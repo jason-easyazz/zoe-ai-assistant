@@ -38,6 +38,7 @@ _ZOE_TZ = zoneinfo.ZoneInfo(os.environ.get("ZOE_TIMEZONE", "Australia/Perth"))
 # Registered Tier 2 trigger instances.
 _slow_triggers: list[ProactiveTrigger] = []
 _slow_loop_task: asyncio.Task | None = None
+_cleanup_loop_task: asyncio.Task | None = None
 
 
 def register_trigger(trigger: ProactiveTrigger) -> None:
@@ -223,7 +224,7 @@ def _suppress_scheduler_not_running(loop: asyncio.AbstractEventLoop, context: di
 
 def start_proactive_engine() -> None:
     """Start APScheduler (Tier 1) and the slow loop (Tier 2)."""
-    global _slow_loop_task
+    global _slow_loop_task, _cleanup_loop_task
     try:
         loop = asyncio.get_running_loop()
         loop.set_exception_handler(_suppress_scheduler_not_running)
@@ -231,15 +232,18 @@ def start_proactive_engine() -> None:
         pass
     start_scheduler()
     _slow_loop_task = asyncio.ensure_future(_slow_loop())
-    asyncio.ensure_future(_cleanup_expired_pending())
+    _cleanup_loop_task = asyncio.ensure_future(_cleanup_expired_pending())
     log.info("Proactive engine started")
 
 
 def stop_proactive_engine() -> None:
     """Shut down APScheduler and the slow loop."""
-    global _slow_loop_task
+    global _slow_loop_task, _cleanup_loop_task
     stop_scheduler()
     if _slow_loop_task is not None:
         _slow_loop_task.cancel()
         _slow_loop_task = None
+    if _cleanup_loop_task is not None:
+        _cleanup_loop_task.cancel()
+        _cleanup_loop_task = None
     log.info("Proactive engine stopped")

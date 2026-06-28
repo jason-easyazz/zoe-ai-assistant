@@ -1,5 +1,6 @@
 import importlib
 import sys
+import types
 
 from fastapi.testclient import TestClient
 
@@ -53,3 +54,36 @@ def test_metrics_allows_non_loopback_with_valid_internal_token(monkeypatch):
     assert resp.status_code == 200
     assert "text/plain" in resp.headers["content-type"]
     assert "zoe_memory_write_count" in resp.text
+
+
+def test_snapshot_collection_sizes_uses_sync_memory_snapshot(monkeypatch):
+    import memory_metrics
+
+    class FakeService:
+        def __init__(self):
+            self.called = False
+
+        def _collection_sizes_sync(self):
+            self.called = True
+            return {"jason": 2, "family-admin": 1}
+
+        async def collection_sizes_by_user(self):  # pragma: no cover - must not be used
+            raise AssertionError("metrics snapshot must not await MemoryService")
+
+    fake_service = FakeService()
+    fake_module = types.ModuleType("memory_service")
+    fake_module.get_memory_service = lambda: fake_service
+    monkeypatch.setitem(sys.modules, "memory_service", fake_module)
+
+    memory_metrics.snapshot_collection_sizes()
+
+    assert fake_service.called is True
+    samples = {
+        (sample.labels.get("user_id"), sample.value)
+        for metric in memory_metrics.REGISTRY.collect()
+        if metric.name == "zoe_mempalace_collection_size"
+        for sample in metric.samples
+        if sample.name == "zoe_mempalace_collection_size"
+    }
+    assert ("jason", 2.0) in samples
+    assert ("family-admin", 1.0) in samples

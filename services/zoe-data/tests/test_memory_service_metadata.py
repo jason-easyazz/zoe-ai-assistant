@@ -1,5 +1,11 @@
+import asyncio
+import logging
+import sys
+import types
+
 import pytest
 
+import memory_service
 from memory_service import MemoryService, MemoryServiceError, _memory_visible_to_user, is_guest_memory_user
 
 
@@ -305,3 +311,65 @@ def test_semantic_search_blocks_cross_user_disputed_and_superseded_rows():
 
     assert {row.id for row in rows} == {"own", "wing_only", "mixed", "shared"}
     assert {"visibility": "family"} in collection.seen_query_where["$or"]
+
+
+@pytest.mark.asyncio
+async def test_background_task_tracking_holds_task_until_done_and_retrieves_exception(caplog):
+    service = MemoryService(data_dir="/tmp/zoe-test-memory-tasks")
+
+    async def failing_task():
+        await asyncio.sleep(0)
+        raise RuntimeError("tick failed")
+
+    caplog.set_level(logging.WARNING, logger="memory_service")
+    task = service._track_background_task(failing_task(), name="memory_tick_test")
+
+    assert task in service._background_tasks
+
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    for _ in range(10):
+        if task not in service._background_tasks:
+            break
+        await asyncio.sleep(0)
+
+    assert task.done()
+    assert task not in service._background_tasks
+    assert "background task memory_tick_test failed" in caplog.text
+
+
+def test_audit_collection_reuses_cached_persistent_client_per_data_dir(monkeypatch):
+    created_paths = []
+
+    class FakeClient:
+        def __init__(self, path):
+            self.path = path
+            self.collections = []
+
+        def get_or_create_collection(self, name):
+            self.collections.append(name)
+            return {"path": self.path, "name": name}
+
+    def persistent_client(*, path):
+        created_paths.append(path)
+        return FakeClient(path)
+
+    memory_service._AUDIT_CLIENTS.clear()
+    monkeypatch.setitem(
+        sys.modules,
+        "chromadb",
+        types.SimpleNamespace(PersistentClient=persistent_client),
+    )
+
+    first = MemoryService(data_dir="/tmp/zoe-test-audit-cache")
+    second = MemoryService(data_dir="/tmp/zoe-test-audit-cache")
+    other = MemoryService(data_dir="/tmp/zoe-test-audit-cache-other")
+
+    assert first._audit_collection()["path"] == "/tmp/zoe-test-audit-cache"
+    assert first._audit_collection()["path"] == "/tmp/zoe-test-audit-cache"
+    assert second._audit_collection()["path"] == "/tmp/zoe-test-audit-cache"
+    assert other._audit_collection()["path"] == "/tmp/zoe-test-audit-cache-other"
+    assert created_paths == [
+        "/tmp/zoe-test-audit-cache",
+        "/tmp/zoe-test-audit-cache-other",
+    ]

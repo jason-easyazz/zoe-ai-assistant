@@ -136,32 +136,10 @@ def snapshot_collection_sizes() -> None:
     the request path.
     """
     try:
-        import asyncio
         from memory_service import get_memory_service
 
         svc = get_memory_service()
-
-        async def _collect() -> dict[str, int]:
-            return await svc.collection_sizes_by_user()
-
-        try:
-            counts = asyncio.run(_collect())
-        except RuntimeError:
-            import threading
-            result: dict[str, int] = {}
-
-            def _runner() -> None:
-                nonlocal result
-                loop = asyncio.new_event_loop()
-                try:
-                    result = loop.run_until_complete(_collect())
-                finally:
-                    loop.close()
-
-            t = threading.Thread(target=_runner, daemon=True)
-            t.start()
-            t.join(timeout=2.0)
-            counts = result
+        counts = svc._collection_sizes_sync()
 
         mempalace_collection_size.clear()
         for uid, n in counts.items():

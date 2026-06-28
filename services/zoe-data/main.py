@@ -1371,6 +1371,11 @@ async def lifespan(app: FastAPI):
         stop_proactive_engine()
     except Exception:
         pass
+    try:
+        from zoe_core_client import shutdown_workers
+        await shutdown_workers()
+    except Exception:
+        logger.warning("zoe-core worker shutdown failed (non-fatal)", exc_info=True)
     for task in (_openclaw_bg_task, _digest_bg_task, _zoe_update_bg_task,
                  _consolidation_bg_task, _runtime_health_task):
         if task and not task.done():
