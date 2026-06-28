@@ -213,9 +213,21 @@ def test_model_is_advertised_matches_gguf_and_bare_id_forms():
     # endpoint advertises the bare id; config holds the .gguf filename (and vice versa)
     assert _model_is_advertised(canonical, [bare]) is True
     assert _model_is_advertised(bare, [canonical]) is True
-    # full on-disk path and sharded suffix still resolve to the canonical brain
+    # full on-disk path still resolves to the canonical brain
     assert _model_is_advertised(canonical, ["/models/" + canonical]) is True
+
+
+def test_model_is_advertised_accepts_only_gguf_shard_suffix():
+    canonical = "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"
+    bare = "gemma-4-E4B-it-qat-UD-Q4_K_XL"
+
+    # GGUF shard filename form -NNNNN-of-NNNNN (with or without .gguf) is accepted
     assert _model_is_advertised(canonical, [bare + "-00001-of-00002.gguf"]) is True
+    assert _model_is_advertised(canonical, [bare + "-00001-of-00002"]) is True
+    # arbitrary longer variants that are NOT a shard suffix are rejected
+    assert _model_is_advertised(canonical, [bare + "-v2"]) is False
+    assert _model_is_advertised(canonical, [bare + "-instruct"]) is False
+    assert _model_is_advertised(canonical, [bare + "-00001"]) is False
 
 
 def test_model_is_advertised_rejects_unrelated_models():

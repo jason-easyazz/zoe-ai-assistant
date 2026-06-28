@@ -12,6 +12,7 @@ import asyncio
 import importlib.metadata
 import importlib.util
 import os
+import re
 import time
 from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass
@@ -270,15 +271,18 @@ def _model_is_advertised(model: str, advertised: list[str]) -> bool:
     """True when the configured model matches an advertised id in either form.
 
     Recognizes the canonical id in both the bare-id and ``.gguf``-filename forms,
-    and tolerates sharded/suffixed advertised ids (e.g. ``…-00001-of-00002``)
-    without matching unrelated, shorter model names.
+    and tolerates only the GGUF *shard* filename suffix ``-NNNNN-of-NNNNN``
+    (e.g. ``…-00001-of-00002``). An arbitrary longer variant such as ``…-v2`` is
+    rejected so the probe never reports a model ready that chat completions can't
+    actually serve under the configured name.
     """
     target = _normalize_model_id(model)
     if not target:
         return False
+    shard_pattern = re.compile(rf"^{re.escape(target)}-\d+-of-\d+$")
     for candidate in advertised:
         normalized = _normalize_model_id(candidate)
-        if normalized == target or normalized.startswith(target):
+        if normalized == target or shard_pattern.match(normalized):
             return True
     return False
 
