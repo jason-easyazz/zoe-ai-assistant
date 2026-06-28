@@ -663,7 +663,6 @@ async def add_important_date(
     month = body.get("month")
     day = body.get("day")
     year = body.get("year")
-    reminder_days_before = body.get("reminder_days_before", 7)
     if not label:
         raise HTTPException(status_code=400, detail="label is required")
 
@@ -681,9 +680,23 @@ async def add_important_date(
     month = _bounded_int(month, "month", 1, 12)
     day = _bounded_int(day, "day", 1, 31)
     year = _bounded_int(year, "year", 1, 9999)
-    if reminder_days_before is None:
+
+    # Reject impossible calendar dates (e.g. Feb 30, Apr 31). When the year is
+    # absent (recurring date), validate the day against a leap year so a
+    # recurring Feb 29 is allowed but Feb 30 / Apr 31 / etc. are still rejected.
+    if month is not None and day is not None:
+        try:
+            datetime(year if year is not None else 2000, month, day)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="invalid calendar date")
+
+    # Default reminder only when the key is OMITTED; preserve an explicit null.
+    if "reminder_days_before" in body:
+        reminder_days_before = _bounded_int(
+            body["reminder_days_before"], "reminder_days_before", 0, 366
+        )
+    else:
         reminder_days_before = 7
-    reminder_days_before = _bounded_int(reminder_days_before, "reminder_days_before", 0, 366)
     await db.execute(
         "INSERT INTO person_important_dates (id, person_id, user_id, label, date_type, month, day, year, reminder_days_before) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",

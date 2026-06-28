@@ -68,9 +68,11 @@ class _FakeDB:
         self.other_person_user_id = other_person_user_id
         self.insert_error = insert_error
         self.executed = []
+        self.calls = []
 
     def execute(self, sql, params=None):
         self.executed.append(sql)
+        self.calls.append((sql, params))
         s = " ".join(sql.split()).upper()
         if s.startswith("SELECT USER_ID, VISIBILITY"):
             return _ExecResult(_FakeCursor([
@@ -142,6 +144,11 @@ async def test_relationship_db_error_does_not_leak(patched, caplog):
     {"label": "Bday", "reminder_days_before": -1},
     {"label": "Bday", "reminder_days_before": 100000},
     {"label": "Bday", "month": "13"},
+    # Impossible calendar dates (per-field bounds alone would let these through).
+    {"label": "Bday", "month": 2, "day": 30},            # Feb 30 (recurring)
+    {"label": "Bday", "month": 4, "day": 31},            # Apr 31 (recurring)
+    {"label": "Bday", "month": 2, "day": 30, "year": 2024},   # Feb 30 with year
+    {"label": "Bday", "month": 2, "day": 29, "year": 2023},   # Feb 29 in a non-leap year
 ])
 async def test_important_date_invalid_rejected(patched, body):
     db = _FakeDB()
@@ -158,6 +165,8 @@ async def test_important_date_invalid_rejected(patched, body):
     {"label": "Anniversary", "month": 2, "day": 29, "year": 2024, "reminder_days_before": 0},
     {"label": "Bday"},  # all optional fields omitted -> reminder defaults to 7
     {"label": "Bday", "month": 6, "day": 28, "year": 2026},
+    {"label": "Bday", "month": 2, "day": 29},   # recurring Feb 29 (no year) is allowed
+    {"label": "Bday", "month": 4, "day": 30},   # Apr 30 is a real date
 ])
 async def test_important_date_valid_passes(patched, body):
     db = _FakeDB()
@@ -165,3 +174,34 @@ async def test_important_date_valid_passes(patched, body):
     assert result["ok"] is True
     assert "id" in result
     assert any("INSERT INTO PERSON_IMPORTANT_DATES" in s.upper() for s in db.executed)
+
+
+def _stored_reminder(db):
+    """Pull reminder_days_before (last INSERT param) from the recorded call."""
+    for sql, params in db.calls:
+        if "INSERT INTO PERSON_IMPORTANT_DATES" in sql.upper():
+            return params[-1]
+    raise AssertionError("no important-date INSERT was recorded")
+
+
+async def test_reminder_omitted_defaults_to_7(patched):
+    db = _FakeDB()
+    await people.add_important_date("p1", {"label": "Bday"}, user=USER, db=db)
+    assert _stored_reminder(db) == 7
+
+
+async def test_reminder_explicit_null_preserved(patched):
+    db = _FakeDB()
+    await people.add_important_date(
+        "p1", {"label": "Bday", "reminder_days_before": None}, user=USER, db=db
+    )
+    # Explicit null must NOT become the default; it is preserved as None.
+    assert _stored_reminder(db) is None
+
+
+async def test_reminder_explicit_value_bounded_and_kept(patched):
+    db = _FakeDB()
+    await people.add_important_date(
+        "p1", {"label": "Bday", "reminder_days_before": 30}, user=USER, db=db
+    )
+    assert _stored_reminder(db) == 30
