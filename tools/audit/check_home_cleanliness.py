@@ -114,9 +114,9 @@ def get_category(filename):
             return 'tools/ or scripts/'
     elif filename.endswith('.md'):
         if any(kw in filename.upper() for kw in ['STATUS', 'COMPLETE', 'REPORT', 'SUMMARY']):
-            return 'docs/archive/reports/'
+            return 'docs/reviews/ or docs/post-mortems/'
         elif any(kw in filename.upper() for kw in ['GUIDE', 'DOCUMENTATION', 'DEMO']):
-            return 'docs/archive/technical/'
+            return 'docs/guides/ or docs/developer/'
         else:
             return 'docs/'
     elif filename.endswith(('.conf', '.yml', '.yaml')):
@@ -146,4 +146,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-

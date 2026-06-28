@@ -1718,16 +1718,9 @@ async def synthesize(payload: dict, caller: dict = Depends(_require_voice_auth))
     content_type = "audio/wav"
     provider = "none"
 
-    # ── TTS waterfall: kokoro-sidecar → local sidecar → Kokoro ONNX → Edge TTS → espeak-ng ──
-    if mode in {"hybrid", "local"}:
-        audio_bytes = await _synthesize_local_service(text, profile=profile, base_url=local_tts_url)
-        if audio_bytes:
-            provider = "local-tts"
-            if not audio_bytes.startswith(b"RIFF"):
-                content_type = "audio/mpeg"
-
+    # ── TTS waterfall: Kokoro sidecar → Kokoro ONNX → local sidecar → Edge TTS → espeak-ng ──
     # Kokoro sidecar — GPU-accelerated natural af_sky voice (~150ms warm on Jetson).
-    if audio_bytes is None and mode != "cloud":
+    if mode != "cloud":
         audio_bytes = await _synthesize_kokoro_sidecar(text)
         if audio_bytes:
             provider = "kokoro-sidecar"
@@ -1739,6 +1732,13 @@ async def synthesize(payload: dict, caller: dict = Depends(_require_voice_auth))
         if audio_bytes:
             provider = "kokoro-onnx"
             content_type = "audio/wav"
+
+    if audio_bytes is None and mode in {"hybrid", "local"}:
+        audio_bytes = await _synthesize_local_service(text, profile=profile, base_url=local_tts_url)
+        if audio_bytes:
+            provider = "local-tts"
+            if not audio_bytes.startswith(b"RIFF"):
+                content_type = "audio/mpeg"
 
     if audio_bytes is None and mode in {"hybrid", "cloud", "edge"}:
         try:
@@ -1816,13 +1816,8 @@ async def voice_stream(payload: dict, caller: dict = Depends(_require_voice_auth
             provider = "none"
             error_msg: Optional[str] = None
 
-            # Waterfall: kokoro-sidecar → local sidecar → Kokoro ONNX → Edge TTS → espeak
-            if mode in {"hybrid", "local"} and local_tts_url:
-                audio_bytes = await _synthesize_local_service(sentence, profile=profile, base_url=local_tts_url)
-                if audio_bytes:
-                    provider = "local-tts"
-
-            if audio_bytes is None and mode != "cloud":
+            # Waterfall: Kokoro sidecar → Kokoro ONNX → local sidecar → Edge TTS → espeak
+            if mode != "cloud":
                 audio_bytes = await _synthesize_kokoro_sidecar(sentence)
                 if audio_bytes:
                     provider = "kokoro-sidecar"
@@ -1831,6 +1826,11 @@ async def voice_stream(payload: dict, caller: dict = Depends(_require_voice_auth
                 audio_bytes = await _synthesize_kokoro(sentence)
                 if audio_bytes:
                     provider = "kokoro-onnx"
+
+            if audio_bytes is None and mode in {"hybrid", "local"} and local_tts_url:
+                audio_bytes = await _synthesize_local_service(sentence, profile=profile, base_url=local_tts_url)
+                if audio_bytes:
+                    provider = "local-tts"
 
             if audio_bytes is None and mode in {"hybrid", "cloud", "edge"}:
                 try:

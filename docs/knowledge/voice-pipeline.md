@@ -16,8 +16,11 @@ How a spoken turn flows through Zoe, and how we measure it without regressing. T
 
 1. **STT — Moonshine v2 Medium.** Runs **in-process inside `zoe-data` on CPU** (onnxruntime GPU
    discovery fails on Tegra). Warmed at startup via `warm_moonshine` (`services/zoe-data/main.py`,
-   `routers/voice_tts.py`). A **faster-whisper** worker exists as a secondary/fallback
-   (`ZOE_WHISPER_DEVICE=cuda`) — Moonshine is the primary rock.
+   `routers/voice_tts.py`). Since **#854 Moonshine is the ONLY live STT engine** — faster-whisper was
+   removed from the live path (it cold-loaded onto a memory-starved GPU and clouded accuracy); whisper
+   helpers remain defined for offline tooling but never run on a live turn. `_run_moonshine` also runs
+   a `_strip_wake_word` pass removing the "Hey Zoe" wake bleed (Moonshine emits the wake on its own
+   line; greeting-prefixed homophones like "hey joey" strip, bare real names like "Joe" are kept).
 2. **Brain — Gemma 4 E4B-QAT + MTP**, host-native `llama-server` on `:11434`.
 3. **TTS — Kokoro**, sidecar on `127.0.0.1:10201`, via a waterfall in `routers/voice_tts.py`:
    **Kokoro → Edge TTS → espeak-ng** (each falls back to the next).
@@ -27,14 +30,29 @@ Per-stage timings are exported to Prometheus as `zoe_voice_stage_seconds`
 
 ## Measuring it — the replay harness
 
-Jason's saved WAVs at **`~/.zoe-voice-samples`** (245 clips as of 2026-06-26) are a **permanent
-regression corpus**. Replay-gate **every** voice change; the said-vs-did mapping must not regress —
-"can't do it" on a sample is a bug, not an excuse.
+Jason's saved WAVs at **`~/.zoe-voice-samples`** (~313 clips and growing) are a **permanent
+regression corpus** — `ZOE_VOICE_SAVE_AUDIO=1` auto-captures real turns, so the corpus (and the bar)
+**evolves with real use**. Replay-gating **every** voice change is MANDATORY (root `AGENTS.md`); the
+said-vs-did mapping must not regress — "can't do it" on a sample is a bug, not an excuse.
 
 - Harness: `scripts/perf/measure_voice.py` + `scripts/perf/measure_tts.py` (set `ZOE_PERF=1`); they
   wrap `services/zoe-data/tests/replay_samples.py`.
 - **Always run under `flock /tmp/zoe-voice-harness.lock`** — two Kokoro loads (~2.3 GB each) will OOM
   the memory-tight box.
+
+## Regression + speed gate — `voice_regression_probe.py` (fleet tool, evolving)
+
+`scripts/maintenance/voice_regression_probe.py` is the **baseline-compared** wrapper any agent (or a
+human, or the scheduled timer) runs to catch drift on TWO axes at once:
+- **function** — the corpus OK-rate must not drop / CANT_DO+ERROR must not rise (Zoe mustn't lose an ability);
+- **speed** — per-stage medians (STT / brain / e2e) must not regress beyond a ratio + absolute-ms gate.
+It mirrors `zoe_latency_probe.py`: `--update-baseline` to set the bar, baseline at
+`~/.cache/zoe/voice_regression_baseline.json`, a `…_trend.jsonl` history, non-zero exit + `WARN` on
+regression. It self-guards: **SKIPs if available memory is low** (never OOMs the box) and runs the
+harness under the shared flock. Scheduled daily off-peak via the
+`scripts/setup/systemd/zoe-voice-regression.{service,timer}` templates (operator installs to
+`~/.config/systemd/user/`). Numbers are RELATIVE (warm harness) — used for *drift vs baseline*, not
+as live performance.
 
 ## The caveat that bites (read this)
 
