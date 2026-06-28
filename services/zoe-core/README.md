@@ -14,8 +14,8 @@ via Pi's extension hooks.
 
 > **Core ≠ monolith.** zoe-core *orchestrates and delegates*; it does not absorb
 > the code of `zoe-data`/`zoe-auth`/`zoe-database`. Abilities stay modular
-> (extensions/tools). The retired Docker monolith that once held this name is
-> archived at `docs/archive/retired-services/zoe-core/` — do not revive it.
+> (extensions/tools). The retired Docker monolith that once held this name was
+> removed from the working tree and remains in git history only — do not revive it.
 
 > **Status: lab-only / additive.** zoe-core is the destination brain (Pi on
 > Gemma 4 E4B-QAT), built and proven *beside* the live system. `zoe_agent` remains
