@@ -690,8 +690,11 @@ async def add_important_date(
         except ValueError:
             raise HTTPException(status_code=422, detail="invalid calendar date")
 
-    # Default reminder only when the key is OMITTED; preserve an explicit null.
+    # Default reminder only when the key is OMITTED. The column is NOT NULL, so
+    # an explicit null is rejected rather than silently coerced to the default.
     if "reminder_days_before" in body:
+        if body["reminder_days_before"] is None:
+            raise HTTPException(status_code=422, detail="reminder_days_before must be between 0 and 366")
         reminder_days_before = _bounded_int(
             body["reminder_days_before"], "reminder_days_before", 0, 366
         )

@@ -190,13 +190,16 @@ async def test_reminder_omitted_defaults_to_7(patched):
     assert _stored_reminder(db) == 7
 
 
-async def test_reminder_explicit_null_preserved(patched):
+async def test_reminder_explicit_null_rejected(patched):
     db = _FakeDB()
-    await people.add_important_date(
-        "p1", {"label": "Bday", "reminder_days_before": None}, user=USER, db=db
-    )
-    # Explicit null must NOT become the default; it is preserved as None.
-    assert _stored_reminder(db) is None
+    # The column is NOT NULL; an explicit null must be rejected (not coerced to
+    # the default and not written as NULL).
+    with pytest.raises(HTTPException) as ei:
+        await people.add_important_date(
+            "p1", {"label": "Bday", "reminder_days_before": None}, user=USER, db=db
+        )
+    assert ei.value.status_code == 422
+    assert not any("INSERT" in s.upper() for s in db.executed)
 
 
 async def test_reminder_explicit_value_bounded_and_kept(patched):
