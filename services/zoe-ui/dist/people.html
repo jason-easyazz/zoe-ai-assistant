@@ -1367,7 +1367,7 @@
             icon.textContent = '👤';
             
             if (isEditing) {
-                name.innerHTML = `<input type="text" id="editPersonName" value="${person.name}" class="edit-field" placeholder="Full name">`;
+                name.innerHTML = `<input type="text" id="editPersonName" value="${escapeHtml(person.name)}" class="edit-field" placeholder="Full name">`;
                 const _editTier = normTier(person.circle || person.category || 'circle');
                 const _editCtx = person.context || 'personal';
                 subtitle.innerHTML = `
@@ -1432,25 +1432,25 @@
                         <div class="info-item">
                             <div class="info-label">Phone</div>
                             <div class="info-value">
-                                ${isEditing ? `<input type="tel" id="editPersonPhone" value="${person.phone || ''}" class="edit-field" placeholder="Phone number">` : (person.phone || 'Not provided')}
+                                ${isEditing ? `<input type="tel" id="editPersonPhone" value="${escapeHtml(person.phone || '')}" class="edit-field" placeholder="Phone number">` : escapeHtml(person.phone || 'Not provided')}
                             </div>
                         </div>
                         <div class="info-item">
                             <div class="info-label">Email</div>
                             <div class="info-value">
-                                ${isEditing ? `<input type="email" id="editPersonEmail" value="${person.email || ''}" class="edit-field" placeholder="Email address">` : (person.email || 'Not provided')}
+                                ${isEditing ? `<input type="email" id="editPersonEmail" value="${escapeHtml(person.email || '')}" class="edit-field" placeholder="Email address">` : escapeHtml(person.email || 'Not provided')}
                             </div>
                         </div>
                         <div class="info-item">
                             <div class="info-label">Birthday</div>
                             <div class="info-value">
-                                ${isEditing ? `<input type="date" id="editPersonBirthday" value="${person.birthday || ''}" class="edit-field">` : (person.birthday || 'Not provided')}
+                                ${isEditing ? `<input type="date" id="editPersonBirthday" value="${escapeHtml(person.birthday || '')}" class="edit-field">` : escapeHtml(person.birthday || 'Not provided')}
                             </div>
                         </div>
                         <div class="info-item">
                             <div class="info-label">Address</div>
                             <div class="info-value">
-                                ${isEditing ? `<input type="text" id="editPersonAddress" value="${person.address || ''}" class="edit-field" placeholder="Address">` : (person.address || 'Not provided')}
+                                ${isEditing ? `<input type="text" id="editPersonAddress" value="${escapeHtml(person.address || '')}" class="edit-field" placeholder="Address">` : escapeHtml(person.address || 'Not provided')}
                             </div>
                         </div>
                     </div>
@@ -1463,10 +1463,10 @@
                     <div class="section-title">Notes & Preferences</div>
                     <div class="notes-section">
                         ${isEditing ? `
-                            <textarea id="editPersonNotes" class="edit-field notes-textarea" placeholder="Add notes about this person...">${person.notes || ''}</textarea>
+                            <textarea id="editPersonNotes" class="edit-field notes-textarea" placeholder="Add notes about this person...">${escapeHtml(person.notes || '')}</textarea>
                         ` : `
                             <div class="note-item">
-                                <div class="timeline-title">${person.notes || 'No notes yet'}</div>
+                                <div class="timeline-title">${escapeHtml(person.notes || 'No notes yet')}</div>
                             </div>
                         `}
                     </div>
@@ -1482,11 +1482,11 @@
                         <div class="info-grid">
                             ${peopleFieldSchema.map(field => `
                                 <div class="info-item">
-                                    <div class="info-label">${field.label}</div>
+                                    <div class="info-label">${escapeHtml(field.label)}</div>
                                     <div class="info-value">
                                         ${isEditing
-                                            ? `<input type="text" class="edit-field" data-edit-field-key="${field.field_key}" value="${custom[field.field_key] || ''}" placeholder="${field.label}">`
-                                            : (custom[field.field_key] || 'Not set')}
+                                            ? `<input type="text" class="edit-field" data-edit-field-key="${escapeHtml(field.field_key)}" value="${escapeHtml(custom[field.field_key] || '')}" placeholder="${escapeHtml(field.label)}">`
+                                            : escapeHtml(custom[field.field_key] || 'Not set')}
                                     </div>
                                 </div>
                             `).join('')}
@@ -1738,9 +1738,9 @@
                 if (activeContext !== 'all' && (person.context||'personal') !== activeContext) return false;
                 return true;
             }).map(person => `
-                <div class="person-card" onclick="showPersonById('${person.id}')">
-                    <div class="person-label">${person.name}</div>
-                    <div class="person-text">${person.relationshipType || person.category}${person.birthday ? ` • Birthday: ${person.birthday}` : ""}</div>
+                <div class="person-card" onclick="showPersonById(${escapeHtml(JSON.stringify(String(person.id)))})">
+                    <div class="person-label">${escapeHtml(person.name)}</div>
+                    <div class="person-text">${escapeHtml(person.relationshipType || person.category)}${person.birthday ? ` • Birthday: ${escapeHtml(person.birthday)}` : ""}</div>
                     <div class="person-action">View Details</div>
                 </div>
             `).join("");
@@ -1987,6 +1987,16 @@
             if (dateEl) dateEl.textContent = now.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
         }
 
+        function escapeHtml(value) {
+            return String(value ?? '').replace(/[&<>"']/g, char => ({
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#39;'
+            })[char]);
+        }
+
         // User profile storage
         let userProfile = null;
 
@@ -1998,8 +2008,8 @@
                 if (container) {
                     container.innerHTML = peopleFieldSchema.map(field => `
                         <div class="modal-field">
-                            <label class="modal-label">${field.label}</label>
-                            <input type="text" class="modal-input" data-field-key="${field.field_key}" placeholder="${field.label}">
+                            <label class="modal-label">${escapeHtml(field.label)}</label>
+                            <input type="text" class="modal-input" data-field-key="${escapeHtml(field.field_key)}" placeholder="${escapeHtml(field.label)}">
                         </div>
                     `).join('');
                 }
@@ -2259,15 +2269,15 @@
                 } catch(e) {}
 
                 el.innerHTML = `
-                    ${person.phone ? `<a href="tel:${person.phone}" style="display:inline-block;margin:0 8px 8px 0;padding:8px 14px;border-radius:10px;border:1px solid rgba(255,255,255,0.2);color:#fff;text-decoration:none;font-size:13px">📞 ${person.phone}</a>` : ''}
-                    ${person.email ? `<a href="mailto:${person.email}" style="display:inline-block;margin:0 8px 8px 0;padding:8px 14px;border-radius:10px;border:1px solid rgba(255,255,255,0.2);color:#fff;text-decoration:none;font-size:13px">✉️ ${person.email}</a>` : ''}
-                    ${person.how_we_met ? `<div style="margin-top:10px;font-size:12px;opacity:0.6;text-transform:uppercase;letter-spacing:0.05em">How We Met</div><div style="font-size:14px;color:#fff;opacity:0.85;margin-top:4px">${person.how_we_met.replace(/</g,'&lt;')}</div>` : ''}
+                    ${person.phone ? `<a href="tel:${escapeHtml(person.phone)}" style="display:inline-block;margin:0 8px 8px 0;padding:8px 14px;border-radius:10px;border:1px solid rgba(255,255,255,0.2);color:#fff;text-decoration:none;font-size:13px">📞 ${escapeHtml(person.phone)}</a>` : ''}
+                    ${person.email ? `<a href="mailto:${escapeHtml(person.email)}" style="display:inline-block;margin:0 8px 8px 0;padding:8px 14px;border-radius:10px;border:1px solid rgba(255,255,255,0.2);color:#fff;text-decoration:none;font-size:13px">✉️ ${escapeHtml(person.email)}</a>` : ''}
+                    ${person.how_we_met ? `<div style="margin-top:10px;font-size:12px;opacity:0.6;text-transform:uppercase;letter-spacing:0.05em">How We Met</div><div style="font-size:14px;color:#fff;opacity:0.85;margin-top:4px">${escapeHtml(person.how_we_met)}</div>` : ''}
                     ${relsHtml}
                     <div style="margin-top:12px;font-size:12px;opacity:0.6;text-transform:uppercase;letter-spacing:0.05em">Relationship Health</div>
                     <div style="height:6px;border-radius:3px;background:rgba(255,255,255,0.1);margin-top:6px">
                         <div style="height:6px;border-radius:3px;width:${Math.round(hs*100)}%;background:${hs>=0.6?'#48BB78':hs>=0.35?'#ECC94B':'#FC8181'}"></div>
                     </div>
-                    ${person.notes ? `<div style="margin-top:14px;font-size:14px;opacity:0.8">${(person.notes||'').replace(/</g,'&lt;')}</div>` : ''}
+                    ${person.notes ? `<div style="margin-top:14px;font-size:14px;opacity:0.8">${escapeHtml(person.notes)}</div>` : ''}
                 `;
             } else if (tab === 'dates') {
                 const el = document.getElementById('dp-dates-content');
@@ -2388,5 +2398,4 @@
     <script src="/js/touch-ui-executor.js?v=20260405"></script>
 </body>
 </html>
-
 

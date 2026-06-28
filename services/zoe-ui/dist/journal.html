@@ -2365,6 +2365,16 @@
         async function checkApiStatus() {
             if (typeof checkAPI === 'function') return checkAPI();
         }
+
+        function escapeHtml(value) {
+            return String(value ?? '').replace(/[&<>"']/g, char => ({
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#39;'
+            })[char]);
+        }
         
         /**
          * Detect photo orientation and apply appropriate layout class
@@ -2962,7 +2972,7 @@
             
             notificationsContent.innerHTML = notifications.map(notification => `
                 <div class="notification-item ${notification.is_delivered ? '' : 'unread'}">
-                    <div class="notification-title">${notification.message}</div>
+                    <div class="notification-title">${escapeHtml(notification.message)}</div>
                     <div class="notification-meta">
                         <span class="notification-time">${formatNotificationTime(notification.notification_time)}</span>
                     </div>
@@ -3066,7 +3076,7 @@
                     const container = input.parentElement;
                     const tag = document.createElement('span');
                     tag.className = 'tag-chip';
-                    tag.innerHTML = `${input.value.trim()} <span class="tag-remove">×</span>`;
+                    tag.innerHTML = `${escapeHtml(input.value.trim())} <span class="tag-remove">×</span>`;
                     
                     // Remove tag on click
                     tag.querySelector('.tag-remove').addEventListener('click', () => {
