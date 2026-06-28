@@ -59,6 +59,15 @@ services:
       - OMNIGENT_AUTH_ENABLED=1
       - OMNIGENT_AUTH_PROVIDER=header
       - OMNIGENT_LOCAL_SINGLE_USER=1
+      # Trust this deployment's PUBLIC tunnel Origin for CSRF-guarded multipart-upload endpoints
+      # (session bundle uploads → require_trusted_origin → origin_allowed). In single-user mode
+      # (above) ONLY loopback origins are trusted, so a browser reaching Omnigent through the
+      # tunnel is rejected ("Forbidden: this endpoint requires a trusted Origin header").
+      # The origin is DEPLOYMENT-SPECIFIC, so it comes from the repo .env (e.g.
+      # OMNIGENT_WS_ALLOWED_ORIGINS=https://buildzoe.the411.life), NOT hardcoded in this reusable
+      # module — the default is empty (loopback-only, safe for any operator). Any non-allowlisted
+      # cross-site Origin stays rejected.
+      - OMNIGENT_WS_ALLOWED_ORIGINS=${OMNIGENT_WS_ALLOWED_ORIGINS:-}
       # The in-container host runner (entrypoint: `omnigent host $OMNIGENT_SELF_URL`) attaches to
       # the co-located server over LOOPBACK, NOT via zoe.local. With the published port bound to
       # 127.0.0.1 (above), the old default http://zoe.local:6767 (= host-gateway → host's published
