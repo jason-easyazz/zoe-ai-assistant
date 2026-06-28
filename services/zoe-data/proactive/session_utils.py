@@ -57,20 +57,31 @@ async def claim_pending(pending_id: str) -> dict | None:
     or None if not found / already claimed / expired.
     """
     async with _get_compat_db() as db:
+        # Claim ATOMICALLY first: a single conditional UPDATE is the source of
+        # truth for who owns this pending row. Concurrent taps race here and
+        # exactly one matches `claimed = 0`; the losers get no RETURNING row and
+        # bail out, so we never create duplicate chat sessions for one tap.
+        # (db.commit() is a no-op on the asyncpg compat shim without an explicit
+        # transaction, so the old SELECT-then-UPDATE had no atomicity at all.)
         async with db.execute(
-            "SELECT * FROM proactive_pending WHERE id = ? AND claimed = 0",
+            "UPDATE proactive_pending SET claimed = 1 "
+            "WHERE id = ? AND claimed = 0 RETURNING *",
             (pending_id,),
         ) as cur:
             row = await cur.fetchone()
 
         if row is None:
+            # Not found, expired-and-removed, or already claimed by a racer.
             return None
 
-        # Check expiry.
+        # Expiry check AFTER winning the claim. If expired, release the claim so
+        # the row stays consistent (claimed = 0) for the cleanup loop and the
+        # caller sees "not claimable".
         try:
             expires = datetime.fromisoformat(row["expires_at"].replace("Z", "+00:00"))
             if datetime.now(timezone.utc) > expires:
                 log.warning("Pending %s expired; ignoring claim", pending_id)
+                await _release_claim(db, pending_id)
                 return None
         except Exception:
             pass
@@ -78,21 +89,41 @@ async def claim_pending(pending_id: str) -> dict | None:
         session_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        await db.execute(
-            """INSERT INTO chat_sessions (id, user_id, title, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?)""",
-            (session_id, row["user_id"], "Proactive notification", now, now),
-        )
-        await db.execute(
-            """INSERT INTO chat_messages
-               (id, session_id, role, content, created_at)
-               VALUES (?, ?, 'assistant', ?, ?)""",
-            (str(uuid.uuid4()), session_id, row["message"], now),
-        )
-        await db.execute(
-            "UPDATE proactive_pending SET claimed = 1 WHERE id = ?",
-            (pending_id,),
-        )
-        await db.commit()
+        # Seed the session + first message inside ONE explicit transaction, so a
+        # partial failure can never leave an orphan session without its message
+        # (or vice versa). On any failure we roll back and compensate by
+        # releasing the claim, so the notification can be retried rather than
+        # being silently lost behind claimed = 1.
+        try:
+            async with db.transaction():
+                await db.execute(
+                    """INSERT INTO chat_sessions (id, user_id, title, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (session_id, row["user_id"], "Proactive notification", now, now),
+                )
+                await db.execute(
+                    """INSERT INTO chat_messages
+                       (id, session_id, role, content, created_at)
+                       VALUES (?, ?, 'assistant', ?, ?)""",
+                    (str(uuid.uuid4()), session_id, row["message"], now),
+                )
+        except Exception:
+            log.exception(
+                "claim_pending: session seed failed for %s; releasing claim", pending_id
+            )
+            await _release_claim(db, pending_id)
+            return None
+
         log.info("Claimed pending %s → session %s", pending_id, session_id)
         return {"session_id": session_id, "message": row["message"]}
+
+
+async def _release_claim(db, pending_id: str) -> None:
+    """Best-effort release of a claim so a row can be retried/cleaned up."""
+    try:
+        await db.execute(
+            "UPDATE proactive_pending SET claimed = 0 WHERE id = ?",
+            (pending_id,),
+        )
+    except Exception:
+        log.error("claim_pending: failed to release claim for %s", pending_id)

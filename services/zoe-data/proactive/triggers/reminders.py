@@ -61,18 +61,42 @@ async def schedule_reminder(
         )
         await db.commit()
 
-    register_job(
-        func=_fire_reminder,
-        run_at=send_at,
-        job_id=job_id,
-        kwargs={"pending_id": row_id, "user_id": user_id, "message": message},
-    )
+    # Register the scheduler job AFTER the row exists. If registration fails the
+    # row would otherwise linger as a "scheduled" reminder that can never fire,
+    # so compensate by deleting the orphan row before re-raising.
+    try:
+        register_job(
+            func=_fire_reminder,
+            run_at=send_at,
+            job_id=job_id,
+            kwargs={"pending_id": row_id, "user_id": user_id, "message": message},
+        )
+    except Exception:
+        log.exception(
+            "schedule_reminder: job registration failed for %s; removing orphan row", row_id
+        )
+        try:
+            async with _get_compat_db() as db:
+                await db.execute(
+                    "DELETE FROM proactive_scheduled WHERE id = ?", (row_id,)
+                )
+                await db.commit()
+        except Exception:
+            log.error("schedule_reminder: failed to remove orphan row %s", row_id)
+        raise
     log.info("Scheduled reminder %s for user %s at %s", row_id, user_id, send_str)
     return row_id
 
 
 async def cancel_reminder(scheduled_id: str) -> bool:
-    """Cancel a scheduled reminder by its proactive_scheduled.id."""
+    """Cancel a scheduled reminder by its proactive_scheduled.id.
+
+    Cancels the APScheduler job FIRST, then deletes the DB row. Deleting the row
+    before cancelling (the old order) could leave an orphan job that still fires
+    against a row that no longer exists. cancel_job() returns False only when the
+    job is already absent (fired / never registered), in which case there is no
+    live job to orphan, so we still drop the now-stale row.
+    """
     async with _get_compat_db() as db:
         async with db.execute(
             "SELECT apscheduler_job_id FROM proactive_scheduled WHERE id = ?",
@@ -81,13 +105,22 @@ async def cancel_reminder(scheduled_id: str) -> bool:
             row = await cur.fetchone()
         if row is None:
             return False
-        job_id = row["apscheduler_job_id"]
+    job_id = row["apscheduler_job_id"]
+
+    cancelled = cancel_job(job_id)
+
+    async with _get_compat_db() as db:
         await db.execute(
             "DELETE FROM proactive_scheduled WHERE id = ?", (scheduled_id,)
         )
         await db.commit()
 
-    return cancel_job(job_id)
+    if not cancelled:
+        log.warning(
+            "cancel_reminder: scheduler job %s was already absent; removed stale row %s",
+            job_id, scheduled_id,
+        )
+    return cancelled
 
 
 async def reschedule_reminder(scheduled_id: str, new_send_at: datetime) -> bool:

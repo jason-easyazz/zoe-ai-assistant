@@ -195,7 +195,7 @@ class MorningCheckInTrigger(ProactiveTrigger):
             """SELECT DISTINCT cs.user_id, u.name AS username
                FROM chat_sessions cs
                LEFT JOIN users u ON u.id = cs.user_id
-               WHERE cs.created_at > datetime('now', '-7 days')"""
+               WHERE cs.created_at > (CURRENT_TIMESTAMP - INTERVAL '7 days')::text"""
         ) as cur:
             users = [(row[0], row[1] or "") async for row in cur]
 
