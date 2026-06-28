@@ -2552,6 +2552,16 @@ _WAKE_PREFIX_RE = re.compile(
     r"[\s,.!?-]+(?=\S)",
     re.IGNORECASE,
 )
+# Ambiguous homophones (joe/joey/josie — real names) are treated as an inline wake
+# bleed ONLY when preceded by a REQUIRED greeting ("hey joey, show me my lists" ->
+# strip). A bare homophone with no greeting ("Joe wants the weather") has no match
+# and is left intact, so a real command subject is never cut.
+_WAKE_GREETING_NAME_RE = re.compile(
+    r"^\s*(?:hey|hi|ok|okay)[\s,]+"
+    r"(?:joe|joey|josie)"
+    r"[\s,.!?-]+(?=\S)",
+    re.IGNORECASE,
+)
 
 
 def _strip_wake_word(lines: list) -> str:
@@ -2567,11 +2577,15 @@ def _strip_wake_word(lines: list) -> str:
     # 1. Drop leading lines that are nothing but a wake word.
     while len(kept) > 1 and _WAKE_LINE_RE.match(kept[0]):
         kept = kept[1:]
-    # 2. If the wake word is inline on the (now) first line, strip just the prefix.
-    stripped = _WAKE_PREFIX_RE.sub("", kept[0], count=1).strip()
-    if stripped:
+    # 2. If the wake word is inline on the (now) first line, strip just the prefix:
+    #    (a) greeting + ambiguous homophone ("hey joey, ..."), then (b) an
+    #    unambiguous wake variant ("zoe, ..." / "zo ..."). A bare homophone
+    #    ("Joe wants ...") has no greeting, so it stays intact.
+    head = _WAKE_GREETING_NAME_RE.sub("", kept[0], count=1)
+    head = _WAKE_PREFIX_RE.sub("", head, count=1).strip()
+    if head:
         # Re-capitalise so the command doesn't start lowercase after the cut.
-        kept[0] = stripped[:1].upper() + stripped[1:]
+        kept[0] = head[:1].upper() + head[1:]
     return " ".join(kept).strip()
 
 
