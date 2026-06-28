@@ -132,6 +132,87 @@ class _SlowMcpDashboardSaveDb(_DashboardLayoutDb):
 
 
 # --------------------------------------------------------------------------
+# MCP actor authorization — tools/call must trust transport/session context,
+# not caller-supplied _user_id/user_id arguments.
+# --------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_stdio_no_context_still_falls_back_to_family_admin_for_local_calls():
+    db = _RoutingDb({"dashboard_layouts": []})
+
+    await mcp_server._execute_tool(
+        db=db,
+        name="dashboard_get_layout",
+        args={},
+        actor_context={},
+    )
+
+    sql, params = db.calls[0]
+    assert "FROM dashboard_layouts" in sql
+    assert params == ("family-admin",)
+
+
+@pytest.mark.asyncio
+async def test_non_admin_transport_actor_cannot_override_dashboard_target():
+    db = _RoutingDb({"dashboard_layouts": []})
+
+    await mcp_server._execute_tool(
+        db=db,
+        name="dashboard_get_layout",
+        args={
+            "_user_id": "victim-via-caller-arg",
+            "user_id": "victim",
+        },
+        actor_context={"user_id": "jason", "role": "member", "source": "test-session"},
+    )
+
+    sql, params = db.calls[0]
+    assert "FROM dashboard_layouts" in sql
+    assert params == ("jason",)
+
+
+@pytest.mark.asyncio
+async def test_admin_transport_actor_can_target_another_dashboard_user():
+    db = _RoutingDb({"dashboard_layouts": []})
+
+    await mcp_server._execute_tool(
+        db=db,
+        name="dashboard_get_layout",
+        args={"user_id": "target"},
+        actor_context={"user_id": "family-admin", "role": "admin", "source": "test-session"},
+    )
+
+    sql, params = db.calls[0]
+    assert "FROM dashboard_layouts" in sql
+    assert params == ("target",)
+
+
+@pytest.mark.asyncio
+async def test_non_admin_transport_actor_cannot_override_portrait_target(monkeypatch):
+    captured = {}
+
+    async def fake_load_portrait(user_id):
+        captured["user_id"] = user_id
+        return {"summary": "actor only"}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "user_portrait",
+        types.SimpleNamespace(load_portrait=fake_load_portrait),
+    )
+
+    result = await mcp_server._execute_tool(
+        db=None,
+        name="user_portrait_get",
+        args={"_user_id": "victim-via-caller-arg", "user_id": "victim"},
+        actor_context={"user_id": "jason", "role": "member", "source": "test-session"},
+    )
+
+    assert captured["user_id"] == "jason"
+    assert result["user_id"] == "jason"
+    assert result["has_portrait"] is True
+
+
+# --------------------------------------------------------------------------
 # #1 — explicit user_id target survives the injected _user_id (proactive_schedule)
 # --------------------------------------------------------------------------
 @pytest.mark.asyncio
