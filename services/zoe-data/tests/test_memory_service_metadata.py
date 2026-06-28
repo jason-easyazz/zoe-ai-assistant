@@ -16,6 +16,8 @@ class _FakeCollection:
         self.query_result = query_result or {}
         self.seen_get_where = None
         self.seen_query_where = None
+        self.deleted_ids = []
+        self.upserts = []
 
     def get(self, **kwargs):
         self.seen_get_where = kwargs.get("where")
@@ -24,6 +26,12 @@ class _FakeCollection:
     def query(self, **kwargs):
         self.seen_query_where = kwargs.get("where")
         return self.query_result
+
+    def delete(self, **kwargs):
+        self.deleted_ids.extend(kwargs.get("ids") or [])
+
+    def upsert(self, **kwargs):
+        self.upserts.append(kwargs)
 
 
 @pytest.fixture
@@ -197,6 +205,63 @@ async def test_ingest_passes_first_class_event_metadata_to_writer():
     assert seen["metadata"]["relationships"] == "[{\"relationship_type\":\"FAILED_ON\"}]"
     assert seen["metadata"]["evidence_refs"] == "[\"trace:weather:001\"]"
     assert seen["audit_after"]["event_id"] == "mem_evt_candidate"
+
+
+@pytest.mark.asyncio
+async def test_ingest_same_text_distinct_identity_does_not_clobber():
+    service = MemoryService(data_dir="/tmp/zoe-test-memory-service")
+    writes = []
+
+    def fake_write(mem_id, text, metadata):
+        writes.append((mem_id, text, metadata))
+
+    async def fake_audit(**kwargs):
+        return None
+
+    service._write_row = fake_write
+    service._append_audit = fake_audit
+
+    first = await service.ingest(
+        "Jason prefers quiet mornings.",
+        user_id="jason",
+        user_turn_id="turn-1",
+        source="digest",
+        memory_type="preference",
+        scope="personal",
+        entity_type="person",
+        entity_id="jason",
+    )
+    second = await service.ingest(
+        "Jason prefers quiet mornings.",
+        user_id="jason",
+        user_turn_id="turn-2",
+        source="hindsight_retain_candidate",
+        memory_type="failure",
+        scope="project",
+        entity_type="zoe_memory_event",
+        entity_id="weather-card",
+    )
+
+    assert first is not None and second is not None
+    assert first.id != second.id
+    assert [write[0] for write in writes] == [first.id, second.id]
+
+
+@pytest.mark.asyncio
+async def test_delete_user_purges_audit_payload_rows():
+    memories = _FakeCollection(get_result={"ids": ["mem-1", "mem-2"]})
+    audit = _FakeCollection(get_result={"ids": ["audit-1", "audit-2"]})
+    service = MemoryService(data_dir="/tmp/zoe-test-memory-delete")
+    service._collection = lambda: memories
+    service._audit_collection = lambda: audit
+
+    deleted = await service.delete_user("jason", actor="admin")
+
+    assert deleted == 2
+    assert memories.deleted_ids == ["mem-1", "mem-2"]
+    assert audit.seen_get_where == {"user_id": "jason"}
+    assert audit.deleted_ids == ["audit-1", "audit-2"]
+    assert audit.upserts == []
 
 
 def test_build_metadata_defaults_keep_review_edit_call_compatible():

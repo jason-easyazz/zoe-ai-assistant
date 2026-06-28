@@ -48,6 +48,7 @@ async def test_load_todays_messages_uses_postgres_timestamp_cast():
     assert text == "I like quiet mornings\nI prefer tea"
     assert "(cm.created_at::timestamptz AT TIME ZONE ?)::date" in db.sql[0]
     assert "(now() AT TIME ZONE ?)::date" in db.sql[0]
+    assert "NULLIF(cm.metadata, '')::jsonb->>'user_id'" in db.sql[0]
     assert "CURRENT_DATE" not in db.sql[0]
     assert "DATE('now'" not in db.sql[0]
 
@@ -69,8 +70,28 @@ async def test_run_digest_for_all_active_users_uses_postgres_timestamp_cast(monk
     assert seen == ["user-1", "user-2"]
     assert "(cm.created_at::timestamptz AT TIME ZONE ?)::date" in db.sql[0]
     assert "(now() AT TIME ZONE ?)::date" in db.sql[0]
+    assert "NULLIF(cm.metadata, '')::jsonb->>'user_id'" in db.sql[0]
     assert "CURRENT_DATE" not in db.sql[0]
     assert "DATE('now'" not in db.sql[0]
+
+
+@pytest.mark.asyncio
+async def test_run_digest_for_all_active_users_uses_message_metadata_owner(monkeypatch):
+    db = _FakeDb([("jason",)])
+    seen = []
+
+    async def fake_run_memory_digest(user_id, db=None):
+        seen.append(user_id)
+        return {"user_id": user_id, "stored": 0}
+
+    monkeypatch.setattr(memory_digest, "run_memory_digest", fake_run_memory_digest)
+
+    results = await memory_digest.run_digest_for_all_active_users(db=db)
+
+    assert [item["user_id"] for item in results] == ["jason"]
+    assert seen == ["jason"]
+    assert "NULLIF(cm.metadata, '')::jsonb->>'user_id'" in db.sql[0]
+    assert "cs.user_id" in db.sql[0]
 
 
 @pytest.mark.asyncio
@@ -127,7 +148,7 @@ async def test_run_weekly_consolidation_for_all_fallback_uses_get_db_ctx(monkeyp
     assert ctx.entered == 1 and ctx.exited == 1
     assert consolidated == ["alice", "bob"]
     assert [r["user_id"] for r in results] == ["alice", "bob"]
-    assert "SELECT DISTINCT user_id FROM chat_sessions" in db.sql[0]
+    assert "NULLIF(cm.metadata, '')::jsonb->>'user_id'" in db.sql[0]
 
 
 @pytest.mark.asyncio
@@ -161,7 +182,7 @@ async def test_run_dreaming_for_all_fallback_db_none_uses_get_db_ctx(monkeypatch
     # per-user cycles self-acquire (db=None passed through) — the listing
     # connection isn't held across per-user work.
     assert seen == [("alice", None), ("bob", None)]
-    assert "SELECT DISTINCT user_id FROM chat_sessions" in db.sql[0]
+    assert "NULLIF(cm.metadata, '')::jsonb->>'user_id'" in db.sql[0]
 
 
 @pytest.mark.asyncio
