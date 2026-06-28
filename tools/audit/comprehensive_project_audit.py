@@ -263,7 +263,7 @@ class ComprehensiveAuditor:
         if self.stats.get('temp_files', 0) > 0:
             print(f"  {Colors.YELLOW}→ Run: find . -name '*.tmp' -o -name '*.bak' | xargs rm{Colors.RESET}")
         if self.stats.get('md_over_limit', 0) > 0:
-            print(f"  {Colors.YELLOW}→ Archive {self.stats['md_over_limit']} MD files to docs/archive/{Colors.RESET}")
+            print(f"  {Colors.YELLOW}→ Move {self.stats['md_over_limit']} MD files to active docs/{{category}}/ folders or delete superseded files{Colors.RESET}")
         
         if total_issues == 0:
             print(f"\n{Colors.GREEN}🎉 PROJECT IS PERFECTLY CLEAN!{Colors.RESET}")
@@ -295,4 +295,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-

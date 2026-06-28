@@ -9,13 +9,12 @@ All project documentation, organized by category. The root of the repository hol
 - `governance/` — `ZOE_DESIGN_PRINCIPLES.md` (the design charter — NORMATIVE for large design changes), cleanup safety, critical-files list, manifest system.
 - `architecture/`, `api/`, `guides/`, `developer/`, `deployment/`, `adr/` — technical reference by audience.
 - `strategy/`, `research/`, `reviews/`, `post-mortems/`, `implementation/`, `performance/` — working documents.
-- `archive/` — retired documents. Move here instead of deleting; excluded from the knowledge graph.
 
 ## Local Contracts
 
 - New documentation goes in `docs/{category}/`, NEVER in the repository root.
 - The charter in `governance/` is normative: read it before large design changes; the enforceable subset is mirrored in `.cursorrules` and `.cursor/rules/`.
-- When in doubt about deleting a doc, move it to `archive/`.
+- Retired documents are removed from the working tree; git history keeps the old bytes. Do not create or restore `docs/archive/`.
 - `knowledge/` is an OKF knowledge bundle (markdown + YAML frontmatter, agent-curatable records — see root "Knowledge vs. Records (OKF)"). It holds descriptive facts, NOT contracts; binding rules stay in `AGENTS.md`.
 
 ## Forbidden
@@ -23,7 +22,7 @@ All project documentation, organized by category. The root of the repository hol
 The autonomous knowledge/memory loop curates `knowledge/` only. It must NEVER:
 - edit any `AGENTS.md` contract (contracts change only via the DOX pass + human review)
 - create, modify, or delete documentation outside `knowledge/`
-- alter `governance/` (the normative charter) or move docs into/out of `archive/`
+- alter `governance/` (the normative charter) or create/restore `docs/archive/`
 - add files to the repository root
 
 ## Work Guidance

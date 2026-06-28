@@ -3,8 +3,8 @@
 Clean Home Directory - Remove Test/Temp Files from /home/pi
 ===========================================================
 
-Moves all test scripts, status reports, and temp files from /home/pi 
-to appropriate locations in PROJECT_ROOT.
+Moves all test scripts, status reports, and temp files from /home/pi
+to appropriate active locations in PROJECT_ROOT.
 """
 
 import os
@@ -48,7 +48,7 @@ def clean_home_directory():
     # Auto-detect project root (works for both Pi and Nano)
     zoe_root = Path(__file__).parent.parent.parent.resolve()
     
-    # Create timestamp for archive
+    # Timestamp grouped moves that still need review.
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     
     moves = {
@@ -87,21 +87,21 @@ def clean_home_directory():
         # Status reports
         if not moved and file.suffix == '.md':
             if any(keyword in file.name.upper() for keyword in ['STATUS', 'SUMMARY', 'REPORT', 'COMPLETE', 'READY', 'DONE', 'FIXED']):
-                target = zoe_root / 'docs' / 'archive' / 'reports' / f"{timestamp}"
+                target = zoe_root / 'docs' / 'reviews' / f"{timestamp}"
                 target.mkdir(parents=True, exist_ok=True)
                 moves['status_reports'].append((file, target / file.name))
                 moved = True
             
             # Feature docs
             elif any(keyword in file.name.upper() for keyword in ['GUIDE', 'DEMO', 'DOCUMENTATION', 'CURRENT_STATE', 'INTEGRATION', 'ENHANCEMENT', 'SYSTEM', 'ROADMAP']):
-                target = zoe_root / 'docs' / 'archive' / 'technical' / f"{timestamp}"
+                target = zoe_root / 'docs' / 'developer' / f"{timestamp}"
                 target.mkdir(parents=True, exist_ok=True)
                 moves['feature_docs'].append((file, target / file.name))
                 moved = True
             
             # Other misc docs
             elif file.name not in ['README.md', 'CHANGELOG.md']:
-                target = zoe_root / 'docs' / 'archive' / 'misc' / f"{timestamp}"
+                target = zoe_root / 'docs' / 'research' / f"{timestamp}"
                 target.mkdir(parents=True, exist_ok=True)
                 moves['misc_docs'].append((file, target / file.name))
                 moved = True
@@ -166,5 +166,4 @@ def clean_home_directory():
 if __name__ == "__main__":
     total = clean_home_directory()
     print(f"\n🎯 /home/pi is now clean!")
-    print(f"💾 All files archived in PROJECT_ROOT with timestamp for recovery")
-
+    print(f"💾 Files moved into active PROJECT_ROOT review folders with timestamp")

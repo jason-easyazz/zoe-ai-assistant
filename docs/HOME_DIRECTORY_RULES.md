@@ -38,7 +38,7 @@
 ### Status Reports & Summaries
 ```
 /home/pi/STATUS_REPORT.md           ❌ WRONG
-/home/zoe/assistant/docs/archive/reports/  ✅ RIGHT
+/home/zoe/assistant/docs/reviews/          ✅ RIGHT
 ```
 
 ### Config Files
@@ -84,7 +84,7 @@ python3 tools/cleanup/clean_home_directory.py
 
 This will:
 - Move test scripts to `zoe/tests/archive/`
-- Move status reports to `zoe/docs/archive/reports/`
+- Move status reports to `zoe/docs/reviews/` or delete if superseded
 - Move configs to `zoe/config/archive/`
 - Move scripts to `zoe/scripts/utilities/archive/`
 - Delete temp files
@@ -174,4 +174,3 @@ After cleanup on 2025-10-08:
 **Remember**: `/home/pi` is NOT a workspace - keep it clean! 🧹
 
 *Last Updated: October 8, 2025*
-
