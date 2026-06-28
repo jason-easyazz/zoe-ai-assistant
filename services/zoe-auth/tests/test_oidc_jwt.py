@@ -182,3 +182,36 @@ def test_token_public_client_still_works_with_pkce_only(token_client):
     resp = client.post("/application/o/token/", data=_token_form())  # no client_secret
     assert resp.status_code == 200
     assert resp.json()["access_token"] == "access-token"
+
+
+def test_token_confidential_client_accepts_secret_via_http_basic(token_client):
+    """Regression: a confidential client may send its secret via HTTP Basic auth."""
+    import base64
+
+    app, monkeypatch = token_client
+    _set_client(monkeypatch, client_id="confidential-app", secret_hash="s3cret")
+    client = TestClient(app)
+    basic = base64.b64encode(b"confidential-app:s3cret").decode()
+    resp = client.post(
+        "/application/o/token/",
+        data=_token_form(),  # no client_secret in the body
+        headers={"Authorization": f"Basic {basic}"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["access_token"] == "access-token"
+
+
+def test_token_rejects_basic_secret_for_mismatched_client_id(token_client):
+    """A Basic header whose client_id differs from the form client_id is ignored."""
+    import base64
+
+    app, monkeypatch = token_client
+    _set_client(monkeypatch, client_id="confidential-app", secret_hash="s3cret")
+    client = TestClient(app)
+    basic = base64.b64encode(b"someone-else:s3cret").decode()
+    resp = client.post(
+        "/application/o/token/",
+        data=_token_form(),
+        headers={"Authorization": f"Basic {basic}"},
+    )
+    assert resp.status_code == 401

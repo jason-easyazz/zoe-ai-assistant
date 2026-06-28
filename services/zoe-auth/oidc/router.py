@@ -364,6 +364,29 @@ async def authorize_complete(
 # Token endpoint
 # ---------------------------------------------------------------------------
 
+def _client_secret_from_basic(authorization: Optional[str], client_id: str) -> Optional[str]:
+    """Extract the client_secret from an HTTP Basic ``Authorization`` header.
+
+    Supports the ``client_secret_basic`` token-endpoint auth method: the header
+    is ``Basic base64(urlencode(client_id):urlencode(client_secret))``. Returns
+    the secret only when the basic-auth client_id matches the request's
+    ``client_id`` (defence against mixing identities), else None.
+    """
+    if not authorization or not authorization.lower().startswith("basic "):
+        return None
+    try:
+        decoded = base64.b64decode(authorization[6:].strip()).decode("utf-8")
+    except Exception:
+        return None
+    basic_id, sep, basic_secret = decoded.partition(":")
+    if not sep:
+        return None
+    from urllib.parse import unquote
+    if unquote(basic_id) != client_id:
+        return None
+    return unquote(basic_secret)
+
+
 @router.post("/application/o/token/")
 async def token(
     request: Request,
@@ -373,6 +396,7 @@ async def token(
     client_id: str = Form(...),
     code_verifier: str = Form(...),
     client_secret: Optional[str] = Form(None),
+    authorization: Optional[str] = Header(None),
 ):
     if grant_type != "authorization_code":
         raise HTTPException(400, "Only grant_type=authorization_code is supported")
@@ -380,6 +404,10 @@ async def token(
     client = get_client(client_id)
     if client is None or not client["is_active"]:
         raise HTTPException(401, detail={"error": "invalid_client"})
+
+    # Accept the secret from either client_secret_post (form body) or
+    # client_secret_basic (HTTP Basic Authorization header), per RFC 6749 §2.3.1.
+    client_secret = client_secret or _client_secret_from_basic(authorization, client_id)
 
     # Confidential clients (a client_secret_hash is registered) MUST present a
     # valid client_secret. Previously the secret was only checked when one was

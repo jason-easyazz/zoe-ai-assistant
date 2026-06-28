@@ -268,49 +268,55 @@ async def login(request: LoginRequest, http_request: Request):
         # Get client IP
         ip_address = http_request.client.host if http_request.client else None
 
+        # Resolve the account first so throttle buckets are keyed on user_id —
+        # the same identity the session-layer gate uses — avoiding username vs
+        # user_id drift that would leave some paths under-throttled.
+        with auth_db.get_connection() as conn:
+            cursor = conn.execute("SELECT user_id, password_hash FROM auth_users WHERE username = ?", (request.username,))
+            user_row = cursor.fetchone()
+            user_id = user_row["user_id"] if user_row else None
+            password_hash = user_row["password_hash"] if user_row else None
+
+        # Throttle identity: the DB user_id for known accounts, else the
+        # submitted username (so login enumeration is still throttled).
+        throttle_id = user_id or request.username
+
         # Brute-force throttle. The hard block is scoped to this exact
-        # (IP, username) pair, so it can neither lock a victim out from other IPs
-        # nor lock a whole NAT/proxy; progressive backoff then slows a hammering
-        # IP without ever denying a valid credential from a clean IP.
-        if rate_limiter.is_hard_blocked("login", ip_address, request.username):
+        # (IP, user) pair — checked first so a blocked pair is denied immediately
+        # — so it can neither lock a victim out from other IPs nor lock a whole
+        # NAT/proxy; progressive backoff then slows a hammering IP without ever
+        # denying a valid credential from a clean IP.
+        if rate_limiter.is_hard_blocked("login", ip_address, throttle_id):
             return AuthResponse(
                 success=False,
                 error_message="Too many login attempts. Please try again later."
             )
-        delay = rate_limiter.delay_for("login", ip_address, request.username)
+        delay = rate_limiter.delay_for("login", ip_address, throttle_id)
         if delay:
             await asyncio.sleep(delay)
 
-        # Look up user by username first
-        with auth_db.get_connection() as conn:
-            cursor = conn.execute("SELECT user_id, password_hash FROM auth_users WHERE username = ?", (request.username,))
-            user_row = cursor.fetchone()
+        if not user_row:
+            # Count unknown-user attempts too so username enumeration via the
+            # login endpoint is throttled.
+            rate_limiter.register_failed_attempt("login", ip_address, throttle_id)
+            return AuthResponse(
+                success=False,
+                error_message="Invalid credentials"
+            )
 
-            if not user_row:
-                # Count unknown-user attempts too so username enumeration via the
-                # login endpoint is throttled.
-                rate_limiter.register_failed_attempt("login", ip_address, request.username)
-                return AuthResponse(
-                    success=False,
-                    error_message="Invalid credentials"
-                )
-
-            user_id = user_row["user_id"]
-            password_hash = user_row["password_hash"]
-
-            # Check if user needs to set password (NULL or 'SETUP_REQUIRED' password_hash)
-            if password_hash is None or password_hash == 'SETUP_REQUIRED':
-                return AuthResponse(
-                    success=False,
-                    error_message="PASSWORD_SETUP_REQUIRED",
-                    requires_escalation=True,
-                    user_info={"user_id": user_id, "username": request.username}
-                )
+        # Check if user needs to set password (NULL or 'SETUP_REQUIRED' password_hash)
+        if password_hash is None or password_hash == 'SETUP_REQUIRED':
+            return AuthResponse(
+                success=False,
+                error_message="PASSWORD_SETUP_REQUIRED",
+                requires_escalation=True,
+                user_info={"user_id": user_id, "username": request.username}
+            )
 
         # Now verify password with user_id
         auth_result = auth_manager.verify_password(user_id, request.password, ip_address)
         if not auth_result.success:
-            rate_limiter.register_failed_attempt("login", ip_address, request.username)
+            rate_limiter.register_failed_attempt("login", ip_address, throttle_id)
             return AuthResponse(
                 success=False,
                 error_message=auth_result.error_message

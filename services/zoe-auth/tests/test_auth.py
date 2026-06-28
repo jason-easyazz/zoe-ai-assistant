@@ -354,7 +354,8 @@ def test_admin_reset_lifts_login_hard_block(sqlite_auth_db, monkeypatch):
         rate_limiter.register_failed_attempt("login", TESTCLIENT_IP, "zoe")
     assert rate_limiter.is_hard_blocked("login", TESTCLIENT_IP, "zoe") is True
 
-    rate_limiter.reset_for(user_id="zoe")  # what the admin endpoint calls
+    # Clearing the IP lifts both the pair hard-block and the per-IP backoff.
+    rate_limiter.reset_for(ip_address=TESTCLIENT_IP)  # what the admin endpoint calls
 
     client = TestClient(app)
     resp = client.post(
