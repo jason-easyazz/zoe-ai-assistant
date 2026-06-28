@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 
 from db_compat import get_compat_db as _get_compat_db
-from proactive.scheduler import register_job, cancel_job
+from proactive.scheduler import register_job, cancel_job, CancelResult
 
 log = logging.getLogger(__name__)
 
@@ -91,11 +91,15 @@ async def schedule_reminder(
 async def cancel_reminder(scheduled_id: str) -> bool:
     """Cancel a scheduled reminder by its proactive_scheduled.id.
 
-    Cancels the APScheduler job FIRST, then deletes the DB row. Deleting the row
-    before cancelling (the old order) could leave an orphan job that still fires
-    against a row that no longer exists. cancel_job() returns False only when the
-    job is already absent (fired / never registered), in which case there is no
-    live job to orphan, so we still drop the now-stale row.
+    Cancels the APScheduler job FIRST, then deletes the DB row only once the job
+    is CONFIRMED gone — either removed now (REMOVED) or already absent (ABSENT).
+    Deleting the row before cancelling (the old order) could leave an orphan job
+    that still fires against a row that no longer exists.
+
+    A real cancel failure (transient jobstore error) propagates out of
+    cancel_job: we do NOT delete the row, so the reminder is not silently
+    orphaned and the error surfaces to the caller. Returns True only when a live
+    job was actually removed; False when the job was already absent.
     """
     async with _get_compat_db() as db:
         async with db.execute(
@@ -107,7 +111,9 @@ async def cancel_reminder(scheduled_id: str) -> bool:
             return False
     job_id = row["apscheduler_job_id"]
 
-    cancelled = cancel_job(job_id)
+    # May raise on a real scheduler failure — intentionally NOT caught, so the
+    # DB row below is reached only after a confirmed REMOVED/ABSENT outcome.
+    result = cancel_job(job_id)
 
     async with _get_compat_db() as db:
         await db.execute(
@@ -115,12 +121,12 @@ async def cancel_reminder(scheduled_id: str) -> bool:
         )
         await db.commit()
 
-    if not cancelled:
+    if result is CancelResult.ABSENT:
         log.warning(
             "cancel_reminder: scheduler job %s was already absent; removed stale row %s",
             job_id, scheduled_id,
         )
-    return cancelled
+    return result is CancelResult.REMOVED
 
 
 async def reschedule_reminder(scheduled_id: str, new_send_at: datetime) -> bool:
