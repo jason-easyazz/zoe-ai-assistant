@@ -266,6 +266,9 @@ class _ZoeCoreWorker:
         async with self._lock:
             await self._reset_locked()
 
+    async def terminate_now(self) -> None:
+        await self._reset_locked()
+
     async def _reset_locked(self) -> None:
         proc = self.proc
         self.proc = None
@@ -620,13 +623,19 @@ async def run_zoe_core(
     return ""
 
 
-async def shutdown_workers() -> None:
+async def shutdown_workers(*, reset_timeout_s: float = 2.0) -> None:
     """Reap all warm brain processes (call on service shutdown)."""
     async with _WORKERS_LOCK:
         workers = list(_WORKERS.values())
         _WORKERS.clear()
     for worker in workers:
         try:
-            await worker.reset()
+            await asyncio.wait_for(worker.reset(), timeout=reset_timeout_s)
+        except asyncio.TimeoutError:
+            logger.warning("zoe-core: worker reset timed out on shutdown; forcing terminate")
+            try:
+                await worker.terminate_now()
+            except Exception:  # noqa: BLE001
+                logger.warning("zoe-core: failed to force-terminate worker on shutdown", exc_info=True)
         except Exception:  # noqa: BLE001
             logger.warning("zoe-core: failed to reap worker on shutdown", exc_info=True)
