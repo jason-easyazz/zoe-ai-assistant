@@ -19,9 +19,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/notes", tags=["notes"])
 
-_MAX_CATEGORY_LENGTH = 512
-
-
 def _row_to_dict(row) -> dict:
     """Convert aiosqlite Row to dict, parsing tags JSON."""
     if row is None:
@@ -93,8 +90,6 @@ async def list_notes(
     """List notes with optional category filter. Returns {notes: [...], count}."""
     await require_feature_access(db, user, feature="notes", action="read")
     user_id = user["user_id"]
-    if category and len(category) > _MAX_CATEGORY_LENGTH:
-        return {"notes": [], "count": 0}
     conditions = [_visibility_filter_sql()]
     params: list = [user_id]
 

@@ -132,27 +132,21 @@ async def test_memory_prompt_search_failure_is_logged_and_nonfatal(monkeypatch, 
     assert "semantic prompt search failed" in caplog.text
 
 
-def test_notes_category_bounds_without_rejecting_plausible_stored_values(monkeypatch):
+def test_notes_category_filter_accepts_long_stored_values(monkeypatch):
     monkeypatch.setattr(notes, "require_feature_access", _allow_feature)
     db = _RecordingDb()
     client = TestClient(_notes_app(db))
 
-    stored_length_category = "c" * notes._MAX_CATEGORY_LENGTH
-    plausible = client.get("/api/notes/", params={"category": stored_length_category})
+    stored_category = "c" * 700
+    plausible = client.get("/api/notes/", params={"category": stored_category})
     assert plausible.status_code == 200
-    assert db.calls[0][1] == ["U1", stored_length_category, 100]
-    assert db.calls[1][1] == ["U1", stored_length_category]
-
-    db.calls.clear()
-    over_bound = client.get("/api/notes/", params={"category": "x" * (notes._MAX_CATEGORY_LENGTH + 1)})
-    assert over_bound.status_code == 200
-    assert over_bound.json() == {"notes": [], "count": 0}
-    assert db.calls == []
+    assert db.calls[0][1] == ["U1", stored_category, 100]
+    assert db.calls[1][1] == ["U1", stored_category]
 
     normal = client.get("/api/notes/", params={"category": "work", "limit": 5})
     assert normal.status_code == 200
-    assert db.calls[0][1] == ["U1", "work", 5]
-    assert db.calls[1][1] == ["U1", "work"]
+    assert db.calls[2][1] == ["U1", "work", 5]
+    assert db.calls[3][1] == ["U1", "work"]
 
 
 def test_memories_like_search_rejects_or_caps_overlong_inputs(monkeypatch):
@@ -160,11 +154,17 @@ def test_memories_like_search_rejects_or_caps_overlong_inputs(monkeypatch):
     db = _RecordingDb()
     client = TestClient(_memories_app(db))
 
-    people = client.get("/api/memories/people", params={"q": "x" * 201})
+    people = client.get(
+        "/api/memories/people",
+        params={"q": "x" * (memories._MAX_LIKE_QUERY_LENGTH + 1)},
+    )
     assert people.status_code == 422
     assert db.calls == []
 
-    preview = client.post("/api/memories/link-preview", json={"query": "y" * 250})
+    preview = client.post(
+        "/api/memories/link-preview",
+        json={"query": "y" * (memories._MAX_LIKE_QUERY_LENGTH + 1)},
+    )
     assert preview.status_code == 422
     assert db.calls == []
 
@@ -181,3 +181,8 @@ def test_memories_normal_like_search_inputs_are_unchanged(monkeypatch):
     preview = client.post("/api/memories/link-preview", json={"query": "tea"})
     assert preview.status_code == 200
     assert db.calls[-1][1][1:] == ["%tea%", "%tea%"]
+
+    long_url = "https://example.com/" + ("p" * 350)
+    preview = client.post("/api/memories/link-preview", json={"url": long_url})
+    assert preview.status_code == 200
+    assert db.calls[-1][1][1:] == [f"%{long_url}%", f"%{long_url}%"]

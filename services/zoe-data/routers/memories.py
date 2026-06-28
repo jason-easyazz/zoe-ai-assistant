@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/memories", tags=["memories"])
 
 _MAX_SEARCH_QUERY_LENGTH = 500
-_MAX_LIKE_QUERY_LENGTH = 200
+_MAX_LIKE_QUERY_LENGTH = 4096
 _MAX_PROMPT_MESSAGE_LENGTH = 1000
 
 
