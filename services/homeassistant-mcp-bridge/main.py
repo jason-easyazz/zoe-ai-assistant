@@ -257,7 +257,7 @@ async def control_device(request: DeviceControlRequest):
             "toggle": "toggle",
             "set_brightness": "turn_on",
             "set_color": "turn_on",
-            "set_temperature": "turn_on",
+            "set_temperature": "set_temperature",
             # media_player
             "media_play": "media_play",
             "media_pause": "media_pause",
@@ -619,4 +619,3 @@ async def ha_voice_turn(request: VoiceTurnRequest):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8007)
-
