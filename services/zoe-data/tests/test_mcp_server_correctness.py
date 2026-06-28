@@ -16,6 +16,8 @@ Covers:
   suppression) and never confirms device delivery.
 """
 
+import asyncio
+import json
 import os
 import sys
 import types
@@ -49,12 +51,84 @@ class _RoutingDb:
         self._routes = routes
         self.calls = []
 
-    async def execute(self, sql, params=()):
+    async def execute(self, sql, *params):
+        if len(params) == 1 and isinstance(params[0], (list, tuple)):
+            params = tuple(params[0])
         self.calls.append((sql, params))
         for needle, rows in self._routes.items():
             if needle in sql:
                 return _Cursor(rows)
         return _Cursor([])
+
+
+class _DashboardTxn:
+    def __init__(self, db):
+        self._db = db
+
+    async def __aenter__(self):
+        await self._db.lock.acquire()
+        self._db.active_transactions += 1
+        self._db.max_active_transactions = max(
+            self._db.max_active_transactions,
+            self._db.active_transactions,
+        )
+        return self
+
+    async def __aexit__(self, *_args):
+        self._db.active_transactions -= 1
+        self._db.lock.release()
+
+
+class _DashboardLayoutDb:
+    def __init__(self, layout=None):
+        self.layout = layout
+        self.calls = []
+        self.lock = asyncio.Lock()
+        self.active_transactions = 0
+        self.max_active_transactions = 0
+
+    def transaction(self):
+        return _DashboardTxn(self)
+
+    async def fetchrow(self, sql, *params):
+        self.calls.append((sql, params))
+        if self.layout is None:
+            return None
+        return {"layout": json.dumps(self.layout)}
+
+    async def execute(self, sql, *params):
+        if len(params) == 1 and isinstance(params[0], (list, tuple)):
+            params = tuple(params[0])
+        self.calls.append((sql, params))
+        if sql.startswith("INSERT INTO dashboard_layouts"):
+            if self.layout is None:
+                self.layout = json.loads(params[1])
+            return "INSERT 0 1"
+        if sql.startswith("UPDATE dashboard_layouts"):
+            self.layout = json.loads(params[0])
+            return "UPDATE 1"
+        return _Cursor([])
+
+
+class _SlowMcpDashboardSaveDb(_DashboardLayoutDb):
+    def __init__(self, layout=None):
+        super().__init__(layout=layout)
+        self.save_update_started = asyncio.Event()
+        self.release_save_update = asyncio.Event()
+        self._held_save_once = False
+
+    async def execute(self, sql, *params):
+        if len(params) == 1 and isinstance(params[0], (list, tuple)):
+            params = tuple(params[0])
+        if (
+            sql.startswith("UPDATE dashboard_layouts")
+            and not self._held_save_once
+            and params[0] == json.dumps([{"id": "tasks", "x": 0, "y": 0, "w": 2, "h": 3}])
+        ):
+            self._held_save_once = True
+            self.save_update_started.set()
+            await self.release_save_update.wait()
+        return await super().execute(sql, *params)
 
 
 # --------------------------------------------------------------------------
@@ -161,7 +235,7 @@ async def test_dashboard_get_layout_targets_explicit_user_not_caller():
 
 @pytest.mark.asyncio
 async def test_dashboard_save_layout_targets_explicit_user_not_caller():
-    db = _RoutingDb({"dashboard_layouts": []})
+    db = _DashboardLayoutDb()
 
     result = await mcp_server._execute_tool(
         db=db,
@@ -172,8 +246,48 @@ async def test_dashboard_save_layout_targets_explicit_user_not_caller():
     assert result["status"] == "ok"
     sql, params = db.calls[0]
     assert "INSERT INTO dashboard_layouts" in sql
-    # uid is the first bound param of the upsert.
+    # uid is the first bound param of the ensure-row insert.
     assert params[0] == "target"
+    assert any("FOR UPDATE" in sql for sql, _params in db.calls)
+
+
+@pytest.mark.asyncio
+async def test_dashboard_save_layout_serializes_with_add_widget_on_layout_lock():
+    db = _SlowMcpDashboardSaveDb(
+        layout=[{"id": "weather", "x": 0, "y": 0, "w": 2, "h": 2}]
+    )
+
+    save_task = asyncio.create_task(
+        mcp_server._execute_tool(
+            db=db,
+            name="dashboard_save_layout",
+            args={
+                "_user_id": "u1",
+                "layout": [{"id": "tasks", "x": 0, "y": 0, "w": 2, "h": 3}],
+            },
+        )
+    )
+    await db.save_update_started.wait()
+
+    add_task = asyncio.create_task(
+        mcp_server._execute_tool(
+            db=db,
+            name="dashboard_add_widget",
+            args={"_user_id": "u1", "widgets": ["events"]},
+        )
+    )
+
+    await asyncio.sleep(0)
+    assert not add_task.done()
+
+    db.release_save_update.set()
+    save_result, add_result = await asyncio.gather(save_task, add_task)
+
+    assert save_result == {"status": "ok"}
+    assert add_result == {"status": "ok", "added": ["events"]}
+    assert {widget["id"] for widget in db.layout} == {"tasks", "events"}
+    assert db.max_active_transactions == 1
+    assert sum("FOR UPDATE" in sql for sql, _params in db.calls) >= 2
 
 
 @pytest.mark.asyncio
