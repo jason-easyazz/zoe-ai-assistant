@@ -144,6 +144,36 @@ def test_data_url_read_lazily_and_defaults_to_8011(monkeypatch):
     assert zc._data_url() == "http://127.0.0.1:9999"
 
 
+@pytest.mark.asyncio
+async def test_shutdown_workers_force_terminates_after_reset_timeout():
+    import zoe_core_client as zc
+
+    class StuckWorker:
+        def __init__(self) -> None:
+            self.reset_called = False
+            self.terminate_called = False
+
+        async def reset(self) -> None:
+            self.reset_called = True
+            await asyncio.Event().wait()
+
+        async def terminate_now(self) -> None:
+            self.terminate_called = True
+
+    worker = StuckWorker()
+    async with zc._WORKERS_LOCK:
+        zc._WORKERS.clear()
+        zc._WORKERS[("jason", "stuck", False)] = worker
+    try:
+        await zc.shutdown_workers(reset_timeout_s=0.01)
+    finally:
+        async with zc._WORKERS_LOCK:
+            zc._WORKERS.clear()
+
+    assert worker.reset_called is True
+    assert worker.terminate_called is True
+
+
 @pytest.mark.integration
 @requires_env
 @pytest.mark.asyncio

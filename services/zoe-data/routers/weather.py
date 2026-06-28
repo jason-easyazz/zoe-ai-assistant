@@ -12,6 +12,7 @@ Geocoding (location search):
 """
 import os
 import json
+import logging
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Optional
@@ -25,6 +26,7 @@ from models import WeatherPreferences
 from push import broadcaster
 
 router = APIRouter(prefix="/api/weather", tags=["weather"])
+logger = logging.getLogger(__name__)
 
 OPENWEATHERMAP_API_KEY = os.environ.get("OPENWEATHERMAP_API_KEY", "")
 _weather_cache: dict = {}
@@ -199,8 +201,9 @@ async def _fetch_openmeteo_current(lat: float, lon: float, city: str, country: s
         }
         _weather_cache["current"] = result
         return result
-    except Exception as e:
-        return _weather_cache.get("current", {"cached": False, "error": str(e)})
+    except Exception:
+        logger.exception("open-meteo current weather fetch failed")
+        return _weather_cache.get("current", {"cached": False, "error": "Weather provider unavailable"})
 
 
 async def _fetch_openmeteo_forecast(lat: float, lon: float) -> dict:
@@ -225,8 +228,9 @@ async def _fetch_openmeteo_forecast(lat: float, lon: float) -> dict:
             hourly_raw = {"times": data["hourly"]["time"], "temps": data["hourly"]["temperature_2m"],
                           "codes": data["hourly"]["weathercode"]}
             daily_raw  = data.get("daily", {})
-        except Exception as e:
-            return _weather_cache.get("forecast", {"hourly": [], "daily": [], "error": str(e)})
+        except Exception:
+            logger.exception("open-meteo forecast fetch failed")
+            return _weather_cache.get("forecast", {"hourly": [], "daily": [], "error": "Weather provider unavailable"})
 
     # Hourly: next 8 slots from now
     now = datetime.now()
@@ -306,8 +310,9 @@ async def _fetch_owm_current(lat: float, lon: float, city: str, country: str) ->
         }
         _weather_cache["current"] = result
         return result
-    except Exception as e:
-        return _weather_cache.get("current", {"cached": False, "error": str(e)})
+    except Exception:
+        logger.exception("openweathermap current weather fetch failed")
+        return _weather_cache.get("current", {"cached": False, "error": "Weather provider unavailable"})
 
 
 async def _fetch_owm_forecast(lat: float, lon: float) -> dict:
@@ -355,8 +360,9 @@ async def _fetch_owm_forecast(lat: float, lon: float) -> dict:
         result = {"hourly": hourly, "daily": daily}
         _weather_cache["forecast"] = result
         return result
-    except Exception as e:
-        return _weather_cache.get("forecast", {"hourly": [], "daily": [], "error": str(e)})
+    except Exception:
+        logger.exception("openweathermap forecast fetch failed")
+        return _weather_cache.get("forecast", {"hourly": [], "daily": [], "error": "Weather provider unavailable"})
 
 
 # ─── Public route helpers ─────────────────────────────────────────────────────
@@ -521,5 +527,6 @@ async def search_locations(query: str = "", limit: int = 8, user: dict = Depends
             if i.get("latitude") is not None
         ]
         return {"results": results}
-    except Exception as e:
-        return {"results": [], "error": str(e)}
+    except Exception:
+        logger.exception("weather location search failed")
+        return {"results": [], "error": "Location search unavailable"}

@@ -174,6 +174,26 @@ class AiortcRoom:
         self._ice_gathering_complete = asyncio.Event()
         self._last_pong_at: Optional[float] = None
         self._use_structured_ping = hasattr(lk_rtc.SignalRequest(), "ping_req")
+        # Strong refs to fire-and-forget coroutines (emitted handlers, track
+        # handling). Without these the event loop only keeps a weak ref, so a task
+        # can be garbage-collected mid-flight and its exception silently lost.
+        self._bg_tasks: set = set()
+
+    def _spawn_bg(self, coro) -> asyncio.Task:
+        """Schedule a background coroutine, hold a strong ref until it finishes, and
+        surface any exception instead of letting it vanish into a GC'd task."""
+        task = asyncio.ensure_future(coro)
+        self._bg_tasks.add(task)
+
+        def _done(t: asyncio.Task) -> None:
+            self._bg_tasks.discard(t)
+            if not t.cancelled():
+                exc = t.exception()
+                if exc is not None:
+                    log.warning("[aiortc] background task error: %s", exc)
+
+        task.add_done_callback(_done)
+        return task
 
     # ── Event API ─────────────────────────────────────────────────────────────
     def on(self, event: str):
@@ -187,7 +207,7 @@ class AiortcRoom:
         for fn in self._handlers.get(event, []):
             result = fn(*args, **kwargs)
             if asyncio.iscoroutine(result):
-                asyncio.ensure_future(result)
+                self._spawn_bg(result)
 
     # ── Public API ────────────────────────────────────────────────────────────
     @property
@@ -239,6 +259,12 @@ class AiortcRoom:
             except asyncio.CancelledError:
                 pass
         self._signal_task = None
+        # Cancel any still-running emitted/track-handling background tasks so they
+        # don't outlive the room.
+        for task in list(self._bg_tasks):
+            if task is not current and not task.done():
+                task.cancel()
+        self._bg_tasks.clear()
 
     # ── Signalling loop ───────────────────────────────────────────────────────
     async def _signal_loop(self) -> None:
@@ -406,7 +432,7 @@ class AiortcRoom:
         def on_track(track):
             log.info("[aiortc] Track received: kind=%s id=%s", track.kind, track.id)
             if track.kind == "audio":
-                asyncio.ensure_future(self._handle_audio_track(track))
+                self._spawn_bg(self._handle_audio_track(track))
 
         @pc.on("datachannel")
         def on_dc(channel):

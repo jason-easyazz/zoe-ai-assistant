@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 
 from db_compat import get_compat_db as _get_compat_db
-from proactive.scheduler import register_job, cancel_job
+from proactive.scheduler import register_job, cancel_job, CancelResult
 
 log = logging.getLogger(__name__)
 
@@ -61,18 +61,46 @@ async def schedule_reminder(
         )
         await db.commit()
 
-    register_job(
-        func=_fire_reminder,
-        run_at=send_at,
-        job_id=job_id,
-        kwargs={"pending_id": row_id, "user_id": user_id, "message": message},
-    )
+    # Register the scheduler job AFTER the row exists. If registration fails the
+    # row would otherwise linger as a "scheduled" reminder that can never fire,
+    # so compensate by deleting the orphan row before re-raising.
+    try:
+        register_job(
+            func=_fire_reminder,
+            run_at=send_at,
+            job_id=job_id,
+            kwargs={"pending_id": row_id, "user_id": user_id, "message": message},
+        )
+    except Exception:
+        log.exception(
+            "schedule_reminder: job registration failed for %s; removing orphan row", row_id
+        )
+        try:
+            async with _get_compat_db() as db:
+                await db.execute(
+                    "DELETE FROM proactive_scheduled WHERE id = ?", (row_id,)
+                )
+                await db.commit()
+        except Exception:
+            log.error("schedule_reminder: failed to remove orphan row %s", row_id)
+        raise
     log.info("Scheduled reminder %s for user %s at %s", row_id, user_id, send_str)
     return row_id
 
 
 async def cancel_reminder(scheduled_id: str) -> bool:
-    """Cancel a scheduled reminder by its proactive_scheduled.id."""
+    """Cancel a scheduled reminder by its proactive_scheduled.id.
+
+    Cancels the APScheduler job FIRST, then deletes the DB row only once the job
+    is CONFIRMED gone — either removed now (REMOVED) or already absent (ABSENT).
+    Deleting the row before cancelling (the old order) could leave an orphan job
+    that still fires against a row that no longer exists.
+
+    A real cancel failure (transient jobstore error) propagates out of
+    cancel_job: we do NOT delete the row, so the reminder is not silently
+    orphaned and the error surfaces to the caller. Returns True only when a live
+    job was actually removed; False when the job was already absent.
+    """
     async with _get_compat_db() as db:
         async with db.execute(
             "SELECT apscheduler_job_id FROM proactive_scheduled WHERE id = ?",
@@ -81,13 +109,24 @@ async def cancel_reminder(scheduled_id: str) -> bool:
             row = await cur.fetchone()
         if row is None:
             return False
-        job_id = row["apscheduler_job_id"]
+    job_id = row["apscheduler_job_id"]
+
+    # May raise on a real scheduler failure — intentionally NOT caught, so the
+    # DB row below is reached only after a confirmed REMOVED/ABSENT outcome.
+    result = cancel_job(job_id)
+
+    async with _get_compat_db() as db:
         await db.execute(
             "DELETE FROM proactive_scheduled WHERE id = ?", (scheduled_id,)
         )
         await db.commit()
 
-    return cancel_job(job_id)
+    if result is CancelResult.ABSENT:
+        log.warning(
+            "cancel_reminder: scheduler job %s was already absent; removed stale row %s",
+            job_id, scheduled_id,
+        )
+    return result is CancelResult.REMOVED
 
 
 async def reschedule_reminder(scheduled_id: str, new_send_at: datetime) -> bool:
