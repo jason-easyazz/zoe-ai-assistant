@@ -287,7 +287,6 @@ routers/
 │   └── self_awareness.py    # Self-awareness
 ├── integrations/
 │   ├── homeassistant.py     # Home Assistant
-│   ├── n8n.py               # N8N workflows
 │   ├── weather.py           # Weather service
 │   └── mcp.py               # Model Context Protocol
 └── system/
@@ -478,8 +477,7 @@ services/
 │   └── zoe-ui/
 ├── integrations/      # Integration services
 │   ├── homeassistant-mcp-bridge/
-│   ├── n8n-mcp-bridge/
-│   └── zoe-mcp-server/
+│   └── zoe-mcp-server/         # n8n-mcp-bridge retired (March 2026); only the n8n SSO code path remains in zoe-auth/sso/n8n.py
 ├── ai/                # AI services
 │   ├── mem-agent/
 │   ├── zoe-ollama/    (reference only, runs in Docker)
@@ -605,7 +603,7 @@ data/
 | zoe-whisper | 9001 | Speech-to-text | ✅ Healthy |
 | zoe-tts | 9002 | Text-to-speech | ✅ Healthy |
 | zoe-mcp-server | 8003 | MCP integration | ✅ Healthy |
-| zoe-n8n | 5678 | Workflow automation | ✅ Healthy |
+| zoe-n8n | 5678 | Workflow automation | ⛔ Retired (Mar 2026 — OpenClaw covers automation) |
 | cloudflared | - | Secure tunnel | ✅ Healthy |
 
 ### ✅ Strengths

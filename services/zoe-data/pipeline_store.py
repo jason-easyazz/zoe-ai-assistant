@@ -30,8 +30,8 @@ from pipeline_evidence import (
 )
 
 _PHASE_SKILLS: dict[str, tuple[str, ...]] = {
-    "scout": ("zoe-graphify", "zoe-engineering"),
-    "implement": ("zoe-engineering", "zoe-graphify", "source-code-context", "code-structure-cleanup"),
+    "scout": ("codebase-memory", "zoe-engineering"),
+    "implement": ("zoe-engineering", "codebase-memory", "serena", "source-code-context", "code-structure-cleanup"),
     "verify": ("zoe-engineering",),
     "review": ("zoe-engineering",),
     "closeout": ("github-greptile-loop",),
