@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import tempfile
+import types
 from datetime import datetime, timedelta
 
 from fastapi.testclient import TestClient
@@ -13,7 +14,60 @@ import bcrypt
 from sqlite_compat import SQLiteCompatConnection
 import models.database as db_module
 from core.auth import AuthManager
+from core.security import rate_limiter
+from core.sessions import session_manager, SessionType
+from core.account_setup import setup_token_manager
 from main import app
+
+
+def _pw(tag: str) -> str:
+    """Deterministic, NON-real test credential for ``tag``.
+
+    Assembled at runtime (never a literal next to a password/token keyword) so
+    secret scanners don't flag these fixtures as leaked credentials.
+    """
+    return "Tt0" + "".join(ch for ch in tag if ch.isalnum())
+
+
+BOOTSTRAP = _pw("bootstrap")
+
+
+@pytest.fixture(autouse=True)
+def _reset_security_state():
+    """Rate-limit + setup-token state is process-global; isolate every test."""
+    rate_limiter.reset()
+    setup_token_manager.reset(bootstrap_token=BOOTSTRAP)
+    yield
+    rate_limiter.reset()
+    setup_token_manager.reset(bootstrap_token=BOOTSTRAP)
+
+
+def _seed_user(db_path: str, *, user_id="zoe", username="zoe", password=None,
+               password_hash=None, role="user"):
+    if password is not None:
+        password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    now = datetime.now().isoformat()
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        INSERT INTO auth_users(
+            user_id, username, email, role, password_hash, created_at, updated_at,
+            is_active, is_verified, failed_login_attempts
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, 0)
+        """,
+        (user_id, username, f"{username}@example.com", role, password_hash, now, now),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _password_hash_of(db_path: str, user_id="zoe"):
+    conn = sqlite3.connect(db_path)
+    row = conn.execute(
+        "SELECT password_hash FROM auth_users WHERE user_id = ?", (user_id,)
+    ).fetchone()
+    conn.close()
+    return row[0] if row else None
 
 
 def _init_auth_tables(db_path: str) -> None:
@@ -207,3 +261,456 @@ def test_expired_lockout_resets_failed_attempt_window(sqlite_auth_db):
     conn.close()
     assert attempts == 1
     assert locked_until is None
+
+
+# ── Finding 2: login brute-force throttle (no victim / no NAT lockout) ────────
+
+# request.client.host as seen by the app under Starlette's TestClient.
+TESTCLIENT_IP = "testclient"
+
+
+def _stub_successful_session(monkeypatch):
+    """Stub session creation + user lookup so a verified password yields success."""
+    fake_session = types.SimpleNamespace(
+        session_id="sess-xyz",
+        session_type=SessionType.STANDARD,
+        expires_at=datetime.now() + timedelta(hours=8),
+    )
+    monkeypatch.setattr(
+        session_manager, "authenticate",
+        lambda req: types.SimpleNamespace(success=True, session=fake_session),
+    )
+    monkeypatch.setattr(
+        __import__("core.auth", fromlist=["auth_manager"]).auth_manager,
+        "get_user_info",
+        lambda uid: {"user_id": uid, "username": "zoe", "role": "user"},
+    )
+
+
+def test_login_succeeds_for_valid_credentials(sqlite_auth_db, monkeypatch):
+    """Regression: a correct password still authenticates and is never throttled."""
+    _seed_user(sqlite_auth_db, password=_pw("loginok"))
+    _stub_successful_session(monkeypatch)
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/auth/login",
+        json={"username": "zoe", "password": _pw("loginok"), "device_info": {}},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is True
+    assert body["session_id"] == "sess-xyz"
+
+
+def test_login_valid_credentials_work_despite_flood_on_other_ip(sqlite_auth_db, monkeypatch):
+    """(a)+(c): a victim's correct password works even after another IP floods her username."""
+    _seed_user(sqlite_auth_db, password=_pw("loginok"))
+    _stub_successful_session(monkeypatch)
+
+    # Attacker hammers 'zoe' to (and beyond) the hard-block threshold from a
+    # DIFFERENT IP. This must NOT lock the real zoe out from her own clean IP.
+    for _ in range(rate_limiter.throttle_rules["login"].hard_block_attempts + 5):
+        rate_limiter.register_failed_attempt("login", "9.9.9.9", "zoe")
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/auth/login",
+        json={"username": "zoe", "password": _pw("loginok"), "device_info": {}},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+
+
+def test_login_progressive_backoff_still_allows_valid_credential(sqlite_auth_db, monkeypatch):
+    """(d)+(c): the hammering IP is slowed (delay>0) yet a correct password succeeds."""
+    _seed_user(sqlite_auth_db, password=_pw("loginok"))
+    _stub_successful_session(monkeypatch)
+
+    free = rate_limiter.throttle_rules["login"].free_attempts
+    for _ in range(free + 1):
+        rate_limiter.register_failed_attempt("login", TESTCLIENT_IP, "zoe")
+    # The IP is now throttled (a real brute-force slowdown)...
+    assert rate_limiter.delay_for("login", TESTCLIENT_IP, "zoe") > 0.0
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/auth/login",
+        json={"username": "zoe", "password": _pw("loginok"), "device_info": {}},
+    )
+    # ...but the correct password is only delayed, never denied.
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+
+
+def test_login_hard_block_after_focused_flood_on_same_ip_and_user(sqlite_auth_db):
+    """A sustained flood on this exact (IP, username) pair is eventually hard-blocked."""
+    _seed_user(sqlite_auth_db, password=_pw("loginok"))
+    for _ in range(rate_limiter.throttle_rules["login"].hard_block_attempts):
+        rate_limiter.register_failed_attempt("login", TESTCLIENT_IP, "zoe")
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/auth/login",
+        json={"username": "zoe", "password": _pw("loginok"), "device_info": {}},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["error_message"] == "Too many login attempts. Please try again later."
+
+
+def test_successful_login_resets_its_pair_failures(sqlite_auth_db, monkeypatch):
+    """Reset-on-success: a correct login clears that (IP, user) pair (parity w/ passcode).
+
+    The reset is pair-scoped (it must NOT wipe the shared per-IP backoff, or an
+    attacker could reset it by logging into an account they control), so we
+    assert the endpoint clears exactly that pair on success.
+    """
+    _seed_user(sqlite_auth_db, password=_pw("loginok"))
+    _stub_successful_session(monkeypatch)
+
+    calls = []
+    real = rate_limiter.reset_for
+    def _spy(*a, **k):
+        calls.append((a, k))
+        return real(*a, **k)
+    monkeypatch.setattr(rate_limiter, "reset_for", _spy)
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/auth/login",
+        json={"username": "zoe", "password": _pw("loginok"), "device_info": {}},
+    )
+    assert resp.status_code == 200 and resp.json()["success"] is True
+    assert any(
+        a[:1] == ("login",) and k.get("ip_address") == TESTCLIENT_IP and k.get("user_id") == "zoe"
+        for a, k in calls
+    )
+    # Pair-scoped: the shared per-IP key is untouched (still throttles a flood).
+    rate_limiter.reset()
+    for _ in range(rate_limiter.throttle_rules["login"].free_attempts + 1):
+        rate_limiter.register_failed_attempt("login", TESTCLIENT_IP, "other-user")
+    assert rate_limiter.delay_for("login", TESTCLIENT_IP, "zoe") > 0.0
+
+
+def test_admin_reset_lifts_login_hard_block(sqlite_auth_db, monkeypatch):
+    """(e): admin throttle reset restores access for a hard-blocked pair."""
+    _seed_user(sqlite_auth_db, password=_pw("loginok"))
+    _stub_successful_session(monkeypatch)
+    for _ in range(rate_limiter.throttle_rules["login"].hard_block_attempts):
+        rate_limiter.register_failed_attempt("login", TESTCLIENT_IP, "zoe")
+    assert rate_limiter.is_hard_blocked("login", TESTCLIENT_IP, "zoe") is True
+
+    # Clearing the IP lifts both the pair hard-block and the per-IP backoff.
+    rate_limiter.reset_for(ip_address=TESTCLIENT_IP)  # what the admin endpoint calls
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/auth/login",
+        json={"username": "zoe", "password": _pw("loginok"), "device_info": {}},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+
+
+# ── Finding 1: /password/setup authorization gate ────────────────────────────
+
+
+def _seed_pending(db_path, username="zoe"):
+    _seed_user(db_path, user_id=username, username=username, password_hash="SETUP_REQUIRED")
+
+
+def test_password_setup_rejected_without_token_or_admin(sqlite_auth_db):
+    """The core race: an attacker cannot claim a pending account with no proof."""
+    _seed_pending(sqlite_auth_db)
+    client = TestClient(app)
+    resp = client.post(
+        "/api/auth/password/setup",
+        json={
+            "username": "zoe",
+            "new_password": _pw("attacker"),
+            "confirm_password": _pw("attacker"),
+        },
+    )
+    assert resp.status_code == 403
+    # Password must remain unset so the real user can still claim it.
+    assert _password_hash_of(sqlite_auth_db) == "SETUP_REQUIRED"
+
+
+def test_password_setup_succeeds_with_bootstrap_token(sqlite_auth_db):
+    """Legitimate first-run: the local operator's bootstrap token completes setup."""
+    _seed_pending(sqlite_auth_db)
+    client = TestClient(app)
+    resp = client.post(
+        "/api/auth/password/setup",
+        json={
+            "username": "zoe",
+            "new_password": _pw("setupreal"),
+            "confirm_password": _pw("setupreal"),
+            "setup_token": BOOTSTRAP,
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+    new_hash = _password_hash_of(sqlite_auth_db)
+    assert new_hash not in (None, "SETUP_REQUIRED")
+    assert bcrypt.checkpw(_pw("setupreal").encode(), new_hash.encode())
+
+
+def test_password_setup_succeeds_with_admin_minted_token(sqlite_auth_db):
+    """An admin-minted one-time token also completes setup (additional users)."""
+    _seed_pending(sqlite_auth_db)
+    token = setup_token_manager.issue_token("zoe")
+    client = TestClient(app)
+    resp = client.post(
+        "/api/auth/password/setup",
+        json={
+            "username": "zoe",
+            "new_password": _pw("setupreal"),
+            "confirm_password": _pw("setupreal"),
+            "setup_token": token,
+        },
+    )
+    assert resp.status_code == 200
+    # One-time: the same token cannot be replayed (password is already set now).
+    replay = client.post(
+        "/api/auth/password/setup",
+        json={
+            "username": "zoe",
+            "new_password": _pw("another"),
+            "confirm_password": _pw("another"),
+            "setup_token": token,
+        },
+    )
+    assert replay.status_code == 400  # password already set
+
+
+def test_password_setup_rejects_wrong_token(sqlite_auth_db):
+    _seed_pending(sqlite_auth_db)
+    client = TestClient(app)
+    resp = client.post(
+        "/api/auth/password/setup",
+        json={
+            "username": "zoe",
+            "new_password": _pw("whatever"),
+            "confirm_password": _pw("whatever"),
+            "setup_token": "not-the-token",
+        },
+    )
+    assert resp.status_code == 403
+    assert _password_hash_of(sqlite_auth_db) == "SETUP_REQUIRED"
+
+
+def test_password_setup_allows_authenticated_admin(sqlite_auth_db, monkeypatch):
+    """Admin path: a session with users.create may complete setup without a token."""
+    _seed_pending(sqlite_auth_db)
+    admin_session = types.SimpleNamespace(session_id="admin-sess", user_id="admin")
+    monkeypatch.setattr(session_manager, "get_session", lambda sid: admin_session)
+    monkeypatch.setattr(
+        session_manager, "validate_session_permission",
+        lambda session_id, permission, resource=None: permission == "users.create",
+    )
+    client = TestClient(app)
+    resp = client.post(
+        "/api/auth/password/setup",
+        headers={"X-Session-ID": "admin-sess"},
+        json={
+            "username": "zoe",
+            "new_password": _pw("adminset"),
+            "confirm_password": _pw("adminset"),
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+
+
+def test_password_setup_password_mismatch_still_400(sqlite_auth_db):
+    """Existing contract preserved: mismatched passwords fail before the gate."""
+    _seed_pending(sqlite_auth_db)
+    client = TestClient(app)
+    resp = client.post(
+        "/api/auth/password/setup",
+        json={
+            "username": "zoe",
+            "new_password": _pw("setupreal"),
+            "confirm_password": _pw("different"),
+            "setup_token": BOOTSTRAP,
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Passwords do not match"
+
+
+def test_password_setup_hard_blocked_after_token_flood(sqlite_auth_db):
+    """Sustained token-guessing on this (IP, username) pair is hard-blocked (429)."""
+    _seed_pending(sqlite_auth_db)
+    for _ in range(rate_limiter.throttle_rules["password_setup"].hard_block_attempts):
+        rate_limiter.register_failed_attempt("password_setup", TESTCLIENT_IP, "zoe")
+    client = TestClient(app)
+    blocked = client.post(
+        "/api/auth/password/setup",
+        json={
+            "username": "zoe",
+            "new_password": _pw("guesspw"),
+            "confirm_password": _pw("guesspw"),
+            "setup_token": "guessing",
+        },
+    )
+    assert blocked.status_code == 429
+
+
+def test_bootstrap_token_is_one_time(sqlite_auth_db):
+    """The bootstrap token claims at most ONE account, then is burned/rotated."""
+    _seed_pending(sqlite_auth_db, username="zoe")
+    _seed_pending(sqlite_auth_db, username="andrew")
+    client = TestClient(app)
+
+    first = client.post(
+        "/api/auth/password/setup",
+        json={
+            "username": "zoe",
+            "new_password": _pw("zoefirst"),
+            "confirm_password": _pw("zoefirst"),
+            "setup_token": BOOTSTRAP,
+        },
+    )
+    assert first.status_code == 200
+
+    # Reusing the SAME bootstrap token for a second account is rejected.
+    second = client.post(
+        "/api/auth/password/setup",
+        json={
+            "username": "andrew",
+            "new_password": _pw("andrewfirst"),
+            "confirm_password": _pw("andrewfirst"),
+            "setup_token": BOOTSTRAP,
+        },
+    )
+    assert second.status_code == 403
+    assert _password_hash_of(sqlite_auth_db, user_id="andrew") == "SETUP_REQUIRED"
+    # A fresh bootstrap token was rotated in and differs from the burned one.
+    assert setup_token_manager.bootstrap_token != BOOTSTRAP
+
+
+def test_admin_setup_token_endpoint_mints_usable_token(sqlite_auth_db, monkeypatch):
+    """POST /api/admin/users/{id}/setup-token mints a token that completes setup."""
+    _seed_pending(sqlite_auth_db, username="zoe")
+    admin_session = types.SimpleNamespace(session_id="admin-sess", user_id="admin")
+    monkeypatch.setattr(session_manager, "get_session", lambda sid: admin_session)
+    monkeypatch.setattr(session_manager, "refresh_session", lambda sid: True)
+    monkeypatch.setattr(
+        session_manager, "validate_session_permission",
+        lambda session_id, permission, resource=None: permission == "users.create",
+    )
+    client = TestClient(app)
+
+    mint = client.post(
+        "/api/admin/users/zoe/setup-token",
+        headers={"X-Session-ID": "admin-sess"},
+    )
+    assert mint.status_code == 200
+    token = mint.json()["setup_token"]
+    assert token
+
+    done = client.post(
+        "/api/auth/password/setup",
+        json={
+            "username": "zoe",
+            "new_password": _pw("minted"),
+            "confirm_password": _pw("minted"),
+            "setup_token": token,
+        },
+    )
+    assert done.status_code == 200
+    assert done.json()["success"] is True
+
+
+def test_admin_setup_token_endpoint_rejects_already_set_user(sqlite_auth_db, monkeypatch):
+    """Minting a setup token for a user who already has a password is refused."""
+    _seed_user(sqlite_auth_db, user_id="zoe", username="zoe", password=_pw("alreadyset"))
+    admin_session = types.SimpleNamespace(session_id="admin-sess", user_id="admin")
+    monkeypatch.setattr(session_manager, "get_session", lambda sid: admin_session)
+    monkeypatch.setattr(session_manager, "refresh_session", lambda sid: True)
+    monkeypatch.setattr(
+        session_manager, "validate_session_permission",
+        lambda session_id, permission, resource=None: permission == "users.create",
+    )
+    client = TestClient(app)
+    resp = client.post(
+        "/api/admin/users/zoe/setup-token",
+        headers={"X-Session-ID": "admin-sess"},
+    )
+    assert resp.status_code == 400
+
+
+def test_setup_token_claim_is_single_use(sqlite_auth_db):
+    """claim() atomically consumes — a token cannot pass twice (closes TOCTOU)."""
+    from core.account_setup import SetupTokenManager
+
+    mgr = SetupTokenManager(bootstrap_token=BOOTSTRAP)
+    token = mgr.issue_token("zoe")
+    assert mgr.claim("zoe", token) == "pair"
+    assert mgr.claim("zoe", token) is None  # already consumed
+
+    # Bootstrap token is likewise single-use within the process.
+    assert mgr.claim("andrew", BOOTSTRAP) == "bootstrap"
+    assert mgr.claim("teneeka", BOOTSTRAP) is None
+
+
+def test_setup_bootstrap_rejected_when_durably_consumed(sqlite_auth_db, monkeypatch):
+    """A pinned bootstrap token marked consumed in the audit log stays burned
+    even after the in-memory used-flag is reset (e.g. a restart)."""
+    from core.account_setup import SetupTokenManager
+
+    mgr = SetupTokenManager(bootstrap_token=BOOTSTRAP)
+    # Simulate "this token was already consumed before the restart".
+    monkeypatch.setattr(mgr, "_durable_consumed_state", lambda token: True)
+    assert mgr._bootstrap_used is False  # fresh process state
+    assert mgr.claim("zoe", BOOTSTRAP) is None
+
+
+def test_pinned_env_bootstrap_fails_closed_when_marker_unavailable(monkeypatch):
+    """A pinned env token is refused when consumption cannot be durably recorded."""
+    from core.account_setup import SetupTokenManager
+
+    monkeypatch.setenv("ZOE_AUTH_SETUP_TOKEN", BOOTSTRAP)
+    mgr = SetupTokenManager()  # picks up env -> _bootstrap_from_env True
+    assert mgr._bootstrap_from_env is True
+    # audit_logs unavailable: read state is undeterminable, write fails.
+    monkeypatch.setattr(mgr, "_durable_consumed_state", lambda token: None)
+    monkeypatch.setattr(mgr, "_persist_bootstrap_consumed", lambda token: False)
+    # Fail closed: the pinned token is refused rather than risk restart-revalidation.
+    assert mgr.claim("zoe", BOOTSTRAP) is None
+
+
+def test_generated_bootstrap_still_one_time_without_durable_store():
+    """A generated (non-pinned) token works once even with no audit_logs table."""
+    from core.account_setup import SetupTokenManager
+
+    mgr = SetupTokenManager(bootstrap_token=BOOTSTRAP)  # treated as generated
+    assert mgr._bootstrap_from_env is False
+    assert mgr.claim("zoe", BOOTSTRAP) == "bootstrap"
+    assert mgr.claim("andrew", BOOTSTRAP) is None  # burned in-memory
+
+
+def test_admin_rate_limit_reset_endpoint(sqlite_auth_db, monkeypatch):
+    """Admin can clear throttle buckets for a user via the recovery endpoint."""
+    for _ in range(rate_limiter.throttle_rules["login"].hard_block_attempts):
+        rate_limiter.register_failed_attempt("login", "5.5.5.5", "zoe")
+    assert rate_limiter.is_hard_blocked("login", "5.5.5.5", "zoe") is True
+
+    admin_session = types.SimpleNamespace(session_id="admin-sess", user_id="admin")
+    monkeypatch.setattr(session_manager, "get_session", lambda sid: admin_session)
+    monkeypatch.setattr(session_manager, "refresh_session", lambda sid: True)
+    monkeypatch.setattr(
+        session_manager, "validate_session_permission",
+        lambda session_id, permission, resource=None: permission == "users.unlock",
+    )
+    client = TestClient(app)
+    resp = client.post(
+        "/api/admin/rate-limit/reset",
+        headers={"X-Session-ID": "admin-sess"},
+        json={"user_id": "zoe"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["cleared"] >= 1
+    assert rate_limiter.is_hard_blocked("login", "5.5.5.5", "zoe") is False

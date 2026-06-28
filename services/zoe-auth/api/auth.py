@@ -8,14 +8,18 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime
+import asyncio
 import logging
 
 from core.auth import auth_manager
 from core.passcode import passcode_manager
 from core.sessions import session_manager, AuthenticationRequest, SessionType, AuthMethod
 from core.rbac import rbac_manager
+from core.security import rate_limiter
+from core.account_setup import setup_token_manager
 from models.database import auth_db
 from api.dependencies import get_current_session, require_permission, validate_session_timeout
+from api.dependencies import optional_session
 
 logger = logging.getLogger(__name__)
 
@@ -50,10 +54,16 @@ class PasswordChangeRequest(BaseModel):
     new_password: str = Field(..., min_length=8)
 
 class InitialPasswordSetupRequest(BaseModel):
-    """Initial password setup for new users"""
+    """Initial password setup for new users.
+
+    Requires proof of authorization: a one-time ``setup_token`` (bootstrap or
+    admin-minted) OR an authenticated admin session on the request. Without it,
+    an attacker could claim a pre-provisioned username before the real user.
+    """
     username: str = Field(..., min_length=1, max_length=50)
     new_password: str = Field(..., min_length=8)
     confirm_password: str = Field(..., min_length=8)
+    setup_token: Optional[str] = Field(None, max_length=256)
 
 class PasscodeSetupRequest(BaseModel):
     """Passcode setup request model"""
@@ -256,38 +266,67 @@ async def login(request: LoginRequest, http_request: Request):
     """
     try:
         # Get client IP
-        ip_address = http_request.client.host
-        
-        # Look up user by username first
+        ip_address = http_request.client.host if http_request.client else None
+
+        # Resolve the account first so throttle buckets are keyed on user_id —
+        # the same identity the session-layer gate uses — avoiding username vs
+        # user_id drift that would leave some paths under-throttled.
         with auth_db.get_connection() as conn:
             cursor = conn.execute("SELECT user_id, password_hash FROM auth_users WHERE username = ?", (request.username,))
             user_row = cursor.fetchone()
-            
-            if not user_row:
-                return AuthResponse(
-                    success=False,
-                    error_message="Invalid credentials"
-                )
-            
-            user_id = user_row["user_id"]
-            password_hash = user_row["password_hash"]
-            
-            # Check if user needs to set password (NULL or 'SETUP_REQUIRED' password_hash)
-            if password_hash is None or password_hash == 'SETUP_REQUIRED':
-                return AuthResponse(
-                    success=False,
-                    error_message="PASSWORD_SETUP_REQUIRED",
-                    requires_escalation=True,
-                    user_info={"user_id": user_id, "username": request.username}
-                )
-        
+            user_id = user_row["user_id"] if user_row else None
+            password_hash = user_row["password_hash"] if user_row else None
+
+        # Throttle identity: the DB user_id for known accounts, else the
+        # submitted username (so login enumeration is still throttled).
+        throttle_id = user_id or request.username
+
+        # Brute-force throttle. The hard block is scoped to this exact
+        # (IP, user) pair — checked first so a blocked pair is denied immediately
+        # — so it can neither lock a victim out from other IPs nor lock a whole
+        # NAT/proxy; progressive backoff then slows a hammering IP without ever
+        # denying a valid credential from a clean IP.
+        if rate_limiter.is_hard_blocked("login", ip_address, throttle_id):
+            return AuthResponse(
+                success=False,
+                error_message="Too many login attempts. Please try again later."
+            )
+        delay = rate_limiter.delay_for("login", ip_address, throttle_id)
+        if delay:
+            await asyncio.sleep(delay)
+
+        if not user_row:
+            # Count unknown-user attempts too so username enumeration via the
+            # login endpoint is throttled.
+            rate_limiter.register_failed_attempt("login", ip_address, throttle_id)
+            return AuthResponse(
+                success=False,
+                error_message="Invalid credentials"
+            )
+
+        # Check if user needs to set password (NULL or 'SETUP_REQUIRED' password_hash)
+        if password_hash is None or password_hash == 'SETUP_REQUIRED':
+            return AuthResponse(
+                success=False,
+                error_message="PASSWORD_SETUP_REQUIRED",
+                requires_escalation=True,
+                user_info={"user_id": user_id, "username": request.username}
+            )
+
         # Now verify password with user_id
         auth_result = auth_manager.verify_password(user_id, request.password, ip_address)
         if not auth_result.success:
+            rate_limiter.register_failed_attempt("login", ip_address, throttle_id)
             return AuthResponse(
                 success=False,
                 error_message=auth_result.error_message
             )
+
+        # Reset-on-success: a proven credential clears this (IP, user) pair's
+        # accumulated failures + hard block, so a legitimate user who fumbled a
+        # few times isn't left throttled. Scoped to the pair (never the shared IP
+        # bucket), so it can't be abused to wipe an attacker's IP throttle.
+        rate_limiter.reset_for("login", ip_address=ip_address, user_id=throttle_id)
 
         # Create authentication request
         auth_request = AuthenticationRequest(
@@ -345,9 +384,9 @@ async def login_passcode(request: PasscodeLoginRequest, http_request: Request):
     """
     try:
         # Get client IP
-        ip_address = http_request.client.host
+        ip_address = http_request.client.host if http_request.client else None
         user_id: Optional[str] = None
-        
+
         # Resolve user_id: accept either username (web login) or user_id (panel/voice).
         with auth_db.get_connection() as conn:
             if request.user_id:
@@ -382,6 +421,19 @@ async def login_passcode(request: PasscodeLoginRequest, http_request: Request):
                     )
                 user_id = row[0]
 
+        # Throttle keyed on the resolved user_id — the SAME identity that
+        # verify_passcode records failures under — so the pair hard-block and
+        # progressive backoff actually feed back into this route. Pair hard-block
+        # short-circuits first; the block is also re-checked inside verify_passcode.
+        if rate_limiter.is_hard_blocked("passcode", ip_address, user_id):
+            return AuthResponse(
+                success=False,
+                error_message="Too many attempts. Please try again later."
+            )
+        delay = rate_limiter.delay_for("passcode", ip_address, user_id)
+        if delay:
+            await asyncio.sleep(delay)
+
         # Verify passcode
         passcode_result = passcode_manager.verify_passcode(user_id, request.passcode, ip_address)
         if not passcode_result.is_valid:
@@ -389,6 +441,11 @@ async def login_passcode(request: PasscodeLoginRequest, http_request: Request):
                 success=False,
                 error_message=passcode_result.error_message
             )
+
+        # Reset-on-success: clear this (IP, user) pair's accumulated passcode
+        # failures + hard block (same anti-lockout property as login). Pair-scoped
+        # only, so the shared-IP backoff is untouched.
+        rate_limiter.reset_for("passcode", ip_address=ip_address, user_id=user_id)
 
         # Create passcode session
         auth_request = AuthenticationRequest(
@@ -626,24 +683,62 @@ async def get_user_profile(current_session = Depends(get_current_session)):
     """
     return await get_current_user(current_session)
 
+def _is_admin_session(current_session) -> bool:
+    """True if the request carries an admin session allowed to set passwords."""
+    if not current_session:
+        return False
+    return session_manager.validate_session_permission(
+        current_session.session_id, "users.create"
+    )
+
+
 @router.post("/password/setup")
-async def setup_initial_password(request: InitialPasswordSetupRequest, http_request: Request):
+async def setup_initial_password(
+    request: InitialPasswordSetupRequest,
+    http_request: Request,
+    current_session = Depends(optional_session),
+):
     """
-    Set initial password for users with NULL password_hash
-    This is used for first-time login after account creation
-    
+    Set the initial password for a pending user (NULL / 'SETUP_REQUIRED' hash).
+
+    Authorization is REQUIRED — without it any caller could claim a
+    pre-provisioned username before the real person. The request must present
+    one of:
+      * a valid one-time ``setup_token`` (bootstrap token from the service log /
+        ``ZOE_AUTH_SETUP_TOKEN``, or an admin-minted per-user token), or
+      * an authenticated admin session (``users.create`` permission).
+
+    The endpoint is rate-limited (IP + username) to blunt brute-forcing of the
+    token. Legitimate first-run setup keeps working: the local operator reads the
+    bootstrap token from the service journal (or sets the env var) and an admin
+    mints per-user tokens for everyone else.
+
     Args:
-        request: Username and new password
+        request: Username, new password, and (optionally) a setup token
         http_request: FastAPI request object
-        
+        current_session: Optional authenticated session (admin path)
+
     Returns:
-        Success message and session
+        Success message
     """
+    ip_address = http_request.client.host if http_request.client else None
     try:
+        # Brute-force throttle for token guessing: a (IP, username)-pair hard
+        # block plus per-IP progressive backoff. A clean IP is never delayed or
+        # denied, so the real user's first-run setup is unaffected.
+        if rate_limiter.is_hard_blocked("password_setup", ip_address, request.username):
+            raise HTTPException(
+                status_code=429,
+                detail="Too many setup attempts. Please try again later.",
+            )
+        delay = rate_limiter.delay_for("password_setup", ip_address, request.username)
+        if delay:
+            await asyncio.sleep(delay)
+
         # Validate passwords match
         if request.new_password != request.confirm_password:
             raise HTTPException(status_code=400, detail="Passwords do not match")
-        
+
         # Look up user
         with auth_db.get_connection() as conn:
             cursor = conn.execute(
@@ -651,35 +746,55 @@ async def setup_initial_password(request: InitialPasswordSetupRequest, http_requ
                 (request.username,)
             )
             user_row = cursor.fetchone()
-            
+
             if not user_row:
+                rate_limiter.register_failed_attempt("password_setup", ip_address, request.username)
                 raise HTTPException(status_code=404, detail="User not found")
-            
+
             user_id = user_row["user_id"]
             password_hash = user_row["password_hash"]
-            
+
             # Only allow if password is NULL or 'SETUP_REQUIRED' (not set)
             if password_hash is not None and password_hash != 'SETUP_REQUIRED':
                 raise HTTPException(status_code=400, detail="Password already set. Use password change instead.")
-            
+
+            # AUTHORIZATION: require a valid setup token OR an admin session.
+            # claim() atomically verifies AND consumes the token, so two
+            # concurrent setup requests cannot both pass with the same token.
+            admin_ok = _is_admin_session(current_session)
+            if admin_ok:
+                setup_token_manager.clear_pending(user_id)  # drop any stale token
+            else:
+                token_kind = setup_token_manager.claim(user_id, request.setup_token)
+                if not token_kind:
+                    rate_limiter.register_failed_attempt("password_setup", ip_address, request.username)
+                    logger.warning(
+                        "Rejected unauthorized password setup for user '%s' from %s",
+                        request.username, ip_address,
+                    )
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Setup authorization required: provide a valid setup token or use an admin account.",
+                    )
+
             # Set the new password using auth_manager
             import bcrypt
             new_hash = bcrypt.hashpw(request.new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-            
+
             conn.execute(
                 "UPDATE auth_users SET password_hash = ?, updated_at = ? WHERE user_id = ?",
                 (new_hash, datetime.utcnow().isoformat(), user_id)
             )
-            
-            logger.info(f"Initial password set for user: {request.username}")
-            
-            return {
-                "success": True,
-                "message": "Password set successfully. You can now log in.",
-                "user_id": user_id,
-                "username": request.username
-            }
-    
+
+        logger.info(f"Initial password set for user: {request.username}")
+
+        return {
+            "success": True,
+            "message": "Password set successfully. You can now log in.",
+            "user_id": user_id,
+            "username": request.username
+        }
+
     except HTTPException:
         raise
     except Exception as e:

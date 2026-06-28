@@ -135,8 +135,11 @@ class EnhancedSessionManager:
             AuthenticationResult with session or error details
         """
         try:
-            # Check rate limiting
-            if self._is_rate_limited(request.user_id, request.ip_address):
+            # Check rate limiting (IP + username sliding window). Password and
+            # passcode failures live in separate buckets so a fat-fingered PIN
+            # never blocks a password login.
+            rl_action = "passcode" if request.auth_method == AuthMethod.PASSCODE else "login"
+            if self._is_rate_limited(request.user_id, request.ip_address, rl_action):
                 return AuthenticationResult(
                     success=False,
                     error_message="Too many authentication attempts. Please try again later.",
@@ -561,11 +564,19 @@ class EnhancedSessionManager:
         return (session.is_active and 
                 datetime.now(timezone.utc) < session.expires_at)
 
-    def _is_rate_limited(self, user_id: str, ip_address: Optional[str]) -> bool:
-        """Check if user/IP is rate limited"""
-        # Simplified rate limiting check
-        # Could be enhanced with Redis or more sophisticated algorithms
-        return False
+    def _is_rate_limited(self, user_id: str, ip_address: Optional[str],
+                         action: str = "login") -> bool:
+        """Hard-deny gate for ``action`` — only the (IP, username) pair block.
+
+        Delegates to the shared throttle's pair-scoped volumetric block, so it
+        never denies a valid credential from a clean IP and never locks a whole
+        NAT. The progressive backoff that actually slows a hammering IP is applied
+        by the async API endpoints (``api.auth``); failures are recorded at the
+        credential-verification choke points (``api.auth.login`` for passwords,
+        ``PasscodeManager.verify_passcode`` for passcodes).
+        """
+        from core.security import rate_limiter
+        return rate_limiter.is_limited(action, ip_address, user_id)
 
     def _remove_session(self, session_id: str) -> bool:
         """Remove session from memory and mark inactive in DB"""
