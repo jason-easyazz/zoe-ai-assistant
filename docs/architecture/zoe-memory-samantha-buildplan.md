@@ -40,7 +40,7 @@ memory unprompted; its understanding of the user evolves.
 - **Stores (already running):** Chroma/MemPalace (vector recall, raw-first) +
   PostgreSQL (entities/relationships/temporal/user-model: `people`,
   `person_relationships`, `person_important_dates`, `user_portraits`, `events`).
-- **Capture:** every chat/voice turn → `chat_messages` verbatim, instantly. ✅ DONE.
+- **Capture:** every chat/voice turn → `chat_messages` verbatim. ⚠️ MECHANISM REAL, LIVE-UNCONFIRMED POST-1b. Code-traced + demo-proven; 68 organic `voice-panel-*` rows + 728 `web_*` rows exist historically. BUT the newest `chat_messages` row of ANY kind is 2026-06-22 — *before* the 1b deploy (2026-06-24) — so **zero rows carry `metadata.user_id`** and the table is dominated by test/replay harness sessions. No persisted turn has occurred since 1b shipped, so owner-stamping is unconfirmed on live organic traffic. Open either/or: no real voice *commands* since (wake-bleed empty transcripts + panel polling only) vs a persistence regression ~2026-06-24. Note: organic panel voice ALSO has its own per-turn memory path (`voice_tts._run_voice_memory_passes` → `latent_intent_detector.detect_and_store`) independent of idle consolidation.
 - **Consolidate (Increment 1):** idle-triggered whole-conversation pass → clean facts
   via the write-quality gate. `memory_idle_consolidation.py`.
 - **Retrieve (Increment 2):** `zoe_memory_router` composes Chroma + Postgres into the
@@ -112,22 +112,31 @@ memory unprompted; its understanding of the user evolves.
 - [x] Memory P1 read-packet, P2 write-gate, P3 junk cleanup (shipped earlier)
 - [x] **1a** — idle consolidation engine (**PR #771** merged; branch `feat/memory-idle-consolidation`, flag off, tests green, SQL lab-validated)
 - [x] **1b** — persist per-turn user (**PR #775** merged; chat+voice `_save_chat_message` stamps `metadata.user_id`; consolidation resolves owner from per-turn metadata over a guest session; SQL lab-proven a guest-owned session resolves to `jason`)
-- [~] **1c** — lab-prove + Samantha same-day test + prod-enable prep  ← **NEXT** (CI acceptance test added; lab-enable + prod-enable runbooks documented in §8; prod flag NOT flipped — awaits Jason + a run on the live box)
+- [x] **dedup gate** — `memory_quality.classify_against_existing` ADD/UPDATE/**SKIP** + prefer-richer + same-attribute near-dup merge + "never drop a correction" (**PR #794** squash-merged 2026-06-24; branch tip `f0e30bff` == #794 head, so the "2 unmerged commits" are the squash-ancestry illusion, NOT pending work). This was the stated prod-enable blocker; it is **cleared**. Plus **PR #795/#796** (live-integration suites) and **PR #798** (normalize `GEMMA_SERVER_URL` — the prod `/v1/v1` 404 was killing consolidation).
+- [~] **1c** — lab-prove + prod-enable + **verify prod health**  ← **NEXT** (CI bar green: 67 tests pass, demo/synthetic only. **Prod flag is already ON** since 2026-06-24: `ZOE_IDLE_CONSOLIDATION_ENABLED=1` in `services/zoe-data/.env`, confirmed in the live process env (PID-checked 2026-06-26). Engine is **healthy** (NRestarts=0, active). **BUT it has never consolidated a real conversation.** Live Postgres diagnostic 2026-06-26 (read-only): `memory_consolidation_state` has 55 watermark rows and **every one is a `demo_*`/`demo_dedup_*` test session** (last `2026-06-24 21:55`) — all from the dedup lab run, zero real users. Why: (a) **no `chat_messages` traffic in 3.7 days** (newest row ~2026-06-22, total 3150) so nothing is ever inside the 1h lookback; (b) **zero `chat_messages` carry `metadata.user_id`**, so 1b owner-resolution would skip every session — though all 3150 rows **predate the 1b deploy (2026-06-24)**, so 1b stamping is **unverified in prod, not proven broken**. The 3.7-day capture gap is itself suspicious (panel is in active use → is capture even alive?). Also two **separate, older** startup bugs (NOT the idle engine): `proactive/engine.py:208` `_cleanup_expired_pending` does `cur.rowcount` on the compat `_Cursor` (no such attr); `memory_digest.py:706` weekly `run_weekly_consolidation_for_all` fallback hit "connection was closed in the middle of operation". 1c is not done until a *real* authenticated turn is shown to (1) land in `chat_messages` and (2) carry `metadata.user_id`, and then a sweep consolidates it cleanly.)
 - [ ] **2a** hybrid retrieval · [ ] **2b** compose Postgres+Chroma packet · [ ] **2c** voice mirror
 - [ ] **3a** reflection · [ ] **3b** importance · [ ] **3c** proactive surfacing
 - [ ] (carry-over) identity deploy `#768` — FF-deploy when the tooling/classifier outage clears
 
 ## 7. NEXT ACTION (always exactly one)
-→ **Run the §8 lab-enable runbook on the live box, then (with Jason's blessing) the prod-enable
-runbook.** The merged 1a+1b code is proven in CI by `services/zoe-data/tests/test_samantha_acceptance_loop.py`
-(live→idle→store→recall, Gemma + DB mocked, real gate + ingest/recall) — that test does NOT need the
-live box and is the regression bar. What remains can only be done ON the Orin (it needs real
-Postgres/Chroma/Gemma): set `ZOE_IDLE_CONSOLIDATION_ENABLED=1` + a short `ZOE_IDLE_CONSOLIDATION_IDLE_S`
-in a worktree, replay a morning→afternoon exchange, confirm afternoon cross-session recall via
-`/api/memories/for-prompt`, and run the zoe-core integration Samantha tests. Only after that passes,
-flip the prod flag per §8 and watch the `MEMORY_IDLE_CONSOLIDATE` log line + memory-store growth.
-**Do not flip the prod flag without Jason.** When 1c lands as proven-in-prod, move to **2a (hybrid
-retrieval)**. Update §6/§7 after each step.
+→ **Get ONE real post-1b persisted turn and watch the whole chain (the positive control).**
+DIAGNOSIS DONE 2026-06-26/27 (Jason chose "diagnose first"): capture is NOT structurally broken —
+`_save_chat_message` works (demo round-trip PASS; `get_db_ctx` translates `?`→`$N`), `voice_command`
+persists the user turn (~line 3014) *before* any fast-path, `zoe-touch-pi` resolves to a real owner
+(jason via `panel_user_bindings`/`ui_panel_sessions`), and 68 organic `voice-panel-*` rows exist
+historically. The gap: **no turn of any kind has persisted since 2026-06-22 (pre-1b)**, so the
+metadata-stamp + idle-consolidation chain has never run on live post-1b data. **Positive control
+(needs a real turn — static trace can't go further):** have Jason speak ONE command to the panel
+("Zoe, remember my dad's name is Neil"), then read-only confirm a fresh
+`voice-panel-zoe-touch-pi-*` row appears in `chat_messages` *with* `metadata.user_id` populated.
+Branches: row WITH metadata → chain healthy; wait past IDLE, confirm `MEMORY_IDLE_CONSOLIDATE …
+stored>=1` + recall via `/api/memories/for-prompt`. Row WITHOUT metadata → 1b stamping regressed on
+the live voice path (fix `effective_user`→`_save_chat_message` plumbing). NO row → persistence
+regressed ~2026-06-24 (the fire-and-forget `_spawn_bg` save) — the real blocker, fix first. **Parallel,
+independent:** the two adjacent startup bugs as one small hardening PR (no new flag):
+`proactive/engine.py` `_cleanup_expired_pending` `rowcount` on the compat `_Cursor`, and
+`memory_digest.py` weekly `list_users` pooled-connection-closed. After the control passes, revisit the
+§3 strategy fork (chat_messages-as-spine vs voice-keeps-own-path), then **2a**. Update §6/§7 after each step.
 
 ## 8. Increment 1c — enable runbooks
 
