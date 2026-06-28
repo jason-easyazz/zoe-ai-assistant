@@ -21,6 +21,13 @@ logger = logging.getLogger(__name__)
 
 _pool: asyncpg.Pool | None = None
 
+_SQLITE_DATETIME_OFFSET_RE = re.compile(
+    r"datetime\s*\(\s*'now'\s*,\s*'([+-]?)(\d+)\s+(\w+)'\s*\)",
+    re.IGNORECASE,
+)
+_SQLITE_DATETIME_NOW_RE = re.compile(r"datetime\s*\(\s*'now'\s*\)", re.IGNORECASE)
+_NOW_RE = re.compile(r"\bNOW\(\)(?!::)", re.IGNORECASE)
+
 
 async def _release_safely(pool: "asyncpg.Pool", conn: "asyncpg.Connection") -> None:
     """Return `conn` to `pool`, tolerating the request-cancellation teardown race.
@@ -48,9 +55,16 @@ async def _release_safely(pool: "asyncpg.Pool", conn: "asyncpg.Connection") -> N
         logger.warning("db_pool: unexpected error releasing connection", exc_info=True)
 
 
-async def init_pool() -> None:
-    """Initialize the asyncpg connection pool. Call once at startup."""
+async def init_pool() -> asyncpg.Pool:
+    """Initialize the asyncpg connection pool.
+
+    Safe to call repeatedly during tests/startup retries: if a live pool already
+    exists, return it instead of rebinding the module global to a second pool.
+    """
     global _pool
+    if _pool is not None and not _pool.is_closing():
+        return _pool
+
     # Read at call time (not import time) so EnvironmentFile values are available
     postgres_url = os.environ.get("POSTGRES_URL", "")
     if not postgres_url:
@@ -64,6 +78,7 @@ async def init_pool() -> None:
         max_size=10,
         command_timeout=30,
     )
+    return _pool
 
 
 async def close_pool() -> None:
@@ -281,6 +296,21 @@ async def get_db_ctx():
         await _release_safely(pool, conn)
 
 
+def _copy_quoted_sql(sql: str, start: int) -> tuple[str, int]:
+    """Return the quoted token starting at `start`, preserving doubled escapes."""
+    quote = sql[start]
+    pos = start + 1
+    while pos < len(sql):
+        if sql[pos] == quote:
+            if pos + 1 < len(sql) and sql[pos + 1] == quote:
+                pos += 2
+                continue
+            pos += 1
+            break
+        pos += 1
+    return sql[start:pos], pos
+
+
 def _adapt_params(sql: str, params) -> tuple[str, list]:
     """Convert ? placeholders to $1, $2, $3... for asyncpg.
 
@@ -288,36 +318,54 @@ def _adapt_params(sql: str, params) -> tuple[str, list]:
     into TEXT columns (migrated from SQLite) don't get DatatypeMismatchError.
     Only replaces NOW() not already followed by :: to avoid double-casting.
 
-    WARNING: Transition shim — replaces ALL '?' characters including those
-    inside string literals. Migrate callers to explicit $N params.
+    SQL quoted literals/identifiers are copied verbatim so literal question
+    marks and text like 'NOW()' do not become placeholders or casts.
     """
-    i = 0
+    param_index = 0
+    pos = 0
+    converted: list[str] = []
 
-    def _replace(_match):
-        nonlocal i
-        i += 1
-        return f"${i}"
+    while pos < len(sql):
+        char = sql[pos]
+        if char in ("'", '"'):
+            quoted, pos = _copy_quoted_sql(sql, pos)
+            converted.append(quoted)
+            continue
 
-    # Rewrite SQLite datetime('now', '±N unit') → PostgreSQL CURRENT_TIMESTAMP ± INTERVAL.
-    # Result is cast to ::text so it compares correctly against TEXT timestamp columns.
-    # Uses CURRENT_TIMESTAMP (not NOW()) to avoid triggering the NOW()::text rewrite below.
-    # Handles: datetime('now', '-7 days'), datetime('now', '+1 day'), etc.
-    # Does NOT handle datetime('now', ?) — fix those at the call site.
-    def _rewrite_sqlite_datetime(m: re.Match) -> str:
-        sign = "-" if m.group(1) == "-" else "+"
-        return f"(CURRENT_TIMESTAMP {sign} INTERVAL '{m.group(2)} {m.group(3)}')::text"
+        # Rewrite SQLite datetime('now', '±N unit') → PostgreSQL CURRENT_TIMESTAMP ± INTERVAL.
+        # Result is cast to ::text so it compares correctly against TEXT timestamp columns.
+        # Uses CURRENT_TIMESTAMP (not NOW()) to avoid triggering the NOW()::text rewrite below.
+        # Handles: datetime('now', '-7 days'), datetime('now', '+1 day'), etc.
+        # Does NOT handle datetime('now', ?) — fix those at the call site.
+        datetime_match = _SQLITE_DATETIME_OFFSET_RE.match(sql, pos)
+        if datetime_match is not None:
+            sign = "-" if datetime_match.group(1) == "-" else "+"
+            converted.append(
+                f"(CURRENT_TIMESTAMP {sign} INTERVAL "
+                f"'{datetime_match.group(2)} {datetime_match.group(3)}')::text"
+            )
+            pos = datetime_match.end()
+            continue
 
-    sql = re.sub(
-        r"datetime\s*\(\s*'now'\s*,\s*'([+-]?)(\d+)\s+(\w+)'\s*\)",
-        _rewrite_sqlite_datetime,
-        sql,
-        flags=re.IGNORECASE,
-    )
-    # Rewrite bare datetime('now') → CURRENT_TIMESTAMP::text
-    sql = re.sub(r"datetime\s*\(\s*'now'\s*\)", "CURRENT_TIMESTAMP::text", sql, flags=re.IGNORECASE)
+        datetime_now_match = _SQLITE_DATETIME_NOW_RE.match(sql, pos)
+        if datetime_now_match is not None:
+            converted.append("CURRENT_TIMESTAMP::text")
+            pos = datetime_now_match.end()
+            continue
 
-    # Auto-cast NOW() → NOW()::text for TEXT timestamp columns (SQLite migration compat)
-    sql = re.sub(r"\bNOW\(\)(?!::)", "NOW()::text", sql, flags=re.IGNORECASE)
+        now_match = _NOW_RE.match(sql, pos)
+        if now_match is not None:
+            converted.append("NOW()::text")
+            pos = now_match.end()
+            continue
 
-    converted = re.sub(r"\?", _replace, sql)
-    return converted, list(params) if params is not None else []
+        if char == "?":
+            param_index += 1
+            converted.append(f"${param_index}")
+            pos += 1
+            continue
+
+        converted.append(char)
+        pos += 1
+
+    return "".join(converted), list(params) if params is not None else []

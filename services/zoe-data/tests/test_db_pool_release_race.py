@@ -89,3 +89,70 @@ def test_get_db_ctx_propagates_body_error_but_still_releases(monkeypatch):
     with pytest.raises(ValueError):
         _run(go())
     assert pool.released == 1  # released even when the body raised
+
+
+def test_init_pool_is_idempotent_for_live_pool(monkeypatch):
+    class _Pool:
+        def __init__(self):
+            self.closed = 0
+
+        def is_closing(self):
+            return False
+
+        async def close(self):
+            self.closed += 1
+
+    created = []
+
+    async def create_pool(*args, **kwargs):
+        pool = _Pool()
+        created.append((args, kwargs, pool))
+        return pool
+
+    monkeypatch.setenv("POSTGRES_URL", "postgresql://zoe:pw@localhost:5432/zoe")
+    monkeypatch.setattr(db_pool, "_pool", None)
+    monkeypatch.setattr(db_pool.asyncpg, "create_pool", create_pool)
+
+    async def go():
+        first = await db_pool.init_pool()
+        second = await db_pool.init_pool()
+        return first, second
+
+    first, second = _run(go())
+    assert first is second
+    assert db_pool.get_pool() is first
+    assert len(created) == 1
+    assert created[0][2].closed == 0
+
+
+def test_adapt_params_ignores_question_marks_inside_quoted_literals():
+    sql, args = db_pool._adapt_params(
+        "SELECT * FROM notes WHERE note = 'huh?' AND label = \"why?\" AND owner = ? AND body LIKE ?",
+        ("jason", "%real?%"),
+    )
+
+    assert sql == (
+        "SELECT * FROM notes WHERE note = 'huh?' AND label = \"why?\" "
+        "AND owner = $1 AND body LIKE $2"
+    )
+    assert args == ["jason", "%real?%"]
+
+
+def test_adapt_params_keeps_now_inside_literals_but_casts_real_now():
+    sql, args = db_pool._adapt_params(
+        "INSERT INTO events(note, created_at) VALUES ('NOW()? stays text', NOW())",
+        (),
+    )
+
+    assert sql == "INSERT INTO events(note, created_at) VALUES ('NOW()? stays text', NOW()::text)"
+    assert args == []
+
+
+def test_adapt_params_handles_doubled_quote_literals():
+    sql, args = db_pool._adapt_params(
+        "SELECT * FROM notes WHERE note = 'Jason''s huh?' AND id = ?",
+        (42,),
+    )
+
+    assert sql == "SELECT * FROM notes WHERE note = 'Jason''s huh?' AND id = $1"
+    assert args == [42]
