@@ -81,13 +81,34 @@ def get_pool() -> asyncpg.Pool:
     return _pool
 
 
+def _parse_status_rowcount(status: str) -> int:
+    """Affected-row count from an asyncpg command-status tag.
+
+    asyncpg's `Connection.execute` returns tags like "DELETE 5", "UPDATE 3",
+    "INSERT 0 2" — the count is the trailing integer. Returns -1 (DB-API's
+    "unknown") for tags without one (e.g. "CREATE TABLE").
+    """
+    try:
+        return int(status.rsplit(None, 1)[-1])
+    except (AttributeError, ValueError, IndexError):
+        return -1
+
+
 class _Cursor:
     """Buffered cursor providing aiosqlite-compatible fetchall/fetchone/iteration."""
-    __slots__ = ("_rows", "_idx")
+    __slots__ = ("_rows", "_idx", "_rowcount")
 
-    def __init__(self, rows: list):
+    def __init__(self, rows: list, rowcount: int | None = None):
         self._rows = rows
         self._idx = 0
+        # Mirror aiosqlite/DB-API: row count of the last operation. For SELECT/
+        # RETURNING this is the number of buffered rows; for write statements the
+        # caller passes the parsed command-status count.
+        self._rowcount = len(rows) if rowcount is None else rowcount
+
+    @property
+    def rowcount(self) -> int:
+        return self._rowcount
 
     async def fetchall(self):
         return self._rows
@@ -187,8 +208,8 @@ class AsyncpgCompat:
             rows = await self._conn.fetch(sql_pg, *args)
             return _Cursor(list(rows))
         else:
-            await self._conn.execute(sql_pg, *args)
-            return _Cursor([])
+            status = await self._conn.execute(sql_pg, *args)
+            return _Cursor([], rowcount=_parse_status_rowcount(status))
 
     async def execute_fetchall(self, sql: str, params=()) -> list:
         """aiosqlite-compatible shorthand: execute and return all rows immediately.

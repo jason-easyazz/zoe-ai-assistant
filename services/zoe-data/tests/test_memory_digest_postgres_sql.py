@@ -1,5 +1,6 @@
 import pytest
 
+import db_pool
 import memory_digest
 
 
@@ -19,6 +20,23 @@ class _FakeDb:
     async def execute(self, sql, params=()):
         self.sql.append(sql)
         return _Cursor(self.rows)
+
+
+class _FakeCtx:
+    """Async-context-manager stand-in for db_pool.get_db_ctx()."""
+
+    def __init__(self, db):
+        self.db = db
+        self.entered = 0
+        self.exited = 0
+
+    async def __aenter__(self):
+        self.entered += 1
+        return self.db
+
+    async def __aexit__(self, *exc):
+        self.exited += 1
+        return False
 
 
 @pytest.mark.asyncio
@@ -53,3 +71,60 @@ async def test_run_digest_for_all_active_users_uses_postgres_timestamp_cast(monk
     assert "(now() AT TIME ZONE ?)::date" in db.sql[0]
     assert "CURRENT_DATE" not in db.sql[0]
     assert "DATE('now'" not in db.sql[0]
+
+
+@pytest.mark.asyncio
+async def test_run_digest_for_all_active_users_db_none_uses_get_db_ctx(monkeypatch):
+    """db=None must acquire via the context manager, not the suspended-generator
+    `async for db in get_db(): break` form that closed the connection mid-query."""
+    db = _FakeDb([("user-1",), ("user-2",)])
+    ctx = _FakeCtx(db)
+    monkeypatch.setattr(db_pool, "get_db_ctx", lambda: ctx)
+
+    seen = []
+
+    async def fake_run_memory_digest(user_id, db=None):
+        seen.append((user_id, db))
+        return {"user_id": user_id}
+
+    monkeypatch.setattr(memory_digest, "run_memory_digest", fake_run_memory_digest)
+
+    results = await memory_digest.run_digest_for_all_active_users()  # db defaults to None
+
+    assert ctx.entered == 1 and ctx.exited == 1  # pooled connection acquired + released
+    assert [r["user_id"] for r in results] == ["user-1", "user-2"]
+    # per-user digests self-acquire (db=None passed through) — we don't hold the
+    # listing connection across the LLM loop.
+    assert seen == [("user-1", None), ("user-2", None)]
+
+
+@pytest.mark.asyncio
+async def test_run_weekly_consolidation_for_all_fallback_uses_get_db_ctx(monkeypatch):
+    """When MemoryService has no list_users(), the chat_sessions fallback must
+    acquire via get_db_ctx (the previous suspended-generator form logged
+    'could not list users: connection was closed in the middle of operation')."""
+    import memory_service
+
+    class _SvcNoListUsers:
+        pass  # no list_users attr → AttributeError → fallback path
+
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: _SvcNoListUsers())
+
+    db = _FakeDb([("alice",), ("bob",), (None,)])  # None filtered out
+    ctx = _FakeCtx(db)
+    monkeypatch.setattr(db_pool, "get_db_ctx", lambda: ctx)
+
+    consolidated = []
+
+    async def fake_run_weekly_consolidation(user_id):
+        consolidated.append(user_id)
+        return {"user_id": user_id}
+
+    monkeypatch.setattr(memory_digest, "run_weekly_consolidation", fake_run_weekly_consolidation)
+
+    results = await memory_digest.run_weekly_consolidation_for_all()  # db=None
+
+    assert ctx.entered == 1 and ctx.exited == 1
+    assert consolidated == ["alice", "bob"]
+    assert [r["user_id"] for r in results] == ["alice", "bob"]
+    assert "SELECT DISTINCT user_id FROM chat_sessions" in db.sql[0]

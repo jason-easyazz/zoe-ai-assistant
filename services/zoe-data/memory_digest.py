@@ -695,12 +695,18 @@ async def run_weekly_consolidation_for_all(db=None) -> list[dict]:
         # Fall back to chat-sessions table so we never silently process
         # zero users when MemoryService hasn't exposed a list helper.
         try:
-            from database import get_db  # type: ignore[import]
-            if db is None:
-                async for db in get_db():
-                    break
-            rows = await db.execute("SELECT DISTINCT user_id FROM chat_sessions")
-            rows = await rows.fetchall()
+            from db_pool import get_db_ctx  # type: ignore[import]
+            sql = "SELECT DISTINCT user_id FROM chat_sessions"
+            if db is not None:
+                rows = await (await db.execute(sql)).fetchall()
+            else:
+                # Acquire a pooled connection via the context manager — the bare
+                # `async for db in get_db(): break` form leaves the generator
+                # suspended at the yield, so the connection is closed out from
+                # under the next query ("connection was closed in the middle of
+                # operation"). Materialize the rows before release.
+                async with get_db_ctx() as _db:
+                    rows = await (await _db.execute(sql)).fetchall()
             user_ids = [row[0] for row in rows if row[0]]
         except Exception as exc:
             logger.error("consolidation: could not list users: %s", exc)
@@ -715,22 +721,24 @@ async def run_digest_for_all_active_users(db=None) -> list[dict]:
     """Run memory digest for all users who had chat activity today."""
     results = []
     try:
-        from database import get_db  # type: ignore[import]
-        if db is None:
-            async for db in get_db():
-                break
-        rows = await db.execute(
-            """
+        from db_pool import get_db_ctx  # type: ignore[import]
+        sql = """
             SELECT DISTINCT cs.user_id
             FROM chat_messages cm
             JOIN chat_sessions cs ON cm.session_id = cs.id
             WHERE cm.role = 'user'
               AND (cm.created_at::timestamptz AT TIME ZONE ?)::date =
                   (now() AT TIME ZONE ?)::date
-            """,
-            (_ZOE_TIMEZONE, _ZOE_TIMEZONE),
-        )
-        rows = await rows.fetchall()
+            """
+        params = (_ZOE_TIMEZONE, _ZOE_TIMEZONE)
+        if db is not None:
+            rows = await (await db.execute(sql, params)).fetchall()
+        else:
+            # Short-lived pooled acquire for the listing only (avoids the
+            # suspended-generator bug); each per-user digest opens its own
+            # connection below, so we don't hold one across the LLM loop.
+            async with get_db_ctx() as _db:
+                rows = await (await _db.execute(sql, params)).fetchall()
         user_ids = [row[0] for row in rows if row[0]]
     except Exception as exc:
         logger.error("memory_digest: could not list active users: %s", exc)
