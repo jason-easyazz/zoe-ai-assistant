@@ -11,14 +11,17 @@
  * live llama-server on :11434). Exporting `route` mounts the HTTP agent API so
  * `POST /agents/zoe/:id` works (see Flue routing-api).
  *
- * Tools/memory are deliberately OUT of this increment: small local models do
- * not reliably call tools, and per the plan §6 abilities/memory (Seam B) land
- * in a later phase. This increment produces a TEXT reply only — persona
- * conversation parity is the lab bar.
+ * Phase 3, increment 1: REAL tools (`zoeTools`) are now wired on — get_time,
+ * recall_memory, shopping_list_add — each calling zoe-data's existing internal
+ * capability endpoints over HTTP (see src/tools/zoe-tools.ts). The open question
+ * this answers is whether the local Gemma brain reliably tool-calls; the parity
+ * harness measures it (parity/RESULTS.md). Acting identity is bound in trusted
+ * code (env), never from model args.
  *
  * LAB ONLY.
  */
 import { type AgentRouteHandler, defineAgent } from '@flue/runtime';
+import { zoeTools } from '../tools/zoe-tools.js';
 
 // Verbatim from services/zoe-core/SOUL.md (the persona soul.ts injects as the
 // system prompt every turn). Keep in sync if SOUL.md changes.
@@ -56,4 +59,5 @@ export const route: AgentRouteHandler = async (c, next) => {
 export default defineAgent(() => ({
   model: 'zoe/local',
   instructions: ZOE_SOUL,
+  tools: zoeTools,
 }));
