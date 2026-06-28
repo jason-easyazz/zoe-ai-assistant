@@ -143,18 +143,32 @@ per-process multi-user workaround in `zoe_core_client.py`.
 - **Phase 0 — Harness on Flue. ✅ DONE.** scout→implement→verify→openPR proven;
   +1.5 ms voice (PR #858).
 - **Phase 1 — Telegram as a front-door channel.** Transport (long-poll) → zoe-data
-  `/api/chat` with `channel="telegram"` → `fast_tiers`. Retire Hermes Telegram.
+  `/api/chat` with `channel="telegram"` → `fast_tiers`.
   *(The running Flue Telegram bot is re-slotted to this — feed the front door with
   the channel tag, not a separate brain.)*
+  **Identity is mandatory, not optional:** the bridge must map the *verified*
+  Telegram sender id → a Zoe user through Zoe's own auth boundary (a device/session
+  token or an explicit allow-list→user mapping owned by zoe-data) — never trust an
+  identity value supplied by the bridge, and never let multiple senders collapse
+  into a shared `guest`. Retiring Hermes Telegram happens only **after** this
+  channel is live and verified (gates below).
 - **Phase 2 — Flue brain behind the `run_zoe_core` seam.** Stand up the Flue sidecar
   as a *third* brain implementation: `registerProvider` Gemma, port `soul` →
   instructions, emit the text-delta/sentinel contract. **Lab-prove parity** vs the
   Pi-CLI brain on the voice corpus + #735; demo-users only.
 - **Phase 3 — Tools & memory (Seam B).** Give the Flue brain Zoe's abilities/memory
   via `defineTool`/MCP, so it has full parity with the extension brain.
-- **Phase 4 — Cut over + retire.** Flip `_USE_ZOE_CORE` → Flue for real users once
-  proven; retire the per-turn `pi --mode rpc` path, then the Hermes/Multica/OpenClaw
-  engineering loops (the harness already lives on Flue).
+- **Phase 4 — Cut over + retire (gated, reversible).** Flip `_USE_ZOE_CORE` → Flue
+  for real users **only after** §4's gates pass (voice-corpus parity + #735 +
+  operator sign-off), and keep the flip reversible (the Pi-CLI brain stays as the
+  fallback until Flue has soaked). **Retire a system only once Flue demonstrably
+  owns its job and the fallback is preserved:** retire the per-turn `pi --mode rpc`
+  brain path only after the Flue brain is the proven default; retire each
+  Hermes/Multica/OpenClaw loop only after Flue has replaced that specific function
+  (engineering harness, fallback agent execution, PR automation) and an operator has
+  signed off. **Never remove a live bridge before its Flue replacement is proven** —
+  removing fallback paths ahead of their replacement is the one move that breaks
+  prod. Retirement is per-function and per-operator-approval, not a sweep.
 - **Phase 5 — Thin & enrich.** zoe-data settles into front-door + fast-path + data/IO;
   more channels + durable workflows on Flue; wire the live "what Zoe is doing" UI
   stream (`@flue/sdk`/`@flue/react`) into touch/chat.
