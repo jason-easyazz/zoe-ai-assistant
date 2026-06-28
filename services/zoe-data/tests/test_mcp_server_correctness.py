@@ -6,8 +6,10 @@ Covers:
   proactive_schedule targeted the caller instead of the requested user).
 - #3 journal_get_streak: operate on native asyncpg date objects (streak used to
   be stuck at 0 and raised TypeError once two distinct days existed).
-- #2 journal_on_this_day: Postgres ``to_char`` + ``created_at::date <
-  CURRENT_DATE`` instead of SQLite ``strftime``/``date('now')``.
+- #2 journal_on_this_day: created_at is TEXT, so cast text->timestamp before
+  Postgres ``to_char(created_at::timestamp, 'MM-DD')`` and
+  ``created_at::timestamp::date < CURRENT_DATE`` (not SQLite
+  ``strftime``/``date('now')`` and not an uncast ``to_char``/``::date``).
 - #4 flag_needs_human_review: report the true outcome via ``push_status``
   (failed / suppressed_quiet_hours / submitted) with ``push_sent`` always False,
   since fire_notification returns None in every path (including quiet-hours
@@ -219,7 +221,7 @@ async def test_journal_get_streak_counts_consecutive_date_objects():
     db = _RoutingDb(
         {
             "COUNT(*)": [(len(day_rows),)],
-            "DISTINCT date(created_at)": day_rows,
+            "DISTINCT created_at::timestamp::date": day_rows,
         }
     )
 
@@ -245,7 +247,7 @@ async def test_journal_get_streak_handles_iso_string_rows():
     db = _RoutingDb(
         {
             "COUNT(*)": [(2,)],
-            "DISTINCT date(created_at)": day_rows,
+            "DISTINCT created_at::timestamp::date": day_rows,
         }
     )
 
@@ -273,12 +275,15 @@ async def test_journal_on_this_day_uses_postgres_to_char():
     )
 
     sql, params = db.calls[0]
-    assert "to_char(created_at, 'MM-DD')" in sql
     assert "strftime" not in sql
-    # The date predicate must be Postgres-correct, not SQLite date()/date('now').
-    assert "created_at::date < CURRENT_DATE" in sql
     assert "date('now')" not in sql
-    assert "date(created_at)" not in sql
+    # created_at is TEXT in the live schema, so to_char and the date comparison
+    # MUST cast text->timestamp first — an uncast to_char(created_at, ...) /
+    # created_at::date errors on Postgres.
+    assert "to_char(created_at::timestamp, 'MM-DD')" in sql
+    assert "created_at::timestamp::date < CURRENT_DATE" in sql
+    assert "to_char(created_at," not in sql
+    assert "to_char(created_at)" not in sql
     # The bound parameter must be the MM-DD string matching to_char's format.
     assert params[1] == date.today().strftime("%m-%d")
 
@@ -401,3 +406,82 @@ async def test_flag_needs_human_review_high_urgency_bypasses_quiet_hours(monkeyp
     assert result["push_status"] == "submitted"
     assert result["push_sent"] is False
     assert sent["context"]["force_send"] is True
+
+
+# --------------------------------------------------------------------------
+# #2/#3 (live Postgres) — the journal queries must run against a TEXT created_at
+# column. to_char()/::date on raw text errors on Postgres; this exercises the
+# real SQL end-to-end so the missing cast would be caught. Skips when no DB.
+# --------------------------------------------------------------------------
+def _anniversary(today):
+    """today's month/day in a prior year (handles Feb 29)."""
+    y = today.year - 1
+    while True:
+        try:
+            return today.replace(year=y)
+        except ValueError:
+            y -= 1
+
+
+@pytest.mark.asyncio
+async def test_journal_queries_run_against_text_created_at_on_postgres():
+    postgres_url = os.environ.get("POSTGRES_URL")
+    if not postgres_url:
+        pytest.skip("POSTGRES_URL not set — no live Postgres to validate TEXT casts")
+    try:
+        import asyncpg  # noqa: F401
+    except ImportError:
+        pytest.skip("asyncpg not installed")
+
+    import db_pool
+
+    conn = await asyncpg.connect(postgres_url)
+    try:
+        # TEMP TABLE shadows the real journal_entries for this connection only
+        # (created_at TEXT mirrors the live schema), so no production rows change.
+        await conn.execute(
+            """CREATE TEMP TABLE journal_entries (
+                   id text, user_id text, title text, mood text,
+                   created_at text, deleted int
+               )"""
+        )
+        today = date.today()
+        anniv = _anniversary(today)
+        ts = lambda d: f"{d.isoformat()} 09:00:00+00"  # noqa: E731 — matches NOW()::text shape
+
+        # on_this_day fixtures for user U1: a past-year anniversary (expected) and
+        # a same-MM-DD entry dated today (must be excluded by < CURRENT_DATE).
+        await conn.execute(
+            "INSERT INTO journal_entries VALUES ($1,$2,$3,$4,$5,$6)",
+            "anniv", "U1", "one year ago", "happy", ts(anniv), 0,
+        )
+        await conn.execute(
+            "INSERT INTO journal_entries VALUES ($1,$2,$3,$4,$5,$6)",
+            "today", "U1", "today", "ok", ts(today), 0,
+        )
+        # streak fixtures for user U2: two consecutive days.
+        await conn.execute(
+            "INSERT INTO journal_entries VALUES ($1,$2,$3,$4,$5,$6)",
+            "s0", "U2", "d0", "ok", ts(today), 0,
+        )
+        await conn.execute(
+            "INSERT INTO journal_entries VALUES ($1,$2,$3,$4,$5,$6)",
+            "s1", "U2", "d1", "ok", ts(today - timedelta(days=1)), 0,
+        )
+
+        db = db_pool.AsyncpgCompat(conn)
+
+        on_this_day = await mcp_server._execute_tool(
+            db=db, name="journal_on_this_day", args={"_user_id": "U1"}
+        )
+        ids = {e["id"] for e in on_this_day["entries"]}
+        assert "anniv" in ids          # past anniversary surfaced
+        assert "today" not in ids      # today excluded by created_at::timestamp::date < CURRENT_DATE
+
+        streak = await mcp_server._execute_tool(
+            db=db, name="journal_get_streak", args={"_user_id": "U2"}
+        )
+        assert streak["total_entries"] == 2
+        assert streak["current_streak"] == 2
+    finally:
+        await conn.close()

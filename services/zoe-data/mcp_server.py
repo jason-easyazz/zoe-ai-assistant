@@ -2020,12 +2020,13 @@ async def _execute_tool(db, name: str, args: dict):
         row = await cursor.fetchone()
         total = row[0] if row else 0
         cursor = await db.execute(
-            "SELECT DISTINCT date(created_at) as d FROM journal_entries WHERE user_id=? AND deleted=0 ORDER BY d DESC",
+            "SELECT DISTINCT created_at::timestamp::date as d FROM journal_entries WHERE user_id=? AND deleted=0 ORDER BY d DESC",
             (user_id,),
         )
         rows = await cursor.fetchall()
-        # date(created_at) comes back from asyncpg as native date objects;
-        # operate on dates directly rather than comparing against ISO strings.
+        # created_at is TEXT in the live schema, so cast text->timestamp->date in
+        # SQL; asyncpg then hands back native date objects. Operate on dates
+        # directly rather than comparing against ISO strings.
         dates_sorted = sorted(
             {d for d in (_coerce_date(r[0]) for r in rows) if d is not None},
             reverse=True,
@@ -2065,10 +2066,12 @@ async def _execute_tool(db, name: str, args: dict):
 
     elif name == "journal_on_this_day":
         today_md = date.today().strftime("%m-%d")
+        # created_at is TEXT in the live schema; to_char()/date comparison need a
+        # timestamp, so cast text->timestamp before formatting and before ::date.
         cursor = await db.execute(
             """SELECT id, title, mood, created_at FROM journal_entries
-             WHERE user_id=? AND deleted=0 AND to_char(created_at, 'MM-DD')=?
-             AND created_at::date < CURRENT_DATE ORDER BY created_at DESC""",
+             WHERE user_id=? AND deleted=0 AND to_char(created_at::timestamp, 'MM-DD')=?
+             AND created_at::timestamp::date < CURRENT_DATE ORDER BY created_at DESC""",
             (user_id, today_md),
         )
         rows = await cursor.fetchall()
