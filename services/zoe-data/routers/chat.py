@@ -1779,6 +1779,7 @@ async def chat_stream_generator(
     force_openclaw: bool = False,
     force_agent: str = "auto",
     req_panel_id: str | None = None,
+    channel: str = "chat",
 ):
     user_id = user["user_id"]
     user_role = user.get("role")
@@ -2058,7 +2059,7 @@ async def chat_stream_generator(
                 import fast_tiers as _fast_path
                 _fp_res = await _fast_path.resolve(
                     message_for_processing, user_id, session_id,
-                    channel="chat",
+                    channel=channel,
                 )
             except Exception as _fp_exc:  # never let the fast path break a turn
                 logger.debug("chat_stream fast_path resolve failed (non-fatal): %s", _fp_exc)
@@ -3228,6 +3229,34 @@ async def _hermes_stream_generator(
         )
 
 
+def _resolve_channel(body: dict) -> str:
+    """Normalize the optional per-channel tag from a chat request body.
+
+    Phase 1 (additive): a channel may identify itself via an optional `channel`
+    field (e.g. "telegram") so `fast_tiers.resolve()` can select its
+    CHANNEL_PROFILES entry. Only a KNOWN channel is honored — a missing, blank,
+    non-string (the body is raw JSON, so `channel` could be `123`/`true`/an
+    object), or unknown/typo'd value resolves to "chat", the historical hardcoded
+    default. This keeps web/voice/touch byte-identical to before the field
+    existed, never 500s on a malformed field, and ensures an unrecognized channel
+    can't silently widen behaviour (an unknown tag yields an empty profile whose
+    writes default to allowed — falling back to "chat" keeps writes deferred).
+    """
+    raw = body.get("channel")
+    if not isinstance(raw, str):
+        return "chat"
+    channel = raw.strip().lower()
+    if not channel:
+        return "chat"
+    try:
+        import fast_tiers as _ft
+
+        known = channel in _ft.CHANNEL_PROFILES
+    except Exception:
+        known = channel == "chat"
+    return channel if known else "chat"
+
+
 @router.post("/")
 async def chat(request: Request, user: dict = Depends(get_current_user), stream: bool = True):
     body = await request.json()
@@ -3238,6 +3267,8 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
     # OpenClaw remains available, but only for explicit manual requests.
     force_openclaw = bool(body.get("force_openclaw", False)) or (force_agent == "openclaw")
     req_panel_id: str | None = body.get("panel_id") or None
+    # Optional per-channel tag (Phase 1: additive) — see _resolve_channel.
+    req_channel: str = _resolve_channel(body)
     is_voice_mode = request.headers.get("X-Voice-Mode", "").lower() in ("true", "1", "yes")
     voice_max_tokens = int(body.get("max_tokens", 0)) if is_voice_mode else 0
 
@@ -3269,6 +3300,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                     force_openclaw=force_openclaw,
                     force_agent=force_agent,
                     req_panel_id=req_panel_id,
+                    channel=req_channel,
                 ):
                     yield chunk
             finally:
@@ -3377,7 +3409,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                 import fast_tiers as _fast_path
                 _fp_res = await _fast_path.resolve(
                     message_for_processing, user_id, session_id,
-                    channel="chat",
+                    channel=req_channel,
                 )
             except Exception as _fp_exc:  # never let the fast path break a turn
                 logger.debug("chat fast_path resolve failed (non-fatal): %s", _fp_exc)
