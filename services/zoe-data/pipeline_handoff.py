@@ -10,7 +10,8 @@ from pipeline_evidence import EvidenceItem, PipelinePhase, content_hash
 
 _KV_RE = re.compile(r"^[ \t]*([A-Z_]+)=(.*)$", re.MULTILINE)
 _TOOL_NAMES = (
-    "graphify",
+    "codebase-memory",
+    "serena",
     "opensrc",
     "multica",
     "greptile",
@@ -18,12 +19,12 @@ _TOOL_NAMES = (
     "validator",
     "pytest",
     "zoe-engineering",
-    "zoe-graphify",
     "source-code-context",
     "github-greptile-loop",
 )
 _SKILL_TOOL_SOURCES = {
-    "zoe-graphify": "graphify",
+    "codebase-memory": "codebase-memory",
+    "serena": "serena",
     "source-code-context": "opensrc",
     "github-greptile-loop": "greptile",
     "zoe-engineering": "zoe-engineering",
@@ -32,7 +33,7 @@ _SKILL_TOOL_SOURCES = {
 }
 _LOG_TOOL_MARKERS = (
     "TOOLS_USED",
-    "graphify query",
+    "codebase-memory",
     "opensrc path",
     "greploop_guard",
     "validate_structure",
