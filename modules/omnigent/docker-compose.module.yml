@@ -14,10 +14,12 @@ services:
     # CMD is the image entrypoint (entrypoint.sh): runs the foreground OIDC server AND
     # attaches the host/runner, so a single container serves the UI and runs agents.
     ports:
-      - "6767:6767"   # LAN access (binds 0.0.0.0). cloudflared reaches it internally via zoe-network.
-                      # NOTE: the omnigent server has no auth of its own — anyone on the LAN can
-                      # reach it. Fine for a trusted home network; gate with Cloudflare Access
-                      # before ever exposing it through the tunnel.
+      - "127.0.0.1:6767:6767"  # localhost-only (host-local debugging). In header mode the server
+                      # has NO auth of its own, so the port is NOT published to the LAN — otherwise
+                      # any LAN device would be treated as the `local` user with the mounted
+                      # workspace + agent credentials. cloudflared reaches it over the internal
+                      # zoe-network (http://zoe-omnigent:6767), so the Cloudflare-Access-gated
+                      # tunnel is unaffected by the localhost bind.
     # AUTH = OAuth subscriptions (Claude / ChatGPT / Cursor logins), NOT API keys.
     # DO NOT set ANTHROPIC_API_KEY or OPENAI_API_KEY here: if present, the CLIs bill the
     # metered API and silently ignore your subscription. Subscription tokens live in the
@@ -43,20 +45,27 @@ services:
       # resolve unchanged inside the container.
       - PATH=/home/zoe/.local/bin:/root/.local/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
       - OPENSRC_HOME=/home/zoe/.opensrc
-      # Auth delegated to Zoe's own SSO (zoe-auth OIDC) — one Zoe login, UI stays protected
-      # even on the LAN. Issuer/redirect use zoe.local so the token `iss` matches across
-      # browser and server (zoe-auth derives issuer from the Host header). Access the UI at
-      # http://zoe.local:6767 (NOT the raw IP) so the OIDC redirect host stays consistent.
+      # Auth: header-mode + single-user, gated externally by Cloudflare Access on the tunnel
+      # (https://buildzoe.the411.life → zoe-cloudflared → zoe-omnigent:6767). Access is the
+      # gate; Omnigent itself trusts every request and resolves it to the reserved "local"
+      # user (server/auth.py: header provider + OMNIGENT_LOCAL_SINGLE_USER → "local").
+      #
+      # Why NOT OIDC here: Omnigent's OIDC issuer/redirect are pinned to the LAN origin
+      # http://zoe.local:6767. Reached through Cloudflare (buildzoe.the411.life, HTTPS) the
+      # login round-trip crosses origins — the __Host-ap_auth_state cookie is set on the
+      # Cloudflare host but the callback returns to http://zoe.local, so the cookie never
+      # comes back → "Missing auth state cookie" (server/routes/auth.py). One OIDC client
+      # can't straddle both origins, so the tunnel path uses Cloudflare Access instead.
       - OMNIGENT_AUTH_ENABLED=1
-      - OMNIGENT_AUTH_PROVIDER=oidc
-      # Issuer is the nginx frontend (http://zoe.local, port 80) — it serves the login UI at /
-      # and proxies /application/o/, /.well-known/, /jwks.json to zoe-auth. NOT :8002 (raw API,
-      # whose / is JSON with no login page).
-      - OMNIGENT_OIDC_ISSUER=http://zoe.local
-      - OMNIGENT_OIDC_CLIENT_ID=${OMNIGENT_OIDC_CLIENT_ID:-omnigent}
-      - OMNIGENT_OIDC_CLIENT_SECRET=${OMNIGENT_OIDC_CLIENT_SECRET}
-      - OMNIGENT_OIDC_REDIRECT_URI=http://zoe.local:6767/auth/callback
-      - OMNIGENT_OIDC_COOKIE_SECRET=${OMNIGENT_OIDC_COOKIE_SECRET}
+      - OMNIGENT_AUTH_PROVIDER=header
+      - OMNIGENT_LOCAL_SINGLE_USER=1
+      # To revert to LAN-only OIDC (only if the Cloudflare path is retired): flip provider
+      # back to `oidc` and uncomment the block below. OIDC works only via http://zoe.local:6767.
+      # - OMNIGENT_OIDC_ISSUER=http://zoe.local
+      # - OMNIGENT_OIDC_CLIENT_ID=${OMNIGENT_OIDC_CLIENT_ID:-omnigent}
+      # - OMNIGENT_OIDC_CLIENT_SECRET=${OMNIGENT_OIDC_CLIENT_SECRET}
+      # - OMNIGENT_OIDC_REDIRECT_URI=http://zoe.local:6767/auth/callback
+      # - OMNIGENT_OIDC_COOKIE_SECRET=${OMNIGENT_OIDC_COOKIE_SECRET}
     # Resolve zoe.local to the host so the container reaches zoe-auth's published :8002 with
     # a Host header of "zoe.local:8002" — keeps the OIDC issuer identical to the browser's.
     extra_hosts:
