@@ -12,10 +12,11 @@ Routes:
 """
 import logging
 import os
-from typing import Optional
+from typing import Any, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict, Field
 
 from auth import get_current_user
 
@@ -24,6 +25,16 @@ router = APIRouter(prefix="/api/ha", tags=["ha-control"])
 
 _HA_BRIDGE = os.environ.get("ZOE_HA_BRIDGE_URL", "http://127.0.0.1:8007")
 _TIMEOUT = 10.0
+
+
+class HAControlPayload(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    entity_id: str | None = Field(default=None, max_length=256)
+    action: str | None = Field(default=None, max_length=128)
+    service: str | None = Field(default=None, max_length=128)
+    params: dict[str, Any] | None = Field(default=None, max_length=100)
+    service_data: dict[str, Any] | None = Field(default=None, max_length=100)
 
 # ── auth: session or device token ────────────────────────────────────────────
 
@@ -67,9 +78,9 @@ async def list_entities(
         return {"entities": entities, "count": len(entities)}
     except httpx.ConnectError:
         raise HTTPException(status_code=503, detail="HA bridge offline")
-    except Exception as exc:
-        logger.error("ha/entities error: %s", exc)
-        raise HTTPException(status_code=502, detail=str(exc))
+    except Exception:
+        logger.exception("ha/entities error")
+        raise HTTPException(status_code=502, detail="HA bridge request failed")
 
 
 @router.get("/state/{entity_id:path}")
@@ -80,14 +91,15 @@ async def get_entity_state(entity_id: str, caller: dict = Depends(_require_calle
     except httpx.ConnectError:
         raise HTTPException(status_code=503, detail="HA bridge offline")
     except httpx.HTTPStatusError as exc:
-        raise HTTPException(status_code=exc.response.status_code, detail=f"HA bridge: {exc}")
-    except Exception as exc:
-        logger.error("ha/state error entity=%s: %s", entity_id, exc)
-        raise HTTPException(status_code=502, detail=str(exc))
+        logger.exception("ha/state bridge status error entity=%s", entity_id)
+        raise HTTPException(status_code=exc.response.status_code, detail="HA bridge request failed")
+    except Exception:
+        logger.exception("ha/state error entity=%s", entity_id)
+        raise HTTPException(status_code=502, detail="HA bridge request failed")
 
 
 @router.post("/control")
-async def ha_control(payload: dict, caller: dict = Depends(_require_caller)):
+async def ha_control(payload: HAControlPayload, caller: dict = Depends(_require_caller)):
     """
     Call a HA service directly from the touch panel.
 
@@ -96,9 +108,9 @@ async def ha_control(payload: dict, caller: dict = Depends(_require_caller)):
       { "entity_id": "light.kitchen", "action": "turn_on", "params": { "brightness_pct": 80 } }
       { "domain": "scene", "service": "turn_on", "entity_id": "scene.movie_time" }
     """
-    entity_id = (payload.get("entity_id") or "").strip()
-    action = (payload.get("action") or payload.get("service") or "").strip()
-    params = payload.get("params") or payload.get("service_data") or {}
+    entity_id = (payload.entity_id or "").strip()
+    action = (payload.action or payload.service or "").strip()
+    params = payload.params or payload.service_data or {}
     if not entity_id:
         raise HTTPException(status_code=400, detail="entity_id is required")
 
@@ -124,7 +136,8 @@ async def ha_control(payload: dict, caller: dict = Depends(_require_caller)):
     except httpx.ConnectError:
         raise HTTPException(status_code=503, detail="HA bridge offline")
     except httpx.HTTPStatusError as exc:
-        raise HTTPException(status_code=exc.response.status_code, detail=f"HA bridge: {exc.response.text}")
-    except Exception as exc:
-        logger.error("ha/control error: %s", exc)
-        raise HTTPException(status_code=502, detail=str(exc))
+        logger.exception("ha/control bridge status error")
+        raise HTTPException(status_code=exc.response.status_code, detail="HA bridge request failed")
+    except Exception:
+        logger.exception("ha/control error")
+        raise HTTPException(status_code=502, detail="HA bridge request failed")
