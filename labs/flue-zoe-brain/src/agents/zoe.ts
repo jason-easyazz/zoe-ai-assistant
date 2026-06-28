@@ -11,12 +11,15 @@
  * live llama-server on :11434). Exporting `route` mounts the HTTP agent API so
  * `POST /agents/zoe/:id` works (see Flue routing-api).
  *
- * Phase 3, increment 1: REAL tools (`zoeTools`) are now wired on — get_time,
- * recall_memory, shopping_list_add — each calling zoe-data's existing internal
- * capability endpoints over HTTP (see src/tools/zoe-tools.ts). The open question
- * this answers is whether the local Gemma brain reliably tool-calls; the parity
- * harness measures it (parity/RESULTS.md). Acting identity is bound in trusted
- * code (env), never from model args.
+ * Phase 3: REAL tools (`zoeTools`) are wired on, each calling zoe-data's existing
+ * internal capability endpoints over HTTP (see src/tools/zoe-tools.ts).
+ *   - increment 1: get_time, recall_memory, shopping_list_add
+ *   - increment 2: get_weather, list_reminders, show_calendar, show_list (reads);
+ *                  set_timer, add_reminder, add_calendar_event, create_note (writes)
+ * The open question this answers is whether the local Gemma brain reliably
+ * tool-calls; the parity harness measures it (parity/RESULTS.md). Acting identity
+ * is bound in trusted code (env), never from model args; writes are gated behind
+ * ZOE_BRAIN_ALLOW_WRITES (dry-run by default).
  *
  * LAB ONLY.
  */
