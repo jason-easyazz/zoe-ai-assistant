@@ -28,7 +28,17 @@ import * as v from 'valibot';
 // Defaults to the live local endpoint (same default as prod's ZOE_DATA_URL).
 const ZOE_DATA_URL = process.env.ZOE_DATA_URL ?? 'http://127.0.0.1:8000';
 const INTERNAL_TOKEN = process.env.ZOE_INTERNAL_TOKEN ?? '';
-const HTTP_TIMEOUT_MS = Number(process.env.ZOE_BRAIN_TOOL_TIMEOUT_MS ?? 8000);
+// Validate the timeout: Number('') is 0 and Number('abc') is NaN, either of which
+// would make AbortSignal.timeout() abort every call immediately. Fall back to 8s
+// for any non-positive / non-finite value.
+const HTTP_TIMEOUT_MS = (() => {
+  const n = Number(process.env.ZOE_BRAIN_TOOL_TIMEOUT_MS);
+  return Number.isFinite(n) && n > 0 ? n : 8000;
+})();
+
+// Identities that zoe-data accepts but that mean "not a real user" — treat as no
+// user so a tool fails closed instead of silently returning an empty packet.
+const GUEST_IDENTITIES = new Set(['guest', 'anonymous', 'anon', 'unknown', 'none']);
 
 // Writes are off by default in the lab: shopping_list_add becomes a DRY-RUN
 // unless explicitly enabled, so the parity harness can't mutate the real list.
@@ -38,7 +48,12 @@ const ALLOW_WRITES =
 // The acting user, bound in trusted code (env), NOT from model args. Read fresh
 // each call so a single process is never pinned to one identity at module load.
 function actingUserId(): string {
-  return (process.env.ZOE_BRAIN_USER_ID ?? '').trim();
+  const id = (process.env.ZOE_BRAIN_USER_ID ?? '').trim();
+  // Fail closed on guest-style identities: zoe-data returns a *successful* empty
+  // packet for them, which would otherwise look like "nothing stored" and hide an
+  // invalid acting identity.
+  if (!id || GUEST_IDENTITIES.has(id.toLowerCase())) return '';
+  return id;
 }
 
 function internalHeaders(extra?: Record<string, string>): Record<string, string> {
@@ -146,9 +161,11 @@ const shoppingListAdd = defineTool({
     if (!item) return 'I need to know which item to add to the shopping list.';
 
     if (!ALLOW_WRITES) {
-      // Lab default: DRY-RUN. Acknowledge without mutating the real list.
-      return `(dry-run) I'd add "${item}" to your shopping list. ` +
-        `Writes are disabled in the lab (set ZOE_BRAIN_ALLOW_WRITES=true to enable).`;
+      // Lab default: DRY-RUN — do NOT let the model claim success. Be explicit
+      // that nothing was added and instruct the model not to say otherwise.
+      return `WRITE DISABLED — "${item}" was NOT added to the shopping list (this is a ` +
+        `lab build; set ZOE_BRAIN_ALLOW_WRITES=true to enable writes). Tell the user you ` +
+        `can't add to their list yet — do NOT claim it was added.`;
     }
 
     try {
@@ -166,7 +183,12 @@ const shoppingListAdd = defineTool({
       if (!res.ok) {
         return `I couldn't add that to your list right now (the list service returned ${res.status}).`;
       }
-      const data = (await res.json()) as { result?: string };
+      const data = (await res.json()) as { ok?: boolean; result?: string };
+      // The dispatch reports success via `ok`; don't claim success on a
+      // non-confirming shape (e.g. { ok: false, result: "" }).
+      if (data.ok === false) {
+        return `I couldn't add "${item}" to your list — the list service didn't confirm it.`;
+      }
       return (data.result ?? '').trim() || `Added "${item}" to your shopping list.`;
     } catch {
       return "I couldn't reach the list service right now.";
