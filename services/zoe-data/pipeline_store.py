@@ -29,9 +29,14 @@ from pipeline_evidence import (
     with_evidence,
 )
 
+# Must mirror the skills each phase is actually dispatched with in
+# kanban_adapter._CHAIN: the no-TOOLS_USED evidence fallback credits these as
+# "pinned skills" tool evidence, so listing a skill a worker was never given
+# would advance the pipeline on misleading evidence. implement deliberately
+# pins only zoe-engineering (preload is kept minimal per _CHAIN).
 _PHASE_SKILLS: dict[str, tuple[str, ...]] = {
     "scout": ("codebase-memory", "zoe-engineering"),
-    "implement": ("zoe-engineering", "codebase-memory", "serena", "source-code-context", "code-structure-cleanup"),
+    "implement": ("zoe-engineering",),
     "verify": ("zoe-engineering",),
     "review": ("zoe-engineering",),
     "closeout": ("github-greptile-loop",),

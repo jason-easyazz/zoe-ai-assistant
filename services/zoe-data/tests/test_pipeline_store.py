@@ -733,6 +733,17 @@ async def test_sync_pipeline_advances_with_live_run_metadata_recovery(isolated_s
     )
 
 
+def test_phase_skills_implement_only_credits_pinned_skills():
+    # _PHASE_SKILLS feeds the no-TOOLS_USED evidence fallback, which credits each
+    # listed skill as "pinned skills" tool evidence. implement is dispatched with
+    # only zoe-engineering (kanban_adapter._CHAIN), so it must not list runtime-only
+    # tools like codebase-memory/serena — that would advance the pipeline on tool
+    # evidence the implement worker was never given.
+    assert store._PHASE_SKILLS["implement"] == ("zoe-engineering",)
+    assert "codebase-memory" not in store._PHASE_SKILLS["implement"]
+    assert "serena" not in store._PHASE_SKILLS["implement"]
+
+
 @pytest.mark.asyncio
 async def test_sync_pipeline_ignores_stale_duplicate_implement_block_after_verify_success(
     isolated_store,
