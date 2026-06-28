@@ -21,6 +21,7 @@ import json
 import os
 import sys
 import types
+from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -152,6 +153,28 @@ async def test_stdio_no_context_still_falls_back_to_family_admin_for_local_calls
 
 
 @pytest.mark.asyncio
+async def test_handle_tool_without_actor_context_preserves_internal_user_id(monkeypatch):
+    db = _RoutingDb({"FROM notes": []})
+
+    @asynccontextmanager
+    async def fake_db_ctx():
+        yield db
+
+    monkeypatch.setattr(mcp_server, "_pg_get_db", fake_db_ctx)
+
+    result = json.loads(
+        await mcp_server.handle_tool(
+            "note_search",
+            {"_user_id": "jason", "query": "birthday"},
+        )
+    )
+
+    assert result == {"notes": []}
+    sql, params = next(call for call in db.calls if "FROM notes" in call[0])
+    assert params == ("%birthday%", "%birthday%", "jason")
+
+
+@pytest.mark.asyncio
 async def test_non_admin_transport_actor_cannot_override_dashboard_target():
     db = _RoutingDb({"dashboard_layouts": []})
 
@@ -206,6 +229,13 @@ async def test_meta_actor_role_admin_is_ignored_when_db_role_is_member():
     }
     sql, params = next(call for call in db.calls if "FROM dashboard_layouts" in call[0])
     assert params == ("jason",)
+
+
+def test_dashboard_add_widget_schema_allows_admin_user_target():
+    tool = next(t for t in mcp_server.TOOLS if t["name"] == "dashboard_add_widget")
+
+    assert "user_id" in tool["inputSchema"]["properties"]
+    assert tool["inputSchema"]["properties"]["user_id"]["type"] == "string"
 
 
 @pytest.mark.asyncio

@@ -301,6 +301,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
+                "user_id": {"type": "string", "description": "User ID (default: current user)"},
                 "widgets": {"type": "array", "items": {"type": "string"}, "description": "Widget IDs to add"},
             },
             "required": ["widgets"],
@@ -1157,7 +1158,7 @@ from db_compat import get_compat_db as _pg_get_db  # noqa: E402
 async def handle_tool(name: str, args: dict, actor_context: dict | None = None) -> str:
     async with _pg_get_db() as db:
         try:
-            result = await _execute_tool(db, name, args, actor_context=actor_context or {})
+            result = await _execute_tool(db, name, args, actor_context=actor_context)
             return json.dumps(result, default=str)
         except Exception as e:
             return json.dumps({"error": str(e)})
@@ -3148,7 +3149,11 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
                 return {"error": "title and description required"}
             evidence = (args.get("evidence") or "").strip()
             prop_id = str(uuid.uuid4()).replace("-", "")
-            proposal_user_id = str(user_id).strip() if actor.get("explicit") else None
+            proposal_user_id = (
+                str(user_id).strip()
+                if actor.get("explicit") or actor.get("source") == "legacy_fallback"
+                else None
+            )
             intake = build_mcp_runtime_evolution_proposal_intake(
                 proposal_id=prop_id,
                 title=title,

@@ -141,7 +141,7 @@ async def test_create_evolution_proposal_stores_runtime_intake_contract_snapshot
 
 
 @pytest.mark.asyncio
-async def test_create_evolution_proposal_keeps_system_scope_without_explicit_user(monkeypatch):
+async def test_create_evolution_proposal_attributes_legacy_fallback_to_family_admin(monkeypatch):
     async def fake_sync_evolution_proposal_to_multica(**_kwargs):
         return None
 
@@ -172,8 +172,8 @@ async def test_create_evolution_proposal_keeps_system_scope_without_explicit_use
     evidence = json.loads(insert_args[3])
     assert evidence["source"] == "runtime_evolution_intake"
     assert evidence["signal"]["source"] == "mcp:create_evolution_proposal"
-    assert evidence["signal"]["scope"] == "system"
-    assert evidence["signal"]["user_id"] is None
+    assert evidence["signal"]["scope"] == "personal"
+    assert evidence["signal"]["user_id"] == "family-admin"
     assert contract["schema"] == "zoe_evolution_proposal"
     assert contract["legacy_writer"] == "runtime_evolution_intake"
     assert insert_args[5] == "code_improvement"
