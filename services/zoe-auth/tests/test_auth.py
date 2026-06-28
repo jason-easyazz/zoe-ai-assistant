@@ -857,3 +857,52 @@ def test_admin_reset_clears_limiter_and_db_lockout(sqlite_auth_db, monkeypatch):
     pc_failed = conn.execute("SELECT failed_attempts FROM passcodes WHERE user_id='zoe'").fetchone()[0]
     conn.close()
     assert failed == 0 and locked is None and pc_failed == 0
+
+
+# ── Setup token: two-phase reserve/finalize must not burn on a failed write ───
+
+
+def test_setup_token_reserve_release_does_not_burn(sqlite_auth_db):
+    """A reserved token survives a failed write (release) and is only burned on finalize."""
+    from core.account_setup import SetupTokenManager
+
+    mgr = SetupTokenManager(bootstrap_token=BOOTSTRAP)
+    token = mgr.issue_token("zoe")
+    assert mgr.reserve("zoe", token) == "pair"
+    # Concurrent reuse is blocked while in-flight.
+    assert mgr.reserve("zoe", token) is None
+    # Write failed -> release: the token is usable again (NOT burned).
+    mgr.release("zoe", "pair", token)
+    assert mgr.reserve("zoe", token) == "pair"
+    # finalize consumes it for good.
+    mgr.finalize("zoe", "pair", token)
+    assert mgr.reserve("zoe", token) is None
+
+
+def test_setup_rolls_back_and_keeps_token_when_durable_record_fails(sqlite_auth_db, monkeypatch):
+    """If the durable bootstrap marker can't be written, the password write rolls
+    back AND the token is not burned, so the user can retry."""
+    _seed_pending(sqlite_auth_db)
+    # Pretend the bootstrap is a pinned env token whose durable marker write fails.
+    monkeypatch.setattr(setup_token_manager, "bootstrap_needs_durable_record", lambda: True)
+    monkeypatch.setattr(setup_token_manager, "_persist_bootstrap_consumed",
+                        lambda token, conn=None: False)
+    client = TestClient(app)
+    resp = client.post(
+        "/api/auth/password/setup",
+        json={"username": "zoe", "new_password": _pw("realpw"),
+              "confirm_password": _pw("realpw"), "setup_token": BOOTSTRAP},
+    )
+    assert resp.status_code == 503
+    # Password write rolled back — account still pending.
+    assert _password_hash_of(sqlite_auth_db) == "SETUP_REQUIRED"
+
+    # Token was NOT burned: once the durable record works, the same token succeeds.
+    monkeypatch.setattr(setup_token_manager, "bootstrap_needs_durable_record", lambda: False)
+    resp2 = client.post(
+        "/api/auth/password/setup",
+        json={"username": "zoe", "new_password": _pw("realpw"),
+              "confirm_password": _pw("realpw"), "setup_token": BOOTSTRAP},
+    )
+    assert resp2.status_code == 200
+    assert _password_hash_of(sqlite_auth_db) not in (None, "SETUP_REQUIRED")

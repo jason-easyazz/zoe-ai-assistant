@@ -380,8 +380,10 @@ def _parse_basic_auth(authorization: Optional[str]) -> tuple[Optional[str], Opti
     basic_id, sep, basic_secret = decoded.partition(":")
     if not sep:
         return None, None
-    from urllib.parse import unquote
-    return unquote(basic_id), unquote(basic_secret)
+    # RFC 6749 §2.3.1: id/secret are application/x-www-form-urlencoded, so '+'
+    # decodes to a space (unquote_plus), not left literal.
+    from urllib.parse import unquote_plus
+    return unquote_plus(basic_id), unquote_plus(basic_secret)
 
 
 @router.post("/application/o/token/")

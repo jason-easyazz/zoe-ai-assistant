@@ -56,6 +56,11 @@ class SetupTokenManager:
         self._lock = threading.RLock()
         # user_id -> (token_hash, expires_at)
         self._pending: Dict[str, Tuple[str, datetime]] = {}
+        # In-flight reservations: a token is reserved (verified, not yet consumed)
+        # while its password write commits. This blocks concurrent reuse (TOCTOU)
+        # without burning the token before the write succeeds.
+        self._reserved_pairs: set = set()
+        self._bootstrap_reserved = False
         self._bootstrap_token = bootstrap_token
         self._bootstrap_generated = False
         # True when the bootstrap token is a pinned ZOE_AUTH_SETUP_TOKEN. A pinned
@@ -144,27 +149,39 @@ class SetupTokenManager:
             # No audit table / DB unavailable (e.g. unit tests).
             return None
 
-    def _persist_bootstrap_consumed(self, token: str) -> bool:
-        """Durably record consumption. Returns True on success, False otherwise."""
+    def _persist_bootstrap_consumed(self, token: str, conn=None) -> bool:
+        """Durably record consumption. Returns True on success, False otherwise.
+
+        If ``conn`` is given, the marker is written on that connection so it
+        commits/rolls back atomically with the caller's password write; otherwise
+        a private connection is used (best effort).
+        """
+        sql = (
+            "INSERT INTO audit_logs (log_id, user_id, action, resource, result, timestamp)"
+            " VALUES (?, ?, ?, ?, ?, ?)"
+        )
+        params = (
+            f"setupboot_{secrets.token_hex(8)}", None,
+            "setup_bootstrap_consumed", _hash(token), "success",
+            datetime.now(timezone.utc).isoformat(),
+        )
         try:
+            if conn is not None:
+                conn.execute(sql, params)
+                return True
             from models.database import auth_db
-            with auth_db.get_connection() as conn:
-                conn.execute(
-                    """
-                    INSERT INTO audit_logs
-                    (log_id, user_id, action, resource, result, timestamp)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        f"setupboot_{secrets.token_hex(8)}", None,
-                        "setup_bootstrap_consumed", _hash(token), "success",
-                        datetime.now(timezone.utc).isoformat(),
-                    ),
-                )
+            with auth_db.get_connection() as own:
+                own.execute(sql, params)
             return True
         except Exception as exc:
             logger.debug("Could not persist bootstrap-consumed marker: %s", exc)
             return False
+
+    def bootstrap_needs_durable_record(self) -> bool:
+        """True when the current bootstrap token is pinned (env) and so requires a
+        durable consumed-marker written transactionally with the password."""
+        with self._lock:
+            return self._bootstrap_from_env
 
     # -- per-user one-time tokens --------------------------------------
     def issue_token(self, user_id: str, ttl_minutes: int = DEFAULT_TOKEN_TTL_MINUTES) -> str:
@@ -187,43 +204,78 @@ class SetupTokenManager:
                 return False
             return hmac.compare_digest(_hash(token), token_hash)
 
-    # -- atomic claim ---------------------------------------------------
-    def claim(self, user_id: str, token: Optional[str]) -> Optional[str]:
-        """Atomically verify AND consume a setup credential for ``user_id``.
+    # -- two-phase claim: reserve -> (write password) -> finalize / release ----
+    def reserve(self, user_id: str, token: Optional[str]) -> Optional[str]:
+        """Atomically verify a credential and RESERVE it (in-flight) for ``user_id``.
 
-        Returns ``"pair"`` for a valid per-user token (which is removed here),
-        ``"bootstrap"`` for the one-time bootstrap token (which is burned,
-        durably marked consumed, and rotated here), or ``None``. Verify and
-        consume happen under one lock so two concurrent setup requests cannot
-        both pass with the same token (TOCTOU) — only the first wins.
+        Returns the kind (``"pair"``/``"bootstrap"``) without consuming the token,
+        or ``None``. The reservation blocks any concurrent request from using the
+        same token (TOCTOU) until the caller :meth:`finalize`s (after the password
+        write commits) or :meth:`release`s it (if the write fails, so the user can
+        retry). The token is NOT burned here — that would lock a user out if the
+        write later failed.
         """
         if not token:
             return None
         with self._lock:
-            if self._matches_pending(user_id, token):
-                self._pending.pop(user_id, None)
+            if user_id not in self._reserved_pairs and self._matches_pending(user_id, token):
+                self._reserved_pairs.add(user_id)
                 return "pair"
-            if self._matches_bootstrap(token):
-                from_env = self._bootstrap_from_env
-                persisted = self._persist_bootstrap_consumed(token)
-                # A pinned (env) token survives restarts, so refuse to spend it
-                # unless we durably recorded the consumption — otherwise a restart
-                # could revalidate it. A generated token needs no durable record.
-                if from_env and not persisted:
-                    logger.error(
-                        "Refusing pinned bootstrap setup: cannot durably record "
-                        "consumption (audit_logs unavailable) — failing closed."
-                    )
-                    return None
-                self._bootstrap_used = True
-                self._rotate_bootstrap()
+            if not self._bootstrap_reserved and self._matches_bootstrap(token):
+                self._bootstrap_reserved = True
                 return "bootstrap"
             return None
+
+    def finalize(self, user_id: str, kind: Optional[str], token: Optional[str]) -> None:
+        """Consume a reserved credential after the password write has committed.
+
+        A ``"pair"`` token is dropped; a ``"bootstrap"`` token is burned and
+        rotated. (The durable bootstrap marker is written transactionally with the
+        password by the caller, so it is not written again here.)
+        """
+        with self._lock:
+            if kind == "pair":
+                self._pending.pop(user_id, None)
+                self._reserved_pairs.discard(user_id)
+            elif kind == "bootstrap":
+                self._bootstrap_used = True
+                self._rotate_bootstrap()
+                self._bootstrap_reserved = False
+
+    def release(self, user_id: str, kind: Optional[str], token: Optional[str]) -> None:
+        """Release a reservation without consuming (the password write failed)."""
+        with self._lock:
+            if kind == "pair":
+                self._reserved_pairs.discard(user_id)
+            elif kind == "bootstrap":
+                self._bootstrap_reserved = False
+
+    def claim(self, user_id: str, token: Optional[str]) -> Optional[str]:
+        """Verify+consume in one call (no external transaction).
+
+        Convenience wrapper around reserve/finalize for non-transactional callers
+        and tests; the API endpoint uses reserve/finalize directly so the token is
+        only burned after the password write commits.
+        """
+        kind = self.reserve(user_id, token)
+        if not kind:
+            return None
+        if kind == "bootstrap" and self._bootstrap_from_env:
+            if not self._persist_bootstrap_consumed(token):
+                self.release(user_id, kind, token)
+                logger.error(
+                    "Refusing pinned bootstrap setup: cannot durably record "
+                    "consumption (audit_logs unavailable) — failing closed."
+                )
+                return None
+        self.finalize(user_id, kind, token)
+        return kind
 
     def clear_pending(self, user_id: str) -> None:
         """Drop any stale per-user token for ``user_id`` (admin-session path)."""
         with self._lock:
             self._pending.pop(user_id, None)
+            self._reserved_pairs.discard(user_id)
 
     def reset(self, bootstrap_token: Optional[str] = None) -> None:
         """Clear all state. Intended for tests.
@@ -234,6 +286,8 @@ class SetupTokenManager:
         """
         with self._lock:
             self._pending.clear()
+            self._reserved_pairs.clear()
+            self._bootstrap_reserved = False
             self._bootstrap_used = False
             if bootstrap_token is not None:
                 self._bootstrap_token = bootstrap_token

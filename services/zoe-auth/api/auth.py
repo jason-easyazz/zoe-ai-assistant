@@ -758,34 +758,58 @@ async def setup_initial_password(
             if password_hash is not None and password_hash != 'SETUP_REQUIRED':
                 raise HTTPException(status_code=400, detail="Password already set. Use password change instead.")
 
-            # AUTHORIZATION: require a valid setup token OR an admin session.
-            # claim() atomically verifies AND consumes the token, so two
-            # concurrent setup requests cannot both pass with the same token.
-            admin_ok = _is_admin_session(current_session)
-            if admin_ok:
-                setup_token_manager.clear_pending(user_id)  # drop any stale token
-            else:
-                token_kind = setup_token_manager.claim(user_id, request.setup_token)
-                if not token_kind:
-                    rate_limiter.register_failed_attempt("password_setup", ip_address, request.username)
-                    logger.warning(
-                        "Rejected unauthorized password setup for user '%s' from %s",
-                        request.username, ip_address,
-                    )
-                    raise HTTPException(
-                        status_code=403,
-                        detail="Setup authorization required: provide a valid setup token or use an admin account.",
-                    )
+        # AUTHORIZATION: require a valid setup token OR an admin session. reserve()
+        # verifies the token and holds it in-flight (blocking concurrent reuse)
+        # but does NOT burn it — we only finalize after the password write commits,
+        # so a failed write never locks the user out of retrying.
+        admin_ok = _is_admin_session(current_session)
+        token_kind = None
+        if admin_ok:
+            setup_token_manager.clear_pending(user_id)  # drop any stale token
+        else:
+            token_kind = setup_token_manager.reserve(user_id, request.setup_token)
+            if not token_kind:
+                rate_limiter.register_failed_attempt("password_setup", ip_address, request.username)
+                logger.warning(
+                    "Rejected unauthorized password setup for user '%s' from %s",
+                    request.username, ip_address,
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail="Setup authorization required: provide a valid setup token or use an admin account.",
+                )
 
-            # Set the new password using auth_manager
+        try:
             import bcrypt
             new_hash = bcrypt.hashpw(request.new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
-            conn.execute(
-                "UPDATE auth_users SET password_hash = ?, updated_at = ? WHERE user_id = ?",
-                (new_hash, datetime.utcnow().isoformat(), user_id)
-            )
+            with auth_db.get_connection() as conn:
+                # Conditional UPDATE so a row claimed concurrently isn't overwritten.
+                conn.execute(
+                    "UPDATE auth_users SET password_hash = ?, updated_at = ? WHERE user_id = ?"
+                    " AND (password_hash IS NULL OR password_hash = 'SETUP_REQUIRED')",
+                    (new_hash, datetime.utcnow().isoformat(), user_id)
+                )
+                if conn.total_changes == 0:
+                    raise HTTPException(status_code=409, detail="Password already set. Use password change instead.")
+                # Burn a pinned (env) bootstrap token durably in the SAME
+                # transaction (fail closed): if it can't be recorded, roll the
+                # password write back too, so the token can't later revalidate.
+                if token_kind == "bootstrap" and setup_token_manager.bootstrap_needs_durable_record():
+                    if not setup_token_manager._persist_bootstrap_consumed(request.setup_token, conn):
+                        raise HTTPException(
+                            status_code=503,
+                            detail="Setup temporarily unavailable. Please try again.",
+                        )
+        except Exception:
+            # Write failed/rolled back — release the reservation so retry works.
+            if token_kind:
+                setup_token_manager.release(user_id, token_kind, request.setup_token)
+            raise
 
+        # Committed: now consume the reserved token (one-time).
+        if token_kind:
+            setup_token_manager.finalize(user_id, token_kind, request.setup_token)
         logger.info(f"Initial password set for user: {request.username}")
 
         return {
