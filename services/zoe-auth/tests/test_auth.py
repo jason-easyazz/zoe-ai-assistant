@@ -14,10 +14,44 @@ import bcrypt
 from sqlite_compat import SQLiteCompatConnection
 import models.database as db_module
 from core.auth import AuthManager
+from core.passcode import passcode_manager
 from core.security import rate_limiter
 from core.sessions import session_manager, SessionType
 from core.account_setup import setup_token_manager
 from main import app
+
+
+def _ensure_passcodes_table(db_path: str) -> None:
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS passcodes (
+            user_id TEXT PRIMARY KEY,
+            passcode_hash TEXT,
+            salt TEXT DEFAULT '',
+            failed_attempts INTEGER DEFAULT 0,
+            max_attempts INTEGER DEFAULT 5,
+            expires_at TEXT,
+            is_active INTEGER DEFAULT 1,
+            last_used TEXT
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+def _seed_passcode(db_path: str, user_id: str, pin: str, failed: int = 0) -> None:
+    _ensure_passcodes_table(db_path)
+    pin_hash = passcode_manager.hasher.hash(pin + "")  # salt = ""
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO passcodes(user_id, passcode_hash, salt, failed_attempts, max_attempts, is_active)"
+        " VALUES (?, ?, '', ?, 5, 1)",
+        (user_id, pin_hash, failed),
+    )
+    conn.commit()
+    conn.close()
 
 
 def _pw(tag: str) -> str:
@@ -694,6 +728,7 @@ def test_generated_bootstrap_still_one_time_without_durable_store():
 
 def test_admin_rate_limit_reset_endpoint(sqlite_auth_db, monkeypatch):
     """Admin can clear throttle buckets for a user via the recovery endpoint."""
+    _ensure_passcodes_table(sqlite_auth_db)  # endpoint clears DB lockout for the user
     for _ in range(rate_limiter.throttle_rules["login"].hard_block_attempts):
         rate_limiter.register_failed_attempt("login", "5.5.5.5", "zoe")
     assert rate_limiter.is_hard_blocked("login", "5.5.5.5", "zoe") is True
@@ -714,3 +749,111 @@ def test_admin_rate_limit_reset_endpoint(sqlite_auth_db, monkeypatch):
     assert resp.status_code == 200
     assert resp.json()["cleared"] >= 1
     assert rate_limiter.is_hard_blocked("login", "5.5.5.5", "zoe") is False
+
+
+# ── End-to-end: per-user DB lockout must NOT enable victim lockout ────────────
+# These drive the REAL auth_manager.verify_password / verify_passcode so they
+# cover the pre-existing per-user DB lockouts underneath the RateLimiter.
+
+
+def test_victim_password_succeeds_after_many_global_failures(sqlite_auth_db):
+    """(1) A correct password is NEVER denied by the user-global failed counter.
+
+    verify_password is user-global (IP-independent), so failing it many times is
+    the worst case for "attacker fails the victim from many IPs". The victim's
+    correct credential must still authenticate.
+    """
+    mgr = AuthManager()
+    _seed_user(sqlite_auth_db, password=_pw("victimok"))
+    for i in range(mgr.max_failed_password_attempts + 5):
+        assert mgr.verify_password("zoe", f"wrong-{i}").success is False
+    # No victim lockout: the real password still works.
+    result = mgr.verify_password("zoe", _pw("victimok"))
+    assert result.success is True
+    # And the counters were reset on the successful auth.
+    conn = sqlite3.connect(sqlite_auth_db)
+    failed, locked = conn.execute(
+        "SELECT failed_login_attempts, locked_until FROM auth_users WHERE user_id='zoe'"
+    ).fetchone()
+    conn.close()
+    assert failed == 0 and locked is None
+
+
+def test_victim_passcode_succeeds_after_many_global_failures(sqlite_auth_db):
+    """(1, passcode) A correct passcode is NEVER denied by the user-global counter."""
+    rate_limiter.reset()
+    _seed_passcode(sqlite_auth_db, "zoe", "1379", failed=99)
+    # Wrong PINs (well under the per-IP hard-block threshold) ...
+    for _ in range(10):
+        assert passcode_manager.verify_passcode("zoe", "9999", ip_address=None).is_valid is False
+    # ... then the real PIN still works despite the high failed_attempts count.
+    assert passcode_manager.verify_passcode("zoe", "1379", ip_address=None).is_valid is True
+
+
+def test_shared_ip_household_password_not_locked_out(sqlite_auth_db, monkeypatch):
+    """(2) On a shared IP, one member failing must not deny another's correct login."""
+    _seed_user(sqlite_auth_db, user_id="jason", username="jason", password=_pw("jasonok"))
+    _seed_user(sqlite_auth_db, user_id="sarah", username="sarah", password=_pw("sarahok"))
+    _stub_successful_session(monkeypatch)
+    client = TestClient(app)
+    # 'jason' (one household member) fumbles several times from the shared IP.
+    for _ in range(rate_limiter.throttle_rules["login"].free_attempts):
+        client.post("/api/auth/login",
+                    json={"username": "jason", "password": "nope", "device_info": {}})
+    # 'sarah' on the same IP logs in correctly — not denied (different pair; and
+    # no user-global lock denies a correct credential).
+    resp = client.post("/api/auth/login",
+                       json={"username": "sarah", "password": _pw("sarahok"), "device_info": {}})
+    assert resp.status_code == 200 and resp.json()["success"] is True
+
+
+def test_single_brute_forcing_ip_is_hard_blocked(sqlite_auth_db):
+    """(3) Brute-force protection preserved: one IP hammering one user is blocked."""
+    _seed_user(sqlite_auth_db, password=_pw("victimok"))
+    client = TestClient(app)
+    for _ in range(rate_limiter.throttle_rules["login"].hard_block_attempts):
+        rate_limiter.register_failed_attempt("login", TESTCLIENT_IP, "zoe")
+    resp = client.post("/api/auth/login",
+                       json={"username": "zoe", "password": _pw("victimok"), "device_info": {}})
+    assert resp.json()["error_message"] == "Too many login attempts. Please try again later."
+
+
+def test_admin_reset_clears_limiter_and_db_lockout(sqlite_auth_db, monkeypatch):
+    """(4) Admin reset clears BOTH the limiter buckets AND the DB advisory counters."""
+    # Seed advisory DB lockout state for the user (password + passcode).
+    now = datetime.now().isoformat()
+    future = (datetime.now() + timedelta(minutes=30)).isoformat()
+    conn = sqlite3.connect(sqlite_auth_db)
+    conn.execute(
+        "INSERT INTO auth_users(user_id, username, role, password_hash, created_at, updated_at,"
+        " is_active, is_verified, failed_login_attempts, locked_until)"
+        " VALUES ('zoe','zoe','user','x',?,?,1,1,9,?)",
+        (now, now, future),
+    )
+    conn.commit()
+    conn.close()
+    _seed_passcode(sqlite_auth_db, "zoe", "1379", failed=9)
+    for _ in range(rate_limiter.throttle_rules["login"].hard_block_attempts):
+        rate_limiter.register_failed_attempt("login", "5.5.5.5", "zoe")
+    assert rate_limiter.is_hard_blocked("login", "5.5.5.5", "zoe") is True
+
+    admin_session = types.SimpleNamespace(session_id="admin-sess", user_id="admin")
+    monkeypatch.setattr(session_manager, "get_session", lambda sid: admin_session)
+    monkeypatch.setattr(session_manager, "refresh_session", lambda sid: True)
+    monkeypatch.setattr(
+        session_manager, "validate_session_permission",
+        lambda session_id, permission, resource=None: permission == "users.unlock",
+    )
+    client = TestClient(app)
+    resp = client.post("/api/admin/rate-limit/reset",
+                       headers={"X-Session-ID": "admin-sess"}, json={"user_id": "zoe"})
+    assert resp.status_code == 200
+    assert resp.json()["db_lockout_cleared"] is True
+    assert rate_limiter.is_hard_blocked("login", "5.5.5.5", "zoe") is False
+    conn = sqlite3.connect(sqlite_auth_db)
+    failed, locked = conn.execute(
+        "SELECT failed_login_attempts, locked_until FROM auth_users WHERE user_id='zoe'"
+    ).fetchone()
+    pc_failed = conn.execute("SELECT failed_attempts FROM passcodes WHERE user_id='zoe'").fetchone()[0]
+    conn.close()
+    assert failed == 0 and locked is None and pc_failed == 0

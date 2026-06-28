@@ -166,17 +166,13 @@ class PasscodeManager:
 
                 passcode_hash, salt, failed_attempts, max_attempts, expires_at, is_active, last_used = row
 
-                # Check if account is locked
-                if failed_attempts >= max_attempts:
-                    locked_until = self._calculate_lockout_end(last_used, failed_attempts)
-                    if locked_until and datetime.now() < locked_until:
-                        self._log_audit(user_id, "passcode_verify_blocked", "passcode", 
-                                      "blocked", {"reason": "locked", "ip": ip_address})
-                        return PasscodeValidationResult(
-                            is_valid=False,
-                            error_message="Account temporarily locked",
-                            locked_until=locked_until
-                        )
+                # NOTE: there is deliberately NO user-global "too many failed
+                # attempts" lockout here. Denying a correct passcode because of a
+                # per-user failed count is a victim-lockout vector (anyone could
+                # spam a user's PIN from many IPs to lock the real user out).
+                # Brute force is throttled per-IP / per-(IP,user) by the shared
+                # RateLimiter (see _is_rate_limited above); failed_attempts is
+                # kept only for audit/metrics and never denies a valid passcode.
 
                 # Check expiry
                 if expires_at and datetime.now() > datetime.fromisoformat(expires_at):
@@ -434,22 +430,7 @@ class PasscodeManager:
         from core.security import rate_limiter
         rate_limiter.register_failed_attempt("passcode", ip_address, user_id)
 
-    def _calculate_lockout_end(self, last_attempt: str, failed_attempts: int) -> Optional[datetime]:
-        """Calculate when lockout period ends"""
-        if not last_attempt:
-            return None
-            
-        last_attempt_dt = datetime.fromisoformat(last_attempt)
-        lockout_duration = timedelta(minutes=self.policy.lockout_duration_minutes)
-        
-        # Exponential backoff for repeated lockouts
-        if failed_attempts > self.policy.max_attempts:
-            multiplier = min(failed_attempts - self.policy.max_attempts + 1, 8)
-            lockout_duration *= multiplier
-            
-        return last_attempt_dt + lockout_duration
-
-    def _log_audit(self, user_id: Optional[str], action: str, resource: str, 
+    def _log_audit(self, user_id: Optional[str], action: str, resource: str,
                   result: str, details: Optional[Dict[str, Any]] = None):
         """Log audit event"""
         try:

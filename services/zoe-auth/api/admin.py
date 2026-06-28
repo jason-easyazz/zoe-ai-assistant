@@ -409,10 +409,13 @@ async def reset_rate_limit(
 
     Use this to immediately un-throttle a legitimate user or shared IP that got
     caught by progressive backoff or a pair hard-block. With no filters it clears
-    the entire throttle. Requires the same permission as account unlock.
+    the entire throttle. When a user_id is given it ALSO clears that user's DB
+    advisory counters (auth_users.failed_login_attempts/locked_until and
+    passcodes.failed_attempts) so recovery is unified. Requires the same
+    permission as account unlock.
 
     Returns:
-        Number of throttle buckets/blocks cleared
+        Number of throttle buckets/blocks cleared and whether DB counters were cleared
     """
     try:
         cleared = rate_limiter.reset_for(
@@ -420,12 +423,26 @@ async def reset_rate_limit(
             ip_address=request.ip_address,
             user_id=request.user_id,
         )
+
+        db_cleared = False
+        if request.user_id:
+            with auth_db.get_connection() as conn:
+                conn.execute(
+                    "UPDATE auth_users SET failed_login_attempts = 0, locked_until = NULL WHERE user_id = ?",
+                    (request.user_id,),
+                )
+                conn.execute(
+                    "UPDATE passcodes SET failed_attempts = 0 WHERE user_id = ?",
+                    (request.user_id,),
+                )
+            db_cleared = True
+
         logger.info(
-            "Admin %s reset rate-limit buckets (action=%s ip=%s user=%s): %d cleared",
+            "Admin %s reset rate-limit (action=%s ip=%s user=%s): %d buckets, db_cleared=%s",
             current_session.user_id, request.action, request.ip_address,
-            request.user_id, cleared,
+            request.user_id, cleared, db_cleared,
         )
-        return {"cleared": cleared}
+        return {"cleared": cleared, "db_lockout_cleared": db_cleared}
 
     except Exception as e:
         logger.error(f"Rate-limit reset error: {e}")
