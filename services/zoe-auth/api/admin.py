@@ -14,6 +14,7 @@ from core.auth import auth_manager
 from core.passcode import passcode_manager
 from core.sessions import session_manager
 from core.rbac import rbac_manager
+from core.account_setup import setup_token_manager, DEFAULT_TOKEN_TTL_MINUTES
 from models.database import auth_db
 from api.dependencies import require_permission, require_admin, get_current_session
 
@@ -305,6 +306,61 @@ async def reset_user_password(
     except Exception as e:
         logger.error(f"Password reset error: {e}")
         raise HTTPException(status_code=500, detail="Failed to reset password")
+
+@router.post("/users/{user_id}/setup-token")
+async def issue_setup_token(
+    user_id: str,
+    current_session = Depends(require_permission("users.create"))
+):
+    """
+    Mint a one-time first-password setup token for a pending user (admin only).
+
+    The plaintext token is returned once; hand it to the user, who supplies it as
+    the ``setup_token`` field of ``POST /api/auth/password/setup``. Only valid for
+    accounts that have not set a password yet (NULL / 'SETUP_REQUIRED').
+
+    Args:
+        user_id: User ID to mint a setup token for
+        current_session: Current admin session
+
+    Returns:
+        The one-time token and its TTL in minutes
+    """
+    try:
+        with auth_db.get_connection() as conn:
+            row = conn.execute(
+                "SELECT username, password_hash FROM auth_users WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        password_hash = row["password_hash"]
+        if password_hash is not None and password_hash != "SETUP_REQUIRED":
+            raise HTTPException(
+                status_code=400,
+                detail="User already has a password set; setup token not applicable.",
+            )
+
+        token = setup_token_manager.issue_token(user_id)
+        logger.info(
+            "Admin %s minted a setup token for user %s",
+            current_session.user_id, user_id,
+        )
+        return {
+            "user_id": user_id,
+            "setup_token": token,
+            "expires_in_minutes": DEFAULT_TOKEN_TTL_MINUTES,
+            "note": "One-time token. Provide it as `setup_token` to POST /api/auth/password/setup.",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Issue setup token error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to issue setup token")
+
 
 @router.post("/users/{user_id}/unlock")
 async def unlock_user_account(

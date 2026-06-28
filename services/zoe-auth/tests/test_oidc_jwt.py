@@ -1,8 +1,12 @@
-"""Tests for OIDC JWT issuance and verification."""
+"""Tests for OIDC JWT issuance and verification, plus token-endpoint client auth."""
 
+import pytest
 from cryptography.hazmat.primitives import serialization
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from jose import jwk, jwt
 
+from oidc import router as oidc_router
 from oidc import tokens
 from oidc.keys import generate_rsa_key
 
@@ -75,3 +79,106 @@ def test_verify_access_token_rejects_unknown_key(monkeypatch):
     )
 
     assert tokens.verify_access_token(token, "https://zoe.example", {"keys": []}) is None
+
+
+# ── Finding 3: token endpoint must enforce client_secret for confidential clients ──
+
+
+@pytest.fixture
+def token_client(monkeypatch):
+    """A TestClient for the /token endpoint with the crypto + storage stubbed.
+
+    Only the client-authentication branch is under test, so PKCE, code lookup,
+    user lookup, and JWT issuance are replaced with deterministic stubs.
+    """
+    app = FastAPI()
+    app.include_router(oidc_router.router)
+
+    monkeypatch.setattr(
+        oidc_router, "consume_auth_code",
+        lambda code: {
+            "redirect_uri": "https://app.example/cb",
+            "client_id": "confidential-app",
+            "code_challenge": "chal",
+            "user_id": "jason",
+            "scope": "openid profile",
+            "nonce": None,
+        },
+    )
+    monkeypatch.setattr(oidc_router, "_verify_pkce", lambda verifier, challenge: True)
+    monkeypatch.setattr(
+        oidc_router, "_get_user_info",
+        lambda uid: {"username": "jason", "email": "j@x", "email_verified": True, "role": "user"},
+    )
+    monkeypatch.setattr(oidc_router, "issue_id_token", lambda **kw: "id-token")
+    monkeypatch.setattr(oidc_router, "issue_access_token", lambda **kw: "access-token")
+    # Treat the registered secret hash as the literal expected secret.
+    monkeypatch.setattr(oidc_router, "verify_secret", lambda secret, secret_hash: secret == secret_hash)
+    return app, monkeypatch
+
+
+def _set_client(monkeypatch, *, client_id, secret_hash):
+    monkeypatch.setattr(
+        oidc_router, "get_client",
+        lambda cid: {
+            "client_id": client_id,
+            "client_secret_hash": secret_hash,
+            "client_name": cid,
+            "redirect_uris": ["https://app.example/cb"],
+            "scopes": ["openid", "profile"],
+            "is_active": True,
+        } if cid == client_id else None,
+    )
+
+
+def _token_form(client_secret=None):
+    form = {
+        "grant_type": "authorization_code",
+        "code": "abc",
+        "redirect_uri": "https://app.example/cb",
+        "client_id": "confidential-app",
+        "code_verifier": "verifier",
+    }
+    if client_secret is not None:
+        form["client_secret"] = client_secret
+    return form
+
+
+def test_token_confidential_client_rejected_without_secret(token_client):
+    """The vuln: a confidential client must NOT authenticate on PKCE alone."""
+    app, monkeypatch = token_client
+    _set_client(monkeypatch, client_id="confidential-app", secret_hash="s3cret")
+    client = TestClient(app)
+    resp = client.post("/application/o/token/", data=_token_form())  # no client_secret
+    assert resp.status_code == 401
+    assert resp.json()["detail"]["error"] == "invalid_client"
+
+
+def test_token_confidential_client_rejected_with_wrong_secret(token_client):
+    app, monkeypatch = token_client
+    _set_client(monkeypatch, client_id="confidential-app", secret_hash="s3cret")
+    client = TestClient(app)
+    resp = client.post("/application/o/token/", data=_token_form(client_secret="WRONG"))
+    assert resp.status_code == 401
+    assert resp.json()["detail"]["error"] == "invalid_client"
+
+
+def test_token_confidential_client_accepts_correct_secret(token_client):
+    app, monkeypatch = token_client
+    _set_client(monkeypatch, client_id="confidential-app", secret_hash="s3cret")
+    client = TestClient(app)
+    resp = client.post("/application/o/token/", data=_token_form(client_secret="s3cret"))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["access_token"] == "access-token"
+    assert body["id_token"] == "id-token"
+
+
+def test_token_public_client_still_works_with_pkce_only(token_client):
+    """Regression: a public client (no registered secret) authenticates via PKCE."""
+    app, monkeypatch = token_client
+    _set_client(monkeypatch, client_id="confidential-app", secret_hash=None)
+    client = TestClient(app)
+    resp = client.post("/application/o/token/", data=_token_form())  # no client_secret
+    assert resp.status_code == 200
+    assert resp.json()["access_token"] == "access-token"

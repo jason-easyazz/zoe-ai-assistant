@@ -48,11 +48,101 @@ class RateLimiter:
         # Default rate limit rules
         self.rules = {
             "login": RateLimitRule("login", 5, 300, 900, "ip"),  # 5 attempts per 5min, block 15min
-            "passcode": RateLimitRule("passcode", 3, 180, 600, "ip"),  # 3 attempts per 3min, block 10min
+            "passcode": RateLimitRule("passcode", 5, 180, 600, "ip"),  # 5 attempts per 3min, block 10min
             "password_reset": RateLimitRule("password_reset", 3, 3600, 3600, "ip"),  # 3 per hour
+            "password_setup": RateLimitRule("password_setup", 5, 600, 1800, "ip"),  # 5 per 10min, block 30min
             "api_request": RateLimitRule("api_request", 100, 60, 300, "user"),  # 100 per minute
             "user_creation": RateLimitRule("user_creation", 10, 3600, 7200, "ip"),  # 10 per hour
         }
+
+    # ------------------------------------------------------------------
+    # Failure-counting sliding window (IP + username)
+    #
+    # check_rate_limit() above counts *every* call and is used by callers that
+    # want a per-call gate. The two helpers below implement the failure-only
+    # model used by the auth flows: a legitimate user's successful sign-in never
+    # counts against them, but repeated *failures* from an IP or against a
+    # username trip the window. Both the IP-scoped and the username-scoped
+    # buckets are tracked so neither a single IP hammering many usernames nor a
+    # botnet hammering one username can slip through.
+    # ------------------------------------------------------------------
+
+    def _failure_keys(self, action: str, ip_address: Optional[str],
+                      user_id: Optional[str]) -> List[Tuple[str, str]]:
+        """Return (scope, key) pairs for the buckets that apply to this attempt."""
+        keys: List[Tuple[str, str]] = []
+        if ip_address:
+            keys.append(("ip", f"{action}:ip:{ip_address}"))
+        if user_id:
+            keys.append(("user", f"{action}:user:{user_id}"))
+        return keys
+
+    def is_limited(self, action: str, ip_address: Optional[str] = None,
+                   user_id: Optional[str] = None) -> bool:
+        """Read-only check: is this IP or username currently rate limited?
+
+        Returns True when either the IP-scoped or username-scoped bucket is in a
+        block window, or already at/over the failure threshold for the window.
+        """
+        rule = self.rules.get(action)
+        if not rule:
+            return False
+
+        with self.lock:
+            now = time.time()
+            window_start = now - rule.window_seconds
+            for _scope, key in self._failure_keys(action, ip_address, user_id):
+                blocked_until = self.blocked_until.get(key)
+                if blocked_until is not None:
+                    if now < blocked_until:
+                        return True
+                    del self.blocked_until[key]
+                recent = [t for t in self.memory_store.get(key, []) if t > window_start]
+                if len(recent) >= rule.max_attempts:
+                    return True
+            return False
+
+    def register_failed_attempt(self, action: str, ip_address: Optional[str] = None,
+                                user_id: Optional[str] = None) -> None:
+        """Record one failed attempt against the IP and username windows.
+
+        When a bucket reaches the rule's ``max_attempts`` within the window it is
+        placed in a block window of ``block_duration_seconds``. Call this only on
+        genuine credential/authorization failures, never on success.
+        """
+        rule = self.rules.get(action)
+        if not rule:
+            return
+
+        with self.lock:
+            now = time.time()
+            window_start = now - rule.window_seconds
+            for scope, key in self._failure_keys(action, ip_address, user_id):
+                attempts = self.memory_store[key]
+                attempts[:] = [t for t in attempts if t > window_start]
+                attempts.append(now)
+                if len(attempts) >= rule.max_attempts:
+                    self.blocked_until[key] = now + rule.block_duration_seconds
+                    SecurityMonitor.log_security_event(SecurityEvent(
+                        event_type="rate_limit_exceeded",
+                        severity="medium",
+                        user_id=user_id,
+                        ip_address=ip_address,
+                        details={
+                            "action": action,
+                            "scope": scope,
+                            "attempts": len(attempts),
+                            "limit": rule.max_attempts,
+                            "window_seconds": rule.window_seconds,
+                        },
+                        timestamp=datetime.now(),
+                    ))
+
+    def reset(self) -> None:
+        """Clear all rate-limit state. Intended for tests and admin recovery."""
+        with self.lock:
+            self.memory_store.clear()
+            self.blocked_until.clear()
 
     def check_rate_limit(self, action: str, identifier: str, 
                         user_id: Optional[str] = None) -> Tuple[bool, Optional[datetime]]:

@@ -646,19 +646,20 @@ class AuthManager:
     def _log_auth_attempt(self, user_id: str, method: str, result: str, reason: str, ip_address: Optional[str]):
         """Log authentication attempt - non-blocking, errors suppressed"""
         try:
-            conn = auth_db.get_connection()
-            conn.execute("""
-                INSERT INTO audit_logs 
-                (log_id, user_id, action, resource, result, ip_address, details, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                f"auth_{secrets.token_hex(8)}", user_id, f"auth_{method}",
-                "authentication", result, ip_address,
-                f'{{"reason": "{reason}", "method": "{method}"}}',
-                datetime.now().isoformat()
-            ))
-            conn.commit()
-            conn.close()
+            # Use the context manager so the pooled connection is always
+            # returned (commit on success, rollback on error) — a bare
+            # get_connection()/close() leaks the connection if execute() raises.
+            with auth_db.get_connection() as conn:
+                conn.execute("""
+                    INSERT INTO audit_logs
+                    (log_id, user_id, action, resource, result, ip_address, details, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    f"auth_{secrets.token_hex(8)}", user_id, f"auth_{method}",
+                    "authentication", result, ip_address,
+                    f'{{"reason": "{reason}", "method": "{method}"}}',
+                    datetime.now().isoformat()
+                ))
         except Exception as e:
             # Non-blocking - just log and continue
             logger.debug(f"Audit log failed (non-critical): {e}")

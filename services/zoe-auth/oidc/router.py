@@ -381,8 +381,12 @@ async def token(
     if client is None or not client["is_active"]:
         raise HTTPException(401, detail={"error": "invalid_client"})
 
-    if client["client_secret_hash"] and client_secret:
-        if not verify_secret(client_secret, client["client_secret_hash"]):
+    # Confidential clients (a client_secret_hash is registered) MUST present a
+    # valid client_secret. Previously the secret was only checked when one was
+    # supplied, so a confidential client could omit it and authenticate on PKCE
+    # alone. Public clients (no registered secret) continue to rely on PKCE.
+    if client["client_secret_hash"]:
+        if not client_secret or not verify_secret(client_secret, client["client_secret_hash"]):
             raise HTTPException(401, detail={"error": "invalid_client"})
 
     payload = consume_auth_code(code)

@@ -210,20 +210,25 @@ class PasscodeManager:
                     # Failed verification - increment counter
                     new_failed_attempts = failed_attempts + 1
                     conn.execute("""
-                        UPDATE passcodes 
+                        UPDATE passcodes
                         SET failed_attempts = ?, last_used = ?
                         WHERE user_id = ?
                     """, (new_failed_attempts, datetime.now().isoformat(), user_id))
 
                     remaining = max(0, max_attempts - new_failed_attempts)
-                    
-                    self._log_audit(user_id, "passcode_verify_failed", "passcode", 
+
+                    # Feed the shared IP+username sliding window so a single IP
+                    # (or a botnet targeting one user) is throttled across the
+                    # whole service, not just by this account's own counter.
+                    self._register_rate_limit_failure(user_id, ip_address)
+
+                    self._log_audit(user_id, "passcode_verify_failed", "passcode",
                                   "failure", {
-                                      "reason": "invalid_passcode", 
+                                      "reason": "invalid_passcode",
                                       "attempts": new_failed_attempts,
                                       "ip": ip_address
                                   })
-                    
+
                     return PasscodeValidationResult(
                         is_valid=False,
                         error_message=f"Invalid passcode. {remaining} attempts remaining.",
@@ -414,10 +419,19 @@ class PasscodeManager:
         """, (user_id, user_id, self.policy.prevent_reuse_count))
 
     def _is_rate_limited(self, user_id: str, ip_address: Optional[str]) -> bool:
-        """Check if user/IP is rate limited"""
-        # Implementation for rate limiting checks
-        # This would check against rate_limits table
-        return False  # Simplified for now
+        """Check if this user/IP is currently rate limited for passcode entry.
+
+        Delegates to the shared sliding-window limiter (IP + username buckets).
+        Failed verifications are recorded via ``_register_rate_limit_failure``;
+        this is the read-only gate consulted before each attempt.
+        """
+        from core.security import rate_limiter
+        return rate_limiter.is_limited("passcode", ip_address, user_id)
+
+    def _register_rate_limit_failure(self, user_id: str, ip_address: Optional[str]) -> None:
+        """Record one failed passcode attempt in the shared sliding window."""
+        from core.security import rate_limiter
+        rate_limiter.register_failed_attempt("passcode", ip_address, user_id)
 
     def _calculate_lockout_end(self, last_attempt: str, failed_attempts: int) -> Optional[datetime]:
         """Calculate when lockout period ends"""
