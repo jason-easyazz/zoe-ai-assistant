@@ -1412,7 +1412,7 @@ def detect_intent(
             _clean = _re.sub(r'https?://\S+', '[URL]', _clean)
             with open(_MISS_PATH, "a") as _f:
                 _f.write(_json.dumps({"text": _clean, "ts": __import__("time").time()}) + "\n")
-        except (OSError, TypeError, ValueError, re.error):
+        except Exception:
             pass  # Never let logging break intent routing
         try:
             from pi_intent_evidence import record_intent_miss_evidence
@@ -3703,13 +3703,12 @@ def _execute_calculate(intent: Intent) -> str:
 
     import ast as _ast
     import operator as _operator
-    import re as _re
 
     safe = expr_raw.strip()
     if (
         not safe
         or len(safe) > 80
-        or not _re.fullmatch(r"[\d\s\+\-\*\/\.\(\)\%]+", safe)
+        or not re.fullmatch(r"[\d\s\+\-\*\/\.\(\)\%]+", safe)
         or "**" in safe
     ):
         return f"I can only handle numeric expressions. Try something like \"what is 2 + 2\"."
