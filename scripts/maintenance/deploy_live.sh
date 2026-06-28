@@ -25,6 +25,12 @@ EOF
 fi
 
 echo "▶ live tree on main — pulling latest…"
+# Capture the current tip BEFORE the pull for a reliable rollback. Don't rely on
+# ORIG_HEAD: a no-op ff pull (common — the live tree often already sits at main's
+# tip) does NOT update ORIG_HEAD, so `reset --hard ORIG_HEAD` would roll back to a
+# stale commit, or abort under `set -e` (skipping the recovery restart) if it was
+# never set.
+prev="$(git -C "$LIVE" rev-parse HEAD)"
 git -C "$LIVE" pull --ff-only origin main
 
 echo "▶ restarting $SERVICE…"
@@ -40,10 +46,9 @@ done
 echo "▶ health=$code  (live = main @ $(git -C "$LIVE" rev-parse --short HEAD))"
 if [[ "$code" != "200" ]]; then
     # The new commit is unhealthy — roll the live tree back to the pre-pull tip
-    # (git records it in ORIG_HEAD) and restart, so a bad main can't leave the
-    # service down on a broken commit.
-    echo "✗ health check failed — rolling back to $(git -C "$LIVE" rev-parse --short ORIG_HEAD)" >&2
-    git -C "$LIVE" reset --hard ORIG_HEAD
+    # captured above and restart, so a bad main can't leave the service down.
+    echo "✗ health check failed — rolling back to $(git -C "$LIVE" rev-parse --short "$prev")" >&2
+    git -C "$LIVE" reset --hard "$prev"
     systemctl --user restart "$SERVICE"
     exit 1
 fi
