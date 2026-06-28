@@ -54,8 +54,8 @@ def _patch_all_tts_providers(monkeypatch, order, *, succeed="espeak"):
             return CANNED if name == succeed else None
         return _fake
 
-    # Names mirror the canonical waterfall comment in synthesize():
-    #   local override -> Kokoro sidecar (GPU) -> Kokoro ONNX -> Edge (cloud) -> espeak
+    # Names mirror the live waterfall in synthesize() (Kokoro-first since PR #872):
+    #   Kokoro sidecar (GPU) -> Kokoro ONNX -> local override -> Edge (cloud) -> espeak
     monkeypatch.setattr(vt, "_synthesize_local_service", recorder("local_service"))
     monkeypatch.setattr(vt, "_synthesize_kokoro_sidecar", recorder("kokoro_sidecar"))
     monkeypatch.setattr(vt, "_synthesize_kokoro", recorder("kokoro_onnx"))
@@ -68,12 +68,12 @@ def _patch_all_tts_providers(monkeypatch, order, *, succeed="espeak"):
 def test_tts_waterfall_order_kokoro_before_edge_before_espeak(monkeypatch):
     """The live /synthesize waterfall must attempt providers in the canonical order.
 
-    The rock is Kokoro; Edge TTS is the cloud fallback; espeak-ng is the last resort.
-    We let every provider miss so the route walks the entire chain, then assert the
-    recorded call order. (The only thing that precedes Kokoro is the OPTIONAL external
-    ``ZOE_LOCAL_TTS_URL`` override — off by default — so we clear it to keep the run
-    self-contained; it still records first when reached, proving it sits ahead of the
-    rock as an explicit operator override, never a silent swap.)
+    Kokoro is the primary rock and is tried FIRST (sidecar then ONNX, since PR #872);
+    the optional ``ZOE_LOCAL_TTS_URL`` override sits after it, Edge TTS is the cloud
+    fallback, and espeak-ng is the last resort. We let every provider miss so the route
+    walks the entire chain, then assert the recorded order. (We clear ``ZOE_LOCAL_TTS_URL``
+    to keep the run self-contained; the local-service step still records in-place when
+    reached, proving it stays behind the rock, never ahead of it.)
     """
     monkeypatch.setenv("ZOE_TTS_MODE", "hybrid")  # hybrid exercises the full chain
     monkeypatch.delenv("ZOE_LOCAL_TTS_URL", raising=False)
@@ -84,7 +84,9 @@ def test_tts_waterfall_order_kokoro_before_edge_before_espeak(monkeypatch):
 
     # Fell all the way through to the last resort → full chain was walked.
     assert resp.headers.get("X-Zoe-TTS-Provider") == "espeak-ng"
-    assert order == ["local_service", "kokoro_sidecar", "kokoro_onnx", "edge", "espeak"], order
+    # Kokoro is the primary rock and runs FIRST — ahead of the optional local sidecar
+    # override (PR #872). espeak-ng stays the last resort.
+    assert order == ["kokoro_sidecar", "kokoro_onnx", "local_service", "edge", "espeak"], order
 
     # The load-bearing sub-orderings (what actually keeps the rock the rock):
     assert order.index("kokoro_sidecar") < order.index("kokoro_onnx"), "GPU sidecar must precede ONNX fallback"
