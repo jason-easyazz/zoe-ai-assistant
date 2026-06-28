@@ -12,11 +12,13 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sqlite } from '@flue/runtime/node';
 
-// Anchor the DB beside this package, independent of the process working
-// directory — so starting `dist/server.mjs` from the repo root can't drop a
-// `data/` db next to Zoe's live data, and starting from a dir without `./data`
-// can't fail before /health. Override with ZOE_BRAIN_DB.
-const here = dirname(fileURLToPath(import.meta.url));
-const dbPath = process.env.ZOE_BRAIN_DB ?? join(here, 'data', 'zoe-brain.db');
+// Anchor the DB at the PACKAGE ROOT (the parent of the built `dist/`), not the
+// built module's own dir — so `dist/data/...` (which a clean rebuild would wipe)
+// is never used, the path is independent of the process cwd, and a missing dir
+// can't fail before /health. In the Node build `import.meta.url` is the emitted
+// module under `dist/`, so `../data` resolves to `<package>/data`. Override with
+// ZOE_BRAIN_DB.
+const distDir = dirname(fileURLToPath(import.meta.url));
+const dbPath = process.env.ZOE_BRAIN_DB ?? join(distDir, '..', 'data', 'zoe-brain.db');
 
 export default sqlite(dbPath);

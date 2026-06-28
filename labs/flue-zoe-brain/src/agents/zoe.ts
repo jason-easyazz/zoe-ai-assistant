@@ -37,17 +37,20 @@ const ZOE_SOUL = [
 ].join('\n');
 
 // Exporting `route` publishes the HTTP agent endpoints (POST/GET /agents/zoe/:id).
-// The dev/built server binds localhost by default (not LAN-reachable). For
-// defense-in-depth — so a sidecar bound to a reachable interface can't let any
-// local/LAN caller drive Zoe completions and contend with the voice brain — set
-// ZOE_BRAIN_TOKEN and callers must send `Authorization: Bearer <token>`. Unset =
-// open (lab/localhost only).
+// FAIL CLOSED: this route drives the live Gemma brain on :11434, so by default a
+// caller must present a matching `Authorization: Bearer <ZOE_BRAIN_TOKEN>`. There
+// are exactly two ways to reach it:
+//   - set ZOE_BRAIN_TOKEN and send the bearer token, or
+//   - set ZOE_BRAIN_OPEN=1 to explicitly opt into open access (local lab/smoke
+//     runs only — the server binds localhost by default).
+// With neither set, every request is rejected, so a sidecar accidentally bound to
+// a reachable interface can't let any LAN caller drive completions / contend with
+// the voice brain.
 export const route: AgentRouteHandler = async (c, next) => {
+  if (process.env.ZOE_BRAIN_OPEN === '1') return next();
   const token = process.env.ZOE_BRAIN_TOKEN;
-  if (token && c.req.header('authorization') !== `Bearer ${token}`) {
-    return c.json({ error: 'unauthorized' }, 401);
-  }
-  return next();
+  if (token && c.req.header('authorization') === `Bearer ${token}`) return next();
+  return c.json({ error: 'unauthorized' }, 401);
 };
 
 export default defineAgent(() => ({
