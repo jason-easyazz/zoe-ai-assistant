@@ -410,7 +410,7 @@ def _graphiti_probe(**overrides):
             "runtime": {
                 "enabled": False,
                 "llm_base_url": "http://127.0.0.1:11434/v1",
-                "llm_model": "gemma-4-E2B-it-Q4_K_M.gguf",
+                "llm_model": "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
                 "offline_only": True,
                 "timeout_seconds": 2.0,
             },

@@ -146,7 +146,7 @@ async def run_turn_digest(
 
         prompt = _TURN_EXTRACTION_PROMPT.format(user_message=user_message[:600])
         payload = {
-            "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf"),
+            "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
             "messages": [
                 {"role": "system", "content": "You are a precise fact extractor. Return ONLY valid JSON."},
                 {"role": "user", "content": prompt},
@@ -365,7 +365,7 @@ async def _emotional_memory_pass(user_id: str, chat_text: str, svc) -> int:
 
     prompt = _EMOTIONAL_EXTRACTION_PROMPT.format(chat_text=chat_text[:3000])
     payload = {
-        "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf"),
+        "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
         "messages": [
             {"role": "system", "content": "You are an empathetic listener. Return ONLY valid JSON."},
             {"role": "user", "content": prompt},
@@ -458,7 +458,7 @@ async def _extract_facts_with_gemma(chat_text: str) -> list[dict]:
     """Send chat transcript to the LLM and parse the JSON fact list."""
     prompt = _EXTRACTION_PROMPT.format(chat_text=chat_text[:3000])
     payload = {
-        "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf"),
+        "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
         "messages": [
             {"role": "system", "content": "You are a precise fact extractor. Return ONLY valid JSON."},
             {"role": "user", "content": prompt},
@@ -501,7 +501,7 @@ async def _is_contradiction(new_fact: str, existing_fact: str) -> bool:
         existing_fact=existing_fact.strip(),
     )
     payload = {
-        "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf"),
+        "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
         "messages": [
             {"role": "system", "content": "You are a strict fact-contradiction judge. Return ONLY the JSON object."},
             {"role": "user", "content": prompt},

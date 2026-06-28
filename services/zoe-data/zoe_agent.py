@@ -1,7 +1,7 @@
 """
 Zoe Agent — fast, minimal agent loop for Zoe.
 
-Model: Gemma 4 E2B (llama.cpp)
+Model: Gemma 4 E4B-QAT (llama.cpp)
   Pi:     CPU, --reasoning off, 7 TPS, port 11434 (override via GEMMA_SERVER_URL)
   Jetson: GPU, --reasoning auto, 40+ TPS, port 11434
 
@@ -1218,7 +1218,7 @@ def _model_url() -> str:
 
 
 def _model_name() -> str:
-    return "google_gemma-4-E2B-it-Q4_K_M"
+    return "gemma-4-E4B-it-qat-UD-Q4_K_XL"
 
 
 # ── MemPalace integration (Python API — no subprocess) ───────────────────────
@@ -3084,7 +3084,7 @@ async def _log_feedback_triple(
 async def _chat_capability_shortcut(message: str, user_id: str) -> str | None:
     """Deterministic shortcut for chat-mode queries that sometimes bypass intent_router.
 
-    Covers two failure modes of Gemma 4 E2B at temperature=0.6:
+    Covers two failure modes of Gemma 4 E4B-QAT at temperature=0.6:
 
     1. Memory-recall questions ("do you remember X") where the model occasionally
        hallucinates "I don't have access to your memories" even when facts are loaded.
@@ -3403,7 +3403,7 @@ async def run_zoe_agent(
             sorted(skills), len(active_tools), len(_TOOLS), len(user_portrait), len(user_open_loops),
         )
         # Use tool_choice="required" on the first turn when a real (non-discovery) skill
-        # matched and the tool list is small: forces Gemma 4 E2B to call the tool rather
+        # matched and the tool list is small: forces Gemma 4 E4B-QAT to call the tool rather
         # than answering in text when tool_choice="auto" lets it skip.
         _first_turn_choice = (
             "required"
@@ -3412,7 +3412,7 @@ async def run_zoe_agent(
         )
 
     # Build initial messages list with token-budget-aware compaction.
-    # Gemma 4 E2B context window: 8192 tokens. Reserve ~2000 for the response.
+    # Gemma 4 E4B-QAT context window: 8192 tokens. Reserve ~2000 for the response.
     # Rough token estimate: len(text) / 4 (conservative for mixed content).
     _CTX_BUDGET = int(os.environ.get("ZOE_CONTEXT_TOKEN_BUDGET", "5500"))
     messages: list[dict] = [{"role": "system", "content": system_prompt}]

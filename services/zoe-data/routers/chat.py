@@ -4,7 +4,7 @@ Chat proxy router: bridges the Zoe UI (REST+SSE) to the active agent backend.
 Tiered architecture (Jetson + Pi):
 - Tier 0: Intent router — regex-matched commands (lists, calendar, HA control)
   handled directly in <5ms without any LLM.
-- Tier 1: Zoe Agent — Gemma 4 E2B with MemPalace memory, HA control,
+- Tier 1: Zoe Agent — Gemma 4 E4B-QAT with MemPalace memory, HA control,
   bash tools, and Hermes escalation. True SSE streaming, first token fast.
   Active when JETSON_AGENT_MODE=true OR HERMES_FAST_PATH=false.
   Pi: CPU, 7 TPS, port 11434.  Jetson: GPU, 40+ TPS, port 11434.
@@ -2425,7 +2425,7 @@ async def chat_stream_generator(
         else:
             logger.info("intent_outcome=no_match fast_path=%s", bool(use_intent_fast_path))
             if _USE_LOCAL_BRAIN:
-                # ── Zoe Agent: Gemma 4 E2B with MemPalace + tools — true SSE streaming ──
+                # ── Zoe Agent: Gemma 4 E4B-QAT with MemPalace + tools — true SSE streaming ──
                 tier_label = "Jetson" if _JETSON_AGENT_MODE else "Pi"
                 yield emit(
                     StateSnapshotEvent(

@@ -926,7 +926,7 @@ def _build_agent_card() -> dict:
         {
             "tier": 1,
             "name": "zoe_agent",
-            "model": os.environ.get("ZOE_LOCAL_MODEL", "Gemma 4 E2B"),
+            "model": os.environ.get("ZOE_LOCAL_MODEL", "Gemma 4 E4B-QAT"),
             "status": "online" if _RUNTIME_HEALTH.get("local_llm") else "offline",
         },
         {
@@ -938,7 +938,7 @@ def _build_agent_card() -> dict:
         {
             "tier": 2,
             "name": "openclaw",
-            "model": "Gemma 4 E2B",
+            "model": "Gemma 4 E4B-QAT",
             "browser": True,
             "status": "online" if _RUNTIME_HEALTH.get("openclaw") else "offline",
         },
@@ -1414,7 +1414,7 @@ async def get_agent_runtimes():
         "runtimes": {
             "local_llm": {
                 "port": 11434,
-                "description": "llama-server (Gemma 4 E2B, fast-path agent)",
+                "description": "llama-server (Gemma 4 E4B-QAT, fast-path agent)",
                 "online": _RUNTIME_HEALTH.get("local_llm", False),
             },
             "hermes": {
@@ -1424,7 +1424,7 @@ async def get_agent_runtimes():
             },
             "openclaw": {
                 "port": 18789,
-                "description": "OpenClaw Gateway (Gemma 4 E2B, browser/exec)",
+                "description": "OpenClaw Gateway (Gemma 4 E4B-QAT, browser/exec)",
                 "online": _RUNTIME_HEALTH.get("openclaw", False),
             },
         },

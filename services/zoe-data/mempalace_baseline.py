@@ -66,7 +66,7 @@ BASELINE_CASES: tuple[MemPalaceBaselineCase, ...] = (
     ),
     MemPalaceBaselineCase(
         case_id="graphify_backend_supersession",
-        text="The old Graphify OpenAI backend assumption is superseded by Zoe's local offline Graphify path using the Gemma 4 E2B model-fit probe as evidence.",
+        text="The old Graphify OpenAI backend assumption is superseded by Zoe's local offline Graphify path using the Gemma 4 E4B-QAT model-fit probe as evidence.",
         query="What superseded the old OpenAI Graphify backend assumption?",
         expected_terms=("superseded", "local", "offline", "gemma"),
         memory_type="fact",
