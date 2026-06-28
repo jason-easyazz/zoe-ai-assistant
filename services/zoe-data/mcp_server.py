@@ -1234,12 +1234,35 @@ async def _enqueue_panel_tool(db, *, user_id_fallback: str, panel_id, action_typ
     )
 
 
+def _coerce_date(value):
+    """Normalise a DB date value to a ``datetime.date``.
+
+    asyncpg returns native ``date``/``datetime`` objects for Postgres date
+    expressions, while legacy/SQLite rows may hand back ISO strings. Return a
+    ``date`` for any of those, or ``None`` if the value is empty/unparseable.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+
+
 class _MissingUserId(Exception):
     """Raised when strict mode rejects a tool call with no identity."""
 
 
 async def _execute_tool(db, name: str, args: dict):
-    _uid_raw = args.pop("_user_id", args.pop("user_id", None))
+    # Prefer the framework-injected caller identity (_user_id); fall back to an
+    # explicit user_id arg. Use short-circuit `or` so the fallback pop is lazy —
+    # a default expression like args.pop("_user_id", args.pop("user_id", None))
+    # evaluates eagerly and would always discard an explicit user_id target.
+    _uid_raw = args.pop("_user_id", None) or args.pop("user_id", None)
     if _uid_raw is None:
         if _MCP_STRICT_USER_ID:
             raise _MissingUserId(
@@ -1740,7 +1763,7 @@ async def _execute_tool(db, name: str, args: dict):
             if _zd not in _sys.path:
                 _sys.path.insert(0, _zd)
             from zoe_agent import _web_search_ddg  # type: ignore[import]
-            caller_user_id = args.get("_user_id", "")
+            caller_user_id = user_id
             result_text = await _web_search_ddg(query, user_id=caller_user_id)
             return {"query": query, "raw": result_text}
         except Exception as exc:
@@ -1757,7 +1780,7 @@ async def _execute_tool(db, name: str, args: dict):
             if _zd not in _sys.path:
                 _sys.path.insert(0, _zd)
             from zoe_agent import _web_research  # type: ignore[import]
-            caller_user_id = args.get("_user_id", "")
+            caller_user_id = user_id
             result_text = await _web_research(query, user_id=caller_user_id)
             return {"query": query, "raw": result_text}
         except Exception as exc:
@@ -1997,25 +2020,28 @@ async def _execute_tool(db, name: str, args: dict):
         row = await cursor.fetchone()
         total = row[0] if row else 0
         cursor = await db.execute(
-            "SELECT DISTINCT date(created_at) as d FROM journal_entries WHERE user_id=? AND deleted=0 ORDER BY d DESC",
+            "SELECT DISTINCT created_at::timestamp::date as d FROM journal_entries WHERE user_id=? AND deleted=0 ORDER BY d DESC",
             (user_id,),
         )
         rows = await cursor.fetchall()
-        dates_sorted = sorted([r[0] for r in rows if r[0]], reverse=True)
+        # created_at is TEXT in the live schema, so cast text->timestamp->date in
+        # SQL; asyncpg then hands back native date objects. Operate on dates
+        # directly rather than comparing against ISO strings.
+        dates_sorted = sorted(
+            {d for d in (_coerce_date(r[0]) for r in rows) if d is not None},
+            reverse=True,
+        )
         current_streak = 0
         longest_streak = 0
         if dates_sorted:
             for i, d in enumerate(dates_sorted):
-                expected = (date.today() - timedelta(days=i)).isoformat()
-                if d == expected:
+                if d == date.today() - timedelta(days=i):
                     current_streak += 1
                 else:
                     break
             run = 1
             for i in range(1, len(dates_sorted)):
-                curr_d = datetime.strptime(dates_sorted[i], "%Y-%m-%d").date()
-                prev_d = datetime.strptime(dates_sorted[i - 1], "%Y-%m-%d").date()
-                if (prev_d - curr_d).days == 1:
+                if (dates_sorted[i - 1] - dates_sorted[i]).days == 1:
                     run += 1
                 else:
                     longest_streak = max(longest_streak, run)
@@ -2040,10 +2066,12 @@ async def _execute_tool(db, name: str, args: dict):
 
     elif name == "journal_on_this_day":
         today_md = date.today().strftime("%m-%d")
+        # created_at is TEXT in the live schema; to_char()/date comparison need a
+        # timestamp, so cast text->timestamp before formatting and before ::date.
         cursor = await db.execute(
             """SELECT id, title, mood, created_at FROM journal_entries
-             WHERE user_id=? AND deleted=0 AND strftime('%m-%d', created_at)=?
-             AND date(created_at) < date('now') ORDER BY created_at DESC""",
+             WHERE user_id=? AND deleted=0 AND to_char(created_at::timestamp, 'MM-DD')=?
+             AND created_at::timestamp::date < CURRENT_DATE ORDER BY created_at DESC""",
             (user_id, today_md),
         )
         rows = await cursor.fetchall()
@@ -3027,20 +3055,41 @@ async def _execute_tool(db, name: str, args: dict):
                     )
                     current_desc = resp.json().get("description", "") if resp.status_code == 200 else ""
                 await mc.update_issue(issue_id, description=f"{current_desc}\n\n⚠️ Needs human review: {reason}")
-            # Fire a push notification
+            # Fire a push notification.
+            # fire_notification returns None in EVERY path (sent, deferred, or
+            # suppressed-by-quiet-hours alike) and raises only on error — it never
+            # reports device delivery. So the honest outcomes the caller can derive
+            # are: "failed" (raised), "suppressed_quiet_hours" (the engine's own
+            # predicate: quiet hours and not force_send → nothing is sent), or
+            # "submitted" (the engine attempted delivery, but it cannot be
+            # confirmed). We never claim "sent"/"delivered" — push_sent stays False
+            # because delivery is unconfirmable through this contract.
             push_msg = f"{'🔴' if urgency == 'high' else '⚠️'} Zoe needs your input: {reason[:120]}"
+            force_send = urgency == "high"
+            push_status = "failed"
             try:
-                from proactive.engine import fire_notification  # type: ignore[import]
+                from proactive.engine import fire_notification, _is_in_quiet_hours  # type: ignore[import]
+                # Mirror the engine's suppression gate so a quiet-hours skip is not
+                # mislabelled as submitted.
+                suppressed = (not force_send) and _is_in_quiet_hours()
                 await fire_notification(
                     user_id=user_id,
                     message=push_msg,
                     trigger_type="needs_human_review",
                     item_id=issue_id or "board",
-                    context={"force_send": urgency == "high", "reason": reason, "issue_id": issue_id},
+                    context={"force_send": force_send, "reason": reason, "issue_id": issue_id},
                 )
+                push_status = "suppressed_quiet_hours" if suppressed else "submitted"
             except Exception as push_exc:
                 _mcp_log.warning("flag_needs_human_review: push failed: %s", push_exc)
-            return {"ok": True, "issue_id": issue_id, "reason": reason, "push_sent": True}
+            return {
+                "ok": True,
+                "issue_id": issue_id,
+                "reason": reason,
+                "push_status": push_status,
+                # Delivery is not confirmable through fire_notification's contract.
+                "push_sent": False,
+            }
         except Exception as exc:
             return {"error": f"flag_needs_human_review failed: {exc}"}
 
