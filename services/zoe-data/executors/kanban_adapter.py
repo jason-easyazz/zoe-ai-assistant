@@ -10,7 +10,7 @@ dispatcher reads) rather than importing Hermes internals — keeping Zoe
 surface-agnostic.
 
 Worker profiles + pinned skills encode Zoe's agentic-engineering loop:
-  - scout     (zoe-planner):  zoe-graphify, zoe-engineering     (read-only context)
+  - scout     (zoe-planner):  codebase-memory, zoe-engineering  (read-only context)
   - implement (zoe-coder):  zoe-engineering             (no preloaded skill for audit/no-PR)
   - verify    (zoe-reviewer): zoe-engineering           (no preloaded skill for audit/no-PR)
   - review    (zoe-reviewer): zoe-engineering           (no preloaded skill for audit/no-PR)
@@ -58,7 +58,7 @@ NAME = "kanban"
 # Phases of the per-issue run, in order. Each maps to a worker profile and the
 # skills it must load. Keys double as the idempotency-key suffix (multica:{id}:<phase>).
 _CHAIN = (
-    ("scout", "zoe-planner", ("zoe-graphify", "zoe-engineering")),
+    ("scout", "zoe-planner", ("codebase-memory", "zoe-engineering")),
     (
         "implement",
         "zoe-coder",
@@ -906,7 +906,7 @@ class KanbanAdapter:
                 " focused lookup of the routing/intent file named by the issue or obvious from the"
                 " title, then hand off. Include IMPLEMENTATION_REQUIRED=true unless the exact"
                 " behavior is already handled by merged code.\n"
-                "- Keep this phase bounded: run at most one focused Graphify/doc lookup and no broad repo crawl.\n"
+                "- Keep this phase bounded: run at most one focused codebase-memory/doc lookup and no broad repo crawl.\n"
                 "- For smoke, audit-only, or harness-check tickets, do not over-investigate; summarize the"
                 " observed contract and complete the scout handoff.\n"
                 "- Use opensrc for third-party APIs; reference Multica comments/state as source of truth.\n"
@@ -952,8 +952,8 @@ class KanbanAdapter:
                 f"{harness_hint}"
                 f"{intent_gap_hint}"
                 "- AUDIT/SMOKE FAST PATH: only if the title/body explicitly says audit-only, smoke test,"
-                " no code change, or uses trace/map with an audit/no-code qualifier, do not run Graphify"
-                " or repo exploration first. Complete in one bounded handoff with"
+                " no code change, or uses trace/map with an audit/no-code qualifier, do not run a"
+                " codebase-memory query or repo exploration first. Complete in one bounded handoff with"
                 " TOOLS_USED=audit-read, PR_URL= blank, AUDIT_ONLY=1, TESTS=not applicable/audit-only,"
                 " and SUMMARY= findings. Do not open a PR.\n"
                 "- Start with `kanban_show` to confirm this task id.\n"
@@ -966,11 +966,12 @@ class KanbanAdapter:
                 " decision instead of continuing exploration.\n"
                 "- SMALL EXPLICIT CODE FAST PATH: when the ticket names the exact file, helper,"
                 " function, or focused test to change, inspect only those named files plus the"
-                " nearest existing test. Do not run a broad Graphify query, repo crawl, or unrelated"
+                " nearest existing test. Do not run a broad codebase-memory query, repo crawl, or unrelated"
                 " search. Start editing within 6 tool/model steps; if the change is still unclear by"
                 " then, call `kanban_block` with BLOCKER=IMPLEMENT_BUDGET instead of exploring further.\n"
                 "- For broad or ambiguous code-changing tickets only: read the charter and run at"
-                " most one focused Graphify map (graphify query/path/explain over raw grep).\n"
+                " most one focused codebase-memory map (codebase-memory who-calls-what/architecture"
+                " + Serena for symbol read/edit, over raw grep).\n"
                 "- Use opensrc for any third-party library source before guessing APIs.\n"
                 "- Make the smallest reviewable change; do NOT rewrite existing functions into bloat;"
                 " reuse service-layer helpers.\n"

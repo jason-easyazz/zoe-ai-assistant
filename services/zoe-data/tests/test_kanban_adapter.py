@@ -503,7 +503,7 @@ async def test_dispatch_after_scout_evidence_creates_next_phase():
     from pipeline_evidence import EvidenceItem, transition, with_evidence
 
     state = await bootstrap_state("multica:uuid-next", start_phase="scout")
-    state = with_evidence(state, EvidenceItem(kind="tool", summary="graphify map", passed=True))
+    state = with_evidence(state, EvidenceItem(kind="tool", summary="codebase-memory map", passed=True))
     state = transition(state, "complete")
     save_state(state, event="transition", extra={"row_phase": "scout"})
 
@@ -530,7 +530,7 @@ async def test_dispatch_after_implement_evidence_creates_verify():
     from pipeline_evidence import EvidenceItem, transition, with_evidence
 
     state = await bootstrap_state("multica:uuid-impl-verify", start_phase="implement")
-    state = with_evidence(state, EvidenceItem(kind="tool", summary="graphify", passed=True))
+    state = with_evidence(state, EvidenceItem(kind="tool", summary="codebase-memory", passed=True))
     state = with_evidence(
         state,
         EvidenceItem(
@@ -1403,7 +1403,7 @@ async def test_dispatch_pins_expected_skills():
     await a.dispatch({"id": "u", "identifier": "ZOE-1", "title": "t"})
     creates = [c for c in a.calls if c[0] == "create"]
     scout_skills = [creates[0][i + 1] for i, v in enumerate(creates[0]) if v == "--skill"]
-    assert "zoe-graphify" in scout_skills
+    assert "codebase-memory" in scout_skills
 
 
 @pytest.mark.asyncio
@@ -1925,7 +1925,7 @@ async def test_poll_v4_keeps_audit_closeout_done_for_sync():
 @pytest.mark.asyncio
 async def test_poll_v4_done_phase_with_ready_next_phase_is_partial():
     rows = [_row("scout", "done", chain_version="v4")]
-    show = {"t_scout": {"latest_summary": "TOOLS_USED=graphify\nSCOUT_SUMMARY=small", "comments": []}}
+    show = {"t_scout": {"latest_summary": "TOOLS_USED=codebase-memory\nSCOUT_SUMMARY=small", "comments": []}}
     a = _FakeAdapter(list_rows=rows, show_map=show)
     out = await a.poll("multica:uuid-9")
     assert out["found"] is True
@@ -1939,7 +1939,7 @@ async def test_poll_v4_blocks_code_implement_done_without_pr():
     rows = [_row("implement", "done", chain_version="v4", issue_id="uuid-no-pr")]
     show = {
         "t_implement": {
-            "latest_summary": "TOOLS_USED=graphify\nTESTS=validate_structure.py passed\nSUMMARY=investigated only",
+            "latest_summary": "TOOLS_USED=codebase-memory\nTESTS=validate_structure.py passed\nSUMMARY=investigated only",
             "comments": [],
         }
     }
@@ -4956,7 +4956,7 @@ def test_implement_body_adds_code_audit_fast_path_for_actionable_bug():
     assert "on a second ambiguous patch, call `kanban_block`" in body
     assert "git push -u origin HEAD" in body
     assert body.index("CODE-AUDIT FAST PATH") < body.index("AUDIT/SMOKE FAST PATH")
-    assert body.index("CODE-AUDIT FAST PATH") < body.index("Graphify map")
+    assert body.index("CODE-AUDIT FAST PATH") < body.index("codebase-memory map")
 
 
 def test_implement_body_points_nginx_security_headers_to_helper():
@@ -5195,7 +5195,7 @@ def test_implement_body_documents_existing_pr_revision_fast_path_before_new_pr_c
     assert "if the ticket block already contains `pr_url`/PR_URL" in generic_body
 
 
-def test_implement_body_puts_bounded_fast_paths_before_graphify():
+def test_implement_body_puts_bounded_fast_paths_before_codebase_memory():
     body = ka.KanbanAdapter()._build_body(
         "implement",
         {"id": "uuid-1", "identifier": "ZOE-9", "title": "Audit driver", "description": "evidence_profile: audit"},
@@ -5205,7 +5205,7 @@ def test_implement_body_puts_bounded_fast_paths_before_graphify():
     assert "AUDIT/SMOKE FAST PATH" in body
     assert "TOOLS_USED=audit-read" in body
     assert "TESTS=not applicable/audit-only" in body
-    assert "Graphify map" in body
+    assert "codebase-memory map" in body
     assert "explicitly says audit-only" in body
     assert "uses trace/map with an audit/no-code qualifier" in body
     assert "SMALL EXPLICIT CODE FAST PATH" in body
@@ -5214,8 +5214,8 @@ def test_implement_body_puts_bounded_fast_paths_before_graphify():
     assert "Do NOT create additional Hermes/Kanban tasks" in body
     assert "scaffold subtasks" in body
     assert "broad or ambiguous code-changing tickets only" in body
-    assert body.index("AUDIT/SMOKE FAST PATH") < body.index("Graphify map")
-    assert body.index("SMALL EXPLICIT CODE FAST PATH") < body.index("Graphify map")
+    assert body.index("AUDIT/SMOKE FAST PATH") < body.index("codebase-memory map")
+    assert body.index("SMALL EXPLICIT CODE FAST PATH") < body.index("codebase-memory map")
 
 
 def test_implement_body_has_edit_safety_loop():
@@ -5255,7 +5255,7 @@ def test_implement_body_includes_harness_repo_map_for_harness_tickets():
     assert "services/zoe-data/worktree_bootstrap.py" in body
     assert "For worktree-missing/retro fallback tickets" in body
     assert "Start editing within 6 tool/model steps" in body
-    assert body.index("HARNESS FAST PATH") < body.index("Graphify map")
+    assert body.index("HARNESS FAST PATH") < body.index("codebase-memory map")
 
 
 def test_implement_body_includes_harness_repo_map_for_blocker_followup_source():

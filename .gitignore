@@ -260,9 +260,8 @@ tests/unit/test_jag_board_game_store.py
 # Runtime SQLite caches
 data/touch_cache/
 
-# graphify — RETIRED. graphify-out/ is generated and no longer committed.
+# graphify — RETIRED. Any local graphify-out/ is generated and never committed.
 # Code intelligence is provided by the codebase-memory MCP (re-indexed on demand).
-# Left on disk for the optional graphify_search reader, but kept out of git.
 graphify-out/
 !.cursor/mcp.json
 .cursor/tmp/

@@ -28,6 +28,20 @@ RUN npm install -g @openai/codex && codex --version
 # zoe-data pi_runtime_probe installs it with --ignore-scripts; mirror that here.
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@^0.79.3 && pi --version
 
+# ── GitHub CLI ───────────────────────────────────────────────────────────────
+# The workers (claude_code / codex / pi) each open their OWN PR, so they need `gh`
+# + git push auth. Install gh from its official apt repo (downloads a keyring, not a
+# piped script). The credential itself is NOT baked in — the host's gh login is mounted
+# read-only at runtime (compose) and the entrypoint runs `gh auth setup-git`.
+RUN mkdir -p -m 755 /etc/apt/keyrings \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+         -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+         > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y --no-install-recommends gh \
+    && rm -rf /var/lib/apt/lists/* && gh --version
+
 # ── Cursor harness (second-class) ────────────────────────────────────────────
 # Requires piping the cursor.com installer, which needs a remote-script permission.
 # Left opt-in: uncomment after granting permission, or COPY the host's proven binary in.

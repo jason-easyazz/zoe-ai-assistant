@@ -54,7 +54,7 @@ _EXTENSIONS = [
 
 _PI_COMMAND = os.environ.get("ZOE_CORE_PI_COMMAND", "pi")
 _PROVIDER = os.environ.get("ZOE_CORE_PROVIDER", "local-gemma")
-_MODEL = os.environ.get("ZOE_CORE_MODEL_ID", "gemma-4-E2B-it-Q4_K_M.gguf")
+_MODEL = os.environ.get("ZOE_CORE_MODEL_ID", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf")
 _TIMEOUT_S = float(os.environ.get("ZOE_CORE_TIMEOUT_S", "180"))
 # Generation-length cap for VOICE turns only. The provider extension
 # (provider-local-gemma.ts) registers the model's maxTokens from

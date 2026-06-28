@@ -27,7 +27,7 @@ _CORE = Path(__file__).resolve().parent.parent
 _EXT = _CORE / "extensions"
 _SOUL = _CORE / "SOUL.md"
 _EXTS = ["provider-local-gemma.ts", "soul.ts", "memory.ts", "abilities.ts"]
-_MODEL = os.environ.get("ZOE_CORE_MODEL_ID", "gemma-4-E2B-it-Q4_K_M.gguf")
+_MODEL = os.environ.get("ZOE_CORE_MODEL_ID", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf")
 _BASE_URL = os.environ.get("ZOE_CORE_MODEL_URL") or os.environ.get("GEMMA_SERVER_URL") or "http://127.0.0.1:11434/v1"
 _REPEATS = int(os.environ.get("ZOE_BENCH_REPEATS", "3"))
 
