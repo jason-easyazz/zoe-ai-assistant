@@ -45,3 +45,7 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
   `docs/architecture/zoe-flue-integration.md`: a third implementation behind the
   `run_zoe_core` seam). Text-reply persona only; tools/memory are a later phase.
   Hand-started, demo-only, never in a turn.
+- `flue-zoe-telegram/` — Flue Telegram channel: long-poll bot bridged to zoe-data's
+  `/api/chat` (NOT a Flue LLM agent; `src/agents/zoe.ts` is a build-only placeholder
+  and registers no model provider — never points at the voice brain on `:11434`).
+  Hand-started, demo-only; README is a record, not a contract.
