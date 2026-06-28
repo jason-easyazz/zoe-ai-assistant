@@ -17,15 +17,22 @@ def bootstrap_oidc() -> None:
     ha_secret = os.getenv("HA_OIDC_CLIENT_SECRET", "")
     ha_client_id = os.getenv("HA_OIDC_CLIENT_ID", "home-assistant")
     if ha_secret:
+        ha_redirect_uris = [
+            "http://homeassistant.local:8123/auth/oidc/callback",
+            "http://homeassistant:8123/auth/oidc/callback",
+            f"{base_url}:8123/auth/oidc/callback",
+        ]
+        # Support per-client redirect URI override
+        ha_redirect_uri_override = os.getenv("HA_OIDC_REDIRECT_URI", "")
+        if ha_redirect_uri_override:
+            ha_redirect_uris.append(ha_redirect_uri_override)
+        
         upsert_client(
             client_id=ha_client_id,
             client_name="Home Assistant",
             secret=ha_secret,
-            redirect_uris=[
-                "http://homeassistant.local:8123/auth/oidc/callback",
-                "http://homeassistant:8123/auth/oidc/callback",
-                f"{base_url}:8123/auth/oidc/callback",
-            ],
+            redirect_uris=ha_redirect_uris,
+            public_issuer=os.getenv("HA_OIDC_ISSUER"),
         )
         logger.info(f"OIDC client seeded: {ha_client_id}")
     else:
@@ -34,14 +41,21 @@ def bootstrap_oidc() -> None:
     multica_secret = os.getenv("MULTICA_OIDC_CLIENT_SECRET", "")
     multica_client_id = os.getenv("MULTICA_OIDC_CLIENT_ID", "multica")
     if multica_secret:
+        multica_redirect_uris = [
+            f"{base_url}/multica/auth/callback",
+            "http://multica:3000/auth/callback",
+        ]
+        # Support per-client redirect URI override
+        multica_redirect_uri_override = os.getenv("MULTICA_OIDC_REDIRECT_URI", "")
+        if multica_redirect_uri_override:
+            multica_redirect_uris.append(multica_redirect_uri_override)
+        
         upsert_client(
             client_id=multica_client_id,
             client_name="Multica",
             secret=multica_secret,
-            redirect_uris=[
-                f"{base_url}/multica/auth/callback",
-                "http://multica:3000/auth/callback",
-            ],
+            redirect_uris=multica_redirect_uris,
+            public_issuer=os.getenv("MULTICA_OIDC_ISSUER"),
         )
         logger.info(f"OIDC client seeded: {multica_client_id}")
     else:
@@ -50,14 +64,21 @@ def bootstrap_oidc() -> None:
     omnigent_secret = os.getenv("OMNIGENT_OIDC_CLIENT_SECRET", "")
     omnigent_client_id = os.getenv("OMNIGENT_OIDC_CLIENT_ID", "omnigent")
     if omnigent_secret:
+        omnigent_redirect_uris = [
+            f"{base_url}:6767/auth/callback",
+            "http://zoe.local:6767/auth/callback",
+        ]
+        # Support per-client redirect URI override
+        omnigent_redirect_uri_override = os.getenv("OMNIGENT_OIDC_REDIRECT_URI", "")
+        if omnigent_redirect_uri_override:
+            omnigent_redirect_uris.append(omnigent_redirect_uri_override)
+        
         upsert_client(
             client_id=omnigent_client_id,
             client_name="Omnigent",
             secret=omnigent_secret,
-            redirect_uris=[
-                f"{base_url}:6767/auth/callback",
-                "http://zoe.local:6767/auth/callback",
-            ],
+            redirect_uris=omnigent_redirect_uris,
+            public_issuer=os.getenv("OMNIGENT_OIDC_ISSUER"),
         )
         logger.info(f"OIDC client seeded: {omnigent_client_id}")
     else:

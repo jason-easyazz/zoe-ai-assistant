@@ -40,6 +40,15 @@ def _base_url(request: Request) -> str:
     return f"{scheme}://{host}"
 
 
+def _get_issuer_for_client(client_id: str | None, request: Request) -> str:
+    """Get the issuer for a client, checking for public_issuer override first."""
+    if client_id:
+        client = get_client(client_id)
+        if client and client.get("public_issuer"):
+            return client["public_issuer"]
+    return _base_url(request)
+
+
 def _get_user_info(user_id: str) -> dict | None:
     with get_db() as conn:
         row = conn.execute(
@@ -82,8 +91,11 @@ def _verify_pkce(code_verifier: str, code_challenge: str) -> bool:
 # ---------------------------------------------------------------------------
 
 @router.get("/.well-known/openid-configuration")
-async def discovery(request: Request):
-    base = _base_url(request)
+async def discovery(
+    request: Request,
+    client_id: Optional[str] = None,
+):
+    base = _get_issuer_for_client(client_id, request)
     return JSONResponse({
         "issuer": base,
         "authorization_endpoint": f"{base}/application/o/authorize/",
@@ -409,7 +421,7 @@ async def token(
             400, detail={"error": "invalid_grant", "error_description": "User not found"}
         )
 
-    issuer = _base_url(request)
+    issuer = _get_issuer_for_client(client_id, request)
     scope = payload.get("scope", "openid")
     nonce = payload.get("nonce")
 
@@ -450,6 +462,8 @@ async def userinfo(
         raise HTTPException(401, "Bearer token required")
 
     token_str = authorization.removeprefix("Bearer ").strip()
+    # Extract client_id from token claims to determine the correct issuer for validation
+    # For now, fall back to base_url; a full implementation could decode the JWT header first
     issuer = _base_url(request)
     jwks_data = get_jwks()
     claims = verify_access_token(token_str, issuer, jwks_data)

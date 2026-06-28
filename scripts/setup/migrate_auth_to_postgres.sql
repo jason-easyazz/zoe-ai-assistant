@@ -175,7 +175,8 @@ CREATE TABLE IF NOT EXISTS oidc_clients (
     redirect_uris     TEXT NOT NULL,
     scopes            TEXT NOT NULL DEFAULT 'openid profile email',
     is_active         BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at        TEXT NOT NULL
+    created_at        TEXT NOT NULL,
+    public_issuer     TEXT
 );
 
 CREATE TABLE IF NOT EXISTS oidc_signing_keys (
@@ -186,3 +187,5 @@ CREATE TABLE IF NOT EXISTS oidc_signing_keys (
     created_at      TEXT NOT NULL,
     is_active       BOOLEAN NOT NULL DEFAULT TRUE
 );
+
+ALTER TABLE oidc_clients ADD COLUMN IF NOT EXISTS public_issuer TEXT;

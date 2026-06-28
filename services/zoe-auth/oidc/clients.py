@@ -23,7 +23,7 @@ def verify_secret(secret: str, secret_hash: str) -> bool:
 def get_client(client_id: str) -> dict | None:
     with get_db() as conn:
         row = conn.execute(
-            "SELECT client_id, client_secret_hash, client_name, redirect_uris, scopes, is_active"
+            "SELECT client_id, client_secret_hash, client_name, redirect_uris, scopes, is_active, public_issuer"
             " FROM oidc_clients WHERE client_id = ?",
             (client_id,),
         ).fetchone()
@@ -36,6 +36,7 @@ def get_client(client_id: str) -> dict | None:
         "redirect_uris": json.loads(row[3]),
         "scopes": row[4].split(),
         "is_active": row[5],
+        "public_issuer": row[6],
     }
 
 
@@ -50,14 +51,15 @@ def upsert_client(
     secret: str,
     redirect_uris: list[str],
     scopes: str = "openid profile email",
+    public_issuer: str | None = None,
 ) -> None:
     """Insert or update a client. Safe to call on every startup."""
     secret_hash = hash_secret(secret)
     with get_db() as conn:
         conn.execute(
-            "INSERT INTO oidc_clients (client_id, client_secret_hash, client_name, redirect_uris, scopes, is_active, created_at)"
-            " VALUES (?, ?, ?, ?, ?, TRUE, ?)"
+            "INSERT INTO oidc_clients (client_id, client_secret_hash, client_name, redirect_uris, scopes, is_active, created_at, public_issuer)"
+            " VALUES (?, ?, ?, ?, ?, TRUE, ?, ?)"
             " ON CONFLICT (client_id) DO UPDATE SET client_secret_hash = EXCLUDED.client_secret_hash,"
-            " redirect_uris = EXCLUDED.redirect_uris, scopes = EXCLUDED.scopes, is_active = TRUE",
-            (client_id, secret_hash, client_name, json.dumps(redirect_uris), scopes, _now_iso()),
+            " redirect_uris = EXCLUDED.redirect_uris, scopes = EXCLUDED.scopes, is_active = TRUE, public_issuer = EXCLUDED.public_issuer",
+            (client_id, secret_hash, client_name, json.dumps(redirect_uris), scopes, _now_iso(), public_issuer),
         )
