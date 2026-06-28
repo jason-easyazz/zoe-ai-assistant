@@ -18,7 +18,6 @@ from push import broadcaster
 
 router = APIRouter(prefix="/api/journal", tags=["journal"])
 
-DATE_FILTER_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
 SEARCH_MAX_LENGTH = 200
 CREATED_AT_TIMESTAMP_SQL = (
     "(CASE WHEN pg_input_is_valid(created_at, 'timestamp') THEN created_at::timestamp END)"
@@ -116,8 +115,8 @@ async def list_entries(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     mood: Optional[str] = Query(None),
-    start_date: Optional[str] = Query(None, pattern=DATE_FILTER_PATTERN),
-    end_date: Optional[str] = Query(None, pattern=DATE_FILTER_PATTERN),
+    start_date: Optional[date] = Query(None),
+    end_date: Optional[date] = Query(None),
     search: Optional[str] = Query(None, max_length=SEARCH_MAX_LENGTH),
     user: dict = Depends(get_current_user),
     db=Depends(get_db),

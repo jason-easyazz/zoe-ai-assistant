@@ -55,8 +55,8 @@ async def test_list_entries_uses_postgres_date_casts(monkeypatch):
         limit=10,
         offset=0,
         mood=None,
-        start_date="2026-06-01",
-        end_date="2026-06-28",
+        start_date=date(2026, 6, 1),
+        end_date=date(2026, 6, 28),
         search="field note",
         user=_user(),
         db=db,
@@ -69,8 +69,8 @@ async def test_list_entries_uses_postgres_date_casts(monkeypatch):
     assert "LIKE ? ESCAPE '\\'" in sql
     assert params == [
         "U1",
-        "2026-06-01",
-        "2026-06-28",
+        date(2026, 6, 1),
+        date(2026, 6, 28),
         "%field note%",
         "%field note%",
         10,
@@ -147,8 +147,11 @@ def test_list_entries_rejects_malformed_date_and_overlong_search(monkeypatch):
     app.dependency_overrides[journal.get_db] = lambda: _RecordingDb()
     client = TestClient(app)
 
-    bad_date = client.get("/api/journal/entries?start_date=2026-6-28")
-    assert bad_date.status_code == 422
+    malformed_date = client.get("/api/journal/entries?start_date=2026-6-28")
+    assert malformed_date.status_code == 422
+
+    impossible_date = client.get("/api/journal/entries?end_date=2026-02-31")
+    assert impossible_date.status_code == 422
 
     long_search = client.get("/api/journal/entries", params={"search": "x" * 201})
     assert long_search.status_code == 422
@@ -263,8 +266,8 @@ async def test_journal_router_queries_run_against_text_created_at_on_postgres(mo
             limit=50,
             offset=0,
             mood=None,
-            start_date=anniv.isoformat(),
-            end_date=anniv.isoformat(),
+            start_date=anniv,
+            end_date=anniv,
             search=None,
             user={"user_id": "U1"},
             db=db,
