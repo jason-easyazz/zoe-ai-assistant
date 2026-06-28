@@ -9,7 +9,7 @@ Production runtime services for the Zoe assistant: the web/chat API, static UI, 
 - `zoe-data/` — THE production web + chat API (host uvicorn, port 8000). Single source of truth for chat, intents, memory, MCP tools, and background jobs.
 - `zoe-ui/` — static frontend served by nginx (`dist/` is the docroot) plus `nginx.conf`.
 - `zoe-auth/` — authentication service.
-- `homeassistant-mcp-bridge/`, `n8n-mcp-bridge/` — MCP protocol bridges to external systems.
+- `homeassistant-mcp-bridge/` — MCP protocol bridge to Home Assistant. (The n8n bridge was retired in March 2026 along with n8n itself — OpenClaw cron/skills/exec covers automation. The n8n SSO endpoints under `zoe-auth/` stay until that wiring is also removed.)
 - `livekit/` — realtime audio/video infrastructure config.
 - `zoe-core/` — Zoe's reasoning/orchestration core: the Pi agent (Gemma 4) that binds the other services together and calls abilities. This is the center of Zoe, not a monolith — it orchestrates and delegates; it does not absorb the other services' code. NOTE: a *different*, older `zoe-core` (the retired Docker monolith, replaced by `zoe-data`) is archived at `docs/archive/retired-services/zoe-core/` — that legacy tree must never be revived or extended. This service is the new Pi core, not that archive.
 
@@ -39,6 +39,5 @@ Production runtime services for the Zoe assistant: the web/chat API, static UI, 
 - [zoe-ui/AGENTS.md](zoe-ui/AGENTS.md) — frontend docroot, SW_VERSION contract, nginx.conf
 - [zoe-auth/AGENTS.md](zoe-auth/AGENTS.md) — authentication, OIDC/SSO, touch-panel pairing
 - [homeassistant-mcp-bridge/AGENTS.md](homeassistant-mcp-bridge/AGENTS.md) — Home Assistant MCP bridge
-- [n8n-mcp-bridge/AGENTS.md](n8n-mcp-bridge/AGENTS.md) — n8n MCP bridge
 
 `livekit/` is a single config file (`config.yaml`) with no local editing rules; it stays owned by this doc.
