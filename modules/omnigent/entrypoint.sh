@@ -62,8 +62,11 @@ except FileNotFoundError:
     cfg = {}
 if not isinstance(cfg, dict):
     cfg = {}
+# omnigent's config.yaml keys providers by NAME under a `providers:` MAPPING (load_providers
+# returns {} for anything that isn't a dict). The entry body carries kind + the family block(s),
+# NOT a `name` field — the name is the mapping key.
 entry = {
-    "name": "openrouter", "kind": "gateway", "default": ["pi"],
+    "kind": "gateway", "default": ["pi"],
     "openai": {
         "base_url": "https://openrouter.ai/api/v1",
         "api_key_ref": "env:OPENROUTER_API_KEY",
@@ -72,15 +75,18 @@ entry = {
     },
 }
 provs = cfg.get("providers")
-if not isinstance(provs, list):
-    provs = []
+# A non-dict providers block (absent, or an earlier buggy LIST form that omnigent silently
+# ignored) is reset to an empty mapping — the only thing it could have held is our own
+# non-functional list entry, so nothing usable is lost.
+if not isinstance(provs, dict):
+    provs = {}
 # Create-only: if an `openrouter` provider already exists, leave it ENTIRELY alone — the
 # operator owns it after first seed (a changed default model, an added anthropic family, etc.
 # must survive reboots). Only seed when absent.
-if any(isinstance(p, dict) and p.get("name") == "openrouter" for p in provs):
+if "openrouter" in provs:
     print("[entrypoint] openrouter provider already present — leaving operator config untouched")
 else:
-    provs.append(entry)
+    provs["openrouter"] = entry
     cfg["providers"] = provs
     with open(path, "w") as f:
         yaml.safe_dump(cfg, f, sort_keys=False)
