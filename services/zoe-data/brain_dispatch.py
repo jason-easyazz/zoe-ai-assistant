@@ -7,6 +7,12 @@ cutover flag controls them consistently. (chat.py keeps its own equivalent
 helpers, which are exercised by the routing tests; this module is what the voice
 paths use to avoid circular imports with chat.py.)
 
+Cutover seam: ``ZOE_BRAIN_BACKEND='flue'`` (default ``'core'``) opts the brain
+lane into the Flue brain sidecar (``zoe_flue_client``) instead of zoe-core. This
+is ADDITIVE and default-OFF — with the env unset/``'core'`` dispatch is
+byte-identical to today, so the live voice path is unaffected. The flip is
+operator-gated on voice-corpus parity; reversible by env toggle (no migration).
+
 Imports are lazy inside each function to avoid import-time cycles
 (main.py → routers.chat → ... ).
 """
@@ -27,8 +33,24 @@ def use_core_brain() -> bool:
     }
 
 
+def use_flue_brain() -> bool:
+    """True ONLY when ``ZOE_BRAIN_BACKEND == 'flue'`` (default ``'core'``).
+
+    The additive, default-OFF cutover seam to the Flue brain sidecar. With the
+    env unset or ``'core'`` this returns False and dispatch is byte-identical to
+    today (zoe-core, legacy on fallback). Read lazily so a .env value
+    bootstrapped after import is honored. The flip is operator-gated on
+    voice-corpus parity — do not change the default here.
+    """
+    return (os.environ.get("ZOE_BRAIN_BACKEND", "core") or "").strip().lower() == "flue"
+
+
 def brain_streaming(message: str, session_id: str, user_id: str = "", **kwargs: Any) -> AsyncIterator[str]:
-    """Streaming brain turn — zoe-core by default, legacy on fallback."""
+    """Streaming brain turn — Flue (opt-in) > zoe-core (default) > legacy."""
+    if use_flue_brain():
+        from zoe_flue_client import run_flue_brain_streaming
+
+        return run_flue_brain_streaming(message, session_id, user_id, **kwargs)
     if use_core_brain():
         from zoe_core_client import run_zoe_core_streaming
 
@@ -39,7 +61,11 @@ def brain_streaming(message: str, session_id: str, user_id: str = "", **kwargs: 
 
 
 async def brain_oneshot(message: str, session_id: str, user_id: str = "", **kwargs: Any) -> str:
-    """Non-streaming brain turn — zoe-core by default, legacy on fallback."""
+    """Non-streaming brain turn — Flue (opt-in) > zoe-core (default) > legacy."""
+    if use_flue_brain():
+        from zoe_flue_client import run_flue_brain
+
+        return await run_flue_brain(message, session_id, user_id, **kwargs)
     if use_core_brain():
         from zoe_core_client import run_zoe_core
 
