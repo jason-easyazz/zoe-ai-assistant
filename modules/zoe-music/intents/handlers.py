@@ -51,6 +51,33 @@ async def _get(client: httpx.AsyncClient, path: str, params: Dict | None = None)
     )
 
 
+def _search_result_count(payload) -> int:
+    """Best-effort count of items in a /tools/search body.
+
+    The module proxies Music Assistant's response body verbatim, so an HTTP 200
+    can still carry an empty result set or an error-shaped envelope. Treat both
+    as zero so the handler never claims a find it doesn't have; only an actual
+    non-empty result bucket counts as a hit.
+    """
+    data = payload
+    if not data:
+        return 0
+    if isinstance(data, dict):
+        # Explicit failure envelope from the bridge or MA.
+        if data.get("ok") is False or data.get("error") or data.get("error_code"):
+            return 0
+        # MA wraps command output under "result".
+        inner = data.get("result")
+        if isinstance(inner, (dict, list)):
+            data = inner
+    if isinstance(data, list):
+        return len(data)
+    if isinstance(data, dict):
+        # Sum every list-valued bucket (tracks/artists/albums/... or unknown).
+        return sum(len(v) for v in data.values() if isinstance(v, list))
+    return 0
+
+
 async def handle_music_play(intent, user_id: str, context: Dict) -> Dict[str, Any]:
     """Handle MusicPlay intent — search and play music in one call."""
     query = (
@@ -185,10 +212,22 @@ async def handle_music_search(intent, user_id: str, context: Dict) -> Dict[str, 
                     "success": False,
                     "message": f"I couldn't search for '{query}' right now.",
                 }
+            try:
+                payload = resp.json()
+            except Exception:
+                payload = None
+            # HTTP 200 is not enough: inspect the body so an empty or
+            # error-shaped result isn't reported as a successful find.
+            count = _search_result_count(payload)
+            if count <= 0:
+                return {
+                    "success": False,
+                    "message": f"I couldn't find any music matching '{query}'.",
+                }
             return {
                 "success": True,
-                "message": f"🔍 Here's what I found for '{query}'.",
-                "data": resp.json(),
+                "message": f"🔍 Found {count} result(s) for '{query}'.",
+                "data": payload,
             }
     except Exception as e:
         logger.error(f"Music search failed: {e}")

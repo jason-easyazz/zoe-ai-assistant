@@ -23,12 +23,20 @@ class Intent:
         self.text = text
 
 
+_NO_PAYLOAD = object()  # sentinel: distinguishes "use default" from explicit None
+
+
 class FakeResp:
-    def __init__(self, status=200, payload=None):
+    def __init__(self, status=200, payload=_NO_PAYLOAD):
         self.status_code = status
-        self._p = payload if payload is not None else {
+        # Default payload is a "happy" response that satisfies every handler:
+        # ok/playing for control + now_playing, and a non-empty result bucket
+        # so search counts a real hit. An explicit payload (including None) is
+        # honored so callers can simulate empty/error bodies.
+        self._p = {
             "ok": True, "playing": True, "title": "Song", "artist": "Artist",
-        }
+            "tracks": [{"title": "Song", "artist": "Artist"}],
+        } if payload is _NO_PAYLOAD else payload
 
     def json(self):
         return self._p
@@ -110,7 +118,7 @@ async def test_handler_hits_existing_route_with_token(handlers, real_routes, fn_
 
 
 @pytest.mark.parametrize("fn_name,slots", HTTP_HANDLERS)
-async def test_handler_call_passes_real_auth_gate(handlers, fn_name, slots):
+async def test_handler_call_passes_real_auth_gate(handlers, monkeypatch, fn_name, slots):
     """Replay the exact (method, path, token) the handler emits against the real
     app: it must clear the gate (not 401), the route must exist (not 404/405),
     and the body/params must validate (not 422)."""
@@ -127,11 +135,11 @@ async def test_handler_call_passes_real_auth_gate(handlers, fn_name, slots):
     async def _ha_noop(service, extra=None):
         return None
 
-    # Stub the network so authorized calls return cleanly.
-    import os
-    main._ma_available = _ma_down
-    main._ha_service = _ha_noop
-    os.environ["ZOE_MUSIC_SERVICE_TOKEN"] = TOKEN
+    # Stub the network and set the token via monkeypatch so pytest restores
+    # process/module state on teardown (no leakage into later tests).
+    monkeypatch.setattr(main, "_ma_available", _ma_down)
+    monkeypatch.setattr(main, "_ha_service", _ha_noop)
+    monkeypatch.setenv("ZOE_MUSIC_SERVICE_TOKEN", TOKEN)
     client = TestClient(main.app)
 
     if method == "POST":
@@ -146,6 +154,53 @@ async def test_handler_call_passes_real_auth_gate(handlers, fn_name, slots):
     )
     # And the same call WITHOUT the token is rejected by the gate.
     assert missing.status_code == 401
+
+
+def _client_returning(status, payload):
+    """Build a FakeClient class whose GET returns a fixed (status, payload)."""
+    class _C(FakeClient):
+        async def get(self, url, params=None, headers=None):
+            FakeClient.calls.append(("GET", url, params, headers))
+            return FakeResp(status=status, payload=payload)
+    return _C
+
+
+# Bodies that must NOT be reported as a successful find even on HTTP 200.
+@pytest.mark.parametrize("status,payload", [
+    (200, None),                                   # empty body
+    (200, {}),                                     # empty dict
+    (200, {"ok": False}),                          # error-shaped envelope
+    (200, {"error": "boom"}),                      # error key
+    (200, {"error_code": 42}),                     # error code
+    (200, {"tracks": [], "artists": [], "albums": []}),  # valid-but-empty search
+    (200, {"result": {"tracks": []}}),             # MA-wrapped empty
+    (503, {"tracks": [{"title": "x"}]}),           # non-200 even with a body
+])
+async def test_search_does_not_overreport_on_empty_or_error(monkeypatch, status, payload):
+    mod = load_music_handlers()
+    monkeypatch.setenv("ZOE_MUSIC_SERVICE_TOKEN", TOKEN)
+    FakeClient.calls = []
+    monkeypatch.setattr(mod.httpx, "AsyncClient", _client_returning(status, payload))
+
+    res = await mod.handle_music_search(Intent(slots={"query": "nonexistent"}), "u", {})
+    assert res["success"] is False
+
+
+# Bodies that genuinely contain results must still succeed (don't break search).
+@pytest.mark.parametrize("payload", [
+    {"tracks": [{"title": "Yesterday"}]},
+    {"artists": [{"name": "Beatles"}], "tracks": []},
+    {"result": {"tracks": [{"title": "Hey Jude"}]}},
+    [{"title": "a"}, {"title": "b"}],
+])
+async def test_search_reports_real_results(monkeypatch, payload):
+    mod = load_music_handlers()
+    monkeypatch.setenv("ZOE_MUSIC_SERVICE_TOKEN", TOKEN)
+    FakeClient.calls = []
+    monkeypatch.setattr(mod.httpx, "AsyncClient", _client_returning(200, payload))
+
+    res = await mod.handle_music_search(Intent(slots={"query": "beatles"}), "u", {})
+    assert res["success"] is True
 
 
 async def test_static_stubs_make_no_http_call(handlers):
