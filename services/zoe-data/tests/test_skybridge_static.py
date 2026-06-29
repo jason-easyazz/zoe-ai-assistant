@@ -71,9 +71,11 @@ def test_skybridge_push_socket_uses_authenticated_session_query():
     assert "window.zoePushWs = this.push;" in sync
     assert "originalConnect" not in sync
     assert "/ws/push?channel=all`" not in sync
-    assert "async def _session_can_subscribe_panel" in main
-    assert "FROM ui_panel_sessions WHERE panel_id = ?" in main
-    assert "not device_info and not await _session_can_subscribe_panel(panel_id, session_id)" in main
+    assert "async def _resolve_subscribable_panel" in main
+    # Canonical resolution joins ui_panel_sessions to the registered `panels` table.
+    assert "JOIN panels p ON p.panel_id = s.panel_id" in main
+    assert "subscribe_panel_id = await _resolve_subscribable_panel(panel_id, session_id)" in main
+    assert "await broadcaster.connect_panel(websocket, subscribe_panel_id)" in main
     assert "Touch guest session was rejected; refreshing guest session" in auth
     assert "profile.status === 401 || profile.status === 403 || profile.status === 404" in auth
     assert "keeping existing session" in auth
