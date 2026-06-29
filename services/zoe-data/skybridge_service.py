@@ -1205,7 +1205,11 @@ def _affected_rows(result: Any) -> int | None:
         return None
     if isinstance(result, int):
         return result
-    match = re.search(r"\b(?:INSERT|UPDATE|DELETE)\s+(\d+)\b", str(result))
+    text = str(result)
+    insert_match = re.search(r"\bINSERT\s+\d+\s+(\d+)\b", text)
+    if insert_match:
+        return int(insert_match.group(1))
+    match = re.search(r"\b(?:UPDATE|DELETE)\s+(\d+)\b", text)
     return int(match.group(1)) if match else None
 
 
@@ -1843,7 +1847,7 @@ async def _resolve_list_create(intent: SkybridgeIntent, user_id: str, db: Any) -
             "",
             "personal" if list_type in {"work", "personal", "tasks"} else "family",
         )
-        created = str(status).endswith(" 1")
+        created = _affected_rows(status) == 1
         await _maybe_commit(db)
     result = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type, list_name=intent.list_name), user_id, db)
     result["intent"] = {"domain": "lists", "action": "create_list", "list_type": list_type, "list_name": intent.list_name}
