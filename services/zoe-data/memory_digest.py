@@ -41,6 +41,48 @@ def _normalize_gemma_base(raw: str) -> str:
 
 _GEMMA_URL = _normalize_gemma_base(os.environ.get("GEMMA_SERVER_URL", "http://127.0.0.1:11434"))
 _ZOE_TIMEZONE = os.environ.get("ZOE_TIMEZONE", "Australia/Perth")
+_GUEST_USERS = ("guest", "anonymous", "voice-guest", "voice-daemon", "")
+
+
+def _message_owner_expr() -> str:
+    guests = ", ".join("'" + user.replace("'", "''") + "'" for user in _GUEST_USERS)
+    # chat_messages.metadata is TEXT and legacy rows may contain non-JSON.
+    # Extract the simple {"user_id": "..."} field without a jsonb cast so one
+    # malformed row cannot fail discovery for every user.
+    metadata_user = (
+        "CASE WHEN cm.metadata ~ '^\\s*\\{' "
+        "THEN substring(cm.metadata from '\"user_id\"\\s*:\\s*\"([^\"]+)\"') "
+        "ELSE NULL END"
+    )
+    return (
+        "CASE "
+        f"WHEN COALESCE({metadata_user}, '') NOT IN ({guests}) "
+        f"THEN {metadata_user} "
+        f"WHEN COALESCE(cs.user_id, '') NOT IN ({guests}) "
+        "THEN cs.user_id "
+        "ELSE NULL END"
+    )
+
+
+def _message_owner_users_sql(*, today_only: bool) -> str:
+    owner_expr = _message_owner_expr()
+    date_clause = ""
+    if today_only:
+        date_clause = """
+          AND (cm.created_at::timestamptz AT TIME ZONE ?)::date =
+              (now() AT TIME ZONE ?)::date
+        """
+    return f"""
+        SELECT DISTINCT owner.user_id
+        FROM (
+            SELECT {owner_expr} AS user_id
+            FROM chat_messages cm
+            JOIN chat_sessions cs ON cm.session_id = cs.id
+            WHERE cm.role = 'user'
+            {date_clause}
+        ) owner
+        WHERE owner.user_id IS NOT NULL
+        """
 
 _EXTRACTION_PROMPT = """\
 You are extracting personal facts from a chat transcript. Only extract facts the user explicitly stated about themselves, their family, preferences, or life. Do NOT infer, assume, or add anything not stated directly.
@@ -421,12 +463,13 @@ async def _emotional_memory_pass(user_id: str, chat_text: str, svc) -> int:
 
 
 async def _load_todays_messages(user_id: str, db=None) -> str:
-    """Load today's user-turn messages from chat_messages, joined to chat_sessions."""
+    """Load today's user-turn messages using per-message metadata ownership."""
+    owner_expr = _message_owner_expr()
     sql = """
             SELECT cm.content
             FROM chat_messages cm
             JOIN chat_sessions cs ON cm.session_id = cs.id
-            WHERE cs.user_id = ?
+            WHERE """ + owner_expr + """ = ?
               AND cm.role = 'user'
               AND (cm.created_at::timestamptz AT TIME ZONE ?)::date =
                   (now() AT TIME ZONE ?)::date
@@ -698,7 +741,7 @@ async def run_weekly_consolidation_for_all(db=None) -> list[dict]:
         # zero users when MemoryService hasn't exposed a list helper.
         try:
             from db_pool import get_db_ctx  # type: ignore[import]
-            sql = "SELECT DISTINCT user_id FROM chat_sessions"
+            sql = _message_owner_users_sql(today_only=False)
             if db is not None:
                 rows = await (await db.execute(sql)).fetchall()
             else:
@@ -724,14 +767,7 @@ async def run_digest_for_all_active_users(db=None) -> list[dict]:
     results = []
     try:
         from db_pool import get_db_ctx  # type: ignore[import]
-        sql = """
-            SELECT DISTINCT cs.user_id
-            FROM chat_messages cm
-            JOIN chat_sessions cs ON cm.session_id = cs.id
-            WHERE cm.role = 'user'
-              AND (cm.created_at::timestamptz AT TIME ZONE ?)::date =
-                  (now() AT TIME ZONE ?)::date
-            """
+        sql = _message_owner_users_sql(today_only=True)
         params = (_ZOE_TIMEZONE, _ZOE_TIMEZONE)
         if db is not None:
             rows = await (await db.execute(sql, params)).fetchall()
@@ -1255,7 +1291,7 @@ async def run_dreaming_for_all(db=None) -> list[dict]:
     except AttributeError:
         try:
             from db_pool import get_db_ctx  # type: ignore[import]
-            sql = "SELECT DISTINCT user_id FROM chat_sessions"
+            sql = _message_owner_users_sql(today_only=False)
             if db is not None:
                 rows = await (await db.execute(sql)).fetchall()
             else:
