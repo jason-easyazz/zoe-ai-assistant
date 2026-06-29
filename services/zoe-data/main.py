@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 import httpx
 from database import init_db
+from gemma_endpoint import gemma_base
 from push import broadcaster
 from auth import require_internal_token
 from routers import (
@@ -79,9 +80,7 @@ _READINESS_CACHE_LOCK = asyncio.Lock()
 
 
 def _gemma_base_url() -> str:
-    raw = (os.environ.get("GEMMA_SERVER_URL") or os.environ.get("ZOE_LLAMA_URL") or "http://127.0.0.1:11434").strip()
-    normalized = raw.rstrip("/")
-    return normalized[:-3].rstrip("/") if normalized.endswith("/v1") else normalized
+    return gemma_base()
 
 
 def _canonical_gemma_model(model_id: str) -> bool:
@@ -137,11 +136,14 @@ async def _check_stt_ready() -> dict:
     try:
         from routers import voice_tts
 
+        loaded = bool(voice_tts.moonshine_ready())
+        load_error = voice_tts.moonshine_error()
         return {
-            "ok": True,
+            "ok": loaded or load_error is None,
             "engine": "moonshine",
             "arch": voice_tts.moonshine_arch(),
-            "loaded": bool(voice_tts.moonshine_ready()),
+            "loaded": loaded,
+            **({"error": load_error} if load_error else {}),
         }
     except Exception as exc:
         return {"ok": False, "engine": "moonshine", "error": exc.__class__.__name__}

@@ -126,6 +126,7 @@ def test_stt_ready_does_not_race_moonshine_warmup(monkeypatch):
     from routers import voice_tts
 
     monkeypatch.setattr(voice_tts, "moonshine_ready", lambda: False)
+    monkeypatch.setattr(voice_tts, "moonshine_error", lambda: None)
     monkeypatch.setattr(voice_tts, "moonshine_arch", lambda: "MEDIUM_STREAMING")
 
     report = asyncio.run(main._check_stt_ready())
@@ -133,6 +134,21 @@ def test_stt_ready_does_not_race_moonshine_warmup(monkeypatch):
     assert report["ok"] is True
     assert report["loaded"] is False
     assert report["engine"] == "moonshine"
+
+
+def test_stt_ready_reports_known_moonshine_load_failure(monkeypatch):
+    import main
+    from routers import voice_tts
+
+    monkeypatch.setattr(voice_tts, "moonshine_ready", lambda: False)
+    monkeypatch.setattr(voice_tts, "moonshine_error", lambda: "FileNotFoundError")
+    monkeypatch.setattr(voice_tts, "moonshine_arch", lambda: "MEDIUM_STREAMING")
+
+    report = asyncio.run(main._check_stt_ready())
+
+    assert report["ok"] is False
+    assert report["loaded"] is False
+    assert report["error"] == "FileNotFoundError"
 
 
 def test_zoe_data_unit_does_not_wait_for_network_online():
@@ -184,4 +200,15 @@ def test_gemma_base_url_strips_version_suffix_with_trailing_slash(monkeypatch):
 
     monkeypatch.setenv("GEMMA_SERVER_URL", "http://127.0.0.1:11434/v1/")
 
+    assert main._gemma_base_url() == "http://127.0.0.1:11434"
+
+
+def test_gemma_base_url_uses_shared_gemma_resolver(monkeypatch):
+    import gemma_endpoint
+    import main
+
+    monkeypatch.delenv("GEMMA_SERVER_URL", raising=False)
+    monkeypatch.setenv("ZOE_LLAMA_URL", "http://other-host:11434")
+
+    assert main._gemma_base_url() == gemma_endpoint.gemma_base()
     assert main._gemma_base_url() == "http://127.0.0.1:11434"

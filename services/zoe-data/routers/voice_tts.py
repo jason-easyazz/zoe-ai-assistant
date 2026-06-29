@@ -1977,6 +1977,7 @@ def _log_voice_stt_sample(
 # --- Moonshine ONNX STT (edge real-time; faster on short commands, CPU-only so
 # it never competes with the brain's GPU). Model + tokenizer are cached once. ---
 _moonshine_model = None  # moonshine_voice v2 Transcriber
+_moonshine_load_error = None
 _moonshine_lock = threading.Lock()
 # Serializes Moonshine INFERENCE across executor threads: the wake-time warmup dummy
 # inference and a real command transcription share one singleton transcriber, so they
@@ -1990,6 +1991,10 @@ def moonshine_arch() -> str:
 
 def moonshine_ready() -> bool:
     return _moonshine_model is not None
+
+
+def moonshine_error() -> Optional[str]:
+    return _moonshine_load_error
 
 
 def kokoro_ready() -> bool:
@@ -2067,18 +2072,23 @@ def _ensure_moonshine():
     """Lazily build the Moonshine v2 transcriber (MEDIUM_STREAMING by default —
     accurate on real room audio, ~0.5s/clip). Locked so a concurrent first call
     can't race the model load."""
-    global _moonshine_model
+    global _moonshine_model, _moonshine_load_error
     if _moonshine_model is not None:
         return _moonshine_model
     with _moonshine_lock:
         if _moonshine_model is None:
-            import moonshine_voice as mv
-            from moonshine_voice.transcriber import Transcriber
+            try:
+                import moonshine_voice as mv
+                from moonshine_voice.transcriber import Transcriber
 
-            archname = (os.environ.get("ZOE_MOONSHINE_ARCH") or "MEDIUM_STREAMING").strip()
-            arch = getattr(mv.ModelArch, archname, mv.ModelArch.MEDIUM_STREAMING)
-            model_path, resolved_arch = mv.get_model_for_language("en", arch)
-            _moonshine_model = Transcriber(model_path, resolved_arch)
+                archname = (os.environ.get("ZOE_MOONSHINE_ARCH") or "MEDIUM_STREAMING").strip()
+                arch = getattr(mv.ModelArch, archname, mv.ModelArch.MEDIUM_STREAMING)
+                model_path, resolved_arch = mv.get_model_for_language("en", arch)
+                _moonshine_model = Transcriber(model_path, resolved_arch)
+                _moonshine_load_error = None
+            except Exception as exc:
+                _moonshine_load_error = exc.__class__.__name__
+                raise
     return _moonshine_model
 
 
