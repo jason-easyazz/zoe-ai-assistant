@@ -1827,30 +1827,100 @@ async def internal_broadcast(payload: dict, _: None = Depends(require_internal_t
     return {"ok": True}
 
 
-async def _session_can_subscribe_panel(panel_id: str, session_id: str | None) -> bool:
-    """Allow browser panel sockets only for sessions bound to that panel."""
+async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> str | None:
+    """Resolve the *canonical* panel channel a browser push socket may subscribe to.
+
+    Returns the panel_id whose ``panel_{id}`` channel the socket should join, or
+    ``None`` to reject the connection.
+
+    A single physical browser may hold several ``ui_panel_sessions`` rows for one
+    session over its life: a generated ``panel_xxxx`` alias captured from
+    localStorage, plus the REGISTERED id (e.g. ``zoe-touch-pi``). But server pushes
+    (``broadcast_to_panel``) are addressed to the registered panel, and the
+    registered ids are exactly the rows in the ``panels`` table — generated aliases
+    are written to ``ui_panel_sessions`` by bind but never to ``panels``.
+
+    Resolution prefers the session's REGISTERED panel (a bound row whose id is in
+    ``panels``) over a generated alias, which closes the whole "stale alias wins /
+    rebinds" class instead of fixing it per-permutation. Crucially the selected
+    registered row is TIED TO THE CONNECTING panel, so a session that holds rows for
+    SEVERAL registered panels (e.g. A and B) can't misroute:
+      1. Among the session's registered bound rows, prefer the one whose
+         ``panel_id`` IS the connecting id; only when none is (the connecting id is
+         a generated alias, not a registered row) fall back to the foreground /
+         most-recently-seen registered row. So panel A reconnecting always joins
+         ``panel_A`` even when panel B is foreground in the same session, while a
+         generated ``panel_xxxx`` still resolves to the registered
+         ``panel_zoe-touch-pi``. (An alias has no column linking it to a specific
+         registered panel; the session's foreground/most-recent registered panel is
+         the documented best-guess target for it.)
+      2. Else (the session has only generated aliases, or no session_id) fall back
+         to the connecting id when it is itself a bound row the user owns — under
+         this session, or a NULL-session legacy/device bind.
+      * admin/agent roles may target any explicit panel_id.
+      * an unresolved session defers to the registered-panel guest policy.
+    A user can never reach a panel their session/account isn't bound to (every
+    query filters on ``user_id``).
+    """
     user = await _resolve_ws_session(session_id)
     if user is None:
-        return await _panel_allows_guest_push(panel_id)
+        if panel_id and await _panel_allows_guest_push(panel_id):
+            return panel_id
+        return None
     user_id = str(user.get("user_id") or "")
     role = str(user.get("role") or "").lower()
     if not user_id:
-        return False
+        return None
     if role in {"admin", "agent"}:
-        return True
+        # Trusted roles may subscribe to an explicit panel channel as-is.
+        return panel_id or None
+    if not panel_id:
+        return None
     try:
         from database import get_db
 
         async for db in get_db():
+            # (1) CANONICAL: a REGISTERED panel (a bound row whose panel_id exists
+            # in `panels`) for this session + user. The connecting id is tied into
+            # the choice via `(s.panel_id = ?) DESC`, which ranks the row for the
+            # CONNECTING panel first. So when the session holds rows for several
+            # registered panels (A and B), panel A's socket resolves to panel_A —
+            # never whichever row happens to win is_foreground/last_seen_at. Only
+            # when the connecting id is NOT one of the session's registered rows
+            # (it is a generated alias) does the foreground/recency order decide;
+            # that is the documented fallback (an alias has no column linking it to
+            # a specific registered panel, so the foreground/most-recent registered
+            # panel is the best canonical target — this still routes panel_<alias>
+            # to panel_zoe-touch-pi). user_id scoping keeps it the session's own.
+            if session_id:
+                cursor = await db.execute(
+                    "SELECT s.panel_id FROM ui_panel_sessions s "
+                    "JOIN panels p ON p.panel_id = s.panel_id "
+                    "WHERE s.chat_session_id = ? AND s.user_id = ? "
+                    "ORDER BY (s.panel_id = ?) DESC, "
+                    "s.is_foreground DESC, s.last_seen_at DESC LIMIT 1",
+                    (session_id, user_id, panel_id),
+                )
+                row = await cursor.fetchone()
+                if row and row["panel_id"]:
+                    return str(row["panel_id"])
+
+            # (2) No registered panel for this session (only generated aliases, or
+            # no session_id). Authorise the connecting id when it is itself a bound
+            # row the user owns — under this session, or a NULL-session legacy/device
+            # bind — and subscribe to its own channel.
             cursor = await db.execute(
-                "SELECT user_id FROM ui_panel_sessions WHERE panel_id = ? ORDER BY last_seen_at DESC LIMIT 1",
-                (panel_id,),
+                "SELECT 1 FROM ui_panel_sessions "
+                "WHERE panel_id = ? AND user_id = ? "
+                "AND (chat_session_id = ? OR chat_session_id IS NULL) LIMIT 1",
+                (panel_id, user_id, session_id),
             )
-            row = await cursor.fetchone()
-            return bool(row and str(row["user_id"]) == user_id)
+            if await cursor.fetchone():
+                return panel_id
+            return None
     except Exception as exc:
         logger.debug("push websocket panel session validation failed: %s", exc)
-        return False
+        return None
 
 
 async def _panel_allows_guest_push(panel_id: str) -> bool:
@@ -1946,13 +2016,26 @@ async def websocket_push(
             from routers.panel_auth import lookup_device_token
             device_info = lookup_device_token(token_header)
         session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
-        # Browser WebSockets cannot send X-Device-Token. Accept a panel channel
-        # subscription when the browser session is already bound to this panel.
-        if not device_info and not await _session_can_subscribe_panel(panel_id, session_id):
-            await websocket.close(1008, "Invalid device token")
-            return
+        # A valid device token (the Pi kiosk) subscribes under its own connecting
+        # id. Browser WebSockets cannot send X-Device-Token; for them resolve the
+        # CANONICAL bound panel id from the session and subscribe there, so the
+        # socket joins the channel pushes are actually sent to even when the client
+        # connected under a different alias id.
+        subscribe_panel_id = panel_id
+        if not device_info:
+            subscribe_panel_id = await _resolve_subscribable_panel(panel_id, session_id)
+            if not subscribe_panel_id:
+                await websocket.close(1008, "Invalid device token")
+                return
         # Panel token or bound browser session verified; subscribe to panel push.
-        await broadcaster.connect_panel(websocket, panel_id)
+        await broadcaster.connect_panel(websocket, subscribe_panel_id)
+        # Clean up under the RESOLVED id we actually subscribed to — not the
+        # connecting alias. A browser that connected as panel_<alias> but resolved
+        # to panel_<registered> would otherwise hand disconnect the wrong channel.
+        # (disconnect() self-heals via the broadcaster's per-socket panel map, so
+        # this isn't a live leak, but aligning the channel keeps cleanup correct,
+        # explicit, and robust to future broadcaster refactors.)
+        disconnect_channel = f"panel_{subscribe_panel_id}"
     else:
         # Non-panel: perform lightweight session validation via zoe-auth HTTP.
         session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
@@ -1979,9 +2062,9 @@ async def websocket_push(
         await broadcaster.connect(
             websocket, channel, user_id=str(user.get("user_id") or "")
         )
+        disconnect_channel = channel
     # -----------------------------------------------------------------
     # Normal data relay loop
-    disconnect_channel = f"panel_{panel_id}" if panel_id else channel
     await _run_push_ws_loop(websocket, disconnect_channel, allow_catchup=True)
 
 
