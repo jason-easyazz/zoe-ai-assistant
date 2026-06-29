@@ -3,11 +3,13 @@ Stub routers for frontend endpoints that don't have full implementations yet.
 Returns empty/default data so the frontend doesn't get 404 errors.
 """
 import json
+import logging
 import os
 from fastapi import APIRouter, Depends, Request
 from auth import get_current_user
 from db_pool import get_db
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["stubs"])
 
 
@@ -73,7 +75,12 @@ async def get_settings(user: dict = Depends(get_current_user), db=Depends(get_db
             except (json.JSONDecodeError, TypeError):
                 settings[row["key"]] = row["value"]
     except Exception:
-        pass
+        logger.exception("Failed to load system settings")
+        return {
+            "status": "degraded",
+            "error": "settings_storage_unavailable",
+            "settings": settings,
+        }
     # Expose HA bridge URL for widgets that need it
     if "homeassistant_url" not in settings:
         ha_url = os.environ.get("ZOE_HA_URL", os.environ.get("ZOE_HA_BRIDGE_URL", ""))
@@ -96,7 +103,12 @@ async def get_intelligence_settings(user: dict = Depends(get_current_user), db=D
             merged = {**_INTELLIGENCE_DEFAULTS, **stored}
             return {"settings": merged}
     except Exception:
-        pass
+        logger.exception("Failed to load intelligence settings")
+        return {
+            "status": "degraded",
+            "error": "settings_storage_unavailable",
+            "settings": dict(_INTELLIGENCE_DEFAULTS),
+        }
     return {"settings": dict(_INTELLIGENCE_DEFAULTS)}
 
 
@@ -127,5 +139,4 @@ async def save_intelligence_settings(
     except Exception as exc:
         return {"status": "error", "detail": str(exc)}
     return {"status": "ok", "settings": filtered}
-
 
