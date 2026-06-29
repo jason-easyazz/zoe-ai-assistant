@@ -8,7 +8,7 @@
 importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.63.12'; // skybridge: auth and voice surface cache bypass
+const SW_VERSION = '4.63.13'; // local-timezone date fix: re-precache corrected calendar.html
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
@@ -550,7 +550,32 @@ self.addEventListener('activate', (event) => {
         ))
     );
 
-    event.waitUntil(Promise.all([purgeOldPrecaches, purgeStaleModules]));
+    // 3) One-shot purge of the runtime-cached pages/scripts carrying the
+    //    local-timezone date fix that are NOT in the Workbox precache:
+    //    /touch/calendar.html, /journal.html (zoe-html) and the Today widget
+    //    /touch/js/touch-widgets.js (zoe-widgets/zoe-js). These routes are
+    //    NetworkFirst, so an online client already revalidates on next load;
+    //    dropping any cached copy here also closes the offline-fallback window
+    //    so a flaky-network kiosk can't keep serving the pre-fix code.
+    const dateFixPaths = new Set([
+        '/touch/calendar.html',
+        '/journal.html',
+        '/touch/js/touch-widgets.js',
+    ]);
+    const purgeStaleDateFix = caches.keys().then((names) =>
+        Promise.all(names.map((name) =>
+            caches.open(name).then((cache) =>
+                cache.keys().then((requests) =>
+                    Promise.all(requests
+                        .filter((r) => dateFixPaths.has(new URL(r.url).pathname))
+                        .map((r) => cache.delete(r))
+                    )
+                )
+            )
+        ))
+    );
+
+    event.waitUntil(Promise.all([purgeOldPrecaches, purgeStaleModules, purgeStaleDateFix]));
 });
 
 // NOTE: a second copy of 'push', 'notificationclick' and 'activate' handlers
