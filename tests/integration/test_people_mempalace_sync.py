@@ -223,6 +223,11 @@ async def test_person_extractor_dual_fanout(db_conn):
         pytest.skip(f"MemPalace/vector store unavailable: {e}")
 
     try:
+        await db_conn.execute(
+            "INSERT INTO users (id, name, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+            test_user, "CRM Sync Test User", "member",
+        )
+
         # Insert a test person
         await db_conn.execute(
             "INSERT INTO people (id, user_id, name, relationship, circle, context, visibility) VALUES ($1,$2,$3,$4,$5,$6,$7)",
@@ -275,6 +280,7 @@ async def test_person_extractor_dual_fanout(db_conn):
             user_id=test_user,
             mem_ids=created_mem_ids,
         )
+        await db_conn.execute("DELETE FROM users WHERE id=$1", test_user)
 
 
 @pytest.mark.asyncio
@@ -282,22 +288,29 @@ async def test_health_score_recalc(db_conn):
     """recalc_and_save updates health_score in DB."""
     from person_health import recalc_and_save
 
-    test_user = "test-health-user"
     person_id = str(uuid.uuid4())
+    test_user = f"test-health-user-{person_id[:8]}"
 
-    await db_conn.execute(
-        "INSERT INTO people (id, user_id, name, circle, context, last_contacted_at, contact_count, health_score, visibility) "
-        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
-        person_id, test_user, f"HealthTest_{person_id[:4]}", "circle", "personal",
-        datetime.utcnow().isoformat() + "Z", 5, 0.5, "family",
-    )
+    try:
+        await db_conn.execute(
+            "INSERT INTO users (id, name, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+            test_user, "Health Test User", "member",
+        )
 
-    db_compat = AsyncpgCompat(db_conn)
-    score = await recalc_and_save(person_id, test_user, db_compat)
-    assert 0.0 <= score <= 1.0, f"Score out of range: {score}"
+        await db_conn.execute(
+            "INSERT INTO people (id, user_id, name, circle, context, last_contacted_at, contact_count, health_score, visibility) "
+            "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+            person_id, test_user, f"HealthTest_{person_id[:4]}", "circle", "personal",
+            datetime.utcnow().isoformat() + "Z", 5, 0.5, "family",
+        )
 
-    # Clean up
-    await db_conn.execute("DELETE FROM people WHERE id=$1", person_id)
+        db_compat = AsyncpgCompat(db_conn)
+        score = await recalc_and_save(person_id, test_user, db_compat)
+        assert 0.0 <= score <= 1.0, f"Score out of range: {score}"
+
+    finally:
+        await db_conn.execute("DELETE FROM people WHERE id=$1", person_id)
+        await db_conn.execute("DELETE FROM users WHERE id=$1", test_user)
 
 
 def test_fields_route_order_is_correct():
