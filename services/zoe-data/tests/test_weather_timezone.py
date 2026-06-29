@@ -64,6 +64,11 @@ async def test_openweather_forecast_filters_by_remote_location_timezone(monkeypa
                         "weather": [{"description": "current", "icon": "01d"}],
                     },
                     {
+                        "dt": 1782689100,  # 2026-06-29 07:25 Australia/Perth
+                        "main": None,
+                        "weather": None,
+                    },
+                    {
                         "dt_txt": "not-a-timestamp",
                         "main": {"temp": 99},
                         "weather": [{"description": "bad timestamp", "icon": "50d"}],
@@ -71,7 +76,7 @@ async def test_openweather_forecast_filters_by_remote_location_timezone(monkeypa
                     {
                         "dt": 1782789600,  # 2026-06-30 11:20 Australia/Perth
                         "main": {"temp": 22},
-                        "weather": [{"description": "tomorrow", "icon": "02d"}],
+                        "weather": {"description": "tomorrow", "icon": "02d"},
                     },
                 ],
             }
@@ -93,7 +98,7 @@ async def test_openweather_forecast_filters_by_remote_location_timezone(monkeypa
 
     forecast = await weather._fetch_owm_forecast(-31.95, 115.86)
 
-    assert [hour["description"] for hour in forecast["hourly"]] == ["current", "tomorrow"]
+    assert [hour["description"] for hour in forecast["hourly"]] == ["current", None, "tomorrow"]
     assert [day["day"] for day in forecast["daily"]] == ["2026-06-30"]
 
 

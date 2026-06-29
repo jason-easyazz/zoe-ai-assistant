@@ -134,6 +134,20 @@ def _parse_owm_forecast_time(item: dict, tz) -> datetime | None:
         return None
 
 
+def _owm_weather_info(item: dict) -> dict:
+    weather_items = item.get("weather")
+    if isinstance(weather_items, list) and weather_items and isinstance(weather_items[0], dict):
+        return weather_items[0]
+    if isinstance(weather_items, dict):
+        return weather_items
+    return {}
+
+
+def _owm_main_info(item: dict) -> dict:
+    main = item.get("main")
+    return main if isinstance(main, dict) else {}
+
+
 async def _get_system_default_location(db) -> dict:
     """Read admin-configured default weather location from DB."""
     try:
@@ -371,12 +385,13 @@ async def _fetch_owm_forecast(lat: float, lon: float) -> dict:
                 continue
             if item_dt < now:
                 continue
-            wa = item.get("weather", [{}])
+            wa = _owm_weather_info(item)
+            main = _owm_main_info(item)
             hourly.append({
                 "time": item_dt.isoformat(),
-                "temp": item.get("main", {}).get("temp"),
-                "description": wa[0].get("description") if wa else None,
-                "icon": wa[0].get("icon") if wa else None,
+                "temp": main.get("temp"),
+                "description": wa.get("description"),
+                "icon": wa.get("icon"),
             })
             if len(hourly) >= 8:
                 break
@@ -394,15 +409,15 @@ async def _fetch_owm_forecast(lat: float, lon: float) -> dict:
             if date_key == today_str:
                 continue
             entries = day_buckets[date_key]
-            temps = [e.get("main", {}).get("temp") for e in entries if e.get("main", {}).get("temp") is not None]
+            temps = [_owm_main_info(e).get("temp") for e in entries if _owm_main_info(e).get("temp") is not None]
             midday = min(entries, key=lambda e: abs(_parse_owm_forecast_time(e, provider_tz).hour - 12))
-            wa = midday.get("weather", [{}])
+            wa = _owm_weather_info(midday)
             daily.append({
                 "day":  date_key,
                 "high": max(temps) if temps else None,
                 "low":  min(temps) if temps else None,
-                "description": wa[0].get("description") if wa else None,
-                "icon": wa[0].get("icon") if wa else None,
+                "description": wa.get("description"),
+                "icon": wa.get("icon"),
             })
             if len(daily) >= 5:
                 break
