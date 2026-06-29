@@ -1139,7 +1139,11 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
                 """SELECT m.content, m.role FROM chat_messages m
                    JOIN chat_sessions s ON m.session_id = s.id
                    WHERE s.user_id = ? AND m.role = 'user'
-                     AND m.created_at > datetime('now', '-2 days')
+                     AND CASE
+                           WHEN m.created_at ~ '^\\d{4}-\\d{2}-\\d{2}[ T]'
+                           THEN m.created_at::timestamptz
+                           ELSE NULL
+                         END > CURRENT_TIMESTAMP - INTERVAL '2 days'
                    ORDER BY m.created_at DESC LIMIT 50""",
                 (user_id,),
             ) as cur:
