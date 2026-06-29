@@ -1013,29 +1013,35 @@ def detect_intent(
 
     # --- TRANSACTIONS ---
     # Parse money exactly: integer cents (no float drift) plus the canonical
-    # two-decimal dollars the command boundary still expects.
+    # two-decimal dollars the command boundary still expects. A malformed match
+    # (e.g. "1.2.3") returns None so we DON'T record a bogus $0 transaction —
+    # the turn falls through to later intents / open-domain handling instead.
     from money import to_cents, to_dollars
 
-    def _money_slots(raw: str) -> dict:
+    def _money_slots(raw: str):
         try:
             cents = to_cents(raw)
         except ValueError:
-            cents = 0
+            return None
         return {"amount": to_dollars(cents), "amount_cents": cents}
 
     m = re.match(
         r"^i (?:spent|paid) \$?([\d.]+)(?: ?(?:dollars?|bucks?))?(?: (?:at|on|for) (.+))?$", t
     )
     if m:
-        desc = (m.group(2) or "").strip() or "purchase"
-        return Intent("transaction_create", {**_money_slots(m.group(1)), "description": desc})
+        slots = _money_slots(m.group(1))
+        if slots is not None:
+            desc = (m.group(2) or "").strip() or "purchase"
+            return Intent("transaction_create", {**slots, "description": desc})
 
     m = re.match(
         r"^(?:bought|purchased) (.+?) (?:for )\$?([\d.]+)$", t
     )
     if m:
-        desc = m.group(1).strip()
-        return Intent("transaction_create", {**_money_slots(m.group(2)), "description": desc})
+        slots = _money_slots(m.group(2))
+        if slots is not None:
+            desc = m.group(1).strip()
+            return Intent("transaction_create", {**slots, "description": desc})
 
     for pattern in [
         r"^(?:how much (?:did i|have i) (?:spent?|spend)|weekly spending|budget check|spending (?:summary|this week))(.*)$",

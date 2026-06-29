@@ -39,8 +39,14 @@ def _to_decimal(amount) -> Decimal:
 def to_cents(amount) -> int:
     """Convert a dollar amount to an exact integer number of cents.
 
-    Rounds half-up at the cent. Raises ``ValueError`` on NaN/inf or unparseable
-    input.
+    Rounding is ROUND_HALF_UP to the nearest cent (e.g. 0.005 -> 1 cent). Raises
+    ``ValueError`` on NaN/inf or unparseable input.
+
+    Note on lossiness: this rounds to the nearest cent. A clean two-decimal value
+    maps to exactly its cents, but a value already corrupted by earlier float
+    storage (e.g. a REAL that reads back as 19.999999) rounds to the nearest cent
+    (2000) — the rounding recovers the *intended* cents for clean inputs, but
+    cannot recover an original sub-cent intent that was never representable.
     """
     return int((_to_decimal(amount) * 100).quantize(_ONE, rounding=ROUND_HALF_UP))
 

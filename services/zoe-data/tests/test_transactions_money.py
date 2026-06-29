@@ -11,14 +11,14 @@ Covers the P2 float-drift + pending-in-summary fixes:
 import asyncio
 import importlib.util
 import sys
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
+import aiosqlite
 import pytest
 from sqlalchemy import create_engine, text
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
-from alembic import op as alembic_op
 
 SVC = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SVC))
@@ -229,6 +229,17 @@ def test_intent_router_parser_produces_exact_cents():
     assert intent.slots["amount"] == 3.50
 
 
+def test_intent_router_rejects_malformed_amount_no_zero_transaction():
+    import intent_router
+
+    # A malformed money string must NOT become a $0 transaction (NB5).
+    for text in ("i spent $1.2.3 on coffee", "bought coffee for $1.2.3"):
+        intent = intent_router.detect_intent(text, log_miss=False)
+        assert intent is None or intent.name != "transaction_create", (
+            f"{text!r} produced a bogus transaction: {intent}"
+        )
+
+
 def test_nlu_extractor_produces_exact_cents(monkeypatch):
     import nlu_extractor
 
@@ -240,3 +251,135 @@ def test_nlu_extractor_produces_exact_cents(monkeypatch):
     assert result["amount_cents"] == 1999
     assert result["amount"] == 19.99
     assert result["description"] == "coffee"
+
+
+def test_nlu_extractor_rejects_malformed_amount(monkeypatch):
+    import nlu_extractor
+
+    async def _fake_tool(text, schema):
+        return {"description": "coffee", "amount": "1.2.3"}
+    monkeypatch.setattr(nlu_extractor, "_call_with_tool", _fake_tool)
+
+    # Unparseable amount → None (caller falls through), never a $0 transaction.
+    result = asyncio.run(nlu_extractor._extract_transaction("i spent garbage on coffee"))
+    assert result is None
+
+
+# ─── SQLite-backed router paths: dialect-safe cents + legacy convergence ───────
+
+_TXN_DDL = """
+CREATE TABLE transactions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    description TEXT,
+    amount REAL,
+    amount_cents BIGINT,
+    type TEXT DEFAULT 'expense',
+    transaction_date TEXT,
+    payment_method TEXT,
+    status TEXT DEFAULT 'completed',
+    person_id TEXT,
+    calendar_event_id TEXT,
+    metadata TEXT,
+    visibility TEXT DEFAULT 'family',
+    deleted INTEGER DEFAULT 0,
+    created_at TEXT,
+    updated_at TEXT
+)
+"""
+
+
+async def _sqlite_txn_db(rows):
+    db = await aiosqlite.connect(":memory:")
+    db.row_factory = aiosqlite.Row
+    await db.create_function("NOW", 0, lambda: "2026-06-29T00:00:00")
+    await db.execute(_TXN_DDL)
+    for r in rows:
+        cols = ", ".join(r.keys())
+        ph = ", ".join("?" for _ in r)
+        await db.execute(f"INSERT INTO transactions ({cols}) VALUES ({ph})", list(r.values()))
+    await db.commit()
+    return db
+
+
+def test_row_cents_sql_is_dialect_aware_and_sqlite_runs():
+    pg = transactions._row_cents_sql(object())            # non-sqlite → Postgres
+    assert "::numeric" in pg and "::bigint" in pg
+
+    async def _run():
+        db = await _sqlite_txn_db([])
+        try:
+            sqlite_expr = transactions._row_cents_sql(db)
+            assert "::numeric" not in sqlite_expr        # no Postgres-only casts
+            # The SQLite expression actually executes.
+            await db.execute("INSERT INTO transactions (id, user_id, amount) VALUES ('x','u1',12.5)")
+            cur = await db.execute(f"SELECT {sqlite_expr} FROM transactions WHERE id='x'")
+            assert (await cur.fetchone())[0] == 1250
+        finally:
+            await db.close()
+    asyncio.run(_run())
+
+
+def test_summary_dialect_safe_on_sqlite(monkeypatch):
+    async def _noop(*a, **k):
+        return None
+    monkeypatch.setattr(transactions, "require_feature_access", _noop)
+
+    today = date.today().isoformat()
+
+    async def _run():
+        db = await _sqlite_txn_db([
+            dict(id="1", user_id="u1", amount=25.99, amount_cents=2599, type="expense",
+                 status="completed", visibility="family", deleted=0, transaction_date=today),
+            dict(id="2", user_id="u1", amount=50.0, amount_cents=5000, type="expense",
+                 status="pending", visibility="family", deleted=0, transaction_date=today),
+            dict(id="3", user_id="u1", amount=100.0, amount_cents=10000, type="income",
+                 status="completed", visibility="family", deleted=0, transaction_date=today),
+            # Legacy row: amount only, amount_cents NULL → COALESCE fallback.
+            dict(id="4", user_id="u1", amount=12.50, type="expense",
+                 status="completed", visibility="family", deleted=0, transaction_date=today),
+        ])
+        try:
+            return await transactions.get_weekly_summary(user={"user_id": "u1"}, db=db)
+        finally:
+            await db.close()
+
+    result = asyncio.run(_run())
+    assert result["total_expense"] == 38.49   # 25.99 + 12.50; pending 50.00 excluded
+    assert result["total_income"] == 100.00
+    assert result["net"] == 61.51
+
+
+def test_update_converges_legacy_amount_cents(monkeypatch):
+    async def _noop(*a, **k):
+        return None
+    monkeypatch.setattr(transactions, "require_feature_access", _noop)
+
+    async def _bcast(*a, **k):
+        return None
+    monkeypatch.setattr(transactions.broadcaster, "broadcast", _bcast)
+
+    from models import TransactionUpdate
+
+    async def _run():
+        db = await _sqlite_txn_db([
+            # Legacy/MCP-style row: REAL amount set, amount_cents NULL.
+            dict(id="t1", user_id="u1", description="old", amount=12.50,
+                 type="expense", status="completed", visibility="family",
+                 deleted=0, transaction_date=date.today().isoformat()),
+        ])
+        try:
+            # Update only the description — amount NOT in the payload.
+            payload = TransactionUpdate(description="new label")
+            await transactions.update_transaction(
+                transaction_id="t1", payload=payload, user={"user_id": "u1"}, db=db
+            )
+            cur = await db.execute("SELECT amount_cents, description FROM transactions WHERE id='t1'")
+            return await cur.fetchone()
+        finally:
+            await db.close()
+
+    row = asyncio.run(_run())
+    # The legacy row converged onto the exact source-of-truth column (NB1).
+    assert row["amount_cents"] == 1250
+    assert row["description"] == "new label"

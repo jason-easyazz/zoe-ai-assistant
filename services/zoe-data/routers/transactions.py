@@ -18,10 +18,24 @@ from push import broadcaster
 
 router = APIRouter(prefix="/api/transactions", tags=["transactions"])
 
-# Exact integer-cents expression for a single row, falling back to the legacy
-# REAL ``amount`` for rows written by paths (e.g. the MCP tools) that don't
-# populate ``amount_cents``. Summing this yields drift-free totals.
-_ROW_CENTS_SQL = "COALESCE(amount_cents, ROUND(amount::numeric * 100)::bigint)"
+
+def _is_sqlite(db) -> bool:
+    """True if the connection is SQLite (test path); runtime is PostgreSQL."""
+    return "sqlite" in (type(db).__module__ or "").lower()
+
+
+def _row_cents_sql(db) -> str:
+    """Exact integer-cents SQL expression for a single row, dialect-aware.
+
+    Prefers the stored ``amount_cents``; falls back to round(amount*100) over the
+    legacy REAL ``amount`` for rows written by paths (e.g. the MCP tools) that
+    don't populate cents. Summing this yields drift-free totals. PostgreSQL is the
+    runtime; the SQLite branch keeps SQLite-backed tests (and any future SQLite
+    path) working since ``::numeric``/``::bigint`` are Postgres-only.
+    """
+    if _is_sqlite(db):
+        return "COALESCE(amount_cents, CAST(ROUND(amount * 100) AS INTEGER))"
+    return "COALESCE(amount_cents, ROUND(amount::numeric * 100)::bigint)"
 
 
 def _row_to_dict(row) -> dict:
@@ -159,8 +173,9 @@ async def get_weekly_summary(
         f"{_visibility_filter_sql()} AND transaction_date >= ? AND transaction_date <= ? "
         "AND status = 'completed'"
     )
+    cents_sql = _row_cents_sql(db)
     cursor = await db.execute(
-        f"""SELECT type, SUM({_ROW_CENTS_SQL}) as total_cents
+        f"""SELECT type, SUM({cents_sql}) as total_cents
          FROM transactions
          WHERE {where}
          GROUP BY type""",
@@ -170,7 +185,7 @@ async def get_weekly_summary(
     by_type = {r[0]: to_dollars(r[1]) for r in rows}
 
     cursor = await db.execute(
-        f"""SELECT SUM({_ROW_CENTS_SQL}) FROM transactions
+        f"""SELECT SUM({cents_sql}) FROM transactions
          WHERE {where} AND type = 'expense'""",
         [user_id, start_str, end_str],
     )
@@ -178,7 +193,7 @@ async def get_weekly_summary(
     total_expense_cents = (row[0] if row and row[0] else 0) or 0
 
     cursor = await db.execute(
-        f"""SELECT SUM({_ROW_CENTS_SQL}) FROM transactions
+        f"""SELECT SUM({cents_sql}) FROM transactions
          WHERE {where} AND type = 'income'""",
         [user_id, start_str, end_str],
     )
@@ -239,6 +254,7 @@ async def update_transaction(
     updates = []
     params = []
     data = payload.model_dump(exclude_unset=True)
+    amount_in_payload = "amount" in data
     for key, value in data.items():
         if key == "metadata":
             updates.append("metadata = ?")
@@ -257,6 +273,11 @@ async def update_transaction(
     if not updates:
         return _row_to_dict(row)
 
+    if not amount_in_payload:
+        # Converge legacy/MCP rows (amount_cents IS NULL) onto the exact
+        # source-of-truth column on ANY update, so they don't sit on the
+        # COALESCE read-fallback forever. No-op when cents already present.
+        updates.append(f"amount_cents = {_row_cents_sql(db)}")
     updates.append("updated_at = NOW()")
     params.append(transaction_id)
     await db.execute(

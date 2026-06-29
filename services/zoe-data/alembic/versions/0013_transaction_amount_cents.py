@@ -11,6 +11,12 @@ What this does:
     pins the float's value before rounding, so a clean two-decimal dollar value
     maps to exactly its cents with no cent lost or gained.
 
+Rounding is to the NEAREST cent (Postgres ROUND / SQLite ROUND are
+half-away-from-zero, matching money.to_cents' ROUND_HALF_UP). This is lossless
+for clean two-decimal values. A value already corrupted by REAL storage (e.g.
+19.999999) rounds to the nearest cent (2000) — correct for clean inputs, but a
+genuine sub-cent original intent was never representable and cannot be recovered.
+
 The legacy ``amount`` REAL column is intentionally KEPT, not dropped:
   - Other writers/readers (the MCP ``transaction_*`` tools in mcp_server.py)
     still use ``amount`` and are out of this change's scope. Dropping it would
