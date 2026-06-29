@@ -12,12 +12,14 @@ Safe path:
     --confirm "REWRITE HISTORY IN DISPOSABLE MIRROR"
   scripts/maintenance/git_history_cleanup.py --mirror /tmp/zoe-history-cleanup.git --execute --push \
     --confirm "REWRITE HISTORY IN DISPOSABLE MIRROR" \
-    --confirm-push "FORCE PUSH REWRITTEN HISTORY"
+    --confirm-push "FORCE PUSH REWRITTEN HISTORY" \
+    --confirm-push-url "git@github.com:jason-easyazz/zoe-ai-assistant.git"
 """
 
 from __future__ import annotations
 
 import argparse
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -40,7 +42,7 @@ FORBIDDEN_MIRRORS = {
 def run_git(mirror: Path, args: list[str], description: str, dry_run: bool) -> str:
     cmd = ["git", "-C", str(mirror), *args]
     print(f"{'DRY-RUN' if dry_run else 'RUN'}: {description}")
-    print("  " + " ".join(cmd))
+    print("  " + shlex.join(cmd))
     if dry_run:
         return ""
     result = subprocess.run(cmd, capture_output=True, text=True, check=False)
@@ -61,6 +63,10 @@ def git_output(mirror: Path, args: list[str]) -> str:
     if result.returncode != 0:
         raise SystemExit(result.stderr.strip() or f"git {' '.join(args)} failed")
     return result.stdout.strip()
+
+
+def origin_push_url(mirror: Path) -> str:
+    return git_output(mirror, ["remote", "get-url", "--push", "origin"])
 
 
 def require_disposable_mirror(mirror: Path) -> Path:
@@ -88,6 +94,30 @@ def git_size(mirror: Path) -> str:
     return result.stdout.strip() if result.returncode == 0 else "unknown"
 
 
+def index_filter_for(file_path: str) -> str:
+    return "git rm --cached --ignore-unmatch -- " + shlex.quote(file_path)
+
+
+def original_ref_deletions(mirror: Path) -> list[str]:
+    refs = git_output(mirror, ["for-each-ref", "--format=delete %(refname)", "refs/original"])
+    return [line for line in refs.splitlines() if line.strip()]
+
+
+def print_ref_deletion_plan(mirror: Path, dry_run: bool) -> list[str]:
+    refs = original_ref_deletions(mirror)
+    print(f"{'DRY-RUN' if dry_run else 'RUN'}: delete filter-branch backup refs")
+    if refs:
+        print("  printf '%s\\n' \\")
+        for ref in refs:
+            print(f"    {shlex.quote(ref)} \\")
+        print(f"    | {shlex.join(['git', '-C', str(mirror), 'update-ref', '--stdin'])}")
+    else:
+        print("  No refs/original entries currently exist.")
+        print("  Execute mode re-checks after filter-branch and deletes any refs/original entries with:")
+        print(f"    {shlex.join(['git', '-C', str(mirror), 'update-ref', '--stdin'])}")
+    return refs
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Rewrite Zoe git history only inside a disposable mirror clone.",
@@ -106,6 +136,11 @@ def parse_args() -> argparse.Namespace:
         help=f"Required with --push: {PUSH_CONFIRMATION!r}",
     )
     parser.add_argument(
+        "--confirm-push-url",
+        default="",
+        help="Required with --push: exact resolved origin push URL printed by this script.",
+    )
+    parser.add_argument(
         "--file",
         action="append",
         dest="files",
@@ -119,6 +154,7 @@ def main() -> int:
     mirror = require_disposable_mirror(Path(args.mirror))
     dry_run = not args.execute
     files = tuple(args.files or DEFAULT_LARGE_FILES)
+    push_url = origin_push_url(mirror)
 
     if args.execute and args.confirm != EXECUTE_CONFIRMATION:
         raise SystemExit(f"Refusing to execute without --confirm {EXECUTE_CONFIRMATION!r}")
@@ -126,9 +162,15 @@ def main() -> int:
         raise SystemExit("--push requires --execute")
     if args.push and args.confirm_push != PUSH_CONFIRMATION:
         raise SystemExit(f"Refusing to force-push without --confirm-push {PUSH_CONFIRMATION!r}")
+    if args.push and args.confirm_push_url != push_url:
+        raise SystemExit(
+            "Refusing to force-push without confirming the exact origin push URL. "
+            f"Re-run with --confirm-push-url {push_url!r} if this is the intended remote."
+        )
 
     print("Git history cleanup")
     print(f"Mirror: {mirror}")
+    print(f"Origin push URL: {push_url}")
     print(f"Mode: {'execute' if args.execute else 'dry-run'}")
     print(f"Initial mirror size: {git_size(mirror)}")
     print("Files targeted for history removal:")
@@ -142,7 +184,7 @@ def main() -> int:
                 "filter-branch",
                 "--force",
                 "--index-filter",
-                f"git rm --cached --ignore-unmatch -- {file_path}",
+                index_filter_for(file_path),
                 "--prune-empty",
                 "--tag-name-filter",
                 "cat",
@@ -153,24 +195,17 @@ def main() -> int:
             dry_run,
         )
 
-    run_git(
-        mirror,
-        ["for-each-ref", "--format=delete %(refname)", "refs/original"],
-        "list filter-branch backup refs to delete with git update-ref --stdin",
-        dry_run,
-    )
-    if not dry_run:
-        refs = git_output(mirror, ["for-each-ref", "--format=delete %(refname)", "refs/original"])
-        if refs:
-            result = subprocess.run(
-                ["git", "-C", str(mirror), "update-ref", "--stdin"],
-                input=refs,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            if result.returncode != 0:
-                raise SystemExit(result.stderr.strip())
+    refs = print_ref_deletion_plan(mirror, dry_run)
+    if refs and not dry_run:
+        result = subprocess.run(
+            ["git", "-C", str(mirror), "update-ref", "--stdin"],
+            input="\n".join(refs) + "\n",
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise SystemExit(result.stderr.strip())
 
     run_git(mirror, ["reflog", "expire", "--expire=now", "--all"], "expire reflogs", dry_run)
     run_git(mirror, ["gc", "--prune=now", "--aggressive"], "garbage collect mirror", dry_run)
