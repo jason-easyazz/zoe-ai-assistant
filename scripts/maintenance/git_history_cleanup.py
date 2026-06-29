@@ -14,6 +14,7 @@ Safe path:
     --confirm "REWRITE HISTORY IN DISPOSABLE MIRROR" \
     --confirm-push "FORCE PUSH REWRITTEN HISTORY" \
     --confirm-push-url "git@github.com:jason-easyazz/zoe-ai-assistant.git"
+  # Repeat --confirm-push-url once for every configured origin push URL.
 """
 
 from __future__ import annotations
@@ -65,8 +66,12 @@ def git_output(mirror: Path, args: list[str]) -> str:
     return result.stdout.strip()
 
 
-def origin_push_url(mirror: Path) -> str:
-    return git_output(mirror, ["remote", "get-url", "--push", "origin"])
+def origin_push_urls(mirror: Path) -> tuple[str, ...]:
+    output = git_output(mirror, ["remote", "get-url", "--push", "--all", "origin"])
+    urls = tuple(line for line in output.splitlines() if line.strip())
+    if not urls:
+        raise SystemExit("Refusing to force-push: origin has no push URLs.")
+    return urls
 
 
 def require_disposable_mirror(mirror: Path) -> Path:
@@ -137,8 +142,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--confirm-push-url",
-        default="",
-        help="Required with --push: exact resolved origin push URL printed by this script.",
+        action="append",
+        default=[],
+        help="Required with --push: repeat once for every resolved origin push URL printed by this script.",
     )
     parser.add_argument(
         "--file",
@@ -154,7 +160,7 @@ def main() -> int:
     mirror = require_disposable_mirror(Path(args.mirror))
     dry_run = not args.execute
     files = tuple(args.files or DEFAULT_LARGE_FILES)
-    push_url = origin_push_url(mirror)
+    push_urls = origin_push_urls(mirror)
 
     if args.execute and args.confirm != EXECUTE_CONFIRMATION:
         raise SystemExit(f"Refusing to execute without --confirm {EXECUTE_CONFIRMATION!r}")
@@ -162,15 +168,18 @@ def main() -> int:
         raise SystemExit("--push requires --execute")
     if args.push and args.confirm_push != PUSH_CONFIRMATION:
         raise SystemExit(f"Refusing to force-push without --confirm-push {PUSH_CONFIRMATION!r}")
-    if args.push and args.confirm_push_url != push_url:
+    if args.push and tuple(args.confirm_push_url) != push_urls:
         raise SystemExit(
-            "Refusing to force-push without confirming the exact origin push URL. "
-            f"Re-run with --confirm-push-url {push_url!r} if this is the intended remote."
+            "Refusing to force-push without confirming the full ordered origin push URL set. "
+            "Re-run with one --confirm-push-url for each URL below, in order, if these are intended:\n"
+            + "\n".join(f"  --confirm-push-url {url!r}" for url in push_urls)
         )
 
     print("Git history cleanup")
     print(f"Mirror: {mirror}")
-    print(f"Origin push URL: {push_url}")
+    print("Origin push URLs:")
+    for push_url in push_urls:
+        print(f"  - {push_url}")
     print(f"Mode: {'execute' if args.execute else 'dry-run'}")
     print(f"Initial mirror size: {git_size(mirror)}")
     print("Files targeted for history removal:")
@@ -211,8 +220,9 @@ def main() -> int:
     run_git(mirror, ["gc", "--prune=now", "--aggressive"], "garbage collect mirror", dry_run)
 
     if args.push:
-        run_git(mirror, ["push", "origin", "--force", "--all"], "force-push all branches", dry_run)
-        run_git(mirror, ["push", "origin", "--force", "--tags"], "force-push all tags", dry_run)
+        for push_url in push_urls:
+            run_git(mirror, ["push", push_url, "--force", "--all"], f"force-push all branches to {push_url}", dry_run)
+            run_git(mirror, ["push", push_url, "--force", "--tags"], f"force-push all tags to {push_url}", dry_run)
     else:
         print("Remote push skipped. Add --push plus typed push confirmation after reviewing the mirror.")
 
