@@ -294,6 +294,20 @@ async def reset_user_password(
         )
 
         if success:
+            try:
+                invalidated = session_manager.invalidate_user_sessions(user_id)
+                logger.info(
+                    "Invalidated %s sessions after admin password reset for user %s by %s",
+                    invalidated,
+                    user_id,
+                    current_session.user_id
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to invalidate sessions after admin password reset for user %s by %s",
+                    user_id,
+                    current_session.user_id
+                )
             return {
                 "message": message,
                 "temporary_password": temp_password,

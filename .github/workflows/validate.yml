@@ -126,3 +126,12 @@ jobs:
           POSTGRES_URL: postgresql://zoe:${{ env.CI_DB_PASSWORD }}@localhost:5432/zoe
           ZOE_DATA_DB: ":memory:"
           ZOE_MEMORY_STARTUP_STRICT: "false"
+
+      - name: People MemPalace integration cleanup
+        run: |
+          PYTHONPATH="${{ github.workspace }}/services/zoe-data" pytest \
+            tests/integration/test_people_mempalace_sync.py \
+            -x -q \
+            --override-ini="asyncio_mode=auto"
+        env:
+          POSTGRES_URL: postgresql://zoe:${{ env.CI_DB_PASSWORD }}@localhost:5432/zoe
