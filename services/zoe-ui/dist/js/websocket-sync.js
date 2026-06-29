@@ -400,7 +400,10 @@ window.ZoeWebSockets = {
                     registeredPanelId,
                     aliasPanelId,
                 ].filter(Boolean);
-                authoritativePanelIds = [urlPanelId, registeredPanelId].filter(Boolean);
+                authoritativePanelIds = [
+                    urlPanelId,
+                    registeredPanelId,
+                ].filter((panelId) => panelId && !/^panel_[a-z0-9]{8}$/i.test(panelId));
             } catch (_) {}
             const requestedPanelId = String(payload.panel_id || '').trim();
             // Alias-only browsers can receive a canonical registered-id payload

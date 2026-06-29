@@ -41,6 +41,8 @@ function makeGetPanelId({ search = '', stored = {}, random = 0.123456789 } = {})
   const Math = Object.assign({}, global.Math, { random: () => random });
   const URLSearchParams = global.URLSearchParams;
   // eslint-disable-next-line no-eval
+  const isGeneratedPanelAlias = eval('(' + extract('isGeneratedPanelAlias') + ')');
+  // eslint-disable-next-line no-eval
   const getPanelId = eval('(' + extract('getPanelId') + ')');
   return { getPanelId, stored, writes };
 }
@@ -74,5 +76,17 @@ assert.deepStrictEqual(harness.writes, [
   ['zoe_panel_id', 'living-room'],
   ['zoe_touch_panel_id', 'living-room']
 ], 'URL panel_id is persisted to both storage keys for later pages');
+
+harness = makeGetPanelId({
+  search: '?panel_id=panel_0e3ko5bl',
+  stored: {
+    zoe_panel_id: 'zoe-touch-pi',
+    zoe_touch_panel_id: 'panel_oldalias'
+  }
+});
+assert.strictEqual(harness.getPanelId(), 'panel_0e3ko5bl', 'explicit URL alias still selects that page identity');
+assert.deepStrictEqual(harness.writes, [
+  ['zoe_touch_panel_id', 'panel_0e3ko5bl']
+], 'generated URL aliases stay fallback-only and do not overwrite the registered id');
 
 console.log('getPanelId precedence: all assertions passed');

@@ -141,7 +141,9 @@
         const forced = params.get('panel_id');
         if (forced && forced.trim()) {
             const panelId = forced.trim();
-            localStorage.setItem('zoe_panel_id', panelId);
+            if (!isGeneratedPanelAlias(panelId)) {
+                localStorage.setItem('zoe_panel_id', panelId);
+            }
             localStorage.setItem('zoe_touch_panel_id', panelId);
             return panelId;
         }
@@ -151,6 +153,10 @@
             localStorage.setItem('zoe_touch_panel_id', panelId);
         }
         return panelId;
+    }
+
+    function isGeneratedPanelAlias(panelId) {
+        return /^panel_[a-z0-9]{8}$/i.test(String(panelId || '').trim());
     }
 
     // Does a server-addressed action belong to THIS panel? A panel can answer to

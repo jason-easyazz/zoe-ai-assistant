@@ -240,9 +240,12 @@
                 const params = new URLSearchParams(window.location.search);
                 const fromQuery = params.get('panel_id');
                 if (fromQuery && fromQuery.trim()) {
-                    localStorage.setItem('zoe_panel_id', fromQuery.trim());
-                    localStorage.setItem('zoe_touch_panel_id', fromQuery.trim());
-                    return fromQuery.trim();
+                    const panelId = fromQuery.trim();
+                    if (!/^panel_[a-z0-9]{8}$/i.test(panelId)) {
+                        localStorage.setItem('zoe_panel_id', panelId);
+                    }
+                    localStorage.setItem('zoe_touch_panel_id', panelId);
+                    return panelId;
                 }
                 return localStorage.getItem('zoe_panel_id')
                     || localStorage.getItem('zoe_touch_panel_id')
