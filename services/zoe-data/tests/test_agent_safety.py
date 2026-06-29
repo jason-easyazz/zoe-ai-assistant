@@ -200,13 +200,27 @@ def test_dangerous_panel_hosts_blocked(host):
             assert_panel_host(host)
 
 
-def test_panel_allowlist_env_override(monkeypatch):
-    # Operators can explicitly allow an otherwise-blocked host (e.g. co-located
-    # panel on loopback) via ZOE_PANEL_ALLOWED_HOSTS.
-    assert is_allowed_panel_host("127.0.0.1") is False
-    monkeypatch.setenv("ZOE_PANEL_ALLOWED_HOSTS", "127.0.0.1, panel.local")
-    assert is_allowed_panel_host("127.0.0.1") is True
-    assert is_allowed_panel_host("panel.local") is True  # allowlisted by name, no DNS
+def test_panel_allowlist_never_bypasses_danger_check(monkeypatch):
+    # B4 regression: an allowlisted host must STILL resolve to a private LAN
+    # address. The allowlist only narrows; it can never widen the policy, so
+    # loopback / metadata / public stay blocked even when explicitly listed.
+    monkeypatch.setenv("ZOE_PANEL_ALLOWED_HOSTS", "127.0.0.1, 169.254.169.254, 8.8.8.8, 192.168.1.61")
+    assert is_allowed_panel_host("127.0.0.1") is False        # loopback, listed -> still blocked
+    assert is_allowed_panel_host("169.254.169.254") is False  # metadata, listed -> still blocked
+    assert is_allowed_panel_host("8.8.8.8") is False          # public, listed -> still blocked
+    assert is_allowed_panel_host("192.168.1.61") is True      # private LAN AND listed -> allowed
+    with pytest.raises(SSRFBlocked):
+        assert_panel_host("127.0.0.1")
+
+
+def test_panel_allowlist_narrows_to_listed_lan_hosts(monkeypatch):
+    # When the allowlist is set, a private LAN host NOT on the list is rejected;
+    # when unset, any private LAN host is allowed.
+    monkeypatch.setenv("ZOE_PANEL_ALLOWED_HOSTS", "192.168.1.61")
+    assert is_allowed_panel_host("192.168.1.61") is True
+    assert is_allowed_panel_host("10.0.0.5") is False   # LAN but not listed
+    monkeypatch.delenv("ZOE_PANEL_ALLOWED_HOSTS", raising=False)
+    assert is_allowed_panel_host("10.0.0.5") is True    # no list -> any LAN ok
 
 
 # ── guarded_urlopen aborts before opening an internal target ──────────────────
@@ -216,3 +230,134 @@ def test_guarded_urlopen_blocks_internal_before_connect():
         agent_safety.guarded_urlopen("http://169.254.169.254/latest/meta-data/", timeout=1)
     with pytest.raises(SSRFBlocked):
         agent_safety.guarded_urlopen("http://127.0.0.1:6379/", timeout=1)
+
+
+# ── B3: obfuscated literal encodings of internal IPs are rejected ─────────────
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://2130706433/",          # decimal     -> 127.0.0.1
+        "http://0x7f000001/",          # hex         -> 127.0.0.1
+        "http://0177.0.0.1/",          # octal       -> 127.0.0.1
+        "http://017700000001/",        # full octal  -> 127.0.0.1
+        "http://2852039166/",          # decimal     -> 169.254.169.254 (metadata)
+        "http://[::ffff:127.0.0.1]/",  # IPv4-mapped -> loopback
+        "http://[::ffff:a9fe:a9fe]/",  # IPv4-mapped -> 169.254.169.254
+        "http://100.64.0.1/",          # CGNAT 100.64/10 (not globally routable)
+    ],
+)
+def test_obfuscated_internal_encodings_blocked(url):
+    assert is_public_url(url) is False
+    with pytest.raises(SSRFBlocked):
+        assert_public_url(url)
+
+
+# ── B3: connection is pinned to the validated IP (anti-rebinding) ─────────────
+
+def test_resolve_validate_pin_rejects_internal():
+    with pytest.raises(SSRFBlocked):
+        agent_safety.resolve_validate_pin("169.254.169.254")
+    with pytest.raises(SSRFBlocked):
+        agent_safety.resolve_validate_pin("127.0.0.1")
+    # public literal pins to itself
+    assert agent_safety.resolve_validate_pin("8.8.8.8") == "8.8.8.8"
+
+
+def test_pinned_connection_connects_to_validated_ip(monkeypatch):
+    import ipaddress
+
+    captured = {}
+
+    def fake_resolve(host):
+        # host validates as public, returns a specific public IP
+        return [ipaddress.ip_address("8.8.8.8")]
+
+    def fake_create_connection(address, *a, **k):
+        captured["address"] = address
+        raise AssertionError("stop-after-connect")  # don't actually open a socket
+
+    monkeypatch.setattr(agent_safety, "resolve_ips", fake_resolve)
+    monkeypatch.setattr(agent_safety.socket, "create_connection", fake_create_connection)
+
+    conn = agent_safety._PinnedHTTPConnection("evil-rebind.example", 80)
+    with pytest.raises(AssertionError):
+        conn.connect()
+    # The socket connected to the validated IP literal, NOT a re-resolved hostname.
+    assert captured["address"] == ("8.8.8.8", 80)
+
+
+def test_dns_rebinding_validate_public_then_connect_private_blocked(monkeypatch):
+    import ipaddress
+
+    state = {"n": 0}
+
+    def flapping_resolve(host):
+        state["n"] += 1
+        # 1st lookup (validation) -> public; 2nd lookup (connect/pin) -> private
+        if state["n"] == 1:
+            return [ipaddress.ip_address("8.8.8.8")]
+        return [ipaddress.ip_address("10.0.0.5")]
+
+    monkeypatch.setattr(agent_safety, "resolve_ips", flapping_resolve)
+
+    # Validation-time view: looks public.
+    assert is_public_url("http://rebind.test/") is True
+    # Connect-time pin re-resolves and now sees a private address -> blocked.
+    with pytest.raises(SSRFBlocked):
+        agent_safety.resolve_validate_pin("rebind.test")
+
+
+# ── B1/B2: Playwright route guard aborts internal hops pre-connect ────────────
+
+def _drive_route_guard(target_url):
+    """Install guard_browser_page on a fake page and run its handler for one
+    request URL; return (continued, aborted)."""
+    import asyncio
+
+    class _FakeRoute:
+        def __init__(self, url):
+            self.request = type("Req", (), {"url": url})()
+            self.continued = False
+            self.aborted = False
+
+        async def continue_(self):
+            self.continued = True
+
+        async def abort(self):
+            self.aborted = True
+
+    class _FakePage:
+        def __init__(self):
+            self.handler = None
+
+        async def route(self, pattern, handler):
+            self.handler = handler
+
+    async def _run():
+        page = _FakePage()
+        await agent_safety.guard_browser_page(page)
+        route = _FakeRoute(target_url)
+        await page.handler(route)
+        return route.continued, route.aborted
+
+    return asyncio.new_event_loop().run_until_complete(_run())
+
+
+def test_browser_route_guard_allows_public():
+    continued, aborted = _drive_route_guard("http://8.8.8.8/page")
+    assert continued is True and aborted is False
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1/",                         # loopback
+        "http://169.254.169.254/latest/meta-data/",  # cloud metadata (redirect target)
+        "http://192.168.1.10/",                      # private LAN
+        "http://2130706433/",                        # decimal-encoded loopback
+    ],
+)
+def test_browser_route_guard_aborts_internal(url):
+    continued, aborted = _drive_route_guard(url)
+    assert aborted is True and continued is False

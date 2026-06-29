@@ -9,7 +9,7 @@ THE production Zoe API: FastAPI app served by host uvicorn on port 8000. Owns ch
 - App entry and core: `main.py`, `database.py` (+ `db_pool.py`, `db_compat.py`, `alembic/` migrations), `auth.py`.
 - Routing/NLU: `intent_router.py`, `intent_classifier_llm.py`, `pi_intent_classifier.py`, `routers/` (see child doc).
 - Agents and tools: `mcp_server.py`, `openclaw_ws.py`, `hermes_http.py`, `zoe_agent`-related modules, `executors/` (engineering-board executors, currently `kanban_adapter.py`).
-- Agent security helpers: `agent_safety.py` — the single home for the bash-tool shell-injection guard (argv parsing, no shell) and the outbound-fetch SSRF guard (`assert_public_url`, `assert_panel_host`, `guarded_urlopen`). Stdlib-only so it loads in slim CI.
+- Agent security helpers: `agent_safety.py` — the single home for the bash-tool shell-injection guard (argv parsing, no shell) and the SSRF guards: `assert_public_url` (web fetch), `assert_panel_host` (panels = private-LAN only; loopback/link-local/metadata/public always rejected, allowlist narrows but never bypasses), `guarded_urlopen` (validates + **pins the connection to the validated IP**, defeating DNS-rebinding), and `guard_browser_page` (Playwright `page.route` that validates every request/redirect hop pre-connect). Stdlib-only so it loads in slim CI.
 - Memory: `hindsight_memory.py`, `hindsight_retain_candidates.py`, `conversation_context.py`.
 - Memory ops: Ingest (`memory_digest.py` dreaming), Query (`memory_service.py` search), and Lint (`memory_lint.py`) — the report-only scan for contradictions/stale/orphan/duplicate rows.
 - Streaming/UI protocol: `ag_ui_stream.py`, `card_service.py`, `card_contract.py`.
@@ -22,7 +22,7 @@ THE production Zoe API: FastAPI app served by host uvicorn on port 8000. Owns ch
 - Runs as a systemd USER service: `systemctl --user restart zoe-data.service`; in scripts/CI prefix `XDG_RUNTIME_DIR=/run/user/$(id -u)`.
 - Every memory write carries scope (`personal` / `shared` / `ambient`); no unscoped writes.
 - Tools register through the allow-list mechanism; every world-changing action goes through a proposal path.
-- The bash tool runs commands via argv (`create_subprocess_exec`), never a shell; outbound web-fetch / browser tools and panel-host proxies must validate targets through `agent_safety` (SSRF guard) — don't reintroduce raw `create_subprocess_shell` or unguarded `urlopen`/`page.goto` on user-supplied URLs/hosts.
+- The bash tool runs commands via argv (`create_subprocess_exec`), never a shell. Outbound fetch/browser tools and panel proxies must route through `agent_safety`: HTTP fetches use `guarded_urlopen` (IP-pinned), Playwright pages must `await guard_browser_page(page)` before any `goto` (per-hop pre-connect validation), and panel hosts go through `assert_panel_host`. Don't reintroduce raw `create_subprocess_shell`, unguarded `urlopen`, or a `page.goto` on a user URL without the route guard. Validating `page.url` only AFTER `goto` is insufficient — the request was already sent.
 - Schema changes go through Alembic; never DROP/DELETE without WHERE and a backup.
 - Harness engineering rules apply (charter section 9): minimize structure, ablate module by module, prefer natural-language harness over brittle Python control flow.
 

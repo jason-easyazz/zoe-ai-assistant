@@ -40,7 +40,7 @@ os.environ.setdefault("ORT_DISABLE_GPU", "1")
 
 import httpx
 
-from agent_safety import CommandRejected, check_bash_command, is_public_url
+from agent_safety import CommandRejected, check_bash_command, guard_browser_page, is_public_url
 
 logger = logging.getLogger(__name__)
 
@@ -2309,11 +2309,11 @@ async def _web_research(query: str, user_id: str = "") -> str:
                     logger.warning("web_research: blocked non-public URL %s", url[:80])
                     return ""
                 page = await ctx.new_page()
+                # Validate EVERY request/redirect hop pre-connect: a public URL may
+                # 30x to an internal/metadata host. The route guard aborts before
+                # the browser connects (so page.goto raises -> handled below).
+                await guard_browser_page(page)
                 await page.goto(url, wait_until="domcontentloaded", timeout=12000)
-                # Re-check after redirects: a public URL may 30x to an internal one.
-                if not is_public_url(page.url):
-                    logger.warning("web_research: blocked redirect to non-public URL %s", page.url[:80])
-                    return ""
                 # Let JS settle before any interaction
                 await page.wait_for_timeout(800)
                 await _dismiss_overlays(page)

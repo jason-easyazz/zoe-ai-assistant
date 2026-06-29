@@ -27,6 +27,7 @@ imports) so it loads in the slim CI environment and is cheap to unit-test.
 
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import os
 import shlex
@@ -195,37 +196,40 @@ def is_public_url(url: str) -> bool:
         return False
 
 
-def panel_allowlist() -> set:
-    """Explicit panel-host allowlist.
+def panel_allowlist() -> "set | None":
+    """Optional operator allowlist of panel hostnames (``ZOE_PANEL_ALLOWED_HOSTS``,
+    comma-separated).
 
-    Always includes the configured default panel host (``ZOE_PI_HOST``) and any
-    comma-separated extras in ``ZOE_PANEL_ALLOWED_HOSTS``. Use this to permit a
-    co-located panel on loopback, which the LAN heuristic below would block.
+    Returns ``None`` when unset (no name restriction — any LAN host is judged on
+    its address alone). When set it only *narrows* what is permitted; it can
+    NEVER widen the policy: an allowlisted host must still resolve to a private
+    LAN address (the danger/public checks in :func:`is_allowed_panel_host` always
+    apply). It is therefore not an escape hatch for loopback / metadata / public.
     """
-    hosts = {
-        h.strip().lower()
-        for h in os.environ.get("ZOE_PANEL_ALLOWED_HOSTS", "").split(",")
-        if h.strip()
-    }
-    default = os.environ.get("ZOE_PI_HOST", "192.168.1.61").strip().lower()
-    if default:
-        hosts.add(default)
-    return hosts
+    raw = os.environ.get("ZOE_PANEL_ALLOWED_HOSTS", "")
+    hosts = {h.strip().lower() for h in raw.split(",") if h.strip()}
+    return hosts or None
 
 
 def is_allowed_panel_host(host: str) -> bool:
     """Policy for display-panel hosts.
 
-    Allowed: hosts in :func:`panel_allowlist`, or any **private LAN** address
-    (panels live on the LAN). Blocked: loopback, link-local / cloud-metadata,
-    multicast, reserved, and **public** addresses (a panel host is never on the
-    public internet — that would be an exfiltration target).
+    Allowed ONLY when the host resolves entirely to a **private LAN** address
+    (RFC1918 ``10/8`` ``172.16/12`` ``192.168/16``, or the IPv6 ULA/private
+    equivalents). Blocked: loopback, link-local / cloud-metadata
+    (``169.254.169.254``), multicast, reserved, and **public** addresses — a
+    panel host is never on the public internet (exfiltration target) nor on
+    loopback (localhost-only services).
+
+    The danger/private check applies to EVERY host, including any listed in
+    :func:`panel_allowlist`; membership only narrows, it never bypasses.
     """
     h = (host or "").strip()
     if not h:
         return False
-    if h.lower() in panel_allowlist():
-        return True
+    allow = panel_allowlist()
+    if allow is not None and h.lower() not in allow:
+        return False
     ips = resolve_ips(h)
     if not ips:
         return False
@@ -246,9 +250,65 @@ def assert_panel_host(host: str) -> str:
     return host
 
 
+def resolve_validate_pin(host: str) -> str:
+    """Resolve ``host``, require EVERY resolved address to be public, and return
+    one validated IP literal to connect to.
+
+    This is the anti-rebinding primitive: the caller connects to the *returned
+    IP*, so the address that was validated is exactly the address that is
+    connected — there is no second, unchecked DNS lookup at connect time.
+    Raises :class:`SSRFBlocked` if the host is unresolvable or any address is
+    non-public.
+    """
+    ips = resolve_ips(host)
+    if not ips:
+        raise SSRFBlocked(f"host {host!r} could not be resolved")
+    for ip in ips:
+        if not is_public_ip(ip):
+            raise SSRFBlocked(f"host {host!r} resolves to non-public address {ip}")
+    return str(ips[0])
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    """HTTPConnection that resolves+validates the host at connect time and pins
+    the socket to the validated IP (defeats DNS-rebinding TOCTOU)."""
+
+    def connect(self):
+        ip = resolve_validate_pin(self.host)
+        self.sock = socket.create_connection(
+            (ip, self.port), self.timeout, self.source_address
+        )
+        if self._tunnel_host:
+            self._tunnel()
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPSConnection variant of :class:`_PinnedHTTPConnection`. Connects to the
+    validated IP while keeping the original hostname for the ``Host`` header and
+    TLS SNI."""
+
+    def connect(self):
+        ip = resolve_validate_pin(self.host)
+        sock = socket.create_connection(
+            (ip, self.port), self.timeout, self.source_address
+        )
+        server_hostname = self.host
+        if self._tunnel_host:
+            self.sock = sock
+            self._tunnel()
+            server_hostname = self._tunnel_host
+        self.sock = self._context.wrap_socket(sock, server_hostname=server_hostname)
+
+
 def guarded_urlopen(url: str, *, timeout: float, headers: dict | None = None):
-    """``urllib`` open that enforces :func:`assert_public_url` on the initial URL
-    **and on every redirect hop** (defends against redirect-to-internal SSRF).
+    """``urllib`` open with SSRF protection:
+
+    * the initial URL and every redirect hop are validated with
+      :func:`assert_public_url`; and
+    * the actual TCP connection is pinned to the validated IP
+      (:class:`_PinnedHTTPConnection` / ``HTTPS``), so a DNS-rebinding host that
+      reads as public at validation time but flips to a private address at
+      connect time is still blocked.
 
     Returns the response object for the caller to read. Raises
     :class:`SSRFBlocked` if any hop targets a non-public address.
@@ -256,6 +316,8 @@ def guarded_urlopen(url: str, *, timeout: float, headers: dict | None = None):
     from urllib.request import (
         Request,
         HTTPRedirectHandler,
+        HTTPHandler,
+        HTTPSHandler,
         build_opener,
     )
 
@@ -263,9 +325,47 @@ def guarded_urlopen(url: str, *, timeout: float, headers: dict | None = None):
 
     class _GuardedRedirect(HTTPRedirectHandler):
         def redirect_request(self, req, fp, code, msg, hdrs, newurl):
-            assert_public_url(newurl)  # raises SSRFBlocked -> aborts the chain
+            assert_public_url(newurl)  # cheap pre-check; pinned connect is authoritative
             return super().redirect_request(req, fp, code, msg, hdrs, newurl)
 
-    opener = build_opener(_GuardedRedirect)
+    class _GuardedHTTPHandler(HTTPHandler):
+        def http_open(self, req):
+            return self.do_open(_PinnedHTTPConnection, req)
+
+    class _GuardedHTTPSHandler(HTTPSHandler):
+        def https_open(self, req):
+            return self.do_open(
+                _PinnedHTTPSConnection, req, context=self._context
+            )
+
+    opener = build_opener(_GuardedHTTPHandler, _GuardedHTTPSHandler, _GuardedRedirect)
     req = Request(url, headers=headers or {})
     return opener.open(req, timeout=timeout)
+
+
+async def guard_browser_page(page) -> None:
+    """Install an SSRF route guard on a Playwright ``page``.
+
+    Registers a ``page.route('**/*', ...)`` handler that runs
+    :func:`assert_public_url` on EVERY request — the top-level navigation and
+    every redirect hop — and **aborts** the route before the browser connects if
+    the target is private / loopback / link-local / cloud-metadata. This blocks a
+    ``public -> 169.254.169.254`` redirect pre-connect rather than after the
+    request has already been sent.
+
+    Residual risk: the validation resolves the hostname, while Chromium resolves
+    again at connect time, so a DNS-rebinding host is not fully pinned for the
+    browser path (unlike :func:`guarded_urlopen`, which pins the IP). The
+    per-hop pre-connect abort is the mitigation available for Playwright here.
+    """
+
+    async def _handler(route):
+        request = route.request
+        try:
+            assert_public_url(request.url)
+        except SSRFBlocked:
+            await route.abort()
+            return
+        await route.continue_()
+
+    await page.route("**/*", _handler)
