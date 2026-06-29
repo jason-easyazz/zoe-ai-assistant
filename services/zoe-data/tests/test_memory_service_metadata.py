@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 import types
+from datetime import datetime, timezone
 
 import pytest
 
@@ -291,6 +292,66 @@ def test_build_metadata_defaults_keep_review_edit_call_compatible():
 
     assert metadata["source"] == "review_ui"
     assert "source_excerpt" not in metadata
+
+
+def test_build_metadata_normalizes_offset_expires_at_to_utc():
+    metadata = MemoryService._build_metadata(
+        user_id="jason",
+        source="mcp",
+        session_id=None,
+        user_turn_id=None,
+        memory_type="fact",
+        confidence=0.7,
+        status="approved",
+        tags=[],
+        entity_type=None,
+        entity_id=None,
+        expires_at="2026-06-29T00:30:00+08:00",
+    )
+
+    assert metadata["expires_at"] == "2026-06-28T16:30:00Z"
+
+
+def test_metadata_read_expires_offset_datetimes_by_utc_instant(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = cls(2026, 6, 28, 18, 0, tzinfo=timezone.utc)
+            return value if tz is None else value.astimezone(tz)
+
+        @classmethod
+        def utcnow(cls):
+            return cls(2026, 6, 28, 18, 0)
+
+    monkeypatch.setattr(memory_service.datetime, "datetime", FixedDateTime)
+    collection = _FakeCollection(
+        get_result={
+            "ids": ["expired-by-offset", "active"],
+            "documents": ["Should be gone", "Should remain"],
+            "metadatas": [
+                {
+                    "user_id": "jason",
+                    "visibility": "personal",
+                    "status": "approved",
+                    "expires_at": "2026-06-29T00:30:00+08:00",
+                    "added_at": "2026-06-28T00:00:00Z",
+                },
+                {
+                    "user_id": "jason",
+                    "visibility": "personal",
+                    "status": "approved",
+                    "expires_at": "2026-06-28T20:30:00Z",
+                    "added_at": "2026-06-28T00:00:00Z",
+                },
+            ],
+        }
+    )
+    service = MemoryService(data_dir="/tmp/zoe-test-memory-expiry")
+    service._collection = lambda: collection
+
+    rows = service._metadata_read("jason", limit=10)
+
+    assert [row.id for row in rows] == ["active"]
 
 
 def test_memory_visible_to_user_matches_user_id_or_wing_or_shared_visibility():

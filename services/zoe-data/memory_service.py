@@ -79,6 +79,40 @@ def _metadata_value(value: Any) -> str | int | float | bool:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
+def _parse_aware_datetime(value: Any) -> datetime.datetime | None:
+    if not value:
+        return None
+    if isinstance(value, datetime.datetime):
+        dt = value
+    elif isinstance(value, str):
+        try:
+            dt = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return dt.astimezone(datetime.timezone.utc)
+
+
+def _normalize_expires_at(expires_at: str) -> str:
+    dt = _parse_aware_datetime(expires_at)
+    if dt is None:
+        raise MemoryServiceError("expires_at must be ISO-8601")
+    return dt.isoformat().replace("+00:00", "Z")
+
+
+def _memory_expired(expires_at: Any, now: datetime.datetime | None = None) -> bool:
+    expires_dt = _parse_aware_datetime(expires_at)
+    if expires_dt is None:
+        return False
+    now_dt = now or datetime.datetime.now(datetime.timezone.utc)
+    if now_dt.tzinfo is None:
+        now_dt = now_dt.replace(tzinfo=datetime.timezone.utc)
+    return expires_dt <= now_dt.astimezone(datetime.timezone.utc)
+
+
 _BLOCKED_READ_STATUSES = {"archived", "rejected", "superseded", "pending", "disputed"}
 
 
@@ -742,7 +776,7 @@ class MemoryService:
         if entity_id:
             md["entity_id"] = entity_id
         if expires_at:
-            md["expires_at"] = expires_at
+            md["expires_at"] = _normalize_expires_at(expires_at)
         if source_excerpt:
             md["source_excerpt"] = source_excerpt
         if event_scope:
@@ -816,14 +850,13 @@ class MemoryService:
         docs = result.get("documents") or []
         metas = result.get("metadatas") or []
         ids = result.get("ids") or []
-        now = datetime.datetime.utcnow()
-        now_iso = now.isoformat() + "Z"
+        now = datetime.datetime.now(datetime.timezone.utc)
         filtered: list[MemoryRef] = []
         for rid, doc, meta in zip(ids, docs, metas):
             if not isinstance(meta, dict):
                 meta = {}
             expires = meta.get("expires_at")
-            if expires and expires <= now_iso:
+            if expires and _memory_expired(expires, now):
                 continue
             if not _memory_visible_to_user(meta, user_id):
                 continue
@@ -847,8 +880,8 @@ class MemoryService:
                 access_count = 0
             added_at = md.get("added_at") or ""
             try:
-                dt = datetime.datetime.fromisoformat(added_at.replace("Z", ""))
-                age_days = max(0.0, (now - dt).total_seconds() / 86400.0)
+                dt = _parse_aware_datetime(added_at)
+                age_days = max(0.0, (now - dt).total_seconds() / 86400.0) if dt else 0.0
             except Exception:
                 age_days = 0.0
             score = conf * math.exp(-LAMBDA * age_days) + 0.1 * math.log1p(access_count)
@@ -869,13 +902,12 @@ class MemoryService:
         docs = (result.get("documents") or [[]])[0]
         metas = (result.get("metadatas") or [[]])[0]
         distances = (result.get("distances") or [[]])[0]
-        now = datetime.datetime.utcnow()
-        now_iso = now.isoformat() + "Z"
+        now = datetime.datetime.now(datetime.timezone.utc)
         hits: list[MemoryRef] = []
         for rid, doc, meta, dist in zip(ids, docs, metas, distances):
             md = dict(meta) if isinstance(meta, dict) else {}
             expires = md.get("expires_at")
-            if expires and expires <= now_iso:
+            if expires and _memory_expired(expires, now):
                 continue
             if not _memory_visible_to_user(md, user_id):
                 continue
@@ -913,8 +945,8 @@ class MemoryService:
                 access_count = 0
             added_at = md.get("added_at") or ""
             try:
-                dt = datetime.datetime.fromisoformat(added_at.replace("Z", ""))
-                age_days = max(0.0, (now - dt).total_seconds() / 86400.0)
+                dt = _parse_aware_datetime(added_at)
+                age_days = max(0.0, (now - dt).total_seconds() / 86400.0) if dt else 0.0
             except Exception:
                 age_days = 0.0
             semantic = (1.0 / (1.0 + dist)) * conf * math.exp(-_LAMBDA * age_days)
@@ -958,12 +990,12 @@ class MemoryService:
         ids = result.get("ids") or []
         docs = result.get("documents") or []
         metas = result.get("metadatas") or []
-        now_iso = datetime.datetime.utcnow().isoformat() + "Z"
+        now = datetime.datetime.now(datetime.timezone.utc)
         keep = []
         for rid, doc, meta in zip(ids, docs, metas):
             md = dict(meta) if isinstance(meta, dict) else {}
             expires = md.get("expires_at")
-            if expires and expires <= now_iso:
+            if expires and _memory_expired(expires, now):
                 continue
             keep.append((rid, doc, md))
         ids = [r[0] for r in keep]
@@ -985,6 +1017,8 @@ class MemoryService:
         if not ids:
             return None
         meta = metas[0] if isinstance(metas[0], dict) else {}
+        if _memory_expired(meta.get("expires_at")):
+            return None
         return MemoryRef(id=ids[0], text=docs[0] or "", metadata=dict(meta))
 
     @staticmethod

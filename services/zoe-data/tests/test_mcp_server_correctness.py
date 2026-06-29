@@ -62,6 +62,17 @@ class _RoutingDb:
         return _Cursor([])
 
 
+class _RecordingDb:
+    def __init__(self):
+        self.calls = []
+
+    async def execute(self, sql, *params):
+        if len(params) == 1 and isinstance(params[0], (list, tuple)):
+            params = tuple(params[0])
+        self.calls.append((sql, params))
+        return _Cursor([])
+
+
 class _DashboardTxn:
     def __init__(self, db):
         self._db = db
@@ -130,6 +141,62 @@ class _SlowMcpDashboardSaveDb(_DashboardLayoutDb):
             self.save_update_started.set()
             await self.release_save_update.wait()
         return await super().execute(sql, *params)
+
+
+# --------------------------------------------------------------------------
+# Datetime and limit regressions from the datetime-money audit lane.
+# --------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_calendar_today_uses_zoe_timezone_date(monkeypatch):
+    db = _RecordingDb()
+    monkeypatch.setattr(mcp_server, "today_for_zoe_tz", lambda: date(2026, 6, 29))
+
+    result = await mcp_server._execute_tool(
+        db=db,
+        name="calendar_today",
+        args={"_user_id": "jason"},
+    )
+
+    assert result == {"date": "2026-06-29", "events": []}
+    sql, params = next(call for call in db.calls if "FROM events" in call[0])
+    assert "FROM events" in sql
+    assert params == ("2026-06-29", "jason")
+
+
+@pytest.mark.asyncio
+async def test_reminder_today_uses_zoe_timezone_date(monkeypatch):
+    db = _RecordingDb()
+    monkeypatch.setattr(mcp_server, "today_for_zoe_tz", lambda: date(2026, 6, 29))
+
+    result = await mcp_server._execute_tool(
+        db=db,
+        name="reminder_list",
+        args={"_user_id": "jason", "today_only": True},
+    )
+
+    assert result == {"reminders": []}
+    sql, params = next(call for call in db.calls if "FROM reminders" in call[0])
+    assert "FROM reminders" in sql
+    assert params == ("2026-06-29", "jason")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw_limit", "expected"),
+    [(-10, 1), (10_000, 100), ("not-int", 20)],
+)
+async def test_transaction_list_clamps_limit(raw_limit, expected):
+    db = _RecordingDb()
+
+    await mcp_server._execute_tool(
+        db=db,
+        name="transaction_list",
+        args={"_user_id": "jason", "limit": raw_limit},
+    )
+
+    sql, params = next(call for call in db.calls if "FROM transactions" in call[0])
+    assert "FROM transactions" in sql
+    assert params[-1] == expected
 
 
 # --------------------------------------------------------------------------
