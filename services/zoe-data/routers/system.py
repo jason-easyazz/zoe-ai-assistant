@@ -10,6 +10,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from agent_safety import SSRFBlocked, assert_panel_host, is_allowed_panel_host
 from auth import get_current_user, require_admin, get_a2a_caller, require_internal_token
 from database import get_db
 from hermes_http import hermes_auth_headers
@@ -2157,6 +2158,10 @@ async def _proxy_reload_to_pi(pi_host: str) -> None:
     """Fire-and-forget POST /reload so settings apply within ~1s."""
     if not pi_host:
         return
+    if not is_allowed_panel_host(pi_host):
+        # SSRF guard: never POST to loopback / link-local / metadata / public hosts.
+        logger.warning("panel agent reload skipped: %r is not an allowed panel host", pi_host)
+        return
     url = f"http://{pi_host}:{_PANEL_AGENT_PORT}/reload"
     try:
         async with httpx.AsyncClient(timeout=2.5) as c:
@@ -2177,6 +2182,13 @@ async def put_display_preferences(
     device_id = body.get("device_id") or "default"
     incoming = body.get("preferences") if isinstance(body.get("preferences"), dict) else body
     pi_host_override = body.get("pi_host")
+    if pi_host_override:
+        # SSRF guard: reject (don't persist) a panel host that points at
+        # loopback / link-local / metadata / public addresses.
+        try:
+            assert_panel_host(str(pi_host_override))
+        except SSRFBlocked as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     cursor = await db.execute(
         "SELECT * FROM display_preferences WHERE device_id = ?",
@@ -2259,6 +2271,10 @@ async def post_display_brightness(
     except Exception:
         raise HTTPException(status_code=400, detail="value must be an integer 0-100")
     pi_host = body.get("pi_host") or _DEFAULT_PI_HOST
+    try:
+        assert_panel_host(pi_host)  # SSRF guard
+    except SSRFBlocked as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     url = f"http://{pi_host}:{_PANEL_AGENT_PORT}/brightness"
     try:
         async with httpx.AsyncClient(timeout=3.0) as c:
@@ -2311,6 +2327,10 @@ async def post_display_volume(
     pi_host = body.get("pi_host") or None
 
     if pi_host:
+        try:
+            assert_panel_host(pi_host)  # SSRF guard
+        except SSRFBlocked as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
         # Forward to the Pi panel agent which controls the Pi's ALSA/PulseAudio volume
         url = f"http://{pi_host}:{_PANEL_AGENT_PORT}/volume"
         try:
