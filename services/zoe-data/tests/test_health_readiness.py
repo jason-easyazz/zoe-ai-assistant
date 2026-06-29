@@ -156,3 +156,11 @@ def test_canonical_gemma_model_requires_gemma_e4b():
     assert main._canonical_gemma_model("/models/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf")
     assert not main._canonical_gemma_model("/models/gemma-4-E2B.gguf")
     assert not main._canonical_gemma_model("/models/llama-3.2.gguf")
+
+
+def test_gemma_base_url_strips_version_suffix_with_trailing_slash(monkeypatch):
+    import main
+
+    monkeypatch.setenv("GEMMA_SERVER_URL", "http://127.0.0.1:11434/v1/")
+
+    assert main._gemma_base_url() == "http://127.0.0.1:11434"

@@ -80,7 +80,8 @@ _READINESS_CACHE_LOCK = asyncio.Lock()
 
 def _gemma_base_url() -> str:
     raw = (os.environ.get("GEMMA_SERVER_URL") or os.environ.get("ZOE_LLAMA_URL") or "http://127.0.0.1:11434").strip()
-    return raw[:-3].rstrip("/") if raw.rstrip("/").endswith("/v1") else raw.rstrip("/")
+    normalized = raw.rstrip("/")
+    return normalized[:-3].rstrip("/") if normalized.endswith("/v1") else normalized
 
 
 def _canonical_gemma_model(model_id: str) -> bool:
