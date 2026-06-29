@@ -846,6 +846,21 @@ async def change_password(request: PasswordChangeRequest,
         )
 
         if success:
+            try:
+                invalidated = session_manager.invalidate_user_sessions(
+                    current_session.user_id,
+                    except_session=current_session.session_id
+                )
+                logger.info(
+                    "Invalidated %s other sessions after password change for user %s",
+                    invalidated,
+                    current_session.user_id
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to invalidate other sessions after password change for user %s",
+                    current_session.user_id
+                )
             return {"message": message}
         else:
             raise HTTPException(status_code=400, detail=message)
@@ -1027,6 +1042,5 @@ async def check_permission(permission: str, resource: Optional[str] = None,
     except Exception as e:
         logger.error(f"Permission check error: {e}")
         raise HTTPException(status_code=500, detail="Permission check failed")
-
 
 
