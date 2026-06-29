@@ -178,6 +178,11 @@ async def _fire_reminder(pending_id: str, user_id: str, message: str) -> None:
             message=message,
             trigger_type="reminder",
             pending_id=pending_id,
+            # Pass the claimed item_id through so a quiet-hours reschedule inside
+            # fire_notification keeps the reminder link — otherwise the follow-up
+            # job has item_id="" and loses the generation/supersede backstop,
+            # letting it deliver after the reminder was snoozed/acked/deleted.
+            item_id=item_id,
         )
     except Exception as exc:
         log.error("_fire_reminder failed for pending %s: %s", pending_id, exc)

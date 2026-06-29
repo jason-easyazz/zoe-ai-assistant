@@ -297,6 +297,30 @@ async def test_fire_failure_releases_claim_and_reraises(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_fire_reminder_passes_item_id_to_notification(monkeypatch):
+    """The claimed item_id must flow into fire_notification so a quiet-hours
+    reschedule keeps the reminder link (generation/supersede backstop)."""
+    store = FakeReminderDB(
+        scheduled={"r1": {"fired": 0, "claimed_at": None, "item_id": "rem1",
+                          "schedule_generation": 0, "attempts": 0}},
+        reminders={"rem1": {"is_active": 1, "acknowledged": 0, "deleted": 0,
+                            "schedule_generation": 0}},
+    )
+    _patch_compat(monkeypatch, reminders, store)
+    captured = {}
+
+    async def fake_fire(**kw):
+        captured.update(kw)
+        store.scheduled[kw["pending_id"]]["fired"] = 1
+
+    monkeypatch.setattr("proactive.engine.fire_notification", fake_fire)
+
+    await reminders._fire_reminder("r1", "u1", "hi")
+
+    assert captured.get("item_id") == "rem1"
+
+
+@pytest.mark.asyncio
 async def test_fire_aborts_when_reminder_obligation_void(monkeypatch):
     """B2: an in-flight job re-reads state and does NOT deliver a deleted reminder."""
     store = FakeReminderDB(
