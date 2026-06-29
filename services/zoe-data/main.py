@@ -5,8 +5,11 @@ import uuid as _uuid_mod
 from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+import httpx
 from database import init_db
+from gemma_endpoint import gemma_base
 from push import broadcaster
 from auth import require_internal_token
 from routers import (
@@ -72,6 +75,205 @@ _RUNTIME_HEALTH: dict[str, bool] = {
 }
 # Timestamp of the last probe (ISO string); exposed via GET /api/agent/runtimes
 _RUNTIME_LAST_PROBED: str = ""
+_READINESS_CACHE: dict[str, object] = {"expires_at": 0.0, "report": None}
+_READINESS_CACHE_LOCK = asyncio.Lock()
+
+
+def _ws_idle_timeout_seconds() -> float:
+    try:
+        value = float(os.environ.get("ZOE_WS_IDLE_TIMEOUT_SECONDS", "120"))
+    except (TypeError, ValueError):
+        return 120.0
+    if value <= 0:
+        return 120.0
+    return value
+
+
+WS_IDLE_TIMEOUT_SECONDS = _ws_idle_timeout_seconds()
+
+
+def _gemma_base_url() -> str:
+    return gemma_base()
+
+
+def _canonical_gemma_model(model_id: str) -> bool:
+    normalized = (model_id or "").lower()
+    return "gemma" in normalized and "e4b" in normalized
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+async def _check_brain_ready(timeout_s: float = 2.0) -> dict:
+    base_url = _gemma_base_url()
+    detail: dict = {"ok": False, "url": base_url}
+    try:
+        async with httpx.AsyncClient(timeout=timeout_s) as client:
+            health = await client.get(f"{base_url}/health")
+            detail["health_status"] = health.status_code
+            if health.status_code != 200:
+                detail["error"] = f"health_http_{health.status_code}"
+                return detail
+
+            detail["ok"] = True
+            try:
+                models = await client.get(f"{base_url}/v1/models")
+                detail["models_status"] = models.status_code
+                if models.status_code == 200:
+                    payload = models.json()
+                    model_ids = [
+                        str(item.get("id") or item.get("model") or "")
+                        for item in payload.get("data", [])
+                        if isinstance(item, dict)
+                    ]
+                    detail["models"] = model_ids[:5]
+                    # Telemetry only: current llama-server exposes a model id/path
+                    # containing "gemma" and "e4b", but readiness is gated on the
+                    # server's own /health so model-list shape drift cannot block boot.
+                    detail["canonical_model_seen"] = any(
+                        _canonical_gemma_model(model_id) for model_id in model_ids
+                    )
+            except Exception as models_exc:
+                detail["models_error"] = models_exc.__class__.__name__
+            return detail
+    except Exception as exc:
+        detail["error"] = exc.__class__.__name__
+        return detail
+
+
+async def _check_stt_ready() -> dict:
+    try:
+        from routers import voice_tts
+
+        loaded = bool(voice_tts.moonshine_ready())
+        load_error = voice_tts.moonshine_error()
+        return {
+            "ok": loaded or load_error is None,
+            "engine": "moonshine",
+            "arch": voice_tts.moonshine_arch(),
+            "loaded": loaded,
+            **({"error": load_error} if load_error else {}),
+        }
+    except Exception as exc:
+        return {"ok": False, "engine": "moonshine", "error": exc.__class__.__name__}
+
+
+async def _check_tts_ready(timeout_s: float = 2.0) -> dict:
+    from routers import voice_tts
+
+    mode = os.environ.get("ZOE_TTS_MODE", "hybrid").strip().lower() or "hybrid"
+    sidecar_url = os.environ.get("ZOE_KOKORO_SIDECAR_URL", "http://127.0.0.1:10201").rstrip("/")
+    detail: dict = {
+        "ok": False,
+        "engine": "kokoro-waterfall",
+        "mode": mode,
+        "sidecar_url": sidecar_url,
+    }
+    if mode in {"edge", "cloud", "offline"}:
+        detail["ok"] = True
+        detail["provider"] = mode
+        return detail
+    try:
+        async with httpx.AsyncClient(timeout=timeout_s) as client:
+            response = await client.get(f"{sidecar_url}/health")
+        detail["status_code"] = response.status_code
+        if response.status_code == 200:
+            payload = response.json()
+            detail["pipeline_loaded"] = bool(payload.get("pipeline_loaded"))
+            detail["voice"] = payload.get("voice")
+            detail["device"] = payload.get("device")
+            detail["ok"] = bool(payload.get("pipeline_loaded"))
+            if not detail["ok"]:
+                detail["error"] = "pipeline_not_loaded"
+            else:
+                detail["provider"] = "kokoro-sidecar"
+                return detail
+        detail["error"] = f"http_{response.status_code}"
+    except Exception as exc:
+        detail["error"] = exc.__class__.__name__
+    detail["local_onnx_loaded"] = bool(voice_tts.kokoro_ready())
+    detail["local_onnx_configured"] = bool(voice_tts.kokoro_configured())
+    if detail["local_onnx_loaded"] or detail["local_onnx_configured"]:
+        detail["ok"] = True
+        detail["provider"] = "kokoro-onnx"
+        return detail
+    detail["espeak_available"] = bool(voice_tts._has_espeak_ng())
+    if mode in {"hybrid", "local", "offline"} and detail["espeak_available"]:
+        detail["ok"] = True
+        detail["provider"] = "espeak-ng"
+        return detail
+    detail["edge_tts_available"] = bool(voice_tts.edge_tts_available())
+    if mode in {"hybrid"} and detail["edge_tts_available"]:
+        detail["ok"] = True
+        detail["provider"] = "edge-tts"
+        return detail
+    if mode in {"hybrid", "local"}:
+        detail["error"] = "no_tts_provider_available"
+    return detail
+
+
+async def _build_readiness_report_uncached() -> dict:
+    brain, stt, tts = await asyncio.gather(
+        _check_brain_ready(),
+        _check_stt_ready(),
+        _check_tts_ready(),
+    )
+    dependencies = {"brain": brain, "stt": stt, "tts": tts}
+    ready = all(bool(dep.get("ok")) for dep in dependencies.values())
+    return {
+        "status": "ok" if ready else "degraded",
+        "service": "zoe-data",
+        "version": "1.0.0",
+        "memory_capture": _memory_capture_health,
+        "ready": ready,
+        "dependencies": dependencies,
+    }
+
+
+async def _build_readiness_report(*, use_cache: bool = True) -> dict:
+    now = time.monotonic()
+    cached_report = _READINESS_CACHE.get("report")
+    if use_cache and isinstance(cached_report, dict) and now < float(_READINESS_CACHE.get("expires_at") or 0.0):
+        return dict(cached_report)
+
+    async with _READINESS_CACHE_LOCK:
+        now = time.monotonic()
+        cached_report = _READINESS_CACHE.get("report")
+        if use_cache and isinstance(cached_report, dict) and now < float(_READINESS_CACHE.get("expires_at") or 0.0):
+            return dict(cached_report)
+
+        total_timeout_s = max(0.1, _env_float("ZOE_READINESS_TIMEOUT_S", 4.0))
+        cache_ttl_s = max(0.0, _env_float("ZOE_READINESS_CACHE_TTL_S", 3.0))
+        try:
+            report = await asyncio.wait_for(_build_readiness_report_uncached(), timeout=total_timeout_s)
+        except Exception as exc:
+            report = {
+                "status": "degraded",
+                "service": "zoe-data",
+                "version": "1.0.0",
+                "memory_capture": _memory_capture_health,
+                "ready": False,
+                "dependencies": {"readiness": {"ok": False, "error": exc.__class__.__name__}},
+            }
+        _READINESS_CACHE["report"] = dict(report)
+        _READINESS_CACHE["expires_at"] = time.monotonic() + cache_ttl_s
+        return report
+
+
+async def _wait_for_brain_startup() -> None:
+    deadline = time.monotonic() + max(0.0, _env_float("ZOE_BRAIN_STARTUP_WAIT_S", 30.0))
+    last: dict = {}
+    while time.monotonic() < deadline:
+        last = await _check_brain_ready(timeout_s=2.0)
+        if last.get("ok"):
+            logger.info("Brain readiness gate passed")
+            return
+        await asyncio.sleep(1.0)
+    logger.warning("Brain readiness gate timed out; /readyz will report not ready: %s", last)
 
 
 # These legacy logging filters are no longer needed with the new JSON middleware
@@ -668,6 +870,7 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing zoe-data database...")
     await init_db()
     logger.info("Database initialized. zoe-data is ready.")
+    asyncio.create_task(_wait_for_brain_startup(), name="brain_startup_readiness_probe")
     # One-time MemPalace migration: re-tag legacy records from wing="zoe" to wing="family-admin".
     # Gated behind a DB flag so the expensive ChromaDB scan only runs on first startup.
     try:
@@ -736,6 +939,18 @@ async def lifespan(app: FastAPI):
 
     # Proactive engine: APScheduler (Tier 1) + slow-loop (Tier 2).
     try:
+        # Schema guard: the claim/generation logic depends on migration 0012.
+        # Fail fast & LOUD (and don't start the engine in a broken state) rather
+        # than letting every reminder silently error on the missing columns.
+        from proactive.engine import verify_proactive_schema
+        _missing_cols = await verify_proactive_schema()
+        if _missing_cols:
+            raise RuntimeError(
+                "proactive DB schema out of date — missing columns: "
+                f"{_missing_cols}. Run: alembic upgrade head (migration 0012). "
+                "Proactive engine NOT started."
+            )
+
         from proactive.engine import start_proactive_engine, register_trigger
         from proactive.triggers.reminder_scan import ReminderScanTrigger
         from proactive.triggers.morning_checkin import MorningCheckInTrigger
@@ -760,8 +975,20 @@ async def lifespan(app: FastAPI):
                 " EveningWindDownTrigger, OpenClawTrigger registered)"
             )
         start_proactive_engine()
+        # Reconcile after the scheduler is live: re-register any unfired reminder
+        # whose one-shot job was dropped while the service was down (>misfire
+        # grace) so a missed reminder still fires after restart.
+        try:
+            from proactive.engine import reconcile_scheduled_jobs
+            _recovered = await reconcile_scheduled_jobs()
+            if _recovered:
+                logger.info("Proactive reconcile recovered %d missed reminder(s)", _recovered)
+        except Exception as _rec_exc:
+            logger.warning("Proactive reconcile skipped (non-fatal): %s", _rec_exc)
     except Exception as _pe_exc:
-        logger.warning("Proactive engine failed to start (non-fatal): %s", _pe_exc)
+        # Loud + explicit: reminders/proactive nudges will NOT fire until this is
+        # resolved (commonly: run alembic migrations). Not silently swallowed.
+        logger.error("Proactive engine NOT started — reminders will not fire: %s", _pe_exc)
 
     # Multica autopilot schedule sync — register cron jobs from Multica into APScheduler.
     # Must run after start_proactive_engine() so the scheduler is already running.
@@ -1404,15 +1631,77 @@ from middleware.logging import StructuredLoggingMiddleware
 
 app.add_middleware(StructuredLoggingMiddleware)
 
+# Browser origins permitted to make credentialed requests. This base list plus
+# the ZOE_ALLOWED_WS_ORIGINS extras (resolved by _allowed_browser_origins) are
+# the single source of truth for BOTH the HTTP CORS policy (below) and the
+# WebSocket CSWSH origin guard (_ws_origin_allowed) so the two cannot drift
+# apart — an operator-added kiosk origin is honoured by credentialed HTTP calls
+# and WebSocket handshakes alike.
+ALLOWED_ORIGINS = [
+    "https://zoe.local",
+    "https://zoe.the411.life",
+    "http://zoe.local",
+    "http://localhost",
+    "http://localhost:8080",
+]
+
+
+def _allowed_browser_origins() -> frozenset[str]:
+    """The credentialed-origin allowlist shared by HTTP CORS and the WebSocket
+    CSWSH guard: the base ALLOWED_ORIGINS plus any extra panel/kiosk hosts
+    configured via ZOE_ALLOWED_WS_ORIGINS (comma-separated).
+
+    The env var lets an operator add a LAN hostname/IP-based origin the browser
+    kiosk uses without a code change; it is empty by default. Because both the
+    CORS middleware and the WS guard read this one function, adding an origin
+    here cannot leave the HTTP and WebSocket policies inconsistent.
+    """
+    raw = os.getenv("ZOE_ALLOWED_WS_ORIGINS", "")
+    extra = [o.strip() for o in raw.split(",") if o.strip()]
+    return frozenset(ALLOWED_ORIGINS) | frozenset(extra)
+
+
+def _ws_origin_allowed(websocket: WebSocket) -> bool:
+    """CSWSH guard: True if this WS handshake's Origin may connect.
+
+    Policy:
+    - No Origin header → allow. Browsers ALWAYS send Origin on a WS handshake,
+      so a missing Origin means a non-browser client (the native kiosk/voice
+      panel, CLI tools, internal services). Those are not reachable by the
+      cross-site-request threat CSWSH defends against, so we do not block them.
+    - Origin present and in the allowlist → allow.
+    - Origin present and NOT in the allowlist → reject (foreign web origin).
+    """
+    origin = websocket.headers.get("origin")
+    if origin is None:
+        return True
+    return origin in _allowed_browser_origins()
+
+
+async def _enforce_ws_origin(websocket: WebSocket) -> bool:
+    """Apply the CSWSH origin allowlist to a WS handshake.
+
+    Returns True when the connection may proceed. On rejection it closes the
+    handshake before accept (the ASGI server turns a pre-accept close into an
+    HTTP 403; the 1008 policy-violation code is recorded for clients that see
+    it) and returns False — the caller MUST return immediately.
+    """
+    if _ws_origin_allowed(websocket):
+        return True
+    logger.warning(
+        "Rejected cross-origin WebSocket handshake: origin=%r path=%s",
+        websocket.headers.get("origin"),
+        websocket.url.path,
+    )
+    await websocket.close(code=1008)
+    return False
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://zoe.local",
-        "https://zoe.the411.life",
-        "http://zoe.local",
-        "http://localhost",
-        "http://localhost:8080",
-    ],
+    # Same allowlist the WS CSWSH guard uses (base list + ZOE_ALLOWED_WS_ORIGINS
+    # extras) so HTTP CORS and WebSocket origin policy can never drift apart.
+    allow_origins=sorted(_allowed_browser_origins()),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1481,6 +1770,12 @@ async def root_health():
     }
 
 
+@app.get("/readyz")
+async def root_readyz():
+    report = await _build_readiness_report(use_cache=True)
+    return JSONResponse(report, status_code=200 if report["ready"] else 503)
+
+
 @app.get("/api/router/classify")
 async def router_classify(text: str, _: None = Depends(require_internal_token)):
     """Tier-1 semantic router test endpoint: classify an utterance into a domain.
@@ -1532,30 +1827,100 @@ async def internal_broadcast(payload: dict, _: None = Depends(require_internal_t
     return {"ok": True}
 
 
-async def _session_can_subscribe_panel(panel_id: str, session_id: str | None) -> bool:
-    """Allow browser panel sockets only for sessions bound to that panel."""
+async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> str | None:
+    """Resolve the *canonical* panel channel a browser push socket may subscribe to.
+
+    Returns the panel_id whose ``panel_{id}`` channel the socket should join, or
+    ``None`` to reject the connection.
+
+    A single physical browser may hold several ``ui_panel_sessions`` rows for one
+    session over its life: a generated ``panel_xxxx`` alias captured from
+    localStorage, plus the REGISTERED id (e.g. ``zoe-touch-pi``). But server pushes
+    (``broadcast_to_panel``) are addressed to the registered panel, and the
+    registered ids are exactly the rows in the ``panels`` table — generated aliases
+    are written to ``ui_panel_sessions`` by bind but never to ``panels``.
+
+    Resolution prefers the session's REGISTERED panel (a bound row whose id is in
+    ``panels``) over a generated alias, which closes the whole "stale alias wins /
+    rebinds" class instead of fixing it per-permutation. Crucially the selected
+    registered row is TIED TO THE CONNECTING panel, so a session that holds rows for
+    SEVERAL registered panels (e.g. A and B) can't misroute:
+      1. Among the session's registered bound rows, prefer the one whose
+         ``panel_id`` IS the connecting id; only when none is (the connecting id is
+         a generated alias, not a registered row) fall back to the foreground /
+         most-recently-seen registered row. So panel A reconnecting always joins
+         ``panel_A`` even when panel B is foreground in the same session, while a
+         generated ``panel_xxxx`` still resolves to the registered
+         ``panel_zoe-touch-pi``. (An alias has no column linking it to a specific
+         registered panel; the session's foreground/most-recent registered panel is
+         the documented best-guess target for it.)
+      2. Else (the session has only generated aliases, or no session_id) fall back
+         to the connecting id when it is itself a bound row the user owns — under
+         this session, or a NULL-session legacy/device bind.
+      * admin/agent roles may target any explicit panel_id.
+      * an unresolved session defers to the registered-panel guest policy.
+    A user can never reach a panel their session/account isn't bound to (every
+    query filters on ``user_id``).
+    """
     user = await _resolve_ws_session(session_id)
     if user is None:
-        return await _panel_allows_guest_push(panel_id)
+        if panel_id and await _panel_allows_guest_push(panel_id):
+            return panel_id
+        return None
     user_id = str(user.get("user_id") or "")
     role = str(user.get("role") or "").lower()
     if not user_id:
-        return False
+        return None
     if role in {"admin", "agent"}:
-        return True
+        # Trusted roles may subscribe to an explicit panel channel as-is.
+        return panel_id or None
+    if not panel_id:
+        return None
     try:
         from database import get_db
 
         async for db in get_db():
+            # (1) CANONICAL: a REGISTERED panel (a bound row whose panel_id exists
+            # in `panels`) for this session + user. The connecting id is tied into
+            # the choice via `(s.panel_id = ?) DESC`, which ranks the row for the
+            # CONNECTING panel first. So when the session holds rows for several
+            # registered panels (A and B), panel A's socket resolves to panel_A —
+            # never whichever row happens to win is_foreground/last_seen_at. Only
+            # when the connecting id is NOT one of the session's registered rows
+            # (it is a generated alias) does the foreground/recency order decide;
+            # that is the documented fallback (an alias has no column linking it to
+            # a specific registered panel, so the foreground/most-recent registered
+            # panel is the best canonical target — this still routes panel_<alias>
+            # to panel_zoe-touch-pi). user_id scoping keeps it the session's own.
+            if session_id:
+                cursor = await db.execute(
+                    "SELECT s.panel_id FROM ui_panel_sessions s "
+                    "JOIN panels p ON p.panel_id = s.panel_id "
+                    "WHERE s.chat_session_id = ? AND s.user_id = ? "
+                    "ORDER BY (s.panel_id = ?) DESC, "
+                    "s.is_foreground DESC, s.last_seen_at DESC LIMIT 1",
+                    (session_id, user_id, panel_id),
+                )
+                row = await cursor.fetchone()
+                if row and row["panel_id"]:
+                    return str(row["panel_id"])
+
+            # (2) No registered panel for this session (only generated aliases, or
+            # no session_id). Authorise the connecting id when it is itself a bound
+            # row the user owns — under this session, or a NULL-session legacy/device
+            # bind — and subscribe to its own channel.
             cursor = await db.execute(
-                "SELECT user_id FROM ui_panel_sessions WHERE panel_id = ? ORDER BY last_seen_at DESC LIMIT 1",
-                (panel_id,),
+                "SELECT 1 FROM ui_panel_sessions "
+                "WHERE panel_id = ? AND user_id = ? "
+                "AND (chat_session_id = ? OR chat_session_id IS NULL) LIMIT 1",
+                (panel_id, user_id, session_id),
             )
-            row = await cursor.fetchone()
-            return bool(row and str(row["user_id"]) == user_id)
+            if await cursor.fetchone():
+                return panel_id
+            return None
     except Exception as exc:
         logger.debug("push websocket panel session validation failed: %s", exc)
-        return False
+        return None
 
 
 async def _panel_allows_guest_push(panel_id: str) -> bool:
@@ -1578,6 +1943,53 @@ async def _panel_allows_guest_push(panel_id: str) -> bool:
     return False
 
 
+async def _receive_ws_text_with_deadline(websocket: WebSocket) -> str:
+    return await asyncio.wait_for(
+        websocket.receive_text(),
+        timeout=WS_IDLE_TIMEOUT_SECONDS,
+    )
+
+
+async def _run_push_ws_loop(
+    websocket: WebSocket,
+    disconnect_channel: str,
+    *,
+    allow_catchup: bool = False,
+):
+    try:
+        while True:
+            data = await _receive_ws_text_with_deadline(websocket)
+            if data == "ping":
+                await websocket.send_json({"type": "pong"})
+            elif allow_catchup and data.startswith("catchup:"):
+                _, _, raw_seq = data.partition(":")
+                try:
+                    seq = int(raw_seq)
+                except (TypeError, ValueError):
+                    await websocket.send_json({
+                        "type": "error",
+                        "error": "invalid_catchup_sequence",
+                    })
+                    continue
+                if seq < 0:
+                    await websocket.send_json({
+                        "type": "error",
+                        "error": "invalid_catchup_sequence",
+                    })
+                    continue
+                await broadcaster.catchup(websocket, seq)
+    except WebSocketDisconnect:
+        pass
+    except asyncio.TimeoutError:
+        logger.info("WebSocket idle timeout on channel %s", disconnect_channel)
+        try:
+            await websocket.close(1001, "Idle timeout")
+        except Exception:
+            pass
+    finally:
+        broadcaster.disconnect(websocket, disconnect_channel)
+
+
 @app.websocket("/ws/push")
 async def websocket_push(
     websocket: WebSocket,
@@ -1590,6 +2002,9 @@ async def websocket_push(
     panel channel (receives both global 'all' events AND panel-specific events).
     Without panel_id, falls back to the plain channel subscription.
     """
+    # CSWSH guard: reject foreign browser origins before any auth/session work.
+    if not await _enforce_ws_origin(websocket):
+        return
     # -----------------------------------------------------------------
     # WebSocket auth and session validation
     # -----------------------------------------------------------------
@@ -1601,13 +2016,26 @@ async def websocket_push(
             from routers.panel_auth import lookup_device_token
             device_info = lookup_device_token(token_header)
         session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
-        # Browser WebSockets cannot send X-Device-Token. Accept a panel channel
-        # subscription when the browser session is already bound to this panel.
-        if not device_info and not await _session_can_subscribe_panel(panel_id, session_id):
-            await websocket.close(1008, "Invalid device token")
-            return
+        # A valid device token (the Pi kiosk) subscribes under its own connecting
+        # id. Browser WebSockets cannot send X-Device-Token; for them resolve the
+        # CANONICAL bound panel id from the session and subscribe there, so the
+        # socket joins the channel pushes are actually sent to even when the client
+        # connected under a different alias id.
+        subscribe_panel_id = panel_id
+        if not device_info:
+            subscribe_panel_id = await _resolve_subscribable_panel(panel_id, session_id)
+            if not subscribe_panel_id:
+                await websocket.close(1008, "Invalid device token")
+                return
         # Panel token or bound browser session verified; subscribe to panel push.
-        await broadcaster.connect_panel(websocket, panel_id)
+        await broadcaster.connect_panel(websocket, subscribe_panel_id)
+        # Clean up under the RESOLVED id we actually subscribed to — not the
+        # connecting alias. A browser that connected as panel_<alias> but resolved
+        # to panel_<registered> would otherwise hand disconnect the wrong channel.
+        # (disconnect() self-heals via the broadcaster's per-socket panel map, so
+        # this isn't a live leak, but aligning the channel keeps cleanup correct,
+        # explicit, and robust to future broadcaster refactors.)
+        disconnect_channel = f"panel_{subscribe_panel_id}"
     else:
         # Non-panel: perform lightweight session validation via zoe-auth HTTP.
         session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
@@ -1634,25 +2062,16 @@ async def websocket_push(
         await broadcaster.connect(
             websocket, channel, user_id=str(user.get("user_id") or "")
         )
+        disconnect_channel = channel
     # -----------------------------------------------------------------
     # Normal data relay loop
-    try:
-        while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_json({"type": "pong"})
-            elif data.startswith("catchup:"):
-                seq = int(data.split(":")[1])
-                await broadcaster.catchup(websocket, seq)
-    except WebSocketDisconnect:
-        if panel_id:
-            broadcaster.disconnect(websocket, f"panel_{panel_id}")
-        else:
-            broadcaster.disconnect(websocket, channel)
+    await _run_push_ws_loop(websocket, disconnect_channel, allow_catchup=True)
 
 
 @app.websocket("/api/calendar/ws/{user_id}")
 async def calendar_ws(websocket: WebSocket, user_id: str):
+    if not await _enforce_ws_origin(websocket):
+        return
     session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
     user = await _resolve_ws_session(session_id)
     if user is None or user.get("role") not in ("member", "admin", "agent"):
@@ -1666,17 +2085,13 @@ async def calendar_ws(websocket: WebSocket, user_id: str):
     await broadcaster.connect(
         websocket, "calendar", user_id=str(user.get("user_id") or user_id)
     )
-    try:
-        while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_json({"type": "pong"})
-    except WebSocketDisconnect:
-        broadcaster.disconnect(websocket, "calendar")
+    await _run_push_ws_loop(websocket, "calendar")
 
 
 @app.websocket("/api/lists/ws/{user_id}")
 async def lists_ws_with_user(websocket: WebSocket, user_id: str):
+    if not await _enforce_ws_origin(websocket):
+        return
     session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
     user = await _resolve_ws_session(session_id)
     if user is None or user.get("role") not in ("member", "admin", "agent"):
@@ -1689,17 +2104,13 @@ async def lists_ws_with_user(websocket: WebSocket, user_id: str):
     await broadcaster.connect(
         websocket, "lists", user_id=str(user.get("user_id") or user_id)
     )
-    try:
-        while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_json({"type": "pong"})
-    except WebSocketDisconnect:
-        broadcaster.disconnect(websocket, "lists")
+    await _run_push_ws_loop(websocket, "lists")
 
 
 @app.websocket("/api/lists/ws")
 async def lists_ws(websocket: WebSocket):
+    if not await _enforce_ws_origin(websocket):
+        return
     session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
     user = await _resolve_ws_session(session_id)
     if user is None or user.get("role") not in ("member", "admin", "agent"):
@@ -1708,17 +2119,13 @@ async def lists_ws(websocket: WebSocket):
     await broadcaster.connect(
         websocket, "lists", user_id=str(user.get("user_id") or "")
     )
-    try:
-        while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_json({"type": "pong"})
-    except WebSocketDisconnect:
-        broadcaster.disconnect(websocket, "lists")
+    await _run_push_ws_loop(websocket, "lists")
 
 
 @app.websocket("/api/people/ws/{user_id}")
 async def people_ws(websocket: WebSocket, user_id: str):
+    if not await _enforce_ws_origin(websocket):
+        return
     session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
     user = await _resolve_ws_session(session_id)
     if user is None or user.get("role") not in ("member", "admin", "agent"):
@@ -1731,17 +2138,13 @@ async def people_ws(websocket: WebSocket, user_id: str):
     await broadcaster.connect(
         websocket, "people", user_id=str(user.get("user_id") or user_id)
     )
-    try:
-        while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_json({"type": "pong"})
-    except WebSocketDisconnect:
-        broadcaster.disconnect(websocket, "people")
+    await _run_push_ws_loop(websocket, "people")
 
 
 @app.websocket("/api/reminders/ws/{user_id}")
 async def reminders_ws(websocket: WebSocket, user_id: str):
+    if not await _enforce_ws_origin(websocket):
+        return
     session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
     user = await _resolve_ws_session(session_id)
     if user is None or user.get("role") not in ("member", "admin", "agent"):
@@ -1754,17 +2157,13 @@ async def reminders_ws(websocket: WebSocket, user_id: str):
     await broadcaster.connect(
         websocket, "reminders", user_id=str(user.get("user_id") or user_id)
     )
-    try:
-        while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_json({"type": "pong"})
-    except WebSocketDisconnect:
-        broadcaster.disconnect(websocket, "reminders")
+    await _run_push_ws_loop(websocket, "reminders")
 
 
 @app.websocket("/api/notes/ws/{user_id}")
 async def notes_ws(websocket: WebSocket, user_id: str):
+    if not await _enforce_ws_origin(websocket):
+        return
     session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
     user = await _resolve_ws_session(session_id)
     if user is None or user.get("role") not in ("member", "admin", "agent"):
@@ -1777,17 +2176,13 @@ async def notes_ws(websocket: WebSocket, user_id: str):
     await broadcaster.connect(
         websocket, "notes", user_id=str(user.get("user_id") or user_id)
     )
-    try:
-        while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_json({"type": "pong"})
-    except WebSocketDisconnect:
-        broadcaster.disconnect(websocket, "notes")
+    await _run_push_ws_loop(websocket, "notes")
 
 
 @app.websocket("/api/journal/ws/{user_id}")
 async def journal_ws(websocket: WebSocket, user_id: str):
+    if not await _enforce_ws_origin(websocket):
+        return
     session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
     user = await _resolve_ws_session(session_id)
     if user is None or user.get("role") not in ("member", "admin", "agent"):
@@ -1796,13 +2191,7 @@ async def journal_ws(websocket: WebSocket, user_id: str):
     await broadcaster.connect(
         websocket, "journal", user_id=str(user.get("user_id") or user_id)
     )
-    try:
-        while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_json({"type": "pong"})
-    except WebSocketDisconnect:
-        broadcaster.disconnect(websocket, "journal")
+    await _run_push_ws_loop(websocket, "journal")
 
 
 async def _resolve_ws_session(session_id: str | None) -> dict | None:
@@ -1880,9 +2269,15 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
     Accepts text and binary (audio) messages:
     - Text JSON {"type": "text", "message": "..."} → routed through zoe_agent
     - Text JSON {"type": "cancel"} → sets cancel flag for in-flight pipeline
-    - Binary → transcribed via faster-whisper then routed as text
+    - Binary → transcribed via Moonshine then routed as text
     Emits {"type": "state"}, {"type": "transcript"}, {"type": "audio"}, {"type": "done"}.
     """
+    # CSWSH guard. NOTE: guest authentication for this endpoint is intentionally
+    # OUT OF SCOPE here (a separate threat-model decision about LAN-kiosk guest
+    # voice); this only closes the cross-web-origin vector. The native kiosk
+    # sends no Origin header and is unaffected.
+    if not await _enforce_ws_origin(websocket):
+        return
     await websocket.accept()
     ws_session_id = session_id or f"ws-voice-{_uuid_mod.uuid4().hex[:8]}"
     user_id = await _resolve_ws_user(session_id)
@@ -1908,7 +2303,7 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
             if raw.get("bytes"):
                 # Binary audio chunk: detect format from magic bytes, write temp file, transcribe.
                 # Browser MediaRecorder always sends WebM/opus (magic: \x1a\x45\xdf\xa3).
-                # Saving as .wav when the content is WebM causes whisper.cpp to fail.
+                # Preserve the real container suffix; WebM/opus must not be mislabeled as WAV.
                 audio_bytes: bytes = raw["bytes"]
                 await websocket.send_json({"type": "state", "state": "thinking"})
                 try:

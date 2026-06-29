@@ -7,7 +7,7 @@
 #
 # What this installs:
 #   1. openwakeword  — wake word detection ("hey zoe")
-#   2. whisper.cpp   — speech-to-text (via Zoe Jetson API)
+#   2. Moonshine STT — speech-to-text via Zoe Jetson API
 #   3. zoe-voice-daemon.py — the main daemon that ties it together
 #   4. systemd unit  — auto-start + watchdog restart
 #

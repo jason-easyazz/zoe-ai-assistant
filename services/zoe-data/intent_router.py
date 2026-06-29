@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Optional
 
 from fastapi import HTTPException
 
+from time_utils import today_for_zoe_tz
 from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS
 
 if TYPE_CHECKING:
@@ -1011,21 +1012,36 @@ def detect_intent(
         return Intent("journal_prompt", {})
 
     # --- TRANSACTIONS ---
+    # Parse money exactly: integer cents (no float drift) plus the canonical
+    # two-decimal dollars the command boundary still expects. A malformed match
+    # (e.g. "1.2.3") returns None so we DON'T record a bogus $0 transaction —
+    # the turn falls through to later intents / open-domain handling instead.
+    from money import to_cents, to_dollars
+
+    def _money_slots(raw: str):
+        try:
+            cents = to_cents(raw)
+        except ValueError:
+            return None
+        return {"amount": to_dollars(cents), "amount_cents": cents}
+
     m = re.match(
         r"^i (?:spent|paid) \$?([\d.]+)(?: ?(?:dollars?|bucks?))?(?: (?:at|on|for) (.+))?$", t
     )
     if m:
-        amount = float(m.group(1))
-        desc = (m.group(2) or "").strip() or "purchase"
-        return Intent("transaction_create", {"amount": amount, "description": desc})
+        slots = _money_slots(m.group(1))
+        if slots is not None:
+            desc = (m.group(2) or "").strip() or "purchase"
+            return Intent("transaction_create", {**slots, "description": desc})
 
     m = re.match(
         r"^(?:bought|purchased) (.+?) (?:for )\$?([\d.]+)$", t
     )
     if m:
-        desc = m.group(1).strip()
-        amount = float(m.group(2))
-        return Intent("transaction_create", {"amount": amount, "description": desc})
+        slots = _money_slots(m.group(2))
+        if slots is not None:
+            desc = m.group(1).strip()
+            return Intent("transaction_create", {**slots, "description": desc})
 
     for pattern in [
         r"^(?:how much (?:did i|have i) (?:spent?|spend)|weekly spending|budget check|spending (?:summary|this week))(.*)$",
@@ -2008,10 +2024,10 @@ async def _execute_calendar_show_direct(intent: Intent, user_id: str) -> Optiona
     works even when the mcporter MCP subprocess is down (the source of the
     calendar 'hit and miss'). Mirrors the qualifier→date-range logic in
     _build_command's calendar_show branch."""
-    from datetime import date, timedelta
+    from datetime import timedelta
     slots = intent.slots or {}
     qualifier = str(slots.get("qualifier", "")).strip().lower()
-    today_d = date.today()
+    today_d = today_for_zoe_tz()
     if qualifier in ("today", "today's", ""):
         start = end = today_d
         scope = "today"
@@ -2775,10 +2791,9 @@ async def _daily_briefing_weather(user_id: str) -> Optional[dict]:
 
 async def _daily_briefing_calendar(user_id: str) -> Optional[dict]:
     try:
-        from datetime import date
         from database import get_db_ctx
 
-        today = date.today().isoformat()
+        today = today_for_zoe_tz().isoformat()
         async with get_db_ctx() as db:
             cursor = await db.execute(
                 "SELECT id, title, start_time, end_time, category, location FROM events"
@@ -2795,10 +2810,9 @@ async def _daily_briefing_calendar(user_id: str) -> Optional[dict]:
 
 async def _daily_briefing_reminders(user_id: str) -> Optional[dict]:
     try:
-        from datetime import date
         from database import get_db_ctx
 
-        today = date.today().isoformat()
+        today = today_for_zoe_tz().isoformat()
         async with get_db_ctx() as db:
             cursor = await db.execute(
                 "SELECT id, title, due_date, due_time, priority, category FROM reminders"
@@ -2818,7 +2832,7 @@ def _spoken_day(raw: str) -> str:
     try:
         import datetime as _dt
         d = _dt.date.fromisoformat(str(raw)[:10])
-        today = _dt.date.today()
+        today = today_for_zoe_tz()
         if d == today:
             return "today"
         if d == today + _dt.timedelta(days=1):
@@ -3353,9 +3367,9 @@ def _build_command(intent: Intent, user_id: str) -> Optional[str]:
         return cmd
 
     if intent.name == "calendar_show":
-        from datetime import date, timedelta
+        from datetime import timedelta
         qualifier = s.get("qualifier", "").strip().lower()
-        today_d = date.today()
+        today_d = today_for_zoe_tz()
 
         if qualifier in ("today", "today's"):
             return f"{base} zoe-data.calendar_today"

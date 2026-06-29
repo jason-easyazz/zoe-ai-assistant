@@ -7,8 +7,9 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import parse_qs, quote_plus, unquote, urlparse
-from urllib.request import Request, urlopen
 from html import unescape
+
+from agent_safety import guarded_urlopen
 
 
 _URL_RE = re.compile(r"https?://[^\s)>\]\"']+")
@@ -19,6 +20,7 @@ _DDG_RESULT_RE = re.compile(
 )
 _TAG_RE = re.compile(r"<[^>]+>")
 _HTML_PRICE_RE = re.compile(r"(?i)(?:\$|aud\s*)([0-9]{1,4}(?:\.[0-9]{1,2})?)")
+DDG_SEARCH_HTML_MAX_BYTES = 5 * 1024 * 1024
 _STOPWORDS = {
     "the",
     "and",
@@ -236,19 +238,41 @@ def _looks_relevant(query: str, *, title: str, url: str, snippet: str = "") -> b
 
 
 def _fetch_page_price(url: str, timeout_s: float) -> str:
-    req = Request(
-        url,
-        headers={
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
-            "Accept-Language": "en-US,en;q=0.9",
-        },
-    )
+    # SSRF guard: result-target pages are arbitrary URLs; only fetch public hosts
+    # (validated on the initial URL and on every redirect hop).
+    headers = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
     try:
-        with urlopen(req, timeout=timeout_s) as resp:
+        with guarded_urlopen(url, timeout=timeout_s, headers=headers) as resp:
             data = resp.read(350000).decode("utf-8", errors="replace")
-    except Exception:
+    except Exception:  # incl. SSRFBlocked
         return ""
     return _extract_price_from_html_text(data)
+
+
+def _read_bounded_response(resp: Any, max_bytes: int) -> bytes:
+    content_length = resp.headers.get("Content-Length") if hasattr(resp, "headers") else None
+    if content_length:
+        try:
+            declared_length = int(content_length)
+        except (TypeError, ValueError):
+            declared_length = None
+        if declared_length is not None and declared_length > max_bytes:
+            raise ValueError(f"response body exceeds {max_bytes} byte cap")
+
+    chunks: list[bytes] = []
+    total = 0
+    while total <= max_bytes:
+        chunk = resp.read(min(65536, max_bytes + 1 - total))
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise ValueError(f"response body exceeds {max_bytes} byte cap")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def fetch_web_fallback_results(query: str, max_results: int = 5, timeout_s: float = 8.0) -> list[dict[str, str]]:
@@ -256,17 +280,16 @@ def fetch_web_fallback_results(query: str, max_results: int = 5, timeout_s: floa
     if not (query or "").strip():
         return []
     url = f"https://duckduckgo.com/html/?q={quote_plus(query.strip())}"
-    req = Request(
-        url,
-        headers={
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
-            "Accept-Language": "en-US,en;q=0.9",
-        },
-    )
+    headers = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
     try:
-        with urlopen(req, timeout=timeout_s) as resp:
-            body = resp.read().decode("utf-8", errors="replace")
-    except Exception:
+        with guarded_urlopen(url, timeout=timeout_s, headers=headers) as resp:
+            body = _read_bounded_response(resp, DDG_SEARCH_HTML_MAX_BYTES).decode(
+                "utf-8", errors="replace"
+            )
+    except Exception:  # incl. SSRFBlocked
         return []
 
     rows: list[dict[str, str]] = []
@@ -500,4 +523,3 @@ def build_package(
         },
     )
     return asdict(pkg)
-
