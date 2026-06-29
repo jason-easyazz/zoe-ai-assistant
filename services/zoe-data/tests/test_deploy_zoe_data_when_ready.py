@@ -62,6 +62,41 @@ def _env(live: Path, extra=None):
     return env
 
 
+def _copy_wrapper_bundle(tmp_path: Path):
+    bundle = tmp_path / "bundle" / "scripts" / "maintenance"
+    bundle.mkdir(parents=True)
+    wrapper = bundle / "deploy_zoe_data_when_ready.sh"
+    deploy_live = bundle / "deploy_live.sh"
+    marker = tmp_path / "deploy-called"
+    shutil.copy2(SCRIPT, wrapper)
+    wrapper.chmod(0o755)
+    deploy_live.write_text(f"#!/usr/bin/env bash\nset -euo pipefail\ntouch {marker}\n")
+    deploy_live.chmod(0o755)
+    return wrapper, deploy_live, marker
+
+
+def _install_url_aware_curl_shim(tmp_path: Path, expected_url: str):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(exist_ok=True)
+    curl_log = tmp_path / "curl-argv.log"
+    (fake_bin / "curl").write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        f"printf '%s\\n' \"$*\" >> {curl_log}\n"
+        "url=''\n"
+        "for arg in \"$@\"; do\n"
+        "  case \"$arg\" in http://*) url=\"$arg\" ;; esac\n"
+        "done\n"
+        f"if [[ \"$url\" == {expected_url!r} ]]; then\n"
+        "  printf '200'\n"
+        "else\n"
+        "  printf '503'\n"
+        "fi\n"
+    )
+    (fake_bin / "curl").chmod(0o755)
+    return fake_bin, curl_log
+
+
 def test_check_fails_on_feature_branch(tmp_path):
     live = _seed_live_tree(tmp_path)
     _git(live, "checkout", "-b", "feature/test")
@@ -99,15 +134,7 @@ def test_check_passes_on_clean_main_with_low_memory_gate_disabled(tmp_path):
 
 def test_deploy_without_confirmation_refuses_and_does_not_invoke_deploy_live(tmp_path):
     live = _seed_live_tree(tmp_path)
-    bundle = tmp_path / "bundle" / "scripts" / "maintenance"
-    bundle.mkdir(parents=True)
-    wrapper = bundle / "deploy_zoe_data_when_ready.sh"
-    deploy_live = bundle / "deploy_live.sh"
-    marker = tmp_path / "deploy-called"
-    shutil.copy2(SCRIPT, wrapper)
-    wrapper.chmod(0o755)
-    deploy_live.write_text(f"#!/usr/bin/env bash\nset -euo pipefail\ntouch {marker}\n")
-    deploy_live.chmod(0o755)
+    wrapper, _deploy_live, marker = _copy_wrapper_bundle(tmp_path)
 
     proc = _run([str(wrapper), "--deploy"], env=_env(live))
 
@@ -119,19 +146,9 @@ def test_deploy_without_confirmation_refuses_and_does_not_invoke_deploy_live(tmp
 
 def test_deploy_with_confirmation_invokes_deploy_live_stub_and_post_verify(tmp_path):
     live = _seed_live_tree(tmp_path)
-    bundle = tmp_path / "bundle" / "scripts" / "maintenance"
-    fake_bin = tmp_path / "bin"
-    bundle.mkdir(parents=True)
-    fake_bin.mkdir()
-    wrapper = bundle / "deploy_zoe_data_when_ready.sh"
-    deploy_live = bundle / "deploy_live.sh"
-    marker = tmp_path / "deploy-called"
-    shutil.copy2(SCRIPT, wrapper)
-    wrapper.chmod(0o755)
-    deploy_live.write_text(f"#!/usr/bin/env bash\nset -euo pipefail\ntouch {marker}\n")
-    deploy_live.chmod(0o755)
-    (fake_bin / "curl").write_text("#!/usr/bin/env bash\nprintf '200'\n")
-    (fake_bin / "curl").chmod(0o755)
+    wrapper, _deploy_live, marker = _copy_wrapper_bundle(tmp_path)
+    expected_url = "http://127.0.0.1:18000/health"
+    fake_bin, curl_log = _install_url_aware_curl_shim(tmp_path, expected_url)
 
     proc = _run(
         [str(wrapper), "--deploy", "--yes-restart-production"],
@@ -140,10 +157,12 @@ def test_deploy_with_confirmation_invokes_deploy_live_stub_and_post_verify(tmp_p
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert marker.exists()
-    assert "POST-DEPLOY VERIFY PASS" in proc.stdout
+    assert "PRE-FLIGHT TARGET CONTENT PASS" in proc.stdout
+    assert "PASS post-health" in proc.stdout
+    assert expected_url in curl_log.read_text()
 
 
-def test_confirmed_deploy_post_verify_allows_faster_whisper_docstring(tmp_path):
+def test_confirmed_deploy_preflight_allows_faster_whisper_docstring(tmp_path):
     live = _seed_live_tree(tmp_path)
     main = live / "services" / "zoe-data" / "main.py"
     main.write_text(
@@ -155,19 +174,9 @@ def test_confirmed_deploy_post_verify_allows_faster_whisper_docstring(tmp_path):
     _git(live, "add", "services/zoe-data/main.py")
     _git(live, "commit", "-m", "docstring mentions faster-whisper")
     _git(live, "push", "origin", "main")
-    bundle = tmp_path / "bundle" / "scripts" / "maintenance"
-    fake_bin = tmp_path / "bin"
-    bundle.mkdir(parents=True)
-    fake_bin.mkdir()
-    wrapper = bundle / "deploy_zoe_data_when_ready.sh"
-    deploy_live = bundle / "deploy_live.sh"
-    marker = tmp_path / "deploy-called"
-    shutil.copy2(SCRIPT, wrapper)
-    wrapper.chmod(0o755)
-    deploy_live.write_text(f"#!/usr/bin/env bash\nset -euo pipefail\ntouch {marker}\n")
-    deploy_live.chmod(0o755)
-    (fake_bin / "curl").write_text("#!/usr/bin/env bash\nprintf '200'\n")
-    (fake_bin / "curl").chmod(0o755)
+    wrapper, _deploy_live, marker = _copy_wrapper_bundle(tmp_path)
+    expected_url = "http://127.0.0.1:18000/health"
+    fake_bin, curl_log = _install_url_aware_curl_shim(tmp_path, expected_url)
 
     proc = _run(
         [str(wrapper), "--deploy", "--yes-restart-production"],
@@ -176,28 +185,39 @@ def test_confirmed_deploy_post_verify_allows_faster_whisper_docstring(tmp_path):
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert marker.exists()
-    assert "PASS post-main" in proc.stdout
-    assert "PASS post-main-whisper" in proc.stdout
-    assert "POST-DEPLOY VERIFY PASS" in proc.stdout
+    assert "PASS target-main" in proc.stdout
+    assert "PASS target-main-whisper" in proc.stdout
+    assert "PRE-FLIGHT TARGET CONTENT PASS" in proc.stdout
+    assert expected_url in curl_log.read_text()
 
 
 def test_confirmed_deploy_with_failed_gates_aborts_before_deploy_live(tmp_path):
     live = _seed_live_tree(tmp_path)
     _git(live, "checkout", "-b", "feature/not-ready")
-    bundle = tmp_path / "bundle" / "scripts" / "maintenance"
-    bundle.mkdir(parents=True)
-    wrapper = bundle / "deploy_zoe_data_when_ready.sh"
-    deploy_live = bundle / "deploy_live.sh"
-    marker = tmp_path / "deploy-called"
-    shutil.copy2(SCRIPT, wrapper)
-    wrapper.chmod(0o755)
-    deploy_live.write_text(f"#!/usr/bin/env bash\nset -euo pipefail\ntouch {marker}\n")
-    deploy_live.chmod(0o755)
+    wrapper, _deploy_live, marker = _copy_wrapper_bundle(tmp_path)
 
     proc = _run([str(wrapper), "--deploy", "--yes-restart-production"], env=_env(live))
 
     assert proc.returncode != 0
     assert "deploy aborted: gates are NOT-READY" in proc.stdout
+    assert not marker.exists()
+
+
+def test_confirmed_deploy_with_bad_target_content_aborts_before_deploy_live(tmp_path):
+    live = _seed_live_tree(tmp_path)
+    voice = live / "services" / "zoe-data" / "routers" / "voice_tts.py"
+    voice.write_text("def other_warmup():\n    pass\n")
+    _git(live, "add", "services/zoe-data/routers/voice_tts.py")
+    _git(live, "commit", "-m", "remove target marker")
+    _git(live, "push", "origin", "main")
+    _git(live, "reset", "--hard", "HEAD~1")
+    wrapper, _deploy_live, marker = _copy_wrapper_bundle(tmp_path)
+
+    proc = _run([str(wrapper), "--deploy", "--yes-restart-production"], env=_env(live))
+
+    assert proc.returncode != 0
+    assert "PRE-FLIGHT TARGET CONTENT FAIL" in proc.stdout
+    assert "deploy aborted: target commit content is NOT-READY" in proc.stdout
     assert not marker.exists()
 
 

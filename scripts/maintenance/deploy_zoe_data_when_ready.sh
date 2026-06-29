@@ -249,57 +249,70 @@ check_gates() {
 }
 
 main_schedules_moonshine_startup() {
-    local main_file="$1"
-    grep -Eq "(create_task|ensure_future)[(][^)]*warm_moonshine" "$main_file"
+    # This verify intentionally assumes the current startup warmup idiom:
+    # scheduling the warm task via asyncio.create_task/ensure_future.
+    grep -Eq "(create_task|ensure_future)[(][^)]*warm_moonshine"
 }
 
 main_schedules_whisper_startup() {
-    local main_file="$1"
-    grep -Eq "(create_task|ensure_future)[(][^)]*(warm_whisper|warm_faster_whisper|load_whisper|load_faster_whisper|faster_whisper|faster-whisper)" "$main_file"
+    grep -Eq "(create_task|ensure_future)[(][^)]*(warm_whisper|warm_faster_whisper|load_whisper|load_faster_whisper|faster_whisper|faster-whisper)"
 }
 
-post_deploy_verify() {
-    local voice_file="${LIVE}/services/zoe-data/routers/voice_tts.py"
-    local main_file="${LIVE}/services/zoe-data/main.py"
-    local code=""
+preflight_target_content_verify() {
+    local target_ref="refs/remotes/origin/main"
+    local voice_path="services/zoe-data/routers/voice_tts.py"
+    local main_path="services/zoe-data/main.py"
+    local voice_content=""
+    local main_content=""
     local failed=0
 
-    log "post-deploy verify starting"
-    if grep -q "_prewarm_stt_on_wake" "$voice_file"; then
-        gate_pass "post-voice" "voice_tts.py contains _prewarm_stt_on_wake"
+    log "pre-flight target content verify: ${target_ref}"
+    voice_content="$(git -C "$LIVE" show "${target_ref}:${voice_path}" 2>/dev/null || true)"
+    main_content="$(git -C "$LIVE" show "${target_ref}:${main_path}" 2>/dev/null || true)"
+
+    if [[ -n "$voice_content" && "$voice_content" == *"_prewarm_stt_on_wake"* ]]; then
+        gate_pass "target-voice" "${voice_path} contains _prewarm_stt_on_wake"
     else
-        gate_fail "post-voice" "voice_tts.py missing _prewarm_stt_on_wake"
+        gate_fail "target-voice" "${target_ref}:${voice_path} missing _prewarm_stt_on_wake"
         failed=1
     fi
 
-    if main_schedules_moonshine_startup "$main_file"; then
-        gate_pass "post-main" "main.py schedules Moonshine startup warmup"
+    if [[ -n "$main_content" ]] && main_schedules_moonshine_startup <<<"$main_content"; then
+        gate_pass "target-main" "${main_path} schedules Moonshine startup warmup"
     else
-        gate_fail "post-main" "main.py does not schedule warm_moonshine startup warmup"
+        gate_fail "target-main" "${target_ref}:${main_path} does not schedule warm_moonshine startup warmup"
         failed=1
     fi
 
-    if main_schedules_whisper_startup "$main_file"; then
-        gate_fail "post-main-whisper" "main.py appears to schedule a whisper startup warmup"
+    if [[ -n "$main_content" ]] && main_schedules_whisper_startup <<<"$main_content"; then
+        gate_fail "target-main-whisper" "${target_ref}:${main_path} appears to schedule a whisper startup warmup"
         failed=1
     else
-        gate_pass "post-main-whisper" "no whisper startup warmup scheduling detected"
+        gate_pass "target-main-whisper" "no whisper startup warmup scheduling detected in target commit"
     fi
+
+    if [[ "$failed" -eq 0 ]]; then
+        log "PRE-FLIGHT TARGET CONTENT PASS"
+        return 0
+    fi
+    log "PRE-FLIGHT TARGET CONTENT FAIL"
+    return 1
+}
+
+post_deploy_info() {
+    local code=""
+    local live_sha=""
+
+    live_sha="$(git -C "$LIVE" rev-parse --short HEAD 2>/dev/null || true)"
+    log "post-deploy informational check: live_sha=${live_sha:-unknown}"
 
     code="$(curl -s -o /dev/null -w '%{http_code}' -m 3 "http://127.0.0.1:${PORT}/health" || true)"
     if [[ "$code" == "200" ]]; then
         gate_pass "post-health" "http://127.0.0.1:${PORT}/health returned 200"
     else
-        gate_fail "post-health" "http://127.0.0.1:${PORT}/health returned ${code:-no response}"
-        failed=1
+        log "WARNING: post-deploy informational health returned ${code:-no response}; deploy_live.sh reported success and owns rollback. The service may still be LIVE at ${live_sha:-unknown}; this wrapper does not roll back after deploy_live succeeds."
     fi
-
-    if [[ "$failed" -eq 0 ]]; then
-        log "POST-DEPLOY VERIFY PASS"
-        return 0
-    fi
-    log "POST-DEPLOY VERIFY FAIL"
-    return 1
+    return 0
 }
 
 run_watch() {
@@ -338,12 +351,16 @@ case "$MODE" in
             log "REFUSING: --deploy would restart production ${SERVICE}; rerun with --yes-restart-production to confirm this production action."
             exit 1
         fi
+        if ! preflight_target_content_verify; then
+            log "deploy aborted: target commit content is NOT-READY"
+            exit 1
+        fi
         if [[ ! -x "$DEPLOY_LIVE" ]]; then
             log "ERROR: blessed deploy script is not executable: $DEPLOY_LIVE" >&2
             exit 1
         fi
         log "running blessed deploy: $DEPLOY_LIVE"
         "$DEPLOY_LIVE"
-        post_deploy_verify
+        post_deploy_info
         ;;
 esac
