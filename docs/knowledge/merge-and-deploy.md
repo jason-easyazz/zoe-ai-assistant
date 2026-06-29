@@ -72,6 +72,10 @@ With `strict = true` only **one** PR can be up-to-date at a time, so a batch of 
 - **Workaround (no force-push):** make a fresh single squashed commit of the final state, push it to a
   **new** branch (a normal create), open a **replacement PR**, and close the old one. Identical final
   diff, clean history → GitGuardian passes. (Used for the panel-authz and auth-limiter PRs.)
+- **Carry the review state forward.** A replacement PR starts with a blank slate — the old PR's resolved
+  threads, unresolved findings, and approvals do **not** transfer. Before closing the original, copy any
+  still-open review findings into the new PR (or re-run the cross-review against the final diff) so a
+  fix doesn't silently drop prior review context. Cross-link the old and new PR numbers.
 
 ## CI test discovery — `validate.yml` runs an ENUMERATED list
 
