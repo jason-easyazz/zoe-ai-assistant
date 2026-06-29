@@ -64,7 +64,8 @@ services:
     - zoe-network
     restart: unless-stopped
     depends_on:
-    - zoe-database
+      zoe-database:
+        condition: service_healthy
     environment:
     - PYTHONUNBUFFERED=1
     - DATABASE_PATH=/app/data/zoe.db
@@ -134,7 +135,7 @@ services:
   #
   # 1. NATIVE STACK (primary, active for Zoe touch panel):
   #    - Wake word:   openWakeWord ONNX model on Pi daemon (zoe_voice_daemon.py)
-  #    - STT:         whisper.cpp CLI on Jetson (/api/voice/transcribe)
+  #    - STT:         Moonshine v2 Medium in zoe-data (/api/voice/transcribe)
   #    - TTS:         Kokoro ONNX → Edge TTS → espeak-ng waterfall (/api/voice/synthesize)
   #    - Barge-in:    Silero VAD on Pi during TTS playback
   #    - Speaker ID:  resemblyzer 256-dim embeddings on Pi
@@ -165,17 +166,7 @@ services:
   #    wyoming-openwakeword: OOM-killed May 2026, not configured in any active pipeline.
   # wyoming-whisper: disabled — HA satellite STT experiment abandoned (quality insufficient).
   # wyoming-openwakeword: disabled — OOM-killed May 2026, not configured in any active pipeline.
-  # To re-enable either, uncomment the block below and run: docker compose up -d wyoming-whisper
-  #
-  # wyoming-whisper:
-  #   image: rhasspy/wyoming-whisper:latest
-  #   container_name: wyoming-whisper
-  #   restart: unless-stopped
-  #   command: --model tiny-int8 --language en --uri tcp://0.0.0.0:10300
-  #   volumes:
-  #   - ./data/wyoming/whisper:/data
-  #   networks:
-  #   - zoe-network
+  # Do not re-enable Wyoming Whisper; Moonshine is the canonical STT rock.
   #
   # wyoming-openwakeword:
   #   image: rhasspy/wyoming-openwakeword:latest
@@ -243,7 +234,7 @@ services:
   #   NOTE: the name "zoe-core" is now REUSED for the new Pi-agent core (services/zoe-core/), the reasoning
   #   brain on Gemma 4. That new service is defined separately — this comment refers only to the old monolith.
   # zoe-litellm: RETIRED - OpenClaw handles model routing (GPT-4o-mini / Gemini Flash / local Hermes)
-  # zoe-llamacpp: RETIRED - Native llama-server on host :11434 (Hermes-3-8B, better GPU perf)
+  # zoe-llamacpp: RETIRED - Native llama-server on host :11434 (Gemma 4 E4B-QAT+MTP)
   # zoe-mcp-server: RETIRED - OpenClaw native tool system
   # zoe-mem-agent: RETIRED - OpenClaw memory-memu plugin
   # zoe-code-execution: RETIRED - OpenClaw exec tool
