@@ -391,7 +391,12 @@ window.ZoeWebSockets = {
             let currentPanelId = '';
             try {
                 const params = new URLSearchParams(window.location.search || '');
-                currentPanelId = (params.get('panel_id') || localStorage.getItem('zoe_touch_panel_id') || '').trim();
+                currentPanelId = (
+                    params.get('panel_id')
+                    || localStorage.getItem('zoe_panel_id')
+                    || localStorage.getItem('zoe_touch_panel_id')
+                    || ''
+                ).trim();
             } catch (_) {}
             if (payload.panel_id && currentPanelId && payload.panel_id !== currentPanelId) {
                 return;
@@ -437,7 +442,6 @@ window.ZoeWebSockets = {
         console.log('[ZoeWS] Panel push channel connected, panel_id:', panelId);
     }
 };
-
 
 
 

@@ -1090,10 +1090,11 @@
                     }
                 } catch (_) {}
                 if (!panelId) {
-                    panelId = localStorage.getItem('zoe_touch_panel_id') || null;
+                    panelId = localStorage.getItem('zoe_panel_id') || localStorage.getItem('zoe_touch_panel_id') || null;
                 }
                 if (!panelId) return;
                 // Store the panel_id so subsequent pages pick it up immediately.
+                localStorage.setItem('zoe_panel_id', panelId);
                 localStorage.setItem('zoe_touch_panel_id', panelId);
                 // Fire-and-forget — failure is non-fatal; the dashboard's bindPanel()
                 // call will succeed shortly after the page redirect completes.

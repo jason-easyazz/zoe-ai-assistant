@@ -135,21 +135,17 @@
     }
 
     function getPanelId() {
-        // The connecting id need not be the panel's canonical id: the server's
-        // /ws/push guard resolves the canonical bound panel from the session and
-        // subscribes the socket to THAT channel (see _resolve_subscribable_panel in
-        // services/zoe-data/main.py), so pushes reach the panel regardless of which
-        // of its aliases this returns. We therefore keep the original behaviour and
-        // do not juggle the registered/generated key precedence here (the two keys
-        // can always diverge, so any precedence rule just trades one stale-id case
-        // for the opposite one).
+        // Prefer the registered panel id for push routing. The generated touch
+        // alias is only a fallback for fresh browsers that have not been paired.
         const params = new URLSearchParams(window.location.search);
         const forced = params.get('panel_id');
         if (forced && forced.trim()) {
-            localStorage.setItem('zoe_touch_panel_id', forced.trim());
-            return forced.trim();
+            const panelId = forced.trim();
+            localStorage.setItem('zoe_panel_id', panelId);
+            localStorage.setItem('zoe_touch_panel_id', panelId);
+            return panelId;
         }
-        let panelId = localStorage.getItem('zoe_touch_panel_id');
+        let panelId = localStorage.getItem('zoe_panel_id') || localStorage.getItem('zoe_touch_panel_id');
         if (!panelId) {
             panelId = 'panel_' + Math.random().toString(36).slice(2, 10);
             localStorage.setItem('zoe_touch_panel_id', panelId);
