@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 import tempfile
 import types
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 import pytest
@@ -18,6 +18,7 @@ from core.passcode import passcode_manager
 from core.security import rate_limiter
 from core.sessions import session_manager, SessionType
 from core.account_setup import setup_token_manager
+from models.database import AuthMethod, AuthSession
 from main import app
 
 
@@ -71,9 +72,13 @@ def _reset_security_state():
     """Rate-limit + setup-token state is process-global; isolate every test."""
     rate_limiter.reset()
     setup_token_manager.reset(bootstrap_token=BOOTSTRAP)
+    with session_manager.session_lock:
+        session_manager.active_sessions.clear()
     yield
     rate_limiter.reset()
     setup_token_manager.reset(bootstrap_token=BOOTSTRAP)
+    with session_manager.session_lock:
+        session_manager.active_sessions.clear()
 
 
 def _seed_user(db_path: str, *, user_id="zoe", username="zoe", password=None,
@@ -104,6 +109,23 @@ def _password_hash_of(db_path: str, user_id="zoe"):
     return row[0] if row else None
 
 
+def _add_active_session(session_id: str, user_id: str) -> AuthSession:
+    now = datetime.now(timezone.utc)
+    session = AuthSession(
+        session_id=session_id,
+        user_id=user_id,
+        session_type=SessionType.STANDARD,
+        auth_method=AuthMethod.PASSWORD,
+        device_info={},
+        created_at=now,
+        last_activity=now,
+        expires_at=now + timedelta(hours=1),
+    )
+    with session_manager.session_lock:
+        session_manager.active_sessions[session_id] = session
+    return session
+
+
 def _init_auth_tables(db_path: str) -> None:
     conn = sqlite3.connect(db_path)
     conn.execute(
@@ -122,6 +144,16 @@ def _init_auth_tables(db_path: str) -> None:
             failed_login_attempts INTEGER DEFAULT 0,
             locked_until TEXT,
             settings TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS password_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
         )
         """
     )
@@ -674,6 +706,66 @@ def test_admin_setup_token_endpoint_rejects_already_set_user(sqlite_auth_db, mon
         headers={"X-Session-ID": "admin-sess"},
     )
     assert resp.status_code == 400
+
+
+def test_password_change_invalidates_other_sessions_but_keeps_current(sqlite_auth_db, monkeypatch):
+    _seed_user(sqlite_auth_db, user_id="zoe", username="zoe", password=_pw("currentok"))
+    _add_active_session("current-sess", "zoe")
+    _add_active_session("other-sess", "zoe")
+    monkeypatch.setattr(
+        __import__("core.auth", fromlist=["auth_manager"]).auth_manager.password_policy,
+        "require_special",
+        False,
+    )
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/auth/password/change",
+        headers={"X-Session-ID": "current-sess"},
+        json={
+            "current_password": _pw("currentok"),
+            "new_password": _pw("rotatedok"),
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"message": "Password changed successfully"}
+    assert session_manager.get_session("current-sess") is not None
+    assert session_manager.get_session("other-sess") is None
+
+
+def test_admin_password_reset_invalidates_all_target_user_sessions(sqlite_auth_db, monkeypatch):
+    _add_active_session("admin-sess", "admin")
+    _add_active_session("target-sess-1", "zoe")
+    _add_active_session("target-sess-2", "zoe")
+    temp_pw = _pw("resettemp")
+
+    monkeypatch.setattr(
+        session_manager,
+        "validate_session_permission",
+        lambda session_id, permission, resource=None: permission == "users.reset_password",
+    )
+    monkeypatch.setattr(
+        __import__("core.auth", fromlist=["auth_manager"]).auth_manager,
+        "reset_password",
+        lambda user_id, reset_by: (True, "Password reset successfully", temp_pw),
+    )
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/admin/users/zoe/reset-password",
+        headers={"X-Session-ID": "admin-sess"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "message": "Password reset successfully",
+        "temporary_password": temp_pw,
+        "note": "User must change password on next login",
+    }
+    assert session_manager.get_session("admin-sess") is not None
+    assert session_manager.get_session("target-sess-1") is None
+    assert session_manager.get_session("target-sess-2") is None
 
 
 def test_setup_token_claim_is_single_use(sqlite_auth_db):
