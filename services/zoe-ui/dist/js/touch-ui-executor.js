@@ -135,6 +135,14 @@
     }
 
     function getPanelId() {
+        // The connecting id need not be the panel's canonical id: the server's
+        // /ws/push guard resolves the canonical bound panel from the session and
+        // subscribes the socket to THAT channel (see _resolve_subscribable_panel in
+        // services/zoe-data/main.py), so pushes reach the panel regardless of which
+        // of its aliases this returns. We therefore keep the original behaviour and
+        // do not juggle the registered/generated key precedence here (the two keys
+        // can always diverge, so any precedence rule just trades one stale-id case
+        // for the opposite one).
         const params = new URLSearchParams(window.location.search);
         const forced = params.get('panel_id');
         if (forced && forced.trim()) {
