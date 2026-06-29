@@ -17,9 +17,17 @@ class _FailingDDGS:
 
 
 class _FakeUrlResponse:
-    def __init__(self, body: bytes, headers: dict[str, str] | None = None):
+    def __init__(
+        self,
+        body: bytes,
+        headers: dict[str, str] | None = None,
+        *,
+        max_chunk_size: int | None = None,
+    ):
         self._body = body
         self.headers = headers or {}
+        self._offset = 0
+        self._max_chunk_size = max_chunk_size
         self.read_sizes: list[int | None] = []
 
     def __enter__(self):
@@ -30,7 +38,14 @@ class _FakeUrlResponse:
 
     def read(self, size: int | None = None) -> bytes:
         self.read_sizes.append(size)
-        return self._body if size is None else self._body[:size]
+        if self._offset >= len(self._body):
+            return b""
+        limit = len(self._body) if size is None else self._offset + size
+        if self._max_chunk_size is not None:
+            limit = min(limit, self._offset + self._max_chunk_size)
+        chunk = self._body[self._offset : min(limit, len(self._body))]
+        self._offset += len(chunk)
+        return chunk
 
 
 def _force_html_fallback(monkeypatch):
@@ -59,7 +74,24 @@ def test_ddg_search_sync_parses_normal_bounded_search_html(monkeypatch):
             "url": "https://example.com/deals",
         }
     ]
-    assert response.read_sizes == [zoe_agent._DDG_SEARCH_HTML_MAX_BYTES + 1]
+    assert response.read_sizes == [65536, 65536]
+
+
+def test_ddg_search_sync_reads_until_eof_after_short_read(monkeypatch):
+    _force_html_fallback(monkeypatch)
+    body = (
+        b'<a class="result__a" href="https://example.com/deals">Example deal</a>'
+        b'<a class="result__snippet">Example snippet for this search result</a>'
+        + b"x" * 3000
+    )
+    response = _FakeUrlResponse(body, max_chunk_size=1024)
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: response)
+
+    rows = zoe_agent._ddg_search_sync("example deal", max_results=1)
+
+    assert rows[0]["url"] == "https://example.com/deals"
+    assert len(response.read_sizes) > 1
 
 
 def test_ddg_search_sync_rejects_over_cap_search_html(monkeypatch):

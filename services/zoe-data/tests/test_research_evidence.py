@@ -90,9 +90,17 @@ def test_package_needs_web_fallback_depends_on_usable_sources_and_results(packag
 
 
 class _FakeUrlResponse:
-    def __init__(self, body: bytes, headers: dict[str, str] | None = None):
+    def __init__(
+        self,
+        body: bytes,
+        headers: dict[str, str] | None = None,
+        *,
+        max_chunk_size: int | None = None,
+    ):
         self._body = body
         self.headers = headers or {}
+        self._offset = 0
+        self._max_chunk_size = max_chunk_size
         self.read_sizes: list[int | None] = []
 
     def __enter__(self):
@@ -103,7 +111,14 @@ class _FakeUrlResponse:
 
     def read(self, size: int | None = None) -> bytes:
         self.read_sizes.append(size)
-        return self._body if size is None else self._body[:size]
+        if self._offset >= len(self._body):
+            return b""
+        limit = len(self._body) if size is None else self._offset + size
+        if self._max_chunk_size is not None:
+            limit = min(limit, self._offset + self._max_chunk_size)
+        chunk = self._body[self._offset : min(limit, len(self._body))]
+        self._offset += len(chunk)
+        return chunk
 
 
 def test_fetch_web_fallback_results_parses_normal_bounded_search_html(monkeypatch):
@@ -128,7 +143,26 @@ def test_fetch_web_fallback_results_parses_normal_bounded_search_html(monkeypatc
             "verified": "true",
         }
     ]
-    assert response.read_sizes == [research_evidence.DDG_SEARCH_HTML_MAX_BYTES + 1]
+    assert response.read_sizes == [65536, 65536]
+
+
+def test_fetch_web_fallback_results_reads_until_eof_after_short_read(monkeypatch):
+    import research_evidence
+
+    prefix = b"x" * 4096
+    body = prefix + b"""
+        <a class="result__a" href="https://example.com/deals">Example deal</a>
+        <a class="result__snippet">Example deal for $19.99 today</a>
+    """
+    response = _FakeUrlResponse(body, max_chunk_size=2048)
+    monkeypatch.setattr(research_evidence, "guarded_urlopen", lambda *a, **k: response)
+    monkeypatch.setattr(research_evidence, "_fetch_page_price", lambda *a, **k: "")
+
+    rows = fetch_web_fallback_results("example deal", max_results=1)
+
+    assert rows[0]["url"] == "https://example.com/deals"
+    assert rows[0]["price"] == "$19.99"
+    assert len(response.read_sizes) > 1
 
 
 def test_fetch_web_fallback_results_rejects_over_cap_search_html(monkeypatch):

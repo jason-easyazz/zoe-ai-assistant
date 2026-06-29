@@ -146,7 +146,8 @@ async def _mcp_call(tool: str, arguments: dict[str, Any]) -> Any:
     async with httpx.AsyncClient(timeout=90) as client:
         async with client.stream("POST", MCP_URL, json=payload, headers=headers) as resp:
             resp.raise_for_status()
-            data = json.loads((await _read_bounded_httpx_response(resp, MCP_RESPONSE_MAX_BYTES)).decode())
+            raw = await _read_bounded_httpx_response(resp, MCP_RESPONSE_MAX_BYTES)
+            data = json.loads(raw.decode(resp.encoding or "utf-8"))
     if data.get("error"):
         raise RuntimeError(f"Greptile MCP error: {data['error']}")
     result = data.get("result") or {}

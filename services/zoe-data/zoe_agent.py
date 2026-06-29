@@ -1722,10 +1722,18 @@ def _read_bounded_url_response(resp, max_bytes: int) -> bytes:
             declared_length = None
         if declared_length is not None and declared_length > max_bytes:
             raise ValueError(f"response body exceeds {max_bytes} byte cap")
-    data = resp.read(max_bytes + 1)
-    if len(data) > max_bytes:
-        raise ValueError(f"response body exceeds {max_bytes} byte cap")
-    return data
+
+    chunks: list[bytes] = []
+    total = 0
+    while total <= max_bytes:
+        chunk = resp.read(min(65536, max_bytes + 1 - total))
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise ValueError(f"response body exceeds {max_bytes} byte cap")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _ddg_search_sync(query: str, max_results: int = 5, timeout_s: float = 10.0) -> list[dict]:
