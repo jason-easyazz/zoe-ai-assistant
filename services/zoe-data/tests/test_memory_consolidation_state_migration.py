@@ -133,17 +133,32 @@ def test_0014_postgres_branch_mirrors_runtime_ddl():
 
 # ─── 0007 context ADD COLUMN is rerun-safe (Postgres) ─────────────────────────
 
-def test_0007_context_add_column_is_idempotent():
+def _render_0006_to_0007(dialect_url: str) -> str:
+    cfg = Config()
+    cfg.set_main_option("script_location", str(SVC / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", dialect_url)
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         from alembic import command
-        command.upgrade(_alembic_config(), "0006:0007", sql=True)
-    sql = buf.getvalue().lower()
-    # The previously-unguarded ADD COLUMN now uses IF NOT EXISTS, so a
-    # partial-failure re-run no longer dies on duplicate-column.
+        command.upgrade(cfg, "0006:0007", sql=True)
+    return buf.getvalue().lower()
+
+
+def test_0007_context_add_column_is_idempotent_on_postgres():
+    sql = _render_0006_to_0007("postgresql+psycopg2://u:p@localhost/db")
+    # Postgres (production): previously-unguarded ADD COLUMN now uses IF NOT
+    # EXISTS, so a partial-failure re-run no longer dies on duplicate-column.
     assert "add column if not exists context text not null default 'personal'" in sql
     # Net schema is unchanged — the column is still TEXT NOT NULL DEFAULT.
     assert "alter table people add column context" not in sql
+
+
+def test_0007_context_add_column_sqlite_uses_plain_add_column():
+    # SQLite has no ADD COLUMN IF NOT EXISTS; the dialect branch must emit plain
+    # ADD COLUMN so the migration parses under SQLite, with the same net column.
+    sql = _render_0006_to_0007("sqlite://")
+    assert "add column context text not null default 'personal'" in sql
+    assert "if not exists context" not in sql
 
 
 # ─── Runtime _ensure_state_table gates CREATE for least-privilege roles ────────
