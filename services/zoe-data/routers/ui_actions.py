@@ -20,6 +20,44 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ui", tags=["ui"])
 
 
+async def _authorize_panel(db, user: dict, panel_id: str) -> None:
+    """Ensure the caller is allowed to act on ``panel_id``.
+
+    Only two callers are legitimate for panel-scoped writes/polls:
+
+      * A panel daemon authenticated with that panel's **device token** — its
+        resolved user dict carries ``panel_id`` (set in ``auth.get_current_user``
+        / ``_resolve_device_token_user``). It may act ONLY on its own panel.
+      * A **human session user explicitly bound to the panel** via
+        ``panel_user_bindings`` (``binding_type`` 'default' or 'allowed').
+
+    Any other authenticated user is rejected with 403. Without this gate a
+    normal session could bind/sync an arbitrary ``panel_id`` (the
+    ``ON CONFLICT(panel_id)`` upsert rewrites ``ui_panel_sessions.user_id``) and
+    then poll ``/actions/pending`` to drain another panel/user's queued actions
+    — the panel-hijack vulnerability (P1).
+    """
+    token_panel = user.get("panel_id")
+    if token_panel:
+        # Device-token caller: scoped to exactly one panel.
+        if str(token_panel) == str(panel_id):
+            return
+        raise HTTPException(status_code=403, detail="Device token is not valid for this panel")
+
+    user_id = user.get("user_id")
+    if user_id and user_id != "guest":
+        row = await (
+            await db.execute(
+                "SELECT 1 FROM panel_user_bindings WHERE panel_id = ? AND user_id = ? LIMIT 1",
+                (panel_id, user_id),
+            )
+        ).fetchone()
+        if row:
+            return
+
+    raise HTTPException(status_code=403, detail="Not authorized for this panel")
+
+
 @router.post("/panel/bind")
 async def bind_panel(
     payload: dict,
@@ -31,6 +69,7 @@ async def bind_panel(
     panel_id = payload.get("panel_id")
     if not panel_id:
         raise HTTPException(status_code=400, detail="panel_id is required")
+    await _authorize_panel(db, user, panel_id)
 
     chat_session_id = payload.get("session_id")
     page = payload.get("page")
@@ -73,6 +112,16 @@ async def create_ui_action(
         raise HTTPException(status_code=400, detail="Unsupported action_type")
     if not await can_use_ui_action(db, user, action_type):
         raise HTTPException(status_code=403, detail="Role cannot enqueue this action type")
+    # A caller-supplied panel_id targets another surface's queue: enqueue_ui_action
+    # rewrites the stored user_id to that panel's owner, so the action is delivered
+    # when the panel polls /actions/pending. Without this gate a guest or unbound
+    # session could inject actions into an arbitrary active panel (same panel-hijack
+    # class as bind/poll/sync). Authorize panel ownership/device-token, matching the
+    # other panel-scoped routes. No panel_id → enqueue_ui_action resolves the
+    # caller's OWN foreground panel, which needs no cross-panel check.
+    target_panel_id = payload.get("panel_id")
+    if target_panel_id:
+        await _authorize_panel(db, user, target_panel_id)
     data = payload.get("payload", {})
     result = await enqueue_ui_action(
         db,
@@ -96,6 +145,7 @@ async def get_pending_ui_actions(
     db=Depends(get_db),
 ):
     await require_feature_access(db, user, feature="ui_actions", action="read")
+    await _authorize_panel(db, user, panel_id)
     # Resolve the panel's registered user_id from ui_panel_sessions.
     # Actions are stored under the panel's user (who polls for them), which may differ
     # from the caller's user_id when actions are queued by OpenClaw/API on behalf of the panel.
@@ -262,6 +312,7 @@ async def sync_ui_state(
     panel_id = payload.get("panel_id")
     if not panel_id:
         raise HTTPException(status_code=400, detail="panel_id is required")
+    await _authorize_panel(db, user, panel_id)
 
     page = payload.get("page")
     chat_session_id = payload.get("session_id")
