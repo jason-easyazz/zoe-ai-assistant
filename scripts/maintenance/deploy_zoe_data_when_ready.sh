@@ -18,6 +18,16 @@ MODE_SET=0
 WATCH_INTERVAL=30
 MAX_WAIT=""
 YES_RESTART=0
+PINNED_TARGET_SHA=""
+PINNED_ORIGIN_REMOTE=""
+PINNED_ORIGIN_INSTEAD_OF=""
+
+cleanup() {
+    if [[ -n "$PINNED_ORIGIN_REMOTE" && -d "$PINNED_ORIGIN_REMOTE" ]]; then
+        rm -rf "$(dirname "$PINNED_ORIGIN_REMOTE")"
+    fi
+}
+trap cleanup EXIT
 
 log() {
     printf 'deploy-ready: %s\n' "$*"
@@ -264,9 +274,18 @@ preflight_target_content_verify() {
     local main_path="services/zoe-data/main.py"
     local voice_content=""
     local main_content=""
+    local target_sha=""
     local failed=0
 
-    log "pre-flight target content verify: ${target_ref}"
+    target_sha="$(git -C "$LIVE" rev-parse "${target_ref}" 2>/dev/null || true)"
+    if [[ -z "$target_sha" ]]; then
+        gate_fail "target-sha" "could not resolve ${target_ref}"
+        log "PRE-FLIGHT TARGET CONTENT FAIL"
+        return 1
+    fi
+    PINNED_TARGET_SHA="$target_sha"
+
+    log "pre-flight target content verify: ${target_ref} @ ${PINNED_TARGET_SHA}"
     voice_content="$(git -C "$LIVE" show "${target_ref}:${voice_path}" 2>/dev/null || true)"
     main_content="$(git -C "$LIVE" show "${target_ref}:${main_path}" 2>/dev/null || true)"
 
@@ -299,6 +318,48 @@ preflight_target_content_verify() {
     return 1
 }
 
+assert_deployed_target_sha() {
+    local live_sha=""
+
+    if [[ -z "$PINNED_TARGET_SHA" ]]; then
+        log "ERROR: no pinned target SHA recorded before deploy_live.sh handoff" >&2
+        return 1
+    fi
+
+    live_sha="$(git -C "$LIVE" rev-parse HEAD 2>/dev/null || true)"
+    if [[ "$live_sha" == "$PINNED_TARGET_SHA" ]]; then
+        gate_pass "post-target-sha" "live HEAD matches pre-flighted target ${PINNED_TARGET_SHA}"
+        return 0
+    fi
+
+    gate_fail "post-target-sha" "live HEAD ${live_sha:-unknown} does not match pre-flighted target ${PINNED_TARGET_SHA}"
+    log "ERROR: deploy_live.sh did not leave the live tree at the pre-flighted target. Restart/rollback remains owned by deploy_live.sh; this wrapper is aborting so the drift is visible."
+    return 1
+}
+
+prepare_pinned_origin_remote() {
+    local remote_root=""
+    local origin_url=""
+
+    if [[ -z "$PINNED_TARGET_SHA" ]]; then
+        log "ERROR: no pinned target SHA recorded before preparing deploy remote" >&2
+        return 1
+    fi
+    origin_url="$(git -C "$LIVE" config --get remote.origin.url 2>/dev/null || true)"
+    if [[ -z "$origin_url" ]]; then
+        log "ERROR: could not resolve live remote.origin.url before preparing deploy remote" >&2
+        return 1
+    fi
+
+    remote_root="$(mktemp -d "${TMPDIR:-/tmp}/zoe-deploy-pinned-origin.XXXXXX")"
+    PINNED_ORIGIN_REMOTE="${remote_root}/origin.git"
+    PINNED_ORIGIN_INSTEAD_OF="$origin_url"
+
+    git init --bare "$PINNED_ORIGIN_REMOTE" >/dev/null
+    git -C "$LIVE" push "$PINNED_ORIGIN_REMOTE" "${PINNED_TARGET_SHA}:refs/heads/main" >/dev/null
+    log "prepared pinned origin remote for deploy_live.sh: main=${PINNED_TARGET_SHA}"
+}
+
 post_deploy_info() {
     local code=""
     local live_sha=""
@@ -306,6 +367,9 @@ post_deploy_info() {
     live_sha="$(git -C "$LIVE" rev-parse --short HEAD 2>/dev/null || true)"
     log "post-deploy informational check: live_sha=${live_sha:-unknown}"
 
+    # /health is zoe-data's liveness probe, not readiness. There is no /readyz
+    # endpoint today, so this informational check intentionally mirrors the
+    # blessed deploy_live.sh contract. If /readyz is added, upgrade both scripts.
     code="$(curl -s -o /dev/null -w '%{http_code}' -m 3 "http://127.0.0.1:${PORT}/health" || true)"
     if [[ "$code" == "200" ]]; then
         gate_pass "post-health" "http://127.0.0.1:${PORT}/health returned 200"
@@ -359,8 +423,19 @@ case "$MODE" in
             log "ERROR: blessed deploy script is not executable: $DEPLOY_LIVE" >&2
             exit 1
         fi
-        log "running blessed deploy: $DEPLOY_LIVE"
-        "$DEPLOY_LIVE"
+        if ! prepare_pinned_origin_remote; then
+            log "deploy aborted: could not prepare pinned origin remote"
+            exit 1
+        fi
+        log "running blessed deploy: $DEPLOY_LIVE (pre-flighted target ${PINNED_TARGET_SHA})"
+        ZOE_DEPLOY_PINNED_TARGET_SHA="$PINNED_TARGET_SHA" \
+            GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0="url.${PINNED_ORIGIN_REMOTE}.insteadOf" \
+            GIT_CONFIG_VALUE_0="$PINNED_ORIGIN_INSTEAD_OF" \
+            "$DEPLOY_LIVE"
+        if ! assert_deployed_target_sha; then
+            exit 1
+        fi
         post_deploy_info
         ;;
 esac
