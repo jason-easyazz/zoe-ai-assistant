@@ -16,7 +16,15 @@ from alembic import op
 
 def upgrade():
     # ── 1. Add context column ──────────────────────────────────────────────
-    op.execute("ALTER TABLE people ADD COLUMN context TEXT NOT NULL DEFAULT 'personal'")
+    # Postgres: IF NOT EXISTS so a partial-failure re-run doesn't die on
+    # duplicate-column. SQLite (tests) has no ADD COLUMN IF NOT EXISTS, so branch
+    # on dialect (matching 0013) and emit plain ADD COLUMN there — a fresh dev DB
+    # is clean. Net effect is identical on both: people.context becomes
+    # TEXT NOT NULL DEFAULT 'personal'. Production is PostgreSQL.
+    if op.get_bind().dialect.name == "postgresql":
+        op.execute("ALTER TABLE people ADD COLUMN IF NOT EXISTS context TEXT NOT NULL DEFAULT 'personal'")
+    else:
+        op.execute("ALTER TABLE people ADD COLUMN context TEXT NOT NULL DEFAULT 'personal'")
 
     # ── 2. Migrate circle 6 → 3 tiers (order matters — work first) ────────
     op.execute("UPDATE people SET context='work', circle='circle' WHERE circle='work'")
