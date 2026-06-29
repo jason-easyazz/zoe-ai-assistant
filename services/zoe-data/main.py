@@ -736,6 +736,18 @@ async def lifespan(app: FastAPI):
 
     # Proactive engine: APScheduler (Tier 1) + slow-loop (Tier 2).
     try:
+        # Schema guard: the claim/generation logic depends on migration 0012.
+        # Fail fast & LOUD (and don't start the engine in a broken state) rather
+        # than letting every reminder silently error on the missing columns.
+        from proactive.engine import verify_proactive_schema
+        _missing_cols = await verify_proactive_schema()
+        if _missing_cols:
+            raise RuntimeError(
+                "proactive DB schema out of date — missing columns: "
+                f"{_missing_cols}. Run: alembic upgrade head (migration 0012). "
+                "Proactive engine NOT started."
+            )
+
         from proactive.engine import start_proactive_engine, register_trigger
         from proactive.triggers.reminder_scan import ReminderScanTrigger
         from proactive.triggers.morning_checkin import MorningCheckInTrigger
@@ -760,8 +772,20 @@ async def lifespan(app: FastAPI):
                 " EveningWindDownTrigger, OpenClawTrigger registered)"
             )
         start_proactive_engine()
+        # Reconcile after the scheduler is live: re-register any unfired reminder
+        # whose one-shot job was dropped while the service was down (>misfire
+        # grace) so a missed reminder still fires after restart.
+        try:
+            from proactive.engine import reconcile_scheduled_jobs
+            _recovered = await reconcile_scheduled_jobs()
+            if _recovered:
+                logger.info("Proactive reconcile recovered %d missed reminder(s)", _recovered)
+        except Exception as _rec_exc:
+            logger.warning("Proactive reconcile skipped (non-fatal): %s", _rec_exc)
     except Exception as _pe_exc:
-        logger.warning("Proactive engine failed to start (non-fatal): %s", _pe_exc)
+        # Loud + explicit: reminders/proactive nudges will NOT fire until this is
+        # resolved (commonly: run alembic migrations). Not silently swallowed.
+        logger.error("Proactive engine NOT started — reminders will not fire: %s", _pe_exc)
 
     # Multica autopilot schedule sync — register cron jobs from Multica into APScheduler.
     # Must run after start_proactive_engine() so the scheduler is already running.
