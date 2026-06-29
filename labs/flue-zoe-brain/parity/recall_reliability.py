@@ -7,10 +7,18 @@ would answer "I don't remember" from its own head WITHOUT calling recall_memory
 recall-style prompts.
 
 This harness measures that rate directly and HONESTLY: it scores on whether a
-`recall_memory` tool call actually FIRED — by inspecting the agent's GET event
-stream for a `tool_start` (or persisted `tool`) event with
-`toolName == "recall_memory"` — NOT on the reply text. A reply that merely
-*sounds* like recall does not count.
+`recall_memory` tool call actually FIRED in the agent's GET event stream — NOT on
+the reply text. A reply that merely *sounds* like recall does not count.
+
+Flue's Node event stream (GET /agents/zoe/:id → publicEventData) is a JSON LIST of
+events, and a genuine tool firing is a `tool_start` event followed by a terminal
+`tool` event, each carrying `toolName` (@flue/runtime FlueEventVariant). The scorer
+is deliberately tolerant of shape drift so a real call is never undercounted as a
+MISS: it accepts the history as a list OR an object wrapping an
+events/messages/data/history array; recognises tool-fire events typed
+tool_start/tool/tool_call/function_call (case- and separator-insensitive); and reads
+the tool name from any of toolName/name/tool_name. It stays precise — only a genuine
+recall_memory tool event counts, never a text mention.
 
 Run (with the Flue brain serving on :3578):
     python3 parity/recall_reliability.py
@@ -80,20 +88,71 @@ def _get(url: str, timeout: float = 30.0) -> list:
         return json.loads(r.read().decode())
 
 
-def recall_fired(events: list) -> bool:
-    """True iff a recall_memory tool call actually fired (event stream, not text)."""
-    for e in events:
-        if e.get("type") in ("tool_start", "tool") and e.get("toolName") == "recall_memory":
+# Event `type`s (normalized) that represent a tool/function actually FIRING. Flue's
+# Node stream emits `tool_start` + a terminal `tool`; `tool_call`/`function_call` are
+# tolerated for other adapters/wire shapes so a real call is never scored as a MISS.
+_TOOL_EVENT_TYPES = frozenset({"tool_start", "tool", "tool_call", "function_call"})
+# Keys a tool-fire event may carry the tool name under, across event shapes.
+_TOOL_NAME_KEYS = ("toolName", "name", "tool_name")
+
+
+def _norm_type(raw: object) -> str:
+    """Lowercase and fold hyphens/spaces to underscores for tolerant type matching."""
+    return str(raw or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _event_tool_name(event: dict) -> str:
+    """The tool name an event carries (toolName/name/tool_name), or '' if none."""
+    for key in _TOOL_NAME_KEYS:
+        val = event.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return ""
+
+
+def _is_tool_event(event: dict) -> bool:
+    """True iff this event represents a tool/function actually firing."""
+    return _norm_type(event.get("type")) in _TOOL_EVENT_TYPES
+
+
+def _iter_events(history: object):
+    """Yield event dicts from session history shaped as either a list of events or
+    an object wrapping an events/messages/data/history array. Non-dict items skipped."""
+    seq = history
+    if isinstance(history, dict):
+        seq = []
+        for key in ("events", "messages", "data", "history"):
+            val = history.get(key)
+            if isinstance(val, list):
+                seq = val
+                break
+    if not isinstance(seq, list):
+        return
+    for item in seq:
+        if isinstance(item, dict):
+            yield item
+
+
+def recall_fired(history: object) -> bool:
+    """True iff a recall_memory tool call actually fired (event stream, not text).
+
+    Robust across event shapes (see module docstring) but precise: only a genuine
+    recall_memory tool-fire event counts — never a text mention in a reply."""
+    for event in _iter_events(history):
+        if _is_tool_event(event) and _event_tool_name(event).lower() == "recall_memory":
             return True
     return False
 
 
-def any_tool_fired(events: list) -> set:
-    return {
-        e.get("toolName")
-        for e in events
-        if e.get("type") in ("tool_start", "tool") and e.get("toolName")
-    }
+def any_tool_fired(history: object) -> set:
+    """Every tool name that actually fired in the session history (for honest output)."""
+    names = set()
+    for event in _iter_events(history):
+        if _is_tool_event(event):
+            name = _event_tool_name(event)
+            if name:
+                names.add(name)
+    return names
 
 
 def main() -> None:

@@ -87,7 +87,8 @@ type DispatchResponse = { intent?: string; ok?: boolean; result?: string };
  * The acting user_id is bound from env in trusted code (never model args). The
  * caller supplies only the intent name + content slots. Returns a discriminated
  * result so each tool can phrase success/failure in its own voice and NEVER
- * claim success on a non-confirming response (ok === false or transport error).
+ * claim success on a non-confirming response (anything but an explicit ok === true,
+ * or a transport error).
  *
  * `service` is a short noun for user-facing error text ("reminder", "calendar").
  */
@@ -113,9 +114,14 @@ async function dispatchIntent(
       return { ok: false, text: `I couldn't reach the ${service} service right now (it returned ${res.status}).` };
     }
     const data = (await res.json()) as DispatchResponse;
-    // Don't claim success on a non-confirming shape (e.g. { ok: false }).
-    if (data.ok === false) {
-      return { ok: false, text: `The ${service} service didn't confirm that.` };
+    // Require an EXPLICIT positive confirmation. zoe-data's /api/system/intent-dispatch
+    // returns { intent, ok: (result is not None), result } (routers/system.py), so a
+    // genuine success is ALWAYS ok === true. Anything else on a 200 — ok:false, ok
+    // missing/undefined, a non-boolean ok, an empty/garbled body — is NOT a
+    // confirmation. Fail closed with a non-confirming line rather than fabricate a
+    // "done" reply (e.g. successFallback) the backend never actually confirmed.
+    if (data.ok !== true) {
+      return { ok: false, text: `I couldn't confirm that went through with the ${service} service.` };
     }
     return { ok: true, text: (data.result ?? '').trim() };
   } catch {

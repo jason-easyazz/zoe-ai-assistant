@@ -18,6 +18,18 @@ tools were 100%.
 - All **11 tools** reconciled onto a clean branch (hardened semantics kept:
   identity fail-closed, dispatch `ok` checked, validated timeout, honest dry-run).
 
+**Review hardening (PR #915):**
+- **No false confirmation** (`src/tools/zoe-tools.ts`): `dispatchIntent` now requires
+  an EXPLICIT `ok === true` from `/api/system/intent-dispatch` before reporting
+  success. A 200 that doesn't confirm (ok missing, ok:false, non-boolean ok, garbled
+  body) returns a non-confirming line instead of a fabricated "done" reply. Covered by
+  `test/dispatch_confirm.test.ts` (`node --experimental-strip-types --test test/`).
+- **Scorer can't undercount** (`parity/recall_reliability.py`): `recall_fired` now
+  recognises a recall_memory firing across event-stream shapes — history as a list or
+  an object wrapping an events/messages array; event types tool_start/tool/tool_call/
+  function_call (case/separator-insensitive); tool name from toolName/name/tool_name —
+  while still ignoring text mentions. Covered by `parity/test_recall_reliability.py`.
+
 **AFTER-fix numeric re-benchmark: DEFERRED (environment, not the fix).** The shared
 Jetson was under heavy concurrent GPU load (multiple fleet agents), so each Gemma
 call crawled and the ≥30-trial benchmark timed out. The fix is directionally sound
