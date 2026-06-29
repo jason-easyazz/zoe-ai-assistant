@@ -575,7 +575,16 @@ async def submit_pin(payload: dict, request: Request = None, db=Depends(get_db))
                 resolved_user_id = str(_default_row["user_id"])
                 resolved_from_binding = True
         except Exception as _bind_exc:
-            logger.debug("panel_auth: default binding lookup failed: %s", _bind_exc)
+            # This lookup is part of deciding the acting identity, so it is
+            # security-load-bearing and must FAIL CLOSED. A transient DB error
+            # here must not fall through to the "no resolvable user" 400 (which
+            # tells the panel the challenge itself is malformed and to give up);
+            # return the same retryable 503 the authorization check below uses.
+            logger.warning("panel_auth: default binding lookup failed: %s", _bind_exc)
+            raise HTTPException(
+                status_code=503,
+                detail="Authorization check temporarily unavailable. Please try again.",
+            )
 
     if not resolved_user_id:
         raise HTTPException(status_code=400, detail="Challenge has no resolvable user")

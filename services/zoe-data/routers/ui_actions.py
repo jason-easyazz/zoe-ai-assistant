@@ -112,6 +112,16 @@ async def create_ui_action(
         raise HTTPException(status_code=400, detail="Unsupported action_type")
     if not await can_use_ui_action(db, user, action_type):
         raise HTTPException(status_code=403, detail="Role cannot enqueue this action type")
+    # A caller-supplied panel_id targets another surface's queue: enqueue_ui_action
+    # rewrites the stored user_id to that panel's owner, so the action is delivered
+    # when the panel polls /actions/pending. Without this gate a guest or unbound
+    # session could inject actions into an arbitrary active panel (same panel-hijack
+    # class as bind/poll/sync). Authorize panel ownership/device-token, matching the
+    # other panel-scoped routes. No panel_id → enqueue_ui_action resolves the
+    # caller's OWN foreground panel, which needs no cross-panel check.
+    target_panel_id = payload.get("panel_id")
+    if target_panel_id:
+        await _authorize_panel(db, user, target_panel_id)
     data = payload.get("payload", {})
     result = await enqueue_ui_action(
         db,

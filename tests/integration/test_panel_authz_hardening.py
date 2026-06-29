@@ -182,13 +182,105 @@ async def test_pending_allows_bound_user(_noop_feature_access):
     assert "actions" in out and out["count"] == 0
 
 
+@pytest.fixture
+def _stub_create_deps(monkeypatch):
+    """Allow create_ui_action's role check; record whether enqueue is reached.
+
+    create_ui_action runs require_feature_access → action_type allow-list →
+    can_use_ui_action → panel authorization → enqueue_ui_action. We stub the
+    first/third so the panel-authorization gate is the only thing under test, and
+    replace enqueue with a recorder so a passing authz reaches the real queue path
+    exactly once (and a rejection never does).
+    """
+    async def _ok(*a, **k):
+        return None
+    monkeypatch.setattr(ui_actions, "require_feature_access", _ok)
+
+    async def _can(*a, **k):
+        return True
+    monkeypatch.setattr(ui_actions, "can_use_ui_action", _can)
+
+    calls = []
+
+    async def _enqueue(_db, **kwargs):
+        calls.append(kwargs)
+        return {"id": "act-1", "panel_id": kwargs.get("panel_id")}
+    monkeypatch.setattr(ui_actions, "enqueue_ui_action", _enqueue)
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_create_action_rejects_unbound_user_targeting_panel(_stub_create_deps):
+    """An unbound session cannot enqueue an action into another panel's queue (P1).
+
+    enqueue_ui_action rewrites the stored user_id to the target panel's owner, so
+    an injected action would be delivered when that panel polls. The create route
+    must apply the same panel gate as bind/poll/sync.
+    """
+    db = _BindingDB(bound_pairs=set())  # mallory bound to nothing
+    mallory = {"user_id": "mallory", "role": "member"}
+    with pytest.raises(HTTPException) as exc:
+        await ui_actions.create_ui_action(
+            {"action_type": "notify", "panel_id": "living-room", "payload": {}},
+            user=mallory, db=db,
+        )
+    assert exc.value.status_code == 403
+    assert _stub_create_deps == []  # never reached the queue
+
+
+@pytest.mark.asyncio
+async def test_create_action_device_token_cannot_target_other_panel(_stub_create_deps):
+    """A device token for panel A cannot enqueue into panel B (P1)."""
+    db = _BindingDB(bound_pairs=set())
+    daemon = {"user_id": "family-admin", "role": "member", "panel_id": "panel-A"}
+    with pytest.raises(HTTPException) as exc:
+        await ui_actions.create_ui_action(
+            {"action_type": "notify", "panel_id": "panel-B", "payload": {}},
+            user=daemon, db=db,
+        )
+    assert exc.value.status_code == 403
+    assert _stub_create_deps == []
+
+
+@pytest.mark.asyncio
+async def test_create_action_allows_bound_user_for_panel(_stub_create_deps):
+    """A user bound to the target panel may enqueue for it (HARD CONSTRAINT)."""
+    db = _BindingDB(bound_pairs={("living-room", "alice")})
+    alice = {"user_id": "alice", "role": "member"}
+    out = await ui_actions.create_ui_action(
+        {"action_type": "notify", "panel_id": "living-room", "payload": {}},
+        user=alice, db=db,
+    )
+    assert out["status"] == "ok"
+    assert len(_stub_create_deps) == 1
+    assert _stub_create_deps[0]["panel_id"] == "living-room"
+
+
+@pytest.mark.asyncio
+async def test_create_action_without_panel_id_skips_panel_gate(_stub_create_deps):
+    """No panel_id → enqueue resolves the caller's OWN foreground panel; allowed.
+
+    This is the normal front-end path (zoe-orb posts no panel_id), which must keep
+    working without a binding to any specific panel.
+    """
+    db = _BindingDB(bound_pairs=set())
+    mallory = {"user_id": "mallory", "role": "member"}
+    out = await ui_actions.create_ui_action(
+        {"action_type": "notify", "payload": {}},
+        user=mallory, db=db,
+    )
+    assert out["status"] == "ok"
+    assert len(_stub_create_deps) == 1
+    assert _stub_create_deps[0].get("panel_id") is None
+
+
 # ── P2: panel_auth /auth/pin ignores forged user_id ───────────────────────────
 
 class _PinChallengeDB:
     """Fake DB for submit_pin: one pending challenge owned by 'alice' on 'p1'."""
 
     def __init__(self, challenge_user="alice", panel_id="p1", bound_users=("alice",),
-                 raise_on_binding=False):
+                 raise_on_binding=False, raise_on_default_binding=False):
         future = (datetime.now(tz=timezone.utc) + timedelta(minutes=2)).isoformat()
         self._challenge = {
             "challenge_id": "chal-1",
@@ -201,6 +293,7 @@ class _PinChallengeDB:
         self._panel_id = panel_id
         self._bound_users = set(bound_users)
         self._raise_on_binding = raise_on_binding
+        self._raise_on_default_binding = raise_on_default_binding
         self.challenge_status_updates = []
 
     def execute(self, sql, params=None):
@@ -216,6 +309,8 @@ class _PinChallengeDB:
             return _ExecResult([{"1": 1}] if p[1] in self._bound_users else [])
         if s.startswith("SELECT USER_ID FROM PANEL_USER_BINDINGS"):
             # default-binding fallback (only hit when challenge has no user)
+            if self._raise_on_default_binding:
+                raise RuntimeError("simulated transient DB error during default-binding lookup")
             return _ExecResult([{"user_id": next(iter(self._bound_users), None)}])
         if s.startswith("UPDATE PANEL_AUTH_CHALLENGES SET STATUS"):
             self.challenge_status_updates.append(p[0])
@@ -403,6 +498,30 @@ async def test_pin_voice_default_binding_path_still_works(_patch_pin_env):
     )
     assert out["status"] == "approved"
     assert _FakeAuthClient.captured == [("dave", _OK_PIN)]
+
+
+@pytest.mark.asyncio
+async def test_pin_default_binding_lookup_fails_closed_on_db_error(_patch_pin_env):
+    """A DB error while resolving the panel's default binding must FAIL CLOSED.
+
+    For a voice/userless challenge (user_id=None) the acting identity comes from
+    the panel's 'default' binding. A transient DB error there must return the
+    retryable 503 authz-unavailable response — NOT fall through to the
+    400 "no resolvable user", which tells the panel the challenge is malformed
+    and to give up, breaking a valid voice PIN approval.
+    """
+    db = _PinChallengeDB(
+        challenge_user=None, bound_users=("dave",), raise_on_default_binding=True
+    )
+    with pytest.raises(HTTPException) as exc:
+        await panel_auth.submit_pin(
+            {"challenge_id": "chal-1", "pin": _OK_PIN},
+            request=_FakeRequest(),
+            db=db,
+        )
+    assert exc.value.status_code == 503
+    # Must have failed BEFORE delegating to zoe-auth for PIN validation.
+    assert _FakeAuthClient.captured == []
 
 
 # ── P2: panel_provision atomic one-time token pickup ──────────────────────────
