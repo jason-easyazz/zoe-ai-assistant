@@ -36,7 +36,8 @@ Usage: deploy_zoe_data_when_ready.sh [--check | --watch[=SECONDS] | --deploy] [o
 Modes:
   --check
       Read-only gate check. Prints PASS/FAIL for each gate plus READY/NOT-READY.
-      This is the default mode and performs no mutation.
+      This is the default mode and performs no working-tree/live mutation. It does
+      fetch origin/main, which updates remote-tracking refs.
 
   --watch[=SECONDS]
   --watch SECONDS
@@ -161,6 +162,7 @@ check_gates() {
     local upstream=""
     local left=0
     local right=0
+    local counts=""
 
     log "checking live tree: ${LIVE}"
     log "service=${SERVICE} port=${PORT} min_avail_mb=${MIN_AVAIL_MB}"
@@ -192,10 +194,21 @@ check_gates() {
         fi
 
         if git -C "$LIVE" fetch origin main >/dev/null 2>&1; then
-            head="$(git -C "$LIVE" rev-parse HEAD)"
+            head="$(git -C "$LIVE" rev-parse HEAD 2>/dev/null || true)"
             upstream="$(git -C "$LIVE" rev-parse refs/remotes/origin/main 2>/dev/null || true)"
-            if [[ -n "$upstream" ]]; then
-                read -r left right < <(git -C "$LIVE" rev-list --left-right --count HEAD...refs/remotes/origin/main)
+            if [[ -n "$head" && -n "$upstream" ]]; then
+                counts="$(git -C "$LIVE" rev-list --left-right --count HEAD...refs/remotes/origin/main 2>/dev/null || true)"
+                if [[ "$counts" =~ ^[0-9]+[[:space:]]+[0-9]+$ ]]; then
+                    read -r left right <<<"$counts"
+                else
+                    gate_fail "origin-main" "could not compare HEAD to origin/main"
+                    failed=1
+                    left=0
+                    right=0
+                fi
+            fi
+
+            if [[ "$failed" -eq 0 && -n "$head" && -n "$upstream" ]]; then
                 if [[ "$left" -eq 0 && "$right" -eq 0 ]]; then
                     gate_pass "origin-main" "main is up-to-date with origin/main"
                 elif [[ "$left" -eq 0 && "$right" -gt 0 ]]; then
@@ -208,8 +221,10 @@ check_gates() {
                     failed=1
                 fi
             else
-                gate_fail "origin-main" "could not resolve refs/remotes/origin/main after fetch (HEAD ${head})"
-                failed=1
+                if [[ "$failed" -eq 0 ]]; then
+                    gate_fail "origin-main" "could not resolve HEAD or refs/remotes/origin/main after fetch (HEAD ${head:-unknown})"
+                    failed=1
+                fi
             fi
         else
             gate_fail "origin-main" "git fetch origin main failed"
@@ -233,6 +248,16 @@ check_gates() {
     return 1
 }
 
+main_schedules_moonshine_startup() {
+    local main_file="$1"
+    grep -Eq "(create_task|ensure_future)[(][^)]*warm_moonshine" "$main_file"
+}
+
+main_schedules_whisper_startup() {
+    local main_file="$1"
+    grep -Eq "(create_task|ensure_future)[(][^)]*(warm_whisper|warm_faster_whisper|load_whisper|load_faster_whisper|faster_whisper|faster-whisper)" "$main_file"
+}
+
 post_deploy_verify() {
     local voice_file="${LIVE}/services/zoe-data/routers/voice_tts.py"
     local main_file="${LIVE}/services/zoe-data/main.py"
@@ -247,11 +272,18 @@ post_deploy_verify() {
         failed=1
     fi
 
-    if grep -q "warm_moonshine" "$main_file" && ! grep -q "faster-whisper" "$main_file"; then
-        gate_pass "post-main" "main.py warms Moonshine and has no faster-whisper startup warmup"
+    if main_schedules_moonshine_startup "$main_file"; then
+        gate_pass "post-main" "main.py schedules Moonshine startup warmup"
     else
-        gate_fail "post-main" "main.py must contain warm_moonshine and no faster-whisper startup warmup"
+        gate_fail "post-main" "main.py does not schedule warm_moonshine startup warmup"
         failed=1
+    fi
+
+    if main_schedules_whisper_startup "$main_file"; then
+        gate_fail "post-main-whisper" "main.py appears to schedule a whisper startup warmup"
+        failed=1
+    else
+        gate_pass "post-main-whisper" "no whisper startup warmup scheduling detected"
     fi
 
     code="$(curl -s -o /dev/null -w '%{http_code}' -m 3 "http://127.0.0.1:${PORT}/health" || true)"

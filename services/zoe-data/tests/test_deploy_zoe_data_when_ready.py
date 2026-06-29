@@ -38,7 +38,11 @@ def _seed_live_tree(tmp_path: Path) -> Path:
     main = live / "services" / "zoe-data" / "main.py"
     voice.parent.mkdir(parents=True)
     voice.write_text("def _prewarm_stt_on_wake():\n    pass\n")
-    main.write_text("def startup():\n    warm_moonshine()\n")
+    main.write_text(
+        "import asyncio\n\n"
+        "async def startup():\n"
+        "    asyncio.create_task(warm_moonshine(), name=\"moonshine_warmup\")\n"
+    )
     (live / "README.md").write_text("fake live tree\n")
     _git(live, "add", ".")
     _git(live, "commit", "-m", "init")
@@ -137,3 +141,70 @@ def test_deploy_with_confirmation_invokes_deploy_live_stub_and_post_verify(tmp_p
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert marker.exists()
     assert "POST-DEPLOY VERIFY PASS" in proc.stdout
+
+
+def test_confirmed_deploy_post_verify_allows_faster_whisper_docstring(tmp_path):
+    live = _seed_live_tree(tmp_path)
+    main = live / "services" / "zoe-data" / "main.py"
+    main.write_text(
+        '"""Binary -> transcribed via faster-whisper then routed as text."""\n'
+        "import asyncio\n\n"
+        "async def startup():\n"
+        "    asyncio.create_task(warm_moonshine(), name=\"moonshine_warmup\")\n"
+    )
+    _git(live, "add", "services/zoe-data/main.py")
+    _git(live, "commit", "-m", "docstring mentions faster-whisper")
+    _git(live, "push", "origin", "main")
+    bundle = tmp_path / "bundle" / "scripts" / "maintenance"
+    fake_bin = tmp_path / "bin"
+    bundle.mkdir(parents=True)
+    fake_bin.mkdir()
+    wrapper = bundle / "deploy_zoe_data_when_ready.sh"
+    deploy_live = bundle / "deploy_live.sh"
+    marker = tmp_path / "deploy-called"
+    shutil.copy2(SCRIPT, wrapper)
+    wrapper.chmod(0o755)
+    deploy_live.write_text(f"#!/usr/bin/env bash\nset -euo pipefail\ntouch {marker}\n")
+    deploy_live.chmod(0o755)
+    (fake_bin / "curl").write_text("#!/usr/bin/env bash\nprintf '200'\n")
+    (fake_bin / "curl").chmod(0o755)
+
+    proc = _run(
+        [str(wrapper), "--deploy", "--yes-restart-production"],
+        env=_env(live, {"PATH": f"{fake_bin}:{os.environ['PATH']}"}),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert marker.exists()
+    assert "PASS post-main" in proc.stdout
+    assert "PASS post-main-whisper" in proc.stdout
+    assert "POST-DEPLOY VERIFY PASS" in proc.stdout
+
+
+def test_confirmed_deploy_with_failed_gates_aborts_before_deploy_live(tmp_path):
+    live = _seed_live_tree(tmp_path)
+    _git(live, "checkout", "-b", "feature/not-ready")
+    bundle = tmp_path / "bundle" / "scripts" / "maintenance"
+    bundle.mkdir(parents=True)
+    wrapper = bundle / "deploy_zoe_data_when_ready.sh"
+    deploy_live = bundle / "deploy_live.sh"
+    marker = tmp_path / "deploy-called"
+    shutil.copy2(SCRIPT, wrapper)
+    wrapper.chmod(0o755)
+    deploy_live.write_text(f"#!/usr/bin/env bash\nset -euo pipefail\ntouch {marker}\n")
+    deploy_live.chmod(0o755)
+
+    proc = _run([str(wrapper), "--deploy", "--yes-restart-production"], env=_env(live))
+
+    assert proc.returncode != 0
+    assert "deploy aborted: gates are NOT-READY" in proc.stdout
+    assert not marker.exists()
+
+
+def test_yes_restart_without_deploy_is_usage_error(tmp_path):
+    live = _seed_live_tree(tmp_path)
+
+    proc = _run([str(SCRIPT), "--yes-restart-production"], env=_env(live))
+
+    assert proc.returncode == 2
+    assert "--yes-restart-production is only valid with --deploy" in proc.stderr
