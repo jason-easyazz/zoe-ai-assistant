@@ -7,6 +7,13 @@ import intent_router
 from intent_router import Intent
 
 
+_REAL_MUSIC_DB_HELPERS = (
+    intent_router._music_top_recent_genre,
+    intent_router._music_recent_repeat_count,
+    intent_router._music_recent_skip_count,
+)
+
+
 class _FakeResponse:
     def __init__(self, status_code=200, payload=None):
         self.status_code = status_code
@@ -98,21 +105,16 @@ async def test_music_ha_bridge_http_failure_surfaces_instead_of_success(intent):
 
 
 @pytest.mark.asyncio
-async def test_unknown_music_command_returns_spoken_unrecognized_result():
+async def test_unknown_music_command_falls_through_to_chat_fallback():
     result = await intent_router._execute_music_intent(Intent("music_control", {"command": "rewind"}), "jason")
 
-    assert result == "I didn't recognize that music command."
+    assert result is None
 
 
 def test_music_async_path_has_no_sync_psycopg2_connect():
     sources = "\n".join(
         inspect.getsource(obj)
-        for obj in (
-            intent_router._execute_music_intent,
-            intent_router._music_top_recent_genre,
-            intent_router._music_recent_repeat_count,
-            intent_router._music_recent_skip_count,
-        )
+        for obj in (intent_router._execute_music_intent, *_REAL_MUSIC_DB_HELPERS)
     )
 
     assert "psycopg2" not in sources

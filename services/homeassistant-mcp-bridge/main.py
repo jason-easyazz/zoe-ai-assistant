@@ -250,6 +250,12 @@ async def control_device(request: DeviceControlRequest):
             result = await ha_bridge.call_service("input_number", "set_value", entity_id, service_data)
             return {"message": f"Set {entity_id} to {data.get('value')}", "result": result}
 
+        if action == "set_temperature" and domain != "climate":
+            raise HTTPException(
+                status_code=400,
+                detail="set_temperature is only supported for climate entities",
+            )
+
         # Map common actions to Home Assistant services
         service_mapping = {
             "turn_on": "turn_on",

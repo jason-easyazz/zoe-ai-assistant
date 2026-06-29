@@ -3288,7 +3288,7 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
                          "volume_up": "Volume up", "volume_down": "Volume down",
                          "shuffle": "Shuffle on", "mute": "Muted", "unmute": "Unmuted"}.get(cmd, cmd.title())
                 return f"{label}."
-            return "I didn't recognize that music command."
+            return None
 
         elif intent.name == "music_volume":
             level = int(slots.get("level", 50))

@@ -42,3 +42,29 @@ async def test_set_temperature_calls_climate_set_temperature(monkeypatch):
         )
     ]
     assert result["message"] == "Successfully executed set_temperature on climate.living_room"
+
+
+@pytest.mark.asyncio
+async def test_set_temperature_rejects_non_climate_entities(monkeypatch):
+    bridge = _load_bridge_module()
+    calls = []
+
+    class FakeBridge:
+        async def call_service(self, domain, service, entity_id=None, data=None):
+            calls.append((domain, service, entity_id, data))
+            return {"ok": True}
+
+    monkeypatch.setattr(bridge, "ha_bridge", FakeBridge())
+
+    with pytest.raises(bridge.HTTPException) as exc_info:
+        await bridge.control_device(
+            bridge.DeviceControlRequest(
+                entity_id="light.living_room",
+                action="set_temperature",
+                data={"temperature": 21.5},
+            )
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "set_temperature is only supported for climate entities"
+    assert calls == []
