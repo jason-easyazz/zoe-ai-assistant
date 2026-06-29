@@ -388,17 +388,17 @@ window.ZoeWebSockets = {
         // ── PIN challenge ──────────────────────────────────────────────────
         this.push.on('panel_pin_request', (data) => {
             const payload = unwrapPayload(data);
-            let currentPanelId = '';
+            let knownPanelIds = [];
             try {
                 const params = new URLSearchParams(window.location.search || '');
-                currentPanelId = (
-                    params.get('panel_id')
-                    || localStorage.getItem('zoe_panel_id')
-                    || localStorage.getItem('zoe_touch_panel_id')
-                    || ''
-                ).trim();
+                knownPanelIds = [
+                    params.get('panel_id'),
+                    localStorage.getItem('zoe_panel_id'),
+                    localStorage.getItem('zoe_touch_panel_id'),
+                ].map((value) => String(value || '').trim()).filter(Boolean);
             } catch (_) {}
-            if (payload.panel_id && currentPanelId && payload.panel_id !== currentPanelId) {
+            const requestedPanelId = String(payload.panel_id || '').trim();
+            if (requestedPanelId && knownPanelIds.length && !knownPanelIds.includes(requestedPanelId)) {
                 return;
             }
             // Prefer modern panel_request_auth flow (touch login page) over
@@ -442,6 +442,5 @@ window.ZoeWebSockets = {
         console.log('[ZoeWS] Panel push channel connected, panel_id:', panelId);
     }
 };
-
 
 
