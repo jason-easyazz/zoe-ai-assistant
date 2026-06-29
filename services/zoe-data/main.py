@@ -536,12 +536,15 @@ def _tracked_multica_engineering_issues(*groups: list[dict]) -> list[dict]:
     return tracked
 
 
-async def _read_multica_board_statuses(client, statuses: tuple[str, ...]) -> dict[str, list[dict]]:
+async def _read_multica_board_statuses(
+    client, statuses: tuple[str, ...]
+) -> tuple[dict[str, list[dict]], set[str]]:
     """Read Multica board statuses, tolerating partial failures.
 
     A total outage must still raise so the poll cycle is skipped as observable
     downtime. If at least one status read succeeds, keep that work moving and
-    log the missing statuses rather than starving the whole cycle.
+    log the missing statuses rather than starving the whole cycle. The returned
+    failed-status set keeps unknown board state distinct from a real empty lane.
     """
     results: dict[str, list[dict]] = {}
     failures: dict[str, Exception] = {}
@@ -569,7 +572,7 @@ async def _read_multica_board_statuses(client, statuses: tuple[str, ...]) -> dic
             ", ".join(status for status in statuses if status not in failures),
         )
 
-    return results
+    return results, set(failures)
 
 
 def _blocked_multica_chain_reason(chain: dict) -> str:
@@ -1153,10 +1156,14 @@ async def lifespan(app: FastAPI):
                 # Board-state reads must distinguish a Multica outage from an empty
                 # board, but a partial status-read failure should not starve work
                 # from statuses already read this cycle.
-                _board_statuses = await _read_multica_board_statuses(
+                (
+                    _board_statuses,
+                    _failed_board_statuses,
+                ) = await _read_multica_board_statuses(
                     client,
                     ("todo", "in_progress", "in_review", "blocked"),
                 )
+                _can_start_new_multica_work = not _failed_board_statuses
                 stale_todos = _board_statuses["todo"]
                 _now_ts = _t.time()
                 _closed_stale_ids: set[str] = set()
@@ -1248,6 +1255,7 @@ async def lifespan(app: FastAPI):
                         if (
                             _wh_limit > 0
                             and os.environ.get("ZOE_MULTICA_AUTO_ADMIT", "false").lower() == "true"
+                            and _can_start_new_multica_work
                             and not stale_todos
                             and not in_progress_issues
                             and not in_review_issues
@@ -1440,7 +1448,7 @@ async def lifespan(app: FastAPI):
                                 if _wh_dispatched >= _wh_limit:
                                     break
                         # Reuse the todo list already fetched above for the stale autopilot pass.
-                        if _wh_dispatched < _wh_limit:
+                        if _wh_dispatched < _wh_limit and _can_start_new_multica_work:
                             for _todo in stale_todos or []:
                                 await _maybe_dispatch_hermes_issue(_todo, from_todo=True)
                                 if _wh_dispatched >= _wh_limit:

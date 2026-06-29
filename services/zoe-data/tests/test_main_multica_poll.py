@@ -127,11 +127,12 @@ async def test_read_multica_board_statuses_continues_after_partial_failure(caplo
 
     client = Client()
 
-    statuses = await _read_multica_board_statuses(
+    statuses, failed = await _read_multica_board_statuses(
         client,
         ("todo", "in_progress", "in_review", "blocked"),
     )
 
+    assert failed == {"blocked"}
     assert statuses["todo"] == [{"id": "todo", "status": "todo"}]
     assert statuses["in_progress"] == [{"id": "in_progress", "status": "in_progress"}]
     assert statuses["in_review"] == [{"id": "in_review", "status": "in_review"}]
@@ -176,6 +177,26 @@ async def test_read_multica_board_statuses_total_outage_raises_and_is_observable
     assert all(call["raise_on_error"] is True for call in client.list_calls)
     assert "all Multica status reads failed" in caplog.text
     assert "skipping this cycle" in caplog.text
+
+
+def test_poll_loop_does_not_treat_failed_status_reads_as_empty_lane():
+    source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+    status_read = source.index("_failed_board_statuses")
+    lane_guard = source.index("_can_start_new_multica_work = not _failed_board_statuses", status_read)
+    admission_gate = source.index(
+        "and _can_start_new_multica_work",
+        source.index("ZOE_MULTICA_AUTO_ADMIT", lane_guard),
+    )
+    todo_gate = source.index(
+        "if _wh_dispatched < _wh_limit and _can_start_new_multica_work:",
+        admission_gate,
+    )
+    tracked_sync = source.index(
+        "issues = _tracked_multica_engineering_issues(",
+        todo_gate,
+    )
+
+    assert status_read < lane_guard < admission_gate < todo_gate < tracked_sync
 
 
 def test_poll_dispatch_backfills_ready_blocked_pipeline_before_todo():
