@@ -91,7 +91,9 @@ app.add_middleware(
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     start_time = datetime.now()
-    logger.info(f"Request: {request.method} {request.url} from {request.client.host if request.client else 'unknown'}")
+    # Log the path only — never the raw query string, which can carry secrets
+    # (e.g. the OIDC RP-initiated logout passes id_token_hint as a query param).
+    logger.info(f"Request: {request.method} {request.url.path} from {request.client.host if request.client else 'unknown'}")
     response = await call_next(request)
     process_time = (datetime.now() - start_time).total_seconds()
     logger.info(f"Response: {response.status_code} in {process_time:.3f}s")
