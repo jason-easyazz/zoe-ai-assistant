@@ -20,7 +20,7 @@ Operational scripting for Zoe hosts: setup, maintenance, deployment, migrations,
 - `graphify_local_probe.py` remains only as an offline, observe-only probe (runs in a throwaway snapshot); it never syncs output back into the repo and is not wired to any recurring timer.
 - `prune_worktrees.sh` is dry-run by default; never pass `--execute` without operator review of the candidate list. Skips dirty, locked, live-checkout, unmerged, and recently-active worktrees.
 - Destructive maintenance scripts must be dry-run by default, require explicit execution flags, and print the candidate list before deleting or rewriting anything.
-- Git history rewrites must run only in a disposable bare mirror clone with typed confirmation. Force-pushing rewritten history requires a separate explicit push flag, typed push confirmation, and exact confirmation of every resolved `origin` push URL.
+- Git history rewrites must run only in a disposable bare mirror clone with typed confirmation. Force-pushing rewritten history requires a separate explicit push flag, typed push confirmation, and exact confirmation of every resolved `origin` push URL. Pushing to multiple URLs is not atomic: every confirmed destination is attempted regardless of earlier failures, and the run exits non-zero with the full list of any destinations left divergent.
 - Live deploy rollback may ignore gitignored/untracked runtime artifacts so recovery can proceed, but it must abort before `git reset --hard` when tracked worktree or index changes are present.
 - Docker cleanup must not stop/remove containers or prune volumes; recurring cleanup is limited to dangling images and build cache.
 

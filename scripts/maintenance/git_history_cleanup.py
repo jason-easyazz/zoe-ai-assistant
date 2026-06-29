@@ -123,6 +123,31 @@ def print_ref_deletion_plan(mirror: Path, dry_run: bool) -> list[str]:
     return refs
 
 
+def force_push_all(mirror: Path, push_urls: tuple[str, ...], dry_run: bool) -> list[str]:
+    """Force-push branches and tags to every confirmed URL.
+
+    Returns the list of "<url> (<refs>)" destinations that failed. Every URL is
+    attempted regardless of earlier failures so the operator gets the complete
+    divergence map instead of the run stopping at the first error.
+    """
+    failures: list[str] = []
+    for push_url in push_urls:
+        for ref_flag, label in (("--all", "branches"), ("--tags", "tags")):
+            cmd = ["git", "-C", str(mirror), "push", push_url, "--force", ref_flag]
+            print(f"{'DRY-RUN' if dry_run else 'RUN'}: force-push all {label} to {push_url}")
+            print("  " + shlex.join(cmd))
+            if dry_run:
+                continue
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            if result.stdout.strip():
+                print(result.stdout.strip())
+            if result.returncode != 0:
+                if result.stderr.strip():
+                    print(result.stderr.strip(), file=sys.stderr)
+                failures.append(f"{push_url} ({label})")
+    return failures
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Rewrite Zoe git history only inside a disposable mirror clone.",
@@ -220,9 +245,17 @@ def main() -> int:
     run_git(mirror, ["gc", "--prune=now", "--aggressive"], "garbage collect mirror", dry_run)
 
     if args.push:
-        for push_url in push_urls:
-            run_git(mirror, ["push", push_url, "--force", "--all"], f"force-push all branches to {push_url}", dry_run)
-            run_git(mirror, ["push", push_url, "--force", "--tags"], f"force-push all tags to {push_url}", dry_run)
+        # Pushing to N independent remotes is not atomic. Attempt every
+        # destination instead of aborting on the first failure, so a single
+        # failed push cannot silently leave the rest of the confirmed remote
+        # set untouched. Collect failures and surface the full divergence map.
+        push_failures = force_push_all(mirror, push_urls, dry_run)
+        if push_failures:
+            raise SystemExit(
+                "Force-push finished with failures; the confirmed remotes are now divergent.\n"
+                "Re-run --push after resolving these destinations:\n"
+                + "\n".join(f"  - {failure}" for failure in push_failures)
+            )
     else:
         print("Remote push skipped. Add --push plus typed push confirmation after reviewing the mirror.")
 
