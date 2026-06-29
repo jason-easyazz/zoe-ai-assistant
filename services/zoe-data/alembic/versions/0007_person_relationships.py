@@ -16,7 +16,11 @@ from alembic import op
 
 def upgrade():
     # ── 1. Add context column ──────────────────────────────────────────────
-    op.execute("ALTER TABLE people ADD COLUMN context TEXT NOT NULL DEFAULT 'personal'")
+    # IF NOT EXISTS so a partial-failure re-run doesn't die on duplicate-column.
+    # Net effect is unchanged: on a fresh DB the column is still created with the
+    # same TEXT NOT NULL DEFAULT 'personal'. (Postgres-only clause; production is
+    # PostgreSQL. The other ADD COLUMNs in this migration already use it.)
+    op.execute("ALTER TABLE people ADD COLUMN IF NOT EXISTS context TEXT NOT NULL DEFAULT 'personal'")
 
     # ── 2. Migrate circle 6 → 3 tiers (order matters — work first) ────────
     op.execute("UPDATE people SET context='work', circle='circle' WHERE circle='work'")

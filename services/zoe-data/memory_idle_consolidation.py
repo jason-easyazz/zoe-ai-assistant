@@ -100,9 +100,13 @@ CHECK_INTERVAL = _int_env("ZOE_IDLE_CONSOLIDATION_CHECK_S", 60)
 MIN_TURNS = _int_env("ZOE_IDLE_CONSOLIDATION_MIN_TURNS", 2)
 
 
-# Run the bootstrap DDL once per process, not on every 60s sweep. (The table is a
-# local watermark store; if a future increment needs to evolve its schema, do that
-# through the migration framework, not this CREATE-IF-NOT-EXISTS.)
+# Schema source of truth is the Alembic migration
+# (alembic/versions/0014_memory_consolidation_state.py). This runtime CREATE is a
+# backward-compat / dev-convenience fallback only: `IF NOT EXISTS` makes it a
+# harmless no-op once the migration has run, so it never errors and never drifts
+# from the migration. It also keeps unmigrated dev/test DBs working. Run once per
+# process, not on every 60s sweep. If the schema ever needs to evolve, do it
+# through a new migration — keep this DDL byte-for-byte in sync (or drop it).
 _state_table_ready = False
 
 
