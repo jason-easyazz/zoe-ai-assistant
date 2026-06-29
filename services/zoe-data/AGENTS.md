@@ -21,6 +21,7 @@ THE production Zoe API: FastAPI app served by host uvicorn on port 8000. Owns ch
 - Runs as a systemd USER service: `systemctl --user restart zoe-data.service`; in scripts/CI prefix `XDG_RUNTIME_DIR=/run/user/$(id -u)`.
 - Every memory write carries scope (`personal` / `shared` / `ambient`); no unscoped writes.
 - Tools register through the allow-list mechanism; every world-changing action goes through a proposal path.
+- The stdio MCP server must derive the acting user from transport/session context, not tool arguments; non-admin tools may only target the acting user unless the tool is explicitly admin-authorized for cross-user action.
 - Schema changes go through Alembic; never DROP/DELETE without WHERE and a backup.
 - Harness engineering rules apply (charter section 9): minimize structure, ablate module by module, prefer natural-language harness over brittle Python control flow.
 
