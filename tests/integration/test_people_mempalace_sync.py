@@ -11,7 +11,6 @@ Run with:
   pytest tests/integration/test_people_mempalace_sync.py -v
 """
 
-import asyncio
 import os
 import sys
 import uuid
@@ -30,13 +29,6 @@ if not os.environ.get('POSTGRES_URL'):
                 os.environ.setdefault(k.strip(), v.strip())
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../services/zoe-data'))
-
-
-@pytest.fixture(scope="module")
-def event_loop():
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
 
 
 @pytest.fixture(scope="module")
