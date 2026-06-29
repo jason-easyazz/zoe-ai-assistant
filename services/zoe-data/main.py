@@ -79,6 +79,19 @@ _READINESS_CACHE: dict[str, object] = {"expires_at": 0.0, "report": None}
 _READINESS_CACHE_LOCK = asyncio.Lock()
 
 
+def _ws_idle_timeout_seconds() -> float:
+    try:
+        value = float(os.environ.get("ZOE_WS_IDLE_TIMEOUT_SECONDS", "120"))
+    except (TypeError, ValueError):
+        return 120.0
+    if value <= 0:
+        return 120.0
+    return value
+
+
+WS_IDLE_TIMEOUT_SECONDS = _ws_idle_timeout_seconds()
+
+
 def _gemma_base_url() -> str:
     return gemma_base()
 
@@ -1798,6 +1811,53 @@ async def _panel_allows_guest_push(panel_id: str) -> bool:
     return False
 
 
+async def _receive_ws_text_with_deadline(websocket: WebSocket) -> str:
+    return await asyncio.wait_for(
+        websocket.receive_text(),
+        timeout=WS_IDLE_TIMEOUT_SECONDS,
+    )
+
+
+async def _run_push_ws_loop(
+    websocket: WebSocket,
+    disconnect_channel: str,
+    *,
+    allow_catchup: bool = False,
+):
+    try:
+        while True:
+            data = await _receive_ws_text_with_deadline(websocket)
+            if data == "ping":
+                await websocket.send_json({"type": "pong"})
+            elif allow_catchup and data.startswith("catchup:"):
+                _, _, raw_seq = data.partition(":")
+                try:
+                    seq = int(raw_seq)
+                except (TypeError, ValueError):
+                    await websocket.send_json({
+                        "type": "error",
+                        "error": "invalid_catchup_sequence",
+                    })
+                    continue
+                if seq < 0:
+                    await websocket.send_json({
+                        "type": "error",
+                        "error": "invalid_catchup_sequence",
+                    })
+                    continue
+                await broadcaster.catchup(websocket, seq)
+    except WebSocketDisconnect:
+        pass
+    except asyncio.TimeoutError:
+        logger.info("WebSocket idle timeout on channel %s", disconnect_channel)
+        try:
+            await websocket.close(1001, "Idle timeout")
+        except Exception:
+            pass
+    finally:
+        broadcaster.disconnect(websocket, disconnect_channel)
+
+
 @app.websocket("/ws/push")
 async def websocket_push(
     websocket: WebSocket,
@@ -1856,19 +1916,8 @@ async def websocket_push(
         )
     # -----------------------------------------------------------------
     # Normal data relay loop
-    try:
-        while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_json({"type": "pong"})
-            elif data.startswith("catchup:"):
-                seq = int(data.split(":")[1])
-                await broadcaster.catchup(websocket, seq)
-    except WebSocketDisconnect:
-        if panel_id:
-            broadcaster.disconnect(websocket, f"panel_{panel_id}")
-        else:
-            broadcaster.disconnect(websocket, channel)
+    disconnect_channel = f"panel_{panel_id}" if panel_id else channel
+    await _run_push_ws_loop(websocket, disconnect_channel, allow_catchup=True)
 
 
 @app.websocket("/api/calendar/ws/{user_id}")
@@ -1886,13 +1935,7 @@ async def calendar_ws(websocket: WebSocket, user_id: str):
     await broadcaster.connect(
         websocket, "calendar", user_id=str(user.get("user_id") or user_id)
     )
-    try:
-        while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_json({"type": "pong"})
-    except WebSocketDisconnect:
-        broadcaster.disconnect(websocket, "calendar")
+    await _run_push_ws_loop(websocket, "calendar")
 
 
 @app.websocket("/api/lists/ws/{user_id}")
@@ -1909,13 +1952,7 @@ async def lists_ws_with_user(websocket: WebSocket, user_id: str):
     await broadcaster.connect(
         websocket, "lists", user_id=str(user.get("user_id") or user_id)
     )
-    try:
-        while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_json({"type": "pong"})
-    except WebSocketDisconnect:
-        broadcaster.disconnect(websocket, "lists")
+    await _run_push_ws_loop(websocket, "lists")
 
 
 @app.websocket("/api/lists/ws")
@@ -1928,13 +1965,7 @@ async def lists_ws(websocket: WebSocket):
     await broadcaster.connect(
         websocket, "lists", user_id=str(user.get("user_id") or "")
     )
-    try:
-        while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_json({"type": "pong"})
-    except WebSocketDisconnect:
-        broadcaster.disconnect(websocket, "lists")
+    await _run_push_ws_loop(websocket, "lists")
 
 
 @app.websocket("/api/people/ws/{user_id}")
@@ -1951,13 +1982,7 @@ async def people_ws(websocket: WebSocket, user_id: str):
     await broadcaster.connect(
         websocket, "people", user_id=str(user.get("user_id") or user_id)
     )
-    try:
-        while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_json({"type": "pong"})
-    except WebSocketDisconnect:
-        broadcaster.disconnect(websocket, "people")
+    await _run_push_ws_loop(websocket, "people")
 
 
 @app.websocket("/api/reminders/ws/{user_id}")
@@ -1974,13 +1999,7 @@ async def reminders_ws(websocket: WebSocket, user_id: str):
     await broadcaster.connect(
         websocket, "reminders", user_id=str(user.get("user_id") or user_id)
     )
-    try:
-        while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_json({"type": "pong"})
-    except WebSocketDisconnect:
-        broadcaster.disconnect(websocket, "reminders")
+    await _run_push_ws_loop(websocket, "reminders")
 
 
 @app.websocket("/api/notes/ws/{user_id}")
@@ -1997,13 +2016,7 @@ async def notes_ws(websocket: WebSocket, user_id: str):
     await broadcaster.connect(
         websocket, "notes", user_id=str(user.get("user_id") or user_id)
     )
-    try:
-        while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_json({"type": "pong"})
-    except WebSocketDisconnect:
-        broadcaster.disconnect(websocket, "notes")
+    await _run_push_ws_loop(websocket, "notes")
 
 
 @app.websocket("/api/journal/ws/{user_id}")
@@ -2016,13 +2029,7 @@ async def journal_ws(websocket: WebSocket, user_id: str):
     await broadcaster.connect(
         websocket, "journal", user_id=str(user.get("user_id") or user_id)
     )
-    try:
-        while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_json({"type": "pong"})
-    except WebSocketDisconnect:
-        broadcaster.disconnect(websocket, "journal")
+    await _run_push_ws_loop(websocket, "journal")
 
 
 async def _resolve_ws_session(session_id: str | None) -> dict | None:
