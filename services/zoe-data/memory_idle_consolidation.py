@@ -101,29 +101,86 @@ MIN_TURNS = _int_env("ZOE_IDLE_CONSOLIDATION_MIN_TURNS", 2)
 
 
 # Schema source of truth is the Alembic migration
-# (alembic/versions/0014_memory_consolidation_state.py). This runtime CREATE is a
-# backward-compat / dev-convenience fallback only: `IF NOT EXISTS` makes it a
-# harmless no-op once the migration has run, so it never errors and never drifts
-# from the migration. It also keeps unmigrated dev/test DBs working. Run once per
-# process, not on every 60s sweep. If the schema ever needs to evolve, do it
-# through a new migration — keep this DDL byte-for-byte in sync (or drop it).
+# (alembic/versions/0014_memory_consolidation_state.py). This runtime path is a
+# backward-compat / dev-convenience fallback only — it just CREATEs the table on
+# an unmigrated dev/test DB. Run once per process, not on every 60s sweep. If the
+# schema ever needs to evolve, do it through a new migration — keep the DDL below
+# byte-for-byte in sync (or drop it).
+#
+# CRITICAL (least-privilege roles): we must NOT issue `CREATE TABLE` once the
+# table exists. In PostgreSQL `CREATE TABLE IF NOT EXISTS` still requires the
+# CREATE privilege even when the table already exists (the privilege is checked
+# before the existence short-circuit), so a read/write-only runtime role would
+# fail on the "no-op". So: check existence FIRST and only CREATE when the table
+# is genuinely absent.
 _state_table_ready = False
+
+
+def _is_insufficient_privilege(exc: BaseException) -> bool:
+    """True if exc is a Postgres insufficient-privilege error (SQLSTATE 42501)."""
+    sqlstate = getattr(exc, "sqlstate", None) or getattr(exc, "pgcode", None)
+    if sqlstate == "42501":
+        return True
+    name = type(exc).__name__.lower()
+    return "insufficientprivilege" in name or "permission denied" in str(exc).lower()
+
+
+async def _state_table_exists(conn) -> bool:
+    """Whether memory_consolidation_state exists, without needing CREATE privilege.
+
+    Postgres: ``to_regclass`` resolves the name in the search_path (NULL if absent)
+    and needs no special privilege. Falls back to ``sqlite_master`` for the SQLite
+    dev path (where ``to_regclass`` doesn't exist).
+    """
+    try:
+        reg = await conn.fetchval("SELECT to_regclass('memory_consolidation_state')")
+        return reg is not None
+    except Exception:
+        # Non-Postgres (e.g. SQLite dev): no to_regclass — use the catalog.
+        row = await conn.fetchval(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='table' AND name='memory_consolidation_state'"
+        )
+        return row is not None
 
 
 async def _ensure_state_table(conn) -> None:
     global _state_table_ready
     if _state_table_ready:
         return
-    await conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS memory_consolidation_state (
-            session_id text PRIMARY KEY,
-            user_id text NOT NULL,
-            last_consolidated_at timestamptz NOT NULL DEFAULT now(),
-            turns_consolidated int NOT NULL DEFAULT 0
+    # Existence check FIRST: a least-privilege role (no schema CREATE) must never
+    # issue a CREATE once Alembic 0014 has created the table.
+    if await _state_table_exists(conn):
+        _state_table_ready = True
+        return
+    # Table genuinely absent — unmigrated dev/test DB. Create it.
+    try:
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS memory_consolidation_state (
+                session_id text PRIMARY KEY,
+                user_id text NOT NULL,
+                last_consolidated_at timestamptz NOT NULL DEFAULT now(),
+                turns_consolidated int NOT NULL DEFAULT 0
+            )
+            """
         )
-        """
-    )
+    except Exception as exc:
+        # Defense-in-depth: if the role lacks CREATE but a concurrent creator
+        # (the migration or another process) won the race so the table now
+        # exists, continue — consolidation can proceed. If it's truly absent,
+        # consolidation genuinely can't work: log and re-raise.
+        if _is_insufficient_privilege(exc) and await _state_table_exists(conn):
+            logger.warning(
+                "memory_consolidation_state: no CREATE privilege but table already "
+                "exists (created by Alembic 0014); continuing without CREATE: %s", exc,
+            )
+        else:
+            logger.error(
+                "memory_consolidation_state missing and could not be created "
+                "(run Alembic migration 0014): %s", exc,
+            )
+            raise
     _state_table_ready = True
 
 

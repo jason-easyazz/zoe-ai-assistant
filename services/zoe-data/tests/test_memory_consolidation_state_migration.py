@@ -18,6 +18,7 @@ import io
 import sys
 from pathlib import Path
 
+import pytest
 from sqlalchemy import create_engine, text
 from alembic.config import Config
 from alembic.migration import MigrationContext
@@ -124,6 +125,10 @@ def test_0014_postgres_branch_mirrors_runtime_ddl():
     assert "user_id text not null" in sql
     assert "last_consolidated_at timestamptz not null default now()" in sql
     assert "turns_consolidated int not null default 0" in sql
+    # The runtime DDL creates no secondary index (the PK is the only key), so the
+    # migration must not either — keep them byte-for-byte in sync.
+    assert "create index" not in sql
+    assert "create unique index" not in sql
 
 
 # ─── 0007 context ADD COLUMN is rerun-safe (Postgres) ─────────────────────────
@@ -139,3 +144,89 @@ def test_0007_context_add_column_is_idempotent():
     assert "add column if not exists context text not null default 'personal'" in sql
     # Net schema is unchanged — the column is still TEXT NOT NULL DEFAULT.
     assert "alter table people add column context" not in sql
+
+
+# ─── Runtime _ensure_state_table gates CREATE for least-privilege roles ────────
+
+import asyncio  # noqa: E402
+
+import memory_idle_consolidation as mic  # noqa: E402
+
+
+class _InsufficientPrivilege(Exception):
+    """Stand-in for asyncpg.InsufficientPrivilegeError (SQLSTATE 42501)."""
+    sqlstate = "42501"
+
+    def __init__(self, msg="permission denied for schema public"):
+        super().__init__(msg)
+
+
+class _FakeConn:
+    """Minimal asyncpg-shaped conn: fetchval() for existence, execute() for DDL.
+
+    ``raise_on_create`` simulates a role without CREATE privilege; ``race_create``
+    simulates a concurrent creator that makes the table appear despite the error.
+    """
+
+    def __init__(self, *, exists, raise_on_create=False, race_create=False):
+        self._exists = exists
+        self.raise_on_create = raise_on_create
+        self.race_create = race_create
+        self.create_attempted = False
+
+    async def fetchval(self, sql, *args):
+        s = sql.lower()
+        if "to_regclass" in s or "sqlite_master" in s:
+            return "memory_consolidation_state" if self._exists else None
+        return None
+
+    async def execute(self, sql, *args):
+        if "create table" in sql.lower():
+            self.create_attempted = True
+            if self.raise_on_create:
+                if self.race_create:
+                    self._exists = True  # concurrent creator won the race
+                raise _InsufficientPrivilege()
+            self._exists = True
+        return "CREATE TABLE"
+
+
+def _run_ensure(conn):
+    mic._state_table_ready = False  # reset the once-per-process guard
+    try:
+        asyncio.run(mic._ensure_state_table(conn))
+    finally:
+        mic._state_table_ready = False
+
+
+def test_runtime_skips_create_when_table_exists_without_create_privilege():
+    """The blocker: once 0014 has created the table, a role with no CREATE
+    privilege must NOT issue a CREATE (Postgres checks the privilege before the
+    IF NOT EXISTS short-circuit). The existence check must skip CREATE entirely."""
+    conn = _FakeConn(exists=True, raise_on_create=True)
+    _run_ensure(conn)  # must not raise
+    assert conn.create_attempted is False, "CREATE must be skipped when table exists"
+
+
+def test_runtime_creates_table_on_unmigrated_dev_db():
+    """Dev/test convenience preserved: a DB without the migration still gets the
+    table created (role has CREATE privilege)."""
+    conn = _FakeConn(exists=False, raise_on_create=False)
+    _run_ensure(conn)
+    assert conn.create_attempted is True
+
+
+def test_runtime_tolerates_privilege_error_when_table_appears_concurrently():
+    """Defense-in-depth: existence check said absent, CREATE hit a privilege
+    error, but a concurrent creator made the table appear → continue, no raise."""
+    conn = _FakeConn(exists=False, raise_on_create=True, race_create=True)
+    _run_ensure(conn)  # must not raise
+    assert conn.create_attempted is True
+
+
+def test_runtime_reraises_when_table_truly_absent_and_no_privilege():
+    """If the table is genuinely missing and the role can't CREATE, consolidation
+    can't work — surface the error rather than swallow it."""
+    conn = _FakeConn(exists=False, raise_on_create=True, race_create=False)
+    with pytest.raises(_InsufficientPrivilege):
+        _run_ensure(conn)
