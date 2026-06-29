@@ -369,3 +369,87 @@ async def test_rejects_when_guest_panel_db_yields_nothing(monkeypatch):
 
     monkeypatch.setattr(main, "_resolve_ws_session", resolve)
     assert await main._resolve_subscribable_panel("zoe-touch-pi", "stale-guest-session") is None
+
+
+# ---------------------------------------------------------------------------
+# websocket_push channel-cleanup wiring: the socket subscribes under the
+# RESOLVED panel id, so disconnect cleanup must target that same channel — not
+# the connecting alias. Drives the endpoint with a fake WebSocket + broadcaster.
+# ---------------------------------------------------------------------------
+class _FakeWS:
+    def __init__(self, headers=None, query=None):
+        self.headers = headers or {}
+        self.query_params = query or {}
+
+    async def accept(self):
+        pass
+
+    async def send_json(self, _data):
+        pass
+
+    async def receive_text(self):
+        # Mimic the client closing the socket immediately so the relay loop exits.
+        raise main.WebSocketDisconnect()
+
+    async def close(self, *_a, **_k):
+        pass
+
+
+class _RecordingBroadcaster:
+    def __init__(self):
+        self.connect_panel_calls: list = []
+        self.connect_calls: list = []
+        self.disconnect_calls: list = []
+
+    async def connect_panel(self, _ws, panel_id):
+        self.connect_panel_calls.append(panel_id)
+
+    async def connect(self, _ws, channel, user_id=None):
+        self.connect_calls.append((channel, user_id))
+
+    def disconnect(self, _ws, channel="all"):
+        self.disconnect_calls.append(channel)
+
+    async def catchup(self, _ws, _seq):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_websocket_push_disconnects_under_resolved_panel_channel(monkeypatch):
+    """A browser connecting as panel_<alias> that resolves to panel_<registered>
+    subscribes to panel_<registered>, so cleanup must disconnect from that same
+    channel. Regression for cleanup keyed on the connecting alias instead of the
+    resolved id."""
+    bc = _RecordingBroadcaster()
+    monkeypatch.setattr(main, "broadcaster", bc)
+
+    async def _resolve(_panel_id, _session_id):
+        return "zoe-touch-pi"  # resolved id differs from the connecting alias
+
+    monkeypatch.setattr(main, "_resolve_subscribable_panel", _resolve)
+
+    ws = _FakeWS(query={"session_id": "session-1"})
+    await main.websocket_push(ws, channel="all", panel_id="panel_alias_xyz")
+
+    assert bc.connect_panel_calls == ["zoe-touch-pi"]
+    # Must be the resolved channel, NOT "panel_panel_alias_xyz".
+    assert bc.disconnect_calls == ["panel_zoe-touch-pi"]
+
+
+@pytest.mark.asyncio
+async def test_websocket_push_non_panel_disconnects_under_channel(monkeypatch):
+    """Non-panel connections still clean up under their plain channel (guards the
+    branch-local disconnect_channel assignment)."""
+    bc = _RecordingBroadcaster()
+    monkeypatch.setattr(main, "broadcaster", bc)
+
+    async def _resolve_session(_sid):
+        return {"user_id": "u1", "role": "member"}
+
+    monkeypatch.setattr(main, "_resolve_ws_session", _resolve_session)
+
+    ws = _FakeWS(query={"session_id": "session-1"})
+    await main.websocket_push(ws, channel="all", panel_id="")
+
+    assert bc.connect_calls == [("all", "u1")]
+    assert bc.disconnect_calls == ["all"]

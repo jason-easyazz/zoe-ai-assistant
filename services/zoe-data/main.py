@@ -1964,6 +1964,13 @@ async def websocket_push(
                 return
         # Panel token or bound browser session verified; subscribe to panel push.
         await broadcaster.connect_panel(websocket, subscribe_panel_id)
+        # Clean up under the RESOLVED id we actually subscribed to — not the
+        # connecting alias. A browser that connected as panel_<alias> but resolved
+        # to panel_<registered> would otherwise hand disconnect the wrong channel.
+        # (disconnect() self-heals via the broadcaster's per-socket panel map, so
+        # this isn't a live leak, but aligning the channel keeps cleanup correct,
+        # explicit, and robust to future broadcaster refactors.)
+        disconnect_channel = f"panel_{subscribe_panel_id}"
     else:
         # Non-panel: perform lightweight session validation via zoe-auth HTTP.
         session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
@@ -1990,9 +1997,9 @@ async def websocket_push(
         await broadcaster.connect(
             websocket, channel, user_id=str(user.get("user_id") or "")
         )
+        disconnect_channel = channel
     # -----------------------------------------------------------------
     # Normal data relay loop
-    disconnect_channel = f"panel_{panel_id}" if panel_id else channel
     await _run_push_ws_loop(websocket, disconnect_channel, allow_catchup=True)
 
 
