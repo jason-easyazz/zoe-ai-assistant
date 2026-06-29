@@ -91,28 +91,35 @@ jobs:
         run: |
           pip install --quiet -r services/zoe-auth/requirements.txt
           pytest \
+            services/zoe-data/tests/test_canonical_invariants.py \
+            services/zoe-data/tests/test_voice_smoke_ci.py \
             services/zoe-data/tests/test_guest_policy.py \
             services/zoe-data/tests/test_voice_scope.py \
             services/zoe-data/tests/test_chat_session_title.py \
             services/zoe-data/tests/test_ui_orchestrator_types.py \
             services/zoe-data/tests/test_greptile_client.py \
+            services/zoe-data/tests/test_db_pool_release_race.py \
             services/zoe-data/tests/test_greploop_guard.py \
             services/zoe-data/tests/test_pipeline_store.py \
             services/zoe-data/tests/test_pipeline_evidence.py \
             services/zoe-data/tests/test_multica_poll_dispatch.py \
             services/zoe-data/tests/test_main_multica_poll.py \
             services/zoe-data/tests/test_zoe_agent_self_url.py \
+            services/zoe-data/tests/test_agent_safety.py \
+            services/zoe-data/tests/test_openclaw_skill_name_safety.py \
             services/zoe-data/tests/test_pipeline_store.py \
             services/zoe-data/tests/test_pipeline_evidence.py \
             services/zoe-data/tests/test_multica_poll_dispatch.py \
             services/zoe-data/tests/test_main_multica_poll.py \
             services/zoe-data/tests/test_kanban_phase_budget.py \
+            services/homeassistant-mcp-bridge/tests/test_ha_bridge.py \
             -x -q \
             --override-ini="asyncio_mode=auto"
           PYTHONPATH="${{ github.workspace }}/services/zoe-auth:${{ github.workspace }}/services/zoe-auth/tests" pytest \
             services/zoe-auth/tests/test_auth.py \
             services/zoe-auth/tests/test_smoke.py \
             services/zoe-auth/tests/test_oidc_jwt.py \
+            services/zoe-auth/tests/test_request_logging.py \
             -x -q
         env:
           PYTHONPATH: ${{ github.workspace }}/services/zoe-data

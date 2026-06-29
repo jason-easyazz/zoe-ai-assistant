@@ -5,8 +5,11 @@ import uuid as _uuid_mod
 from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+import httpx
 from database import init_db
+from gemma_endpoint import gemma_base
 from push import broadcaster
 from auth import require_internal_token
 from routers import (
@@ -72,6 +75,205 @@ _RUNTIME_HEALTH: dict[str, bool] = {
 }
 # Timestamp of the last probe (ISO string); exposed via GET /api/agent/runtimes
 _RUNTIME_LAST_PROBED: str = ""
+_READINESS_CACHE: dict[str, object] = {"expires_at": 0.0, "report": None}
+_READINESS_CACHE_LOCK = asyncio.Lock()
+
+
+def _ws_idle_timeout_seconds() -> float:
+    try:
+        value = float(os.environ.get("ZOE_WS_IDLE_TIMEOUT_SECONDS", "120"))
+    except (TypeError, ValueError):
+        return 120.0
+    if value <= 0:
+        return 120.0
+    return value
+
+
+WS_IDLE_TIMEOUT_SECONDS = _ws_idle_timeout_seconds()
+
+
+def _gemma_base_url() -> str:
+    return gemma_base()
+
+
+def _canonical_gemma_model(model_id: str) -> bool:
+    normalized = (model_id or "").lower()
+    return "gemma" in normalized and "e4b" in normalized
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+async def _check_brain_ready(timeout_s: float = 2.0) -> dict:
+    base_url = _gemma_base_url()
+    detail: dict = {"ok": False, "url": base_url}
+    try:
+        async with httpx.AsyncClient(timeout=timeout_s) as client:
+            health = await client.get(f"{base_url}/health")
+            detail["health_status"] = health.status_code
+            if health.status_code != 200:
+                detail["error"] = f"health_http_{health.status_code}"
+                return detail
+
+            detail["ok"] = True
+            try:
+                models = await client.get(f"{base_url}/v1/models")
+                detail["models_status"] = models.status_code
+                if models.status_code == 200:
+                    payload = models.json()
+                    model_ids = [
+                        str(item.get("id") or item.get("model") or "")
+                        for item in payload.get("data", [])
+                        if isinstance(item, dict)
+                    ]
+                    detail["models"] = model_ids[:5]
+                    # Telemetry only: current llama-server exposes a model id/path
+                    # containing "gemma" and "e4b", but readiness is gated on the
+                    # server's own /health so model-list shape drift cannot block boot.
+                    detail["canonical_model_seen"] = any(
+                        _canonical_gemma_model(model_id) for model_id in model_ids
+                    )
+            except Exception as models_exc:
+                detail["models_error"] = models_exc.__class__.__name__
+            return detail
+    except Exception as exc:
+        detail["error"] = exc.__class__.__name__
+        return detail
+
+
+async def _check_stt_ready() -> dict:
+    try:
+        from routers import voice_tts
+
+        loaded = bool(voice_tts.moonshine_ready())
+        load_error = voice_tts.moonshine_error()
+        return {
+            "ok": loaded or load_error is None,
+            "engine": "moonshine",
+            "arch": voice_tts.moonshine_arch(),
+            "loaded": loaded,
+            **({"error": load_error} if load_error else {}),
+        }
+    except Exception as exc:
+        return {"ok": False, "engine": "moonshine", "error": exc.__class__.__name__}
+
+
+async def _check_tts_ready(timeout_s: float = 2.0) -> dict:
+    from routers import voice_tts
+
+    mode = os.environ.get("ZOE_TTS_MODE", "hybrid").strip().lower() or "hybrid"
+    sidecar_url = os.environ.get("ZOE_KOKORO_SIDECAR_URL", "http://127.0.0.1:10201").rstrip("/")
+    detail: dict = {
+        "ok": False,
+        "engine": "kokoro-waterfall",
+        "mode": mode,
+        "sidecar_url": sidecar_url,
+    }
+    if mode in {"edge", "cloud", "offline"}:
+        detail["ok"] = True
+        detail["provider"] = mode
+        return detail
+    try:
+        async with httpx.AsyncClient(timeout=timeout_s) as client:
+            response = await client.get(f"{sidecar_url}/health")
+        detail["status_code"] = response.status_code
+        if response.status_code == 200:
+            payload = response.json()
+            detail["pipeline_loaded"] = bool(payload.get("pipeline_loaded"))
+            detail["voice"] = payload.get("voice")
+            detail["device"] = payload.get("device")
+            detail["ok"] = bool(payload.get("pipeline_loaded"))
+            if not detail["ok"]:
+                detail["error"] = "pipeline_not_loaded"
+            else:
+                detail["provider"] = "kokoro-sidecar"
+                return detail
+        detail["error"] = f"http_{response.status_code}"
+    except Exception as exc:
+        detail["error"] = exc.__class__.__name__
+    detail["local_onnx_loaded"] = bool(voice_tts.kokoro_ready())
+    detail["local_onnx_configured"] = bool(voice_tts.kokoro_configured())
+    if detail["local_onnx_loaded"] or detail["local_onnx_configured"]:
+        detail["ok"] = True
+        detail["provider"] = "kokoro-onnx"
+        return detail
+    detail["espeak_available"] = bool(voice_tts._has_espeak_ng())
+    if mode in {"hybrid", "local", "offline"} and detail["espeak_available"]:
+        detail["ok"] = True
+        detail["provider"] = "espeak-ng"
+        return detail
+    detail["edge_tts_available"] = bool(voice_tts.edge_tts_available())
+    if mode in {"hybrid"} and detail["edge_tts_available"]:
+        detail["ok"] = True
+        detail["provider"] = "edge-tts"
+        return detail
+    if mode in {"hybrid", "local"}:
+        detail["error"] = "no_tts_provider_available"
+    return detail
+
+
+async def _build_readiness_report_uncached() -> dict:
+    brain, stt, tts = await asyncio.gather(
+        _check_brain_ready(),
+        _check_stt_ready(),
+        _check_tts_ready(),
+    )
+    dependencies = {"brain": brain, "stt": stt, "tts": tts}
+    ready = all(bool(dep.get("ok")) for dep in dependencies.values())
+    return {
+        "status": "ok" if ready else "degraded",
+        "service": "zoe-data",
+        "version": "1.0.0",
+        "memory_capture": _memory_capture_health,
+        "ready": ready,
+        "dependencies": dependencies,
+    }
+
+
+async def _build_readiness_report(*, use_cache: bool = True) -> dict:
+    now = time.monotonic()
+    cached_report = _READINESS_CACHE.get("report")
+    if use_cache and isinstance(cached_report, dict) and now < float(_READINESS_CACHE.get("expires_at") or 0.0):
+        return dict(cached_report)
+
+    async with _READINESS_CACHE_LOCK:
+        now = time.monotonic()
+        cached_report = _READINESS_CACHE.get("report")
+        if use_cache and isinstance(cached_report, dict) and now < float(_READINESS_CACHE.get("expires_at") or 0.0):
+            return dict(cached_report)
+
+        total_timeout_s = max(0.1, _env_float("ZOE_READINESS_TIMEOUT_S", 4.0))
+        cache_ttl_s = max(0.0, _env_float("ZOE_READINESS_CACHE_TTL_S", 3.0))
+        try:
+            report = await asyncio.wait_for(_build_readiness_report_uncached(), timeout=total_timeout_s)
+        except Exception as exc:
+            report = {
+                "status": "degraded",
+                "service": "zoe-data",
+                "version": "1.0.0",
+                "memory_capture": _memory_capture_health,
+                "ready": False,
+                "dependencies": {"readiness": {"ok": False, "error": exc.__class__.__name__}},
+            }
+        _READINESS_CACHE["report"] = dict(report)
+        _READINESS_CACHE["expires_at"] = time.monotonic() + cache_ttl_s
+        return report
+
+
+async def _wait_for_brain_startup() -> None:
+    deadline = time.monotonic() + max(0.0, _env_float("ZOE_BRAIN_STARTUP_WAIT_S", 30.0))
+    last: dict = {}
+    while time.monotonic() < deadline:
+        last = await _check_brain_ready(timeout_s=2.0)
+        if last.get("ok"):
+            logger.info("Brain readiness gate passed")
+            return
+        await asyncio.sleep(1.0)
+    logger.warning("Brain readiness gate timed out; /readyz will report not ready: %s", last)
 
 
 # These legacy logging filters are no longer needed with the new JSON middleware
@@ -668,6 +870,7 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing zoe-data database...")
     await init_db()
     logger.info("Database initialized. zoe-data is ready.")
+    asyncio.create_task(_wait_for_brain_startup(), name="brain_startup_readiness_probe")
     # One-time MemPalace migration: re-tag legacy records from wing="zoe" to wing="family-admin".
     # Gated behind a DB flag so the expensive ChromaDB scan only runs on first startup.
     try:
@@ -736,6 +939,18 @@ async def lifespan(app: FastAPI):
 
     # Proactive engine: APScheduler (Tier 1) + slow-loop (Tier 2).
     try:
+        # Schema guard: the claim/generation logic depends on migration 0012.
+        # Fail fast & LOUD (and don't start the engine in a broken state) rather
+        # than letting every reminder silently error on the missing columns.
+        from proactive.engine import verify_proactive_schema
+        _missing_cols = await verify_proactive_schema()
+        if _missing_cols:
+            raise RuntimeError(
+                "proactive DB schema out of date — missing columns: "
+                f"{_missing_cols}. Run: alembic upgrade head (migration 0012). "
+                "Proactive engine NOT started."
+            )
+
         from proactive.engine import start_proactive_engine, register_trigger
         from proactive.triggers.reminder_scan import ReminderScanTrigger
         from proactive.triggers.morning_checkin import MorningCheckInTrigger
@@ -760,8 +975,20 @@ async def lifespan(app: FastAPI):
                 " EveningWindDownTrigger, OpenClawTrigger registered)"
             )
         start_proactive_engine()
+        # Reconcile after the scheduler is live: re-register any unfired reminder
+        # whose one-shot job was dropped while the service was down (>misfire
+        # grace) so a missed reminder still fires after restart.
+        try:
+            from proactive.engine import reconcile_scheduled_jobs
+            _recovered = await reconcile_scheduled_jobs()
+            if _recovered:
+                logger.info("Proactive reconcile recovered %d missed reminder(s)", _recovered)
+        except Exception as _rec_exc:
+            logger.warning("Proactive reconcile skipped (non-fatal): %s", _rec_exc)
     except Exception as _pe_exc:
-        logger.warning("Proactive engine failed to start (non-fatal): %s", _pe_exc)
+        # Loud + explicit: reminders/proactive nudges will NOT fire until this is
+        # resolved (commonly: run alembic migrations). Not silently swallowed.
+        logger.error("Proactive engine NOT started — reminders will not fire: %s", _pe_exc)
 
     # Multica autopilot schedule sync — register cron jobs from Multica into APScheduler.
     # Must run after start_proactive_engine() so the scheduler is already running.
@@ -1371,6 +1598,13 @@ async def lifespan(app: FastAPI):
         stop_proactive_engine()
     except Exception:
         pass
+    try:
+        from zoe_core_client import shutdown_workers
+        await shutdown_workers(reset_timeout_s=2.0)
+    except asyncio.TimeoutError:
+        logger.warning("zoe-core worker shutdown timed out (non-fatal)")
+    except Exception:
+        logger.warning("zoe-core worker shutdown failed (non-fatal)", exc_info=True)
     for task in (_openclaw_bg_task, _digest_bg_task, _zoe_update_bg_task,
                  _consolidation_bg_task, _runtime_health_task):
         if task and not task.done():
@@ -1474,6 +1708,12 @@ async def root_health():
     }
 
 
+@app.get("/readyz")
+async def root_readyz():
+    report = await _build_readiness_report(use_cache=True)
+    return JSONResponse(report, status_code=200 if report["ready"] else 503)
+
+
 @app.get("/api/router/classify")
 async def router_classify(text: str, _: None = Depends(require_internal_token)):
     """Tier-1 semantic router test endpoint: classify an utterance into a domain.
@@ -1508,7 +1748,7 @@ async def prometheus_metrics(_: None = Depends(require_internal_token)):
     from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
     from memory_metrics import REGISTRY, snapshot_collection_sizes
 
-    snapshot_collection_sizes()
+    await snapshot_collection_sizes()
     return Response(
         content=generate_latest(REGISTRY),
         media_type=CONTENT_TYPE_LATEST,
@@ -1641,6 +1881,53 @@ async def _panel_allows_guest_push(panel_id: str) -> bool:
     return False
 
 
+async def _receive_ws_text_with_deadline(websocket: WebSocket) -> str:
+    return await asyncio.wait_for(
+        websocket.receive_text(),
+        timeout=WS_IDLE_TIMEOUT_SECONDS,
+    )
+
+
+async def _run_push_ws_loop(
+    websocket: WebSocket,
+    disconnect_channel: str,
+    *,
+    allow_catchup: bool = False,
+):
+    try:
+        while True:
+            data = await _receive_ws_text_with_deadline(websocket)
+            if data == "ping":
+                await websocket.send_json({"type": "pong"})
+            elif allow_catchup and data.startswith("catchup:"):
+                _, _, raw_seq = data.partition(":")
+                try:
+                    seq = int(raw_seq)
+                except (TypeError, ValueError):
+                    await websocket.send_json({
+                        "type": "error",
+                        "error": "invalid_catchup_sequence",
+                    })
+                    continue
+                if seq < 0:
+                    await websocket.send_json({
+                        "type": "error",
+                        "error": "invalid_catchup_sequence",
+                    })
+                    continue
+                await broadcaster.catchup(websocket, seq)
+    except WebSocketDisconnect:
+        pass
+    except asyncio.TimeoutError:
+        logger.info("WebSocket idle timeout on channel %s", disconnect_channel)
+        try:
+            await websocket.close(1001, "Idle timeout")
+        except Exception:
+            pass
+    finally:
+        broadcaster.disconnect(websocket, disconnect_channel)
+
+
 @app.websocket("/ws/push")
 async def websocket_push(
     websocket: WebSocket,
@@ -1705,19 +1992,8 @@ async def websocket_push(
         )
     # -----------------------------------------------------------------
     # Normal data relay loop
-    try:
-        while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_json({"type": "pong"})
-            elif data.startswith("catchup:"):
-                seq = int(data.split(":")[1])
-                await broadcaster.catchup(websocket, seq)
-    except WebSocketDisconnect:
-        if panel_id:
-            broadcaster.disconnect(websocket, f"panel_{panel_id}")
-        else:
-            broadcaster.disconnect(websocket, channel)
+    disconnect_channel = f"panel_{panel_id}" if panel_id else channel
+    await _run_push_ws_loop(websocket, disconnect_channel, allow_catchup=True)
 
 
 @app.websocket("/api/calendar/ws/{user_id}")
@@ -1735,13 +2011,7 @@ async def calendar_ws(websocket: WebSocket, user_id: str):
     await broadcaster.connect(
         websocket, "calendar", user_id=str(user.get("user_id") or user_id)
     )
-    try:
-        while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_json({"type": "pong"})
-    except WebSocketDisconnect:
-        broadcaster.disconnect(websocket, "calendar")
+    await _run_push_ws_loop(websocket, "calendar")
 
 
 @app.websocket("/api/lists/ws/{user_id}")
@@ -1758,13 +2028,7 @@ async def lists_ws_with_user(websocket: WebSocket, user_id: str):
     await broadcaster.connect(
         websocket, "lists", user_id=str(user.get("user_id") or user_id)
     )
-    try:
-        while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_json({"type": "pong"})
-    except WebSocketDisconnect:
-        broadcaster.disconnect(websocket, "lists")
+    await _run_push_ws_loop(websocket, "lists")
 
 
 @app.websocket("/api/lists/ws")
@@ -1777,13 +2041,7 @@ async def lists_ws(websocket: WebSocket):
     await broadcaster.connect(
         websocket, "lists", user_id=str(user.get("user_id") or "")
     )
-    try:
-        while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_json({"type": "pong"})
-    except WebSocketDisconnect:
-        broadcaster.disconnect(websocket, "lists")
+    await _run_push_ws_loop(websocket, "lists")
 
 
 @app.websocket("/api/people/ws/{user_id}")
@@ -1800,13 +2058,7 @@ async def people_ws(websocket: WebSocket, user_id: str):
     await broadcaster.connect(
         websocket, "people", user_id=str(user.get("user_id") or user_id)
     )
-    try:
-        while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_json({"type": "pong"})
-    except WebSocketDisconnect:
-        broadcaster.disconnect(websocket, "people")
+    await _run_push_ws_loop(websocket, "people")
 
 
 @app.websocket("/api/reminders/ws/{user_id}")
@@ -1823,13 +2075,7 @@ async def reminders_ws(websocket: WebSocket, user_id: str):
     await broadcaster.connect(
         websocket, "reminders", user_id=str(user.get("user_id") or user_id)
     )
-    try:
-        while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_json({"type": "pong"})
-    except WebSocketDisconnect:
-        broadcaster.disconnect(websocket, "reminders")
+    await _run_push_ws_loop(websocket, "reminders")
 
 
 @app.websocket("/api/notes/ws/{user_id}")
@@ -1846,13 +2092,7 @@ async def notes_ws(websocket: WebSocket, user_id: str):
     await broadcaster.connect(
         websocket, "notes", user_id=str(user.get("user_id") or user_id)
     )
-    try:
-        while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_json({"type": "pong"})
-    except WebSocketDisconnect:
-        broadcaster.disconnect(websocket, "notes")
+    await _run_push_ws_loop(websocket, "notes")
 
 
 @app.websocket("/api/journal/ws/{user_id}")
@@ -1865,13 +2105,7 @@ async def journal_ws(websocket: WebSocket, user_id: str):
     await broadcaster.connect(
         websocket, "journal", user_id=str(user.get("user_id") or user_id)
     )
-    try:
-        while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_json({"type": "pong"})
-    except WebSocketDisconnect:
-        broadcaster.disconnect(websocket, "journal")
+    await _run_push_ws_loop(websocket, "journal")
 
 
 async def _resolve_ws_session(session_id: str | None) -> dict | None:
@@ -1949,7 +2183,7 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
     Accepts text and binary (audio) messages:
     - Text JSON {"type": "text", "message": "..."} → routed through zoe_agent
     - Text JSON {"type": "cancel"} → sets cancel flag for in-flight pipeline
-    - Binary → transcribed via faster-whisper then routed as text
+    - Binary → transcribed via Moonshine then routed as text
     Emits {"type": "state"}, {"type": "transcript"}, {"type": "audio"}, {"type": "done"}.
     """
     await websocket.accept()
@@ -1977,7 +2211,7 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
             if raw.get("bytes"):
                 # Binary audio chunk: detect format from magic bytes, write temp file, transcribe.
                 # Browser MediaRecorder always sends WebM/opus (magic: \x1a\x45\xdf\xa3).
-                # Saving as .wav when the content is WebM causes whisper.cpp to fail.
+                # Preserve the real container suffix; WebM/opus must not be mislabeled as WAV.
                 audio_bytes: bytes = raw["bytes"]
                 await websocket.send_json({"type": "state", "state": "thinking"})
                 try:

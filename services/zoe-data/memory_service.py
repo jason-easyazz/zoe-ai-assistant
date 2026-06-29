@@ -35,6 +35,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -60,6 +61,8 @@ _MEMPALACE_DATA = os.environ.get(
 )
 
 _AUDIT_COLLECTION = os.environ.get("ZOE_MEMORY_AUDIT_COLLECTION", "mempalace_audit")
+_AUDIT_CLIENTS: dict[str, Any] = {}
+_AUDIT_CLIENTS_LOCK = threading.Lock()
 
 _MEMORY_SCOPE_TO_VISIBILITY = {
     "personal": "personal",
@@ -74,6 +77,53 @@ def _metadata_value(value: Any) -> str | int | float | bool:
     if isinstance(value, (str, int, float, bool)):
         return value
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _parse_aware_datetime(value: Any) -> datetime.datetime | None:
+    if not value:
+        return None
+    if isinstance(value, datetime.datetime):
+        dt = value
+    elif isinstance(value, datetime.date):
+        # Legacy date-only expiries mean "valid through this UTC day".
+        dt = datetime.datetime.combine(value, datetime.time.max)
+    elif isinstance(value, str):
+        raw = value.strip()
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+            try:
+                legacy_date = datetime.date.fromisoformat(raw)
+            except ValueError:
+                return None
+            # Date-only legacy strings expire after the calendar day ends in UTC.
+            dt = datetime.datetime.combine(legacy_date, datetime.time.max)
+        else:
+            try:
+                dt = datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+    else:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return dt.astimezone(datetime.timezone.utc)
+
+
+def _normalize_expires_at(expires_at: str) -> str:
+    dt = _parse_aware_datetime(expires_at)
+    if dt is None:
+        raise MemoryServiceError("expires_at must be ISO-8601")
+    return dt.isoformat().replace("+00:00", "Z")
+
+
+def _memory_expired(expires_at: Any, now: datetime.datetime | None = None) -> bool:
+    expires_dt = _parse_aware_datetime(expires_at)
+    if expires_dt is None:
+        logger.warning("memory_service: invalid expires_at metadata kept active: %r", expires_at)
+        return False
+    now_dt = now or datetime.datetime.now(datetime.timezone.utc)
+    if now_dt.tzinfo is None:
+        now_dt = now_dt.replace(tzinfo=datetime.timezone.utc)
+    return expires_dt <= now_dt.astimezone(datetime.timezone.utc)
 
 
 _BLOCKED_READ_STATUSES = {"archived", "rejected", "superseded", "pending", "disputed"}
@@ -114,6 +164,32 @@ def _scope_visibility(scope: Any | None) -> str:
     if scope_value not in _MEMORY_SCOPE_TO_VISIBILITY:
         raise MemoryServiceError(f"unsupported memory scope: {scope_value}")
     return _MEMORY_SCOPE_TO_VISIBILITY[scope_value]
+
+
+def _memory_id(user_id: str, text: str, metadata: Mapping[str, Any]) -> str:
+    """Stable row id; include durable identity so same text can exist in distinct lanes."""
+
+    identity = {
+        "user_id": user_id,
+        "text": text,
+        "source": metadata.get("source", ""),
+        "scope": metadata.get("scope", ""),
+        "visibility": metadata.get("visibility", ""),
+        "memory_type": metadata.get("memory_type", ""),
+        "entity_type": metadata.get("entity_type", ""),
+        "entity_id": metadata.get("entity_id", ""),
+    }
+    basis = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    return f"zoe_{user_id}_{hashlib.sha256(basis).hexdigest()[:24]}"
+
+
+def _invalidate_agent_user_facts_cache(user_id: str) -> None:
+    try:
+        from zoe_agent import _invalidate_user_facts_cache  # type: ignore[import]
+
+        _invalidate_user_facts_cache(user_id)
+    except Exception as exc:
+        logger.debug("memory_service: user facts cache invalidation skipped: %s", exc)
 
 
 def _promote_event_metadata(md: dict[str, Any], extra: dict[str, Any]) -> None:
@@ -209,6 +285,7 @@ class MemoryService:
         self._data_dir = data_dir
         self._user_locks: dict[str, asyncio.Lock] = {}
         self._seen_keys: set[str] = set()
+        self._background_tasks: set[asyncio.Task[Any]] = set()
 
     async def ingest(
         self,
@@ -285,7 +362,7 @@ class MemoryService:
                 idem_key=idem_key,
             )
 
-            mem_id = f"zoe_{user_id}_{hashlib.md5(scrubbed.encode()).hexdigest()[:16]}"
+            mem_id = _memory_id(user_id, scrubbed, metadata)
             try:
                 await self._run_sync(
                     self._write_row, mem_id, scrubbed, metadata
@@ -323,7 +400,10 @@ class MemoryService:
             return []
         ids = [r.id for r in rows]
         if ids:
-            asyncio.create_task(self._tick_access(user_id, ids))
+            self._track_background_task(
+                self._tick_access(user_id, ids),
+                name="memory_tick_access_prompt",
+            )
         return rows
 
     async def search(
@@ -360,7 +440,10 @@ class MemoryService:
         ids = [r.id for r in rows]
         if ids:
             # Pass query for unique_query_count tracking in dreaming memory
-            asyncio.create_task(self.tick_access(user_id, ids, query=query))
+            self._track_background_task(
+                self.tick_access(user_id, ids, query=query),
+                name="memory_tick_access_search",
+            )
         return rows
 
     async def delete_user(self, user_id: str, *, actor: str) -> int:
@@ -370,19 +453,12 @@ class MemoryService:
         async with lock:
             try:
                 ids = await self._run_sync(self._list_ids_for_user, user_id)
-                if not ids:
-                    return 0
-                await self._run_sync(self._delete_ids, ids)
+                if ids:
+                    await self._run_sync(self._delete_ids, ids)
+                await self._run_sync(self._delete_audit_for_user_sync, user_id)
             except Exception as exc:
                 raise MemoryServiceError(f"delete_user failed: {exc}") from exc
-            await self._append_audit(
-                mem_id="*",
-                user_id=user_id,
-                actor=actor,
-                action="delete_user",
-                before={"count": len(ids)},
-                after=None,
-            )
+            _invalidate_agent_user_facts_cache(user_id)
             return len(ids)
 
     async def list_by_status(
@@ -566,7 +642,6 @@ class MemoryService:
             scrubbed, reject = scrub_pii(new_text)
             if reject:
                 raise MemoryServiceError(f"edit rejected by PII scrubber: {reject}")
-            new_id = f"zoe_{user_id}_{hashlib.md5(scrubbed.encode()).hexdigest()[:16]}"
             new_meta = self._build_metadata(
                 user_id=user_id,
                 source=current.metadata.get("source", "review_ui"),
@@ -581,6 +656,7 @@ class MemoryService:
                 expires_at=current.metadata.get("expires_at"),
                 idem_key=self._idempotency_key(user_id, mem_id, scrubbed),
             )
+            new_id = _memory_id(user_id, scrubbed, new_meta)
             new_meta["supersedes_id"] = mem_id
             new_meta["reviewed_by"] = actor
             new_meta["reviewed_at"] = new_meta["added_at"]
@@ -713,7 +789,7 @@ class MemoryService:
         if entity_id:
             md["entity_id"] = entity_id
         if expires_at:
-            md["expires_at"] = expires_at
+            md["expires_at"] = _normalize_expires_at(expires_at)
         if source_excerpt:
             md["source_excerpt"] = source_excerpt
         if event_scope:
@@ -735,13 +811,43 @@ class MemoryService:
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, fn, *args)
 
+    def _track_background_task(self, coro, *, name: str) -> asyncio.Task[Any]:
+        task = asyncio.create_task(coro, name=name)
+        self._background_tasks.add(task)
+
+        def _done(done: asyncio.Task[Any]) -> None:
+            self._background_tasks.discard(done)
+            if done.cancelled():
+                return
+            try:
+                exc = done.exception()
+            except Exception:
+                logger.warning("memory_service: background task inspection failed", exc_info=True)
+                return
+            if exc is not None:
+                logger.warning(
+                    "memory_service: background task %s failed",
+                    name,
+                    exc_info=(type(exc), exc, exc.__traceback__),
+                )
+
+        task.add_done_callback(_done)
+        return task
+
     def _collection(self):
         from mempalace.palace import get_collection  # type: ignore[import]
         return get_collection(self._data_dir)
 
     def _audit_collection(self):
-        import chromadb
-        client = chromadb.PersistentClient(path=self._data_dir)
+        data_dir = os.path.realpath(os.path.abspath(os.path.expanduser(self._data_dir)))
+        client = _AUDIT_CLIENTS.get(data_dir)
+        if client is None:
+            with _AUDIT_CLIENTS_LOCK:
+                client = _AUDIT_CLIENTS.get(data_dir)
+                if client is None:
+                    import chromadb
+                    client = chromadb.PersistentClient(path=data_dir)
+                    _AUDIT_CLIENTS[data_dir] = client
         return client.get_or_create_collection(_AUDIT_COLLECTION)
 
     def _write_row(self, mem_id: str, text: str, metadata: dict[str, Any]) -> None:
@@ -757,14 +863,13 @@ class MemoryService:
         docs = result.get("documents") or []
         metas = result.get("metadatas") or []
         ids = result.get("ids") or []
-        now = datetime.datetime.utcnow()
-        now_iso = now.isoformat() + "Z"
+        now = datetime.datetime.now(datetime.timezone.utc)
         filtered: list[MemoryRef] = []
         for rid, doc, meta in zip(ids, docs, metas):
             if not isinstance(meta, dict):
                 meta = {}
             expires = meta.get("expires_at")
-            if expires and expires <= now_iso:
+            if expires and _memory_expired(expires, now):
                 continue
             if not _memory_visible_to_user(meta, user_id):
                 continue
@@ -788,8 +893,8 @@ class MemoryService:
                 access_count = 0
             added_at = md.get("added_at") or ""
             try:
-                dt = datetime.datetime.fromisoformat(added_at.replace("Z", ""))
-                age_days = max(0.0, (now - dt).total_seconds() / 86400.0)
+                dt = _parse_aware_datetime(added_at)
+                age_days = max(0.0, (now - dt).total_seconds() / 86400.0) if dt else 0.0
             except Exception:
                 age_days = 0.0
             score = conf * math.exp(-LAMBDA * age_days) + 0.1 * math.log1p(access_count)
@@ -810,13 +915,12 @@ class MemoryService:
         docs = (result.get("documents") or [[]])[0]
         metas = (result.get("metadatas") or [[]])[0]
         distances = (result.get("distances") or [[]])[0]
-        now = datetime.datetime.utcnow()
-        now_iso = now.isoformat() + "Z"
+        now = datetime.datetime.now(datetime.timezone.utc)
         hits: list[MemoryRef] = []
         for rid, doc, meta, dist in zip(ids, docs, metas, distances):
             md = dict(meta) if isinstance(meta, dict) else {}
             expires = md.get("expires_at")
-            if expires and expires <= now_iso:
+            if expires and _memory_expired(expires, now):
                 continue
             if not _memory_visible_to_user(md, user_id):
                 continue
@@ -854,8 +958,8 @@ class MemoryService:
                 access_count = 0
             added_at = md.get("added_at") or ""
             try:
-                dt = datetime.datetime.fromisoformat(added_at.replace("Z", ""))
-                age_days = max(0.0, (now - dt).total_seconds() / 86400.0)
+                dt = _parse_aware_datetime(added_at)
+                age_days = max(0.0, (now - dt).total_seconds() / 86400.0) if dt else 0.0
             except Exception:
                 age_days = 0.0
             semantic = (1.0 / (1.0 + dist)) * conf * math.exp(-_LAMBDA * age_days)
@@ -877,6 +981,14 @@ class MemoryService:
         col = self._collection()
         col.delete(ids=ids)
 
+    def _delete_audit_for_user_sync(self, user_id: str) -> int:
+        col = self._audit_collection()
+        result = col.get(where={"user_id": user_id})
+        ids = list(result.get("ids") or [])
+        if ids:
+            col.delete(ids=ids)
+        return len(ids)
+
     def _list_by_status_sync(self, user_id: str, status: str) -> list[MemoryRef]:
         col = self._collection()
         result = col.get(
@@ -891,12 +1003,12 @@ class MemoryService:
         ids = result.get("ids") or []
         docs = result.get("documents") or []
         metas = result.get("metadatas") or []
-        now_iso = datetime.datetime.utcnow().isoformat() + "Z"
+        now = datetime.datetime.now(datetime.timezone.utc)
         keep = []
         for rid, doc, meta in zip(ids, docs, metas):
             md = dict(meta) if isinstance(meta, dict) else {}
             expires = md.get("expires_at")
-            if expires and expires <= now_iso:
+            if expires and _memory_expired(expires, now):
                 continue
             keep.append((rid, doc, md))
         ids = [r[0] for r in keep]

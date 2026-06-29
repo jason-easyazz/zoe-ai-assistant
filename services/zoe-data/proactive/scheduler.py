@@ -10,9 +10,11 @@ import logging
 import os
 import uuid
 from datetime import datetime
+from enum import Enum
 from typing import Callable
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.jobstores.base import JobLookupError
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 
 from database import DB_PATH
@@ -93,12 +95,43 @@ def register_job(
     return job_id
 
 
-def cancel_job(job_id: str) -> bool:
-    """Cancel a scheduled job. Returns True if found and removed."""
+def job_exists(job_id: str) -> bool:
+    """True if a live job with this id is present in the scheduler/jobstore.
+
+    Used by startup reconciliation to distinguish a reminder that still has a
+    scheduled job (leave it alone) from one whose job was dropped (re-register).
+    """
+    scheduler = get_scheduler()
+    try:
+        return scheduler.get_job(job_id) is not None
+    except Exception:
+        return False
+
+
+class CancelResult(Enum):
+    """Outcome of cancel_job — distinguishes 'gone' from 'failed to cancel'."""
+    REMOVED = "removed"   # job was present and removed
+    ABSENT = "absent"     # no such job (already fired / never registered)
+
+
+def cancel_job(job_id: str) -> CancelResult:
+    """Cancel a scheduled job.
+
+    Returns:
+        CancelResult.REMOVED — the job was present and has been removed.
+        CancelResult.ABSENT  — no such job (already fired / never registered);
+                               there is no live job to orphan.
+
+    Raises:
+        Any non-JobLookupError failure from the scheduler/jobstore (e.g. a
+        transient store error) is re-raised so callers never mistake a real
+        cancel failure for 'job already gone' and silently orphan a live job.
+    """
     scheduler = get_scheduler()
     try:
         scheduler.remove_job(job_id)
         log.debug("Cancelled job %s", job_id)
-        return True
-    except Exception:
-        return False
+        return CancelResult.REMOVED
+    except JobLookupError:
+        log.debug("cancel_job: job %s already absent", job_id)
+        return CancelResult.ABSENT
