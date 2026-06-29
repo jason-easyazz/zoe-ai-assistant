@@ -1,19 +1,25 @@
 """Regression tests for the scheduler/reminder reliability cluster.
 
-Covers four bugs and the three required behaviours:
+Covers the original four bugs AND the three cross-review race conditions, plus
+the three required behaviours:
 
   (a) A reminder whose one-shot APScheduler job was dropped while the service was
-      down (>misfire_grace) still fires after restart — via the missed-job
-      listener catch-up and startup reconciliation.
+      down (>misfire_grace) still fires after restart — missed-job listener
+      catch-up and startup reconciliation.
   (b) An updated / snoozed reminder fires at the NEW time and never at the old
-      one — update/snooze cancel the stale job and reschedule.
+      one — update/snooze cancel the stale job BEFORE mutating, and reschedule.
   (c) A lifespan restart / reload does not duplicate triggers or background
       loops.
 
-Plus P2: _fire_reminder records failure state and RE-RAISES (so APScheduler
-marks the job errored and reconciliation can retry) instead of swallowing.
+Cross-review races, all gated by the atomic single-row claim:
+  B1 listener+reconcile double-fire → exactly one delivery.
+  B2 router commit→cancel window → no stale/after-delete fire (cancel-before-
+     mutate + in-job obligation re-read).
+  B3 crash-after-deliver-before-mark → reconcile does NOT re-deliver (recent
+     claim), but a genuinely stuck claim recovers after the stuck timeout.
 
-All fakes avoid a real DB / scheduler so the suite runs without Postgres.
+The fakes model the proactive_scheduled claim semantics so the races are
+exercised for real, not just happy-path sequencing.
 """
 import asyncio
 import contextlib
@@ -28,8 +34,7 @@ import proactive.triggers.reminders as reminders
 
 
 # --------------------------------------------------------------------------- #
-# Dual-mode fake compat DB (supports both `await db.execute()` and
-# `async with db.execute() as cur`).
+# Dual-mode cursor/exec (supports `await db.execute()` and `async with ...`).
 # --------------------------------------------------------------------------- #
 class _Cursor:
     def __init__(self, rows):
@@ -63,7 +68,10 @@ class _Exec:
 
 
 class FakeCompatDB:
-    """Returns ``select_rows`` for any SELECT/RETURNING, [] otherwise; records SQL."""
+    """Returns ``select_rows`` for any SELECT/RETURNING, [] otherwise; records SQL.
+
+    Dumb fake for tests that don't depend on claim semantics.
+    """
 
     def __init__(self, select_rows=None):
         self.select_rows = list(select_rows or [])
@@ -74,7 +82,7 @@ class FakeCompatDB:
         self.executed.append((norm, params))
         upper = norm.strip().upper()
         rows = self.select_rows if (upper.startswith("SELECT") or "RETURNING" in upper) else []
-        return _Exec(lambda: _make_cursor(rows))
+        return _Exec(lambda: _async_cursor(rows))
 
     async def commit(self):
         pass
@@ -86,7 +94,90 @@ class FakeCompatDB:
         return False
 
 
-async def _make_cursor(rows):
+class FakeReminderDB:
+    """Models proactive_scheduled + reminders with REAL atomic-claim semantics.
+
+    Implements the conditional claim UPDATE, fired-marking, failure/release, the
+    obligation read, and the reconcile/load selects — so the races are exercised
+    rather than mocked away.
+    """
+
+    def __init__(self, scheduled=None, reminders=None):
+        self.scheduled = scheduled or {}
+        self.reminders = reminders or {}
+        self.executed = []
+
+    def execute(self, sql, params=()):
+        norm = " ".join(sql.split())
+        p = list(params) if isinstance(params, (list, tuple)) else [params]
+        self.executed.append((norm, p))
+        return _Exec(lambda: self._do(norm.upper(), p))
+
+    async def _do(self, u, p):
+        # Atomic delivery claim.
+        if u.startswith("UPDATE PROACTIVE_SCHEDULED SET CLAIMED_AT = ? WHERE ID = ? AND FIRED = 0"):
+            now_iso, sid, stuck = p[0], p[1], p[2]
+            row = self.scheduled.get(sid)
+            if row and row.get("fired", 0) == 0 and (
+                row.get("claimed_at") is None or row["claimed_at"] < stuck
+            ):
+                row["claimed_at"] = now_iso
+                return _Cursor([{"id": sid, "item_id": row.get("item_id", "")}])
+            return _Cursor([])
+        # Consume (void obligation): mark fired without delivering.
+        if u.startswith("UPDATE PROACTIVE_SCHEDULED SET FIRED = 1 WHERE ID = ?"):
+            row = self.scheduled.get(p[0])
+            if row:
+                row["fired"] = 1
+            return _Cursor([])
+        # Failure: bump attempts, store last_error, RELEASE claim.
+        if u.startswith("UPDATE PROACTIVE_SCHEDULED SET ATTEMPTS"):
+            row = self.scheduled.get(p[-1])
+            if row:
+                row["attempts"] = row.get("attempts", 0) + 1
+                row["last_error"] = p[0]
+                row["claimed_at"] = None
+            return _Cursor([])
+        # Obligation read.
+        if u.startswith("SELECT IS_ACTIVE, ACKNOWLEDGED, DELETED FROM REMINDERS WHERE ID = ?"):
+            r = self.reminders.get(p[0])
+            return _Cursor([r] if r else [])
+        # reconcile select (fired=0 AND unclaimed/stuck).
+        if "FROM PROACTIVE_SCHEDULED" in u and "WHERE FIRED = 0" in u:
+            cutoff = p[0] if p else None
+            out = [
+                self._row_view(sid, row)
+                for sid, row in self.scheduled.items()
+                if row.get("fired", 0) == 0
+                and (row.get("claimed_at") is None or (cutoff and row["claimed_at"] < cutoff))
+            ]
+            return _Cursor(out)
+        # _load_scheduled_row (by id).
+        if "FROM PROACTIVE_SCHEDULED" in u and "WHERE ID = ?" in u:
+            row = self.scheduled.get(p[0])
+            return _Cursor([self._row_view(p[0], row)] if row else [])
+        return _Cursor([])
+
+    @staticmethod
+    def _row_view(sid, row):
+        return {
+            "id": sid, "user_id": row.get("user_id"), "message": row.get("message"),
+            "item_id": row.get("item_id", ""), "send_at": row.get("send_at"),
+            "apscheduler_job_id": row.get("apscheduler_job_id") or f"reminder-{sid}",
+            "fired": row.get("fired", 0), "attempts": row.get("attempts", 0),
+        }
+
+    async def commit(self):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_):
+        return False
+
+
+async def _async_cursor(rows):
     return _Cursor(rows)
 
 
@@ -102,61 +193,196 @@ def _iso(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _fake_fire(store, deliveries):
+    async def fire(**kw):
+        deliveries.append(kw["pending_id"])
+        row = store.scheduled.get(kw["pending_id"])
+        if row:
+            row["fired"] = 1  # mirror fire_notification marking fired=1
+
+    return fire
+
+
 # =========================================================================== #
-# (a) Missed reminder fires after restart
+# Atomic claim — exactly-once delivery (B1 / B3 core)
+# =========================================================================== #
+@pytest.mark.asyncio
+async def test_concurrent_fire_delivers_exactly_once(monkeypatch):
+    """Two _fire_reminder calls on the same row (listener + reconcile catch-up
+    jobs both registered) → exactly ONE delivery via the atomic claim."""
+    store = FakeReminderDB(
+        scheduled={"r1": {"fired": 0, "claimed_at": None, "item_id": "", "attempts": 0}},
+    )
+    _patch_compat(monkeypatch, reminders, store)
+    deliveries = []
+    monkeypatch.setattr("proactive.engine.fire_notification", _fake_fire(store, deliveries))
+
+    await asyncio.gather(
+        reminders._fire_reminder("r1", "u1", "hi"),
+        reminders._fire_reminder("r1", "u1", "hi"),
+    )
+
+    assert deliveries == ["r1"], "claim must collapse concurrent fires to one delivery"
+    assert store.scheduled["r1"]["fired"] == 1
+
+
+@pytest.mark.asyncio
+async def test_fire_skips_row_claimed_by_a_live_delivery(monkeypatch):
+    """A row claimed moments ago (delivery in flight elsewhere) is not re-fired."""
+    store = FakeReminderDB(
+        scheduled={"r1": {"fired": 0, "claimed_at": _iso(datetime.now(timezone.utc)),
+                          "item_id": "", "attempts": 0}},
+    )
+    _patch_compat(monkeypatch, reminders, store)
+    deliveries = []
+    monkeypatch.setattr("proactive.engine.fire_notification", _fake_fire(store, deliveries))
+
+    await reminders._fire_reminder("r1", "u1", "hi")
+
+    assert deliveries == [], "must not fire a row another path already claimed"
+
+
+@pytest.mark.asyncio
+async def test_fire_reclaims_stuck_claim_then_delivers(monkeypatch):
+    """A claim older than the stuck timeout (crash mid-delivery) is reclaimable."""
+    old = _iso(datetime.now(timezone.utc) - timedelta(seconds=reminders._STUCK_CLAIM_SECONDS + 60))
+    store = FakeReminderDB(
+        scheduled={"r1": {"fired": 0, "claimed_at": old, "item_id": "", "attempts": 0}},
+    )
+    _patch_compat(monkeypatch, reminders, store)
+    deliveries = []
+    monkeypatch.setattr("proactive.engine.fire_notification", _fake_fire(store, deliveries))
+
+    await reminders._fire_reminder("r1", "u1", "hi")
+
+    assert deliveries == ["r1"], "a stuck claim must recover and deliver"
+
+
+@pytest.mark.asyncio
+async def test_fire_failure_releases_claim_and_reraises(monkeypatch):
+    """On delivery failure: attempts bumped, claim released, exception re-raised."""
+    store = FakeReminderDB(
+        scheduled={"r1": {"fired": 0, "claimed_at": None, "item_id": "", "attempts": 0}},
+    )
+    _patch_compat(monkeypatch, reminders, store)
+
+    async def boom(**_kw):
+        raise RuntimeError("delivery down")
+
+    monkeypatch.setattr("proactive.engine.fire_notification", boom)
+
+    with pytest.raises(RuntimeError):
+        await reminders._fire_reminder("r1", "u1", "hi")
+
+    row = store.scheduled["r1"]
+    assert row["attempts"] == 1, "attempts recorded"
+    assert row["claimed_at"] is None, "claim released so a retry can re-claim"
+    assert row["fired"] == 0, "failed delivery stays unfired"
+
+
+@pytest.mark.asyncio
+async def test_fire_aborts_when_reminder_obligation_void(monkeypatch):
+    """B2: an in-flight job re-reads state and does NOT deliver a deleted reminder."""
+    store = FakeReminderDB(
+        scheduled={"r1": {"fired": 0, "claimed_at": None, "item_id": "rem1", "attempts": 0}},
+        reminders={"rem1": {"is_active": 1, "acknowledged": 0, "deleted": 1}},
+    )
+    _patch_compat(monkeypatch, reminders, store)
+    deliveries = []
+    monkeypatch.setattr("proactive.engine.fire_notification", _fake_fire(store, deliveries))
+
+    await reminders._fire_reminder("r1", "u1", "hi")
+
+    assert deliveries == [], "a deleted reminder must not fire"
+    assert store.scheduled["r1"]["fired"] == 1, "void obligation consumed (won't retry)"
+
+
+# =========================================================================== #
+# (a) Missed reminder fires after restart  +  B3 reconcile claim filter
 # =========================================================================== #
 @pytest.mark.asyncio
 async def test_reconcile_reregisters_reminder_with_missing_job(monkeypatch):
-    """fired=0 row whose live job is gone → re-registered at its send_at."""
     send_at = datetime.now(timezone.utc) + timedelta(hours=2)
-    row = {
-        "id": "r1", "user_id": "u1", "message": "ping", "item_id": "rem1",
-        "send_at": _iso(send_at), "apscheduler_job_id": "reminder-r1",
-        "fired": 0, "attempts": 0,
-    }
-    _patch_compat(monkeypatch, engine, FakeCompatDB(select_rows=[row]))
+    store = FakeReminderDB(
+        scheduled={"r1": {"fired": 0, "claimed_at": None, "item_id": "rem1",
+                          "user_id": "u1", "message": "ping", "send_at": _iso(send_at),
+                          "apscheduler_job_id": "reminder-r1", "attempts": 0}},
+    )
+    _patch_compat(monkeypatch, engine, store)
     monkeypatch.setattr(scheduler, "job_exists", lambda jid: False)
     registered = []
     monkeypatch.setattr(scheduler, "register_job", lambda **kw: registered.append(kw))
 
-    recovered = await engine.reconcile_scheduled_jobs()
-
-    assert recovered == 1
+    assert await engine.reconcile_scheduled_jobs() == 1
     assert registered[0]["job_id"] == "reminder-r1"
-    # Future reminder keeps its original fire time (no double-fire / no shifting).
-    assert registered[0]["run_at"] == datetime.fromisoformat(row["send_at"].replace("Z", "+00:00"))
-    assert registered[0]["kwargs"]["pending_id"] == "r1"
+    assert registered[0]["run_at"] == datetime.fromisoformat(_iso(send_at).replace("Z", "+00:00"))
 
 
 @pytest.mark.asyncio
 async def test_reconcile_skips_reminder_with_live_job(monkeypatch):
-    """A reminder that still has a live job is left untouched (no double-fire)."""
-    row = {
-        "id": "r1", "user_id": "u1", "message": "ping", "item_id": "rem1",
-        "send_at": _iso(datetime.now(timezone.utc) + timedelta(hours=2)),
-        "apscheduler_job_id": "reminder-r1", "fired": 0, "attempts": 0,
-    }
-    _patch_compat(monkeypatch, engine, FakeCompatDB(select_rows=[row]))
+    store = FakeReminderDB(
+        scheduled={"r1": {"fired": 0, "claimed_at": None, "item_id": "rem1",
+                          "user_id": "u1", "message": "ping",
+                          "send_at": _iso(datetime.now(timezone.utc) + timedelta(hours=2)),
+                          "apscheduler_job_id": "reminder-r1", "attempts": 0}},
+    )
+    _patch_compat(monkeypatch, engine, store)
     monkeypatch.setattr(scheduler, "job_exists", lambda jid: True)
     registered = []
     monkeypatch.setattr(scheduler, "register_job", lambda **kw: registered.append(kw))
 
-    recovered = await engine.reconcile_scheduled_jobs()
-
-    assert recovered == 0
+    assert await engine.reconcile_scheduled_jobs() == 0
     assert registered == []
 
 
 @pytest.mark.asyncio
+async def test_reconcile_skips_recently_claimed_row(monkeypatch):
+    """B3: a row delivered-but-not-yet-marked (recent claim, fired=0) is NOT
+    re-registered → no re-delivery after a crash within the stuck window."""
+    store = FakeReminderDB(
+        scheduled={"r1": {"fired": 0, "claimed_at": _iso(datetime.now(timezone.utc)),
+                          "item_id": "rem1", "user_id": "u1", "message": "ping",
+                          "send_at": _iso(datetime.now(timezone.utc) - timedelta(hours=1)),
+                          "apscheduler_job_id": "reminder-r1", "attempts": 0}},
+    )
+    _patch_compat(monkeypatch, engine, store)
+    monkeypatch.setattr(scheduler, "job_exists", lambda jid: False)
+    registered = []
+    monkeypatch.setattr(scheduler, "register_job", lambda **kw: registered.append(kw))
+
+    assert await engine.reconcile_scheduled_jobs() == 0
+    assert registered == [], "recently-claimed (in-flight/just-delivered) row must be left alone"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_recovers_stuck_claim(monkeypatch):
+    """A genuinely stuck claim (older than the timeout) is re-registered."""
+    old = _iso(datetime.now(timezone.utc) - timedelta(seconds=reminders._STUCK_CLAIM_SECONDS + 60))
+    store = FakeReminderDB(
+        scheduled={"r1": {"fired": 0, "claimed_at": old, "item_id": "rem1",
+                          "user_id": "u1", "message": "ping",
+                          "send_at": _iso(datetime.now(timezone.utc) - timedelta(hours=1)),
+                          "apscheduler_job_id": "reminder-r1", "attempts": 0}},
+    )
+    _patch_compat(monkeypatch, engine, store)
+    monkeypatch.setattr(scheduler, "job_exists", lambda jid: False)
+    registered = []
+    monkeypatch.setattr(scheduler, "register_job", lambda **kw: registered.append(kw))
+
+    assert await engine.reconcile_scheduled_jobs() == 1
+    assert registered[0]["job_id"] == "reminder-r1"
+
+
+@pytest.mark.asyncio
 async def test_reconcile_gives_up_after_max_attempts(monkeypatch):
-    """A poison reminder past the attempt cap is not re-registered (no spin)."""
-    row = {
-        "id": "r1", "user_id": "u1", "message": "ping", "item_id": "rem1",
-        "send_at": _iso(datetime.now(timezone.utc) - timedelta(hours=2)),
-        "apscheduler_job_id": "reminder-r1", "fired": 0,
-        "attempts": engine._MAX_FIRE_ATTEMPTS,
-    }
-    _patch_compat(monkeypatch, engine, FakeCompatDB(select_rows=[row]))
+    store = FakeReminderDB(
+        scheduled={"r1": {"fired": 0, "claimed_at": None, "item_id": "rem1",
+                          "user_id": "u1", "message": "ping",
+                          "send_at": _iso(datetime.now(timezone.utc) - timedelta(hours=2)),
+                          "apscheduler_job_id": "reminder-r1",
+                          "attempts": engine._MAX_FIRE_ATTEMPTS}},
+    )
+    _patch_compat(monkeypatch, engine, store)
     monkeypatch.setattr(scheduler, "job_exists", lambda jid: False)
     registered = []
     monkeypatch.setattr(scheduler, "register_job", lambda **kw: registered.append(kw))
@@ -167,14 +393,14 @@ async def test_reconcile_gives_up_after_max_attempts(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_missed_listener_schedules_immediate_catchup(monkeypatch):
-    """EVENT_JOB_MISSED handler re-registers a past-due reminder to fire now."""
     before = datetime.now(timezone.utc)
-    row = {
-        "id": "r1", "user_id": "u1", "message": "ping", "item_id": "rem1",
-        "send_at": _iso(before - timedelta(hours=6)),  # missed during downtime
-        "apscheduler_job_id": "reminder-r1", "fired": 0, "attempts": 0,
-    }
-    _patch_compat(monkeypatch, engine, FakeCompatDB(select_rows=[row]))
+    store = FakeReminderDB(
+        scheduled={"r1": {"fired": 0, "claimed_at": None, "item_id": "rem1",
+                          "user_id": "u1", "message": "ping",
+                          "send_at": _iso(before - timedelta(hours=6)),
+                          "apscheduler_job_id": "reminder-r1", "attempts": 0}},
+    )
+    _patch_compat(monkeypatch, engine, store)
     registered = []
     monkeypatch.setattr(scheduler, "register_job", lambda **kw: registered.append(kw))
 
@@ -182,8 +408,7 @@ async def test_missed_listener_schedules_immediate_catchup(monkeypatch):
 
     assert registered, "missed reminder must be re-registered for catch-up"
     assert registered[0]["job_id"] == "reminder-r1"
-    # Catch-up fires immediately (not at the long-past original time).
-    assert registered[0]["run_at"] >= before
+    assert registered[0]["run_at"] >= before  # fires now, not at the long-past time
 
 
 @pytest.mark.asyncio
@@ -195,47 +420,11 @@ async def test_missed_listener_ignores_non_reminder_jobs(monkeypatch):
         job_id = "multica-autopilot-7"
 
     engine._on_job_missed(_Evt())
-    assert fired == [], "only reminder-* jobs trigger catch-up"
+    assert fired == []
 
 
 # =========================================================================== #
-# P2: _fire_reminder records failure and re-raises (no silent death)
-# =========================================================================== #
-@pytest.mark.asyncio
-async def test_fire_reminder_records_failure_and_reraises(monkeypatch):
-    async def boom(**_kw):
-        raise RuntimeError("delivery down")
-
-    monkeypatch.setattr("proactive.engine.fire_notification", boom)
-    db = FakeCompatDB()
-    _patch_compat(monkeypatch, reminders, db)
-
-    with pytest.raises(RuntimeError):
-        await reminders._fire_reminder("p1", "u1", "hi")
-
-    # Failure state recorded so reconciliation/listeners can act.
-    assert any(
-        sql.upper().startswith("UPDATE PROACTIVE_SCHEDULED") and "ATTEMPTS" in sql.upper()
-        for sql, _ in db.executed
-    ), "attempts/last_error must be recorded on failure"
-
-
-@pytest.mark.asyncio
-async def test_fire_reminder_success_does_not_record_failure(monkeypatch):
-    async def ok(**_kw):
-        return None
-
-    monkeypatch.setattr("proactive.engine.fire_notification", ok)
-    db = FakeCompatDB()
-    _patch_compat(monkeypatch, reminders, db)
-
-    await reminders._fire_reminder("p1", "u1", "hi")  # must not raise
-
-    assert db.executed == [], "a successful fire writes no failure state"
-
-
-# =========================================================================== #
-# (b) Updated / snoozed reminder fires at the NEW time, not the old
+# (b) Updated / snoozed reminder fires at the NEW time, not the old (+B2)
 # =========================================================================== #
 @pytest.mark.asyncio
 async def test_schedule_due_reminder_uses_current_due_time(monkeypatch):
@@ -250,34 +439,25 @@ async def test_schedule_due_reminder_uses_current_due_time(monkeypatch):
     now = datetime.now(timezone.utc)
     target_local = now.astimezone(scan._ZOE_TZ) + timedelta(hours=2)
     due_time = f"{target_local.hour:02d}:{target_local.minute:02d}"
-    row = {"id": "rem1", "user_id": "u1", "title": "take meds",
-           "due_date": None, "due_time": due_time}
-    db = FakeCompatDB(select_rows=[])  # no existing unfired schedule
+    row = {"id": "rem1", "user_id": "u1", "title": "take meds", "due_date": None, "due_time": due_time}
+    db = FakeCompatDB(select_rows=[])
 
     rid = await scan.schedule_due_reminder(db, row, now_utc=now)
 
     assert rid == "rem1"
     assert captured["item_id"] == "rem1"
-    # send_at is derived from the row's (new) due_time, not any stale value.
-    assert captured["send_at"] == scan.build_run_at(
-        None, target_local.hour, target_local.minute, now
-    )
+    assert captured["send_at"] == scan.build_run_at(None, target_local.hour, target_local.minute, now)
 
 
 @pytest.mark.asyncio
 async def test_schedule_due_reminder_idempotent_when_already_scheduled(monkeypatch):
     called = []
-    monkeypatch.setattr(
-        "proactive.triggers.reminders.schedule_reminder",
-        lambda **kw: called.append(kw),
-    )
-    db = FakeCompatDB(select_rows=[{"exists": 1}])  # an unfired row already exists
+    monkeypatch.setattr("proactive.triggers.reminders.schedule_reminder", lambda **kw: called.append(kw))
+    db = FakeCompatDB(select_rows=[{"exists": 1}])
     row = {"id": "rem1", "user_id": "u1", "title": "t", "due_date": None, "due_time": "09:00"}
 
-    rid = await scan.schedule_due_reminder(db, row, now_utc=datetime.now(timezone.utc))
-
-    assert rid is None
-    assert called == [], "must not double-schedule an already-scheduled reminder"
+    assert await scan.schedule_due_reminder(db, row, now_utc=datetime.now(timezone.utc)) is None
+    assert called == []
 
 
 @pytest.mark.asyncio
@@ -292,81 +472,69 @@ async def test_cancel_reminder_jobs_cancels_every_unfired(monkeypatch):
 
     monkeypatch.setattr(reminders, "cancel_reminder", fake_cancel)
 
-    n = await reminders.cancel_reminder_jobs("rem1")
-
-    assert n == 2
+    assert await reminders.cancel_reminder_jobs("rem1") == 2
     assert cancelled == ["s1", "s2"]
 
 
 @pytest.mark.asyncio
-async def test_update_resync_cancels_old_then_reschedules_new(monkeypatch):
-    """Router resync: stale job cancelled, reminder rescheduled at the new due-time."""
+async def test_update_cancels_job_before_mutating_state(monkeypatch):
+    """B2: update cancels the OLD-time job BEFORE the state change is persisted."""
     import routers.reminders as rr
 
-    cancelled = []
-    scheduled = []
+    order = []
 
     async def fake_cancel(reminder_id):
-        cancelled.append(reminder_id)
-        return 1
+        order.append(("cancel", reminder_id))
 
-    async def fake_schedule_due(db, row, **_kw):
-        scheduled.append(dict(row))
-        return row["id"]
+    async def fake_resched(db, reminder_id):
+        order.append(("reschedule", reminder_id))
+
+    async def noop(*a, **k):
+        return None
 
     monkeypatch.setattr("proactive.triggers.reminders.cancel_reminder_jobs", fake_cancel)
-    monkeypatch.setattr("proactive.triggers.reminder_scan.schedule_due_reminder", fake_schedule_due)
+    monkeypatch.setattr(rr, "_reschedule_reminder_due_safe", fake_resched)
+    monkeypatch.setattr(rr, "require_feature_access", noop)
+    monkeypatch.setattr(rr.broadcaster, "broadcast", noop)
 
-    updated_row = {
-        "id": "rem1", "user_id": "u1", "title": "t",
-        "due_date": "2026-07-01", "due_time": "09:30",  # the NEW time
-        "is_active": 1, "acknowledged": 0, "deleted": 0, "snoozed_until": None,
-    }
-    db = FakeCompatDB(select_rows=[updated_row])
+    reminder = {"id": "rem1", "user_id": "u1", "title": "t", "due_time": "09:00",
+                "is_active": 1, "acknowledged": 0, "deleted": 0, "snoozed_until": None}
 
-    await rr._resync_reminder_schedule(db, "rem1", reschedule=True)
+    class OrderDB:
+        def execute(self, sql, params=()):
+            norm = " ".join(sql.split())
+            if norm.upper().startswith("UPDATE REMINDERS"):
+                order.append(("update", "rem1"))
+            return _Exec(lambda: self._do(norm))
 
-    assert cancelled == ["rem1"], "the old-time job must be cancelled"
-    assert scheduled and scheduled[0]["due_time"] == "09:30", "rescheduled at the NEW time"
+        async def _do(self, norm):
+            if norm.upper().startswith("SELECT"):
+                return _Cursor([reminder])
+            return _Cursor([])
 
+        async def commit(self):
+            pass
 
-@pytest.mark.asyncio
-async def test_resync_no_reschedule_only_cancels(monkeypatch):
-    """acknowledge/delete: cancel only, never reschedule a done reminder."""
-    import routers.reminders as rr
+    from models import ReminderUpdate
 
-    cancelled = []
-    scheduled = []
-    monkeypatch.setattr(
-        "proactive.triggers.reminders.cancel_reminder_jobs",
-        lambda rid: _coro_append(cancelled, rid),
-    )
-    monkeypatch.setattr(
-        "proactive.triggers.reminder_scan.schedule_due_reminder",
-        lambda db, row, **k: _coro_append(scheduled, row),
-    )
+    await rr.update_reminder("rem1", ReminderUpdate(due_time="17:00"),
+                             user={"user_id": "u1"}, db=OrderDB())
 
-    await rr._resync_reminder_schedule(FakeCompatDB(), "rem1", reschedule=False)
-
-    assert cancelled == ["rem1"]
-    assert scheduled == [], "reschedule=False must not register a new job"
-
-
-async def _coro_append(bucket, value):
-    bucket.append(value)
-    return 1
+    assert ("cancel", "rem1") in order and ("update", "rem1") in order
+    assert order.index(("cancel", "rem1")) < order.index(("update", "rem1")), \
+        "B2: stale job must be cancelled BEFORE the state mutation commits"
+    assert order.index(("update", "rem1")) < order.index(("reschedule", "rem1"))
 
 
 @pytest.mark.asyncio
-async def test_snooze_route_reschedules_at_snooze_time(monkeypatch):
-    """Snooze cancels the old-time job and schedules a one-shot at snoozed_until."""
+async def test_snooze_cancels_before_mutate_and_reschedules_at_snooze_time(monkeypatch):
     import routers.reminders as rr
     from models import SnoozeBody
 
-    reminder_row = {"id": "rem1", "user_id": "u1", "title": "stretch",
-                    "due_time": "09:00", "is_active": 1, "acknowledged": 0,
-                    "deleted": 0, "snoozed_until": None}
-    db = FakeCompatDB(select_rows=[reminder_row])
+    reminder_row = {"id": "rem1", "user_id": "u1", "title": "stretch", "due_time": "09:00",
+                    "is_active": 1, "acknowledged": 0, "deleted": 0, "snoozed_until": None}
+
+    order = []
 
     async def noop(*a, **k):
         return None
@@ -375,33 +543,43 @@ async def test_snooze_route_reschedules_at_snooze_time(monkeypatch):
     monkeypatch.setattr(rr, "_create_notification", noop)
     monkeypatch.setattr(rr.broadcaster, "broadcast", noop)
 
-    cancelled = []
+    async def fake_cancel(reminder_id):
+        order.append("cancel")
+
     scheduled = []
 
-    async def fake_cancel(reminder_id):
-        cancelled.append(reminder_id)
-        return 1
-
     async def fake_schedule_reminder(user_id, message, send_at, item_id=""):
-        scheduled.append({"user_id": user_id, "message": message,
-                          "send_at": send_at, "item_id": item_id})
+        order.append("schedule")
+        scheduled.append({"user_id": user_id, "message": message, "send_at": send_at, "item_id": item_id})
         return "row-x"
 
     monkeypatch.setattr("proactive.triggers.reminders.cancel_reminder_jobs", fake_cancel)
     monkeypatch.setattr("proactive.triggers.reminders.schedule_reminder", fake_schedule_reminder)
 
+    class SnoozeDB:
+        def execute(self, sql, params=()):
+            norm = " ".join(sql.split())
+            if norm.upper().startswith("UPDATE REMINDERS"):
+                order.append("update")
+            return _Exec(lambda: self._do(norm))
+
+        async def _do(self, norm):
+            if norm.upper().startswith("SELECT"):
+                return _Cursor([reminder_row])
+            return _Cursor([])
+
+        async def commit(self):
+            pass
+
     before = datetime.now(timezone.utc)
-    result = await rr.snooze_reminder(
-        "rem1", SnoozeBody(snooze_minutes=15), user={"user_id": "u1"}, db=db
-    )
+    result = await rr.snooze_reminder("rem1", SnoozeBody(snooze_minutes=15),
+                                      user={"user_id": "u1"}, db=SnoozeDB())
 
     assert result is not None
-    assert cancelled == ["rem1"], "old-time job cancelled on snooze"
-    assert scheduled, "snooze must schedule a fire at the new (snooze) time"
-    sched = scheduled[0]
-    assert sched["item_id"] == "rem1"
-    # New fire time is ~15 min out (the snooze), not the original 09:00.
-    assert before + timedelta(minutes=14) <= sched["send_at"] <= before + timedelta(minutes=16)
+    assert order.index("cancel") < order.index("update"), "cancel old job before mutating snooze state"
+    assert scheduled and scheduled[0]["item_id"] == "rem1"
+    # Re-fires ~15 min out (the snooze), not at the original 09:00.
+    assert before + timedelta(minutes=14) <= scheduled[0]["send_at"] <= before + timedelta(minutes=16)
 
 
 # =========================================================================== #
@@ -424,11 +602,11 @@ def test_register_trigger_is_idempotent(trigger_registry):
             self.trigger_type = t
 
     engine.register_trigger(_T("reminder_scan"))
-    engine.register_trigger(_T("reminder_scan"))  # reload re-registers
+    engine.register_trigger(_T("reminder_scan"))
     engine.register_trigger(_T("morning_checkin"))
 
     types = [t.trigger_type for t in trigger_registry]
-    assert types.count("reminder_scan") == 1, "duplicate trigger must be skipped"
+    assert types.count("reminder_scan") == 1
     assert types.count("morning_checkin") == 1
 
 
@@ -465,10 +643,10 @@ async def test_start_proactive_engine_does_not_duplicate_loops(monkeypatch, engi
     engine.start_proactive_engine()
     slow1, cleanup1 = engine._slow_loop_task, engine._cleanup_loop_task
 
-    engine.start_proactive_engine()  # simulate lifespan restart / reload
+    engine.start_proactive_engine()  # lifespan restart / reload
 
-    assert engine._slow_loop_task is slow1, "live slow loop must not be replaced"
-    assert engine._cleanup_loop_task is cleanup1, "live cleanup loop must not be replaced"
+    assert engine._slow_loop_task is slow1
+    assert engine._cleanup_loop_task is cleanup1
 
     engine.stop_proactive_engine()
     assert engine._slow_loop_task is None

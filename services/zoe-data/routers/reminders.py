@@ -21,14 +21,13 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/reminders", tags=["reminders"])
 
 
-async def _resync_reminder_schedule(db, reminder_id: str, *, reschedule: bool) -> None:
-    """Keep APScheduler in sync after a reminder's due-time/state changes.
+async def _cancel_reminder_jobs_safe(reminder_id: str) -> None:
+    """Cancel any stale APScheduler job + scheduled row for a reminder.
 
-    Cancels any stale jobs scheduled for the OLD due-time, then (when reschedule)
-    re-schedules at the reminder's CURRENT due-time so the next fire lands at the
-    new time and not the old one. Best-effort: scheduler hiccups must never fail
-    the user's request — the missed/error listeners and startup reconciliation
-    are the backstop.
+    Call this BEFORE committing a due-time/state change so a job scheduled for
+    the OLD time can't fire in the commit→cancel window (B2). Best-effort: a
+    scheduler hiccup must never fail the user's request — the in-job atomic claim
+    + obligation re-read and startup reconciliation are the backstop.
     """
     try:
         from proactive.triggers.reminders import cancel_reminder_jobs
@@ -36,9 +35,9 @@ async def _resync_reminder_schedule(db, reminder_id: str, *, reschedule: bool) -
     except Exception:
         log.exception("reminder resync: cancel stale jobs failed for %s", reminder_id)
 
-    if not reschedule:
-        return
 
+async def _reschedule_reminder_due_safe(db, reminder_id: str) -> None:
+    """Reschedule a reminder at its CURRENT due-time (call AFTER the mutation)."""
     try:
         from proactive.triggers.reminder_scan import schedule_due_reminder
         cursor = await db.execute("SELECT * FROM reminders WHERE id = ?", [reminder_id])
@@ -167,15 +166,19 @@ async def update_reminder(
 
     updates.append("updated_at = NOW()")
     params.append(reminder_id)
+
+    # B2: cancel the OLD-time job BEFORE the state change auto-commits, so it
+    # can't fire in the gap. The in-job claim + obligation re-read are the final
+    # backstop for a sub-second in-flight boundary.
+    await _cancel_reminder_jobs_safe(reminder_id)
     await db.execute(
         f"UPDATE reminders SET {', '.join(updates)} WHERE id = ?",
         params,
     )
     await db.commit()
 
-    # Sync APScheduler: cancel any job at the OLD due-time and reschedule at the
-    # new one so the reminder fires at the updated time (not the stale one).
-    await _resync_reminder_schedule(db, reminder_id, reschedule=True)
+    # Reschedule at the new due-time.
+    await _reschedule_reminder_due_safe(db, reminder_id)
 
     cursor = await db.execute("SELECT * FROM reminders WHERE id = ?", [reminder_id])
     row = await cursor.fetchone()
@@ -205,15 +208,14 @@ async def delete_reminder(
     if dict(row).get("user_id") != user_id:
         raise HTTPException(status_code=403, detail="Not authorised to delete this reminder")
 
+    # B2: cancel the pending job BEFORE marking deleted so it can't fire after
+    # delete; the in-job obligation re-read also aborts a sub-second in-flight job.
+    await _cancel_reminder_jobs_safe(reminder_id)
     await db.execute(
         "UPDATE reminders SET deleted = 1, updated_at = NOW() WHERE id = ?",
         [reminder_id],
     )
     await db.commit()
-
-    # Cancel any unfired APScheduler jobs for this reminder (don't reschedule —
-    # the reminder is gone).
-    await _resync_reminder_schedule(db, reminder_id, reschedule=False)
 
     await broadcaster.broadcast("reminders", "reminder_deleted", {"id": reminder_id}, user_id=user_id)
     return {"ok": True, "id": reminder_id}
@@ -241,6 +243,10 @@ async def snooze_reminder(
     owner_id = dict(row).get("user_id") or user_id
     title = dict(row).get("title") or "Reminder"
     snoozed_until = (datetime.utcnow() + timedelta(minutes=body.snooze_minutes)).isoformat() + "Z"
+
+    # B2: cancel the OLD-time job BEFORE the snooze state change auto-commits, so
+    # it can't fire at the old time during the gap.
+    await _cancel_reminder_jobs_safe(reminder_id)
     await db.execute(
         "UPDATE reminders SET snoozed_until = ?, updated_at = NOW() WHERE id = ?",
         [snoozed_until, reminder_id],
@@ -255,11 +261,10 @@ async def snooze_reminder(
     )
     await db.commit()
 
-    # Sync APScheduler: cancel the job at the OLD due-time and (re)schedule a
-    # one-shot at snoozed_until so the reminder re-fires when the snooze ends.
+    # Reschedule a one-shot at snoozed_until so the reminder re-fires when the
+    # snooze ends.
     try:
-        from proactive.triggers.reminders import cancel_reminder_jobs, schedule_reminder
-        await cancel_reminder_jobs(reminder_id)
+        from proactive.triggers.reminders import schedule_reminder
         snooze_at = datetime.fromisoformat(snoozed_until.replace("Z", "+00:00"))
         if snooze_at.tzinfo is None:
             snooze_at = snooze_at.replace(tzinfo=timezone.utc)
@@ -267,7 +272,7 @@ async def snooze_reminder(
             user_id=owner_id, message=title, send_at=snooze_at, item_id=reminder_id
         )
     except Exception:
-        log.exception("reminder snooze: APScheduler resync failed for %s", reminder_id)
+        log.exception("reminder snooze: reschedule at snoozed_until failed for %s", reminder_id)
 
     cursor = await db.execute("SELECT * FROM reminders WHERE id = ?", [reminder_id])
     row = await cursor.fetchone()
@@ -295,6 +300,10 @@ async def acknowledge_reminder(
     if row is None:
         raise HTTPException(status_code=404, detail="Reminder not found")
 
+    # B2: an acknowledged reminder is done — cancel the pending job BEFORE the
+    # state change auto-commits so it can't still fire; the in-job obligation
+    # re-read also aborts a sub-second in-flight job.
+    await _cancel_reminder_jobs_safe(reminder_id)
     await db.execute(
         "UPDATE reminders SET acknowledged = 1, updated_at = NOW() WHERE id = ?",
         [reminder_id],
@@ -308,10 +317,6 @@ async def acknowledge_reminder(
         data={"reminder_id": reminder_id},
     )
     await db.commit()
-
-    # Sync APScheduler: an acknowledged reminder is done — cancel any pending job
-    # so it can't still fire.
-    await _resync_reminder_schedule(db, reminder_id, reschedule=False)
 
     cursor = await db.execute("SELECT * FROM reminders WHERE id = ?", [reminder_id])
     row = await cursor.fetchone()

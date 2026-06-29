@@ -413,14 +413,26 @@ async def reconcile_scheduled_jobs() -> int:
     (an unfired row already exists), so it would be lost forever. Rows that still
     have a live job are left untouched, so a correctly-scheduled reminder is
     never double-fired. Returns the number of jobs recovered.
+
+    Only acts on rows that are UNCLAIMED or whose claim is stuck (older than the
+    stuck timeout): a row claimed recently is either being delivered right now or
+    was just delivered but not yet marked fired (crash window) — re-registering
+    it would risk a double delivery. The in-job atomic claim is the final
+    backstop even if a job is registered here.
     """
     from proactive.scheduler import job_exists
+    from proactive.triggers.reminders import _STUCK_CLAIM_SECONDS
 
+    stuck_cutoff = (
+        datetime.now(timezone.utc) - timedelta(seconds=_STUCK_CLAIM_SECONDS)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
         async with _get_compat_db() as db:
             async with db.execute(
                 "SELECT id, user_id, message, item_id, send_at, apscheduler_job_id, "
-                "fired, attempts FROM proactive_scheduled WHERE fired = 0"
+                "fired, attempts FROM proactive_scheduled "
+                "WHERE fired = 0 AND (claimed_at IS NULL OR claimed_at < ?)",
+                (stuck_cutoff,),
             ) as cur:
                 rows = await cur.fetchall()
     except Exception as exc:
