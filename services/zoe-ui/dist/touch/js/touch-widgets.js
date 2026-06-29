@@ -350,9 +350,11 @@ body.light-mode .tw-ev-item { background: rgba(0,0,0,0.02); }
                     if (dayEl) dayEl.textContent = DAYS[now.getDay()];
                 };
                 tick();
-                const timer = setInterval(tick, 1000);
-                // Clean up if widget removed
-                el._twTimer = timer;
+                // Clear any prior clock timer on this element before re-arming
+                // so repeated init()/render() calls don't pile up 1s ticks
+                // firing against detached DOM (FE14).
+                if (el._twTimer) clearInterval(el._twTimer);
+                el._twTimer = setInterval(tick, 1000);
             }
         },
 
@@ -407,9 +409,28 @@ body.light-mode .tw-ev-item { background: rgba(0,0,0,0.02); }
                 const list = el.querySelector('.tw-events-list');
                 if (!list) return;
                 try {
-                    const today = new Date().toISOString().split('T')[0];
-                    const data = await api(`/api/calendar/events?date=${today}`);
-                    const items = data.events || data.items || (Array.isArray(data) ? data : []);
+                    // Build the LOCAL calendar date (Y-M-D), not toISOString()'s
+                    // UTC date: past ~5pm Pacific the UTC date is already
+                    // tomorrow, so the kiosk would fetch the wrong day (FE2).
+                    const fmt = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                    const n = new Date();
+                    const today = fmt(n);
+                    // GET /api/calendar/events applies BOTH start_date and
+                    // end_date params to the event's start_date column (and
+                    // ignores `date`). So a today-only window returns only events
+                    // that START today and drops multi-day events already in
+                    // progress. Widen the lower bound, then keep events that
+                    // actually overlap today (end_date >= today >= start_date;
+                    // a missing end_date is treated as a single-day event).
+                    const windowStart = fmt(new Date(n.getFullYear(), n.getMonth(), n.getDate() - 31));
+                    const data = await api(`/api/calendar/events?start_date=${windowStart}&end_date=${today}`);
+                    const all = data.events || data.items || (Array.isArray(data) ? data : []);
+                    const items = all.filter(ev => {
+                        const start = ev.start_date || ev.date;
+                        if (!start) return false;
+                        const end = ev.end_date || start;
+                        return start <= today && end >= today;
+                    });
                     if (!items.length) {
                         list.innerHTML = '<div class="tw-empty">No events today ✓</div>';
                         return;
@@ -688,12 +709,27 @@ body.light-mode .tw-ev-item { background: rgba(0,0,0,0.02); }
     // ── Public API ────────────────────────────────────────────────────
 
     /**
+     * Stop and clear any timers an element owns (clock tick + refresh loop).
+     * Idempotent — safe to call before re-render and on teardown (FE14).
+     * @param {HTMLElement} el - Container element previously passed to render().
+     */
+    function destroy(el) {
+        if (!el) return;
+        if (el._twTimer) { clearInterval(el._twTimer); el._twTimer = null; }
+        if (el._twInterval) { clearInterval(el._twInterval); el._twInterval = null; }
+    }
+
+    /**
      * Render a widget into the given element.
      * @param {string} type - Widget type key (e.g. 'time', 'weather')
      * @param {HTMLElement} el - Container element to render into
      */
     async function render(type, el) {
         if (!el) return;
+        // Tear down timers from a prior render of this element first; replacing
+        // innerHTML below orphans their DOM, so leaving them running piles up
+        // intervals firing against detached nodes over kiosk uptime (FE14).
+        destroy(el);
         const w = WIDGETS[type];
         if (!w) {
             el.innerHTML = `<div class="widget-header"><div class="widget-title">${type}</div></div>
@@ -704,10 +740,10 @@ body.light-mode .tw-ev-item { background: rgba(0,0,0,0.02); }
             el.innerHTML = w.template();
             await w.init(el);
             if (w.interval) {
-                const timer = setInterval(() => {
+                if (el._twInterval) clearInterval(el._twInterval);
+                el._twInterval = setInterval(() => {
                     try { w.init(el); } catch (e) { /* ignore refresh errors */ }
                 }, w.interval);
-                el._twInterval = timer;
             }
         } catch (e) {
             console.warn(`[TouchWidgets:${type}]`, e);
@@ -720,7 +756,7 @@ body.light-mode .tw-ev-item { background: rgba(0,0,0,0.02); }
         injectCSS();
     }
 
-    return { render, init, WIDGETS };
+    return { render, destroy, init, WIDGETS };
 
 })();
 

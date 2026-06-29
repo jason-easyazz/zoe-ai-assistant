@@ -2187,6 +2187,13 @@
         
         function parseEventDate(event) {
             const dateStr = event.start_date || event.date;
+            if (!dateStr) return new Date(NaN);
+            // A bare YYYY-MM-DD must parse as LOCAL midnight, not UTC midnight:
+            // the grid filters compare e.date.toDateString() (local), so a
+            // UTC-parsed date lands in the previous day's cell at negative UTC
+            // offsets. Strings that carry a time component keep native parsing.
+            const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
+            if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
             return new Date(dateStr);
         }
         
@@ -3398,7 +3405,7 @@
                     method: 'PUT',
                     headers: session ? { 'X-Session-ID': session.session_id } : {},
                     body: JSON.stringify({
-                        due_date: date.toISOString().split('T')[0],
+                        due_date: formatDateISO(date),
                         due_time: time
                     })
                 });
@@ -3902,7 +3909,7 @@
         async function openEventPanel(event) {
             editingEventId = event.id;
             document.getElementById('editTitle').value = event.title;
-            document.getElementById('editDate').value = event.date.toISOString().split('T')[0];
+            document.getElementById('editDate').value = formatDateISO(event.date);
             document.getElementById('editTime').value = event.time;
             document.getElementById('editDuration').value = event.duration;
             document.getElementById('editCategory').value = event.category;
@@ -3985,7 +3992,7 @@
         function calculateReminderOffset(event, reminder) {
             // Calculate offset from event start time
             try {
-                const eventTime = new Date(`${event.date.toISOString().split('T')[0]} ${event.time}`);
+                const eventTime = new Date(`${formatDateISO(event.date)} ${event.time}`);
                 const reminderTime = new Date(`${reminder.due_date} ${reminder.due_time}`);
                 const diffMinutes = Math.floor((eventTime - reminderTime) / 1000 / 60);
                 return diffMinutes;
