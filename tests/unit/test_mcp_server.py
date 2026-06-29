@@ -1,209 +1,114 @@
-#!/usr/bin/env python3
-"""
-Test script for Zoe MCP Server
-Tests the MCP server functionality locally
-"""
+"""Unit checks for the production Zoe MCP stdio/dispatch surface."""
 
-import asyncio
+from __future__ import annotations
+
 import json
-import sqlite3
+import os
+import subprocess
+import sys
 from pathlib import Path
 
-# Auto-detect project root
-PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
+import pytest
 
-# Mock MCP server for testing
-class MockMCPServer:
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ZOE_DATA = PROJECT_ROOT / "services" / "zoe-data"
+
+
+def _run_mcp_stdio(message: dict) -> dict:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(ZOE_DATA) + os.pathsep + env.get("PYTHONPATH", "")
+    proc = subprocess.Popen(
+        [sys.executable, str(ZOE_DATA / "mcp_server.py")],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    assert proc.stdin is not None
+    assert proc.stdout is not None
+    proc.stdin.write(json.dumps(message) + "\n")
+    proc.stdin.close()
+    line = proc.stdout.readline()
+    stderr = proc.stderr.read() if proc.stderr else ""
+    returncode = proc.wait(timeout=10)
+    assert returncode == 0, stderr
+    assert line, stderr
+    return json.loads(line)
+
+
+def _import_mcp_server():
+    sys.path.insert(0, str(ZOE_DATA))
+    try:
+        import mcp_server
+    except Exception as exc:
+        pytest.skip(f"Cannot import production mcp_server.py dependencies: {exc}")
+    return mcp_server
+
+
+def test_stdio_tools_list_exposes_production_tools():
+    response = _run_mcp_stdio({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+
+    assert response["jsonrpc"] == "2.0"
+    assert response["id"] == 1
+    tools = response["result"]["tools"]
+    tool_names = {tool["name"] for tool in tools}
+    assert "list_add_item" in tool_names
+    assert "calendar_create_event" in tool_names
+
+
+class _Cursor:
+    def __init__(self, rows=None):
+        self._rows = rows or []
+
+    async def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    async def fetchall(self):
+        return self._rows
+
+
+class _DispatchDb:
     def __init__(self):
-        self.db_path = str(PROJECT_ROOT / "data" / "zoe.db")
-    
-    async def test_search_memories(self):
-        """Test memory search"""
-        print("🔍 Testing search_memories...")
-        
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        # Test search
-        cursor.execute("SELECT COUNT(*) FROM people")
-        people_count = cursor.fetchone()[0]
-        
-        cursor.execute("SELECT COUNT(*) FROM projects")
-        projects_count = cursor.fetchone()[0]
-        
-        cursor.execute("SELECT COUNT(*) FROM memory_facts")
-        facts_count = cursor.fetchone()[0]
-        
-        conn.close()
-        
-        print(f"   ✅ Found {people_count} people, {projects_count} projects, {facts_count} facts")
-        return True
-    
-    async def test_create_person(self):
-        """Test person creation"""
-        print("👤 Testing create_person...")
-        
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        # Count before
-        cursor.execute("SELECT COUNT(*) FROM people")
-        count_before = cursor.fetchone()[0]
-        
-        # Create test person
-        cursor.execute("""
-            INSERT INTO people (user_id, name, profile, facts, important_dates, preferences)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, ("default", "Test Person", '{"relationship": "test", "created_by": "mcp_test"}', "{}", "{}", "{}"))
-        
-        conn.commit()
-        
-        # Count after
-        cursor.execute("SELECT COUNT(*) FROM people")
-        count_after = cursor.fetchone()[0]
-        
-        conn.close()
-        
-        if count_after > count_before:
-            print(f"   ✅ Successfully created person (count: {count_before} -> {count_after})")
-            return True
-        else:
-            print("   ❌ Failed to create person")
-            return False
-    
-    async def test_create_calendar_event(self):
-        """Test calendar event creation"""
-        print("📅 Testing create_calendar_event...")
-        
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        # Count before
-        cursor.execute("SELECT COUNT(*) FROM events")
-        count_before = cursor.fetchone()[0]
-        
-        # Create test event
-        cursor.execute("""
-            INSERT INTO events (user_id, title, start_date, start_time, description, category)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, ("default", "Test Event", "2025-10-04", "10:00", "Test event created by MCP", "personal"))
-        
-        conn.commit()
-        
-        # Count after
-        cursor.execute("SELECT COUNT(*) FROM events")
-        count_after = cursor.fetchone()[0]
-        
-        conn.close()
-        
-        if count_after > count_before:
-            print(f"   ✅ Successfully created event (count: {count_before} -> {count_after})")
-            return True
-        else:
-            print("   ❌ Failed to create event")
-            return False
-    
-    async def test_add_to_list(self):
-        """Test adding to list"""
-        print("📝 Testing add_to_list...")
-        
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        # Count before
-        cursor.execute("SELECT COUNT(*) FROM list_items")
-        count_before = cursor.fetchone()[0]
-        
-        # Find or create a list
-        cursor.execute("SELECT id FROM lists WHERE user_id = ? LIMIT 1", ("default",))
-        list_row = cursor.fetchone()
-        
-        if list_row:
-            list_id = list_row[0]
-        else:
-            # Create a test list
-            cursor.execute("""
-                INSERT INTO lists (user_id, name, category, description)
-                VALUES (?, ?, ?, ?)
-            """, ("default", "Test List", "personal", "Test list for MCP"))
-            list_id = cursor.lastrowid
-        
-        # Add item
-        cursor.execute("""
-            INSERT INTO list_items (list_id, task_text, priority, completed)
-            VALUES (?, ?, ?, ?)
-        """, (list_id, "Test task from MCP", "medium", False))
-        
-        conn.commit()
-        
-        # Count after
-        cursor.execute("SELECT COUNT(*) FROM list_items")
-        count_after = cursor.fetchone()[0]
-        
-        conn.close()
-        
-        if count_after > count_before:
-            print(f"   ✅ Successfully added to list (count: {count_before} -> {count_after})")
-            return True
-        else:
-            print("   ❌ Failed to add to list")
-            return False
-    
-    async def test_get_developer_tasks(self):
-        """Test getting developer tasks"""
-        print("📋 Testing get_developer_tasks...")
-        
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute("SELECT COUNT(*) FROM developer_tasks WHERE user_id = ?", ("default",))
-        task_count = cursor.fetchone()[0]
-        
-        conn.close()
-        
-        print(f"   ✅ Found {task_count} developer tasks")
-        return task_count > 0
-    
-    async def run_tests(self):
-        """Run all tests"""
-        print("🧪 Running Zoe MCP Server Tests")
-        print("=" * 40)
-        
-        tests = [
-            self.test_search_memories,
-            self.test_create_person,
-            self.test_create_calendar_event,
-            self.test_add_to_list,
-            self.test_get_developer_tasks
-        ]
-        
-        passed = 0
-        total = len(tests)
-        
-        for test in tests:
-            try:
-                if await test():
-                    passed += 1
-            except Exception as e:
-                print(f"   ❌ Test failed with error: {str(e)}")
-        
-        print("\n" + "=" * 40)
-        print(f"📊 Test Results: {passed}/{total} tests passed")
-        
-        if passed == total:
-            print("🎉 All tests passed! MCP server is ready.")
-            return True
-        else:
-            print("⚠️  Some tests failed. Check the output above.")
-            return False
+        self.calls = []
 
-async def main():
-    """Main test function"""
-    server = MockMCPServer()
-    success = await server.run_tests()
-    return 0 if success else 1
+    async def execute(self, sql, params=None):
+        self.calls.append((sql, params))
+        if "SELECT id FROM lists" in sql:
+            return _Cursor([])
+        return _Cursor([])
 
-if __name__ == "__main__":
-    exit_code = asyncio.run(main())
-    exit(exit_code)
 
+@pytest.mark.asyncio
+async def test_execute_tool_dispatches_list_add_item_through_production_path(monkeypatch):
+    mcp_server = _import_mcp_server()
+
+    async def _noop_notify(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(mcp_server, "_notify_ui", _noop_notify)
+    db = _DispatchDb()
+
+    result = await mcp_server._execute_tool(
+        db,
+        "list_add_item",
+        {"list_type": "shopping", "list_name": "Groceries", "text": "bread"},
+        actor_context={"user_id": "dispatch-user", "source": "transport_meta"},
+    )
+
+    assert result["status"] == "added"
+    assert result["list"] == "Groceries"
+    assert result["text"] == "bread"
+    assert any("INSERT INTO lists" in sql for sql, _params in db.calls)
+    assert any("INSERT INTO list_items" in sql for sql, _params in db.calls)
+    list_insert = next(params for sql, params in db.calls if "INSERT INTO lists" in sql)
+    assert list_insert[1] == "dispatch-user"
+
+
+def test_tool_metadata_matches_dispatch_name():
+    mcp_server = _import_mcp_server()
+
+    list_add = next(tool for tool in mcp_server.TOOLS if tool["name"] == "list_add_item")
+    schema = list_add["inputSchema"]
+    assert schema["required"] == ["list_type", "text"]
+    assert "text" in schema["properties"]

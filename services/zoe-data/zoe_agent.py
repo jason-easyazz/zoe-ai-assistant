@@ -86,6 +86,7 @@ _JETSON_MODE    = os.environ.get("JETSON_AGENT_MODE", "false").lower() == "true"
 _MAX_TOOL_ITERS   = int(os.environ.get("ZOE_AGENT_MAX_TOOL_ITERS", "5"))
 _LLM_TIMEOUT      = float(os.environ.get("ZOE_AGENT_LLM_TIMEOUT", "120.0"))
 _TOOL_TIMEOUT     = float(os.environ.get("ZOE_AGENT_TOOL_TIMEOUT", "10.0"))
+_DDG_SEARCH_HTML_MAX_BYTES = 5 * 1024 * 1024
 # Hermes opt-out — set ZOE_HERMES_AUTO_ESCALATE=false to disable even when healthy.
 _HERMES_AUTO_ESCALATE = os.environ.get("ZOE_HERMES_AUTO_ESCALATE", "true").lower() != "false"
 
@@ -1712,6 +1713,29 @@ async def _bash(command: str) -> str:
         return f"[bash error: {exc}]"
 
 
+def _read_bounded_url_response(resp, max_bytes: int) -> bytes:
+    content_length = resp.headers.get("Content-Length") if hasattr(resp, "headers") else None
+    if content_length:
+        try:
+            declared_length = int(content_length)
+        except (TypeError, ValueError):
+            declared_length = None
+        if declared_length is not None and declared_length > max_bytes:
+            raise ValueError(f"response body exceeds {max_bytes} byte cap")
+
+    chunks: list[bytes] = []
+    total = 0
+    while total <= max_bytes:
+        chunk = resp.read(min(65536, max_bytes + 1 - total))
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise ValueError(f"response body exceeds {max_bytes} byte cap")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 def _ddg_search_sync(query: str, max_results: int = 5, timeout_s: float = 10.0) -> list[dict]:
     """Synchronous DuckDuckGo search using the duckduckgo-search library.
 
@@ -1766,7 +1790,9 @@ def _ddg_search_sync(query: str, max_results: int = 5, timeout_s: float = 10.0) 
         try:
             req = Request(url, headers=headers)
             with urlopen(req, timeout=timeout_s) as resp:
-                body = resp.read().decode("utf-8", errors="replace")
+                body = _read_bounded_url_response(resp, _DDG_SEARCH_HTML_MAX_BYTES).decode(
+                    "utf-8", errors="replace"
+                )
             # DDG bot detection — skip if we got the challenge page
             if "anomaly.js" in body or len(body) < 3000:
                 continue
