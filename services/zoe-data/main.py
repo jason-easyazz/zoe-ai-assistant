@@ -77,7 +77,19 @@ _RUNTIME_HEALTH: dict[str, bool] = {
 _RUNTIME_LAST_PROBED: str = ""
 _READINESS_CACHE: dict[str, object] = {"expires_at": 0.0, "report": None}
 _READINESS_CACHE_LOCK = asyncio.Lock()
-WS_IDLE_TIMEOUT_SECONDS = float(os.environ.get("ZOE_WS_IDLE_TIMEOUT_SECONDS", "120"))
+
+
+def _ws_idle_timeout_seconds() -> float:
+    try:
+        value = float(os.environ.get("ZOE_WS_IDLE_TIMEOUT_SECONDS", "120"))
+    except (TypeError, ValueError):
+        return 120.0
+    if value <= 0:
+        return 120.0
+    return value
+
+
+WS_IDLE_TIMEOUT_SECONDS = _ws_idle_timeout_seconds()
 
 
 def _gemma_base_url() -> str:

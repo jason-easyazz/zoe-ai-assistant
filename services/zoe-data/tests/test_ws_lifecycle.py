@@ -80,3 +80,19 @@ async def test_idle_websocket_is_reaped_after_deadline(monkeypatch):
     assert ws not in bc._connections["notes"]
     assert ws not in bc._ws_users
     assert ws not in bc._ws_panels
+
+
+def test_ws_idle_timeout_env_falls_back_for_bad_values(monkeypatch):
+    monkeypatch.setenv("ZOE_WS_IDLE_TIMEOUT_SECONDS", "not-a-number")
+    assert main._ws_idle_timeout_seconds() == 120.0
+
+    monkeypatch.setenv("ZOE_WS_IDLE_TIMEOUT_SECONDS", "0")
+    assert main._ws_idle_timeout_seconds() == 120.0
+
+    monkeypatch.setenv("ZOE_WS_IDLE_TIMEOUT_SECONDS", "-5")
+    assert main._ws_idle_timeout_seconds() == 120.0
+
+
+def test_ws_idle_timeout_env_accepts_positive_values(monkeypatch):
+    monkeypatch.setenv("ZOE_WS_IDLE_TIMEOUT_SECONDS", "180.5")
+    assert main._ws_idle_timeout_seconds() == 180.5
