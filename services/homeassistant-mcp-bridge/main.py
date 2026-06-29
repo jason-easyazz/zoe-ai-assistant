@@ -54,14 +54,25 @@ class HomeAssistantBridge:
                 if response.status_code == 200:
                     return response.json()
                 else:
-                    raise HTTPException(status_code=response.status_code, detail=response.text)
+                    raise HTTPException(
+                        status_code=response.status_code,
+                        detail="Home Assistant request failed",
+                    )
                     
             except httpx.TimeoutException:
                 raise HTTPException(status_code=408, detail="Home Assistant request timeout")
             except httpx.ConnectError:
                 raise HTTPException(status_code=503, detail="Cannot connect to Home Assistant")
+            except HTTPException:
+                raise
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"Home Assistant API error: {str(e)}")
+
+    async def _get_states_by_domain(self, domain: str) -> List[Dict]:
+        """Get Home Assistant state entities for a domain."""
+        prefix = f"{domain}."
+        states = await self.get_states()
+        return [s for s in states if s.get("entity_id", "").startswith(prefix)]
     
     async def get_states(self) -> List[Dict]:
         """Get all entity states from Home Assistant"""
@@ -85,7 +96,7 @@ class HomeAssistantBridge:
     
     async def get_automations(self) -> List[Dict]:
         """Get all automations from Home Assistant"""
-        return await self._make_request("GET", "automation")
+        return await self._get_states_by_domain("automation")
     
     async def trigger_automation(self, automation_id: str) -> Dict:
         """Trigger an automation"""
@@ -93,7 +104,7 @@ class HomeAssistantBridge:
     
     async def get_scenes(self) -> List[Dict]:
         """Get all scenes from Home Assistant"""
-        return await self._make_request("GET", "scene")
+        return await self._get_states_by_domain("scene")
     
     async def activate_scene(self, scene_id: str) -> Dict:
         """Activate a scene"""
@@ -101,7 +112,7 @@ class HomeAssistantBridge:
     
     async def get_scripts(self) -> List[Dict]:
         """Get all scripts from Home Assistant"""
-        return await self._make_request("GET", "script")
+        return await self._get_states_by_domain("script")
     
     async def run_script(self, script_id: str, variables: Dict = None) -> Dict:
         """Run a script"""
@@ -327,7 +338,9 @@ async def get_lights():
             })
         
         return {"lights": formatted_lights, "count": len(formatted_lights)}
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -349,7 +362,9 @@ async def get_switches():
             })
         
         return {"switches": formatted_switches, "count": len(formatted_switches)}
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -372,7 +387,9 @@ async def get_sensors():
             })
         
         return {"sensors": formatted_sensors, "count": len(formatted_sensors)}
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -392,7 +409,9 @@ async def get_automations():
             })
         
         return {"automations": formatted_automations, "count": len(formatted_automations)}
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -427,7 +446,9 @@ async def get_scenes():
             })
         
         return {"scenes": formatted_scenes, "count": len(formatted_scenes)}
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -462,7 +483,9 @@ async def get_scripts():
             })
         
         return {"scripts": formatted_scripts, "count": len(formatted_scripts)}
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -509,9 +532,9 @@ async def analyze_home_assistant():
     """Get comprehensive analysis of Home Assistant setup"""
     try:
         states = await ha_bridge.get_states()
-        automations = await ha_bridge.get_automations()
-        scenes = await ha_bridge.get_scenes()
-        scripts = await ha_bridge.get_scripts()
+        automations = [s for s in states if s.get("entity_id", "").startswith("automation.")]
+        scenes = [s for s in states if s.get("entity_id", "").startswith("scene.")]
+        scripts = [s for s in states if s.get("entity_id", "").startswith("script.")]
         
         # Analyze entities by domain
         domains = {}
@@ -559,7 +582,9 @@ async def analyze_home_assistant():
         }
         
         return {"analysis": analysis}
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -619,4 +644,3 @@ async def ha_voice_turn(request: VoiceTurnRequest):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8007)
-
