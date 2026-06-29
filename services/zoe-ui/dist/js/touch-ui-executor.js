@@ -51,6 +51,7 @@
     };
     const AUTH_CHALLENGE_CACHE_KEY = 'zoe_seen_auth_challenges';
     const AUTH_CHALLENGE_TTL_MS = 10 * 60 * 1000;
+    const GENERATED_ALIAS_CACHE_KEY = 'zoe_touch_panel_alias_generated';
 
     const AUTO_HOME_TIMEOUT_S = Number(window.ZOE_AUTO_HOME_TIMEOUT_S || 20);
     const HOME_PATH = '/touch/skybridge.html';
@@ -135,26 +136,44 @@
     }
 
     function getPanelId() {
-        // The connecting id need not be the panel's canonical id: the server's
-        // /ws/push guard resolves the canonical bound panel from the session and
-        // subscribes the socket to THAT channel (see _resolve_subscribable_panel in
-        // services/zoe-data/main.py), so pushes reach the panel regardless of which
-        // of its aliases this returns. We therefore keep the original behaviour and
-        // do not juggle the registered/generated key precedence here (the two keys
-        // can always diverge, so any precedence rule just trades one stale-id case
-        // for the opposite one).
+        // Prefer the registered panel id for push routing. The generated touch
+        // alias is only a fallback for fresh browsers that have not been paired.
         const params = new URLSearchParams(window.location.search);
         const forced = params.get('panel_id');
         if (forced && forced.trim()) {
-            localStorage.setItem('zoe_touch_panel_id', forced.trim());
-            return forced.trim();
-        }
-        let panelId = localStorage.getItem('zoe_touch_panel_id');
-        if (!panelId) {
-            panelId = 'panel_' + Math.random().toString(36).slice(2, 10);
+            const panelId = forced.trim();
+            if (!isLocalGeneratedPanelAlias(panelId)) {
+                localStorage.setItem('zoe_panel_id', panelId);
+            }
             localStorage.setItem('zoe_touch_panel_id', panelId);
+            return panelId;
+        }
+        let panelId = localStorage.getItem('zoe_panel_id') || localStorage.getItem('zoe_touch_panel_id');
+        if (!panelId) {
+            panelId = generatePanelAlias();
+            localStorage.setItem('zoe_touch_panel_id', panelId);
+            localStorage.setItem(GENERATED_ALIAS_CACHE_KEY, panelId);
         }
         return panelId;
+    }
+
+    function generatePanelAlias() {
+        const suffix = Math.random().toString(36).slice(2).padEnd(8, '0').slice(0, 8);
+        return 'panel_' + suffix;
+    }
+
+    function isGeneratedPanelAlias(panelId) {
+        return /^panel_[a-z0-9]{8}$/i.test(String(panelId || '').trim());
+    }
+
+    function isLocalGeneratedPanelAlias(panelId) {
+        const value = String(panelId || '').trim();
+        if (!isGeneratedPanelAlias(value)) return false;
+        try {
+            return localStorage.getItem(GENERATED_ALIAS_CACHE_KEY) === value;
+        } catch (_) {
+            return false;
+        }
     }
 
     // Does a server-addressed action belong to THIS panel? A panel can answer to
@@ -167,18 +186,45 @@
     function panelMatches(targetPanelId) {
         const wanted = String(targetPanelId || '').trim();
         if (!wanted) return true;
+        const identity = collectPanelIdentity();
+        if (!identity.known.size) return true; // unknown identity -> act rather than swallow
+        return identity.known.has(wanted);
+    }
+
+    function panelMatchesAuthTarget(targetPanelId) {
+        const wanted = String(targetPanelId || '').trim();
+        if (!wanted) return true;
+        const identity = collectPanelIdentity();
+        if (!identity.known.size) return true; // unknown identity -> act rather than swallow
+        // Alias-only browsers may receive canonical registered-id auth payloads
+        // after the server resolves their socket subscription. Without a
+        // registered id locally, the client cannot prove that canonical target is
+        // foreign, but this tolerance is limited to PIN/auth prompts.
+        if (!identity.hasAuthoritativePanelId) return true;
+        return identity.known.has(wanted);
+    }
+
+    function collectPanelIdentity() {
         const known = new Set();
-        if (state.panelId) known.add(String(state.panelId).trim());
+        let hasAuthoritativePanelId = false;
+        function rememberPanelId(panelId, isAuthoritative) {
+            const value = String(panelId || '').trim();
+            if (!value) return;
+            known.add(value);
+            if (isAuthoritative) {
+                hasAuthoritativePanelId = true;
+            }
+        }
         try {
             const urlId = new URLSearchParams(window.location.search).get('panel_id');
-            if (urlId) known.add(urlId.trim());
-            const lsTouch = localStorage.getItem('zoe_touch_panel_id');
-            if (lsTouch) known.add(lsTouch.trim());
-            const lsPanel = localStorage.getItem('zoe_panel_id');
-            if (lsPanel) known.add(lsPanel.trim());
+            const touchId = localStorage.getItem('zoe_touch_panel_id');
+            const registeredId = localStorage.getItem('zoe_panel_id');
+            rememberPanelId(state.panelId, String(state.panelId || '').trim() === String(registeredId || '').trim());
+            rememberPanelId(urlId, !!urlId && !isLocalGeneratedPanelAlias(urlId));
+            rememberPanelId(touchId, !!touchId && String(touchId).trim() === String(registeredId || '').trim());
+            rememberPanelId(registeredId, !!registeredId);
         } catch (_) {}
-        if (!known.size) return true; // unknown identity → act rather than swallow
-        return known.has(wanted);
+        return { known, hasAuthoritativePanelId };
     }
 
     function hydrateSeenAuthChallenges() {
@@ -1034,7 +1080,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                     if (msg.type === 'panel_pin_request' && msg.data) {
                         const d = (msg.data && msg.data.data) ? msg.data.data : msg.data;
                         const actionId = String((d && d.challenge_id) || '').trim() || ('push_pin_' + Date.now());
-                        if (panelMatches(d.panel_id)) {
+                        if (panelMatchesAuthTarget(d.panel_id)) {
                             executeAction({
                                 id: `push_pin_${actionId}`,
                                 action_type: 'panel_request_auth',
@@ -1056,7 +1102,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                         // Auth RESULT must be explicitly addressed to this panel — never
                         // act on an unaddressed result (it would flash/dismiss the PIN pad
                         // on every kiosk). Require a present id that matches an alias.
-                        if (d.panel_id && panelMatches(d.panel_id)) {
+                        if (d.panel_id && panelMatchesAuthTarget(d.panel_id)) {
                             hidePinPad();
                             showToast(d.status === 'approved' ? 'Authorised' : 'Not authorised');
                         }
@@ -1310,7 +1356,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             if (actionType === 'panel_request_auth') {
                 if (payload.challenge_id) {
                     disarmAutoHomeTimer('auth-required');
-                    if (!panelMatches(payload.panel_id)) {
+                    if (!panelMatchesAuthTarget(payload.panel_id)) {
                         return { status: 'skipped', error_code: 'wrong_panel' };
                     }
                     const challengeId = String(payload.challenge_id);
