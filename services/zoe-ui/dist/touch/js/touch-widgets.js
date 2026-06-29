@@ -412,13 +412,25 @@ body.light-mode .tw-ev-item { background: rgba(0,0,0,0.02); }
                     // Build the LOCAL calendar date (Y-M-D), not toISOString()'s
                     // UTC date: past ~5pm Pacific the UTC date is already
                     // tomorrow, so the kiosk would fetch the wrong day (FE2).
+                    const fmt = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
                     const n = new Date();
-                    const today = `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`;
-                    // GET /api/calendar/events filters on start_date/end_date
-                    // (inclusive); it ignores a `date` param, which would return
-                    // every day's events. Bound both ends to today's local date.
-                    const data = await api(`/api/calendar/events?start_date=${today}&end_date=${today}`);
-                    const items = data.events || data.items || (Array.isArray(data) ? data : []);
+                    const today = fmt(n);
+                    // GET /api/calendar/events applies BOTH start_date and
+                    // end_date params to the event's start_date column (and
+                    // ignores `date`). So a today-only window returns only events
+                    // that START today and drops multi-day events already in
+                    // progress. Widen the lower bound, then keep events that
+                    // actually overlap today (end_date >= today >= start_date;
+                    // a missing end_date is treated as a single-day event).
+                    const windowStart = fmt(new Date(n.getFullYear(), n.getMonth(), n.getDate() - 31));
+                    const data = await api(`/api/calendar/events?start_date=${windowStart}&end_date=${today}`);
+                    const all = data.events || data.items || (Array.isArray(data) ? data : []);
+                    const items = all.filter(ev => {
+                        const start = ev.start_date || ev.date;
+                        if (!start) return false;
+                        const end = ev.end_date || start;
+                        return start <= today && end >= today;
+                    });
                     if (!items.length) {
                         list.innerHTML = '<div class="tw-empty">No events today ✓</div>';
                         return;
