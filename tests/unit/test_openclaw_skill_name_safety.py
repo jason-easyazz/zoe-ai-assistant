@@ -14,7 +14,7 @@ legitimate skill names still operate exactly as before.
 """
 from __future__ import annotations
 
-import shutil
+import json
 from pathlib import Path
 
 import pytest
@@ -48,7 +48,16 @@ TRAVERSAL_NAMES = [
     "foo\x00bar",
     "name with space",
     "weird;name",
+    # Leading-hyphen names would be reinterpreted as CLI options when forwarded
+    # as argv to the openclaw CLI (option injection, not shell injection).
+    "--force",
+    "--help",
+    "-rf",
+    "-",
 ]
+
+# Names that are specifically CLI-option-injection vectors (leading hyphen).
+CLI_OPTION_NAMES = ["--force", "--help", "-rf", "-", "--version=evil"]
 
 
 @pytest.fixture
@@ -85,10 +94,54 @@ def test_unsafe_names_rejected(name):
         om._validate_skill_name(name)
 
 
+@pytest.mark.parametrize("name", CLI_OPTION_NAMES)
+def test_leading_hyphen_rejected(name):
+    """Leading-hyphen names must be rejected so they can't act as CLI options."""
+    with pytest.raises(ValueError):
+        om._validate_skill_name(name)
+
+
+@pytest.mark.parametrize("name", ["home-assistant", "Skill-1.2.3", "a.b_c-1", "video-frames"])
+def test_mid_hyphen_and_dot_names_accepted(name):
+    """Hyphens/dots in the middle stay valid — only leading ones are blocked."""
+    assert om._validate_skill_name(name) == name
+
+
 def test_safe_skill_dir_stays_in_base(sandbox):
     resolved = om._safe_skill_dir("briefing")
     assert resolved == sandbox["base"].resolve() / "briefing"
     assert sandbox["base"].resolve() in resolved.parents
+
+
+def test_safe_skill_dir_rejects_symlink_to_base(sandbox):
+    """A valid-named symlink INSIDE the skills base that resolves back to the base
+    itself must be rejected — otherwise remove_skill would rmtree the whole base."""
+    link = sandbox["base"] / "loopback"
+    link.symlink_to(sandbox["base"], target_is_directory=True)
+    with pytest.raises(ValueError):
+        om._safe_skill_dir("loopback")
+    # And going through remove_skill must NOT delete the base or its real skill.
+    assert sandbox["base"].exists()
+    assert sandbox["good"].exists()
+
+
+def test_safe_skill_dir_rejects_symlink_escaping_base(sandbox):
+    """A valid-named symlink that resolves OUTSIDE the base is rejected, not followed."""
+    link = sandbox["base"] / "escape"
+    link.symlink_to(sandbox["secret"], target_is_directory=True)
+    with pytest.raises(ValueError):
+        om._safe_skill_dir("escape")
+    assert sandbox["secret"].exists()
+
+
+async def test_remove_skill_symlink_to_base_does_not_rmtree_base(sandbox):
+    """End-to-end: removing a name that symlinks back to base never wipes the base."""
+    (sandbox["base"] / "loopback").symlink_to(sandbox["base"], target_is_directory=True)
+    with pytest.raises(ValueError):
+        await om.remove_skill("loopback")
+    assert sandbox["base"].exists()
+    assert sandbox["good"].exists()
+    assert (sandbox["good"] / "SKILL.md").exists()
 
 
 @pytest.mark.parametrize("name", TRAVERSAL_NAMES)
@@ -135,6 +188,35 @@ async def test_install_bundled_traversal_rejected(sandbox, monkeypatch):
     with pytest.raises(ValueError):
         await om.install_skill("../secret", source="openclaw-bundled")
     assert sandbox["secret"].exists()
+
+
+@pytest.mark.parametrize("name", CLI_OPTION_NAMES)
+async def test_install_leading_hyphen_rejected(sandbox, monkeypatch, name):
+    """Leading-hyphen names are rejected before any CLI argv is built."""
+    async def _fake_run(*args, **kwargs):  # pragma: no cover - must not be reached
+        raise AssertionError("CLI should not run for a CLI-option-injection name")
+
+    monkeypatch.setattr(om, "_run_openclaw", _fake_run)
+    with pytest.raises(ValueError):
+        await om.install_skill(name, source="openclaw-bundled")
+
+
+async def test_install_bundled_happy_path(sandbox, monkeypatch, tmp_path):
+    """A legitimate bundled install copies the source into the skills base."""
+    src = tmp_path / "bundled_src"
+    src.mkdir()
+    (src / "SKILL.md").write_text("# Notes\nNote-taking skill\n")
+
+    async def _fake_run(*args, **kwargs):
+        assert args[:3] == ("skills", "info", "notes")
+        return 0, json.dumps({"baseDir": str(src)}), ""
+
+    monkeypatch.setattr(om, "_run_openclaw", _fake_run)
+    result = await om.install_skill("notes", source="openclaw-bundled")
+    assert result["status"] == "installed"
+    dest = sandbox["base"] / "notes"
+    assert dest.is_dir()
+    assert (dest / "SKILL.md").read_text() == "# Notes\nNote-taking skill\n"
 
 
 # ── preview_skill (read path) ─────────────────────────────────────────────────

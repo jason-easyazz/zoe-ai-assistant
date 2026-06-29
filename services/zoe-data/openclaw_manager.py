@@ -149,16 +149,20 @@ _SKILLS_BASE: Path = _OPENCLAW_DIR / "workspace" / "skills"
 
 # A skill name is a single path component from a conservative charset. The regex
 # is the charset gate; the explicit checks below give clear errors and defend in
-# depth against separators, parent refs, null bytes, and leading dots.
-_SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+# depth against separators, parent refs, null bytes, and leading dots/hyphens.
+# The first character MUST be alphanumeric so a name can never be mistaken for a
+# CLI option (e.g. '--force', '-rf') when forwarded as argv to the openclaw CLI.
+_SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 def _validate_skill_name(name: str) -> str:
-    """Validate a caller-supplied skill name for filesystem safety.
+    """Validate a caller-supplied skill name for filesystem and CLI safety.
 
-    Rejects anything that could escape the skills directory: path separators,
-    parent refs ('..'), null bytes, leading dots, and characters outside
-    ``[A-Za-z0-9._-]``. Returns the name unchanged when safe, else ValueError.
+    Rejects anything that could escape the skills directory or be reinterpreted
+    as a CLI option: path separators, parent refs ('..'), null bytes, leading
+    dots, leading hyphens, and characters outside ``[A-Za-z0-9._-]``. The first
+    character must be alphanumeric. Returns the name unchanged when safe, else
+    ValueError.
     """
     if not name or not isinstance(name, str):
         raise ValueError("Skill name is required")
@@ -168,11 +172,14 @@ def _validate_skill_name(name: str) -> str:
         raise ValueError(f"Invalid skill name '{name}': path separators not allowed")
     if name.startswith("."):
         raise ValueError(f"Invalid skill name '{name}': must not start with '.'")
+    if name.startswith("-"):
+        raise ValueError(f"Invalid skill name '{name}': must not start with '-'")
     if ".." in name:
         raise ValueError(f"Invalid skill name '{name}': '..' not allowed")
     if not _SKILL_NAME_RE.match(name):
         raise ValueError(
-            f"Invalid skill name '{name}': allowed characters are A-Z a-z 0-9 . _ -"
+            f"Invalid skill name '{name}': must start with a letter or digit and "
+            "contain only A-Z a-z 0-9 . _ -"
         )
     return name
 
@@ -180,14 +187,18 @@ def _validate_skill_name(name: str) -> str:
 def _safe_skill_dir(name: str) -> Path:
     """Resolve a skill name to its workspace directory, fully sandboxed.
 
-    Validates the name, then asserts the resolved path stays strictly inside
-    ``_SKILLS_BASE`` (realpath-based, so symlink/normalisation tricks cannot
-    escape). Raises ValueError on any unsafe name or out-of-base resolution.
+    Validates the name, then asserts the resolved path is STRICTLY INSIDE
+    ``_SKILLS_BASE`` — a child of base, never base itself (realpath-based, so a
+    symlink that resolves back to the base or anywhere outside is rejected, not
+    rmtree'd). Raises ValueError on any unsafe name or out-of-base resolution.
     """
     _validate_skill_name(name)
     base = _SKILLS_BASE.resolve()
     candidate = (base / name).resolve()
-    if candidate != base and base not in candidate.parents:
+    # base must be a STRICT parent of candidate: candidate == base (e.g. a
+    # symlink resolving back to the skills root) must be rejected so callers
+    # can never operate on the whole skills directory.
+    if candidate == base or base not in candidate.parents:
         raise ValueError(f"Invalid skill name '{name}': resolves outside skills directory")
     return candidate
 
