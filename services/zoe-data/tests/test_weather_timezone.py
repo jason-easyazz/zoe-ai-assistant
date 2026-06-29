@@ -1,6 +1,6 @@
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -95,3 +95,43 @@ async def test_openweather_forecast_filters_by_remote_location_timezone(monkeypa
 
     assert [hour["description"] for hour in forecast["hourly"]] == ["current", "tomorrow"]
     assert [day["day"] for day in forecast["daily"]] == ["2026-06-30"]
+
+
+@pytest.mark.asyncio
+async def test_openweather_forecast_bad_provider_timezone_keeps_valid_rows(monkeypatch):
+    monkeypatch.setattr(weather, "_weather_now", lambda tz: datetime(2026, 6, 28, 23, 0, tzinfo=timezone.utc))
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "city": {"timezone": "UTC"},
+                "list": [
+                    {
+                        "dt": 1782691200,  # 2026-06-29 00:00 UTC
+                        "main": {"temp": 12},
+                        "weather": [{"description": "valid", "icon": "01d"}],
+                    }
+                ],
+            }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(weather.httpx, "AsyncClient", FakeClient)
+
+    forecast = await weather._fetch_owm_forecast(-31.95, 115.86)
+
+    assert [hour["description"] for hour in forecast["hourly"]] == ["valid"]

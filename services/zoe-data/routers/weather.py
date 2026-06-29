@@ -357,7 +357,11 @@ async def _fetch_owm_forecast(lat: float, lon: float) -> dict:
             r.raise_for_status()
             data = r.json()
         items = data.get("list", [])
-        provider_tz = timezone(timedelta(seconds=int(data.get("city", {}).get("timezone") or 0)))
+        try:
+            provider_offset = int(data.get("city", {}).get("timezone") or 0)
+        except (TypeError, ValueError):
+            provider_offset = 0
+        provider_tz = timezone(timedelta(seconds=provider_offset))
         now = _weather_now(provider_tz)
 
         hourly = []
