@@ -62,7 +62,7 @@ def _env(live: Path, extra=None):
     return env
 
 
-def _copy_wrapper_bundle(tmp_path: Path):
+def _copy_wrapper_bundle(tmp_path: Path, deploy_live_body: str | None = None):
     bundle = tmp_path / "bundle" / "scripts" / "maintenance"
     bundle.mkdir(parents=True)
     wrapper = bundle / "deploy_zoe_data_when_ready.sh"
@@ -70,7 +70,11 @@ def _copy_wrapper_bundle(tmp_path: Path):
     marker = tmp_path / "deploy-called"
     shutil.copy2(SCRIPT, wrapper)
     wrapper.chmod(0o755)
-    deploy_live.write_text(f"#!/usr/bin/env bash\nset -euo pipefail\ntouch {marker}\n")
+    deploy_live.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        f"{deploy_live_body if deploy_live_body is not None else f'touch {marker}'}\n"
+    )
     deploy_live.chmod(0o755)
     return wrapper, deploy_live, marker
 
@@ -160,6 +164,44 @@ def test_deploy_with_confirmation_invokes_deploy_live_stub_and_post_verify(tmp_p
     assert "PRE-FLIGHT TARGET CONTENT PASS" in proc.stdout
     assert "PASS post-health" in proc.stdout
     assert expected_url in curl_log.read_text()
+
+
+def test_confirmed_deploy_aborts_when_deploy_live_ships_unverified_sha(tmp_path):
+    live = _seed_live_tree(tmp_path)
+    (live / "README.md").write_text("preflighted origin update\n")
+    _git(live, "add", "README.md")
+    _git(live, "commit", "-m", "preflighted update")
+    _git(live, "push", "origin", "main")
+    _git(live, "reset", "--hard", "HEAD~1")
+
+    drift_work = tmp_path / "drift-work"
+    remote_url = _git(live, "config", "--get", "remote.origin.url").stdout.strip()
+    subprocess.run(["git", "clone", remote_url, str(drift_work)], check=True, capture_output=True)
+    _git(drift_work, "checkout", "main")
+    _git(drift_work, "config", "user.email", "test@example.com")
+    _git(drift_work, "config", "user.name", "Test User")
+
+    marker_path = tmp_path / "deploy-called"
+    wrapper, _deploy_live, marker = _copy_wrapper_bundle(
+        tmp_path,
+        deploy_live_body=(
+            f"printf 'drifted origin update\\n' > {drift_work / 'README.md'}\n"
+            f"git -C {drift_work} add README.md\n"
+            f"git -C {drift_work} commit -m 'drift origin main'\n"
+            f"git -C {drift_work} push origin main\n"
+            "git -C \"$ZOE_LIVE_TREE\" fetch origin main\n"
+            "git -C \"$ZOE_LIVE_TREE\" reset --hard refs/remotes/origin/main\n"
+            f"touch {marker_path}"
+        ),
+    )
+
+    proc = _run([str(wrapper), "--deploy", "--yes-restart-production"], env=_env(live))
+
+    assert proc.returncode != 0
+    assert marker.exists()
+    assert "PRE-FLIGHT TARGET CONTENT PASS" in proc.stdout
+    assert "FAIL post-target-sha" in proc.stdout
+    assert "does not match pre-flighted target" in proc.stdout
 
 
 def test_confirmed_deploy_preflight_allows_faster_whisper_docstring(tmp_path):
