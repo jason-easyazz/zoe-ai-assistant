@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import contextvars
+import importlib.util
 import json
 import logging
 import os
@@ -430,6 +431,10 @@ VOICE_PROFILES = {
 
 def _has_espeak_ng() -> bool:
     return shutil.which("espeak-ng") is not None
+
+
+def edge_tts_available() -> bool:
+    return importlib.util.find_spec("edge_tts") is not None
 
 
 async def _synthesize_espeak(text: str, speed: int, pitch: int, volume: int) -> bytes:

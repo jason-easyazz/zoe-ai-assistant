@@ -192,10 +192,13 @@ async def _check_tts_ready(timeout_s: float = 2.0) -> dict:
         detail["ok"] = True
         detail["provider"] = "espeak-ng"
         return detail
-    if mode in {"hybrid"}:
+    detail["edge_tts_available"] = bool(voice_tts.edge_tts_available())
+    if mode in {"hybrid"} and detail["edge_tts_available"]:
         detail["ok"] = True
-        detail["provider"] = "edge-tts-or-espeak-fallback"
+        detail["provider"] = "edge-tts"
         return detail
+    if mode in {"hybrid", "local"}:
+        detail["error"] = "no_tts_provider_available"
     return detail
 
 

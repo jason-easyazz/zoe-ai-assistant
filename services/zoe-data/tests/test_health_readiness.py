@@ -121,6 +121,64 @@ def test_tts_mode_edge_counts_ready_without_kokoro(monkeypatch):
     assert report["provider"] == "edge"
 
 
+def test_tts_hybrid_requires_a_real_provider(monkeypatch):
+    import main
+    from routers import voice_tts
+
+    class FailingClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, *args, **kwargs):
+            raise OSError("sidecar down")
+
+    monkeypatch.setenv("ZOE_TTS_MODE", "hybrid")
+    monkeypatch.setattr(main.httpx, "AsyncClient", FailingClient)
+    monkeypatch.setattr(voice_tts, "kokoro_ready", lambda: False)
+    monkeypatch.setattr(voice_tts, "_has_espeak_ng", lambda: False)
+    monkeypatch.setattr(voice_tts, "edge_tts_available", lambda: False)
+
+    report = asyncio.run(main._check_tts_ready())
+
+    assert report["ok"] is False
+    assert report["error"] == "no_tts_provider_available"
+
+
+def test_tts_hybrid_edge_package_counts_ready(monkeypatch):
+    import main
+    from routers import voice_tts
+
+    class FailingClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, *args, **kwargs):
+            raise OSError("sidecar down")
+
+    monkeypatch.setenv("ZOE_TTS_MODE", "hybrid")
+    monkeypatch.setattr(main.httpx, "AsyncClient", FailingClient)
+    monkeypatch.setattr(voice_tts, "kokoro_ready", lambda: False)
+    monkeypatch.setattr(voice_tts, "_has_espeak_ng", lambda: False)
+    monkeypatch.setattr(voice_tts, "edge_tts_available", lambda: True)
+
+    report = asyncio.run(main._check_tts_ready())
+
+    assert report["ok"] is True
+    assert report["provider"] == "edge-tts"
+
+
 def test_stt_ready_does_not_race_moonshine_warmup(monkeypatch):
     import main
     from routers import voice_tts
