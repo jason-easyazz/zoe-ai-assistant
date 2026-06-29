@@ -72,6 +72,17 @@ def split_command(command: str) -> List[str]:
     return argv
 
 
+def _matches_prefix_tokens(argv: List[str], prefix: str) -> bool:
+    """True iff ``argv`` starts with the prefix's tokens, compared token-by-token.
+
+    Token comparison (not raw ``str.startswith``) so a bare allowlist entry like
+    ``date`` matches only the ``date`` binary — never ``dateevil`` — and
+    ``python3 -c`` matches ``["python3", "-c", ...]`` but not ``python3 -cfoo``.
+    """
+    pfx_tokens = shlex.split(prefix)
+    return bool(pfx_tokens) and argv[: len(pfx_tokens)] == pfx_tokens
+
+
 def check_bash_command(command: str, allowed_prefixes: Iterable[str]) -> List[str]:
     """Validate ``command`` against the allowlist + injection policy.
 
@@ -86,13 +97,15 @@ def check_bash_command(command: str, allowed_prefixes: Iterable[str]) -> List[st
     if not cmd:
         raise CommandRejected("empty command")
 
-    allowed = tuple(allowed_prefixes)
-    if not any(cmd.startswith(pfx) for pfx in allowed):
-        raise CommandRejected(f"'{cmd[:40]}' is not in the allowed command list")
-
+    # Parse FIRST, then match the allowlist against the parsed argv tokens — a raw
+    # str.startswith would let `dateevil` slip past the bare `date` entry.
     argv = split_command(cmd)
 
-    if any(cmd.startswith(pfx) for pfx in _CODE_BEARING_PREFIXES):
+    allowed = tuple(allowed_prefixes)
+    if not any(_matches_prefix_tokens(argv, pfx) for pfx in allowed):
+        raise CommandRejected(f"'{cmd[:40]}' is not in the allowed command list")
+
+    if any(_matches_prefix_tokens(argv, pfx) for pfx in _CODE_BEARING_PREFIXES):
         # Layout: <python> <-c> <code> [extra...]. The code arg (index 2) may
         # legitimately contain metacharacters, so scan only the tokens AFTER it.
         scan_tokens = argv[3:]

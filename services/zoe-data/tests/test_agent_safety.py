@@ -118,6 +118,24 @@ def test_unbalanced_quotes_rejected():
         check_bash_command('echo "unterminated', ALLOWED)
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "dateevil",                 # bare 'date' prefix must not match 'dateevil'
+        "uptimefoo",                # bare 'uptime' prefix must not match
+        "lsbin /etc",               # 'ls ' must not match 'lsbin'
+        "catastrophe /etc/passwd",  # 'cat ' must not match 'catastrophe'
+        "python3 -cmalicious",      # 'python3 -c' must not match '-cmalicious'
+        "psql -c 'DROP TABLE x'",   # 'ps ' must not match 'psql'
+    ],
+)
+def test_prefix_suffix_does_not_match_other_binaries(payload):
+    # Regression: token-aware matching — a bare allowlist entry must only match
+    # the exact binary/flags, never a longer binary name with the same prefix.
+    with pytest.raises(CommandRejected):
+        check_bash_command(payload, ALLOWED)
+
+
 # ── SSRF: outbound web-fetch policy (assert_public_url) ────────────────────────
 
 @pytest.mark.parametrize(
