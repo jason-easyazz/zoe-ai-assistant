@@ -203,7 +203,7 @@ async def _restart_openclaw_gateway() -> None:
 
 
 @router.post("/telegram/setup")
-async def telegram_setup(request: Request, _user: dict = Depends(get_current_user)):
+async def telegram_setup(request: Request, _user: dict = Depends(require_admin)):
     """
     Validate a Telegram bot token, write it to openclaw.json, and restart the gateway.
 
@@ -239,8 +239,8 @@ async def telegram_setup(request: Request, _user: dict = Depends(get_current_use
     try:
         _save_telegram_token(token)
     except Exception as exc:
-        logger.error("Failed to save telegram token: %s", exc)
-        raise HTTPException(status_code=500, detail=f"Could not save config: {exc}")
+        logger.exception("Failed to save telegram token")
+        raise HTTPException(status_code=500, detail="Could not save Telegram configuration")
 
     # Restart gateway so it picks up the new channel
     asyncio.ensure_future(_restart_openclaw_gateway())
