@@ -133,7 +133,7 @@ async def provision_poll(code: str, db=Depends(get_db)):
     No authentication required (Pi has no session at this point).
     """
     row = await (await db.execute(
-        "SELECT code, status, token, expires_at FROM panel_provision_codes WHERE code = ?",
+        "SELECT code, status, token, panel_id, expires_at FROM panel_provision_codes WHERE code = ?",
         (code,),
     )).fetchone()
     if not row:
@@ -153,19 +153,21 @@ async def provision_poll(code: str, db=Depends(get_db)):
     if status == "confirmed":
         # One-time token pickup must be atomic. The previous read-then-clear
         # (SELECT token … then UPDATE … SET token = NULL) let two concurrent polls
-        # both read the same raw device token before either cleared it. A single
-        # conditional UPDATE … WHERE token IS NOT NULL RETURNING makes exactly one
-        # poll observe a non-NULL token; every other concurrent poll matches zero
-        # rows and gets {"status": "confirmed"} with no token.
-        picked = await (await db.execute(
-            "UPDATE panel_provision_codes SET token = NULL "
-            "WHERE code = ? AND token IS NOT NULL "
-            "RETURNING token, panel_id",
+        # both read the same raw device token before either cleared it.
+        #
+        # Use a single conditional UPDATE and decide the winner by affected-row
+        # count: the row-level write lock serializes concurrent statements, so
+        # exactly one poll flips `token` (rowcount == 1) and the rest match zero
+        # rows. The winner returns the token it already read in the SELECT above
+        # (we must NOT use `RETURNING token` here — PostgreSQL RETURNING yields the
+        # post-update value, which is the NULL we just wrote).
+        cleared = await db.execute(
+            "UPDATE panel_provision_codes SET token = NULL WHERE code = ? AND token IS NOT NULL",
             (code,),
-        )).fetchone()
+        )
         await db.commit()
-        if picked and picked["token"]:
-            return {"status": "confirmed", "token": picked["token"], "panel_id": picked["panel_id"]}
+        if getattr(cleared, "rowcount", 0) == 1 and row["token"]:
+            return {"status": "confirmed", "token": row["token"], "panel_id": row["panel_id"]}
         # Token already delivered to an earlier poll.
         return {"status": "confirmed"}
 

@@ -568,6 +568,10 @@ async def submit_pin(payload: dict, db=Depends(get_db)):
     # by an authenticated caller (create_pin_challenge), but we still require that
     # user to be bound to the panel when a binding exists for it.
     if not resolved_from_binding:
+        # This check is security-load-bearing, so it must FAIL CLOSED: a transient
+        # DB error here must never let the request skip authorization and proceed to
+        # PIN validation. Convert unexpected errors into a 503 (deny) instead of
+        # swallowing them.
         try:
             _has_binding = await (await db.execute(
                 "SELECT 1 FROM panel_user_bindings WHERE panel_id = ? LIMIT 1",
@@ -587,7 +591,11 @@ async def submit_pin(payload: dict, db=Depends(get_db)):
         except HTTPException:
             raise
         except Exception as _authz_exc:
-            logger.debug("panel_auth: panel authorization check failed: %s", _authz_exc)
+            logger.warning("panel_auth: panel authorization check errored: %s", _authz_exc)
+            raise HTTPException(
+                status_code=503,
+                detail="Authorization check temporarily unavailable. Please try again.",
+            )
 
     pin_valid = False
     auth_service_error: Optional[str] = None

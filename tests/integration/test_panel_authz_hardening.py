@@ -39,8 +39,10 @@ from fastapi import HTTPException  # noqa: E402
 # ── Shared fake DB plumbing (mirrors test_people_hardening.py) ─────────────────
 
 class _FakeCursor:
-    def __init__(self, rows):
+    def __init__(self, rows, rowcount=None):
         self._rows = rows
+        # Mirror db_pool._Cursor: SELECT → len(rows); writes → parsed status count.
+        self.rowcount = len(rows) if rowcount is None else rowcount
 
     async def fetchone(self):
         return self._rows[0] if self._rows else None
@@ -52,8 +54,8 @@ class _FakeCursor:
 class _ExecResult:
     """Mimics aiosqlite execute(): awaitable AND async context manager."""
 
-    def __init__(self, rows=None):
-        self._cursor = _FakeCursor(rows or [])
+    def __init__(self, rows=None, rowcount=None):
+        self._cursor = _FakeCursor(rows or [], rowcount=rowcount)
 
     def __await__(self):
         async def _run():
@@ -185,7 +187,8 @@ async def test_pending_allows_bound_user(_noop_feature_access):
 class _PinChallengeDB:
     """Fake DB for submit_pin: one pending challenge owned by 'alice' on 'p1'."""
 
-    def __init__(self, challenge_user="alice", panel_id="p1", bound_users=("alice",)):
+    def __init__(self, challenge_user="alice", panel_id="p1", bound_users=("alice",),
+                 raise_on_binding=False):
         future = (datetime.now(tz=timezone.utc) + timedelta(minutes=2)).isoformat()
         self._challenge = {
             "challenge_id": "chal-1",
@@ -197,6 +200,7 @@ class _PinChallengeDB:
         }
         self._panel_id = panel_id
         self._bound_users = set(bound_users)
+        self._raise_on_binding = raise_on_binding
         self.challenge_status_updates = []
 
     def execute(self, sql, params=None):
@@ -205,6 +209,8 @@ class _PinChallengeDB:
         if s.startswith("SELECT * FROM PANEL_AUTH_CHALLENGES"):
             return _ExecResult([dict(self._challenge)])
         if s.startswith("SELECT 1 FROM PANEL_USER_BINDINGS WHERE PANEL_ID = ? LIMIT 1"):
+            if self._raise_on_binding:
+                raise RuntimeError("simulated transient DB error during authz check")
             return _ExecResult([{"1": 1}] if self._bound_users else [])
         if s.startswith("SELECT 1 FROM PANEL_USER_BINDINGS WHERE PANEL_ID = ? AND USER_ID = ?"):
             return _ExecResult([{"1": 1}] if p[1] in self._bound_users else [])
@@ -292,6 +298,19 @@ async def test_pin_forged_user_cannot_approve_with_other_pin(_patch_pin_env):
     assert _FakeAuthClient.captured == [("alice", "mallory-pin")]
 
 
+@pytest.mark.asyncio
+async def test_pin_authz_fails_closed_on_db_error(_patch_pin_env):
+    """A DB error during the panel-authz check must DENY, never skip the check."""
+    db = _PinChallengeDB(challenge_user="alice", raise_on_binding=True)
+    with pytest.raises(HTTPException) as exc:
+        await panel_auth.submit_pin(
+            {"challenge_id": "chal-1", "pin": "1234"}, db=db
+        )
+    assert exc.value.status_code == 503
+    # Must have failed BEFORE delegating to zoe-auth for PIN validation.
+    assert _FakeAuthClient.captured == []
+
+
 # ── P2: panel_provision atomic one-time token pickup ──────────────────────────
 
 class _ProvisionRaceDB:
@@ -316,16 +335,18 @@ class _ProvisionRaceDB:
 
     def execute(self, sql, params=None):
         s = _norm(sql)
-        if s.startswith("SELECT CODE, STATUS, TOKEN, EXPIRES_AT"):
+        if s.startswith("SELECT CODE, STATUS, TOKEN, PANEL_ID, EXPIRES_AT"):
+            # SELECT yields control (simulated I/O) so concurrent polls interleave
+            # and both observe the still-present token before the conditional clear.
             snapshot = dict(self.row)
             return _SleepingExecResult([snapshot])
-        if "RETURNING" in s and "TOKEN = NULL" in s:
-            # Atomic conditional clear: only succeeds if token still present.
+        if s.startswith("UPDATE PANEL_PROVISION_CODES SET TOKEN = NULL"):
+            # Atomic conditional clear modeled by a single non-yielding step:
+            # rowcount == 1 only for the poll that actually flips a non-NULL token.
             if self.row["token"] is not None:
-                tok = self.row["token"]
                 self.row["token"] = None
-                return _ExecResult([{"token": tok, "panel_id": self.row["panel_id"]}])
-            return _ExecResult([])
+                return _ExecResult([], rowcount=1)
+            return _ExecResult([], rowcount=0)
         return _ExecResult([])
 
     async def commit(self):
