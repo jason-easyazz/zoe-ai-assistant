@@ -1055,6 +1055,14 @@ async def lifespan(app: FastAPI):
             _paused_poll_s = 300.0
         _ACTIVE_POLL_S = 30.0
         _pause_check_warned = False
+        # Bind the typed outage exception once so the loop-level handler can tell a
+        # Multica OUTAGE apart from a genuinely empty board. Defensive fallback to an
+        # empty tuple (matches nothing) keeps the handler safe even if the import
+        # fails — never let this kill the poll task.
+        try:
+            from multica_client import MulticaUnavailableError
+        except Exception:  # pragma: no cover - import guard
+            MulticaUnavailableError = ()  # type: ignore[assignment,misc]
         while True:
             try:
                 # Re-checked inside the cycle, so a resume still takes effect
@@ -1106,8 +1114,11 @@ async def lifespan(app: FastAPI):
                             )
                     except Exception as _prune_exc:
                         logger.warning("multica_poll: worktree prune sweep failed: %s", _prune_exc)
-                # Fast-path: auto-close stale autopilot tracker todos (no agent needed)
-                stale_todos = await client.list_issues(status="todo")
+                # Fast-path: auto-close stale autopilot tracker todos (no agent needed).
+                # raise_on_error: a Multica OUTAGE here must NOT read as an empty board
+                # (which would silently suppress dispatch/sync) — surface it so the
+                # loop-level handler logs and skips this cycle instead.
+                stale_todos = await client.list_issues(status="todo", raise_on_error=True)
                 _now_ts = _t.time()
                 _closed_stale_ids: set[str] = set()
                 for _stale in stale_todos or []:
@@ -1134,9 +1145,11 @@ async def lifespan(app: FastAPI):
                         if str(issue.get("id") or "") not in _closed_stale_ids
                     ]
 
-                in_progress_issues = await client.list_issues(status="in_progress") or []
-                in_review_issues = await client.list_issues(status="in_review") or []
-                blocked_issues = await client.list_issues(status="blocked") or []
+                # raise_on_error: same rationale — an outage on any board-state read
+                # must surface as MulticaUnavailableError, not a falsely-empty board.
+                in_progress_issues = await client.list_issues(status="in_progress", raise_on_error=True) or []
+                in_review_issues = await client.list_issues(status="in_review", raise_on_error=True) or []
+                blocked_issues = await client.list_issues(status="blocked", raise_on_error=True) or []
 
                 # Webhook bridge: Hermes-assigned todos / in_progress (no chain) → issue.assigned.
                 try:
@@ -1569,6 +1582,14 @@ async def lifespan(app: FastAPI):
                             logger.debug("multica_poll: in_review autopilot close: %s", _rev_exc)
             except asyncio.CancelledError:
                 return
+            except MulticaUnavailableError as _outage_exc:
+                # Multica OUTAGE (not an empty board): log loudly and skip this cycle.
+                # The loop keeps running and retries next pass — dispatch/sync are
+                # deferred, never silently suppressed, until Multica recovers.
+                logger.warning(
+                    "multica_poll: Multica unavailable (%s) — skipping this cycle; "
+                    "dispatch/sync deferred until it recovers", _outage_exc,
+                )
             except Exception as _exc:
                 logger.debug("multica_poll: loop error (non-fatal): %s", _exc)
 

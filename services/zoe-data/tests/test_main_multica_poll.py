@@ -59,6 +59,37 @@ def test_poll_dispatches_ready_work_only_when_runtime_pause_is_inactive():
     assert active_branch < backfill < paused_branch
 
 
+def test_poll_loop_distinguishes_multica_outage_from_empty_board():
+    """A Multica OUTAGE must not read as an empty board (which would silently suppress
+    dispatch/sync). The board-state reads opt into raise_on_error=True, and the loop
+    catches MulticaUnavailableError — logging a WARNING and skipping the cycle — BEFORE
+    the generic non-fatal handler and AFTER CancelledError. So an outage is observable
+    and the poll loop keeps running rather than crashing or treating it as "no work"."""
+    source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+    loop_start = source.index("async def _multica_poll_loop():")
+    loop_region = source[
+        loop_start : source.index('if os.environ.get("ZOE_MULTICA"', loop_start)
+    ]
+
+    # The four board-state reads opt in to surfacing outages.
+    for status in ("todo", "in_progress", "in_review", "blocked"):
+        assert f'list_issues(status="{status}", raise_on_error=True)' in loop_region
+
+    # The typed-exception name is bound (defensively) for the handler.
+    assert "from multica_client import MulticaUnavailableError" in loop_region
+
+    # Handler ordering: CancelledError < MulticaUnavailableError < generic Exception.
+    cancelled = loop_region.index("except asyncio.CancelledError:")
+    outage = loop_region.index("except MulticaUnavailableError")
+    generic = loop_region.index("except Exception as _exc:")
+    assert cancelled < outage < generic
+
+    # The outage handler warns (observable) and skips the cycle — not a debug swallow.
+    handler_segment = loop_region[outage:generic]
+    assert "logger.warning(" in handler_segment
+    assert "skipping this cycle" in handler_segment
+
+
 def test_multica_poll_interval_throttles_when_paused():
     from main import _multica_poll_interval_s
 
@@ -84,7 +115,9 @@ def test_multica_poll_loop_routes_sleep_through_paused_interval_helper():
 
 def test_poll_dispatch_backfills_ready_blocked_pipeline_before_todo():
     source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
-    blocked_fetch = source.index('blocked_issues = await client.list_issues(status="blocked")')
+    blocked_fetch = source.index(
+        'blocked_issues = await client.list_issues(status="blocked", raise_on_error=True)'
+    )
     blocked_loop = source.index('for _blocked in _blk_window:', blocked_fetch)
     todo_loop = source.index('for _todo in stale_todos or []:', blocked_loop)
     clear_blocker = source.index(
