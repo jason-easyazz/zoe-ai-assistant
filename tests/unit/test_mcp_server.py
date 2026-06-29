@@ -1,159 +1,114 @@
-"""Unit checks for the legacy MCP database operations.
-
-These tests used to be a script with async methods that pytest never collected.
-They now assert the same database effects against an isolated SQLite database.
-"""
+"""Unit checks for the production Zoe MCP stdio/dispatch surface."""
 
 from __future__ import annotations
 
-import sqlite3
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ZOE_DATA = PROJECT_ROOT / "services" / "zoe-data"
 
-@pytest.fixture()
-def mcp_db(tmp_path):
-    db_path = tmp_path / "zoe.db"
-    conn = sqlite3.connect(db_path)
-    conn.executescript(
-        """
-        CREATE TABLE people (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            profile TEXT,
-            facts TEXT,
-            important_dates TEXT,
-            preferences TEXT
-        );
-        CREATE TABLE projects (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT NOT NULL,
-            name TEXT NOT NULL
-        );
-        CREATE TABLE memory_facts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT NOT NULL,
-            fact TEXT NOT NULL
-        );
-        CREATE TABLE events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT NOT NULL,
-            title TEXT NOT NULL,
-            start_date TEXT,
-            start_time TEXT,
-            description TEXT,
-            category TEXT
-        );
-        CREATE TABLE lists (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            category TEXT,
-            description TEXT
-        );
-        CREATE TABLE list_items (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            list_id INTEGER NOT NULL,
-            task_text TEXT NOT NULL,
-            priority TEXT,
-            completed INTEGER DEFAULT 0
-        );
-        CREATE TABLE developer_tasks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT NOT NULL,
-            title TEXT NOT NULL
-        );
-        INSERT INTO projects (user_id, name) VALUES ('default', 'MCP project');
-        INSERT INTO memory_facts (user_id, fact) VALUES ('default', 'MCP fact');
-        INSERT INTO developer_tasks (user_id, title) VALUES ('default', 'MCP task');
-        """
+
+def _run_mcp_stdio(message: dict) -> dict:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(ZOE_DATA) + os.pathsep + env.get("PYTHONPATH", "")
+    proc = subprocess.Popen(
+        [sys.executable, str(ZOE_DATA / "mcp_server.py")],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
     )
+    assert proc.stdin is not None
+    assert proc.stdout is not None
+    proc.stdin.write(json.dumps(message) + "\n")
+    proc.stdin.close()
+    line = proc.stdout.readline()
+    stderr = proc.stderr.read() if proc.stderr else ""
+    returncode = proc.wait(timeout=10)
+    assert returncode == 0, stderr
+    assert line, stderr
+    return json.loads(line)
+
+
+def _import_mcp_server():
+    sys.path.insert(0, str(ZOE_DATA))
     try:
-        yield conn
-    finally:
-        conn.close()
+        import mcp_server
+    except Exception as exc:
+        pytest.skip(f"Cannot import production mcp_server.py dependencies: {exc}")
+    return mcp_server
 
 
-def test_search_memories_reads_expected_tables(mcp_db):
-    cursor = mcp_db.cursor()
+def test_stdio_tools_list_exposes_production_tools():
+    response = _run_mcp_stdio({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
 
-    counts = {}
-    for table in ("people", "projects", "memory_facts"):
-        cursor.execute(f"SELECT COUNT(*) FROM {table}")
-        counts[table] = cursor.fetchone()[0]
+    assert response["jsonrpc"] == "2.0"
+    assert response["id"] == 1
+    tools = response["result"]["tools"]
+    tool_names = {tool["name"] for tool in tools}
+    assert "list_add_item" in tool_names
+    assert "calendar_create_event" in tool_names
 
-    assert counts == {"people": 0, "projects": 1, "memory_facts": 1}
+
+class _Cursor:
+    def __init__(self, rows=None):
+        self._rows = rows or []
+
+    async def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    async def fetchall(self):
+        return self._rows
 
 
-def test_create_person_increases_people_count(mcp_db):
-    cursor = mcp_db.cursor()
-    cursor.execute("SELECT COUNT(*) FROM people")
-    count_before = cursor.fetchone()[0]
+class _DispatchDb:
+    def __init__(self):
+        self.calls = []
 
-    cursor.execute(
-        """
-        INSERT INTO people (user_id, name, profile, facts, important_dates, preferences)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        ("default", "Test Person", '{"relationship": "test", "created_by": "mcp_test"}', "{}", "{}", "{}"),
+    async def execute(self, sql, params=None):
+        self.calls.append((sql, params))
+        if "SELECT id FROM lists" in sql:
+            return _Cursor([])
+        return _Cursor([])
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_dispatches_list_add_item_through_production_path(monkeypatch):
+    mcp_server = _import_mcp_server()
+
+    async def _noop_notify(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(mcp_server, "_notify_ui", _noop_notify)
+    db = _DispatchDb()
+
+    result = await mcp_server._execute_tool(
+        db,
+        "list_add_item",
+        {"list_type": "shopping", "list_name": "Groceries", "text": "bread"},
+        actor_context={"user_id": "dispatch-user", "source": "transport_meta"},
     )
-    mcp_db.commit()
 
-    cursor.execute("SELECT COUNT(*) FROM people")
-    count_after = cursor.fetchone()[0]
-    assert count_after == count_before + 1
-
-
-def test_create_calendar_event_increases_event_count(mcp_db):
-    cursor = mcp_db.cursor()
-    cursor.execute("SELECT COUNT(*) FROM events")
-    count_before = cursor.fetchone()[0]
-
-    cursor.execute(
-        """
-        INSERT INTO events (user_id, title, start_date, start_time, description, category)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        ("default", "Test Event", "2026-06-28", "10:00", "Test event created by MCP", "personal"),
-    )
-    mcp_db.commit()
-
-    cursor.execute("SELECT COUNT(*) FROM events")
-    count_after = cursor.fetchone()[0]
-    assert count_after == count_before + 1
+    assert result["status"] == "added"
+    assert result["list"] == "Groceries"
+    assert result["text"] == "bread"
+    assert any("INSERT INTO lists" in sql for sql, _params in db.calls)
+    assert any("INSERT INTO list_items" in sql for sql, _params in db.calls)
+    list_insert = next(params for sql, params in db.calls if "INSERT INTO lists" in sql)
+    assert list_insert[1] == "dispatch-user"
 
 
-def test_add_to_list_creates_list_item(mcp_db):
-    cursor = mcp_db.cursor()
-    cursor.execute("SELECT COUNT(*) FROM list_items")
-    count_before = cursor.fetchone()[0]
+def test_tool_metadata_matches_dispatch_name():
+    mcp_server = _import_mcp_server()
 
-    cursor.execute(
-        """
-        INSERT INTO lists (user_id, name, category, description)
-        VALUES (?, ?, ?, ?)
-        """,
-        ("default", "Test List", "personal", "Test list for MCP"),
-    )
-    list_id = cursor.lastrowid
-    cursor.execute(
-        """
-        INSERT INTO list_items (list_id, task_text, priority, completed)
-        VALUES (?, ?, ?, ?)
-        """,
-        (list_id, "Test task from MCP", "medium", False),
-    )
-    mcp_db.commit()
-
-    cursor.execute("SELECT COUNT(*) FROM list_items")
-    count_after = cursor.fetchone()[0]
-    assert count_after == count_before + 1
-
-
-def test_get_developer_tasks_requires_existing_tasks(mcp_db):
-    cursor = mcp_db.cursor()
-    cursor.execute("SELECT COUNT(*) FROM developer_tasks WHERE user_id = ?", ("default",))
-    task_count = cursor.fetchone()[0]
-
-    assert task_count > 0
+    list_add = next(tool for tool in mcp_server.TOOLS if tool["name"] == "list_add_item")
+    schema = list_add["inputSchema"]
+    assert schema["required"] == ["list_type", "text"]
+    assert "text" in schema["properties"]

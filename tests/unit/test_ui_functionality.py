@@ -10,9 +10,10 @@ import pytest
 
 requests = pytest.importorskip("requests")
 
+ZOE_ROOT = "http://localhost:8000"
 ZOE_API = "http://localhost:8000/api"
-PEOPLE_SERVICE = "http://localhost:8010"
-COLLECTIONS_SERVICE = "http://localhost:8011"
+PEOPLE_SERVICE = ZOE_API
+COLLECTIONS_SERVICE = ZOE_API
 
 
 def _get_or_skip(url: str) -> requests.Response:
@@ -23,7 +24,7 @@ def _get_or_skip(url: str) -> requests.Response:
 
 
 def test_zoe_core_health_endpoint():
-    response = _get_or_skip(f"{ZOE_API}/health")
+    response = _get_or_skip(f"{ZOE_ROOT}/health")
 
     assert response.status_code == 200
     assert isinstance(response.json(), dict)

@@ -1,16 +1,19 @@
-"""Live tool-calling smoke tests.
-
-These require the MCP and Zoe API services. Unavailable services skip visibly;
-reachable services must satisfy real response assertions.
-"""
+"""Tool-calling smoke tests for the current Zoe runtime."""
 
 from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
 httpx = pytest.importorskip("httpx")
 
-MCP_URL = "http://localhost:8003"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ZOE_DATA = PROJECT_ROOT / "services" / "zoe-data"
 ZOE_API = "http://localhost:8000/api"
 
 
@@ -22,38 +25,46 @@ async def _post_or_skip(url: str, **kwargs) -> httpx.Response:
         pytest.skip(f"Live service unavailable for {url}: {exc}")
 
 
-@pytest.mark.asyncio
-async def test_mcp_server_lists_tools():
-    response = await _post_or_skip(
-        f"{MCP_URL}/tools/list",
-        json={"_auth_token": "default", "_session_id": "default"},
-        timeout=5.0,
+def _run_mcp_stdio(message: dict) -> dict:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(ZOE_DATA) + os.pathsep + env.get("PYTHONPATH", "")
+    proc = subprocess.Popen(
+        [sys.executable, str(ZOE_DATA / "mcp_server.py")],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
     )
+    assert proc.stdin is not None
+    assert proc.stdout is not None
+    proc.stdin.write(json.dumps(message) + "\n")
+    proc.stdin.close()
+    line = proc.stdout.readline()
+    stderr = proc.stderr.read() if proc.stderr else ""
+    returncode = proc.wait(timeout=10)
+    assert returncode == 0, stderr
+    assert line, stderr
+    return json.loads(line)
 
-    assert response.status_code == 200, response.text[:300]
-    tools_data = response.json()
-    assert tools_data["total_tools"] > 0
-    assert isinstance(tools_data["categories"], (dict, list))
+
+def test_mcp_stdio_lists_tools():
+    response = _run_mcp_stdio({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+
+    tools = response["result"]["tools"]
+    tool_names = {tool["name"] for tool in tools}
+    assert "list_add_item" in tool_names
+    assert "calendar_list_events" in tool_names
 
 
-@pytest.mark.asyncio
-async def test_mcp_add_to_list_tool_executes():
-    response = await _post_or_skip(
-        f"{MCP_URL}/tools/add_to_list",
-        json={
-            "list_name": "test_shopping",
-            "task_text": "test item",
-            "priority": "medium",
-            "_auth_token": "default",
-            "_session_id": "default",
-        },
-        timeout=5.0,
-    )
+def test_chat_router_maps_core_brain_tool_sentinels_to_ag_ui_events():
+    chat_source = (ZOE_DATA / "routers" / "chat.py").read_text()
 
-    assert response.status_code == 200, response.text[:300]
-    result = response.json()
-    assert result.get("success", True) is not False
-    assert result.get("message") or result.get("result") or result.get("data")
+    assert "def brain_tool_sentinel_events" in chat_source
+    assert "ToolCallStartEvent" in chat_source
+    assert "ToolCallArgsEvent" in chat_source
+    assert "ToolCallResultEvent" in chat_source
+    assert "for _tool_ev in brain_tool_sentinel_events(" in chat_source
 
 
 @pytest.mark.asyncio
