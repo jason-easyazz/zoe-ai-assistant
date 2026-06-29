@@ -69,6 +69,13 @@ For reviewable development work:
 - Use the `github-greptile-loop` Hermes skill to delegate heavier fix/re-review loops.
 - Do not treat Greptile as a replacement for local Zoe verification; run focused tests and live health checks before marking work merge-ready.
 
+Merge mechanics & gotchas — canonical record: **[docs/knowledge/merge-and-deploy.md](docs/knowledge/merge-and-deploy.md)** (read it before driving any PR to merge). The load-bearing rules:
+- A green `Greptile Review` **check ≠ resolved threads**. `required_conversation_resolution` is the gate that enforces "5/5, every comment sorted" — mark every thread resolved (GraphQL `resolveReviewThread`), don't just reply.
+- **Arm auto-merge** (`gh pr merge <n> --squash --auto`) instead of merging by hand. `strict` drains a batch **serially** — nudge one PR per merge, and expect each branch-update to re-trigger a fresh Greptile review that may post new threads (the re-review treadmill).
+- **Add every new test file to `validate.yml`'s enumerated test list**, or it silently never runs in CI.
+- GitGuardian scans **branch history**: a leaked/test cred in an intermediate commit fails even with a clean head tree. Scrub via a clean re-branch (squash to one commit on a new branch, replacement PR) — force-push is blocked by design.
+- Never `--admin`/`--force`; squash-only; the **human merges** (or armed auto-merge does) — agents never bypass the gate.
+
 ## Cursor MCP
 
 The tracked Cursor MCP config intentionally includes only non-secret local servers. `zoe-tools` launches the operator-local helper at `/home/zoe/bin/zoe-tools-mcp.py` through `uv run --with fastmcp --with httpx`; provision that helper on Zoe hosts before relying on the repo-local MCP entry. Keep token-backed servers such as Greptile in user-global Cursor config or environment-backed local config, never in tracked repo files.
