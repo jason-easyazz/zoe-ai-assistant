@@ -12,21 +12,22 @@ single check shared by all endpoints, so the helper tests cover the policy for
 every endpoint; the TestClient tests prove the wiring end-to-end on both an
 unauthenticated endpoint (/ws/voice/) and an authenticated one (/api/lists/ws).
 """
+import json
 import os
+import subprocess
 import sys
+from pathlib import Path
 
 import pytest
+from starlette.middleware.cors import CORSMiddleware
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-# conftest puts both services/zoe-data and services/zoe-auth on sys.path (and
-# both define a top-level ``main`` module). Force zoe-data's to win here.
-_ZOE_DATA = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "services", "zoe-data")
-)
-if _ZOE_DATA in sys.path:
-    sys.path.remove(_ZOE_DATA)
-sys.path.insert(0, _ZOE_DATA)
+# This suite lives in services/zoe-data/tests, so the service root is one level
+# up. Put it first on sys.path so zoe-data's top-level ``main`` wins over
+# zoe-auth's same-named module if both are ever collected together.
+_ZOE_DATA = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_ZOE_DATA))
 sys.modules.pop("main", None)
 import main  # noqa: E402
 
@@ -81,6 +82,57 @@ async def test_enforce_closes_on_foreign_origin():
 async def test_enforce_passes_allowed_and_missing():
     assert await main._enforce_ws_origin(_FakeWS("https://zoe.local")) is True
     assert await main._enforce_ws_origin(_FakeWS(origin=None)) is True
+
+
+# --- CORS/WS allowlist parity (no drift) ------------------------------------
+
+def _cors_allow_origins(app):
+    """The allow_origins the CORSMiddleware was wired with."""
+    for mw in app.user_middleware:
+        if mw.cls is CORSMiddleware:
+            return mw.options.get("allow_origins")
+    raise AssertionError("CORSMiddleware is not installed on the app")
+
+
+def test_cors_and_ws_share_one_allowlist():
+    # The HTTP CORS policy must be wired from the SAME allowlist the WS CSWSH
+    # guard uses, so a credentialed origin can never be allowed for one and
+    # rejected by the other.
+    assert sorted(_cors_allow_origins(main.app)) == sorted(main._allowed_browser_origins())
+
+
+def test_env_extra_origin_widens_both_cors_and_ws():
+    # A kiosk origin added via ZOE_ALLOWED_WS_ORIGINS must reach BOTH the WS
+    # guard and HTTP CORS; otherwise the WS channel connects while credentialed
+    # HTTP calls / preflights are rejected, leaving the deployment half-broken.
+    # CORSMiddleware snapshots allow_origins at app construction, so resolve the
+    # env in a fresh interpreter to observe the wiring end-to-end.
+    code = (
+        "import json\n"
+        "from starlette.middleware.cors import CORSMiddleware\n"
+        "import main\n"
+        "cors = [m.options.get('allow_origins') for m in main.app.user_middleware "
+        "if m.cls is CORSMiddleware][0]\n"
+        "ws = sorted(main._allowed_browser_origins())\n"
+        "print(json.dumps({'cors': sorted(cors), 'ws': ws}))\n"
+    )
+    env = {
+        **os.environ,
+        "ZOE_ALLOWED_WS_ORIGINS": "https://kiosk.lan",
+        "PYTHONPATH": str(_ZOE_DATA),
+    }
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=str(_ZOE_DATA),
+    )
+    assert proc.returncode == 0, proc.stderr
+    data = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert "https://kiosk.lan" in data["ws"]
+    assert "https://kiosk.lan" in data["cors"]
+    assert data["cors"] == data["ws"]  # no drift
 
 
 # --- end-to-end wiring tests via TestClient --------------------------------

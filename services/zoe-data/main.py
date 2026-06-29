@@ -1631,9 +1631,12 @@ from middleware.logging import StructuredLoggingMiddleware
 
 app.add_middleware(StructuredLoggingMiddleware)
 
-# Browser origins permitted to make credentialed requests. This single list is
-# the source of truth for BOTH the HTTP CORS policy (below) and the WebSocket
-# CSWSH origin guard (_ws_origin_allowed) so the two cannot drift apart.
+# Browser origins permitted to make credentialed requests. This base list plus
+# the ZOE_ALLOWED_WS_ORIGINS extras (resolved by _allowed_browser_origins) are
+# the single source of truth for BOTH the HTTP CORS policy (below) and the
+# WebSocket CSWSH origin guard (_ws_origin_allowed) so the two cannot drift
+# apart — an operator-added kiosk origin is honoured by credentialed HTTP calls
+# and WebSocket handshakes alike.
 ALLOWED_ORIGINS = [
     "https://zoe.local",
     "https://zoe.the411.life",
@@ -1643,12 +1646,15 @@ ALLOWED_ORIGINS = [
 ]
 
 
-def _allowed_ws_origins() -> frozenset[str]:
-    """Origins allowed to open a WebSocket: the CORS allowlist plus any extra
-    panel/kiosk hosts configured via ZOE_ALLOWED_WS_ORIGINS (comma-separated).
+def _allowed_browser_origins() -> frozenset[str]:
+    """The credentialed-origin allowlist shared by HTTP CORS and the WebSocket
+    CSWSH guard: the base ALLOWED_ORIGINS plus any extra panel/kiosk hosts
+    configured via ZOE_ALLOWED_WS_ORIGINS (comma-separated).
 
     The env var lets an operator add a LAN hostname/IP-based origin the browser
-    kiosk uses without a code change; it is empty by default.
+    kiosk uses without a code change; it is empty by default. Because both the
+    CORS middleware and the WS guard read this one function, adding an origin
+    here cannot leave the HTTP and WebSocket policies inconsistent.
     """
     raw = os.getenv("ZOE_ALLOWED_WS_ORIGINS", "")
     extra = [o.strip() for o in raw.split(",") if o.strip()]
@@ -1669,7 +1675,7 @@ def _ws_origin_allowed(websocket: WebSocket) -> bool:
     origin = websocket.headers.get("origin")
     if origin is None:
         return True
-    return origin in _allowed_ws_origins()
+    return origin in _allowed_browser_origins()
 
 
 async def _enforce_ws_origin(websocket: WebSocket) -> bool:
@@ -1693,7 +1699,9 @@ async def _enforce_ws_origin(websocket: WebSocket) -> bool:
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    # Same allowlist the WS CSWSH guard uses (base list + ZOE_ALLOWED_WS_ORIGINS
+    # extras) so HTTP CORS and WebSocket origin policy can never drift apart.
+    allow_origins=sorted(_allowed_browser_origins()),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
