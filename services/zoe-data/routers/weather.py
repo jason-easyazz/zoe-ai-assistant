@@ -123,12 +123,15 @@ def _parse_local_forecast_time(value: str, tz) -> datetime:
     return dt.astimezone(tz)
 
 
-def _parse_owm_forecast_time(item: dict, tz) -> datetime:
-    if item.get("dt") is not None:
-        return datetime.fromtimestamp(item["dt"], tz=timezone.utc).astimezone(tz)
-    dt_txt = str(item.get("dt_txt") or "")
-    dt = datetime.strptime(dt_txt, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-    return dt.astimezone(tz)
+def _parse_owm_forecast_time(item: dict, tz) -> datetime | None:
+    try:
+        if item.get("dt") is not None:
+            return datetime.fromtimestamp(item["dt"], tz=timezone.utc).astimezone(tz)
+        dt_txt = str(item.get("dt_txt") or "")
+        dt = datetime.strptime(dt_txt, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        return dt.astimezone(tz)
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
 
 
 async def _get_system_default_location(db) -> dict:
@@ -360,6 +363,8 @@ async def _fetch_owm_forecast(lat: float, lon: float) -> dict:
         hourly = []
         for item in items:
             item_dt = _parse_owm_forecast_time(item, provider_tz)
+            if item_dt is None:
+                continue
             if item_dt < now:
                 continue
             wa = item.get("weather", [{}])
@@ -375,6 +380,8 @@ async def _fetch_owm_forecast(lat: float, lon: float) -> dict:
         day_buckets: dict = defaultdict(list)
         for item in items:
             item_dt = _parse_owm_forecast_time(item, provider_tz)
+            if item_dt is None:
+                continue
             day_buckets[item_dt.date().isoformat()].append(item)
 
         daily = []

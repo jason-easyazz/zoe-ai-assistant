@@ -64,6 +64,11 @@ async def test_openweather_forecast_filters_by_remote_location_timezone(monkeypa
                         "weather": [{"description": "current", "icon": "01d"}],
                     },
                     {
+                        "dt_txt": "not-a-timestamp",
+                        "main": {"temp": 99},
+                        "weather": [{"description": "bad timestamp", "icon": "50d"}],
+                    },
+                    {
                         "dt": 1782789600,  # 2026-06-30 11:20 Australia/Perth
                         "main": {"temp": 22},
                         "weather": [{"description": "tomorrow", "icon": "02d"}],
