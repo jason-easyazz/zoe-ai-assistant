@@ -1631,15 +1631,69 @@ from middleware.logging import StructuredLoggingMiddleware
 
 app.add_middleware(StructuredLoggingMiddleware)
 
+# Browser origins permitted to make credentialed requests. This single list is
+# the source of truth for BOTH the HTTP CORS policy (below) and the WebSocket
+# CSWSH origin guard (_ws_origin_allowed) so the two cannot drift apart.
+ALLOWED_ORIGINS = [
+    "https://zoe.local",
+    "https://zoe.the411.life",
+    "http://zoe.local",
+    "http://localhost",
+    "http://localhost:8080",
+]
+
+
+def _allowed_ws_origins() -> frozenset[str]:
+    """Origins allowed to open a WebSocket: the CORS allowlist plus any extra
+    panel/kiosk hosts configured via ZOE_ALLOWED_WS_ORIGINS (comma-separated).
+
+    The env var lets an operator add a LAN hostname/IP-based origin the browser
+    kiosk uses without a code change; it is empty by default.
+    """
+    raw = os.getenv("ZOE_ALLOWED_WS_ORIGINS", "")
+    extra = [o.strip() for o in raw.split(",") if o.strip()]
+    return frozenset(ALLOWED_ORIGINS) | frozenset(extra)
+
+
+def _ws_origin_allowed(websocket: WebSocket) -> bool:
+    """CSWSH guard: True if this WS handshake's Origin may connect.
+
+    Policy:
+    - No Origin header → allow. Browsers ALWAYS send Origin on a WS handshake,
+      so a missing Origin means a non-browser client (the native kiosk/voice
+      panel, CLI tools, internal services). Those are not reachable by the
+      cross-site-request threat CSWSH defends against, so we do not block them.
+    - Origin present and in the allowlist → allow.
+    - Origin present and NOT in the allowlist → reject (foreign web origin).
+    """
+    origin = websocket.headers.get("origin")
+    if origin is None:
+        return True
+    return origin in _allowed_ws_origins()
+
+
+async def _enforce_ws_origin(websocket: WebSocket) -> bool:
+    """Apply the CSWSH origin allowlist to a WS handshake.
+
+    Returns True when the connection may proceed. On rejection it closes the
+    handshake before accept (the ASGI server turns a pre-accept close into an
+    HTTP 403; the 1008 policy-violation code is recorded for clients that see
+    it) and returns False — the caller MUST return immediately.
+    """
+    if _ws_origin_allowed(websocket):
+        return True
+    logger.warning(
+        "Rejected cross-origin WebSocket handshake: origin=%r path=%s",
+        websocket.headers.get("origin"),
+        websocket.url.path,
+    )
+    await websocket.close(code=1008)
+    return False
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://zoe.local",
-        "https://zoe.the411.life",
-        "http://zoe.local",
-        "http://localhost",
-        "http://localhost:8080",
-    ],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1870,6 +1924,9 @@ async def websocket_push(
     panel channel (receives both global 'all' events AND panel-specific events).
     Without panel_id, falls back to the plain channel subscription.
     """
+    # CSWSH guard: reject foreign browser origins before any auth/session work.
+    if not await _enforce_ws_origin(websocket):
+        return
     # -----------------------------------------------------------------
     # WebSocket auth and session validation
     # -----------------------------------------------------------------
@@ -1922,6 +1979,8 @@ async def websocket_push(
 
 @app.websocket("/api/calendar/ws/{user_id}")
 async def calendar_ws(websocket: WebSocket, user_id: str):
+    if not await _enforce_ws_origin(websocket):
+        return
     session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
     user = await _resolve_ws_session(session_id)
     if user is None or user.get("role") not in ("member", "admin", "agent"):
@@ -1940,6 +1999,8 @@ async def calendar_ws(websocket: WebSocket, user_id: str):
 
 @app.websocket("/api/lists/ws/{user_id}")
 async def lists_ws_with_user(websocket: WebSocket, user_id: str):
+    if not await _enforce_ws_origin(websocket):
+        return
     session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
     user = await _resolve_ws_session(session_id)
     if user is None or user.get("role") not in ("member", "admin", "agent"):
@@ -1957,6 +2018,8 @@ async def lists_ws_with_user(websocket: WebSocket, user_id: str):
 
 @app.websocket("/api/lists/ws")
 async def lists_ws(websocket: WebSocket):
+    if not await _enforce_ws_origin(websocket):
+        return
     session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
     user = await _resolve_ws_session(session_id)
     if user is None or user.get("role") not in ("member", "admin", "agent"):
@@ -1970,6 +2033,8 @@ async def lists_ws(websocket: WebSocket):
 
 @app.websocket("/api/people/ws/{user_id}")
 async def people_ws(websocket: WebSocket, user_id: str):
+    if not await _enforce_ws_origin(websocket):
+        return
     session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
     user = await _resolve_ws_session(session_id)
     if user is None or user.get("role") not in ("member", "admin", "agent"):
@@ -1987,6 +2052,8 @@ async def people_ws(websocket: WebSocket, user_id: str):
 
 @app.websocket("/api/reminders/ws/{user_id}")
 async def reminders_ws(websocket: WebSocket, user_id: str):
+    if not await _enforce_ws_origin(websocket):
+        return
     session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
     user = await _resolve_ws_session(session_id)
     if user is None or user.get("role") not in ("member", "admin", "agent"):
@@ -2004,6 +2071,8 @@ async def reminders_ws(websocket: WebSocket, user_id: str):
 
 @app.websocket("/api/notes/ws/{user_id}")
 async def notes_ws(websocket: WebSocket, user_id: str):
+    if not await _enforce_ws_origin(websocket):
+        return
     session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
     user = await _resolve_ws_session(session_id)
     if user is None or user.get("role") not in ("member", "admin", "agent"):
@@ -2021,6 +2090,8 @@ async def notes_ws(websocket: WebSocket, user_id: str):
 
 @app.websocket("/api/journal/ws/{user_id}")
 async def journal_ws(websocket: WebSocket, user_id: str):
+    if not await _enforce_ws_origin(websocket):
+        return
     session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
     user = await _resolve_ws_session(session_id)
     if user is None or user.get("role") not in ("member", "admin", "agent"):
@@ -2110,6 +2181,12 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
     - Binary → transcribed via Moonshine then routed as text
     Emits {"type": "state"}, {"type": "transcript"}, {"type": "audio"}, {"type": "done"}.
     """
+    # CSWSH guard. NOTE: guest authentication for this endpoint is intentionally
+    # OUT OF SCOPE here (a separate threat-model decision about LAN-kiosk guest
+    # voice); this only closes the cross-web-origin vector. The native kiosk
+    # sends no Origin header and is unaffected.
+    if not await _enforce_ws_origin(websocket):
+        return
     await websocket.accept()
     ws_session_id = session_id or f"ws-voice-{_uuid_mod.uuid4().hex[:8]}"
     user_id = await _resolve_ws_user(session_id)
