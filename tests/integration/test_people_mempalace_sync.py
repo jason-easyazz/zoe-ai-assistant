@@ -124,22 +124,26 @@ async def test_new_columns_exist(db_conn):
 async def test_person_extractor_dual_fanout(db_conn):
     """Create a person, run process_text → verify DB activity row AND MemPalace entry."""
     from person_extractor import process_text
+    from memory_service import get_memory_service
 
     test_user = "test-crm-sync-user"
     person_id = str(uuid.uuid4())
     person_name = f"Zynthia_{person_id[:6]}"
+    memory_service = get_memory_service()
 
-    # Insert a test person
-    await db_conn.execute(
-        "INSERT INTO people (id, user_id, name, relationship, circle, context, visibility) VALUES ($1,$2,$3,$4,$5,$6,$7)",
-        person_id, test_user, person_name, "friend", "circle", "personal", "family",
-    )
+    try:
+        memory_service._collection()
+    except Exception as e:
+        pytest.skip(f"MemPalace/vector store unavailable: {e}")
 
-    db_compat = AsyncpgCompat(db_conn)
+    try:
+        # Insert a test person
+        await db_conn.execute(
+            "INSERT INTO people (id, user_id, name, relationship, circle, context, visibility) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+            person_id, test_user, person_name, "friend", "circle", "personal", "family",
+        )
 
-    with __import__('unittest.mock', fromlist=['patch']).patch(
-        'person_extractor._post_write_hooks', new_callable=__import__('unittest.mock', fromlist=['AsyncMock']).AsyncMock
-    ):
+        db_compat = AsyncpgCompat(db_conn)
         count = await process_text(
             f"{person_name} loves hiking in the mountains.",
             user_id=test_user,
@@ -147,15 +151,43 @@ async def test_person_extractor_dual_fanout(db_conn):
             db=db_compat,
         )
 
-    # Verify: DB activity row written
-    rows = await db_conn.fetch(
-        "SELECT id FROM person_activities WHERE person_id=$1 LIMIT 5", person_id
-    )
-    assert len(rows) > 0 or count == 0, "Expected at least one activity row if count > 0"
+        assert count == 1, "Expected process_text to write the detected person preference"
 
-    # Clean up test data
-    await db_conn.execute("DELETE FROM person_activities WHERE person_id=$1", person_id)
-    await db_conn.execute("DELETE FROM people WHERE id=$1", person_id)
+        # Verify: DB activity row written and linked to the MemPalace write.
+        row = await db_conn.fetchrow(
+            "SELECT id, activity_type, description, mem_id FROM person_activities WHERE person_id=$1 LIMIT 1",
+            person_id,
+        )
+        assert row is not None, "Expected a person_activities row for the extracted preference"
+        assert row["activity_type"] == "fact"
+        assert person_name in row["description"]
+        assert "hiking in the mountains" in row["description"]
+        assert row["mem_id"], "Expected person_activities.mem_id to reference the MemPalace record"
+
+        # Verify: actual MemPalace/vector side effect is readable, not patched away.
+        memory = await memory_service.get(row["mem_id"])
+        assert memory is not None, f"MemPalace record {row['mem_id']} was not found"
+        assert memory.metadata["entity_id"] == person_id
+        assert memory.metadata["entity_type"] == "person"
+        assert memory.metadata["user_id"] == test_user
+        assert "hiking in the mountains" in memory.text
+
+        people_row = await db_conn.fetchrow(
+            "SELECT notification_count, health_score, last_contacted_at FROM people WHERE id=$1",
+            person_id,
+        )
+        assert people_row is not None
+        assert people_row["notification_count"] > 0, "_post_write_hooks should increment notification_count"
+        assert people_row["last_contacted_at"] is not None, "_post_write_hooks should update last_contacted_at"
+        assert people_row["health_score"] is not None, "_post_write_hooks should recalculate health_score"
+    finally:
+        # Clean up test data and the test user's MemPalace rows.
+        await db_conn.execute("DELETE FROM person_activities WHERE person_id=$1", person_id)
+        await db_conn.execute("DELETE FROM people WHERE id=$1", person_id)
+        try:
+            await memory_service.delete_user(test_user, actor="test")
+        except Exception:
+            pass
 
 
 @pytest.mark.asyncio

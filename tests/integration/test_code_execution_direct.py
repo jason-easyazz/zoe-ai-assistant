@@ -1,50 +1,48 @@
-#!/usr/bin/env python3
+"""Live code execution integration checks.
+
+The HTTP tests require the code execution service on localhost. Unavailable
+services skip visibly; reachable services must satisfy the expected behavior.
 """
-Direct test of code execution - bypasses API auth
-Tests the code execution service and MCP integration directly
-"""
 
-import asyncio
-import httpx
-import json
-import sys
+from __future__ import annotations
 
-async def test_code_execution_service():
-    """Test code execution service directly"""
-    print("🧪 Testing Code Execution Service...")
-    
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        # Test 1: Simple code execution
-        print("\n1️⃣ Testing simple TypeScript execution...")
-        try:
-            response = await client.post(
-                "http://localhost:8010/execute",
-                json={
-                    "code": "console.log('Hello from code execution!');",
-                    "language": "typescript",
-                    "user_id": "test_user"
-                }
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                if result.get("success"):
-                    print(f"   ✅ Success! Output: {result.get('output', '')[:100]}")
-                    return True
-                else:
-                    print(f"   ❌ Failed: {result.get('error', 'Unknown error')}")
-                    return False
-            else:
-                print(f"   ⚠️  Service not available: {response.status_code}")
-                return False
-        except Exception as e:
-            print(f"   ⚠️  Service not running: {e}")
-            return False
+from pathlib import Path
 
-async def test_mcp_tool_via_code():
-    """Test MCP tool execution via code"""
-    print("\n2️⃣ Testing MCP tool execution via code...")
-    
+import pytest
+
+httpx = pytest.importorskip("httpx")
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ZOE_DATA = PROJECT_ROOT / "services" / "zoe-data"
+CODE_EXECUTION_URL = "http://localhost:8010/execute"
+
+
+async def _execute_or_skip(payload: dict) -> httpx.Response:
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            return await client.post(CODE_EXECUTION_URL, json=payload)
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.NetworkError) as exc:
+        pytest.skip(f"Code execution service unavailable: {exc}")
+
+
+@pytest.mark.asyncio
+async def test_code_execution_service_runs_typescript():
+    response = await _execute_or_skip(
+        {
+            "code": "console.log('Hello from code execution!');",
+            "language": "typescript",
+            "user_id": "test_user",
+        }
+    )
+
+    assert response.status_code == 200, response.text[:300]
+    result = response.json()
+    assert result.get("success") is True, result.get("error") or result
+    assert "Hello from code execution!" in result.get("output", "")
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_executes_via_code_execution_service():
     code = """
 import * as zoeLists from './servers/zoe-lists';
 
@@ -56,148 +54,36 @@ const result = await zoeLists.addToList({
 
 console.log(JSON.stringify(result));
 """
-    
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        try:
-            response = await client.post(
-                "http://localhost:8010/execute",
-                json={
-                    "code": code,
-                    "language": "typescript",
-                    "user_id": "test_user"
-                }
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                if result.get("success"):
-                    output = result.get("output", "")
-                    print(f"   ✅ Code executed!")
-                    print(f"   📤 Output: {output[:200]}")
-                    
-                    # Check if it actually called the MCP tool
-                    if "success" in output.lower() or "added" in output.lower():
-                        print(f"   ✅ MCP tool was called successfully!")
-                        return True
-                    else:
-                        print(f"   ⚠️  Code ran but MCP tool may not have been called")
-                        print(f"   Full output: {output}")
-                        return True  # Code execution worked, even if MCP didn't
-                else:
-                    error = result.get("error", "Unknown")
-                    print(f"   ⚠️  Code execution failed: {error}")
-                    print(f"   This is expected if MCP server isn't accessible from code execution service")
-                    return True  # Not a failure of our implementation
-            else:
-                print(f"   ⚠️  Service error: {response.status_code}")
-                return False
-        except Exception as e:
-            print(f"   ⚠️  Error: {e}")
-            return False
 
-async def test_chat_router_code_execution():
-    """Test chat router's code execution integration"""
-    print("\n3️⃣ Testing Chat Router Code Execution Integration...")
-    
-    # Import the function directly
-    try:
-        import sys
-        sys.path.insert(0, '/home/zoe/assistant/services/zoe-core')
-        
-        from routers.chat import get_mcp_tools_context, search_tools, execute_code
-        
-        # Test get_mcp_tools_context
-        print("   Testing get_mcp_tools_context()...")
-        context = await get_mcp_tools_context()
-        if context and "CODE EXECUTION" in context.upper():
-            print(f"   ✅ Code execution pattern detected in context!")
-            print(f"   Context length: {len(context)} chars")
-            if "progressive disclosure" in context.lower():
-                print(f"   ✅ Progressive disclosure mentioned!")
-            return True
-        else:
-            print(f"   ⚠️  Code execution pattern not found in context")
-            print(f"   Context preview: {context[:200]}")
-            return False
-            
-    except Exception as e:
-        print(f"   ❌ Error importing chat router: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+    response = await _execute_or_skip(
+        {
+            "code": code,
+            "language": "typescript",
+            "user_id": "test_user",
+        }
+    )
 
-async def test_search_tools():
-    """Test search_tools function"""
-    print("\n4️⃣ Testing search_tools() function...")
-    
-    try:
-        import sys
-        sys.path.insert(0, '/home/zoe/assistant/services/zoe-core')
-        from routers.chat import search_tools
-        
-        result = await search_tools("shopping list", "summary")
-        if result and "add_to_list" in result.lower():
-            print(f"   ✅ search_tools working! Found relevant tools")
-            print(f"   Result preview: {result[:200]}")
-            return True
-        else:
-            print(f"   ⚠️  search_tools returned: {result[:200]}")
-            return False
-    except Exception as e:
-        print(f"   ❌ Error: {e}")
-        return False
+    assert response.status_code == 200, response.text[:300]
+    result = response.json()
+    assert result.get("success") is True, result.get("error") or result
+    output = result.get("output", "")
+    assert "success" in output.lower() or "added" in output.lower(), output
 
-async def main():
-    """Run all tests"""
-    print("="*70)
-    print("Zoe Code Execution - Direct Testing")
-    print("="*70)
-    
-    results = []
-    
-    # Test 1: Code execution service
-    results.append(await test_code_execution_service())
-    
-    # Test 2: MCP tool via code
-    results.append(await test_mcp_tool_via_code())
-    
-    # Test 3: Chat router integration
-    results.append(await test_chat_router_code_execution())
-    
-    # Test 4: Search tools
-    results.append(await test_search_tools())
-    
-    # Summary
-    print("\n" + "="*70)
-    print("Test Results Summary")
-    print("="*70)
-    
-    passed = sum(1 for r in results if r)
-    total = len(results)
-    
-    print(f"\n✅ Passed: {passed}/{total}")
-    print(f"❌ Failed: {total - passed}/{total}")
-    
-    if passed == total:
-        print("\n🎉 All tests passed! Code execution is working correctly.")
-    elif passed >= total - 1:
-        print("\n✅ Most tests passed! Code execution is mostly working.")
-        print("   Minor issues may be due to service dependencies.")
-    else:
-        print("\n⚠️  Some tests failed. Check service status and logs.")
-    
-    return 0 if passed >= total - 1 else 1
 
-if __name__ == "__main__":
-    try:
-        exit_code = asyncio.run(main())
-        sys.exit(exit_code)
-    except KeyboardInterrupt:
-        print("\n\n⚠️  Test interrupted")
-        sys.exit(1)
-    except Exception as e:
-        print(f"\n\n❌ Test failed: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+def test_chat_router_wires_core_brain_tool_event_mapping():
+    chat_source = (ZOE_DATA / "routers" / "chat.py").read_text()
 
+    assert "from zoe_core_client import run_zoe_core, run_zoe_core_streaming" in chat_source
+    assert "def brain_tool_sentinel_events" in chat_source
+    assert "ToolCallStartEvent" in chat_source
+    assert "ToolCallArgsEvent" in chat_source
+    assert "ToolCallEndEvent" in chat_source
+    assert "ToolCallResultEvent" in chat_source
+
+
+def test_chat_router_uses_brain_tool_sentinel_events_in_streaming_path():
+    chat_source = (ZOE_DATA / "routers" / "chat.py").read_text()
+
+    mapper_pos = chat_source.index("def brain_tool_sentinel_events")
+    streaming_use_pos = chat_source.index("for _tool_ev in brain_tool_sentinel_events(")
+    assert mapper_pos < streaming_use_pos
