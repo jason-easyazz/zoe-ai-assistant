@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Optional
 
 from fastapi import HTTPException
 
+from time_utils import today_for_zoe_tz
 from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS
 
 if TYPE_CHECKING:
@@ -2008,10 +2009,10 @@ async def _execute_calendar_show_direct(intent: Intent, user_id: str) -> Optiona
     works even when the mcporter MCP subprocess is down (the source of the
     calendar 'hit and miss'). Mirrors the qualifier→date-range logic in
     _build_command's calendar_show branch."""
-    from datetime import date, timedelta
+    from datetime import timedelta
     slots = intent.slots or {}
     qualifier = str(slots.get("qualifier", "")).strip().lower()
-    today_d = date.today()
+    today_d = today_for_zoe_tz()
     if qualifier in ("today", "today's", ""):
         start = end = today_d
         scope = "today"
@@ -2775,10 +2776,9 @@ async def _daily_briefing_weather(user_id: str) -> Optional[dict]:
 
 async def _daily_briefing_calendar(user_id: str) -> Optional[dict]:
     try:
-        from datetime import date
         from database import get_db_ctx
 
-        today = date.today().isoformat()
+        today = today_for_zoe_tz().isoformat()
         async with get_db_ctx() as db:
             cursor = await db.execute(
                 "SELECT id, title, start_time, end_time, category, location FROM events"
@@ -2795,10 +2795,9 @@ async def _daily_briefing_calendar(user_id: str) -> Optional[dict]:
 
 async def _daily_briefing_reminders(user_id: str) -> Optional[dict]:
     try:
-        from datetime import date
         from database import get_db_ctx
 
-        today = date.today().isoformat()
+        today = today_for_zoe_tz().isoformat()
         async with get_db_ctx() as db:
             cursor = await db.execute(
                 "SELECT id, title, due_date, due_time, priority, category FROM reminders"

@@ -18,6 +18,7 @@ from card_contract import CardContractError, validate_component
 from card_service import card_service
 from database import get_db_ctx
 from people_utils import row_to_person
+from time_utils import today_for_zoe_tz
 
 logger = logging.getLogger(__name__)
 
@@ -351,7 +352,7 @@ def _default_clock_timezone() -> str:
 
 
 def _today() -> date:
-    return date.today()
+    return today_for_zoe_tz()
 
 
 def _clock_now(timezone_name: str | None = None) -> tuple[datetime, str]:
@@ -1535,7 +1536,7 @@ async def _resolve_calendar_delete_event(intent: SkybridgeIntent, user_id: str, 
 
 
 async def _resolve_calendar(intent: SkybridgeIntent, user_id: str, db: Any) -> dict[str, Any]:
-    start = intent.start_date or date.today()
+    start = intent.start_date or today_for_zoe_tz()
     end = intent.end_date or start
     events = []
     if user_id not in {"guest", "voice-guest"}:
