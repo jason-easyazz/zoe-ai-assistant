@@ -10,6 +10,13 @@ Adds:
     AND (claimed_at IS NULL OR claimed_at < stuck_cutoff)` before delivering;
     only rowcount==1 delivers. A claim older than the stuck timeout is
     reclaimable so a crash mid-delivery eventually recovers.
+  - schedule_generation (on BOTH proactive_scheduled and reminders): a
+    monotonically-increasing version of a reminder's due-time/snooze state.
+    schedule_reminder stamps each scheduled row with the reminder's current
+    generation; update/snooze bump reminders.schedule_generation. A job that
+    won the claim re-checks the generation before delivering and self-voids if
+    the reminder was rescheduled since — so an already-running old-time job
+    can't deliver after a reschedule (cancelling APScheduler can't stop it).
 """
 
 from alembic import op
@@ -30,9 +37,17 @@ def upgrade() -> None:
     op.execute(
         "ALTER TABLE proactive_scheduled ADD COLUMN IF NOT EXISTS claimed_at TEXT"
     )
+    op.execute(
+        "ALTER TABLE proactive_scheduled ADD COLUMN IF NOT EXISTS schedule_generation INTEGER DEFAULT 0"
+    )
+    op.execute(
+        "ALTER TABLE reminders ADD COLUMN IF NOT EXISTS schedule_generation INTEGER DEFAULT 0"
+    )
 
 
 def downgrade() -> None:
+    op.execute("ALTER TABLE reminders DROP COLUMN IF EXISTS schedule_generation")
+    op.execute("ALTER TABLE proactive_scheduled DROP COLUMN IF EXISTS schedule_generation")
     op.execute("ALTER TABLE proactive_scheduled DROP COLUMN IF EXISTS claimed_at")
     op.execute("ALTER TABLE proactive_scheduled DROP COLUMN IF EXISTS last_error")
     op.execute("ALTER TABLE proactive_scheduled DROP COLUMN IF EXISTS attempts")

@@ -184,10 +184,13 @@ async def update_reminder(
         return row_to_dict(row)
 
     updates.append("updated_at = NOW()")
+    # Bump the schedule generation so any old-time job that already won its claim
+    # self-voids at fire time instead of delivering at the stale time.
+    updates.append("schedule_generation = COALESCE(schedule_generation, 0) + 1")
     params.append(reminder_id)
 
     # B2: cancel the OLD-time job BEFORE the state change auto-commits, so it
-    # can't fire in the gap. The in-job claim + obligation re-read are the final
+    # can't fire in the gap. The in-job claim + generation re-check are the final
     # backstop for a sub-second in-flight boundary.
     await _cancel_reminder_jobs_safe(reminder_id)
     await db.execute(
@@ -266,10 +269,12 @@ async def snooze_reminder(
     snoozed_until = (datetime.utcnow() + timedelta(minutes=body.snooze_minutes)).isoformat() + "Z"
 
     # B2: cancel the OLD-time job BEFORE the snooze state change auto-commits, so
-    # it can't fire at the old time during the gap.
+    # it can't fire at the old time during the gap. Bump schedule_generation so an
+    # already-claimed old job self-voids at fire time.
     await _cancel_reminder_jobs_safe(reminder_id)
     await db.execute(
-        "UPDATE reminders SET snoozed_until = ?, updated_at = NOW() WHERE id = ?",
+        "UPDATE reminders SET snoozed_until = ?, updated_at = NOW(), "
+        "schedule_generation = COALESCE(schedule_generation, 0) + 1 WHERE id = ?",
         [snoozed_until, reminder_id],
     )
     await _create_notification(

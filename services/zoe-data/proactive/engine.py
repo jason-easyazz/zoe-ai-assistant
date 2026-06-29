@@ -242,6 +242,33 @@ def _suppress_scheduler_not_running(loop: asyncio.AbstractEventLoop, context: di
     loop.default_exception_handler(context)
 
 
+# Columns migration 0012 must have added before the claim/generation logic works.
+_REQUIRED_PROACTIVE_COLUMNS = {
+    "proactive_scheduled": ["attempts", "last_error", "claimed_at", "schedule_generation"],
+    "reminders": ["schedule_generation"],
+}
+
+
+async def verify_proactive_schema() -> list[str]:
+    """Return the list of required columns that are MISSING (empty list = OK).
+
+    The claim/reconcile/generation logic reads attempts/last_error/claimed_at/
+    schedule_generation; if migration 0012 hasn't run those queries error and
+    reminders would silently fail to deliver. Startup uses this to make the
+    dependency explicit and non-silent (see main.py) rather than failing quietly.
+    """
+    missing: list[str] = []
+    async with _get_compat_db() as db:
+        for table, cols in _REQUIRED_PROACTIVE_COLUMNS.items():
+            async with db.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = ?",
+                (table,),
+            ) as cur:
+                have = {r["column_name"] for r in await cur.fetchall()}
+            missing.extend(f"{table}.{c}" for c in cols if c not in have)
+    return missing
+
+
 def start_proactive_engine() -> None:
     """Start APScheduler (Tier 1) and the slow loop (Tier 2).
 

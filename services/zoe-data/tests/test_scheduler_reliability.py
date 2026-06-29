@@ -122,7 +122,8 @@ class FakeReminderDB:
                 row.get("claimed_at") is None or row["claimed_at"] < stuck
             ):
                 row["claimed_at"] = now_iso
-                return _Cursor([{"id": sid, "item_id": row.get("item_id", "")}])
+                return _Cursor([{"id": sid, "item_id": row.get("item_id", ""),
+                                 "schedule_generation": row.get("schedule_generation", 0)}])
             return _Cursor([])
         # Consume (void obligation): mark fired without delivering.
         if u.startswith("UPDATE PROACTIVE_SCHEDULED SET FIRED = 1 WHERE ID = ?"):
@@ -138,10 +139,18 @@ class FakeReminderDB:
                 row["last_error"] = p[0]
                 row["claimed_at"] = None
             return _Cursor([])
-        # Obligation read.
-        if u.startswith("SELECT IS_ACTIVE, ACKNOWLEDGED, DELETED FROM REMINDERS WHERE ID = ?"):
+        # Obligation + generation read (is_active/acknowledged/deleted/generation).
+        if "FROM REMINDERS" in u and "IS_ACTIVE" in u:
             r = self.reminders.get(p[0])
-            return _Cursor([r] if r else [])
+            if not r:
+                return _Cursor([])
+            out = dict(r)
+            out.setdefault("schedule_generation", 0)
+            return _Cursor([out])
+        # Generation-only read (schedule_reminder stamping).
+        if "SELECT SCHEDULE_GENERATION FROM REMINDERS" in u:
+            r = self.reminders.get(p[0])
+            return _Cursor([{"schedule_generation": (r or {}).get("schedule_generation", 0)}] if r else [])
         # cancel_reminder_jobs select (by item_id).
         if "FROM PROACTIVE_SCHEDULED" in u and "ITEM_ID = ?" in u:
             item = p[0]
@@ -587,6 +596,82 @@ async def test_snooze_cancels_before_mutate_and_reschedules_at_snooze_time(monke
     assert scheduled and scheduled[0]["item_id"] == "rem1"
     # Re-fires ~15 min out (the snooze), not at the original 09:00.
     assert before + timedelta(minutes=14) <= scheduled[0]["send_at"] <= before + timedelta(minutes=16)
+
+
+# =========================================================================== #
+# FIX 1 — generation marker voids a stale claimed job after a reschedule
+# =========================================================================== #
+@pytest.mark.asyncio
+async def test_stale_generation_job_does_not_deliver_after_reschedule(monkeypatch):
+    """A job that won its claim for the OLD time must NOT deliver once the
+    reminder has been rescheduled/snoozed (generation advanced); the new-time
+    job (matching generation) delivers."""
+    store = FakeReminderDB(
+        scheduled={
+            "old": {"fired": 0, "claimed_at": None, "item_id": "rem1",
+                    "schedule_generation": 1, "attempts": 0},
+            "new": {"fired": 0, "claimed_at": None, "item_id": "rem1",
+                    "schedule_generation": 2, "attempts": 0},
+        },
+        reminders={"rem1": {"is_active": 1, "acknowledged": 0, "deleted": 0,
+                            "schedule_generation": 2}},  # rescheduled → gen bumped to 2
+    )
+    _patch_compat(monkeypatch, reminders, store)
+    deliveries = []
+    monkeypatch.setattr("proactive.engine.fire_notification", _fake_fire(store, deliveries))
+
+    # Stale old-time job (gen 1) wins the claim but the reminder is now gen 2.
+    await reminders._fire_reminder("old", "u1", "old-time msg")
+    assert deliveries == [], "stale-generation job must not fire at the old time"
+    assert store.scheduled["old"]["fired"] == 1, "stale job self-voided (consumed)"
+
+    # Current new-time job (gen 2) matches → delivers.
+    await reminders._fire_reminder("new", "u1", "new-time msg")
+    assert deliveries == ["new"], "the new-time job delivers"
+
+
+# =========================================================================== #
+# FIX 3 — startup schema guard for migration 0012
+# =========================================================================== #
+class _SchemaDB:
+    def __init__(self, columns_by_table):
+        self.columns_by_table = columns_by_table
+
+    def execute(self, sql, params=()):
+        p = list(params) if isinstance(params, (list, tuple)) else [params]
+        table = p[0]
+        cols = self.columns_by_table.get(table, set())
+        return _Exec(lambda: _async_cursor([{"column_name": c} for c in cols]))
+
+    async def commit(self):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_):
+        return False
+
+
+@pytest.mark.asyncio
+async def test_verify_proactive_schema_detects_missing_columns(monkeypatch):
+    _patch_compat(monkeypatch, engine, _SchemaDB({
+        "proactive_scheduled": {"id", "attempts", "last_error"},  # missing claimed_at + generation
+        "reminders": {"id"},  # missing schedule_generation
+    }))
+    missing = await engine.verify_proactive_schema()
+    assert "proactive_scheduled.claimed_at" in missing
+    assert "proactive_scheduled.schedule_generation" in missing
+    assert "reminders.schedule_generation" in missing
+
+
+@pytest.mark.asyncio
+async def test_verify_proactive_schema_ok_when_present(monkeypatch):
+    _patch_compat(monkeypatch, engine, _SchemaDB({
+        "proactive_scheduled": {"attempts", "last_error", "claimed_at", "schedule_generation"},
+        "reminders": {"schedule_generation"},
+    }))
+    assert await engine.verify_proactive_schema() == []
 
 
 # =========================================================================== #
