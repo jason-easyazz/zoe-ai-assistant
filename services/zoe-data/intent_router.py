@@ -1012,21 +1012,30 @@ def detect_intent(
         return Intent("journal_prompt", {})
 
     # --- TRANSACTIONS ---
+    # Parse money exactly: integer cents (no float drift) plus the canonical
+    # two-decimal dollars the command boundary still expects.
+    from money import to_cents, to_dollars
+
+    def _money_slots(raw: str) -> dict:
+        try:
+            cents = to_cents(raw)
+        except ValueError:
+            cents = 0
+        return {"amount": to_dollars(cents), "amount_cents": cents}
+
     m = re.match(
         r"^i (?:spent|paid) \$?([\d.]+)(?: ?(?:dollars?|bucks?))?(?: (?:at|on|for) (.+))?$", t
     )
     if m:
-        amount = float(m.group(1))
         desc = (m.group(2) or "").strip() or "purchase"
-        return Intent("transaction_create", {"amount": amount, "description": desc})
+        return Intent("transaction_create", {**_money_slots(m.group(1)), "description": desc})
 
     m = re.match(
         r"^(?:bought|purchased) (.+?) (?:for )\$?([\d.]+)$", t
     )
     if m:
         desc = m.group(1).strip()
-        amount = float(m.group(2))
-        return Intent("transaction_create", {"amount": amount, "description": desc})
+        return Intent("transaction_create", {**_money_slots(m.group(2)), "description": desc})
 
     for pattern in [
         r"^(?:how much (?:did i|have i) (?:spent?|spend)|weekly spending|budget check|spending (?:summary|this week))(.*)$",

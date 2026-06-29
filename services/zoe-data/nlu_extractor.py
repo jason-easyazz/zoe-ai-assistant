@@ -298,9 +298,17 @@ async def _extract_transaction(text: str) -> Optional[dict]:
     args = await _call_with_tool(text, _TRANSACTION_SCHEMA)
     if not args:
         return None
+    # Produce exact integer cents plus the canonical two-decimal dollars the
+    # command boundary expects.
+    from money import to_cents, to_dollars
+    try:
+        cents = to_cents(args.get("amount") or 0)
+    except ValueError:
+        cents = 0
     return {
         "description": (args.get("description") or "purchase").strip(),
-        "amount": float(args.get("amount") or 0),
+        "amount": to_dollars(cents),
+        "amount_cents": cents,
     }
 
 
