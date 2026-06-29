@@ -1236,7 +1236,7 @@ def _model_name() -> str:
 # from one Chroma read, shaving 5–50 ms off the hot path. Writes invalidate
 # the per-user entry so newly added facts surface on the next turn.
 
-_USER_FACTS_CACHE: dict[str, tuple[float, str]] = {}
+_USER_FACTS_CACHE: dict[tuple[str, int], tuple[float, str]] = {}
 # The cold Chroma read is ~1.4s and sits on the voice brain turn's critical path.
 # A 2s TTL expired during the wake→speak→STT gap, so every turn re-paid it. Fact
 # WRITES invalidate the cache immediately (_invalidate_user_facts_cache), so a long
@@ -1245,7 +1245,8 @@ _USER_FACTS_TTL_S: float = float(os.environ.get("PI_USER_FACTS_CACHE_TTL_S", "12
 
 
 def _invalidate_user_facts_cache(user_id: str) -> None:
-    _USER_FACTS_CACHE.pop(user_id, None)
+    for key in [key for key in _USER_FACTS_CACHE if key[0] == user_id]:
+        _USER_FACTS_CACHE.pop(key, None)
 
 
 async def _mempalace_search(
@@ -1362,7 +1363,8 @@ async def _mempalace_load_user_facts(user_id: str, limit: int = 20) -> str:
             return ""
     except Exception:
         return ""
-    cached = _USER_FACTS_CACHE.get(user_id)
+    cache_key = (user_id, limit)
+    cached = _USER_FACTS_CACHE.get(cache_key)
     if cached is not None and cached[0] > now:
         return cached[1]
 
@@ -1431,7 +1433,7 @@ async def _mempalace_load_user_facts(user_id: str, limit: int = 20) -> str:
 
             formatted = "\n\n".join(sections)
 
-        _USER_FACTS_CACHE[user_id] = (now + _USER_FACTS_TTL_S, formatted)
+        _USER_FACTS_CACHE[cache_key] = (now + _USER_FACTS_TTL_S, formatted)
         return formatted
     except ImportError:
         logger.warning("MemPalace not installed — skipping user facts load")
