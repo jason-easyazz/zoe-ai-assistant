@@ -536,6 +536,42 @@ def _tracked_multica_engineering_issues(*groups: list[dict]) -> list[dict]:
     return tracked
 
 
+async def _read_multica_board_statuses(client, statuses: tuple[str, ...]) -> dict[str, list[dict]]:
+    """Read Multica board statuses, tolerating partial failures.
+
+    A total outage must still raise so the poll cycle is skipped as observable
+    downtime. If at least one status read succeeds, keep that work moving and
+    log the missing statuses rather than starving the whole cycle.
+    """
+    results: dict[str, list[dict]] = {}
+    failures: dict[str, Exception] = {}
+
+    for status in statuses:
+        try:
+            results[status] = await client.list_issues(status=status, raise_on_error=True) or []
+        except Exception as exc:
+            failures[status] = exc
+            results[status] = []
+
+    if failures and len(failures) == len(statuses):
+        first_status = next(iter(failures))
+        logger.warning(
+            "multica_poll: all Multica status reads failed (%s); skipping this cycle",
+            ", ".join(statuses),
+        )
+        raise failures[first_status]
+
+    if failures:
+        logger.warning(
+            "multica_poll: partial Multica status read failure for %s; "
+            "continuing with successfully-read statuses %s",
+            ", ".join(failures),
+            ", ".join(status for status in statuses if status not in failures),
+        )
+
+    return results
+
+
 def _blocked_multica_chain_reason(chain: dict) -> str:
     """Return the operator-visible reason for a blocked engineering chain."""
     pipeline = chain.get("pipeline") or {}
@@ -1114,11 +1150,14 @@ async def lifespan(app: FastAPI):
                             )
                     except Exception as _prune_exc:
                         logger.warning("multica_poll: worktree prune sweep failed: %s", _prune_exc)
-                # Fast-path: auto-close stale autopilot tracker todos (no agent needed).
-                # raise_on_error: a Multica OUTAGE here must NOT read as an empty board
-                # (which would silently suppress dispatch/sync) — surface it so the
-                # loop-level handler logs and skips this cycle instead.
-                stale_todos = await client.list_issues(status="todo", raise_on_error=True)
+                # Board-state reads must distinguish a Multica outage from an empty
+                # board, but a partial status-read failure should not starve work
+                # from statuses already read this cycle.
+                _board_statuses = await _read_multica_board_statuses(
+                    client,
+                    ("todo", "in_progress", "in_review", "blocked"),
+                )
+                stale_todos = _board_statuses["todo"]
                 _now_ts = _t.time()
                 _closed_stale_ids: set[str] = set()
                 for _stale in stale_todos or []:
@@ -1145,11 +1184,9 @@ async def lifespan(app: FastAPI):
                         if str(issue.get("id") or "") not in _closed_stale_ids
                     ]
 
-                # raise_on_error: same rationale — an outage on any board-state read
-                # must surface as MulticaUnavailableError, not a falsely-empty board.
-                in_progress_issues = await client.list_issues(status="in_progress", raise_on_error=True) or []
-                in_review_issues = await client.list_issues(status="in_review", raise_on_error=True) or []
-                blocked_issues = await client.list_issues(status="blocked", raise_on_error=True) or []
+                in_progress_issues = _board_statuses["in_progress"]
+                in_review_issues = _board_statuses["in_review"]
+                blocked_issues = _board_statuses["blocked"]
 
                 # Webhook bridge: Hermes-assigned todos / in_progress (no chain) → issue.assigned.
                 try:
