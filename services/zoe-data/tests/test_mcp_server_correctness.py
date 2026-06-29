@@ -231,10 +231,34 @@ async def test_transport_claimed_family_admin_does_not_get_synthetic_admin():
         "user_id": "family-admin",
         "role": None,
         "role_source": None,
-        "source": "transport",
+        "source": "transport_meta",
     }
     sql, params = next(call for call in db.calls if "FROM dashboard_layouts" in call[0])
     assert params == ("family-admin",)
+
+
+@pytest.mark.asyncio
+async def test_transport_meta_identity_cannot_impersonate_db_admin():
+    db = _RoutingDb(
+        {
+            "SELECT role FROM users": [{"role": "admin"}],
+            "dashboard_layouts": [],
+        }
+    )
+    actor_context = mcp_server._trusted_actor_context_from_message(
+        {"params": {"_meta": {"zoe": {"actor_user_id": "real-admin"}}}}
+    )
+
+    await mcp_server._execute_tool(
+        db=db,
+        name="dashboard_get_layout",
+        args={"user_id": "victim"},
+        actor_context=actor_context,
+    )
+
+    assert actor_context["source"] == "transport_meta"
+    sql, params = next(call for call in db.calls if "FROM dashboard_layouts" in call[0])
+    assert params == ("real-admin",)
 
 
 @pytest.mark.asyncio
@@ -288,7 +312,7 @@ async def test_meta_actor_role_admin_is_ignored_when_db_role_is_member():
         "user_id": "jason",
         "role": None,
         "role_source": None,
-        "source": "transport",
+        "source": "transport_meta",
     }
     sql, params = next(call for call in db.calls if "FROM dashboard_layouts" in call[0])
     assert params == ("jason",)
@@ -319,7 +343,7 @@ async def test_env_actor_role_is_ignored_when_actor_user_comes_from_meta(monkeyp
         "user_id": "jason",
         "role": None,
         "role_source": None,
-        "source": "transport",
+        "source": "transport_meta",
     }
     sql, params = next(call for call in db.calls if "FROM dashboard_layouts" in call[0])
     assert params == ("jason",)
@@ -343,7 +367,7 @@ async def test_env_actor_role_is_trusted_when_actor_user_also_comes_from_env(mon
         "user_id": "ops-admin",
         "role": "admin",
         "role_source": "env",
-        "source": "transport",
+        "source": "transport_env",
     }
     sql, params = next(call for call in db.calls if "FROM dashboard_layouts" in call[0])
     assert params == ("target",)

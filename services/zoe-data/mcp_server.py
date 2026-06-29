@@ -1329,11 +1329,12 @@ def _trusted_actor_context_from_message(msg: dict) -> dict:
         os.environ.get("ZOE_MCP_USER_ROLE"),
     )
     role = env_role if env_user_id and not message_user_id else None
+    source = "transport_meta" if message_user_id else "transport_env" if env_user_id else "transport"
     return {
         "user_id": user_id,
         "role": role,
         "role_source": "env" if role else None,
-        "source": "transport",
+        "source": source,
     }
 
 
@@ -1343,6 +1344,8 @@ async def _lookup_actor_role(db, user_id: str, role_hint: str | None, source: st
         return role
     if source == "legacy_fallback" and user_id == "family-admin":
         return "admin"
+    if source == "transport_meta":
+        return "member"
     if db is not None:
         try:
             cursor = await db.execute("SELECT role FROM users WHERE id = ?", (user_id,))
