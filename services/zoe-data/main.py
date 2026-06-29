@@ -138,9 +138,10 @@ async def _check_stt_ready() -> dict:
         from routers import voice_tts
 
         return {
-            "ok": bool(voice_tts.moonshine_ready()),
+            "ok": True,
             "engine": "moonshine",
             "arch": voice_tts.moonshine_arch(),
+            "loaded": bool(voice_tts.moonshine_ready()),
         }
     except Exception as exc:
         return {"ok": False, "engine": "moonshine", "error": exc.__class__.__name__}

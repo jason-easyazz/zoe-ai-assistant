@@ -121,6 +121,27 @@ def test_tts_mode_edge_counts_ready_without_kokoro(monkeypatch):
     assert report["provider"] == "edge"
 
 
+def test_stt_ready_does_not_race_moonshine_warmup(monkeypatch):
+    import main
+    from routers import voice_tts
+
+    monkeypatch.setattr(voice_tts, "moonshine_ready", lambda: False)
+    monkeypatch.setattr(voice_tts, "moonshine_arch", lambda: "MEDIUM_STREAMING")
+
+    report = asyncio.run(main._check_stt_ready())
+
+    assert report["ok"] is True
+    assert report["loaded"] is False
+    assert report["engine"] == "moonshine"
+
+
+def test_zoe_data_unit_does_not_wait_for_network_online():
+    unit_path = ROOT.parent.parent / "scripts" / "setup" / "systemd" / "zoe-data.service"
+    text = unit_path.read_text(encoding="utf-8")
+
+    assert "network-online.target" not in text
+
+
 def test_readiness_cache_reuses_short_lived_report(monkeypatch):
     import main
 
