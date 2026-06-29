@@ -363,6 +363,38 @@ async def test_guest_user_facts_fail_closed_when_memory_service_import_fails(mon
 
 
 @pytest.mark.asyncio
+async def test_user_facts_cache_is_limit_sensitive(monkeypatch):
+    import memory_service
+    from memory_service import MemoryRef
+
+    class _Svc:
+        def __init__(self):
+            self.seen_limits = []
+
+        async def load_for_prompt(self, user_id, limit=20):
+            self.seen_limits.append((user_id, limit))
+            return [
+                MemoryRef(id="1", text="Fact one", metadata={"memory_type": "fact"}),
+                MemoryRef(id="2", text="Fact two", metadata={"memory_type": "fact"}),
+                MemoryRef(id="3", text="Fact three", metadata={"memory_type": "fact"}),
+            ]
+
+    svc = _Svc()
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: svc)
+    monkeypatch.setattr(memory_service, "is_guest_memory_user", lambda uid: False)
+    monkeypatch.setattr(zoe_agent, "_USER_FACTS_CACHE", {})
+
+    one = await zoe_agent._mempalace_load_user_facts("jason", limit=1)
+    two = await zoe_agent._mempalace_load_user_facts("jason", limit=2)
+
+    assert "- Fact one" in one
+    assert "- Fact two" not in one
+    assert "- Fact one" in two
+    assert "- Fact two" in two
+    assert svc.seen_limits == [("jason", 11), ("jason", 12)]
+
+
+@pytest.mark.asyncio
 async def test_guest_semantic_memory_context_skips_mempalace_search(monkeypatch):
     async def fail_search(*args, **kwargs):
         raise AssertionError("guest semantic prompt context must not search memory")
