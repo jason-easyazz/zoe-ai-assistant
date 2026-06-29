@@ -1329,7 +1329,10 @@ def _trusted_actor_context_from_message(msg: dict) -> dict:
         os.environ.get("ZOE_MCP_USER_ROLE"),
     )
     role = env_role if env_user_id and not message_user_id else None
-    source = "transport_meta" if message_user_id else "transport_env" if env_user_id else "transport"
+    if message_user_id:
+        source = "transport_verified" if env_user_id == message_user_id else "transport_meta"
+    else:
+        source = "transport_env" if env_user_id else "transport"
     return {
         "user_id": user_id,
         "role": role,

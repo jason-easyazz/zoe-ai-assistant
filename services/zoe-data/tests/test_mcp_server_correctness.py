@@ -262,6 +262,36 @@ async def test_transport_meta_identity_cannot_impersonate_db_admin():
 
 
 @pytest.mark.asyncio
+async def test_verified_transport_meta_admin_keeps_cross_user_targeting(monkeypatch):
+    monkeypatch.setenv("ZOE_MCP_ACTOR_USER_ID", "real-admin")
+    db = _RoutingDb(
+        {
+            "SELECT role FROM users": [{"role": "admin"}],
+            "dashboard_layouts": [],
+        }
+    )
+    actor_context = mcp_server._trusted_actor_context_from_message(
+        {"params": {"_meta": {"zoe": {"actor_user_id": "real-admin"}}}}
+    )
+
+    await mcp_server._execute_tool(
+        db=db,
+        name="dashboard_get_layout",
+        args={"user_id": "victim"},
+        actor_context=actor_context,
+    )
+
+    assert actor_context == {
+        "user_id": "real-admin",
+        "role": None,
+        "role_source": None,
+        "source": "transport_verified",
+    }
+    sql, params = next(call for call in db.calls if "FROM dashboard_layouts" in call[0])
+    assert params == ("victim",)
+
+
+@pytest.mark.asyncio
 async def test_non_admin_transport_actor_cannot_override_dashboard_target():
     db = _RoutingDb({"dashboard_layouts": []})
 
