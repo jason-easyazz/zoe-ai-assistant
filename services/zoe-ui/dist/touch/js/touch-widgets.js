@@ -414,7 +414,10 @@ body.light-mode .tw-ev-item { background: rgba(0,0,0,0.02); }
                     // tomorrow, so the kiosk would fetch the wrong day (FE2).
                     const n = new Date();
                     const today = `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`;
-                    const data = await api(`/api/calendar/events?date=${today}`);
+                    // GET /api/calendar/events filters on start_date/end_date
+                    // (inclusive); it ignores a `date` param, which would return
+                    // every day's events. Bound both ends to today's local date.
+                    const data = await api(`/api/calendar/events?start_date=${today}&end_date=${today}`);
                     const items = data.events || data.items || (Array.isArray(data) ? data : []);
                     if (!items.length) {
                         list.innerHTML = '<div class="tw-empty">No events today ✓</div>';
