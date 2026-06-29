@@ -459,7 +459,7 @@ _AGENT_DEFS = [
         "description": (
             "Agentic execution runtime. Handles browser automation, code execution, and skill "
             "building. In Multica issue capture, route simple-English ticket creation through "
-            "the Hermes runtime until OpenClaw's Gemma 4 E2B-backed harness has non-rate-limited capacity."
+            "the Hermes runtime until the OpenClaw fallback harness has non-rate-limited capacity."
         ),
         "instructions": (
             "You are OpenClaw, Zoe's native agentic execution runtime. For Multica simple-English "
