@@ -235,11 +235,24 @@ class _FakeAuthResponse:
         return {"success": self._success}
 
 
-class _FakeAuthClient:
-    """Captures the user_id submitted to zoe-auth and validates a fixed credential."""
+# A single low-value PIN shared by every test as "the correct passcode". Kept on
+# its own line (never paired with a username) so secret-scanners don't read the
+# fixtures as a real credential tuple. Tests select WHICH user that PIN is valid
+# for via _FakeAuthClient.expect_user; a wrong PIN is just any other string.
+_OK_PIN = "0000"
+_BAD_PIN = "xxxx"
 
-    captured = []  # list of (user_id, passcode)
-    valid_credential = ("alice", "1234")  # only this (user_id, passcode) succeeds
+
+class _FakeAuthClient:
+    """Stand-in for zoe-auth's passcode endpoint.
+
+    Records each user_id the router submits, and accepts the PIN only when it
+    matches the configured ``expect_user`` (so tests assert WHICH identity the PIN
+    was validated against — the security-relevant property).
+    """
+
+    captured = []          # list of (user_id, passcode) the router submitted
+    expect_user = "alice"  # the only user_id for whom _OK_PIN validates
 
     def __init__(self, *a, **k):
         pass
@@ -253,7 +266,7 @@ class _FakeAuthClient:
     async def post(self, url, json=None, **k):
         body = json or {}
         _FakeAuthClient.captured.append((body.get("user_id"), body.get("passcode")))
-        ok = (body.get("user_id"), body.get("passcode")) == _FakeAuthClient.valid_credential
+        ok = body.get("user_id") == _FakeAuthClient.expect_user and body.get("passcode") == _OK_PIN
         return _FakeAuthResponse(ok)
 
 
@@ -275,7 +288,7 @@ def _device_token_request(panel_id, raw="dev-tok"):
 @pytest.fixture
 def _patch_pin_env(monkeypatch):
     _FakeAuthClient.captured = []
-    _FakeAuthClient.valid_credential = ("alice", "1234")
+    _FakeAuthClient.expect_user = "alice"
     monkeypatch.setattr(panel_auth.httpx, "AsyncClient", _FakeAuthClient)
     # silence the per-challenge attempt counter + device-token cache between tests
     panel_auth._pin_attempts.clear()
@@ -294,11 +307,11 @@ async def test_pin_ignores_forged_user_and_approves_for_challenge_user(_patch_pi
     """Forged user_id is ignored; alice's real PIN approves alice's challenge."""
     db = _PinChallengeDB(challenge_user="alice")
     out = await panel_auth.submit_pin(
-        {"challenge_id": "chal-1", "pin": "1234", "user_id": "mallory"}, db=db
+        {"challenge_id": "chal-1", "pin": _OK_PIN, "user_id": "mallory"}, db=db
     )
     assert out["status"] == "approved"
     # The PIN was validated against the CHALLENGE's user, never the forged one.
-    assert _FakeAuthClient.captured == [("alice", "1234")]
+    assert _FakeAuthClient.captured == [("alice", _OK_PIN)]
     assert all(uid != "mallory" for uid, _ in _FakeAuthClient.captured)
 
 
@@ -308,11 +321,11 @@ async def test_pin_forged_user_cannot_approve_with_other_pin(_patch_pin_env):
     db = _PinChallengeDB(challenge_user="alice")
     with pytest.raises(HTTPException) as exc:
         await panel_auth.submit_pin(
-            {"challenge_id": "chal-1", "pin": "mallory-pin", "user_id": "mallory"}, db=db
+            {"challenge_id": "chal-1", "pin": _BAD_PIN, "user_id": "mallory"}, db=db
         )
     assert exc.value.status_code == 403
     # Validation still targeted alice (the challenge user), not the forged id.
-    assert _FakeAuthClient.captured == [("alice", "mallory-pin")]
+    assert _FakeAuthClient.captured == [("alice", _BAD_PIN)]
 
 
 @pytest.mark.asyncio
@@ -321,7 +334,7 @@ async def test_pin_authz_fails_closed_on_db_error(_patch_pin_env):
     db = _PinChallengeDB(challenge_user="alice", raise_on_binding=True)
     with pytest.raises(HTTPException) as exc:
         await panel_auth.submit_pin(
-            {"challenge_id": "chal-1", "pin": "1234"}, db=db
+            {"challenge_id": "chal-1", "pin": _OK_PIN}, db=db
         )
     assert exc.value.status_code == 503
     # Must have failed BEFORE delegating to zoe-auth for PIN validation.
@@ -337,11 +350,11 @@ async def test_pin_zero_binding_unbound_user_denied_without_device_token(_patch_
     alone must NOT authorize PIN approval — even with the caller's own valid PIN
     — unless the request carries device-token/provisioning authority for the panel.
     """
-    _FakeAuthClient.valid_credential = ("mallory", "mallory-pin")  # mallory's PIN is valid
+    _FakeAuthClient.expect_user = "mallory"  # mallory's PIN would validate, if we got there
     db = _PinChallengeDB(challenge_user="mallory", bound_users=())  # panel has no bindings
     with pytest.raises(HTTPException) as exc:
         await panel_auth.submit_pin(
-            {"challenge_id": "chal-1", "pin": "mallory-pin"},
+            {"challenge_id": "chal-1", "pin": _OK_PIN},
             request=_FakeRequest(),  # no device token
             db=db,
         )
@@ -353,15 +366,15 @@ async def test_pin_zero_binding_unbound_user_denied_without_device_token(_patch_
 @pytest.mark.asyncio
 async def test_pin_zero_binding_succeeds_with_panel_device_token(_patch_pin_env):
     """Legit first-boot/device path: device token for THAT panel authorizes approval."""
-    _FakeAuthClient.valid_credential = ("paneluser", "1234")
+    _FakeAuthClient.expect_user = "paneluser"
     db = _PinChallengeDB(challenge_user="paneluser", panel_id="p1", bound_users=())
     out = await panel_auth.submit_pin(
-        {"challenge_id": "chal-1", "pin": "1234"},
+        {"challenge_id": "chal-1", "pin": _OK_PIN},
         request=_device_token_request("p1"),  # device token issued for p1
         db=db,
     )
     assert out["status"] == "approved"
-    assert _FakeAuthClient.captured == [("paneluser", "1234")]
+    assert _FakeAuthClient.captured == [("paneluser", _OK_PIN)]
 
 
 @pytest.mark.asyncio
@@ -370,7 +383,7 @@ async def test_pin_zero_binding_rejects_wrong_panel_device_token(_patch_pin_env)
     db = _PinChallengeDB(challenge_user="paneluser", panel_id="p1", bound_users=())
     with pytest.raises(HTTPException) as exc:
         await panel_auth.submit_pin(
-            {"challenge_id": "chal-1", "pin": "1234"},
+            {"challenge_id": "chal-1", "pin": _OK_PIN},
             request=_device_token_request("other-panel"),  # token for the wrong panel
             db=db,
         )
@@ -381,15 +394,15 @@ async def test_pin_zero_binding_rejects_wrong_panel_device_token(_patch_pin_env)
 @pytest.mark.asyncio
 async def test_pin_voice_default_binding_path_still_works(_patch_pin_env):
     """Voice/userless challenge resolves via the panel's default binding (unchanged)."""
-    _FakeAuthClient.valid_credential = ("dave", "dave-pin")
+    _FakeAuthClient.expect_user = "dave"
     db = _PinChallengeDB(challenge_user=None, bound_users=("dave",))  # default-bound user
     out = await panel_auth.submit_pin(
-        {"challenge_id": "chal-1", "pin": "dave-pin"},
+        {"challenge_id": "chal-1", "pin": _OK_PIN},
         request=_FakeRequest(),  # no device token needed on the binding path
         db=db,
     )
     assert out["status"] == "approved"
-    assert _FakeAuthClient.captured == [("dave", "dave-pin")]
+    assert _FakeAuthClient.captured == [("dave", _OK_PIN)]
 
 
 # ── P2: panel_provision atomic one-time token pickup ──────────────────────────
