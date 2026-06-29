@@ -92,6 +92,83 @@ def _member(monkeypatch, user_id="u1", role="member"):
     monkeypatch.setattr(main, "_resolve_ws_session", resolve)
 
 
+async def _install_real_db(monkeypatch: pytest.MonkeyPatch):
+    """Back ``database.get_db`` with a real in-memory aiosqlite connection so the
+    resolver's actual SQL (incl. the ORDER BY tie-break) runs, not a canned row.
+
+    Seeds two REGISTERED panels (A and B) on one session/user where B wins the
+    is_foreground/last_seen_at ordering, to prove resolution follows the
+    CONNECTING panel rather than the row that sorts first.
+    """
+    import aiosqlite
+
+    conn = await aiosqlite.connect(":memory:")
+    conn.row_factory = aiosqlite.Row
+    await conn.executescript(
+        """
+        CREATE TABLE panels (
+            panel_id TEXT PRIMARY KEY, is_active INTEGER DEFAULT 1,
+            allow_guest INTEGER DEFAULT 0
+        );
+        CREATE TABLE ui_panel_sessions (
+            panel_id TEXT PRIMARY KEY, user_id TEXT NOT NULL,
+            chat_session_id TEXT, is_foreground INTEGER DEFAULT 1, last_seen_at TEXT
+        );
+        INSERT INTO panels(panel_id) VALUES ('panel_a'), ('panel_b');
+        -- Same session + user, both registered. panel_b is foreground AND more
+        -- recently seen, so the old is_foreground/last_seen_at order picked B.
+        INSERT INTO ui_panel_sessions(panel_id, user_id, chat_session_id, is_foreground, last_seen_at)
+        VALUES ('panel_a', 'u1', 'session-1', 0, '2026-06-29T10:00:00'),
+               ('panel_b', 'u1', 'session-1', 1, '2026-06-29T11:00:00');
+        """
+    )
+    await conn.commit()
+
+    module = types.ModuleType("database")
+
+    async def get_db():
+        yield conn
+
+    module.get_db = get_db
+    monkeypatch.setitem(sys.modules, "database", module)
+    return conn
+
+
+@pytest.mark.asyncio
+async def test_multi_registered_session_routes_to_connecting_panel(monkeypatch):
+    """Regression for 'Registered Panel Misroutes': a session holds rows for TWO
+    registered panels (A and B) where B wins is_foreground/last_seen_at. Each
+    panel's socket must resolve to ITS OWN channel, not whichever row sorts first.
+    """
+    conn = await _install_real_db(monkeypatch)
+    try:
+        _member(monkeypatch)
+        # panel A connects → must subscribe to panel_a even though B is foreground
+        # and most-recently-seen (the row that sorted first before the tie-break).
+        assert await main._resolve_subscribable_panel("panel_a", "session-1") == "panel_a"
+        # Reverse: panel B connects → panel_b.
+        assert await main._resolve_subscribable_panel("panel_b", "session-1") == "panel_b"
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_generated_alias_still_resolves_to_registered_panel(monkeypatch):
+    """A generated alias (no registered row of its own, not in `panels`) connecting
+    on the same multi-panel session has no per-panel link, so it falls back to the
+    foreground/most-recent registered panel — here panel_b. This preserves the
+    alias → registered routing the canonical resolution exists for."""
+    conn = await _install_real_db(monkeypatch)
+    try:
+        _member(monkeypatch)
+        assert (
+            await main._resolve_subscribable_panel("panel_generated_xyz", "session-1")
+            == "panel_b"
+        )
+    finally:
+        await conn.close()
+
+
 # SQL needles for the two resolver queries.
 _REGISTERED = "JOIN panels p ON p.panel_id = s.panel_id"  # step 1: session's registered panel
 _OWN = "AND (chat_session_id = ? OR chat_session_id IS NULL)"  # step 2: own-row fallback
@@ -110,7 +187,9 @@ async def test_resolves_to_session_registered_panel(monkeypatch):
         == "zoe-touch-pi"
     )
     assert len(db.calls) == 1  # registered lookup answered; fallback not reached
-    assert db.calls[0][1] == ("session-1", "u1")
+    # params: chat_session_id, user_id, and the connecting id tie-break that ranks
+    # the connecting panel's own registered row first.
+    assert db.calls[0][1] == ("session-1", "u1", "zoe-touch-pi")
 
 
 @pytest.mark.asyncio

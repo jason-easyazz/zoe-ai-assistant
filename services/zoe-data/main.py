@@ -1538,22 +1538,27 @@ async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> 
     registered ids are exactly the rows in the ``panels`` table — generated aliases
     are written to ``ui_panel_sessions`` by bind but never to ``panels``.
 
-    Resolution is UNCONDITIONALLY CANONICAL for a session-bound socket, so an alias
-    having its own row can never short-circuit it (this is what closes the whole
-    "stale alias wins / rebinds" class instead of fixing it per-permutation):
-      1. If the session has a bound row whose ``panel_id`` is a registered panel
-         (exists in ``panels``), subscribe to THAT channel — always, even when the
-         connecting id is a generated alias that has its own row. So a stale or
-         rebound ``panel_xxxx`` never joins ``panel_panel_xxx`` and misses pushes
-         sent to ``panel_zoe-touch-pi``. Distinct physical panels have distinct
-         ``session_id``s, so this only ever returns the registered panel for the
-         connecting browser's own session (never routes one panel to another's).
+    Resolution prefers the session's REGISTERED panel (a bound row whose id is in
+    ``panels``) over a generated alias, which closes the whole "stale alias wins /
+    rebinds" class instead of fixing it per-permutation. Crucially the selected
+    registered row is TIED TO THE CONNECTING panel, so a session that holds rows for
+    SEVERAL registered panels (e.g. A and B) can't misroute:
+      1. Among the session's registered bound rows, prefer the one whose
+         ``panel_id`` IS the connecting id; only when none is (the connecting id is
+         a generated alias, not a registered row) fall back to the foreground /
+         most-recently-seen registered row. So panel A reconnecting always joins
+         ``panel_A`` even when panel B is foreground in the same session, while a
+         generated ``panel_xxxx`` still resolves to the registered
+         ``panel_zoe-touch-pi``. (An alias has no column linking it to a specific
+         registered panel; the session's foreground/most-recent registered panel is
+         the documented best-guess target for it.)
       2. Else (the session has only generated aliases, or no session_id) fall back
          to the connecting id when it is itself a bound row the user owns — under
          this session, or a NULL-session legacy/device bind.
       * admin/agent roles may target any explicit panel_id.
       * an unresolved session defers to the registered-panel guest policy.
-    A user can never reach a panel their session/account isn't bound to.
+    A user can never reach a panel their session/account isn't bound to (every
+    query filters on ``user_id``).
     """
     user = await _resolve_ws_session(session_id)
     if user is None:
@@ -1573,20 +1578,26 @@ async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> 
         from database import get_db
 
         async for db in get_db():
-            # (1) CANONICAL: the session's REGISTERED panel (a bound row whose
-            # panel_id exists in `panels`). This wins unconditionally over the
-            # connecting id, so a generated alias that has its own row can't make
-            # the socket join panel_<alias> and miss pushes addressed to the
-            # registered panel. Scoped to this session_id + user_id; distinct
-            # physical panels have distinct sessions, so at most one registered
-            # panel resolves here for the connecting browser.
+            # (1) CANONICAL: a REGISTERED panel (a bound row whose panel_id exists
+            # in `panels`) for this session + user. The connecting id is tied into
+            # the choice via `(s.panel_id = ?) DESC`, which ranks the row for the
+            # CONNECTING panel first. So when the session holds rows for several
+            # registered panels (A and B), panel A's socket resolves to panel_A —
+            # never whichever row happens to win is_foreground/last_seen_at. Only
+            # when the connecting id is NOT one of the session's registered rows
+            # (it is a generated alias) does the foreground/recency order decide;
+            # that is the documented fallback (an alias has no column linking it to
+            # a specific registered panel, so the foreground/most-recent registered
+            # panel is the best canonical target — this still routes panel_<alias>
+            # to panel_zoe-touch-pi). user_id scoping keeps it the session's own.
             if session_id:
                 cursor = await db.execute(
                     "SELECT s.panel_id FROM ui_panel_sessions s "
                     "JOIN panels p ON p.panel_id = s.panel_id "
                     "WHERE s.chat_session_id = ? AND s.user_id = ? "
-                    "ORDER BY s.is_foreground DESC, s.last_seen_at DESC LIMIT 1",
-                    (session_id, user_id),
+                    "ORDER BY (s.panel_id = ?) DESC, "
+                    "s.is_foreground DESC, s.last_seen_at DESC LIMIT 1",
+                    (session_id, user_id, panel_id),
                 )
                 row = await cursor.fetchone()
                 if row and row["panel_id"]:
