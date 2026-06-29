@@ -84,11 +84,23 @@ def _parse_aware_datetime(value: Any) -> datetime.datetime | None:
         return None
     if isinstance(value, datetime.datetime):
         dt = value
+    elif isinstance(value, datetime.date):
+        # Legacy date-only expiries mean "valid through this UTC day".
+        dt = datetime.datetime.combine(value, datetime.time.max)
     elif isinstance(value, str):
-        try:
-            dt = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            return None
+        raw = value.strip()
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+            try:
+                legacy_date = datetime.date.fromisoformat(raw)
+            except ValueError:
+                return None
+            # Date-only legacy strings expire after the calendar day ends in UTC.
+            dt = datetime.datetime.combine(legacy_date, datetime.time.max)
+        else:
+            try:
+                dt = datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except ValueError:
+                return None
     else:
         return None
     if dt.tzinfo is None:
@@ -106,6 +118,7 @@ def _normalize_expires_at(expires_at: str) -> str:
 def _memory_expired(expires_at: Any, now: datetime.datetime | None = None) -> bool:
     expires_dt = _parse_aware_datetime(expires_at)
     if expires_dt is None:
+        logger.warning("memory_service: invalid expires_at metadata kept active: %r", expires_at)
         return False
     now_dt = now or datetime.datetime.now(datetime.timezone.utc)
     if now_dt.tzinfo is None:
