@@ -46,7 +46,14 @@ _GUEST_USERS = ("guest", "anonymous", "voice-guest", "voice-daemon", "")
 
 def _message_owner_expr() -> str:
     guests = ", ".join("'" + user.replace("'", "''") + "'" for user in _GUEST_USERS)
-    metadata_user = "NULLIF(cm.metadata, '')::jsonb->>'user_id'"
+    # chat_messages.metadata is TEXT and legacy rows may contain non-JSON.
+    # Extract the simple {"user_id": "..."} field without a jsonb cast so one
+    # malformed row cannot fail discovery for every user.
+    metadata_user = (
+        "CASE WHEN cm.metadata ~ '^\\s*\\{' "
+        "THEN substring(cm.metadata from '\"user_id\"\\s*:\\s*\"([^\"]+)\"') "
+        "ELSE NULL END"
+    )
     return (
         "CASE "
         f"WHEN COALESCE({metadata_user}, '') NOT IN ({guests}) "

@@ -136,6 +136,15 @@ def _memory_id(user_id: str, text: str, metadata: Mapping[str, Any]) -> str:
     return f"zoe_{user_id}_{hashlib.sha256(basis).hexdigest()[:24]}"
 
 
+def _invalidate_agent_user_facts_cache(user_id: str) -> None:
+    try:
+        from zoe_agent import _invalidate_user_facts_cache  # type: ignore[import]
+
+        _invalidate_user_facts_cache(user_id)
+    except Exception as exc:
+        logger.debug("memory_service: user facts cache invalidation skipped: %s", exc)
+
+
 def _promote_event_metadata(md: dict[str, Any], extra: dict[str, Any]) -> None:
     for key in ("event_id", "evidence_refs", "relationships", "supersedes", "retention_policy"):
         value = extra.get(key)
@@ -402,6 +411,7 @@ class MemoryService:
                 await self._run_sync(self._delete_audit_for_user_sync, user_id)
             except Exception as exc:
                 raise MemoryServiceError(f"delete_user failed: {exc}") from exc
+            _invalidate_agent_user_facts_cache(user_id)
             return len(ids)
 
     async def list_by_status(

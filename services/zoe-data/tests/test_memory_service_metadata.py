@@ -248,12 +248,18 @@ async def test_ingest_same_text_distinct_identity_does_not_clobber():
 
 
 @pytest.mark.asyncio
-async def test_delete_user_purges_audit_payload_rows():
+async def test_delete_user_purges_audit_payload_rows(monkeypatch):
     memories = _FakeCollection(get_result={"ids": ["mem-1", "mem-2"]})
     audit = _FakeCollection(get_result={"ids": ["audit-1", "audit-2"]})
     service = MemoryService(data_dir="/tmp/zoe-test-memory-delete")
     service._collection = lambda: memories
     service._audit_collection = lambda: audit
+    invalidated = []
+    monkeypatch.setattr(
+        memory_service,
+        "_invalidate_agent_user_facts_cache",
+        lambda user_id: invalidated.append(user_id),
+    )
 
     deleted = await service.delete_user("jason", actor="admin")
 
@@ -262,6 +268,7 @@ async def test_delete_user_purges_audit_payload_rows():
     assert audit.seen_get_where == {"user_id": "jason"}
     assert audit.deleted_ids == ["audit-1", "audit-2"]
     assert audit.upserts == []
+    assert invalidated == ["jason"]
 
 
 def test_build_metadata_defaults_keep_review_edit_call_compatible():
