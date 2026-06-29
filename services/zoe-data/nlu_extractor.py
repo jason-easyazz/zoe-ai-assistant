@@ -299,14 +299,18 @@ async def _extract_transaction(text: str) -> Optional[dict]:
     if not args:
         return None
     # Produce exact integer cents plus the canonical two-decimal dollars the
-    # command boundary expects. If the extracted amount doesn't parse to a valid
-    # number, return None (caller falls through to Zoe Agent) rather than
-    # recording a bogus $0 transaction.
+    # command boundary expects. A missing/empty/unparseable amount returns None
+    # (caller falls through to Zoe Agent) rather than recording a bogus $0
+    # transaction. Zero is reserved for an explicit 0 amount.
     from money import to_cents, to_dollars
+    amount = args.get("amount")
+    if amount is None or (isinstance(amount, str) and not amount.strip()):
+        logger.warning("nlu_extractor: missing transaction amount %r", amount)
+        return None
     try:
-        cents = to_cents(args.get("amount") or 0)
+        cents = to_cents(amount)
     except ValueError:
-        logger.warning("nlu_extractor: unparseable transaction amount %r", args.get("amount"))
+        logger.warning("nlu_extractor: unparseable transaction amount %r", amount)
         return None
     return {
         "description": (args.get("description") or "purchase").strip(),

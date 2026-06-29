@@ -253,16 +253,34 @@ def test_nlu_extractor_produces_exact_cents(monkeypatch):
     assert result["description"] == "coffee"
 
 
-def test_nlu_extractor_rejects_malformed_amount(monkeypatch):
+@pytest.mark.parametrize("amount", ["1.2.3", "unknown", None, "", "   ", {}])
+def test_nlu_extractor_rejects_bad_or_missing_amount(monkeypatch, amount):
     import nlu_extractor
 
     async def _fake_tool(text, schema):
-        return {"description": "coffee", "amount": "1.2.3"}
+        args = {"description": "coffee"}
+        if amount != {}:                       # {} sentinel = key absent entirely
+            args["amount"] = amount
+        return args
     monkeypatch.setattr(nlu_extractor, "_call_with_tool", _fake_tool)
 
-    # Unparseable amount → None (caller falls through), never a $0 transaction.
-    result = asyncio.run(nlu_extractor._extract_transaction("i spent garbage on coffee"))
+    # Bad / missing / empty amount → None (caller falls through), never a $0 txn.
+    result = asyncio.run(nlu_extractor._extract_transaction("i spent x on coffee"))
     assert result is None
+
+
+def test_nlu_extractor_allows_explicit_zero(monkeypatch):
+    import nlu_extractor
+
+    async def _fake_tool(text, schema):
+        return {"description": "freebie", "amount": 0}
+    monkeypatch.setattr(nlu_extractor, "_call_with_tool", _fake_tool)
+
+    # Zero is reserved for an EXPLICIT 0 amount (not a masked parse failure).
+    result = asyncio.run(nlu_extractor._extract_transaction("free sample"))
+    assert result is not None
+    assert result["amount_cents"] == 0
+    assert result["amount"] == 0.0
 
 
 # ─── SQLite-backed router paths: dialect-safe cents + legacy convergence ───────
