@@ -1,0 +1,317 @@
+#!/usr/bin/env bash
+# Gatekeeper wrapper for the blessed zoe-data live deploy.
+#
+# This script checks whether the live tree is safe to deploy, then delegates all
+# pull/restart/rollback behavior to deploy_live.sh. It never repairs the live
+# checkout itself.
+set -euo pipefail
+
+LIVE="${ZOE_LIVE_TREE:-/home/zoe/assistant}"
+MIN_AVAIL_MB="${ZOE_DEPLOY_MIN_AVAIL_MB:-700}"
+SERVICE="${ZOE_SERVICE:-zoe-data}"
+PORT="${ZOE_PORT:-8000}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEPLOY_LIVE="${SCRIPT_DIR}/deploy_live.sh"
+
+MODE="check"
+MODE_SET=0
+WATCH_INTERVAL=30
+MAX_WAIT=""
+YES_RESTART=0
+
+log() {
+    printf 'deploy-ready: %s\n' "$*"
+}
+
+fail_usage() {
+    printf 'deploy-ready: ERROR: %s\n\n' "$*" >&2
+    usage >&2
+    exit 2
+}
+
+usage() {
+    cat <<'EOF'
+Usage: deploy_zoe_data_when_ready.sh [--check | --watch[=SECONDS] | --deploy] [options]
+
+Modes:
+  --check
+      Read-only gate check. Prints PASS/FAIL for each gate plus READY/NOT-READY.
+      This is the default mode and performs no mutation.
+
+  --watch[=SECONDS]
+  --watch SECONDS
+      Re-run --check until READY. Defaults to 30 seconds between checks.
+      Optional: --max-wait SECONDS. This mode never deploys.
+
+  --deploy
+      Run the same gates once. If READY, refuses unless
+      --yes-restart-production is also supplied. When confirmed, execs the
+      blessed scripts/maintenance/deploy_live.sh, then runs post-deploy checks.
+
+Required deploy confirmation:
+  --yes-restart-production
+      Required with --deploy because restarting zoe-data is a production action.
+
+Environment:
+  ZOE_LIVE_TREE=/home/zoe/assistant
+  ZOE_DEPLOY_MIN_AVAIL_MB=700
+  ZOE_SERVICE=zoe-data
+  ZOE_PORT=8000
+EOF
+}
+
+set_mode() {
+    local requested="$1"
+    if [[ "$MODE_SET" -eq 1 ]]; then
+        if [[ "$MODE" != "$requested" ]]; then
+            fail_usage "modes are mutually exclusive"
+        fi
+    fi
+    MODE="$requested"
+    MODE_SET=1
+}
+
+parse_positive_int() {
+    local name="$1"
+    local value="$2"
+    if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+        fail_usage "$name must be a non-negative integer"
+    fi
+    printf '%s' "$value"
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --check)
+            set_mode "check"
+            shift
+            ;;
+        --watch)
+            set_mode "watch"
+            if [[ $# -gt 1 && "$2" =~ ^[0-9]+$ ]]; then
+                WATCH_INTERVAL="$(parse_positive_int "--watch" "$2")"
+                shift 2
+            else
+                shift
+            fi
+            ;;
+        --watch=*)
+            set_mode "watch"
+            WATCH_INTERVAL="$(parse_positive_int "--watch" "${1#--watch=}")"
+            shift
+            ;;
+        --max-wait)
+            [[ $# -gt 1 ]] || fail_usage "--max-wait requires SECONDS"
+            MAX_WAIT="$(parse_positive_int "--max-wait" "$2")"
+            shift 2
+            ;;
+        --max-wait=*)
+            MAX_WAIT="$(parse_positive_int "--max-wait" "${1#--max-wait=}")"
+            shift
+            ;;
+        --deploy)
+            set_mode "deploy"
+            shift
+            ;;
+        --yes-restart-production)
+            YES_RESTART=1
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            fail_usage "unknown argument: $1"
+            ;;
+    esac
+done
+
+if [[ "$MODE" != "deploy" && "$YES_RESTART" -eq 1 ]]; then
+    fail_usage "--yes-restart-production is only valid with --deploy"
+fi
+if [[ "$MODE" != "watch" && -n "$MAX_WAIT" ]]; then
+    fail_usage "--max-wait is only valid with --watch"
+fi
+
+gate_pass() {
+    printf 'deploy-ready: PASS %-18s %s\n' "$1" "$2"
+}
+
+gate_fail() {
+    printf 'deploy-ready: FAIL %-18s %s\n' "$1" "$2"
+}
+
+mem_available_mb() {
+    if [[ -r /proc/meminfo ]]; then
+        awk '/^MemAvailable:/ {print int($2 / 1024); found=1; exit} END {if (!found) exit 1}' /proc/meminfo 2>/dev/null && return 0
+    fi
+    if command -v free >/dev/null 2>&1; then
+        free -m | awk '/^Mem:/ {print $7; found=1; exit} END {if (!found) exit 1}' 2>/dev/null && return 0
+    fi
+    printf '0'
+}
+
+check_gates() {
+    local failed=0
+    local branch=""
+    local status=""
+    local avail=0
+    local head=""
+    local upstream=""
+    local left=0
+    local right=0
+
+    log "checking live tree: ${LIVE}"
+    log "service=${SERVICE} port=${PORT} min_avail_mb=${MIN_AVAIL_MB}"
+
+    if git -C "$LIVE" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        gate_pass "git-repo" "$LIVE is a git worktree"
+    else
+        gate_fail "git-repo" "$LIVE is not a git worktree"
+        failed=1
+    fi
+
+    if [[ "$failed" -eq 0 ]]; then
+        branch="$(git -C "$LIVE" branch --show-current 2>/dev/null || true)"
+        if [[ "$branch" == "main" ]]; then
+            gate_pass "branch" "on main"
+        else
+            gate_fail "branch" "on '${branch:-detached}', expected main"
+            failed=1
+        fi
+
+        git -C "$LIVE" update-index -q --refresh 2>/dev/null || true
+        status="$(git -C "$LIVE" status --porcelain 2>/dev/null || true)"
+        if [[ -z "$status" ]]; then
+            gate_pass "clean-tree" "working tree clean"
+        else
+            gate_fail "clean-tree" "working tree has uncommitted changes"
+            printf '%s\n' "$status" | sed 's/^/deploy-ready:   /'
+            failed=1
+        fi
+
+        if git -C "$LIVE" fetch origin main >/dev/null 2>&1; then
+            head="$(git -C "$LIVE" rev-parse HEAD)"
+            upstream="$(git -C "$LIVE" rev-parse refs/remotes/origin/main 2>/dev/null || true)"
+            if [[ -n "$upstream" ]]; then
+                read -r left right < <(git -C "$LIVE" rev-list --left-right --count HEAD...refs/remotes/origin/main)
+                if [[ "$left" -eq 0 && "$right" -eq 0 ]]; then
+                    gate_pass "origin-main" "main is up-to-date with origin/main"
+                elif [[ "$left" -eq 0 && "$right" -gt 0 ]]; then
+                    gate_pass "origin-main" "main is behind origin/main by ${right} commit(s); deploy_live.sh will ff-pull"
+                elif [[ "$left" -gt 0 && "$right" -eq 0 ]]; then
+                    gate_fail "origin-main" "main is ahead of origin/main by ${left} commit(s)"
+                    failed=1
+                else
+                    gate_fail "origin-main" "main has diverged from origin/main (${left} ahead, ${right} behind)"
+                    failed=1
+                fi
+            else
+                gate_fail "origin-main" "could not resolve refs/remotes/origin/main after fetch (HEAD ${head})"
+                failed=1
+            fi
+        else
+            gate_fail "origin-main" "git fetch origin main failed"
+            failed=1
+        fi
+    fi
+
+    avail="$(mem_available_mb)"
+    if [[ "$avail" =~ ^[0-9]+$ && "$avail" -gt "$MIN_AVAIL_MB" ]]; then
+        gate_pass "memory" "MemAvailable=${avail}MB > ${MIN_AVAIL_MB}MB"
+    else
+        gate_fail "memory" "MemAvailable=${avail}MB <= ${MIN_AVAIL_MB}MB"
+        failed=1
+    fi
+
+    if [[ "$failed" -eq 0 ]]; then
+        log "READY"
+        return 0
+    fi
+    log "NOT-READY"
+    return 1
+}
+
+post_deploy_verify() {
+    local voice_file="${LIVE}/services/zoe-data/routers/voice_tts.py"
+    local main_file="${LIVE}/services/zoe-data/main.py"
+    local code=""
+    local failed=0
+
+    log "post-deploy verify starting"
+    if grep -q "_prewarm_stt_on_wake" "$voice_file"; then
+        gate_pass "post-voice" "voice_tts.py contains _prewarm_stt_on_wake"
+    else
+        gate_fail "post-voice" "voice_tts.py missing _prewarm_stt_on_wake"
+        failed=1
+    fi
+
+    if grep -q "warm_moonshine" "$main_file" && ! grep -q "faster-whisper" "$main_file"; then
+        gate_pass "post-main" "main.py warms Moonshine and has no faster-whisper startup warmup"
+    else
+        gate_fail "post-main" "main.py must contain warm_moonshine and no faster-whisper startup warmup"
+        failed=1
+    fi
+
+    code="$(curl -s -o /dev/null -w '%{http_code}' -m 3 "http://127.0.0.1:${PORT}/health" || true)"
+    if [[ "$code" == "200" ]]; then
+        gate_pass "post-health" "http://127.0.0.1:${PORT}/health returned 200"
+    else
+        gate_fail "post-health" "http://127.0.0.1:${PORT}/health returned ${code:-no response}"
+        failed=1
+    fi
+
+    if [[ "$failed" -eq 0 ]]; then
+        log "POST-DEPLOY VERIFY PASS"
+        return 0
+    fi
+    log "POST-DEPLOY VERIFY FAIL"
+    return 1
+}
+
+run_watch() {
+    local start now elapsed
+    start="$(date +%s)"
+    while true; do
+        log "watch cycle $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        if check_gates; then
+            return 0
+        fi
+        if [[ -n "$MAX_WAIT" ]]; then
+            now="$(date +%s)"
+            elapsed=$((now - start))
+            if [[ "$elapsed" -ge "$MAX_WAIT" ]]; then
+                log "watch max-wait reached (${MAX_WAIT}s)"
+                return 1
+            fi
+        fi
+        sleep "$WATCH_INTERVAL"
+    done
+}
+
+case "$MODE" in
+    check)
+        check_gates
+        ;;
+    watch)
+        run_watch
+        ;;
+    deploy)
+        if ! check_gates; then
+            log "deploy aborted: gates are NOT-READY"
+            exit 1
+        fi
+        if [[ "$YES_RESTART" -ne 1 ]]; then
+            log "REFUSING: --deploy would restart production ${SERVICE}; rerun with --yes-restart-production to confirm this production action."
+            exit 1
+        fi
+        if [[ ! -x "$DEPLOY_LIVE" ]]; then
+            log "ERROR: blessed deploy script is not executable: $DEPLOY_LIVE" >&2
+            exit 1
+        fi
+        log "running blessed deploy: $DEPLOY_LIVE"
+        "$DEPLOY_LIVE"
+        post_deploy_verify
+        ;;
+esac

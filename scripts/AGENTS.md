@@ -7,7 +7,7 @@ Operational scripting for Zoe hosts: setup, maintenance, deployment, migrations,
 ## Ownership
 
 - `setup/` — host/platform provisioning, including `setup/jetson/` systemd unit templates.
-- `maintenance/` — recurring operational jobs: `graphify_local_probe.py` (offline, observe-only local Graphify probe in a throwaway snapshot; never writes `graphify-out/` into the repo), `prune_worktrees.sh` (stale worktree cleanup), `greploop_guard.py` (Greptile fix-packet loop), `zoe-memory-lint.py` (report-only memory Lint CLI — prints contradictions/stale/orphan/duplicate findings, never mutates stored memory), triage generators, and `pi_intent_probe.py` for local Pi/Gemma ambiguous-intent timing evidence.
+- `maintenance/` — recurring operational jobs: `deploy_zoe_data_when_ready.sh` (read-only readiness/watch gate plus explicit-confirmation wrapper around blessed `deploy_live.sh`), `graphify_local_probe.py` (offline, observe-only local Graphify probe in a throwaway snapshot; never writes `graphify-out/` into the repo), `prune_worktrees.sh` (stale worktree cleanup), `greploop_guard.py` (Greptile fix-packet loop), `zoe-memory-lint.py` (report-only memory Lint CLI — prints contradictions/stale/orphan/duplicate findings, never mutates stored memory), triage generators, and `pi_intent_probe.py` for local Pi/Gemma ambiguous-intent timing evidence.
 - `perf/` — speed-regression harness: `measure_speed.py` (brain TTFT + gen tok/s probe vs the live llama-server), `measure_voice.py` (voice e2e latency + said-vs-did correctness, wrapping `services/zoe-data/tests/replay_samples.py`), and `measure_tts.py` (Kokoro TTS time-to-first-audio — times the live sidecar synth of the first speakable clause, reporting cache hit/miss; sources reply text from the replay corpus or a plain `--replies-file`). All are read-only and gated behind `ZOE_PERF=1`; see `perf/README.md` for the before/after workflow and the captured baseline.
 - `deploy/`, `migrations/`, `testing/`, `train/`, `utilities/`, `preview/` — task-specific script groups.
 
@@ -31,6 +31,8 @@ Log to journal (systemd) or an explicit log path; scripts that fail silently hav
 ## Verification
 
 For timer-driven scripts, run once manually with the unit's exact ExecStart line and check `systemctl --user status <unit>` after the next scheduled fire.
+
+For `deploy_zoe_data_when_ready.sh`, run `pytest services/zoe-data/tests/test_deploy_zoe_data_when_ready.py`; the test uses fake git live trees and never restarts production.
 
 ## Child DOX Index
 
