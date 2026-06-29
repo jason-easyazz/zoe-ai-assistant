@@ -389,16 +389,24 @@ window.ZoeWebSockets = {
         this.push.on('panel_pin_request', (data) => {
             const payload = unwrapPayload(data);
             let knownPanelIds = [];
+            let authoritativePanelIds = [];
             try {
                 const params = new URLSearchParams(window.location.search || '');
+                const urlPanelId = String(params.get('panel_id') || '').trim();
+                const registeredPanelId = String(localStorage.getItem('zoe_panel_id') || '').trim();
+                const aliasPanelId = String(localStorage.getItem('zoe_touch_panel_id') || '').trim();
                 knownPanelIds = [
-                    params.get('panel_id'),
-                    localStorage.getItem('zoe_panel_id'),
-                    localStorage.getItem('zoe_touch_panel_id'),
-                ].map((value) => String(value || '').trim()).filter(Boolean);
+                    urlPanelId,
+                    registeredPanelId,
+                    aliasPanelId,
+                ].filter(Boolean);
+                authoritativePanelIds = [urlPanelId, registeredPanelId].filter(Boolean);
             } catch (_) {}
             const requestedPanelId = String(payload.panel_id || '').trim();
-            if (requestedPanelId && knownPanelIds.length && !knownPanelIds.includes(requestedPanelId)) {
+            // Alias-only browsers can receive a canonical registered-id payload
+            // after the server resolves their socket subscription, so only reject
+            // mismatches once the browser knows an authoritative id itself.
+            if (requestedPanelId && authoritativePanelIds.length && !knownPanelIds.includes(requestedPanelId)) {
                 return;
             }
             // Prefer modern panel_request_auth flow (touch login page) over
@@ -442,5 +450,3 @@ window.ZoeWebSockets = {
         console.log('[ZoeWS] Panel push channel connected, panel_id:', panelId);
     }
 };
-
-
