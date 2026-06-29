@@ -14,6 +14,7 @@ import os
 
 from runtime_env import bootstrap_runtime_env
 from agent_safety import SSRFBlocked, assert_panel_url, assert_public_url, guard_browser_page
+from time_utils import today_for_zoe_tz
 
 bootstrap_runtime_env()
 
@@ -1468,7 +1469,7 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         return {**result, "date": args["start_date"], "status": "created"}
 
     elif name == "calendar_today":
-        today = date.today().isoformat()
+        today = today_for_zoe_tz().isoformat()
         cursor = await db.execute(
             "SELECT id, title, start_time, end_time, category, location FROM events"
             " WHERE start_date = ? AND (visibility = 'family' OR user_id = ?) AND deleted = 0"
@@ -1571,7 +1572,7 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
 
     elif name == "reminder_list":
         if args.get("today_only"):
-            today = date.today().isoformat()
+            today = today_for_zoe_tz().isoformat()
             cursor = await db.execute(
                 "SELECT id, title, due_date, due_time, priority, category FROM reminders"
                 " WHERE due_date = ? AND (visibility = 'family' OR user_id = ?)"
@@ -2256,7 +2257,14 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         return {**result, "date": tx_date, "status": "created"}
 
     elif name == "transaction_list":
-        limit = args.get("limit", 20)
+        raw_limit = args.get("limit", 20)
+        try:
+            if isinstance(raw_limit, bool):
+                raise ValueError("boolean limit is not valid")
+            limit = int(raw_limit)
+        except (TypeError, ValueError):
+            limit = 20
+        limit = max(1, min(limit, 100))
         conditions = ["(visibility='family' OR user_id=?) AND deleted=0"]
         params = [user_id]
         if args.get("start_date"):
