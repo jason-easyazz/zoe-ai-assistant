@@ -135,8 +135,10 @@ _BLOCKED_READ_STATUSES = {"archived", "rejected", "superseded", "pending", "disp
 # idempotent write path. Bounded to keep memory flat over the process lifetime.
 _SEEN_KEYS_MAX = 50_000
 
-# Cap for the per-row distinct-query hash blob (_query_hashes metadata). unique_query_count
-# stays the durable monotonic signal; only the recent-hash window is bounded.
+# Cap for the per-row distinct-query hash blob (_query_hashes metadata). The blob is
+# the dedup oracle and never evicts; once it is full both the blob and the derived
+# unique_query_count freeze, so churned-out queries can't re-count and inflate the
+# signal. unique_query_count is thus monotonic and == min(distinct queries, this cap).
 _MAX_QUERY_HASHES = 256
 
 
@@ -1124,14 +1126,18 @@ class MemoryService:
             m["access_count"] = int(m.get("access_count", 0) or 0) + 1
             m["last_accessed"] = now_iso
             if query_hash:
-                # Track distinct queries that have surfaced this memory. Keep only a
-                # bounded recent window of hashes so the stored blob can't grow without
-                # limit; unique_query_count stays the durable monotonic signal.
+                # Track distinct queries that have surfaced this memory. The hash blob
+                # is the dedup oracle AND must stay bounded, so it is capped at
+                # _MAX_QUERY_HASHES and never evicts. Once saturated we can no longer
+                # tell a genuinely new query from one whose hash was already dropped,
+                # so unique_query_count FREEZES at the cap rather than re-counting
+                # churned-out queries (which would inflate the promotion/diversity
+                # signal). It stays a monotonic, non-decreasing count == min(distinct
+                # queries, _MAX_QUERY_HASHES); the cap (256) is far above any promotion
+                # threshold so freezing loses no real signal.
                 seen_hashes = [h for h in (m.get("_query_hashes") or "").split(",") if h]
-                if query_hash not in seen_hashes:
+                if query_hash not in seen_hashes and len(seen_hashes) < _MAX_QUERY_HASHES:
                     seen_hashes.append(query_hash)
-                    if len(seen_hashes) > _MAX_QUERY_HASHES:
-                        seen_hashes = seen_hashes[-_MAX_QUERY_HASHES:]
                     m["_query_hashes"] = ",".join(seen_hashes)
                     m["unique_query_count"] = int(m.get("unique_query_count", 0) or 0) + 1
             new_metas.append(m)

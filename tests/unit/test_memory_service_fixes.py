@@ -247,5 +247,35 @@ async def test_query_hashes_blob_is_bounded(svc):
     meta = svc._fake.rows[ref.id]["metadata"]
     stored = [h for h in (meta.get("_query_hashes") or "").split(",") if h]
     assert len(stored) <= _MAX_QUERY_HASHES, "stored hash blob must stay capped"
-    # unique_query_count is the durable monotonic signal and keeps counting.
-    assert meta["unique_query_count"] >= _MAX_QUERY_HASHES
+    # The blob never evicts, so it fills exactly to the cap...
+    assert len(stored) == _MAX_QUERY_HASHES
+    # ...and unique_query_count freezes there (== min(distinct, cap)) instead of
+    # inflating past it as churned-out queries keep arriving.
+    assert meta["unique_query_count"] == _MAX_QUERY_HASHES
+
+
+async def test_unique_query_count_does_not_inflate_after_saturation(svc):
+    """Greptile P2: an evicted/churned query must NOT re-count once the bounded
+    window is saturated, or the diversity signal inflates without truly new queries."""
+    ref = await _seed(svc, "enjoys hiking")
+
+    # Fill the window exactly to the cap with distinct queries.
+    for i in range(_MAX_QUERY_HASHES):
+        await svc.tick_access("u1", [ref.id], query=f"q{i}")
+    meta = svc._fake.rows[ref.id]["metadata"]
+    assert meta["unique_query_count"] == _MAX_QUERY_HASHES
+    assert len([h for h in meta["_query_hashes"].split(",") if h]) == _MAX_QUERY_HASHES
+
+    # A brand-new distinct query after saturation must not bump the count: the
+    # window is full and we can no longer distinguish new from already-dropped.
+    await svc.tick_access("u1", [ref.id], query="a totally new query")
+    meta = svc._fake.rows[ref.id]["metadata"]
+    assert meta["unique_query_count"] == _MAX_QUERY_HASHES, "saturated count must freeze"
+
+    # Re-issuing one of the earliest queries (the kind the old sliding window would
+    # have evicted and then re-counted) must also leave the count untouched.
+    await svc.tick_access("u1", [ref.id], query="q0")
+    meta = svc._fake.rows[ref.id]["metadata"]
+    assert meta["unique_query_count"] == _MAX_QUERY_HASHES, "re-seen query must not re-count"
+    # access_count keeps climbing even while the distinct-query signal is frozen.
+    assert meta["access_count"] == _MAX_QUERY_HASHES + 2
