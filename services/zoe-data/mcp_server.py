@@ -301,6 +301,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
+                "user_id": {"type": "string", "description": "User ID (default: current user)"},
                 "widgets": {"type": "array", "items": {"type": "string"}, "description": "Widget IDs to add"},
             },
             "required": ["widgets"],
@@ -1154,10 +1155,10 @@ TOOLS = [
 from db_compat import get_compat_db as _pg_get_db  # noqa: E402
 
 
-async def handle_tool(name: str, args: dict) -> str:
+async def handle_tool(name: str, args: dict, actor_context: dict | None = None) -> str:
     async with _pg_get_db() as db:
         try:
-            result = await _execute_tool(db, name, args)
+            result = await _execute_tool(db, name, args, actor_context=actor_context)
             return json.dumps(result, default=str)
         except Exception as e:
             return json.dumps({"error": str(e)})
@@ -1280,13 +1281,111 @@ class _MissingUserId(Exception):
     """Raised when strict mode rejects a tool call with no identity."""
 
 
-async def _execute_tool(db, name: str, args: dict):
-    # Prefer the framework-injected caller identity (_user_id); fall back to an
-    # explicit user_id arg. Use short-circuit `or` so the fallback pop is lazy —
-    # a default expression like args.pop("_user_id", args.pop("user_id", None))
-    # evaluates eagerly and would always discard an explicit user_id target.
-    _uid_raw = args.pop("_user_id", None) or args.pop("user_id", None)
-    if _uid_raw is None:
+_ADMIN_ROLES = {"admin"}
+
+
+def _normalize_user_id(value) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _trusted_actor_context_from_message(msg: dict) -> dict:
+    """Extract MCP actor data from transport/session metadata, not tool args.
+
+    Per-message metadata may identify the session actor, but privilege is
+    server-authoritative: roles come only from the DB or server env.
+    """
+    params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
+    meta = params.get("_meta") or msg.get("_meta") or {}
+    if not isinstance(meta, dict):
+        meta = {}
+    zoe_meta = meta.get("zoe") if isinstance(meta.get("zoe"), dict) else {}
+    session_meta = meta.get("session") if isinstance(meta.get("session"), dict) else {}
+
+    def _first(*values):
+        for value in values:
+            normalized = _normalize_user_id(value)
+            if normalized:
+                return normalized
+        return None
+
+    message_user_id = _first(
+        zoe_meta.get("actor_user_id"),
+        zoe_meta.get("user_id"),
+        session_meta.get("actor_user_id"),
+        session_meta.get("user_id"),
+        meta.get("actor_user_id"),
+        meta.get("user_id"),
+    )
+    env_user_id = _first(
+        os.environ.get("ZOE_MCP_ACTOR_USER_ID"),
+        os.environ.get("ZOE_MCP_USER_ID"),
+    )
+    user_id = message_user_id or env_user_id
+    env_role = _first(
+        os.environ.get("ZOE_MCP_ACTOR_ROLE"),
+        os.environ.get("ZOE_MCP_USER_ROLE"),
+    )
+    role = env_role if env_user_id and not message_user_id else None
+    if message_user_id:
+        source = "transport_verified" if env_user_id == message_user_id else "transport_meta"
+    else:
+        source = "transport_env" if env_user_id else "transport"
+    return {
+        "user_id": user_id,
+        "role": role,
+        "role_source": "env" if role else None,
+        "source": source,
+    }
+
+
+async def _lookup_actor_role(db, user_id: str, role_hint: str | None, source: str | None) -> str:
+    role = (role_hint or "").strip().lower()
+    if role:
+        return role
+    if source == "legacy_fallback" and user_id == "family-admin":
+        return "admin"
+    if source == "transport_meta":
+        return "member"
+    if db is not None:
+        try:
+            cursor = await db.execute("SELECT role FROM users WHERE id = ?", (user_id,))
+            row = await cursor.fetchone()
+            if row:
+                value = row.get("role") if hasattr(row, "get") else row["role"]
+                if value:
+                    return str(value).strip().lower()
+        except Exception:
+            pass
+    return "member"
+
+
+async def _resolve_mcp_actor(db, name: str, args: dict, actor_context: dict | None) -> dict:
+    """Resolve the acting identity.
+
+    actor_context=None is the legacy direct-test/internal helper mode. The stdio
+    tools/call path always passes a context, so caller-supplied args are not
+    trusted there.
+    """
+    explicit = False
+    if actor_context is None:
+        _uid_raw = args.pop("_user_id", None)
+        if _uid_raw is None:
+            _uid_raw = args.pop("user_id", None)
+        explicit = _uid_raw is not None
+        role_hint = None
+        source = "legacy_args"
+    else:
+        args.pop("_user_id", None)
+        _uid_raw = actor_context.get("user_id")
+        explicit = _uid_raw is not None
+        role_hint = actor_context.get("role") if actor_context.get("role_source") == "env" else None
+        source = actor_context.get("source") or "transport"
+
+    user_id = _normalize_user_id(_uid_raw)
+    if user_id is None:
         if _MCP_STRICT_USER_ID:
             raise _MissingUserId(
                 f"tool '{name}' requires explicit _user_id (strict mode enabled)"
@@ -1297,8 +1396,39 @@ async def _execute_tool(db, name: str, args: dict):
             name,
         )
         user_id = "family-admin"
-    else:
-        user_id = _uid_raw
+        source = "legacy_fallback"
+        _mcp_log.warning(
+            "mcp tool '%s' using legacy unauthenticated family-admin fallback",
+            name,
+        )
+
+    role = await _lookup_actor_role(db, user_id, role_hint, source)
+    return {"user_id": user_id, "role": role, "explicit": explicit, "source": source}
+
+
+def _is_admin_actor(actor: dict) -> bool:
+    return str(actor.get("role") or "").strip().lower() in _ADMIN_ROLES
+
+
+def _authorized_target_user(actor: dict, requested_user_id, tool_name: str) -> str:
+    actor_user_id = str(actor["user_id"])
+    requested = _normalize_user_id(requested_user_id)
+    if requested is None or requested == actor_user_id:
+        return actor_user_id if requested is None else requested
+    if _is_admin_actor(actor):
+        return requested
+    _mcp_log.warning(
+        "mcp tool '%s' ignored non-admin user_id override actor=%s requested=%s",
+        tool_name,
+        actor_user_id,
+        requested,
+    )
+    return actor_user_id
+
+
+async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = None):
+    actor = await _resolve_mcp_actor(db, name, args, actor_context)
+    user_id = actor["user_id"]
 
     if "list_type" in args:
         args["list_type"] = _LIST_TYPE_ALIASES.get(args["list_type"], args["list_type"])
@@ -1519,7 +1649,7 @@ async def _execute_tool(db, name: str, args: dict):
         return {"notes": [dict(r) for r in rows]}
 
     elif name == "dashboard_get_layout":
-        uid = args.get("user_id", user_id)
+        uid = _authorized_target_user(actor, args.get("user_id"), name)
         cursor = await db.execute(
             "SELECT layout, updated_at FROM dashboard_layouts WHERE user_id = ?",
             (uid,),
@@ -1530,7 +1660,7 @@ async def _execute_tool(db, name: str, args: dict):
         return {"layout": None, "message": "No layout saved yet"}
 
     elif name == "dashboard_save_layout":
-        uid = args.get("user_id", user_id)
+        uid = _authorized_target_user(actor, args.get("user_id"), name)
         layout_payload = json.dumps(args.get("layout", []))
         async with db.transaction():
             await _ensure_dashboard_layout_row(db, uid)
@@ -1545,7 +1675,7 @@ async def _execute_tool(db, name: str, args: dict):
         return {"status": "ok"}
 
     elif name == "dashboard_add_widget":
-        uid = args.get("user_id", user_id)
+        uid = _authorized_target_user(actor, args.get("user_id"), name)
         widget_ids = args.get("widgets", [])
         VALID_WIDGETS = {
             "weather",
@@ -2808,7 +2938,7 @@ async def _execute_tool(db, name: str, args: dict):
         from datetime import datetime as _dt_cls, timezone as _tz
         msg_text = (args.get("message") or "").strip()
         send_at_str = (args.get("send_at") or "").strip()
-        target_uid = args.get("user_id") or user_id
+        target_uid = _authorized_target_user(actor, args.get("user_id"), name)
         if not msg_text:
             return {"error": "message is required"}
         if not send_at_str:
@@ -2832,7 +2962,7 @@ async def _execute_tool(db, name: str, args: dict):
 
     # === USER PORTRAIT ================================================
     elif name == "user_portrait_get":
-        target_uid = (args.get("user_id") or "").strip() or user_id
+        target_uid = _authorized_target_user(actor, args.get("user_id"), name)
         try:
             from user_portrait import load_portrait  # type: ignore[import]
             portrait = await load_portrait(target_uid)
@@ -3029,7 +3159,11 @@ async def _execute_tool(db, name: str, args: dict):
                 return {"error": "title and description required"}
             evidence = (args.get("evidence") or "").strip()
             prop_id = str(uuid.uuid4()).replace("-", "")
-            proposal_user_id = str(_uid_raw).strip() if _uid_raw else None
+            proposal_user_id = (
+                str(user_id).strip()
+                if actor.get("explicit") or actor.get("source") == "legacy_fallback"
+                else None
+            )
             intake = build_mcp_runtime_evolution_proposal_intake(
                 proposal_id=prop_id,
                 title=title,
@@ -3162,7 +3296,8 @@ async def run_stdio_server():
         elif method == "tools/call":
             tool_name = msg["params"]["name"]
             tool_args = msg["params"].get("arguments", {})
-            result_text = await handle_tool(tool_name, tool_args)
+            actor_context = _trusted_actor_context_from_message(msg)
+            result_text = await handle_tool(tool_name, tool_args, actor_context=actor_context)
             response = {
                 "jsonrpc": "2.0",
                 "id": msg.get("id"),

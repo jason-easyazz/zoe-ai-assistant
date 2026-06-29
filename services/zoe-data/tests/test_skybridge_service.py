@@ -877,6 +877,8 @@ async def test_new_named_work_list_is_created_and_displayed():
     assert result["intent"]["list_name"] == "Projects"
     assert any(item["name"] == "Projects" and item["list_type"] == "work" for item in db.lists)
     assert result["cards"][0]["content"]["list_name"] == "Projects"
+    assert result["spoken_summary"] == "Created Projects."
+    assert result["actions"][0]["type"] == "created"
 
 
 @pytest.mark.asyncio
