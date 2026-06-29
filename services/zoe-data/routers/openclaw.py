@@ -112,7 +112,10 @@ async def search_skills(q: str = Query(""), _user: dict = Depends(get_current_us
 @router.get("/skills/{name}/preview")
 async def preview_skill_endpoint(name: str, _user: dict = Depends(get_current_user)):
     """Read SKILL.md and run automated security scan. Returns content + security verdict."""
-    return await preview_skill(name)
+    try:
+        return await preview_skill(name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.post("/skills/{name}/install")
@@ -126,6 +129,8 @@ async def install_skill_endpoint(
     """Install a skill (allowlist-gated). Returns 403 if not in allowlist."""
     try:
         return await install_skill(name, version=version, force=force, source=source)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
     except RuntimeError as exc:
@@ -137,6 +142,8 @@ async def update_skill_endpoint(name: str, _user: dict = Depends(require_admin))
     """Update a workspace skill from ClawHub."""
     try:
         return await update_skill(name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -146,6 +153,8 @@ async def remove_skill_endpoint(name: str, _user: dict = Depends(require_admin))
     """Remove a workspace skill by deleting its directory."""
     try:
         return await remove_skill(name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 

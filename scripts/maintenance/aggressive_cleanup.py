@@ -1,239 +1,198 @@
 #!/usr/bin/env python3
 """
-AGGRESSIVE Zoe Project Cleanup Script
-Removes everything unnecessary to get under size limits
+Dry-run-first cleanup for generated Zoe artifacts.
+
+The old script removed source routers, configs, backups, and checkpoints without
+confirmation. This replacement only deletes allowlisted generated artifacts, never
+source files. Use --execute to delete safe generated files. Add
+--include-state-artifacts plus typed confirmation to delete generated state such
+as backups/checkpoints/training DBs.
 """
 
-import os
+from __future__ import annotations
+
+import argparse
 import shutil
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
-from datetime import datetime
 
-def run_command(cmd, description):
-    """Run a command and return success status"""
-    print(f"🔄 {description}...")
-    try:
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        if result.returncode == 0:
-            print(f"✅ {description} - Success")
-            return True
+
+STATE_CONFIRMATION = "DELETE GENERATED STATE"
+SOURCE_SUFFIXES = {
+    ".c",
+    ".cpp",
+    ".css",
+    ".go",
+    ".h",
+    ".html",
+    ".js",
+    ".jsx",
+    ".md",
+    ".py",
+    ".rs",
+    ".sh",
+    ".ts",
+    ".tsx",
+    ".yml",
+    ".yaml",
+}
+SAFE_ROOT_FILES = (
+    "database_analysis.json",
+    "database_audit_report.json",
+    "database_violations.json",
+)
+STATE_PATHS = (
+    "backups",
+    "checkpoints",
+    "logs",
+    "data/training.db",
+)
+
+
+@dataclass(frozen=True)
+class Candidate:
+    path: Path
+    reason: str
+    stateful: bool = False
+
+
+def get_path_size_mb(path: Path) -> int:
+    if not path.exists():
+        return 0
+    result = subprocess.run(["du", "-sm", str(path)], capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        return 0
+    return int(result.stdout.split()[0])
+
+
+def is_source_file(path: Path) -> bool:
+    return path.is_file() and path.suffix.lower() in SOURCE_SUFFIXES
+
+
+def iter_candidates(repo: Path, include_state: bool) -> tuple[list[Candidate], list[Candidate]]:
+    candidates: list[Candidate] = []
+    skipped_state: list[Candidate] = []
+
+    for pycache in repo.rglob("__pycache__"):
+        if pycache.is_dir():
+            candidates.append(Candidate(pycache, "Python bytecode cache"))
+
+    for pattern, reason in (("*.pyc", "Python bytecode"), ("*.pyo", "Python optimized bytecode")):
+        for path in repo.rglob(pattern):
+            if path.is_file():
+                candidates.append(Candidate(path, reason))
+
+    for rel in SAFE_ROOT_FILES:
+        path = repo / rel
+        if path.exists():
+            candidates.append(Candidate(path, "generated audit/report artifact"))
+
+    for rel in STATE_PATHS:
+        path = repo / rel
+        if not path.exists():
+            continue
+        candidate = Candidate(path, "generated state artifact", stateful=True)
+        if include_state:
+            candidates.append(candidate)
         else:
-            print(f"❌ {description} - Failed: {result.stderr}")
-            return False
-    except Exception as e:
-        print(f"❌ {description} - Error: {e}")
-        return False
+            skipped_state.append(candidate)
 
-def get_directory_size(path):
-    """Get directory size in MB"""
-    try:
-        result = subprocess.run(['du', '-sm', path], capture_output=True, text=True)
-        if result.returncode == 0:
-            size_mb = int(result.stdout.split()[0])
-            return size_mb
-    except:
-        pass
+    seen: set[Path] = set()
+    unique: list[Candidate] = []
+    for candidate in sorted(candidates, key=lambda item: len(item.path.resolve().parts)):
+        resolved = candidate.path.resolve()
+        if resolved in seen:
+            continue
+        if any(parent in seen for parent in resolved.parents):
+            continue
+        seen.add(resolved)
+        unique.append(candidate)
+    return unique, skipped_state
+
+
+def assert_safe_candidate(repo: Path, candidate: Candidate) -> None:
+    path = candidate.path.resolve()
+    if not path.is_relative_to(repo):
+        raise SystemExit(f"Refusing path outside repo: {path}")
+    if is_source_file(path):
+        raise SystemExit(f"Refusing to delete source/config file: {path}")
+
+
+def remove_candidate(candidate: Candidate) -> None:
+    path = candidate.path
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Clean allowlisted generated Zoe artifacts.")
+    parser.add_argument(
+        "--repo",
+        default=".",
+        help="Repository root to clean. Defaults to current directory.",
+    )
+    parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Delete allowlisted generated artifacts. Default is dry-run.",
+    )
+    parser.add_argument(
+        "--include-state-artifacts",
+        action="store_true",
+        help="Also delete generated state artifacts such as backups/checkpoints/logs/training DB.",
+    )
+    parser.add_argument(
+        "--confirm-state",
+        default="",
+        help=f"Required with --include-state-artifacts and --execute: {STATE_CONFIRMATION!r}",
+    )
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    repo = Path(args.repo).expanduser().resolve()
+    if not (repo / ".git").exists():
+        raise SystemExit(f"Refusing to clean non-repository path: {repo}")
+    if args.execute and args.include_state_artifacts and args.confirm_state != STATE_CONFIRMATION:
+        raise SystemExit(f"Refusing state cleanup without --confirm-state {STATE_CONFIRMATION!r}")
+
+    candidates, skipped_state = iter_candidates(repo, args.include_state_artifacts)
+    total_mb = 0
+
+    print("Aggressive cleanup")
+    print(f"Repo: {repo}")
+    print(f"Mode: {'execute' if args.execute else 'dry-run'}")
+    print("Source/config deletion: retired; this script never deletes source files or configs.")
+
+    if skipped_state:
+        print("\nStateful generated artifacts skipped:")
+        for candidate in skipped_state:
+            print(f"  - {candidate.path.relative_to(repo)} ({get_path_size_mb(candidate.path)}MB)")
+        print(f"Use --include-state-artifacts --confirm-state {STATE_CONFIRMATION!r} to include them.")
+
+    print("\nDeletion plan:")
+    if not candidates:
+        print("  No allowlisted generated artifacts found.")
+        return 0
+
+    for candidate in candidates:
+        assert_safe_candidate(repo, candidate)
+        size_mb = get_path_size_mb(candidate.path)
+        total_mb += size_mb
+        marker = "STATE " if candidate.stateful else ""
+        print(f"  - {marker}{candidate.path.relative_to(repo)} ({size_mb}MB): {candidate.reason}")
+        if args.execute:
+            remove_candidate(candidate)
+
+    action = "Deleted" if args.execute else "Would delete"
+    print(f"\n{action} {len(candidates)} allowlisted paths, approximately {total_mb}MB.")
     return 0
 
-def aggressive_python_cache_cleanup():
-    """Remove ALL Python cache files aggressively"""
-    print("\n🧹 AGGRESSIVE Python cache cleanup...")
-    
-    # Find all __pycache__ directories
-    cache_dirs = []
-    for root, dirs, files in os.walk('.'):
-        if '__pycache__' in dirs:
-            cache_dirs.append(os.path.join(root, '__pycache__'))
-    
-    total_size = 0
-    for cache_dir in cache_dirs:
-        size_mb = get_directory_size(cache_dir)
-        total_size += size_mb
-        print(f"  Removing {cache_dir} ({size_mb}MB)")
-        shutil.rmtree(cache_dir, ignore_errors=True)
-    
-    # Also remove .pyc files
-    run_command("find . -name '*.pyc' -delete", "Remove .pyc files")
-    run_command("find . -name '*.pyo' -delete", "Remove .pyo files")
-    
-    print(f"✅ Removed {len(cache_dirs)} cache directories ({total_size}MB freed)")
-    return total_size
-
-def remove_large_database_files():
-    """Remove large database files that aren't essential"""
-    print("\n🗄️ Removing large database files...")
-    
-    # Remove training database (can be regenerated)
-    training_db = "data/training.db"
-    if os.path.exists(training_db):
-        size_mb = get_directory_size(training_db)
-        print(f"  Removing training database: {training_db} ({size_mb}MB)")
-        os.remove(training_db)
-        return size_mb
-    
-    return 0
-
-def remove_large_json_files():
-    """Remove large JSON analysis files"""
-    print("\n📊 Removing large JSON files...")
-    
-    large_json_files = [
-        "database_analysis.json",
-        "database_audit_report.json", 
-        "database_violations.json"
-    ]
-    
-    total_size = 0
-    for json_file in large_json_files:
-        if os.path.exists(json_file):
-            size_mb = get_directory_size(json_file)
-            total_size += size_mb
-            print(f"  Removing large JSON: {json_file} ({size_mb}MB)")
-            os.remove(json_file)
-    
-    print(f"✅ Removed large JSON files ({total_size}MB freed)")
-    return total_size
-
-def remove_documentation_files():
-    """Remove non-essential documentation"""
-    print("\n📚 Removing non-essential documentation...")
-    
-    # Remove large documentation files
-    doc_files = [
-        "PROMPT_FOR_DEVELOPER_UI.md",
-        "comprehensive_model_benchmark.py",
-        "benchmark_llms.py",
-        "demonstrate_zoe_awareness.py",
-        "analyze_databases.py",
-        "migrate_to_unified_db.py",
-        "create_enhancement_tasks.py"
-    ]
-    
-    total_size = 0
-    for doc_file in doc_files:
-        if os.path.exists(doc_file):
-            size_mb = get_directory_size(doc_file)
-            total_size += size_mb
-            print(f"  Removing doc file: {doc_file} ({size_mb}MB)")
-            os.remove(doc_file)
-    
-    print(f"✅ Removed documentation files ({total_size}MB freed)")
-    return total_size
-
-def remove_backup_directories():
-    """Remove backup directories"""
-    print("\n🗂️ Removing backup directories...")
-    
-    backup_dirs = [
-        "backups",
-        "checkpoints", 
-        "logs",
-        "configs"
-    ]
-    
-    total_size = 0
-    for backup_dir in backup_dirs:
-        if os.path.exists(backup_dir):
-            size_mb = get_directory_size(backup_dir)
-            total_size += size_mb
-            print(f"  Removing backup dir: {backup_dir} ({size_mb}MB)")
-            shutil.rmtree(backup_dir, ignore_errors=True)
-    
-    print(f"✅ Removed backup directories ({total_size}MB freed)")
-    return total_size
-
-def remove_unnecessary_config_files():
-    """Remove duplicate config files"""
-    print("\n⚙️ Removing duplicate config files...")
-    
-    config_files = [
-        "working-tunnel-config.yml",
-        "working-config.yml",
-        "simple-tunnel-config.yml", 
-        "simple-config.yml",
-        "tunnel-config.yml",
-        "final-tunnel-config.yml",
-        "final-config.yml",
-        "cloudflared-config.yml"
-    ]
-    
-    total_size = 0
-    for config_file in config_files:
-        if os.path.exists(config_file):
-            size_mb = get_directory_size(config_file)
-            total_size += size_mb
-            print(f"  Removing config: {config_file} ({size_mb}MB)")
-            os.remove(config_file)
-    
-    print(f"✅ Removed duplicate config files ({total_size}MB freed)")
-    return total_size
-
-def remove_large_service_files():
-    """Remove large files from services"""
-    print("\n🔧 Removing large service files...")
-    
-    # Remove large router files that might be duplicates
-    router_files_to_check = [
-        "services/zoe-core/routers/developer.py",
-        "services/zoe-core/routers/chat.py"
-    ]
-    
-    total_size = 0
-    for router_file in router_files_to_check:
-        if os.path.exists(router_file):
-            size_mb = get_directory_size(router_file)
-            if size_mb > 50:  # Only remove if over 50KB
-                total_size += size_mb
-                print(f"  Removing large router: {router_file} ({size_mb}MB)")
-                os.remove(router_file)
-    
-    print(f"✅ Removed large service files ({total_size}MB freed)")
-    return total_size
-
-def optimize_git():
-    """Run aggressive git optimization"""
-    print("\n🔧 AGGRESSIVE git optimization...")
-    run_command("git gc --aggressive --prune=now", "Aggressive garbage collection")
-    run_command("git repack -ad", "Git repack")
-
-def main():
-    """Main aggressive cleanup function"""
-    print("🧹 AGGRESSIVE ZOE PROJECT CLEANUP")
-    print("=" * 50)
-    
-    # Change to project directory
-    os.chdir('/home/zoe/assistant')
-    
-    # Get initial size
-    initial_size = get_directory_size('.')
-    print(f"📊 Initial project size: {initial_size}MB")
-    
-    total_freed = 0
-    
-    # Run aggressive cleanup operations
-    total_freed += aggressive_python_cache_cleanup()
-    total_freed += remove_large_database_files()
-    total_freed += remove_large_json_files()
-    total_freed += remove_documentation_files()
-    total_freed += remove_backup_directories()
-    total_freed += remove_unnecessary_config_files()
-    total_freed += remove_large_service_files()
-    
-    # Optimize git
-    optimize_git()
-    
-    # Get final size
-    final_size = get_directory_size('.')
-    actual_freed = initial_size - final_size
-    
-    print("\n" + "=" * 50)
-    print("🎉 AGGRESSIVE CLEANUP COMPLETE!")
-    print(f"📊 Initial size: {initial_size}MB")
-    print(f"📊 Final size: {final_size}MB")
-    print(f"💾 Space freed: {actual_freed}MB")
-    print(f"📈 Size reduction: {(actual_freed/initial_size)*100:.1f}%")
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
