@@ -1,6 +1,8 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List
 from datetime import datetime
+
+from money import normalize_dollars
 
 
 class EventCreate(BaseModel):
@@ -206,6 +208,7 @@ class JournalEntryUpdate(BaseModel):
 
 class TransactionCreate(BaseModel):
     description: str
+    # Dollars at the API boundary; stored exactly as integer cents internally.
     amount: float
     type: str = "expense"
     transaction_date: str
@@ -216,6 +219,13 @@ class TransactionCreate(BaseModel):
     metadata: Optional[dict] = None
     visibility: str = "family"
 
+    @field_validator("amount")
+    @classmethod
+    def _exact_amount(cls, v: float) -> float:
+        # Reject NaN/inf and snap to a canonical two-decimal dollar value so the
+        # boundary amount maps to integer cents with no float drift downstream.
+        return normalize_dollars(v)
+
 
 class TransactionUpdate(BaseModel):
     description: Optional[str] = None
@@ -225,6 +235,13 @@ class TransactionUpdate(BaseModel):
     payment_method: Optional[str] = None
     status: Optional[str] = None
     metadata: Optional[dict] = None
+
+    @field_validator("amount")
+    @classmethod
+    def _exact_amount(cls, v):
+        if v is None:
+            return v
+        return normalize_dollars(v)
 
 
 class WeatherPreferences(BaseModel):

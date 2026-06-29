@@ -1403,7 +1403,7 @@ async def _mempalace_load_user_facts(user_id: str, limit: int = 20) -> str:
             # Emotional moments block — most recent 5, helps Zoe follow up naturally
             if emotional_refs:
                 import datetime as _dt
-                now_dt = _dt.datetime.utcnow()
+                now_dt = _dt.datetime.now(_dt.timezone.utc)
                 emo_lines = ["## Recent emotional moments:"]
                 for ref in emotional_refs[:5]:
                     text = (ref.text or "")[:180]
@@ -1414,7 +1414,11 @@ async def _mempalace_load_user_facts(user_id: str, limit: int = 20) -> str:
                     age_str = ""
                     if added_at:
                         try:
-                            added_dt = _dt.datetime.fromisoformat(added_at.rstrip("Z"))
+                            added_dt = _dt.datetime.fromisoformat(added_at.replace("Z", "+00:00"))
+                            if added_dt.tzinfo is None:
+                                added_dt = added_dt.replace(tzinfo=_dt.timezone.utc)
+                            else:
+                                added_dt = added_dt.astimezone(_dt.timezone.utc)
                             delta = now_dt - added_dt
                             if delta.days == 0:
                                 age_str = "today"

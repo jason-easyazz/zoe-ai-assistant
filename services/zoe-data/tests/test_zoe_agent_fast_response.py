@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import types
+
+import pytest
+
+import memory_service
 import zoe_agent
 
 
@@ -48,3 +54,29 @@ def test_fast_response_answers_capability_prompt() -> None:
 
 def test_fast_response_leaves_open_howto_to_model() -> None:
     assert zoe_agent._check_fast_response("how do i boil an egg") is None
+
+
+@pytest.mark.asyncio
+async def test_mempalace_emotional_offset_metadata_gets_age_label(monkeypatch) -> None:
+    added_at = datetime.now(timezone.utc).isoformat()
+    ref = types.SimpleNamespace(
+        text="Jason felt proud after fixing the calendar.",
+        metadata={
+            "memory_type": "emotional_moment",
+            "tags": "emotional",
+            "added_at": added_at,
+        },
+    )
+
+    class FakeMemoryService:
+        async def load_for_prompt(self, user_id, limit=20):
+            return [ref]
+
+    zoe_agent._USER_FACTS_CACHE.clear()
+    monkeypatch.setattr(memory_service, "is_guest_memory_user", lambda user_id: False)
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: FakeMemoryService())
+
+    packet = await zoe_agent._mempalace_load_user_facts("jason")
+
+    assert "## Recent emotional moments:" in packet
+    assert "- [today] Jason felt proud after fixing the calendar." in packet
