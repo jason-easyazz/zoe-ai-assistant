@@ -2993,6 +2993,80 @@ async def _execute_music_setup(user_id: str) -> str:
     )
 
 
+async def _music_top_recent_genre(user_id: str) -> Optional[str]:
+    try:
+        from database import get_db_ctx
+
+        async with get_db_ctx() as db:
+            row = await db.fetchrow(
+                """
+                SELECT genre,
+                       SUM(CASE event_type
+                           WHEN 'complete' THEN 2 WHEN 'repeat' THEN 3
+                           WHEN 'partial' THEN 1 WHEN 'skip' THEN -2
+                           ELSE 0 END) as score
+                FROM music_listening_events
+                WHERE user_id=$1 AND genre != '' AND ts > $2
+                GROUP BY genre ORDER BY score DESC LIMIT 1
+                """,
+                user_id,
+                time.time() - 86400 * 30,
+            )
+        if row and row["score"] > 0:
+            return row["genre"]
+    except Exception:
+        pass
+    return None
+
+
+async def _music_recent_repeat_count(user_id: str, track_title: str) -> int:
+    if not track_title:
+        return 0
+    try:
+        from database import get_db_ctx
+
+        async with get_db_ctx() as db:
+            count = await db.fetchval(
+                "SELECT count(*) FROM music_listening_events "
+                "WHERE user_id=$1 AND track_title=$2 AND event_type IN ('complete','partial') "
+                "AND ts > $3",
+                user_id,
+                track_title,
+                time.time() - 1800,
+            )
+        return int(count or 0)
+    except Exception:
+        return 0
+
+
+async def _music_recent_skip_count(user_id: str) -> int:
+    try:
+        from database import get_db_ctx
+
+        async with get_db_ctx() as db:
+            count = await db.fetchval(
+                "SELECT count(*) FROM music_listening_events "
+                "WHERE user_id=$1 AND event_type='skip' AND ts > $2",
+                user_id,
+                time.time() - 900,
+            )
+        return int(count or 0)
+    except Exception:
+        return 0
+
+
+async def _post_music_ha_control(client, ha_url: str, payload: dict) -> Optional[str]:
+    try:
+        response = await client.post(f"{ha_url}/devices/control", json=payload)
+    except Exception as exc:
+        logger.warning("music HA control failed: %s", exc)
+        return "I couldn't reach the Home Assistant bridge to control the music."
+    if response.status_code >= 400:
+        logger.warning("music HA control returned HTTP %s", response.status_code)
+        return f"I couldn't control the music because the Home Assistant bridge returned HTTP {response.status_code}."
+    return None
+
+
 async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
     """Route music intents to HA media_player via zoe-data HA bridge."""
     try:
@@ -3006,27 +3080,9 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
             # Genre-weighted discovery for vague queries
             _query = query.strip()
             if not _query or _query.lower() in {"something", "music", "anything", "a song", "some music"}:
-                try:
-                    import psycopg2 as _pg3, time as _t3
-                    _conn3 = _pg3.connect(os.environ.get("POSTGRES_URL", "postgresql://zoe:REDACTED@localhost:5432/zoe"))
-                    _cur3 = _conn3.cursor()
-                    # Get top-scored genre from last 30 days
-                    _cur3.execute("""
-                        SELECT genre,
-                               SUM(CASE event_type
-                                   WHEN 'complete' THEN 2 WHEN 'repeat' THEN 3
-                                   WHEN 'partial' THEN 1 WHEN 'skip' THEN -2
-                                   ELSE 0 END) as score
-                        FROM music_listening_events
-                        WHERE user_id=%s AND genre != '' AND ts > %s
-                        GROUP BY genre ORDER BY score DESC LIMIT 1
-                    """, (user_id, _t3.time() - 86400 * 30))
-                    _rows = _cur3.fetchone()
-                    _conn3.close()
-                    if _rows and _rows[1] > 0:
-                        _query = _rows[0]  # use top genre as search query
-                except Exception:
-                    pass
+                recent_genre = await _music_top_recent_genre(user_id)
+                if recent_genre:
+                    _query = recent_genre  # use top genre as search query
                 if not _query:
                     _query = "music"  # final fallback
 
@@ -3039,7 +3095,9 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
                 },
             }
             async with _httpx.AsyncClient(timeout=8.0) as c:
-                await c.post(f"{ha_url}/devices/control", json=payload)
+                failure = await _post_music_ha_control(c, ha_url, payload)
+                if failure:
+                    return failure
 
             # Fire-and-forget: 5-signal play event logger
             async def _log_play_event() -> None:
@@ -3120,22 +3178,9 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
                         event_type = "complete"
 
                     # Check for repeat: same track played again in last 30 min
-                    try:
-                        import psycopg2 as _pg2, time as _time
-                        _conn2 = _pg2.connect(os.environ.get("POSTGRES_URL", "postgresql://zoe:REDACTED@localhost:5432/zoe"))
-                        _cur2 = _conn2.cursor()
-                        _cur2.execute(
-                            "SELECT count(*) FROM music_listening_events "
-                            "WHERE user_id=%s AND track_title=%s AND event_type IN ('complete','partial') "
-                            "AND ts > %s",
-                            (user_id, start_meta.get("track_title", ""), _time.time() - 1800)
-                        )
-                        _recent = _cur2.fetchone()[0]
-                        _conn2.close()
-                        if _recent > 0 and event_type == "complete":
-                            event_type = "repeat"
-                    except Exception:
-                        pass
+                    _recent = await _music_recent_repeat_count(user_id, start_meta.get("track_title", ""))
+                    if _recent > 0 and event_type == "complete":
+                        event_type = "repeat"
 
                     from database import log_music_event as _log
                     await _log(
@@ -3210,7 +3255,9 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
                     "data": extra,
                 }
                 async with _httpx.AsyncClient(timeout=8.0) as c:
-                    await c.post(f"{ha_url}/devices/control", json=payload)
+                    failure = await _post_music_ha_control(c, ha_url, payload)
+                    if failure:
+                        return failure
 
                 # Log skip/pause events for taste learning
                 _evt_type = None
@@ -3229,30 +3276,19 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
                 result = None
                 # Skip-streak mood detection
                 if cmd in ("next", "skip"):
-                    try:
-                        import psycopg2 as _pg, time as _t
-                        _conn = _pg.connect(os.environ.get("POSTGRES_URL", "postgresql://zoe:REDACTED@localhost:5432/zoe"))
-                        _cur = _conn.cursor()
-                        _cur.execute(
-                            "SELECT count(*) FROM music_listening_events "
-                            "WHERE user_id=%s AND event_type='skip' AND ts > %s",
-                            (user_id, _t.time() - 900)  # last 15 min
+                    _recent_skips = await _music_recent_skip_count(user_id)
+                    if _recent_skips >= 4:
+                        label_str = {"next": "Skipped to next", "skip": "Skipped to next"}.get(cmd, cmd.title())
+                        return (
+                            label_str + ". You've skipped quite a few — want me to try a different genre or mood?"
                         )
-                        _recent_skips = _cur.fetchone()[0]
-                        _conn.close()
-                        if _recent_skips >= 4:
-                            label_str = {"next": "Skipped to next", "skip": "Skipped to next"}.get(cmd, cmd.title())
-                            return (
-                                label_str + ". You've skipped quite a few — want me to try a different genre or mood?"
-                            )
-                    except Exception:
-                        pass
 
                 label = {"pause": "Paused", "stop": "Stopped", "resume": "Resumed",
                          "next": "Skipped to next", "previous": "Back to previous",
                          "volume_up": "Volume up", "volume_down": "Volume down",
                          "shuffle": "Shuffle on", "mute": "Muted", "unmute": "Unmuted"}.get(cmd, cmd.title())
                 return f"{label}."
+            return None
 
         elif intent.name == "music_volume":
             level = int(slots.get("level", 50))
@@ -3263,7 +3299,9 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
                 "data": {"volume_level": vol},
             }
             async with _httpx.AsyncClient(timeout=8.0) as c:
-                await c.post(f"{ha_url}/devices/control", json=payload)
+                failure = await _post_music_ha_control(c, ha_url, payload)
+                if failure:
+                    return failure
             try:
                 import asyncio as _asyncio
                 from database import log_music_event as _log
