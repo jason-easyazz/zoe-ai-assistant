@@ -25,7 +25,7 @@ from typing import Optional
 
 import asyncio
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from auth import get_current_user, require_admin
 from database import get_db
 
@@ -87,6 +87,24 @@ def lookup_device_token(raw_token: str) -> dict | None:
     if exp and datetime.fromisoformat(exp) < datetime.now(tz=timezone.utc):
         return None
     return info
+
+
+def _request_has_panel_device_token(request: Request | None, panel_id: str) -> bool:
+    """True iff the request carries a valid device token issued for ``panel_id``.
+
+    Used as the authority proof on /auth/pin for a panel that has NO
+    panel_user_bindings rows yet (first-boot / panel-daemon). Without it, a bare
+    authenticated session could create a challenge for an arbitrary active panel
+    and approve it with its own PIN — see the zero-binding branch in submit_pin.
+    """
+    try:
+        raw = request.headers.get("X-Device-Token", "") if request is not None else ""
+    except Exception:
+        raw = ""
+    if not raw:
+        return False
+    info = lookup_device_token(raw)
+    return bool(info and str(info.get("panel_id")) == str(panel_id))
 
 
 async def _resolve_device_token_user(raw_token: str) -> dict | None:
@@ -499,7 +517,7 @@ async def create_pin_challenge_internal(panel_id: str, user_id, action_context, 
 
 
 @router.post("/auth/pin")
-async def submit_pin(payload: dict, db=Depends(get_db)):
+async def submit_pin(payload: dict, request: Request = None, db=Depends(get_db)):
     """
     Submit a PIN for an outstanding challenge (called by the touch panel JS).
     PINs are validated by delegating to zoe-auth's /api/auth/login/passcode
@@ -562,11 +580,9 @@ async def submit_pin(payload: dict, db=Depends(get_db)):
     if not resolved_user_id:
         raise HTTPException(status_code=400, detail="Challenge has no resolvable user")
 
-    # Verify panel authorization: the resolved identity must be allowed on this
-    # panel. A user resolved from the panel binding is authorized by definition;
-    # a user carried on the challenge is trusted because the challenge was created
-    # by an authenticated caller (create_pin_challenge), but we still require that
-    # user to be bound to the panel when a binding exists for it.
+    # Verify panel authorization for a challenge-carried user. (Users resolved
+    # from the panel's default binding above are authorized by definition and
+    # skip this block.)
     if not resolved_from_binding:
         # This check is security-load-bearing, so it must FAIL CLOSED: a transient
         # DB error here must never let the request skip authorization and proceed to
@@ -578,6 +594,7 @@ async def submit_pin(payload: dict, db=Depends(get_db)):
                 (row["panel_id"],),
             )).fetchone()
             if _has_binding:
+                # Bindings exist → the challenge user MUST be among them.
                 _allowed = await (await db.execute(
                     "SELECT 1 FROM panel_user_bindings WHERE panel_id = ? AND user_id = ? LIMIT 1",
                     (row["panel_id"], resolved_user_id),
@@ -588,6 +605,22 @@ async def submit_pin(payload: dict, db=Depends(get_db)):
                         resolved_user_id, row["panel_id"],
                     )
                     raise HTTPException(status_code=403, detail="User not authorized for this panel")
+            elif not _request_has_panel_device_token(request, row["panel_id"]):
+                # Zero bindings for this panel. The challenge ALONE is NOT proof of
+                # authority: create_pin_challenge accepts any authenticated user plus
+                # an arbitrary active panel_id and stores that caller as the challenge
+                # user, so trusting it here would let a normal session approve a PIN
+                # for a panel it has no relationship to (BLOCKING cross-review finding).
+                # Require the panel's own device token on the request (panel-daemon /
+                # first-boot authority). Legitimate provisioning always creates a
+                # 'default' binding atomically (panel_provision.provision_confirm), so a
+                # correctly-provisioned panel is never in this zero-binding branch.
+                logger.warning(
+                    "panel_auth: PIN approval denied for unbound panel %s without device-token "
+                    "authority (challenge user %s)",
+                    row["panel_id"], resolved_user_id,
+                )
+                raise HTTPException(status_code=403, detail="Panel not authorized for PIN approval")
         except HTTPException:
             raise
         except Exception as _authz_exc:

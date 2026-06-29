@@ -239,7 +239,7 @@ class _FakeAuthClient:
     """Captures the user_id submitted to zoe-auth and validates a fixed credential."""
 
     captured = []  # list of (user_id, passcode)
-    valid_credential = ("alice", "1234")  # only alice/1234 succeeds
+    valid_credential = ("alice", "1234")  # only this (user_id, passcode) succeeds
 
     def __init__(self, *a, **k):
         pass
@@ -257,12 +257,29 @@ class _FakeAuthClient:
         return _FakeAuthResponse(ok)
 
 
+class _FakeRequest:
+    """Minimal stand-in for starlette Request — only .headers.get is used."""
+
+    def __init__(self, headers=None):
+        self.headers = headers or {}
+
+
+def _device_token_request(panel_id, raw="dev-tok"):
+    """A request carrying a device token registered for `panel_id` in the cache."""
+    panel_auth._token_cache[panel_auth._hash_token(raw)] = {
+        "panel_id": panel_id, "role": "kiosk", "revoked": 0, "expires_at": None,
+    }
+    return _FakeRequest({"X-Device-Token": raw})
+
+
 @pytest.fixture
 def _patch_pin_env(monkeypatch):
     _FakeAuthClient.captured = []
+    _FakeAuthClient.valid_credential = ("alice", "1234")
     monkeypatch.setattr(panel_auth.httpx, "AsyncClient", _FakeAuthClient)
-    # silence the per-challenge attempt counter between tests
+    # silence the per-challenge attempt counter + device-token cache between tests
     panel_auth._pin_attempts.clear()
+    panel_auth._token_cache.clear()
 
     class _Broadcaster:
         async def broadcast(self, *a, **k):
@@ -311,14 +328,79 @@ async def test_pin_authz_fails_closed_on_db_error(_patch_pin_env):
     assert _FakeAuthClient.captured == []
 
 
+@pytest.mark.asyncio
+async def test_pin_zero_binding_unbound_user_denied_without_device_token(_patch_pin_env):
+    """BLOCKING: active panel + ZERO bindings — a normal user can't self-approve.
+
+    create_pin_challenge stores the (arbitrary authenticated) caller as the
+    challenge user for any active panel_id. On an unbound panel, the challenge
+    alone must NOT authorize PIN approval — even with the caller's own valid PIN
+    — unless the request carries device-token/provisioning authority for the panel.
+    """
+    _FakeAuthClient.valid_credential = ("mallory", "mallory-pin")  # mallory's PIN is valid
+    db = _PinChallengeDB(challenge_user="mallory", bound_users=())  # panel has no bindings
+    with pytest.raises(HTTPException) as exc:
+        await panel_auth.submit_pin(
+            {"challenge_id": "chal-1", "pin": "mallory-pin"},
+            request=_FakeRequest(),  # no device token
+            db=db,
+        )
+    assert exc.value.status_code == 403
+    # Denied BEFORE the PIN was ever validated against zoe-auth.
+    assert _FakeAuthClient.captured == []
+
+
+@pytest.mark.asyncio
+async def test_pin_zero_binding_succeeds_with_panel_device_token(_patch_pin_env):
+    """Legit first-boot/device path: device token for THAT panel authorizes approval."""
+    _FakeAuthClient.valid_credential = ("paneluser", "1234")
+    db = _PinChallengeDB(challenge_user="paneluser", panel_id="p1", bound_users=())
+    out = await panel_auth.submit_pin(
+        {"challenge_id": "chal-1", "pin": "1234"},
+        request=_device_token_request("p1"),  # device token issued for p1
+        db=db,
+    )
+    assert out["status"] == "approved"
+    assert _FakeAuthClient.captured == [("paneluser", "1234")]
+
+
+@pytest.mark.asyncio
+async def test_pin_zero_binding_rejects_wrong_panel_device_token(_patch_pin_env):
+    """A device token for a DIFFERENT panel is not authority for this panel."""
+    db = _PinChallengeDB(challenge_user="paneluser", panel_id="p1", bound_users=())
+    with pytest.raises(HTTPException) as exc:
+        await panel_auth.submit_pin(
+            {"challenge_id": "chal-1", "pin": "1234"},
+            request=_device_token_request("other-panel"),  # token for the wrong panel
+            db=db,
+        )
+    assert exc.value.status_code == 403
+    assert _FakeAuthClient.captured == []
+
+
+@pytest.mark.asyncio
+async def test_pin_voice_default_binding_path_still_works(_patch_pin_env):
+    """Voice/userless challenge resolves via the panel's default binding (unchanged)."""
+    _FakeAuthClient.valid_credential = ("dave", "dave-pin")
+    db = _PinChallengeDB(challenge_user=None, bound_users=("dave",))  # default-bound user
+    out = await panel_auth.submit_pin(
+        {"challenge_id": "chal-1", "pin": "dave-pin"},
+        request=_FakeRequest(),  # no device token needed on the binding path
+        db=db,
+    )
+    assert out["status"] == "approved"
+    assert _FakeAuthClient.captured == [("dave", "dave-pin")]
+
+
 # ── P2: panel_provision atomic one-time token pickup ──────────────────────────
 
 class _ProvisionRaceDB:
     """Fake DB modeling the confirmed provision row with a one-shot token.
 
     SELECT yields to the loop (simulating I/O) so two concurrent polls both
-    observe the pending token; the conditional UPDATE ... RETURNING is atomic
-    (no internal await) so only one poll clears+returns it.
+    observe the pending token; the conditional UPDATE ... WHERE token = ? is
+    modeled as a single non-yielding step, so only the poll whose observed token
+    still matches the row flips it (rowcount == 1) and every other poll gets 0.
     """
 
     def __init__(self):
@@ -341,9 +423,11 @@ class _ProvisionRaceDB:
             snapshot = dict(self.row)
             return _SleepingExecResult([snapshot])
         if s.startswith("UPDATE PANEL_PROVISION_CODES SET TOKEN = NULL"):
-            # Atomic conditional clear modeled by a single non-yielding step:
-            # rowcount == 1 only for the poll that actually flips a non-NULL token.
-            if self.row["token"] is not None:
+            # Atomic conditional clear modeled by a single non-yielding step. The
+            # query matches the EXACT token the poll observed (WHERE token = ?), so
+            # rowcount == 1 only for the poll whose token still equals the row.
+            want_token = (tuple(params or ()) + (None,))[1]
+            if self.row["token"] is not None and self.row["token"] == want_token:
                 self.row["token"] = None
                 return _ExecResult([], rowcount=1)
             return _ExecResult([], rowcount=0)
