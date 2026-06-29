@@ -98,7 +98,7 @@ class PushBroadcaster:
 
         dead = set()
         delivered = 0
-        for ws in self._connections[channel]:
+        for ws in list(self._connections[channel]):
             # Skip if this connection belongs to a different user.
             ws_user = self._ws_users.get(ws)
             if user_id is not None and ws_user is not None and ws_user != user_id:
@@ -110,7 +110,7 @@ class PushBroadcaster:
                 dead.add(ws)
 
         for ws in dead:
-            self._connections[channel].discard(ws)
+            self.disconnect(ws, channel)
 
         return delivered
 
