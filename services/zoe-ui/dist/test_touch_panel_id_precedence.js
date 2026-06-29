@@ -43,8 +43,10 @@ function makeGetPanelId({ search = '', stored = {}, random = 0.123456789 } = {})
   // eslint-disable-next-line no-eval
   const isGeneratedPanelAlias = eval('(' + extract('isGeneratedPanelAlias') + ')');
   // eslint-disable-next-line no-eval
+  const generatePanelAlias = eval('(' + extract('generatePanelAlias') + ')');
+  // eslint-disable-next-line no-eval
   const getPanelId = eval('(' + extract('getPanelId') + ')');
-  return { getPanelId, stored, writes };
+  return { getPanelId, generatePanelAlias, isGeneratedPanelAlias, stored, writes };
 }
 
 let harness = makeGetPanelId({
@@ -61,6 +63,8 @@ assert.strictEqual(harness.getPanelId(), 'panel_alias', 'unregistered browser ke
 harness = makeGetPanelId({ stored: {}, random: 0.5 });
 const generated = harness.getPanelId();
 assert.ok(generated.startsWith('panel_'), 'fresh browser mints generated alias');
+assert.strictEqual(generated, 'panel_i0000000', 'short base-36 random output is padded to fixed alias width');
+assert.strictEqual(harness.isGeneratedPanelAlias(generated), true, 'freshly minted alias is classified as generated');
 assert.strictEqual(harness.stored.zoe_touch_panel_id, generated, 'generated alias is persisted');
 assert.strictEqual(harness.stored.zoe_panel_id, undefined, 'generated alias does not become registered id');
 
@@ -88,5 +92,18 @@ assert.strictEqual(harness.getPanelId(), 'panel_0e3ko5bl', 'explicit URL alias s
 assert.deepStrictEqual(harness.writes, [
   ['zoe_touch_panel_id', 'panel_0e3ko5bl']
 ], 'generated URL aliases stay fallback-only and do not overwrite the registered id');
+
+for (const random of [0, 0.000001, 0.1, 0.5, 0.999999999999]) {
+  harness = makeGetPanelId({ stored: {}, random });
+  const alias = harness.generatePanelAlias();
+  assert.match(alias, /^panel_[a-z0-9]{8}$/i, `generated alias has fixed detector width for random=${random}`);
+  assert.strictEqual(harness.isGeneratedPanelAlias(alias), true, `generated alias is detected for random=${random}`);
+}
+
+for (let i = 0; i < 500; i++) {
+  harness = makeGetPanelId({ stored: {}, random: (i + 1) / 1000 });
+  const alias = harness.generatePanelAlias();
+  assert.match(alias, /^panel_[a-z0-9]{8}$/i, `generated alias has fixed detector width at iteration ${i}`);
+}
 
 console.log('getPanelId precedence: all assertions passed');

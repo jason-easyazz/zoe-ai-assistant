@@ -149,10 +149,15 @@
         }
         let panelId = localStorage.getItem('zoe_panel_id') || localStorage.getItem('zoe_touch_panel_id');
         if (!panelId) {
-            panelId = 'panel_' + Math.random().toString(36).slice(2, 10);
+            panelId = generatePanelAlias();
             localStorage.setItem('zoe_touch_panel_id', panelId);
         }
         return panelId;
+    }
+
+    function generatePanelAlias() {
+        const suffix = Math.random().toString(36).slice(2).padEnd(8, '0').slice(0, 8);
+        return 'panel_' + suffix;
     }
 
     function isGeneratedPanelAlias(panelId) {
