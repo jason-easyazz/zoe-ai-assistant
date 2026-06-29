@@ -87,5 +87,5 @@ async def test_chat_tool_calling_returns_structured_response(message):
     result = response.json()
     assert isinstance(result.get("response"), str)
     assert result["response"].strip()
-    assert "response_time" in result
-    assert "routing" in result
+    assert isinstance(result.get("session_id"), str)
+    assert result["session_id"].strip()
