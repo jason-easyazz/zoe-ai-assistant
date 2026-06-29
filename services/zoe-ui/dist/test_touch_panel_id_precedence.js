@@ -28,6 +28,7 @@ function extract(name) {
 
 function makeGetPanelId({ search = '', stored = {}, random = 0.123456789 } = {}) {
   const writes = [];
+  const GENERATED_ALIAS_CACHE_KEY = 'zoe_touch_panel_alias_generated';
   const window = { location: { search } };
   const localStorage = {
     getItem(key) {
@@ -45,8 +46,10 @@ function makeGetPanelId({ search = '', stored = {}, random = 0.123456789 } = {})
   // eslint-disable-next-line no-eval
   const generatePanelAlias = eval('(' + extract('generatePanelAlias') + ')');
   // eslint-disable-next-line no-eval
+  const isLocalGeneratedPanelAlias = eval('(' + extract('isLocalGeneratedPanelAlias') + ')');
+  // eslint-disable-next-line no-eval
   const getPanelId = eval('(' + extract('getPanelId') + ')');
-  return { getPanelId, generatePanelAlias, isGeneratedPanelAlias, stored, writes };
+  return { getPanelId, generatePanelAlias, isGeneratedPanelAlias, isLocalGeneratedPanelAlias, stored, writes };
 }
 
 let harness = makeGetPanelId({
@@ -66,6 +69,7 @@ assert.ok(generated.startsWith('panel_'), 'fresh browser mints generated alias')
 assert.strictEqual(generated, 'panel_i0000000', 'short base-36 random output is padded to fixed alias width');
 assert.strictEqual(harness.isGeneratedPanelAlias(generated), true, 'freshly minted alias is classified as generated');
 assert.strictEqual(harness.stored.zoe_touch_panel_id, generated, 'generated alias is persisted');
+assert.strictEqual(harness.stored.zoe_touch_panel_alias_generated, generated, 'generated alias marker is persisted');
 assert.strictEqual(harness.stored.zoe_panel_id, undefined, 'generated alias does not become registered id');
 
 harness = makeGetPanelId({
@@ -85,13 +89,24 @@ harness = makeGetPanelId({
   search: '?panel_id=panel_0e3ko5bl',
   stored: {
     zoe_panel_id: 'zoe-touch-pi',
-    zoe_touch_panel_id: 'panel_oldalias'
+    zoe_touch_panel_id: 'panel_oldalias',
+    zoe_touch_panel_alias_generated: 'panel_0e3ko5bl'
   }
 });
 assert.strictEqual(harness.getPanelId(), 'panel_0e3ko5bl', 'explicit URL alias still selects that page identity');
 assert.deepStrictEqual(harness.writes, [
   ['zoe_touch_panel_id', 'panel_0e3ko5bl']
 ], 'generated URL aliases stay fallback-only and do not overwrite the registered id');
+
+harness = makeGetPanelId({
+  search: '?panel_id=panel_abcd1234',
+  stored: {}
+});
+assert.strictEqual(harness.getPanelId(), 'panel_abcd1234', 'registered id shaped like generated alias still selects page identity');
+assert.deepStrictEqual(harness.writes, [
+  ['zoe_panel_id', 'panel_abcd1234'],
+  ['zoe_touch_panel_id', 'panel_abcd1234']
+], 'registered-shaped URL id is not treated as generated without the local marker');
 
 for (const random of [0, 0.000001, 0.1, 0.5, 0.999999999999]) {
   harness = makeGetPanelId({ stored: {}, random });

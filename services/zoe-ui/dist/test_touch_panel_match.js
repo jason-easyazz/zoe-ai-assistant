@@ -29,19 +29,23 @@ function extract(name) {
 }
 
 // Build panel match helpers bound to a mockable harness scope.
-function makePanelFns({ statePanelId = '', urlPanelId = null, lsTouch = null, lsPanel = null } = {}) {
+function makePanelFns({ statePanelId = '', urlPanelId = null, lsTouch = null, lsPanel = null, generatedAlias = null } = {}) {
   const state = { panelId: statePanelId };
+  const GENERATED_ALIAS_CACHE_KEY = 'zoe_touch_panel_alias_generated';
   const window = { location: { search: urlPanelId ? '?panel_id=' + encodeURIComponent(urlPanelId) : '' } };
   const localStorage = {
     getItem(k) {
       if (k === 'zoe_touch_panel_id') return lsTouch;
       if (k === 'zoe_panel_id') return lsPanel;
+      if (k === 'zoe_touch_panel_alias_generated') return generatedAlias;
       return null;
     }
   };
   const URLSearchParams = global.URLSearchParams;
   // eslint-disable-next-line no-eval
   const isGeneratedPanelAlias = eval('(' + extract('isGeneratedPanelAlias') + ')');
+  // eslint-disable-next-line no-eval
+  const isLocalGeneratedPanelAlias = eval('(' + extract('isLocalGeneratedPanelAlias') + ')');
   // eslint-disable-next-line no-eval
   const collectPanelIdentity = eval('(' + extract('collectPanelIdentity') + ')');
   // eslint-disable-next-line no-eval
@@ -74,9 +78,12 @@ assert.strictEqual(viaUrl('panel_x'), true, 'state id still matches alongside UR
 // known locally, auth acts rather than dropping the prompt as foreign. General
 // targeted actions still reject the canonical id so non-auth routing remains
 // panel-specific.
-const aliasOnlyFns = makePanelFns({ statePanelId: 'panel_0e3ko5bl', lsTouch: 'panel_0e3ko5bl' });
+const aliasOnlyFns = makePanelFns({ statePanelId: 'panel_0e3ko5bl', lsTouch: 'panel_0e3ko5bl', generatedAlias: 'panel_0e3ko5bl' });
 assert.strictEqual(aliasOnlyFns.panelMatches('zoe-touch-pi'), false, 'alias-only panel must not match every targeted action');
 assert.strictEqual(aliasOnlyFns.panelMatchesAuthTarget('zoe-touch-pi'), true, 'alias-only panel must accept canonical registered auth target');
+
+const registeredShape = makePanelFns({ statePanelId: 'panel_abcd1234', lsPanel: 'panel_abcd1234', lsTouch: 'panel_abcd1234' });
+assert.strictEqual(registeredShape.panelMatchesAuthTarget('kitchen-panel-2'), false, 'registered id shaped like an alias must remain authoritative for auth');
 
 // Panel with no known identity at all → act rather than silently swallow.
 const unknown = makePanelMatches({ statePanelId: '', urlPanelId: null, lsTouch: null, lsPanel: null });

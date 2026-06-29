@@ -51,6 +51,7 @@
     };
     const AUTH_CHALLENGE_CACHE_KEY = 'zoe_seen_auth_challenges';
     const AUTH_CHALLENGE_TTL_MS = 10 * 60 * 1000;
+    const GENERATED_ALIAS_CACHE_KEY = 'zoe_touch_panel_alias_generated';
 
     const AUTO_HOME_TIMEOUT_S = Number(window.ZOE_AUTO_HOME_TIMEOUT_S || 20);
     const HOME_PATH = '/touch/skybridge.html';
@@ -141,7 +142,7 @@
         const forced = params.get('panel_id');
         if (forced && forced.trim()) {
             const panelId = forced.trim();
-            if (!isGeneratedPanelAlias(panelId)) {
+            if (!isLocalGeneratedPanelAlias(panelId)) {
                 localStorage.setItem('zoe_panel_id', panelId);
             }
             localStorage.setItem('zoe_touch_panel_id', panelId);
@@ -151,6 +152,7 @@
         if (!panelId) {
             panelId = generatePanelAlias();
             localStorage.setItem('zoe_touch_panel_id', panelId);
+            localStorage.setItem(GENERATED_ALIAS_CACHE_KEY, panelId);
         }
         return panelId;
     }
@@ -162,6 +164,16 @@
 
     function isGeneratedPanelAlias(panelId) {
         return /^panel_[a-z0-9]{8}$/i.test(String(panelId || '').trim());
+    }
+
+    function isLocalGeneratedPanelAlias(panelId) {
+        const value = String(panelId || '').trim();
+        if (!isGeneratedPanelAlias(value)) return false;
+        try {
+            return localStorage.getItem(GENERATED_ALIAS_CACHE_KEY) === value;
+        } catch (_) {
+            return false;
+        }
     }
 
     // Does a server-addressed action belong to THIS panel? A panel can answer to
@@ -195,20 +207,22 @@
     function collectPanelIdentity() {
         const known = new Set();
         let hasAuthoritativePanelId = false;
-        function rememberPanelId(panelId) {
+        function rememberPanelId(panelId, isAuthoritative) {
             const value = String(panelId || '').trim();
             if (!value) return;
             known.add(value);
-            if (!isGeneratedPanelAlias(value)) {
+            if (isAuthoritative) {
                 hasAuthoritativePanelId = true;
             }
         }
-        rememberPanelId(state.panelId);
         try {
             const urlId = new URLSearchParams(window.location.search).get('panel_id');
-            rememberPanelId(urlId);
-            rememberPanelId(localStorage.getItem('zoe_touch_panel_id'));
-            rememberPanelId(localStorage.getItem('zoe_panel_id'));
+            const touchId = localStorage.getItem('zoe_touch_panel_id');
+            const registeredId = localStorage.getItem('zoe_panel_id');
+            rememberPanelId(state.panelId, String(state.panelId || '').trim() === String(registeredId || '').trim());
+            rememberPanelId(urlId, !!urlId && !isLocalGeneratedPanelAlias(urlId));
+            rememberPanelId(touchId, !!touchId && String(touchId).trim() === String(registeredId || '').trim());
+            rememberPanelId(registeredId, !!registeredId);
         } catch (_) {}
         return { known, hasAuthoritativePanelId };
     }

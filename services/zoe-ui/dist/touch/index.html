@@ -241,7 +241,8 @@
                 const fromQuery = params.get('panel_id');
                 if (fromQuery && fromQuery.trim()) {
                     const panelId = fromQuery.trim();
-                    if (!/^panel_[a-z0-9]{8}$/i.test(panelId)) {
+                    const generatedAlias = localStorage.getItem('zoe_touch_panel_alias_generated');
+                    if (generatedAlias !== panelId) {
                         localStorage.setItem('zoe_panel_id', panelId);
                     }
                     localStorage.setItem('zoe_touch_panel_id', panelId);

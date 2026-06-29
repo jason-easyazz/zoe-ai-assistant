@@ -395,15 +395,16 @@ window.ZoeWebSockets = {
                 const urlPanelId = String(params.get('panel_id') || '').trim();
                 const registeredPanelId = String(localStorage.getItem('zoe_panel_id') || '').trim();
                 const aliasPanelId = String(localStorage.getItem('zoe_touch_panel_id') || '').trim();
+                const generatedAliasId = String(localStorage.getItem('zoe_touch_panel_alias_generated') || '').trim();
                 knownPanelIds = [
                     urlPanelId,
                     registeredPanelId,
                     aliasPanelId,
                 ].filter(Boolean);
                 authoritativePanelIds = [
-                    urlPanelId,
+                    (urlPanelId && urlPanelId !== generatedAliasId) ? urlPanelId : '',
                     registeredPanelId,
-                ].filter((panelId) => panelId && !/^panel_[a-z0-9]{8}$/i.test(panelId));
+                ].filter(Boolean);
             } catch (_) {}
             const requestedPanelId = String(payload.panel_id || '').trim();
             // Alias-only browsers can receive a canonical registered-id payload
