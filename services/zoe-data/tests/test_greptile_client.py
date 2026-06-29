@@ -1,4 +1,5 @@
 import greptile_client
+import pytest
 
 
 def test_parse_confidence_score_from_nested_sources():
@@ -39,3 +40,70 @@ def test_review_is_running_detects_pending_states():
     assert greptile_client.review_is_running({"reviewCompleteness": "in_progress"}) is True
     assert greptile_client.review_is_running({"codeReviews": [{"status": "REVIEWING_FILES"}]}) is True
     assert greptile_client.review_is_running({"reviewCompleteness": "reviewed"}) is False
+
+
+class _FakeStreamResponse:
+    def __init__(self, chunks: list[bytes], headers: dict[str, str] | None = None):
+        self.chunks = chunks
+        self.headers = headers or {}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    def raise_for_status(self):
+        return None
+
+    async def aiter_bytes(self):
+        for chunk in self.chunks:
+            yield chunk
+
+
+class _FakeAsyncClient:
+    def __init__(self, response: _FakeStreamResponse, *args, **kwargs):
+        self.response = response
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    def stream(self, *args, **kwargs):
+        return self.response
+
+
+@pytest.mark.asyncio
+async def test_mcp_call_parses_normal_bounded_json_response(monkeypatch):
+    body = (
+        b'{"result":{"content":[{"type":"text","text":"{\\"ok\\": true}"}]}}'
+    )
+    response = _FakeStreamResponse([body], {"Content-Length": str(len(body))})
+
+    monkeypatch.setenv("GREPTILE_API_KEY", "test-key")
+    monkeypatch.setattr(
+        greptile_client.httpx,
+        "AsyncClient",
+        lambda *a, **k: _FakeAsyncClient(response, *a, **k),
+    )
+
+    assert await greptile_client._mcp_call("tool", {}) == {"ok": True}
+
+
+@pytest.mark.asyncio
+async def test_mcp_call_rejects_over_cap_json_response(monkeypatch):
+    cap = 8
+    response = _FakeStreamResponse([b"x" * cap, b"y"])
+
+    monkeypatch.setenv("GREPTILE_API_KEY", "test-key")
+    monkeypatch.setattr(greptile_client, "MCP_RESPONSE_MAX_BYTES", cap)
+    monkeypatch.setattr(
+        greptile_client.httpx,
+        "AsyncClient",
+        lambda *a, **k: _FakeAsyncClient(response, *a, **k),
+    )
+
+    with pytest.raises(RuntimeError, match="Greptile MCP response exceeds"):
+        await greptile_client._mcp_call("tool", {})

@@ -20,6 +20,7 @@ _DDG_RESULT_RE = re.compile(
 )
 _TAG_RE = re.compile(r"<[^>]+>")
 _HTML_PRICE_RE = re.compile(r"(?i)(?:\$|aud\s*)([0-9]{1,4}(?:\.[0-9]{1,2})?)")
+DDG_SEARCH_HTML_MAX_BYTES = 5 * 1024 * 1024
 _STOPWORDS = {
     "the",
     "and",
@@ -251,6 +252,21 @@ def _fetch_page_price(url: str, timeout_s: float) -> str:
     return _extract_price_from_html_text(data)
 
 
+def _read_bounded_response(resp: Any, max_bytes: int) -> bytes:
+    content_length = resp.headers.get("Content-Length") if hasattr(resp, "headers") else None
+    if content_length:
+        try:
+            declared_length = int(content_length)
+        except (TypeError, ValueError):
+            declared_length = None
+        if declared_length is not None and declared_length > max_bytes:
+            raise ValueError(f"response body exceeds {max_bytes} byte cap")
+    data = resp.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise ValueError(f"response body exceeds {max_bytes} byte cap")
+    return data
+
+
 def fetch_web_fallback_results(query: str, max_results: int = 5, timeout_s: float = 8.0) -> list[dict[str, str]]:
     """Fetch lightweight fallback web results from DuckDuckGo HTML endpoint."""
     if not (query or "").strip():
@@ -262,7 +278,9 @@ def fetch_web_fallback_results(query: str, max_results: int = 5, timeout_s: floa
     }
     try:
         with guarded_urlopen(url, timeout=timeout_s, headers=headers) as resp:
-            body = resp.read().decode("utf-8", errors="replace")
+            body = _read_bounded_response(resp, DDG_SEARCH_HTML_MAX_BYTES).decode(
+                "utf-8", errors="replace"
+            )
     except Exception:  # incl. SSRFBlocked
         return []
 
@@ -497,4 +515,3 @@ def build_package(
         },
     )
     return asdict(pkg)
-
