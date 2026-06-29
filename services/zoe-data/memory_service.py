@@ -119,6 +119,32 @@ def _scope_visibility(scope: Any | None) -> str:
     return _MEMORY_SCOPE_TO_VISIBILITY[scope_value]
 
 
+def _memory_id(user_id: str, text: str, metadata: Mapping[str, Any]) -> str:
+    """Stable row id; include durable identity so same text can exist in distinct lanes."""
+
+    identity = {
+        "user_id": user_id,
+        "text": text,
+        "source": metadata.get("source", ""),
+        "scope": metadata.get("scope", ""),
+        "visibility": metadata.get("visibility", ""),
+        "memory_type": metadata.get("memory_type", ""),
+        "entity_type": metadata.get("entity_type", ""),
+        "entity_id": metadata.get("entity_id", ""),
+    }
+    basis = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    return f"zoe_{user_id}_{hashlib.sha256(basis).hexdigest()[:24]}"
+
+
+def _invalidate_agent_user_facts_cache(user_id: str) -> None:
+    try:
+        from zoe_agent import _invalidate_user_facts_cache  # type: ignore[import]
+
+        _invalidate_user_facts_cache(user_id)
+    except Exception as exc:
+        logger.debug("memory_service: user facts cache invalidation skipped: %s", exc)
+
+
 def _promote_event_metadata(md: dict[str, Any], extra: dict[str, Any]) -> None:
     for key in ("event_id", "evidence_refs", "relationships", "supersedes", "retention_policy"):
         value = extra.get(key)
@@ -289,7 +315,7 @@ class MemoryService:
                 idem_key=idem_key,
             )
 
-            mem_id = f"zoe_{user_id}_{hashlib.md5(scrubbed.encode()).hexdigest()[:16]}"
+            mem_id = _memory_id(user_id, scrubbed, metadata)
             try:
                 await self._run_sync(
                     self._write_row, mem_id, scrubbed, metadata
@@ -380,19 +406,12 @@ class MemoryService:
         async with lock:
             try:
                 ids = await self._run_sync(self._list_ids_for_user, user_id)
-                if not ids:
-                    return 0
-                await self._run_sync(self._delete_ids, ids)
+                if ids:
+                    await self._run_sync(self._delete_ids, ids)
+                await self._run_sync(self._delete_audit_for_user_sync, user_id)
             except Exception as exc:
                 raise MemoryServiceError(f"delete_user failed: {exc}") from exc
-            await self._append_audit(
-                mem_id="*",
-                user_id=user_id,
-                actor=actor,
-                action="delete_user",
-                before={"count": len(ids)},
-                after=None,
-            )
+            _invalidate_agent_user_facts_cache(user_id)
             return len(ids)
 
     async def list_by_status(
@@ -576,7 +595,6 @@ class MemoryService:
             scrubbed, reject = scrub_pii(new_text)
             if reject:
                 raise MemoryServiceError(f"edit rejected by PII scrubber: {reject}")
-            new_id = f"zoe_{user_id}_{hashlib.md5(scrubbed.encode()).hexdigest()[:16]}"
             new_meta = self._build_metadata(
                 user_id=user_id,
                 source=current.metadata.get("source", "review_ui"),
@@ -591,6 +609,7 @@ class MemoryService:
                 expires_at=current.metadata.get("expires_at"),
                 idem_key=self._idempotency_key(user_id, mem_id, scrubbed),
             )
+            new_id = _memory_id(user_id, scrubbed, new_meta)
             new_meta["supersedes_id"] = mem_id
             new_meta["reviewed_by"] = actor
             new_meta["reviewed_at"] = new_meta["added_at"]
@@ -916,6 +935,14 @@ class MemoryService:
     def _delete_ids(self, ids: list[str]) -> None:
         col = self._collection()
         col.delete(ids=ids)
+
+    def _delete_audit_for_user_sync(self, user_id: str) -> int:
+        col = self._audit_collection()
+        result = col.get(where={"user_id": user_id})
+        ids = list(result.get("ids") or [])
+        if ids:
+            col.delete(ids=ids)
+        return len(ids)
 
     def _list_by_status_sync(self, user_id: str, status: str) -> list[MemoryRef]:
         col = self._collection()
