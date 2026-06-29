@@ -31,6 +31,19 @@ from push import broadcaster
 
 router = APIRouter(prefix="/api/people", tags=["people"])
 
+# Hold strong references to fire-and-forget background tasks. asyncio only keeps a
+# weak reference to a task, so a bare ensure_future/create_task can be garbage
+# collected mid-flight before it finishes; tracking it here prevents that.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn_background(coro) -> asyncio.Task:
+    task = asyncio.ensure_future(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+
 _VALID_CIRCLES = {"inner", "circle", "public"}
 _VALID_CONTEXTS = {"personal", "work"}
 
@@ -536,8 +549,8 @@ async def delete_person(
     )
     await db.commit()
 
-    # Archive all MemPalace facts for this entity
-    asyncio.ensure_future(_archive_person_mempalace(person_id, user_id))
+    # Archive all MemPalace facts for this entity (tracked so it can't be GC'd mid-flight)
+    _spawn_background(_archive_person_mempalace(person_id, user_id))
 
     await broadcaster.broadcast("people", "people:deleted", {"id": person_id}, user_id=user_id)
     return {"ok": True, "id": person_id}

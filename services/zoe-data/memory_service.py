@@ -38,6 +38,7 @@ import re
 import threading
 import time
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Optional
 
@@ -127,6 +128,41 @@ def _memory_expired(expires_at: Any, now: datetime.datetime | None = None) -> bo
 
 
 _BLOCKED_READ_STATUSES = {"archived", "rejected", "superseded", "pending", "disputed"}
+
+# Cap for the in-memory idempotency fast-path cache (_seen_keys). Durable dedup is
+# guaranteed by the deterministic mem_id + upsert, so this cache only avoids redundant
+# write attempts; evicting the oldest key at worst lets one duplicate reach the
+# idempotent write path. Bounded to keep memory flat over the process lifetime.
+_SEEN_KEYS_MAX = 50_000
+
+# Cap for the per-row distinct-query hash blob (_query_hashes metadata). unique_query_count
+# stays the durable monotonic signal; only the recent-hash window is bounded.
+_MAX_QUERY_HASHES = 256
+
+
+class _BoundedKeySet:
+    """Insertion-ordered set with a hard cap; oldest entries evict first (FIFO).
+
+    Drop-in for the ``in`` / ``.add`` usage of a plain set, but bounded so it cannot
+    grow without limit across the process lifetime.
+    """
+
+    def __init__(self, maxlen: int = _SEEN_KEYS_MAX):
+        self._maxlen = maxlen
+        self._items: "OrderedDict[str, None]" = OrderedDict()
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._items
+
+    def add(self, key: str) -> None:
+        if key in self._items:
+            return
+        self._items[key] = None
+        while len(self._items) > self._maxlen:
+            self._items.popitem(last=False)
+
+    def __len__(self) -> int:
+        return len(self._items)
 
 
 def _memory_visible_to_user(metadata: Mapping[str, Any], user_id: str) -> bool:
@@ -284,7 +320,7 @@ class MemoryService:
     def __init__(self, data_dir: str = _MEMPALACE_DATA):
         self._data_dir = data_dir
         self._user_locks: dict[str, asyncio.Lock] = {}
-        self._seen_keys: set[str] = set()
+        self._seen_keys: _BoundedKeySet = _BoundedKeySet()
         self._background_tasks: set[asyncio.Task[Any]] = set()
 
     async def ingest(
@@ -662,15 +698,23 @@ class MemoryService:
             new_meta["reviewed_at"] = new_meta["added_at"]
             if note:
                 new_meta["review_note"] = note[:1024]
-            old_meta = dict(current.metadata)
-            old_meta["status"] = "superseded"
-            old_meta["superseded_by_id"] = new_id
-            await self._run_sync(
-                self._write_row, mem_id, current.text, old_meta
-            )
+            # Write the NEW row FIRST, then mark the old one superseded — the same
+            # safe order expert_dispatch._maybe_supersede uses. "superseded" is in
+            # _BLOCKED_READ_STATUSES (instantly invisible on read); marking the old
+            # row first and then failing the new write would make the fact vanish.
             await self._run_sync(
                 self._write_row, new_id, scrubbed, new_meta
             )
+            # Guard new_id != mem_id: an edit whose text+durable identity hash to the
+            # same mem_id just overwrote the row in place, so there is no distinct old
+            # row to retire — superseding it would hide the only surviving copy.
+            if new_id != mem_id:
+                old_meta = dict(current.metadata)
+                old_meta["status"] = "superseded"
+                old_meta["superseded_by_id"] = new_id
+                await self._run_sync(
+                    self._write_row, mem_id, current.text, old_meta
+                )
             await self._append_audit(
                 mem_id=new_id,
                 user_id=user_id,
@@ -1070,10 +1114,9 @@ class MemoryService:
         if not ids:
             return
         col = self._collection()
-        result = col.get(ids=ids, include=["metadatas", "documents"])
+        result = col.get(ids=ids, include=["metadatas"])
         now_iso = datetime.datetime.utcnow().isoformat() + "Z"
         got_ids = result.get("ids") or []
-        got_docs = result.get("documents") or []
         got_metas = result.get("metadatas") or []
         new_metas = []
         for meta in got_metas:
@@ -1081,15 +1124,22 @@ class MemoryService:
             m["access_count"] = int(m.get("access_count", 0) or 0) + 1
             m["last_accessed"] = now_iso
             if query_hash:
-                # Track distinct queries that have surfaced this memory
-                seen_hashes = set((m.get("_query_hashes") or "").split(","))
+                # Track distinct queries that have surfaced this memory. Keep only a
+                # bounded recent window of hashes so the stored blob can't grow without
+                # limit; unique_query_count stays the durable monotonic signal.
+                seen_hashes = [h for h in (m.get("_query_hashes") or "").split(",") if h]
                 if query_hash not in seen_hashes:
-                    seen_hashes.add(query_hash)
-                    m["_query_hashes"] = ",".join(h for h in seen_hashes if h)
+                    seen_hashes.append(query_hash)
+                    if len(seen_hashes) > _MAX_QUERY_HASHES:
+                        seen_hashes = seen_hashes[-_MAX_QUERY_HASHES:]
+                    m["_query_hashes"] = ",".join(seen_hashes)
                     m["unique_query_count"] = int(m.get("unique_query_count", 0) or 0) + 1
             new_metas.append(m)
         if got_ids:
-            col.upsert(ids=got_ids, documents=got_docs, metadatas=new_metas)
+            # Metadata-only write: col.update() omits documents, so Chroma does NOT
+            # recompute embeddings. col.upsert() would re-embed every doc on every
+            # recall hit just to bump access_count/last_accessed (pure waste).
+            col.update(ids=got_ids, metadatas=new_metas)
 
     async def tick_access(self, user_id: str, ids: list[str], query: Optional[str] = None) -> None:
         """Public method: bump access_count + last_accessed for the given memory IDs.
@@ -1122,9 +1172,8 @@ class MemoryService:
 
     def _tick_consolidation_sync(self, user_id: str, ids: list[str]) -> None:
         col = self._collection()
-        result = col.get(ids=ids, include=["documents", "metadatas"])
+        result = col.get(ids=ids, include=["metadatas"])
         got_ids  = result.get("ids")       or []
-        got_docs = result.get("documents") or []
         got_metas = result.get("metadatas") or []
         new_metas = []
         for m in got_metas:
@@ -1132,7 +1181,9 @@ class MemoryService:
             m["consolidation_count"] = int(m.get("consolidation_count", 0) or 0) + 1
             new_metas.append(m)
         if got_ids:
-            col.upsert(ids=got_ids, documents=got_docs, metadatas=new_metas)
+            # Metadata-only write (see _tick_access_sync): col.update() skips the
+            # embedding recompute that col.upsert() would force on every doc.
+            col.update(ids=got_ids, metadatas=new_metas)
 
     async def _append_audit(
         self,
@@ -1180,22 +1231,28 @@ class MemoryService:
         col.upsert(ids=[audit_id], documents=[summary], metadatas=[metadata])
 
 
+    def _entity_ids_sync(self, entity_id: str, user_id: str) -> list[str]:
+        col = self._collection()
+        results = col.get(
+            where={"$and": [
+                {"$or": [{"user_id": user_id}, {"wing": user_id}]},
+                {"entity_id": entity_id},
+            ]},
+            include=["metadatas"],
+        )
+        return results.get("ids", []) if results else []
+
     async def archive_by_entity(self, entity_id: str, user_id: str) -> int:
         """Archive all MemPalace facts for a given entity (e.g. when a person is deleted).
 
         Queries Chroma for documents whose metadata has entity_id=<entity_id> and
         user_id=<user_id>, then archives each one. Returns count archived.
         """
-        col = self._collection()
         try:
-            results = col.get(
-                where={"$and": [
-                    {"$or": [{"user_id": user_id}, {"wing": user_id}]},
-                    {"entity_id": entity_id},
-                ]},
-                include=["metadatas"],
-            )
-            ids = results.get("ids", []) if results else []
+            # Offload the blocking full-collection metadata scan to the executor,
+            # matching every other Chroma access in this module — running col.get()
+            # directly here would block the event loop.
+            ids = await self._run_sync(self._entity_ids_sync, entity_id, user_id)
             archived = 0
             for mem_id in ids:
                 try:
