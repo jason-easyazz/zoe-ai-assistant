@@ -109,10 +109,11 @@ async def test_create_evolution_proposal_stores_runtime_intake_contract_snapshot
     assert result["ok"] is True
     assert result["multica_issue_id"] == "multica-issue-123"
     assert result["contract_schema"] == "zoe_evolution_proposal"
-    assert len(db.calls) == 2
+    proposal_calls = [call for call in db.calls if "evolution_proposals" in call[0]]
+    assert len(proposal_calls) == 2
     assert len(sync_calls) == 1
-    insert_sql, insert_args = db.calls[0]
-    update_sql, update_args = db.calls[1]
+    insert_sql, insert_args = proposal_calls[0]
+    update_sql, update_args = proposal_calls[1]
     assert "target_patterns" in insert_sql
     assert "target_patterns" not in update_sql
 
@@ -141,7 +142,7 @@ async def test_create_evolution_proposal_stores_runtime_intake_contract_snapshot
 
 
 @pytest.mark.asyncio
-async def test_create_evolution_proposal_keeps_system_scope_without_explicit_user(monkeypatch):
+async def test_create_evolution_proposal_attributes_legacy_fallback_to_family_admin(monkeypatch):
     async def fake_sync_evolution_proposal_to_multica(**_kwargs):
         return None
 
@@ -172,8 +173,8 @@ async def test_create_evolution_proposal_keeps_system_scope_without_explicit_use
     evidence = json.loads(insert_args[3])
     assert evidence["source"] == "runtime_evolution_intake"
     assert evidence["signal"]["source"] == "mcp:create_evolution_proposal"
-    assert evidence["signal"]["scope"] == "system"
-    assert evidence["signal"]["user_id"] is None
+    assert evidence["signal"]["scope"] == "personal"
+    assert evidence["signal"]["user_id"] == "family-admin"
     assert contract["schema"] == "zoe_evolution_proposal"
     assert contract["legacy_writer"] == "runtime_evolution_intake"
     assert insert_args[5] == "code_improvement"
