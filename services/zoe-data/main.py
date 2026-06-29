@@ -183,7 +183,8 @@ async def _check_tts_ready(timeout_s: float = 2.0) -> dict:
     except Exception as exc:
         detail["error"] = exc.__class__.__name__
     detail["local_onnx_loaded"] = bool(voice_tts.kokoro_ready())
-    if voice_tts.kokoro_ready():
+    detail["local_onnx_configured"] = bool(voice_tts.kokoro_configured())
+    if detail["local_onnx_loaded"] or detail["local_onnx_configured"]:
         detail["ok"] = True
         detail["provider"] = "kokoro-onnx"
         return detail

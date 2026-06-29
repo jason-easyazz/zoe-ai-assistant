@@ -2006,6 +2006,11 @@ def kokoro_ready() -> bool:
     return _kokoro_instance is not None
 
 
+def kokoro_configured() -> bool:
+    model_path = os.environ.get("ZOE_KOKORO_MODEL", "").strip()
+    return bool(model_path and os.path.isfile(model_path) and importlib.util.find_spec("kokoro_onnx") is not None)
+
+
 # ── Wake-word bleed fix ──────────────────────────────────────────────────────
 # The panel sends the WHOLE captured utterance — wake word ("Hey Zoe") + pre-roll
 # included — with no wake-offset metadata. Transcribing the leading wake word
