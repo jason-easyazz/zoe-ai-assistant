@@ -143,6 +143,55 @@ def _scan_skill_content(content: str) -> dict:
     return {"verdict": verdict, "findings": findings}
 
 
+# Base directory all workspace skills live under. Every caller-supplied skill
+# name is resolved relative to this and asserted to stay strictly inside it.
+_SKILLS_BASE: Path = _OPENCLAW_DIR / "workspace" / "skills"
+
+# A skill name is a single path component from a conservative charset. The regex
+# is the charset gate; the explicit checks below give clear errors and defend in
+# depth against separators, parent refs, null bytes, and leading dots.
+_SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _validate_skill_name(name: str) -> str:
+    """Validate a caller-supplied skill name for filesystem safety.
+
+    Rejects anything that could escape the skills directory: path separators,
+    parent refs ('..'), null bytes, leading dots, and characters outside
+    ``[A-Za-z0-9._-]``. Returns the name unchanged when safe, else ValueError.
+    """
+    if not name or not isinstance(name, str):
+        raise ValueError("Skill name is required")
+    if "\x00" in name:
+        raise ValueError("Invalid skill name: null byte not allowed")
+    if "/" in name or "\\" in name or (os.altsep and os.altsep in name):
+        raise ValueError(f"Invalid skill name '{name}': path separators not allowed")
+    if name.startswith("."):
+        raise ValueError(f"Invalid skill name '{name}': must not start with '.'")
+    if ".." in name:
+        raise ValueError(f"Invalid skill name '{name}': '..' not allowed")
+    if not _SKILL_NAME_RE.match(name):
+        raise ValueError(
+            f"Invalid skill name '{name}': allowed characters are A-Z a-z 0-9 . _ -"
+        )
+    return name
+
+
+def _safe_skill_dir(name: str) -> Path:
+    """Resolve a skill name to its workspace directory, fully sandboxed.
+
+    Validates the name, then asserts the resolved path stays strictly inside
+    ``_SKILLS_BASE`` (realpath-based, so symlink/normalisation tricks cannot
+    escape). Raises ValueError on any unsafe name or out-of-base resolution.
+    """
+    _validate_skill_name(name)
+    base = _SKILLS_BASE.resolve()
+    candidate = (base / name).resolve()
+    if candidate != base and base not in candidate.parents:
+        raise ValueError(f"Invalid skill name '{name}': resolves outside skills directory")
+    return candidate
+
+
 def _skill_is_allowed(name: str, source: str) -> bool:
     """Return True if a skill may be installed.
 
@@ -382,6 +431,7 @@ async def install_skill(
     source: str = "clawhub",
 ) -> dict[str, Any]:
     """Install a skill. Raises PermissionError if not in allowlist; RuntimeError on CLI failure."""
+    _validate_skill_name(name)
     if not _skill_is_allowed(name, source):
         raise PermissionError(
             f"'{name}' is not in the Zoe skill allowlist. "
@@ -402,7 +452,7 @@ async def install_skill(
         base_dir = info.get("baseDir")
         if not base_dir or not Path(base_dir).is_dir():
             raise RuntimeError(f"Bundled skill '{name}' has no baseDir")
-        dest = _OPENCLAW_DIR / "workspace" / "skills" / name
+        dest = _safe_skill_dir(name)
         if dest.exists():
             if not force:
                 shutil.rmtree(dest)  # treat re-install as force-update
@@ -435,6 +485,7 @@ async def install_skill(
 
 async def update_skill(name: str) -> dict[str, Any]:
     """Update a workspace skill from ClawHub."""
+    _validate_skill_name(name)
     rc, out, err = await _run_openclaw("skills", "update", name, timeout=60)
     if rc != 0:
         raise RuntimeError(err.strip() or f"update failed (exit {rc})")
@@ -443,7 +494,7 @@ async def update_skill(name: str) -> dict[str, Any]:
 
 async def remove_skill(name: str) -> dict[str, Any]:
     """Remove a workspace skill by deleting its directory."""
-    skill_dir = _OPENCLAW_DIR / "workspace" / "skills" / name
+    skill_dir = _safe_skill_dir(name)
     if not skill_dir.exists():
         raise RuntimeError(f"Skill '{name}' not found in workspace")
     try:
@@ -464,7 +515,7 @@ async def preview_skill(name: str) -> dict[str, Any]:
     source = "unknown"
 
     # 1. Workspace skill — ~/.openclaw/workspace/skills/{name}/SKILL.md
-    skill_ws_dir = _OPENCLAW_DIR / "workspace" / "skills" / name
+    skill_ws_dir = _safe_skill_dir(name)
     if skill_ws_dir.exists():
         for fname in ("SKILL.md", "skill.md"):
             p = skill_ws_dir / fname
