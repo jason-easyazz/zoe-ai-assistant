@@ -41,6 +41,8 @@ function makePanelMatches({ statePanelId = '', urlPanelId = null, lsTouch = null
   };
   const URLSearchParams = global.URLSearchParams;
   // eslint-disable-next-line no-eval
+  const isGeneratedPanelAlias = eval('(' + extract('isGeneratedPanelAlias') + ')');
+  // eslint-disable-next-line no-eval
   return eval('(' + extract('panelMatches') + ')');
 }
 
@@ -57,6 +59,12 @@ assert.strictEqual(live('kitchen-panel-2'), false, 'a genuinely different panel 
 const viaUrl = makePanelMatches({ statePanelId: 'panel_x', urlPanelId: 'living-room' });
 assert.strictEqual(viaUrl('living-room'), true, 'URL panel_id is a valid alias');
 assert.strictEqual(viaUrl('panel_x'), true, 'state id still matches alongside URL');
+
+// Alias-only browser: the websocket server may resolve `panel_...` to a
+// registered id and deliver a canonical PIN/auth payload. With no registered id
+// known locally, act rather than dropping the prompt as foreign.
+const aliasOnly = makePanelMatches({ statePanelId: 'panel_0e3ko5bl', lsTouch: 'panel_0e3ko5bl' });
+assert.strictEqual(aliasOnly('zoe-touch-pi'), true, 'alias-only panel must accept canonical registered auth target');
 
 // Panel with no known identity at all → act rather than silently swallow.
 const unknown = makePanelMatches({ statePanelId: '', urlPanelId: null, lsTouch: null, lsPanel: null });

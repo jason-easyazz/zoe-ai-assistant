@@ -170,16 +170,27 @@
         const wanted = String(targetPanelId || '').trim();
         if (!wanted) return true;
         const known = new Set();
-        if (state.panelId) known.add(String(state.panelId).trim());
+        let hasAuthoritativePanelId = false;
+        function rememberPanelId(panelId) {
+            const value = String(panelId || '').trim();
+            if (!value) return;
+            known.add(value);
+            if (!isGeneratedPanelAlias(value)) {
+                hasAuthoritativePanelId = true;
+            }
+        }
+        rememberPanelId(state.panelId);
         try {
             const urlId = new URLSearchParams(window.location.search).get('panel_id');
-            if (urlId) known.add(urlId.trim());
-            const lsTouch = localStorage.getItem('zoe_touch_panel_id');
-            if (lsTouch) known.add(lsTouch.trim());
-            const lsPanel = localStorage.getItem('zoe_panel_id');
-            if (lsPanel) known.add(lsPanel.trim());
+            rememberPanelId(urlId);
+            rememberPanelId(localStorage.getItem('zoe_touch_panel_id'));
+            rememberPanelId(localStorage.getItem('zoe_panel_id'));
         } catch (_) {}
         if (!known.size) return true; // unknown identity → act rather than swallow
+        // Alias-only browsers may receive canonical registered-id payloads after
+        // the server resolves their socket subscription. Without a registered id
+        // locally, the client cannot prove that canonical target is foreign.
+        if (!hasAuthoritativePanelId) return true;
         return known.has(wanted);
     }
 
