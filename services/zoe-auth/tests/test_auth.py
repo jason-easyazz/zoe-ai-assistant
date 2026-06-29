@@ -64,6 +64,10 @@ def _pw(tag: str) -> str:
     return "Tt0" + "".join(ch for ch in tag if ch.isalnum())
 
 
+def _strong_pw(tag: str) -> str:
+    return _pw(tag) + "!"
+
+
 BOOTSTRAP = _pw("bootstrap")
 
 
@@ -719,7 +723,7 @@ def test_password_change_invalidates_other_sessions_but_keeps_current(sqlite_aut
         headers={"X-Session-ID": "current-sess"},
         json={
             "current_password": _pw("currentok"),
-            "new_password": "Tt0!rotatedok",
+            "new_password": _strong_pw("rotatedok"),
         },
     )
 
