@@ -54,7 +54,10 @@ class HomeAssistantBridge:
                 if response.status_code == 200:
                     return response.json()
                 else:
-                    raise HTTPException(status_code=response.status_code, detail=response.text)
+                    raise HTTPException(
+                        status_code=response.status_code,
+                        detail="Home Assistant request failed",
+                    )
                     
             except httpx.TimeoutException:
                 raise HTTPException(status_code=408, detail="Home Assistant request timeout")

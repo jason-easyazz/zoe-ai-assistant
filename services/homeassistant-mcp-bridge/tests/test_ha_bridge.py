@@ -56,7 +56,7 @@ async def test_make_request_preserves_upstream_http_status(bridge_module, monkey
         await bridge._make_request("GET", "states")
 
     assert exc_info.value.status_code == status_code
-    assert exc_info.value.detail == f"HA returned {status_code}"
+    assert exc_info.value.detail == "Home Assistant request failed"
 
 
 def test_automation_upstream_http_error_reaches_client(bridge_module, monkeypatch):
