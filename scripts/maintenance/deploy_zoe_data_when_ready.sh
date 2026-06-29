@@ -19,6 +19,15 @@ WATCH_INTERVAL=30
 MAX_WAIT=""
 YES_RESTART=0
 PINNED_TARGET_SHA=""
+PINNED_ORIGIN_REMOTE=""
+PINNED_ORIGIN_INSTEAD_OF=""
+
+cleanup() {
+    if [[ -n "$PINNED_ORIGIN_REMOTE" && -d "$PINNED_ORIGIN_REMOTE" ]]; then
+        rm -rf "$(dirname "$PINNED_ORIGIN_REMOTE")"
+    fi
+}
+trap cleanup EXIT
 
 log() {
     printf 'deploy-ready: %s\n' "$*"
@@ -324,8 +333,31 @@ assert_deployed_target_sha() {
     fi
 
     gate_fail "post-target-sha" "live HEAD ${live_sha:-unknown} does not match pre-flighted target ${PINNED_TARGET_SHA}"
-    log "ERROR: deploy_live.sh may have fetched a newer origin/main than this wrapper verified. Restart/rollback remains owned by deploy_live.sh; this wrapper is aborting so the drift is visible."
+    log "ERROR: deploy_live.sh did not leave the live tree at the pre-flighted target. Restart/rollback remains owned by deploy_live.sh; this wrapper is aborting so the drift is visible."
     return 1
+}
+
+prepare_pinned_origin_remote() {
+    local remote_root=""
+    local origin_url=""
+
+    if [[ -z "$PINNED_TARGET_SHA" ]]; then
+        log "ERROR: no pinned target SHA recorded before preparing deploy remote" >&2
+        return 1
+    fi
+    origin_url="$(git -C "$LIVE" config --get remote.origin.url 2>/dev/null || true)"
+    if [[ -z "$origin_url" ]]; then
+        log "ERROR: could not resolve live remote.origin.url before preparing deploy remote" >&2
+        return 1
+    fi
+
+    remote_root="$(mktemp -d "${TMPDIR:-/tmp}/zoe-deploy-pinned-origin.XXXXXX")"
+    PINNED_ORIGIN_REMOTE="${remote_root}/origin.git"
+    PINNED_ORIGIN_INSTEAD_OF="$origin_url"
+
+    git init --bare "$PINNED_ORIGIN_REMOTE" >/dev/null
+    git -C "$LIVE" push "$PINNED_ORIGIN_REMOTE" "${PINNED_TARGET_SHA}:refs/heads/main" >/dev/null
+    log "prepared pinned origin remote for deploy_live.sh: main=${PINNED_TARGET_SHA}"
 }
 
 post_deploy_info() {
@@ -391,9 +423,16 @@ case "$MODE" in
             log "ERROR: blessed deploy script is not executable: $DEPLOY_LIVE" >&2
             exit 1
         fi
-        export ZOE_DEPLOY_PINNED_TARGET_SHA="$PINNED_TARGET_SHA"
+        if ! prepare_pinned_origin_remote; then
+            log "deploy aborted: could not prepare pinned origin remote"
+            exit 1
+        fi
         log "running blessed deploy: $DEPLOY_LIVE (pre-flighted target ${PINNED_TARGET_SHA})"
-        "$DEPLOY_LIVE"
+        ZOE_DEPLOY_PINNED_TARGET_SHA="$PINNED_TARGET_SHA" \
+            GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0="url.${PINNED_ORIGIN_REMOTE}.insteadOf" \
+            GIT_CONFIG_VALUE_0="$PINNED_ORIGIN_INSTEAD_OF" \
+            "$DEPLOY_LIVE"
         if ! assert_deployed_target_sha; then
             exit 1
         fi
