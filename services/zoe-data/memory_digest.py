@@ -19,6 +19,7 @@ import os
 import uuid
 
 import httpx
+from routers.journal import CREATED_AT_VALID_TIMESTAMP_SQL
 
 logger = logging.getLogger(__name__)
 
@@ -1131,16 +1132,17 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
     deserves a follow-up. Runs as part of the nightly dreaming cycle.
     """
     from db_compat import get_compat_db as _get_compat_db
+    created_at_valid_sql = CREATED_AT_VALID_TIMESTAMP_SQL.replace("created_at", "m.created_at")
 
     # Load last 48h of messages for this user
     try:
         async with _get_compat_db() as _db:
             async with _db.execute(
-                """SELECT m.content, m.role FROM chat_messages m
+                f"""SELECT m.content, m.role FROM chat_messages m
                    JOIN chat_sessions s ON m.session_id = s.id
                    WHERE s.user_id = ? AND m.role = 'user'
                      AND CASE
-                           WHEN m.created_at ~ '^\\d{4}-\\d{2}-\\d{2}[ T]'
+                           WHEN {created_at_valid_sql}
                            THEN m.created_at::timestamptz
                            ELSE NULL
                          END > CURRENT_TIMESTAMP - INTERVAL '2 days'

@@ -14,7 +14,7 @@ def zoe_timezone() -> ZoneInfo:
     name = (os.environ.get("ZOE_TIMEZONE") or DEFAULT_ZOE_TIMEZONE).strip() or DEFAULT_ZOE_TIMEZONE
     try:
         return ZoneInfo(name)
-    except ZoneInfoNotFoundError:
+    except (ZoneInfoNotFoundError, ValueError):
         return ZoneInfo(DEFAULT_ZOE_TIMEZONE)
 
 

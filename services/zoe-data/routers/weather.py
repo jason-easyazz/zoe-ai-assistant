@@ -108,7 +108,7 @@ def _timezone_from_name(name: str | None):
         return timezone.utc
     try:
         return ZoneInfo(str(name))
-    except ZoneInfoNotFoundError:
+    except (ZoneInfoNotFoundError, ValueError):
         return timezone.utc
 
 
@@ -364,7 +364,7 @@ async def _fetch_owm_forecast(lat: float, lon: float) -> dict:
                 continue
             wa = item.get("weather", [{}])
             hourly.append({
-                "time": item.get("dt_txt") or item_dt.isoformat(),
+                "time": item_dt.isoformat(),
                 "temp": item.get("main", {}).get("temp"),
                 "description": wa[0].get("description") if wa else None,
                 "icon": wa[0].get("icon") if wa else None,

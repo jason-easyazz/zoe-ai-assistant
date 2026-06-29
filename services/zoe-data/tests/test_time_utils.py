@@ -21,3 +21,11 @@ def test_today_for_zoe_tz_falls_back_to_perth_for_invalid_timezone(monkeypatch):
     utc_now = datetime(2026, 6, 28, 23, 0, tzinfo=timezone.utc)
 
     assert today_for_zoe_tz(utc_now).isoformat() == "2026-06-29"
+
+
+def test_today_for_zoe_tz_falls_back_for_path_like_timezone(monkeypatch):
+    monkeypatch.setenv("ZOE_TIMEZONE", "/usr/share/zoneinfo/Australia/Perth")
+
+    utc_now = datetime(2026, 6, 28, 23, 0, tzinfo=timezone.utc)
+
+    assert today_for_zoe_tz(utc_now).isoformat() == "2026-06-29"

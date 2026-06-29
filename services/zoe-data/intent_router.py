@@ -2817,7 +2817,7 @@ def _spoken_day(raw: str) -> str:
     try:
         import datetime as _dt
         d = _dt.date.fromisoformat(str(raw)[:10])
-        today = _dt.date.today()
+        today = today_for_zoe_tz()
         if d == today:
             return "today"
         if d == today + _dt.timedelta(days=1):
@@ -3352,9 +3352,9 @@ def _build_command(intent: Intent, user_id: str) -> Optional[str]:
         return cmd
 
     if intent.name == "calendar_show":
-        from datetime import date, timedelta
+        from datetime import timedelta
         qualifier = s.get("qualifier", "").strip().lower()
-        today_d = date.today()
+        today_d = today_for_zoe_tz()
 
         if qualifier in ("today", "today's"):
             return f"{base} zoe-data.calendar_today"

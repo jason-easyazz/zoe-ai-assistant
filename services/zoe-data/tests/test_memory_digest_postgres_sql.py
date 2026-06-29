@@ -54,14 +54,18 @@ class _AsyncCursor:
 
 
 class _CompatDb:
-    def __init__(self, rows):
+    def __init__(self, rows, *, has_malformed_prefix_timestamp=False):
         self.rows = rows
         self.sql = []
         self.params = []
+        self.has_malformed_prefix_timestamp = has_malformed_prefix_timestamp
 
     def execute(self, sql, params=()):
         self.sql.append(sql)
         self.params.append(params)
+        if self.has_malformed_prefix_timestamp:
+            assert "m.created_at ~ '^\\d{4}-\\d{2}-\\d{2}[ T]'" not in sql
+            assert sql.count("$'") >= 1
         return _AsyncCursor(self.rows)
 
 
@@ -130,10 +134,24 @@ async def test_extract_open_loops_uses_temporal_cast_for_mixed_text_timestamps(m
     result = await memory_digest._extract_open_loops("user-1")
 
     assert result == {"user_id": "user-1", "extracted": 0}
-    assert "WHEN m.created_at ~ '^\\d{4}-\\d{2}-\\d{2}[ T]'" in db.sql[0]
+    assert "WHEN m.created_at ~ '^(" in db.sql[0]
     assert "THEN m.created_at::timestamptz" in db.sql[0]
     assert "END > CURRENT_TIMESTAMP - INTERVAL '2 days'" in db.sql[0]
     assert "datetime('now', '-2 days')" not in db.sql[0]
+
+
+@pytest.mark.asyncio
+async def test_extract_open_loops_malformed_prefix_timestamp_does_not_reach_cast(monkeypatch):
+    import db_compat
+
+    db = _CompatDb([], has_malformed_prefix_timestamp=True)
+    monkeypatch.setattr(db_compat, "get_compat_db", lambda: _CompatCtx(db))
+
+    result = await memory_digest._extract_open_loops("user-1")
+
+    assert result == {"user_id": "user-1", "extracted": 0}
+    assert "2026-13-45" not in db.sql[0]
+    assert "m.created_at::timestamptz" in db.sql[0]
 
 
 @pytest.mark.asyncio
