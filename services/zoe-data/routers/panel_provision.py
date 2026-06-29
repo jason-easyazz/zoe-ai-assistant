@@ -151,21 +151,23 @@ async def provision_poll(code: str, db=Depends(get_db)):
         return {"status": "expired"}
 
     if status == "confirmed":
-        token = row["token"]
-        if token:
-            # Clear the token from DB after delivery (one-time pickup)
-            await db.execute(
-                "UPDATE panel_provision_codes SET token = NULL WHERE code = ?", (code,)
-            )
-            await db.commit()
-            panel_row = await (await db.execute(
-                "SELECT panel_id FROM panel_provision_codes WHERE code = ?", (code,)
-            )).fetchone()
-            panel_id = panel_row["panel_id"] if panel_row else None
-            return {"status": "confirmed", "token": token, "panel_id": panel_id}
-        else:
-            # Token already delivered
-            return {"status": "confirmed"}
+        # One-time token pickup must be atomic. The previous read-then-clear
+        # (SELECT token … then UPDATE … SET token = NULL) let two concurrent polls
+        # both read the same raw device token before either cleared it. A single
+        # conditional UPDATE … WHERE token IS NOT NULL RETURNING makes exactly one
+        # poll observe a non-NULL token; every other concurrent poll matches zero
+        # rows and gets {"status": "confirmed"} with no token.
+        picked = await (await db.execute(
+            "UPDATE panel_provision_codes SET token = NULL "
+            "WHERE code = ? AND token IS NOT NULL "
+            "RETURNING token, panel_id",
+            (code,),
+        )).fetchone()
+        await db.commit()
+        if picked and picked["token"]:
+            return {"status": "confirmed", "token": picked["token"], "panel_id": picked["panel_id"]}
+        # Token already delivered to an earlier poll.
+        return {"status": "confirmed"}
 
     return {"status": status}
 

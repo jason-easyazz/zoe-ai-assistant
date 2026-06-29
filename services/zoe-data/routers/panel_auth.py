@@ -507,7 +507,11 @@ async def submit_pin(payload: dict, db=Depends(get_db)):
     """
     challenge_id = str(payload.get("challenge_id") or "").strip()
     pin = str(payload.get("pin") or "").strip()
-    user_id_hint = str(payload.get("user_id") or "").strip() or None
+    # SECURITY (P2): this endpoint is UNAUTHENTICATED. A caller-supplied user_id
+    # must NEVER influence which identity the PIN is validated against — otherwise
+    # any valid user's PIN could approve a challenge for a panel/user they aren't
+    # bound to. The acting identity is resolved ONLY from the challenge or the
+    # panel's binding below; any "user_id" in the payload is deliberately ignored.
     if not challenge_id or not pin:
         raise HTTPException(status_code=400, detail="challenge_id and pin required")
 
@@ -534,7 +538,12 @@ async def submit_pin(payload: dict, db=Depends(get_db)):
     # Pass 0 proved the old SHA-256-on-users.pin_hash path always 500s: wrong column
     # name ("user_id" vs "id") and every users.pin_hash is NULL.
     zoe_auth_base = os.environ.get("ZOE_AUTH_URL", "http://localhost:8002")
-    resolved_user_id = user_id_hint or (row["user_id"] if row["user_id"] else None)
+    # Resolve the acting identity ONLY from trusted sources — the challenge's
+    # stored user, else the panel's configured default-user binding. Caller input
+    # is never consulted (see SECURITY note above).
+    challenge_user_id = str(row["user_id"]) if row["user_id"] else None
+    resolved_user_id = challenge_user_id
+    resolved_from_binding = False
     if not resolved_user_id:
         # Voice-originated challenges are often created with user_id=None.
         # Fall back to the panel's configured default user so PIN verification
@@ -546,8 +555,40 @@ async def submit_pin(payload: dict, db=Depends(get_db)):
             )).fetchone()
             if _default_row and _default_row["user_id"]:
                 resolved_user_id = str(_default_row["user_id"])
+                resolved_from_binding = True
         except Exception as _bind_exc:
             logger.debug("panel_auth: default binding lookup failed: %s", _bind_exc)
+
+    if not resolved_user_id:
+        raise HTTPException(status_code=400, detail="Challenge has no resolvable user")
+
+    # Verify panel authorization: the resolved identity must be allowed on this
+    # panel. A user resolved from the panel binding is authorized by definition;
+    # a user carried on the challenge is trusted because the challenge was created
+    # by an authenticated caller (create_pin_challenge), but we still require that
+    # user to be bound to the panel when a binding exists for it.
+    if not resolved_from_binding:
+        try:
+            _has_binding = await (await db.execute(
+                "SELECT 1 FROM panel_user_bindings WHERE panel_id = ? LIMIT 1",
+                (row["panel_id"],),
+            )).fetchone()
+            if _has_binding:
+                _allowed = await (await db.execute(
+                    "SELECT 1 FROM panel_user_bindings WHERE panel_id = ? AND user_id = ? LIMIT 1",
+                    (row["panel_id"], resolved_user_id),
+                )).fetchone()
+                if not _allowed:
+                    logger.warning(
+                        "panel_auth: challenge user %s not bound to panel %s — rejecting PIN",
+                        resolved_user_id, row["panel_id"],
+                    )
+                    raise HTTPException(status_code=403, detail="User not authorized for this panel")
+        except HTTPException:
+            raise
+        except Exception as _authz_exc:
+            logger.debug("panel_auth: panel authorization check failed: %s", _authz_exc)
+
     pin_valid = False
     auth_service_error: Optional[str] = None
     try:
