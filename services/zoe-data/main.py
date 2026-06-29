@@ -74,6 +74,8 @@ _RUNTIME_HEALTH: dict[str, bool] = {
 }
 # Timestamp of the last probe (ISO string); exposed via GET /api/agent/runtimes
 _RUNTIME_LAST_PROBED: str = ""
+_READINESS_CACHE: dict[str, object] = {"expires_at": 0.0, "report": None}
+_READINESS_CACHE_LOCK = asyncio.Lock()
 
 
 def _gemma_base_url() -> str:
@@ -84,6 +86,13 @@ def _gemma_base_url() -> str:
 def _canonical_gemma_model(model_id: str) -> bool:
     normalized = (model_id or "").lower()
     return "gemma" in normalized and "e4b" in normalized
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
 
 
 async def _check_brain_ready(timeout_s: float = 2.0) -> dict:
@@ -97,22 +106,26 @@ async def _check_brain_ready(timeout_s: float = 2.0) -> dict:
                 detail["error"] = f"health_http_{health.status_code}"
                 return detail
 
-            models = await client.get(f"{base_url}/v1/models")
-            detail["models_status"] = models.status_code
-            if models.status_code != 200:
-                detail["error"] = f"models_http_{models.status_code}"
-                return detail
-            payload = models.json()
-            model_ids = [
-                str(item.get("id") or item.get("model") or "")
-                for item in payload.get("data", [])
-                if isinstance(item, dict)
-            ]
-            detail["models"] = model_ids[:5]
-            if not any(_canonical_gemma_model(model_id) for model_id in model_ids):
-                detail["error"] = "canonical_gemma_e4b_model_missing"
-                return detail
             detail["ok"] = True
+            try:
+                models = await client.get(f"{base_url}/v1/models")
+                detail["models_status"] = models.status_code
+                if models.status_code == 200:
+                    payload = models.json()
+                    model_ids = [
+                        str(item.get("id") or item.get("model") or "")
+                        for item in payload.get("data", [])
+                        if isinstance(item, dict)
+                    ]
+                    detail["models"] = model_ids[:5]
+                    # Telemetry only: current llama-server exposes a model id/path
+                    # containing "gemma" and "e4b", but readiness is gated on the
+                    # server's own /health so model-list shape drift cannot block boot.
+                    detail["canonical_model_seen"] = any(
+                        _canonical_gemma_model(model_id) for model_id in model_ids
+                    )
+            except Exception as models_exc:
+                detail["models_error"] = models_exc.__class__.__name__
             return detail
     except Exception as exc:
         detail["error"] = exc.__class__.__name__
@@ -133,8 +146,20 @@ async def _check_stt_ready() -> dict:
 
 
 async def _check_tts_ready(timeout_s: float = 2.0) -> dict:
+    from routers import voice_tts
+
+    mode = os.environ.get("ZOE_TTS_MODE", "hybrid").strip().lower() or "hybrid"
     sidecar_url = os.environ.get("ZOE_KOKORO_SIDECAR_URL", "http://127.0.0.1:10201").rstrip("/")
-    detail: dict = {"ok": False, "engine": "kokoro", "sidecar_url": sidecar_url}
+    detail: dict = {
+        "ok": False,
+        "engine": "kokoro-waterfall",
+        "mode": mode,
+        "sidecar_url": sidecar_url,
+    }
+    if mode in {"edge", "cloud", "offline"}:
+        detail["ok"] = True
+        detail["provider"] = mode
+        return detail
     try:
         async with httpx.AsyncClient(timeout=timeout_s) as client:
             response = await client.get(f"{sidecar_url}/health")
@@ -147,22 +172,30 @@ async def _check_tts_ready(timeout_s: float = 2.0) -> dict:
             detail["ok"] = bool(payload.get("pipeline_loaded"))
             if not detail["ok"]:
                 detail["error"] = "pipeline_not_loaded"
-            return detail
+            else:
+                detail["provider"] = "kokoro-sidecar"
+                return detail
         detail["error"] = f"http_{response.status_code}"
-        return detail
     except Exception as exc:
         detail["error"] = exc.__class__.__name__
-        try:
-            from routers import voice_tts
-
-            detail["local_onnx_loaded"] = bool(voice_tts.kokoro_ready())
-            detail["ok"] = bool(voice_tts.kokoro_ready())
-        except Exception:
-            pass
+    detail["local_onnx_loaded"] = bool(voice_tts.kokoro_ready())
+    if voice_tts.kokoro_ready():
+        detail["ok"] = True
+        detail["provider"] = "kokoro-onnx"
         return detail
+    detail["espeak_available"] = bool(voice_tts._has_espeak_ng())
+    if mode in {"hybrid", "local", "offline"} and detail["espeak_available"]:
+        detail["ok"] = True
+        detail["provider"] = "espeak-ng"
+        return detail
+    if mode in {"hybrid"}:
+        detail["ok"] = True
+        detail["provider"] = "edge-tts-or-espeak-fallback"
+        return detail
+    return detail
 
 
-async def _build_readiness_report() -> dict:
+async def _build_readiness_report_uncached() -> dict:
     brain, stt, tts = await asyncio.gather(
         _check_brain_ready(),
         _check_stt_ready(),
@@ -180,8 +213,38 @@ async def _build_readiness_report() -> dict:
     }
 
 
+async def _build_readiness_report(*, use_cache: bool = True) -> dict:
+    now = time.monotonic()
+    cached_report = _READINESS_CACHE.get("report")
+    if use_cache and isinstance(cached_report, dict) and now < float(_READINESS_CACHE.get("expires_at") or 0.0):
+        return dict(cached_report)
+
+    async with _READINESS_CACHE_LOCK:
+        now = time.monotonic()
+        cached_report = _READINESS_CACHE.get("report")
+        if use_cache and isinstance(cached_report, dict) and now < float(_READINESS_CACHE.get("expires_at") or 0.0):
+            return dict(cached_report)
+
+        total_timeout_s = max(0.1, _env_float("ZOE_READINESS_TIMEOUT_S", 4.0))
+        cache_ttl_s = max(0.0, _env_float("ZOE_READINESS_CACHE_TTL_S", 3.0))
+        try:
+            report = await asyncio.wait_for(_build_readiness_report_uncached(), timeout=total_timeout_s)
+        except Exception as exc:
+            report = {
+                "status": "degraded",
+                "service": "zoe-data",
+                "version": "1.0.0",
+                "memory_capture": _memory_capture_health,
+                "ready": False,
+                "dependencies": {"readiness": {"ok": False, "error": exc.__class__.__name__}},
+            }
+        _READINESS_CACHE["report"] = dict(report)
+        _READINESS_CACHE["expires_at"] = time.monotonic() + cache_ttl_s
+        return report
+
+
 async def _wait_for_brain_startup() -> None:
-    deadline = time.monotonic() + float(os.environ.get("ZOE_BRAIN_STARTUP_WAIT_S", "30"))
+    deadline = time.monotonic() + max(0.0, _env_float("ZOE_BRAIN_STARTUP_WAIT_S", 30.0))
     last: dict = {}
     while time.monotonic() < deadline:
         last = await _check_brain_ready(timeout_s=2.0)
@@ -189,7 +252,7 @@ async def _wait_for_brain_startup() -> None:
             logger.info("Brain readiness gate passed")
             return
         await asyncio.sleep(1.0)
-    logger.warning("Brain readiness gate timed out; /health will report not ready: %s", last)
+    logger.warning("Brain readiness gate timed out; /readyz will report not ready: %s", last)
 
 
 # These legacy logging filters are no longer needed with the new JSON middleware
@@ -1592,7 +1655,17 @@ async def a2a_well_known():
 
 @app.get("/health")
 async def root_health():
-    report = await _build_readiness_report()
+    return {
+        "status": "ok",
+        "service": "zoe-data",
+        "version": "1.0.0",
+        "memory_capture": _memory_capture_health,
+    }
+
+
+@app.get("/readyz")
+async def root_readyz():
+    report = await _build_readiness_report(use_cache=True)
     return JSONResponse(report, status_code=200 if report["ready"] else 503)
 
 
