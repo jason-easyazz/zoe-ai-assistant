@@ -133,7 +133,7 @@ async def provision_poll(code: str, db=Depends(get_db)):
     No authentication required (Pi has no session at this point).
     """
     row = await (await db.execute(
-        "SELECT code, status, token, expires_at FROM panel_provision_codes WHERE code = ?",
+        "SELECT code, status, token, panel_id, expires_at FROM panel_provision_codes WHERE code = ?",
         (code,),
     )).fetchone()
     if not row:
@@ -151,21 +151,29 @@ async def provision_poll(code: str, db=Depends(get_db)):
         return {"status": "expired"}
 
     if status == "confirmed":
+        # One-time token pickup must be atomic. The previous read-then-clear
+        # (SELECT token … then UPDATE … SET token = NULL) let two concurrent polls
+        # both read the same raw device token before either cleared it.
+        #
+        # Use a single conditional UPDATE and decide the winner by affected-row
+        # count: the row-level write lock serializes concurrent statements, so
+        # exactly one poll flips the row (rowcount == 1) and the rest match zero
+        # rows. The condition matches the EXACT token this poll read (S1), so it is
+        # also robust against token rotation — we never clear/deliver a token other
+        # than the one we observed. The winner returns the token it already read
+        # above (we must NOT use `RETURNING token` here — PostgreSQL RETURNING yields
+        # the post-update value, which is the NULL we just wrote).
         token = row["token"]
         if token:
-            # Clear the token from DB after delivery (one-time pickup)
-            await db.execute(
-                "UPDATE panel_provision_codes SET token = NULL WHERE code = ?", (code,)
+            cleared = await db.execute(
+                "UPDATE panel_provision_codes SET token = NULL WHERE code = ? AND token = ?",
+                (code, token),
             )
             await db.commit()
-            panel_row = await (await db.execute(
-                "SELECT panel_id FROM panel_provision_codes WHERE code = ?", (code,)
-            )).fetchone()
-            panel_id = panel_row["panel_id"] if panel_row else None
-            return {"status": "confirmed", "token": token, "panel_id": panel_id}
-        else:
-            # Token already delivered
-            return {"status": "confirmed"}
+            if getattr(cleared, "rowcount", 0) == 1:
+                return {"status": "confirmed", "token": token, "panel_id": row["panel_id"]}
+        # Token already delivered to an earlier poll (or rotated out from under us).
+        return {"status": "confirmed"}
 
     return {"status": status}
 

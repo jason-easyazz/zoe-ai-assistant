@@ -25,7 +25,7 @@ from typing import Optional
 
 import asyncio
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from auth import get_current_user, require_admin
 from database import get_db
 
@@ -87,6 +87,24 @@ def lookup_device_token(raw_token: str) -> dict | None:
     if exp and datetime.fromisoformat(exp) < datetime.now(tz=timezone.utc):
         return None
     return info
+
+
+def _request_has_panel_device_token(request: Request | None, panel_id: str) -> bool:
+    """True iff the request carries a valid device token issued for ``panel_id``.
+
+    Used as the authority proof on /auth/pin for a panel that has NO
+    panel_user_bindings rows yet (first-boot / panel-daemon). Without it, a bare
+    authenticated session could create a challenge for an arbitrary active panel
+    and approve it with its own PIN — see the zero-binding branch in submit_pin.
+    """
+    try:
+        raw = request.headers.get("X-Device-Token", "") if request is not None else ""
+    except Exception:
+        raw = ""
+    if not raw:
+        return False
+    info = lookup_device_token(raw)
+    return bool(info and str(info.get("panel_id")) == str(panel_id))
 
 
 async def _resolve_device_token_user(raw_token: str) -> dict | None:
@@ -499,7 +517,7 @@ async def create_pin_challenge_internal(panel_id: str, user_id, action_context, 
 
 
 @router.post("/auth/pin")
-async def submit_pin(payload: dict, db=Depends(get_db)):
+async def submit_pin(payload: dict, request: Request = None, db=Depends(get_db)):
     """
     Submit a PIN for an outstanding challenge (called by the touch panel JS).
     PINs are validated by delegating to zoe-auth's /api/auth/login/passcode
@@ -507,7 +525,11 @@ async def submit_pin(payload: dict, db=Depends(get_db)):
     """
     challenge_id = str(payload.get("challenge_id") or "").strip()
     pin = str(payload.get("pin") or "").strip()
-    user_id_hint = str(payload.get("user_id") or "").strip() or None
+    # SECURITY (P2): this endpoint is UNAUTHENTICATED. A caller-supplied user_id
+    # must NEVER influence which identity the PIN is validated against — otherwise
+    # any valid user's PIN could approve a challenge for a panel/user they aren't
+    # bound to. The acting identity is resolved ONLY from the challenge or the
+    # panel's binding below; any "user_id" in the payload is deliberately ignored.
     if not challenge_id or not pin:
         raise HTTPException(status_code=400, detail="challenge_id and pin required")
 
@@ -534,7 +556,12 @@ async def submit_pin(payload: dict, db=Depends(get_db)):
     # Pass 0 proved the old SHA-256-on-users.pin_hash path always 500s: wrong column
     # name ("user_id" vs "id") and every users.pin_hash is NULL.
     zoe_auth_base = os.environ.get("ZOE_AUTH_URL", "http://localhost:8002")
-    resolved_user_id = user_id_hint or (row["user_id"] if row["user_id"] else None)
+    # Resolve the acting identity ONLY from trusted sources — the challenge's
+    # stored user, else the panel's configured default-user binding. Caller input
+    # is never consulted (see SECURITY note above).
+    challenge_user_id = str(row["user_id"]) if row["user_id"] else None
+    resolved_user_id = challenge_user_id
+    resolved_from_binding = False
     if not resolved_user_id:
         # Voice-originated challenges are often created with user_id=None.
         # Fall back to the panel's configured default user so PIN verification
@@ -546,8 +573,63 @@ async def submit_pin(payload: dict, db=Depends(get_db)):
             )).fetchone()
             if _default_row and _default_row["user_id"]:
                 resolved_user_id = str(_default_row["user_id"])
+                resolved_from_binding = True
         except Exception as _bind_exc:
             logger.debug("panel_auth: default binding lookup failed: %s", _bind_exc)
+
+    if not resolved_user_id:
+        raise HTTPException(status_code=400, detail="Challenge has no resolvable user")
+
+    # Verify panel authorization for a challenge-carried user. (Users resolved
+    # from the panel's default binding above are authorized by definition and
+    # skip this block.)
+    if not resolved_from_binding:
+        # This check is security-load-bearing, so it must FAIL CLOSED: a transient
+        # DB error here must never let the request skip authorization and proceed to
+        # PIN validation. Convert unexpected errors into a 503 (deny) instead of
+        # swallowing them.
+        try:
+            _has_binding = await (await db.execute(
+                "SELECT 1 FROM panel_user_bindings WHERE panel_id = ? LIMIT 1",
+                (row["panel_id"],),
+            )).fetchone()
+            if _has_binding:
+                # Bindings exist → the challenge user MUST be among them.
+                _allowed = await (await db.execute(
+                    "SELECT 1 FROM panel_user_bindings WHERE panel_id = ? AND user_id = ? LIMIT 1",
+                    (row["panel_id"], resolved_user_id),
+                )).fetchone()
+                if not _allowed:
+                    logger.warning(
+                        "panel_auth: challenge user %s not bound to panel %s — rejecting PIN",
+                        resolved_user_id, row["panel_id"],
+                    )
+                    raise HTTPException(status_code=403, detail="User not authorized for this panel")
+            elif not _request_has_panel_device_token(request, row["panel_id"]):
+                # Zero bindings for this panel. The challenge ALONE is NOT proof of
+                # authority: create_pin_challenge accepts any authenticated user plus
+                # an arbitrary active panel_id and stores that caller as the challenge
+                # user, so trusting it here would let a normal session approve a PIN
+                # for a panel it has no relationship to (BLOCKING cross-review finding).
+                # Require the panel's own device token on the request (panel-daemon /
+                # first-boot authority). Legitimate provisioning always creates a
+                # 'default' binding atomically (panel_provision.provision_confirm), so a
+                # correctly-provisioned panel is never in this zero-binding branch.
+                logger.warning(
+                    "panel_auth: PIN approval denied for unbound panel %s without device-token "
+                    "authority (challenge user %s)",
+                    row["panel_id"], resolved_user_id,
+                )
+                raise HTTPException(status_code=403, detail="Panel not authorized for PIN approval")
+        except HTTPException:
+            raise
+        except Exception as _authz_exc:
+            logger.warning("panel_auth: panel authorization check errored: %s", _authz_exc)
+            raise HTTPException(
+                status_code=503,
+                detail="Authorization check temporarily unavailable. Please try again.",
+            )
+
     pin_valid = False
     auth_service_error: Optional[str] = None
     try:
