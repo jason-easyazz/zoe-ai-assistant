@@ -86,6 +86,35 @@ class _FakeCursor:
         return self._rows
 
 
+async def _cleanup_person_fanout_artifacts(
+    db_conn,
+    memory_service,
+    *,
+    person_id: str,
+    user_id: str,
+    mem_ids: set[str],
+) -> None:
+    """Remove only artifacts created by the dual-fanout integration test."""
+    try:
+        collection = memory_service._collection()
+        result = collection.get(
+            where={"$and": [{"user_id": user_id}, {"entity_id": person_id}]},
+            include=[],
+        )
+        mem_ids.update(str(mid) for mid in (result.get("ids") or []) if mid)
+    except Exception:
+        pass
+
+    if mem_ids:
+        try:
+            await memory_service._run_sync(memory_service._delete_ids, sorted(mem_ids))
+        except Exception:
+            pass
+
+    await db_conn.execute("DELETE FROM person_activities WHERE person_id=$1 AND user_id=$2", person_id, user_id)
+    await db_conn.execute("DELETE FROM people WHERE id=$1 AND user_id=$2", person_id, user_id)
+
+
 @pytest.mark.asyncio
 async def test_create_person_has_crm_columns(db_conn):
     """New people table has circle, health_score, notification_count columns."""
@@ -126,11 +155,11 @@ async def test_person_extractor_dual_fanout(db_conn):
     from person_extractor import process_text
     from memory_service import get_memory_service
 
-    test_user = "test-crm-sync-user"
     person_id = str(uuid.uuid4())
+    test_user = f"test-crm-sync-user-{person_id[:8]}"
     person_name = f"Zynthia_{person_id[:6]}"
     memory_service = get_memory_service()
-    created_mem_id = None
+    created_mem_ids: set[str] = set()
 
     try:
         memory_service._collection()
@@ -164,11 +193,11 @@ async def test_person_extractor_dual_fanout(db_conn):
         assert person_name in row["description"]
         assert "hiking in the mountains" in row["description"]
         assert row["mem_id"], "Expected person_activities.mem_id to reference the MemPalace record"
-        created_mem_id = row["mem_id"]
+        created_mem_ids.add(str(row["mem_id"]))
 
         # Verify: actual MemPalace/vector side effect is readable, not patched away.
-        memory = await memory_service.get(created_mem_id)
-        assert memory is not None, f"MemPalace record {created_mem_id} was not found"
+        memory = await memory_service.get(str(row["mem_id"]))
+        assert memory is not None, f"MemPalace record {row['mem_id']} was not found"
         assert memory.metadata["entity_id"] == person_id
         assert memory.metadata["entity_type"] == "person"
         assert memory.metadata["user_id"] == test_user
@@ -183,14 +212,13 @@ async def test_person_extractor_dual_fanout(db_conn):
         assert people_row["last_contacted_at"] is not None, "_post_write_hooks should update last_contacted_at"
         assert people_row["health_score"] is not None, "_post_write_hooks should recalculate health_score"
     finally:
-        # Clean up only rows created by this test. Never delete the whole user.
-        await db_conn.execute("DELETE FROM person_activities WHERE person_id=$1", person_id)
-        await db_conn.execute("DELETE FROM people WHERE id=$1", person_id)
-        if created_mem_id:
-            try:
-                await memory_service._run_sync(memory_service._delete_ids, [created_mem_id])
-            except Exception:
-                pass
+        await _cleanup_person_fanout_artifacts(
+            db_conn,
+            memory_service,
+            person_id=person_id,
+            user_id=test_user,
+            mem_ids=created_mem_ids,
+        )
 
 
 @pytest.mark.asyncio
