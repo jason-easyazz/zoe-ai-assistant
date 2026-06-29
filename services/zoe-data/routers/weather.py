@@ -372,7 +372,10 @@ async def _fetch_owm_forecast(lat: float, lon: float) -> dict:
             data = r.json()
         items = data.get("list", [])
         try:
-            provider_offset = int(data.get("city", {}).get("timezone") or 0)
+            city = data.get("city")
+            if not isinstance(city, dict):
+                city = {}
+            provider_offset = int(city.get("timezone") or 0)
             provider_tz = timezone(timedelta(seconds=provider_offset))
         except (TypeError, ValueError, OverflowError):
             provider_tz = timezone.utc
