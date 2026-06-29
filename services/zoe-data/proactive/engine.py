@@ -340,9 +340,30 @@ def _on_job_error(event) -> None:
     job_id = getattr(event, "job_id", "") or ""
     if not job_id.startswith(_REMINDER_JOB_PREFIX):
         return
-    # The DB row stays unfired (see _fire_reminder) and attempts/last_error were
-    # recorded there; startup reconciliation retries it (bounded by attempts).
-    log.error("reminder job %s raised: %s", job_id, getattr(event, "exception", None))
+    # _fire_reminder already recorded attempts/last_error and RELEASED the claim.
+    # Re-register a bounded, backed-off retry now so a transient failure doesn't
+    # leave the reminder stuck until the next restart.
+    log.error("reminder job %s raised: %s — scheduling bounded retry",
+              job_id, getattr(event, "exception", None))
+    _run_on_engine_loop(_retry_errored_reminder(job_id))
+
+
+async def _retry_errored_reminder(job_id: str) -> None:
+    scheduled_id = job_id[len(_REMINDER_JOB_PREFIX):]
+    try:
+        row = await _load_scheduled_row(scheduled_id)
+        if row is None or row["fired"]:
+            return
+        attempts = row["attempts"] or 0
+        if attempts >= _MAX_FIRE_ATTEMPTS:
+            log.error("reminder %s exhausted %d attempts; not retrying", scheduled_id, _MAX_FIRE_ATTEMPTS)
+            return
+        # Linear backoff capped at 5 min; attempts was already bumped by the
+        # failed fire, so the first retry waits ~attempts*60s.
+        backoff = timedelta(seconds=min(attempts, 5) * 60)
+        await _ensure_reminder_job(row, catch_up=True, delay=backoff)
+    except Exception as exc:
+        log.warning("failed to schedule retry for reminder %s: %s", scheduled_id, exc)
 
 
 async def _load_scheduled_row(scheduled_id: str):
@@ -355,13 +376,16 @@ async def _load_scheduled_row(scheduled_id: str):
             return await cur.fetchone()
 
 
-async def _ensure_reminder_job(row, *, catch_up: bool) -> bool:
+async def _ensure_reminder_job(row, *, catch_up: bool, delay: timedelta | None = None) -> bool:
     """(Re)register the APScheduler job for an unfired reminder row.
 
     Idempotent: the job id is deterministic and register_job uses
     replace_existing, so concurrent listener + reconciliation calls converge to
-    exactly ONE live job — a reminder is never double-fired. Returns True if a
-    job was (re)registered.
+    exactly ONE live job; the in-job atomic claim guarantees exactly-once even if
+    more than one job runs. Returns True if a job was (re)registered.
+
+    catch_up fires immediately (missed/error recovery); otherwise the row's
+    send_at is honoured. delay adds a backoff (used for error retries).
     """
     if row is None or row["fired"]:
         return False
@@ -383,6 +407,8 @@ async def _ensure_reminder_job(row, *, catch_up: bool) -> bool:
             run_at = send_at if send_at > now else now
         except Exception:
             run_at = now
+    if delay:
+        run_at = now + delay
 
     job_id = row["apscheduler_job_id"] or f"{_REMINDER_JOB_PREFIX}{row['id']}"
     register_job(

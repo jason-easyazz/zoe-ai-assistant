@@ -269,9 +269,11 @@ async def cancel_reminder_jobs(reminder_id: str) -> int:
     Keyed on proactive_scheduled.item_id == reminder_id. Call this whenever a
     reminder's due-time or state changes (update / snooze / acknowledge / delete)
     so a job scheduled for the OLD due-time can never fire against the mutated
-    row. Best-effort per row: a single cancel failure is logged, not fatal — the
-    missed/error listeners and startup reconciliation are the backstop. Returns
-    the number of scheduled rows acted on.
+    row. Returns the number of scheduled rows acted on.
+
+    Airtight on partial failure: if APScheduler removal raises for a row, we
+    still CONSUME the row (mark fired=1) so any surviving orphan job's atomic
+    claim finds nothing to deliver — the stale old-time fire can't slip through.
     """
     async with _get_compat_db() as db:
         async with db.execute(
@@ -286,5 +288,8 @@ async def cancel_reminder_jobs(reminder_id: str) -> int:
             await cancel_reminder(r["id"])
             count += 1
         except Exception:
-            log.exception("cancel_reminder_jobs: failed to cancel scheduled %s", r["id"])
+            log.exception("cancel_reminder_jobs: failed to cancel scheduled %s; "
+                          "neutralizing row so the orphan job can't fire", r["id"])
+            await _consume_scheduled(r["id"])
+            count += 1
     return count

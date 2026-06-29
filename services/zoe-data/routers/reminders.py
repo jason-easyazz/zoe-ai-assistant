@@ -37,23 +37,42 @@ async def _cancel_reminder_jobs_safe(reminder_id: str) -> None:
 
 
 async def _reschedule_reminder_due_safe(db, reminder_id: str) -> None:
-    """Reschedule a reminder at its CURRENT due-time (call AFTER the mutation)."""
+    """Reschedule a reminder at its CURRENT next fire time (call AFTER the mutation).
+
+    A live reminder fires next at snoozed_until if it's snoozed into the future,
+    otherwise at its due-time. Editing a snoozed reminder must NOT drop its
+    pending snooze fire — so we reschedule at snoozed_until here rather than
+    skipping (which previously left a snoozed reminder with no job at all).
+    """
     try:
-        from proactive.triggers.reminder_scan import schedule_due_reminder
         cursor = await db.execute("SELECT * FROM reminders WHERE id = ?", [reminder_id])
         row = await cursor.fetchone()
         if row is None:
             return
         r = dict(row)
-        # Only reschedule a reminder that is still live, due-timed, and not snoozed
-        # (a snoozed reminder is rescheduled at snoozed_until by the snooze route).
-        if (
-            r.get("is_active")
-            and not r.get("acknowledged")
-            and not r.get("deleted")
-            and r.get("due_time")
-            and not r.get("snoozed_until")
-        ):
+        if not (r.get("is_active") and not r.get("acknowledged") and not r.get("deleted")):
+            return
+
+        snoozed = r.get("snoozed_until")
+        if snoozed:
+            try:
+                snooze_at = datetime.fromisoformat(str(snoozed).replace("Z", "+00:00"))
+                if snooze_at.tzinfo is None:
+                    snooze_at = snooze_at.replace(tzinfo=timezone.utc)
+            except Exception:
+                snooze_at = None
+            if snooze_at and snooze_at > datetime.now(timezone.utc):
+                from proactive.triggers.reminders import schedule_reminder
+                await schedule_reminder(
+                    user_id=r.get("user_id"),
+                    message=r.get("title") or "Reminder",
+                    send_at=snooze_at,
+                    item_id=reminder_id,
+                )
+            return  # snooze in the past → reminder_scan will re-pick it up
+
+        if r.get("due_time"):
+            from proactive.triggers.reminder_scan import schedule_due_reminder
             await schedule_due_reminder(db, row)
     except Exception:
         log.exception("reminder resync: reschedule failed for %s", reminder_id)
@@ -239,6 +258,8 @@ async def snooze_reminder(
     row = await cursor.fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Reminder not found")
+    if dict(row).get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Not authorised to snooze this reminder")
 
     owner_id = dict(row).get("user_id") or user_id
     title = dict(row).get("title") or "Reminder"
@@ -299,6 +320,8 @@ async def acknowledge_reminder(
     row = await cursor.fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Reminder not found")
+    if dict(row).get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Not authorised to acknowledge this reminder")
 
     # B2: an acknowledged reminder is done — cancel the pending job BEFORE the
     # state change auto-commits so it can't still fire; the in-job obligation

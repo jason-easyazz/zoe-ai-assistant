@@ -142,6 +142,13 @@ class FakeReminderDB:
         if u.startswith("SELECT IS_ACTIVE, ACKNOWLEDGED, DELETED FROM REMINDERS WHERE ID = ?"):
             r = self.reminders.get(p[0])
             return _Cursor([r] if r else [])
+        # cancel_reminder_jobs select (by item_id).
+        if "FROM PROACTIVE_SCHEDULED" in u and "ITEM_ID = ?" in u:
+            item = p[0]
+            return _Cursor([
+                {"id": sid} for sid, row in self.scheduled.items()
+                if row.get("item_id") == item and row.get("fired", 0) == 0
+            ])
         # reconcile select (fired=0 AND unclaimed/stuck).
         if "FROM PROACTIVE_SCHEDULED" in u and "WHERE FIRED = 0" in u:
             cutoff = p[0] if p else None
@@ -580,6 +587,128 @@ async def test_snooze_cancels_before_mutate_and_reschedules_at_snooze_time(monke
     assert scheduled and scheduled[0]["item_id"] == "rem1"
     # Re-fires ~15 min out (the snooze), not at the original 09:00.
     assert before + timedelta(minutes=14) <= scheduled[0]["send_at"] <= before + timedelta(minutes=16)
+
+
+# =========================================================================== #
+# Cross-review follow-ups (Greptile threads)
+# =========================================================================== #
+@pytest.mark.asyncio
+async def test_cancel_reminder_jobs_neutralizes_row_on_cancel_failure(monkeypatch):
+    """G4: if APScheduler removal fails, the row is consumed so the orphan job
+    can't deliver (its claim finds fired=1)."""
+    store = FakeReminderDB(
+        scheduled={"s1": {"fired": 0, "claimed_at": None, "item_id": "rem1", "attempts": 0}},
+    )
+    _patch_compat(monkeypatch, reminders, store)
+
+    async def boom(_sid):
+        raise RuntimeError("jobstore down")
+
+    monkeypatch.setattr(reminders, "cancel_reminder", boom)
+
+    n = await reminders.cancel_reminder_jobs("rem1")
+
+    assert n == 1
+    assert store.scheduled["s1"]["fired"] == 1, "orphan row neutralized on cancel failure"
+
+
+@pytest.mark.asyncio
+async def test_error_listener_schedules_bounded_retry(monkeypatch):
+    """G3: an errored fire is retried in-process (with backoff), not left until restart."""
+    store = FakeReminderDB(
+        scheduled={"r1": {"fired": 0, "claimed_at": None, "item_id": "", "attempts": 1,
+                          "user_id": "u1", "message": "hi",
+                          "send_at": _iso(datetime.now(timezone.utc) - timedelta(hours=1)),
+                          "apscheduler_job_id": "reminder-r1"}},
+    )
+    _patch_compat(monkeypatch, engine, store)
+    registered = []
+    monkeypatch.setattr(scheduler, "register_job", lambda **kw: registered.append(kw))
+
+    await engine._retry_errored_reminder("reminder-r1")
+
+    assert registered and registered[0]["job_id"] == "reminder-r1"
+    assert registered[0]["run_at"] > datetime.now(timezone.utc), "retry is backed off into the future"
+
+
+@pytest.mark.asyncio
+async def test_error_listener_gives_up_at_max_attempts(monkeypatch):
+    store = FakeReminderDB(
+        scheduled={"r1": {"fired": 0, "claimed_at": None, "item_id": "",
+                          "attempts": engine._MAX_FIRE_ATTEMPTS,
+                          "user_id": "u1", "message": "hi",
+                          "send_at": _iso(datetime.now(timezone.utc) - timedelta(hours=1)),
+                          "apscheduler_job_id": "reminder-r1"}},
+    )
+    _patch_compat(monkeypatch, engine, store)
+    registered = []
+    monkeypatch.setattr(scheduler, "register_job", lambda **kw: registered.append(kw))
+
+    await engine._retry_errored_reminder("reminder-r1")
+
+    assert registered == [], "no retry past the attempt cap"
+
+
+@pytest.mark.asyncio
+async def test_editing_snoozed_reminder_reschedules_at_snooze_time(monkeypatch):
+    """G2: editing a snoozed reminder reschedules at snoozed_until (not dropped)."""
+    import routers.reminders as rr
+
+    future = datetime.now(timezone.utc) + timedelta(minutes=30)
+    snoozed_iso = future.strftime("%Y-%m-%dT%H:%M:%SZ")
+    reminder = {"id": "rem1", "user_id": "u1", "title": "t", "due_time": "09:00",
+                "is_active": 1, "acknowledged": 0, "deleted": 0, "snoozed_until": snoozed_iso}
+    scheduled = []
+
+    async def fake_schedule_reminder(user_id, message, send_at, item_id=""):
+        scheduled.append({"send_at": send_at, "item_id": item_id})
+        return "row-x"
+
+    monkeypatch.setattr("proactive.triggers.reminders.schedule_reminder", fake_schedule_reminder)
+
+    await rr._reschedule_reminder_due_safe(FakeCompatDB(select_rows=[reminder]), "rem1")
+
+    assert scheduled and scheduled[0]["item_id"] == "rem1"
+    assert scheduled[0]["send_at"] == datetime.fromisoformat(snoozed_iso.replace("Z", "+00:00")), \
+        "snoozed reminder must keep firing at snoozed_until after an edit"
+
+
+@pytest.mark.asyncio
+async def test_snooze_rejects_cross_user(monkeypatch):
+    """G1: a user who can VIEW a family reminder cannot snooze another's reminder."""
+    import routers.reminders as rr
+    from fastapi import HTTPException
+    from models import SnoozeBody
+
+    async def noop(*a, **k):
+        return None
+
+    monkeypatch.setattr(rr, "require_feature_access", noop)
+    reminder = {"id": "rem1", "user_id": "owner", "title": "t", "due_time": "09:00",
+                "is_active": 1, "acknowledged": 0, "deleted": 0, "snoozed_until": None}
+
+    with pytest.raises(HTTPException) as ei:
+        await rr.snooze_reminder("rem1", SnoozeBody(snooze_minutes=10),
+                                 user={"user_id": "intruder"}, db=FakeCompatDB(select_rows=[reminder]))
+    assert ei.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_acknowledge_rejects_cross_user(monkeypatch):
+    import routers.reminders as rr
+    from fastapi import HTTPException
+
+    async def noop(*a, **k):
+        return None
+
+    monkeypatch.setattr(rr, "require_feature_access", noop)
+    reminder = {"id": "rem1", "user_id": "owner", "title": "t",
+                "is_active": 1, "acknowledged": 0, "deleted": 0}
+
+    with pytest.raises(HTTPException) as ei:
+        await rr.acknowledge_reminder("rem1", user={"user_id": "intruder"},
+                                      db=FakeCompatDB(select_rows=[reminder]))
+    assert ei.value.status_code == 403
 
 
 # =========================================================================== #
