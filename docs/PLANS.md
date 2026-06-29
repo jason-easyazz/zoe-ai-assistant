@@ -48,7 +48,7 @@ a link to the detail + where it's up to. Mark ✅ when done so nothing lingers h
 ---
 
 ## ✅ Done
-- **Config/deploy health hardening (2026-06-28):** kept `/health` as backward-compatible liveness and added `/readyz` for real Gemma 4 E4B, Moonshine, and TTS readiness; removed faster-whisper/whisper warm-resurrection paths; tightened zoe-data startup ordering, auth DB health dependency, and nginx API upload size.
+- **Config/deploy health hardening (2026-06-28):** kept `/health` as backward-compatible liveness and added `/readyz` for real Gemma 4 E4B, Moonshine, and TTS readiness; removed faster-whisper/whisper warm-resurrection paths; moved dependency health out of deploy liveness, tightened auth DB health dependency, and raised nginx API upload size.
 - **Repo cleanup + lock-in (2026-06-24):** purged `docs/archive` (84MB→1.9MB) + a 69MB untracked backup; added `docs/CANONICAL.md` (single live/dead authority) + `test_canonical_invariants.py` (CI fails if a rock is swapped) + wired CANONICAL into AGENTS.md READ-FIRST; fixed manifest E2B→E4B drift. (#777)
 - **Module retirement (2026-06-24):** retired `orbit`/`agent-zero`/`jag-board`/`questionable-decisions` (code + nginx/UI/compose wiring); `jag-board` + `questionable-decisions` preserved (private repos + local archive); `zoe-music` kept, pinned for Music Assistant migration. (#779)
 - **Agent-readiness wave (2026-06-24):** opensrc repos (#773), agent audit (#774), Claude Code (#787) / Codex (#788) / Cursor (#786) all wired to load the rules + code-intel MCP.

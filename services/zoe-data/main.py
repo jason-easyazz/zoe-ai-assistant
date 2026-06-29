@@ -850,7 +850,7 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing zoe-data database...")
     await init_db()
     logger.info("Database initialized. zoe-data is ready.")
-    await _wait_for_brain_startup()
+    asyncio.create_task(_wait_for_brain_startup(), name="brain_startup_readiness_probe")
     # One-time MemPalace migration: re-tag legacy records from wing="zoe" to wing="family-admin".
     # Gated behind a DB flag so the expensive ChromaDB scan only runs on first startup.
     try:
