@@ -169,6 +169,25 @@
     function panelMatches(targetPanelId) {
         const wanted = String(targetPanelId || '').trim();
         if (!wanted) return true;
+        const identity = collectPanelIdentity();
+        if (!identity.known.size) return true; // unknown identity -> act rather than swallow
+        return identity.known.has(wanted);
+    }
+
+    function panelMatchesAuthTarget(targetPanelId) {
+        const wanted = String(targetPanelId || '').trim();
+        if (!wanted) return true;
+        const identity = collectPanelIdentity();
+        if (!identity.known.size) return true; // unknown identity -> act rather than swallow
+        // Alias-only browsers may receive canonical registered-id auth payloads
+        // after the server resolves their socket subscription. Without a
+        // registered id locally, the client cannot prove that canonical target is
+        // foreign, but this tolerance is limited to PIN/auth prompts.
+        if (!identity.hasAuthoritativePanelId) return true;
+        return identity.known.has(wanted);
+    }
+
+    function collectPanelIdentity() {
         const known = new Set();
         let hasAuthoritativePanelId = false;
         function rememberPanelId(panelId) {
@@ -186,12 +205,7 @@
             rememberPanelId(localStorage.getItem('zoe_touch_panel_id'));
             rememberPanelId(localStorage.getItem('zoe_panel_id'));
         } catch (_) {}
-        if (!known.size) return true; // unknown identity → act rather than swallow
-        // Alias-only browsers may receive canonical registered-id payloads after
-        // the server resolves their socket subscription. Without a registered id
-        // locally, the client cannot prove that canonical target is foreign.
-        if (!hasAuthoritativePanelId) return true;
-        return known.has(wanted);
+        return { known, hasAuthoritativePanelId };
     }
 
     function hydrateSeenAuthChallenges() {
@@ -1047,7 +1061,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                     if (msg.type === 'panel_pin_request' && msg.data) {
                         const d = (msg.data && msg.data.data) ? msg.data.data : msg.data;
                         const actionId = String((d && d.challenge_id) || '').trim() || ('push_pin_' + Date.now());
-                        if (panelMatches(d.panel_id)) {
+                        if (panelMatchesAuthTarget(d.panel_id)) {
                             executeAction({
                                 id: `push_pin_${actionId}`,
                                 action_type: 'panel_request_auth',
@@ -1323,7 +1337,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             if (actionType === 'panel_request_auth') {
                 if (payload.challenge_id) {
                     disarmAutoHomeTimer('auth-required');
-                    if (!panelMatches(payload.panel_id)) {
+                    if (!panelMatchesAuthTarget(payload.panel_id)) {
                         return { status: 'skipped', error_code: 'wrong_panel' };
                     }
                     const challengeId = String(payload.challenge_id);
