@@ -95,6 +95,19 @@ def register_job(
     return job_id
 
 
+def job_exists(job_id: str) -> bool:
+    """True if a live job with this id is present in the scheduler/jobstore.
+
+    Used by startup reconciliation to distinguish a reminder that still has a
+    scheduled job (leave it alone) from one whose job was dropped (re-register).
+    """
+    scheduler = get_scheduler()
+    try:
+        return scheduler.get_job(job_id) is not None
+    except Exception:
+        return False
+
+
 class CancelResult(Enum):
     """Outcome of cancel_job — distinguishes 'gone' from 'failed to cancel'."""
     REMOVED = "removed"   # job was present and removed
