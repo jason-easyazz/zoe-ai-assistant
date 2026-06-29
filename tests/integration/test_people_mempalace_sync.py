@@ -78,6 +78,10 @@ class _FakeCursor:
         return self._rows
 
 
+class _CleanupError(Exception):
+    """Sentinel exception for cleanup ordering regression coverage."""
+
+
 async def _cleanup_person_fanout_artifacts(
     db_conn,
     memory_service,
@@ -87,24 +91,84 @@ async def _cleanup_person_fanout_artifacts(
     mem_ids: set[str],
 ) -> None:
     """Remove only artifacts created by the dual-fanout integration test."""
-    try:
-        collection = memory_service._collection()
-        result = collection.get(
-            where={"$and": [{"user_id": user_id}, {"entity_id": person_id}]},
-            include=[],
-        )
-        mem_ids.update(str(mid) for mid in (result.get("ids") or []) if mid)
-    except Exception:
-        pass
+    collection = memory_service._collection()
+    result = collection.get(
+        where={"$and": [{"user_id": user_id}, {"entity_id": person_id}]},
+        include=[],
+    )
+    mem_ids.update(str(mid) for mid in (result.get("ids") or []) if mid)
 
     if mem_ids:
-        try:
-            await memory_service._run_sync(memory_service._delete_ids, sorted(mem_ids))
-        except Exception:
-            pass
+        await memory_service._run_sync(memory_service._delete_ids, sorted(mem_ids))
 
     await db_conn.execute("DELETE FROM person_activities WHERE person_id=$1 AND user_id=$2", person_id, user_id)
     await db_conn.execute("DELETE FROM people WHERE id=$1 AND user_id=$2", person_id, user_id)
+
+
+class _RecordingCleanupDb:
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+
+    async def execute(self, sql, *args):
+        self.statements.append(sql)
+
+
+class _FailingLookupCollection:
+    def get(self, *args, **kwargs):
+        raise _CleanupError("transient MemPalace lookup failure")
+
+
+class _CleanupLookupFailsMemoryService:
+    def _collection(self):
+        return _FailingLookupCollection()
+
+
+class _DeleteFailsMemoryService:
+    def _collection(self):
+        return self
+
+    def get(self, *args, **kwargs):
+        return {"ids": ["mem-1"]}
+
+    async def _run_sync(self, fn, *args):
+        raise _CleanupError("transient MemPalace delete failure")
+
+    def _delete_ids(self, ids):
+        raise AssertionError("_run_sync fake should raise before calling _delete_ids")
+
+
+@pytest.mark.asyncio
+async def test_cleanup_preserves_sql_linkage_when_mempalace_lookup_fails():
+    """A vector lookup failure must not remove SQL rows needed for retry cleanup."""
+    db = _RecordingCleanupDb()
+
+    with pytest.raises(_CleanupError):
+        await _cleanup_person_fanout_artifacts(
+            db,
+            _CleanupLookupFailsMemoryService(),
+            person_id="person-1",
+            user_id="user-1",
+            mem_ids=set(),
+        )
+
+    assert db.statements == []
+
+
+@pytest.mark.asyncio
+async def test_cleanup_preserves_sql_linkage_when_mempalace_delete_fails():
+    """A vector delete failure must not orphan the vector row by deleting SQL linkage."""
+    db = _RecordingCleanupDb()
+
+    with pytest.raises(_CleanupError):
+        await _cleanup_person_fanout_artifacts(
+            db,
+            _DeleteFailsMemoryService(),
+            person_id="person-1",
+            user_id="user-1",
+            mem_ids=set(),
+        )
+
+    assert db.statements == []
 
 
 @pytest.mark.asyncio
