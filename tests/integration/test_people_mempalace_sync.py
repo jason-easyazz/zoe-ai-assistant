@@ -11,7 +11,6 @@ Run with:
   pytest tests/integration/test_people_mempalace_sync.py -v
 """
 
-import asyncio
 import os
 import sys
 import uuid
@@ -30,13 +29,6 @@ if not os.environ.get('POSTGRES_URL'):
                 os.environ.setdefault(k.strip(), v.strip())
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../services/zoe-data'))
-
-
-@pytest.fixture(scope="module")
-def event_loop():
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
 
 
 @pytest.fixture(scope="module")
@@ -86,6 +78,99 @@ class _FakeCursor:
         return self._rows
 
 
+class _CleanupError(Exception):
+    """Sentinel exception for cleanup ordering regression coverage."""
+
+
+async def _cleanup_person_fanout_artifacts(
+    db_conn,
+    memory_service,
+    *,
+    person_id: str,
+    user_id: str,
+    mem_ids: set[str],
+) -> None:
+    """Remove only artifacts created by the dual-fanout integration test."""
+    collection = memory_service._collection()
+    result = collection.get(
+        where={"$and": [{"user_id": user_id}, {"entity_id": person_id}]},
+        include=[],
+    )
+    mem_ids.update(str(mid) for mid in (result.get("ids") or []) if mid)
+
+    if mem_ids:
+        await memory_service._run_sync(memory_service._delete_ids, sorted(mem_ids))
+
+    await db_conn.execute("DELETE FROM person_activities WHERE person_id=$1 AND user_id=$2", person_id, user_id)
+    await db_conn.execute("DELETE FROM people WHERE id=$1 AND user_id=$2", person_id, user_id)
+
+
+class _RecordingCleanupDb:
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+
+    async def execute(self, sql, *args):
+        self.statements.append(sql)
+
+
+class _FailingLookupCollection:
+    def get(self, *args, **kwargs):
+        raise _CleanupError("transient MemPalace lookup failure")
+
+
+class _CleanupLookupFailsMemoryService:
+    def _collection(self):
+        return _FailingLookupCollection()
+
+
+class _DeleteFailsMemoryService:
+    def _collection(self):
+        return self
+
+    def get(self, *args, **kwargs):
+        return {"ids": ["mem-1"]}
+
+    async def _run_sync(self, fn, *args):
+        raise _CleanupError("transient MemPalace delete failure")
+
+    def _delete_ids(self, ids):
+        raise AssertionError("_run_sync fake should raise before calling _delete_ids")
+
+
+@pytest.mark.asyncio
+async def test_cleanup_preserves_sql_linkage_when_mempalace_lookup_fails():
+    """A vector lookup failure must not remove SQL rows needed for retry cleanup."""
+    db = _RecordingCleanupDb()
+
+    with pytest.raises(_CleanupError):
+        await _cleanup_person_fanout_artifacts(
+            db,
+            _CleanupLookupFailsMemoryService(),
+            person_id="person-1",
+            user_id="user-1",
+            mem_ids=set(),
+        )
+
+    assert db.statements == []
+
+
+@pytest.mark.asyncio
+async def test_cleanup_preserves_sql_linkage_when_mempalace_delete_fails():
+    """A vector delete failure must not orphan the vector row by deleting SQL linkage."""
+    db = _RecordingCleanupDb()
+
+    with pytest.raises(_CleanupError):
+        await _cleanup_person_fanout_artifacts(
+            db,
+            _DeleteFailsMemoryService(),
+            person_id="person-1",
+            user_id="user-1",
+            mem_ids=set(),
+        )
+
+    assert db.statements == []
+
+
 @pytest.mark.asyncio
 async def test_create_person_has_crm_columns(db_conn):
     """New people table has circle, health_score, notification_count columns."""
@@ -124,22 +209,32 @@ async def test_new_columns_exist(db_conn):
 async def test_person_extractor_dual_fanout(db_conn):
     """Create a person, run process_text → verify DB activity row AND MemPalace entry."""
     from person_extractor import process_text
+    from memory_service import get_memory_service
 
-    test_user = "test-crm-sync-user"
     person_id = str(uuid.uuid4())
+    test_user = f"test-crm-sync-user-{person_id[:8]}"
     person_name = f"Zynthia_{person_id[:6]}"
+    memory_service = get_memory_service()
+    created_mem_ids: set[str] = set()
 
-    # Insert a test person
-    await db_conn.execute(
-        "INSERT INTO people (id, user_id, name, relationship, circle, context, visibility) VALUES ($1,$2,$3,$4,$5,$6,$7)",
-        person_id, test_user, person_name, "friend", "circle", "personal", "family",
-    )
+    try:
+        memory_service._collection()
+    except Exception as e:
+        pytest.skip(f"MemPalace/vector store unavailable: {e}")
 
-    db_compat = AsyncpgCompat(db_conn)
+    try:
+        await db_conn.execute(
+            "INSERT INTO users (id, name, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+            test_user, "CRM Sync Test User", "member",
+        )
 
-    with __import__('unittest.mock', fromlist=['patch']).patch(
-        'person_extractor._post_write_hooks', new_callable=__import__('unittest.mock', fromlist=['AsyncMock']).AsyncMock
-    ):
+        # Insert a test person
+        await db_conn.execute(
+            "INSERT INTO people (id, user_id, name, relationship, circle, context, visibility) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+            person_id, test_user, person_name, "friend", "circle", "personal", "family",
+        )
+
+        db_compat = AsyncpgCompat(db_conn)
         count = await process_text(
             f"{person_name} loves hiking in the mountains.",
             user_id=test_user,
@@ -147,15 +242,45 @@ async def test_person_extractor_dual_fanout(db_conn):
             db=db_compat,
         )
 
-    # Verify: DB activity row written
-    rows = await db_conn.fetch(
-        "SELECT id FROM person_activities WHERE person_id=$1 LIMIT 5", person_id
-    )
-    assert len(rows) > 0 or count == 0, "Expected at least one activity row if count > 0"
+        assert count == 1, "Expected process_text to write the detected person preference"
 
-    # Clean up test data
-    await db_conn.execute("DELETE FROM person_activities WHERE person_id=$1", person_id)
-    await db_conn.execute("DELETE FROM people WHERE id=$1", person_id)
+        # Verify: DB activity row written and linked to the MemPalace write.
+        row = await db_conn.fetchrow(
+            "SELECT id, activity_type, description, mem_id FROM person_activities WHERE person_id=$1 LIMIT 1",
+            person_id,
+        )
+        assert row is not None, "Expected a person_activities row for the extracted preference"
+        assert row["activity_type"] == "fact"
+        assert person_name in row["description"]
+        assert "hiking in the mountains" in row["description"]
+        assert row["mem_id"], "Expected person_activities.mem_id to reference the MemPalace record"
+        created_mem_ids.add(str(row["mem_id"]))
+
+        # Verify: actual MemPalace/vector side effect is readable, not patched away.
+        memory = await memory_service.get(str(row["mem_id"]))
+        assert memory is not None, f"MemPalace record {row['mem_id']} was not found"
+        assert memory.metadata["entity_id"] == person_id
+        assert memory.metadata["entity_type"] == "person"
+        assert memory.metadata["user_id"] == test_user
+        assert "hiking in the mountains" in memory.text
+
+        people_row = await db_conn.fetchrow(
+            "SELECT notification_count, health_score, last_contacted_at FROM people WHERE id=$1",
+            person_id,
+        )
+        assert people_row is not None
+        assert people_row["notification_count"] > 0, "_post_write_hooks should increment notification_count"
+        assert people_row["last_contacted_at"] is not None, "_post_write_hooks should update last_contacted_at"
+        assert people_row["health_score"] is not None, "_post_write_hooks should recalculate health_score"
+    finally:
+        await _cleanup_person_fanout_artifacts(
+            db_conn,
+            memory_service,
+            person_id=person_id,
+            user_id=test_user,
+            mem_ids=created_mem_ids,
+        )
+        await db_conn.execute("DELETE FROM users WHERE id=$1", test_user)
 
 
 @pytest.mark.asyncio
@@ -163,22 +288,29 @@ async def test_health_score_recalc(db_conn):
     """recalc_and_save updates health_score in DB."""
     from person_health import recalc_and_save
 
-    test_user = "test-health-user"
     person_id = str(uuid.uuid4())
+    test_user = f"test-health-user-{person_id[:8]}"
 
-    await db_conn.execute(
-        "INSERT INTO people (id, user_id, name, circle, context, last_contacted_at, contact_count, health_score, visibility) "
-        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
-        person_id, test_user, f"HealthTest_{person_id[:4]}", "circle", "personal",
-        datetime.utcnow().isoformat() + "Z", 5, 0.5, "family",
-    )
+    try:
+        await db_conn.execute(
+            "INSERT INTO users (id, name, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+            test_user, "Health Test User", "member",
+        )
 
-    db_compat = AsyncpgCompat(db_conn)
-    score = await recalc_and_save(person_id, test_user, db_compat)
-    assert 0.0 <= score <= 1.0, f"Score out of range: {score}"
+        await db_conn.execute(
+            "INSERT INTO people (id, user_id, name, circle, context, last_contacted_at, contact_count, health_score, visibility) "
+            "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+            person_id, test_user, f"HealthTest_{person_id[:4]}", "circle", "personal",
+            datetime.utcnow().isoformat() + "Z", 5, 0.5, "family",
+        )
 
-    # Clean up
-    await db_conn.execute("DELETE FROM people WHERE id=$1", person_id)
+        db_compat = AsyncpgCompat(db_conn)
+        score = await recalc_and_save(person_id, test_user, db_compat)
+        assert 0.0 <= score <= 1.0, f"Score out of range: {score}"
+
+    finally:
+        await db_conn.execute("DELETE FROM people WHERE id=$1", person_id)
+        await db_conn.execute("DELETE FROM users WHERE id=$1", test_user)
 
 
 def test_fields_route_order_is_correct():
