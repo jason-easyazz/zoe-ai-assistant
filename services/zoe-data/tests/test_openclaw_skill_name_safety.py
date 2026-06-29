@@ -245,8 +245,9 @@ def _load_router_module():
     """
     import importlib.util
 
-    here = Path(__file__).resolve().parents[2]
-    path = here / "services" / "zoe-data" / "routers" / "openclaw.py"
+    # Derive the path from the manager module so this works regardless of where
+    # the test file lives (routers/openclaw.py sits beside openclaw_manager.py).
+    path = Path(om.__file__).resolve().parent / "routers" / "openclaw.py"
     spec = importlib.util.spec_from_file_location("openclaw_router_under_test", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
