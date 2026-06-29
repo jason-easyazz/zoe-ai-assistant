@@ -2541,11 +2541,16 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             # SSRF guard on the browser nav target. The navigation runs in the
             # Hermes-owned broker (out-of-process), so we cannot attach a Playwright
             # route guard here for per-redirect-hop interception. Panels are LAN
-            # display devices, so we CONSTRAIN navigate_to to an allowed private-LAN
-            # panel host — that closes the broker SSRF in-process (we never ask the
-            # broker to load loopback/metadata/public) without needing an in-broker
-            # guard. (Public-website screenshots go through cloakbrowser_screenshot,
-            # which has the per-hop route guard.)
+            # display devices, so we CONSTRAIN the INITIAL navigate_to to an allowed
+            # private-LAN panel host — we never ASK the broker to load
+            # loopback/metadata/public. (Public-website screenshots go through
+            # cloakbrowser_screenshot, which has the per-hop route guard.)
+            #
+            # ACCEPTED RESIDUAL: an allowed LAN page could itself 30x to
+            # loopback/metadata *inside the broker*; closing that requires the
+            # broker to enforce redirect-hop validation (its own route guard /
+            # CDP). That is broker-side and out of scope for this in-process diff.
+            # Documented in agent_safety.guard_browser_page + services/zoe-data/AGENTS.md.
             try:
                 assert_panel_url(str(navigate_to))
             except SSRFBlocked as exc:
