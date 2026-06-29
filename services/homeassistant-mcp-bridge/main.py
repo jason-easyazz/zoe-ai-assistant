@@ -335,7 +335,9 @@ async def get_lights():
             })
         
         return {"lights": formatted_lights, "count": len(formatted_lights)}
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -357,7 +359,9 @@ async def get_switches():
             })
         
         return {"switches": formatted_switches, "count": len(formatted_switches)}
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -380,7 +384,9 @@ async def get_sensors():
             })
         
         return {"sensors": formatted_sensors, "count": len(formatted_sensors)}
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -523,9 +529,9 @@ async def analyze_home_assistant():
     """Get comprehensive analysis of Home Assistant setup"""
     try:
         states = await ha_bridge.get_states()
-        automations = await ha_bridge.get_automations()
-        scenes = await ha_bridge.get_scenes()
-        scripts = await ha_bridge.get_scripts()
+        automations = [s for s in states if s.get("entity_id", "").startswith("automation.")]
+        scenes = [s for s in states if s.get("entity_id", "").startswith("scene.")]
+        scripts = [s for s in states if s.get("entity_id", "").startswith("script.")]
         
         # Analyze entities by domain
         domains = {}

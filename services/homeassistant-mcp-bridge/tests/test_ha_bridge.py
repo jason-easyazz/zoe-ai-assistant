@@ -71,6 +71,18 @@ def test_automation_upstream_http_error_reaches_client(bridge_module, monkeypatc
     assert response.json()["detail"] == "unauthorized"
 
 
+def test_lights_upstream_http_error_reaches_client(bridge_module, monkeypatch):
+    async def raise_missing():
+        raise HTTPException(status_code=404, detail="missing states")
+
+    monkeypatch.setattr(bridge_module.ha_bridge, "get_states", raise_missing)
+
+    response = TestClient(bridge_module.app).get("/lights")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "missing states"
+
+
 def test_automation_scene_and_script_endpoints_filter_states(bridge_module, monkeypatch):
     states = [
         {
@@ -145,7 +157,11 @@ def test_analysis_uses_state_filtered_automation_scene_script_counts(bridge_modu
         {"entity_id": "light.kitchen", "state": "on", "attributes": {}},
     ]
 
+    calls = 0
+
     async def fake_get_states():
+        nonlocal calls
+        calls += 1
         return states
 
     monkeypatch.setattr(bridge_module.ha_bridge, "get_states", fake_get_states)
@@ -158,3 +174,4 @@ def test_analysis_uses_state_filtered_automation_scene_script_counts(bridge_modu
     assert summary["total_automations"] == 1
     assert summary["total_scenes"] == 1
     assert summary["total_scripts"] == 1
+    assert calls == 1
