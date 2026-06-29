@@ -98,7 +98,8 @@ async def test_openweather_forecast_filters_by_remote_location_timezone(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_openweather_forecast_bad_provider_timezone_keeps_valid_rows(monkeypatch):
+@pytest.mark.parametrize("provider_timezone", ["UTC", 999999999])
+async def test_openweather_forecast_bad_provider_timezone_keeps_valid_rows(monkeypatch, provider_timezone):
     monkeypatch.setattr(weather, "_weather_now", lambda tz: datetime(2026, 6, 28, 23, 0, tzinfo=timezone.utc))
 
     class FakeResponse:
@@ -107,7 +108,7 @@ async def test_openweather_forecast_bad_provider_timezone_keeps_valid_rows(monke
 
         def json(self):
             return {
-                "city": {"timezone": "UTC"},
+                "city": {"timezone": provider_timezone},
                 "list": [
                     {
                         "dt": 1782691200,  # 2026-06-29 00:00 UTC
