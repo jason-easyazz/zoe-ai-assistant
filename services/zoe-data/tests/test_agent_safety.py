@@ -22,6 +22,7 @@ from agent_safety import (  # noqa: E402
     CommandRejected,
     SSRFBlocked,
     assert_panel_host,
+    assert_panel_url,
     assert_public_url,
     check_bash_command,
     is_allowed_panel_host,
@@ -379,3 +380,58 @@ def test_browser_route_guard_allows_public():
 def test_browser_route_guard_aborts_internal(url):
     continued, aborted = _drive_route_guard(url)
     assert aborted is True and continued is False
+
+
+# ── Residual #1: guarded_urlopen ignores environment proxies ──────────────────
+
+def test_guarded_urlopen_ignores_env_proxy(monkeypatch):
+    import ipaddress
+
+    # Public proxy in env: if honored, urllib would connect to the proxy host.
+    monkeypatch.setenv("HTTP_PROXY", "http://9.9.9.9:8080")
+    monkeypatch.setenv("http_proxy", "http://9.9.9.9:8080")
+    monkeypatch.setenv("ALL_PROXY", "http://9.9.9.9:8080")
+
+    def fake_resolve(host):
+        if host == "origin.example":
+            return [ipaddress.ip_address("8.8.8.8")]
+        return [ipaddress.ip_address(host)]  # IP literals (e.g. the proxy) pass through
+
+    captured = {}
+
+    def fake_create_connection(address, *a, **k):
+        captured["address"] = address
+        raise AssertionError("stop-after-connect")
+
+    monkeypatch.setattr(agent_safety, "resolve_ips", fake_resolve)
+    monkeypatch.setattr(agent_safety.socket, "create_connection", fake_create_connection)
+
+    with pytest.raises(AssertionError):
+        agent_safety.guarded_urlopen("http://origin.example/x", timeout=2)
+
+    # Connected directly to the validated ORIGIN IP, never the proxy (9.9.9.9).
+    assert captured["address"] == ("8.8.8.8", 80)
+
+
+# ── Residual #2: panel_browser_screenshot nav is LAN-panel-only ───────────────
+
+@pytest.mark.parametrize("url", ["http://192.168.1.61/", "http://10.0.0.5:8123/setup"])
+def test_assert_panel_url_allows_lan(url):
+    assert assert_panel_url(url) == url
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://8.8.8.8/",                           # public — not a panel
+        "https://1.1.1.1/",                          # public host
+        "http://127.0.0.1/",                         # loopback
+        "http://169.254.169.254/latest/meta-data/",  # metadata
+        "http://2130706433/",                        # decimal-encoded loopback
+        "file:///etc/passwd",                        # non-http scheme
+        "ftp://192.168.1.61/",                       # non-http scheme
+    ],
+)
+def test_assert_panel_url_rejects_non_lan(url):
+    with pytest.raises(SSRFBlocked):
+        assert_panel_url(url)

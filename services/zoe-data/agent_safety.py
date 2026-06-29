@@ -263,6 +263,23 @@ def assert_panel_host(host: str) -> str:
     return host
 
 
+def assert_panel_url(url: str) -> str:
+    """Raise :class:`SSRFBlocked` unless ``url`` is an ``http(s)`` URL whose host is
+    an allowed private-LAN panel target (:func:`is_allowed_panel_host`).
+
+    Used to constrain panel-display navigation (e.g. ``panel_browser_screenshot``)
+    to LAN-only targets so an out-of-process browser broker can't be steered at
+    loopback / metadata / public hosts even if its own redirect handling is opaque.
+    """
+    parts = urlsplit((url or "").strip())
+    if parts.scheme not in ("http", "https"):
+        raise SSRFBlocked(f"scheme {parts.scheme or '(none)'!r} not allowed (http/https only)")
+    if not parts.hostname:
+        raise SSRFBlocked("URL has no host")
+    assert_panel_host(parts.hostname)
+    return url
+
+
 def resolve_validate_pin(host: str) -> str:
     """Resolve ``host``, require EVERY resolved address to be public, and return
     one validated IP literal to connect to.
@@ -331,6 +348,7 @@ def guarded_urlopen(url: str, *, timeout: float, headers: dict | None = None):
         HTTPRedirectHandler,
         HTTPHandler,
         HTTPSHandler,
+        ProxyHandler,
         build_opener,
     )
 
@@ -351,7 +369,14 @@ def guarded_urlopen(url: str, *, timeout: float, headers: dict | None = None):
                 _PinnedHTTPSConnection, req, context=self._context
             )
 
-    opener = build_opener(_GuardedHTTPHandler, _GuardedHTTPSHandler, _GuardedRedirect)
+    # Empty ProxyHandler => IGNORE HTTP(S)_PROXY/ALL_PROXY env vars. Without this,
+    # build_opener installs an env-driven ProxyHandler and the pinned connection
+    # would connect to the PROXY, not the validated origin IP — silently defeating
+    # the IP-pin / rebinding protection. Zoe is local-first: guarded fetches always
+    # connect directly to the validated+pinned IP.
+    opener = build_opener(
+        ProxyHandler({}), _GuardedHTTPHandler, _GuardedHTTPSHandler, _GuardedRedirect
+    )
     req = Request(url, headers=headers or {})
     return opener.open(req, timeout=timeout)
 
@@ -366,10 +391,19 @@ async def guard_browser_page(page) -> None:
     ``public -> 169.254.169.254`` redirect pre-connect rather than after the
     request has already been sent.
 
-    Residual risk: the validation resolves the hostname, while Chromium resolves
-    again at connect time, so a DNS-rebinding host is not fully pinned for the
-    browser path (unlike :func:`guarded_urlopen`, which pins the IP). The
-    per-hop pre-connect abort is the mitigation available for Playwright here.
+    ACCEPTED RESIDUAL (browser DNS-rebinding): this validates ``request.url`` in
+    Python (the handler resolves the hostname), but Playwright/Chromium resolves
+    the hostname AGAIN with its own resolver at connect time. We cannot IP-pin
+    Chromium's socket from the route layer (route exposes the URL, not the
+    resolved peer IP). So the realistic attack — a public page that *redirects*
+    to a private/metadata host — IS blocked here pre-connect (the redirect issues
+    a new request whose URL is re-validated and aborted). What remains UNCLOSED is
+    the narrow case where the SAME hostname resolves public at guard time and
+    private at Chromium's connect time (true same-host DNS rebinding). Closing
+    that needs CDP ``Fetch.requestPaused`` resolved-IP inspection or a pinning
+    proxy in front of the browser context — out of scope for this pass and
+    disproportionate here. HTTP fetches that need full pinning use
+    :func:`guarded_urlopen` instead.
     """
 
     async def _handler(route):

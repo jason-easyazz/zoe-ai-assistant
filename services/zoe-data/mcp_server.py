@@ -13,7 +13,7 @@ from datetime import date, datetime, timedelta
 import os
 
 from runtime_env import bootstrap_runtime_env
-from agent_safety import SSRFBlocked, assert_public_url, guard_browser_page
+from agent_safety import SSRFBlocked, assert_panel_url, assert_public_url, guard_browser_page
 
 bootstrap_runtime_env()
 
@@ -2408,13 +2408,16 @@ async def _execute_tool(db, name: str, args: dict):
         caption = args.get("caption") or ""
         navigate_to = args.get("navigate_to") or None
         if navigate_to:
-            # SSRF guard on the browser nav target. The actual navigation runs in
-            # the Hermes-owned broker process (out-of-process), so we cannot attach
-            # a Playwright route guard here for per-redirect-hop interception — the
-            # broker must enforce its own redirect-hop validation. This pre-check
-            # rejects a directly-private/metadata target before the broker is asked.
+            # SSRF guard on the browser nav target. The navigation runs in the
+            # Hermes-owned broker (out-of-process), so we cannot attach a Playwright
+            # route guard here for per-redirect-hop interception. Panels are LAN
+            # display devices, so we CONSTRAIN navigate_to to an allowed private-LAN
+            # panel host — that closes the broker SSRF in-process (we never ask the
+            # broker to load loopback/metadata/public) without needing an in-broker
+            # guard. (Public-website screenshots go through cloakbrowser_screenshot,
+            # which has the per-hop route guard.)
             try:
-                assert_public_url(str(navigate_to))
+                assert_panel_url(str(navigate_to))
             except SSRFBlocked as exc:
                 return {"ok": False, "error": f"blocked: {exc}"}
         plan = _BROWSER_BROKER.plan_action(
