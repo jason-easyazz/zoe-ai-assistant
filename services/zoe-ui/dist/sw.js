@@ -8,7 +8,7 @@
 importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.63.13'; // local-timezone date fix: re-precache corrected calendar.html
+const SW_VERSION = '4.63.14'; // privacy: no-cache personal API routes + loopback/LAN http passthrough
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
@@ -30,14 +30,34 @@ if (workbox) {
     workbox.core.skipWaiting();
     workbox.core.clientsClaim();
 
-    // Force all fetch requests to HTTPS when the SW itself is on HTTPS.
-    // This includes local IPs (192.168.x, 127.x) since an HTTPS-served SW cannot
-    // make mixed-content HTTP requests — FastAPI redirect responses to http://localhost
-    // would be blocked by the browser's mixed-content policy.
+    // Upgrade genuine REMOTE http:// fetches to https:// when the SW is on HTTPS,
+    // so real mixed-content requests aren't blocked by the browser.
+    //
+    // EXCEPTION (BUG FIX): loopback and private-LAN targets must pass through
+    // un-rewritten. The touch UI deliberately calls LOCAL panel daemons over plain
+    // http — the voice-activate daemon on http://localhost:7777/activate and the
+    // wake beacon on http://127.0.0.1:8765/wake (see touch/js/touch-menu.js). Those
+    // daemons don't speak TLS, and browsers already treat loopback as a secure
+    // context, so these are NOT mixed-content and must not be upgraded — rewriting
+    // them to https breaks voice activation / wake on HTTPS deployments.
+    function isLocalRequestTarget(url) {
+        const h = url.hostname;
+        return (
+            h === 'localhost' ||
+            h.endsWith('.localhost') ||
+            h === '127.0.0.1' || h.startsWith('127.') || // IPv4 loopback block
+            h === '::1' ||                               // IPv6 loopback
+            h === '0.0.0.0' ||
+            h.endsWith('.local') ||                      // mDNS panel hostnames
+            h.startsWith('192.168.') ||                  // private LAN
+            h.startsWith('10.') ||                       // private LAN
+            /^172\.(1[6-9]|2\d|3[01])\./.test(h)         // private LAN 172.16–31.x
+        );
+    }
     self.addEventListener('fetch', (event) => {
         if (self.location.protocol !== 'https:') return; // only apply on HTTPS
         const url = new URL(event.request.url);
-        if (url.protocol === 'http:') {
+        if (url.protocol === 'http:' && !isLocalRequestTarget(url)) {
             const httpsUrl = event.request.url.replace('http://', 'https://');
             event.respondWith(fetch(new Request(httpsUrl, event.request)));
             return;
@@ -204,9 +224,36 @@ if (workbox) {
         new workbox.strategies.NetworkOnly()
     );
 
-    // 6. Other API Calls - Network First (fresh data, fallback to cache)
+    // 6. Other API Calls — privacy-first, default-DENY caching.
+    //
+    // BUG FIX: the previous rule cached EVERY remaining /api/ response with
+    // NetworkFirst for up to 1 hour. That swept in authenticated, user-scoped
+    // personal data (journal, memories, people, notes, lists, reminders,
+    // transactions, calendar, dashboard, user profile, …). Persisting those in
+    // Cache Storage means (a) stale private data can be served back, and (b) on a
+    // SHARED KIOSK, after a user/session switch the next user's NetworkFirst miss
+    // (or offline) could serve the PREVIOUS user's cached personal data — a
+    // cross-user leak.
+    //
+    // Fix: invert the default. Cache ONLY an explicit allowlist of genuinely
+    // non-personal, identical-for-everyone endpoints; everything else under
+    // /api/ falls through to NetworkOnly and is never written to the cache. This
+    // is safe-by-default: any new personal route added later is non-cacheable
+    // automatically, without having to be enumerated here.
+    //
+    // (Auth, chat, notifications, ui/panel, admin, health and ws are already
+    // NetworkOnly via rule #5 above, which is registered first and wins.)
+    const CACHEABLE_API_PREFIXES = [
+        '/api/weather',                  // forecast — keyed by location, identical for everyone there; not user-private
+        '/api/system/capability-matrix', // static capability/feature info — non-personal
+    ];
+    const isCacheableApi = (pathname) => CACHEABLE_API_PREFIXES.some(
+        (prefix) => pathname === prefix || pathname.startsWith(prefix + '/')
+    );
+
+    // 6a. Allowlisted non-personal API — Network First (fresh data, short cache fallback).
     workbox.routing.registerRoute(
-        ({ url }) => url.pathname.startsWith('/api/'),
+        ({ url }) => url.pathname.startsWith('/api/') && isCacheableApi(url.pathname),
         new workbox.strategies.NetworkFirst({
             cacheName: 'zoe-api',
             networkTimeoutSeconds: 5,
@@ -220,6 +267,15 @@ if (workbox) {
                 })
             ]
         })
+    );
+
+    // 6b. Every other API call — Network Only. Personal/user-scoped data is
+    //     never persisted, so it can't go stale or leak across a kiosk session
+    //     switch. Offline simply fails (handled by setCatchHandler) rather than
+    //     serving someone else's private data.
+    workbox.routing.registerRoute(
+        ({ url }) => url.pathname.startsWith('/api/'),
+        new workbox.strategies.NetworkOnly()
     );
 
     // 7. Fonts - Cache First (rarely change)
@@ -238,6 +294,39 @@ if (workbox) {
             ]
         })
     );
+
+    // ===== SELF-TEST (no-op in production) =====
+    // Demonstrates the two invariants this SW must hold. Exposed for a test
+    // harness and run only when self.__SW_SELFTEST__ is set, so it never
+    // executes on real kiosks. Returns [{name, pass}] and throws on any failure.
+    self.__swSelfTest = function () {
+        const results = [];
+        const assert = (name, cond) => results.push({ name, pass: !!cond });
+
+        // BUG 1 — personal/user-scoped API responses must NOT be cacheable;
+        //         allowlisted non-personal endpoints stay cacheable.
+        assert('journal entries NOT cacheable',  !isCacheableApi('/api/journal/entries'));
+        assert('memories people NOT cacheable',  !isCacheableApi('/api/memories/people'));
+        assert('calendar NOT cacheable',         !isCacheableApi('/api/calendar/events'));
+        assert('dashboard NOT cacheable',        !isCacheableApi('/api/dashboard/layout'));
+        assert('user profile NOT cacheable',     !isCacheableApi('/api/user/profile'));
+        assert('weather IS cacheable',            isCacheableApi('/api/weather'));
+        assert('capability-matrix IS cacheable',  isCacheableApi('/api/system/capability-matrix'));
+        assert('system status NOT cacheable',    !isCacheableApi('/api/system/status'));
+
+        // BUG 2 — loopback / private-LAN daemon URLs must NOT be upgraded to https;
+        //         genuine remote http URLs still are.
+        assert('localhost:7777 daemon kept http', isLocalRequestTarget(new URL('http://localhost:7777/activate')));
+        assert('127.0.0.1:8765 daemon kept http', isLocalRequestTarget(new URL('http://127.0.0.1:8765/wake')));
+        assert('192.168 panel host kept http',    isLocalRequestTarget(new URL('http://192.168.1.50:8765/wake')));
+        assert('*.local panel host kept http',    isLocalRequestTarget(new URL('http://panel.local:8765/wake')));
+        assert('remote http IS upgraded',        !isLocalRequestTarget(new URL('http://example.com/api/x')));
+
+        const failed = results.filter((r) => !r.pass);
+        if (failed.length) throw new Error('SW self-test failed: ' + failed.map((r) => r.name).join(', '));
+        return results;
+    };
+    if (self.__SW_SELFTEST__) console.table(self.__swSelfTest());
 
     // ===== OFFLINE FALLBACK =====
     workbox.routing.setCatchHandler(async ({ event }) => {
