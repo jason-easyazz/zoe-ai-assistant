@@ -6,7 +6,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from auth import get_current_user
 from database import get_db
-from guest_policy import require_feature_access
+from guest_policy import require_feature_access, role_from_user
 from models import ListCreate, ListUpdate, ListItemCreate, ListItemUpdate
 from push import broadcaster
 
@@ -28,10 +28,17 @@ def _row_to_dict(row) -> dict:
     return dict(row)
 
 
-async def _require_list_owner_for_mutation(db, list_id: str, list_type: str, user_id: str, action: str) -> None:
+async def _require_list_item_mutation_access(
+    db,
+    list_id: str,
+    list_type: str,
+    user: dict,
+    action: str,
+) -> None:
+    user_id = user["user_id"]
     cursor = await db.execute(
         """
-        SELECT id, user_id FROM lists
+        SELECT id, user_id, visibility FROM lists
         WHERE id = ? AND list_type = ? AND deleted = 0
           AND (visibility = 'family' OR user_id = ?)
         """,
@@ -40,8 +47,12 @@ async def _require_list_owner_for_mutation(db, list_id: str, list_type: str, use
     row = await cursor.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="List not found")
-    if dict(row).get("user_id") != user_id:
-        raise HTTPException(status_code=403, detail=f"Not authorised to {action} items in this list")
+    list_data = dict(row)
+    if list_data.get("user_id") == user_id:
+        return
+    if list_data.get("visibility") == "family" and role_from_user(user) != "guest":
+        return
+    raise HTTPException(status_code=403, detail=f"Not authorised to {action} items in this list")
 
 
 @router.get("/types")
@@ -286,7 +297,7 @@ async def add_item(
     list_type = _normalize_list_type(list_type)
 
     user_id = user["user_id"]
-    await _require_list_owner_for_mutation(db, list_id, list_type, user_id, "add")
+    await _require_list_item_mutation_access(db, list_id, list_type, user, "add")
 
     item_id = str(uuid.uuid4())
     await db.execute(
@@ -384,7 +395,7 @@ async def update_item(
     list_type = _normalize_list_type(list_type)
 
     user_id = user["user_id"]
-    await _require_list_owner_for_mutation(db, list_id, list_type, user_id, "edit")
+    await _require_list_item_mutation_access(db, list_id, list_type, user, "edit")
 
     cursor = await db.execute(
         "SELECT id FROM list_items WHERE id = ? AND list_id = ? AND deleted = 0",
@@ -472,7 +483,7 @@ async def delete_item(
     list_type = _normalize_list_type(list_type)
 
     user_id = user["user_id"]
-    await _require_list_owner_for_mutation(db, list_id, list_type, user_id, "delete")
+    await _require_list_item_mutation_access(db, list_id, list_type, user, "delete")
 
     cursor = await db.execute(
         "SELECT id FROM list_items WHERE id = ? AND list_id = ? AND deleted = 0",

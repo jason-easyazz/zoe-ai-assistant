@@ -29,8 +29,9 @@ class FakeCursor:
 
 
 class ListDB:
-    def __init__(self, list_owner: str):
+    def __init__(self, list_owner: str, list_visibility: str = "family"):
         self.list_owner = list_owner
+        self.list_visibility = list_visibility
         self.calls: list[tuple[str, list[Any]]] = []
         self.commits = 0
         self.item_text = "milk"
@@ -40,8 +41,19 @@ class ListDB:
         self.calls.append((sql, params_list))
         normalized = " ".join(sql.split())
 
-        if normalized.startswith("SELECT id, user_id FROM lists"):
-            return FakeCursor([{"id": params_list[0], "user_id": self.list_owner}])
+        if normalized.startswith("SELECT id, user_id"):
+            actor_id = params_list[2]
+            if self.list_visibility != "family" and actor_id != self.list_owner:
+                return FakeCursor()
+            return FakeCursor(
+                [
+                    {
+                        "id": params_list[0],
+                        "user_id": self.list_owner,
+                        "visibility": self.list_visibility,
+                    }
+                ]
+            )
         if normalized.startswith("SELECT id FROM list_items"):
             return FakeCursor([{"id": params_list[0]}])
         if normalized.startswith("INSERT INTO list_items"):
@@ -103,10 +115,10 @@ async def _allow_feature(*args, **kwargs):
 
 @pytest.mark.parametrize("operation", ["add", "update", "delete"])
 @pytest.mark.asyncio
-async def test_non_owner_cannot_mutate_family_visible_list_items(monkeypatch, operation):
+async def test_guest_cannot_mutate_family_visible_list_items(monkeypatch, operation):
     monkeypatch.setattr(lists, "require_feature_access", _allow_feature)
     db = ListDB(list_owner="owner")
-    user = {"user_id": "viewer", "role": "member"}
+    user = {"user_id": "guest", "role": "guest"}
 
     with pytest.raises(HTTPException) as excinfo:
         if operation == "add":
@@ -142,7 +154,7 @@ async def test_non_owner_cannot_mutate_family_visible_list_items(monkeypatch, op
 
 
 @pytest.mark.asyncio
-async def test_owner_can_still_add_item_to_list(monkeypatch):
+async def test_family_member_can_add_item_to_family_visible_list(monkeypatch):
     monkeypatch.setattr(lists, "require_feature_access", _allow_feature)
 
     async def fake_broadcast(*args, **kwargs):
@@ -150,7 +162,7 @@ async def test_owner_can_still_add_item_to_list(monkeypatch):
 
     monkeypatch.setattr(lists.broadcaster, "broadcast", fake_broadcast)
     db = ListDB(list_owner="owner")
-    user = {"user_id": "owner", "role": "member"}
+    user = {"user_id": "household-member", "role": "member"}
 
     result = await lists.add_item(
         "shopping",
@@ -191,6 +203,41 @@ async def test_owner_can_still_update_item_in_list(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_non_owner_cannot_mutate_personal_list_items(monkeypatch):
+    monkeypatch.setattr(lists, "require_feature_access", _allow_feature)
+    db = ListDB(list_owner="owner", list_visibility="personal")
+    user = {"user_id": "household-member", "role": "member"}
+
+    with pytest.raises(HTTPException) as excinfo:
+        await lists.add_item(
+            "shopping",
+            "list-1",
+            ListItemCreate(text="milk"),
+            user=user,
+            db=db,
+        )
+
+    assert excinfo.value.status_code == 404
+    assert not any("INSERT INTO list_items" in sql for sql, _ in db.calls)
+    assert db.commits == 0
+
+
+def _notification_client(db: NotificationDB) -> TestClient:
+    app = FastAPI()
+    app.include_router(notifications.router)
+
+    async def fake_get_db():
+        yield db
+
+    app.dependency_overrides[notifications.get_current_user] = lambda: {
+        "user_id": "u-1",
+        "role": "member",
+    }
+    app.dependency_overrides[notifications.get_db] = fake_get_db
+    return TestClient(app)
+
+
+@pytest.mark.asyncio
 async def test_notification_create_broadcasts_only_to_target_user(monkeypatch):
     monkeypatch.setattr(notifications, "require_feature_access", _allow_feature)
     broadcasts = []
@@ -225,6 +272,33 @@ async def test_notification_create_broadcasts_only_to_target_user(monkeypatch):
     ]
 
 
+def test_track_interaction_accepts_query_action_without_body(monkeypatch):
+    monkeypatch.setattr(notifications, "require_feature_access", _allow_feature)
+    db = NotificationDB()
+
+    response = _notification_client(db).post("/api/notifications/notif-1/interaction?action=click")
+
+    assert response.status_code == 200
+    update_calls = [call for call in db.calls if "UPDATE notifications SET delivered = 1" in call[0]]
+    assert update_calls
+    assert update_calls[0][1][0] == "click"
+
+
+def test_track_interaction_accepts_json_body_action(monkeypatch):
+    monkeypatch.setattr(notifications, "require_feature_access", _allow_feature)
+    db = NotificationDB()
+
+    response = _notification_client(db).post(
+        "/api/notifications/notif-1/interaction",
+        json={"action": "snooze"},
+    )
+
+    assert response.status_code == 200
+    update_calls = [call for call in db.calls if "UPDATE notifications SET delivered = 1" in call[0]]
+    assert update_calls
+    assert update_calls[0][1][0] == "snooze"
+
+
 def test_non_admin_rejected_from_telegram_setup(monkeypatch):
     app = FastAPI()
     app.include_router(openclaw.router)
@@ -250,7 +324,7 @@ async def test_track_interaction_records_body_action(monkeypatch):
 
     await notifications.track_interaction(
         "notif-1",
-        notifications.NotificationInteraction(action="click"),
+        body=notifications.NotificationInteraction(action="click"),
         user=user,
         db=db,
     )
@@ -261,15 +335,17 @@ async def test_track_interaction_records_body_action(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_settings_db_error_surfaces_degraded_response():
+async def test_settings_db_error_surfaces_flat_degraded_response(monkeypatch):
+    monkeypatch.setenv("ZOE_HA_URL", "http://ha.local")
     result = await stubs.get_settings(
         user={"user_id": "u-1", "role": "member"},
         db=BrokenSettingsDB(),
     )
 
-    assert result["status"] == "degraded"
-    assert result["error"] == "settings_storage_unavailable"
-    assert result["settings"] == {}
+    assert result["_status"] == "degraded"
+    assert result["_error"] == "settings_storage_unavailable"
+    assert result["homeassistant_url"] == "http://ha.local"
+    assert "settings" not in result
 
 
 @pytest.mark.asyncio

@@ -63,6 +63,14 @@ _INTELLIGENCE_DEFAULTS = {
 }
 
 
+def _add_env_settings(settings: dict) -> dict:
+    if "homeassistant_url" not in settings:
+        ha_url = os.environ.get("ZOE_HA_URL", os.environ.get("ZOE_HA_BRIDGE_URL", ""))
+        if ha_url:
+            settings["homeassistant_url"] = ha_url
+    return settings
+
+
 @router.get("/api/settings")
 async def get_settings(user: dict = Depends(get_current_user), db=Depends(get_db)):
     """Return general system settings (HA URL, feature flags, etc.)."""
@@ -76,17 +84,11 @@ async def get_settings(user: dict = Depends(get_current_user), db=Depends(get_db
                 settings[row["key"]] = row["value"]
     except Exception:
         logger.exception("Failed to load system settings")
-        return {
-            "status": "degraded",
-            "error": "settings_storage_unavailable",
-            "settings": settings,
-        }
+        settings["_status"] = "degraded"
+        settings["_error"] = "settings_storage_unavailable"
+        return _add_env_settings(settings)
     # Expose HA bridge URL for widgets that need it
-    if "homeassistant_url" not in settings:
-        ha_url = os.environ.get("ZOE_HA_URL", os.environ.get("ZOE_HA_BRIDGE_URL", ""))
-        if ha_url:
-            settings["homeassistant_url"] = ha_url
-    return settings
+    return _add_env_settings(settings)
 
 
 @router.get("/api/settings/intelligence")
@@ -139,4 +141,3 @@ async def save_intelligence_settings(
     except Exception as exc:
         return {"status": "error", "detail": str(exc)}
     return {"status": "ok", "settings": filtered}
-

@@ -120,12 +120,13 @@ async def mark_read(
 @router.post("/{notification_id}/interaction")
 async def track_interaction(
     notification_id: str,
-    body: NotificationInteraction = Body(...),
+    action: str = Query("dismiss"),
+    body: NotificationInteraction | None = Body(None),
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
     await require_feature_access(db, user, feature="notifications", action="interact")
-    action = body.action
+    action = body.action if body is not None else action
     if action not in VALID_INTERACTION_ACTIONS:
         raise HTTPException(
             status_code=422,
