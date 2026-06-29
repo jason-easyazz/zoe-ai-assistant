@@ -1337,11 +1337,11 @@ def _trusted_actor_context_from_message(msg: dict) -> dict:
     }
 
 
-async def _lookup_actor_role(db, user_id: str, role_hint: str | None) -> str:
+async def _lookup_actor_role(db, user_id: str, role_hint: str | None, source: str | None) -> str:
     role = (role_hint or "").strip().lower()
     if role:
         return role
-    if user_id == "family-admin":
+    if source == "legacy_fallback" and user_id == "family-admin":
         return "admin"
     if db is not None:
         try:
@@ -1396,7 +1396,7 @@ async def _resolve_mcp_actor(db, name: str, args: dict, actor_context: dict | No
             name,
         )
 
-    role = await _lookup_actor_role(db, user_id, role_hint)
+    role = await _lookup_actor_role(db, user_id, role_hint, source)
     return {"user_id": user_id, "role": role, "explicit": explicit, "source": source}
 
 

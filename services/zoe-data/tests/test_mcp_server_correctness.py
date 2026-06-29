@@ -153,6 +153,21 @@ async def test_stdio_no_context_still_falls_back_to_family_admin_for_local_calls
 
 
 @pytest.mark.asyncio
+async def test_stdio_no_context_fallback_family_admin_can_target_other_users():
+    db = _RoutingDb({"dashboard_layouts": []})
+
+    await mcp_server._execute_tool(
+        db=db,
+        name="dashboard_get_layout",
+        args={"user_id": "target"},
+        actor_context={},
+    )
+
+    sql, params = next(call for call in db.calls if "FROM dashboard_layouts" in call[0])
+    assert params == ("target",)
+
+
+@pytest.mark.asyncio
 async def test_handle_tool_without_actor_context_preserves_internal_user_id(monkeypatch):
     db = _RoutingDb({"FROM notes": []})
 
@@ -191,6 +206,35 @@ async def test_legacy_explicit_user_uses_db_role_for_cross_user_target():
 
     sql, params = next(call for call in db.calls if "FROM dashboard_layouts" in call[0])
     assert params == ("jason",)
+
+
+@pytest.mark.asyncio
+async def test_transport_claimed_family_admin_does_not_get_synthetic_admin():
+    db = _RoutingDb(
+        {
+            "SELECT role FROM users": [],
+            "dashboard_layouts": [],
+        }
+    )
+    actor_context = mcp_server._trusted_actor_context_from_message(
+        {"params": {"_meta": {"zoe": {"actor_user_id": "family-admin"}}}}
+    )
+
+    await mcp_server._execute_tool(
+        db=db,
+        name="dashboard_get_layout",
+        args={"user_id": "victim"},
+        actor_context=actor_context,
+    )
+
+    assert actor_context == {
+        "user_id": "family-admin",
+        "role": None,
+        "role_source": None,
+        "source": "transport",
+    }
+    sql, params = next(call for call in db.calls if "FROM dashboard_layouts" in call[0])
+    assert params == ("family-admin",)
 
 
 @pytest.mark.asyncio
@@ -320,7 +364,12 @@ async def test_admin_transport_actor_can_target_another_dashboard_user():
         db=db,
         name="dashboard_get_layout",
         args={"user_id": "target"},
-        actor_context={"user_id": "family-admin", "role": "admin", "source": "test-session"},
+        actor_context={
+            "user_id": "ops-admin",
+            "role": "admin",
+            "role_source": "env",
+            "source": "transport",
+        },
     )
 
     sql, params = db.calls[0]
@@ -377,10 +426,15 @@ async def test_proactive_schedule_admin_can_target_explicit_user(monkeypatch):
         db=None,
         name="proactive_schedule",
         args={
-            "_user_id": "family-admin",
             "user_id": "target",
             "message": "drink water",
             "send_at": send_at,
+        },
+        actor_context={
+            "user_id": "ops-admin",
+            "role": "admin",
+            "role_source": "env",
+            "source": "transport",
         },
     )
 
@@ -446,7 +500,13 @@ async def test_dashboard_get_layout_targets_explicit_user_not_caller():
     await mcp_server._execute_tool(
         db=db,
         name="dashboard_get_layout",
-        args={"_user_id": "family-admin", "user_id": "target"},
+        args={"user_id": "target"},
+        actor_context={
+            "user_id": "ops-admin",
+            "role": "admin",
+            "role_source": "env",
+            "source": "transport",
+        },
     )
 
     sql, params = db.calls[0]
@@ -461,7 +521,13 @@ async def test_dashboard_save_layout_targets_explicit_user_not_caller():
     result = await mcp_server._execute_tool(
         db=db,
         name="dashboard_save_layout",
-        args={"_user_id": "family-admin", "user_id": "target", "layout": [{"w": "tasks"}]},
+        args={"user_id": "target", "layout": [{"w": "tasks"}]},
+        actor_context={
+            "user_id": "ops-admin",
+            "role": "admin",
+            "role_source": "env",
+            "source": "transport",
+        },
     )
 
     assert result["status"] == "ok"
@@ -528,7 +594,13 @@ async def test_user_portrait_get_targets_explicit_user_not_caller(monkeypatch):
     result = await mcp_server._execute_tool(
         db=None,
         name="user_portrait_get",
-        args={"_user_id": "family-admin", "user_id": "target"},
+        args={"user_id": "target"},
+        actor_context={
+            "user_id": "ops-admin",
+            "role": "admin",
+            "role_source": "env",
+            "source": "transport",
+        },
     )
 
     assert captured["user_id"] == "target"
