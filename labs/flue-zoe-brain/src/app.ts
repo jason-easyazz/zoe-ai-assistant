@@ -17,13 +17,22 @@
 import { registerProvider } from '@flue/runtime';
 import { flue } from '@flue/runtime/routing';
 import { Hono } from 'hono';
+import { CAPPED_COMPLETIONS_API, registerCappedCompletions } from './providers/capped-completions.js';
+
+// Register the capped wire-protocol handler BEFORE the provider that uses it. It
+// wraps the built-in openai-completions handler and imposes a hard per-turn
+// tool-iteration ceiling so a turn can never loop on tool calls forever (the Flue
+// HTTP agent route otherwise runs the agent loop unbounded). See
+// src/providers/capped-completions.ts. Cap via ZOE_BRAIN_MAX_TOOL_ITERS (default 8).
+registerCappedCompletions();
 
 // Seam M: the Gemma rock. Same OpenAI-compatible llama-server that the live Pi
 // `local-gemma` extension already points at — registered here so the Flue Agent
 // reaches it the first-party way. The base URL is overridable via env for the
-// lab; defaults to the live local endpoint.
+// lab; defaults to the live local endpoint. The `api` points at our capped
+// handler (CAPPED_COMPLETIONS_API), which delegates to openai-completions.
 registerProvider('zoe', {
-  api: 'openai-completions',
+  api: CAPPED_COMPLETIONS_API,
   baseUrl: process.env.ZOE_BRAIN_BASE_URL ?? 'http://127.0.0.1:11434/v1',
   // llama-server ignores the key, but the OpenAI-completions client requires a
   // non-empty one. Use a harmless placeholder (overridable via env).
