@@ -53,6 +53,7 @@ async def test_openweather_forecast_filters_by_remote_location_timezone(monkeypa
             return {
                 "city": {"timezone": 8 * 3600},
                 "list": [
+                    None,
                     {
                         "dt": 1782685200,  # 2026-06-29 06:20 Australia/Perth
                         "main": {"temp": 11},

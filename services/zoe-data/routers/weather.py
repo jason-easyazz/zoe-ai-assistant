@@ -124,6 +124,8 @@ def _parse_local_forecast_time(value: str, tz) -> datetime:
 
 
 def _parse_owm_forecast_time(item: dict, tz) -> datetime | None:
+    if not isinstance(item, dict):
+        return None
     try:
         if item.get("dt") is not None:
             return datetime.fromtimestamp(item["dt"], tz=timezone.utc).astimezone(tz)
