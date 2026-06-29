@@ -938,7 +938,7 @@ class MemoryService:
 
     def _delete_audit_for_user_sync(self, user_id: str) -> int:
         col = self._audit_collection()
-        result = col.get(where={"user_id": user_id}, include=[])
+        result = col.get(where={"user_id": user_id})
         ids = list(result.get("ids") or [])
         if ids:
             col.delete(ids=ids)

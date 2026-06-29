@@ -18,8 +18,10 @@ class _FakeCollection:
         self.seen_query_where = None
         self.deleted_ids = []
         self.upserts = []
+        self.seen_get_kwargs = None
 
     def get(self, **kwargs):
+        self.seen_get_kwargs = kwargs
         self.seen_get_where = kwargs.get("where")
         return self.get_result
 
@@ -266,6 +268,7 @@ async def test_delete_user_purges_audit_payload_rows(monkeypatch):
     assert deleted == 2
     assert memories.deleted_ids == ["mem-1", "mem-2"]
     assert audit.seen_get_where == {"user_id": "jason"}
+    assert "include" not in audit.seen_get_kwargs
     assert audit.deleted_ids == ["audit-1", "audit-2"]
     assert audit.upserts == []
     assert invalidated == ["jason"]
