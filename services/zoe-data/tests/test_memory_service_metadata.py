@@ -426,6 +426,32 @@ def test_metadata_read_keeps_garbage_expires_at_with_warning(monkeypatch, caplog
     assert "invalid expires_at metadata kept active" in caplog.text
 
 
+def test_get_sync_keeps_expired_rows_manageable():
+    collection = _FakeCollection(
+        get_result={
+            "ids": ["expired"],
+            "documents": ["Manageable expired row"],
+            "metadatas": [
+                {
+                    "user_id": "jason",
+                    "visibility": "personal",
+                    "status": "approved",
+                    "expires_at": "2000-01-01T00:00:00Z",
+                    "added_at": "1999-12-31T00:00:00Z",
+                },
+            ],
+        }
+    )
+    service = MemoryService(data_dir="/tmp/zoe-test-memory-expired-get")
+    service._collection = lambda: collection
+
+    row = service._get_sync("expired")
+
+    assert row is not None
+    assert row.id == "expired"
+    assert row.text == "Manageable expired row"
+
+
 def test_memory_visible_to_user_matches_user_id_or_wing_or_shared_visibility():
     assert _memory_visible_to_user({"user_id": "Jason", "visibility": "personal"}, "jason") is True
     assert _memory_visible_to_user({"wing": "jason", "visibility": "personal"}, "jason") is True

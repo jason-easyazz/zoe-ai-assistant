@@ -2257,8 +2257,11 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         return {**result, "date": tx_date, "status": "created"}
 
     elif name == "transaction_list":
+        raw_limit = args.get("limit", 20)
         try:
-            limit = int(args.get("limit", 20))
+            if isinstance(raw_limit, bool):
+                raise ValueError("boolean limit is not valid")
+            limit = int(raw_limit)
         except (TypeError, ValueError):
             limit = 20
         limit = max(1, min(limit, 100))

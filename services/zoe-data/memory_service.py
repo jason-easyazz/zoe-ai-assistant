@@ -1030,8 +1030,6 @@ class MemoryService:
         if not ids:
             return None
         meta = metas[0] if isinstance(metas[0], dict) else {}
-        if _memory_expired(meta.get("expires_at")):
-            return None
         return MemoryRef(id=ids[0], text=docs[0] or "", metadata=dict(meta))
 
     @staticmethod

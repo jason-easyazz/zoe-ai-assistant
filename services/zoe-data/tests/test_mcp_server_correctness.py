@@ -183,7 +183,7 @@ async def test_reminder_today_uses_zoe_timezone_date(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("raw_limit", "expected"),
-    [(-10, 1), (10_000, 100), ("not-int", 20)],
+    [(-10, 1), (10_000, 100), ("not-int", 20), (True, 20), (False, 20)],
 )
 async def test_transaction_list_clamps_limit(raw_limit, expected):
     db = _RecordingDb()
