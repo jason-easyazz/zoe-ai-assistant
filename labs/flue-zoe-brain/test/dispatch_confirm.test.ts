@@ -31,8 +31,12 @@ const byName = (n: string) =>
   zoeTools.find((t) => t.name === n)! as unknown as RunnableTool;
 const shoppingListAdd = byName('shopping_list_add');
 const getWeather = byName('get_weather');
+const setTimer = byName('set_timer');
 
 const FABRICATED = 'Added "milk" to your shopping list.';
+
+// The canned line zoe-data's timer_create ALWAYS returns — proof of nothing.
+const CANNED_TIMER = 'Starting a 10 minute timer.';
 
 /** Stub global fetch with a single 200 response carrying `body`, then restore. */
 async function withFetch200(body: unknown, fn: () => Promise<void>): Promise<void> {
@@ -110,6 +114,47 @@ test('200 with an unparseable body → NOT confirmed (fail closed)', async () =>
     const out = (await shoppingListAdd.run({ input: { item: 'milk' } })) as string;
     assert.notEqual(out, FABRICATED);
     assert.doesNotMatch(out, /^Added /);
+  });
+});
+
+// ─── set_timer: must NEVER claim a timer started off this path ────────────────
+// The /api/system/intent-dispatch timer_create path returns a canned "Starting a
+// N minute timer" line whether or not a real countdown was scheduled, so set_timer
+// fails closed: it never reports success unless the backend EXPLICITLY confirms a
+// real timer (which this path cannot), and treats the canned line as NON-confirmation.
+
+const TIMER_UNCERTAIN = /can't reliably start a real timer/i;
+
+test('set_timer: ok:true carrying ONLY the canned line → NOT confirmed, no fabricated success', async () => {
+  await withFetch200({ intent: 'timer_create', ok: true, result: CANNED_TIMER }, async () => {
+    const out = (await setTimer.run({ input: { minutes: 10 } })) as string;
+    assert.notEqual(out, CANNED_TIMER);
+    assert.doesNotMatch(out, /^Starting a /i); // never echoes the canned "timer started" line
+    assert.match(out, TIMER_UNCERTAIN);
+  });
+});
+
+test('set_timer: 200 without ok → NOT confirmed', async () => {
+  await withFetch200({ intent: 'timer_create', result: CANNED_TIMER }, async () => {
+    const out = (await setTimer.run({ input: { minutes: 5, label: 'eggs' } })) as string;
+    assert.doesNotMatch(out, /^Starting a /i);
+    assert.match(out, TIMER_UNCERTAIN);
+  });
+});
+
+test('set_timer: ok:false → NOT confirmed', async () => {
+  await withFetch200({ intent: 'timer_create', ok: false, result: '' }, async () => {
+    const out = (await setTimer.run({ input: { minutes: 3 } })) as string;
+    assert.doesNotMatch(out, /^Starting a /i);
+    assert.match(out, TIMER_UNCERTAIN);
+  });
+});
+
+test('set_timer: 200 with an unparseable body → NOT confirmed (fail closed)', async () => {
+  await withFetch200BadBody(async () => {
+    const out = (await setTimer.run({ input: { minutes: 10 } })) as string;
+    assert.doesNotMatch(out, /^Starting a /i);
+    assert.match(out, TIMER_UNCERTAIN);
   });
 });
 

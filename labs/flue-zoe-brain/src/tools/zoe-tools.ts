@@ -349,7 +349,26 @@ const showList = defineTool({
 /**
  * set_timer — start a countdown timer for N minutes. WRITE → timer_create
  * {minutes,label}. Gated behind ZOE_BRAIN_ALLOW_WRITES (dry-run by default).
+ *
+ * FAILS CLOSED — never claims a timer started off this path. zoe-data's
+ * timer_create intent (intent_router.py) returns a CANNED "Starting a N minute
+ * timer" line WHETHER OR NOT a countdown was actually scheduled: on the touch
+ * panel Skybridge owns the real timer/alarm and is consulted BEFORE that
+ * fast-path, so the /api/system/intent-dispatch route this tool uses NEVER
+ * schedules a countdown or fires an alarm. The dispatch response
+ * ({intent, ok, result}) therefore carries no proof a real timer exists — ok:true
+ * only means "result is not None" (i.e. the canned line). There is no response
+ * this path can return that genuinely confirms a scheduled timer, so reporting
+ * success would tell the user a timer started when none will fire. We require an
+ * explicit positive confirmation that is NOT the canned line (same fail-closed
+ * discipline the shopping-list / dispatch path uses); since the backend can only
+ * ever return that canned line, set_timer stays effectively always-uncertain.
  */
+// The canned, NON-confirming line zoe-data's timer_create always returns
+// ("Starting a 10 minute timer", "Starting a 3 minute timer for the eggs").
+// Seeing it is proof of NOTHING — explicitly treated as a non-confirmation.
+const CANNED_TIMER_RE = /^\s*starting a\b.*\btimer\b/i;
+
 const setTimer = defineTool({
   name: 'set_timer',
   description:
@@ -364,14 +383,22 @@ const setTimer = defineTool({
     const minutes = Math.round(input.minutes);
     const label = String(input?.label ?? '').trim() || 'Timer';
     const named = label.toLowerCase() === 'timer' ? '' : ` for ${label}`;
-    return runWrite(
-      'timer_create',
-      { minutes, label },
-      'timer',
-      `a ${minutes} minute timer${named}`,
-      `Starting a ${minutes} minute timer${named}.`,
-      signal,
-    );
+    if (!ALLOW_WRITES) {
+      return `WRITE DISABLED — a ${minutes} minute timer${named} was NOT started (this is a ` +
+        `lab build; set ZOE_BRAIN_ALLOW_WRITES=true to enable writes). Tell the user you ` +
+        `can't do that yet — do NOT claim it was done.`;
+    }
+    const out = await dispatchIntent('timer_create', { minutes, label }, 'timer', signal);
+    // A genuine confirmation requires ok===true AND a non-empty result that is NOT
+    // the canned "Starting a … timer" line. The backend cannot currently produce
+    // such a result, so this is effectively always-uncertain — by design, never a
+    // fabricated "timer started".
+    const confirmed = out.ok && out.text.length > 0 && !CANNED_TIMER_RE.test(out.text);
+    if (!confirmed) {
+      return "I can't reliably start a real timer right now, so I won't say I did. " +
+        'Set it on the kitchen panel, or ask me for a reminder instead.';
+    }
+    return out.text;
   },
 });
 
