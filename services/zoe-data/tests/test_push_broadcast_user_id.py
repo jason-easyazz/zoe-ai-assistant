@@ -101,6 +101,49 @@ async def test_broadcast_empty_channel_returns_zero(bc):
     assert result == 0
 
 
+@pytest.mark.asyncio
+async def test_broadcast_survives_connection_set_mutation_during_send(bc):
+    """A send suspension point must not let connect/disconnect abort fan-out."""
+    ws_a = _make_ws()
+    ws_b = _make_ws()
+    ws_new_1 = _make_ws()
+    ws_new_2 = _make_ws()
+    await _connect(bc, ws_a, channel="ch", user_id="u1")
+    await _connect(bc, ws_b, channel="ch", user_id="u1")
+
+    async def mutate_connections(_message):
+        bc.disconnect(ws_b, "ch")
+        bc._connections["ch"].add(ws_new_1)
+        bc._connections["ch"].add(ws_new_2)
+        await asyncio.sleep(0)
+
+    ws_a.send_json.side_effect = mutate_connections
+
+    delivered = await bc.broadcast("ch", "evt", {}, user_id="u1")
+
+    assert delivered == 2
+    ws_a.send_json.assert_awaited_once()
+    ws_b.send_json.assert_awaited_once()
+    ws_new_1.send_json.assert_not_called()
+    ws_new_2.send_json.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_broadcast_prunes_dead_panel_socket_from_all_state(bc):
+    """Failed sends remove dead sockets from channel sets and metadata maps."""
+    ws = _make_ws()
+    await _connect_panel(bc, ws, panel_id="panel-1")
+    ws.send_json.side_effect = RuntimeError("socket closed")
+
+    delivered = await bc.broadcast("all", "evt", {})
+
+    assert delivered == 0
+    assert ws not in bc._connections["all"]
+    assert ws not in bc._connections["panel_panel-1"]
+    assert ws not in bc._ws_users
+    assert ws not in bc._ws_panels
+
+
 async def _connect_panel(bc, ws, panel_id='panel-1'):
     ws.accept = AsyncMock()
     ws.send_json = AsyncMock()

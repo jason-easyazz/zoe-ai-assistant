@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 import types
+from datetime import datetime, timezone
 
 import pytest
 
@@ -16,14 +17,24 @@ class _FakeCollection:
         self.query_result = query_result or {}
         self.seen_get_where = None
         self.seen_query_where = None
+        self.deleted_ids = []
+        self.upserts = []
+        self.seen_get_kwargs = None
 
     def get(self, **kwargs):
+        self.seen_get_kwargs = kwargs
         self.seen_get_where = kwargs.get("where")
         return self.get_result
 
     def query(self, **kwargs):
         self.seen_query_where = kwargs.get("where")
         return self.query_result
+
+    def delete(self, **kwargs):
+        self.deleted_ids.extend(kwargs.get("ids") or [])
+
+    def upsert(self, **kwargs):
+        self.upserts.append(kwargs)
 
 
 @pytest.fixture
@@ -199,6 +210,71 @@ async def test_ingest_passes_first_class_event_metadata_to_writer():
     assert seen["audit_after"]["event_id"] == "mem_evt_candidate"
 
 
+@pytest.mark.asyncio
+async def test_ingest_same_text_distinct_identity_does_not_clobber():
+    service = MemoryService(data_dir="/tmp/zoe-test-memory-service")
+    writes = []
+
+    def fake_write(mem_id, text, metadata):
+        writes.append((mem_id, text, metadata))
+
+    async def fake_audit(**kwargs):
+        return None
+
+    service._write_row = fake_write
+    service._append_audit = fake_audit
+
+    first = await service.ingest(
+        "Jason prefers quiet mornings.",
+        user_id="jason",
+        user_turn_id="turn-1",
+        source="digest",
+        memory_type="preference",
+        scope="personal",
+        entity_type="person",
+        entity_id="jason",
+    )
+    second = await service.ingest(
+        "Jason prefers quiet mornings.",
+        user_id="jason",
+        user_turn_id="turn-2",
+        source="hindsight_retain_candidate",
+        memory_type="failure",
+        scope="project",
+        entity_type="zoe_memory_event",
+        entity_id="weather-card",
+    )
+
+    assert first is not None and second is not None
+    assert first.id != second.id
+    assert [write[0] for write in writes] == [first.id, second.id]
+
+
+@pytest.mark.asyncio
+async def test_delete_user_purges_audit_payload_rows(monkeypatch):
+    memories = _FakeCollection(get_result={"ids": ["mem-1", "mem-2"]})
+    audit = _FakeCollection(get_result={"ids": ["audit-1", "audit-2"]})
+    service = MemoryService(data_dir="/tmp/zoe-test-memory-delete")
+    service._collection = lambda: memories
+    service._audit_collection = lambda: audit
+    invalidated = []
+    monkeypatch.setattr(
+        memory_service,
+        "_invalidate_agent_user_facts_cache",
+        lambda user_id: invalidated.append(user_id),
+    )
+
+    deleted = await service.delete_user("jason", actor="admin")
+
+    assert deleted == 2
+    assert memories.deleted_ids == ["mem-1", "mem-2"]
+    assert audit.seen_get_where == {"user_id": "jason"}
+    assert "include" not in audit.seen_get_kwargs
+    assert audit.deleted_ids == ["audit-1", "audit-2"]
+    assert audit.upserts == []
+    assert invalidated == ["jason"]
+
+
 def test_build_metadata_defaults_keep_review_edit_call_compatible():
     metadata = MemoryService._build_metadata(
         user_id="jason",
@@ -216,6 +292,164 @@ def test_build_metadata_defaults_keep_review_edit_call_compatible():
 
     assert metadata["source"] == "review_ui"
     assert "source_excerpt" not in metadata
+
+
+def test_build_metadata_normalizes_offset_expires_at_to_utc():
+    metadata = MemoryService._build_metadata(
+        user_id="jason",
+        source="mcp",
+        session_id=None,
+        user_turn_id=None,
+        memory_type="fact",
+        confidence=0.7,
+        status="approved",
+        tags=[],
+        entity_type=None,
+        entity_id=None,
+        expires_at="2026-06-29T00:30:00+08:00",
+    )
+
+    assert metadata["expires_at"] == "2026-06-28T16:30:00Z"
+
+
+def test_metadata_read_expires_offset_datetimes_by_utc_instant(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = cls(2026, 6, 28, 18, 0, tzinfo=timezone.utc)
+            return value if tz is None else value.astimezone(tz)
+
+        @classmethod
+        def utcnow(cls):
+            return cls(2026, 6, 28, 18, 0)
+
+    monkeypatch.setattr(memory_service.datetime, "datetime", FixedDateTime)
+    collection = _FakeCollection(
+        get_result={
+            "ids": ["expired-by-offset", "active"],
+            "documents": ["Should be gone", "Should remain"],
+            "metadatas": [
+                {
+                    "user_id": "jason",
+                    "visibility": "personal",
+                    "status": "approved",
+                    "expires_at": "2026-06-29T00:30:00+08:00",
+                    "added_at": "2026-06-28T00:00:00Z",
+                },
+                {
+                    "user_id": "jason",
+                    "visibility": "personal",
+                    "status": "approved",
+                    "expires_at": "2026-06-28T20:30:00Z",
+                    "added_at": "2026-06-28T00:00:00Z",
+                },
+            ],
+        }
+    )
+    service = MemoryService(data_dir="/tmp/zoe-test-memory-expiry")
+    service._collection = lambda: collection
+
+    rows = service._metadata_read("jason", limit=10)
+
+    assert [row.id for row in rows] == ["active"]
+
+
+@pytest.mark.parametrize("legacy_expires_at", ["2026-06-27", "2026-06-28 17:00:00"])
+def test_metadata_read_expires_common_legacy_datetime_forms(monkeypatch, legacy_expires_at):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = cls(2026, 6, 28, 18, 0, tzinfo=timezone.utc)
+            return value if tz is None else value.astimezone(tz)
+
+    monkeypatch.setattr(memory_service.datetime, "datetime", FixedDateTime)
+    collection = _FakeCollection(
+        get_result={
+            "ids": ["expired", "active"],
+            "documents": ["Should be gone", "Should remain"],
+            "metadatas": [
+                {
+                    "user_id": "jason",
+                    "visibility": "personal",
+                    "status": "approved",
+                    "expires_at": legacy_expires_at,
+                    "added_at": "2026-06-28T00:00:00Z",
+                },
+                {
+                    "user_id": "jason",
+                    "visibility": "personal",
+                    "status": "approved",
+                    "expires_at": "2026-06-28 19:00:00",
+                    "added_at": "2026-06-28T00:00:00Z",
+                },
+            ],
+        }
+    )
+    service = MemoryService(data_dir="/tmp/zoe-test-memory-legacy-expiry")
+    service._collection = lambda: collection
+
+    rows = service._metadata_read("jason", limit=10)
+
+    assert [row.id for row in rows] == ["active"]
+
+
+def test_metadata_read_keeps_garbage_expires_at_with_warning(monkeypatch, caplog):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = cls(2026, 6, 28, 18, 0, tzinfo=timezone.utc)
+            return value if tz is None else value.astimezone(tz)
+
+    monkeypatch.setattr(memory_service.datetime, "datetime", FixedDateTime)
+    collection = _FakeCollection(
+        get_result={
+            "ids": ["garbage"],
+            "documents": ["Keep fail-safe row"],
+            "metadatas": [
+                {
+                    "user_id": "jason",
+                    "visibility": "personal",
+                    "status": "approved",
+                    "expires_at": "not-a-date",
+                    "added_at": "2026-06-28T00:00:00Z",
+                },
+            ],
+        }
+    )
+    service = MemoryService(data_dir="/tmp/zoe-test-memory-garbage-expiry")
+    service._collection = lambda: collection
+
+    caplog.set_level(logging.WARNING, logger="memory_service")
+    rows = service._metadata_read("jason", limit=10)
+
+    assert [row.id for row in rows] == ["garbage"]
+    assert "invalid expires_at metadata kept active" in caplog.text
+
+
+def test_get_sync_keeps_expired_rows_manageable():
+    collection = _FakeCollection(
+        get_result={
+            "ids": ["expired"],
+            "documents": ["Manageable expired row"],
+            "metadatas": [
+                {
+                    "user_id": "jason",
+                    "visibility": "personal",
+                    "status": "approved",
+                    "expires_at": "2000-01-01T00:00:00Z",
+                    "added_at": "1999-12-31T00:00:00Z",
+                },
+            ],
+        }
+    )
+    service = MemoryService(data_dir="/tmp/zoe-test-memory-expired-get")
+    service._collection = lambda: collection
+
+    row = service._get_sync("expired")
+
+    assert row is not None
+    assert row.id == "expired"
+    assert row.text == "Manageable expired row"
 
 
 def test_memory_visible_to_user_matches_user_id_or_wing_or_shared_visibility():

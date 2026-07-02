@@ -21,6 +21,7 @@ import json
 import os
 import sys
 import types
+from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -58,6 +59,17 @@ class _RoutingDb:
         for needle, rows in self._routes.items():
             if needle in sql:
                 return _Cursor(rows)
+        return _Cursor([])
+
+
+class _RecordingDb:
+    def __init__(self):
+        self.calls = []
+
+    async def execute(self, sql, *params):
+        if len(params) == 1 and isinstance(params[0], (list, tuple)):
+            params = tuple(params[0])
+        self.calls.append((sql, params))
         return _Cursor([])
 
 
@@ -132,10 +144,391 @@ class _SlowMcpDashboardSaveDb(_DashboardLayoutDb):
 
 
 # --------------------------------------------------------------------------
+# Datetime and limit regressions from the datetime-money audit lane.
+# --------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_calendar_today_uses_zoe_timezone_date(monkeypatch):
+    db = _RecordingDb()
+    monkeypatch.setattr(mcp_server, "today_for_zoe_tz", lambda: date(2026, 6, 29))
+
+    result = await mcp_server._execute_tool(
+        db=db,
+        name="calendar_today",
+        args={"_user_id": "jason"},
+    )
+
+    assert result == {"date": "2026-06-29", "events": []}
+    sql, params = next(call for call in db.calls if "FROM events" in call[0])
+    assert "FROM events" in sql
+    assert params == ("2026-06-29", "jason")
+
+
+@pytest.mark.asyncio
+async def test_reminder_today_uses_zoe_timezone_date(monkeypatch):
+    db = _RecordingDb()
+    monkeypatch.setattr(mcp_server, "today_for_zoe_tz", lambda: date(2026, 6, 29))
+
+    result = await mcp_server._execute_tool(
+        db=db,
+        name="reminder_list",
+        args={"_user_id": "jason", "today_only": True},
+    )
+
+    assert result == {"reminders": []}
+    sql, params = next(call for call in db.calls if "FROM reminders" in call[0])
+    assert "FROM reminders" in sql
+    assert params == ("2026-06-29", "jason")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw_limit", "expected"),
+    [(-10, 1), (10_000, 100), ("not-int", 20), (True, 20), (False, 20)],
+)
+async def test_transaction_list_clamps_limit(raw_limit, expected):
+    db = _RecordingDb()
+
+    await mcp_server._execute_tool(
+        db=db,
+        name="transaction_list",
+        args={"_user_id": "jason", "limit": raw_limit},
+    )
+
+    sql, params = next(call for call in db.calls if "FROM transactions" in call[0])
+    assert "FROM transactions" in sql
+    assert params[-1] == expected
+
+
+# --------------------------------------------------------------------------
+# MCP actor authorization — tools/call must trust transport/session context,
+# not caller-supplied _user_id/user_id arguments.
+# --------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_stdio_no_context_still_falls_back_to_family_admin_for_local_calls():
+    db = _RoutingDb({"dashboard_layouts": []})
+
+    await mcp_server._execute_tool(
+        db=db,
+        name="dashboard_get_layout",
+        args={},
+        actor_context={},
+    )
+
+    sql, params = db.calls[0]
+    assert "FROM dashboard_layouts" in sql
+    assert params == ("family-admin",)
+
+
+@pytest.mark.asyncio
+async def test_stdio_no_context_fallback_family_admin_can_target_other_users():
+    db = _RoutingDb({"dashboard_layouts": []})
+
+    await mcp_server._execute_tool(
+        db=db,
+        name="dashboard_get_layout",
+        args={"user_id": "target"},
+        actor_context={},
+    )
+
+    sql, params = next(call for call in db.calls if "FROM dashboard_layouts" in call[0])
+    assert params == ("target",)
+
+
+@pytest.mark.asyncio
+async def test_handle_tool_without_actor_context_preserves_internal_user_id(monkeypatch):
+    db = _RoutingDb({"FROM notes": []})
+
+    @asynccontextmanager
+    async def fake_db_ctx():
+        yield db
+
+    monkeypatch.setattr(mcp_server, "_pg_get_db", fake_db_ctx)
+
+    result = json.loads(
+        await mcp_server.handle_tool(
+            "note_search",
+            {"_user_id": "jason", "query": "birthday"},
+        )
+    )
+
+    assert result == {"notes": []}
+    sql, params = next(call for call in db.calls if "FROM notes" in call[0])
+    assert params == ("%birthday%", "%birthday%", "jason")
+
+
+@pytest.mark.asyncio
+async def test_legacy_explicit_user_uses_db_role_for_cross_user_target():
+    db = _RoutingDb(
+        {
+            "SELECT role FROM users": [{"role": "member"}],
+            "dashboard_layouts": [],
+        }
+    )
+
+    await mcp_server._execute_tool(
+        db=db,
+        name="dashboard_get_layout",
+        args={"_user_id": "jason", "user_id": "victim"},
+    )
+
+    sql, params = next(call for call in db.calls if "FROM dashboard_layouts" in call[0])
+    assert params == ("jason",)
+
+
+@pytest.mark.asyncio
+async def test_transport_claimed_family_admin_does_not_get_synthetic_admin():
+    db = _RoutingDb(
+        {
+            "SELECT role FROM users": [],
+            "dashboard_layouts": [],
+        }
+    )
+    actor_context = mcp_server._trusted_actor_context_from_message(
+        {"params": {"_meta": {"zoe": {"actor_user_id": "family-admin"}}}}
+    )
+
+    await mcp_server._execute_tool(
+        db=db,
+        name="dashboard_get_layout",
+        args={"user_id": "victim"},
+        actor_context=actor_context,
+    )
+
+    assert actor_context == {
+        "user_id": "family-admin",
+        "role": None,
+        "role_source": None,
+        "source": "transport_meta",
+    }
+    sql, params = next(call for call in db.calls if "FROM dashboard_layouts" in call[0])
+    assert params == ("family-admin",)
+
+
+@pytest.mark.asyncio
+async def test_transport_meta_identity_cannot_impersonate_db_admin():
+    db = _RoutingDb(
+        {
+            "SELECT role FROM users": [{"role": "admin"}],
+            "dashboard_layouts": [],
+        }
+    )
+    actor_context = mcp_server._trusted_actor_context_from_message(
+        {"params": {"_meta": {"zoe": {"actor_user_id": "real-admin"}}}}
+    )
+
+    await mcp_server._execute_tool(
+        db=db,
+        name="dashboard_get_layout",
+        args={"user_id": "victim"},
+        actor_context=actor_context,
+    )
+
+    assert actor_context["source"] == "transport_meta"
+    sql, params = next(call for call in db.calls if "FROM dashboard_layouts" in call[0])
+    assert params == ("real-admin",)
+
+
+@pytest.mark.asyncio
+async def test_verified_transport_meta_admin_keeps_cross_user_targeting(monkeypatch):
+    monkeypatch.setenv("ZOE_MCP_ACTOR_USER_ID", "real-admin")
+    db = _RoutingDb(
+        {
+            "SELECT role FROM users": [{"role": "admin"}],
+            "dashboard_layouts": [],
+        }
+    )
+    actor_context = mcp_server._trusted_actor_context_from_message(
+        {"params": {"_meta": {"zoe": {"actor_user_id": "real-admin"}}}}
+    )
+
+    await mcp_server._execute_tool(
+        db=db,
+        name="dashboard_get_layout",
+        args={"user_id": "victim"},
+        actor_context=actor_context,
+    )
+
+    assert actor_context == {
+        "user_id": "real-admin",
+        "role": None,
+        "role_source": None,
+        "source": "transport_verified",
+    }
+    sql, params = next(call for call in db.calls if "FROM dashboard_layouts" in call[0])
+    assert params == ("victim",)
+
+
+@pytest.mark.asyncio
+async def test_non_admin_transport_actor_cannot_override_dashboard_target():
+    db = _RoutingDb({"dashboard_layouts": []})
+
+    await mcp_server._execute_tool(
+        db=db,
+        name="dashboard_get_layout",
+        args={
+            "_user_id": "victim-via-caller-arg",
+            "user_id": "victim",
+        },
+        actor_context={"user_id": "jason", "role": "member", "source": "test-session"},
+    )
+
+    sql, params = next(call for call in db.calls if "FROM dashboard_layouts" in call[0])
+    assert "FROM dashboard_layouts" in sql
+    assert params == ("jason",)
+
+
+@pytest.mark.asyncio
+async def test_meta_actor_role_admin_is_ignored_when_db_role_is_member():
+    db = _RoutingDb(
+        {
+            "SELECT role FROM users": [{"role": "member"}],
+            "dashboard_layouts": [],
+        }
+    )
+    actor_context = mcp_server._trusted_actor_context_from_message(
+        {
+            "params": {
+                "_meta": {
+                    "zoe": {
+                        "actor_user_id": "jason",
+                        "actor_role": "admin",
+                    }
+                }
+            }
+        }
+    )
+
+    await mcp_server._execute_tool(
+        db=db,
+        name="dashboard_get_layout",
+        args={"user_id": "victim"},
+        actor_context=actor_context,
+    )
+
+    assert actor_context == {
+        "user_id": "jason",
+        "role": None,
+        "role_source": None,
+        "source": "transport_meta",
+    }
+    sql, params = next(call for call in db.calls if "FROM dashboard_layouts" in call[0])
+    assert params == ("jason",)
+
+
+@pytest.mark.asyncio
+async def test_env_actor_role_is_ignored_when_actor_user_comes_from_meta(monkeypatch):
+    monkeypatch.setenv("ZOE_MCP_ACTOR_USER_ID", "env-admin")
+    monkeypatch.setenv("ZOE_MCP_ACTOR_ROLE", "admin")
+    db = _RoutingDb(
+        {
+            "SELECT role FROM users": [{"role": "member"}],
+            "dashboard_layouts": [],
+        }
+    )
+    actor_context = mcp_server._trusted_actor_context_from_message(
+        {"params": {"_meta": {"zoe": {"actor_user_id": "jason"}}}}
+    )
+
+    await mcp_server._execute_tool(
+        db=db,
+        name="dashboard_get_layout",
+        args={"user_id": "victim"},
+        actor_context=actor_context,
+    )
+
+    assert actor_context == {
+        "user_id": "jason",
+        "role": None,
+        "role_source": None,
+        "source": "transport_meta",
+    }
+    sql, params = next(call for call in db.calls if "FROM dashboard_layouts" in call[0])
+    assert params == ("jason",)
+
+
+@pytest.mark.asyncio
+async def test_env_actor_role_is_trusted_when_actor_user_also_comes_from_env(monkeypatch):
+    monkeypatch.setenv("ZOE_MCP_ACTOR_USER_ID", "ops-admin")
+    monkeypatch.setenv("ZOE_MCP_ACTOR_ROLE", "admin")
+    db = _RoutingDb({"dashboard_layouts": []})
+    actor_context = mcp_server._trusted_actor_context_from_message({"params": {}})
+
+    await mcp_server._execute_tool(
+        db=db,
+        name="dashboard_get_layout",
+        args={"user_id": "target"},
+        actor_context=actor_context,
+    )
+
+    assert actor_context == {
+        "user_id": "ops-admin",
+        "role": "admin",
+        "role_source": "env",
+        "source": "transport_env",
+    }
+    sql, params = next(call for call in db.calls if "FROM dashboard_layouts" in call[0])
+    assert params == ("target",)
+
+
+def test_dashboard_add_widget_schema_allows_admin_user_target():
+    tool = next(t for t in mcp_server.TOOLS if t["name"] == "dashboard_add_widget")
+
+    assert "user_id" in tool["inputSchema"]["properties"]
+    assert tool["inputSchema"]["properties"]["user_id"]["type"] == "string"
+
+
+@pytest.mark.asyncio
+async def test_admin_transport_actor_can_target_another_dashboard_user():
+    db = _RoutingDb({"dashboard_layouts": []})
+
+    await mcp_server._execute_tool(
+        db=db,
+        name="dashboard_get_layout",
+        args={"user_id": "target"},
+        actor_context={
+            "user_id": "ops-admin",
+            "role": "admin",
+            "role_source": "env",
+            "source": "transport",
+        },
+    )
+
+    sql, params = db.calls[0]
+    assert "FROM dashboard_layouts" in sql
+    assert params == ("target",)
+
+
+@pytest.mark.asyncio
+async def test_non_admin_transport_actor_cannot_override_portrait_target(monkeypatch):
+    captured = {}
+
+    async def fake_load_portrait(user_id):
+        captured["user_id"] = user_id
+        return {"summary": "actor only"}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "user_portrait",
+        types.SimpleNamespace(load_portrait=fake_load_portrait),
+    )
+
+    result = await mcp_server._execute_tool(
+        db=None,
+        name="user_portrait_get",
+        args={"_user_id": "victim-via-caller-arg", "user_id": "victim"},
+        actor_context={"user_id": "jason", "role": "member", "source": "test-session"},
+    )
+
+    assert captured["user_id"] == "jason"
+    assert result["user_id"] == "jason"
+    assert result["has_portrait"] is True
+
+
+# --------------------------------------------------------------------------
 # #1 — explicit user_id target survives the injected _user_id (proactive_schedule)
 # --------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_proactive_schedule_targets_explicit_user_not_caller(monkeypatch):
+async def test_proactive_schedule_admin_can_target_explicit_user(monkeypatch):
     captured = {}
 
     async def fake_schedule_reminder(*, user_id, message, send_at):
@@ -154,15 +547,19 @@ async def test_proactive_schedule_targets_explicit_user_not_caller(monkeypatch):
         db=None,
         name="proactive_schedule",
         args={
-            "_user_id": "caller",          # framework-injected caller identity
-            "user_id": "target",           # explicit target the tool asked for
+            "user_id": "target",
             "message": "drink water",
             "send_at": send_at,
+        },
+        actor_context={
+            "user_id": "ops-admin",
+            "role": "admin",
+            "role_source": "env",
+            "source": "transport",
         },
     )
 
     assert result["status"] == "scheduled"
-    # The explicit target must win — not the caller that was injected by the framework.
     assert captured["user_id"] == "target"
 
 
@@ -224,12 +621,17 @@ async def test_dashboard_get_layout_targets_explicit_user_not_caller():
     await mcp_server._execute_tool(
         db=db,
         name="dashboard_get_layout",
-        args={"_user_id": "caller", "user_id": "target"},
+        args={"user_id": "target"},
+        actor_context={
+            "user_id": "ops-admin",
+            "role": "admin",
+            "role_source": "env",
+            "source": "transport",
+        },
     )
 
     sql, params = db.calls[0]
     assert "FROM dashboard_layouts" in sql
-    # The leftover explicit user_id target must drive the query, not the caller.
     assert params == ("target",)
 
 
@@ -240,7 +642,13 @@ async def test_dashboard_save_layout_targets_explicit_user_not_caller():
     result = await mcp_server._execute_tool(
         db=db,
         name="dashboard_save_layout",
-        args={"_user_id": "caller", "user_id": "target", "layout": [{"w": "tasks"}]},
+        args={"user_id": "target", "layout": [{"w": "tasks"}]},
+        actor_context={
+            "user_id": "ops-admin",
+            "role": "admin",
+            "role_source": "env",
+            "source": "transport",
+        },
     )
 
     assert result["status"] == "ok"
@@ -307,10 +715,15 @@ async def test_user_portrait_get_targets_explicit_user_not_caller(monkeypatch):
     result = await mcp_server._execute_tool(
         db=None,
         name="user_portrait_get",
-        args={"_user_id": "caller", "user_id": "target"},
+        args={"user_id": "target"},
+        actor_context={
+            "user_id": "ops-admin",
+            "role": "admin",
+            "role_source": "env",
+            "source": "transport",
+        },
     )
 
-    # The explicit target must win over the injected caller for both the load and the echo.
     assert captured["user_id"] == "target"
     assert result["user_id"] == "target"
     assert result["has_portrait"] is True
@@ -388,7 +801,7 @@ async def test_journal_on_this_day_uses_postgres_to_char():
         args={"_user_id": "jason"},
     )
 
-    sql, params = db.calls[0]
+    sql, params = next(call for call in db.calls if "journal_entries" in call[0])
     assert "strftime" not in sql
     assert "date('now')" not in sql
     # created_at is TEXT in the live schema, so to_char and the date comparison

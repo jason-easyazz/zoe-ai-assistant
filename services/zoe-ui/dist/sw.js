@@ -8,7 +8,7 @@
 importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.63.12'; // skybridge: auth and voice surface cache bypass
+const SW_VERSION = '4.63.15'; // privacy: default-deny /api cache + IPv4-literal/IPv6 loopback passthrough
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
@@ -30,14 +30,55 @@ if (workbox) {
     workbox.core.skipWaiting();
     workbox.core.clientsClaim();
 
-    // Force all fetch requests to HTTPS when the SW itself is on HTTPS.
-    // This includes local IPs (192.168.x, 127.x) since an HTTPS-served SW cannot
-    // make mixed-content HTTP requests — FastAPI redirect responses to http://localhost
-    // would be blocked by the browser's mixed-content policy.
+    // Upgrade genuine REMOTE http:// fetches to https:// when the SW is on HTTPS,
+    // so real mixed-content requests aren't blocked by the browser.
+    //
+    // EXCEPTION (BUG FIX): loopback and private-LAN targets must pass through
+    // un-rewritten. The touch UI deliberately calls LOCAL panel daemons over plain
+    // http — the voice-activate daemon on http://localhost:7777/activate and the
+    // wake beacon on http://127.0.0.1:8765/wake (see touch/js/touch-menu.js). Those
+    // daemons don't speak TLS, and browsers already treat loopback as a secure
+    // context, so these are NOT mixed-content and must not be upgraded — rewriting
+    // them to https breaks voice activation / wake on HTTPS deployments.
+    // True only for a syntactically valid IPv4 literal (exactly four 0–255 octets),
+    // so a public hostname that merely starts with private-range digits
+    // (e.g. "192.168.example.com", "10.example.com") is NOT treated as one.
+    function ipv4Octets(h) {
+        const parts = h.split('.');
+        if (parts.length !== 4) return null;
+        const octets = [];
+        for (const part of parts) {
+            if (!/^\d{1,3}$/.test(part)) return null;
+            const n = Number(part);
+            if (n > 255) return null;
+            octets.push(n);
+        }
+        return octets;
+    }
+    function isLocalRequestTarget(url) {
+        const h = url.hostname;
+        // Explicit non-IP local names: loopback alias + mDNS panel hostnames.
+        if (h === 'localhost' || h.endsWith('.localhost')) return true;
+        if (h.endsWith('.local')) return true;
+        // IPv6 loopback. URL.hostname keeps the brackets for IPv6 literals,
+        // so new URL('http://[::1]/').hostname === '[::1]'.
+        if (h === '::1' || h === '[::1]') return true;
+        // IPv4 loopback / private ranges — ONLY for genuine IPv4 literals, never
+        // for arbitrary hostnames. Public remote http must still upgrade to https.
+        const o = ipv4Octets(h);
+        if (o) {
+            if (o[0] === 127) return true;                          // 127.0.0.0/8 loopback
+            if (o[0] === 10) return true;                           // 10.0.0.0/8
+            if (o[0] === 192 && o[1] === 168) return true;          // 192.168.0.0/16
+            if (o[0] === 172 && o[1] >= 16 && o[1] <= 31) return true; // 172.16.0.0/12
+            if (o[0] === 0 && o[1] === 0 && o[2] === 0 && o[3] === 0) return true; // 0.0.0.0
+        }
+        return false;
+    }
     self.addEventListener('fetch', (event) => {
         if (self.location.protocol !== 'https:') return; // only apply on HTTPS
         const url = new URL(event.request.url);
-        if (url.protocol === 'http:') {
+        if (url.protocol === 'http:' && !isLocalRequestTarget(url)) {
             const httpsUrl = event.request.url.replace('http://', 'https://');
             event.respondWith(fetch(new Request(httpsUrl, event.request)));
             return;
@@ -204,22 +245,69 @@ if (workbox) {
         new workbox.strategies.NetworkOnly()
     );
 
-    // 6. Other API Calls - Network First (fresh data, fallback to cache)
+    // 6. Other API Calls — privacy-first, default-DENY caching.
+    //
+    // BUG FIX: the previous rule cached EVERY remaining /api/ response with
+    // NetworkFirst for up to 1 hour. That swept in authenticated, user-scoped
+    // personal data (journal, memories, people, notes, lists, reminders,
+    // transactions, calendar, dashboard, user profile, …). Persisting those in
+    // Cache Storage means (a) stale private data can be served back, and (b) on a
+    // SHARED KIOSK, after a user/session switch the next user's NetworkFirst miss
+    // (or offline) could serve the PREVIOUS user's cached personal data — a
+    // cross-user leak.
+    //
+    // Fix: invert the default. Cache ONLY an explicit allowlist of endpoints that
+    // are provably non-personal AND identical for everyone AND not user-keyed;
+    // everything else under /api/ falls through to NetworkOnly and is never
+    // written to the cache. Safe-by-default: any new personal route is
+    // non-cacheable automatically, without having to be enumerated here.
+    //
+    // The allowlist is currently EMPTY: every /api endpoint reviewed is
+    // authenticated and/or user-keyed. Even seemingly-shared paths are personal —
+    // /api/weather/{current,forecast,preferences} read weather_preferences by the
+    // authenticated user_id, and /api/system/capability-matrix/me returns the
+    // caller's role-specific matrix (its base path is admin-only). Caching any of
+    // them would stale or leak per-user data across kiosk sessions. Losing offline
+    // cache for /api is acceptable; leaking personal data is not. Entries, if ever
+    // added, must be an EXACT pathname (not a prefix — a prefix could also match
+    // /me, /preferences, or admin sub-paths) and provably non-personal.
+    //
+    // (Auth, chat, notifications, ui/panel, admin, health and ws are already
+    // NetworkOnly via rule #5 above, which is registered first and wins.)
+    const CACHEABLE_API_PATHS = new Set([
+        // intentionally empty — default-deny
+    ]);
+    const isCacheableApi = (pathname) => CACHEABLE_API_PATHS.has(pathname);
+
+    // 6a. Allowlisted non-personal API — Network First (fresh data, short cache
+    //     fallback). Registered only when the allowlist is non-empty; while empty,
+    //     all /api/ traffic is handled by rule 6b below.
+    if (CACHEABLE_API_PATHS.size > 0) {
+        workbox.routing.registerRoute(
+            ({ url }) => isCacheableApi(url.pathname),
+            new workbox.strategies.NetworkFirst({
+                cacheName: 'zoe-api',
+                networkTimeoutSeconds: 5,
+                plugins: [
+                    new workbox.expiration.ExpirationPlugin({
+                        maxEntries: 100,
+                        maxAgeSeconds: 60 * 60
+                    }),
+                    new workbox.cacheableResponse.CacheableResponsePlugin({
+                        statuses: [0, 200]
+                    })
+                ]
+            })
+        );
+    }
+
+    // 6b. Every other API call — Network Only. Personal/user-scoped data is
+    //     never persisted, so it can't go stale or leak across a kiosk session
+    //     switch. Offline simply fails (handled by setCatchHandler) rather than
+    //     serving someone else's private data.
     workbox.routing.registerRoute(
         ({ url }) => url.pathname.startsWith('/api/'),
-        new workbox.strategies.NetworkFirst({
-            cacheName: 'zoe-api',
-            networkTimeoutSeconds: 5,
-            plugins: [
-                new workbox.expiration.ExpirationPlugin({
-                    maxEntries: 100,
-                    maxAgeSeconds: 60 * 60
-                }),
-                new workbox.cacheableResponse.CacheableResponsePlugin({
-                    statuses: [0, 200]
-                })
-            ]
-        })
+        new workbox.strategies.NetworkOnly()
     );
 
     // 7. Fonts - Cache First (rarely change)
@@ -238,6 +326,50 @@ if (workbox) {
             ]
         })
     );
+
+    // ===== SELF-TEST (no-op in production) =====
+    // Demonstrates the two invariants this SW must hold. Exposed for a test
+    // harness and run only when self.__SW_SELFTEST__ is set, so it never
+    // executes on real kiosks. Returns [{name, pass}] and throws on any failure.
+    self.__swSelfTest = function () {
+        const results = [];
+        const assert = (name, cond) => results.push({ name, pass: !!cond });
+
+        // BUG 1 — default-deny: NO /api endpoint is cacheable. Personal/user-scoped
+        //         routes and the previously-(wrongly)-allowlisted weather /
+        //         capability-matrix paths must all fall through to NetworkOnly.
+        assert('journal entries NOT cacheable',  !isCacheableApi('/api/journal/entries'));
+        assert('memories people NOT cacheable',  !isCacheableApi('/api/memories/people'));
+        assert('calendar NOT cacheable',         !isCacheableApi('/api/calendar/events'));
+        assert('dashboard NOT cacheable',        !isCacheableApi('/api/dashboard/layout'));
+        assert('user profile NOT cacheable',     !isCacheableApi('/api/user/profile'));
+        assert('weather NOT cacheable',          !isCacheableApi('/api/weather'));
+        assert('weather/current NOT cacheable',  !isCacheableApi('/api/weather/current'));
+        assert('capability-matrix NOT cacheable',!isCacheableApi('/api/system/capability-matrix'));
+        assert('capability-matrix/me NOT cache', !isCacheableApi('/api/system/capability-matrix/me'));
+
+        // BUG 2 — loopback / private-LAN daemon URLs must NOT be upgraded to https;
+        //         genuine remote http URLs still are.
+        assert('localhost:7777 daemon kept http', isLocalRequestTarget(new URL('http://localhost:7777/activate')));
+        assert('127.0.0.1:8765 daemon kept http', isLocalRequestTarget(new URL('http://127.0.0.1:8765/wake')));
+        assert('IPv4 192.168 literal IS local',   isLocalRequestTarget(new URL('http://192.168.1.50:8765/wake')));
+        assert('IPv4 10.x literal IS local',      isLocalRequestTarget(new URL('http://10.0.0.5/wake')));
+        assert('IPv4 172.16 literal IS local',    isLocalRequestTarget(new URL('http://172.16.0.9/wake')));
+        assert('IPv6 [::1] loopback IS local',    isLocalRequestTarget(new URL('http://[::1]:8765/wake')));
+        assert('*.local panel host kept http',    isLocalRequestTarget(new URL('http://panel.local:8765/wake')));
+        // Public hostnames that merely START with private-range digits must NOT be
+        // treated as local — they are genuine remote http and must still upgrade.
+        assert('192.168.example.com IS remote',  !isLocalRequestTarget(new URL('http://192.168.example.com/x')));
+        assert('10.example.com IS remote',       !isLocalRequestTarget(new URL('http://10.example.com/x')));
+        assert('172.16.example.com IS remote',   !isLocalRequestTarget(new URL('http://172.16.example.com/x')));
+        assert('172.32 IPv4 literal IS remote',  !isLocalRequestTarget(new URL('http://172.32.0.1/x')));
+        assert('remote http IS upgraded',        !isLocalRequestTarget(new URL('http://example.com/api/x')));
+
+        const failed = results.filter((r) => !r.pass);
+        if (failed.length) throw new Error('SW self-test failed: ' + failed.map((r) => r.name).join(', '));
+        return results;
+    };
+    if (self.__SW_SELFTEST__) console.table(self.__swSelfTest());
 
     // ===== OFFLINE FALLBACK =====
     workbox.routing.setCatchHandler(async ({ event }) => {
@@ -550,7 +682,32 @@ self.addEventListener('activate', (event) => {
         ))
     );
 
-    event.waitUntil(Promise.all([purgeOldPrecaches, purgeStaleModules]));
+    // 3) One-shot purge of the runtime-cached pages/scripts carrying the
+    //    local-timezone date fix that are NOT in the Workbox precache:
+    //    /touch/calendar.html, /journal.html (zoe-html) and the Today widget
+    //    /touch/js/touch-widgets.js (zoe-widgets/zoe-js). These routes are
+    //    NetworkFirst, so an online client already revalidates on next load;
+    //    dropping any cached copy here also closes the offline-fallback window
+    //    so a flaky-network kiosk can't keep serving the pre-fix code.
+    const dateFixPaths = new Set([
+        '/touch/calendar.html',
+        '/journal.html',
+        '/touch/js/touch-widgets.js',
+    ]);
+    const purgeStaleDateFix = caches.keys().then((names) =>
+        Promise.all(names.map((name) =>
+            caches.open(name).then((cache) =>
+                cache.keys().then((requests) =>
+                    Promise.all(requests
+                        .filter((r) => dateFixPaths.has(new URL(r.url).pathname))
+                        .map((r) => cache.delete(r))
+                    )
+                )
+            )
+        ))
+    );
+
+    event.waitUntil(Promise.all([purgeOldPrecaches, purgeStaleModules, purgeStaleDateFix]));
 });
 
 // NOTE: a second copy of 'push', 'notificationclick' and 'activate' handlers

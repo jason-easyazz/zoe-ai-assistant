@@ -4,7 +4,9 @@ services:
     container_name: zoe-music
     restart: unless-stopped
     ports:
-      - "8100:8100"
+      # Publish on loopback only — reachable in-cluster via the zoe-network
+      # service DNS name (zoe-music:8100), never on the host's external NICs.
+      - "127.0.0.1:8100:8100"
     volumes:
       - .:/app
       - ../../data:/app/data
@@ -13,6 +15,9 @@ services:
       - DATABASE_PATH=/app/data/zoe.db
       - MCP_SERVER_URL=http://zoe-mcp-server:8003
       - PLATFORM=${PLATFORM:-unknown}
+      # Shared service token gating /tools/*; the zoe-core intent handlers send
+      # the same value. Module fails closed (503) until this is set.
+      - ZOE_MUSIC_SERVICE_TOKEN=${ZOE_MUSIC_SERVICE_TOKEN:-}
       
       # Music service API keys (optional)
       - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID:-}

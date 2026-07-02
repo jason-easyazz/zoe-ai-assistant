@@ -1,8 +1,10 @@
+import logging
 import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import httpx
 import multica_client
 import pytest
 
@@ -512,3 +514,140 @@ async def test_sync_evolution_proposal_returns_none_for_non_dict_created_issue(m
 
 async def _async_tuple():
     return None, None
+
+
+# ── Outage observability: distinguish a real failure from an empty board ──────
+
+
+class _RaisingHttpClient:
+    """Fake httpx.AsyncClient whose every verb raises the given error."""
+
+    def __init__(self, exc):
+        self._exc = exc
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return None
+
+    async def get(self, *args, **kwargs):
+        raise self._exc
+
+    async def put(self, *args, **kwargs):
+        raise self._exc
+
+
+def _configure_multica(monkeypatch):
+    monkeypatch.setenv("MULTICA_BASE_URL", "https://multica.example")
+    monkeypatch.setenv("MULTICA_API_TOKEN", "token-1")
+    monkeypatch.setenv("MULTICA_WORKSPACE_ID", "workspace-1")
+
+
+@pytest.mark.asyncio
+async def test_list_issues_logs_warning_and_returns_empty_on_outage(monkeypatch, caplog):
+    """A real outage is LOGGED at WARNING and still returns [] by default, so the
+    existing `or []` callers keep working but the failure is no longer silent."""
+    _configure_multica(monkeypatch)
+    monkeypatch.setattr(
+        multica_client.httpx,
+        "AsyncClient",
+        lambda **_kwargs: _RaisingHttpClient(httpx.ConnectError("connection refused")),
+    )
+
+    with caplog.at_level(logging.WARNING, logger=multica_client.__name__):
+        result = await multica_client.MULClient().list_issues(status="todo")
+
+    assert result == []
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("list_issues failed" in r.getMessage() for r in warnings)
+
+
+@pytest.mark.asyncio
+async def test_list_issues_raises_typed_error_when_opted_in(monkeypatch, caplog):
+    """With raise_on_error=True an outage surfaces as MulticaUnavailableError (carrying
+    endpoint + cause) so a caller can tell an OUTAGE apart from an empty board — and it
+    is still logged on the way out."""
+    _configure_multica(monkeypatch)
+    boom = httpx.ConnectError("connection refused")
+    monkeypatch.setattr(
+        multica_client.httpx, "AsyncClient", lambda **_kwargs: _RaisingHttpClient(boom)
+    )
+
+    with caplog.at_level(logging.WARNING, logger=multica_client.__name__):
+        with pytest.raises(multica_client.MulticaUnavailableError) as excinfo:
+            await multica_client.MULClient().list_issues(status="todo", raise_on_error=True)
+
+    assert excinfo.value.cause is boom
+    assert excinfo.value.endpoint.endswith("/api/issues")
+    assert any("list_issues failed" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_list_issues_empty_board_does_not_raise_when_opted_in(monkeypatch):
+    """HARD CONSTRAINT: a legitimately empty 200 board must behave exactly as before —
+    return [] and NEVER raise — even with raise_on_error=True."""
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return []
+
+    class FakeHttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, *args, **kwargs):
+            return FakeResponse()
+
+    _configure_multica(monkeypatch)
+    monkeypatch.setattr(multica_client.httpx, "AsyncClient", lambda **_kwargs: FakeHttpClient())
+
+    result = await multica_client.MULClient().list_issues(status="todo", raise_on_error=True)
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_typed_error_captures_http_status(monkeypatch):
+    """An HTTP error response status is captured on the typed exception for log/metric
+    context (endpoint + status)."""
+    _configure_multica(monkeypatch)
+    request = httpx.Request("GET", "https://multica.example/api/issues")
+    response = httpx.Response(503, request=request)
+    boom = httpx.HTTPStatusError("service unavailable", request=request, response=response)
+    monkeypatch.setattr(
+        multica_client.httpx, "AsyncClient", lambda **_kwargs: _RaisingHttpClient(boom)
+    )
+
+    with pytest.raises(multica_client.MulticaUnavailableError) as excinfo:
+        await multica_client.MULClient().list_issues(raise_on_error=True)
+
+    assert excinfo.value.status == 503
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method, kwargs",
+    [
+        ("get_issue", {"issue_id": "abc"}),
+        ("update_issue", {"issue_id": "abc", "status": "done"}),
+    ],
+)
+async def test_get_and_update_issue_raise_typed_error_when_opted_in(monkeypatch, method, kwargs):
+    """get_issue / update_issue default to swallowing (empty dict) but raise the typed
+    outage error when the caller opts in."""
+    _configure_multica(monkeypatch)
+    boom = httpx.ConnectError("down")
+    monkeypatch.setattr(
+        multica_client.httpx, "AsyncClient", lambda **_kwargs: _RaisingHttpClient(boom)
+    )
+    client = multica_client.MULClient()
+
+    assert await getattr(client, method)(**kwargs) == {}
+    with pytest.raises(multica_client.MulticaUnavailableError):
+        await getattr(client, method)(**kwargs, raise_on_error=True)

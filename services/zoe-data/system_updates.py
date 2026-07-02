@@ -965,7 +965,7 @@ async def _check_and_notify_zoe_release(db: Any) -> None:
         await db.commit()
 
         from push import broadcaster
-        broadcaster.broadcast("all", "notification_created", {
+        await broadcaster.broadcast("all", "notification_created", {
             "type": "zoe_update",
             "title": f"Zoe {latest} available",
             "message": "A new version of Zoe is ready to install.",
