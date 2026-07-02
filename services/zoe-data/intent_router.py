@@ -1951,6 +1951,28 @@ async def _execute_reminder_create_direct(intent: Intent, user_id: str) -> Optio
         return None
 
 
+async def _execute_reminder_list_direct(intent: Intent, user_id: str) -> Optional[str]:
+    """Read reminders straight from the reminders table (mirrors mcp_server's
+    reminder_list query) so 'what are my reminders' works even when the mcporter
+    MCP subprocess is down, and an empty list formats as 'No reminders set.'
+    instead of surfacing as a failure (ok:false) to brain/tool consumers."""
+    try:
+        from database import get_db_ctx
+
+        async with get_db_ctx() as db:
+            cursor = await db.execute(
+                "SELECT id, title, due_date, due_time, priority, category FROM reminders"
+                " WHERE (visibility = 'family' OR user_id = ?)"
+                " AND is_active = 1 AND deleted = 0 ORDER BY due_date, due_time LIMIT 20",
+                (user_id,),
+            )
+            rows = [dict(r) for r in await cursor.fetchall()]
+        return _format_response(intent, json.dumps({"reminders": rows}, default=str))
+    except Exception as exc:
+        logger.warning("reminder_list direct execution unavailable; falling back to mcporter: %s", exc)
+        return None
+
+
 def _escape_like_pattern(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
@@ -2694,6 +2716,11 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
 
     if intent.name == "reminder_create":
         direct_result = await _execute_reminder_create_direct(intent, user_id)
+        if direct_result:
+            return direct_result
+
+    if intent.name == "reminder_list":
+        direct_result = await _execute_reminder_list_direct(intent, user_id)
         if direct_result:
             return direct_result
 
@@ -3549,7 +3576,7 @@ def _format_response(intent: Intent, raw_output: str) -> str:
             return "No reminders set."
         lines = ["Your reminders:"]
         for r in reminders:
-            lines.append(f"  - {r.get('title', r.get('text', '?'))} (due: {r.get('due_date', 'TBD')})")
+            lines.append(f"  - {r.get('title', r.get('text', '?'))} (due: {r.get('due_date') or 'TBD'})")
         return "\n".join(lines)
 
     if intent.name == "people_create":
