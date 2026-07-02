@@ -186,7 +186,55 @@ per-process multi-user workaround in `zoe_core_client.py`.
 
 ---
 
-## 8. Research basis
+## 8. Retirement inventory — what each legacy system does, and what recreates it
+
+> **The rule (from §6 Phase 4): a capability is retired only after its Flue
+> recreation demonstrably owns the job, with operator sign-off. Nothing on this
+> list is deleted because it's old — it's deleted because Flue now does it.**
+> This is the concrete checklist behind "retire Multica/Hermes/OpenClaw."
+
+### 8.1 Multica — board-driven engineering orchestration
+
+| Capability today (code) | Flue recreation | Retire-gate |
+|---|---|---|
+| Ticket/board orchestration: `executors/kanban_adapter.py`, `multica_ticket_contract.py`, `multica_autopilot_sync.py`, `pipeline_handoff.py` | A **durable Flue workflow** per ticket: bound agent delegates scout → implement → verify → openPR to subagents (the Phase-0 harness pattern, proven in #858). Ticket state lives in Flue run durability; zoe-data stays SoR for anything user-visible. | Flue processes ≥5 real tickets end-to-end (branch → PR → merged) with no stalls; operator sign-off. |
+| Worktree lifecycle: `worktree_bootstrap.py` (create/remove/prune, squash-merge detection) | Reused as-is first (it's harness-agnostic Python callable via a tool), ported into the Flue workflow's exec helpers later. | Flue workflow owns worktree create/cleanup for its own tickets. |
+| Greptile PR loop: `greploop_guard.py`, `greptile_client.py` (packet-only fix loops, thread resolution) | A Flue **workflow step/subagent** wrapping the same packet-generation logic — port the module, don't rewrite the mechanics. | A Flue-driven greploop takes ≥3 PRs from open → threads-resolved → merged. |
+
+### 8.2 Hermes — engineering/browser delegation
+
+| Capability today | Flue recreation | Retire-gate |
+|---|---|---|
+| Engineering delegation: `hermes_http.py`, `~/.hermes/skills` (`zoe-engineering`, `github-greptile-loop`, `source-code-context`, `code-structure-cleanup`) | Flue **agents + subagents** with `defineTool`/MCP over the same zoe-data endpoints; each Hermes skill becomes a Flue agent definition (prompts are largely reusable). | Per-skill: the Flue agent completes the same task class the skill handled. |
+| Browser work: `browser_broker.py` + `zoe-cloakbrowser` skill | CloakBrowser tools exposed to Flue via MCP (Seam B). | Flue agent completes a real browser task through the broker. |
+| Knowledge refresh: `zoe-status-refresh` skill | A scheduled Flue workflow writing OKF records under `docs/knowledge/` (records only — never AGENTS.md contracts). | One full refresh cycle produced by Flue and lint-clean. |
+| `hermes-agent.service` (PAUSED since 2026-06-21: enabled but inactive) | Superseded by the Flue runtime unit. | Disable + remove the unit only when 8.1's PR loop gate passes. |
+
+### 8.3 OpenClaw — fallback agent execution
+
+| Capability today | Flue recreation | Retire-gate |
+|---|---|---|
+| Fallback agent runtime: `routers/openclaw.py`, `background_runner.py`, `executor_registry.py`, skills sandbox | Flue `local()` sandbox + subagent execution; OpenClaw is already manual-fallback-only (AGENTS.md), so this is last and lowest-risk. | Flue runs the same background job classes; operator sign-off. |
+
+### 8.4 Cross-cutting seams (re-pointed, not retired)
+
+`agent_sync.py`, `zoe_agent_registry.py`, capability profiles / evolution gates
+(`zoe_capability_profile.py`, `zoe_evolution_execution_gate.py`) register *which
+agents exist and what they may do* — they get a Flue-agent registration alongside
+the existing ones, and legacy rows drop out as each system above retires.
+
+### 8.5 What deletion looks like (when gates pass)
+
+Per CANONICAL: **retire by removing** — each passed gate produces a deletion PR
+(module + its tests + its AGENTS.md/docs mentions), not an archive copy. The big
+wins land here: `kanban_adapter.py` (~2.3k lines) + `test_kanban_adapter.py`
+(~6k lines, the largest file in the repo), `greploop_guard.py` + its ~3.2k-line
+test, `hermes_http.py`, `routers/openclaw.py`. None of it moves until its row
+above is green.
+
+---
+
+## 9. Research basis
 
 Four parallel deep-dive threads (2026-06-28), each evidence-backed:
 1. **Pi** — confirmed Pi is the shared substrate (Zoe = `pi-coding-agent` CLI/RPC;
