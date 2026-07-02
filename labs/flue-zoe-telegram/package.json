@@ -1,0 +1,25 @@
+{
+  "name": "flue-zoe-telegram",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Lab-only: a Flue Zoe-agent for Telegram (long-poll, Gemma-backed, durable, proactive). NOT wired to the voice path.",
+  "license": "Apache-2.0",
+  "engines": { "node": ">=22.19.0" },
+  "scripts": {
+    "build": "flue build --target node",
+    "dev": "flue dev --target node",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@flue/runtime": "1.0.0-beta.6",
+    "grammy": "^1.44.0",
+    "hono": "^4.8.3",
+    "valibot": "^1.1.0"
+  },
+  "devDependencies": {
+    "@flue/cli": "1.0.0-beta.6",
+    "@types/node": "22.10.2",
+    "typescript": "5.7.2"
+  }
+}
