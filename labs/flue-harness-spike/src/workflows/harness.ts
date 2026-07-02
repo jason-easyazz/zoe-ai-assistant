@@ -131,10 +131,17 @@ export default defineWorkflow({
 
     // PHASE 4: openPR (deterministic; never merges).
     await commitAndPush(cfg, branch, commitSubject);
+    // Redact the PATCH too before it goes into the public PR body — not just the
+    // verify evidence. A hostile issue can steer the write-capable agent into
+    // writing an API key / .env value into a tracked file; captureDiff() then
+    // stages it, and publishing the raw diff would leak it before human review.
+    // Same defence-in-depth as safeEvidence (not a guarantee — operator owns the
+    // sandbox/VERIFY_CMD), applied consistently to every secret-bearing surface.
+    const redactedPatch = redactSecrets(diff.patch);
     const cappedPatch =
-      diff.patch.length > 48 * 1024
-        ? `${diff.patch.slice(0, 48 * 1024)}\n…[truncated; see GitHub diff view]`
-        : diff.patch;
+      redactedPatch.length > 48 * 1024
+        ? `${redactedPatch.slice(0, 48 * 1024)}\n…[truncated; see GitHub diff view]`
+        : redactedPatch;
     const body = [
       `Autonomous Flue-harness spike — issue #${issue.number}.`,
       '',
