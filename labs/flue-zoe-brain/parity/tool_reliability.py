@@ -22,10 +22,13 @@ Run (with the Flue brain serving on :3578):
 from __future__ import annotations
 
 import json
+import os
+import sys
 import time
 import urllib.request
 import uuid
 from collections import defaultdict
+from pathlib import Path
 
 BASE = "http://127.0.0.1:3578"
 POST_URL = BASE + "/agents/zoe/{sid}?wait=result"
@@ -68,13 +71,31 @@ def _get(url: str) -> list[dict]:
 
 
 def tools_called(events: list[dict]) -> list[str]:
-    """Tool names actually invoked during the prompt operation, in order.
+    """Tool names invoked *during the prompt operation*, in order.
 
-    We count `tool_start` events (one per invocation) and read their `toolName`.
+    We count `tool_start` events (one per invocation) and read their `toolName`,
+    but scope them to the `prompt` operation so setup/lifecycle/multi-operation
+    tool events can't inflate the count. When the stream exposes operation
+    boundaries (`operation_start`/`operation_end` with an `operationKind`/`kind`),
+    we only count tool starts while inside a `prompt` operation; a tool start in a
+    non-prompt operation is ignored. Older/simpler streams emit no operation
+    markers at all — then `in_prompt` stays `None` and we count every tool start,
+    preserving the original behaviour.
     """
     names: list[str] = []
+    in_prompt: bool | None = None  # None => no operation markers seen yet
     for e in events:
-        if e.get("type") == "tool_start":
+        etype = str(e.get("type") or "").strip().lower().replace("-", "_")
+        if etype in ("operation_start", "operationstart"):
+            kind = str(e.get("operationKind") or e.get("kind") or "").strip().lower()
+            in_prompt = kind == "prompt"
+            continue
+        if etype in ("operation_end", "operationend"):
+            in_prompt = False
+            continue
+        if etype == "tool_start":
+            if in_prompt is False:
+                continue  # tool fired outside the prompt operation — don't count it
             tn = e.get("toolName")
             if tn:
                 names.append(tn)
@@ -88,6 +109,61 @@ def reply_text(body: dict) -> str:
     return str(res).strip()
 
 
+# Deterministic marker emitted by shopping_list_add when writes are OFF
+# (src/tools/zoe-tools.ts dry-run branch: `WRITE DISABLED — "<item>" was NOT added`).
+_DRYRUN_MARKER = "WRITE DISABLED"
+_PROBE_SENTINEL = "__parity_dryrun_probe__do_not_add__"
+
+
+def assert_dry_run() -> None:
+    """Fail loudly unless the live sidecar is confirmed to have writes DISABLED.
+
+    This harness sends mutation-shaped `shopping_list_add` prompts. If the sidecar
+    it happens to be talking to was started with `ZOE_BRAIN_ALLOW_WRITES=true`,
+    those trials would add REAL items while we only report tool-call reliability.
+    Guard against that before sending any write-shaped prompt:
+
+    - Send one probe `shopping_list_add` (unique sentinel item) to a throwaway
+      session and read the session history. The dry-run tool returns a
+      deterministic ``WRITE DISABLED`` marker; if it appears, dry-run is CONFIRMED.
+    - If `shopping_list_add` fired but the marker is absent, writes look ENABLED —
+      abort loudly (the sentinel may have been added; operator should remove it and
+      restart with `ZOE_BRAIN_ALLOW_WRITES=false`).
+    - If the probe couldn't confirm dry-run (e.g. the model didn't call the tool),
+      abort by default rather than risk real writes. Set
+      `TOOL_REL_SKIP_WRITE_CHECK=1` to bypass only when you KNOW the sidecar is
+      read-only.
+    """
+    if os.environ.get("TOOL_REL_SKIP_WRITE_CHECK") == "1":
+        print("dry-run check SKIPPED (TOOL_REL_SKIP_WRITE_CHECK=1)")
+        return
+
+    sid = f"rel-probe-{uuid.uuid4().hex[:12]}"
+    try:
+        _post(POST_URL.format(sid=sid), {"message": f"add {_PROBE_SENTINEL} to my list"})
+        events = _get(GET_URL.format(sid=sid))
+    except Exception as exc:  # sidecar unreachable / errored
+        sys.exit(f"ABORT: could not run the dry-run preflight probe ({exc}).")
+
+    blob = json.dumps(events)
+    fired = "shopping_list_add" in tools_called(events) or "shopping_list_add" in blob
+    if _DRYRUN_MARKER in blob:
+        print("dry-run CONFIRMED (shopping_list_add returned WRITE DISABLED).")
+        return
+    if fired:
+        sys.exit(
+            "ABORT: shopping_list_add fired but no WRITE DISABLED marker — the "
+            f"sidecar appears to have WRITES ENABLED. The sentinel item "
+            f"'{_PROBE_SENTINEL}' may have been added; remove it and restart the "
+            "sidecar with ZOE_BRAIN_ALLOW_WRITES=false."
+        )
+    sys.exit(
+        "ABORT: could not confirm the sidecar is in dry-run (the probe didn't "
+        "trigger shopping_list_add). Refusing to send write-shaped prompts. Set "
+        "TOOL_REL_SKIP_WRITE_CHECK=1 only if you KNOW writes are disabled."
+    )
+
+
 def main() -> None:
     # tool -> {"correct": n, "total": n}
     per_tool = defaultdict(lambda: {"correct": 0, "total": 0})
@@ -96,6 +172,9 @@ def main() -> None:
 
     total_correct = 0
     total_calls = 0
+
+    # Refuse to send write-shaped prompts unless the sidecar is confirmed dry-run.
+    assert_dry_run()
 
     for expected, prompt in PROMPTS:
         for rep in range(REPEATS):
@@ -181,9 +260,12 @@ def main() -> None:
         },
         "misfires": misfires,
     }
-    with open("parity/tool_reliability_last.json", "w") as f:
+    # Write next to this script (not cwd-relative) so the summary lands correctly
+    # regardless of the directory the harness was invoked from.
+    out_path = Path(__file__).parent / "tool_reliability_last.json"
+    with out_path.open("w") as f:
         json.dump(summary, f, indent=2)
-    print("\nWrote parity/tool_reliability_last.json")
+    print(f"\nWrote {out_path}")
 
 
 if __name__ == "__main__":
