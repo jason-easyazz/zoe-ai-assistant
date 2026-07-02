@@ -90,16 +90,22 @@ def test_sentinel_prefixes_cover_both_kinds():
 #   * speak filler on the FIRST tool_start when no audio has been emitted yet;
 #   * never speak a sentinel as text;
 #   * at most one filler per turn;
-#   * suppress the filler when the brain led with its own spoken text.
+#   * suppress the filler when the brain led with its own spoken text —
+#     including text still buffering toward its first sentence boundary;
+#   * suppress the filler when the cached processing-ack audio already played.
 
-def _simulate(deltas, *, filler_enabled=True):
+def _simulate(deltas, *, filler_enabled=True, processing_ack_audio_sent=False):
     """Return (spoken_units, recorded_units) for a delta sequence."""
     spoken, recorded = [], []
+    token_buf = ""
     first_audio_set = False
     filler_emitted = False
 
     def emit(unit, *, record=True):
         nonlocal first_audio_set
+        unit = unit.strip()
+        if not unit:
+            return
         spoken.append(unit)
         if record:
             recorded.append(unit)
@@ -109,14 +115,25 @@ def _simulate(deltas, *, filler_enabled=True):
         if not delta:
             continue
         if delta.startswith(v._VOICE_TOOL_SENTINEL_PREFIXES):
-            if not filler_emitted and not first_audio_set and filler_enabled:
+            if (
+                not filler_emitted
+                and not first_audio_set
+                and not token_buf
+                and not processing_ack_audio_sent
+                and filler_enabled
+            ):
                 name = v._voice_tool_name_from_sentinel(delta)
                 if name is not None:
                     filler_emitted = True
                     emit(v._voice_tool_filler(name), record=False)
             continue  # sentinels are NEVER spoken as text
-        # plain text delta (sentence-level for the sim)
-        emit(delta)
+        # plain text delta: buffer until a sentence boundary, like the real loop
+        token_buf += delta
+        ready, token_buf = v._extract_complete_sentences(token_buf)
+        for sentence in ready:
+            emit(sentence)
+    if token_buf.strip():
+        emit(token_buf)
     return spoken, recorded
 
 
@@ -161,6 +178,32 @@ def test_filler_only_once_across_multiple_tool_calls():
     deltas = [_tool("start", name="calendar"), _tool("start", name="weather"), "Done."]
     spoken, _ = _simulate(deltas)
     assert spoken == ["Let me check your calendar.", "Done."]  # only one filler
+
+
+def test_filler_suppressed_when_text_still_buffering():
+    # Brain streams a PARTIAL lead-in (no sentence boundary yet) and then the
+    # tool sentinel: token_buf is non-empty even though no audio flushed, so the
+    # filler must stay silent — otherwise the user hears the filler AND the
+    # brain's own lead-in (the exact double lead-in the feature prevents).
+    deltas = [
+        "Let me check",
+        _tool("start"),
+        _tool("result"),
+        " your calendar. Nothing this week.",
+    ]
+    spoken, recorded = _simulate(deltas)
+    assert spoken == ["Let me check your calendar.", "Nothing this week."]
+    assert recorded == spoken  # no unrecorded filler snuck in
+
+
+def test_filler_suppressed_after_processing_ack_audio():
+    # The cached processing-ack chunk bypasses _emit_sentence, so first-audio
+    # tracking never fires — but the user already heard an acknowledgement.
+    # A filler on top would be two back-to-back acks.
+    deltas = [_tool("start"), _tool("result"), "Nothing this week."]
+    spoken, recorded = _simulate(deltas, processing_ack_audio_sent=True)
+    assert spoken == ["Nothing this week."]
+    assert recorded == ["Nothing this week."]
 
 
 def test_filler_disabled_drops_sentinels_but_stays_silent():
