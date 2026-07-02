@@ -109,58 +109,61 @@ def reply_text(body: dict) -> str:
     return str(res).strip()
 
 
-# Deterministic marker emitted by shopping_list_add when writes are OFF
-# (src/tools/zoe-tools.ts dry-run branch: `WRITE DISABLED — "<item>" was NOT added`).
-_DRYRUN_MARKER = "WRITE DISABLED"
-_PROBE_SENTINEL = "__parity_dryrun_probe__do_not_add__"
-
-
 def assert_dry_run() -> None:
     """Fail loudly unless the live sidecar is confirmed to have writes DISABLED.
 
-    This harness sends mutation-shaped `shopping_list_add` prompts. If the sidecar
-    it happens to be talking to was started with `ZOE_BRAIN_ALLOW_WRITES=true`,
-    those trials would add REAL items while we only report tool-call reliability.
-    Guard against that before sending any write-shaped prompt:
+    This harness later sends mutation-shaped ``shopping_list_add`` prompts. If the
+    sidecar was started with ``ZOE_BRAIN_ALLOW_WRITES=true`` those trials would add
+    REAL items while we only report tool-call reliability, so we gate on dry-run
+    first.
 
-    - Send one probe `shopping_list_add` (unique sentinel item) to a throwaway
-      session and read the session history. The dry-run tool returns a
-      deterministic ``WRITE DISABLED`` marker; if it appears, dry-run is CONFIRMED.
-    - If `shopping_list_add` fired but the marker is absent, writes look ENABLED —
-      abort loudly (the sentinel may have been added; operator should remove it and
-      restart with `ZOE_BRAIN_ALLOW_WRITES=false`).
-    - If the probe couldn't confirm dry-run (e.g. the model didn't call the tool),
-      abort by default rather than risk real writes. Set
-      `TOOL_REL_SKIP_WRITE_CHECK=1` to bypass only when you KNOW the sidecar is
-      read-only.
+    The preflight is deliberately NON-MUTATING. Earlier it sent a real
+    ``shopping_list_add`` prompt and inferred dry-run from the tool's
+    ``WRITE DISABLED`` marker — but on a misconfigured (writes-ENABLED) sidecar
+    that probe could itself add the sentinel item before this code could read the
+    stream and abort, i.e. the safety check performed the very mutation it exists
+    to prevent. Instead we require the operator to positively attest that the
+    sidecar is read-only, and we only ever exercise a READ-ONLY tool here:
+
+    - ``TOOL_REL_WRITES_CONFIRMED_OFF=1`` is REQUIRED. It is a human attestation
+      that the sidecar was launched with ``ZOE_BRAIN_ALLOW_WRITES=false``. Without
+      it we refuse to send any write-shaped prompt (fail closed) — there is no
+      prompt-path way to read write-state without risking a write, so the operator
+      must vouch for it.
+    - We still send ONE probe, but a read-only ``show_list`` request (never a
+      write tool), purely to confirm the sidecar is reachable and answering before
+      the run starts. Even on a writes-ENABLED sidecar this cannot mutate anything.
+    - ``TOOL_REL_SKIP_WRITE_CHECK=1`` additionally skips the reachability probe for
+      environments where even the read call is undesirable; the attestation above
+      is still required.
     """
+    if os.environ.get("TOOL_REL_WRITES_CONFIRMED_OFF") != "1":
+        sys.exit(
+            "ABORT: refusing to send write-shaped prompts without a dry-run "
+            "attestation. Start the sidecar with ZOE_BRAIN_ALLOW_WRITES=false and "
+            "set TOOL_REL_WRITES_CONFIRMED_OFF=1 to confirm. (There is no "
+            "non-mutating prompt that can verify write-state from the client, so "
+            "the operator must vouch for it.)"
+        )
+
     if os.environ.get("TOOL_REL_SKIP_WRITE_CHECK") == "1":
-        print("dry-run check SKIPPED (TOOL_REL_SKIP_WRITE_CHECK=1)")
+        print(
+            "dry-run ATTESTED (TOOL_REL_WRITES_CONFIRMED_OFF=1); reachability probe "
+            "SKIPPED (TOOL_REL_SKIP_WRITE_CHECK=1)."
+        )
         return
 
+    # Read-only reachability probe. `show_list` never writes, so this is safe even
+    # if the operator's attestation is wrong — no sentinel item can be added.
     sid = f"rel-probe-{uuid.uuid4().hex[:12]}"
     try:
-        _post(POST_URL.format(sid=sid), {"message": f"add {_PROBE_SENTINEL} to my list"})
-        events = _get(GET_URL.format(sid=sid))
+        _post(POST_URL.format(sid=sid), {"message": "show me my shopping list"})
+        _get(GET_URL.format(sid=sid))
     except Exception as exc:  # sidecar unreachable / errored
-        sys.exit(f"ABORT: could not run the dry-run preflight probe ({exc}).")
-
-    blob = json.dumps(events)
-    fired = "shopping_list_add" in tools_called(events) or "shopping_list_add" in blob
-    if _DRYRUN_MARKER in blob:
-        print("dry-run CONFIRMED (shopping_list_add returned WRITE DISABLED).")
-        return
-    if fired:
-        sys.exit(
-            "ABORT: shopping_list_add fired but no WRITE DISABLED marker — the "
-            f"sidecar appears to have WRITES ENABLED. The sentinel item "
-            f"'{_PROBE_SENTINEL}' may have been added; remove it and restart the "
-            "sidecar with ZOE_BRAIN_ALLOW_WRITES=false."
-        )
-    sys.exit(
-        "ABORT: could not confirm the sidecar is in dry-run (the probe didn't "
-        "trigger shopping_list_add). Refusing to send write-shaped prompts. Set "
-        "TOOL_REL_SKIP_WRITE_CHECK=1 only if you KNOW writes are disabled."
+        sys.exit(f"ABORT: could not reach the sidecar for the preflight probe ({exc}).")
+    print(
+        "dry-run ATTESTED (TOOL_REL_WRITES_CONFIRMED_OFF=1); sidecar reachable "
+        "(read-only show_list probe)."
     )
 
 
