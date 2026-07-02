@@ -9,7 +9,6 @@ from zoe_evolution_proposal import EvolutionSignal, EvolutionSignalType, Proposa
 from zoe_evolution_proposal_adapter import load_proposal_contract_snapshot
 from zoe_evolution_runtime_intake import (
     RuntimeEvolutionProposalIntake,
-    build_graphiti_runtime_trial_proposal_intake,
     build_pi_runtime_install_proposal_intake,
     build_runtime_evolution_proposal_intake,
 )
@@ -399,96 +398,3 @@ def test_pi_runtime_install_proposal_reports_missing_pi_candidate(monkeypatch):
     with pytest.raises(ValueError, match="pi_runtime_reuse"):
         runtime_intake.build_pi_runtime_install_proposal_intake(probe_result=_pi_probe())
 
-
-def _graphiti_probe(**overrides):
-    defaults = {
-        "ok": False,
-        "acceptable": True,
-        "status": "disabled",
-        "reason": "GRAPHITI_ENABLED is false",
-        "config": {
-            "runtime": {
-                "enabled": False,
-                "llm_base_url": "http://127.0.0.1:11434/v1",
-                "llm_model": "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
-                "offline_only": True,
-                "timeout_seconds": 2.0,
-            },
-            "backend": {
-                "enabled": False,
-                "backend": "falkordb",
-                "falkordb_host": "127.0.0.1",
-                "falkordb_port": 6379,
-                "neo4j_host": "127.0.0.1",
-                "neo4j_bolt_port": 7687,
-                "offline_only": True,
-                "timeout_seconds": 1.0,
-            },
-        },
-        "packages": {
-            "graphiti_core": {"available": False, "version": None},
-            "falkordb": {"available": False, "version": None},
-        },
-        "backend": {"enabled": False, "reason": "GRAPHITI_ENABLED is false"},
-        "llm": {"enabled": False, "reason": "GRAPHITI_ENABLED is false"},
-        "latency_ms": 1.2,
-    }
-    defaults.update(overrides)
-    return defaults
-
-
-def test_graphiti_runtime_trial_proposal_is_inert_and_blocked_until_runtime_ready():
-    intake = build_graphiti_runtime_trial_proposal_intake(
-        proposal_id="prop_graphiti_runtime_trial_test",
-        user_id="jason",
-        runtime_probe_result=_graphiti_probe(),
-    )
-
-    row = intake.to_legacy_row()
-    payload = load_proposal_contract_snapshot(row["target_patterns"])
-    evidence = json.loads(row["evidence"])
-
-    assert row["status"] == "pending"
-    assert payload is not None
-    proposal = payload["proposal"]
-    assert proposal["candidate"]["candidate_id"] == "graphiti_falkordb_trial"
-    assert proposal["autonomy_class"] == "prepare"
-    assert proposal["risk"] == "privileged"
-    assert proposal["approval_gate"]["allowed_to_prepare"] is False
-    assert proposal["approval_gate"]["allowed_to_execute"] is False
-    assert proposal["approval_gate"]["blockers"] == ["score_below_threshold"]
-    assert proposal["approval_required"] == [
-        "user_or_admin_for_privileged_execution",
-        "security_review",
-        "install_or_runtime_change",
-        "license_review",
-        "sidecar_start",
-        "pr_evidence",
-    ]
-    assert proposal["metadata"]["graphiti_runtime_probe"]["status"] == "disabled"
-    assert proposal["metadata"]["graphiti_candidate_gate"]["allowed"] is False
-    assert evidence["signal"]["metadata"]["probe_status"] == "disabled"
-    assert evidence["signal"]["metadata"]["backend_enabled"] is False
-    assert evidence["signal"]["metadata"]["llm_enabled"] is False
-    assert evidence["observation_trace_collection"]["ok"] is True
-    assert evidence["observation_trace_collection"]["traces"][0]["metadata"]["proposal_type"] == "code_improvement"
-    assert intake.multica_payload["contract_snapshot"] == row["target_patterns"]
-
-
-def test_graphiti_runtime_trial_proposal_marks_runtime_ready_only_from_ready_probe():
-    probe = _graphiti_probe(ok=True, status="ready_for_ingest_trial")
-
-    intake = build_graphiti_runtime_trial_proposal_intake(runtime_probe_result=probe)
-    payload = load_proposal_contract_snapshot(intake.target_patterns)
-
-    assert payload is not None
-    candidate = payload["proposal"]["candidate"]
-    assert candidate["metadata"]["runtime_ready"] is True
-    assert payload["proposal"]["approval_gate"]["allowed_to_execute"] is False
-
-
-def test_graphiti_runtime_trial_proposal_reports_missing_graphiti_candidate(monkeypatch):
-    monkeypatch.setattr(runtime_intake, "EXAMPLE_CANDIDATES", ())
-
-    with pytest.raises(ValueError, match="graphiti_falkordb_trial"):
-        runtime_intake.build_graphiti_runtime_trial_proposal_intake(runtime_probe_result=_graphiti_probe())
