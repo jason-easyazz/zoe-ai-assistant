@@ -306,19 +306,33 @@ class _ZoeCoreWorker:
         streamed_any = False   # whether we've yielded anything this whole turn
         saw_turn_end = False   # at least one turn has completed
         prompt_accepted = False
+        # Count of tool calls that started but haven't reported tool_execution_end.
+        # A slow tool (web search / deep research ~60s / CloakBrowser) produces a
+        # long stdout gap with NO events; if we applied the idle timeout during
+        # that gap we'd time out, return the pre-tool fragment as a "complete"
+        # answer, and leave the worker mid-generation. So while a tool is
+        # outstanding we use the full remaining deadline, never the idle window.
+        tools_outstanding = 0
         deadline = time.monotonic() + timeout_s
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise asyncio.TimeoutError("zoe-core turn timed out")
-            # Once we have an answer and a completed turn, bound each read to the
-            # idle window: if agent_end never comes, return rather than hang.
-            read_timeout = min(remaining, _IDLE_TIMEOUT_S) if (streamed_any and saw_turn_end) else remaining
+            # Once we have an answer and a completed turn — and no tool call is in
+            # flight — bound each read to the idle window: if agent_end never comes,
+            # return rather than hang. With a tool outstanding, the gap is expected
+            # work, so wait out the full remaining deadline instead.
+            idle_eligible = streamed_any and saw_turn_end and tools_outstanding == 0
+            read_timeout = min(remaining, _IDLE_TIMEOUT_S) if idle_eligible else remaining
             try:
                 line = await asyncio.wait_for(self.proc.stdout.readline(), timeout=read_timeout)
             except asyncio.TimeoutError:
-                if streamed_any and saw_turn_end:
+                if idle_eligible:
                     return  # answer delivered + a turn ended; agent_end presumed lost
+                # Deadline hit with a tool still outstanding (or before any answer):
+                # never pass off a truncated turn as complete. Raise so stream()
+                # resets the worker (no orphaned mid-generation process) and the
+                # caller can surface/persist the failure instead of a fragment.
                 raise
             if not line:
                 raise RuntimeError("zoe-core Pi RPC process closed")
@@ -371,7 +385,15 @@ class _ZoeCoreWorker:
                     if tc is not None:
                         tc_id = tc.get("id")
                         tc_name = tc.get("name")
+                        # Count a tool as in-flight ONLY under the exact guard that
+                        # makes it trackable (id AND name — the same condition as the
+                        # start sentinel). _toolcall_block_from_amev accepts any
+                        # type=="toolCall" block, so an id-without-name (or unnamed)
+                        # block would otherwise increment the counter with no matching
+                        # tool_execution_end and leave the turn permanently
+                        # non-idle-eligible (phantom pending tool).
                         if tc_id and tc_name:
+                            tools_outstanding += 1
                             yield "__TOOL__:" + json.dumps(
                                 {"phase": "start", "id": str(tc_id), "name": str(tc_name)}
                             )
@@ -386,6 +408,9 @@ class _ZoeCoreWorker:
                 for sentinel in _tool_args_sentinels(event):
                     yield sentinel
             elif etype == "tool_execution_end":
+                # Tool finished — re-arm the idle timeout (clamp at 0 in case a
+                # start event was missed) now that events should resume promptly.
+                tools_outstanding = max(0, tools_outstanding - 1)
                 sentinel = _tool_result_sentinel(event)
                 if sentinel is not None:
                     yield sentinel

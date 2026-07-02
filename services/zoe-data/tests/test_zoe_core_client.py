@@ -492,3 +492,197 @@ async def test_malformed_tool_frames_never_crash_and_skip_sentinel():
     ])
     assert [c for c in out if c.startswith("__TOOL__:")] == []
     assert "ok" in out
+
+
+# ── Unit tests for _read_turn: idle-timeout vs. a slow outstanding tool (P1-B) ─
+# A slow tool (web search / deep research ~60s / CloakBrowser) produces a long
+# stdout gap with NO events AFTER a turn_end. The old reader applied the idle
+# timeout during that gap, returned the pre-tool fragment as a "complete" answer,
+# and left the worker mid-generation. These tests drive _read_turn against a
+# stream that delivers events with REAL async delays so the idle window can elapse
+# under a shrunk _IDLE_TIMEOUT_S — no `pi` binary or model needed.
+
+
+async def _run_read_turn_streamed(batches, *, request_id="req-1", timeout_s=5.0):
+    """Drive _read_turn while feeding the RPC stream in timed batches.
+
+    `batches` is a list of (delay_s, [events]); each batch is fed after sleeping
+    `delay_s`, concurrently with _read_turn, so genuine idle gaps elapse between
+    events. EOF is fed after the last batch. Returns the list of yielded deltas.
+    """
+    import types
+
+    import zoe_core_client as zc
+
+    reader = asyncio.StreamReader()
+
+    async def _feeder():
+        for delay, events in batches:
+            if delay:
+                await asyncio.sleep(delay)
+            for ev in events:
+                reader.feed_data((json.dumps(ev) + "\n").encode())
+        reader.feed_eof()
+
+    worker = zc._ZoeCoreWorker.__new__(zc._ZoeCoreWorker)
+    worker.proc = types.SimpleNamespace(stdout=reader, stdin=None)
+    feed_task = asyncio.create_task(_feeder())
+    try:
+        return [delta async for delta in worker._read_turn(request_id, timeout_s)]
+    finally:
+        feed_task.cancel()
+        try:
+            await feed_task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_slow_tool_gap_does_not_truncate(monkeypatch):
+    """A >idle-window gap WHILE a tool is outstanding must NOT trigger the idle
+    timeout: the turn waits out the slow tool and streams the full answer.
+
+    Without the fix the idle timeout fires during the gap (streamed_any +
+    saw_turn_end) and _read_turn returns the pre-tool fragment as complete."""
+    import zoe_core_client as zc
+    monkeypatch.setattr(zc, "_IDLE_TIMEOUT_S", 0.05)
+
+    out = await _run_read_turn_streamed(
+        [
+            (0.0, [
+                _accept(),
+                _delta("Let me search"),
+                _toolcall_start("tc-1", "web_search"),
+                _message_end_toolcall("tc-1", "web_search", {"query": "weekend weather"}),
+                {"type": "turn_end", "id": "req-1"},
+            ]),
+            # Tool runs far longer than the idle window before any event resumes.
+            (0.30, [
+                _tool_exec_end(tc_id="tc-1", result="Saturday is sunny, 24 degrees."),
+                {"type": "message_start", "id": "req-1"},
+                _delta("It'll be"),
+                _delta(" sunny, 24°."),
+                _agent_end(),
+            ]),
+        ],
+        timeout_s=5.0,
+    )
+    text = [c for c in out if not c.startswith("__TOOL__:") and not c.startswith("__THINKING__:")]
+    # The full answer streamed — the pre-tool fragment was NOT returned as complete.
+    assert text == ["Let me search", "It'll be", " sunny, 24°."]
+
+
+@pytest.mark.asyncio
+async def test_idle_timeout_with_pending_tool_raises_not_truncates(monkeypatch):
+    """If the deadline is reached while a tool is STILL outstanding, _read_turn
+    raises (so stream() resets the worker) rather than silently returning the
+    pre-tool fragment as a complete reply."""
+    import zoe_core_client as zc
+    monkeypatch.setattr(zc, "_IDLE_TIMEOUT_S", 0.05)
+
+    with pytest.raises(asyncio.TimeoutError):
+        # Tool starts + turn_end, then the stream goes silent forever. Deadline is
+        # short; the idle window (0.05) is shorter still — but must NOT be applied
+        # because a tool is pending, so we hit the real deadline and raise.
+        await _run_read_turn_streamed(
+            [
+                (0.0, [
+                    _accept(),
+                    _delta("Let me search"),
+                    _toolcall_start("tc-1", "web_search"),
+                    {"type": "turn_end", "id": "req-1"},
+                ]),
+                (5.0, []),  # never delivers the tool result within the deadline
+            ],
+            timeout_s=0.25,
+        )
+
+
+@pytest.mark.asyncio
+async def test_idle_timeout_still_applies_with_no_pending_tool(monkeypatch):
+    """Safety valve intact: with NO tool outstanding, an idle gap after an answer
+    + turn_end still returns (agent_end presumed lost) instead of hanging."""
+    import zoe_core_client as zc
+    monkeypatch.setattr(zc, "_IDLE_TIMEOUT_S", 0.05)
+
+    out = await _run_read_turn_streamed(
+        [
+            (0.0, [
+                _accept(),
+                _delta("All done"),
+                {"type": "turn_end", "id": "req-1"},
+            ]),
+            # No tool pending and no agent_end — idle window elapses → return.
+            (5.0, [_agent_end()]),  # arrives long after the idle window
+        ],
+        timeout_s=2.0,
+    )
+    assert out == ["All done"]
+
+
+@pytest.mark.asyncio
+async def test_malformed_toolcall_start_does_not_block_idle(monkeypatch):
+    """A malformed toolcall_start (no valid toolCall block) must NOT count as an
+    outstanding tool: it has no matching tool_execution_end, so counting it would
+    leave the turn permanently non-idle-eligible — after turn_end the user would
+    wait out the FULL deadline and get a reset instead of the short idle
+    completion. The frame is validated BEFORE tools_outstanding is bumped, so the
+    turn still goes idle."""
+    import zoe_core_client as zc
+    monkeypatch.setattr(zc, "_IDLE_TIMEOUT_S", 0.05)
+
+    out = await _run_read_turn_streamed(
+        [
+            (0.0, [
+                _accept(),
+                _delta("All done"),
+                # Malformed: no partial/content, so _toolcall_block_from_amev
+                # rejects it. Must not increment tools_outstanding.
+                {"type": "message_update", "id": "req-1",
+                 "assistantMessageEvent": {"type": "toolcall_start"}},
+                {"type": "turn_end", "id": "req-1"},
+            ]),
+            # Stream then goes silent: with no REAL tool pending the idle window
+            # (0.05s) must elapse and return — not run out the 2s deadline and
+            # raise (which is what a phantom pending tool would cause).
+            (5.0, [_agent_end()]),
+        ],
+        timeout_s=2.0,
+    )
+    assert out == ["All done"]
+
+
+async def test_unnamed_toolcall_start_does_not_block_idle(monkeypatch):
+    """A toolCall block WITH an id but WITHOUT a usable name passes
+    _toolcall_block_from_amev (it accepts any type=="toolCall" block) but is NOT
+    trackable — the start sentinel is suppressed and no tool_execution_end will
+    match it. It must therefore not count as outstanding either (count under the
+    exact same id-AND-name guard as the sentinel), or the turn stays permanently
+    non-idle-eligible (Greptile #920 round 2)."""
+    import zoe_core_client as zc
+    monkeypatch.setattr(zc, "_IDLE_TIMEOUT_S", 0.05)
+
+    out = await _run_read_turn_streamed(
+        [
+            (0.0, [
+                _accept(),
+                _delta("All done"),
+                # Valid-shaped block but name missing: accepted by the parser,
+                # suppressed by the sentinel guard — must not be counted.
+                {"type": "message_update", "id": "req-1",
+                 "assistantMessageEvent": {
+                     "type": "toolcall_start",
+                     "contentIndex": 0,
+                     "partial": {"content": [
+                         {"type": "toolCall", "id": "tc-noname",
+                          "arguments": {}, "partialArgs": "", "streamIndex": 0}
+                     ]},
+                 }},
+                {"type": "turn_end", "id": "req-1"},
+            ]),
+            (5.0, [_agent_end()]),
+        ],
+        timeout_s=2.0,
+    )
+    assert out == ["All done"]
+    assert not any(c.startswith("__TOOL__:") for c in out)
