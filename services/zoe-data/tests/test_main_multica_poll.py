@@ -22,7 +22,7 @@ class RecordingClient:
     async def get_issue(self, issue_id):
         return self.issues.get(issue_id, {})
 
-    async def list_issues(self, status=None, *, limit=None):
+    async def list_issues(self, status=None, *, limit=None, raise_on_error=False):
         self.list_calls.append({"status": status, "limit": limit})
         issues = list(self.issues.values()) + list(self.created)
         if status is not None:
@@ -59,6 +59,38 @@ def test_poll_dispatches_ready_work_only_when_runtime_pause_is_inactive():
     assert active_branch < backfill < paused_branch
 
 
+def test_poll_loop_distinguishes_multica_outage_from_empty_board():
+    """A Multica OUTAGE must not read as an empty board (which would silently suppress
+    dispatch/sync). The board-state reads opt into raise_on_error=True, and the loop
+    catches MulticaUnavailableError — logging a WARNING and skipping the cycle — BEFORE
+    the generic non-fatal handler and AFTER CancelledError. So an outage is observable
+    and the poll loop keeps running rather than crashing or treating it as "no work"."""
+    source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+    loop_start = source.index("async def _multica_poll_loop():")
+    loop_region = source[
+        loop_start : source.index('if os.environ.get("ZOE_MULTICA"', loop_start)
+    ]
+
+    # The four board-state reads opt in to surfacing outages through the resilient
+    # status reader: full outage raises, partial outage logs and continues.
+    assert "_read_multica_board_statuses(" in loop_region
+    assert '("todo", "in_progress", "in_review", "blocked")' in loop_region
+
+    # The typed-exception name is bound (defensively) for the handler.
+    assert "from multica_client import MulticaUnavailableError" in loop_region
+
+    # Handler ordering: CancelledError < MulticaUnavailableError < generic Exception.
+    cancelled = loop_region.index("except asyncio.CancelledError:")
+    outage = loop_region.index("except MulticaUnavailableError")
+    generic = loop_region.index("except Exception as _exc:")
+    assert cancelled < outage < generic
+
+    # The outage handler warns (observable) and skips the cycle — not a debug swallow.
+    handler_segment = loop_region[outage:generic]
+    assert "logger.warning(" in handler_segment
+    assert "skipping this cycle" in handler_segment
+
+
 def test_multica_poll_interval_throttles_when_paused():
     from main import _multica_poll_interval_s
 
@@ -82,17 +114,103 @@ def test_multica_poll_loop_routes_sleep_through_paused_interval_helper():
     assert "await asyncio.sleep(30)" not in source  # no hardcoded poll cadence
 
 
+@pytest.mark.asyncio
+async def test_read_multica_board_statuses_continues_after_partial_failure(caplog):
+    from main import _read_multica_board_statuses
+
+    class Client(RecordingClient):
+        async def list_issues(self, status=None, *, limit=None, raise_on_error=False):
+            self.list_calls.append({"status": status, "limit": limit, "raise_on_error": raise_on_error})
+            if status == "blocked":
+                raise RuntimeError("blocked read failed")
+            return [{"id": status, "status": status}]
+
+    client = Client()
+
+    statuses, failed = await _read_multica_board_statuses(
+        client,
+        ("todo", "in_progress", "in_review", "blocked"),
+    )
+
+    assert failed == {"blocked"}
+    assert statuses["todo"] == [{"id": "todo", "status": "todo"}]
+    assert statuses["in_progress"] == [{"id": "in_progress", "status": "in_progress"}]
+    assert statuses["in_review"] == [{"id": "in_review", "status": "in_review"}]
+    assert statuses["blocked"] == []
+    assert [call["status"] for call in client.list_calls] == [
+        "todo",
+        "in_progress",
+        "in_review",
+        "blocked",
+    ]
+    assert all(call["raise_on_error"] is True for call in client.list_calls)
+    assert "partial Multica status read failure for blocked" in caplog.text
+    assert "continuing with successfully-read statuses todo, in_progress, in_review" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_read_multica_board_statuses_total_outage_raises_and_is_observable(caplog):
+    from main import _read_multica_board_statuses
+
+    class MulticaUnavailableError(RuntimeError):
+        pass
+
+    class Client(RecordingClient):
+        async def list_issues(self, status=None, *, limit=None, raise_on_error=False):
+            self.list_calls.append({"status": status, "limit": limit, "raise_on_error": raise_on_error})
+            raise MulticaUnavailableError(f"{status} unavailable")
+
+    client = Client()
+
+    with pytest.raises(MulticaUnavailableError, match="todo unavailable"):
+        await _read_multica_board_statuses(
+            client,
+            ("todo", "in_progress", "in_review", "blocked"),
+        )
+
+    assert [call["status"] for call in client.list_calls] == [
+        "todo",
+        "in_progress",
+        "in_review",
+        "blocked",
+    ]
+    assert all(call["raise_on_error"] is True for call in client.list_calls)
+    assert "all Multica status reads failed" in caplog.text
+    assert "skipping this cycle" in caplog.text
+
+
+def test_poll_loop_does_not_treat_failed_status_reads_as_empty_lane():
+    source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+    status_read = source.index("_failed_board_statuses")
+    lane_guard = source.index("_can_start_new_multica_work = not _failed_board_statuses", status_read)
+    admission_gate = source.index(
+        "and _can_start_new_multica_work",
+        source.index("ZOE_MULTICA_AUTO_ADMIT", lane_guard),
+    )
+    todo_gate = source.index(
+        "if _wh_dispatched < _wh_limit and _can_start_new_multica_work:",
+        admission_gate,
+    )
+    tracked_sync = source.index(
+        "issues = _tracked_multica_engineering_issues(",
+        todo_gate,
+    )
+
+    assert status_read < lane_guard < admission_gate < todo_gate < tracked_sync
+
+
 def test_poll_dispatch_backfills_ready_blocked_pipeline_before_todo():
     source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
-    blocked_fetch = source.index('blocked_issues = await client.list_issues(status="blocked")')
-    blocked_loop = source.index('for _blocked in _blk_window:', blocked_fetch)
+    status_read = source.index("_read_multica_board_statuses(")
+    blocked_assign = source.index('blocked_issues = _board_statuses["blocked"]', status_read)
+    blocked_loop = source.index('for _blocked in _blk_window:', blocked_assign)
     todo_loop = source.index('for _todo in stale_todos or []:', blocked_loop)
     clear_blocker = source.index(
         'clear_blocker=True',
         source.index('elif (_candidate.get("status") or "") == "blocked":'),
     )
 
-    assert blocked_fetch < blocked_loop < todo_loop
+    assert status_read < blocked_assign < blocked_loop < todo_loop
     assert clear_blocker < blocked_loop
 
 

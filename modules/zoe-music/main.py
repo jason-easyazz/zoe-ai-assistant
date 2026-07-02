@@ -17,12 +17,13 @@ MCP tools exposed:
   music.now_playing — get current playback state
   music.search    — search MA library
 """
+import hmac
 import logging
 import os
 
 import httpx
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 
 logging.basicConfig(
@@ -37,6 +38,32 @@ MA_URL = os.environ.get("MUSIC_ASSISTANT_URL", "http://localhost:8095")
 MA_TOKEN = os.environ.get("MUSIC_ASSISTANT_TOKEN", "")
 HA_BRIDGE_URL = os.environ.get("ZOE_HA_BRIDGE_URL", "http://localhost:8007")
 DEFAULT_PLAYER = os.environ.get("ZOE_DEFAULT_MEDIA_PLAYER", "media_player.all")
+
+
+# ── Auth gate ────────────────────────────────────────────────────────────
+#
+# /tools/* drive Music Assistant / Home Assistant playback and must not be
+# callable by anything that can merely reach the port. We require a shared
+# service token: the legitimate in-cluster caller (zoe-core intent handlers,
+# see intents/handlers.py) sends the same ZOE_MUSIC_SERVICE_TOKEN value. The
+# module is also published on loopback only (docker-compose.module.yml), so
+# the token is defence-in-depth, not the sole control.
+
+def _expected_service_token() -> str:
+    # Read live (not cached at import) so deployments and tests can set it.
+    return os.environ.get("ZOE_MUSIC_SERVICE_TOKEN", "")
+
+
+async def require_service_token(
+    x_zoe_service_token: str = Header(default="", alias="X-Zoe-Service-Token"),
+) -> None:
+    """Reject any tool call lacking the shared Zoe service token."""
+    expected = _expected_service_token()
+    if not expected:
+        # Fail closed: refuse state-changing calls until a token is configured.
+        raise HTTPException(503, "music module locked: ZOE_MUSIC_SERVICE_TOKEN not set")
+    if not (x_zoe_service_token and hmac.compare_digest(x_zoe_service_token, expected)):
+        raise HTTPException(401, "missing or invalid X-Zoe-Service-Token")
 
 
 # ── MA v2 API helpers (POST /api with Bearer auth) ───────────────────────────
@@ -128,17 +155,25 @@ async def _ha_service(service: str, extra: dict | None = None):
 # ── Models ───────────────────────────────────────────────────────────────
 
 class PlayRequest(BaseModel):
-    query: str
-    player_id: Optional[str] = None
+    query: str = Field(min_length=1, max_length=500)
+    player_id: Optional[str] = Field(default=None, max_length=200)
+
+    @field_validator("query")
+    @classmethod
+    def _query_not_blank(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("query must not be empty")
+        return v
 
 
 class VolumeRequest(BaseModel):
-    level: int  # 0-100
-    player_id: Optional[str] = None
+    level: int = Field(ge=0, le=100)  # 0-100
+    player_id: Optional[str] = Field(default=None, max_length=200)
 
 
 class PlayerRequest(BaseModel):
-    player_id: Optional[str] = None
+    player_id: Optional[str] = Field(default=None, max_length=200)
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────
@@ -149,7 +184,7 @@ async def health():
     return {"status": "ok", "music_assistant": "online" if ma_ok else "offline"}
 
 
-@app.post("/tools/play")
+@app.post("/tools/play", dependencies=[Depends(require_service_token)])
 async def tool_play(req: PlayRequest):
     player_id = req.player_id or await _get_active_player()
     if await _ma_available() and player_id:
@@ -163,7 +198,7 @@ async def tool_play(req: PlayRequest):
     return {"ok": True, "fallback": "ha"}
 
 
-@app.post("/tools/pause")
+@app.post("/tools/pause", dependencies=[Depends(require_service_token)])
 async def tool_pause(req: PlayerRequest):
     pid = req.player_id or await _get_active_player()
     if await _ma_available() and pid:
@@ -173,7 +208,7 @@ async def tool_pause(req: PlayerRequest):
     return {"ok": True, "fallback": "ha"}
 
 
-@app.post("/tools/resume")
+@app.post("/tools/resume", dependencies=[Depends(require_service_token)])
 async def tool_resume(req: PlayerRequest):
     pid = req.player_id or await _get_active_player()
     if await _ma_available() and pid:
@@ -183,7 +218,7 @@ async def tool_resume(req: PlayerRequest):
     return {"ok": True, "fallback": "ha"}
 
 
-@app.post("/tools/skip")
+@app.post("/tools/skip", dependencies=[Depends(require_service_token)])
 async def tool_skip(req: PlayerRequest):
     pid = req.player_id or await _get_active_player()
     if await _ma_available() and pid:
@@ -193,7 +228,7 @@ async def tool_skip(req: PlayerRequest):
     return {"ok": True, "fallback": "ha"}
 
 
-@app.post("/tools/previous")
+@app.post("/tools/previous", dependencies=[Depends(require_service_token)])
 async def tool_previous(req: PlayerRequest):
     pid = req.player_id or await _get_active_player()
     if await _ma_available() and pid:
@@ -203,7 +238,7 @@ async def tool_previous(req: PlayerRequest):
     return {"ok": True, "fallback": "ha"}
 
 
-@app.post("/tools/volume")
+@app.post("/tools/volume", dependencies=[Depends(require_service_token)])
 async def tool_volume(req: VolumeRequest):
     level = max(0, min(100, req.level))
     pid = req.player_id or await _get_active_player()
@@ -214,7 +249,7 @@ async def tool_volume(req: VolumeRequest):
     return {"ok": True, "level": level, "fallback": "ha"}
 
 
-@app.get("/tools/now_playing")
+@app.get("/tools/now_playing", dependencies=[Depends(require_service_token)])
 async def tool_now_playing():
     if not await _ma_available():
         return {"ok": False, "reason": "music_assistant_offline"}
@@ -243,8 +278,14 @@ async def tool_now_playing():
         return {"ok": False, "reason": str(exc)}
 
 
-@app.get("/tools/search")
-async def tool_search(query: str, limit: int = 10):
+@app.get("/tools/search", dependencies=[Depends(require_service_token)])
+async def tool_search(
+    query: str = Query(min_length=1, max_length=500),
+    limit: int = Query(10, ge=1, le=50),
+):
+    query = query.strip()
+    if not query:
+        raise HTTPException(422, "query must not be empty")
     if not await _ma_available():
         raise HTTPException(503, "Music Assistant offline")
     return await _ma_cmd("music/search", {"search_query": query, "limit": limit})
@@ -252,4 +293,9 @@ async def tool_search(query: str, limit: int = 10):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8100)
+    # Default 0.0.0.0 so other containers on zoe-network can reach the module;
+    # host-level exposure is restricted to loopback by the compose port bind
+    # (docker-compose.module.yml). Override with ZOE_MUSIC_BIND_HOST=127.0.0.1
+    # for a bare-metal/localhost-only deployment.
+    bind_host = os.environ.get("ZOE_MUSIC_BIND_HOST", "0.0.0.0")
+    uvicorn.run(app, host=bind_host, port=8100)

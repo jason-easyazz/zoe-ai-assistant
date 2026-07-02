@@ -1,4 +1,4 @@
-"""Voice /transcribe endpoint: auth gate and whisper stub."""
+"""Voice /transcribe endpoint: auth gate and Moonshine STT contract."""
 
 import base64
 import asyncio
@@ -45,10 +45,7 @@ def test_transcribe_ok_with_mock_whisper(client, monkeypatch):
     async def _fake_run(path: str) -> str:
         return "hello world"
 
-    # Patch the waterfall entry point — the endpoint picks between
-    # whisper.cpp CLI and faster-whisper based on runtime config, and on CI
-    # neither may be available. Patching `_transcribe_audio` short-circuits
-    # both branches so the test is deterministic.
+    # Patch the Moonshine entry point so the test is deterministic and model-free.
     monkeypatch.setattr(voice_tts, "_transcribe_audio", _fake_run)
     wav = b"RIFF" + b"\x00" * 12  # minimal header-ish payload for temp file
     body = {"audio_base64": base64.b64encode(wav).decode(), "panel_id": "p1"}
@@ -83,10 +80,7 @@ def test_transcribe_writes_stt_audit_log(client, monkeypatch, tmp_path):
     # Moonshine is the only STT engine — the audit log reflects that, not whisper.
     assert record["model"] == "moonshine"
     assert record["audio_bytes"] == len(wav)
-    assert isinstance(record["vad_threshold"], float)
-    assert isinstance(record["min_speech_ms"], int)
-    assert isinstance(record["min_silence_ms"], int)
-    assert isinstance(record["speech_pad_ms"], int)
+    assert record["moonshine_arch"] == "MEDIUM_STREAMING"
 
 
 def test_transcribe_missing_body_400(client):
@@ -94,11 +88,11 @@ def test_transcribe_missing_body_400(client):
     assert r.status_code == 400
 
 
-def test_transcribe_503_when_whisper_missing(client, monkeypatch, tmp_path):
+def test_transcribe_503_when_moonshine_fails(client, monkeypatch, tmp_path):
     from routers import voice_tts
 
     async def _boom(path: str) -> str:
-        raise RuntimeError("whisper.cpp binary not found")
+        raise RuntimeError("moonshine unavailable")
 
     log_path = tmp_path / "voice_stt.jsonl"
     monkeypatch.setenv("ZOE_VOICE_STT_LOG", str(log_path))
@@ -113,216 +107,7 @@ def test_transcribe_503_when_whisper_missing(client, monkeypatch, tmp_path):
     assert record["route"] == "transcribe"
     assert record["audio_bytes"] == len(wav)
     assert record["transcript"] == ""
-    assert "whisper.cpp binary not found" in record["error"]
-
-
-def test_faster_whisper_subprocess_signal_does_not_exit_worker(monkeypatch):
-    from routers import voice_tts
-
-    class _Proc:
-        returncode = -11
-
-        async def communicate(self):
-            return b"", b"native crash"
-
-    async def _fake_exec(*args, **kwargs):
-        return _Proc()
-
-    monkeypatch.setattr(voice_tts.asyncio, "create_subprocess_exec", _fake_exec)
-    monkeypatch.setenv("ZOE_WHISPER_TIMEOUT_S", "5")
-
-    with pytest.raises(RuntimeError, match="signal 11"):
-        asyncio.run(voice_tts._run_faster_whisper_subprocess("/tmp/example.wav"))
-
-
-def test_faster_whisper_defaults_to_persistent_worker(monkeypatch):
-    from routers import voice_tts
-
-    async def _fake_subprocess(path: str) -> str:
-        return f"child:{path}"
-
-    async def _fake_worker(path: str) -> str:
-        return f"persistent:{path}"
-
-    async def _fake_in_process(path: str) -> str:
-        return f"in-process:{path}"
-
-    monkeypatch.delenv("ZOE_WHISPER_IN_PROCESS", raising=False)
-    monkeypatch.delenv("ZOE_WHISPER_PERSISTENT_WORKER", raising=False)
-    monkeypatch.setattr(voice_tts, "_run_faster_whisper_subprocess", _fake_subprocess)
-    monkeypatch.setattr(voice_tts, "_run_faster_whisper_worker", _fake_worker)
-    monkeypatch.setattr(voice_tts, "_run_faster_whisper_in_process", _fake_in_process)
-
-    assert asyncio.run(voice_tts._run_faster_whisper("/tmp/audio.wav")) == "persistent:/tmp/audio.wav"
-
-
-def test_faster_whisper_subprocess_fallback_opt_out(monkeypatch):
-    from routers import voice_tts
-
-    async def _fake_subprocess(path: str) -> str:
-        return f"child:{path}"
-
-    async def _fake_worker(path: str) -> str:
-        return f"persistent:{path}"
-
-    async def _fake_in_process(path: str) -> str:
-        return f"in-process:{path}"
-
-    monkeypatch.delenv("ZOE_WHISPER_IN_PROCESS", raising=False)
-    monkeypatch.setenv("ZOE_WHISPER_PERSISTENT_WORKER", "false")
-    monkeypatch.setattr(voice_tts, "_run_faster_whisper_subprocess", _fake_subprocess)
-    monkeypatch.setattr(voice_tts, "_run_faster_whisper_worker", _fake_worker)
-    monkeypatch.setattr(voice_tts, "_run_faster_whisper_in_process", _fake_in_process)
-
-    assert asyncio.run(voice_tts._run_faster_whisper("/tmp/audio.wav")) == "child:/tmp/audio.wav"
-
-
-def test_faster_whisper_in_process_opt_in(monkeypatch):
-    from routers import voice_tts
-
-    async def _fake_subprocess(path: str) -> str:
-        return f"child:{path}"
-
-    async def _fake_worker(path: str) -> str:
-        return f"persistent:{path}"
-
-    async def _fake_in_process(path: str) -> str:
-        return f"in-process:{path}"
-
-    monkeypatch.setenv("ZOE_WHISPER_IN_PROCESS", "true")
-    monkeypatch.setattr(voice_tts, "_run_faster_whisper_subprocess", _fake_subprocess)
-    monkeypatch.setattr(voice_tts, "_run_faster_whisper_worker", _fake_worker)
-    monkeypatch.setattr(voice_tts, "_run_faster_whisper_in_process", _fake_in_process)
-
-    assert asyncio.run(voice_tts._run_faster_whisper("/tmp/audio.wav")) == "in-process:/tmp/audio.wav"
-
-
-def test_warm_faster_whisper_worker_primes_persistent_worker(monkeypatch):
-    from routers import voice_tts
-
-    calls = []
-
-    async def _fake_worker(path: str) -> str:
-        calls.append(Path(path).exists())
-        return ""
-
-    monkeypatch.delenv("ZOE_WHISPER_WARMUP", raising=False)
-    monkeypatch.delenv("ZOE_WHISPER_IN_PROCESS", raising=False)
-    monkeypatch.delenv("ZOE_WHISPER_PERSISTENT_WORKER", raising=False)
-    monkeypatch.setenv("ZOE_WHISPER_WARMUP_TIMEOUT_S", "2")
-    monkeypatch.setattr(voice_tts, "_run_faster_whisper_worker", _fake_worker)
-
-    assert asyncio.run(voice_tts.warm_faster_whisper_worker()) is True
-    assert calls == [True]
-
-
-def test_warm_faster_whisper_worker_respects_opt_out(monkeypatch):
-    from routers import voice_tts
-
-    async def _unexpected_worker(path: str) -> str:
-        raise AssertionError("worker should not be called")
-
-    monkeypatch.setenv("ZOE_WHISPER_WARMUP", "false")
-    monkeypatch.setattr(voice_tts, "_run_faster_whisper_worker", _unexpected_worker)
-
-    assert asyncio.run(voice_tts.warm_faster_whisper_worker()) is False
-
-
-def test_warm_faster_whisper_worker_resets_worker_after_timeout(monkeypatch):
-    from routers import voice_tts
-
-    stopped = []
-
-    class _Worker:
-        async def stop(self):
-            stopped.append(True)
-
-    async def _timeout_worker(path: str) -> str:
-        raise asyncio.TimeoutError("warmup timed out")
-
-    monkeypatch.delenv("ZOE_WHISPER_WARMUP", raising=False)
-    monkeypatch.delenv("ZOE_WHISPER_IN_PROCESS", raising=False)
-    monkeypatch.delenv("ZOE_WHISPER_PERSISTENT_WORKER", raising=False)
-    monkeypatch.setattr(voice_tts, "_run_faster_whisper_worker", _timeout_worker)
-    monkeypatch.setattr(voice_tts, "_faster_whisper_worker", _Worker())
-
-    assert asyncio.run(voice_tts.warm_faster_whisper_worker()) is False
-    assert stopped == [True]
-    assert voice_tts._faster_whisper_worker is None
-
-
-@pytest.mark.parametrize(
-    "env_name",
-    ["ZOE_WHISPER_IN_PROCESS", "ZOE_WHISPER_PERSISTENT_WORKER"],
-)
-def test_warm_faster_whisper_worker_skips_when_persistent_path_inactive(monkeypatch, env_name):
-    from routers import voice_tts
-
-    async def _unexpected_worker(path: str) -> str:
-        raise AssertionError("worker should not be called")
-
-    monkeypatch.delenv("ZOE_WHISPER_WARMUP", raising=False)
-    monkeypatch.delenv("ZOE_WHISPER_IN_PROCESS", raising=False)
-    monkeypatch.delenv("ZOE_WHISPER_PERSISTENT_WORKER", raising=False)
-    monkeypatch.setattr(voice_tts, "_run_faster_whisper_worker", _unexpected_worker)
-    if env_name == "ZOE_WHISPER_IN_PROCESS":
-        monkeypatch.setenv(env_name, "true")
-    else:
-        monkeypatch.setenv(env_name, "false")
-
-    assert asyncio.run(voice_tts.warm_faster_whisper_worker()) is False
-
-
-def test_faster_whisper_worker_reuses_process(monkeypatch):
-    from routers import voice_tts
-
-    worker = voice_tts._FasterWhisperWorker()
-    starts = []
-
-    class _Stream:
-        def __init__(self, lines=None):
-            self.lines = list(lines or [])
-
-        async def readline(self):
-            return self.lines.pop(0)
-
-    class _Stdin:
-        def __init__(self):
-            self.writes = []
-
-        def write(self, data):
-            self.writes.append(data)
-
-        async def drain(self):
-            return None
-
-    class _Proc:
-        returncode = None
-
-        def __init__(self):
-            self.stdin = _Stdin()
-            self.stdout = _Stream([
-                b'{"ready": true}\n',
-                b'{"text": "first"}\n',
-                b'{"text": "second"}\n',
-            ])
-
-        def terminate(self):
-            self.returncode = -15
-
-        async def wait(self):
-            return self.returncode
-
-    async def _fake_exec(*_args, **_kwargs):
-        starts.append(1)
-        return _Proc()
-
-    monkeypatch.setattr(voice_tts.asyncio, "create_subprocess_exec", _fake_exec)
-    monkeypatch.setenv("ZOE_WHISPER_TIMEOUT_S", "2")
-
-    assert asyncio.run(worker.transcribe("/tmp/one.wav")) == "first"
-    assert asyncio.run(worker.transcribe("/tmp/two.wav")) == "second"
-    assert len(starts) == 1
+    assert "moonshine unavailable" in record["error"]
 
 
 @pytest.mark.parametrize(
@@ -506,12 +291,7 @@ def test_transcribe_audio_impl_is_moonshine_only(monkeypatch):
     async def _moon(path: str) -> str:
         return "moonshine result"
 
-    def _explode(*a, **k):  # any whisper call here is a regression
-        raise AssertionError("whisper must not run on the live STT path")
-
     monkeypatch.setattr(voice_tts, "_run_moonshine", _moon)
-    monkeypatch.setattr(voice_tts, "_run_faster_whisper", _explode)
-    monkeypatch.setattr(voice_tts, "_run_whisper_cpp", _explode)
 
     assert asyncio.run(voice_tts._transcribe_audio_impl("/tmp/x.wav")) == "moonshine result"
 
@@ -523,12 +303,7 @@ def test_transcribe_audio_impl_empty_returns_empty_no_whisper(monkeypatch):
     async def _moon_empty(path: str) -> str:
         return ""
 
-    def _explode(*a, **k):
-        raise AssertionError("whisper must not run when Moonshine returns empty")
-
     monkeypatch.setattr(voice_tts, "_run_moonshine", _moon_empty)
-    monkeypatch.setattr(voice_tts, "_run_faster_whisper", _explode)
-    monkeypatch.setattr(voice_tts, "_run_whisper_cpp", _explode)
 
     assert asyncio.run(voice_tts._transcribe_audio_impl("/tmp/x.wav")) == ""
 
@@ -541,11 +316,7 @@ def test_transcribe_audio_impl_moonshine_error_raises(monkeypatch):
     async def _moon_boom(path: str) -> str:
         raise RuntimeError("moonshine boom")
 
-    def _explode(*a, **k):
-        raise AssertionError("whisper must not run on Moonshine error")
-
     monkeypatch.setattr(voice_tts, "_run_moonshine", _moon_boom)
-    monkeypatch.setattr(voice_tts, "_run_faster_whisper", _explode)
 
     raised = False
     try:
@@ -663,10 +434,6 @@ def test_maybe_capture_stt_saves_corpus_without_whisper_ab(monkeypatch, tmp_path
     monkeypatch.setenv("ZOE_VOICE_SAVE_AUDIO", "1")
     monkeypatch.setenv("ZOE_VOICE_SAMPLE_DIR", str(sample_dir))
 
-    def _explode(*a, **k):
-        raise AssertionError("no whisper A/B on a live capture")
-
-    monkeypatch.setattr(voice_tts, "_run_faster_whisper", _explode)
     spawned = []
     monkeypatch.setattr(voice_tts, "_spawn_bg", lambda coro: spawned.append(coro))
 

@@ -14,6 +14,8 @@ from core.auth import auth_manager
 from core.passcode import passcode_manager
 from core.sessions import session_manager
 from core.rbac import rbac_manager
+from core.security import rate_limiter
+from core.account_setup import setup_token_manager, DEFAULT_TOKEN_TTL_MINUTES
 from models.database import auth_db
 from api.dependencies import require_permission, require_admin, get_current_session
 
@@ -292,6 +294,20 @@ async def reset_user_password(
         )
 
         if success:
+            try:
+                invalidated = session_manager.invalidate_user_sessions(user_id)
+                logger.info(
+                    "Invalidated %s sessions after admin password reset for user %s by %s",
+                    invalidated,
+                    user_id,
+                    current_session.user_id
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to invalidate sessions after admin password reset for user %s by %s",
+                    user_id,
+                    current_session.user_id
+                )
             return {
                 "message": message,
                 "temporary_password": temp_password,
@@ -305,6 +321,61 @@ async def reset_user_password(
     except Exception as e:
         logger.error(f"Password reset error: {e}")
         raise HTTPException(status_code=500, detail="Failed to reset password")
+
+@router.post("/users/{user_id}/setup-token")
+async def issue_setup_token(
+    user_id: str,
+    current_session = Depends(require_permission("users.create"))
+):
+    """
+    Mint a one-time first-password setup token for a pending user (admin only).
+
+    The plaintext token is returned once; hand it to the user, who supplies it as
+    the ``setup_token`` field of ``POST /api/auth/password/setup``. Only valid for
+    accounts that have not set a password yet (NULL / 'SETUP_REQUIRED').
+
+    Args:
+        user_id: User ID to mint a setup token for
+        current_session: Current admin session
+
+    Returns:
+        The one-time token and its TTL in minutes
+    """
+    try:
+        with auth_db.get_connection() as conn:
+            row = conn.execute(
+                "SELECT username, password_hash FROM auth_users WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        password_hash = row["password_hash"]
+        if password_hash is not None and password_hash != "SETUP_REQUIRED":
+            raise HTTPException(
+                status_code=400,
+                detail="User already has a password set; setup token not applicable.",
+            )
+
+        token = setup_token_manager.issue_token(user_id)
+        logger.info(
+            "Admin %s minted a setup token for user %s",
+            current_session.user_id, user_id,
+        )
+        return {
+            "user_id": user_id,
+            "setup_token": token,
+            "expires_in_minutes": DEFAULT_TOKEN_TTL_MINUTES,
+            "note": "One-time token. Provide it as `setup_token` to POST /api/auth/password/setup.",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Issue setup token error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to issue setup token")
+
 
 @router.post("/users/{user_id}/unlock")
 async def unlock_user_account(
@@ -333,6 +404,64 @@ async def unlock_user_account(
     except Exception as e:
         logger.error(f"Account unlock error: {e}")
         raise HTTPException(status_code=500, detail="Failed to unlock account")
+
+
+class RateLimitResetRequest(BaseModel):
+    """Admin throttle-reset request. Any subset of filters may be provided."""
+    action: Optional[str] = Field(None, description="login | passcode | password_setup")
+    user_id: Optional[str] = Field(None, description="Clear buckets for this username/user_id")
+    ip_address: Optional[str] = Field(None, description="Clear buckets for this IP")
+
+
+@router.post("/rate-limit/reset")
+async def reset_rate_limit(
+    request: RateLimitResetRequest,
+    current_session = Depends(require_permission("users.unlock"))
+):
+    """
+    Clear brute-force throttle buckets for a user and/or IP (admin recovery).
+
+    Use this to immediately un-throttle a legitimate user or shared IP that got
+    caught by progressive backoff or a pair hard-block. With no filters it clears
+    the entire throttle. When a user_id is given it ALSO clears that user's DB
+    advisory counters (auth_users.failed_login_attempts/locked_until and
+    passcodes.failed_attempts) so recovery is unified. Requires the same
+    permission as account unlock.
+
+    Returns:
+        Number of throttle buckets/blocks cleared and whether DB counters were cleared
+    """
+    try:
+        cleared = rate_limiter.reset_for(
+            action=request.action,
+            ip_address=request.ip_address,
+            user_id=request.user_id,
+        )
+
+        db_cleared = False
+        if request.user_id:
+            with auth_db.get_connection() as conn:
+                conn.execute(
+                    "UPDATE auth_users SET failed_login_attempts = 0, locked_until = NULL WHERE user_id = ?",
+                    (request.user_id,),
+                )
+                conn.execute(
+                    "UPDATE passcodes SET failed_attempts = 0 WHERE user_id = ?",
+                    (request.user_id,),
+                )
+            db_cleared = True
+
+        logger.info(
+            "Admin %s reset rate-limit (action=%s ip=%s user=%s): %d buckets, db_cleared=%s",
+            current_session.user_id, request.action, request.ip_address,
+            request.user_id, cleared, db_cleared,
+        )
+        return {"cleared": cleared, "db_lockout_cleared": db_cleared}
+
+    except Exception as e:
+        logger.error(f"Rate-limit reset error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to reset rate limit")
+
 
 class PasscodeSetRequest(BaseModel):
     """Admin passcode set request"""

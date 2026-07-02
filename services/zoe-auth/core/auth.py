@@ -171,23 +171,19 @@ class AuthManager:
                         account_verified=bool(is_verified)
                     )
 
-                if locked_until_dt:
-                    if datetime.now() < locked_until_dt:
-                        self._log_auth_attempt(user_id, "password", "failure",
-                                             "account_locked", ip_address)
-                        return AuthValidationResult(
-                            success=False,
-                            error_message="Account is locked",
-                            locked_until=locked_until_dt,
-                            account_verified=bool(is_verified)
-                        )
-                    failed_attempts = 0
-
-                # Verify password
+                # Verify the password BEFORE any user-global lockout check. A
+                # CORRECT credential must never be denied because of failed
+                # attempts the user may not have made — a user-global
+                # locked_until is exactly the victim-lockout vector (anyone can
+                # spam a username from many IPs to lock the real user out).
+                # Brute force is throttled per-IP / per-(IP,user) by the shared
+                # RateLimiter at the API layer; failed_login_attempts /
+                # locked_until are kept for audit + admin visibility only and
+                # never deny a valid credential.
                 if password_hash and bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8')):
-                    # Success - update last login
+                    # Success - update last login and clear the advisory counters.
                     conn.execute("""
-                        UPDATE auth_users 
+                        UPDATE auth_users
                         SET last_login = ?, failed_login_attempts = 0, locked_until = NULL
                         WHERE user_id = ?
                     """, (datetime.now().isoformat(), user_id))
@@ -195,42 +191,46 @@ class AuthManager:
                     # Check if password change is required
                     requires_change = self._password_requires_change(created_at, updated_at)
 
-                    self._log_auth_attempt(user_id, "password", "success", 
+                    self._log_auth_attempt(user_id, "password", "success",
                                          "valid_password", ip_address)
-                    
+
                     return AuthValidationResult(
                         success=True,
                         user_id=user_id,
                         requires_password_change=requires_change,
                         account_verified=bool(is_verified)
                     )
-                else:
-                    # Failed password
-                    failed_attempts += 1
-                    lock_until = None
-                    if failed_attempts >= self.max_failed_password_attempts:
-                        lock_until = datetime.now() + self.lockout_duration
 
-                    conn.execute("""
-                        UPDATE auth_users
-                        SET failed_login_attempts = ?, locked_until = ?, updated_at = ?
-                        WHERE user_id = ?
-                    """, (
-                        failed_attempts,
-                        lock_until.isoformat() if lock_until else None,
-                        datetime.now().isoformat(),
-                        user_id,
-                    ))
+                # Wrong password: track the failed attempt for audit/metrics. An
+                # expired advisory window restarts the count. This NEVER denies a
+                # valid credential (that path returned above).
+                if locked_until_dt and datetime.now() >= locked_until_dt:
+                    failed_attempts = 0
+                failed_attempts += 1
+                lock_until = None
+                if failed_attempts >= self.max_failed_password_attempts:
+                    lock_until = datetime.now() + self.lockout_duration
 
-                    self._log_auth_attempt(user_id, "password", "failure", 
-                                         "invalid_password", ip_address)
-                    
-                    return AuthValidationResult(
-                            success=False,
-                            error_message="Invalid password",
-                            locked_until=lock_until,
-                            account_verified=bool(is_verified)
-                        )
+                conn.execute("""
+                    UPDATE auth_users
+                    SET failed_login_attempts = ?, locked_until = ?, updated_at = ?
+                    WHERE user_id = ?
+                """, (
+                    failed_attempts,
+                    lock_until.isoformat() if lock_until else None,
+                    datetime.now().isoformat(),
+                    user_id,
+                ))
+
+                self._log_auth_attempt(user_id, "password", "failure",
+                                     "invalid_password", ip_address)
+
+                return AuthValidationResult(
+                    success=False,
+                    error_message="Invalid password",
+                    locked_until=lock_until,
+                    account_verified=bool(is_verified)
+                )
 
         except Exception as e:
             logger.error(f"Password verification error for user {user_id}: {e}")
@@ -646,19 +646,20 @@ class AuthManager:
     def _log_auth_attempt(self, user_id: str, method: str, result: str, reason: str, ip_address: Optional[str]):
         """Log authentication attempt - non-blocking, errors suppressed"""
         try:
-            conn = auth_db.get_connection()
-            conn.execute("""
-                INSERT INTO audit_logs 
-                (log_id, user_id, action, resource, result, ip_address, details, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                f"auth_{secrets.token_hex(8)}", user_id, f"auth_{method}",
-                "authentication", result, ip_address,
-                f'{{"reason": "{reason}", "method": "{method}"}}',
-                datetime.now().isoformat()
-            ))
-            conn.commit()
-            conn.close()
+            # Use the context manager so the pooled connection is always
+            # returned (commit on success, rollback on error) — a bare
+            # get_connection()/close() leaks the connection if execute() raises.
+            with auth_db.get_connection() as conn:
+                conn.execute("""
+                    INSERT INTO audit_logs
+                    (log_id, user_id, action, resource, result, ip_address, details, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    f"auth_{secrets.token_hex(8)}", user_id, f"auth_{method}",
+                    "authentication", result, ip_address,
+                    f'{{"reason": "{reason}", "method": "{method}"}}',
+                    datetime.now().isoformat()
+                ))
         except Exception as e:
             # Non-blocking - just log and continue
             logger.debug(f"Audit log failed (non-critical): {e}")

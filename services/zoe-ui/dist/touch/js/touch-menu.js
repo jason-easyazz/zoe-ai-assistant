@@ -591,7 +591,7 @@ html.dark-mode .ztm-ctx-item { color: rgba(255,255,255,0.88); border-bottom-colo
             .then(() => {})
             .catch(() => {
                 if (window.zoePushWs && window.zoePushWs.readyState === 1) {
-                    const panelId = localStorage.getItem('zoe_touch_panel_id') || '';
+                    const panelId = localStorage.getItem('zoe_panel_id') || localStorage.getItem('zoe_touch_panel_id') || '';
                     window.zoePushWs.send(JSON.stringify({ type: 'voice:orb_tap', data: { panel_id: panelId } }));
                 }
                 document.dispatchEvent(new CustomEvent('zoe:voice:wake'));
