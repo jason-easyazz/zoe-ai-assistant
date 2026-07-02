@@ -4,8 +4,9 @@ This directory stores version-controlled templates for the Zoe touchscreen kiosk
 
 ## Live panel state — current source of truth (verified 2026-06-26)
 
-`config.json`, `start-kiosk.sh`, and `systemd/zoe-kiosk.service` here are now a **byte-exact
-mirror of what the `zoe-touch` panel (192.168.1.61) actually runs.** How it boots today:
+`config.json` here is a **byte-exact mirror of what the `zoe-touch` panel (192.168.1.61)
+actually runs.** `start-kiosk.sh` and `systemd/zoe-kiosk.service` are the same live capture
+**plus review hardening deltas not yet deployed to the panel** (see below). How it boots today:
 
 - systemd **`zoe-kiosk.service`** runs as user **`pi`** (`/etc/systemd/system/zoe-kiosk.service`)
   → execs `/opt/TouchKio/start-kiosk.sh` → launches **`chromium-browser --kiosk`**.
@@ -15,6 +16,27 @@ mirror of what the `zoe-touch` panel (192.168.1.61) actually runs.** How it boot
   microphone — in `--kiosk` mode Chromium can't show the mic prompt, so `getUserMedia` used
   to hang and the voice UI fell back to typing. Security note: the kiosk auto-grants mic to
   whatever it loads — acceptable for a single-purpose panel meant to listen.
+
+### Tracked hardening deltas vs the live capture (deploy to the panel to reconcile)
+
+The launcher/unit tracked here intentionally improve on the 2026-06-26 capture; the live
+panel still runs the pre-hardening versions until these are deployed:
+
+- **DevTools loopback-only** — live panel exposes `--remote-debugging-port=9222` on all
+  interfaces with `--remote-allow-origins=*` (any LAN device can drive the kiosk browser,
+  which auto-grants the mic). Tracked launcher binds `127.0.0.1` and drops the allow-origins
+  flag; debug from the host via `ssh -L 9222:127.0.0.1:9222`.
+- **Local fallback URL** — live panel falls back to `zoe.the411.life/touch/dashboard.html`
+  (Cloudflare-blocked from the panel + retired surface); tracked launcher falls back to the
+  local LAN Skybridge URL from `config.json`.
+- **Chromium binary resolution** — `chromium-browser` then `chromium`, loud failure if absent.
+- **Network gating** — unit waits for `network-online.target`; the launcher pings the host
+  from the configured URL and exits non-zero on total failure so systemd retries instead of
+  booting into a connection-error page.
+- **Provision-mode recovery** — panels installed via the provisioning flow re-enter the local
+  provisioning UI when `.provisioned`/token are missing. Gated on `provision-server.py`
+  existing on the device, so the live panel (which does not use the provisioning flow) still
+  boots straight into the kiosk.
 
 > ⚠️ **Divergence to reconcile separately.** The deploy instructions below (Option A/B,
 > `--user zoe`, `~/.config/autostart/*.desktop`) and the provisioning helpers

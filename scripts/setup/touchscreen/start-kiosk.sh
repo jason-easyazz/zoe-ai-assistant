@@ -6,6 +6,7 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 
 CONFIG="/opt/TouchKio/config.json"
 PROVISIONED="/opt/TouchKio/.provisioned"
+PROVISION_SERVER="/opt/TouchKio/provision-server.py"
 KIOSK_HOME="${HOME:-/home/pi}"
 # Fallback matches the tracked config.json template: the local LAN Skybridge
 # surface. Never fall back to zoe.the411.life (Cloudflare-blocked from the
@@ -65,10 +66,14 @@ COMMON_FLAGS=(
 
 # Unprovisioned or reset panel: open the local provisioning UI instead of the
 # kiosk URL so the panel can re-enter the provision flow from the device.
-if [ ! -f "${PROVISIONED}" ] || [ -z "${TOKEN}" ]; then
+# Only when the provision server is actually installed — the live zoe-touch
+# panel runs WITHOUT the provisioning flow (no provision-server.py, no token
+# in config.json) and must boot straight into the kiosk, not a dead
+# localhost:8888 page.
+if [ -f "${PROVISION_SERVER}" ] && { [ ! -f "${PROVISIONED}" ] || [ -z "${TOKEN}" ]; }; then
   echo "[start-kiosk] .provisioned missing or token empty — entering provision mode"
   mkdir -p "${KIOSK_HOME}/.config/chromium-provision"
-  python3 /opt/TouchKio/provision-server.py --mode provision &
+  python3 "${PROVISION_SERVER}" --mode provision &
   sleep 2
   exec "${CHROMIUM_BIN}" \
     "${COMMON_FLAGS[@]}" \
