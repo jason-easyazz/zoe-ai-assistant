@@ -1,5 +1,7 @@
 # Zoe Hindsight Bake-Off
 
+> **Status (2026-07-03): bake-off concluded — harness retired by removal.** The probe/bake-off modules, maintenance drivers, and tests listed below were removed from the tree per the retire-by-removing doctrine (docs/CANONICAL.md); git history keeps the code. File paths and commands in this document are a historical record of how the evidence was produced and are no longer runnable.
+
 ## Purpose
 
 Hindsight remains an offline-only candidate for Zoe reflective memory: lessons, recurring failures, fixes, and experience summaries. It is not a replacement for MemPalace and it is not in the chat hot path.
