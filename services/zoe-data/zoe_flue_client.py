@@ -34,6 +34,7 @@ import json
 import logging
 import os
 from typing import Any, AsyncIterator
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,10 @@ def _timeout_s() -> float:
 
 def _endpoint(session_id: str) -> str:
     sid = (session_id or "default").strip() or "default"
-    return f"{_base_url()}/agents/zoe/{sid}?wait=result"
+    # URL-encode the sid as a single path segment: a raw session id containing
+    # '/', '?', '#', or '..' would otherwise change the route (path traversal /
+    # query injection) instead of addressing that literal Flue session.
+    return f"{_base_url()}/agents/zoe/{quote(sid, safe='')}?wait=result"
 
 
 def _headers() -> dict[str, str]:
@@ -112,13 +116,22 @@ async def run_flue_brain_streaming(
     one delta. Errors/timeouts are caught and yielded as a short error string —
     never raised — so a backend hiccup can't crash a turn.
 
-    Extra kwargs (history, db_memory_context, portrait, voice_mode, callbacks,
-    etc.) are accepted for run_zoe_core_streaming signature compatibility; the
-    sidecar owns its own persona/memory/tools, so they're intentionally ignored
-    here.
+    The acting ``user_id`` is forwarded to the sidecar so it can bind per-request
+    identity (whose memory/tools to touch) instead of falling back to a single
+    process-wide ``ZOE_BRAIN_USER_ID``. Extra kwargs (history, db_memory_context,
+    portrait, voice_mode, callbacks, etc.) are accepted for
+    run_zoe_core_streaming signature compatibility; the sidecar owns its own
+    persona/memory/tools, so they're intentionally ignored here.
     """
     url = _endpoint(session_id)
-    payload = json.dumps({"message": message}).encode()
+    body_obj: dict[str, str] = {"message": message}
+    # Forward the caller's identity when known so the sidecar isn't pinned to one
+    # env-configured user. Omit empty/guest ids so the sidecar's own fail-closed
+    # identity handling applies rather than sending a blank user.
+    uid = (user_id or "").strip()
+    if uid:
+        body_obj["user_id"] = uid
+    payload = json.dumps(body_obj).encode()
     try:
         import httpx
 
