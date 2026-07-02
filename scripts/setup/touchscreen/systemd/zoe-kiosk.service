@@ -1,7 +1,7 @@
 [Unit]
 Description=Zoe Kiosk Display
-After=graphical.target
-Wants=graphical.target
+After=graphical.target network-online.target
+Wants=graphical.target network-online.target
 
 [Service]
 Type=simple

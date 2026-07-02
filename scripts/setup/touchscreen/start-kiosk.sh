@@ -2,34 +2,101 @@
 set -e
 
 export DISPLAY=:0
-export XDG_RUNTIME_DIR=/run/user/1000
-mkdir -p /home/pi/.config/chromium-kiosk
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 
 CONFIG="/opt/TouchKio/config.json"
-DEFAULT_URL="https://zoe.the411.life/touch/dashboard.html"
-ZOE_URL=$(python3 - <<'PYC'
+PROVISIONED="/opt/TouchKio/.provisioned"
+KIOSK_HOME="${HOME:-/home/pi}"
+# Fallback matches the tracked config.json template: the local LAN Skybridge
+# surface. Never fall back to zoe.the411.life (Cloudflare-blocked from the
+# panel) or the retired dashboard.html.
+DEFAULT_URL="https://192.168.1.218/touch/skybridge.html?panel_id=zoe-touch-pi&kiosk=1"
+
+# Resolve the Chromium binary — image-dependent name. Fail loudly so systemd
+# journal shows why the panel is black instead of silently looping.
+CHROMIUM_BIN="$(command -v chromium-browser || command -v chromium || true)"
+if [ -z "${CHROMIUM_BIN}" ]; then
+  echo "ERROR: no Chromium binary found (tried chromium-browser, chromium)" >&2
+  exit 1
+fi
+
+read_config_key() {
+  KEY="$1" CONFIG_PATH="${CONFIG}" python3 - <<'PYC'
 import json
+import os
+
 try:
-    d=json.load(open('/opt/TouchKio/config.json'))
-    print(d.get('url') or 'https://zoe.the411.life/touch/dashboard.html')
+    with open(os.environ["CONFIG_PATH"]) as fh:
+        data = json.load(fh)
+    print(data.get(os.environ["KEY"]) or "")
 except Exception:
-    print('https://zoe.the411.life/touch/dashboard.html')
+    print("")
 PYC
-)
+}
 
-echo "Starting Zoe Kiosk: $ZOE_URL"
-
-# Wait for network
-for i in $(seq 1 30); do
-  ping -c1 -W1 192.168.1.218 >/dev/null 2>&1 && break
-  sleep 1
-done
+ZOE_URL="$(read_config_key url)"
+ZOE_URL="${ZOE_URL:-${DEFAULT_URL}}"
+TOKEN="$(read_config_key token)"
 
 # Wait for X server
 for i in $(seq 1 30); do
   xset q >/dev/null 2>&1 && break
   sleep 1
 done
+
+# DevTools stays loopback-only: debug from the host via an SSH tunnel
+# (ssh -L 9222:127.0.0.1:9222). Never expose it to the LAN.
+COMMON_FLAGS=(
+  --remote-debugging-port=9222
+  --remote-debugging-address=127.0.0.1
+  --kiosk
+  --no-first-run
+  --disable-infobars
+  --disable-session-crashed-bubble
+  --disable-restore-session-state
+  --noerrdialogs
+  --disable-features=TranslateUI,OptimizationHints,AutofillServerCommunication
+  --touch-events=enabled
+  --start-maximized
+  --ignore-certificate-errors
+  --disable-extensions
+  --no-sandbox
+)
+
+# Unprovisioned or reset panel: open the local provisioning UI instead of the
+# kiosk URL so the panel can re-enter the provision flow from the device.
+if [ ! -f "${PROVISIONED}" ] || [ -z "${TOKEN}" ]; then
+  echo "[start-kiosk] .provisioned missing or token empty — entering provision mode"
+  mkdir -p "${KIOSK_HOME}/.config/chromium-provision"
+  python3 /opt/TouchKio/provision-server.py --mode provision &
+  sleep 2
+  exec "${CHROMIUM_BIN}" \
+    "${COMMON_FLAGS[@]}" \
+    --user-data-dir="${KIOSK_HOME}/.config/chromium-provision" \
+    "http://localhost:8888/"
+fi
+
+echo "Starting Zoe Kiosk: ${ZOE_URL}"
+mkdir -p "${KIOSK_HOME}/.config/chromium-kiosk"
+
+# Gate on the configured Zoe host being reachable. On total failure exit
+# non-zero so systemd (Restart=always) retries, instead of booting Chromium
+# into a connection-error page it never recovers from.
+ZOE_HOST="$(python3 -c "import sys, urllib.parse; print(urllib.parse.urlsplit(sys.argv[1]).hostname or '')" "${ZOE_URL}")"
+if [ -n "${ZOE_HOST}" ]; then
+  NET_OK=0
+  for i in $(seq 1 60); do
+    if ping -c1 -W1 "${ZOE_HOST}" >/dev/null 2>&1; then
+      NET_OK=1
+      break
+    fi
+    sleep 1
+  done
+  if [ "${NET_OK}" != "1" ]; then
+    echo "ERROR: Zoe host ${ZOE_HOST} unreachable after 60 attempts; exiting for systemd retry" >&2
+    exit 1
+  fi
+fi
 
 # Display power settings
 xset s off || true
@@ -47,24 +114,9 @@ unclutter -idle 0.2 -root &
 
 sleep 2
 
-exec chromium-browser \
-  --remote-debugging-port=9222 \
-  --remote-debugging-address=0.0.0.0 \
-  --remote-allow-origins=* \
-  --kiosk \
-  --no-first-run \
-  --disable-infobars \
-  --disable-session-crashed-bubble \
-  --disable-restore-session-state \
-  --noerrdialogs \
-  --disable-features=TranslateUI,OptimizationHints,AutofillServerCommunication \
-  --touch-events=enabled \
-  --start-maximized \
+exec "${CHROMIUM_BIN}" \
+  "${COMMON_FLAGS[@]}" \
   --autoplay-policy=no-user-gesture-required \
   --use-fake-ui-for-media-stream \
-  --user-data-dir=/home/pi/.config/chromium-kiosk \
-  --ignore-certificate-errors \
-  --disable-extensions \
-  --no-sandbox \
-  "$ZOE_URL"
-
+  --user-data-dir="${KIOSK_HOME}/.config/chromium-kiosk" \
+  "${ZOE_URL}"
