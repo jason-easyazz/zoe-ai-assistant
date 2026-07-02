@@ -41,7 +41,7 @@ import * as v from 'valibot';
 // .ts extension so the offline strip-types tests (node --experimental-strip-types)
 // can resolve it too; tsconfig has allowImportingTsExtensions and the flue build
 // bundles .ts specifiers fine.
-import { ACTIVATOR_TOOL_NAME, GROUP_NAMES, TOOL_GROUPS } from './tool-groups.ts';
+import { ACTIVATOR_TOOL_NAME, GROUP_NAMES, GROUP_PURPOSES, TOOL_GROUPS } from './tool-groups.ts';
 
 // zoe-data base URL — the live capability backend. Overridable for the lab.
 // Defaults to the live local endpoint (same default as prod's ZOE_DATA_URL).
@@ -515,14 +515,13 @@ const createNote = defineTool({
  * same identity fail-closed semantics and ZOE_BRAIN_ALLOW_WRITES gate as
  * before. Disclosure only shrinks what the model SEES per call.
  */
-const GROUP_SUMMARY = [
-  'weather (current weather / forecast)',
-  'lists (add to or show shopping/task lists)',
-  'timers (countdown timers)',
-  'reminders (list or create reminders)',
-  'calendar (show or add events)',
-  'notes (save a note)',
-].join(', ');
+// Derived from the canonical map (never hand-maintained): every group the
+// picklist accepts is guaranteed to appear here with its purpose line, so the
+// description cannot drift when a group is added (GROUP_PURPOSES is a total
+// Record — a missing purpose is a compile error).
+const GROUP_SUMMARY = GROUP_NAMES.map(
+  (group) => `${group} (${GROUP_PURPOSES[group]})`,
+).join(', ');
 
 const activateAbilities = defineTool({
   name: ACTIVATOR_TOOL_NAME,

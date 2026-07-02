@@ -81,6 +81,22 @@ export type AbilityGroup = keyof typeof TOOL_GROUPS;
 export const GROUP_NAMES = Object.keys(TOOL_GROUPS) as readonly AbilityGroup[];
 
 /**
+ * One-line human purpose per group, used to build the `activate_abilities`
+ * tool description. Kept HERE, next to the canonical map, and typed as a
+ * total Record so adding a group without a purpose line is a compile error —
+ * the activator's description can never silently drift out of sync with the
+ * groups its picklist accepts.
+ */
+export const GROUP_PURPOSES: Record<AbilityGroup, string> = {
+  weather: 'current weather / forecast',
+  lists: 'add to or show shopping/task lists',
+  timers: 'countdown timers',
+  reminders: 'list or create reminders',
+  calendar: 'show or add events',
+  notes: 'save a note',
+};
+
+/**
  * Deterministic relevance triggers per group, matched (case-insensitively)
  * against the last user message — prod's keyword/example matching analogue.
  * Misses are fine: the activator tool is the model-driven fallback.
@@ -147,9 +163,12 @@ export function activeGroups(messages: Message[]): Set<AbilityGroup> {
   }
 
   // 3 + 4. Explicit activations and sticky already-used groups, from the
-  // transcript's assistant tool calls.
+  // transcript's assistant tool calls. Guard string content the same way
+  // lastUserText does, so a plain-text assistant message can never be
+  // iterated character-by-character if the pi-ai message type evolves.
   for (const msg of messages) {
     if (msg.role !== 'assistant') continue;
+    if (typeof msg.content === 'string') continue;
     for (const part of msg.content) {
       if (part.type !== 'toolCall') continue;
       if (part.name === ACTIVATOR_TOOL_NAME) {
