@@ -85,8 +85,14 @@ async def test_wedged_spawn_does_not_block_the_loop(monkeypatch, tmp_path):
         with pytest.raises(ka.KanbanCLIError, match="timed out"):
             await adapter._run_worktree_command(["true"], cwd=tmp_path, timeout=0.1)
         elapsed = time.monotonic() - t0
+        ticks_during_wedge = ticks  # snapshot before the heartbeat finishes on its own
         await hb
     finally:
         release.set()  # let the wedged worker thread exit
     assert elapsed < 5.0  # bounded despite the wedge (timeout + grace, not forever)
-    assert ticks == 20  # the event loop kept running throughout
+    # The load-bearing liveness proof: the loop scheduled other tasks WHILE the
+    # spawn was wedged (>=1 tick inside the ~0.3s window; conservative so CI
+    # scheduling jitter can't flake it). ticks == 20 afterwards is deterministic
+    # since hb is awaited to completion — it only sanity-checks nothing cancelled it.
+    assert ticks_during_wedge > 0
+    assert ticks == 20
