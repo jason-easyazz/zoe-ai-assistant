@@ -763,6 +763,71 @@ def _fast_first_audio_enabled() -> bool:
     return os.environ.get("ZOE_VOICE_FAST_FIRST_AUDIO", "1").strip().lower() in ("1", "true", "yes", "on")
 
 
+# The Pi brain surfaces "what Zoe is doing" as text sentinels riding alongside the
+# spoken stream (see zoe_core_client._read_turn). They are NOT speech — the voice
+# path must consume them, never synthesize them (otherwise Kokoro reads raw JSON).
+_VOICE_TOOL_SENTINEL_PREFIXES = ("__TOOL__:", "__THINKING__:")
+
+
+def _voice_tool_filler_enabled() -> bool:
+    return os.environ.get("ZOE_VOICE_TOOL_FILLER", "1").strip().lower() in ("1", "true", "yes", "on")
+
+
+# Short, generic, spoken acknowledgements keyed by tool. Tool turns can sit silent
+# for several seconds while the brain calls a tool and then synthesizes the answer.
+# When the brain emits a tool_call BEFORE saying anything itself, we speak ONE of
+# these so first-audio comes fast — then the real answer follows unchanged. Kept
+# deliberately generic: they never claim a result, so they're always truthful.
+_VOICE_TOOL_FILLERS = {
+    "calendar": "Let me check your calendar.",
+    "lists": "Let me check your lists.",
+    "list": "Let me check your list.",
+    "reminders": "Let me check your reminders.",
+    "reminder": "Let me check your reminders.",
+    "memory": "Let me look that up.",
+    "weather": "Let me check the weather.",
+    "web": "Let me look that up.",
+    "search": "Let me look that up.",
+}
+_VOICE_TOOL_FILLER_DEFAULT = "One sec."
+
+
+def _voice_tool_filler(tool_name: str) -> str:
+    """Pick a short spoken acknowledgement for a brain tool_call.
+
+    Matches the tool name (or a prefix of it, so 'calendar_show' -> 'calendar')
+    to a templated line; falls back to a generic 'One sec.' Never embeds the
+    result — purely a leading filler so audio starts before the tool returns.
+    """
+    name = (tool_name or "").strip().lower()
+    if name in _VOICE_TOOL_FILLERS:
+        return _VOICE_TOOL_FILLERS[name]
+    for key, line in _VOICE_TOOL_FILLERS.items():
+        if name.startswith(key):
+            return line
+    return _VOICE_TOOL_FILLER_DEFAULT
+
+
+def _voice_tool_name_from_sentinel(delta: str) -> "Optional[str]":
+    """Extract the tool name from a ``__TOOL__:`` sentinel, or None.
+
+    Only ``phase == 'start'`` sentinels trigger a filler (one per turn); args/result
+    phases return None so we never speak twice for the same tool call. Malformed
+    sentinels return None rather than raising — a bad frame must not break the turn.
+    """
+    if not delta.startswith("__TOOL__:"):
+        return None
+    try:
+        import json as _json
+        tc = _json.loads(delta[len("__TOOL__:"):])
+    except Exception:
+        return None
+    if not isinstance(tc, dict) or tc.get("phase") != "start":
+        return None
+    name = tc.get("name")
+    return str(name) if name else None
+
+
 def _extract_first_unit(buffer: str) -> tuple[Optional[str], str]:
     """Pull the FIRST speakable unit out of a streaming buffer as early as possible.
 
@@ -2102,12 +2167,86 @@ def _ensure_moonshine():
     return _moonshine_model
 
 
+_MOONSHINE_SAMPLE_RATE = 16000
+
+
+def _prepare_audio_for_moonshine(audio, sample_rate: int):
+    """Guarantee Moonshine gets the mono, 16 kHz float audio it expects.
+
+    Moonshine's own ``load_wav_file`` mixes to mono but does NOT resample — it
+    hands the file's native rate straight to ``transcribe_without_streaming``,
+    which silently degrades accuracy if a panel ever captures at something other
+    than 16 kHz. This helper closes that gap.
+
+    Deliberately NOT a denoiser/normaliser: replaying the operator's real corpus
+    (see tests + the wake-strip note) showed Moonshine is extremely sensitive to
+    *any* per-sample edit — peak/RMS gain, DC-offset removal, and leading-silence
+    / wake-audio trimming each regressed as many clips as they fixed (a clean
+    "What time is it?" flipped to "Mom is it"). So for audio that is already mono
+    16 kHz — every live panel turn today — this returns the samples unchanged
+    (zero regression by construction). It only edits the samples to resample when
+    the input rate genuinely differs.
+
+    Returns ``(audio, rate)`` where ``rate`` is 16000 whenever the input rate was
+    known. An unknown/invalid rate (``<= 0``) cannot be resampled, so the samples
+    pass through and that rate is returned for the caller to surface.
+    """
+    import numpy as np
+
+    try:
+        sr = int(sample_rate)
+    except (TypeError, ValueError):
+        sr = 0
+
+    a = np.asarray(audio, dtype=np.float32)
+    needs_downmix = a.ndim > 1
+    if needs_downmix:
+        # Defensive mono downmix (load_wav_file already mixes, but a caller handing
+        # us a 2-D array must not crash the C transcribe call).
+        a = a.mean(axis=1).astype(np.float32)
+
+    if sr == _MOONSHINE_SAMPLE_RATE and not needs_downmix:
+        # Fast path: already mono at the target rate -> return UNCHANGED samples
+        # (identity for the live 16 kHz path; no decode perturbation).
+        return audio, _MOONSHINE_SAMPLE_RATE
+    if a.size == 0:
+        return [], (_MOONSHINE_SAMPLE_RATE if sr > 0 else sr)
+    if sr <= 0:
+        # Unknown/invalid native rate — we can't honestly resample. Don't pretend
+        # it's 16 kHz; hand the (mono) samples back with the rate as-is so the
+        # caller doesn't mistake malformed metadata for valid 16 kHz audio.
+        return (audio if not needs_downmix else a.tolist()), sr
+    if sr == _MOONSHINE_SAMPLE_RATE:
+        # Was a 2-D 16 kHz array we just downmixed; no resample needed.
+        return a.tolist(), _MOONSHINE_SAMPLE_RATE
+
+    # Only reached when capture-format drifts off 16 kHz. Linear interpolation
+    # resample (numpy-only — scipy is NOT a declared zoe-data dependency, so the
+    # off-rate path must not import it). Adequate for 16 kHz speech STT and it
+    # can't make a 16 kHz clip worse because this branch never runs for 16 kHz.
+    n_out = max(1, int(round(a.shape[0] * _MOONSHINE_SAMPLE_RATE / sr)))
+    src_idx = np.arange(a.shape[0], dtype=np.float64)
+    dst_idx = np.linspace(0.0, a.shape[0] - 1, n_out)
+    resampled = np.interp(dst_idx, src_idx, a).astype(np.float32)
+    return resampled.tolist(), _MOONSHINE_SAMPLE_RATE
+
+
 async def _run_moonshine(wav_path: str) -> str:
     from moonshine_voice.utils import load_wav_file
 
     def _work() -> str:
         tr = _ensure_moonshine()
         audio, sr = load_wav_file(wav_path)
+        # Moonshine wants mono 16 kHz; load_wav_file doesn't resample. This is an
+        # identity for the live 16 kHz path and only resamples off-rate capture.
+        audio, sr = _prepare_audio_for_moonshine(audio, sr)
+        if not isinstance(sr, int) or sr <= 0:
+            # Corrupt/malformed WAV metadata (rate 0/None): _prepare_audio... hands
+            # the rate back for us to surface — never feed it into the C transcribe
+            # call. Treat the clip as unusable -> empty transcript (the caller's
+            # empty_transcript handling re-prompts).
+            logger.warning("Moonshine: unusable sample rate %r for %s — skipping clip", sr, wav_path)
+            return ""
         with _moonshine_infer_lock:
             out = tr.transcribe_without_streaming(audio, sr)
         # Moonshine segments speech into lines and emits the wake phrase ("Hey Zoe.")
@@ -3593,14 +3732,23 @@ async def voice_command(
                 token_buf = ""
                 full_reply_parts: list[str] = []
                 _t_first_audio: Optional[float] = None
+                _filler_emitted = False  # at most one tool-turn filler per turn
+                # The processing-ack path yields audio bytes directly (without going
+                # through _emit_sentence), so _t_first_audio stays None even though
+                # the user already heard audio — track it separately.
+                _processing_ack_audio_sent = False
 
                 try:
-                    async def _emit_sentence(sentence: str):
+                    async def _emit_sentence(sentence: str, *, record: bool = True):
                         nonlocal chunk_index, _t_first_audio
                         s = sentence.strip()
                         if not s:
                             return
-                        full_reply_parts.append(s)
+                        # record=False for the leading tool filler: it's spoken but
+                        # must NOT join the persisted/displayed answer (it's an
+                        # acknowledgement, not part of what Zoe actually answered).
+                        if record:
+                            full_reply_parts.append(s)
                         await _bc_stream.broadcast("all", "voice:responding", {
                             "panel_id": panel_id,
                             "text": s[:200],
@@ -3691,6 +3839,7 @@ async def voice_command(
                                 yield (header + "\n").encode()
                                 yield str(ack_event["audio_base64"]).encode() + b"\n"
                                 chunk_index += 1
+                                _processing_ack_audio_sent = True
                             else:
                                 async for out_line in _emit_line({"processing_ack": True, "text": ack_text, "panel_id": panel_id}):
                                     yield out_line
@@ -3707,6 +3856,32 @@ async def voice_command(
                         portrait=_v_portrait,
                     ):
                         if not delta:
+                            continue
+                        # Brain "what I'm doing" sentinels ride alongside the spoken
+                        # stream — they must NEVER be synthesized. On the FIRST
+                        # tool_call (phase=start), if the brain hasn't spoken anything
+                        # yet, emit ONE short generic filler so first-audio comes fast
+                        # instead of sitting silent while the tool runs + the answer
+                        # synthesizes. Skip the filler when the user already heard (or
+                        # is about to hear) real content: audio was synthesized
+                        # (_t_first_audio), brain text is buffering toward a sentence
+                        # boundary (token_buf), or the cached processing-ack already
+                        # played audio — any of those would make it a double lead-in.
+                        if delta.startswith(_VOICE_TOOL_SENTINEL_PREFIXES):
+                            if (
+                                not _filler_emitted
+                                and _t_first_audio is None
+                                and not token_buf
+                                and not _processing_ack_audio_sent
+                                and _voice_tool_filler_enabled()
+                            ):
+                                _tool_name = _voice_tool_name_from_sentinel(delta)
+                                if _tool_name is not None:
+                                    _filler_emitted = True
+                                    async for out_chunk in _emit_sentence(
+                                        _voice_tool_filler(_tool_name), record=False
+                                    ):
+                                        yield out_chunk
                             continue
                         if delta.startswith(_VOICE_ESCALATION_MARKERS):
                             try:
@@ -3823,6 +3998,12 @@ async def voice_command(
                 portrait=_v_portrait_nc,
             ):
                 if not delta:
+                    continue
+                # Drop brain "what I'm doing" sentinels — they ride alongside the
+                # stream and must never be collected into the spoken answer (the
+                # non-stream path synthesizes the whole reply at once, so there's no
+                # leading-audio gap to fill; we only strip the noise here).
+                if delta.startswith(_VOICE_TOOL_SENTINEL_PREFIXES):
                     continue
                 if delta.startswith(_VOICE_ESCALATION_MARKERS):
                     try:
