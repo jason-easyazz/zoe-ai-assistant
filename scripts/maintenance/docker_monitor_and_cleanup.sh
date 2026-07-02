@@ -1,7 +1,7 @@
 #!/bin/bash
 # Docker Disk Space Monitor and Cleanup
-# Prevents Docker from filling the drive
-# Runs daily to catch issues before they become critical
+# Prevents Docker cache/dangling images from filling the drive.
+# This script intentionally does not stop/remove containers or prune volumes.
 # Created: 2025-11-05
 
 set -e
@@ -10,7 +10,7 @@ LOG_FILE="/home/zoe/assistant/data/docker_monitor.log"
 ALERT_FILE="/home/zoe/assistant/data/disk_alerts.log"
 
 # Thresholds
-DOCKER_CRITICAL_GB=50  # If Docker uses more than 50GB, trigger aggressive cleanup
+DOCKER_CRITICAL_GB=50  # If Docker uses more than 50GB, trigger deeper cache cleanup
 DOCKER_WARNING_GB=30   # If Docker uses more than 30GB, trigger warning
 DISK_CRITICAL_PERCENT=85
 DISK_WARNING_PERCENT=70
@@ -86,64 +86,39 @@ main() {
         WARNING=true
     fi
     
-    # Cleanup actions
+    # Cleanup actions: allowlist only dangling images and build cache. Do not
+    # stop/remove containers, remove named images, or prune volumes; those can
+    # delete live DB/state.
     if [ "$CRITICAL" = true ]; then
-        echo -e "\n${RED}🚨 CRITICAL: Running aggressive Docker cleanup${NC}"
-        log_message "Running aggressive Docker cleanup"
-        
-        # Stop containers
-        echo "Stopping all containers..."
-        docker ps -q | xargs -r docker stop
-        
-        # Remove stopped containers
-        echo "Removing stopped containers..."
-        docker ps -aq | xargs -r docker rm
-        
-        # Remove all unused images (not just dangling)
-        echo "Removing unused images..."
-        docker images -q | xargs -r docker rmi -f 2>/dev/null || true
-        
-        # Remove all unused volumes
-        echo "Removing unused volumes..."
-        docker volume prune -af
-        
-        # Remove all build cache
-        echo "Removing build cache..."
+        echo -e "\n${RED}🚨 CRITICAL: Running Docker cache cleanup${NC}"
+        log_message "Running critical Docker cache cleanup"
+
+        echo "Removing dangling images..."
+        docker image prune -f --filter "dangling=true"
+
+        echo "Removing all build cache..."
         docker builder prune -af
-        
-        # Full system prune
-        echo "Running full system prune..."
-        docker system prune -af --volumes
-        
-        log_message "Aggressive cleanup completed"
+
+        log_message "Critical Docker cache cleanup completed"
         
     elif [ "$WARNING" = true ]; then
-        echo -e "\n${YELLOW}⚠️  WARNING: Running standard Docker cleanup${NC}"
-        log_message "Running standard Docker cleanup"
-        
-        # Remove stopped containers
-        docker ps -aq -f status=exited | xargs -r docker rm
-        
-        # Remove dangling images
-        docker images -qf dangling=true | xargs -r docker rmi
-        
-        # Remove unused volumes
-        docker volume prune -f
-        
-        # Remove old build cache (7+ days)
+        echo -e "\n${YELLOW}⚠️  WARNING: Running Docker cache cleanup${NC}"
+        log_message "Running warning Docker cache cleanup"
+
+        echo "Removing dangling images..."
+        docker image prune -f --filter "dangling=true"
+
+        echo "Removing old build cache (7+ days)..."
         docker builder prune -f --filter "until=168h"
-        
-        # System prune (safe)
-        docker system prune -f --volumes
-        
-        log_message "Standard cleanup completed"
+
+        log_message "Warning Docker cache cleanup completed"
         
     else
         echo -e "\n${GREEN}✅ Docker disk usage is healthy${NC}"
         
-        # Still do light maintenance
+        # Still do light build-cache maintenance.
         echo "Running light maintenance..."
-        docker system prune -f --filter "until=72h"
+        docker builder prune -f --filter "until=168h"
         
         log_message "Light maintenance completed"
     fi
@@ -162,4 +137,3 @@ main() {
 }
 
 main "$@"
-

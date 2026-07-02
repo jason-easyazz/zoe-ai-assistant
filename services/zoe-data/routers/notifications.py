@@ -5,7 +5,8 @@ Mounted at prefix="/api/notifications" with tag "notifications".
 import json
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from pydantic import BaseModel
 from auth import get_current_user
 from database import get_db
 from guest_policy import require_feature_access
@@ -14,6 +15,10 @@ from push import broadcaster
 router = APIRouter(prefix="/api/notifications", tags=["notifications"])
 
 VALID_INTERACTION_ACTIONS = {"dismiss", "read", "click", "snooze"}
+
+
+class NotificationInteraction(BaseModel):
+    action: str = "dismiss"
 
 
 @router.get("/", response_model=dict)
@@ -90,7 +95,7 @@ async def create_notification(
         "title": payload.get("title", ""), "message": payload.get("message", ""),
         "delivered": False,
     }
-    await broadcaster.broadcast("all", "notification_created", notif)
+    await broadcaster.broadcast("all", "notification_created", notif, user_id=user_id)
     return notif
 
 
@@ -115,11 +120,13 @@ async def mark_read(
 @router.post("/{notification_id}/interaction")
 async def track_interaction(
     notification_id: str,
-    action: str = "dismiss",
+    action: str = Query("dismiss"),
+    body: NotificationInteraction | None = Body(None),
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
     await require_feature_access(db, user, feature="notifications", action="interact")
+    action = body.action if body is not None else action
     if action not in VALID_INTERACTION_ACTIONS:
         raise HTTPException(
             status_code=422,

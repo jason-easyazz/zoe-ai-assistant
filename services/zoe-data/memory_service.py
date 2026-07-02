@@ -38,6 +38,7 @@ import re
 import threading
 import time
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Optional
 
@@ -79,7 +80,91 @@ def _metadata_value(value: Any) -> str | int | float | bool:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
+def _parse_aware_datetime(value: Any) -> datetime.datetime | None:
+    if not value:
+        return None
+    if isinstance(value, datetime.datetime):
+        dt = value
+    elif isinstance(value, datetime.date):
+        # Legacy date-only expiries mean "valid through this UTC day".
+        dt = datetime.datetime.combine(value, datetime.time.max)
+    elif isinstance(value, str):
+        raw = value.strip()
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+            try:
+                legacy_date = datetime.date.fromisoformat(raw)
+            except ValueError:
+                return None
+            # Date-only legacy strings expire after the calendar day ends in UTC.
+            dt = datetime.datetime.combine(legacy_date, datetime.time.max)
+        else:
+            try:
+                dt = datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+    else:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return dt.astimezone(datetime.timezone.utc)
+
+
+def _normalize_expires_at(expires_at: str) -> str:
+    dt = _parse_aware_datetime(expires_at)
+    if dt is None:
+        raise MemoryServiceError("expires_at must be ISO-8601")
+    return dt.isoformat().replace("+00:00", "Z")
+
+
+def _memory_expired(expires_at: Any, now: datetime.datetime | None = None) -> bool:
+    expires_dt = _parse_aware_datetime(expires_at)
+    if expires_dt is None:
+        logger.warning("memory_service: invalid expires_at metadata kept active: %r", expires_at)
+        return False
+    now_dt = now or datetime.datetime.now(datetime.timezone.utc)
+    if now_dt.tzinfo is None:
+        now_dt = now_dt.replace(tzinfo=datetime.timezone.utc)
+    return expires_dt <= now_dt.astimezone(datetime.timezone.utc)
+
+
 _BLOCKED_READ_STATUSES = {"archived", "rejected", "superseded", "pending", "disputed"}
+
+# Cap for the in-memory idempotency fast-path cache (_seen_keys). Durable dedup is
+# guaranteed by the deterministic mem_id + upsert, so this cache only avoids redundant
+# write attempts; evicting the oldest key at worst lets one duplicate reach the
+# idempotent write path. Bounded to keep memory flat over the process lifetime.
+_SEEN_KEYS_MAX = 50_000
+
+# Cap for the per-row distinct-query hash blob (_query_hashes metadata). The blob is
+# the dedup oracle and never evicts; once it is full both the blob and the derived
+# unique_query_count freeze, so churned-out queries can't re-count and inflate the
+# signal. unique_query_count is thus monotonic and == min(distinct queries, this cap).
+_MAX_QUERY_HASHES = 256
+
+
+class _BoundedKeySet:
+    """Insertion-ordered set with a hard cap; oldest entries evict first (FIFO).
+
+    Drop-in for the ``in`` / ``.add`` usage of a plain set, but bounded so it cannot
+    grow without limit across the process lifetime.
+    """
+
+    def __init__(self, maxlen: int = _SEEN_KEYS_MAX):
+        self._maxlen = maxlen
+        self._items: "OrderedDict[str, None]" = OrderedDict()
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._items
+
+    def add(self, key: str) -> None:
+        if key in self._items:
+            return
+        self._items[key] = None
+        while len(self._items) > self._maxlen:
+            self._items.popitem(last=False)
+
+    def __len__(self) -> int:
+        return len(self._items)
 
 
 def _memory_visible_to_user(metadata: Mapping[str, Any], user_id: str) -> bool:
@@ -237,7 +322,7 @@ class MemoryService:
     def __init__(self, data_dir: str = _MEMPALACE_DATA):
         self._data_dir = data_dir
         self._user_locks: dict[str, asyncio.Lock] = {}
-        self._seen_keys: set[str] = set()
+        self._seen_keys: _BoundedKeySet = _BoundedKeySet()
         self._background_tasks: set[asyncio.Task[Any]] = set()
 
     async def ingest(
@@ -615,15 +700,23 @@ class MemoryService:
             new_meta["reviewed_at"] = new_meta["added_at"]
             if note:
                 new_meta["review_note"] = note[:1024]
-            old_meta = dict(current.metadata)
-            old_meta["status"] = "superseded"
-            old_meta["superseded_by_id"] = new_id
-            await self._run_sync(
-                self._write_row, mem_id, current.text, old_meta
-            )
+            # Write the NEW row FIRST, then mark the old one superseded — the same
+            # safe order expert_dispatch._maybe_supersede uses. "superseded" is in
+            # _BLOCKED_READ_STATUSES (instantly invisible on read); marking the old
+            # row first and then failing the new write would make the fact vanish.
             await self._run_sync(
                 self._write_row, new_id, scrubbed, new_meta
             )
+            # Guard new_id != mem_id: an edit whose text+durable identity hash to the
+            # same mem_id just overwrote the row in place, so there is no distinct old
+            # row to retire — superseding it would hide the only surviving copy.
+            if new_id != mem_id:
+                old_meta = dict(current.metadata)
+                old_meta["status"] = "superseded"
+                old_meta["superseded_by_id"] = new_id
+                await self._run_sync(
+                    self._write_row, mem_id, current.text, old_meta
+                )
             await self._append_audit(
                 mem_id=new_id,
                 user_id=user_id,
@@ -742,7 +835,7 @@ class MemoryService:
         if entity_id:
             md["entity_id"] = entity_id
         if expires_at:
-            md["expires_at"] = expires_at
+            md["expires_at"] = _normalize_expires_at(expires_at)
         if source_excerpt:
             md["source_excerpt"] = source_excerpt
         if event_scope:
@@ -816,14 +909,13 @@ class MemoryService:
         docs = result.get("documents") or []
         metas = result.get("metadatas") or []
         ids = result.get("ids") or []
-        now = datetime.datetime.utcnow()
-        now_iso = now.isoformat() + "Z"
+        now = datetime.datetime.now(datetime.timezone.utc)
         filtered: list[MemoryRef] = []
         for rid, doc, meta in zip(ids, docs, metas):
             if not isinstance(meta, dict):
                 meta = {}
             expires = meta.get("expires_at")
-            if expires and expires <= now_iso:
+            if expires and _memory_expired(expires, now):
                 continue
             if not _memory_visible_to_user(meta, user_id):
                 continue
@@ -847,8 +939,8 @@ class MemoryService:
                 access_count = 0
             added_at = md.get("added_at") or ""
             try:
-                dt = datetime.datetime.fromisoformat(added_at.replace("Z", ""))
-                age_days = max(0.0, (now - dt).total_seconds() / 86400.0)
+                dt = _parse_aware_datetime(added_at)
+                age_days = max(0.0, (now - dt).total_seconds() / 86400.0) if dt else 0.0
             except Exception:
                 age_days = 0.0
             score = conf * math.exp(-LAMBDA * age_days) + 0.1 * math.log1p(access_count)
@@ -869,13 +961,12 @@ class MemoryService:
         docs = (result.get("documents") or [[]])[0]
         metas = (result.get("metadatas") or [[]])[0]
         distances = (result.get("distances") or [[]])[0]
-        now = datetime.datetime.utcnow()
-        now_iso = now.isoformat() + "Z"
+        now = datetime.datetime.now(datetime.timezone.utc)
         hits: list[MemoryRef] = []
         for rid, doc, meta, dist in zip(ids, docs, metas, distances):
             md = dict(meta) if isinstance(meta, dict) else {}
             expires = md.get("expires_at")
-            if expires and expires <= now_iso:
+            if expires and _memory_expired(expires, now):
                 continue
             if not _memory_visible_to_user(md, user_id):
                 continue
@@ -913,8 +1004,8 @@ class MemoryService:
                 access_count = 0
             added_at = md.get("added_at") or ""
             try:
-                dt = datetime.datetime.fromisoformat(added_at.replace("Z", ""))
-                age_days = max(0.0, (now - dt).total_seconds() / 86400.0)
+                dt = _parse_aware_datetime(added_at)
+                age_days = max(0.0, (now - dt).total_seconds() / 86400.0) if dt else 0.0
             except Exception:
                 age_days = 0.0
             semantic = (1.0 / (1.0 + dist)) * conf * math.exp(-_LAMBDA * age_days)
@@ -958,12 +1049,12 @@ class MemoryService:
         ids = result.get("ids") or []
         docs = result.get("documents") or []
         metas = result.get("metadatas") or []
-        now_iso = datetime.datetime.utcnow().isoformat() + "Z"
+        now = datetime.datetime.now(datetime.timezone.utc)
         keep = []
         for rid, doc, meta in zip(ids, docs, metas):
             md = dict(meta) if isinstance(meta, dict) else {}
             expires = md.get("expires_at")
-            if expires and expires <= now_iso:
+            if expires and _memory_expired(expires, now):
                 continue
             keep.append((rid, doc, md))
         ids = [r[0] for r in keep]
@@ -1025,10 +1116,9 @@ class MemoryService:
         if not ids:
             return
         col = self._collection()
-        result = col.get(ids=ids, include=["metadatas", "documents"])
+        result = col.get(ids=ids, include=["metadatas"])
         now_iso = datetime.datetime.utcnow().isoformat() + "Z"
         got_ids = result.get("ids") or []
-        got_docs = result.get("documents") or []
         got_metas = result.get("metadatas") or []
         new_metas = []
         for meta in got_metas:
@@ -1036,15 +1126,26 @@ class MemoryService:
             m["access_count"] = int(m.get("access_count", 0) or 0) + 1
             m["last_accessed"] = now_iso
             if query_hash:
-                # Track distinct queries that have surfaced this memory
-                seen_hashes = set((m.get("_query_hashes") or "").split(","))
-                if query_hash not in seen_hashes:
-                    seen_hashes.add(query_hash)
-                    m["_query_hashes"] = ",".join(h for h in seen_hashes if h)
+                # Track distinct queries that have surfaced this memory. The hash blob
+                # is the dedup oracle AND must stay bounded, so it is capped at
+                # _MAX_QUERY_HASHES and never evicts. Once saturated we can no longer
+                # tell a genuinely new query from one whose hash was already dropped,
+                # so unique_query_count FREEZES at the cap rather than re-counting
+                # churned-out queries (which would inflate the promotion/diversity
+                # signal). It stays a monotonic, non-decreasing count == min(distinct
+                # queries, _MAX_QUERY_HASHES); the cap (256) is far above any promotion
+                # threshold so freezing loses no real signal.
+                seen_hashes = [h for h in (m.get("_query_hashes") or "").split(",") if h]
+                if query_hash not in seen_hashes and len(seen_hashes) < _MAX_QUERY_HASHES:
+                    seen_hashes.append(query_hash)
+                    m["_query_hashes"] = ",".join(seen_hashes)
                     m["unique_query_count"] = int(m.get("unique_query_count", 0) or 0) + 1
             new_metas.append(m)
         if got_ids:
-            col.upsert(ids=got_ids, documents=got_docs, metadatas=new_metas)
+            # Metadata-only write: col.update() omits documents, so Chroma does NOT
+            # recompute embeddings. col.upsert() would re-embed every doc on every
+            # recall hit just to bump access_count/last_accessed (pure waste).
+            col.update(ids=got_ids, metadatas=new_metas)
 
     async def tick_access(self, user_id: str, ids: list[str], query: Optional[str] = None) -> None:
         """Public method: bump access_count + last_accessed for the given memory IDs.
@@ -1077,9 +1178,8 @@ class MemoryService:
 
     def _tick_consolidation_sync(self, user_id: str, ids: list[str]) -> None:
         col = self._collection()
-        result = col.get(ids=ids, include=["documents", "metadatas"])
+        result = col.get(ids=ids, include=["metadatas"])
         got_ids  = result.get("ids")       or []
-        got_docs = result.get("documents") or []
         got_metas = result.get("metadatas") or []
         new_metas = []
         for m in got_metas:
@@ -1087,7 +1187,9 @@ class MemoryService:
             m["consolidation_count"] = int(m.get("consolidation_count", 0) or 0) + 1
             new_metas.append(m)
         if got_ids:
-            col.upsert(ids=got_ids, documents=got_docs, metadatas=new_metas)
+            # Metadata-only write (see _tick_access_sync): col.update() skips the
+            # embedding recompute that col.upsert() would force on every doc.
+            col.update(ids=got_ids, metadatas=new_metas)
 
     async def _append_audit(
         self,
@@ -1135,22 +1237,28 @@ class MemoryService:
         col.upsert(ids=[audit_id], documents=[summary], metadatas=[metadata])
 
 
+    def _entity_ids_sync(self, entity_id: str, user_id: str) -> list[str]:
+        col = self._collection()
+        results = col.get(
+            where={"$and": [
+                {"$or": [{"user_id": user_id}, {"wing": user_id}]},
+                {"entity_id": entity_id},
+            ]},
+            include=["metadatas"],
+        )
+        return results.get("ids", []) if results else []
+
     async def archive_by_entity(self, entity_id: str, user_id: str) -> int:
         """Archive all MemPalace facts for a given entity (e.g. when a person is deleted).
 
         Queries Chroma for documents whose metadata has entity_id=<entity_id> and
         user_id=<user_id>, then archives each one. Returns count archived.
         """
-        col = self._collection()
         try:
-            results = col.get(
-                where={"$and": [
-                    {"$or": [{"user_id": user_id}, {"wing": user_id}]},
-                    {"entity_id": entity_id},
-                ]},
-                include=["metadatas"],
-            )
-            ids = results.get("ids", []) if results else []
+            # Offload the blocking full-collection metadata scan to the executor,
+            # matching every other Chroma access in this module — running col.get()
+            # directly here would block the event loop.
+            ids = await self._run_sync(self._entity_ids_sync, entity_id, user_id)
             archived = 0
             for mem_id in ids:
                 try:

@@ -11,12 +11,16 @@
  * live llama-server on :11434). Exporting `route` mounts the HTTP agent API so
  * `POST /agents/zoe/:id` works (see Flue routing-api).
  *
- * Phase 3, increment 1: REAL tools (`zoeTools`) are now wired on — get_time,
- * recall_memory, shopping_list_add — each calling zoe-data's existing internal
- * capability endpoints over HTTP (see src/tools/zoe-tools.ts). The open question
- * this answers is whether the local Gemma brain reliably tool-calls; the parity
- * harness measures it (parity/RESULTS.md). Acting identity is bound in trusted
- * code (env), never from model args.
+ * Phase 3: REAL tools (`zoeTools`) are wired on, each calling zoe-data's existing
+ * internal capability endpoints over HTTP (see src/tools/zoe-tools.ts).
+ *   - increment 1: get_time, recall_memory, shopping_list_add
+ *   - increment 2: get_weather, list_reminders, show_calendar, show_list (reads);
+ *                  set_timer, add_reminder, add_calendar_event, create_note (writes)
+ * The open question this answers is whether the local Gemma brain reliably
+ * tool-calls; the parity/reliability harness measures it (parity/RESULTS.md,
+ * parity/RELIABILITY.md). Acting identity is bound in trusted code (env), never
+ * from model args; writes are gated behind ZOE_BRAIN_ALLOW_WRITES (dry-run by
+ * default).
  *
  * LAB ONLY.
  */
@@ -37,6 +41,8 @@ const ZOE_SOUL = [
   "Help doesn't always mean information or tasks. Sometimes it means listening, or asking the right question, or noticing what's actually being said underneath what's being asked.",
   '',
   'You answer everyday questions — recipes, cooking, how-to, science, history, maths, general knowledge — directly from your own knowledge, in your own voice.',
+  '',
+  "But you do NOT know anything about the person you're talking to from your own head. The only way to know what's stored about them — their name, their facts, their preferences, anything personal — is to call the recall_memory tool. So whenever someone asks what you know or remember about them (their name, their preferences, who they are, what you have stored), ALWAYS call recall_memory FIRST and answer from what it returns. Never guess, and never say you don't remember or don't have anything stored until recall_memory has told you so.",
 ].join('\n');
 
 // Exporting `route` publishes the HTTP agent endpoints (POST/GET /agents/zoe/:id).

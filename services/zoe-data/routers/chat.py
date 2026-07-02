@@ -597,23 +597,42 @@ async def brain_tool_card_events(sentinel, *, user_id, tool_names, emitted_domai
         )
 
 
+def _use_flue_brain() -> bool:
+    """True ONLY when ``ZOE_BRAIN_BACKEND == 'flue'`` (default ``'core'``).
+
+    Additive, default-OFF cutover seam to the Flue brain sidecar. Read lazily
+    (not a module constant) so the live brain path is byte-identical to today
+    unless an operator explicitly opts in. The flip is gated on voice-corpus
+    parity — do not change the default.
+    """
+    return (os.environ.get("ZOE_BRAIN_BACKEND", "core") or "").strip().lower() == "flue"
+
+
 def _brain_streaming(message, session_id, user_id="", **kwargs):
-    """Brain streaming dispatch — zoe-core (Pi) by default, legacy on fallback.
+    """Brain streaming dispatch — Flue (opt-in) > zoe-core (Pi, default) > legacy.
 
     user_id defaults to "" (not a real identity) to preserve the fail-closed
     multi-user guarantee (#692): an omitted user must never inherit another
     user's identity/memory. All call sites pass it explicitly.
     """
+    if _use_flue_brain():
+        from zoe_flue_client import run_flue_brain_streaming
+
+        return run_flue_brain_streaming(message, session_id, user_id, **kwargs)
     if _USE_ZOE_CORE:
         return run_zoe_core_streaming(message, session_id, user_id, **kwargs)
     return run_zoe_agent_streaming(message, session_id, user_id, **kwargs)
 
 
 async def _brain_oneshot(message, session_id, user_id="", **kwargs):
-    """Brain non-streaming dispatch — zoe-core (Pi) by default, legacy on fallback.
+    """Brain non-streaming dispatch — Flue (opt-in) > zoe-core (Pi, default) > legacy.
 
     See _brain_streaming on the fail-closed user_id default.
     """
+    if _use_flue_brain():
+        from zoe_flue_client import run_flue_brain
+
+        return await run_flue_brain(message, session_id, user_id, **kwargs)
     if _USE_ZOE_CORE:
         return await run_zoe_core(message, session_id, user_id, **kwargs)
     return await run_zoe_agent(message, session_id, user_id, **kwargs)

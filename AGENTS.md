@@ -12,7 +12,7 @@
 
 Before any code task, you MUST — do not fall back to raw grep/guessing:
 
-- **Navigate + edit code via the MCP bus, not raw grep/Read/Edit.** Use **codebase-memory** for who-calls-what / architecture / seams and **Serena** for symbol read + symbolic edits. Reach for `grep`/`Read` only when the bus genuinely can't answer.
+- **Navigate + edit code via the MCP bus, not raw grep/Read/Edit.** Use **codebase-memory** for who-calls-what / architecture / seams and **Serena** for symbol read + symbolic edits. Reach for `grep`/`Read` only when the bus genuinely can't answer. If codebase-memory `list_projects` comes back empty, run `index_repository(repo_path=/home/zoe/assistant, mode="moderate")` before proceeding — an empty graph silently unmeets this mandate and agents fall back to grep.
 - **Use `opensrc` for any third-party API before guessing** — `opensrc path pypi:<pkg>@<version>` (pin the installed version). Never invent library behaviour from memory.
 - **Drive every PR to merge with the Greptile loop** — reply to + RESOLVE each Greptile thread, follow up until it actually merges; squash only, never `--admin`/`--force`.
 - **Follow the DOX `AGENTS.md` chain** — read the root plus every nested `AGENTS.md` on the path to files you touch, and do the closeout DOX pass after editing (see *DOX framework* below).
@@ -68,6 +68,13 @@ For reviewable development work:
 - Use Cursor's Greptile MCP to fetch review status/comments.
 - Use the `github-greptile-loop` Hermes skill to delegate heavier fix/re-review loops.
 - Do not treat Greptile as a replacement for local Zoe verification; run focused tests and live health checks before marking work merge-ready.
+
+Merge mechanics & gotchas — canonical record: **[docs/knowledge/merge-and-deploy.md](docs/knowledge/merge-and-deploy.md)** (read it before driving any PR to merge). The load-bearing rules:
+- A green `Greptile Review` **check ≠ resolved threads**. `required_conversation_resolution` is the gate that enforces "5/5, every comment sorted" — mark every thread resolved (GraphQL `resolveReviewThread`), don't just reply.
+- **Arm auto-merge** (`gh pr merge <n> --squash --auto`) instead of merging by hand. `strict` drains a batch **serially** — nudge one PR per merge, and expect each branch-update to re-trigger a fresh Greptile review that may post new threads (the re-review treadmill).
+- **Add every new test file to `validate.yml`'s enumerated test list**, or it silently never runs in CI.
+- GitGuardian scans **branch history**: a leaked/test cred in an intermediate commit fails even with a clean head tree. Scrub via a clean re-branch (squash to one commit on a new branch, replacement PR) — force-push is blocked by design.
+- Never `--admin`/`--force`; squash-only; the **human merges** (or armed auto-merge does) — agents never bypass the gate.
 
 ## Cursor MCP
 

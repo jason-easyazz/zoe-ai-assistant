@@ -39,6 +39,47 @@ class _FakeCtx:
         return False
 
 
+class _AsyncCursor:
+    def __init__(self, rows):
+        self._rows = rows
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def fetchall(self):
+        return self._rows
+
+
+class _CompatDb:
+    def __init__(self, rows, *, has_malformed_prefix_timestamp=False):
+        self.rows = rows
+        self.sql = []
+        self.params = []
+        self.has_malformed_prefix_timestamp = has_malformed_prefix_timestamp
+
+    def execute(self, sql, params=()):
+        self.sql.append(sql)
+        self.params.append(params)
+        if self.has_malformed_prefix_timestamp:
+            assert "m.created_at ~ '^\\d{4}-\\d{2}-\\d{2}[ T]'" not in sql
+            assert sql.count("$'") >= 1
+        return _AsyncCursor(self.rows)
+
+
+class _CompatCtx:
+    def __init__(self, db):
+        self.db = db
+
+    async def __aenter__(self):
+        return self.db
+
+    async def __aexit__(self, *exc):
+        return False
+
+
 @pytest.mark.asyncio
 async def test_load_todays_messages_uses_postgres_timestamp_cast():
     db = _FakeDb([("I like quiet mornings",), ("I prefer tea",)])
@@ -77,6 +118,40 @@ async def test_run_digest_for_all_active_users_uses_postgres_timestamp_cast(monk
     assert "::jsonb" not in db.sql[0]
     assert "CURRENT_DATE" not in db.sql[0]
     assert "DATE('now'" not in db.sql[0]
+
+
+@pytest.mark.asyncio
+async def test_extract_open_loops_uses_temporal_cast_for_mixed_text_timestamps(monkeypatch):
+    import db_compat
+
+    # The fake result represents rows that would have mixed TEXT timestamp forms
+    # in Postgres ("2026-06-29T01:00:00Z" and "2026-06-29 01:00:00+00").
+    # The assertion is on the generated SQL: timestamptz comparison makes those
+    # forms temporal, not lexical.
+    db = _CompatDb([])
+    monkeypatch.setattr(db_compat, "get_compat_db", lambda: _CompatCtx(db))
+
+    result = await memory_digest._extract_open_loops("user-1")
+
+    assert result == {"user_id": "user-1", "extracted": 0}
+    assert "WHEN m.created_at ~ '^(" in db.sql[0]
+    assert "THEN m.created_at::timestamptz" in db.sql[0]
+    assert "END > CURRENT_TIMESTAMP - INTERVAL '2 days'" in db.sql[0]
+    assert "datetime('now', '-2 days')" not in db.sql[0]
+
+
+@pytest.mark.asyncio
+async def test_extract_open_loops_malformed_prefix_timestamp_does_not_reach_cast(monkeypatch):
+    import db_compat
+
+    db = _CompatDb([], has_malformed_prefix_timestamp=True)
+    monkeypatch.setattr(db_compat, "get_compat_db", lambda: _CompatCtx(db))
+
+    result = await memory_digest._extract_open_loops("user-1")
+
+    assert result == {"user_id": "user-1", "extracted": 0}
+    assert "2026-13-45" not in db.sql[0]
+    assert "m.created_at::timestamptz" in db.sql[0]
 
 
 @pytest.mark.asyncio

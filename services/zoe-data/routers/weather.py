@@ -14,11 +14,12 @@ import os
 import json
 import logging
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from auth import get_current_user, require_admin
 from database import get_db
@@ -100,6 +101,53 @@ def _resolve_location(prefs: Optional[dict], fallback: Optional[dict] = None) ->
         if lat is not None and lon is not None:
             return lat, lon, city, country
     return DEFAULT_LAT, DEFAULT_LON, DEFAULT_CITY, DEFAULT_COUNTRY
+
+
+def _timezone_from_name(name: str | None):
+    if not name:
+        return timezone.utc
+    try:
+        return ZoneInfo(str(name))
+    except (ZoneInfoNotFoundError, ValueError):
+        return timezone.utc
+
+
+def _weather_now(tz) -> datetime:
+    return datetime.now(tz)
+
+
+def _parse_local_forecast_time(value: str, tz) -> datetime:
+    dt = datetime.fromisoformat(str(value))
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=tz)
+    return dt.astimezone(tz)
+
+
+def _parse_owm_forecast_time(item: dict, tz) -> datetime | None:
+    if not isinstance(item, dict):
+        return None
+    try:
+        if item.get("dt") is not None:
+            return datetime.fromtimestamp(item["dt"], tz=timezone.utc).astimezone(tz)
+        dt_txt = str(item.get("dt_txt") or "")
+        dt = datetime.strptime(dt_txt, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        return dt.astimezone(tz)
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+
+
+def _owm_weather_info(item: dict) -> dict:
+    weather_items = item.get("weather")
+    if isinstance(weather_items, list) and weather_items and isinstance(weather_items[0], dict):
+        return weather_items[0]
+    if isinstance(weather_items, dict):
+        return weather_items
+    return {}
+
+
+def _owm_main_info(item: dict) -> dict:
+    main = item.get("main")
+    return main if isinstance(main, dict) else {}
 
 
 async def _get_system_default_location(db) -> dict:
@@ -196,6 +244,7 @@ async def _fetch_openmeteo_current(lat: float, lon: float, city: str, country: s
                 "times": h_times,
                 "temps": hourly.get("temperature_2m", []),
                 "codes": hourly.get("weathercode", []),
+                "timezone": data.get("timezone"),
             },
             "_daily_raw": daily_d,
         }
@@ -226,21 +275,22 @@ async def _fetch_openmeteo_forecast(lat: float, lon: float) -> dict:
                 r.raise_for_status()
                 data = r.json()
             hourly_raw = {"times": data["hourly"]["time"], "temps": data["hourly"]["temperature_2m"],
-                          "codes": data["hourly"]["weathercode"]}
+                          "codes": data["hourly"]["weathercode"], "timezone": data.get("timezone")}
             daily_raw  = data.get("daily", {})
         except Exception:
             logger.exception("open-meteo forecast fetch failed")
             return _weather_cache.get("forecast", {"hourly": [], "daily": [], "error": "Weather provider unavailable"})
 
-    # Hourly: next 8 slots from now
-    now = datetime.now()
+    # Hourly: next 8 slots from now in the provider/location timezone.
+    provider_tz = _timezone_from_name(hourly_raw.get("timezone"))
+    now = _weather_now(provider_tz)
     h_times = hourly_raw.get("times", [])
     h_temps = hourly_raw.get("temps", [])
     h_codes = hourly_raw.get("codes", [])
     hourly = []
     for i, t in enumerate(h_times):
         try:
-            dt = datetime.fromisoformat(t)
+            dt = _parse_local_forecast_time(t, provider_tz)
             if dt < now:
                 continue
         except Exception:
@@ -252,7 +302,7 @@ async def _fetch_openmeteo_forecast(lat: float, lon: float) -> dict:
             break
 
     # Daily: skip today, next 5 days
-    today_str = now.strftime("%Y-%m-%d")
+    today_str = now.date().isoformat()
     d_dates = daily_raw.get("time", [])
     d_maxes = daily_raw.get("temperature_2m_max", [])
     d_mins  = daily_raw.get("temperature_2m_min", [])
@@ -323,36 +373,56 @@ async def _fetch_owm_forecast(lat: float, lon: float) -> dict:
             r.raise_for_status()
             data = r.json()
         items = data.get("list", [])
+        try:
+            city = data.get("city")
+            if not isinstance(city, dict):
+                city = {}
+            provider_offset = int(city.get("timezone") or 0)
+            provider_tz = timezone(timedelta(seconds=provider_offset))
+        except (TypeError, ValueError, OverflowError):
+            provider_tz = timezone.utc
+        now = _weather_now(provider_tz)
 
         hourly = []
-        for item in items[:8]:
-            wa = item.get("weather", [{}])
+        for item in items:
+            item_dt = _parse_owm_forecast_time(item, provider_tz)
+            if item_dt is None:
+                continue
+            if item_dt < now:
+                continue
+            wa = _owm_weather_info(item)
+            main = _owm_main_info(item)
             hourly.append({
-                "time": item.get("dt_txt") or datetime.fromtimestamp(item["dt"], tz=timezone.utc).isoformat(),
-                "temp": item.get("main", {}).get("temp"),
-                "description": wa[0].get("description") if wa else None,
-                "icon": wa[0].get("icon") if wa else None,
+                "time": item_dt.isoformat(),
+                "temp": main.get("temp"),
+                "description": wa.get("description"),
+                "icon": wa.get("icon"),
             })
+            if len(hourly) >= 8:
+                break
 
         day_buckets: dict = defaultdict(list)
         for item in items:
-            day_buckets[item.get("dt_txt", "")[:10]].append(item)
+            item_dt = _parse_owm_forecast_time(item, provider_tz)
+            if item_dt is None:
+                continue
+            day_buckets[item_dt.date().isoformat()].append(item)
 
         daily = []
-        today_str = datetime.now().strftime("%Y-%m-%d")
+        today_str = now.date().isoformat()
         for date_key in sorted(day_buckets.keys()):
             if date_key == today_str:
                 continue
             entries = day_buckets[date_key]
-            temps = [e.get("main", {}).get("temp") for e in entries if e.get("main", {}).get("temp") is not None]
-            midday = min(entries, key=lambda e: abs(int((e.get("dt_txt") or "00:00:00 00")[11:13]) - 12))
-            wa = midday.get("weather", [{}])
+            temps = [_owm_main_info(e).get("temp") for e in entries if _owm_main_info(e).get("temp") is not None]
+            midday = min(entries, key=lambda e: abs(_parse_owm_forecast_time(e, provider_tz).hour - 12))
+            wa = _owm_weather_info(midday)
             daily.append({
                 "day":  date_key,
                 "high": max(temps) if temps else None,
                 "low":  min(temps) if temps else None,
-                "description": wa[0].get("description") if wa else None,
-                "icon": wa[0].get("icon") if wa else None,
+                "description": wa.get("description"),
+                "icon": wa.get("icon"),
             })
             if len(daily) >= 5:
                 break

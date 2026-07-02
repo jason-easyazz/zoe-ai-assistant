@@ -10,6 +10,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from agent_safety import SSRFBlocked, assert_panel_host, is_allowed_panel_host
 from auth import get_current_user, require_admin, get_a2a_caller, require_internal_token
 from database import get_db
 from hermes_http import hermes_auth_headers
@@ -2157,6 +2158,10 @@ async def _proxy_reload_to_pi(pi_host: str) -> None:
     """Fire-and-forget POST /reload so settings apply within ~1s."""
     if not pi_host:
         return
+    if not is_allowed_panel_host(pi_host):
+        # SSRF guard: never POST to loopback / link-local / metadata / public hosts.
+        logger.warning("panel agent reload skipped: %r is not an allowed panel host", pi_host)
+        return
     url = f"http://{pi_host}:{_PANEL_AGENT_PORT}/reload"
     try:
         async with httpx.AsyncClient(timeout=2.5) as c:
@@ -2177,6 +2182,13 @@ async def put_display_preferences(
     device_id = body.get("device_id") or "default"
     incoming = body.get("preferences") if isinstance(body.get("preferences"), dict) else body
     pi_host_override = body.get("pi_host")
+    if pi_host_override:
+        # SSRF guard: reject (don't persist) a panel host that points at
+        # loopback / link-local / metadata / public addresses.
+        try:
+            assert_panel_host(str(pi_host_override))
+        except SSRFBlocked as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     cursor = await db.execute(
         "SELECT * FROM display_preferences WHERE device_id = ?",
@@ -2259,6 +2271,10 @@ async def post_display_brightness(
     except Exception:
         raise HTTPException(status_code=400, detail="value must be an integer 0-100")
     pi_host = body.get("pi_host") or _DEFAULT_PI_HOST
+    try:
+        assert_panel_host(pi_host)  # SSRF guard
+    except SSRFBlocked as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     url = f"http://{pi_host}:{_PANEL_AGENT_PORT}/brightness"
     try:
         async with httpx.AsyncClient(timeout=3.0) as c:
@@ -2311,6 +2327,10 @@ async def post_display_volume(
     pi_host = body.get("pi_host") or None
 
     if pi_host:
+        try:
+            assert_panel_host(pi_host)  # SSRF guard
+        except SSRFBlocked as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
         # Forward to the Pi panel agent which controls the Pi's ALSA/PulseAudio volume
         url = f"http://{pi_host}:{_PANEL_AGENT_PORT}/volume"
         try:
@@ -2459,66 +2479,3 @@ async def delegate_sync(body: _DelegateSyncBody, _: None = Depends(require_inter
         logger.warning("delegate-sync failed target=%s: %s", target, exc)
         raise HTTPException(status_code=502, detail="delegation failed") from exc
     return {"target": target, "ok": bool(result), "result": result or ""}
-
-
-# ─── On-demand STT warm (keep faster-whisper hot via an external timer) ───────
-
-# Startup warmup (ZOE_WHISPER_WARMUP) destabilized the service — it could block
-# the :8000 bind and crash-loop. So warming is triggered post-startup instead:
-# an external timer POSTs here to load (and keep loaded) the persistent
-# faster-whisper worker by running one tiny silent transcription through it.
-
-
-@router.post("/whisper-warm")
-async def whisper_warm(_: None = Depends(require_internal_token)):
-    """Warm (and keep warm) the persistent faster-whisper STT worker on demand.
-
-    Internal/service endpoint (loopback or X-Internal-Token) — meant to be hit
-    by an external timer so STT stays hot without any warmup work during app
-    startup. Runs one tiny silent transcription through the persistent worker,
-    which loads the model in the worker subprocess if cold, else reuses it.
-
-    Best-effort: a warm failure is logged and returned as ``ok: false`` with
-    HTTP 200 — it must never 500 or raise.
-    """
-    # Lazy import: voice_tts pulls in heavy STT/TTS deps and imports back from
-    # system-side helpers; importing at module load would risk an import cycle.
-    from routers.voice_tts import (
-        _create_warmup_wav_path,
-        _reset_faster_whisper_worker,
-        _run_faster_whisper_worker,
-        _write_warmup_silence_wav,
-    )
-
-    try:
-        timeout_s = float(os.environ.get("ZOE_WHISPER_WARMUP_TIMEOUT_S", "45"))
-    except (TypeError, ValueError):
-        timeout_s = 45.0
-
-    wav_path = ""
-    started = time.monotonic()
-    try:
-        # Offload sync file I/O to a worker thread so the event loop never blocks.
-        wav_path = await asyncio.to_thread(_create_warmup_wav_path)
-        await asyncio.to_thread(_write_warmup_silence_wav, wav_path)
-        # Bound the worker call: a hung/deadlocked subprocess must not hang the
-        # request (the 30s keepwarm timer would otherwise pile up coroutines).
-        await asyncio.wait_for(_run_faster_whisper_worker(wav_path), timeout=timeout_s)
-        latency_ms = int((time.monotonic() - started) * 1000)
-        return {"ok": True, "warmed": True, "latency_ms": latency_ms}
-    except Exception as exc:
-        # Reset the persistent worker so a broken/hung one is torn down and the
-        # NEXT warm starts fresh — otherwise every subsequent ping reuses the
-        # broken worker and the model never recovers without a service restart.
-        try:
-            await _reset_faster_whisper_worker()
-        except Exception:  # noqa: BLE001 - best-effort teardown
-            logger.warning("whisper-warm: worker reset after failure also failed", exc_info=True)
-        logger.warning("whisper-warm failed: %s", exc)
-        return {"ok": False, "warmed": False, "error": exc.__class__.__name__}
-    finally:
-        if wav_path:
-            try:
-                os.unlink(wav_path)
-            except OSError:
-                pass

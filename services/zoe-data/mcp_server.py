@@ -13,6 +13,8 @@ from datetime import date, datetime, timedelta
 import os
 
 from runtime_env import bootstrap_runtime_env
+from agent_safety import SSRFBlocked, assert_panel_url, assert_public_url, guard_browser_page
+from time_utils import today_for_zoe_tz
 
 bootstrap_runtime_env()
 
@@ -1467,7 +1469,7 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         return {**result, "date": args["start_date"], "status": "created"}
 
     elif name == "calendar_today":
-        today = date.today().isoformat()
+        today = today_for_zoe_tz().isoformat()
         cursor = await db.execute(
             "SELECT id, title, start_time, end_time, category, location FROM events"
             " WHERE start_date = ? AND (visibility = 'family' OR user_id = ?) AND deleted = 0"
@@ -1570,7 +1572,7 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
 
     elif name == "reminder_list":
         if args.get("today_only"):
-            today = date.today().isoformat()
+            today = today_for_zoe_tz().isoformat()
             cursor = await db.execute(
                 "SELECT id, title, due_date, due_time, priority, category FROM reminders"
                 " WHERE due_date = ? AND (visibility = 'family' OR user_id = ?)"
@@ -2255,7 +2257,14 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         return {**result, "date": tx_date, "status": "created"}
 
     elif name == "transaction_list":
-        limit = args.get("limit", 20)
+        raw_limit = args.get("limit", 20)
+        try:
+            if isinstance(raw_limit, bool):
+                raise ValueError("boolean limit is not valid")
+            limit = int(raw_limit)
+        except (TypeError, ValueError):
+            limit = 20
+        limit = max(1, min(limit, 100))
         conditions = ["(visibility='family' OR user_id=?) AND deleted=0"]
         params = [user_id]
         if args.get("start_date"):
@@ -2536,6 +2545,24 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         panel_id = args.get("panel_id") or None
         caption = args.get("caption") or ""
         navigate_to = args.get("navigate_to") or None
+        if navigate_to:
+            # SSRF guard on the browser nav target. The navigation runs in the
+            # Hermes-owned broker (out-of-process), so we cannot attach a Playwright
+            # route guard here for per-redirect-hop interception. Panels are LAN
+            # display devices, so we CONSTRAIN the INITIAL navigate_to to an allowed
+            # private-LAN panel host — we never ASK the broker to load
+            # loopback/metadata/public. (Public-website screenshots go through
+            # cloakbrowser_screenshot, which has the per-hop route guard.)
+            #
+            # ACCEPTED RESIDUAL: an allowed LAN page could itself 30x to
+            # loopback/metadata *inside the broker*; closing that requires the
+            # broker to enforce redirect-hop validation (its own route guard /
+            # CDP). That is broker-side and out of scope for this in-process diff.
+            # Documented in agent_safety.guard_browser_page + services/zoe-data/AGENTS.md.
+            try:
+                assert_panel_url(str(navigate_to))
+            except SSRFBlocked as exc:
+                return {"ok": False, "error": f"blocked: {exc}"}
         plan = _BROWSER_BROKER.plan_action(
             action="capture_screenshot",
             params={
@@ -2612,6 +2639,10 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         url = str(args.get("url") or "").strip()
         if not url.startswith(("http://", "https://")):
             return {"ok": False, "error": "url must start with http:// or https://"}
+        try:
+            assert_public_url(url)  # SSRF guard: block private/loopback/metadata targets
+        except SSRFBlocked as exc:
+            return {"ok": False, "error": f"blocked: {exc}"}
         text_limit = int(args.get("text_limit") or 4000)
         wait_until = str(args.get("wait_until") or "domcontentloaded")
         try:
@@ -2621,6 +2652,9 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         context = await launch_context_async(headless=True)
         try:
             page = await context.new_page()
+            # SSRF: validate EVERY request/redirect hop pre-connect (a public URL
+            # may 30x to an internal/metadata host); aborts the route before connect.
+            await guard_browser_page(page)
             await page.goto(url, wait_until=wait_until, timeout=30000)
             title = await page.title()
             try:
@@ -2646,6 +2680,10 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         url = str(args.get("url") or "").strip()
         if not url.startswith(("http://", "https://")):
             return {"ok": False, "error": "url must start with http:// or https://"}
+        try:
+            assert_public_url(url)  # SSRF guard: block private/loopback/metadata targets
+        except SSRFBlocked as exc:
+            return {"ok": False, "error": f"blocked: {exc}"}
         wait_until = str(args.get("wait_until") or "domcontentloaded")
         full_page = bool(args.get("full_page", False))
         try:
@@ -2655,6 +2693,8 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         context = await launch_context_async(headless=True)
         try:
             page = await context.new_page()
+            # SSRF: validate every request/redirect hop pre-connect (see above).
+            await guard_browser_page(page)
             await page.goto(url, wait_until=wait_until, timeout=30000)
             screenshot = await page.screenshot(type="png", full_page=full_page)
             import base64 as _base64

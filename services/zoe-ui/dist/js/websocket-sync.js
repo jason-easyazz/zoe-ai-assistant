@@ -388,12 +388,29 @@ window.ZoeWebSockets = {
         // ── PIN challenge ──────────────────────────────────────────────────
         this.push.on('panel_pin_request', (data) => {
             const payload = unwrapPayload(data);
-            let currentPanelId = '';
+            let knownPanelIds = [];
+            let authoritativePanelIds = [];
             try {
                 const params = new URLSearchParams(window.location.search || '');
-                currentPanelId = (params.get('panel_id') || localStorage.getItem('zoe_touch_panel_id') || '').trim();
+                const urlPanelId = String(params.get('panel_id') || '').trim();
+                const registeredPanelId = String(localStorage.getItem('zoe_panel_id') || '').trim();
+                const aliasPanelId = String(localStorage.getItem('zoe_touch_panel_id') || '').trim();
+                const generatedAliasId = String(localStorage.getItem('zoe_touch_panel_alias_generated') || '').trim();
+                knownPanelIds = [
+                    urlPanelId,
+                    registeredPanelId,
+                    aliasPanelId,
+                ].filter(Boolean);
+                authoritativePanelIds = [
+                    (urlPanelId && urlPanelId !== generatedAliasId) ? urlPanelId : '',
+                    registeredPanelId,
+                ].filter(Boolean);
             } catch (_) {}
-            if (payload.panel_id && currentPanelId && payload.panel_id !== currentPanelId) {
+            const requestedPanelId = String(payload.panel_id || '').trim();
+            // Alias-only browsers can receive a canonical registered-id payload
+            // after the server resolves their socket subscription, so only reject
+            // mismatches once the browser knows an authoritative id itself.
+            if (requestedPanelId && authoritativePanelIds.length && !knownPanelIds.includes(requestedPanelId)) {
                 return;
             }
             // Prefer modern panel_request_auth flow (touch login page) over
@@ -437,7 +454,3 @@ window.ZoeWebSockets = {
         console.log('[ZoeWS] Panel push channel connected, panel_id:', panelId);
     }
 };
-
-
-
-
