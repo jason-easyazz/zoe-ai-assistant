@@ -51,6 +51,18 @@ const HTTP_TIMEOUT_MS = (() => {
   return Number.isFinite(n) && n > 0 ? n : 8000;
 })();
 
+// Combine the turn's abort signal (if any) with a per-tool timeout. The old code
+// (`signal ?? AbortSignal.timeout(...)`) made the timeout dead code: the turn
+// signal is essentially always present, so a blocked zoe-data endpoint hung to the
+// turn deadline (~120s) instead of the intended 8s. AbortSignal.any aborts on the
+// FIRST of {turn aborted, timeout}, so a stuck endpoint is bounded at 8s while the
+// turn can still cancel earlier. (AbortSignal.any is available on Node >= 20.3;
+// this lab targets Node >= 22.)
+function fetchSignal(signal: AbortSignal | undefined): AbortSignal {
+  const timeout = AbortSignal.timeout(HTTP_TIMEOUT_MS);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
 // Identities that zoe-data accepts but that mean "not a real user" — treat as no
 // user so a tool fails closed instead of silently returning an empty packet.
 const GUEST_IDENTITIES = new Set(['guest', 'anonymous', 'anon', 'unknown', 'none']);
@@ -108,7 +120,7 @@ async function dispatchIntent(
       method: 'POST',
       headers: internalHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ user_id: userId, intent, slots }),
-      signal: signal ?? AbortSignal.timeout(HTTP_TIMEOUT_MS),
+      signal: fetchSignal(signal),
     });
     if (!res.ok) {
       return { ok: false, text: `I couldn't reach the ${service} service right now (it returned ${res.status}).` };
@@ -213,7 +225,7 @@ const recallMemory = defineTool({
       if (query) url.searchParams.set('message', query.slice(0, 500));
       const res = await fetch(url, {
         headers: internalHeaders(),
-        signal: signal ?? AbortSignal.timeout(HTTP_TIMEOUT_MS),
+        signal: fetchSignal(signal),
       });
       if (!res.ok) return "I couldn't reach my memory right now.";
       const data = (await res.json()) as { packet?: string };
