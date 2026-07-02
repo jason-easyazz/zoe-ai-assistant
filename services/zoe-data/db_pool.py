@@ -11,6 +11,7 @@ Migration strategy:
 New code should use db.fetch(), db.fetchrow(), db.execute() directly.
 Old code using cursor = await db.execute() + cursor.fetchall() still works.
 """
+import asyncio
 import asyncpg
 import logging
 import os
@@ -20,6 +21,14 @@ from contextlib import asynccontextmanager
 logger = logging.getLogger(__name__)
 
 _pool: asyncpg.Pool | None = None
+_pool_loop: asyncio.AbstractEventLoop | None = None
+
+_SQLITE_DATETIME_OFFSET_RE = re.compile(
+    r"datetime\s*\(\s*'now'\s*,\s*'([+-]?)(\d+)\s+(\w+)'\s*\)",
+    re.IGNORECASE,
+)
+_SQLITE_DATETIME_NOW_RE = re.compile(r"datetime\s*\(\s*'now'\s*\)", re.IGNORECASE)
+_NOW_RE = re.compile(r"\bNOW\(\)(?!::)", re.IGNORECASE)
 
 
 async def _release_safely(pool: "asyncpg.Pool", conn: "asyncpg.Connection") -> None:
@@ -48,9 +57,52 @@ async def _release_safely(pool: "asyncpg.Pool", conn: "asyncpg.Connection") -> N
         logger.warning("db_pool: unexpected error releasing connection", exc_info=True)
 
 
-async def init_pool() -> None:
-    """Initialize the asyncpg connection pool. Call once at startup."""
-    global _pool
+def _bound_loop(pool: "asyncpg.Pool") -> asyncio.AbstractEventLoop | None:
+    """Return the loop associated with a pool, preferring our explicit tracking."""
+    return _pool_loop or getattr(pool, "_loop", None)
+
+
+async def _discard_pool(
+    pool: "asyncpg.Pool",
+    pool_loop: asyncio.AbstractEventLoop | None,
+    current_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """Close a same-loop pool, or terminate a stale cross-loop pool."""
+    if pool.is_closing():
+        return
+    if pool_loop is current_loop:
+        await pool.close()
+        return
+
+    # asyncpg pools own loop-bound futures/timers. Closing a stale pool from a
+    # replacement loop can raise "Event loop is closed" or cross-loop Future
+    # errors, so terminate synchronously and replace it on the current loop.
+    terminate = getattr(pool, "terminate", None)
+    if callable(terminate):
+        terminate()
+    else:
+        logger.warning("db_pool: stale pool has no terminate() method; discarding without close")
+
+
+async def init_pool() -> asyncpg.Pool:
+    """Initialize the asyncpg connection pool.
+
+    Safe to call repeatedly during tests/startup retries: if a live pool exists
+    on the current event loop, return it. If the cached pool belongs to a stale
+    loop, discard it and create a replacement on the running loop.
+    """
+    global _pool, _pool_loop
+    current_loop = asyncio.get_running_loop()
+    if _pool is not None:
+        pool_loop = _bound_loop(_pool)
+        if not _pool.is_closing() and pool_loop is current_loop:
+            return _pool
+
+        stale_pool = _pool
+        _pool = None
+        _pool_loop = None
+        await _discard_pool(stale_pool, pool_loop, current_loop)
+
     # Read at call time (not import time) so EnvironmentFile values are available
     postgres_url = os.environ.get("POSTGRES_URL", "")
     if not postgres_url:
@@ -64,14 +116,18 @@ async def init_pool() -> None:
         max_size=10,
         command_timeout=30,
     )
+    _pool_loop = current_loop
+    return _pool
 
 
 async def close_pool() -> None:
     """Close the connection pool. Call on shutdown."""
-    global _pool
+    global _pool, _pool_loop
     if _pool is not None:
-        await _pool.close()
+        current_loop = asyncio.get_running_loop()
+        await _discard_pool(_pool, _bound_loop(_pool), current_loop)
         _pool = None
+        _pool_loop = None
 
 
 def get_pool() -> asyncpg.Pool:
@@ -81,13 +137,34 @@ def get_pool() -> asyncpg.Pool:
     return _pool
 
 
+def _parse_status_rowcount(status: str) -> int:
+    """Affected-row count from an asyncpg command-status tag.
+
+    asyncpg's `Connection.execute` returns tags like "DELETE 5", "UPDATE 3",
+    "INSERT 0 2" — the count is the trailing integer. Returns -1 (DB-API's
+    "unknown") for tags without one (e.g. "CREATE TABLE").
+    """
+    try:
+        return int(status.rsplit(None, 1)[-1])
+    except (AttributeError, ValueError, IndexError):
+        return -1
+
+
 class _Cursor:
     """Buffered cursor providing aiosqlite-compatible fetchall/fetchone/iteration."""
-    __slots__ = ("_rows", "_idx")
+    __slots__ = ("_rows", "_idx", "_rowcount")
 
-    def __init__(self, rows: list):
+    def __init__(self, rows: list, rowcount: int | None = None):
         self._rows = rows
         self._idx = 0
+        # Mirror aiosqlite/DB-API: row count of the last operation. For SELECT/
+        # RETURNING this is the number of buffered rows; for write statements the
+        # caller passes the parsed command-status count.
+        self._rowcount = len(rows) if rowcount is None else rowcount
+
+    @property
+    def rowcount(self) -> int:
+        return self._rowcount
 
     async def fetchall(self):
         return self._rows
@@ -187,8 +264,8 @@ class AsyncpgCompat:
             rows = await self._conn.fetch(sql_pg, *args)
             return _Cursor(list(rows))
         else:
-            await self._conn.execute(sql_pg, *args)
-            return _Cursor([])
+            status = await self._conn.execute(sql_pg, *args)
+            return _Cursor([], rowcount=_parse_status_rowcount(status))
 
     async def execute_fetchall(self, sql: str, params=()) -> list:
         """aiosqlite-compatible shorthand: execute and return all rows immediately.
@@ -260,6 +337,21 @@ async def get_db_ctx():
         await _release_safely(pool, conn)
 
 
+def _copy_quoted_sql(sql: str, start: int) -> tuple[str, int]:
+    """Return the quoted token starting at `start`, preserving doubled escapes."""
+    quote = sql[start]
+    pos = start + 1
+    while pos < len(sql):
+        if sql[pos] == quote:
+            if pos + 1 < len(sql) and sql[pos + 1] == quote:
+                pos += 2
+                continue
+            pos += 1
+            break
+        pos += 1
+    return sql[start:pos], pos
+
+
 def _adapt_params(sql: str, params) -> tuple[str, list]:
     """Convert ? placeholders to $1, $2, $3... for asyncpg.
 
@@ -267,36 +359,54 @@ def _adapt_params(sql: str, params) -> tuple[str, list]:
     into TEXT columns (migrated from SQLite) don't get DatatypeMismatchError.
     Only replaces NOW() not already followed by :: to avoid double-casting.
 
-    WARNING: Transition shim — replaces ALL '?' characters including those
-    inside string literals. Migrate callers to explicit $N params.
+    SQL quoted literals/identifiers are copied verbatim so literal question
+    marks and text like 'NOW()' do not become placeholders or casts.
     """
-    i = 0
+    param_index = 0
+    pos = 0
+    converted: list[str] = []
 
-    def _replace(_match):
-        nonlocal i
-        i += 1
-        return f"${i}"
+    while pos < len(sql):
+        char = sql[pos]
+        if char in ("'", '"'):
+            quoted, pos = _copy_quoted_sql(sql, pos)
+            converted.append(quoted)
+            continue
 
-    # Rewrite SQLite datetime('now', '±N unit') → PostgreSQL CURRENT_TIMESTAMP ± INTERVAL.
-    # Result is cast to ::text so it compares correctly against TEXT timestamp columns.
-    # Uses CURRENT_TIMESTAMP (not NOW()) to avoid triggering the NOW()::text rewrite below.
-    # Handles: datetime('now', '-7 days'), datetime('now', '+1 day'), etc.
-    # Does NOT handle datetime('now', ?) — fix those at the call site.
-    def _rewrite_sqlite_datetime(m: re.Match) -> str:
-        sign = "-" if m.group(1) == "-" else "+"
-        return f"(CURRENT_TIMESTAMP {sign} INTERVAL '{m.group(2)} {m.group(3)}')::text"
+        # Rewrite SQLite datetime('now', '±N unit') → PostgreSQL CURRENT_TIMESTAMP ± INTERVAL.
+        # Result is cast to ::text so it compares correctly against TEXT timestamp columns.
+        # Uses CURRENT_TIMESTAMP (not NOW()) to avoid triggering the NOW()::text rewrite below.
+        # Handles: datetime('now', '-7 days'), datetime('now', '+1 day'), etc.
+        # Does NOT handle datetime('now', ?) — fix those at the call site.
+        datetime_match = _SQLITE_DATETIME_OFFSET_RE.match(sql, pos)
+        if datetime_match is not None:
+            sign = "-" if datetime_match.group(1) == "-" else "+"
+            converted.append(
+                f"(CURRENT_TIMESTAMP {sign} INTERVAL "
+                f"'{datetime_match.group(2)} {datetime_match.group(3)}')::text"
+            )
+            pos = datetime_match.end()
+            continue
 
-    sql = re.sub(
-        r"datetime\s*\(\s*'now'\s*,\s*'([+-]?)(\d+)\s+(\w+)'\s*\)",
-        _rewrite_sqlite_datetime,
-        sql,
-        flags=re.IGNORECASE,
-    )
-    # Rewrite bare datetime('now') → CURRENT_TIMESTAMP::text
-    sql = re.sub(r"datetime\s*\(\s*'now'\s*\)", "CURRENT_TIMESTAMP::text", sql, flags=re.IGNORECASE)
+        datetime_now_match = _SQLITE_DATETIME_NOW_RE.match(sql, pos)
+        if datetime_now_match is not None:
+            converted.append("CURRENT_TIMESTAMP::text")
+            pos = datetime_now_match.end()
+            continue
 
-    # Auto-cast NOW() → NOW()::text for TEXT timestamp columns (SQLite migration compat)
-    sql = re.sub(r"\bNOW\(\)(?!::)", "NOW()::text", sql, flags=re.IGNORECASE)
+        now_match = _NOW_RE.match(sql, pos)
+        if now_match is not None:
+            converted.append("NOW()::text")
+            pos = now_match.end()
+            continue
 
-    converted = re.sub(r"\?", _replace, sql)
-    return converted, list(params) if params is not None else []
+        if char == "?":
+            param_index += 1
+            converted.append(f"${param_index}")
+            pos += 1
+            continue
+
+        converted.append(char)
+        pos += 1
+
+    return "".join(converted), list(params) if params is not None else []

@@ -1,16 +1,15 @@
 import asyncio
 import base64
 import contextvars
+import importlib.util
 import json
 import logging
 import os
 import re
 import shutil
-import sys
 import tempfile
 import threading
 import time
-import wave
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -432,6 +431,10 @@ VOICE_PROFILES = {
 
 def _has_espeak_ng() -> bool:
     return shutil.which("espeak-ng") is not None
+
+
+def edge_tts_available() -> bool:
+    return importlib.util.find_spec("edge_tts") is not None
 
 
 async def _synthesize_espeak(text: str, speed: int, pitch: int, volume: int) -> bytes:
@@ -1783,16 +1786,9 @@ async def synthesize(payload: dict, caller: dict = Depends(_require_voice_auth))
     content_type = "audio/wav"
     provider = "none"
 
-    # ── TTS waterfall: kokoro-sidecar → local sidecar → Kokoro ONNX → Edge TTS → espeak-ng ──
-    if mode in {"hybrid", "local"}:
-        audio_bytes = await _synthesize_local_service(text, profile=profile, base_url=local_tts_url)
-        if audio_bytes:
-            provider = "local-tts"
-            if not audio_bytes.startswith(b"RIFF"):
-                content_type = "audio/mpeg"
-
+    # ── TTS waterfall: Kokoro sidecar → Kokoro ONNX → local sidecar → Edge TTS → espeak-ng ──
     # Kokoro sidecar — GPU-accelerated natural af_sky voice (~150ms warm on Jetson).
-    if audio_bytes is None and mode != "cloud":
+    if mode != "cloud":
         audio_bytes = await _synthesize_kokoro_sidecar(text)
         if audio_bytes:
             provider = "kokoro-sidecar"
@@ -1804,6 +1800,13 @@ async def synthesize(payload: dict, caller: dict = Depends(_require_voice_auth))
         if audio_bytes:
             provider = "kokoro-onnx"
             content_type = "audio/wav"
+
+    if audio_bytes is None and mode in {"hybrid", "local"}:
+        audio_bytes = await _synthesize_local_service(text, profile=profile, base_url=local_tts_url)
+        if audio_bytes:
+            provider = "local-tts"
+            if not audio_bytes.startswith(b"RIFF"):
+                content_type = "audio/mpeg"
 
     if audio_bytes is None and mode in {"hybrid", "cloud", "edge"}:
         try:
@@ -1881,13 +1884,8 @@ async def voice_stream(payload: dict, caller: dict = Depends(_require_voice_auth
             provider = "none"
             error_msg: Optional[str] = None
 
-            # Waterfall: kokoro-sidecar → local sidecar → Kokoro ONNX → Edge TTS → espeak
-            if mode in {"hybrid", "local"} and local_tts_url:
-                audio_bytes = await _synthesize_local_service(sentence, profile=profile, base_url=local_tts_url)
-                if audio_bytes:
-                    provider = "local-tts"
-
-            if audio_bytes is None and mode != "cloud":
+            # Waterfall: Kokoro sidecar → Kokoro ONNX → local sidecar → Edge TTS → espeak
+            if mode != "cloud":
                 audio_bytes = await _synthesize_kokoro_sidecar(sentence)
                 if audio_bytes:
                     provider = "kokoro-sidecar"
@@ -1896,6 +1894,11 @@ async def voice_stream(payload: dict, caller: dict = Depends(_require_voice_auth
                 audio_bytes = await _synthesize_kokoro(sentence)
                 if audio_bytes:
                     provider = "kokoro-onnx"
+
+            if audio_bytes is None and mode in {"hybrid", "local"} and local_tts_url:
+                audio_bytes = await _synthesize_local_service(sentence, profile=profile, base_url=local_tts_url)
+                if audio_bytes:
+                    provider = "local-tts"
 
             if audio_bytes is None and mode in {"hybrid", "cloud", "edge"}:
                 try:
@@ -1941,66 +1944,6 @@ async def voice_stream(payload: dict, caller: dict = Depends(_require_voice_auth
     )
 
 
-def _whisper_cpp_binary() -> Optional[str]:
-    explicit = (os.environ.get("ZOE_WHISPER_CPP_BIN") or "").strip()
-    if explicit and os.path.isfile(explicit) and os.access(explicit, os.X_OK):
-        return explicit
-    for name in ("whisper-cli", "whisper.cpp", "main"):
-        p = shutil.which(name)
-        if p:
-            return p
-    return None
-
-
-async def _run_whisper_cpp(wav_path: str) -> str:
-    """Run whisper.cpp CLI; return transcript text (may be empty)."""
-    bin_path = _whisper_cpp_binary()
-    model = (os.environ.get("ZOE_WHISPER_MODEL") or "").strip()
-    if not bin_path:
-        raise RuntimeError(
-            "whisper.cpp binary not found; set ZOE_WHISPER_CPP_BIN or install whisper-cli on PATH"
-        )
-    if not model or not os.path.isfile(model):
-        raise RuntimeError(
-            "whisper model not found; set ZOE_WHISPER_MODEL to a .bin file (e.g. ggml-base.en.bin)"
-        )
-    lang = (os.environ.get("ZOE_WHISPER_LANG") or "en").strip()
-    extra = os.environ.get("ZOE_WHISPER_EXTRA_ARGS", "-nt").strip()
-    extra_parts = extra.split() if extra else []
-    cmd = [bin_path, "-m", model, "-f", wav_path, "-l", lang] + extra_parts
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    out, err = await asyncio.wait_for(proc.communicate(), timeout=float(os.environ.get("ZOE_WHISPER_TIMEOUT_S", "120")))
-    if proc.returncode != 0:
-        msg = err.decode(errors="ignore").strip() or out.decode(errors="ignore").strip()
-        raise RuntimeError(f"whisper.cpp failed (exit {proc.returncode}): {msg[:500]}")
-    text = out.decode(errors="ignore").strip()
-    return text
-
-
-# Cached faster-whisper model instance to avoid ~1s reload per call
-_faster_whisper_model = None
-_faster_whisper_model_name: str = ""
-_faster_whisper_lock = asyncio.Lock()
-_faster_whisper_worker: "_FasterWhisperWorker | None" = None
-
-
-def _use_in_process_faster_whisper() -> bool:
-    return (os.environ.get("ZOE_WHISPER_IN_PROCESS") or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _use_persistent_faster_whisper_worker() -> bool:
-    return (os.environ.get("ZOE_WHISPER_PERSISTENT_WORKER") or "true").strip().lower() not in {
-        "0",
-        "false",
-        "no",
-        "off",
-    }
-
-
 def _normalize_voice_command_text(text: str) -> str:
     """Correct common STT homophones that block deterministic voice intents."""
     normalized = (text or "").strip()
@@ -2015,481 +1958,6 @@ def _normalize_voice_command_text(text: str) -> str:
     for pattern, repl in replacements:
         normalized = re.sub(pattern, repl, normalized, flags=re.IGNORECASE)
     return normalized
-
-
-async def _get_faster_whisper_model():
-    """Lazy-load and cache a faster-whisper WhisperModel instance."""
-    global _faster_whisper_model, _faster_whisper_model_name
-    model_name = (os.environ.get("ZOE_WHISPER_MODEL") or "base.en").strip()
-    async with _faster_whisper_lock:
-        if _faster_whisper_model is not None and _faster_whisper_model_name == model_name:
-            return _faster_whisper_model
-        try:
-            from faster_whisper import WhisperModel  # type: ignore
-            device = "cuda" if os.environ.get("ZOE_WHISPER_DEVICE", "").lower() == "cuda" else "cpu"
-            # int8_float16 = int8-quantized weights + float16 compute: best speed/memory for Jetson
-            # CPU defaults to float32; ctranslate2 int8 is not supported on Jetson ARM.
-            default_compute = "int8_float16" if device == "cuda" else "float32"
-            compute_type = os.environ.get("ZOE_WHISPER_COMPUTE_TYPE", default_compute).strip() or default_compute
-            logger.info("Loading faster-whisper model=%s device=%s", model_name, device)
-            _faster_whisper_model = WhisperModel(model_name, device=device, compute_type=compute_type)
-            _faster_whisper_model_name = model_name
-            logger.info("faster-whisper model loaded: %s", model_name)
-            return _faster_whisper_model
-        except ImportError:
-            logger.debug("faster-whisper not installed")
-            return None
-        except Exception as exc:
-            logger.warning("faster-whisper model load failed: %s", exc)
-            return None
-
-
-async def _run_faster_whisper_subprocess(wav_path: str) -> str:
-    """Transcribe with faster-whisper in a child process so native crashes cannot kill the API worker."""
-    model_name = (os.environ.get("ZOE_WHISPER_MODEL") or "base.en").strip()
-    device = "cuda" if os.environ.get("ZOE_WHISPER_DEVICE", "").lower() == "cuda" else "cpu"
-    timeout = _env_float("ZOE_WHISPER_TIMEOUT_S", 20.0)
-
-    code = r"""
-import json
-import os
-import sys
-
-from faster_whisper import WhisperModel
-
-wav_path = sys.argv[1]
-model_name = os.environ.get("ZOE_WHISPER_MODEL") or "base.en"
-device = "cuda" if os.environ.get("ZOE_WHISPER_DEVICE", "").lower() == "cuda" else "cpu"
-default_compute = "int8_float16" if device == "cuda" else "float32"
-compute_type = (os.environ.get("ZOE_WHISPER_COMPUTE_TYPE") or default_compute).strip() or default_compute
-lang = (os.environ.get("ZOE_WHISPER_LANG") or "en").strip()
-
-def _env_float(name, default):
-    try:
-        return float(os.environ.get(name, str(default)))
-    except (TypeError, ValueError):
-        return default
-
-def _env_int(name, default):
-    try:
-        return int(os.environ.get(name, str(default)))
-    except (TypeError, ValueError):
-        return default
-
-model = WhisperModel(model_name, device=device, compute_type=compute_type)
-segments, _info = model.transcribe(
-    wav_path,
-    language=lang,
-    beam_size=_env_int("ZOE_WHISPER_BEAM_SIZE", 5),
-    vad_filter=True,
-    vad_parameters={
-        "threshold": _env_float("ZOE_WHISPER_VAD_THRESHOLD", 0.50),
-        "min_speech_duration_ms": _env_int("ZOE_WHISPER_MIN_SPEECH_MS", 120),
-        "min_silence_duration_ms": _env_int("ZOE_WHISPER_MIN_SILENCE_MS", 350),
-        "speech_pad_ms": _env_int("ZOE_WHISPER_SPEECH_PAD_MS", 220),
-    },
-)
-text = " ".join(seg.text.strip() for seg in segments).strip()
-print(json.dumps({"text": text}), flush=True)
-"""
-
-    logger.info("Running faster-whisper subprocess model=%s device=%s", model_name, device)
-    proc = await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-c",
-        code,
-        wav_path,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=os.environ.copy(),
-    )
-    try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError as exc:
-        proc.kill()
-        await proc.wait()
-        raise RuntimeError(f"faster-whisper timed out after {timeout:.1f}s") from exc
-
-    stderr = err.decode(errors="ignore").strip()
-    stdout = out.decode(errors="ignore").strip()
-    if proc.returncode != 0:
-        if proc.returncode and proc.returncode < 0:
-            reason = f"signal {-proc.returncode}"
-        else:
-            reason = f"exit {proc.returncode}"
-        detail = stderr or stdout or "no stderr"
-        raise RuntimeError(f"faster-whisper subprocess failed ({reason}): {detail[:500]}")
-
-    try:
-        payload = json.loads(stdout.splitlines()[-1] if stdout else "{}")
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"faster-whisper subprocess returned invalid output: {stdout[:500]}") from exc
-    return str(payload.get("text") or "").strip()
-
-
-class _FasterWhisperWorker:
-    """Long-lived isolated faster-whisper process with one loaded model."""
-
-    def __init__(self) -> None:
-        self.proc: asyncio.subprocess.Process | None = None
-        self.lock = asyncio.Lock()
-        self.model_key = ""
-
-    def _current_model_key(self) -> str:
-        model_name = (os.environ.get("ZOE_WHISPER_MODEL") or "base.en").strip()
-        device = "cuda" if os.environ.get("ZOE_WHISPER_DEVICE", "").lower() == "cuda" else "cpu"
-        default_compute = "int8_float16" if device == "cuda" else "float32"
-        compute_type = (os.environ.get("ZOE_WHISPER_COMPUTE_TYPE") or default_compute).strip() or default_compute
-        return "|".join((model_name, device, compute_type))
-
-    async def stop(self) -> None:
-        proc = self.proc
-        self.proc = None
-        self.model_key = ""
-        if proc and proc.returncode is None:
-            proc.terminate()
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=2.0)
-            except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
-
-    async def _stderr_snippet(self, limit: int = 1200) -> str:
-        if not self.proc or not self.proc.stderr:
-            return ""
-        try:
-            data = await asyncio.wait_for(self.proc.stderr.read(limit), timeout=0.2)
-        except Exception:
-            return ""
-        return data.decode(errors="ignore").strip()
-
-    async def _ensure_started(self) -> None:
-        key = self._current_model_key()
-        if self.proc and self.proc.returncode is None and self.model_key == key:
-            return
-        await self.stop()
-        startup_timeout = _env_float("ZOE_WHISPER_WORKER_START_TIMEOUT_S", 30.0)
-        code = r"""
-import json
-import os
-import sys
-
-from faster_whisper import WhisperModel
-
-model_name = os.environ.get("ZOE_WHISPER_MODEL") or "base.en"
-device = "cuda" if os.environ.get("ZOE_WHISPER_DEVICE", "").lower() == "cuda" else "cpu"
-default_compute = "int8_float16" if device == "cuda" else "float32"
-compute_type = (os.environ.get("ZOE_WHISPER_COMPUTE_TYPE") or default_compute).strip() or default_compute
-lang = (os.environ.get("ZOE_WHISPER_LANG") or "en").strip()
-
-def _env_float(name, default):
-    try:
-        return float(os.environ.get(name, str(default)))
-    except (TypeError, ValueError):
-        return default
-
-def _env_int(name, default):
-    try:
-        return int(os.environ.get(name, str(default)))
-    except (TypeError, ValueError):
-        return default
-
-model = WhisperModel(model_name, device=device, compute_type=compute_type)
-print(json.dumps({"ready": True, "model": model_name, "device": device, "compute_type": compute_type}), flush=True)
-
-for line in sys.stdin:
-    try:
-        payload = json.loads(line)
-        wav_path = str(payload.get("wav_path") or "")
-        segments, _info = model.transcribe(
-            wav_path,
-            language=lang,
-            beam_size=_env_int("ZOE_WHISPER_BEAM_SIZE", 5),
-            vad_filter=True,
-            vad_parameters={
-                "threshold": _env_float("ZOE_WHISPER_VAD_THRESHOLD", 0.50),
-                "min_speech_duration_ms": _env_int("ZOE_WHISPER_MIN_SPEECH_MS", 120),
-                "min_silence_duration_ms": _env_int("ZOE_WHISPER_MIN_SILENCE_MS", 350),
-                "speech_pad_ms": _env_int("ZOE_WHISPER_SPEECH_PAD_MS", 220),
-            },
-        )
-        text = " ".join(seg.text.strip() for seg in segments).strip()
-        print(json.dumps({"text": text}), flush=True)
-    except Exception as exc:
-        print(json.dumps({"error": str(exc)}), flush=True)
-"""
-        logger.info("Starting faster-whisper worker key=%s", key)
-        self.proc = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-u",
-            "-c",
-            code,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=os.environ.copy(),
-        )
-        if not self.proc.stdout:
-            await self.stop()
-            raise RuntimeError("faster-whisper worker stdout unavailable")
-        try:
-            ready_raw = await asyncio.wait_for(self.proc.stdout.readline(), timeout=startup_timeout)
-        except asyncio.TimeoutError as exc:
-            detail = await self._stderr_snippet()
-            await self.stop()
-            suffix = f": {detail[:500]}" if detail else ""
-            raise RuntimeError(f"faster-whisper worker startup timed out after {startup_timeout:.1f}s{suffix}") from exc
-        if self.proc.returncode is not None:
-            detail = await self._stderr_snippet()
-            suffix = f": {detail[:500]}" if detail else ""
-            raise RuntimeError(f"faster-whisper worker exited during startup ({self.proc.returncode}){suffix}")
-        try:
-            ready = json.loads(ready_raw.decode(errors="ignore"))
-        except json.JSONDecodeError as exc:
-            detail = await self._stderr_snippet()
-            await self.stop()
-            suffix = f": {detail[:500]}" if detail else ""
-            raise RuntimeError(f"faster-whisper worker returned invalid startup output: {ready_raw[:300]!r}{suffix}") from exc
-        if not ready.get("ready"):
-            await self.stop()
-            raise RuntimeError(f"faster-whisper worker did not become ready: {ready}")
-        self.model_key = key
-
-    async def transcribe(self, wav_path: str) -> str:
-        async with self.lock:
-            await self._ensure_started()
-            if not self.proc or not self.proc.stdin or not self.proc.stdout or self.proc.returncode is not None:
-                raise RuntimeError("faster-whisper worker is not running")
-            timeout = _env_float("ZOE_WHISPER_TIMEOUT_S", 20.0)
-            request = json.dumps({"wav_path": wav_path}) + "\n"
-            try:
-                self.proc.stdin.write(request.encode())
-                await self.proc.stdin.drain()
-                raw = await asyncio.wait_for(self.proc.stdout.readline(), timeout=timeout)
-            except Exception:
-                await self.stop()
-                raise
-            if self.proc.returncode is not None:
-                code = self.proc.returncode
-                await self.stop()
-                raise RuntimeError(f"faster-whisper worker exited ({code})")
-            try:
-                payload = json.loads(raw.decode(errors="ignore"))
-            except json.JSONDecodeError as exc:
-                await self.stop()
-                raise RuntimeError(f"faster-whisper worker returned invalid output: {raw[:300]!r}") from exc
-            if payload.get("error"):
-                raise RuntimeError(f"faster-whisper worker failed: {str(payload['error'])[:500]}")
-            return str(payload.get("text") or "").strip()
-
-
-async def _run_faster_whisper_worker(wav_path: str) -> str:
-    global _faster_whisper_worker
-    if _faster_whisper_worker is None:
-        _faster_whisper_worker = _FasterWhisperWorker()
-    return await _faster_whisper_worker.transcribe(wav_path)
-
-
-async def _reset_faster_whisper_worker() -> None:
-    global _faster_whisper_worker
-    worker = _faster_whisper_worker
-    _faster_whisper_worker = None
-    if worker is not None:
-        await worker.stop()
-
-
-def _voice_stt_warmup_enabled() -> bool:
-    return (os.environ.get("ZOE_WHISPER_WARMUP") or "true").strip().lower() not in {
-        "0",
-        "false",
-        "no",
-        "off",
-    }
-
-
-def _available_memory_mb() -> Optional[int]:
-    """Return roughly available system memory in MB, or None if undetectable.
-
-    Reads /proc/meminfo (Linux-only) so we don't add a new dependency. This is
-    used as a soft guard for the optional faster-whisper startup warmup so it
-    can be skipped when the host is under memory pressure.
-    """
-    try:
-        meminfo = Path("/proc/meminfo")
-        if not meminfo.is_file():
-            return None
-        available_kb: Optional[int] = None
-        total_kb: Optional[int] = None
-        free_kb: Optional[int] = None
-        buffers_kb: Optional[int] = None
-        cached_kb: Optional[int] = None
-        for raw in meminfo.read_text(errors="ignore").splitlines():
-            if raw.startswith("MemAvailable:"):
-                available_kb = int(raw.split()[1])
-            elif raw.startswith("MemTotal:"):
-                total_kb = int(raw.split()[1])
-            elif raw.startswith("MemFree:"):
-                free_kb = int(raw.split()[1])
-            elif raw.startswith("Buffers:"):
-                buffers_kb = int(raw.split()[1])
-            elif raw.startswith("Cached:"):
-                cached_kb = int(raw.split()[1])
-        if available_kb is not None:
-            return available_kb // 1024
-        if total_kb is not None and free_kb is not None:
-            extras = (buffers_kb or 0) + (cached_kb or 0)
-            return (free_kb + extras) // 1024
-        return None
-    except (OSError, ValueError, IndexError):
-        return None
-
-
-def _should_skip_warmup_for_low_memory() -> Optional[str]:
-    """Return a skip-reason string if warmup should be skipped for low memory, else None.
-
-    Configurable via ZOE_WHISPER_WARMUP_MIN_AVAIL_MB (default 1024 MB). Set to 0
-    to disable the guard. Returns None when memory is healthy or undetectable —
-    we never block the warmup solely because we couldn't read /proc/meminfo.
-    """
-    threshold_mb = _env_float("ZOE_WHISPER_WARMUP_MIN_AVAIL_MB", 1024.0)
-    if threshold_mb <= 0:
-        return None
-    avail_mb = _available_memory_mb()
-    if avail_mb is None:
-        return None
-    if avail_mb < threshold_mb:
-        return f"available memory {avail_mb}MB below threshold {int(threshold_mb)}MB"
-    return None
-
-
-def _write_warmup_silence_wav(path: str, *, seconds: float = 1.0, sample_rate: int = 16000) -> None:
-    frame_count = max(1, int(sample_rate * seconds))
-    with wave.open(path, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(sample_rate)
-        wf.writeframes(b"\x00\x00" * frame_count)
-
-
-def _create_warmup_wav_path() -> str:
-    """Create an empty temp wav file and return its path. Sync helper.
-
-    Runs in a worker thread via ``asyncio.to_thread`` so it never blocks the
-    event loop while allocating a temp file on disk.
-    """
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-        return tmp.name
-
-
-async def warm_faster_whisper_worker() -> bool:
-    """Prime the persistent faster-whisper worker without blocking API startup.
-
-    This coroutine is scheduled as a background task during lifespan startup
-    (see ``main.py``). To guarantee it can never stall zoe-data's :8000 bind
-    we (1) early-return when available system memory is below the configured
-    threshold and (2) offload every synchronous I/O step (tempfile creation,
-    silence-wav write) to a worker thread via ``asyncio.to_thread``. The
-    subprocess model load itself already runs in a child process, not on the
-    event-loop thread.
-    """
-    if not _voice_stt_warmup_enabled():
-        logger.info("faster-whisper warmup disabled by ZOE_WHISPER_WARMUP")
-        return False
-    if _use_in_process_faster_whisper() or not _use_persistent_faster_whisper_worker():
-        logger.info("faster-whisper warmup skipped; persistent worker is not active")
-        return False
-    skip_reason = _should_skip_warmup_for_low_memory()
-    if skip_reason is not None:
-        logger.warning("faster-whisper warmup skipped (%s); will warm lazily on first use", skip_reason)
-        return False
-    timeout = _env_float("ZOE_WHISPER_WARMUP_TIMEOUT_S", 45.0)
-    tmp_path = ""
-    started = time.monotonic()
-    try:
-        # Offload all sync I/O to a worker thread so this coroutine is pure async I/O.
-        tmp_path = await asyncio.to_thread(_create_warmup_wav_path)
-        await asyncio.to_thread(_write_warmup_silence_wav, tmp_path)
-        await asyncio.wait_for(_run_faster_whisper_worker(tmp_path), timeout=timeout)
-        logger.info("faster-whisper worker warmup completed in %.2fs", time.monotonic() - started)
-        return True
-    except asyncio.CancelledError:
-        await _reset_faster_whisper_worker()
-        raise
-    except Exception as exc:
-        await _reset_faster_whisper_worker()
-        logger.warning("faster-whisper worker warmup failed: %s", exc)
-        return False
-    finally:
-        if tmp_path:
-            try:
-                # ``os.unlink`` is sync but tiny; safe to run inline.
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-
-
-async def _run_faster_whisper_in_process(wav_path: str) -> str:
-    """Transcribe using the faster-whisper Python library in the API worker."""
-    model = await _get_faster_whisper_model()
-    if model is None:
-        raise RuntimeError("faster-whisper not available; install with: pip install faster-whisper")
-    lang = (os.environ.get("ZOE_WHISPER_LANG") or "en").strip()
-    vad_threshold = _env_float("ZOE_WHISPER_VAD_THRESHOLD", 0.50)
-    min_speech_ms = _env_int("ZOE_WHISPER_MIN_SPEECH_MS", 120)
-    min_silence_ms = _env_int("ZOE_WHISPER_MIN_SILENCE_MS", 350)
-    speech_pad_ms = _env_int("ZOE_WHISPER_SPEECH_PAD_MS", 220)
-    timeout = _env_float("ZOE_WHISPER_TIMEOUT_S", 20.0)
-
-    _MAX_STT_OOM_RETRIES = 2
-
-    def _transcribe_sync():
-        for attempt in range(_MAX_STT_OOM_RETRIES + 1):
-            try:
-                # Release any cached CUDA blocks before inference to reduce peak pressure.
-                try:
-                    import torch
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-                except Exception:
-                    pass
-                segments, _info = model.transcribe(
-                    wav_path,
-                    language=lang,
-                    beam_size=int(os.environ.get("ZOE_WHISPER_BEAM_SIZE", "5")),
-                    vad_filter=True,
-                    vad_parameters={
-                        "threshold": vad_threshold,
-                        "min_speech_duration_ms": min_speech_ms,
-                        "min_silence_duration_ms": min_silence_ms,
-                        "speech_pad_ms": speech_pad_ms,
-                    },
-                )
-                return " ".join(seg.text.strip() for seg in segments).strip()
-            except RuntimeError as exc:
-                msg = str(exc)
-                if ("memory" in msg.lower() or "allocation" in msg.lower()) and attempt < _MAX_STT_OOM_RETRIES:
-                    logger.warning("STT CUDA OOM attempt %d/%d — retrying in 500ms: %s", attempt + 1, _MAX_STT_OOM_RETRIES, msg[:120])
-                    import time as _time
-                    _time.sleep(0.5)
-                    continue
-                raise
-
-    loop = asyncio.get_event_loop()
-    text = await asyncio.wait_for(
-        loop.run_in_executor(None, _transcribe_sync),
-        timeout=timeout,
-    )
-    return text
-
-
-async def _run_faster_whisper(wav_path: str) -> str:
-    """Transcribe using faster-whisper when whisper.cpp is unavailable."""
-    if _use_in_process_faster_whisper():
-        return await _run_faster_whisper_in_process(wav_path)
-    if _use_persistent_faster_whisper_worker():
-        return await _run_faster_whisper_worker(wav_path)
-    return await _run_faster_whisper_subprocess(wav_path)
-
 
 
 def _env_float(name: str, default: float) -> float:
@@ -2565,12 +2033,7 @@ def _log_voice_stt_sample(
             "transcript_chars": len(transcript or ""),
             # Actual backend that produced this transcript (was hardcoded base.en).
             "model": _stt_backend_var.get() or (os.environ.get("ZOE_STT_BACKEND") or "moonshine").strip(),
-            "device": (os.environ.get("ZOE_WHISPER_DEVICE") or "").strip(),
-            "compute_type": (os.environ.get("ZOE_WHISPER_COMPUTE_TYPE") or "").strip(),
-            "vad_threshold": _env_float("ZOE_WHISPER_VAD_THRESHOLD", 0.50),
-            "min_speech_ms": _env_int("ZOE_WHISPER_MIN_SPEECH_MS", 120),
-            "min_silence_ms": _env_int("ZOE_WHISPER_MIN_SILENCE_MS", 350),
-            "speech_pad_ms": _env_int("ZOE_WHISPER_SPEECH_PAD_MS", 220),
+            "moonshine_arch": moonshine_arch(),
         }
         if error:
             record["error"] = error[:500]
@@ -2584,25 +2047,123 @@ def _log_voice_stt_sample(
 # --- Moonshine ONNX STT (edge real-time; faster on short commands, CPU-only so
 # it never competes with the brain's GPU). Model + tokenizer are cached once. ---
 _moonshine_model = None  # moonshine_voice v2 Transcriber
+_moonshine_load_error = None
 _moonshine_lock = threading.Lock()
+# Serializes Moonshine INFERENCE across executor threads: the wake-time warmup dummy
+# inference and a real command transcription share one singleton transcriber, so they
+# must not run concurrently (the model isn't guaranteed thread-safe per-inference).
+_moonshine_infer_lock = threading.Lock()
+
+
+def moonshine_arch() -> str:
+    return (os.environ.get("ZOE_MOONSHINE_ARCH") or "MEDIUM_STREAMING").strip()
+
+
+def moonshine_ready() -> bool:
+    return _moonshine_model is not None
+
+
+def moonshine_error() -> Optional[str]:
+    return _moonshine_load_error
+
+
+def kokoro_ready() -> bool:
+    return _kokoro_instance is not None
+
+
+def kokoro_configured() -> bool:
+    model_path = os.environ.get("ZOE_KOKORO_MODEL", "").strip()
+    return bool(model_path and os.path.isfile(model_path) and importlib.util.find_spec("kokoro_onnx") is not None)
+
+
+# ── Wake-word bleed fix ──────────────────────────────────────────────────────
+# The panel sends the WHOLE captured utterance — wake word ("Hey Zoe") + pre-roll
+# included — with no wake-offset metadata. Transcribing the leading wake word
+# corrupts the command ("Hey Zoe, what time is it" -> "Hey Zoe Tom is it"). We fix
+# this server-side using Moonshine's OWN line segmentation: it naturally emits the
+# wake phrase as its own line ("Hey Zoe.") separate from the command line, so we
+# drop leading wake-only lines and, if the wake word landed inline on the command
+# line, strip just that leading prefix. This NEVER cuts the raw audio, so command
+# words can't be clipped — the guard is the replay corpus (tests/replay_samples.py).
+
+# A line that is ENTIRELY a wake-word variant (so the whole line is dropped).
+_WAKE_LINE_RE = re.compile(
+    r"^\s*(?:hey|hi|ok|okay|a|hey,)?[\s,]*"
+    r"(?:zoe|zoey|zo|joey|joe|zoie|sewey|so|josie|zoee)"
+    r"[\s,.!?]*$",
+    re.IGNORECASE,
+)
+# A leading wake prefix on a line that ALSO carries the command (strip the prefix
+# only). Requires a following word (?=\S) so a bare name that IS the command stays.
+_WAKE_PREFIX_RE = re.compile(
+    r"^\s*(?:hey|hi|ok|okay)?[\s,]*"
+    # Inline strip uses ONLY unambiguous non-word wake variants. Real names/words
+    # (joe, joey, josie, so) are deliberately EXCLUDED here — as an inline prefix
+    # they would corrupt a real command ("Joe wants the weather", "so, add milk").
+    # Those still get caught when they are a whole wake-only line (_WAKE_LINE_RE);
+    # only the risky inline strip is conservative.
+    r"(?:zoe|zoey|zoie|zoee|zo|sewey)"
+    r"[\s,.!?-]+(?=\S)",
+    re.IGNORECASE,
+)
+# Ambiguous homophones (joe/joey/josie — real names) are treated as an inline wake
+# bleed ONLY when preceded by a REQUIRED greeting ("hey joey, show me my lists" ->
+# strip). A bare homophone with no greeting ("Joe wants the weather") has no match
+# and is left intact, so a real command subject is never cut.
+_WAKE_GREETING_NAME_RE = re.compile(
+    r"^\s*(?:hey|hi|ok|okay)[\s,]+"
+    r"(?:joe|joey|josie)"
+    r"[\s,.!?-]+(?=\S)",
+    re.IGNORECASE,
+)
+
+
+def _strip_wake_word(lines: list) -> str:
+    """Given Moonshine's per-line transcript texts (in order), drop the leading
+    wake word and return the command transcript.
+
+    Conservative by construction: it only removes whole leading wake-only lines or
+    an inline leading wake prefix, and never returns empty when there was content
+    (a clip that is *only* the wake word is left as-is for the caller to handle)."""
+    kept = [t for t in ((s or "").strip() for s in lines) if t]
+    if not kept:
+        return ""
+    # 1. Drop leading lines that are nothing but a wake word.
+    while len(kept) > 1 and _WAKE_LINE_RE.match(kept[0]):
+        kept = kept[1:]
+    # 2. If the wake word is inline on the (now) first line, strip just the prefix:
+    #    (a) greeting + ambiguous homophone ("hey joey, ..."), then (b) an
+    #    unambiguous wake variant ("zoe, ..." / "zo ..."). A bare homophone
+    #    ("Joe wants ...") has no greeting, so it stays intact.
+    head = _WAKE_GREETING_NAME_RE.sub("", kept[0], count=1)
+    head = _WAKE_PREFIX_RE.sub("", head, count=1).strip()
+    if head:
+        # Re-capitalise so the command doesn't start lowercase after the cut.
+        kept[0] = head[:1].upper() + head[1:]
+    return " ".join(kept).strip()
 
 
 def _ensure_moonshine():
     """Lazily build the Moonshine v2 transcriber (MEDIUM_STREAMING by default —
     accurate on real room audio, ~0.5s/clip). Locked so a concurrent first call
     can't race the model load."""
-    global _moonshine_model
+    global _moonshine_model, _moonshine_load_error
     if _moonshine_model is not None:
         return _moonshine_model
     with _moonshine_lock:
         if _moonshine_model is None:
-            import moonshine_voice as mv
-            from moonshine_voice.transcriber import Transcriber
+            try:
+                import moonshine_voice as mv
+                from moonshine_voice.transcriber import Transcriber
 
-            archname = (os.environ.get("ZOE_MOONSHINE_ARCH") or "MEDIUM_STREAMING").strip()
-            arch = getattr(mv.ModelArch, archname, mv.ModelArch.MEDIUM_STREAMING)
-            model_path, resolved_arch = mv.get_model_for_language("en", arch)
-            _moonshine_model = Transcriber(model_path, resolved_arch)
+                archname = (os.environ.get("ZOE_MOONSHINE_ARCH") or "MEDIUM_STREAMING").strip()
+                arch = getattr(mv.ModelArch, archname, mv.ModelArch.MEDIUM_STREAMING)
+                model_path, resolved_arch = mv.get_model_for_language("en", arch)
+                _moonshine_model = Transcriber(model_path, resolved_arch)
+                _moonshine_load_error = None
+            except Exception as exc:
+                _moonshine_load_error = exc.__class__.__name__
+                raise
     return _moonshine_model
 
 
@@ -2612,24 +2173,30 @@ async def _run_moonshine(wav_path: str) -> str:
     def _work() -> str:
         tr = _ensure_moonshine()
         audio, sr = load_wav_file(wav_path)
-        out = tr.transcribe_without_streaming(audio, sr)
-        text = getattr(out, "text", None)
-        if not (isinstance(text, str) and text.strip()):
-            try:
-                text = " ".join(line.text for line in out.lines)
-            except Exception:
-                text = str(out)
-        return (text or "").strip()
+        with _moonshine_infer_lock:
+            out = tr.transcribe_without_streaming(audio, sr)
+        # Moonshine segments speech into lines and emits the wake phrase ("Hey Zoe.")
+        # as its own leading line. Strip the wake word from those lines so the
+        # leading "Hey Zoe" can't corrupt the command transcript (wake-word bleed).
+        lines = [getattr(ln, "text", "") or "" for ln in getattr(out, "lines", [])]
+        if lines:
+            text = _strip_wake_word(lines)
+            if text:
+                return text
+        # Fallback: some builds expose a flat .text; strip the wake prefix from it.
+        flat = getattr(out, "text", None)
+        if isinstance(flat, str) and flat.strip():
+            return _strip_wake_word([flat])
+        return ""
 
     return await asyncio.get_running_loop().run_in_executor(None, _work)
 
 
 async def warm_moonshine() -> bool:
     """Pre-load the Moonshine STT model+tokenizer so the first panel turn isn't
-    cold (saves the ~1-2s ONNX session load on the first utterance)."""
-    if (os.environ.get("ZOE_STT_BACKEND") or "moonshine").strip().lower() != "moonshine":
-        logger.info("Moonshine warmup skipped; ZOE_STT_BACKEND is not moonshine")
-        return False
+    cold (saves the ~1-2s ONNX session load on the first utterance). Moonshine is
+    the only live STT engine, so this ALWAYS warms regardless of ZOE_STT_BACKEND —
+    a stale whisper-era value must not skip the warmup the live path depends on."""
     started = time.monotonic()
     try:
         await asyncio.get_running_loop().run_in_executor(None, _ensure_moonshine)
@@ -2641,10 +2208,10 @@ async def warm_moonshine() -> bool:
 
 
 async def _maybe_capture_stt(wav_path: str, primary: str) -> None:
-    """Diagnostic A/B: when ZOE_VOICE_SAVE_AUDIO is set, save the real utterance
-    and log the primary (Moonshine) result alongside whisper's, so we can tell —
-    on the user's actual room audio — which is more accurate and whether the
-    pre-roll is corrupting it. Logs at WARNING so it's visible past the level."""
+    """When ZOE_VOICE_SAVE_AUDIO is set, save the real utterance to the operator's
+    permanent regression corpus (~/.zoe-voice-samples) and log the Moonshine
+    transcript. This is corpus capture only — there is NO whisper A/B; whisper
+    must never run on a live turn (Moonshine is the only STT engine)."""
     if (os.environ.get("ZOE_VOICE_SAVE_AUDIO") or "").strip().lower() not in ("1", "true", "yes", "on"):
         return
     try:
@@ -2660,16 +2227,7 @@ async def _maybe_capture_stt(wav_path: str, primary: str) -> None:
         logger.warning("STT capture failed: %s", exc)
         return
 
-    # Run the whisper A/B on the COPY fire-and-forget, so it never adds latency to
-    # the live transcription path (the whole point of the Moonshine v2 win).
-    async def _ab() -> None:
-        try:
-            alt = await _run_faster_whisper(dst)
-        except Exception as exc:
-            alt = f"<whisper err: {exc}>"
-        logger.warning("STT_AB file=%s moonshine=%r whisper=%r", dst, (primary or "")[:90], (alt or "")[:90])
-
-    _spawn_bg(_ab())
+    logger.info("STT_CAPTURE file=%s moonshine=%r", dst, (primary or "")[:90])
 
 
 async def _transcribe_audio(wav_path: str) -> str:
@@ -2686,34 +2244,30 @@ _stt_backend_var: contextvars.ContextVar[str] = contextvars.ContextVar("stt_back
 
 
 async def _transcribe_audio_impl(wav_path: str) -> str:
+    """Transcribe with Moonshine v2 — the ONLY live STT engine.
+
+    Moonshine is the rock: there is no whisper fallback in the live path (it
+    cold-loaded onto a memory-starved GPU and corrupted accuracy). A genuinely
+    empty transcription returns "" (silence — callers re-prompt / no-op). A
+    Moonshine BACKEND failure (missing model, OOM, runtime dep) RAISES, so callers
+    can tell a real failure apart from silence instead of masking it as success.
     """
-    Transcription waterfall:
-    0. Moonshine ONNX (default; edge real-time, CPU) — falls through on error
-    1. whisper.cpp CLI (if binary + ggml model configured)
-    2. faster-whisper Python (auto-downloaded model, GPU/CPU)
-    """
-    if (os.environ.get("ZOE_STT_BACKEND") or "moonshine").strip().lower() == "moonshine":
-        try:
-            text = await _run_moonshine(wav_path)
-            if text:
-                _stt_backend_var.set("moonshine:" + (os.environ.get("ZOE_MOONSHINE_ARCH") or "v2").strip())
-                return text
-            logger.warning("Moonshine STT returned empty; falling back to whisper")
-        except Exception as exc:
-            logger.warning("Moonshine STT failed (%s); falling back to whisper", exc)
-    if _whisper_cpp_binary():
-        model = (os.environ.get("ZOE_WHISPER_MODEL") or "").strip()
-        if model and os.path.isfile(model):
-            _stt_backend_var.set("whisper.cpp:" + os.path.basename(model))
-            return await _run_whisper_cpp(wav_path)
-    _stt_backend_var.set("faster-whisper:" + (os.environ.get("ZOE_WHISPER_MODEL") or "base.en").strip())
-    return await _run_faster_whisper(wav_path)
+    try:
+        text = await _run_moonshine(wav_path)
+    except Exception as exc:
+        logger.warning("Moonshine STT failed (backend error, surfacing): %s", exc)
+        raise
+    if text:
+        _stt_backend_var.set("moonshine:" + (os.environ.get("ZOE_MOONSHINE_ARCH") or "v2").strip())
+        return text
+    logger.info("Moonshine STT returned empty transcript")
+    return ""
 
 
 @router.post("/transcribe")
 async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_auth)):
     """
-    Transcribe base64 WAV/PCM audio using whisper.cpp on the Jetson (Pi voice daemon).
+    Transcribe base64 WAV/PCM audio using Moonshine v2 on the Jetson (Pi voice daemon).
     Request: { \"audio_base64\": \"...\", \"panel_id\": \"...\" }
     """
     b64 = str((payload or {}).get("audio_base64") or "").strip()
@@ -4957,6 +4511,43 @@ async def _prewarm_brain_for_panel(panel_id: str) -> None:
         logger.debug("voice/wake brain prewarm failed (non-fatal): %s", exc)
 
 
+def _stt_prewarm_on_wake_enabled() -> bool:
+    return (os.environ.get("ZOE_STT_PREWARM_ON_WAKE", "1").strip().lower()
+            in ("1", "true", "yes", "on"))
+
+
+async def _prewarm_stt_on_wake() -> None:
+    """On wake-word, warm Moonshine STT so the FIRST command after idle isn't decoded
+    on a cold/swapped-out inference path. Symmetric to _prewarm_brain_for_panel: the
+    brain is already prewarmed on wake, but Moonshine is warmed only ONCE at startup,
+    and its (un-mlock'd) pages get swapped out during idle on this memory-tight box —
+    so the first utterance after a gap hit a cold STT and mis-decoded ("first command
+    after a while" mishears), then was clean once warm. Run a tiny dummy inference in
+    the ~1-2s wake->command window (faults the model pages back in + primes the
+    onnxruntime path) so the real command runs warm. Best-effort + backgrounded;
+    never delays or breaks the wake acknowledgement.
+    """
+    try:
+        if not _stt_prewarm_on_wake_enabled():
+            return
+        loop = asyncio.get_running_loop()
+
+        def _warm() -> None:
+            import numpy as _np
+            tr = _ensure_moonshine()
+            # ~1s of very-low-amplitude noise @ 16kHz — NOT pure silence (which Moonshine
+            # may VAD-short-circuit without running the encoder, leaving the pages cold);
+            # real low-level input forces the inference path so the model faults back in.
+            # Serialized against real transcriptions so the warmup can't race a command.
+            buf = _np.random.default_rng(0).standard_normal(16000).astype(_np.float32) * 0.003
+            with _moonshine_infer_lock:
+                tr.transcribe_without_streaming(buf, 16000)
+
+        await loop.run_in_executor(None, _warm)
+    except Exception as exc:
+        logger.debug("voice/wake STT prewarm failed (non-fatal): %s", exc)
+
+
 @router.post("/wake")
 async def voice_wake(payload: dict, caller: dict = Depends(_require_voice_auth)):
     """
@@ -4991,6 +4582,9 @@ async def voice_wake(payload: dict, caller: dict = Depends(_require_voice_auth))
     # finishes speaking — hides the first-turn-of-session subprocess cold start.
     try:
         asyncio.ensure_future(_prewarm_brain_for_panel(panel_id))
+        # Warm Moonshine STT too — the brain was prewarmed but the (un-mlock'd) STT
+        # swaps out during idle, so the FIRST command after a gap was decoded cold.
+        asyncio.ensure_future(_prewarm_stt_on_wake())
     except Exception as exc:
         logger.debug("voice/wake prewarm dispatch failed (non-fatal): %s", exc)
 
@@ -5030,7 +4624,7 @@ async def voice_ambient(payload: dict, caller: dict = Depends(_require_voice_aut
     """Receive an ambient audio segment from the Pi daemon, transcribe it, and store in DB.
 
     The Pi daemon's always-on VAD posts speech segments here.
-    Raw audio is transcribed by Whisper, then stored in ambient_memory.
+    Raw audio is transcribed by Moonshine, then stored in ambient_memory.
     Raw audio bytes are discarded after transcription — only text is kept.
     """
     from database import get_db
@@ -5043,7 +4637,7 @@ async def voice_ambient(payload: dict, caller: dict = Depends(_require_voice_aut
     if not b64:
         raise HTTPException(status_code=400, detail="audio_base64 is required")
 
-    # Transcribe via whisper.cpp.
+    # Transcribe via Moonshine — the only STT engine (no whisper anywhere).
     try:
         raw = base64.b64decode(b64, validate=True)
     except Exception as exc:
@@ -5055,7 +4649,7 @@ async def voice_ambient(payload: dict, caller: dict = Depends(_require_voice_aut
         wav_path = tmp.name
     transcript = ""
     try:
-        transcript = await _run_whisper_cpp(wav_path)
+        transcript = await _transcribe_audio_impl(wav_path)
     except Exception as exc:
         logger.debug("ambient transcription failed: %s", exc)
         return {"ok": False, "panel_id": panel_id, "transcript": ""}

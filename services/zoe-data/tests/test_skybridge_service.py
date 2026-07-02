@@ -295,6 +295,19 @@ def test_classify_skybridge_action_requests():
     assert create_event.title == "pick up the groceries"
     assert create_event.target_time == "15:00"
 
+    # No-time add → all-day event with a CLEAN title (was "work to my calendar").
+    notime = classify_skybridge_intent("add work to my calendar")
+    assert notime.domain == "calendar" and notime.action == "create_event"
+    assert notime.title == "work"
+    assert notime.all_day is True and notime.target_time == ""
+    assert classify_skybridge_intent("put dentist on the calendar").title == "dentist"
+    assert classify_skybridge_intent("add a calendar event called Team Sync").title == "Team Sync"
+    # must not hijack a list add or a timed calendar add
+    assert classify_skybridge_intent("add bread to the shopping list").action != "create_event"
+    timed = classify_skybridge_intent("add standup to my calendar at 9am")
+    assert timed.action == "create_event" and timed.all_day is False and timed.target_time == "09:00"
+    assert timed.title == "standup"
+
     move_event = classify_skybridge_intent("Can you change my appointment to 9am", calendar_context)
     assert move_event.domain == "calendar"
     assert move_event.action == "update_time"
@@ -864,6 +877,8 @@ async def test_new_named_work_list_is_created_and_displayed():
     assert result["intent"]["list_name"] == "Projects"
     assert any(item["name"] == "Projects" and item["list_type"] == "work" for item in db.lists)
     assert result["cards"][0]["content"]["list_name"] == "Projects"
+    assert result["spoken_summary"] == "Created Projects."
+    assert result["actions"][0]["type"] == "created"
 
 
 @pytest.mark.asyncio

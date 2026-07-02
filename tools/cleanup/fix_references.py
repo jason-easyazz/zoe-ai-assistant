@@ -13,12 +13,12 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 REPLACEMENTS = {
     "ZOES_CURRENT_STATE.md": "PROJECT_STATUS.md",
     "SYSTEM_STATUS.md": "PROJECT_STATUS.md",
-    "FINAL_STATUS_REPORT.md": "docs/archive/reports/FINAL_STATUS_REPORT.md",
-    "SYSTEM_REVIEW_FINAL.md": "docs/archive/reports/SYSTEM_REVIEW_FINAL.md",
-    "ALL_PHASES_COMPLETE.md": "docs/archive/reports/ALL_PHASES_COMPLETE.md",
-    "AUTHENTICATION-READY.md": "docs/archive/reports/AUTHENTICATION-READY.md",
+    "FINAL_STATUS_REPORT.md": "docs/reviews/FINAL_STATUS_REPORT.md",
+    "SYSTEM_REVIEW_FINAL.md": "docs/reviews/SYSTEM_REVIEW_FINAL.md",
+    "ALL_PHASES_COMPLETE.md": "docs/post-mortems/ALL_PHASES_COMPLETE.md",
+    "AUTHENTICATION-READY.md": "docs/reviews/AUTHENTICATION-READY.md",
     "CLEANUP_COMPLETE_SUMMARY.md": "CLEANUP_SUMMARY.md",
-    "SYSTEM_OPTIMIZATION_REPORT.md": "docs/archive/reports/SYSTEM_OPTIMIZATION_REPORT.md",
+    "SYSTEM_OPTIMIZATION_REPORT.md": "docs/reviews/SYSTEM_OPTIMIZATION_REPORT.md",
 }
 
 # Files to update (excluding the audit/fix scripts themselves)
@@ -119,11 +119,8 @@ def update_documentation_index():
 
 ## 📁 Organized Documentation (`/docs/`)
 
-### `/docs/archive/`
-Historical documentation and old status reports:
-- **archive/reports/** - System reports, phase completions, status docs
-- **archive/technical/** - Technical docs, styling updates, debug files
-- **archive/guides/** - Old integration guides and documentation
+Retired documentation is removed from the working tree. Git history keeps old
+bytes; do not recreate `docs/archive/`.
 
 ### `/docs/guides/`
 User and developer guides (coming soon)
@@ -166,13 +163,13 @@ API documentation (coming soon)
 
 ### When Adding New Docs
 1. **Current/Active**: Keep in project root
-2. **Historical**: Move to `/docs/archive/` when superseded
+2. **Historical**: Delete when superseded; recover from git history if needed
 3. **Guides**: Place in `/docs/guides/`
 4. **API Docs**: Place in `/docs/api/`
 
 ### Naming Conventions
 - Use `PROJECT_STATUS.md` as single source of truth for status
-- Date old docs when archiving: `STATUS_20251008.md`
+- Remove superseded docs from the working tree; git history keeps prior versions
 - Use clear, descriptive names: `FEATURE_NAME_GUIDE.md`
 
 ---
@@ -207,25 +204,8 @@ For current, active documentation, see the project root:
 
 ## 📁 This Folder (`/docs/`)
 
-### `/docs/archive/`
-Historical documentation organized by category:
-
-**Reports** (`archive/reports/`)
-- System status reports
-- Phase completion docs
-- Integration reports  
-- Test results
-
-**Technical** (`archive/technical/`)
-- API fixes
-- Styling updates
-- Debug documentation
-- Technical specifications
-
-**Guides** (`archive/guides/`)
-- Old integration guides
-- Installation docs
-- Feature documentation
+Retired documents are removed from the working tree. Git history keeps old bytes;
+do not recreate `docs/archive/`.
 
 ### `/docs/guides/` (Future)
 User and developer guides will be placed here
@@ -242,39 +222,36 @@ API documentation will be placed here
 **Understand Zoe**: Read `../README.md`
 **Start Using Zoe**: Read `../QUICK-START.md`
 **See Current Status**: Read `../PROJECT_STATUS.md`
-**Find Old Reports**: Check `archive/reports/`
-**Find Technical Docs**: Check `archive/technical/`
+**Find Old Reports**: Use git history
+**Find Technical Docs**: Search active categories or git history
 **Troubleshoot**: Run `python3 ../comprehensive_audit.py`
 
 ---
 
 ## 🔍 Finding Documentation
 
-### By Date
-All archived docs are organized chronologically within their categories.
-
 ### By Type
-- **Status**: `archive/reports/`
-- **Technical**: `archive/technical/`  
-- **Guides**: `archive/guides/`
+- **Status**: `reviews/` or `post-mortems/`
+- **Technical**: `developer/` or `architecture/`
+- **Guides**: `guides/`
 
 ### By Topic
-Use grep to search: `grep -r "your topic" archive/`
+Use grep to search: `grep -r "your topic" docs/`
 
 ---
 
 ## 📝 Documentation Guidelines
 
-### Current vs Archived
+### Current vs Retired
 - **Current**: Project root (active, maintained)
-- **Archived**: `/docs/archive/` (historical reference)
+- **Retired**: removed from the working tree; recover from git history
 
-### When to Archive
+### When to Retire
 - When a new status doc supersedes an old one
 - When features are deprecated
 - When guides are rewritten
 
-### Don't Archive
+### Don't Retire
 - Current active documentation
 - Frequently referenced guides
 - API documentation
@@ -321,4 +298,3 @@ if __name__ == "__main__":
     print("✅ Updated documentation/DOCUMENTATION_INDEX.md")
     print("✅ Created docs/README.md")
     print("\n🎉 All references updated to new structure!\n")
-

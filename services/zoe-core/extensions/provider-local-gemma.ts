@@ -17,7 +17,7 @@ const BASE_URL =
 // llama-server / ollama don't require a real key, but OpenAI clients want a
 // non-empty one.
 const API_KEY = process.env.ZOE_CORE_MODEL_API_KEY ?? "local";
-const DEFAULT_MODEL_ID = process.env.ZOE_CORE_MODEL_ID ?? "gemma-4-E2B-it-Q4_K_M.gguf";
+const DEFAULT_MODEL_ID = process.env.ZOE_CORE_MODEL_ID ?? "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf";
 const CONTEXT_WINDOW = Number(process.env.ZOE_CORE_MODEL_CONTEXT) || 32768;
 const MAX_TOKENS = Number(process.env.ZOE_CORE_MODEL_MAXTOKENS) || 2048;
 

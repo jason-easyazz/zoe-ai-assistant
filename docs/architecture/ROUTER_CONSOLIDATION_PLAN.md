@@ -421,10 +421,9 @@ app.include_router(onboarding.router)
 1. **Remove Old Routers**
    ```bash
    cd services/zoe-core/routers
-   # Move old routers to archive
-   mkdir -p ../../docs/archive/routers_pre_consolidation
-   mv calendar.py enhanced_calendar.py birthday_calendar.py ../../docs/archive/routers_pre_consolidation/
-   mv lists.py lists_redesigned.py ../../docs/archive/routers_pre_consolidation/
+   # Remove old routers; git history keeps the pre-consolidation versions
+   git rm calendar.py enhanced_calendar.py birthday_calendar.py
+   git rm lists.py lists_redesigned.py
    # ... etc
    ```
 
@@ -502,4 +501,3 @@ app.include_router(onboarding.router)
 
 *Document created: October 9, 2025*  
 *Ready for implementation approval*
-

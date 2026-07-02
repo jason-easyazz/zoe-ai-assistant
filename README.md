@@ -22,7 +22,7 @@ systemd user services for the latency-sensitive ones.
 | Auth  | `zoe-auth`        | 8002  | Docker |
 | UI    | `zoe-ui` (nginx)  | 80/443 | Docker |
 | Home  | `homeassistant` + `homeassistant-mcp-bridge` | 8123 | Docker |
-| LLM   | `llama-server` (Gemma 4 E2B, llama.cpp) | 11434 | systemd (host) |
+| LLM   | `llama-server` (Gemma 4 E4B, llama.cpp) | 11434 | systemd (host) |
 | Agent | `hermes-agent`    | 8642  | systemd (host) |
 | Agent | `openclaw-gateway` (fallback) | 18789 | systemd (host) |
 | Voice | `kokoro-tts` (optional) | 10201 | systemd (host) |

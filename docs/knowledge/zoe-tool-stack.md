@@ -24,3 +24,7 @@ Descriptive map of the tools in Zoe's agent layer. See [index](index.md). For *b
 ## Memory & safety
 - **MemPalace** — ChromaDB-backed semantic memory plus user portrait and open-loops engine (in `services/zoe-data`). Consolidated nightly ("dreaming"). A periodic lint pass (contradictions / stale / orphans) is the missing third operation to add.
 - **SkillSpector** (`~/.local/bin/skillspector`, NVIDIA) — security scanner for agent skills/extensions. Gate before installing or promoting a skill/extension; the static stage is conservative, so use the LLM stage plus human judgement for verdicts. See the root `AGENTS.md` "Skill & extension safety" contract.
+
+## Testing & regression
+- **Voice regression + speed harness** — Jason's real-voice corpus (`~/.zoe-voice-samples`, auto-growing via `ZOE_VOICE_SAVE_AUDIO`) replayed through the live voice path. `scripts/maintenance/voice_regression_probe.py` is the baseline-compared gate (function OK-rate + per-stage speed, `--update-baseline`, trend log, memory-self-guarded, flock'd); it wraps `scripts/perf/measure_voice.py` / `measure_tts.py`. **Replay-gating every voice change is mandatory** (root `AGENTS.md`). Scheduled daily via `scripts/setup/systemd/zoe-voice-regression.{service,timer}`. Full doc: [voice-pipeline.md](voice-pipeline.md). Warm-harness numbers are relative (drift vs baseline), not live performance.
+- **Latency probe** — `scripts/maintenance/zoe_latency_probe.py`: light chat/voice/health latency check vs a saved baseline (`--update-baseline`); the pattern the voice probe mirrors.

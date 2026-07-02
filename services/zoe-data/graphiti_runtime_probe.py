@@ -12,6 +12,7 @@ import asyncio
 import importlib.metadata
 import importlib.util
 import os
+import re
 import time
 from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass
@@ -31,7 +32,7 @@ class GraphitiRuntimeConfigError(ValueError):
 class GraphitiRuntimeConfig:
     enabled: bool = False
     llm_base_url: str = "http://127.0.0.1:11434/v1"
-    llm_model: str = "gemma-4-E2B-it-Q4_K_M.gguf"
+    llm_model: str = "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"
     offline_only: bool = True
     timeout_seconds: float = 2.0
 
@@ -41,7 +42,7 @@ class GraphitiRuntimeConfig:
         config = cls(
             enabled=_env_bool(values.get("GRAPHITI_ENABLED"), default=False),
             llm_base_url=(values.get("GRAPHITI_LLM_BASE_URL") or "http://127.0.0.1:11434/v1").rstrip("/"),
-            llm_model=values.get("GRAPHITI_LLM_MODEL") or "gemma-4-E2B-it-Q4_K_M.gguf",
+            llm_model=values.get("GRAPHITI_LLM_MODEL") or "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
             offline_only=_env_bool(values.get("GRAPHITI_OFFLINE_ONLY"), default=True),
             timeout_seconds=_env_float(values.get("GRAPHITI_RUNTIME_PROBE_TIMEOUT_SECONDS"), default=2.0),
         )
@@ -54,7 +55,7 @@ class GraphitiRuntimeConfig:
         return {
             "enabled": _env_bool_snapshot(values.get("GRAPHITI_ENABLED"), default=False),
             "llm_base_url": (values.get("GRAPHITI_LLM_BASE_URL") or "http://127.0.0.1:11434/v1").rstrip("/"),
-            "llm_model": values.get("GRAPHITI_LLM_MODEL") or "gemma-4-E2B-it-Q4_K_M.gguf",
+            "llm_model": values.get("GRAPHITI_LLM_MODEL") or "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
             "offline_only": _env_bool_snapshot(values.get("GRAPHITI_OFFLINE_ONLY"), default=True),
             "timeout_seconds": _env_float_snapshot(values.get("GRAPHITI_RUNTIME_PROBE_TIMEOUT_SECONDS"), default=2.0),
         }
@@ -245,9 +246,45 @@ async def _probe_openai_compatible_llm(config: GraphitiRuntimeConfig) -> dict[st
         "base_url": config.llm_base_url,
         "models_url": url,
         "model": config.llm_model,
-        "model_available": config.llm_model in models,
+        "model_available": _model_is_advertised(config.llm_model, models),
         "advertised_models": models[:20],
     }
+
+
+def _normalize_model_id(value: Any) -> str:
+    """Canonicalize a model id/filename for tolerant presence checks.
+
+    Local llama.cpp / llama-server endpoints advertise the brain by its on-disk
+    path or filename (``gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf``), while other tools
+    refer to the bare id (``gemma-4-E4B-it-qat-UD-Q4_K_XL``). Reduce to basename,
+    drop a trailing ``.gguf`` extension, and lowercase so both forms compare equal
+    without changing the canonical model itself.
+    """
+    text = str(value or "").strip().replace("\\", "/")
+    text = text.rsplit("/", 1)[-1]
+    if text.lower().endswith(".gguf"):
+        text = text[: -len(".gguf")]
+    return text.lower()
+
+
+def _model_is_advertised(model: str, advertised: list[str]) -> bool:
+    """True when the configured model matches an advertised id in either form.
+
+    Recognizes the canonical id in both the bare-id and ``.gguf``-filename forms,
+    and tolerates only the GGUF *shard* filename suffix ``-NNNNN-of-NNNNN``
+    (e.g. ``…-00001-of-00002``). An arbitrary longer variant such as ``…-v2`` is
+    rejected so the probe never reports a model ready that chat completions can't
+    actually serve under the configured name.
+    """
+    target = _normalize_model_id(model)
+    if not target:
+        return False
+    shard_pattern = re.compile(rf"^{re.escape(target)}-\d+-of-\d+$")
+    for candidate in advertised:
+        normalized = _normalize_model_id(candidate)
+        if normalized == target or shard_pattern.match(normalized):
+            return True
+    return False
 
 
 def _models_url(base_url: str) -> str:
