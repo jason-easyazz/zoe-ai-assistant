@@ -650,3 +650,39 @@ async def test_malformed_toolcall_start_does_not_block_idle(monkeypatch):
         timeout_s=2.0,
     )
     assert out == ["All done"]
+
+
+async def test_unnamed_toolcall_start_does_not_block_idle(monkeypatch):
+    """A toolCall block WITH an id but WITHOUT a usable name passes
+    _toolcall_block_from_amev (it accepts any type=="toolCall" block) but is NOT
+    trackable — the start sentinel is suppressed and no tool_execution_end will
+    match it. It must therefore not count as outstanding either (count under the
+    exact same id-AND-name guard as the sentinel), or the turn stays permanently
+    non-idle-eligible (Greptile #920 round 2)."""
+    import zoe_core_client as zc
+    monkeypatch.setattr(zc, "_IDLE_TIMEOUT_S", 0.05)
+
+    out = await _run_read_turn_streamed(
+        [
+            (0.0, [
+                _accept(),
+                _delta("All done"),
+                # Valid-shaped block but name missing: accepted by the parser,
+                # suppressed by the sentinel guard — must not be counted.
+                {"type": "message_update", "id": "req-1",
+                 "assistantMessageEvent": {
+                     "type": "toolcall_start",
+                     "contentIndex": 0,
+                     "partial": {"content": [
+                         {"type": "toolCall", "id": "tc-noname",
+                          "arguments": {}, "partialArgs": "", "streamIndex": 0}
+                     ]},
+                 }},
+                {"type": "turn_end", "id": "req-1"},
+            ]),
+            (5.0, [_agent_end()]),
+        ],
+        timeout_s=2.0,
+    )
+    assert out == ["All done"]
+    assert not any(c.startswith("__TOOL__:") for c in out)

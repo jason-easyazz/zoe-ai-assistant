@@ -383,16 +383,17 @@ class _ZoeCoreWorker:
                 elif amev_type == "toolcall_start":
                     tc = _toolcall_block_from_amev(amev)
                     if tc is not None:
-                        # A tool is now in flight — suppress the idle timeout until
-                        # its matching tool_execution_end arrives (slow tools are
-                        # silent). Counted only AFTER the frame validates: a
-                        # malformed toolcall_start has no matching
-                        # tool_execution_end, so counting it would leave the turn
-                        # permanently non-idle-eligible (phantom pending tool).
-                        tools_outstanding += 1
                         tc_id = tc.get("id")
                         tc_name = tc.get("name")
+                        # Count a tool as in-flight ONLY under the exact guard that
+                        # makes it trackable (id AND name — the same condition as the
+                        # start sentinel). _toolcall_block_from_amev accepts any
+                        # type=="toolCall" block, so an id-without-name (or unnamed)
+                        # block would otherwise increment the counter with no matching
+                        # tool_execution_end and leave the turn permanently
+                        # non-idle-eligible (phantom pending tool).
                         if tc_id and tc_name:
+                            tools_outstanding += 1
                             yield "__TOOL__:" + json.dumps(
                                 {"phase": "start", "id": str(tc_id), "name": str(tc_name)}
                             )
