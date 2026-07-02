@@ -326,6 +326,127 @@ def test_transcribe_audio_impl_moonshine_error_raises(monkeypatch):
     assert raised, "Moonshine backend error must surface (raise), not be masked as silence"
 
 
+# ── Moonshine audio prep (mono / 16 kHz guarantee, no per-sample edits) ──────
+
+
+def test_prepare_audio_passes_16k_through_unchanged():
+    """Already-16 kHz audio must reach Moonshine byte-for-byte unchanged.
+
+    This is the zero-regression guarantee: replaying the operator's corpus showed
+    Moonshine is so input-sensitive that even DC-offset removal flips transcripts,
+    so the prep MUST be an identity for the live 16 kHz path."""
+    from routers import voice_tts
+
+    audio = [0.0, 0.5, -0.5, 0.25, -0.25, 0.0]
+    out_audio, out_sr = voice_tts._prepare_audio_for_moonshine(audio, 16000)
+
+    assert out_sr == 16000
+    # Same object, not just equal values — no copy, no edit.
+    assert out_audio is audio
+
+
+def test_prepare_audio_resamples_off_rate_to_16k():
+    """A non-16 kHz capture is resampled to 16 kHz (Moonshine's expected rate)."""
+    import numpy as np
+    from routers import voice_tts
+
+    sr = 48000
+    # 1.0s of a 440 Hz tone at 48 kHz -> expect ~16000 samples at 16 kHz.
+    t = np.arange(sr, dtype=np.float32) / sr
+    tone = (0.3 * np.sin(2 * np.pi * 440.0 * t)).astype(np.float32)
+
+    out_audio, out_sr = voice_tts._prepare_audio_for_moonshine(tone.tolist(), sr)
+
+    assert out_sr == 16000
+    # 48k -> 16k is a clean 3:1 decimation; length scales with the ratio.
+    assert abs(len(out_audio) - sr // 3) <= 2
+    # Still bounded audio, not garbage.
+    assert max(abs(x) for x in out_audio) < 1.0
+
+
+def test_prepare_audio_downmixes_stereo_to_mono():
+    """A 2-D (stereo) array is averaged to mono so the C transcribe call is safe."""
+    import numpy as np
+    from routers import voice_tts
+
+    stereo = np.array([[0.4, 0.0], [0.0, 0.4], [0.2, 0.2]], dtype=np.float32)
+    out_audio, out_sr = voice_tts._prepare_audio_for_moonshine(stereo, 16000)
+
+    assert out_sr == 16000
+    mono = np.asarray(out_audio, dtype=np.float32)
+    assert mono.ndim == 1
+    assert mono.tolist() == pytest.approx([0.2, 0.2, 0.2])
+
+
+def test_prepare_audio_empty_is_noop():
+    from routers import voice_tts
+
+    out_audio, out_sr = voice_tts._prepare_audio_for_moonshine([], 44100)
+    assert out_sr == 16000
+    assert list(out_audio) == []
+
+
+def test_run_moonshine_rejects_invalid_rate_before_transcribe(monkeypatch, tmp_path):
+    """A corrupt WAV whose metadata yields rate 0/None must NEVER reach the C
+    transcribe call — _run_moonshine returns empty instead (Greptile #886)."""
+    import asyncio
+    from routers import voice_tts
+
+    class _ExplodingTr:
+        def transcribe_without_streaming(self, audio, sr):
+            raise AssertionError(f"invalid rate {sr!r} reached Moonshine")
+
+    monkeypatch.setattr(voice_tts, "_ensure_moonshine", lambda: _ExplodingTr())
+
+    import sys
+    import types
+    fake_utils = types.SimpleNamespace(load_wav_file=lambda p: ([0.1, 0.2, 0.3], 0))
+    monkeypatch.setitem(sys.modules, "moonshine_voice.utils", fake_utils)
+    monkeypatch.setitem(sys.modules, "moonshine_voice", types.SimpleNamespace(utils=fake_utils))
+
+    wav = tmp_path / "corrupt.wav"
+    wav.write_bytes(b"RIFF....")
+    assert asyncio.run(voice_tts._run_moonshine(str(wav))) == ""
+
+
+def test_prepare_audio_resample_needs_no_scipy(monkeypatch):
+    """The off-rate resample must be numpy-only — scipy is NOT a declared
+    zoe-data runtime dependency, so importing it would break the live path on a
+    deployment that installs only requirements.txt (Greptile #886)."""
+    import builtins
+    import numpy as np
+    from routers import voice_tts
+
+    real_import = builtins.__import__
+
+    def _no_scipy(name, *args, **kwargs):
+        if name == "scipy" or name.startswith("scipy."):
+            raise ModuleNotFoundError("No module named 'scipy' (blocked by test)")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _no_scipy)
+
+    tone = (0.2 * np.sin(np.linspace(0, 20, 48000))).astype(np.float32)
+    out_audio, out_sr = voice_tts._prepare_audio_for_moonshine(tone.tolist(), 48000)
+
+    assert out_sr == 16000
+    assert abs(len(out_audio) - 16000) <= 2
+
+
+def test_prepare_audio_unknown_rate_not_coerced_to_16k():
+    """A falsey/invalid native rate must NOT be silently relabelled 16 kHz — that
+    would make malformed audio look valid to Moonshine (Greptile #886). The rate
+    is handed back unchanged so the caller can surface the bad metadata."""
+    from routers import voice_tts
+
+    audio = [0.1, -0.1, 0.2, -0.2]
+    for bad in (0, None):
+        out_audio, out_sr = voice_tts._prepare_audio_for_moonshine(audio, bad)
+        # Not relabelled as the valid 16 kHz rate.
+        assert out_sr != 16000
+        assert list(out_audio) == audio
+
+
 def test_maybe_capture_stt_saves_corpus_without_whisper_ab(monkeypatch, tmp_path):
     """Corpus capture still saves the WAV, but fires NO whisper A/B."""
     from routers import voice_tts

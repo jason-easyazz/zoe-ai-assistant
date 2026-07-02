@@ -2167,12 +2167,86 @@ def _ensure_moonshine():
     return _moonshine_model
 
 
+_MOONSHINE_SAMPLE_RATE = 16000
+
+
+def _prepare_audio_for_moonshine(audio, sample_rate: int):
+    """Guarantee Moonshine gets the mono, 16 kHz float audio it expects.
+
+    Moonshine's own ``load_wav_file`` mixes to mono but does NOT resample — it
+    hands the file's native rate straight to ``transcribe_without_streaming``,
+    which silently degrades accuracy if a panel ever captures at something other
+    than 16 kHz. This helper closes that gap.
+
+    Deliberately NOT a denoiser/normaliser: replaying the operator's real corpus
+    (see tests + the wake-strip note) showed Moonshine is extremely sensitive to
+    *any* per-sample edit — peak/RMS gain, DC-offset removal, and leading-silence
+    / wake-audio trimming each regressed as many clips as they fixed (a clean
+    "What time is it?" flipped to "Mom is it"). So for audio that is already mono
+    16 kHz — every live panel turn today — this returns the samples unchanged
+    (zero regression by construction). It only edits the samples to resample when
+    the input rate genuinely differs.
+
+    Returns ``(audio, rate)`` where ``rate`` is 16000 whenever the input rate was
+    known. An unknown/invalid rate (``<= 0``) cannot be resampled, so the samples
+    pass through and that rate is returned for the caller to surface.
+    """
+    import numpy as np
+
+    try:
+        sr = int(sample_rate)
+    except (TypeError, ValueError):
+        sr = 0
+
+    a = np.asarray(audio, dtype=np.float32)
+    needs_downmix = a.ndim > 1
+    if needs_downmix:
+        # Defensive mono downmix (load_wav_file already mixes, but a caller handing
+        # us a 2-D array must not crash the C transcribe call).
+        a = a.mean(axis=1).astype(np.float32)
+
+    if sr == _MOONSHINE_SAMPLE_RATE and not needs_downmix:
+        # Fast path: already mono at the target rate -> return UNCHANGED samples
+        # (identity for the live 16 kHz path; no decode perturbation).
+        return audio, _MOONSHINE_SAMPLE_RATE
+    if a.size == 0:
+        return [], (_MOONSHINE_SAMPLE_RATE if sr > 0 else sr)
+    if sr <= 0:
+        # Unknown/invalid native rate — we can't honestly resample. Don't pretend
+        # it's 16 kHz; hand the (mono) samples back with the rate as-is so the
+        # caller doesn't mistake malformed metadata for valid 16 kHz audio.
+        return (audio if not needs_downmix else a.tolist()), sr
+    if sr == _MOONSHINE_SAMPLE_RATE:
+        # Was a 2-D 16 kHz array we just downmixed; no resample needed.
+        return a.tolist(), _MOONSHINE_SAMPLE_RATE
+
+    # Only reached when capture-format drifts off 16 kHz. Linear interpolation
+    # resample (numpy-only — scipy is NOT a declared zoe-data dependency, so the
+    # off-rate path must not import it). Adequate for 16 kHz speech STT and it
+    # can't make a 16 kHz clip worse because this branch never runs for 16 kHz.
+    n_out = max(1, int(round(a.shape[0] * _MOONSHINE_SAMPLE_RATE / sr)))
+    src_idx = np.arange(a.shape[0], dtype=np.float64)
+    dst_idx = np.linspace(0.0, a.shape[0] - 1, n_out)
+    resampled = np.interp(dst_idx, src_idx, a).astype(np.float32)
+    return resampled.tolist(), _MOONSHINE_SAMPLE_RATE
+
+
 async def _run_moonshine(wav_path: str) -> str:
     from moonshine_voice.utils import load_wav_file
 
     def _work() -> str:
         tr = _ensure_moonshine()
         audio, sr = load_wav_file(wav_path)
+        # Moonshine wants mono 16 kHz; load_wav_file doesn't resample. This is an
+        # identity for the live 16 kHz path and only resamples off-rate capture.
+        audio, sr = _prepare_audio_for_moonshine(audio, sr)
+        if not isinstance(sr, int) or sr <= 0:
+            # Corrupt/malformed WAV metadata (rate 0/None): _prepare_audio... hands
+            # the rate back for us to surface — never feed it into the C transcribe
+            # call. Treat the clip as unusable -> empty transcript (the caller's
+            # empty_transcript handling re-prompts).
+            logger.warning("Moonshine: unusable sample rate %r for %s — skipping clip", sr, wav_path)
+            return ""
         with _moonshine_infer_lock:
             out = tr.transcribe_without_streaming(audio, sr)
         # Moonshine segments speech into lines and emits the wake phrase ("Hey Zoe.")
@@ -2484,8 +2558,8 @@ async def _run_voice_memory_passes(
             user_id=user_id,
             session_id=session_id,
         ))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("voice memory passes failed (non-fatal): %s", exc)
 
 
 async def _run_hermes_voice_escalation(prompt: str, session_id: str, user_id: str) -> str:

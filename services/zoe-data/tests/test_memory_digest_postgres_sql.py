@@ -16,9 +16,11 @@ class _FakeDb:
     def __init__(self, rows):
         self.rows = rows
         self.sql = []
+        self.params = []
 
     async def execute(self, sql, params=()):
         self.sql.append(sql)
+        self.params.append(params)
         return _Cursor(self.rows)
 
 
@@ -316,3 +318,99 @@ async def test_run_music_taste_digest_for_all_db_none_uses_get_db_ctx(monkeypatc
     assert [r["user_id"] for r in results] == ["alice", "bob"]
     assert seen == ["alice", "bob"]
     assert "SELECT DISTINCT user_id FROM music_listening_events" in db.sql[0]
+
+
+class _OrderTrackingCtx(_FakeCtx):
+    """_FakeCtx that appends 'ctx_exit' to a shared event log on release."""
+
+    def __init__(self, db, events_log):
+        super().__init__(db)
+        self._events_log = events_log
+
+    async def __aexit__(self, *exc):
+        self._events_log.append("ctx_exit")
+        return await super().__aexit__(*exc)
+
+
+@pytest.mark.asyncio
+async def test_run_music_taste_digest_reads_events_via_get_db_ctx(monkeypatch):
+    """run_music_taste_digest must materialize events through get_db_ctx and
+    release the pooled connection BEFORE the scoring + MemPalace ingest work,
+    not hold it across that work via `async for db in get_db(): break`."""
+    order: list[str] = []
+
+    # Strong preference for one artist (complete=+2 x3 = +6 > 3 threshold) so a
+    # fact is actually ingested and we can assert release-before-ingest ordering.
+    rows = [
+        ("complete", "Song A", "Aurora", "synthpop"),
+        ("complete", "Song B", "Aurora", "synthpop"),
+        ("complete", "Song C", "Aurora", "synthpop"),
+    ]
+    db = _FakeDb(rows)
+    ctx = _OrderTrackingCtx(db, order)
+    monkeypatch.setattr(db_pool, "get_db_ctx", lambda: ctx)
+
+    class _FakeSvc:
+        async def ingest(self, fact_text, **kwargs):
+            order.append("ingest")
+            return object()  # non-None → counted
+
+    import memory_service
+
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: _FakeSvc())
+
+    result = await memory_digest.run_music_taste_digest("user-1")
+
+    # Connection acquired + released exactly once via the context manager.
+    assert ctx.entered == 1 and ctx.exited == 1
+    # Read went through the pooled acquire against the right table.
+    assert any("music_listening_events" in s for s in db.sql)
+    # At least one preference fact ingested (Aurora scored +6).
+    assert result["facts_ingested"] >= 1
+    # Critical: the pooled connection was released BEFORE any ingest work ran.
+    assert "ctx_exit" in order and "ingest" in order
+    assert order.index("ctx_exit") < order.index("ingest")
+
+
+@pytest.mark.asyncio
+async def test_run_music_taste_digest_releases_before_scoring_on_empty(monkeypatch):
+    """Even with no events, the connection is released via get_db_ctx (no leak)."""
+    db = _FakeDb([])
+    ctx = _FakeCtx(db)
+    monkeypatch.setattr(db_pool, "get_db_ctx", lambda: ctx)
+
+    result = await memory_digest.run_music_taste_digest("user-1")
+
+    assert ctx.entered == 1 and ctx.exited == 1
+    assert result["skipped_reason"] == "no_events"
+
+
+@pytest.mark.asyncio
+async def test_list_user_ids_db_none_uses_get_db_ctx(monkeypatch):
+    """db=None → one short-lived pooled acquire (entered/exited once)."""
+    db = _FakeDb([("alice",), ("bob",), (None,)])  # None filtered out
+    ctx = _FakeCtx(db)
+    monkeypatch.setattr(db_pool, "get_db_ctx", lambda: ctx)
+
+    user_ids = await memory_digest._list_user_ids("SELECT user_id FROM t")
+
+    assert user_ids == ["alice", "bob"]
+    assert ctx.entered == 1 and ctx.exited == 1
+
+
+@pytest.mark.asyncio
+async def test_list_user_ids_uses_supplied_db(monkeypatch):
+    """db supplied → uses it directly, never touches get_db_ctx."""
+    def _boom():
+        raise AssertionError("get_db_ctx must not be used when db is supplied")
+
+    monkeypatch.setattr(db_pool, "get_db_ctx", _boom)
+
+    db = _FakeDb([("carol",)])
+    user_ids = await memory_digest._list_user_ids(
+        "SELECT user_id FROM t WHERE x = ?", ("y",), db=db
+    )
+
+    assert user_ids == ["carol"]
+    assert db.sql == ["SELECT user_id FROM t WHERE x = ?"]
+    assert db.params == [("y",)]  # params forwarded to the supplied connection
