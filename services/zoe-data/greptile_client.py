@@ -15,6 +15,7 @@ ENV_FILE = Path(os.environ.get("GREPTILE_ENV_FILE", Path.home() / ".config/zoe/g
 DEFAULT_REMOTE = "github"
 DEFAULT_BRANCH = "main"
 DEFAULT_REPO = os.environ.get("ZOE_GITHUB_REPO", "jason-easyazz/zoe-ai-assistant")
+MCP_RESPONSE_MAX_BYTES = 2 * 1024 * 1024
 
 
 class GreptileAuthError(RuntimeError):
@@ -110,6 +111,26 @@ def _load_api_key() -> str:
     raise GreptileAuthError("Greptile API key missing")
 
 
+async def _read_bounded_httpx_response(resp: httpx.Response, max_bytes: int) -> bytes:
+    content_length = resp.headers.get("Content-Length")
+    if content_length:
+        try:
+            declared_length = int(content_length)
+        except (TypeError, ValueError):
+            declared_length = None
+        if declared_length is not None and declared_length > max_bytes:
+            raise RuntimeError(f"Greptile MCP response exceeds {max_bytes} byte cap")
+
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in resp.aiter_bytes():
+        total += len(chunk)
+        if total > max_bytes:
+            raise RuntimeError(f"Greptile MCP response exceeds {max_bytes} byte cap")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 async def _mcp_call(tool: str, arguments: dict[str, Any]) -> Any:
     payload = {
         "jsonrpc": "2.0",
@@ -123,9 +144,10 @@ async def _mcp_call(tool: str, arguments: dict[str, Any]) -> Any:
         "Accept": "application/json, text/event-stream",
     }
     async with httpx.AsyncClient(timeout=90) as client:
-        resp = await client.post(MCP_URL, json=payload, headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
+        async with client.stream("POST", MCP_URL, json=payload, headers=headers) as resp:
+            resp.raise_for_status()
+            raw = await _read_bounded_httpx_response(resp, MCP_RESPONSE_MAX_BYTES)
+            data = json.loads(raw.decode(resp.encoding or "utf-8"))
     if data.get("error"):
         raise RuntimeError(f"Greptile MCP error: {data['error']}")
     result = data.get("result") or {}

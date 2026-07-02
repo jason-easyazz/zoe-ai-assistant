@@ -190,8 +190,8 @@
 
     function currentPanelId(storedChallenge) {
         return new URLSearchParams(location.search).get('panel_id')
-            || localStorage.getItem('zoe_touch_panel_id')
             || localStorage.getItem('zoe_panel_id')
+            || localStorage.getItem('zoe_touch_panel_id')
             || (storedChallenge && storedChallenge.panel_id)
             || '';
     }

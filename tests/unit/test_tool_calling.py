@@ -1,97 +1,91 @@
-#!/usr/bin/env python3
-"""
-Test script to verify tool calling functionality
-"""
+"""Tool-calling smoke tests for the current Zoe runtime."""
 
-import asyncio
-import httpx
+from __future__ import annotations
+
 import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 
-async def test_tool_calling():
-    """Test the complete tool calling flow"""
-    
-    print("🧪 Testing Zoe's Tool Calling System")
-    print("=" * 50)
-    
-    # Test 1: Check MCP server tools
-    print("\n1. Testing MCP Server Tools...")
+import pytest
+
+httpx = pytest.importorskip("httpx")
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ZOE_DATA = PROJECT_ROOT / "services" / "zoe-data"
+ZOE_API = "http://localhost:8000/api"
+
+
+async def _post_or_skip(url: str, **kwargs) -> httpx.Response:
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "http://localhost:8003/tools/list",
-                json={"_auth_token": "default", "_session_id": "default"},
-                timeout=5.0
-            )
-            
-            if response.status_code == 200:
-                tools_data = response.json()
-                print(f"✅ MCP Server: {tools_data['total_tools']} tools available")
-                print(f"   Categories: {tools_data['categories']}")
-            else:
-                print(f"❌ MCP Server error: {response.status_code}")
-                return
-                
-    except Exception as e:
-        print(f"❌ MCP Server connection failed: {e}")
-        return
-    
-    # Test 2: Direct tool execution
-    print("\n2. Testing Direct Tool Execution...")
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "http://localhost:8003/tools/add_to_list",
-                json={
-                    "list_name": "test_shopping",
-                    "task_text": "test item",
-                    "priority": "medium",
-                    "_auth_token": "default",
-                    "_session_id": "default"
-                },
-                timeout=5.0
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                print(f"✅ Direct tool execution: {result['message']}")
-            else:
-                print(f"❌ Direct tool execution failed: {response.status_code}")
-                
-    except Exception as e:
-        print(f"❌ Direct tool execution error: {e}")
-    
-    # Test 3: Chat with tool calling
-    print("\n3. Testing Chat with Tool Calling...")
-    test_messages = [
+            return await client.post(url, **kwargs)
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.NetworkError) as exc:
+        pytest.skip(f"Live service unavailable for {url}: {exc}")
+
+
+def _run_mcp_stdio(message: dict) -> dict:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(ZOE_DATA) + os.pathsep + env.get("PYTHONPATH", "")
+    proc = subprocess.Popen(
+        [sys.executable, str(ZOE_DATA / "mcp_server.py")],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    assert proc.stdin is not None
+    assert proc.stdout is not None
+    proc.stdin.write(json.dumps(message) + "\n")
+    proc.stdin.close()
+    line = proc.stdout.readline()
+    stderr = proc.stderr.read() if proc.stderr else ""
+    returncode = proc.wait(timeout=10)
+    assert returncode == 0, stderr
+    assert line, stderr
+    return json.loads(line)
+
+
+def test_mcp_stdio_lists_tools():
+    response = _run_mcp_stdio({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+
+    tools = response["result"]["tools"]
+    tool_names = {tool["name"] for tool in tools}
+    assert "list_add_item" in tool_names
+    assert "calendar_list_events" in tool_names
+
+
+def test_chat_router_maps_core_brain_tool_sentinels_to_ag_ui_events():
+    chat_source = (ZOE_DATA / "routers" / "chat.py").read_text()
+
+    assert "def brain_tool_sentinel_events" in chat_source
+    assert "ToolCallStartEvent" in chat_source
+    assert "ToolCallArgsEvent" in chat_source
+    assert "ToolCallResultEvent" in chat_source
+    assert "for _tool_ev in brain_tool_sentinel_events(" in chat_source
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
         "Add bread to shopping list",
         "What tools do you have?",
-        "Turn on the living room light"
-    ]
-    
-    for message in test_messages:
-        print(f"\n   Testing: '{message}'")
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    "http://localhost:8000/api/chat",
-                    json={"message": message, "user_id": "test_user"},
-                    timeout=30.0
-                )
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    print(f"   ✅ Response: {result['response'][:100]}...")
-                    print(f"   ⏱️  Response time: {result['response_time']:.2f}s")
-                    print(f"   🎯 Routing: {result['routing']}")
-                else:
-                    print(f"   ❌ Chat error: {response.status_code}")
-                    
-        except Exception as e:
-            print(f"   ❌ Chat error: {e}")
-    
-    print("\n" + "=" * 50)
-    print("🎯 Tool Calling Test Complete!")
+        "Turn on the living room light",
+    ],
+)
+async def test_chat_tool_calling_returns_structured_response(message):
+    response = await _post_or_skip(
+        f"{ZOE_API}/chat?stream=false",
+        json={"message": message, "user_id": "test_user"},
+        timeout=30.0,
+    )
 
-if __name__ == "__main__":
-    asyncio.run(test_tool_calling())
-
+    assert response.status_code == 200, response.text[:300]
+    result = response.json()
+    assert isinstance(result.get("response"), str)
+    assert result["response"].strip()
+    assert isinstance(result.get("session_id"), str)
+    assert result["session_id"].strip()

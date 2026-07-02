@@ -7,8 +7,10 @@ alembic>=1.13.0
 psycopg2-binary>=2.9.0
 python-multipart==0.0.12
 httpx==0.28.0
+aiohttp==3.14.1
 websockets==14.0
 python-jose[cryptography]==3.3.0
+PyJWT==2.13.0
 passlib[bcrypt]==1.7.4
 ag-ui-protocol==0.1.14
 python-json-logger>=4.1.0
@@ -26,17 +28,6 @@ moonshine-voice
 # Tier-1 semantic router: bge-small ONNX embeddings (~7-30ms/query, CPU) for
 # fuzzy domain classification between the regex fast-path and the Pi brain.
 fastembed
-# STT fallback via Python API (faster than whisper.cpp CLI on Jetson with CUDA)
-# Pinned: the aarch64/Jetson ctranslate2 4.7.1 wheel ships _ext.so with a broken
-# RUNPATH (/usr/local/lib64:/usr/local/lib) that does NOT point at its own bundled
-# ctranslate2.libs/, so `import ctranslate2` fails with
-#   ImportError: libctranslate2.so.4: cannot open shared object file
-# unless LD_LIBRARY_PATH happens to include the lib. Fix after any reinstall:
-#   patchelf --set-rpath '$ORIGIN/../ctranslate2.libs:/usr/local/lib64:/usr/local/lib' \
-#     ~/.local/lib/python3.10/site-packages/ctranslate2/_ext.cpython-310-aarch64-linux-gnu.so
-# Versions known-good on JetPack 6.2.1 / CUDA 12.6 / numpy 1.26 / py3.10:
-faster-whisper==1.2.1
-ctranslate2==4.7.1
 # Speaker diarization for ambient memory (Jetson CUDA only)
 pyannote.audio>=3.3.2
 # VAD for barge-in and ambient capture (server-side copy; Pi uses same package)
@@ -51,6 +42,8 @@ py-vapid>=1.8
 resemblyzer>=0.1.3
 # LiveKit WebRTC server-side agent (joins room, STT+LLM+TTS, publishes audio)
 livekit>=0.14
+aiortc==1.14.0
+av==16.1.0
 # A2A federation + skill discovery + web search
 ddgs>=6.0
 cloakbrowser>=0.3.28

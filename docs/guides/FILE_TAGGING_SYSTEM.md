@@ -1,7 +1,7 @@
 # File Tagging System for Unused Files
 
 ## Overview
-The File Tagging System automatically identifies files that haven't been accessed in the last week and prepares them for potential archival. This helps keep the project clean and organized.
+The File Tagging System automatically identifies files that haven't been accessed in the last week and prepares them for review before retirement. This helps keep the project clean and organized.
 
 ## How It Works
 
@@ -12,17 +12,17 @@ The File Tagging System automatically identifies files that haven't been accesse
 - **Output**: Creates `scripts/maintenance/file_tags.json`
 
 ### 2. Manual Review
-- Review tagged files before archival
+- Review tagged files before retirement
 - Essential files are automatically excluded:
   - `README.md`, `requirements.txt`, `main.py`
   - Core service files (`chat.py`, `auth.py`, etc.)
   - Database files, logs, and cache files
 
-### 3. Archival Process
+### 3. Retirement Process
 - Manual confirmation required
-- Files moved to `docs/archive/tagged_files/YYYYMMDD_HHMMSS/`
-- Archive manifest created with file details
+- Approved files are deleted from the working tree
 - Original tags file updated
+- Committed files remain recoverable from git history
 
 ## Usage
 
@@ -38,7 +38,7 @@ chmod +x scripts/maintenance/setup_file_tagging.sh
 # Tag unused files manually
 python3 scripts/maintenance/tag_unused_files.py
 
-# Review and archive tagged files
+# Review and retire tagged files
 python3 scripts/maintenance/archive_tagged_files.py
 ```
 
@@ -70,28 +70,18 @@ tail scripts/maintenance/tagging.log
 - Temporary or test files
 - Legacy code files
 
-## Archive Structure
-```
-docs/archive/tagged_files/20241008_143022/
-├── archive_manifest.json          # Archive details
-├── docs/old_documentation.md      # Archived files
-├── config/unused_config.json
-└── scripts/old_script.py
-```
-
 ## Safety Features
-- **Manual confirmation** required for archival
-- **Archive manifest** with file details
-- **Restore capability** from archive location
+- **Manual confirmation** required for retirement
+- **Restore capability** from git history for committed files
 - **Essential files** automatically protected
 - **Logging** of all operations
 
 ## Best Practices
-1. **Review weekly** tagged files before archival
+1. **Review weekly** tagged files before retirement
 2. **Keep essential files** in core directories
 3. **Use descriptive names** for better identification
-4. **Archive in batches** rather than individual files
-5. **Document purpose** of archived files
+4. **Retire in batches** rather than individual files
+5. **Document why files were retired in the commit message**
 
 ## Troubleshooting
 
@@ -113,13 +103,13 @@ crontab -l
 tail /var/log/syslog | grep CRON
 ```
 
-### Archive Recovery
+### Recovery
 ```bash
-# Find archived files
-find docs/archive/tagged_files/ -name "*.json" -exec cat {} \;
+# Find prior versions of a retired file
+git log -- path/to/file.py
 
-# Restore specific file
-cp docs/archive/tagged_files/20241008_143022/path/to/file.py ./
+# Restore a specific committed version
+git show <commit>:path/to/file.py > path/to/file.py
 ```
 
 ## Configuration
@@ -127,4 +117,4 @@ Edit `tag_unused_files.py` to modify:
 - Exclude patterns
 - Essential files list
 - Time threshold (currently 7 days)
-- Archive location
+- Retirement behavior

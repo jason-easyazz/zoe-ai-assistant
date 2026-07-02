@@ -5,7 +5,7 @@ Mounted at prefix="/api/journal" with tag "journal".
 import json
 import random
 import uuid
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -17,6 +17,22 @@ from models import JournalEntryCreate, JournalEntryUpdate
 from push import broadcaster
 
 router = APIRouter(prefix="/api/journal", tags=["journal"])
+
+SEARCH_MAX_LENGTH = 200
+CREATED_AT_VALID_TIMESTAMP_SQL = (
+    "created_at ~ '^("
+    "([0-9]{4}-(01|03|05|07|08|10|12)-(0[1-9]|[12][0-9]|3[01]))|"
+    "([0-9]{4}-(04|06|09|11)-(0[1-9]|[12][0-9]|30))|"
+    "(([0-9]{2}(0[48]|[2468][048]|[13579][26])|([02468][048]|[13579][26])00)-02-29)|"
+    "([0-9]{4}-02-(0[1-9]|1[0-9]|2[0-8]))"
+    ")([ T]([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9](\\.[0-9]+)?)?(Z|[+-][0-9]{2}(:?[0-9]{2})?)?)?$'"
+)
+CREATED_AT_TIMESTAMP_SQL = (
+    f"(CASE WHEN {CREATED_AT_VALID_TIMESTAMP_SQL} THEN created_at::timestamp END)"
+)
+CREATED_AT_DATE_SQL = (
+    f"CASE WHEN {CREATED_AT_VALID_TIMESTAMP_SQL} THEN created_at::timestamp::date END"
+)
 
 # Default journal prompts for GET /prompts
 DEFAULT_PROMPTS = [
@@ -55,6 +71,24 @@ def _visibility_filter_sql() -> str:
     return "user_id = ? AND deleted = 0"
 
 
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _coerce_date(value):
+    """Normalize DB date values from Postgres or legacy SQLite rows."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return None
+
+
 async def _store_journal_memory(db, user_id: str, entry: dict, action: str):
     """Write a journal-derived fact to MemPalace through MemoryService."""
     content = (entry.get("content") or "")[:800]
@@ -89,9 +123,9 @@ async def list_entries(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     mood: Optional[str] = Query(None),
-    start_date: Optional[str] = Query(None),
-    end_date: Optional[str] = Query(None),
-    search: Optional[str] = Query(None),
+    start_date: Optional[date] = Query(None),
+    end_date: Optional[date] = Query(None),
+    search: Optional[str] = Query(None, max_length=SEARCH_MAX_LENGTH),
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
@@ -105,14 +139,14 @@ async def list_entries(
         conditions.append("mood = ?")
         params.append(mood)
     if start_date:
-        conditions.append("date(created_at) >= ?")
+        conditions.append(f"{CREATED_AT_DATE_SQL} >= ?")
         params.append(start_date)
     if end_date:
-        conditions.append("date(created_at) <= ?")
+        conditions.append(f"{CREATED_AT_DATE_SQL} <= ?")
         params.append(end_date)
     if search:
-        conditions.append("(title LIKE ? OR content LIKE ?)")
-        pattern = f"%{search}%"
+        conditions.append("(title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\')")
+        pattern = f"%{_escape_like(search)}%"
         params.extend([pattern, pattern])
 
     where = " AND ".join(conditions)
@@ -200,11 +234,11 @@ async def list_on_this_day(
     await require_feature_access(db, user, feature="journal", action="read")
     user_id = user["user_id"]
     today_md = date.today().strftime("%m-%d")
-    sql = """
+    sql = f"""
         SELECT * FROM journal_entries
         WHERE user_id = ? AND deleted = 0
-          AND strftime('%m-%d', created_at) = ?
-          AND date(created_at) < date('now')
+          AND to_char({CREATED_AT_TIMESTAMP_SQL}, 'MM-DD') = ?
+          AND {CREATED_AT_DATE_SQL} < CURRENT_DATE
         ORDER BY created_at DESC
     """
     cursor = await db.execute(sql, [user_id, today_md])
@@ -220,7 +254,7 @@ async def get_streak_stats(
 ):
     """Return {current_streak, longest_streak, total_entries}."""
     await require_feature_access(db, user, feature="journal", action="read")
-    from datetime import datetime, timedelta
+    from datetime import timedelta
 
     user_id = user["user_id"]
 
@@ -232,22 +266,24 @@ async def get_streak_stats(
     total_entries = row[0] if row else 0
 
     cursor = await db.execute(
-        """SELECT DISTINCT date(created_at) as d
+        f"""SELECT DISTINCT {CREATED_AT_DATE_SQL} as d
          FROM journal_entries
          WHERE user_id = ? AND deleted = 0
          ORDER BY d DESC""",
         [user_id],
     )
     rows = await cursor.fetchall()
-    dates_sorted = sorted([r[0] for r in rows if r[0]], reverse=True)
+    dates_sorted = sorted(
+        {d for d in (_coerce_date(r[0]) for r in rows) if d is not None},
+        reverse=True,
+    )
 
     current_streak = 0
     longest_streak = 0
     if dates_sorted:
-        today = date.today().isoformat()
         # Current streak: consecutive days ending today
         for i, d in enumerate(dates_sorted):
-            expected = (date.today() - timedelta(days=i)).isoformat()
+            expected = date.today() - timedelta(days=i)
             if d == expected:
                 current_streak += 1
             else:
@@ -255,8 +291,8 @@ async def get_streak_stats(
         # Longest streak
         run = 1
         for i in range(1, len(dates_sorted)):
-            curr_d = datetime.strptime(dates_sorted[i], "%Y-%m-%d").date()
-            prev_d = datetime.strptime(dates_sorted[i - 1], "%Y-%m-%d").date()
+            curr_d = dates_sorted[i]
+            prev_d = dates_sorted[i - 1]
             if (prev_d - curr_d).days == 1:
                 run += 1
             else:

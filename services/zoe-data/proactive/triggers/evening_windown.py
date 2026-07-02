@@ -28,7 +28,8 @@ class EveningWindDownTrigger(ProactiveTrigger):
 
         # Get active users (anyone who chatted in last 7 days)
         async with db.execute(
-            "SELECT DISTINCT user_id FROM chat_sessions WHERE created_at > datetime('now', '-7 days')"
+            "SELECT DISTINCT user_id FROM chat_sessions "
+            "WHERE created_at::timestamptz > (CURRENT_TIMESTAMP - INTERVAL '7 days')"
         ) as cur:
             users = [row[0] async for row in cur]
 
@@ -40,7 +41,7 @@ class EveningWindDownTrigger(ProactiveTrigger):
             # Check last journal-like message (rough: look for "journal", "diary", "feeling")
             async with db.execute(
                 """SELECT COUNT(*) FROM chat_sessions
-                   WHERE user_id=? AND created_at > datetime('now', '-3 days')
+                   WHERE user_id=? AND created_at::timestamptz > (CURRENT_TIMESTAMP - INTERVAL '3 days')
                    AND (title LIKE '%journal%' OR title LIKE '%diary%' OR title LIKE '%feeling%')""",
                 (user_id,),
             ) as cur:

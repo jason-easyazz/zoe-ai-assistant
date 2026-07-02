@@ -59,6 +59,39 @@ volume-only, never in the image or in env, and gate the tunnel with Cloudflare A
 some providers (device limits, ToS, session invalidation). Worth confirming per provider before
 leaning on it for unattended runs.
 
+## Workers (polly roster) + the `pi` / OpenRouter gateway
+`polly` (Omnigent's bundled orchestrator) delegates to three workers: `claude_code`
+(claude-native), `codex` (codex-native), and **`pi`** (`@earendil-works/pi-coding-agent`, the
+review/explore specialist and the only worker that runs gateway models). All three CLIs are
+installed in the image; a worker is "available" only if its binary is on PATH (`pi: true` shows
+in `GET /v1/hosts → configured_harnesses`).
+
+`pi` here is a **separate, vanilla install** of the same upstream agent as `services/zoe-core`'s
+brain — pinned to `^0.79.3` to match core, but with **no** Zoe extensions / Gemma provider / soul.
+It does not share state or creds with core's Pi.
+
+`pi` is wired to **OpenRouter** (default model `minimax/minimax-m3` — tool-calling + 1M context,
+a third distinct vendor for genuine cross-vendor review). Wiring:
+- `entrypoint.sh` idempotently seeds a `kind: gateway` provider into `~/.omnigent/config.yaml`
+  (`base_url: https://openrouter.ai/api/v1`, `wire_api: chat` — OpenRouter has no Responses API,
+  `default: ["pi"]` so claude_code/codex subscription auth is untouched).
+- The key is `OPENROUTER_API_KEY` in the repo `.env` (gitignored), passed into the container via
+  compose; config.yaml stores only an `env:OPENROUTER_API_KEY` ref, never the value.
+- **The key must reach the RUNNER** (where pi's provider resolves): omnigent's runner env is
+  allowlisted and only forwards a fixed credential set (`ANTHROPIC_*`/`OPENAI_*`/`GEMINI_*`/`GIT_*`),
+  NOT `OPENROUTER_API_KEY`. Without forwarding, pi fails to boot with *"Set the variable in the
+  environment."* `OMNIGENT_RUNNER_ENV_PASSTHROUGH=OPENROUTER_API_KEY` (compose) is omnigent's
+  documented knob to forward extra `env:` refs to the runner.
+- Change the default model by editing the seed in `entrypoint.sh`; polly can also override
+  per-dispatch with `args.model`.
+
+## GitHub access for the workers (push + open PRs)
+Each worker opens its OWN PR, so they need `gh` + git push auth. `gh` is installed in the image;
+the host's gh login is mounted **read-only** at `/root/.config/gh` and the entrypoint runs
+`gh auth setup-git` so the workers' `git push` uses it. NOTE: this is the operator's personal token
+(broad `repo` scope). To narrow blast radius, replace the host's gh login with a **fine-grained PAT**
+scoped to this repo (`contents` + `pull-requests`: write) — the mount path is unchanged.
+
 ## Server login — Cloudflare Access (header mode)
 The Omnigent web UI is gated **externally by Cloudflare Access** on the tunnel; Omnigent itself
 runs auth-less and trusts every request as the reserved `local` user. Wiring:

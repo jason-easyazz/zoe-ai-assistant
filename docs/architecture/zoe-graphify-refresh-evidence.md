@@ -27,18 +27,18 @@ back into the repo. The model matrix wrapper runs the same fail-closed probe
 across local model candidates and records compact accepted/rejected, latency,
 RSS, model-file, invalid-JSON, truncation, and context-split evidence so Zoe can
 compare Gemma 4 E2B, E4B, and 12B before changing the sync-capable refresh lane. The shard matrix wrapper then runs the selected local model across named bounded repo slices, records blocked shards, accepted-shard latency, and max observed RSS across all shards, and keeps every shard observe-only until a later merge/sync strategy is proven. Default shards avoid `.zoe` operator state and docs-only directories; those require explicit `--shard` opt-in after separate safety/behavior evidence.
-Scoped mode is observe-only evidence for subsystem-sized local model runs; the
-sync-capable refresh wrapper still requires full repo mode with clustering.
+Scoped mode is observe-only evidence for subsystem-sized local model runs (the
+former full-repo sync-capable refresh lane has since been retired with Graphify).
 After the first default matrix run, the default shard set was narrowed to the
 accepted local slices only: `data-core` and `operators`. The UI tree remains an
 explicit `--shard ui=services/zoe-ui` probe until Graphify can index Zoe's HTML,
 CSS, and JavaScript assets without producing empty or malformed graph output.
 
-`graphify_local_refresh.py` is the sync-capable local wrapper. It runs the repo
-probe with clustering and `keep_workdir`, then syncs `graphify-out` back to the
-repo only when the status is accepted, blockers are empty, `graph.json` is
-non-empty, and `GRAPH_REPORT.md` exists. Rejected runs write
-`graphify-out/.last_refresh_error` and leave committed graph artifacts untouched.
+The former sync-capable local wrapper (`graphify_local_refresh.py`) has been
+**removed**: Graphify is retired and `graphify-out/` is no longer committed, so
+nothing syncs graph output back into the repo. Only the observe-only
+`graphify_local_probe.py` (throwaway snapshot, no repo write-back) remains as
+historical evidence tooling.
 
 `graphify_shard_sync_plan.py` is the no-write bridge between accepted shard
 evidence and a future sharded sync implementation. It consumes a

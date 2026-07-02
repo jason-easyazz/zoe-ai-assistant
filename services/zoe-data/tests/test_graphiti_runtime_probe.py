@@ -4,6 +4,7 @@ import httpx
 from graphiti_runtime_probe import (
     GraphitiRuntimeConfig,
     _extract_model_ids,
+    _model_is_advertised,
     _models_url,
     probe_graphiti_runtime,
     probe_graphiti_runtime_sync,
@@ -191,7 +192,7 @@ def test_runtime_config_defaults_to_local_gemma_endpoint():
     config = GraphitiRuntimeConfig.from_env({})
 
     assert config.llm_base_url == "http://127.0.0.1:11434/v1"
-    assert config.llm_model == "gemma-4-E2B-it-Q4_K_M.gguf"
+    assert config.llm_model == "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"
     assert config.offline_only is True
 
 
@@ -203,6 +204,37 @@ def test_models_url_handles_v1_base():
 def test_extract_model_ids_accepts_openai_and_llama_shapes():
     assert _extract_model_ids({"data": [{"id": "a"}]}) == ["a"]
     assert _extract_model_ids({"models": [{"model": "b"}, {"name": "c"}]}) == ["b", "c"]
+
+
+def test_model_is_advertised_matches_gguf_and_bare_id_forms():
+    canonical = "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"
+    bare = "gemma-4-E4B-it-qat-UD-Q4_K_XL"
+
+    # endpoint advertises the bare id; config holds the .gguf filename (and vice versa)
+    assert _model_is_advertised(canonical, [bare]) is True
+    assert _model_is_advertised(bare, [canonical]) is True
+    # full on-disk path still resolves to the canonical brain
+    assert _model_is_advertised(canonical, ["/models/" + canonical]) is True
+
+
+def test_model_is_advertised_accepts_only_gguf_shard_suffix():
+    canonical = "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"
+    bare = "gemma-4-E4B-it-qat-UD-Q4_K_XL"
+
+    # GGUF shard filename form -NNNNN-of-NNNNN (with or without .gguf) is accepted
+    assert _model_is_advertised(canonical, [bare + "-00001-of-00002.gguf"]) is True
+    assert _model_is_advertised(canonical, [bare + "-00001-of-00002"]) is True
+    # arbitrary longer variants that are NOT a shard suffix are rejected
+    assert _model_is_advertised(canonical, [bare + "-v2"]) is False
+    assert _model_is_advertised(canonical, [bare + "-instruct"]) is False
+    assert _model_is_advertised(canonical, [bare + "-00001"]) is False
+
+
+def test_model_is_advertised_rejects_unrelated_models():
+    canonical = "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"
+
+    assert _model_is_advertised(canonical, ["llama-3.1-8b-instruct", "gemma"]) is False
+    assert _model_is_advertised(canonical, []) is False
 
 
 def test_runtime_probe_sync_wrapper_returns_dict():

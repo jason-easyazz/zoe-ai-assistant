@@ -59,12 +59,32 @@ services:
       - OMNIGENT_AUTH_ENABLED=1
       - OMNIGENT_AUTH_PROVIDER=header
       - OMNIGENT_LOCAL_SINGLE_USER=1
+      # Trust this deployment's PUBLIC tunnel Origin for CSRF-guarded multipart-upload endpoints
+      # (session bundle uploads → require_trusted_origin → origin_allowed). In single-user mode
+      # (above) ONLY loopback origins are trusted, so a browser reaching Omnigent through the
+      # tunnel is rejected ("Forbidden: this endpoint requires a trusted Origin header").
+      # The origin is DEPLOYMENT-SPECIFIC, so it comes from the repo .env (e.g.
+      # OMNIGENT_WS_ALLOWED_ORIGINS=https://buildzoe.the411.life), NOT hardcoded in this reusable
+      # module — the default is empty (loopback-only, safe for any operator). Any non-allowlisted
+      # cross-site Origin stays rejected.
+      - OMNIGENT_WS_ALLOWED_ORIGINS=${OMNIGENT_WS_ALLOWED_ORIGINS:-}
       # The in-container host runner (entrypoint: `omnigent host $OMNIGENT_SELF_URL`) attaches to
       # the co-located server over LOOPBACK, NOT via zoe.local. With the published port bound to
       # 127.0.0.1 (above), the old default http://zoe.local:6767 (= host-gateway → host's published
       # port) is unreachable from inside the container, so the host showed "offline". Loopback is
       # correct anyway — server + host share this container. (Default in entrypoint.sh is zoe.local.)
       - OMNIGENT_SELF_URL=http://127.0.0.1:6767
+      # OpenRouter key for the `pi` worker's gateway provider (seeded into ~/.omnigent/config.yaml
+      # by entrypoint.sh as kind:gateway, default scoped to pi → minimax/minimax-m3). Sourced from
+      # the repo .env; config.yaml stores only an `env:OPENROUTER_API_KEY` ref, never the value.
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      # Forward OPENROUTER_API_KEY host→RUNNER so the pi worker's provider resolves. The runner
+      # env is allowlisted (host/connect.py _build_runner_env) and only a fixed credential set
+      # (ANTHROPIC_*/OPENAI_*/GEMINI_*/GIT_*) is forwarded by default — OPENROUTER_API_KEY is not,
+      # so pi's `api_key_ref: env:OPENROUTER_API_KEY` raised "Set the variable in the environment"
+      # and pi failed to boot. OMNIGENT_RUNNER_ENV_PASSTHROUGH is omnigent's documented knob for
+      # exactly this (custom gateway / providers:-config env: refs); it's a comma-separated list.
+      - OMNIGENT_RUNNER_ENV_PASSTHROUGH=OPENROUTER_API_KEY
       # To revert to LAN-only OIDC (only if the Cloudflare path is retired): flip provider
       # back to `oidc` and uncomment the block below. OIDC works only via http://zoe.local:6767.
       # - OMNIGENT_OIDC_ISSUER=http://zoe.local
@@ -94,6 +114,12 @@ services:
       # cursor.com remote installer). The entrypoint symlinks the real versioned binary
       # (which has its bundled node beside it) onto PATH. Login creds → omnigent-cursor volume.
       - /home/zoe/.local/share/cursor-agent:/root/.local/share/cursor-agent:ro
+      # GitHub auth for the workers (each opens its own PR → needs gh + git push). Mount the
+      # host's gh login READ-ONLY; the entrypoint runs `gh auth setup-git` so git push uses it.
+      # NOTE: this is the operator's personal token (broad `repo` scope). To narrow the blast
+      # radius, replace the host login with a fine-grained PAT scoped to this repo
+      # (contents + pull-requests: write) — the mount path stays the same.
+      - /home/zoe/.config/gh:/root/.config/gh:ro
       # ── Code-intel tooling (audit fix #4) ──────────────────────────────────────
       # Serena, codebase-memory, and opensrc live on the HOST only; the repo is mounted
       # but the tools were entirely absent from this container, so the MCP servers wired

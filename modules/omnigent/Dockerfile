@@ -22,6 +22,25 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 # Separate layers so a failure pinpoints the culprit; the --version calls smoke-test them.
 RUN npm install -g @anthropic-ai/claude-code && claude --version
 RUN npm install -g @openai/codex && codex --version
+# Pi — polly's 3rd worker (review/explore specialist; the only worker that can run gateway
+# models). Same upstream agent as zoe-core's brain (@earendil-works/pi-coding-agent), pinned to
+# match core's ^0.79.3, but a SEPARATE vanilla install (no Zoe extensions/Gemma/soul). The
+# zoe-data pi_runtime_probe installs it with --ignore-scripts; mirror that here.
+RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@^0.79.3 && pi --version
+
+# ── GitHub CLI ───────────────────────────────────────────────────────────────
+# The workers (claude_code / codex / pi) each open their OWN PR, so they need `gh`
+# + git push auth. Install gh from its official apt repo (downloads a keyring, not a
+# piped script). The credential itself is NOT baked in — the host's gh login is mounted
+# read-only at runtime (compose) and the entrypoint runs `gh auth setup-git`.
+RUN mkdir -p -m 755 /etc/apt/keyrings \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+         -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+         > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y --no-install-recommends gh \
+    && rm -rf /var/lib/apt/lists/* && gh --version
 
 # ── Cursor harness (second-class) ────────────────────────────────────────────
 # Requires piping the cursor.com installer, which needs a remote-script permission.
@@ -37,7 +56,10 @@ ENV UV_FIND_LINKS=/opt/wheels
 
 # ── uv + Omnigent ────────────────────────────────────────────────────────────
 # uv installed via pip (avoids piping the astral bootstrap script).
-RUN pip install --no-cache-dir uv \
+# pyyaml is for the entrypoint's idempotent ~/.omnigent/config.yaml seed (the
+# OpenRouter gateway provider for the pi worker) — the system python3 the
+# entrypoint runs has no yaml otherwise.
+RUN pip install --no-cache-dir uv pyyaml \
     && uv tool install --force -q --python 3.12 omnigent
 ENV PATH="/root/.local/bin:${PATH}"
 RUN timeout 30s omnigent --version || echo "WARN: confirm 'omnigent --version' at runtime"
