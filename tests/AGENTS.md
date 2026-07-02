@@ -18,7 +18,8 @@ Repository-level test suites: unit, integration, performance, e2e, intent-system
 
 ## Work Guidance
 
-Loose `test_*.py` files in the `tests/` root predate the suite structure; add new tests to subfolders.
+- No loose `test_*.py` files in the `tests/` root — the pre-suite diary scripts were removed; add new tests to the matching subfolder.
+- `results/` is gitignored: local run artifacts (model bake-offs, reports) live there untracked and are never committed.
 
 ## Verification
 
