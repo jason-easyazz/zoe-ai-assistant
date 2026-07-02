@@ -136,6 +136,16 @@ def assert_dry_run() -> None:
     - ``TOOL_REL_SKIP_WRITE_CHECK=1`` additionally skips the reachability probe for
       environments where even the read call is undesirable; the attestation above
       is still required.
+
+    RESIDUAL RISK (by design, on the operator): the attestation is TRUSTED, not
+    verified. If it is set against a sidecar that is actually writes-ENABLED, the
+    ``show_list`` probe cannot detect the mismatch, and the benchmark's own
+    ``shopping_list_add`` reliability prompts (sent later in ``main``) can then add
+    real items. This is unavoidable for a client-side, prompt-only harness — there
+    is no non-mutating prompt that reveals server write-state — so the guarantee is
+    only ever as good as the operator's attestation. What this preflight removes is
+    the sharper footgun of the *safety check itself* performing a write; it does
+    not (and cannot) make a mis-attested run safe.
     """
     if os.environ.get("TOOL_REL_WRITES_CONFIRMED_OFF") != "1":
         sys.exit(
