@@ -20,11 +20,12 @@ Worker profiles + pinned skills encode Zoe's agentic-engineering loop:
 from __future__ import annotations
 
 import asyncio
-import contextlib
+import concurrent.futures
 import json
 import logging
 import os
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -763,6 +764,67 @@ class KanbanCLIError(RuntimeError):
     """Raised when a hermes kanban CLI call fails."""
 
 
+# The kanban/git CLI spawns below must never fork() on the event loop thread.
+#
+# asyncio.create_subprocess_exec performs the fork+exec SYNCHRONOUSLY inside the
+# coroutine, i.e. on the event loop thread. zoe-data is a large (multi-GB RSS)
+# multi-threaded process (Chroma, fastembed, watchdog, thread pools); fork() of
+# such a process can deadlock post-fork/pre-exec — the child hangs on an atfork
+# lock some other thread held at fork time and never reaches exec, while the
+# parent blocks forever reading the exec-status pipe. Seen live on 2026-06-29:
+# one wedged `hermes kanban` fork from the poll loop froze the event loop, the
+# accept queue filled, and every endpoint (/health, /api/memories/for-prompt)
+# timed out until restart. The asyncio.wait_for guard in main.py could not fire
+# because the loop thread itself was blocked.
+#
+# Running the spawn in this small dedicated pool contains the hazard: a wedged
+# fork costs one bounded worker thread, the event loop keeps serving, and the
+# outer wait_for in _spawn_cli still bounds the awaiting coroutine.
+_CLI_POOL = concurrent.futures.ThreadPoolExecutor(
+    max_workers=4, thread_name_prefix="kanban-cli"
+)
+
+# `hermes kanban` calls previously had no bound at all; generous because the
+# box can be slow under memory pressure, but finite because infinite was the bug.
+_KANBAN_CLI_TIMEOUT_S = 120.0
+
+# Extra slack for the coroutine-side wait_for on top of subprocess.run()'s own
+# timeout: run()'s timeout only starts once Popen() returns, so it can never
+# fire if the fork itself wedges — the outer bound covers that case.
+_CLI_WAIT_GRACE_S = 15.0
+
+
+async def _spawn_cli(
+    args: list[str],
+    *,
+    cwd: str,
+    env: dict[str, str] | None = None,
+    timeout: float,
+) -> "subprocess.CompletedProcess[bytes]":
+    """Run a CLI command off the event loop, bounded even if fork() wedges.
+
+    Raises asyncio.TimeoutError if the worker thread does not come back within
+    timeout + grace (fork wedged), subprocess.TimeoutExpired if the child ran
+    too long (run() kills it), or OSError if the executable could not start.
+    """
+    loop = asyncio.get_running_loop()
+
+    def _blocking() -> "subprocess.CompletedProcess[bytes]":
+        return subprocess.run(
+            args,
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+
+    return await asyncio.wait_for(
+        loop.run_in_executor(_CLI_POOL, _blocking),
+        timeout=timeout + _CLI_WAIT_GRACE_S,
+    )
+
+
 class KanbanAdapter:
     """Executor adapter backed by the Hermes Kanban board."""
 
@@ -773,20 +835,20 @@ class KanbanAdapter:
         env = dict(os.environ)
         env.setdefault("HERMES_KANBAN_BOARD", _board())
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=zoe_repo_root(),
-                env=env,
+            proc = await _spawn_cli(
+                cmd, cwd=str(zoe_repo_root()), env=env, timeout=_KANBAN_CLI_TIMEOUT_S
             )
         except OSError as exc:
             raise KanbanCLIError(
                 f"`hermes kanban {' '.join(args)}` could not start: {exc}"
             ) from exc
-        out, err = await proc.communicate()
-        stdout = (out or b"").decode("utf-8", errors="replace").strip()
-        stderr = (err or b"").decode("utf-8", errors="replace").strip()
+        except (subprocess.TimeoutExpired, asyncio.TimeoutError) as exc:
+            raise KanbanCLIError(
+                f"`hermes kanban {' '.join(args)}` timed out after "
+                f"{_KANBAN_CLI_TIMEOUT_S:.0f}s"
+            ) from exc
+        stdout = (proc.stdout or b"").decode("utf-8", errors="replace").strip()
+        stderr = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
         if proc.returncode != 0:
             raise KanbanCLIError(
                 f"`hermes kanban {' '.join(args)}` exited {proc.returncode}: {stderr or stdout}"
@@ -805,22 +867,12 @@ class KanbanAdapter:
         cwd: Path,
         timeout: float = 45.0,
     ) -> str:
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=str(cwd),
-        )
         try:
-            out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError as exc:
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()
-            with contextlib.suppress(Exception):
-                await proc.communicate()
+            proc = await _spawn_cli(args, cwd=str(cwd), timeout=timeout)
+        except (subprocess.TimeoutExpired, asyncio.TimeoutError) as exc:
             raise KanbanCLIError(f"`{' '.join(args)}` timed out after {timeout:.0f}s") from exc
-        stdout = (out or b"").decode("utf-8", errors="replace").strip()
-        stderr = (err or b"").decode("utf-8", errors="replace").strip()
+        stdout = (proc.stdout or b"").decode("utf-8", errors="replace").strip()
+        stderr = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
         if proc.returncode != 0:
             raise KanbanCLIError(f"`{' '.join(args)}` exited {proc.returncode}: {stderr or stdout}")
         return stdout
