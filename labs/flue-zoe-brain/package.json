@@ -10,7 +10,9 @@
   },
   "scripts": {
     "build": "flue build --target node",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "start": "node dist/server.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "0.79.10",
