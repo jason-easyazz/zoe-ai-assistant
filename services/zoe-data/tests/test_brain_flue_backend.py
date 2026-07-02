@@ -136,8 +136,8 @@ async def test_flue_selected_and_hits_sidecar(monkeypatch):
     # Bearer token sent (sidecar fails closed without it).
     assert cap["headers"]["Authorization"] == "Bearer sekret"
     assert cap["headers"]["Content-Type"] == "application/json"
-    # Body shape: {"message": "..."}
-    assert json.loads(cap["content"]) == {"message": "ping"}
+    # Body shape includes the acting user identity when known.
+    assert json.loads(cap["content"]) == {"message": "ping", "user_id": "jason"}
 
 
 @pytest.mark.asyncio
