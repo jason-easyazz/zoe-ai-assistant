@@ -190,6 +190,39 @@ async def test_flue_error_does_not_crash_turn(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("empty_body", [{"result": {}}, {"result": {"text": ""}}, {}])
+async def test_flue_empty_success_yields_fallback(monkeypatch, empty_body):
+    """An HTTP 200 with no usable text must NOT end the stream blank — it yields
+    the same graceful fallback as a transport error, so the assistant turn is
+    never rendered empty."""
+    import zoe_flue_client
+
+    monkeypatch.setenv("ZOE_BRAIN_BACKEND", "flue")
+
+    class _EmptyClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, *a, **k):
+            return _FakeResponse(empty_body)
+
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", _EmptyClient)
+
+    chunks = [c async for c in zoe_flue_client.run_flue_brain_streaming("hi", "s", "jason")]
+    assert chunks == [zoe_flue_client._FALLBACK_TEXT]
+    # And the oneshot collector returns the same non-blank text.
+    out = await zoe_flue_client.run_flue_brain("hi", "s", "jason")
+    assert out == zoe_flue_client._FALLBACK_TEXT
+
+
+@pytest.mark.asyncio
 async def test_chat_router_helper_selects_flue(monkeypatch):
     """The chat.py dispatch helpers honor the same default-OFF seam."""
     import routers.chat as chat

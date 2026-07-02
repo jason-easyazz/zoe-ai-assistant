@@ -44,6 +44,11 @@ logger = logging.getLogger(__name__)
 _DEFAULT_BASE_URL = "http://127.0.0.1:3578"
 _DEFAULT_TIMEOUT_S = 180.0
 
+# Graceful, user-facing fallback emitted whenever a flue turn cannot produce a
+# usable reply — transport/parse error OR an HTTP 200 with empty text. Shared so
+# both failure surfaces render identically instead of one blanking the turn.
+_FALLBACK_TEXT = "Sorry, I had trouble reaching my brain just now. Could you try again?"
+
 
 def _base_url() -> str:
     return (os.environ.get("ZOE_FLUE_BRAIN_URL") or _DEFAULT_BASE_URL).rstrip("/")
@@ -141,12 +146,21 @@ async def run_flue_brain_streaming(
             body = resp.json()
     except Exception as exc:  # noqa: BLE001 - a brain hiccup must never crash a turn
         logger.warning("flue brain turn failed: %s", exc)
-        yield "Sorry, I had trouble reaching my brain just now. Could you try again?"
+        yield _FALLBACK_TEXT
         return
 
     text = _text_from_body(body)
     if text:
         yield text
+        return
+
+    # HTTP 200 but no usable text (e.g. {"result": {}} or {"result": {"text": ""}}).
+    # The streaming chat path has already opened a text message; ending it with
+    # zero chunks would render a blank assistant turn. Treat an empty successful
+    # result as a failed brain turn and emit the same graceful fallback we use for
+    # transport/parse errors, so the user always gets a coherent reply.
+    logger.warning("flue brain returned an empty result; treating as a failed turn")
+    yield _FALLBACK_TEXT
 
 
 async def run_flue_brain(
