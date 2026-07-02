@@ -3659,6 +3659,10 @@ async def voice_command(
                 full_reply_parts: list[str] = []
                 _t_first_audio: Optional[float] = None
                 _filler_emitted = False  # at most one tool-turn filler per turn
+                # The processing-ack path yields audio bytes directly (without going
+                # through _emit_sentence), so _t_first_audio stays None even though
+                # the user already heard audio — track it separately.
+                _processing_ack_audio_sent = False
 
                 try:
                     async def _emit_sentence(sentence: str, *, record: bool = True):
@@ -3761,6 +3765,7 @@ async def voice_command(
                                 yield (header + "\n").encode()
                                 yield str(ack_event["audio_base64"]).encode() + b"\n"
                                 chunk_index += 1
+                                _processing_ack_audio_sent = True
                             else:
                                 async for out_line in _emit_line({"processing_ack": True, "text": ack_text, "panel_id": panel_id}):
                                     yield out_line
@@ -3783,12 +3788,17 @@ async def voice_command(
                         # tool_call (phase=start), if the brain hasn't spoken anything
                         # yet, emit ONE short generic filler so first-audio comes fast
                         # instead of sitting silent while the tool runs + the answer
-                        # synthesizes. If the brain DID lead with text, _t_first_audio
-                        # is already set and we skip the filler (no double lead-in).
+                        # synthesizes. Skip the filler when the user already heard (or
+                        # is about to hear) real content: audio was synthesized
+                        # (_t_first_audio), brain text is buffering toward a sentence
+                        # boundary (token_buf), or the cached processing-ack already
+                        # played audio — any of those would make it a double lead-in.
                         if delta.startswith(_VOICE_TOOL_SENTINEL_PREFIXES):
                             if (
                                 not _filler_emitted
                                 and _t_first_audio is None
+                                and not token_buf
+                                and not _processing_ack_audio_sent
                                 and _voice_tool_filler_enabled()
                             ):
                                 _tool_name = _voice_tool_name_from_sentinel(delta)
