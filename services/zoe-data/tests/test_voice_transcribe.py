@@ -386,6 +386,29 @@ def test_prepare_audio_empty_is_noop():
     assert list(out_audio) == []
 
 
+def test_run_moonshine_rejects_invalid_rate_before_transcribe(monkeypatch, tmp_path):
+    """A corrupt WAV whose metadata yields rate 0/None must NEVER reach the C
+    transcribe call — _run_moonshine returns empty instead (Greptile #886)."""
+    import asyncio
+    from routers import voice_tts
+
+    class _ExplodingTr:
+        def transcribe_without_streaming(self, audio, sr):
+            raise AssertionError(f"invalid rate {sr!r} reached Moonshine")
+
+    monkeypatch.setattr(voice_tts, "_ensure_moonshine", lambda: _ExplodingTr())
+
+    import sys
+    import types
+    fake_utils = types.SimpleNamespace(load_wav_file=lambda p: ([0.1, 0.2, 0.3], 0))
+    monkeypatch.setitem(sys.modules, "moonshine_voice.utils", fake_utils)
+    monkeypatch.setitem(sys.modules, "moonshine_voice", types.SimpleNamespace(utils=fake_utils))
+
+    wav = tmp_path / "corrupt.wav"
+    wav.write_bytes(b"RIFF....")
+    assert asyncio.run(voice_tts._run_moonshine(str(wav))) == ""
+
+
 def test_prepare_audio_resample_needs_no_scipy(monkeypatch):
     """The off-rate resample must be numpy-only — scipy is NOT a declared
     zoe-data runtime dependency, so importing it would break the live path on a

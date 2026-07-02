@@ -2175,6 +2175,13 @@ async def _run_moonshine(wav_path: str) -> str:
         # Moonshine wants mono 16 kHz; load_wav_file doesn't resample. This is an
         # identity for the live 16 kHz path and only resamples off-rate capture.
         audio, sr = _prepare_audio_for_moonshine(audio, sr)
+        if not isinstance(sr, int) or sr <= 0:
+            # Corrupt/malformed WAV metadata (rate 0/None): _prepare_audio... hands
+            # the rate back for us to surface — never feed it into the C transcribe
+            # call. Treat the clip as unusable -> empty transcript (the caller's
+            # empty_transcript handling re-prompts).
+            logger.warning("Moonshine: unusable sample rate %r for %s — skipping clip", sr, wav_path)
+            return ""
         with _moonshine_infer_lock:
             out = tr.transcribe_without_streaming(audio, sr)
         # Moonshine segments speech into lines and emits the wake phrase ("Hey Zoe.")
