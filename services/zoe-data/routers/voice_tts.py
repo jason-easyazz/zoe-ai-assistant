@@ -2558,8 +2558,8 @@ async def _run_voice_memory_passes(
             user_id=user_id,
             session_id=session_id,
         ))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("voice memory passes failed (non-fatal): %s", exc)
 
 
 async def _run_hermes_voice_escalation(prompt: str, session_id: str, user_id: str) -> str:

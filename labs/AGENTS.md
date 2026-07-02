@@ -16,13 +16,18 @@ with its own README/RUNBOOK and is self-contained.
 
 - Do **not** wire any lab code into the live voice path, `zoe-data`, a systemd
   unit, a Docker image, or CI. Labs run as hand-started processes only.
+  (Deliberate exception: `flue-zoe-brain/` ships an **operator opt-in** user-unit
+  *template* — `scripts/setup/systemd/flue-zoe-brain.service`, port 3578 — that is
+  never auto-installed or auto-enabled; production reaches the sidecar only
+  through zoe-data's default-OFF `ZOE_BRAIN_BACKEND=flue` seam. No other lab may
+  ship a unit without amending this contract.)
 - Do **not** let lab **harness/agent** work point at the local voice brain on
   `:11434` (Gemma-4-E4B) for *its own* engineering work — harnesses must use a
   separate harness model so the live GPU slot is never contended. (Exception: a
   spike whose explicit subject **is** the Gemma brain — e.g. `flue-zoe-brain/`,
   porting Zoe's brain onto Flue per `docs/architecture/zoe-flue-integration.md`
-  Seam M — points at `:11434` by design; it must stay hand-started and demo-only,
-  never wired into a turn.)
+  Seam M — points at `:11434` by design; it stays demo-grade and is never wired
+  into a live turn — the prod seam that can reach it defaults OFF.)
 - Do **not** promote a spike to prod without passing its stated acceptance bar
   (the "Samantha tests") and showing no voice-latency regression.
 
@@ -41,10 +46,14 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
 
 - `flue-harness-spike/` — Flue autonomous-harness substrate spike (scout → implement
   → verify → openPR slice); README + RUNBOOK + FINDINGS are records, not contracts.
-- `flue-zoe-brain/` — Flue-hosted Pi `Agent` on the local Gemma brain (Phase 2 of
-  `docs/architecture/zoe-flue-integration.md`: a third implementation behind the
-  `run_zoe_core` seam). Text-reply persona only; tools/memory are a later phase.
-  Hand-started, demo-only, never in a turn.
+- `flue-zoe-brain/` — Flue-hosted Pi `Agent` on the local Gemma brain (a third
+  implementation behind the `run_zoe_core` seam, per
+  `docs/architecture/zoe-flue-integration.md`). Serves 11 real tools against
+  zoe-data with progressive tool disclosure at the wire (always-on core +
+  activated groups per call; `src/tools/tool-groups.ts`), identity fail-closed,
+  writes dry-run-gated. Reached from prod only via the default-OFF
+  `ZOE_BRAIN_BACKEND=flue` seam; may be supervised via the opt-in unit template
+  (see Forbidden above).
 - `flue-zoe-telegram/` — Flue Telegram channel: long-poll bot bridged to zoe-data's
   `/api/chat` (NOT a Flue LLM agent; `src/agents/zoe.ts` is a build-only placeholder
   and registers no model provider — never points at the voice brain on `:11434`).
