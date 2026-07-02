@@ -208,79 +208,6 @@ def build_pi_runtime_install_proposal_intake(
     )
 
 
-def build_graphiti_runtime_trial_proposal_intake(
-    *,
-    proposal_id: str = "prop_graphiti_runtime_trial",
-    user_id: str | None = None,
-    runtime_probe_result: Mapping[str, Any] | None = None,
-) -> RuntimeEvolutionProposalIntake:
-    """Build an inert proposal for Graphiti relational-memory bake-off runtime work.
-
-    This does not install packages, start FalkorDB/Neo4j, ingest episodes, query
-    graph data, or wire Graphiti into chat. It packages the current read-only
-    runtime probe plus Zoe's Graphiti candidate score into the normal proposal
-    contract so Multica/humans can review optional dependencies and sidecar work.
-    """
-
-    probe = dict(runtime_probe_result or {})
-    graphiti_candidate = _graphiti_candidate_with_probe(probe)
-    gate = adoption_gate(graphiti_candidate)
-    status = str(probe.get("status") or "unknown")
-    reason = str(probe.get("reason") or "no probe reason supplied")
-    packages = probe.get("packages") if isinstance(probe.get("packages"), Mapping) else {}
-    backend = probe.get("backend") if isinstance(probe.get("backend"), Mapping) else {}
-    llm = probe.get("llm") if isinstance(probe.get("llm"), Mapping) else {}
-    signal = EvolutionSignal(
-        signal_id=f"signal_{proposal_id}",
-        signal_type=EvolutionSignalType.TOOL_GAP.value,
-        summary="Graphiti relational memory is requested but Zoe must prove local runtime, backend, and structured-output readiness before ingest.",
-        source="graphiti_runtime_probe",
-        evidence_refs=("docs/architecture/zoe-graphiti-fixtures.md", "probe:graphiti_runtime_probe"),
-        user_id=user_id,
-        scope="system" if not user_id else "project",
-        metadata={
-            "probe_status": status,
-            "probe_reason": reason,
-            "packages": packages,
-            "backend_enabled": backend.get("enabled"),
-            "llm_enabled": llm.get("enabled"),
-            "acceptable": probe.get("acceptable"),
-            "ok": probe.get("ok"),
-        },
-    )
-    return build_runtime_evolution_proposal_intake(
-        proposal_id=proposal_id,
-        proposal_type="code_improvement",
-        title="Review Graphiti relational-memory runtime trial",
-        problem_statement=(
-            "Zoe should evaluate Graphiti for temporal relational truth across people, tools, capabilities, "
-            "failures, fixes, approvals, recurring tasks, and superseded facts, but only after optional local "
-            "dependencies, graph sidecar readiness, and local structured-output extraction are proven."
-        ),
-        signal=signal,
-        candidates=(graphiti_candidate,),
-        affected_capabilities=("graphiti_relational_memory", "memory_router", "multica_governance"),
-        expected_benefit=(
-            "Measure whether a Graphiti-style temporal graph can provide explicit evidence-backed relationship truth "
-            "that MemPalace and Hindsight should not own alone."
-        ),
-        verification_plan=(
-            "python3 scripts/maintenance/graphiti_runtime_probe.py --json",
-            "falkordb_fixture_ingest_query_measurement_required",
-            "local_structured_output_extraction_evidence_required",
-            "p50_p95_latency_and_memory_footprint_required",
-            "implementation_pr_must_attach_tests_and_rollback_evidence",
-        ),
-        rollback_plan=(
-            "Do not install Graphiti packages, start graph sidecars, ingest fixtures, or enable graph recall; leave GRAPHITI_ENABLED=false."
-        ),
-        autonomy_class=TrustAutonomyClass.PREPARE.value,
-        risk=ProposalRisk.PRIVILEGED.value,
-        approval_required=("install_or_runtime_change", "license_review", "sidecar_start", "pr_evidence"),
-        legacy_target_patterns=("graphiti relational memory", "falkordb sidecar", "local structured output"),
-        metadata={"graphiti_runtime_probe": probe, "graphiti_candidate_gate": gate},
-    )
-
 
 def build_runtime_evolution_proposal_intake(
     *,
@@ -460,16 +387,6 @@ def _evidence_payload(
     }
 
 
-def _graphiti_candidate_with_probe(probe_result: Mapping[str, Any]) -> CandidateEvaluation:
-    return _candidate_with_probe_metadata(
-        "graphiti_falkordb_trial",
-        probe_result,
-        probe_evidence_ref="probe:graphiti_runtime_probe",
-        probe_metadata_key="graphiti_runtime_probe",
-        readiness_key="runtime_ready",
-        readiness_fn=lambda probe: bool(probe.get("ok")) and probe.get("status") == "ready_for_ingest_trial",
-    )
-
 
 def _pi_candidate_with_probe(probe_result: Mapping[str, Any]) -> CandidateEvaluation:
     return _candidate_with_probe_metadata(
@@ -527,7 +444,6 @@ def _candidate_with_probe_metadata(
 __all__ = [
     "RUNTIME_INTAKE_SOURCE",
     "RuntimeEvolutionProposalIntake",
-    "build_graphiti_runtime_trial_proposal_intake",
     "build_mcp_runtime_evolution_proposal_intake",
     "build_pi_runtime_install_proposal_intake",
     "build_runtime_evolution_proposal_intake",
