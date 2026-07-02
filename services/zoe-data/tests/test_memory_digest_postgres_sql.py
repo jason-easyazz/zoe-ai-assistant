@@ -16,9 +16,11 @@ class _FakeDb:
     def __init__(self, rows):
         self.rows = rows
         self.sql = []
+        self.params = []
 
     async def execute(self, sql, params=()):
         self.sql.append(sql)
+        self.params.append(params)
         return _Cursor(self.rows)
 
 
@@ -381,3 +383,34 @@ async def test_run_music_taste_digest_releases_before_scoring_on_empty(monkeypat
 
     assert ctx.entered == 1 and ctx.exited == 1
     assert result["skipped_reason"] == "no_events"
+
+
+@pytest.mark.asyncio
+async def test_list_user_ids_db_none_uses_get_db_ctx(monkeypatch):
+    """db=None → one short-lived pooled acquire (entered/exited once)."""
+    db = _FakeDb([("alice",), ("bob",), (None,)])  # None filtered out
+    ctx = _FakeCtx(db)
+    monkeypatch.setattr(db_pool, "get_db_ctx", lambda: ctx)
+
+    user_ids = await memory_digest._list_user_ids("SELECT user_id FROM t")
+
+    assert user_ids == ["alice", "bob"]
+    assert ctx.entered == 1 and ctx.exited == 1
+
+
+@pytest.mark.asyncio
+async def test_list_user_ids_uses_supplied_db(monkeypatch):
+    """db supplied → uses it directly, never touches get_db_ctx."""
+    def _boom():
+        raise AssertionError("get_db_ctx must not be used when db is supplied")
+
+    monkeypatch.setattr(db_pool, "get_db_ctx", _boom)
+
+    db = _FakeDb([("carol",)])
+    user_ids = await memory_digest._list_user_ids(
+        "SELECT user_id FROM t WHERE x = ?", ("y",), db=db
+    )
+
+    assert user_ids == ["carol"]
+    assert db.sql == ["SELECT user_id FROM t WHERE x = ?"]
+    assert db.params == [("y",)]  # params forwarded to the supplied connection
