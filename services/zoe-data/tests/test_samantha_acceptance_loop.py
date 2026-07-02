@@ -49,6 +49,23 @@ class _FakeConn:
         self.executed.append((q, a))
 
 
+def _ctx_factory(conn):
+    """A get_ctx() replacement that hands `conn` to each short-lived `async with`.
+
+    The pool-decoupling refactor made consolidate_session open its own short-lived
+    connections (read transcript, write watermark) instead of receiving one — so
+    tests inject the fake conn through this factory rather than positionally.
+    """
+    class _Ctx:
+        async def __aenter__(self):
+            return conn
+
+        async def __aexit__(self, *a):
+            return False
+
+    return lambda: _Ctx()
+
+
 class _FakeMemoryStore:
     """A faithful-enough stand-in for MemoryService: what consolidation ingests is
     exactly what a later recall can return, scoped per user. No Chroma, no DB."""
@@ -126,7 +143,7 @@ def test_morning_fact_recalled_in_the_afternoon(monkeypatch):
 
     # ── IDLE → STORE: the caller passes 'guest' (the session fallback); the engine
     # must resolve the owner to jason from per-turn metadata and consolidate.
-    stored = _run(mic.consolidate_session(conn, "sess-morning", "guest"))
+    stored = _run(mic.consolidate_session("sess-morning", "guest", get_ctx=_ctx_factory(conn)))
 
     assert stored == 1, "exactly the durable fact should be stored; the question gated out"
     assert conn.executed, "the consolidation watermark must be advanced"
@@ -159,7 +176,7 @@ def test_real_quality_gate_rejects_junk_in_the_loop(monkeypatch):
         {"fact": "what should I have for dinner?"},  # a question
     ])
 
-    stored = _run(mic.consolidate_session(_FakeConn(turns), "sess-2", "guest"))
+    stored = _run(mic.consolidate_session("sess-2", "guest", get_ctx=_ctx_factory(_FakeConn(turns))))
     recalled = store.recall("jason")
     assert recalled == ["Jason works as a paramedic in Geraldton"], recalled
     assert stored == 1
@@ -188,7 +205,7 @@ def test_guest_only_session_stores_nothing(monkeypatch):
     # the recall assertion below — otherwise that assertion is vacuously true.
     monkeypatch.setattr(memory_service, "get_memory_service", lambda: store)
 
-    stored = _run(mic.consolidate_session(_FakeConn(turns), "sess-guest", "guest"))
+    stored = _run(mic.consolidate_session("sess-guest", "guest", get_ctx=_ctx_factory(_FakeConn(turns))))
     assert stored == 0
     assert called["extract"] is False, "must skip before extraction when no real owner"
     assert store.rows == [], "no fact may be written for a guest-only session"

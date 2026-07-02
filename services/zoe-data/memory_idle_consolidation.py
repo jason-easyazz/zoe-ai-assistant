@@ -211,6 +211,7 @@ async def find_idle_sessions(conn) -> list[dict]:
                s.user_id    AS session_user_id,
                c.last_at    AS last_at,
                c.n          AS n,
+               st.last_consolidated_at AS since,
                (
                    SELECT array_agg(m2.metadata ORDER BY m2.created_at::timestamptz)
                    FROM chat_messages m2
@@ -219,6 +220,7 @@ async def find_idle_sessions(conn) -> list[dict]:
                ) AS metas
         FROM candidate c
         LEFT JOIN chat_sessions s ON s.id = c.session_id
+        LEFT JOIN memory_consolidation_state st ON st.session_id = c.session_id
         """,
         LOOKBACK_SECONDS, IDLE_SECONDS, MIN_TURNS,
     )
@@ -234,6 +236,9 @@ async def find_idle_sessions(conn) -> list[dict]:
             "user_id": owner,
             "last_at": r["last_at"],
             "n": r["n"],
+            # Consolidation watermark for this session (NULL on first pass). Folded
+            # into the batch query so the sweep needs no per-session fetchval.
+            "since": r["since"],
         })
     return out
 
@@ -244,12 +249,9 @@ def _fact_text(item: Any) -> str:
     return str(item or "").strip()
 
 
-async def consolidate_session(conn, session_id: str, user_id: str,
-                              since: Optional[Any] = None) -> int:
-    """Read the conversation's turns since `since`, extract durable facts over the
-    WHOLE exchange, gate + store them, and advance the consolidation watermark.
-    Returns the number of facts stored. Best-effort; never raises out."""
-    rows = await conn.fetch(
+async def _fetch_transcript_rows(conn, session_id: str, since: Optional[Any]) -> list:
+    """Read the session's turns since `since` from a (short-lived) pooled conn."""
+    return await conn.fetch(
         """
         SELECT role, content, metadata, created_at::timestamptz AS at
         FROM chat_messages
@@ -259,6 +261,43 @@ async def consolidate_session(conn, session_id: str, user_id: str,
         """,
         session_id, since,
     )
+
+
+async def _write_watermark(conn, session_id: str, user_id: str,
+                           last_at: Any, turns: int) -> None:
+    """Advance the consolidation watermark on a (short-lived) pooled conn."""
+    await conn.execute(
+        """
+        INSERT INTO memory_consolidation_state(session_id, user_id, last_consolidated_at, turns_consolidated)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (session_id) DO UPDATE SET
+            last_consolidated_at = excluded.last_consolidated_at,
+            turns_consolidated   = memory_consolidation_state.turns_consolidated + excluded.turns_consolidated
+        """,
+        session_id, user_id, last_at, turns,
+    )
+
+
+async def consolidate_session(session_id: str, user_id: str,
+                              since: Optional[Any] = None,
+                              *, get_ctx=None) -> int:
+    """Read the conversation's turns since `since`, extract durable facts over the
+    WHOLE exchange, gate + store them, and advance the consolidation watermark.
+    Returns the number of facts stored. Best-effort; never raises out.
+
+    POOL DISCIPLINE: a pooled connection is held ONLY for the two discrete DB steps
+    (read the transcript rows, then write the watermark) — NEVER across the Gemma
+    extraction or the memory-service ingest, both of which can block for tens of
+    seconds. Each step opens its own short-lived `get_db_ctx()` and releases before
+    the slow work runs, so one idle session can no longer pin a pool slot for the
+    duration of its LLM call.
+    """
+    if get_ctx is None:
+        from db_pool import get_db_ctx as get_ctx
+
+    # ── Step 1: short-lived conn — read the transcript rows, then release ──────
+    async with get_ctx() as conn:
+        rows = await _fetch_transcript_rows(conn, session_id, since)
     if len(rows) < MIN_TURNS:
         return 0
 
@@ -273,6 +312,7 @@ async def consolidate_session(conn, session_id: str, user_id: str,
 
     transcript = "\n".join(f"{r['role']}: {r['content']}" for r in rows if r["content"])
 
+    # ── Step 2: NO pooled connection held across Gemma extraction + ingest ─────
     try:
         from memory_digest import _extract_facts_with_gemma
         facts = await _extract_facts_with_gemma(transcript)
@@ -317,17 +357,10 @@ async def consolidate_session(conn, session_id: str, user_id: str,
         except Exception as exc:
             logger.debug("idle consolidation ingest failed: %s", exc)
 
+    # ── Step 3: fresh short-lived conn — advance the watermark, then release ───
     last_at = rows[-1]["at"]
-    await conn.execute(
-        """
-        INSERT INTO memory_consolidation_state(session_id, user_id, last_consolidated_at, turns_consolidated)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (session_id) DO UPDATE SET
-            last_consolidated_at = excluded.last_consolidated_at,
-            turns_consolidated   = memory_consolidation_state.turns_consolidated + excluded.turns_consolidated
-        """,
-        session_id, user_id, last_at, len(rows),
-    )
+    async with get_ctx() as conn:
+        await _write_watermark(conn, session_id, user_id, last_at, len(rows))
     logger.info("MEMORY_IDLE_CONSOLIDATE session=%s user=%s turns=%d stored=%d",
                 session_id, user_id, len(rows), stored)
     return stored
@@ -339,24 +372,24 @@ async def run_idle_consolidation_sweep() -> dict:
         return {"enabled": False}
     result = {"enabled": True, "sessions": 0, "stored": 0}
     from db_pool import get_db_ctx
+    # Short-lived listing connection: ensure the state table + list idle sessions,
+    # then RELEASE it before doing any per-session work. No pooled connection is
+    # held across the batch loop — each session opens its own short-lived conns.
     async with get_db_ctx() as conn:
         await _ensure_state_table(conn)
         sessions = await find_idle_sessions(conn)
-        for s in sessions:
-            # Isolate per-session failures: a Gemma OOM/timeout or a watermark write
-            # error on one session must not abort the rest of the batch. The failing
-            # session's watermark is left un-advanced, so it retries next sweep.
-            try:
-                since = await conn.fetchval(
-                    "SELECT last_consolidated_at FROM memory_consolidation_state WHERE session_id=$1",
-                    s["session_id"],
-                )
-                stored = await consolidate_session(conn, s["session_id"], s["user_id"], since)
-                result["sessions"] += 1
-                result["stored"] += stored
-            except Exception as exc:
-                logger.warning("idle consolidation: session %s failed (skipping): %s",
-                               s.get("session_id"), exc)
+    for s in sessions:
+        # Isolate per-session failures: a Gemma OOM/timeout or a watermark write
+        # error on one session must not abort the rest of the batch. The failing
+        # session's watermark is left un-advanced, so it retries next sweep.
+        try:
+            # `since` comes straight from the batch query (no per-session round-trip).
+            stored = await consolidate_session(s["session_id"], s["user_id"], s["since"])
+            result["sessions"] += 1
+            result["stored"] += stored
+        except Exception as exc:
+            logger.warning("idle consolidation: session %s failed (skipping): %s",
+                           s.get("session_id"), exc)
     return result
 
 
