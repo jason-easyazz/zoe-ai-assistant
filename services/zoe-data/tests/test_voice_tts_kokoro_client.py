@@ -7,7 +7,7 @@ re-open one once it's been closed.
 """
 import asyncio
 
-import routers.voice_tts as v
+import tts_waterfall as v
 
 
 def test_client_is_reused_across_calls(monkeypatch):
