@@ -171,6 +171,20 @@ class _Transaction:
         return False
 
 
+class _FakeBgTask:
+    """Task-shaped stub: voice_tts._bg_task calls add_done_callback on the
+    ensure_future result, so the fake must not return None."""
+
+    def add_done_callback(self, _cb):
+        return None
+
+
+def _close_coro_ensure_future(coro):
+    if hasattr(coro, "close"):
+        coro.close()
+    return _FakeBgTask()
+
+
 class _Db:
     def __init__(self):
         self.events: list[str] = []
@@ -508,13 +522,14 @@ async def test_voice_command_uses_skybridge_fast_path(monkeypatch, utterance, re
     monkeypatch.setattr(voice_tts, "_resolve_panel_default_user", no_user)
     monkeypatch.setattr(voice_tts, "_schedule_voice_chat_save", save_chat)
     monkeypatch.setattr(voice_tts, "_run_voice_memory_passes", memory_passes)
-    monkeypatch.setattr(voice_tts.asyncio, "ensure_future", lambda coro: coro.close() if hasattr(coro, "close") else None)
+    monkeypatch.setattr(voice_tts.asyncio, "ensure_future", _close_coro_ensure_future)
     monkeypatch.setattr(voice_tts, "_VOICE_SESSIONS", {})
 
     response = await voice_command(
         {"text": utterance, "panel_id": "panel-sky", "session_id": "session-sky"},
         caller={"user_id": "guest", "panel_id": "panel-sky"},
         db=object(),
+        stream=False,
     )
 
     assert response["ok"] is True
@@ -599,7 +614,7 @@ async def test_voice_command_emits_processing_cue_for_non_pi_fallback(monkeypatc
     monkeypatch.setattr(voice_tts, "_resolve_panel_default_user", no_user)
     monkeypatch.setattr(voice_tts, "_schedule_voice_chat_save", save_chat)
     monkeypatch.setattr(voice_tts, "_run_voice_memory_passes", memory_passes)
-    monkeypatch.setattr(voice_tts.asyncio, "ensure_future", lambda coro: coro.close() if hasattr(coro, "close") else None)
+    monkeypatch.setattr(voice_tts.asyncio, "ensure_future", _close_coro_ensure_future)
     monkeypatch.setattr(voice_tts, "_VOICE_SESSIONS", {})
 
     response = await voice_command(
