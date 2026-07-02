@@ -22,6 +22,12 @@
  * from model args; writes are gated behind ZOE_BRAIN_ALLOW_WRITES (dry-run by
  * default).
  *
+ * All tools stay REGISTERED here every turn, but the model only SEES the
+ * always-on core plus the request's active ability groups — progressive
+ * disclosure is applied at the wire in the capped provider (see
+ * src/tools/tool-groups.ts; `activate_abilities` is the model's way to unlock
+ * the rest).
+ *
  * LAB ONLY.
  */
 import { type AgentRouteHandler, defineAgent } from '@flue/runtime';

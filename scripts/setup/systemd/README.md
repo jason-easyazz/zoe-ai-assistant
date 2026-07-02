@@ -16,6 +16,7 @@ Secrets are never inlined — they are read from `.env` files.
 | `openclaw-gateway.service` | 18789 | Browser/exec agent fallback (needs `openclaw` npm pkg) |
 | `kokoro-tts.service`       | 10201 | Local neural TTS sidecar (optional) |
 | `zoe-data.service`         | 8000  | Primary backend API |
+| `flue-zoe-brain.service`   | 3578  | Flue Zoe-brain sidecar (lab; optional, operator opt-in) |
 
 ## Install
 
@@ -29,6 +30,11 @@ cp scripts/setup/systemd/*.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now llama-server hermes-agent openclaw-gateway kokoro-tts zoe-data
 ```
+
+`flue-zoe-brain.service` is deliberately NOT in that enable line: it supervises
+the lab sidecar behind zoe-data's default-OFF `ZOE_BRAIN_BACKEND=flue` seam.
+Enable it only when running the Flue brain — build + env steps are in
+[labs/flue-zoe-brain/README.md](../../../labs/flue-zoe-brain/README.md).
 
 Start order matters — see [OPERATOR_RUNBOOK.md](../../../docs/guides/OPERATOR_RUNBOOK.md).
 

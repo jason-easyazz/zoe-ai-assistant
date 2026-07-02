@@ -26,10 +26,15 @@
  *
  * Cap is configurable via ZOE_BRAIN_MAX_TOOL_ITERS (default 8).
  *
- * FOLLOW-UP (NOT in this PR — keep it small): 11 tool schemas every turn is also
- * prompt bloat that hurts the 4B's tool reliability/speed. Port prod's progressive
- * tool disclosure (services/zoe-core/.../abilities.ts setActiveTools) so only the
- * relevant tools are offered per turn. See PR description.
+ * This same wire seam also applies PROGRESSIVE TOOL DISCLOSURE (the port of
+ * prod's services/zoe-core/extensions/abilities.ts pattern): before the cap,
+ * `context.tools` is filtered to the always-on core plus the request's active
+ * ability groups, so the 4B isn't carrying all 11 schemas every call. The
+ * active set is derived statelessly from the request's own message window —
+ * see src/tools/tool-groups.ts for the mechanism, sources, and trade-offs.
+ * Policy order: disclosure first, then the cap (past the cap, ALL tools are
+ * stripped regardless of disclosure). ZOE_BRAIN_PROGRESSIVE_TOOLS=false
+ * disables disclosure for A/B comparison.
  *
  * LAB ONLY.
  */
@@ -49,6 +54,8 @@ import type {
   SimpleStreamOptions,
   StreamOptions,
 } from '@earendil-works/pi-ai';
+// .ts extension so the offline strip-types tests can resolve it (see zoe-tools.ts).
+import { discloseTools, progressiveToolsEnabled } from '../tools/tool-groups.ts';
 
 /** Custom api id this module registers; `app.ts` binds the `zoe` provider to it. */
 export const CAPPED_COMPLETIONS_API = 'zoe-capped-completions';
@@ -103,6 +110,17 @@ function applyCap(context: Context): Context {
 }
 
 /**
+ * All wire-level policies for one model call, in order: progressive tool
+ * disclosure (shrink the schemas the model sees to core + active groups),
+ * then the iteration cap (past the cap, strip ALL tools so the turn must
+ * finish in plain text). Exported for the offline unit tests only.
+ */
+export function applyPolicies(context: Context): Context {
+  const disclosed = progressiveToolsEnabled() ? discloseTools(context) : context;
+  return applyCap(disclosed);
+}
+
+/**
  * Delegate to the built-in handler under its own api id, so the handler's
  * URL-based OpenAI-compat detection is unaffected by our custom api slug.
  */
@@ -115,7 +133,7 @@ function cappedStream(
   context: Context,
   options?: StreamOptions,
 ): AssistantMessageEventStream {
-  return streamOpenAICompletions(asCompletionsModel(model), applyCap(context), options);
+  return streamOpenAICompletions(asCompletionsModel(model), applyPolicies(context), options);
 }
 
 function cappedStreamSimple(
@@ -123,7 +141,7 @@ function cappedStreamSimple(
   context: Context,
   options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
-  return streamSimpleOpenAICompletions(asCompletionsModel(model), applyCap(context), options);
+  return streamSimpleOpenAICompletions(asCompletionsModel(model), applyPolicies(context), options);
 }
 
 let registered = false;
