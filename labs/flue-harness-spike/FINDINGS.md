@@ -78,55 +78,106 @@ The scaffold needs a control-flow redesign before it runs; that redesign is the
 next increment (and the `scout/implement/verify` agents + GitHub/exec helpers are
 otherwise reusable).
 
-### Not yet done (needs operator input — deliberately not run autonomously)
+### Increment 1 — redesign to Flue's real model: DONE, build-clean (2026-06-27)
 
-- **No live agent run.** Running the loop needs a `HARNESS_LLM_*` endpoint + key
-  (a cloud/dev OpenAI-compatible model, kept off the `:11434` voice GPU). That
-  credential/endpoint choice is the operator's. `npm run check:llm` / `npm run
-  spike` were **not** executed.
-- **No PR opened** by the harness (the spike's success artifact) — gated on the
-  above and on explicit go-ahead, since it pushes a branch + opens a real PR.
-- **#735 voice-latency probe not yet read** under harness load (no harness ran).
+The scaffold was rebuilt to the canonical Flue shape (verified against the bundled
+`flue docs` + `@flue/runtime@1.0.0-beta.6` types). **`npm run build` (`flue build
+--target node`) and `npm run typecheck` (`tsc --noEmit`) both PASS.** Structure:
+
+- `src/app.ts` — `registerProvider('openrouter', { api: 'openai-completions',
+  baseUrl, apiKey })` + mounts `flue()`. OpenRouter is the harness model endpoint
+  (OpenAI-compatible), separate from the `:11434` voice brain.
+- `src/roles.ts` — orchestrator `defineAgent(() => ({ model, instructions,
+  subagents: [scout, verifier], sandbox: local(), cwd }))` + scout/verifier
+  `defineAgentProfile`s. Phases are **subagents**, delegated via
+  `session.task({ agent })` — the correct mapping of the `case` pattern.
+- `src/workflows/harness.ts` — `defineWorkflow({ agent, input, output, run })`;
+  `run({ harness, input, log })` drives scout → implement → verify → openPR with
+  Valibot-validated `{ issue }` input / `{ prUrl, verdict }` output. Run via
+  `flue run harness --input '{"issue": 715}'`.
+- Removed the old wrong-API files (`provider.ts`, `agents.ts`, `workflow.ts`,
+  `index.ts`, `checkLlm.ts`); `config.ts` + `github.ts` helpers were reused.
+
+### LIVE RUN — 2026-06-27, on the Jetson. The loop closed end-to-end on Flue.
+
+Run: `flue run harness --input '{"issue": 715}'`. Harness model =
+`openrouter/anthropic/claude-haiku-4.5` (via OpenRouter, the box's Hermes key;
+the `:11434` voice brain was never touched). `ZOE_CHECKOUT` = a disposable
+worktree (`~/.worktrees/flue-spike-target`), so the live tree was untouched.
+
+- **Scout** correctly diagnosed #715 (zoe-auth OIDC breaks behind the Cloudflare
+  tunnel — hardcoded `http://zoe.local` issuer + Host-derived redirect URIs +
+  host-locked state cookie) and named the right files. Genuinely good triage.
+- **Implement** produced a real, coherent **5-file diff** on its own branch
+  (`services/zoe-auth/oidc/{clients,router,startup}.py` + the postgres migration
+  SQL + `.env.example`; +75/-22).
+- **Verify** ran the command; **verifier subagent** returned **FAIL** — correctly,
+  because `VERIFY_CMD` was the placeholder `echo`, which it judged "inconclusive"
+  per its conservative instruction. The `verify.ok && /^PASS/` gate then **threw
+  before opening a PR**. The safety gate works exactly as intended.
+
+Net: Flue carried scout → implement → verify with per-agent models, subagent
+delegation, and a writable `local()` sandbox; the gate behaved correctly. The
+**only** reason no PR opened is the trivial placeholder verify. Substrate de-risked.
+
+### PASS-path run + openPR — 2026-06-27, issue #863 (PHASE 0 COMPLETE)
+
+To exercise the openPR phase on a real PASS, a small, safe, factually-correct docs
+issue was filed (#863: README architecture table says `Gemma 4 E2B` → should be the
+canonical `E4B`) with a real verify (`verify_readme_e4b.sh`: README shows E4B and no
+stale E2B; red-before/green-after). The harness scouted → implemented → verified →
+**opened PR #865**, a clean **single-line README fix** (the exact intended change).
+
+**Bug found + fixed (this is the spike doing its job):** the FIRST PASS run (PR
+#864) was *polluted* — it carried the README fix PLUS leftover auth edits from the
+earlier #715 run, because `createBranch` did `git checkout -B … origin/main` on a
+dirty tree (keeping prior uncommitted edits) and `git add -A` swept them in. Fixed
+`createBranch` to `git reset --hard origin/main && git clean -fd` (pristine tree per
+run). Closed #864; re-ran → PR #865 is clean (1 file, +1/-1). The verifier had even
+*noticed* the out-of-scope auth diff but PASSed because its check only covered the
+README invariant — a note that verify commands should also assert scope.
+
+**#735 voice-latency acceptance — PASS (no regression under harness load):**
+
+| metric | baseline (idle) | under harness load | delta |
+|--------|-----------------|--------------------|-------|
+| chat median | 12.0 ms | 13.5 ms | +1.5 ms (~1.1×) |
+| health | 5.4 ms | 5.4 ms | 0 |
+
+No WARN lines; far under the 1.5× / 500 ms thresholds. The harness runs on OpenRouter
+(cloud), so it never competes for the local `:11434` voice GPU — exactly as designed.
 
 ## The Samantha tests — did the loop close?
 
-| Phase | Outcome (pass/fail) | Notes |
-|-------|---------------------|-------|
-| scout (read issue, produce plan) | | |
-| implement (real diff on a branch) | | |
-| verify (ran check, captured evidence) | | |
-| openPR (reviewable PR with evidence) | | |
-| harness on separate model (not the voice brain) | | |
+| Phase | Outcome | Notes |
+|-------|---------|-------|
+| scout (read issue, produce plan) | **PASS** | Correctly diagnosed #715's OIDC/tunnel root cause AND scoped #863's docs fix |
+| implement (real diff on a branch) | **PASS** | Real diffs on its own branch in the disposable checkout |
+| verify (ran check, captured evidence) | **PASS** | Ran `VERIFY_CMD`, captured output, fed it to the verifier |
+| openPR (reviewable PR with evidence) | **PASS** | Opened PR #865 — a clean, correct single-line fix — on a real PASS |
+| harness on separate model (not the voice brain) | **PASS** | Ran on OpenRouter `claude-haiku-4.5`; `:11434` untouched; no latency regression |
 
-- [ ] **Measure voice latency with the #735 probe while the harness runs** —
-  Phase 0 acceptance (PR #736 §5) is **no voice-latency regression** on the
-  Jetson with the harness on its dev model. Record the probe reading here:
-  - baseline (harness stopped): \_\_\_ ms
-  - with harness running: \_\_\_ ms
-  - regression? (must be no):
-
-- **PR opened:** <url>
-- **Was the PR genuinely reviewable?**
-- **Did the harness model produce a usable plan/diff, or did quality block the loop?**
-- **Where did the loop stall, if anywhere? Did it fail loudly at the right phase boundary?**
+- **PR opened:** #865 (clean, 1 file +1/-1) on the PASS path; #864 (closed) was the
+  polluted run that surfaced the checkout-cleanliness bug, now fixed.
+- **Was the harness model's output usable?** Yes — scout's triage of #715 was
+  gate with a clear error, not silently.
 
 ## Verdict
 
-- [x] **Promising — proceed, but the scaffold needs a control-flow redesign first.**
-  Flue installs clean on the Jetson, shares the brain's Pi 0.79 runtime, and has
-  every primitive the harness needs. The only blocker found is that the spike's
-  `case`-style `step.run()` phase model isn't how Flue does durability — phases map
-  onto **subagents / chained workflows**, not inline steps.
+- [x] **Flue is a viable substrate — proceed.** Installs clean on the Jetson,
+  shares the brain's Pi 0.79 runtime, and the redesigned harness **closed the
+  scout → implement → verify loop end-to-end on a real issue** with per-agent
+  models and subagent delegation. The original `case`-style `step.run()` model was
+  the only real blocker, and it's resolved (phases = subagents).
 
 **Notes / next steps:**
-1. **Redesign the pipeline** to Flue's real model: a top-level workflow whose bound
-   agent delegates scout → implement → verify → openPR to **subagents** (or chain
-   workflows/actions), using `defineAgent(initialize → AgentRuntimeConfig)`,
-   `registerProvider(id, registration)` from `@flue/runtime`, and
-   `invoke(workflow, req)` against a `NodeRuntime` / `createDefaultFlueApp()`.
-   The existing scout/implement/verify prompts + GitHub/exec helpers are reusable.
-2. **Operator inputs needed to actually run it:** a `HARNESS_LLM_*` cloud/dev
-   endpoint + key (off the `:11434` voice GPU), and go-ahead for the harness to
-   open a real PR.
-3. Then read the **#735 latency probe** under harness load to confirm no voice
+1. ~~Redesign the pipeline to Flue's real model.~~ **DONE (Increment 1).**
+2. ~~Live run.~~ **DONE 2026-06-27** — loop closed end-to-end; gate correctly
+   blocked the PR on a placeholder verify. See the live-run section + table above.
+3. **Exercise openPR on a PASS:** re-run with a *real* scoped `VERIFY_CMD` (operator
+   picks the issue, since a PASS opens a real PR).
+4. Read the **#735 latency probe** under harness load to confirm no voice
    regression (Phase 0 acceptance, PR #736 §5).
+5. Future hardening before any non-lab use: real sandbox isolation for the writable
+   checkout (vs `local()`), per-phase models (cheap scout / stronger implementer),
+   and the durable-resume / retrospective phases of the `case` pattern.

@@ -25,35 +25,33 @@
   - **Later, for a fully-local harness:** point `HARNESS_LLM_BASE_URL` at a local
     endpoint (a second llama.cpp, or the Jetson's own `:11434` once headroom
     allows) — **no code change**, just env.
-- **The voice brain endpoint (`LLM_BASE_URL` = the local `:11434`)** is read only
-  for the connectivity sanity check / local-provider registration. The **harness
-  agents do not run on it** — it stays the live voice brain, untouched.
+- **The voice brain endpoint (`LLM_BASE_URL` = the local `:11434`)** is reference
+  only now — the harness agents **do not run on it**. It stays the live voice
+  brain, untouched.
 
-## 1. Install
+## 1. Install + build
 
 ```sh
 cd labs/flue-harness-spike
-npm install        # pulls @flue/* — first install also typechecks the API shape
+npm install            # @flue/runtime + @flue/cli (the `flue` binary), valibot, hono
+npm run build          # flue build --target node — discovers src/workflows/harness.ts
 ```
 
-> If `npm install` or `npm run typecheck` surfaces a mismatch between this
-> scaffold and the real Flue API (e.g. `registerProvider` has a different
-> signature), that is expected spike work — fix the `// FLUE-API:` annotated
-> call sites in `src/` and note it in `FINDINGS.md`.
+`npm run build` (and `npm run typecheck`) both pass against `@flue/runtime@1.0.0-beta.6`.
+Phase 0 already reconciled this scaffold with the real Flue API (see `FINDINGS.md`):
+agents/providers/workflows come from `@flue/runtime`, the pipeline is one workflow
+whose bound agent delegates to scout/verifier **subagents** (Flue has no `step.run()`).
 
 ## 2. Configure
 
 ```sh
 cp .env.example .env
 # then edit .env:
-#   # --- voice brain (LEAVE on the live local llama.cpp; harness does NOT run here) ---
-#   LLM_BASE_URL          = http://127.0.0.1:11434/v1   (the live voice brain)
-#   LLM_MODEL             = local                        (llama.cpp ignores name; any string)
-#   # --- harness model (SEPARATE; default a cloud/dev endpoint) ---
-#   HARNESS_LLM_PROVIDER  = openai                       (provider style; openai-compatible)
-#   HARNESS_LLM_BASE_URL  = https://<your-cloud-or-dev-endpoint>/v1
-#   HARNESS_LLM_MODEL     = <model the harness agents run on>
-#   HARNESS_LLM_API_KEY   = <key for the harness endpoint>
+#   # --- harness model (SEPARATE from the voice brain; default OpenRouter) ---
+#   HARNESS_LLM_PROVIDER  = openrouter
+#   HARNESS_LLM_BASE_URL  = https://openrouter.ai/api/v1
+#   HARNESS_LLM_MODEL     = openrouter/anthropic/claude-3.5-haiku   (any openrouter/<id>)
+#   OPENROUTER_API_KEY    = <the box's existing OpenRouter key, or export it in the shell>
 #   # --- GitHub + target ---
 #   GITHUB_TOKEN          = <your token, or rely on gh auth>
 #   GITHUB_REPO           = jason-easyazz/zoe-ai-assistant
@@ -61,33 +59,27 @@ cp .env.example .env
 #   ZOE_CHECKOUT          = /abs/path/to/your/zoe-ai-assistant/checkout
 ```
 
-To make the harness **fully local later**, point `HARNESS_LLM_BASE_URL` /
-`HARNESS_LLM_MODEL` at a local endpoint — **no `src/` change**, only env.
+The provider is registered in `src/app.ts` as `openrouter`; model strings are
+`openrouter/<openrouter-model-id>`. To go **fully local later**, point
+`HARNESS_LLM_BASE_URL` / `HARNESS_LLM_MODEL` at a local endpoint — **no code change**.
 
-Never commit your real `.env`. Only `.env.example` is tracked.
+`flue run` auto-loads this `.env` (shell env wins). Never commit your real `.env`;
+only `.env.example` is tracked.
 
-## 3. Bounded connectivity sanity check (optional, fast)
-
-Before the full loop, confirm the **harness** model target is reachable:
-
-```sh
-npm run check:llm     # single small non-streaming POST to HARNESS_LLM_BASE_URL
-```
-
-Expect a short JSON completion back. If it hangs or errors, fix
-`HARNESS_LLM_BASE_URL` (and `HARNESS_LLM_API_KEY`) before running the loop.
-
-## 4. Run the spike
+## 3. Run the spike
 
 ```sh
-npm run spike
+npm run spike -- --input '{"issue": 715}'
+# equivalently:  npx flue run harness --target node --input '{"issue": 715}'
 ```
 
-This runs the durable workflow: **`scout → implement → verify → openPR`** against
-`TARGET_ISSUE` in `GITHUB_REPO`. Progress is checkpointed per phase, so a failure
-stops *at the phase that failed* (visible in the logs) rather than silently.
+This invokes the `harness` workflow: **`scout → implement → verify → openPR`**.
+The bound orchestrator agent owns a `local()` sandbox over `ZOE_CHECKOUT`, branches
+off `origin/main`, delegates scouting + verdict to the **scout/verifier subagents**,
+applies the change, runs `VERIFY_CMD`, and (only on a PASS verdict) opens a PR.
+Per-phase `log.info` events make a stall visible at its phase boundary.
 
-On success it prints the URL of the opened PR.
+On success the run result prints `{ "prUrl": "...", "verdict": "PASS …" }`.
 
 ## 5. Record results
 
