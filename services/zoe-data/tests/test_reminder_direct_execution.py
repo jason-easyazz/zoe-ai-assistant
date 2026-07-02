@@ -138,6 +138,111 @@ async def test_execute_reminder_create_falls_back_to_mcporter_when_direct_unavai
     ]
 
 
+class _ListCursor:
+    def __init__(self, rows):
+        self._rows = rows
+
+    async def fetchall(self):
+        return self._rows
+
+
+def _fake_reminder_db_ctx(rows):
+    """Async context manager factory mimicking database.get_db_ctx with fixed rows."""
+    import contextlib
+
+    class _ListDB:
+        async def execute(self, _sql, _params=()):
+            return _ListCursor(rows)
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield _ListDB()
+
+    return ctx
+
+
+@pytest.mark.asyncio
+async def test_execute_reminder_list_empty_returns_no_reminders_message(monkeypatch):
+    """Empty reminders must produce the 'No reminders set.' message (ok:true at
+    the intent-dispatch endpoint), not None (which maps to ok:false)."""
+
+    async def fail_mcporter(_cmd):
+        raise AssertionError("reminder_list direct path should avoid mcporter")
+
+    monkeypatch.setattr("database.get_db_ctx", _fake_reminder_db_ctx([]))
+    monkeypatch.setattr("intent_router._run_mcporter", fail_mcporter)
+
+    result = await execute_intent(Intent("reminder_list", {}), "family-admin")
+
+    assert result == "No reminders set."
+
+
+@pytest.mark.asyncio
+async def test_execute_reminder_list_nonempty_formats_reminders(monkeypatch):
+    rows = [
+        {"id": "rem-1", "title": "check the oven", "due_date": "2026-06-15",
+         "due_time": "23:00", "priority": "normal", "category": "general"},
+        {"id": "rem-2", "title": "water plants", "due_date": None,
+         "due_time": None, "priority": "normal", "category": "general"},
+    ]
+
+    async def fail_mcporter(_cmd):
+        raise AssertionError("reminder_list direct path should avoid mcporter")
+
+    monkeypatch.setattr("database.get_db_ctx", _fake_reminder_db_ctx(rows))
+    monkeypatch.setattr("intent_router._run_mcporter", fail_mcporter)
+
+    result = await execute_intent(Intent("reminder_list", {}), "family-admin")
+
+    assert result == (
+        "Your reminders:\n"
+        "  - check the oven (due: 2026-06-15)\n"
+        "  - water plants (due: TBD)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_reminder_list_real_failure_still_returns_none(monkeypatch):
+    """DB down AND mcporter down is a real failure: execute_intent returns None,
+    which the intent-dispatch endpoint maps to ok:false."""
+    import contextlib
+
+    @contextlib.asynccontextmanager
+    async def broken_ctx():
+        raise RuntimeError("db unavailable")
+        yield  # pragma: no cover
+
+    async def fake_mcporter(_cmd):
+        return None
+
+    monkeypatch.setattr("database.get_db_ctx", broken_ctx)
+    monkeypatch.setattr("intent_router._run_mcporter", fake_mcporter)
+
+    result = await execute_intent(Intent("reminder_list", {}), "family-admin")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_execute_reminder_list_falls_back_to_mcporter_when_direct_unavailable(monkeypatch):
+    import contextlib
+
+    @contextlib.asynccontextmanager
+    async def broken_ctx():
+        raise RuntimeError("db unavailable")
+        yield  # pragma: no cover
+
+    async def fake_mcporter(_cmd):
+        return '{"reminders": [{"title": "check the oven", "due_date": "2026-06-15"}]}'
+
+    monkeypatch.setattr("database.get_db_ctx", broken_ctx)
+    monkeypatch.setattr("intent_router._run_mcporter", fake_mcporter)
+
+    result = await execute_intent(Intent("reminder_list", {}), "family-admin")
+
+    assert result == "Your reminders:\n  - check the oven (due: 2026-06-15)"
+
+
 @pytest.mark.asyncio
 async def test_execute_reminder_create_policy_denial_does_not_fall_back_to_mcporter(monkeypatch):
     async def fake_direct(_intent, _user_id):
