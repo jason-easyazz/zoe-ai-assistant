@@ -168,6 +168,132 @@ async def test_midstream_error_persists_partial_flagged_truncated(monkeypatch):
     assert partial["truncated"] is True, "partial must be flagged truncated"
 
 
+# ── Persisted flag must reflect save REALITY, not save scheduling ─────────────
+# The normal-path save can fail (DB down, pool exhausted). If the reply were
+# marked persisted the moment the save was *initiated*, a later error in the same
+# stream would skip the truncated-partial fallback and the reply the user saw
+# would silently vanish from history.
+
+
+def _stub_brain_branch(monkeypatch):
+    """Common setup driving the local-brain streaming branch with a fake brain."""
+    _quiet_common_gates(monkeypatch)
+    monkeypatch.setattr(chat_router, "_USE_LOCAL_BRAIN", True)
+
+    async def _empty(*a, **k):
+        return ""
+
+    monkeypatch.setattr(chat_router, "_mempalace_load_user_facts", _empty)
+
+    class _Rows:
+        async def fetchall(self):
+            return []
+
+    class _Db:
+        async def execute(self, *a, **k):
+            return _Rows()
+
+    async def _fake_get_db():
+        yield _Db()
+
+    monkeypatch.setattr(chat_router, "get_db", _fake_get_db)
+
+    async def fake_brain_streaming(*a, **k):
+        yield "Hello"
+        yield " world"
+
+    monkeypatch.setattr(chat_router, "_brain_streaming", fake_brain_streaming)
+
+
+@pytest.mark.asyncio
+async def test_failed_normal_save_leaves_reply_recoverable(monkeypatch):
+    """If the normal-path save FAILS, the reply must NOT be marked persisted:
+    a later error in the same stream must still trigger the truncated-partial
+    fallback so the reply the user saw isn't silently lost."""
+    _stub_brain_branch(monkeypatch)
+
+    saves: list[dict] = []
+
+    async def failing_save(session_id, role, content, user_id=None, *, truncated=False):
+        saves.append({"role": role, "content": content, "truncated": truncated})
+        return False  # save did NOT land (e.g. DB failure — _save_chat_message swallows it)
+
+    monkeypatch.setattr(chat_router, "_save_chat_message", failing_save)
+
+    # Blow up AFTER the normal save path ran (completion bookkeeping), so the
+    # error handler runs with the persisted flag already decided.
+    async def exploding_record(run_id, session_id, user_id, *, status, **k):
+        if status == "completed":
+            raise RuntimeError("post-save failure")
+
+    monkeypatch.setattr(chat_router, "_record_run_state", exploding_record)
+
+    gen = chat_router.chat_stream_generator("tell me a story", "sess-savefail", _user())
+    async for _ in gen:
+        pass
+
+    truncated = [s for s in saves if s["role"] == "assistant" and s["truncated"]]
+    assert truncated, (
+        f"reply marked persisted despite failed save — truncated fallback skipped; saves={saves}"
+    )
+    assert truncated[-1]["content"] == "Hello world", truncated
+
+
+@pytest.mark.asyncio
+async def test_successful_normal_save_skips_truncated_fallback(monkeypatch):
+    """Complement: when the normal-path save SUCCEEDS, a later error must not
+    re-persist the reply as a truncated duplicate."""
+    _stub_brain_branch(monkeypatch)
+
+    saves: list[dict] = []
+
+    async def ok_save(session_id, role, content, user_id=None, *, truncated=False):
+        saves.append({"role": role, "content": content, "truncated": truncated})
+        return True
+
+    monkeypatch.setattr(chat_router, "_save_chat_message", ok_save)
+
+    async def exploding_record(run_id, session_id, user_id, *, status, **k):
+        if status == "completed":
+            raise RuntimeError("post-save failure")
+
+    monkeypatch.setattr(chat_router, "_record_run_state", exploding_record)
+
+    gen = chat_router.chat_stream_generator("tell me a story", "sess-saveok", _user())
+    async for _ in gen:
+        pass
+
+    assistant_saves = [s for s in saves if s["role"] == "assistant"]
+    assert [s for s in assistant_saves if not s["truncated"]], f"normal save missing; saves={saves}"
+    assert not [s for s in assistant_saves if s["truncated"]], (
+        f"duplicate truncated save despite successful persist; saves={saves}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_save_chat_message_returns_false_on_db_failure(monkeypatch):
+    """Unit guard: a DB failure inside _save_chat_message is swallowed (non-fatal
+    to the stream) but reported as False so callers know the row never landed."""
+    import sys
+    import types
+
+    class _Ctx:
+        async def __aenter__(self):
+            raise RuntimeError("db down")
+
+        async def __aexit__(self, *a):
+            return False
+
+    fake_db_pool = sys.modules.get("db_pool") or types.ModuleType("db_pool")
+    monkeypatch.setattr(fake_db_pool, "get_db_ctx", lambda: _Ctx(), raising=False)
+    monkeypatch.setitem(sys.modules, "db_pool", fake_db_pool)
+
+    ok = await chat_router._save_chat_message("sess-1", "assistant", "reply", user_id="jason")
+    assert ok is False
+    # Empty content: nothing persisted → also False.
+    assert await chat_router._save_chat_message("sess-1", "assistant", "   ") is False
+
+
 @pytest.mark.asyncio
 async def test_save_chat_message_records_truncated_in_metadata(monkeypatch):
     """Unit guard: the truncated flag lands in chat_messages.metadata alongside

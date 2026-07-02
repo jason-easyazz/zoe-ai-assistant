@@ -618,3 +618,35 @@ async def test_idle_timeout_still_applies_with_no_pending_tool(monkeypatch):
         timeout_s=2.0,
     )
     assert out == ["All done"]
+
+
+@pytest.mark.asyncio
+async def test_malformed_toolcall_start_does_not_block_idle(monkeypatch):
+    """A malformed toolcall_start (no valid toolCall block) must NOT count as an
+    outstanding tool: it has no matching tool_execution_end, so counting it would
+    leave the turn permanently non-idle-eligible — after turn_end the user would
+    wait out the FULL deadline and get a reset instead of the short idle
+    completion. The frame is validated BEFORE tools_outstanding is bumped, so the
+    turn still goes idle."""
+    import zoe_core_client as zc
+    monkeypatch.setattr(zc, "_IDLE_TIMEOUT_S", 0.05)
+
+    out = await _run_read_turn_streamed(
+        [
+            (0.0, [
+                _accept(),
+                _delta("All done"),
+                # Malformed: no partial/content, so _toolcall_block_from_amev
+                # rejects it. Must not increment tools_outstanding.
+                {"type": "message_update", "id": "req-1",
+                 "assistantMessageEvent": {"type": "toolcall_start"}},
+                {"type": "turn_end", "id": "req-1"},
+            ]),
+            # Stream then goes silent: with no REAL tool pending the idle window
+            # (0.05s) must elapse and return — not run out the 2s deadline and
+            # raise (which is what a phantom pending tool would cause).
+            (5.0, [_agent_end()]),
+        ],
+        timeout_s=2.0,
+    )
+    assert out == ["All done"]

@@ -1219,8 +1219,12 @@ async def _ensure_user_and_chat_session(session_id: str, user_id: str) -> None:
 async def _save_chat_message(
     session_id: str, role: str, content: str, user_id: str | None = None,
     *, truncated: bool = False,
-) -> None:
+) -> bool:
     """Persist a single chat turn to chat_messages.
+
+    Returns True only when the row was actually committed (False for empty
+    content or a swallowed DB failure), so callers can decide whether the
+    reply still needs a recovery save.
 
     Mirrors the OpenClaw gateway pattern: the caller sends only the new message;
     the server owns the transcript. Zoe Agent reads this table for conversation
@@ -1233,7 +1237,7 @@ async def _save_chat_message(
     """
     clean_content = (content or "").strip()
     if not clean_content:
-        return
+        return False
     meta: dict = {}
     if user_id and user_id not in ("guest", "voice-daemon", ""):
         meta["user_id"] = user_id
@@ -1257,8 +1261,15 @@ async def _save_chat_message(
             )
             await _touch_chat_session(db, session_id=session_id, content=clean_content)
             await db.commit()
+        return True
     except Exception as _sme:
-        logger.debug("_save_chat_message failed (non-fatal): %s", _sme)
+        # Warning, not debug: a dropped save means the reply the user saw is
+        # missing from history, and callers use the False return to recover.
+        logger.warning(
+            "_save_chat_message failed (%s turn for session %s dropped): %s",
+            role, session_id, _sme,
+        )
+        return False
 
 
 async def _touch_chat_session(db, *, session_id: str, content: str, user_id: str | None = None) -> None:
@@ -2837,12 +2848,15 @@ async def chat_stream_generator(
                 except Exception as _psc:
                     logger.debug("pending suggestion cards (non-fatal): %s", _psc)
                 asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
-                # Persist assistant reply so Zoe Agent has context on the next turn
+                # Persist assistant reply so Zoe Agent has context on the next turn.
+                # Awaited (not fire-and-forget) so `persisted_assistant` reflects
+                # whether the row actually landed: marking it persisted while the
+                # scheduled save could still fail would make the error handler skip
+                # the truncated-partial fallback and silently lose the reply.
                 if response_text:
-                    asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text, user_id=user_id))
-                # The reply reached the normal save path — don't let the error
-                # handler re-persist it as a truncated partial.
-                persisted_assistant = True
+                    persisted_assistant = await _save_chat_message(
+                        session_id, "assistant", response_text, user_id=user_id
+                    )
 
             else:
                 # Explicit OpenClaw fallback path.

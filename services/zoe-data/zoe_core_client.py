@@ -381,11 +381,15 @@ class _ZoeCoreWorker:
                     if thinking:
                         yield "__THINKING__:" + thinking
                 elif amev_type == "toolcall_start":
-                    # A tool is now in flight — suppress the idle timeout until its
-                    # matching tool_execution_end arrives (slow tools are silent).
-                    tools_outstanding += 1
                     tc = _toolcall_block_from_amev(amev)
                     if tc is not None:
+                        # A tool is now in flight — suppress the idle timeout until
+                        # its matching tool_execution_end arrives (slow tools are
+                        # silent). Counted only AFTER the frame validates: a
+                        # malformed toolcall_start has no matching
+                        # tool_execution_end, so counting it would leave the turn
+                        # permanently non-idle-eligible (phantom pending tool).
+                        tools_outstanding += 1
                         tc_id = tc.get("id")
                         tc_name = tc.get("name")
                         if tc_id and tc_name:
