@@ -16,9 +16,11 @@ class _FakeDb:
     def __init__(self, rows):
         self.rows = rows
         self.sql = []
+        self.params = []
 
     async def execute(self, sql, params=()):
         self.sql.append(sql)
+        self.params.append(params)
         return _Cursor(self.rows)
 
 
@@ -411,3 +413,4 @@ async def test_list_user_ids_uses_supplied_db(monkeypatch):
 
     assert user_ids == ["carol"]
     assert db.sql == ["SELECT user_id FROM t WHERE x = ?"]
+    assert db.params == [("y",)]  # params forwarded to the supplied connection
