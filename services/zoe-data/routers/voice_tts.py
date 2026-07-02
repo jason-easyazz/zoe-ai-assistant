@@ -763,6 +763,71 @@ def _fast_first_audio_enabled() -> bool:
     return os.environ.get("ZOE_VOICE_FAST_FIRST_AUDIO", "1").strip().lower() in ("1", "true", "yes", "on")
 
 
+# The Pi brain surfaces "what Zoe is doing" as text sentinels riding alongside the
+# spoken stream (see zoe_core_client._read_turn). They are NOT speech — the voice
+# path must consume them, never synthesize them (otherwise Kokoro reads raw JSON).
+_VOICE_TOOL_SENTINEL_PREFIXES = ("__TOOL__:", "__THINKING__:")
+
+
+def _voice_tool_filler_enabled() -> bool:
+    return os.environ.get("ZOE_VOICE_TOOL_FILLER", "1").strip().lower() in ("1", "true", "yes", "on")
+
+
+# Short, generic, spoken acknowledgements keyed by tool. Tool turns can sit silent
+# for several seconds while the brain calls a tool and then synthesizes the answer.
+# When the brain emits a tool_call BEFORE saying anything itself, we speak ONE of
+# these so first-audio comes fast — then the real answer follows unchanged. Kept
+# deliberately generic: they never claim a result, so they're always truthful.
+_VOICE_TOOL_FILLERS = {
+    "calendar": "Let me check your calendar.",
+    "lists": "Let me check your lists.",
+    "list": "Let me check your list.",
+    "reminders": "Let me check your reminders.",
+    "reminder": "Let me check your reminders.",
+    "memory": "Let me look that up.",
+    "weather": "Let me check the weather.",
+    "web": "Let me look that up.",
+    "search": "Let me look that up.",
+}
+_VOICE_TOOL_FILLER_DEFAULT = "One sec."
+
+
+def _voice_tool_filler(tool_name: str) -> str:
+    """Pick a short spoken acknowledgement for a brain tool_call.
+
+    Matches the tool name (or a prefix of it, so 'calendar_show' -> 'calendar')
+    to a templated line; falls back to a generic 'One sec.' Never embeds the
+    result — purely a leading filler so audio starts before the tool returns.
+    """
+    name = (tool_name or "").strip().lower()
+    if name in _VOICE_TOOL_FILLERS:
+        return _VOICE_TOOL_FILLERS[name]
+    for key, line in _VOICE_TOOL_FILLERS.items():
+        if name.startswith(key):
+            return line
+    return _VOICE_TOOL_FILLER_DEFAULT
+
+
+def _voice_tool_name_from_sentinel(delta: str) -> "Optional[str]":
+    """Extract the tool name from a ``__TOOL__:`` sentinel, or None.
+
+    Only ``phase == 'start'`` sentinels trigger a filler (one per turn); args/result
+    phases return None so we never speak twice for the same tool call. Malformed
+    sentinels return None rather than raising — a bad frame must not break the turn.
+    """
+    if not delta.startswith("__TOOL__:"):
+        return None
+    try:
+        import json as _json
+        tc = _json.loads(delta[len("__TOOL__:"):])
+    except Exception:
+        return None
+    if not isinstance(tc, dict) or tc.get("phase") != "start":
+        return None
+    name = tc.get("name")
+    return str(name) if name else None
+
+
 def _extract_first_unit(buffer: str) -> tuple[Optional[str], str]:
     """Pull the FIRST speakable unit out of a streaming buffer as early as possible.
 
@@ -3593,14 +3658,23 @@ async def voice_command(
                 token_buf = ""
                 full_reply_parts: list[str] = []
                 _t_first_audio: Optional[float] = None
+                _filler_emitted = False  # at most one tool-turn filler per turn
+                # The processing-ack path yields audio bytes directly (without going
+                # through _emit_sentence), so _t_first_audio stays None even though
+                # the user already heard audio — track it separately.
+                _processing_ack_audio_sent = False
 
                 try:
-                    async def _emit_sentence(sentence: str):
+                    async def _emit_sentence(sentence: str, *, record: bool = True):
                         nonlocal chunk_index, _t_first_audio
                         s = sentence.strip()
                         if not s:
                             return
-                        full_reply_parts.append(s)
+                        # record=False for the leading tool filler: it's spoken but
+                        # must NOT join the persisted/displayed answer (it's an
+                        # acknowledgement, not part of what Zoe actually answered).
+                        if record:
+                            full_reply_parts.append(s)
                         await _bc_stream.broadcast("all", "voice:responding", {
                             "panel_id": panel_id,
                             "text": s[:200],
@@ -3691,6 +3765,7 @@ async def voice_command(
                                 yield (header + "\n").encode()
                                 yield str(ack_event["audio_base64"]).encode() + b"\n"
                                 chunk_index += 1
+                                _processing_ack_audio_sent = True
                             else:
                                 async for out_line in _emit_line({"processing_ack": True, "text": ack_text, "panel_id": panel_id}):
                                     yield out_line
@@ -3707,6 +3782,32 @@ async def voice_command(
                         portrait=_v_portrait,
                     ):
                         if not delta:
+                            continue
+                        # Brain "what I'm doing" sentinels ride alongside the spoken
+                        # stream — they must NEVER be synthesized. On the FIRST
+                        # tool_call (phase=start), if the brain hasn't spoken anything
+                        # yet, emit ONE short generic filler so first-audio comes fast
+                        # instead of sitting silent while the tool runs + the answer
+                        # synthesizes. Skip the filler when the user already heard (or
+                        # is about to hear) real content: audio was synthesized
+                        # (_t_first_audio), brain text is buffering toward a sentence
+                        # boundary (token_buf), or the cached processing-ack already
+                        # played audio — any of those would make it a double lead-in.
+                        if delta.startswith(_VOICE_TOOL_SENTINEL_PREFIXES):
+                            if (
+                                not _filler_emitted
+                                and _t_first_audio is None
+                                and not token_buf
+                                and not _processing_ack_audio_sent
+                                and _voice_tool_filler_enabled()
+                            ):
+                                _tool_name = _voice_tool_name_from_sentinel(delta)
+                                if _tool_name is not None:
+                                    _filler_emitted = True
+                                    async for out_chunk in _emit_sentence(
+                                        _voice_tool_filler(_tool_name), record=False
+                                    ):
+                                        yield out_chunk
                             continue
                         if delta.startswith(_VOICE_ESCALATION_MARKERS):
                             try:
@@ -3823,6 +3924,12 @@ async def voice_command(
                 portrait=_v_portrait_nc,
             ):
                 if not delta:
+                    continue
+                # Drop brain "what I'm doing" sentinels — they ride alongside the
+                # stream and must never be collected into the spoken answer (the
+                # non-stream path synthesizes the whole reply at once, so there's no
+                # leading-audio gap to fill; we only strip the noise here).
+                if delta.startswith(_VOICE_TOOL_SENTINEL_PREFIXES):
                     continue
                 if delta.startswith(_VOICE_ESCALATION_MARKERS):
                     try:
