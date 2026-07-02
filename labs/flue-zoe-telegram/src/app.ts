@@ -43,7 +43,11 @@ let polling = false;
 // polling. bot.start() runs the long-poll loop until the process stops, so it is
 // fire-and-forget here; failures flip `polling` to false and fail /health.
 void bot.api
-  .deleteWebhook({ drop_pending_updates: true })
+  // Do NOT drop pending updates: during a long-poll takeover we haven't proven we
+  // own the bot yet. If Hermes is still polling this token, dropping here would
+  // discard queued user messages and THEN bot.start() would 409 — losing messages
+  // neither poller can recover. Just clear any webhook; queued updates survive.
+  .deleteWebhook()
   .then(() =>
     bot.start({
       allowed_updates: ['message'],
@@ -53,6 +57,13 @@ void bot.api
       },
     }),
   )
+  .then(() => {
+    // bot.start() resolves when the long-poll loop STOPS (process shutdown or the
+    // loop dying after onStart ran). Clear `polling` so /health flips to 503 and a
+    // supervisor restarts us, instead of looking healthy while serving nobody.
+    polling = false;
+    console.warn('Telegram long-poll loop stopped; marking unhealthy.');
+  })
   .catch((err) => {
     polling = false;
     if (err instanceof GrammyError && err.error_code === 409) {
