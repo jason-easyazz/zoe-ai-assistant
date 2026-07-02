@@ -1,16 +1,16 @@
 [Unit]
-Description=Zoe Touch Panel Kiosk
-After=graphical-session.target network-online.target
-Wants=network-online.target
+Description=Zoe Kiosk Display
+After=graphical.target network-online.target
+Wants=graphical.target network-online.target
 
 [Service]
 Type=simple
-User=zoe
+User=pi
+Group=pi
 Environment=DISPLAY=:0
-Environment=XAUTHORITY=/home/zoe/.Xauthority
 ExecStart=/opt/TouchKio/start-kiosk.sh
 Restart=always
-RestartSec=5
+RestartSec=10
 StandardOutput=journal
 StandardError=journal
 

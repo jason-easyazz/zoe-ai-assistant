@@ -1,10 +1,17 @@
 {
-  "server_url": "https://192.168.1.218",
-  "url": "https://192.168.1.218/touch/dashboard.html?panel_id=zoe-touch-pi&kiosk=1",
-  "panel_id": "zoe-touch-pi",
-  "token": "",
-  "kiosk": true,
-  "browser": "chromium",
-  "user_data_dir": "/home/zoe/.config/chromium-kiosk",
-  "remote_debugging_port": 9222
+  "name": "Zoe Touch Panel",
+  "url": "https://192.168.1.218/touch/skybridge.html?panel_id=zoe-touch-pi&kiosk=1",
+  "rotation": 0,
+  "fullscreen": true,
+  "hide_cursor": true,
+  "disable_screensaver": true,
+  "kiosk_mode": true,
+  "auto_restart": true,
+  "display": {
+    "prevent_sleep": true,
+    "force_display_on": true,
+    "rotation": 0,
+    "orientation": "landscape",
+    "landscape": true
+  }
 }
