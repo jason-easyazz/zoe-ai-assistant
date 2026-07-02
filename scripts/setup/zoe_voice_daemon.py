@@ -41,6 +41,20 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+
+def _env(name: str, default: str, *legacy_names: str) -> str:
+    """Read an environment value, accepting documented legacy aliases."""
+    value = os.environ.get(name)
+    if value not in (None, ""):
+        return value
+    for legacy_name in legacy_names:
+        value = os.environ.get(legacy_name)
+        if value not in (None, ""):
+            log.warning("Using deprecated env %s; prefer %s", legacy_name, name)
+            return value
+    return default
+
+
 # Optional persistent log file (e.g. ZOE_VOICE_LOG=/home/zoe/.zoe-voice/voice.log)
 _voice_log = os.environ.get("ZOE_VOICE_LOG", "").strip()
 if _voice_log:
@@ -57,14 +71,14 @@ HA_BRIDGE_URL = os.environ.get("HA_BRIDGE_URL", "").rstrip("/")
 VOICE_ROUTE_MODE = (os.environ.get("VOICE_ROUTE_MODE", "direct").strip().lower() or "direct")
 PANEL_ID = os.environ.get("PANEL_ID", "zoe-touch-pi")
 DEVICE_TOKEN = os.environ.get("DEVICE_TOKEN", "")
-AUDIO_DEVICE = os.environ.get("AUDIO_DEVICE", "default")
+AUDIO_DEVICE = _env("AUDIO_DEVICE", "default", "MIC_DEVICE_INDEX")
 SAMPLE_RATE = int(os.environ.get("SAMPLE_RATE", "16000"))
 CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "1280"))
 RECORD_SECONDS = int(os.environ.get("RECORD_SECONDS_MAX", "8"))
 SILENCE_TIMEOUT_S = float(os.environ.get("SILENCE_TIMEOUT_S", "1.5"))
 RECORD_SILENCE_AMPLITUDE = int(os.environ.get("RECORD_SILENCE_AMPLITUDE", "300"))
 # Default 0.28 — 0.35 misses many real mics/rooms; tune via WAKEWORD_THRESHOLD.
-WAKEWORD_THRESHOLD = float(os.environ.get("WAKEWORD_THRESHOLD", "0.28"))
+WAKEWORD_THRESHOLD = float(_env("WAKEWORD_THRESHOLD", "0.28", "OWW_THRESHOLD"))
 VERIFY_SSL = os.environ.get("VERIFY_SSL", "true").lower() not in ("false", "0", "no")
 WAKEWORD_DEBUG = os.environ.get("WAKEWORD_DEBUG", "").lower() in ("1", "true", "yes")
 # ── Barge-in: Silero VAD during TTS playback ─────────────────────────────

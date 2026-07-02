@@ -18,6 +18,7 @@ from card_contract import CardContractError, validate_component
 from card_service import card_service
 from database import get_db_ctx
 from people_utils import row_to_person
+from time_utils import today_for_zoe_tz
 
 logger = logging.getLogger(__name__)
 
@@ -351,7 +352,7 @@ def _default_clock_timezone() -> str:
 
 
 def _today() -> date:
-    return date.today()
+    return today_for_zoe_tz()
 
 
 def _clock_now(timezone_name: str | None = None) -> tuple[datetime, str]:
@@ -1205,7 +1206,11 @@ def _affected_rows(result: Any) -> int | None:
         return None
     if isinstance(result, int):
         return result
-    match = re.search(r"\b(?:INSERT|UPDATE|DELETE)\s+(\d+)\b", str(result))
+    text = str(result)
+    insert_match = re.search(r"\bINSERT\s+\d+\s+(\d+)\b", text)
+    if insert_match:
+        return int(insert_match.group(1))
+    match = re.search(r"\b(?:UPDATE|DELETE)\s+(\d+)\b", text)
     return int(match.group(1)) if match else None
 
 
@@ -1531,7 +1536,7 @@ async def _resolve_calendar_delete_event(intent: SkybridgeIntent, user_id: str, 
 
 
 async def _resolve_calendar(intent: SkybridgeIntent, user_id: str, db: Any) -> dict[str, Any]:
-    start = intent.start_date or date.today()
+    start = intent.start_date or today_for_zoe_tz()
     end = intent.end_date or start
     events = []
     if user_id not in {"guest", "voice-guest"}:
@@ -1843,7 +1848,7 @@ async def _resolve_list_create(intent: SkybridgeIntent, user_id: str, db: Any) -
             "",
             "personal" if list_type in {"work", "personal", "tasks"} else "family",
         )
-        created = str(status).endswith(" 1")
+        created = _affected_rows(status) == 1
         await _maybe_commit(db)
     result = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type, list_name=intent.list_name), user_id, db)
     result["intent"] = {"domain": "lists", "action": "create_list", "list_type": list_type, "list_name": intent.list_name}

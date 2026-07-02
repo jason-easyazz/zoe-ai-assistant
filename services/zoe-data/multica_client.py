@@ -1,8 +1,12 @@
 """multica_client.py — Thin async client for the Multica board API.
 
 Gracefully no-ops when MULTICA_BASE_URL is unset or Multica is unavailable.
-All public methods return empty dicts/lists on error rather than raising,
-so callers don't need to handle Multica outages.
+By default the public methods return empty dicts/lists on error rather than
+raising, so callers don't need to handle Multica outages. Real HTTP/network/parse
+failures are logged at WARNING (with endpoint + status) so an outage is visible
+instead of silent. Hot poll/driver paths that must tell an OUTAGE apart from a
+genuinely empty board can opt in with ``raise_on_error=True`` to get a typed
+``MulticaUnavailableError`` instead of an empty value.
 
 API notes (verified against Multica server/cmd/server/router.go):
   - Issues live at /api/issues  (NOT /api/v1/workspaces/{id}/issues)
@@ -19,6 +23,45 @@ from typing import Any, Mapping
 import httpx
 
 logger = logging.getLogger(__name__)
+
+
+class MulticaUnavailableError(Exception):
+    """Raised when a Multica API call fails due to a real outage.
+
+    A "real outage" means an HTTP/network/parse error — as opposed to a
+    legitimately empty/200 result. This lets hot poll/driver paths distinguish a
+    Multica OUTAGE (skip this cycle) from a genuinely empty board (no-op): both
+    otherwise collapse to the same empty dict/list.
+
+    Only raised when a caller opts in via ``raise_on_error=True``. By default the
+    client methods still return empty values on failure, so existing resilient
+    callers (``await client.list_issues(...) or []``) are unaffected.
+    """
+
+    def __init__(
+        self,
+        endpoint: str,
+        *,
+        status: int | None = None,
+        cause: Exception | None = None,
+    ) -> None:
+        self.endpoint = endpoint
+        self.status = status
+        self.cause = cause
+        if status is not None:
+            detail = f"status={status}"
+        elif cause is not None:
+            detail = type(cause).__name__
+        else:
+            detail = "unknown"
+        super().__init__(f"Multica unavailable at {endpoint} ({detail}): {cause}")
+
+
+def _http_status(exc: Exception) -> int | None:
+    """Best-effort HTTP status code from an httpx error (None for network/parse)."""
+    resp = getattr(exc, "response", None)
+    return getattr(resp, "status_code", None) if resp is not None else None
+
 
 _TIMEOUT = 10.0
 _DEFAULT_HERMES_MULTICA_AGENT_ID = "019ae0a7-62f1-47fe-9d46-75fd0ae5d570"
@@ -126,8 +169,14 @@ class MULClient:
             logger.warning("Multica create_issue failed: %s", exc)
             return {"error": str(exc)}
 
-    async def get_issue(self, issue_id: str) -> dict:
-        """Fetch a single issue by ID."""
+    async def get_issue(self, issue_id: str, *, raise_on_error: bool = False) -> dict:
+        """Fetch a single issue by ID.
+
+        On a real HTTP/network/parse failure, logs at WARNING with endpoint+status
+        so an outage is observable. Pass ``raise_on_error=True`` to surface the
+        outage as :class:`MulticaUnavailableError` instead of an empty dict, letting
+        the caller distinguish an outage from a genuinely missing issue.
+        """
         if not self.is_configured():
             return {}
         url = f"{self._base}/api/issues/{issue_id}"
@@ -137,7 +186,12 @@ class MULClient:
                 resp.raise_for_status()
                 return resp.json()
         except (httpx.HTTPError, ValueError, TypeError) as exc:
-            logger.warning("Multica get_issue(%s) failed: %s", issue_id, exc)
+            status = _http_status(exc)
+            logger.warning(
+                "Multica get_issue(%s) failed [%s status=%s]: %s", issue_id, url, status, exc
+            )
+            if raise_on_error:
+                raise MulticaUnavailableError(url, status=status, cause=exc) from exc
             return {}
 
     async def resolve_issue(self, reference: str) -> dict:
@@ -170,8 +224,15 @@ class MULClient:
         status: str | None = None,
         *,
         limit: int | None = None,
+        raise_on_error: bool = False,
     ) -> list[dict]:
-        """List issues in the workspace, optionally filtered by status."""
+        """List issues in the workspace, optionally filtered by status.
+
+        On a real HTTP/network/parse failure, logs at WARNING with endpoint+status
+        so an outage is observable. Pass ``raise_on_error=True`` to surface the
+        outage as :class:`MulticaUnavailableError` instead of an empty list, letting
+        the caller distinguish an outage from a genuinely empty board.
+        """
         if not self.is_configured():
             return []
         url = f"{self._base}/api/issues"
@@ -189,11 +250,29 @@ class MULClient:
                     return data
                 return data.get("issues", []) if isinstance(data, dict) else []
         except (httpx.HTTPError, ValueError, TypeError) as exc:
-            logger.warning("Multica list_issues failed: %s", exc)
+            stat = _http_status(exc)
+            logger.warning(
+                "Multica list_issues failed [%s status=%s params=%s]: %s",
+                url, stat, params, exc,
+            )
+            if raise_on_error:
+                raise MulticaUnavailableError(url, status=stat, cause=exc) from exc
             return []
 
-    async def update_issue(self, issue_id: str, status: str | None = None, **kwargs) -> dict:
-        """Update an issue's status and/or other fields (description, title, etc.)."""
+    async def update_issue(
+        self,
+        issue_id: str,
+        status: str | None = None,
+        *,
+        raise_on_error: bool = False,
+        **kwargs,
+    ) -> dict:
+        """Update an issue's status and/or other fields (description, title, etc.).
+
+        On a real HTTP/network/parse failure, logs at WARNING with endpoint+status
+        so an outage is observable. Pass ``raise_on_error=True`` to surface the
+        outage as :class:`MulticaUnavailableError` instead of an empty dict.
+        """
         if not self.is_configured():
             return {}
         url = f"{self._base}/api/issues/{issue_id}"
@@ -209,7 +288,12 @@ class MULClient:
                 resp.raise_for_status()
                 return resp.json()
         except (httpx.HTTPError, ValueError, TypeError) as exc:
-            logger.warning("Multica update_issue(%s) failed: %s", issue_id, exc)
+            stat = _http_status(exc)
+            logger.warning(
+                "Multica update_issue(%s) failed [%s status=%s]: %s", issue_id, url, stat, exc
+            )
+            if raise_on_error:
+                raise MulticaUnavailableError(url, status=stat, cause=exc) from exc
             return {}
 
     async def list_labels(self) -> list[dict]:

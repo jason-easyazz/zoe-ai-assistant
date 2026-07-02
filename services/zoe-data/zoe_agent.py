@@ -40,6 +40,8 @@ os.environ.setdefault("ORT_DISABLE_GPU", "1")
 
 import httpx
 
+from agent_safety import CommandRejected, check_bash_command, guard_browser_page, is_public_url
+
 logger = logging.getLogger(__name__)
 
 # ── Optional OTEL / Arize Phoenix instrumentation ────────────────────────────
@@ -84,6 +86,7 @@ _JETSON_MODE    = os.environ.get("JETSON_AGENT_MODE", "false").lower() == "true"
 _MAX_TOOL_ITERS   = int(os.environ.get("ZOE_AGENT_MAX_TOOL_ITERS", "5"))
 _LLM_TIMEOUT      = float(os.environ.get("ZOE_AGENT_LLM_TIMEOUT", "120.0"))
 _TOOL_TIMEOUT     = float(os.environ.get("ZOE_AGENT_TOOL_TIMEOUT", "10.0"))
+_DDG_SEARCH_HTML_MAX_BYTES = 5 * 1024 * 1024
 # Hermes opt-out — set ZOE_HERMES_AUTO_ESCALATE=false to disable even when healthy.
 _HERMES_AUTO_ESCALATE = os.environ.get("ZOE_HERMES_AUTO_ESCALATE", "true").lower() != "false"
 
@@ -1236,7 +1239,7 @@ def _model_name() -> str:
 # from one Chroma read, shaving 5–50 ms off the hot path. Writes invalidate
 # the per-user entry so newly added facts surface on the next turn.
 
-_USER_FACTS_CACHE: dict[str, tuple[float, str]] = {}
+_USER_FACTS_CACHE: dict[tuple[str, int], tuple[float, str]] = {}
 # The cold Chroma read is ~1.4s and sits on the voice brain turn's critical path.
 # A 2s TTL expired during the wake→speak→STT gap, so every turn re-paid it. Fact
 # WRITES invalidate the cache immediately (_invalidate_user_facts_cache), so a long
@@ -1245,7 +1248,8 @@ _USER_FACTS_TTL_S: float = float(os.environ.get("PI_USER_FACTS_CACHE_TTL_S", "12
 
 
 def _invalidate_user_facts_cache(user_id: str) -> None:
-    _USER_FACTS_CACHE.pop(user_id, None)
+    for key in [key for key in _USER_FACTS_CACHE if key[0] == user_id]:
+        _USER_FACTS_CACHE.pop(key, None)
 
 
 async def _mempalace_search(
@@ -1362,7 +1366,8 @@ async def _mempalace_load_user_facts(user_id: str, limit: int = 20) -> str:
             return ""
     except Exception:
         return ""
-    cached = _USER_FACTS_CACHE.get(user_id)
+    cache_key = (user_id, limit)
+    cached = _USER_FACTS_CACHE.get(cache_key)
     if cached is not None and cached[0] > now:
         return cached[1]
 
@@ -1399,7 +1404,7 @@ async def _mempalace_load_user_facts(user_id: str, limit: int = 20) -> str:
             # Emotional moments block — most recent 5, helps Zoe follow up naturally
             if emotional_refs:
                 import datetime as _dt
-                now_dt = _dt.datetime.utcnow()
+                now_dt = _dt.datetime.now(_dt.timezone.utc)
                 emo_lines = ["## Recent emotional moments:"]
                 for ref in emotional_refs[:5]:
                     text = (ref.text or "")[:180]
@@ -1410,7 +1415,11 @@ async def _mempalace_load_user_facts(user_id: str, limit: int = 20) -> str:
                     age_str = ""
                     if added_at:
                         try:
-                            added_dt = _dt.datetime.fromisoformat(added_at.rstrip("Z"))
+                            added_dt = _dt.datetime.fromisoformat(added_at.replace("Z", "+00:00"))
+                            if added_dt.tzinfo is None:
+                                added_dt = added_dt.replace(tzinfo=_dt.timezone.utc)
+                            else:
+                                added_dt = added_dt.astimezone(_dt.timezone.utc)
                             delta = now_dt - added_dt
                             if delta.days == 0:
                                 age_str = "today"
@@ -1431,7 +1440,7 @@ async def _mempalace_load_user_facts(user_id: str, limit: int = 20) -> str:
 
             formatted = "\n\n".join(sections)
 
-        _USER_FACTS_CACHE[user_id] = (now + _USER_FACTS_TTL_S, formatted)
+        _USER_FACTS_CACHE[cache_key] = (now + _USER_FACTS_TTL_S, formatted)
         return formatted
     except ImportError:
         logger.warning("MemPalace not installed — skipping user facts load")
@@ -1673,15 +1682,23 @@ async def _ha_control(entity_id: str, action: str, data: dict | None = None) -> 
 # ── Bash self-extension ───────────────────────────────────────────────────────
 
 async def _bash(command: str) -> str:
-    """Run an allowed bash command and return stdout (max 2000 chars)."""
-    # Safety check — only whitelisted prefixes allowed
-    cmd_stripped = command.strip()
-    if not any(cmd_stripped.startswith(pfx) for pfx in _BASH_ALLOWED_PREFIXES):
-        return f"[bash blocked: '{cmd_stripped[:40]}' is not in the allowed command list]"
+    """Run an allowed bash command and return stdout (max 2000 chars).
+
+    Safety: the command is validated against the prefix allowlist AND parsed
+    into an argv list (``agent_safety.check_bash_command``), then executed with
+    ``create_subprocess_exec`` — i.e. NO shell. This neutralises shell-injection
+    (``echo ok; curl http://evil`` no longer chains commands: ``curl`` becomes
+    an inert literal argument to ``echo``), while every legitimate allowlisted
+    command still works.
+    """
+    try:
+        argv = check_bash_command(command, _BASH_ALLOWED_PREFIXES)
+    except CommandRejected as exc:
+        return f"[bash blocked: {exc}]"
     try:
         proc = await asyncio.wait_for(
-            asyncio.create_subprocess_shell(
-                cmd_stripped,
+            asyncio.create_subprocess_exec(
+                *argv,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
             ),
@@ -1694,6 +1711,29 @@ async def _bash(command: str) -> str:
         return "[bash timeout after 15s]"
     except Exception as exc:
         return f"[bash error: {exc}]"
+
+
+def _read_bounded_url_response(resp, max_bytes: int) -> bytes:
+    content_length = resp.headers.get("Content-Length") if hasattr(resp, "headers") else None
+    if content_length:
+        try:
+            declared_length = int(content_length)
+        except (TypeError, ValueError):
+            declared_length = None
+        if declared_length is not None and declared_length > max_bytes:
+            raise ValueError(f"response body exceeds {max_bytes} byte cap")
+
+    chunks: list[bytes] = []
+    total = 0
+    while total <= max_bytes:
+        chunk = resp.read(min(65536, max_bytes + 1 - total))
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise ValueError(f"response body exceeds {max_bytes} byte cap")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _ddg_search_sync(query: str, max_results: int = 5, timeout_s: float = 10.0) -> list[dict]:
@@ -1750,7 +1790,9 @@ def _ddg_search_sync(query: str, max_results: int = 5, timeout_s: float = 10.0) 
         try:
             req = Request(url, headers=headers)
             with urlopen(req, timeout=timeout_s) as resp:
-                body = resp.read().decode("utf-8", errors="replace")
+                body = _read_bounded_url_response(resp, _DDG_SEARCH_HTML_MAX_BYTES).decode(
+                    "utf-8", errors="replace"
+                )
             # DDG bot detection — skip if we got the challenge page
             if "anomaly.js" in body or len(body) < 3000:
                 continue
@@ -2293,7 +2335,16 @@ async def _web_research(query: str, user_id: str = "") -> str:
             flow (postcode → dropdown → confirm), search within site if on a homepage."""
             page = None
             try:
+                # SSRF guard: only follow result links that resolve to public
+                # addresses — never loopback / LAN / cloud-metadata targets.
+                if not is_public_url(url):
+                    logger.warning("web_research: blocked non-public URL %s", url[:80])
+                    return ""
                 page = await ctx.new_page()
+                # Validate EVERY request/redirect hop pre-connect: a public URL may
+                # 30x to an internal/metadata host. The route guard aborts before
+                # the browser connects (so page.goto raises -> handled below).
+                await guard_browser_page(page)
                 await page.goto(url, wait_until="domcontentloaded", timeout=12000)
                 # Let JS settle before any interaction
                 await page.wait_for_timeout(800)
