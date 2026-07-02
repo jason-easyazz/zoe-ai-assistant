@@ -1,0 +1,13 @@
+# Runs the voice regression probe daily, off-peak (panel idle). Persistent catches
+# up a missed run after downtime. The probe itself skips if memory is low.
+[Unit]
+Description=Zoe voice regression probe timer (daily, off-peak)
+Requires=zoe-voice-regression.service
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+Persistent=true
+AccuracySec=5min
+
+[Install]
+WantedBy=timers.target

@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Optional
 
 from fastapi import HTTPException
 
+from time_utils import today_for_zoe_tz
 from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS
 
 if TYPE_CHECKING:
@@ -1011,21 +1012,36 @@ def detect_intent(
         return Intent("journal_prompt", {})
 
     # --- TRANSACTIONS ---
+    # Parse money exactly: integer cents (no float drift) plus the canonical
+    # two-decimal dollars the command boundary still expects. A malformed match
+    # (e.g. "1.2.3") returns None so we DON'T record a bogus $0 transaction —
+    # the turn falls through to later intents / open-domain handling instead.
+    from money import to_cents, to_dollars
+
+    def _money_slots(raw: str):
+        try:
+            cents = to_cents(raw)
+        except ValueError:
+            return None
+        return {"amount": to_dollars(cents), "amount_cents": cents}
+
     m = re.match(
         r"^i (?:spent|paid) \$?([\d.]+)(?: ?(?:dollars?|bucks?))?(?: (?:at|on|for) (.+))?$", t
     )
     if m:
-        amount = float(m.group(1))
-        desc = (m.group(2) or "").strip() or "purchase"
-        return Intent("transaction_create", {"amount": amount, "description": desc})
+        slots = _money_slots(m.group(1))
+        if slots is not None:
+            desc = (m.group(2) or "").strip() or "purchase"
+            return Intent("transaction_create", {**slots, "description": desc})
 
     m = re.match(
         r"^(?:bought|purchased) (.+?) (?:for )\$?([\d.]+)$", t
     )
     if m:
-        desc = m.group(1).strip()
-        amount = float(m.group(2))
-        return Intent("transaction_create", {"amount": amount, "description": desc})
+        slots = _money_slots(m.group(2))
+        if slots is not None:
+            desc = m.group(1).strip()
+            return Intent("transaction_create", {**slots, "description": desc})
 
     for pattern in [
         r"^(?:how much (?:did i|have i) (?:spent?|spend)|weekly spending|budget check|spending (?:summary|this week))(.*)$",
@@ -1400,11 +1416,11 @@ def detect_intent(
 
     if log_miss:
         logger.info("intent_miss: %s", text)
-        # Write to intent-misses file for weekly self-review (PII stripped)
-        import re as _re, json as _json, pathlib as _pathlib
-        _MISS_PATH = _pathlib.Path.home() / "training" / "data" / "intent-misses.jsonl"
-        _MISS_PATH.parent.mkdir(parents=True, exist_ok=True)
         try:
+            # Write to intent-misses file for weekly self-review (PII stripped)
+            import re as _re, json as _json, pathlib as _pathlib
+            _MISS_PATH = _pathlib.Path.home() / "training" / "data" / "intent-misses.jsonl"
+            _MISS_PATH.parent.mkdir(parents=True, exist_ok=True)
             # Strip names, numbers, emails, URLs before writing
             _clean = _re.sub(r'\b[A-Z][a-z]+ [A-Z][a-z]+\b', '[NAME]', text)
             _clean = _re.sub(r'\b\d[\d\s\-]{6,}\b', '[NUMBER]', _clean)
@@ -1412,7 +1428,7 @@ def detect_intent(
             _clean = _re.sub(r'https?://\S+', '[URL]', _clean)
             with open(_MISS_PATH, "a") as _f:
                 _f.write(_json.dumps({"text": _clean, "ts": __import__("time").time()}) + "\n")
-        except (OSError, TypeError, ValueError, re.error):
+        except Exception:
             pass  # Never let logging break intent routing
         try:
             from pi_intent_evidence import record_intent_miss_evidence
@@ -2008,10 +2024,10 @@ async def _execute_calendar_show_direct(intent: Intent, user_id: str) -> Optiona
     works even when the mcporter MCP subprocess is down (the source of the
     calendar 'hit and miss'). Mirrors the qualifier→date-range logic in
     _build_command's calendar_show branch."""
-    from datetime import date, timedelta
+    from datetime import timedelta
     slots = intent.slots or {}
     qualifier = str(slots.get("qualifier", "")).strip().lower()
-    today_d = date.today()
+    today_d = today_for_zoe_tz()
     if qualifier in ("today", "today's", ""):
         start = end = today_d
         scope = "today"
@@ -2775,10 +2791,9 @@ async def _daily_briefing_weather(user_id: str) -> Optional[dict]:
 
 async def _daily_briefing_calendar(user_id: str) -> Optional[dict]:
     try:
-        from datetime import date
         from database import get_db_ctx
 
-        today = date.today().isoformat()
+        today = today_for_zoe_tz().isoformat()
         async with get_db_ctx() as db:
             cursor = await db.execute(
                 "SELECT id, title, start_time, end_time, category, location FROM events"
@@ -2795,10 +2810,9 @@ async def _daily_briefing_calendar(user_id: str) -> Optional[dict]:
 
 async def _daily_briefing_reminders(user_id: str) -> Optional[dict]:
     try:
-        from datetime import date
         from database import get_db_ctx
 
-        today = date.today().isoformat()
+        today = today_for_zoe_tz().isoformat()
         async with get_db_ctx() as db:
             cursor = await db.execute(
                 "SELECT id, title, due_date, due_time, priority, category FROM reminders"
@@ -2818,7 +2832,7 @@ def _spoken_day(raw: str) -> str:
     try:
         import datetime as _dt
         d = _dt.date.fromisoformat(str(raw)[:10])
-        today = _dt.date.today()
+        today = today_for_zoe_tz()
         if d == today:
             return "today"
         if d == today + _dt.timedelta(days=1):
@@ -2993,6 +3007,80 @@ async def _execute_music_setup(user_id: str) -> str:
     )
 
 
+async def _music_top_recent_genre(user_id: str) -> Optional[str]:
+    try:
+        from database import get_db_ctx
+
+        async with get_db_ctx() as db:
+            row = await db.fetchrow(
+                """
+                SELECT genre,
+                       SUM(CASE event_type
+                           WHEN 'complete' THEN 2 WHEN 'repeat' THEN 3
+                           WHEN 'partial' THEN 1 WHEN 'skip' THEN -2
+                           ELSE 0 END) as score
+                FROM music_listening_events
+                WHERE user_id=$1 AND genre != '' AND ts > $2
+                GROUP BY genre ORDER BY score DESC LIMIT 1
+                """,
+                user_id,
+                time.time() - 86400 * 30,
+            )
+        if row and row["score"] > 0:
+            return row["genre"]
+    except Exception:
+        pass
+    return None
+
+
+async def _music_recent_repeat_count(user_id: str, track_title: str) -> int:
+    if not track_title:
+        return 0
+    try:
+        from database import get_db_ctx
+
+        async with get_db_ctx() as db:
+            count = await db.fetchval(
+                "SELECT count(*) FROM music_listening_events "
+                "WHERE user_id=$1 AND track_title=$2 AND event_type IN ('complete','partial') "
+                "AND ts > $3",
+                user_id,
+                track_title,
+                time.time() - 1800,
+            )
+        return int(count or 0)
+    except Exception:
+        return 0
+
+
+async def _music_recent_skip_count(user_id: str) -> int:
+    try:
+        from database import get_db_ctx
+
+        async with get_db_ctx() as db:
+            count = await db.fetchval(
+                "SELECT count(*) FROM music_listening_events "
+                "WHERE user_id=$1 AND event_type='skip' AND ts > $2",
+                user_id,
+                time.time() - 900,
+            )
+        return int(count or 0)
+    except Exception:
+        return 0
+
+
+async def _post_music_ha_control(client, ha_url: str, payload: dict) -> Optional[str]:
+    try:
+        response = await client.post(f"{ha_url}/devices/control", json=payload)
+    except Exception as exc:
+        logger.warning("music HA control failed: %s", exc)
+        return "I couldn't reach the Home Assistant bridge to control the music."
+    if response.status_code >= 400:
+        logger.warning("music HA control returned HTTP %s", response.status_code)
+        return f"I couldn't control the music because the Home Assistant bridge returned HTTP {response.status_code}."
+    return None
+
+
 async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
     """Route music intents to HA media_player via zoe-data HA bridge."""
     try:
@@ -3006,27 +3094,9 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
             # Genre-weighted discovery for vague queries
             _query = query.strip()
             if not _query or _query.lower() in {"something", "music", "anything", "a song", "some music"}:
-                try:
-                    import psycopg2 as _pg3, time as _t3
-                    _conn3 = _pg3.connect(os.environ.get("POSTGRES_URL", "postgresql://zoe:REDACTED@localhost:5432/zoe"))
-                    _cur3 = _conn3.cursor()
-                    # Get top-scored genre from last 30 days
-                    _cur3.execute("""
-                        SELECT genre,
-                               SUM(CASE event_type
-                                   WHEN 'complete' THEN 2 WHEN 'repeat' THEN 3
-                                   WHEN 'partial' THEN 1 WHEN 'skip' THEN -2
-                                   ELSE 0 END) as score
-                        FROM music_listening_events
-                        WHERE user_id=%s AND genre != '' AND ts > %s
-                        GROUP BY genre ORDER BY score DESC LIMIT 1
-                    """, (user_id, _t3.time() - 86400 * 30))
-                    _rows = _cur3.fetchone()
-                    _conn3.close()
-                    if _rows and _rows[1] > 0:
-                        _query = _rows[0]  # use top genre as search query
-                except Exception:
-                    pass
+                recent_genre = await _music_top_recent_genre(user_id)
+                if recent_genre:
+                    _query = recent_genre  # use top genre as search query
                 if not _query:
                     _query = "music"  # final fallback
 
@@ -3039,7 +3109,9 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
                 },
             }
             async with _httpx.AsyncClient(timeout=8.0) as c:
-                await c.post(f"{ha_url}/devices/control", json=payload)
+                failure = await _post_music_ha_control(c, ha_url, payload)
+                if failure:
+                    return failure
 
             # Fire-and-forget: 5-signal play event logger
             async def _log_play_event() -> None:
@@ -3120,22 +3192,9 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
                         event_type = "complete"
 
                     # Check for repeat: same track played again in last 30 min
-                    try:
-                        import psycopg2 as _pg2, time as _time
-                        _conn2 = _pg2.connect(os.environ.get("POSTGRES_URL", "postgresql://zoe:REDACTED@localhost:5432/zoe"))
-                        _cur2 = _conn2.cursor()
-                        _cur2.execute(
-                            "SELECT count(*) FROM music_listening_events "
-                            "WHERE user_id=%s AND track_title=%s AND event_type IN ('complete','partial') "
-                            "AND ts > %s",
-                            (user_id, start_meta.get("track_title", ""), _time.time() - 1800)
-                        )
-                        _recent = _cur2.fetchone()[0]
-                        _conn2.close()
-                        if _recent > 0 and event_type == "complete":
-                            event_type = "repeat"
-                    except Exception:
-                        pass
+                    _recent = await _music_recent_repeat_count(user_id, start_meta.get("track_title", ""))
+                    if _recent > 0 and event_type == "complete":
+                        event_type = "repeat"
 
                     from database import log_music_event as _log
                     await _log(
@@ -3210,7 +3269,9 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
                     "data": extra,
                 }
                 async with _httpx.AsyncClient(timeout=8.0) as c:
-                    await c.post(f"{ha_url}/devices/control", json=payload)
+                    failure = await _post_music_ha_control(c, ha_url, payload)
+                    if failure:
+                        return failure
 
                 # Log skip/pause events for taste learning
                 _evt_type = None
@@ -3229,30 +3290,19 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
                 result = None
                 # Skip-streak mood detection
                 if cmd in ("next", "skip"):
-                    try:
-                        import psycopg2 as _pg, time as _t
-                        _conn = _pg.connect(os.environ.get("POSTGRES_URL", "postgresql://zoe:REDACTED@localhost:5432/zoe"))
-                        _cur = _conn.cursor()
-                        _cur.execute(
-                            "SELECT count(*) FROM music_listening_events "
-                            "WHERE user_id=%s AND event_type='skip' AND ts > %s",
-                            (user_id, _t.time() - 900)  # last 15 min
+                    _recent_skips = await _music_recent_skip_count(user_id)
+                    if _recent_skips >= 4:
+                        label_str = {"next": "Skipped to next", "skip": "Skipped to next"}.get(cmd, cmd.title())
+                        return (
+                            label_str + ". You've skipped quite a few — want me to try a different genre or mood?"
                         )
-                        _recent_skips = _cur.fetchone()[0]
-                        _conn.close()
-                        if _recent_skips >= 4:
-                            label_str = {"next": "Skipped to next", "skip": "Skipped to next"}.get(cmd, cmd.title())
-                            return (
-                                label_str + ". You've skipped quite a few — want me to try a different genre or mood?"
-                            )
-                    except Exception:
-                        pass
 
                 label = {"pause": "Paused", "stop": "Stopped", "resume": "Resumed",
                          "next": "Skipped to next", "previous": "Back to previous",
                          "volume_up": "Volume up", "volume_down": "Volume down",
                          "shuffle": "Shuffle on", "mute": "Muted", "unmute": "Unmuted"}.get(cmd, cmd.title())
                 return f"{label}."
+            return None
 
         elif intent.name == "music_volume":
             level = int(slots.get("level", 50))
@@ -3263,7 +3313,9 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
                 "data": {"volume_level": vol},
             }
             async with _httpx.AsyncClient(timeout=8.0) as c:
-                await c.post(f"{ha_url}/devices/control", json=payload)
+                failure = await _post_music_ha_control(c, ha_url, payload)
+                if failure:
+                    return failure
             try:
                 import asyncio as _asyncio
                 from database import log_music_event as _log
@@ -3315,9 +3367,9 @@ def _build_command(intent: Intent, user_id: str) -> Optional[str]:
         return cmd
 
     if intent.name == "calendar_show":
-        from datetime import date, timedelta
+        from datetime import timedelta
         qualifier = s.get("qualifier", "").strip().lower()
-        today_d = date.today()
+        today_d = today_for_zoe_tz()
 
         if qualifier in ("today", "today's"):
             return f"{base} zoe-data.calendar_today"
@@ -3695,22 +3747,66 @@ async def _execute_smart_home_intent(intent: Intent, user_id: str) -> Optional[s
 
 
 def _execute_calculate(intent: Intent) -> str:
-    """Safe arithmetic evaluator — only pure numeric expressions are passed to eval (ZOE-10)."""
+    """Safe arithmetic evaluator for bounded numeric expressions (ZOE-10)."""
     expr_raw = intent.slots.get("expression", "").strip()
     display = intent.slots.get("display", expr_raw)
     if not expr_raw:
         return "What would you like me to calculate?"
 
-    # Strip everything that isn't a digit, operator, decimal point, or parens.
-    # This is the critical safety gate — no letters means no code injection.
-    import re as _re
-    safe = _re.sub(r"[^\d\s\+\-\*\/\.\(\)\%]", "", expr_raw).strip()
-    if not safe or _re.search(r"[a-zA-Z_]", safe):
+    import ast as _ast
+    import operator as _operator
+
+    safe = expr_raw.strip()
+    if (
+        not safe
+        or len(safe) > 80
+        or not re.fullmatch(r"[\d\s\+\-\*\/\.\(\)\%]+", safe)
+        or "**" in safe
+    ):
         return f"I can only handle numeric expressions. Try something like \"what is 2 + 2\"."
 
+    binary_ops = {
+        _ast.Add: _operator.add,
+        _ast.Sub: _operator.sub,
+        _ast.Mult: _operator.mul,
+        _ast.Div: _operator.truediv,
+        _ast.Mod: _operator.mod,
+    }
+    unary_ops = {
+        _ast.UAdd: _operator.pos,
+        _ast.USub: _operator.neg,
+    }
+    max_nodes = 64
+    max_abs_value = 1_000_000_000_000
+    seen_nodes = 0
+
+    def _check_bound(value):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("non-numeric result")
+        if abs(value) > max_abs_value:
+            raise ValueError("result too large")
+        return value
+
+    def _eval_node(node):
+        nonlocal seen_nodes
+        seen_nodes += 1
+        if seen_nodes > max_nodes:
+            raise ValueError("expression too complex")
+        if isinstance(node, _ast.Expression):
+            return _eval_node(node.body)
+        if isinstance(node, _ast.Constant):
+            return _check_bound(node.value)
+        if isinstance(node, _ast.BinOp) and type(node.op) in binary_ops:
+            left = _eval_node(node.left)
+            right = _eval_node(node.right)
+            return _check_bound(binary_ops[type(node.op)](left, right))
+        if isinstance(node, _ast.UnaryOp) and type(node.op) in unary_ops:
+            return _check_bound(unary_ops[type(node.op)](_eval_node(node.operand)))
+        raise ValueError("unsupported expression")
+
     try:
-        # Restricted eval: no builtins, no globals
-        result = eval(safe, {"__builtins__": {}}, {})  # noqa: S307
+        parsed = _ast.parse(safe, mode="eval")
+        result = _eval_node(parsed)
         if isinstance(result, float):
             # Show integer when result is whole
             result = int(result) if result == int(result) else round(result, 6)

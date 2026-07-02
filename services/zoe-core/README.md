@@ -8,17 +8,17 @@ This is the *center* of Zoe: the brain. The other services are leaf functions �
 database. `zoe-core` is the thing that reasons, decides, and orchestrates them.
 
 Built on **[`pi`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)**
-(the extensible agent framework, run on local **Gemma 4 E2B**). Zoe's
+(the extensible agent framework, run on local **Gemma 4 E4B-QAT**). Zoe's
 capabilities are Pi **extensions/tools**; her personality and memory are wired in
 via Pi's extension hooks.
 
 > **Core ≠ monolith.** zoe-core *orchestrates and delegates*; it does not absorb
 > the code of `zoe-data`/`zoe-auth`/`zoe-database`. Abilities stay modular
-> (extensions/tools). The retired Docker monolith that once held this name is
-> archived at `docs/archive/retired-services/zoe-core/` — do not revive it.
+> (extensions/tools). The retired Docker monolith that once held this name was
+> removed from the working tree and remains in git history only — do not revive it.
 
 > **Status: lab-only / additive.** zoe-core is the destination brain (Pi on
-> Gemma 4 E2B), built and proven *beside* the live system. `zoe_agent` remains
+> Gemma 4 E4B-QAT), built and proven *beside* the live system. `zoe_agent` remains
 > the production chat brain until zoe-core clears the Samantha tests +
 > Pi-vs-`zoe_agent` benchmarks — then cutover. Nothing here is wired into
 > production yet.

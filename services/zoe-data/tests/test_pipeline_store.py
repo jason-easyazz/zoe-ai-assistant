@@ -447,7 +447,7 @@ async def test_sync_pipeline_advances_on_complete_handoff(isolated_store):
 
     async def fetch_detail(_task_id: str):
         return {
-            "latest_summary": "TOOLS_USED=graphify\nTESTS=pytest -q pass\nPR_URL=https://github.com/o/r/pull/9",
+            "latest_summary": "TOOLS_USED=codebase-memory\nTESTS=pytest -q pass\nPR_URL=https://github.com/o/r/pull/9",
             "comments": [],
         }
 
@@ -593,7 +593,7 @@ async def test_sync_pipeline_blocks_code_implement_without_pr(isolated_store):
 
     async def fetch_detail(_task_id: str):
         return {
-            "latest_summary": "TOOLS_USED=graphify\nTESTS=validate_structure.py passed\nSUMMARY=investigated only",
+            "latest_summary": "TOOLS_USED=codebase-memory\nTESTS=validate_structure.py passed\nSUMMARY=investigated only",
             "comments": [],
         }
 
@@ -616,7 +616,7 @@ async def test_sync_pipeline_blocks_default_implement_without_pr(isolated_store)
 
     async def fetch_detail(_task_id: str):
         return {
-            "latest_summary": "TOOLS_USED=graphify\nSUMMARY=investigated only",
+            "latest_summary": "TOOLS_USED=codebase-memory\nSUMMARY=investigated only",
             "comments": [],
         }
 
@@ -731,6 +731,17 @@ async def test_sync_pipeline_advances_with_live_run_metadata_recovery(isolated_s
         and item.artifact == "https://github.com/jason-easyazz/zoe-ai-assistant/pull/213"
         for item in state.evidence
     )
+
+
+def test_phase_skills_implement_only_credits_pinned_skills():
+    # _PHASE_SKILLS feeds the no-TOOLS_USED evidence fallback, which credits each
+    # listed skill as "pinned skills" tool evidence. implement is dispatched with
+    # only zoe-engineering (kanban_adapter._CHAIN), so it must not list runtime-only
+    # tools like codebase-memory/serena — that would advance the pipeline on tool
+    # evidence the implement worker was never given.
+    assert store._PHASE_SKILLS["implement"] == ("zoe-engineering",)
+    assert "codebase-memory" not in store._PHASE_SKILLS["implement"]
+    assert "serena" not in store._PHASE_SKILLS["implement"]
 
 
 @pytest.mark.asyncio
@@ -885,7 +896,7 @@ async def test_sync_pipeline_retries_a_concurrent_transition_write(
     async def fetch_detail(_task_id: str):
         return {
             "latest_summary": (
-                "TOOLS_USED=graphify\n"
+                "TOOLS_USED=codebase-memory\n"
                 "TESTS=pytest -q pass\n"
                 "PR_URL=https://github.com/o/r/pull/9"
             ),
@@ -923,7 +934,7 @@ async def test_sync_pipeline_defers_after_sustained_journal_conflicts(
     async def fetch_detail(_task_id: str):
         return {
             "latest_summary": (
-                "TOOLS_USED=graphify\n"
+                "TOOLS_USED=codebase-memory\n"
                 "TESTS=pytest -q pass\n"
                 "PR_URL=https://github.com/o/r/pull/9"
             ),
@@ -946,7 +957,7 @@ async def test_sync_pipeline_skips_implementation_when_scout_marks_it_unneeded(i
 
     async def fetch_detail(_task_id: str):
         return {
-            "latest_summary": "TOOLS_USED=graphify",
+            "latest_summary": "TOOLS_USED=codebase-memory",
             "comments": [],
             "runs": [
                 {
@@ -979,7 +990,7 @@ async def test_sync_pipeline_keeps_normal_implementation_route(isolated_store):
 
     async def fetch_detail(_task_id: str):
         return {
-            "latest_summary": "TOOLS_USED=graphify",
+            "latest_summary": "TOOLS_USED=codebase-memory",
             "comments": [],
             "runs": [{"metadata": {"IMPLEMENTATION_REQUIRED": "true"}}],
         }
@@ -1006,7 +1017,7 @@ async def test_sync_pipeline_gate_blocks_verify_without_test(isolated_store, mon
     async def fetch_detail(task_id: str):
         if task_id == "t_impl":
             return {
-                "latest_summary": "TOOLS_USED=graphify\nPR_URL=https://github.com/o/r/pull/1",
+                "latest_summary": "TOOLS_USED=codebase-memory\nPR_URL=https://github.com/o/r/pull/1",
                 "comments": [],
             }
         return {"latest_summary": "VALIDATORS=pass", "comments": []}
@@ -1043,7 +1054,7 @@ async def test_sync_pipeline_gate_blocks_verify_after_retry_budget(isolated_stor
     async def fetch_detail(task_id: str):
         if task_id == "t_impl":
             return {
-                "latest_summary": "TOOLS_USED=graphify\nPR_URL=https://github.com/o/r/pull/2",
+                "latest_summary": "TOOLS_USED=codebase-memory\nPR_URL=https://github.com/o/r/pull/2",
                 "comments": [],
             }
         return {"latest_summary": "VALIDATORS=pass", "comments": []}
@@ -1084,7 +1095,7 @@ async def test_harness_verify_completes_done_row_missing_agent_test(isolated_sto
     async def fetch_detail(task_id: str):
         if task_id == "t_impl":
             return {
-                "latest_summary": "TOOLS_USED=graphify\nPR_URL=https://github.com/o/r/pull/9",
+                "latest_summary": "TOOLS_USED=codebase-memory\nPR_URL=https://github.com/o/r/pull/9",
                 "comments": [],
             }
         return {"latest_summary": "VALIDATORS=pass", "comments": []}
@@ -1108,7 +1119,7 @@ async def test_harness_verify_overrides_spurious_block(isolated_store, monkeypat
     async def fetch_detail(task_id: str):
         if task_id == "t_impl":
             return {
-                "latest_summary": "TOOLS_USED=graphify\nPR_URL=https://github.com/o/r/pull/10",
+                "latest_summary": "TOOLS_USED=codebase-memory\nPR_URL=https://github.com/o/r/pull/10",
                 "comments": [],
             }
         return {
@@ -1134,7 +1145,7 @@ async def test_harness_verify_failing_tests_do_not_complete(isolated_store, monk
     async def fetch_detail(task_id: str):
         if task_id == "t_impl":
             return {
-                "latest_summary": "TOOLS_USED=graphify\nPR_URL=https://github.com/o/r/pull/11",
+                "latest_summary": "TOOLS_USED=codebase-memory\nPR_URL=https://github.com/o/r/pull/11",
                 "comments": [],
             }
         return {"latest_summary": "VALIDATORS=pass", "comments": []}
@@ -1165,7 +1176,7 @@ def _review_chain_fetch_detail():
     async def fetch_detail(task_id: str):
         if task_id == "t_impl":
             return {
-                "latest_summary": "TOOLS_USED=graphify\nPR_URL=https://github.com/o/r/pull/20",
+                "latest_summary": "TOOLS_USED=codebase-memory\nPR_URL=https://github.com/o/r/pull/20",
                 "comments": [],
             }
         if task_id == "t_verify":
@@ -1359,7 +1370,7 @@ async def test_sync_pipeline_audit_only_verify_skips_test_gate(isolated_store):
     async def fetch_detail(task_id: str):
         if task_id == "t_impl":
             return {
-                "latest_summary": "AUDIT_ONLY=1\nTOOLS_USED=graphify\nSUMMARY=audit complete",
+                "latest_summary": "AUDIT_ONLY=1\nTOOLS_USED=codebase-memory\nSUMMARY=audit complete",
                 "comments": [],
             }
         return {"latest_summary": "VALIDATORS=validate_structure pass", "comments": []}
@@ -1682,7 +1693,7 @@ async def test_sync_pipeline_auto_validators_on_implement_done(isolated_store, m
 
     async def fetch_detail(_task_id: str):
         return {
-            "latest_summary": "TOOLS_USED=graphify\nTESTS=pytest -q pass\nPR_URL=https://github.com/o/r/pull/9",
+            "latest_summary": "TOOLS_USED=codebase-memory\nTESTS=pytest -q pass\nPR_URL=https://github.com/o/r/pull/9",
             "comments": [],
         }
 

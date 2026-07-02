@@ -6,7 +6,6 @@ Consolidates redundant status/progress docs into organized structure
 
 from pathlib import Path
 from datetime import datetime
-import shutil
 
 # Auto-detect project root (works for both Pi and Nano)
 PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
@@ -312,39 +311,38 @@ def create_docs_folder():
     docs_dir = PROJECT_ROOT / "docs"
     docs_dir.mkdir(exist_ok=True)
     
-    # Create subdirectories
-    (docs_dir / "archive").mkdir(exist_ok=True)
+    # Create active documentation subdirectories. Retired docs are deleted from
+    # the working tree; git history is the archive.
     (docs_dir / "guides").mkdir(exist_ok=True)
     (docs_dir / "api").mkdir(exist_ok=True)
     
     print("✅ Created docs/ folder structure")
 
-def move_to_archive():
-    """Move old docs to archive"""
+def retire_old_docs():
+    """Remove superseded docs from the working tree; git history keeps them."""
     
-    print("\n📦 Moving old docs to archive...")
+    print("\n📦 Retiring old docs from the working tree...")
     
-    docs_archive = PROJECT_ROOT / "docs" / "archive"
-    moved_count = 0
+    retired_count = 0
     
     # Move complete docs
     for doc_name in COMPLETE_DOCS:
         doc_path = PROJECT_ROOT / doc_name
         if doc_path.exists():
-            shutil.move(str(doc_path), str(docs_archive / doc_name))
-            moved_count += 1
-            print(f"  Moved: {doc_name}")
+            doc_path.unlink()
+            retired_count += 1
+            print(f"  Retired: {doc_name}")
     
     # Move old status docs (except the ones we're keeping)
     for doc_name in STATUS_DOCS:
         if doc_name not in KEEP_AS_IS:
             doc_path = PROJECT_ROOT / doc_name
             if doc_path.exists():
-                shutil.move(str(doc_path), str(docs_archive / doc_name))
-                moved_count += 1
-                print(f"  Moved: {doc_name}")
+                doc_path.unlink()
+                retired_count += 1
+                print(f"  Retired: {doc_name}")
     
-    print(f"✅ Moved {moved_count} docs to archive")
+    print(f"✅ Retired {retired_count} docs from the working tree")
 
 def create_docs_index():
     """Create docs/README.md index"""
@@ -368,7 +366,7 @@ Located in project root:
 
 ## 📁 This Folder
 
-- **archive/** - Historical documentation
+- **reviews/** / **post-mortems/** - Review records and cleanup writeups
 - **guides/** - User and developer guides
 - **api/** - API documentation
 
@@ -398,12 +396,12 @@ def generate_report():
     print("  - PROJECT_STATUS.md (consolidated status doc)")
     print("  - docs/ folder structure")
     print("  - docs/README.md (documentation index)")
-    print("  - docs/archive/ (historical docs)")
+    print("  - retired docs removed from the working tree (git keeps history)")
     
     print("\n📊 Summary:")
     print(f"  - Documents consolidated: ~30")
     print(f"  - New structure: Organized and clear")
-    print(f"  - Old docs: Safely archived")
+    print(f"  - Old docs: Retired from the working tree")
     
     print("\n📁 New Documentation Structure:")
     print("  PROJECT_ROOT/")
@@ -415,7 +413,8 @@ def generate_report():
     print("  ├── CLEANUP_PLAN.md")
     print("  └── docs/")
     print("      ├── README.md (index)")
-    print("      ├── archive/ (old docs)")
+    print("      ├── reviews/ (review records)")
+    print("      ├── post-mortems/ (cleanup writeups)")
     print("      ├── guides/ (for future)")
     print("      └── api/ (for future)")
 
@@ -426,11 +425,10 @@ if __name__ == "__main__":
     
     create_project_status()
     create_docs_folder()
-    move_to_archive()
+    retire_old_docs()
     create_docs_index()
     generate_report()
     
     print(f"\n{'='*60}")
     print("✅ CONSOLIDATION COMPLETE!")
     print(f"{'='*60}\n")
-

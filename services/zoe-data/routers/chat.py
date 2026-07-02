@@ -4,7 +4,7 @@ Chat proxy router: bridges the Zoe UI (REST+SSE) to the active agent backend.
 Tiered architecture (Jetson + Pi):
 - Tier 0: Intent router — regex-matched commands (lists, calendar, HA control)
   handled directly in <5ms without any LLM.
-- Tier 1: Zoe Agent — Gemma 4 E2B with MemPalace memory, HA control,
+- Tier 1: Zoe Agent — Gemma 4 E4B-QAT with MemPalace memory, HA control,
   bash tools, and Hermes escalation. True SSE streaming, first token fast.
   Active when JETSON_AGENT_MODE=true OR HERMES_FAST_PATH=false.
   Pi: CPU, 7 TPS, port 11434.  Jetson: GPU, 40+ TPS, port 11434.
@@ -539,23 +539,100 @@ def brain_tool_sentinel_events(sentinel, *, assistant_message_id, tool_names):
         )
 
 
+# Brain UI tools that should also surface a data-filled card in chat. The Pi
+# brain calls these and returns only text (#766/#767 added the live activity
+# view); Wave A additionally re-reads read-only and emits the SAME
+# {type, data, card} zoe.ui_component the intent fast-path renders, so a brain
+# turn that uses calendar/lists/weather shows the result card, not just prose.
+# Map: tool name → (read-only show query, chat card `type`, action label).
+# (people/reminders have no chat card renderer, so they get the activity view only.)
+_BRAIN_UI_TOOL_CARDS = {
+    "calendar": ("show my calendar", "calendar", "Showing calendar"),
+    "lists": ("show my lists", "list", "Showing lists"),
+    "weather": ("what is the weather", "weather", "Showing weather"),
+}
+
+
+async def brain_tool_card_events(sentinel, *, user_id, tool_names, emitted_domains):
+    """For a brain ``__TOOL__`` 'result' on a UI domain, fetch the data-filled
+    card (read-only, via the existing skybridge resolver) and yield it as the
+    same ``{type, data, card}`` ``zoe.ui_component`` the intent fast-path emits.
+
+    Deduped per domain per turn via ``emitted_domains``. Never raises — a failure
+    just means no card (the activity view from ``brain_tool_sentinel_events``
+    still shows). Yields ``CustomEvent`` objects; the caller emits them.
+    """
+    try:
+        tc = json.loads(sentinel[len("__TOOL__:"):])
+    except Exception:  # noqa: BLE001 - malformed sentinel must not break the turn
+        return
+    if tc.get("phase") != "result":
+        return
+    tc_id = str(tc.get("id") or "")
+    # The result sentinel often omits the name; resolve via the id→name map first.
+    name = (str(tc.get("name") or "") or tool_names.get(tc_id, "")).strip().lower()
+    spec = _BRAIN_UI_TOOL_CARDS.get(name)
+    if spec is None or name in emitted_domains:
+        return
+    show_query, card_type, action_label = spec
+    try:
+        from skybridge_service import resolve_skybridge_request
+
+        result = await resolve_skybridge_request(show_query, user_id)
+    except Exception as exc:  # noqa: BLE001 - a card failure must not break the turn
+        logger.debug("brain tool card build failed for %s: %s", name, exc)
+        return
+    if not isinstance(result, dict) or not result.get("handled"):
+        return
+    cards = result.get("cards") or []
+    if not cards:
+        return
+    # Mark emitted only after a handled result with ≥1 card, so a failed/empty
+    # first result for a domain doesn't suppress a later successful one this turn.
+    emitted_domains.add(name)
+    for card in cards:
+        yield CustomEvent(
+            name="zoe.ui_component",
+            value={"type": card_type, "data": {"action": action_label}, "card": card},
+        )
+
+
+def _use_flue_brain() -> bool:
+    """True ONLY when ``ZOE_BRAIN_BACKEND == 'flue'`` (default ``'core'``).
+
+    Additive, default-OFF cutover seam to the Flue brain sidecar. Read lazily
+    (not a module constant) so the live brain path is byte-identical to today
+    unless an operator explicitly opts in. The flip is gated on voice-corpus
+    parity — do not change the default.
+    """
+    return (os.environ.get("ZOE_BRAIN_BACKEND", "core") or "").strip().lower() == "flue"
+
+
 def _brain_streaming(message, session_id, user_id="", **kwargs):
-    """Brain streaming dispatch — zoe-core (Pi) by default, legacy on fallback.
+    """Brain streaming dispatch — Flue (opt-in) > zoe-core (Pi, default) > legacy.
 
     user_id defaults to "" (not a real identity) to preserve the fail-closed
     multi-user guarantee (#692): an omitted user must never inherit another
     user's identity/memory. All call sites pass it explicitly.
     """
+    if _use_flue_brain():
+        from zoe_flue_client import run_flue_brain_streaming
+
+        return run_flue_brain_streaming(message, session_id, user_id, **kwargs)
     if _USE_ZOE_CORE:
         return run_zoe_core_streaming(message, session_id, user_id, **kwargs)
     return run_zoe_agent_streaming(message, session_id, user_id, **kwargs)
 
 
 async def _brain_oneshot(message, session_id, user_id="", **kwargs):
-    """Brain non-streaming dispatch — zoe-core (Pi) by default, legacy on fallback.
+    """Brain non-streaming dispatch — Flue (opt-in) > zoe-core (Pi, default) > legacy.
 
     See _brain_streaming on the fail-closed user_id default.
     """
+    if _use_flue_brain():
+        from zoe_flue_client import run_flue_brain
+
+        return await run_flue_brain(message, session_id, user_id, **kwargs)
     if _USE_ZOE_CORE:
         return await run_zoe_core(message, session_id, user_id, **kwargs)
     return await run_zoe_agent(message, session_id, user_id, **kwargs)
@@ -1125,8 +1202,10 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
             user_id=user_id,
             session_id=session_id,
         )).add_done_callback(
-            lambda t: logger.warning("latent intent detection failed: %s", t.exception())
-            if t.exception() else None
+            lambda t: None if t.cancelled() else (
+                logger.warning("latent intent detection failed: %s", t.exception())
+                if t.exception() else None
+            )
         )
     except Exception as e:
         logger.warning("Memory candidate persistence failed: %s", e)
@@ -1721,6 +1800,7 @@ async def chat_stream_generator(
     force_openclaw: bool = False,
     force_agent: str = "auto",
     req_panel_id: str | None = None,
+    channel: str = "chat",
 ):
     user_id = user["user_id"]
     user_role = user.get("role")
@@ -2000,7 +2080,7 @@ async def chat_stream_generator(
                 import fast_tiers as _fast_path
                 _fp_res = await _fast_path.resolve(
                     message_for_processing, user_id, session_id,
-                    channel="chat",
+                    channel=channel,
                 )
             except Exception as _fp_exc:  # never let the fast path break a turn
                 logger.debug("chat_stream fast_path resolve failed (non-fatal): %s", _fp_exc)
@@ -2367,7 +2447,7 @@ async def chat_stream_generator(
         else:
             logger.info("intent_outcome=no_match fast_path=%s", bool(use_intent_fast_path))
             if _USE_LOCAL_BRAIN:
-                # ── Zoe Agent: Gemma 4 E2B with MemPalace + tools — true SSE streaming ──
+                # ── Zoe Agent: Gemma 4 E4B-QAT with MemPalace + tools — true SSE streaming ──
                 tier_label = "Jetson" if _JETSON_AGENT_MODE else "Pi"
                 yield emit(
                     StateSnapshotEvent(
@@ -2433,6 +2513,8 @@ async def chat_stream_generator(
                 # result/finish events can re-use the name the start event paired
                 # with (the brain's result sentinel may omit it).
                 _brain_tool_names: dict[str, str] = {}
+                # Wave A: UI domains already carded this turn (dedupe repeat calls).
+                _brain_card_domains: set[str] = set()
                 async for chunk in _brain_streaming(
                     expanded_msg,
                     session_id,
@@ -2532,6 +2614,16 @@ async def chat_stream_generator(
                             tool_names=_brain_tool_names,
                         ):
                             yield emit(_tool_ev)
+                        # Wave A: also surface the data-filled card for UI-domain
+                        # tool results (calendar/lists/weather), reusing the proven
+                        # {type, data, card} zoe.ui_component render path.
+                        async for _card_ev in brain_tool_card_events(
+                            chunk,
+                            user_id=user_id,
+                            tool_names=_brain_tool_names,
+                            emitted_domains=_brain_card_domains,
+                        ):
+                            yield emit(_card_ev)
                         continue
                     full_response += chunk
                     yield recorder.emit(
@@ -3158,6 +3250,34 @@ async def _hermes_stream_generator(
         )
 
 
+def _resolve_channel(body: dict) -> str:
+    """Normalize the optional per-channel tag from a chat request body.
+
+    Phase 1 (additive): a channel may identify itself via an optional `channel`
+    field (e.g. "telegram") so `fast_tiers.resolve()` can select its
+    CHANNEL_PROFILES entry. Only a KNOWN channel is honored — a missing, blank,
+    non-string (the body is raw JSON, so `channel` could be `123`/`true`/an
+    object), or unknown/typo'd value resolves to "chat", the historical hardcoded
+    default. This keeps web/voice/touch byte-identical to before the field
+    existed, never 500s on a malformed field, and ensures an unrecognized channel
+    can't silently widen behaviour (an unknown tag yields an empty profile whose
+    writes default to allowed — falling back to "chat" keeps writes deferred).
+    """
+    raw = body.get("channel")
+    if not isinstance(raw, str):
+        return "chat"
+    channel = raw.strip().lower()
+    if not channel:
+        return "chat"
+    try:
+        import fast_tiers as _ft
+
+        known = channel in _ft.CHANNEL_PROFILES
+    except Exception:
+        known = channel == "chat"
+    return channel if known else "chat"
+
+
 @router.post("/")
 async def chat(request: Request, user: dict = Depends(get_current_user), stream: bool = True):
     body = await request.json()
@@ -3168,6 +3288,8 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
     # OpenClaw remains available, but only for explicit manual requests.
     force_openclaw = bool(body.get("force_openclaw", False)) or (force_agent == "openclaw")
     req_panel_id: str | None = body.get("panel_id") or None
+    # Optional per-channel tag (Phase 1: additive) — see _resolve_channel.
+    req_channel: str = _resolve_channel(body)
     is_voice_mode = request.headers.get("X-Voice-Mode", "").lower() in ("true", "1", "yes")
     voice_max_tokens = int(body.get("max_tokens", 0)) if is_voice_mode else 0
 
@@ -3199,6 +3321,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                     force_openclaw=force_openclaw,
                     force_agent=force_agent,
                     req_panel_id=req_panel_id,
+                    channel=req_channel,
                 ):
                     yield chunk
             finally:
@@ -3307,7 +3430,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                 import fast_tiers as _fast_path
                 _fp_res = await _fast_path.resolve(
                     message_for_processing, user_id, session_id,
-                    channel="chat",
+                    channel=req_channel,
                 )
             except Exception as _fp_exc:  # never let the fast path break a turn
                 logger.debug("chat fast_path resolve failed (non-fatal): %s", _fp_exc)

@@ -260,7 +260,7 @@ async def test_pi_intent_governor_rpc_reuses_warm_process_and_strips_cloud_keys(
         "ZOE_PI_INTENT_TRANSPORT": "rpc",
         "ZOE_PI_COMMAND": "pi",
         "ZOE_PI_INTENT_PROVIDER": "ollama",
-        "ZOE_PI_INTENT_MODEL": "gemma-4-E2B-it-Q4_K_M.gguf",
+        "ZOE_PI_INTENT_MODEL": "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
         "ZOE_PI_CWD": str(tmp_path),
         "ZOE_PI_ALLOW_EXECUTION": "true",
         "ZOE_PI_LOCAL_MODEL_CONFIGURED": "true",
@@ -708,7 +708,7 @@ async def test_pi_intent_governor_classifies_with_fake_pi_and_strips_cloud_keys(
         "ZOE_PI_INTENT_ENABLED": "true",
         "ZOE_PI_COMMAND": "pi",
         "ZOE_PI_INTENT_PROVIDER": "ollama",
-        "ZOE_PI_INTENT_MODEL": "gemma-4-E2B-it-Q4_K_M.gguf",
+        "ZOE_PI_INTENT_MODEL": "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
         "ZOE_PI_CWD": str(tmp_path),
         "ZOE_PI_ALLOW_EXECUTION": "true",
         "ZOE_PI_LOCAL_MODEL_CONFIGURED": "true",
@@ -742,7 +742,7 @@ async def test_pi_intent_governor_classifies_with_fake_pi_and_strips_cloud_keys(
     assert "off" in called["argv"]
     assert "--provider" in called["argv"]
     assert "ollama" in called["argv"]
-    assert "gemma-4-E2B-it-Q4_K_M.gguf" in called["argv"]
+    assert "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf" in called["argv"]
 
 
 @pytest.mark.asyncio
@@ -885,7 +885,7 @@ async def test_detect_and_extract_intent_does_not_execute_unpromoted_pi_result(t
     monkeypatch.setenv("ZOE_PI_CWD", str(tmp_path))
     monkeypatch.setenv("ZOE_PI_ALLOW_EXECUTION", "true")
     monkeypatch.setenv("ZOE_PI_LOCAL_MODEL_CONFIGURED", "true")
-    monkeypatch.setenv("ZOE_PI_INTENT_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf")
+    monkeypatch.setenv("ZOE_PI_INTENT_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf")
     monkeypatch.setenv("PI_TEST_RECORD", str(record))
     monkeypatch.delenv("ZOE_PI_INTENT_PROMOTED_GROUPS", raising=False)
     monkeypatch.delenv("ZOE_PI_INTENT_SHADOW_ENABLED", raising=False)
@@ -944,7 +944,7 @@ async def test_detect_and_extract_intent_uses_pi_for_deterministic_miss(tmp_path
     monkeypatch.setenv("ZOE_PI_CWD", str(tmp_path))
     monkeypatch.setenv("ZOE_PI_ALLOW_EXECUTION", "true")
     monkeypatch.setenv("ZOE_PI_LOCAL_MODEL_CONFIGURED", "true")
-    monkeypatch.setenv("ZOE_PI_INTENT_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf")
+    monkeypatch.setenv("ZOE_PI_INTENT_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf")
     monkeypatch.setenv("ZOE_PI_INTENT_PROMOTED_GROUPS", "reminders")
 
     from intent_router import detect_and_extract_intent
@@ -973,7 +973,7 @@ async def test_detect_and_extract_intent_uses_pi_when_slot_extraction_fails(tmp_
     monkeypatch.setenv("ZOE_PI_CWD", str(tmp_path))
     monkeypatch.setenv("ZOE_PI_ALLOW_EXECUTION", "true")
     monkeypatch.setenv("ZOE_PI_LOCAL_MODEL_CONFIGURED", "true")
-    monkeypatch.setenv("ZOE_PI_INTENT_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf")
+    monkeypatch.setenv("ZOE_PI_INTENT_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf")
     monkeypatch.setenv("ZOE_PI_INTENT_PROMOTED_GROUPS", "reminders")
 
     import sys

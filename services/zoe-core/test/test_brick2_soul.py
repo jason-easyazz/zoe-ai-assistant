@@ -21,7 +21,7 @@ _CORE = Path(__file__).resolve().parent.parent
 _PROVIDER_EXT = _CORE / "extensions" / "provider-local-gemma.ts"
 _SOUL_EXT = _CORE / "extensions" / "soul.ts"
 _SOUL_MD = _CORE / "SOUL.md"
-_MODEL = os.environ.get("ZOE_CORE_MODEL_ID", "gemma-4-E2B-it-Q4_K_M.gguf")
+_MODEL = os.environ.get("ZOE_CORE_MODEL_ID", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf")
 _BASE_URL = (
     os.environ.get("ZOE_CORE_MODEL_URL")
     or os.environ.get("GEMMA_SERVER_URL")

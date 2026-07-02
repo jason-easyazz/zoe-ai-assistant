@@ -12,12 +12,18 @@ Usage:
   python tools/generate_module_compose.py --validate-only
 """
 
+import re
 import yaml
 import sys
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional
 import click
+
+# Module directory names are simple slugs (e.g. "zoe-music"). Anything outside
+# this charset — slashes, "..", absolute paths, NUL — is rejected before it is
+# ever used to build a filesystem path.
+_MODULE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 
 class ComposeGenerator:
@@ -47,8 +53,30 @@ class ComposeGenerator:
     
     def load_module_compose(self, module_name: str) -> Optional[Dict]:
         """Load a module's docker-compose.module.yml file."""
+        if not isinstance(module_name, str) or not _MODULE_NAME_RE.match(module_name):
+            print(
+                f"❌ Rejected invalid module name: {module_name!r} "
+                f"(must match {_MODULE_NAME_RE.pattern})",
+                file=sys.stderr,
+            )
+            return None
+
         compose_file = self.modules_dir / module_name / "docker-compose.module.yml"
-        
+
+        # Belt-and-suspenders: the resolved path must stay under modules/.
+        try:
+            modules_root = self.modules_dir.resolve()
+            resolved = compose_file.resolve()
+        except OSError as e:
+            print(f"❌ Could not resolve path for {module_name!r}: {e}", file=sys.stderr)
+            return None
+        if modules_root not in resolved.parents:
+            print(
+                f"❌ Module path escapes modules/: {module_name!r} -> {resolved}",
+                file=sys.stderr,
+            )
+            return None
+
         if not compose_file.exists():
             print(f"⚠️  Warning: {module_name} has no docker-compose.module.yml", file=sys.stderr)
             return None

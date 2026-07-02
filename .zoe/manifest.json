@@ -17,11 +17,6 @@
       "services/zoe-ui/dist/js/ai-processor.js",
       "services/zoe-ui/dist/js/journal-api.js",
       "services/zoe-ui/dist/js/journal-ui-enhancements.js",
-      "services/zoe-ui/dist/js/_archive/memory-graph.js",
-      "services/zoe-ui/dist/js/_archive/memory-search.js",
-      "services/zoe-ui/dist/js/_archive/memory-timeline.js",
-      "services/zoe-ui/dist/js/_archive/settings.js",
-      "services/zoe-ui/dist/js/_archive/wikilink-parser.js",
       "services/zoe-ui/dist/js/zoe-orb.js"
     ],
     "widgets": [
@@ -82,10 +77,10 @@
     "zoe_config": ".zoe/**/*",
     "backups": "backups/**/*",
     "demos": "demos/**/*",
+    "labs": "labs/**/*",
     "skills": "skills/**/*",
     "github": ".github/**/*",
     "training": "training/**/*",
-    "graphify_out": "graphify-out/**/*",
     "cursor_rules": ".cursor/**/*",
     "codex_config": ".codex/**/*",
     "greptile": ".greptile/**/*",

@@ -9,7 +9,7 @@ from pipeline_handoff import (
 
 def test_evidence_from_implement_handoff_parses_tools_and_tests():
     detail = {
-        "latest_summary": "PR_URL=https://github.com/o/r/pull/1\nTOOLS_USED=graphify,opensrc\nTESTS=pytest -q passed",
+        "latest_summary": "PR_URL=https://github.com/o/r/pull/1\nTOOLS_USED=codebase-memory,opensrc\nTESTS=pytest -q passed",
         "comments": [],
     }
     items = evidence_from_handoff("implement", detail)
@@ -26,7 +26,7 @@ def test_implement_evidence_recovers_pr_url_from_prose_without_structured_field(
     # still produce a 'pr' EvidenceItem.
     detail = {
         "latest_summary": (
-            "TOOLS_USED=graphify\nTESTS=pytest -q passed\n"
+            "TOOLS_USED=codebase-memory\nTESTS=pytest -q passed\n"
             "Shipped\n- Branch pushed to origin.\n"
             "- PR opened against main: https://github.com/o/r/pull/514\n"
             "- kanban_complete recorded with PR URL and tests."
@@ -742,16 +742,16 @@ def test_infer_outcome_done_without_blocker_completes():
 
 def test_evidence_from_skills_when_handoff_omits_tools():
     detail = {"latest_summary": "SUMMARY=scout complete", "comments": []}
-    items = evidence_from_handoff("scout", detail, skills=("zoe-graphify", "zoe-engineering"))
+    items = evidence_from_handoff("scout", detail, skills=("codebase-memory", "zoe-engineering"))
     assert any(item.kind == "tool" and item.metadata.get("source") == "skills" for item in items)
 
 
-def test_evidence_from_implement_skills_graphify():
+def test_evidence_from_implement_skills_codebase_memory():
     detail = {"latest_summary": "SUMMARY=done", "comments": []}
     items = evidence_from_handoff(
         "implement",
         detail,
-        skills=("zoe-engineering", "zoe-graphify", "source-code-context"),
+        skills=("zoe-engineering", "codebase-memory", "source-code-context"),
     )
     assert any(item.kind == "tool" for item in items)
 

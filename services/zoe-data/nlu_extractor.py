@@ -19,7 +19,7 @@ from gemma_endpoint import gemma_base
 
 logger = logging.getLogger(__name__)
 
-_MODEL_NAME: str = "google_gemma-4-E2B-it-Q4_K_M"
+_MODEL_NAME: str = "gemma-4-E4B-it-qat-UD-Q4_K_XL"
 
 
 def _today_prefix() -> str:
@@ -298,9 +298,24 @@ async def _extract_transaction(text: str) -> Optional[dict]:
     args = await _call_with_tool(text, _TRANSACTION_SCHEMA)
     if not args:
         return None
+    # Produce exact integer cents plus the canonical two-decimal dollars the
+    # command boundary expects. A missing/empty/unparseable amount returns None
+    # (caller falls through to Zoe Agent) rather than recording a bogus $0
+    # transaction. Zero is reserved for an explicit 0 amount.
+    from money import to_cents, to_dollars
+    amount = args.get("amount")
+    if amount is None or (isinstance(amount, str) and not amount.strip()):
+        logger.warning("nlu_extractor: missing transaction amount %r", amount)
+        return None
+    try:
+        cents = to_cents(amount)
+    except ValueError:
+        logger.warning("nlu_extractor: unparseable transaction amount %r", amount)
+        return None
     return {
         "description": (args.get("description") or "purchase").strip(),
-        "amount": float(args.get("amount") or 0),
+        "amount": to_dollars(cents),
+        "amount_cents": cents,
     }
 
 

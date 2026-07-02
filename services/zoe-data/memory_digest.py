@@ -19,6 +19,7 @@ import os
 import uuid
 
 import httpx
+from routers.journal import CREATED_AT_VALID_TIMESTAMP_SQL
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,48 @@ def _normalize_gemma_base(raw: str) -> str:
 
 _GEMMA_URL = _normalize_gemma_base(os.environ.get("GEMMA_SERVER_URL", "http://127.0.0.1:11434"))
 _ZOE_TIMEZONE = os.environ.get("ZOE_TIMEZONE", "Australia/Perth")
+_GUEST_USERS = ("guest", "anonymous", "voice-guest", "voice-daemon", "")
+
+
+def _message_owner_expr() -> str:
+    guests = ", ".join("'" + user.replace("'", "''") + "'" for user in _GUEST_USERS)
+    # chat_messages.metadata is TEXT and legacy rows may contain non-JSON.
+    # Extract the simple {"user_id": "..."} field without a jsonb cast so one
+    # malformed row cannot fail discovery for every user.
+    metadata_user = (
+        "CASE WHEN cm.metadata ~ '^\\s*\\{' "
+        "THEN substring(cm.metadata from '\"user_id\"\\s*:\\s*\"([^\"]+)\"') "
+        "ELSE NULL END"
+    )
+    return (
+        "CASE "
+        f"WHEN COALESCE({metadata_user}, '') NOT IN ({guests}) "
+        f"THEN {metadata_user} "
+        f"WHEN COALESCE(cs.user_id, '') NOT IN ({guests}) "
+        "THEN cs.user_id "
+        "ELSE NULL END"
+    )
+
+
+def _message_owner_users_sql(*, today_only: bool) -> str:
+    owner_expr = _message_owner_expr()
+    date_clause = ""
+    if today_only:
+        date_clause = """
+          AND (cm.created_at::timestamptz AT TIME ZONE ?)::date =
+              (now() AT TIME ZONE ?)::date
+        """
+    return f"""
+        SELECT DISTINCT owner.user_id
+        FROM (
+            SELECT {owner_expr} AS user_id
+            FROM chat_messages cm
+            JOIN chat_sessions cs ON cm.session_id = cs.id
+            WHERE cm.role = 'user'
+            {date_clause}
+        ) owner
+        WHERE owner.user_id IS NOT NULL
+        """
 
 _EXTRACTION_PROMPT = """\
 You are extracting personal facts from a chat transcript. Only extract facts the user explicitly stated about themselves, their family, preferences, or life. Do NOT infer, assume, or add anything not stated directly.
@@ -146,7 +189,7 @@ async def run_turn_digest(
 
         prompt = _TURN_EXTRACTION_PROMPT.format(user_message=user_message[:600])
         payload = {
-            "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf"),
+            "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
             "messages": [
                 {"role": "system", "content": "You are a precise fact extractor. Return ONLY valid JSON."},
                 {"role": "user", "content": prompt},
@@ -365,7 +408,7 @@ async def _emotional_memory_pass(user_id: str, chat_text: str, svc) -> int:
 
     prompt = _EMOTIONAL_EXTRACTION_PROMPT.format(chat_text=chat_text[:3000])
     payload = {
-        "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf"),
+        "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
         "messages": [
             {"role": "system", "content": "You are an empathetic listener. Return ONLY valid JSON."},
             {"role": "user", "content": prompt},
@@ -421,28 +464,31 @@ async def _emotional_memory_pass(user_id: str, chat_text: str, svc) -> int:
 
 
 async def _load_todays_messages(user_id: str, db=None) -> str:
-    """Load today's user-turn messages from chat_messages, joined to chat_sessions."""
-    try:
-        from database import get_db  # type: ignore[import]
-        if db is None:
-            async for db in get_db():
-                break
-
-        rows = await db.execute(
-            """
+    """Load today's user-turn messages using per-message metadata ownership."""
+    owner_expr = _message_owner_expr()
+    sql = """
             SELECT cm.content
             FROM chat_messages cm
             JOIN chat_sessions cs ON cm.session_id = cs.id
-            WHERE cs.user_id = ?
+            WHERE """ + owner_expr + """ = ?
               AND cm.role = 'user'
               AND (cm.created_at::timestamptz AT TIME ZONE ?)::date =
                   (now() AT TIME ZONE ?)::date
             ORDER BY cm.created_at ASC
             LIMIT 200
-            """,
-            (user_id, _ZOE_TIMEZONE, _ZOE_TIMEZONE),
-        )
-        rows = await rows.fetchall()
+            """
+    params = (user_id, _ZOE_TIMEZONE, _ZOE_TIMEZONE)
+    try:
+        from db_pool import get_db_ctx  # type: ignore[import]
+        if db is not None:
+            rows = await (await db.execute(sql, params)).fetchall()
+        else:
+            # Self-acquire via the context manager when no connection is passed.
+            # The bare `async for db in get_db(): break` form leaves the generator
+            # suspended, so the connection is closed mid-query — which would make
+            # every per-user digest skip after listing (Greptile P1 on #860).
+            async with get_db_ctx() as _db:
+                rows = await (await _db.execute(sql, params)).fetchall()
         if not rows:
             return ""
         lines = [row[0] for row in rows if row[0]]
@@ -456,7 +502,7 @@ async def _extract_facts_with_gemma(chat_text: str) -> list[dict]:
     """Send chat transcript to the LLM and parse the JSON fact list."""
     prompt = _EXTRACTION_PROMPT.format(chat_text=chat_text[:3000])
     payload = {
-        "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf"),
+        "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
         "messages": [
             {"role": "system", "content": "You are a precise fact extractor. Return ONLY valid JSON."},
             {"role": "user", "content": prompt},
@@ -499,7 +545,7 @@ async def _is_contradiction(new_fact: str, existing_fact: str) -> bool:
         existing_fact=existing_fact.strip(),
     )
     payload = {
-        "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf"),
+        "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
         "messages": [
             {"role": "system", "content": "You are a strict fact-contradiction judge. Return ONLY the JSON object."},
             {"role": "user", "content": prompt},
@@ -695,12 +741,18 @@ async def run_weekly_consolidation_for_all(db=None) -> list[dict]:
         # Fall back to chat-sessions table so we never silently process
         # zero users when MemoryService hasn't exposed a list helper.
         try:
-            from database import get_db  # type: ignore[import]
-            if db is None:
-                async for db in get_db():
-                    break
-            rows = await db.execute("SELECT DISTINCT user_id FROM chat_sessions")
-            rows = await rows.fetchall()
+            from db_pool import get_db_ctx  # type: ignore[import]
+            sql = _message_owner_users_sql(today_only=False)
+            if db is not None:
+                rows = await (await db.execute(sql)).fetchall()
+            else:
+                # Acquire a pooled connection via the context manager — the bare
+                # `async for db in get_db(): break` form leaves the generator
+                # suspended at the yield, so the connection is closed out from
+                # under the next query ("connection was closed in the middle of
+                # operation"). Materialize the rows before release.
+                async with get_db_ctx() as _db:
+                    rows = await (await _db.execute(sql)).fetchall()
             user_ids = [row[0] for row in rows if row[0]]
         except Exception as exc:
             logger.error("consolidation: could not list users: %s", exc)
@@ -715,22 +767,17 @@ async def run_digest_for_all_active_users(db=None) -> list[dict]:
     """Run memory digest for all users who had chat activity today."""
     results = []
     try:
-        from database import get_db  # type: ignore[import]
-        if db is None:
-            async for db in get_db():
-                break
-        rows = await db.execute(
-            """
-            SELECT DISTINCT cs.user_id
-            FROM chat_messages cm
-            JOIN chat_sessions cs ON cm.session_id = cs.id
-            WHERE cm.role = 'user'
-              AND (cm.created_at::timestamptz AT TIME ZONE ?)::date =
-                  (now() AT TIME ZONE ?)::date
-            """,
-            (_ZOE_TIMEZONE, _ZOE_TIMEZONE),
-        )
-        rows = await rows.fetchall()
+        from db_pool import get_db_ctx  # type: ignore[import]
+        sql = _message_owner_users_sql(today_only=True)
+        params = (_ZOE_TIMEZONE, _ZOE_TIMEZONE)
+        if db is not None:
+            rows = await (await db.execute(sql, params)).fetchall()
+        else:
+            # Short-lived pooled acquire for the listing only (avoids the
+            # suspended-generator bug); each per-user digest opens its own
+            # connection below, so we don't hold one across the LLM loop.
+            async with get_db_ctx() as _db:
+                rows = await (await _db.execute(sql, params)).fetchall()
         user_ids = [row[0] for row in rows if row[0]]
     except Exception as exc:
         logger.error("memory_digest: could not list active users: %s", exc)
@@ -1085,15 +1132,20 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
     deserves a follow-up. Runs as part of the nightly dreaming cycle.
     """
     from db_compat import get_compat_db as _get_compat_db
+    created_at_valid_sql = CREATED_AT_VALID_TIMESTAMP_SQL.replace("created_at", "m.created_at")
 
     # Load last 48h of messages for this user
     try:
         async with _get_compat_db() as _db:
             async with _db.execute(
-                """SELECT m.content, m.role FROM chat_messages m
+                f"""SELECT m.content, m.role FROM chat_messages m
                    JOIN chat_sessions s ON m.session_id = s.id
                    WHERE s.user_id = ? AND m.role = 'user'
-                     AND m.created_at > datetime('now', '-2 days')
+                     AND CASE
+                           WHEN {created_at_valid_sql}
+                           THEN m.created_at::timestamptz
+                           ELSE NULL
+                         END > CURRENT_TIMESTAMP - INTERVAL '2 days'
                    ORDER BY m.created_at DESC LIMIT 50""",
                 (user_id,),
             ) as cur:
@@ -1244,12 +1296,18 @@ async def run_dreaming_for_all(db=None) -> list[dict]:
         user_ids = await svc.list_users()
     except AttributeError:
         try:
-            from database import get_db
-            if db is None:
-                async for db in get_db():
-                    break
-            rows = await db.execute("SELECT DISTINCT user_id FROM chat_sessions")
-            rows = await rows.fetchall()
+            from db_pool import get_db_ctx  # type: ignore[import]
+            sql = _message_owner_users_sql(today_only=False)
+            if db is not None:
+                rows = await (await db.execute(sql)).fetchall()
+            else:
+                # Short-lived pooled acquire for the listing only — the bare
+                # `async for db in get_db(): break` form leaves the generator
+                # suspended at the yield, so the connection is closed out from
+                # under the query ("connection was closed in the middle of
+                # operation"). Materialize the rows before release.
+                async with get_db_ctx() as _db:
+                    rows = await (await _db.execute(sql)).fetchall()
             user_ids = [r[0] for r in rows if r[0]]
         except Exception as exc:
             logger.error("dreaming: could not list users: %s", exc)
@@ -1419,14 +1477,17 @@ async def run_music_taste_digest_for_all(db=None) -> list[dict]:
     """Run music taste digest for all users who have any music events."""
     results = []
     try:
-        from database import get_db  # type: ignore[import]
-        if db is None:
-            async for db in get_db():
-                break
-        rows = await db.execute(
-            "SELECT DISTINCT user_id FROM music_listening_events"
-        )
-        rows = await rows.fetchall()
+        from db_pool import get_db_ctx  # type: ignore[import]
+        sql = "SELECT DISTINCT user_id FROM music_listening_events"
+        if db is not None:
+            rows = await (await db.execute(sql)).fetchall()
+        else:
+            # Short-lived pooled acquire for the listing only — the bare
+            # `async for db in get_db(): break` form leaves the generator
+            # suspended at the yield, closing the connection mid-query
+            # ("connection was closed in the middle of operation").
+            async with get_db_ctx() as _db:
+                rows = await (await _db.execute(sql)).fetchall()
         user_ids = [r[0] for r in rows if r[0]]
     except Exception as exc:
         logger.error("music_taste_digest: could not list users: %s", exc)

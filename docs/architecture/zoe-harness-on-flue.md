@@ -1,0 +1,414 @@
+# Decision: Build Zoe's Autonomous Harness on Flue (substrate) + `case` (blueprint)
+
+- **Status:** **ACCEPTED — FIRM.** This is no longer "leaning"; it is the chosen path. Not up for re-litigation absent new evidence from the Phase 0 lab spike.
+- **Date:** 2026-06-21
+- **Owners:** Zoe core
+- **Supersedes:** OpenClaw gateway, Hermes PR-harness (both to be retired onto this single substrate)
+- **Type:** Architecture Decision Record (ADR)
+
+> **Decision (one paragraph).** Build Zoe's autonomous, self-evolving harness — the
+> **"Samantha"** capability — on **[Flue](https://github.com/withastro/flue)** (Apache-2.0,
+> built on `@earendil-works/pi-*`, the *same Pi lineage* as Zoe's brain
+> `@earendil-works/pi-coding-agent`), reproducing the **pipeline *pattern*** of
+> **`workos/case`** (`scout → implementer → verifier → reviewer → closer → retrospective`,
+> with evidence gates, fingerprint-based early-abort, and a retrospective → guardrail loop).
+> Flue is adopted because it **ships the durable-state / sandbox / channel / observability
+> infrastructure that OpenClaw and Hermes failed trying to hand-build** — and because, being
+> Apache-2.0 and a thin framework layer over `pi-agent-core`, it is **Pi-with-batteries, not a
+> foreign second runtime**, so adopting it *consolidates* Zoe onto one Pi-based framework
+> rather than adding scaffolding. `case` is **unlicensed (all-rights-reserved)** and is used as
+> a **study-only blueprint — its code is never copied.** The whole rollout is **phased and
+> lab-gated**: nothing reaches the Jetson production path until it passes the Samantha tests.
+
+---
+
+## 1. Context & goal
+
+Zoe has accumulated **two autonomous-build efforts that were built but never fully worked**:
+
+- **OpenClaw** — the channel/gateway layer (notably Telegram) that was meant to be Zoe's
+  external front door. It runs local Gemma, but the gateway scaffolding never converged.
+- **Hermes** — the autonomous PR-processing harness in `services/zoe-data`. Its recurring
+  failure mode is tickets stalling at roadblocks; the pipeline never reliably ran end to end.
+
+Both efforts independently re-implement the same primitives — durable multi-step pipelines,
+subagents, tool/skill hosting, channel ingress — on top of Pi. Maintaining two half-built
+harnesses is the actual blocker.
+
+**Goal:** converge OpenClaw + Hermes into **one Pi-based harness running on Zoe**, on a
+substrate that already provides the durable-workflow / subagent / sandbox / channel plumbing,
+so the team builds *Zoe's behavior* instead of re-building harness infrastructure. This
+directly advances the **"Samantha" self-evolution goal**: a Zoe that can autonomously build,
+test, and extend herself (author her own skills and tools) under hard lab-proof guardrails.
+
+---
+
+## 2. Decision
+
+Adopt a **hybrid**:
+
+> **Substrate = [Flue](https://github.com/withastro/flue)** (the runtime/harness we run on)
+> **Blueprint = `workos/case`'s pipeline *pattern*** (the application design we reproduce — ideas only, never code)
+
+We build Zoe's autonomous self-building harness **on Flue** and re-implement **`case`'s
+pipeline shape** as Flue durable workflows + subagents. We then **retire OpenClaw and Hermes**
+onto this single substrate.
+
+### Why Flue as the substrate
+
+- **License is clean.** Flue is **Apache-2.0**, published by the Astro team
+  (`withastro`), ~**6.1k★**, active, currently **`v1.0.0-beta`**. We can build on it and
+  depend on it without legal ambiguity.
+- **Same Pi lineage as Zoe's brain.** Flue is built on
+  **`@earendil-works/pi-agent-core` / `pi-ai`** — the *current* Pi scope, the same scope as
+  Zoe's brain (`@earendil-works/pi-coding-agent`). Pi moved from `@mariozechner/pi-*` to the
+  Earendil scope in **April 2026**; aligning the harness and the brain on one `@earendil-works/pi-*`
+  runtime keeps a single Pi version surface.
+- **It already provides everything the two dead harnesses were re-inventing:**
+  durable workflows, subagents, a **`local()` sandbox (no Docker / no container daemon)**,
+  **MCP + typed tools**, and **20+ channels including Telegram**.
+
+### Why `case` as the *blueprint only* (and never as code)
+
+- **`workos/case` is legally OFF-LIMITS for copying.** The repo has **no LICENSE file**,
+  `package.json` shows **`"private": true`** and **no `license` field** (`license: null`), and
+  the open-source **license request ([workos/case#19](https://github.com/workos/case/issues/19))**
+  has been **ignored since May 2026**. Absent a license, the code is **all-rights-reserved**.
+  → We may **study its public architecture for ideas, but MUST NOT copy its code.**
+- **It is also a looser lineage fit.** `case` is still on the **old `@mariozechner/pi-*` scope**
+  (≈`0.73.x`), from *before* Pi moved to Earendil. Flue, on the current Earendil scope, is the
+  closer runtime match to Zoe's brain.
+
+We take from `case` only the **pipeline *shape*** to reproduce as Flue workflows/subagents:
+
+```
+scout → implementer → verifier → reviewer → closer → retrospective
+```
+
+…with **evidence gates** between stages, **fingerprint-based early-abort** (hash the
+issue/work signature so a stage bails fast on already-seen or no-op work instead of looping),
+and a **retrospective → guardrail loop** (every failure produces a written playbook entry that
+becomes a *standing guardrail* on later runs). Together these directly address Hermes's "stalls
+at roadblocks" failure mode: the harness aborts cheap mistakes early and *learns* from the
+expensive ones.
+
+---
+
+## 2a. Why buy-and-fork beats build (the rationale that won)
+
+This is the crux of the decision. The two prior efforts **failed for the same reason**, and
+Flue's existence removes that reason.
+
+- **OpenClaw and Hermes both failed because they hand-built harness infrastructure** — durable
+  state machines, retry/resume, sandboxing, channel ingress — *from scratch*, on top of bare
+  Pi. That undifferentiated plumbing is exactly where they stalled (Hermes never ran a ticket
+  end-to-end; OpenClaw's gateway never converged). **We will not repeat that mistake.** Hand-
+  building harness infra is the trap, not the goal.
+- **Flue ships that infrastructure as one converged Apache-2.0 monorepo:** durable workflows,
+  subagents, a **`local()` sandbox (no Docker / no container daemon)**, **MCP + typed tools**,
+  **first-party channels (Telegram and ~20 others)**, and **OpenTelemetry** instrumentation.
+  Everything the dead harnesses re-invented, already built and maintained.
+- **Flue is Pi-with-batteries, NOT a foreign / second runtime.** It is a *framework layer over
+  `pi-agent-core`* — the very runtime Zoe's brain already executes on. Adopting Flue therefore
+  **consolidates Zoe onto a single Pi-based framework**; it *is* the convergence goal, not a
+  new pile of scaffolding to maintain. We are not adding a runtime; we are standardizing on the
+  one we already have, with the harness primitives filled in.
+- **Open source de-risks everything else.** Because Flue is **Apache-2.0**, the usual buy-vs-
+  build worries lose their teeth: we can **pin a commit, fork it, vendor it, or modify it to
+  fit**. Beta-churn, project abandonment, and vendor lock-in stop being existential — **worst
+  case, we own the code.** That license freedom is what turns "depend on someone else's beta"
+  from a risk into a managed one.
+
+### Dissent considered and overruled
+
+A credible alternative was raised: **build the harness directly on bare `pi-agent-core`**,
+skipping Flue's framework layer. Technically this is *tighter* — fewer dependencies, no beta
+surface, full control of every primitive. **It was considered and rejected.** Building directly
+on bare Pi **re-introduces the exact hand-built-infra burden that sank Hermes** (we'd be writing
+our own durable workflows, sandbox, and channel layer again). For a team that **needs to ship
+Zoe's behavior, not harness plumbing**, the framework-over-Pi path wins. If Flue ever proves a
+bad fit, the Apache-2.0 license means we can fall back to bare Pi — but we do not *start* there.
+
+---
+
+## 2b. Model & hardware portability (the core design lever)
+
+There is **no separate dev box.** Flue installs on the **same live Jetson Orin NX (16GB)** that
+already runs the voice brain (local **Gemma E4B on llama.cpp `:11434`**), **Kokoro TTS**,
+`zoe-data`, and **Moonshine STT**. What makes installing the harness *here* safe — without it
+ever competing with the live voice turn for the GPU — is Flue's **per-agent model
+configuration.** This is the single design lever the whole single-box plan leans on, so it is
+written out explicitly.
+
+- **Flue sets models PER AGENT** — `registerProvider(...)` declares a provider once, and each
+  agent (or workflow step) carries its own `provider/model` string. **The harness logic is
+  written once; the compute it runs on is a swappable *setting*, not a code change.** Pointing
+  an agent at a different brain is a config edit, not a rewrite.
+- **NOW (single-box safety):** the **voice brain stays on local Gemma E4B (`:11434`)**,
+  untouched. The **harness agents are pointed at a DIFFERENT model** (a cloud / dev model via a
+  distinct provider) so they **never contend for the live GPU slot** that serves real-time
+  voice. Two providers coexist; the live path and the harness path never share a model endpoint.
+- **TRAJECTORY (why this is future-proof):** Orin NX *now* → **DGX Spark** / better-smaller
+  local models *later*. As local compute grows or local models get good enough, the harness
+  **goes fully local via a one-line provider swap** — point the harness agents at the local
+  provider instead of the cloud one. **Zero harness-code change**; the pipeline is identical,
+  only the model string moves.
+- **Per-agent = per-phase economics.** Because the model is per-agent, each *phase* can run the
+  model that fits it: a **cheap/fast model for scout/triage**, a **stronger model for
+  implementer/reviewer**. Cost and quality are tuned per phase, not globally.
+
+**Honest footnotes (these are real trade-offs, not glossed over):**
+
+- **Cloud-during-dev is not local-first.** Running harness agents on a cloud/dev model while we
+  build is **acceptable for the build phase** (it keeps load off the live GPU and de-risks the
+  pipeline first), but it is *not* the local-first end state. The **local end state is reached
+  via the swap** above, not abandoned.
+- **Cloud tokens cost money.** The harness loops — `scout → implement → verify`, with retries —
+  are **token-heavy** by nature. Running them on a paid API during the build burns API tokens;
+  budget for it, and treat the eventual local swap as the cost-retirement path too.
+
+---
+
+## 3. Non-negotiable guardrails
+
+These are constraints on the decision, not open questions.
+
+### 3.1 The real-time fast-path core stays independent of Flue
+
+Zoe's sub-second answer path **must NOT depend on or route through Flue**:
+
+| Tier | Component | Role |
+|------|-----------|------|
+| **Tier-0** | `intent_router.detect_intent` | regex fast path, <10ms, no LLM |
+| **Tier-1** | `semantic_router` | embedding-based domain routing |
+| **Tier-1.5** | `expert_dispatch` | direct domain-expert executors |
+
+Flue is **only ever**:
+- the **Tier-2 reasoning brain**,
+- the **autonomous-harness substrate**, and
+- the **channel / tool host**.
+
+**A Flue outage must degrade to "channels/harness down," never "Zoe can't answer."** If Flue
+is down, Tier-0 → Tier-1 → Tier-1.5 still serve the user. Flue is never on the critical path
+for a real-time response.
+
+### 3.2 Lab-proof before prod (the Samantha guardrail)
+
+**Nothing migrates to the Jetson production path until it passes the "Samantha tests" in the
+lab.** This is the standing hard guardrail — no prod migration on hope. Each retirement
+milestone below is independently gated by lab proof.
+
+### 3.3 Single-box safety (one Jetson, harness isolated from the live path)
+
+There is **no separate dev box.** The harness is installed on the **same live Orin NX (16GB)**
+that already runs **Gemma E4B (`:11434`) + Kokoro TTS + `zoe-data` + Moonshine STT**. Installing
+it *here* is made safe by keeping it strictly off the live path:
+
+- **Harness runs OFF the live voice turn.** It is its **own process, normally stopped**, started
+  only to run a workflow. It is never in the request path of a voice interaction.
+- **Different model from the voice brain.** Per §2b, harness agents point at a **cloud/dev model
+  on a separate provider**, so they **never compete for the live GPU slot** that serves Gemma
+  E4B for voice. The model is the binding resource; keeping the two on different endpoints is
+  what removes the contention.
+- **Real sandbox for agent-authored code — NOT Flue's in-process `local()`.** Code the harness
+  *authors and runs* must execute under a **true isolation boundary (bubblewrap / rootless
+  container)**, not Flue's in-process `local()`. `local()` shares the host process and is fine
+  for orchestration, but it is **not an isolation boundary** for code Zoe wrote — on a box that
+  is also serving live voice, untrusted self-authored code must be sandboxed for real.
+- **The deterministic fast path needs no LLM, so common voice stays instant regardless.** The
+  real-time path (**`detect_intent` → `semantic_router` → `expert_dispatch`**, §3.1) calls **no
+  LLM at all** for the common cases, so whatever the harness is doing — even mid-run — the usual
+  voice turn is unaffected. RAM budget: the model + Kokoro (Kokoro's ~2.3GB included) remain the
+  binding resource; the Node harness is comparatively cheap but is **still a second runtime**
+  (see Risks) and is killable without taking Zoe down.
+
+### 3.4 Version discipline
+
+- **Pin Flue beta versions.** It is `v1.0.0-beta`; do not float.
+- **Align Pi versions** so the harness and the brain share **one `@earendil-works/pi-*` runtime**
+  (currently **~0.79**). The harness and brain must not drift onto different Pi versions.
+
+> **Operator approval (new-dependency rule).** Flue 1.0 Beta shipped 2026-06-17 — under the
+> 14-day-old threshold in the project's dependency rule, which requires **explicit operator
+> approval** for such packages. That approval was given by the operator (Jason): the buy-and-fork
+> decision in §2a was his call. It is documented here so the evidence trail is explicit. The
+> licence (Apache-2.0) means we can pin/fork/vendor if upstream churns (§2a, §6), and Phase 0
+> (§5) lab-proves the pinned beta before any prod migration.
+
+### 3.5 Durability: persist self-authored skills straight to git
+
+**Flue's `local()` sandbox files are not durable, and subagents restart fresh.** Anything Zoe
+authors about herself — skills, tools, playbook/guardrail entries — must therefore be written
+**straight to git**, not left in sandbox scratch space.
+
+- When Zoe writes a new `SKILL.md` / MCP tool, the harness **commits it to the repo** as the
+  durable record. The sandbox is a workspace, never the source of truth.
+- **Keep subagent steps idempotent.** Because subagents restart-fresh and a workflow may resume,
+  any step that writes self-authored artifacts must be safe to re-run (check-before-write, no
+  duplicate commits, stable file paths). Self-evolution that only lives in a sandbox is lost on
+  restart — it does not count.
+
+### 3.6 Tools: connect to Zoe's MCP servers, don't merge
+
+MCP is a **client/server protocol** — it exists precisely so N clients use M tool-servers without
+merging anything. So we do **not** "merge Zoe's MCP into Flue's MCP." Flue is an MCP **client**
+(it bundles `@modelcontextprotocol/sdk`); Zoe already owns the **server** side. We just wire them.
+
+Zoe's existing MCP servers (built once, reused everywhere):
+
+- **`services/zoe-data/mcp_server.py`** — a **stdio** MCP server exposing Zoe's domain tools
+  (calendar, lists, transactions, HA media, even Greptile-comment fetching). Its docstring already
+  says it's "for **Hermes and local agent integrations**" — i.e. it was built to be the harness's
+  tool server.
+- **`.mcp.json`** — the code-intel bus (**Serena + codebase-memory + graphify**), the
+  self-evolution toolchain for editing Zoe's own code (write-gated through the PR harness).
+
+Wiring:
+
+- **Register those servers in Flue's MCP config**; the harness agents inherit every tool. No
+  rewrite, no merge. The same servers serve the Flue harness, the Pi brain, and Claude/Cursor —
+  one tool defined once, every MCP-speaking client consumes it. This *is* the "fleet of plug-ins"
+  leverage.
+- **Transport:** `mcp_server.py` is **stdio** today (fine when each client spawns its own
+  instance). For one shared always-on instance feeding multiple clients, expose it over
+  **HTTP/SSE** — a small change, still not a merge.
+- **Keep the real-time voice fast path OFF MCP.** The deterministic tiers read Postgres *directly*
+  for sub-second speed; MCP is the harness/brain tier only (same independence principle as §3.1,
+  applied to tools).
+
+---
+
+## 4. Best practices to adopt regardless of substrate
+
+These are settled patterns from the agent-systems literature that we adopt **independent of
+Flue** — they constrain *how* we build, not *what* we build on. Cited briefly for traceability.
+
+- **Tiered memory (Letta / MemGPT).** Split memory into **core** (always-in-context persona +
+  key facts), **recall** (recent conversation), and **archival** (vector-searched long-term).
+  This is the structure Zoe's layered-but-dormant memory should realign to.
+- **Tested-skill library, check-before-write (Voyager / SAGE).** A self-authored skill enters
+  the library **only after it passes a test**; before writing a "new" skill, **check whether one
+  already exists** (dedup). No untested skill becomes permanent. Pairs with §3.5's
+  persist-to-git + idempotency.
+- **Append-only event log.** Every harness step (scout/implement/verify/…) appends an immutable
+  event. State is reconstructed by replaying the log — the basis for durability, audit, and the
+  retrospective loop.
+- **A real sandbox for agent-authored code.** Flue's `local()` is fine for the harness, but code
+  *Zoe writes and runs* should execute under a **true isolation boundary (bubblewrap / gVisor)**,
+  not just process-level separation.
+- **Proposal-only self-modification.** Zoe's self-edits are **proposals** (a PR / a diff a gate
+  must pass), never direct mutation of running config or her own brain. The evidence gates and
+  human/CI review stay in the loop.
+- **OpenTelemetry from day one.** Instrument the harness with **OTel** at the start (Flue ships
+  this), so stalls and regressions are observable rather than guessed at.
+
+---
+
+## 5. Integration & retirement plan
+
+Concrete, **phased, and each phase independently lab-gated** (§3.2). Order matters: prove the
+substrate **on the single Jetson box, isolated from the live path**, first, then channels, then
+pipeline, then retire the old harnesses, then unlock self-authoring. **Nothing in any phase
+touches the Jetson production path until it passes the Samantha tests.**
+
+### Phase 0 — Lab spike on the Jetson, isolated from the live path (PR #737, `labs/flue-harness-spike/`)
+
+There is **no dev box** — the spike runs **on the Jetson itself**, but **isolated from the live
+voice path** (own process, normally stopped) and with the **harness pointed at a separate
+cloud/dev model** (per §2b) so it never competes with the voice brain on `:11434`. We are
+validating Flue's API surface *and* confirming the install is safe to sit alongside the live
+voice box.
+
+- **Verify Flue's real API signatures** (durable workflows, subagents, `local()`, channels) at
+  the pinned beta version against actual code, not docs.
+- **Run a `scout → implement → verify → openPR` loop on a real issue** end-to-end, with the
+  **harness agents on a configurable (cloud/dev) model** while the **voice brain stays on local
+  Gemma E4B (`:11434`), untouched.**
+- **Acceptance:** running the harness on the Jetson with **harness-on-dev-model** shows **no
+  voice-latency regression**, measured by the **#735 latency probe**, *and* the loop closes on a
+  real issue (the Samantha tests). The no-regression bar **replaces** the old "run it on a dev
+  box" criterion. If either bar fails, the decision returns for re-evaluation (the only
+  condition under which this ADR reopens).
+
+### Phase 1 — Telegram channel onto Flue
+
+- Stand up the **Flue `@flue/telegram` channel** and **forward inbound messages to Zoe's
+  channel-agnostic fast-path core** (Tier-0/1/1.5, untouched per §3.1).
+- **Prerequisite (must land first):** that **channel-agnostic core does not yet exist as a
+  reusable unit** — the fast path is currently **voice-only, living in `voice_tts.py`, not in
+  `chat.py`**. It must be **extracted into a channel-agnostic core** before any Flue channel can
+  call it. This extraction is a hard dependency of Phase 1, tracked separately.
+- Prove Telegram-via-Flue reaches parity with the existing path in the lab.
+
+### Phase 2 — Port a thin pipeline slice onto Flue durable workflows
+
+- Port a **thin `scout → … → PR` slice** (the `case` pattern, minimal end-to-end) onto Flue
+  durable workflows with evidence gates and fingerprint early-abort.
+- **Benchmark the Orin footprint** here — this is where Node-harness-on-Jetson RAM headroom
+  (alongside Gemma + Kokoro) gets measured for real.
+
+### Phase 3 — Retire Hermes
+
+- Once the Flue workflow covers Hermes's **PR-harness role** and passes the Samantha tests,
+  **retire Hermes.** Its responsibilities move onto Flue.
+
+### Phase 4 — Retire OpenClaw
+
+- Once all live channels are served by Flue channels, **retire OpenClaw.** Its
+  **Telegram / agent-gateway role moves onto Flue.**
+
+### Phase 5 — Self-evolution: Zoe authors her own skills / MCP tools
+
+- Zoe writes her own **`SKILL.md` skills** and exposes **MCP tools**, persisted straight to git
+  (§3.5) and admitted only via the tested-skill-library discipline (§4). This closes the
+  self-evolution loop — the actual **"Samantha" payoff.**
+
+---
+
+## 6. Risks & mitigations
+
+| Risk | Mitigation |
+|------|-----------|
+| **Beta churn** — Flue is `v1.0.0-beta`; APIs may shift. | **Pin versions** (§3.4); Apache-2.0 means we can **fork / vendor / pin a commit** if upstream churns or stalls (§2a). Watch the changelog; upgrade deliberately behind lab proof. |
+| **The fast-path trap** — drift where Zoe's real-time loop starts routing through Flue. | Hard architectural boundary (§3.1): Tier-0/1/1.5 **never import or call Flue**. Flue is Tier-2 + harness + channels only. A Flue outage = "channels/harness down," **never** "Zoe can't answer." |
+| **`case` license discipline** — accidental code contamination. | Study `case`'s public architecture for **ideas only**; **never copy its code** (`case` is unlicensed / all-rights-reserved, issue #19 unanswered). Reproduce the *pattern* as original Flue code. |
+| **Orin resource budget** — a second Node runtime on a 16GB Orin alongside Python services + Gemma + Kokoro. | The **model + Kokoro (~2.3GB) are the real RAM pressure, not Flue.** Use Flue's **`local()` sandbox (no container daemon)**; benchmark the footprint in **Phase 2**; keep the harness off the hot path so it can be killed without taking Zoe down. |
+| **Pi version drift** between harness and brain. | Align both on one `@earendil-works/pi-*` version (§3.4). |
+| **Durability loss** — self-authored skills vanish on sandbox/subagent restart. | **Persist straight to git** and keep write-steps **idempotent** (§3.5); admit skills only via the tested-skill-library discipline (§4). |
+
+---
+
+## 7. Open questions / next step
+
+**Next step: the Phase 0 lab spike** (§5, **PR #737 / `labs/flue-harness-spike/`**) — **on the
+Jetson itself, isolated from the live path** with the **harness on a separate cloud/dev model**
+(§2b) — verify Flue's real API signatures and run a `scout → implement → verify → openPR` loop on
+a real issue, judged by the **#735 latency probe (no voice-latency regression)** and the
+**Samantha tests**. That spike resolves the remaining open questions:
+
+- Exact `@earendil-works/pi-*` version the Flue beta pins vs. Zoe's brain (~0.79) — confirm a
+  single shared version, or document the bridge if they differ.
+- Real Jetson RAM headroom for the Node harness alongside Gemma + Kokoro under load.
+- The concrete shape of **evidence gates** and the **failure → playbook retrospective** loop on
+  Flue (the part most directly aimed at Hermes's "stalls at roadblocks" pain).
+- Whether Flue's channel abstraction cleanly fronts Zoe's channel-agnostic fast-path core
+  without leaking into the real-time path (§3.1).
+
+Nothing past the lab spike reaches the Jetson production path until it passes the Samantha
+tests.
+
+---
+
+## Sources
+
+- **Flue** — GitHub: <https://github.com/withastro/flue> (**Apache-2.0**, see
+  [`LICENSE`](https://github.com/withastro/flue/blob/main/LICENSE); `withastro`, ~6.1k★,
+  `v1.0.0-beta`; durable workflows, subagents, `local()` sandbox, MCP + typed tools, 20+
+  channels incl. Telegram, OpenTelemetry). Site: <https://flueframework.com>
+- **Pi (current scope)** — `@earendil-works/pi-agent-core` / `pi-ai` (Flue's base) and
+  `@earendil-works/pi-coding-agent` (Zoe's brain). Pi moved from `@mariozechner/pi-*` to
+  `@earendil-works/*` in April 2026.
+- **`workos/case`** — public architecture studied for ideas only; **unlicensed**
+  (`private: true`, no `license` field → all-rights-reserved), on the old `@mariozechner/pi-*`
+  scope (~0.73.x). License request **[workos/case#19](https://github.com/workos/case/issues/19)**
+  open and unanswered since May 2026.

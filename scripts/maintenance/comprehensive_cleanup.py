@@ -131,23 +131,20 @@ def cleanup_large_files():
     print(f"✅ Removed {total_size}MB of large files")
     return total_size
 
-def cleanup_archive_docs():
-    """Review and clean archive documentation"""
-    print("\n📚 Cleaning archive documentation...")
-    
-    archive_dir = Path("docs/archive")
-    if not archive_dir.exists():
-        print("  No archive directory found")
+def cleanup_retired_docs_graveyard():
+    """Remove the retired docs/archive graveyard if an old workflow recreated it."""
+    print("\n📚 Checking retired documentation graveyard...")
+
+    retired_dir = Path("docs/archive")
+    if not retired_dir.exists():
+        print("  No retired docs graveyard found")
         return 0
-    
-    # Remove old UI prototypes (likely outdated)
-    ui_prototypes = archive_dir / "ui-prototypes"
-    if ui_prototypes.exists():
-        size_mb = get_directory_size(str(ui_prototypes))
-        print(f"  Removing old UI prototypes ({size_mb}MB)")
-        shutil.rmtree(str(ui_prototypes))
-        return size_mb
-    
+
+    size_mb = get_directory_size(str(retired_dir))
+    print(f"  Removing docs/archive graveyard ({size_mb}MB); git history keeps old docs")
+    shutil.rmtree(str(retired_dir))
+    return size_mb
+
     return 0
 
 def optimize_git():
@@ -180,7 +177,7 @@ def main():
     total_freed += cleanup_python_cache()
     total_freed += cleanup_old_backups()
     total_freed += cleanup_large_files()
-    total_freed += cleanup_archive_docs()
+    total_freed += cleanup_retired_docs_graveyard()
     
     # Optimize git
     optimize_git()

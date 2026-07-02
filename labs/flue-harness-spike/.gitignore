@@ -1,0 +1,6 @@
+# Lab spike — never commit secrets or installed deps
+.env
+node_modules/
+*.log
+.flue/
+dist/

@@ -364,25 +364,63 @@ async def authorize_complete(
 # Token endpoint
 # ---------------------------------------------------------------------------
 
+def _parse_basic_auth(authorization: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """Parse an HTTP Basic ``Authorization`` header into (client_id, secret).
+
+    Supports the ``client_secret_basic`` token-endpoint auth method (RFC 6749
+    §2.3.1): ``Basic base64(urlencode(client_id):urlencode(client_secret))``.
+    Returns (None, None) when the header is absent or malformed.
+    """
+    if not authorization or not authorization.lower().startswith("basic "):
+        return None, None
+    try:
+        decoded = base64.b64decode(authorization[6:].strip()).decode("utf-8")
+    except Exception:
+        return None, None
+    basic_id, sep, basic_secret = decoded.partition(":")
+    if not sep:
+        return None, None
+    # RFC 6749 §2.3.1: id/secret are application/x-www-form-urlencoded, so '+'
+    # decodes to a space (unquote_plus), not left literal.
+    from urllib.parse import unquote_plus
+    return unquote_plus(basic_id), unquote_plus(basic_secret)
+
+
 @router.post("/application/o/token/")
 async def token(
     request: Request,
     grant_type: str = Form(...),
     code: str = Form(...),
     redirect_uri: str = Form(...),
-    client_id: str = Form(...),
     code_verifier: str = Form(...),
+    client_id: Optional[str] = Form(None),
     client_secret: Optional[str] = Form(None),
+    authorization: Optional[str] = Header(None),
 ):
     if grant_type != "authorization_code":
         raise HTTPException(400, "Only grant_type=authorization_code is supported")
+
+    # A client_secret_basic client may send its id + secret ONLY in the
+    # Authorization header, so client_id is optional in the form and resolved
+    # from whichever source provided it (rejecting a conflicting pair).
+    basic_id, basic_secret = _parse_basic_auth(authorization)
+    if client_id and basic_id and client_id != basic_id:
+        raise HTTPException(401, detail={"error": "invalid_client"})
+    client_id = client_id or basic_id
+    if not client_id:
+        raise HTTPException(401, detail={"error": "invalid_client"})
+    client_secret = client_secret or basic_secret
 
     client = get_client(client_id)
     if client is None or not client["is_active"]:
         raise HTTPException(401, detail={"error": "invalid_client"})
 
-    if client["client_secret_hash"] and client_secret:
-        if not verify_secret(client_secret, client["client_secret_hash"]):
+    # Confidential clients (a client_secret_hash is registered) MUST present a
+    # valid client_secret. Previously the secret was only checked when one was
+    # supplied, so a confidential client could omit it and authenticate on PKCE
+    # alone. Public clients (no registered secret) continue to rely on PKCE.
+    if client["client_secret_hash"]:
+        if not client_secret or not verify_secret(client_secret, client["client_secret_hash"]):
             raise HTTPException(401, detail={"error": "invalid_client"})
 
     payload = consume_auth_code(code)

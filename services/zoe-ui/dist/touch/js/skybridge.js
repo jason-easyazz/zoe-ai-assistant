@@ -35,8 +35,11 @@
     const MAX_STALL_DEFERRALS = 3;
 
     const queryParams = new URLSearchParams(location.search);
-    const configuredIdleMs = Number(queryParams.get('idle_ms') || localStorage.getItem('skybridge_idle_return_ms') || 75000);
-    const CARD_IDLE_MS = Number.isFinite(configuredIdleMs) ? Math.max(15000, configuredIdleMs) : 75000;
+    // How long a card stays up with no interaction before returning to the ambient
+    // clock. Touch/voice resets this, so it's the quiet-time fade. 75s was too quick
+    // to read a result you just asked for; 3 min is comfortable on a kiosk.
+    const configuredIdleMs = Number(queryParams.get('idle_ms') || localStorage.getItem('skybridge_idle_return_ms') || 180000);
+    const CARD_IDLE_MS = Number.isFinite(configuredIdleMs) ? Math.max(15000, configuredIdleMs) : 180000;
 
     const colors = {
         ambient: ['#5fc6ff', '#66d19e'],
@@ -58,6 +61,14 @@
         if (typeof TouchMenu !== 'undefined') TouchMenu.init({ page: 'skybridge' });
         const initialQuery = new URLSearchParams(location.search).get('q');
         if (initialQuery) {
+            // Strip ?q from the URL before running it, so a reload doesn't re-submit
+            // the command — it can be side-effectful (e.g. "set a timer"), which
+            // otherwise regenerates on every refresh. One-shot only.
+            try {
+                const u = new URL(location.href);
+                u.searchParams.delete('q');
+                history.replaceState(null, '', u.pathname + u.search + u.hash);
+            } catch (_) {}
             setTimeout(() => submitCommand(initialQuery), 120);
         }
     }
@@ -86,6 +97,7 @@
         els.input = document.getElementById('skyCommandInput');
         els.mic = document.getElementById('skyMicBtn');
         els.home = document.getElementById('skyHomeBtn');
+        els.navHome = document.getElementById('skyNavHome');
         els.orbButton = document.getElementById('skyOrbButton');
         els.orbButtonText = document.getElementById('skyOrbButtonText');
         els.voiceHint = document.getElementById('skyVoiceHint');
@@ -128,6 +140,10 @@
         els.orbButton.addEventListener('click', toggleVoiceCapture);
         els.voiceAction.addEventListener('click', toggleVoiceCapture);
         els.home.addEventListener('click', () => renderHome({ showCards: true }));
+        if (els.navHome) {
+            // Always-visible Home while a card is up → back to the dashboard hub.
+            els.navHome.addEventListener('click', () => wakeToDashboard());
+        }
         // Touch the resting panel anywhere (not a control) to wake it to the
         // dashboard — the ambient clock should be a door, not a dead end.
         document.addEventListener('click', event => {
@@ -151,6 +167,12 @@
             }
             const btn = event.target.closest('button[data-sky-action]');
             if (!btn) return;
+            // "+ Add item" and friends: open the composer prefilled so you can type
+            // or speak the rest (e.g. "add ⟂ to the shopping list").
+            if (btn.dataset.skyAction === 'compose') {
+                composeInInput(btn.dataset.compose || '', parseInt(btn.dataset.composeCaret, 10) || 0);
+                return;
+            }
             let route = btn.dataset.route;
             const query = btn.dataset.query;
             if (btn.dataset.skyAction === 'auth') {
@@ -168,8 +190,8 @@
 
     function currentPanelId(storedChallenge) {
         return new URLSearchParams(location.search).get('panel_id')
-            || localStorage.getItem('zoe_touch_panel_id')
             || localStorage.getItem('zoe_panel_id')
+            || localStorage.getItem('zoe_touch_panel_id')
             || (storedChallenge && storedChallenge.panel_id)
             || '';
     }
@@ -450,20 +472,42 @@
     // and the stage fills with glance cards anyone can see — time, weather, room
     // controls. Personal cards still ask for sign-in when tapped. Live weather is
     // fetched after the instant cards so the wake feels immediate.
+    // Render the condensed guest dashboard (Layout B) as a single surface — clock +
+    // weather tile + room/music/sign-in. Sets the stage directly (no clearCards,
+    // which would flash the ambient clock back) and bumps the deck token so a
+    // pending weather fetch can tell the view changed under it.
+    function renderDashboardSurface(weather) {
+        deckToken++;
+        cardSequence = 0;
+        document.body.classList.remove('sky-empty');
+        document.body.classList.remove('sky-ambient-clock');
+        document.body.classList.add('sky-has-cards');
+        els.cards.innerHTML = window.SkybridgeRenderer.render({
+            component: 'dashboard',
+            props: { guest: true, weather: weather || null }
+        });
+        requestAnimationFrame(resizeOrb);
+    }
+
     function wakeToDashboard() {
-        renderHome({ showCards: true });
-        // Capture the deck identity AFTER renderHome's clear, so if the user taps a
-        // card or speaks before weather arrives (which clears + re-renders), the
-        // token won't match and we won't append weather onto the wrong view.
+        renderDashboardSurface(null);
         const token = deckToken;
         scheduleIdleReturn();
+        // Enrich with live weather (guest-readable); re-render the surface with it,
+        // but only if the user hasn't moved on (token still current).
         fetch('/api/skybridge/resolve', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
             body: JSON.stringify({ message: 'weather' })
         }).then(res => (res.ok ? res.json() : null)).then(data => {
             if (!data || token !== deckToken || document.body.classList.contains('sky-empty')) return;
-            (Array.isArray(data.cards) ? data.cards : []).forEach(card => addCard(card, false));
+            // The resolve card carries its data under `content` (props is created
+            // later by the renderer's normalization), so read either.
+            const wxCard = (Array.isArray(data.cards) ? data.cards : []).find(c => {
+                const src = (c && c.content && c.content.source) || (c && c.props && c.props.source) || '';
+                return /weather/.test(String(src));
+            });
+            if (wxCard) renderDashboardSurface(wxCard.content || wxCard.props);
         }).catch(() => { /* weather is best-effort on the dashboard */ });
     }
 
@@ -477,6 +521,9 @@
     }
 
     function addCard(card, prepend, delayMs) {
+        // A new card changes the deck, so invalidate any pending async render
+        // (e.g. the dashboard's weather fetch) that would otherwise overwrite it.
+        deckToken++;
         document.body.classList.remove('sky-empty');
         document.body.classList.remove('sky-ambient-clock');
         requestAnimationFrame(resizeOrb);
@@ -959,6 +1006,19 @@
         syncVoiceFallbackState();
         // Leave the status line as the caller set it (e.g. "Ready on local") — it
         // carries the transport mode; don't clobber it with a generic message.
+    }
+
+    // Open the typed composer prefilled with `text`, caret at `caret` — the rest of
+    // the phrase (the item) goes through the same resolver as voice. Voice users can
+    // still just speak; this is the touch path to add without a keyboard hunt.
+    function composeInInput(text, caret) {
+        if (!els.input) return;
+        openCommandFallback('Type the rest, or just speak it.');
+        els.input.value = text || '';
+        requestAnimationFrame(() => {
+            els.input.focus({ preventScroll: true });
+            try { els.input.setSelectionRange(caret, caret); } catch (_) {}
+        });
     }
 
     function openCommandFallback(message) {
