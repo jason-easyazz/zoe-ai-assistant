@@ -500,6 +500,12 @@ async def _load_todays_messages(user_id: str, db=None) -> str:
 
 async def _extract_facts_with_gemma(chat_text: str) -> list[dict]:
     """Send chat transcript to the LLM and parse the JSON fact list."""
+    if len(chat_text) > 3000:
+        logger.warning(
+            "memory_digest: transcript truncated to 3000 chars for fact "
+            "extraction; dropped %d tail chars (may lose late-conversation facts)",
+            len(chat_text) - 3000,
+        )
     prompt = _EXTRACTION_PROMPT.format(chat_text=chat_text[:3000])
     payload = {
         "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
@@ -1322,7 +1328,7 @@ async def run_dreaming_for_all(db=None) -> list[dict]:
 
 # ═══════════════════════════════════════════════════════════════════════════
 # MUSIC TASTE DIGEST
-# Nightly pass: reads raw music_listening_events from SQLite, scores artists
+# Nightly pass: reads raw music_listening_events from the Postgres pool, scores artists
 # and genres by play/skip behaviour, and writes preference facts to MemPalace.
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -1357,19 +1363,25 @@ async def run_music_taste_digest(user_id: str) -> dict:
     _SCORE_MAP = SIGNAL_WEIGHTS
 
     try:
-        from database import get_db  # type: ignore[import]
+        from db_pool import get_db_ctx  # type: ignore[import]
         cutoff_ts = _time.time() - 30 * 86400
 
-        async for db in get_db():
-            rows = await db.execute(
-                """SELECT event_type, track_title, artist, genre
-                   FROM music_listening_events
-                   WHERE user_id = ? AND ts >= ?
-                   ORDER BY ts ASC""",
-                (user_id, cutoff_ts),
-            )
-            events = await rows.fetchall()
-            break  # only need one iteration of the generator
+        # Short-lived pooled acquire for the read only. The bare
+        # `async for db in get_db(): break` form leaves the generator
+        # suspended at its yield, so the pooled connection is held for the
+        # entire (substantial) scoring + MemPalace ingest work below instead
+        # of being released after the query. Materialize the rows, then let
+        # get_db_ctx release the connection before any scoring/ingest.
+        async with get_db_ctx() as _db:
+            events = await (
+                await _db.execute(
+                    """SELECT event_type, track_title, artist, genre
+                       FROM music_listening_events
+                       WHERE user_id = ? AND ts >= ?
+                       ORDER BY ts ASC""",
+                    (user_id, cutoff_ts),
+                )
+            ).fetchall()
     except Exception as exc:
         logger.warning("music_taste_digest: could not load events for %s: %s", user_id, exc)
         result["error"] = str(exc)
