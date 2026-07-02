@@ -20,12 +20,46 @@ class _FakeConn:
     def __init__(self, turns):
         self._turns = turns
         self.executed = []
+        self.fetched = []
 
     async def fetch(self, q, *a):
+        self.fetched.append((q, a))
         return self._turns
 
     async def execute(self, q, *a):
         self.executed.append((q, a))
+
+    async def fetchval(self, q, *a):
+        raise AssertionError(
+            "consolidate_session must not issue a per-session fetchval — "
+            "`since` now comes from find_idle_sessions"
+        )
+
+
+def _ctx_factory(conn, *, checkout_probe=None):
+    """Build a get_ctx() replacement that hands out `conn` for each `async with`.
+
+    `checkout_probe`, if given, is a dict tracking how many connections are
+    currently checked out (`live`) and the max ever concurrently held (`max`).
+    A pooled connection must be released (live back to 0) before the slow Gemma
+    extraction runs — so this lets a test assert the pool is not pinned.
+    """
+    class _Ctx:
+        async def __aenter__(self):
+            if checkout_probe is not None:
+                checkout_probe["live"] += 1
+                checkout_probe["max"] = max(checkout_probe["max"], checkout_probe["live"])
+            return conn
+
+        async def __aexit__(self, *a):
+            if checkout_probe is not None:
+                checkout_probe["live"] -= 1
+            return False
+
+    def _get_ctx():
+        return _Ctx()
+
+    return _get_ctx
 
 
 def test_fact_text_parsing():
@@ -80,7 +114,7 @@ def test_consolidate_whole_conversation_gates_and_stores(monkeypatch):
 
     monkeypatch.setattr(expert_dispatch, "_ingest_or_supersede", _fake_ingest)
 
-    stored = _run(mic.consolidate_session(conn, "sess-1", "jason"))
+    stored = _run(mic.consolidate_session("sess-1", "jason", get_ctx=_ctx_factory(conn)))
 
     assert stored == 1, "the question must be gated out; only the real fact stored"
     assert ingested == [("My dad's name is Neil", "jason", "idle_consolidation")]
@@ -89,7 +123,7 @@ def test_consolidate_whole_conversation_gates_and_stores(monkeypatch):
 
 def test_consolidate_skips_too_few_turns(monkeypatch):
     conn = _FakeConn([_Row(role="user", content="hi", at="2026-06-23T09:00:00+00:00")])
-    assert _run(mic.consolidate_session(conn, "s", "jason")) == 0
+    assert _run(mic.consolidate_session("s", "jason", get_ctx=_ctx_factory(conn))) == 0
 
 
 # ── Increment 1b: per-turn user is persisted + resolved from metadata ──────────
@@ -196,7 +230,7 @@ def test_consolidate_resolves_user_from_metadata(monkeypatch):
     monkeypatch.setattr(expert_dispatch, "_ingest_or_supersede", _fake_ingest)
 
     # caller passes 'guest' (session fallback) but metadata says jason
-    stored = _run(mic.consolidate_session(conn, "sess-1", "guest"))
+    stored = _run(mic.consolidate_session("sess-1", "guest", get_ctx=_ctx_factory(conn)))
     assert stored == 1
     assert ingested == [("Jason's dog is named Rex", "jason")]
 
@@ -218,7 +252,107 @@ def test_consolidate_skips_guest_only_session(monkeypatch):
 
     monkeypatch.setattr(memory_digest, "_extract_facts_with_gemma", _fake_extract)
 
-    stored = _run(mic.consolidate_session(conn, "sess-1", "guest"))
+    stored = _run(mic.consolidate_session("sess-1", "guest", get_ctx=_ctx_factory(conn)))
     assert stored == 0
     assert called["extract"] is False, "must skip before extraction when no real user"
     assert not conn.executed, "no watermark advance for a skipped session"
+
+
+# ── Pool discipline: no pooled connection is held across the Gemma call ─────────
+
+def test_no_pooled_connection_held_across_extraction(monkeypatch):
+    """The pool-starvation fix: consolidate_session must RELEASE its pooled
+    connection before the (slow, ~45s) Gemma extraction runs, and only re-acquire
+    a fresh short-lived one to write the watermark. We prove this two ways:
+      1. a checkout probe: at most ONE connection is ever checked out at a time,
+         and it is fully released (live == 0) at the moment Gemma is invoked;
+      2. the fetch (transcript read) and execute (watermark write) each happen
+         inside their own short-lived `async with`, not one long-held conn.
+    """
+    turns = [
+        _Row(role="user", content="My cat is named Mochi", metadata='{"user_id": "jason"}',
+             at="2026-06-23T09:00:00+00:00"),
+        _Row(role="assistant", content="Cute.", metadata='{"user_id": "jason"}',
+             at="2026-06-23T09:00:05+00:00"),
+    ]
+    conn = _FakeConn(turns)
+    probe = {"live": 0, "max": 0}
+
+    import memory_digest
+    live_during_extract = {"value": None}
+
+    async def _fake_extract(text):
+        # At the instant Gemma runs, the pooled connection MUST be released.
+        live_during_extract["value"] = probe["live"]
+        return [{"fact": "Jason's cat is named Mochi"}]
+
+    monkeypatch.setattr(memory_digest, "_extract_facts_with_gemma", _fake_extract)
+
+    import memory_quality
+    monkeypatch.setattr(memory_quality, "is_storable_fact", lambda t: (True, ""))
+
+    import memory_service
+    import expert_dispatch
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: object())
+
+    async def _fake_ingest(svc, text, **kw):
+        # And the connection must also be released during ingest.
+        assert probe["live"] == 0, "pooled connection held across svc ingest"
+
+    monkeypatch.setattr(expert_dispatch, "_ingest_or_supersede", _fake_ingest)
+
+    stored = _run(mic.consolidate_session(
+        "sess-1", "jason", get_ctx=_ctx_factory(conn, checkout_probe=probe)))
+
+    assert stored == 1
+    assert live_during_extract["value"] == 0, \
+        "pooled connection was still checked out when Gemma extraction ran"
+    assert probe["max"] == 1, "at most one pooled connection may be checked out at a time"
+    assert probe["live"] == 0, "connection leaked — not released after the sweep"
+    # Transcript read and watermark write each ran under their own short-lived conn.
+    assert conn.fetched, "transcript rows must be read under a short-lived conn"
+    assert conn.executed, "watermark must be written under a fresh short-lived conn"
+
+
+# ── P2: `since` comes from find_idle_sessions, not a per-session fetchval ───────
+
+def test_sweep_threads_since_from_find_idle_sessions(monkeypatch):
+    """The sweep must NOT issue a per-session `fetchval` for the watermark — the
+    `since` value is folded into find_idle_sessions and threaded straight through
+    to consolidate_session (eliminating the N+1 round-trip)."""
+    monkeypatch.setenv("ZOE_IDLE_CONSOLIDATION_ENABLED", "1")
+
+    listing_conn = _FakeConn([])  # find_idle_sessions/ensure-table share this conn
+
+    async def _fake_ensure(conn):
+        return None
+
+    monkeypatch.setattr(mic, "_ensure_state_table", _fake_ensure)
+
+    sentinel_since = "2026-06-23T08:00:00+00:00"
+
+    async def _fake_find(conn):
+        # `since` is provided by the batch query (folded LEFT JOIN watermark).
+        return [{"session_id": "sess-1", "user_id": "jason",
+                 "last_at": "2026-06-23T09:00:00+00:00", "n": 3, "since": sentinel_since}]
+
+    monkeypatch.setattr(mic, "find_idle_sessions", _fake_find)
+
+    seen = {}
+
+    async def _fake_consolidate(session_id, user_id, since, **kw):
+        seen["args"] = (session_id, user_id, since)
+        return 2
+
+    monkeypatch.setattr(mic, "consolidate_session", _fake_consolidate)
+
+    # get_db_ctx is only used for the short-lived listing conn now.
+    import db_pool
+    monkeypatch.setattr(db_pool, "get_db_ctx", _ctx_factory(listing_conn))
+
+    res = _run(mic.run_idle_consolidation_sweep())
+
+    assert res == {"enabled": True, "sessions": 1, "stored": 2}
+    # `since` was threaded from find_idle_sessions, NOT re-fetched per session.
+    assert seen["args"] == ("sess-1", "jason", sentinel_since)
+    assert not listing_conn.executed, "sweep must not issue a per-session fetchval/execute"

@@ -93,10 +93,12 @@ jobs:
           pytest \
             services/zoe-data/tests/test_canonical_invariants.py \
             services/zoe-data/tests/test_voice_smoke_ci.py \
+            services/zoe-data/tests/test_voice_tool_filler.py \
             services/zoe-data/tests/test_guest_policy.py \
             services/zoe-data/tests/test_voice_scope.py \
             services/zoe-data/tests/test_chat_session_title.py \
             services/zoe-data/tests/test_ui_orchestrator_types.py \
+            services/zoe-data/tests/test_skybridge_static.py \
             services/zoe-data/tests/test_greptile_client.py \
             services/zoe-data/tests/test_db_pool_release_race.py \
             services/zoe-data/tests/test_greploop_guard.py \

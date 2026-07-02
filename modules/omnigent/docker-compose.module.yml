@@ -84,7 +84,21 @@ services:
       # so pi's `api_key_ref: env:OPENROUTER_API_KEY` raised "Set the variable in the environment"
       # and pi failed to boot. OMNIGENT_RUNNER_ENV_PASSTHROUGH is omnigent's documented knob for
       # exactly this (custom gateway / providers:-config env: refs); it's a comma-separated list.
-      - OMNIGENT_RUNNER_ENV_PASSTHROUGH=OPENROUTER_API_KEY
+      # NB the passthrough is container-wide: ANTHROPIC_MODEL is forwarded to EVERY worker's
+      # runner (pi/codex too). Harmless today — pi (OpenRouter/minimax) and codex (OpenAI) ignore
+      # it — but a future Anthropic-backed worker added without an explicit per-dispatch model
+      # would silently inherit claude-fable-5. Re-check this line when adding workers.
+      - OMNIGENT_RUNNER_ENV_PASSTHROUGH=OPENROUTER_API_KEY,ANTHROPIC_MODEL
+      # Default the claude_code worker to Fable 5 while discounted access lasts (operator choice
+      # 2026-06-29; Fable = the tier ABOVE Opus at ~2x its price, so REVERT when the cheap window
+      # closes — just delete this line and recreate). ANTHROPIC_MODEL is Claude Code's default-model
+      # env; a per-dispatch `args.model` from polly still wins (omnigent passes it as --model, which
+      # overrides the env), so explores can route down to cheaper models. This affects ONLY the
+      # claude_code worker — polly's brain and codex/pi are untouched. NOT ANTHROPIC_API_KEY (never
+      # set that here — it flips the CLI to metered billing); ANTHROPIC_MODEL is just the model
+      # picker and rides the subscription. Forwarded to the runner via the passthrough above
+      # (ANTHROPIC_MODEL is not in omnigent's default HARNESS_CREDENTIAL_ENV_VARS forward set).
+      - ANTHROPIC_MODEL=claude-fable-5
       # To revert to LAN-only OIDC (only if the Cloudflare path is retired): flip provider
       # back to `oidc` and uncomment the block below. OIDC works only via http://zoe.local:6767.
       # - OMNIGENT_OIDC_ISSUER=http://zoe.local
