@@ -500,6 +500,12 @@ async def _load_todays_messages(user_id: str, db=None) -> str:
 
 async def _extract_facts_with_gemma(chat_text: str) -> list[dict]:
     """Send chat transcript to the LLM and parse the JSON fact list."""
+    if len(chat_text) > 3000:
+        logger.warning(
+            "memory_digest: transcript truncated to 3000 chars for fact "
+            "extraction; dropped %d tail chars (may lose late-conversation facts)",
+            len(chat_text) - 3000,
+        )
     prompt = _EXTRACTION_PROMPT.format(chat_text=chat_text[:3000])
     payload = {
         "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
@@ -731,6 +737,25 @@ async def run_weekly_consolidation(user_id: str) -> dict:
     return summary
 
 
+async def _list_user_ids(sql: str, params: tuple = (), *, db=None) -> list[str]:
+    """List user ids for a batch pass (`*_for_all` listing step).
+
+    Uses the supplied connection when given, else a short-lived pooled acquire
+    via ``get_db_ctx()`` for the listing only. Never use the bare
+    ``async for db in get_db(): break`` form — it leaves the generator
+    suspended at the yield, so the connection is closed out from under the
+    query ("connection was closed in the middle of operation"). Materialize
+    the rows before release.
+    """
+    from db_pool import get_db_ctx  # type: ignore[import]
+    if db is not None:
+        rows = await (await db.execute(sql, params)).fetchall()
+    else:
+        async with get_db_ctx() as _db:
+            rows = await (await _db.execute(sql, params)).fetchall()
+    return [row[0] for row in rows if row[0]]
+
+
 async def run_weekly_consolidation_for_all(db=None) -> list[dict]:
     """Run weekly consolidation for every user who has any approved memory."""
     from memory_service import get_memory_service
@@ -741,19 +766,9 @@ async def run_weekly_consolidation_for_all(db=None) -> list[dict]:
         # Fall back to chat-sessions table so we never silently process
         # zero users when MemoryService hasn't exposed a list helper.
         try:
-            from db_pool import get_db_ctx  # type: ignore[import]
-            sql = _message_owner_users_sql(today_only=False)
-            if db is not None:
-                rows = await (await db.execute(sql)).fetchall()
-            else:
-                # Acquire a pooled connection via the context manager — the bare
-                # `async for db in get_db(): break` form leaves the generator
-                # suspended at the yield, so the connection is closed out from
-                # under the next query ("connection was closed in the middle of
-                # operation"). Materialize the rows before release.
-                async with get_db_ctx() as _db:
-                    rows = await (await _db.execute(sql)).fetchall()
-            user_ids = [row[0] for row in rows if row[0]]
+            user_ids = await _list_user_ids(
+                _message_owner_users_sql(today_only=False), db=db
+            )
         except Exception as exc:
             logger.error("consolidation: could not list users: %s", exc)
             return []
@@ -767,18 +782,11 @@ async def run_digest_for_all_active_users(db=None) -> list[dict]:
     """Run memory digest for all users who had chat activity today."""
     results = []
     try:
-        from db_pool import get_db_ctx  # type: ignore[import]
-        sql = _message_owner_users_sql(today_only=True)
-        params = (_ZOE_TIMEZONE, _ZOE_TIMEZONE)
-        if db is not None:
-            rows = await (await db.execute(sql, params)).fetchall()
-        else:
-            # Short-lived pooled acquire for the listing only (avoids the
-            # suspended-generator bug); each per-user digest opens its own
-            # connection below, so we don't hold one across the LLM loop.
-            async with get_db_ctx() as _db:
-                rows = await (await _db.execute(sql, params)).fetchall()
-        user_ids = [row[0] for row in rows if row[0]]
+        user_ids = await _list_user_ids(
+            _message_owner_users_sql(today_only=True),
+            (_ZOE_TIMEZONE, _ZOE_TIMEZONE),
+            db=db,
+        )
     except Exception as exc:
         logger.error("memory_digest: could not list active users: %s", exc)
         return []
@@ -1296,19 +1304,9 @@ async def run_dreaming_for_all(db=None) -> list[dict]:
         user_ids = await svc.list_users()
     except AttributeError:
         try:
-            from db_pool import get_db_ctx  # type: ignore[import]
-            sql = _message_owner_users_sql(today_only=False)
-            if db is not None:
-                rows = await (await db.execute(sql)).fetchall()
-            else:
-                # Short-lived pooled acquire for the listing only — the bare
-                # `async for db in get_db(): break` form leaves the generator
-                # suspended at the yield, so the connection is closed out from
-                # under the query ("connection was closed in the middle of
-                # operation"). Materialize the rows before release.
-                async with get_db_ctx() as _db:
-                    rows = await (await _db.execute(sql)).fetchall()
-            user_ids = [r[0] for r in rows if r[0]]
+            user_ids = await _list_user_ids(
+                _message_owner_users_sql(today_only=False), db=db
+            )
         except Exception as exc:
             logger.error("dreaming: could not list users: %s", exc)
             return []
@@ -1322,7 +1320,7 @@ async def run_dreaming_for_all(db=None) -> list[dict]:
 
 # ═══════════════════════════════════════════════════════════════════════════
 # MUSIC TASTE DIGEST
-# Nightly pass: reads raw music_listening_events from SQLite, scores artists
+# Nightly pass: reads raw music_listening_events from the Postgres pool, scores artists
 # and genres by play/skip behaviour, and writes preference facts to MemPalace.
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -1357,19 +1355,25 @@ async def run_music_taste_digest(user_id: str) -> dict:
     _SCORE_MAP = SIGNAL_WEIGHTS
 
     try:
-        from database import get_db  # type: ignore[import]
+        from db_pool import get_db_ctx  # type: ignore[import]
         cutoff_ts = _time.time() - 30 * 86400
 
-        async for db in get_db():
-            rows = await db.execute(
-                """SELECT event_type, track_title, artist, genre
-                   FROM music_listening_events
-                   WHERE user_id = ? AND ts >= ?
-                   ORDER BY ts ASC""",
-                (user_id, cutoff_ts),
-            )
-            events = await rows.fetchall()
-            break  # only need one iteration of the generator
+        # Short-lived pooled acquire for the read only. The bare
+        # `async for db in get_db(): break` form leaves the generator
+        # suspended at its yield, so the pooled connection is held for the
+        # entire (substantial) scoring + MemPalace ingest work below instead
+        # of being released after the query. Materialize the rows, then let
+        # get_db_ctx release the connection before any scoring/ingest.
+        async with get_db_ctx() as _db:
+            events = await (
+                await _db.execute(
+                    """SELECT event_type, track_title, artist, genre
+                       FROM music_listening_events
+                       WHERE user_id = ? AND ts >= ?
+                       ORDER BY ts ASC""",
+                    (user_id, cutoff_ts),
+                )
+            ).fetchall()
     except Exception as exc:
         logger.warning("music_taste_digest: could not load events for %s: %s", user_id, exc)
         result["error"] = str(exc)
@@ -1477,18 +1481,9 @@ async def run_music_taste_digest_for_all(db=None) -> list[dict]:
     """Run music taste digest for all users who have any music events."""
     results = []
     try:
-        from db_pool import get_db_ctx  # type: ignore[import]
-        sql = "SELECT DISTINCT user_id FROM music_listening_events"
-        if db is not None:
-            rows = await (await db.execute(sql)).fetchall()
-        else:
-            # Short-lived pooled acquire for the listing only — the bare
-            # `async for db in get_db(): break` form leaves the generator
-            # suspended at the yield, closing the connection mid-query
-            # ("connection was closed in the middle of operation").
-            async with get_db_ctx() as _db:
-                rows = await (await _db.execute(sql)).fetchall()
-        user_ids = [r[0] for r in rows if r[0]]
+        user_ids = await _list_user_ids(
+            "SELECT DISTINCT user_id FROM music_listening_events", db=db
+        )
     except Exception as exc:
         logger.error("music_taste_digest: could not list users: %s", exc)
         return []

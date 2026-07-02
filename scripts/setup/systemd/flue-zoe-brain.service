@@ -1,0 +1,40 @@
+# Flue Zoe-brain sidecar (lab) — Flue-hosted Pi Agent on the local Gemma brain, port 3578.
+#
+# OPTIONAL and NOT enabled by default. This supervises the lab sidecar in
+# labs/flue-zoe-brain/; production only reaches it through zoe-data's
+# merged-but-default-OFF ZOE_BRAIN_BACKEND=flue seam, so installing/enabling
+# this unit is an explicit operator action (runbook: labs/flue-zoe-brain/README.md).
+#
+# Build first (the unit runs the built output, it does not build):
+#   cd ~/assistant/labs/flue-zoe-brain && npm install && npm run build
+# Then create the env file from the template:
+#   cp ~/assistant/labs/flue-zoe-brain/.env.example ~/assistant/labs/flue-zoe-brain/.env
+[Unit]
+Description=Flue Zoe-brain sidecar (lab, port 3578)
+# Talks to llama-server (:11434) and zoe-data (:8000). A user unit cannot order
+# itself after those reliably on boot; Restart=always recovers start-order races
+# (same pattern as zoe-data.service).
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/assistant/labs/flue-zoe-brain
+# Adjust the node path if you are not using nvm (same convention as openclaw-gateway).
+ExecStart=%h/.nvm/current/bin/node dist/server.mjs
+Restart=always
+RestartSec=5
+Environment=PORT=3578
+# Secrets and identity (ZOE_BRAIN_TOKEN or ZOE_BRAIN_OPEN, ZOE_BRAIN_USER_ID,
+# ZOE_INTERNAL_TOKEN, ZOE_BRAIN_ALLOW_WRITES, ...) live in the lab-local .env —
+# copy .env.example and fill it in. NEVER inline values here. The file is
+# required (no '-' prefix): the unit fails loudly if the operator hasn't
+# configured it, and the agent route itself fails closed (401) without
+# ZOE_BRAIN_TOKEN/ZOE_BRAIN_OPEN anyway.
+EnvironmentFile=%h/assistant/labs/flue-zoe-brain/.env
+
+# Light hardening (user-service compatible).
+NoNewPrivileges=true
+RestrictRealtime=true
+
+[Install]
+WantedBy=default.target

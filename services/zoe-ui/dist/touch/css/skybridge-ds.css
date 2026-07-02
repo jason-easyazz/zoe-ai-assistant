@@ -8,6 +8,19 @@
  * Apple-tuned: clarity, deference, depth. Tokens, not magic numbers.
  */
 
+/* The card system must be self-contained: it sizes with border-box and must
+   not depend on a consumer page's inline `* { box-sizing: border-box }` reset.
+   (Without this, any page linking cards/*.css but lacking a global reset gets
+   content-box overflow — e.g. .lst-scene's `width:100%` + 28px side padding
+   bleeds 56px past the card edge.) Scoped to the card subtree on purpose: a
+   global `*` reset here could shift unrelated layout on consumer pages. */
+.sky-card,
+.sky-card *,
+.sky-card *::before,
+.sky-card *::after {
+  box-sizing: border-box;
+}
+
 :root {
   /* ── Typeface ──────────────────────────────────────────────────────────── */
   /* Inter is the SF Pro stand-in; self-hosted woff2 (see skybridge-type.css) so
