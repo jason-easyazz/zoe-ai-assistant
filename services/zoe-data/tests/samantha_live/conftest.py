@@ -244,12 +244,11 @@ async def set_session_age(session_id: str, age_s: int) -> None:
 async def consolidate(session_id: str, owner: str) -> int:
     """Drive the engine directly (never the sweep) with since=None.
 
-    ``db`` is an AsyncpgCompat wrapper; its __getattr__ delegates .fetch()/
-    .execute() straight to the native asyncpg conn, which is what
-    consolidate_session needs for its positional $N queries.
+    consolidate_session now opens its OWN short-lived pooled connections (read
+    transcript, write watermark) via get_db_ctx — it never holds one across the
+    Gemma extraction — so we no longer hand it a connection positionally.
     """
-    async with get_db_ctx() as db:
-        return await consolidate_session(db, session_id, owner, None)
+    return await consolidate_session(session_id, owner, None)
 
 
 async def delete_seeded_rows(session_ids: list[str]) -> None:
