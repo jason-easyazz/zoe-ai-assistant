@@ -185,7 +185,7 @@ async def run_turn_digest(
 
     Returns a summary dict: {"new": N, "skipped_duplicates": N, "error": ...}
     """
-    result: dict = {"user_id": user_id, "new": 0, "skipped_duplicates": 0}
+    result: dict = {"user_id": user_id, "new": 0, "skipped_duplicates": 0, "skipped_low_quality": 0}
 
     if not user_message or len(user_message.split()) < 4:
         return result
@@ -259,7 +259,8 @@ async def run_turn_digest(
                 result["skipped_duplicates"] += 1
                 continue
             if not _passes_quality_gate(fact):
-                result["skipped_duplicates"] += 1
+                result["skipped_low_quality"] += 1
+                logger.debug("run_turn_digest: dropped non-fact: %r", fact[:60])
                 continue
             try:
                 ref = await svc.ingest(
