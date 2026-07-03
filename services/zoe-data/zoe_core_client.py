@@ -24,9 +24,12 @@ Design notes
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import contextlib
 import json
 import logging
 import os
+import subprocess
 import time
 import uuid
 from collections import OrderedDict
@@ -239,6 +242,93 @@ def _stringify(value: Any) -> str:
         return str(value)
 
 
+# asyncio.create_subprocess_exec forks() SYNCHRONOUSLY on the calling (event
+# loop) thread. zoe-data is a large multi-GB, multi-threaded process (Chroma,
+# fastembed, thread pools); under heavy swap a fork can wedge post-fork/pre-exec
+# on an atfork lock another thread held at fork time, freezing the whole event
+# loop (the same deadlock class fixed for the hermes kanban CLI in commit
+# 5e5ec34d — see services/zoe-data/AGENTS.md's "Background loops must not fork
+# on the event loop thread" rule). Every cold brain turn and wake-word prewarm
+# spawns this Pi RPC subprocess, so it must not fork on the loop thread either.
+#
+# Unlike the kanban CLI (run-to-completion, fixed via subprocess.run in a
+# thread pool), this is a long-lived RPC process we stream to/from over stdin/
+# stdout for the life of the worker — subprocess.run can't model that. Instead
+# we do the blocking fork+exec (subprocess.Popen) in this dedicated thread pool,
+# then hand the already-open pipe fds to asyncio's low-level pipe transports
+# (connect_read_pipe/connect_write_pipe just wrap existing fds — no fork), so
+# the rest of the worker keeps using the familiar async stdin/stdout interface.
+_SPAWN_POOL = concurrent.futures.ThreadPoolExecutor(
+    max_workers=4, thread_name_prefix="zoe-core-spawn"
+)
+
+
+class _AsyncPipeProcess:
+    """Async-stream wrapper around a subprocess.Popen spawned off the event loop.
+
+    Exposes the small subset of asyncio.subprocess.Process this module relies
+    on: .stdin (StreamWriter), .stdout (StreamReader), .returncode, .terminate(),
+    .kill(), .wait().
+    """
+
+    def __init__(
+        self,
+        popen: subprocess.Popen,
+        stdin: asyncio.StreamWriter,
+        stdout: asyncio.StreamReader,
+    ) -> None:
+        self._popen = popen
+        self.stdin = stdin
+        self.stdout = stdout
+
+    @property
+    def returncode(self) -> "int | None":
+        return self._popen.poll()
+
+    def terminate(self) -> None:
+        with contextlib.suppress(ProcessLookupError):
+            self._popen.terminate()
+
+    def kill(self) -> None:
+        with contextlib.suppress(ProcessLookupError):
+            self._popen.kill()
+
+    async def wait(self) -> int:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(_SPAWN_POOL, self._popen.wait)
+
+
+async def _spawn_pi_process(env: dict[str, str]) -> _AsyncPipeProcess:
+    """Fork+exec the Pi RPC subprocess off the event loop thread (see above)."""
+    loop = asyncio.get_running_loop()
+
+    def _blocking_popen() -> subprocess.Popen:
+        return subprocess.Popen(
+            _rpc_command(),
+            cwd=str(_CORE_DIR),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=env,
+        )
+
+    popen = await loop.run_in_executor(_SPAWN_POOL, _blocking_popen)
+
+    # No explicit loop= args: this coroutine runs on the loop these objects
+    # will use, and the loop parameter was removed from asyncio's high-level
+    # APIs in 3.10 — the constructors bind the running loop themselves.
+    reader = asyncio.StreamReader()
+    read_protocol = asyncio.StreamReaderProtocol(reader)
+    await loop.connect_read_pipe(lambda: read_protocol, popen.stdout)
+
+    write_transport, write_protocol = await loop.connect_write_pipe(
+        asyncio.streams.FlowControlMixin, popen.stdin
+    )
+    writer = asyncio.StreamWriter(write_transport, write_protocol, reader, loop)
+
+    return _AsyncPipeProcess(popen, writer, reader)
+
+
 class _ZoeCoreWorker:
     """A persistent Pi-RPC brain process for one (user, session)."""
 
@@ -246,21 +336,14 @@ class _ZoeCoreWorker:
         self.user_id = user_id
         self.voice_mode = voice_mode
         self.env = _worker_env(user_id, voice_mode=voice_mode)
-        self.proc: asyncio.subprocess.Process | None = None
+        self.proc: "_AsyncPipeProcess | None" = None
         self._lock = asyncio.Lock()
         self.last_used = time.monotonic()
 
     async def _ensure_started(self) -> None:
         if self.proc and self.proc.returncode is None:
             return
-        self.proc = await asyncio.create_subprocess_exec(
-            *_rpc_command(),
-            cwd=str(_CORE_DIR),
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-            env=self.env,
-        )
+        self.proc = await _spawn_pi_process(self.env)
 
     async def reset(self) -> None:
         async with self._lock:
@@ -610,12 +693,53 @@ async def run_zoe_core_streaming(
         message, history=history, db_memory_context=db_memory_context,
         portrait=portrait, voice_mode=voice_mode,
     )
-    # Bound concurrent brain turns (see _MAX_CONCURRENCY). Acquire BEFORE creating
-    # the worker so subprocess spawns are bounded too, not just generations.
-    async with _brain_sem():
-        worker = await _worker_for(user_id, session_id, voice_mode=voice_mode)
-        async for delta in worker.stream(composed, timeout_s=_TIMEOUT_S):
-            yield delta
+    # Bound concurrent brain turns (see _MAX_CONCURRENCY), but only for the
+    # duration of actual generation — NOT for however long the consumer takes to
+    # process each delta. A naive `async with _brain_sem(): async for delta in
+    # worker.stream(...): yield delta` holds the semaphore (and the worker's
+    # per-session lock) across every yield, i.e. for the whole consumer-paced
+    # generator lifetime: a voice consumer doing per-sentence Kokoro TTS, or a
+    # Hermes escalation, keeps a slot pinned long after the brain itself is done,
+    # starving the other _MAX_CONCURRENCY-1 slot(s) for unrelated turns.
+    #
+    # Fix: run generation in a background task that drains worker.stream() into
+    # an unbounded queue as fast as the brain produces it (queue.put never blocks
+    # on a slow consumer), holding the semaphore only inside that task. The outer
+    # generator yields from the queue at whatever pace the caller consumes —
+    # decoupled from the semaphore/lock hold, which now releases as soon as
+    # generation (agent_end) actually completes.
+    queue: "asyncio.Queue[object]" = asyncio.Queue()
+    _DONE = object()
+    errors: list[BaseException] = []
+
+    async def _produce() -> None:
+        try:
+            async with _brain_sem():
+                worker = await _worker_for(user_id, session_id, voice_mode=voice_mode)
+                async for delta in worker.stream(composed, timeout_s=_TIMEOUT_S):
+                    await queue.put(delta)
+        except BaseException as exc:  # noqa: BLE001 - re-raised to the consumer below
+            errors.append(exc)
+        finally:
+            await queue.put(_DONE)
+
+    producer = asyncio.ensure_future(_produce())
+    try:
+        while True:
+            item = await queue.get()
+            if item is _DONE:
+                break
+            yield item
+        if errors:
+            raise errors[0]
+    finally:
+        # Consumer stopped early (break/exception/aclose) — make sure the
+        # producer (and the worker turn it holds) unwinds instead of leaking a
+        # background generation.
+        if not producer.done():
+            producer.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await producer
 
 
 async def _reset_worker_for(
@@ -669,6 +793,13 @@ async def run_zoe_core(
                 history=history, db_memory_context=db_memory_context,
                 portrait=portrait, voice_mode=voice_mode,
             ):
+                # __TOOL__/__THINKING__ are activity sentinels for streaming UI
+                # consumers (see chat.py's sentinel handling) — never real reply
+                # text. The streaming path strips them before display/TTS; do the
+                # same here so a non-streaming caller doesn't persist/speak raw
+                # sentinel JSON.
+                if delta.startswith("__TOOL__:") or delta.startswith("__THINKING__:"):
+                    continue
                 chunks.append(delta)
             last_exc = None
         except Exception as exc:  # noqa: BLE001 - retry transient brain failures once
