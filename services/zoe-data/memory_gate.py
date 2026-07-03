@@ -30,9 +30,11 @@ MEMORY_TRIGGER_WORDS = frozenset({
 # phrases "tell me / give me / remind me" that are not recall).
 _POSSESSIVE_RE = re.compile(r"\b(?:my|mine|our|ours)\b", re.IGNORECASE)
 # A first-person SUBJECT ("I", "we") — the user asking about their own state.
-_FIRST_PERSON_SUBJ_RE = re.compile(
-    r"\b(?:i|i'?m|i'?ve|i'?d|i'?ll|we|we'?re|we'?ve)\b", re.IGNORECASE
-)
+# Just \b(?:i|we)\b: the apostrophe in contractions ("I'm", "we're") is a word
+# boundary, so this still matches the subject of "I've", "we're", etc., while NOT
+# matching "ill" or "were" (a letter follows, so no boundary) — avoiding the
+# false positives an optional-apostrophe pattern (i'?ll → "ill") would cause.
+_FIRST_PERSON_SUBJ_RE = re.compile(r"\b(?:i|we)\b", re.IGNORECASE)
 # A question / recall shape — a leading interrogative or request-to-tell.
 _QUESTION_SHAPE_RE = re.compile(
     r"^\s*(?:hey\s+|ok\s+|so\s+|um\s+|uh\s+|zoe[,\s]+)*"

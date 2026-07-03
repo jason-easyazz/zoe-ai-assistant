@@ -42,6 +42,8 @@ def test_recall_questions_fire(msg):
     "how do I make pasta",
     "tell me a joke",
     "how do I get to the shops",
+    "what films were popular last year?",  # "were" must NOT match \bwe\b (structural rule)
+    "are you ill?",                          # "ill" must NOT match a first-person subject
 ])
 def test_non_recall_messages_do_not_fire(msg):
     assert message_needs_memory(msg) is False, f"{msg!r} should NOT trigger memory recall"
