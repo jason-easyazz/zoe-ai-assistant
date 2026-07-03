@@ -34,11 +34,16 @@ does NOT mutate real data and instructs the model not to claim success).
 | `add_reminder` | write | `reminder_create` | `title`, `date?`, `time?` |
 | `add_calendar_event` | write | `calendar_create` | `title`, `date?`, `time?`, `category?` |
 | `create_note` | write | `note_create` | `content`, `title?` |
+| `note_search` | read | `note_search` | `query` |
+| `add_to_list` | write | `list_add` | `item`, `list_type?` (shopping/tasks/personal/work/bucket) |
+| `list_remove` | write | `list_remove` | `item`, `list_type?` |
+| `journal` | read+write | `journal_create` / `journal_prompt` / `journal_streak` | `action` (create/prompt/streak), `content?`, `mood?` — create is write-gated |
+| `people` | read+write | `people_create` / `people_relate` / `people_search` | `action` (create/relate/search), `name?`, `relationship?`, `related_to?`, `query?`, `notes?` — create/relate are write-gated |
 | `activate_abilities` | local | none (progressive disclosure, see below) | `group` |
 
 ## Progressive tool disclosure
 
-The model does **not** see all 11 tool schemas every call (on the 4B brain that
+The model does **not** see all 16 tool schemas every call (on the 4B brain that
 bloats the prompt, slows prefill in the 8k context, and hurts tool choice). The
 sidecar ports prod's pattern (`services/zoe-core/extensions/abilities.ts`:
 always-on core + relevance-matched tools) onto its own wire seam:

@@ -40,7 +40,7 @@
  * Trade-off (documented in README): the per-session set grows monotonically —
  * a long session that touches every domain converges back to all schemas.
  * Sessions are per-conversation, so in practice a typical turn carries 3
- * schemas instead of 11.
+ * schemas instead of all 16.
  *
  * Unknown tool names (registered on the agent but absent from the grouping
  * map) are ALWAYS disclosed — adding a 12th tool without grouping it here
@@ -69,11 +69,13 @@ export const CORE_TOOL_NAMES: readonly string[] = [
  */
 export const TOOL_GROUPS = {
   weather: ['get_weather'],
-  lists: ['shopping_list_add', 'show_list'],
+  lists: ['shopping_list_add', 'add_to_list', 'list_remove', 'show_list'],
   timers: ['set_timer'],
   reminders: ['list_reminders', 'add_reminder'],
   calendar: ['show_calendar', 'add_calendar_event'],
-  notes: ['create_note'],
+  notes: ['create_note', 'note_search'],
+  journal: ['journal'],
+  people: ['people'],
 } as const satisfies Record<string, readonly string[]>;
 
 export type AbilityGroup = keyof typeof TOOL_GROUPS;
@@ -89,11 +91,13 @@ export const GROUP_NAMES = Object.keys(TOOL_GROUPS) as readonly AbilityGroup[];
  */
 export const GROUP_PURPOSES: Record<AbilityGroup, string> = {
   weather: 'current weather / forecast',
-  lists: 'add to or show shopping/task lists',
+  lists: 'add to, remove from, or show shopping/task lists',
   timers: 'countdown timers',
   reminders: 'list or create reminders',
   calendar: 'show or add events',
-  notes: 'save a note',
+  notes: 'save or search notes',
+  journal: 'diary entries, journaling prompts, streak',
+  people: 'save or look up people/contacts',
 };
 
 /**
@@ -130,6 +134,13 @@ const GROUP_TRIGGERS: Record<AbilityGroup, RegExp> = {
     // list?" from tripping calendar.
     /\b(calendar|schedule|appointments?|meetings?|events?|agenda)\b|\b(?:anything|something|nothing|plans|what(?:'s| is)?|what do (?:i|we) have)\s+(?:on|for|planned|happening|going on)\b[^.?!]*\b(?:today|tonight|tomorrow|weekend|week|(?:mon|tues?|wednes|thurs?|fri|satur|sun)day)\b|\bam i free\b/i,
   notes: /\bnotes?\b|\bjot\b|\bwrite (?:this|that|it) down\b/i,
+  journal: /\b(?:journal(?:ing)?|diary)\b/i,
+  people:
+    // Direct contact-store phrasings and "who is <name>" lookups. Deliberately
+    // NOT a bare \bpeople\b — "how many people live in Perth" is not a
+    // contacts ask; a false positive only discloses one extra schema, but the
+    // bare noun would trip on most small talk.
+    /\bcontacts?\b|\bwho\s+is\b|\b(?:add|save|remember|link|relate)\b[^.?!]*\b(?:person|people|friend|colleague|contact)\b/i,
 };
 
 /** Reverse map: tool name → its group. */
