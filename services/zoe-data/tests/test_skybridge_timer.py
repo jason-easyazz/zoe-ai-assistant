@@ -19,6 +19,7 @@ from skybridge_service import (  # noqa: E402
     active_timers_for,
     cancel_timer_by_id,
     classify_skybridge_intent,
+    create_timer_direct,
     resolve_skybridge_request,
 )
 
@@ -169,3 +170,25 @@ async def test_resolve_status_and_cancel_roundtrip():
 
     after = await resolve_skybridge_request("how long left on my timer", user)
     assert "no timers" in after["spoken_summary"].lower()
+
+
+# ── create_timer_direct (the non-voice intent-dispatch path) ──────────────────
+def test_create_timer_direct_registers_real_timer():
+    """The intent-dispatch path (no Skybridge classifier) must register a real,
+    poll-able timer in the shared store — not just speak a confirmation."""
+    user = "dispatch-user"
+    resolved = create_timer_direct(user, minutes=3, label="Pasta")
+    assert resolved["spoken_summary"]
+    timers = active_timers_for(user)
+    assert len(timers) == 1
+    assert timers[0]["label"] == "Pasta"
+    assert timers[0]["duration_seconds"] == 180
+
+
+def test_create_timer_direct_defaults_bad_minutes_to_five():
+    user = "dispatch-user"
+    resolved = create_timer_direct(user, minutes="soon", label="")
+    assert resolved["spoken_summary"]
+    timers = active_timers_for(user)
+    assert len(timers) == 1
+    assert timers[0]["duration_seconds"] == 300

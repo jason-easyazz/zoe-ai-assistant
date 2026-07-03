@@ -32,7 +32,18 @@ export async function dispatchIntent(
       return `I couldn't do that right now (the ${intent.split("_")[0]} service returned ${res.status}).`;
     }
     const data = (await res.json()) as { result?: string; ok?: boolean };
-    return (data.result ?? "").trim() || "Done.";
+    const result = (data.result ?? "").trim();
+    if (data.ok === false) {
+      // Endpoint fulfilled the HTTP request (200) but execute_intent itself
+      // failed (returned None) -- do not report a false success. Per
+      // services/zoe-data/routers/system.py's intent-dispatch, `ok` is
+      // `result is not None`, so ok:false means the fulfillment path really
+      // errored -- it is not "no result text" for a legitimate empty-but-
+      // successful outcome (those are fixed upstream to return real text,
+      // e.g. "No reminders set." -- see commit 467f9fdd).
+      return `I couldn't do that (the ${intent.split("_")[0]} service didn't complete the request).`;
+    }
+    return result || "Done.";
   } catch (err) {
     // Don't swallow silently: surface the failure for observability while still
     // returning a calm, user-facing message (mirrors the abilities.ts pattern).
