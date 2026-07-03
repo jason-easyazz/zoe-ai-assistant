@@ -165,29 +165,16 @@ async def get_current_user(request: Request) -> dict:
     device_token = request.headers.get("X-Device-Token", "")
 
     # Device token path: resolve to panel user without going through zoe-auth session.
-    # Inline token check to avoid circular import with panel_auth (which imports auth).
+    # Late import inside function body avoids module-level circular dependency
+    # with panel_auth (which imports auth). Delegate to _resolve_device_token_user
+    # so this path honours panel_user_bindings instead of hardcoding the
+    # household-admin identity for every device token (ZOE security review).
     if not session_id and device_token:
-        import hashlib as _hashlib
-        _tok_hash = _hashlib.sha256(device_token.encode()).hexdigest()
-        # Late import inside function body avoids module-level circular dependency
         try:
-            from routers.panel_auth import _token_cache as _ptc
-            _tok_info = _ptc.get(_tok_hash)
-            if _tok_info and not _tok_info.get("revoked"):
-                _exp = _tok_info.get("expires_at")
-                _ok = True
-                if _exp:
-                    from datetime import datetime, timezone
-                    _ok = datetime.fromisoformat(_exp) >= datetime.now(tz=timezone.utc)
-                if _ok:
-                    _pid = _tok_info.get("panel_id", "unknown")
-                    return {
-                        "user_id": DEFAULT_USER_ID,
-                        "role": "member",
-                        "username": f"panel:{_pid}",
-                        "permissions": ["chat", "voice"],
-                        "panel_id": _pid,
-                    }
+            from routers.panel_auth import _resolve_device_token_user
+            _resolved = await _resolve_device_token_user(device_token)
+            if _resolved is not None:
+                return _resolved
         except Exception:
             pass
         # Invalid/unknown token → fall through to unauthenticated behaviour
@@ -265,7 +252,7 @@ async def get_a2a_caller(request: Request) -> dict:
                 detail="A2A bearer token auth is not configured on this server",
             )
         token = auth_header[len("Bearer "):]
-        if token == _ZOE_A2A_TOKEN:
+        if hmac.compare_digest(token, _ZOE_A2A_TOKEN):
             return {
                 "user_id": "a2a-agent",
                 "role": "agent",
