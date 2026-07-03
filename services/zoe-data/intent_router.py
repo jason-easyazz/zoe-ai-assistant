@@ -3781,6 +3781,17 @@ async def _execute_smart_home_intent(intent: Intent, user_id: str) -> Optional[s
         return f"Lights {label}."
     except Exception as exc:
         logger.warning("smart_home intent failed: %s", exc)
+        # An HTTPStatusError means the bridge WAS reachable but rejected the
+        # request (bad entity/room, revoked HA token, …) — the "make sure it's
+        # connected" setup line would be misleading there. Duck-type via
+        # exc.response (httpx is imported inside the try, so its exception
+        # types can't be referenced safely here).
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status is not None:
+            return (
+                f"Home Assistant rejected that request (HTTP {status}). "
+                "Check the device or room name, and that your Home Assistant token is still valid."
+            )
         return (
             "I couldn't reach the smart home bridge. "
             "Make sure Home Assistant is connected — say \"set up home assistant\" to get started."
