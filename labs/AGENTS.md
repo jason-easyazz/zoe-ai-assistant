@@ -48,8 +48,9 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
   → verify → openPR slice); README + RUNBOOK + FINDINGS are records, not contracts.
 - `flue-zoe-brain/` — Flue-hosted Pi `Agent` on the local Gemma brain (a third
   implementation behind the `run_zoe_core` seam, per
-  `docs/architecture/zoe-flue-integration.md`). Serves 12 tools (11 capability
-  tools against zoe-data + the `activate_abilities` activator) with progressive
+  `docs/architecture/zoe-flue-integration.md`). Serves 17 tools (16 capability
+  tools against zoe-data + the `activate_abilities` activator; Wave 1 of the
+  cut-list record `docs/knowledge/flue-cutover-tool-cut-list.md` §3) with progressive
   tool disclosure at the wire (always-on core + activated groups per call;
   `src/tools/tool-groups.ts`), identity fail-closed, writes dry-run-gated.
   Emits the Seam-A text-delta + `__TOOL__`/`__THINKING__` sentinel stream
