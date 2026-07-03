@@ -63,6 +63,15 @@ always-on core + relevance-matched tools) onto its own wire seam:
   per-conversation, so a typical turn carries 3 schemas instead of 11. An
   `activate_abilities` round costs one extra tool iteration when keywords miss
   (counted against `ZOE_BRAIN_MAX_TOOL_ITERS`).
+- **Activator fallback hardening** (E2E found indirect, keyword-free prompts
+  never reached `activate_abilities`, and one reply fabricated a forecast):
+  the agent instructions now carry the group catalogue (`GROUP_SUMMARY`) plus
+  an imperative activate-first / never-fabricate doctrine
+  (`src/agents/zoe.ts`); the activator's wire schema is pinned to a
+  dead-simple single-enum object (`test/activator_fallback.test.ts`); and the
+  keyword triggers cover high-value indirect phrasings
+  (washing/laundry/outside → weather, "anything on \<day\>" / "am I free" →
+  calendar). On-box measurement checklist: `LANDING.md`.
 - **Kill switch:** `ZOE_BRAIN_PROGRESSIVE_TOOLS=false` restores
   all-schemas-every-call (A/B comparison).
 
