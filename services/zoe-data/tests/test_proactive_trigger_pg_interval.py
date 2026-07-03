@@ -66,8 +66,15 @@ def test_bare_now_interval_would_be_mangled():
 
 
 def _as_dt(s: str) -> datetime:
-    """Parse an ISO or space-separated timestamp, mirroring text::timestamptz."""
-    return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    """Parse an ISO or space-separated timestamp, mirroring text::timestamptz.
+
+    Python 3.10's fromisoformat needs a full ±HH:MM offset (3.11 accepts the
+    bare '+00' Postgres renders); normalize both forms so this runs on the box.
+    """
+    s = s.replace("Z", "+00:00")
+    if len(s) >= 3 and (s[-3] in "+-") and s[-2:].isdigit():
+        s += ":00"
+    return datetime.fromisoformat(s)
 
 
 def test_iso_created_at_boundary_temporal_vs_lexical():
