@@ -282,29 +282,68 @@ Four parallel deep-dive threads (2026-06-28), each evidence-backed:
 - **#965** — activator fallback hardening: imperative activate-first /
   never-fabricate doctrine + the `GROUP_SUMMARY` group catalogue in the agent
   instructions; the activator's wire schema pinned to a bare enum by test;
-  widened weather/calendar keyword triggers. The **on-box measurement checklist**
-  is `labs/flue-zoe-brain/LANDING.md` — **the operator has not yet run it**.
+  widened weather/calendar keyword triggers.
+- **#971** — Seam-A streaming: the sidecar now emits the prod text-delta +
+  `__TOOL__`/`__THINKING__` sentinel stream as NDJSON (content-negotiated), so
+  the voice filler (#844) keeps working. Byte contract pinned offline; live
+  stream verified on-box.
 
 **E2E-verified through the seam:** real memories returned; `ZOE_BRAIN_BACKEND=flue`
 works end-to-end; on pure chat the sidecar is **~2× faster** than the prod
 Pi-CLI core.
 
+**On-box verification run 2026-07-03 (LANDING.md checklists, live Gemma):**
+- **Sentinel stream (#971): PASS** — `__THINKING__` → `__TOOL__` start/args
+  (before result) → result → token-level text deltas → `{"done":true}`, real data.
+- **Activator (#965): PASS** — 7/10 trigger-free prompts reached their tool
+  (bar ≥50%); all three prior E2E-failing phrasings now fire; **zero fabricated
+  tool claims**.
+- **Recall regression: PASS** — `recall_memory` fires **31/32 = 96.9%** (bar ≥90%).
+
+### Voice-parity gate — RUN 2026-07-03: **PASS (same-or-better)**
+
+44-prompt corpus from `tests/voice/comprehensive_conversation_test.py` (chat /
+social / info / memory-recall biased), each brain scored on reply sanity, tool
+correctness, and latency. **Flue 41/44 (93%) vs prod 38/44 (86%); flue median
+2.5 s vs prod 5.3 s** (flue faster at every percentile but the LLM-bound max).
+Flue won on fresh-user recall honesty (4/4 vs prod's stale-fact assertions) and
+emitted zero fabricated tool claims. Identity caveat: prod ran as `guest` (only
+client-mintable identity — `parity-gate-user` needs a zoe-auth admin write,
+denied), so prod's recall was contaminated by residual guest memories; flue ran
+env-bound to `parity-gate-user`. No data mutated (writes dry-run flue-side; the
+3 prod guest writes failed at the service). Full record:
+`labs/flue-zoe-brain/parity/` scratch + this section.
+
 ### Cutover blockers — Phase 4 stays closed until each is cleared
 
-1. **Voice-parity gate unrun.** The Samantha bar (§4) against the real-voice
-   corpus needs the operator and a quiet box; it has not been run.
-2. **Tool coverage: 12 → 20 via Waves 1–3; remainder deliberately cut per [`docs/knowledge/flue-cutover-tool-cut-list.md`](../knowledge/flue-cutover-tool-cut-list.md) (signed off 2026-07-03).** The sidecar serves 12 tools; the extension brain registers 18 (11 abilities + 7 Pi built-ins — see the cut-list record for the pinned file:line evidence). The historical "~56" was a projected full-parity target, not the current surface; the 18-item cut list converts the 36-tool difference into deliberate scope (7 Cut, 6 Must-NOT-port, 1 Must-NOT-port-as-is, 1 Defer). Waves 1–3 grow the sidecar 12 → 20 (see the cut-list record §3).
-3. **No streaming / sentinels.** The sidecar returns whole results without the
-   text-delta + `__TOOL__`/`__THINKING__` sentinel stream (Seam A contract), so
-   the voice filler (#844) would go dark on cutover.
+1. **Output token corruption (NEW, from the parity gate).** Reply-start glitches
+   — "I don'm not sure", "I don've stored" (×4 across ~88 calls) — surfaced only
+   on the Flue side. Both brains share the same llama-server/Gemma, so this is in
+   the Flue wire path (pi-ai `openai-completions` streaming detokenization,
+   possibly interacting with the canonical E4B **MTP/speculative** decoding), not
+   the model. **Voice-audible → a hard blocker.** Not yet root-caused.
+2. **In-session context recall regresses vs prod (NEW).** 3 of flue's 4 parity
+   failures are one behaviour: it over-defers to the (empty, fresh-user) memory
+   store and forgets facts stated 1–3 turns earlier ("What's my name?" after
+   "My name is Alex"; "Who am I meeting?" after naming Sarah). Prod, carrying the
+   turn history, answered these. The sidecar must weight in-session conversation
+   over an empty recall packet.
+3. **Tool coverage: 12 → 20 via Waves 1–3; remainder deliberately cut per [`docs/knowledge/flue-cutover-tool-cut-list.md`](../knowledge/flue-cutover-tool-cut-list.md) (signed off 2026-07-03).** The sidecar serves 12 tools; the extension brain registers 18 (11 abilities + 7 Pi built-ins — see the cut-list record for the pinned file:line evidence). The historical "~56" was a projected full-parity target, not the current surface; the 18-item cut list converts the 36-tool difference into deliberate scope (7 Cut, 6 Must-NOT-port, 1 Must-NOT-port-as-is, 1 Defer). Waves 1–3 grow the sidecar 12 → 20 (see the cut-list record §3). The parity corpus barely probed this gap — it stands separately.
 4. **Write path unexercised.** Writes have only ever run dry
    (`ZOE_BRAIN_ALLOW_WRITES` defaults OFF); no real write has been verified
-   end-to-end.
+   end-to-end. The parity gate could not close this (dry-run flue-side; prod's
+   guest writes failed), so it remains open.
+
+**Cleared since last revision:** ~~voice-parity gate unrun~~ (RUN, PASS above);
+~~no streaming/sentinels~~ (#971, verified on-box); ~~operator hasn't run the
+#965 LANDING checklist~~ (run, PASS above).
 
 ### Next action
 
-Operator runs the `labs/flue-zoe-brain/LANDING.md` on-box activator measurement
-(acceptance: ≥50% activator fire on trigger-free prompts, zero fabricated tool
-claims, recall ≥90%), then the blockers above, in order. Phase 1 (Telegram as a
-front-door channel) remains in flight independently — the bot is built (#870);
-the re-slot through `/api/chat` with a `channel` tag is still open.
+The gate PASSED same-or-better, so the flip decision is now the operator's — but
+blockers 1 (voice-audible token corruption) and 2 (in-session context recall)
+are the two that would degrade the live voice experience and should be fixed
+before `ZOE_BRAIN_BACKEND=flue` is flipped, even though the aggregate score
+favours Flue. Phase 1 (Telegram as a front-door channel) remains in flight
+independently — the bot is built (#870); the re-slot through `/api/chat` with a
+`channel` tag is still open.
