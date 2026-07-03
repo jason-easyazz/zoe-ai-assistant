@@ -80,6 +80,18 @@ always-on core + relevance-matched tools) onto its own wire seam:
   keyword triggers cover high-value indirect phrasings
   (washing/laundry/outside → weather, "anything on \<day\>" / "am I free" →
   calendar). On-box measurement checklist: `LANDING.md`.
+- **In-session context doctrine** (`IN_SESSION_CONTEXT_DOCTRINE` in
+  `src/agents/zoe.ts`): the parity gate found the imperative recall doctrine
+  ("you do NOT know anything about the person from your own head; ALWAYS call
+  `recall_memory` first") was, taken absolutely, making the model distrust the
+  live transcript — with an empty fresh-user recall store it forgot facts the
+  user stated 1–3 turns earlier THIS session ("My name is Alex" → "What's my
+  name?" → "I don't have anything stored about your name"). The appended
+  doctrine rebalances precedence: facts stated during the conversation are used
+  immediately from context, and an empty recall result means "nothing stored
+  from before", not "never told this session". It does NOT weaken
+  anti-fabrication or the past-conversation `recall_memory` rule — recall still
+  fires ≥90% on standalone recall prompts.
 - **Kill switch:** `ZOE_BRAIN_PROGRESSIVE_TOOLS=false` restores
   all-schemas-every-call (A/B comparison).
 
