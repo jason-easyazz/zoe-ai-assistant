@@ -1,0 +1,12 @@
+# Hourly trigger for zoe-serena-reaper.service — see that unit for install steps.
+
+[Unit]
+Description=Hourly stale-Serena reap (swap-exhaustion guard)
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=1h
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

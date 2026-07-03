@@ -18,6 +18,8 @@
  *   - increment 1: get_time, recall_memory, shopping_list_add
  *   - increment 2: get_weather, list_reminders, show_calendar, show_list (reads);
  *                  set_timer, add_reminder, add_calendar_event, create_note (writes)
+ *   - Wave 1 (cut-list record §3): note_search (read); add_to_list, list_remove
+ *     (writes); journal + people grouped action-dispatch (writes gated per action)
  * The open question this answers is whether the local Gemma brain reliably
  * tool-calls; the parity/reliability harness measures it (parity/RESULTS.md,
  * parity/RELIABILITY.md). Acting identity is bound in trusted code (env), never
