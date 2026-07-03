@@ -305,6 +305,32 @@ def _build_memory_prompt_packet(
     return {"packet": "## What I know about you\n" + "\n".join(lines), "refs": refs, "count": len(refs)}
 
 
+def _fold_relational_block(
+    packet: dict[str, Any], block: dict[str, Any]
+) -> dict[str, Any]:
+    """Fold the 2b relational block under the vector packet, keeping it cited.
+
+    The vector packet keeps its ``## What I know about you`` section (verbatim);
+    the relational lines are appended under a second ``## People & important
+    dates`` heading so provenance stays visible (each line already carries a
+    ``[people]`` / ``[relationship]`` / ``[date]`` / ``[portrait]`` tag). ``refs``
+    and ``count`` are extended, and ``relational`` records how many relational
+    refs were added so tests/callers can see the gate fired. Shape-compatible
+    with the existing consumer (``memory.ts`` reads only ``packet``).
+    """
+    lines = block.get("lines") or []
+    refs = block.get("refs") or []
+    if not lines:
+        return packet
+    section = "## People & important dates\n" + "\n".join(lines)
+    existing = packet.get("packet") or ""
+    packet["packet"] = f"{existing}\n\n{section}" if existing else section
+    packet["refs"] = list(packet.get("refs") or []) + list(refs)
+    packet["count"] = len(packet["refs"])
+    packet["relational"] = len(refs)
+    return packet
+
+
 # Keyword gate for the per-turn semantic search. Single source of truth lives in
 # memory_gate (shared with zoe_agent) so the two paths can't silently diverge. The
 # ONNX+Chroma semantic search only fires when the message looks like a recall query
@@ -348,6 +374,25 @@ async def memory_for_prompt(
             hits = []
     result = _build_memory_prompt_packet(facts, hits, max_facts=limit)
     result["user_scoped"] = True
+
+    # Increment 2b: fold the relational half (Postgres people/relationships/dates
+    # + portrait) into the packet, behind ZOE_MEMORY_COMPOSE_ENABLED (default OFF)
+    # and router-gated to relational queries. OFF (or a non-relational query) is a
+    # true no-op: compose_enabled() short-circuits before any DB read, so the
+    # packet above is returned byte-for-byte. Best-effort — never breaks a turn.
+    from zoe_memory_compose import compose_enabled, needs_relational
+
+    if compose_enabled() and message.strip() and needs_relational(message):
+        try:
+            from db_pool import get_db_ctx
+            from zoe_memory_compose import compose_relational_block
+
+            async with get_db_ctx() as db:
+                block = await compose_relational_block(user_id, message, db)
+            if block:
+                result = _fold_relational_block(result, block)
+        except Exception:
+            logger.exception("memories: relational compose failed; vector-only packet")
     return result
 
 
