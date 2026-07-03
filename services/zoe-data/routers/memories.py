@@ -256,7 +256,7 @@ _PROMPT_PACKET_MAX_FACTS = 12
 # facts (a superset like "My dad's name is Neil. My mum likes ncis. I have two
 # sisters…" is kept alongside "My dad's name is Neil" — it carries more).
 _DEDUP_STOPWORDS = frozenset({
-    "the", "a", "an", "is", "are", "was", "were", "be", "been", "my", "your",
+    "the", "a", "an", "is", "am", "are", "was", "were", "be", "been", "my", "your",
     "our", "i", "you", "we", "of", "to", "in", "on", "at", "and", "or", "that",
     "this", "it", "s", "for", "with", "has", "have", "had",
 })
@@ -272,19 +272,18 @@ def _dedup_tokens(text: str) -> frozenset:
 def _is_near_duplicate(cand: frozenset, kept: list) -> bool:
     """True when `cand` adds nothing over an already-kept line — i.e. it is a
     near-repeat. Drops only when the CANDIDATE's own tokens are (near-)fully
-    covered by a kept line (``inter / len(cand) >= 0.85``) or the two are highly
-    similar (jaccard >= 0.7). Crucially this is asymmetric: a *richer* candidate
-    (a superset with new tokens) is NOT covered, so it survives — dropping it
-    would lose information. Tiny (<2 content-token) facts are never collapsed."""
+    covered by a kept line (``inter / len(cand) >= 0.85``). This coverage test is
+    deliberately ASYMMETRIC and the sole criterion: a *richer* candidate (a
+    superset with genuinely new tokens — e.g. one that adds a location) is not
+    covered, so it survives; dropping it would lose information. (A symmetric
+    jaccard test would wrongly drop such a candidate, so it is intentionally not
+    used.) Tiny (<2 content-token) facts are never collapsed."""
     if len(cand) < 2:
         return False
     for other in kept:
         if len(other) < 2:
             continue
-        inter = len(cand & other)
-        if not inter:
-            continue
-        if inter / len(cand) >= 0.85 or inter / len(cand | other) >= 0.7:
+        if len(cand & other) / len(cand) >= 0.85:
             return True
     return False
 
