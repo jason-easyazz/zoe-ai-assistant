@@ -39,11 +39,13 @@ does NOT mutate real data and instructs the model not to claim success).
 | `list_remove` | write | `list_remove` | `item`, `list_type?` |
 | `journal` | read+write | `journal_create` / `journal_prompt` / `journal_streak` | `action` (create/prompt/streak), `content?`, `mood?` — create is write-gated |
 | `people` | read+write | `people_create` / `people_relate` / `people_search` | `action` (create/relate/search), `name?`, `relationship?`, `related_to?`, `query?`, `notes?` — create/relate are write-gated |
+| `media` | write | `music_play` / `music_control` / `music_volume` / `set_volume` / `music_setup` | `action` (play/control/set_music_volume/system_volume/setup), `query?`, `command?`, `level?`, `direction?` — system_volume = Zoe's TTS volume, not the player |
+| `home` | write | `smart_home` (validated; entity_id built server-side) | `action` (on/off/dim/brighten), `room?` — lights only |
 | `activate_abilities` | local | none (progressive disclosure, see below) | `group` |
 
 ## Progressive tool disclosure
 
-The model does **not** see all 16 tool schemas every call (on the 4B brain that
+The model does **not** see all 18 tool schemas every call (on the 4B brain that
 bloats the prompt, slows prefill in the 8k context, and hurts tool choice). The
 sidecar ports prod's pattern (`services/zoe-core/extensions/abilities.ts`:
 always-on core + relevance-matched tools) onto its own wire seam:

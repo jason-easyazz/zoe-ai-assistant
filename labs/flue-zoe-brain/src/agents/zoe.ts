@@ -20,6 +20,8 @@
  *                  set_timer, add_reminder, add_calendar_event, create_note (writes)
  *   - Wave 1 (cut-list record §3): note_search (read); add_to_list, list_remove
  *     (writes); journal + people grouped action-dispatch (writes gated per action)
+ *   - Wave 2 (cut-list record §3): media (play/control/volume/setup) + home
+ *     (lights via the validated smart_home intent) grouped action-dispatch (writes gated)
  * The open question this answers is whether the local Gemma brain reliably
  * tool-calls; the parity/reliability harness measures it (parity/RESULTS.md,
  * parity/RELIABILITY.md). Acting identity is bound in trusted code (env), never
