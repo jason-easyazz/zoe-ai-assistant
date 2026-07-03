@@ -202,6 +202,39 @@ def test_phrasing_only_duplicate_skips():
     assert action == "skip" and mid == "old"
 
 
+# --- shared incidental modifier must not mask a correction --------------------
+# A correction that happens to share an adjective/descriptor with the stale row
+# ("red", "iced", "small brown") asserts a DIFFERENT distinctive value → it must
+# supersede, never collapse-by-richness into skip.
+
+@pytest.mark.parametrize("candidate,existing", [
+    ("my car is a red Toyota", "my car is a red Honda"),
+    ("my dog is a small brown poodle", "my dog is a small brown beagle"),
+    ("my employer is the big tech company Google",
+     "my employer is the big tech company Microsoft"),
+    ("my favorite drink is iced black coffee", "my favorite drink is iced green tea"),
+])
+def test_shared_modifier_correction_supersedes_not_skips(candidate, existing):
+    action, mid = classify_against_existing(candidate, [("stale", existing)])
+    assert (action, mid) == ("update", "stale"), (
+        f"{candidate!r} corrects {existing!r} — a shared incidental modifier "
+        "must not read as the same value"
+    )
+
+
+@pytest.mark.parametrize("candidate,existing", [
+    ("my car is a red Toyota", "my car is Toyota red"),
+    ("my dog is a small brown poodle", "my dog is a brown small poodle"),
+    ("my favorite drink is iced black coffee", "my favorite drink is black iced coffee"),
+])
+def test_reordered_rephrasing_never_adds_duplicate(candidate, existing):
+    # Same value, tokens merely reordered → merge (skip/update), never a 2nd row.
+    action, mid = classify_against_existing(candidate, [("old", existing)])
+    assert action in ("skip", "update") and mid == "old", (
+        f"{candidate!r} is a rephrasing of {existing!r} — must not add a duplicate"
+    )
+
+
 def test_generic_statement_is_not_an_attribute_assertion():
     # The optional-subject regex must NOT treat any "X is Y" clause as a personal
     # attribute → no spurious same-attribute match.
