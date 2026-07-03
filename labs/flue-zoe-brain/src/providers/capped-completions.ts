@@ -55,7 +55,11 @@ import type {
   StreamOptions,
 } from '@earendil-works/pi-ai';
 // .ts extension so the offline strip-types tests can resolve it (see zoe-tools.ts).
-import { discloseTools, progressiveToolsEnabled } from '../tools/tool-groups.ts';
+import {
+  discloseTools,
+  progressiveToolsEnabled,
+  stripCodingBuiltins,
+} from '../tools/tool-groups.ts';
 
 /** Custom api id this module registers; `app.ts` binds the `zoe` provider to it. */
 export const CAPPED_COMPLETIONS_API = 'zoe-capped-completions';
@@ -110,13 +114,21 @@ function applyCap(context: Context): Context {
 }
 
 /**
- * All wire-level policies for one model call, in order: progressive tool
- * disclosure (shrink the schemas the model sees to core + active groups),
- * then the iteration cap (past the cap, strip ALL tools so the turn must
- * finish in plain text). Exported for the offline unit tests only.
+ * All wire-level policies for one model call, in order:
+ *   1. strip pi/Flue coding built-ins (read/write/edit/bash/grep/glob/task)
+ *      that the harness injects on every turn — UNCONDITIONAL safety floor, so
+ *      a family voice brain is never handed bash/write/edit/task even with the
+ *      disclosure kill switch off (see tool-groups.ts CODING_BUILTIN_TOOL_NAMES);
+ *   2. progressive tool disclosure (shrink the Zoe schemas the model sees to
+ *      core + active groups) — also strips the coding built-ins, but step 1
+ *      guarantees it regardless of ZOE_BRAIN_PROGRESSIVE_TOOLS;
+ *   3. the iteration cap (past the cap, strip ALL tools so the turn must finish
+ *      in plain text).
+ * Exported for the offline unit tests only.
  */
 export function applyPolicies(context: Context): Context {
-  const disclosed = progressiveToolsEnabled() ? discloseTools(context) : context;
+  const safe = stripCodingBuiltins(context);
+  const disclosed = progressiveToolsEnabled() ? discloseTools(safe) : safe;
   return applyCap(disclosed);
 }
 

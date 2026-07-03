@@ -60,6 +60,18 @@ always-on core + relevance-matched tools) onto its own wire seam:
   the model calls still executes with unchanged identity fail-closed and
   write-gate semantics — disclosure shrinks what the model *sees*, it is not
   a security boundary.
+- **Coding built-ins are always stripped (safety floor):** Flue's harness
+  injects its framework coding tools — `read`, `write`, `edit`, `bash`, `grep`,
+  `glob`, `task` — into `context.tools` on **every** turn regardless of the
+  agent's declared tool list (verified in `@flue/runtime`'s `createTools`;
+  `defineAgent` exposes no option to suppress them). A family **voice** brain
+  must never be handed `bash`/`write`/`edit`/`task`, and the extra schemas bloat
+  the 4B context. `src/tools/tool-groups.ts` carries an explicit denylist
+  (`CODING_BUILTIN_TOOL_NAMES`) and strips these **unconditionally** —
+  `stripCodingBuiltins` runs in `applyPolicies` even when
+  `ZOE_BRAIN_PROGRESSIVE_TOOLS=false`, so the disclosure kill switch can never
+  re-expose them. Real Zoe tools (including ungrouped future ones) are never
+  affected.
 - **Active set** (`src/tools/tool-groups.ts`, derived statelessly from the
   request's own message window): the always-on core (`get_time`,
   `recall_memory`, `activate_abilities`) + groups keyword-matched against the
