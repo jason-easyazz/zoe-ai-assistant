@@ -114,29 +114,17 @@ memory unprompted; its understanding of the user evolves.
 - [x] **1b** — persist per-turn user (**PR #775** merged; chat+voice `_save_chat_message` stamps `metadata.user_id`; consolidation resolves owner from per-turn metadata over a guest session; SQL lab-proven a guest-owned session resolves to `jason`)
 - [x] **dedup gate** — `memory_quality.classify_against_existing` ADD/UPDATE/**SKIP** + prefer-richer + same-attribute near-dup merge + "never drop a correction" (**PR #794** squash-merged 2026-06-24; branch tip `f0e30bff` == #794 head, so the "2 unmerged commits" are the squash-ancestry illusion, NOT pending work). This was the stated prod-enable blocker; it is **cleared**. Plus **PR #795/#796** (live-integration suites) and **PR #798** (normalize `GEMMA_SERVER_URL` — the prod `/v1/v1` 404 was killing consolidation).
 - [~] **1c** — lab-prove + prod-enable + **verify prod health**  ← **NEXT** (CI bar green: 67 tests pass, demo/synthetic only. **Prod flag is already ON** since 2026-06-24: `ZOE_IDLE_CONSOLIDATION_ENABLED=1` in `services/zoe-data/.env`, confirmed in the live process env (PID-checked 2026-06-26). Engine is **healthy** (NRestarts=0, active). **BUT it has never consolidated a real conversation.** Live Postgres diagnostic 2026-06-26 (read-only): `memory_consolidation_state` has 55 watermark rows and **every one is a `demo_*`/`demo_dedup_*` test session** (last `2026-06-24 21:55`) — all from the dedup lab run, zero real users. Why: (a) **no `chat_messages` traffic in 3.7 days** (newest row ~2026-06-22, total 3150) so nothing is ever inside the 1h lookback; (b) **zero `chat_messages` carry `metadata.user_id`**, so 1b owner-resolution would skip every session — though all 3150 rows **predate the 1b deploy (2026-06-24)**, so 1b stamping is **unverified in prod, not proven broken**. The 3.7-day capture gap is itself suspicious (panel is in active use → is capture even alive?). Also two **separate, older** startup bugs (NOT the idle engine): `proactive/engine.py:208` `_cleanup_expired_pending` does `cur.rowcount` on the compat `_Cursor` (no such attr); `memory_digest.py:706` weekly `run_weekly_consolidation_for_all` fallback hit "connection was closed in the middle of operation". 1c is not done until a *real* authenticated turn is shown to (1) land in `chat_messages` and (2) carry `metadata.user_id`, and then a sweep consolidates it cleanly.)
-- [ ] **2a** hybrid retrieval · [ ] **2b** compose Postgres+Chroma packet · [ ] **2c** voice mirror
+- [~] **2a** hybrid retrieval — SHIPPED (flag `ZOE_HYBRID_RETRIEVAL_ENABLED`, default **OFF**, pending lab proof). `MemoryService._semantic_search` now composes three cheap, additive, bounded, O(candidates) boosts on top of the existing semantic+hotness re-rank, gated behind the flag; OFF is a byte-for-byte no-op (the boost term is skipped entirely — proved by `test_flag_off_ordering_is_a_true_noop`). Boosts: (1) **keyword/lexical** — normalized alnum token overlap (stopwords dropped, whole-token *or* substring match so "dad"→"dad's"), weight `_HYBRID_KEYWORD_WEIGHT=0.50` — the primary fix for the 0-hit misses (rescues "what is my dad name"→"My dad's name is Neil"); (2) **temporal-proximity** — `exp(-ln2/30d · age)` × `_HYBRID_RECENCY_WEIGHT=0.05` (mild, never dominates relevance); (3) **preference/importance** — `memory_type ∈ {preference,approval,emotional_moment,person,recurring_task}` (or a numeric `importance` field if a producer ever writes one — currently a no-op arm) × `_HYBRID_PREFERENCE_WEIGHT=0.05`. Zero LLM calls, no embedder reload, no new deps. Candidate fetch + status/visibility filtering unchanged (cross-user + approved-only still enforced with the flag ON). Tests: `tests/test_memory_hybrid_retrieval.py` (8, all synthetic, embedding layer mocked). · [ ] **2b** compose Postgres+Chroma packet · [ ] **2c** voice mirror
 - [ ] **3a** reflection · [ ] **3b** importance · [ ] **3c** proactive surfacing
 - [ ] (carry-over) identity deploy `#768` — FF-deploy when the tooling/classifier outage clears
 
 ## 7. NEXT ACTION (always exactly one)
-→ **Get ONE real post-1b persisted turn and watch the whole chain (the positive control).**
-DIAGNOSIS DONE 2026-06-26/27 (Jason chose "diagnose first"): capture is NOT structurally broken —
-`_save_chat_message` works (demo round-trip PASS; `get_db_ctx` translates `?`→`$N`), `voice_command`
-persists the user turn (~line 3014) *before* any fast-path, `zoe-touch-pi` resolves to a real owner
-(jason via `panel_user_bindings`/`ui_panel_sessions`), and 68 organic `voice-panel-*` rows exist
-historically. The gap: **no turn of any kind has persisted since 2026-06-22 (pre-1b)**, so the
-metadata-stamp + idle-consolidation chain has never run on live post-1b data. **Positive control
-(needs a real turn — static trace can't go further):** have Jason speak ONE command to the panel
-("Zoe, remember my dad's name is Neil"), then read-only confirm a fresh
-`voice-panel-zoe-touch-pi-*` row appears in `chat_messages` *with* `metadata.user_id` populated.
-Branches: row WITH metadata → chain healthy; wait past IDLE, confirm `MEMORY_IDLE_CONSOLIDATE …
-stored>=1` + recall via `/api/memories/for-prompt`. Row WITHOUT metadata → 1b stamping regressed on
-the live voice path (fix `effective_user`→`_save_chat_message` plumbing). NO row → persistence
-regressed ~2026-06-24 (the fire-and-forget `_spawn_bg` save) — the real blocker, fix first. **Parallel,
-independent:** the two adjacent startup bugs as one small hardening PR (no new flag):
-`proactive/engine.py` `_cleanup_expired_pending` `rowcount` on the compat `_Cursor`, and
-`memory_digest.py` weekly `list_users` pooled-connection-closed. After the control passes, revisit the
-§3 strategy fork (chat_messages-as-spine vs voice-keeps-own-path), then **2a**. Update §6/§7 after each step.
+→ **Lab-prove 2a on the box** — enable `ZOE_HYBRID_RETRIEVAL_ENABLED` in a worktree (never prod)
+against real Chroma, run the recall set + the saved-audio corpus (`~/.zoe-voice-samples` via
+`scripts/perf/measure_voice.py` under the flock), confirm the measured 0-hit misses (e.g.
+"what is my dad name" → "My dad's name is Neil") now resolve and nothing regresses (hot path stays
+warm sub-400 ms, no cross-user/unapproved leakage) — then **2b** (compose Postgres+Chroma into the
+`/api/memories/for-prompt` packet). Update §6/§7 after the step.
 
 ## 8. Increment 1c — enable runbooks
 
