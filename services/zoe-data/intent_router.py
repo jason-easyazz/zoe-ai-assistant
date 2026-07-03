@@ -18,6 +18,7 @@ import shlex
 import time
 import shutil
 import unicodedata
+import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
@@ -2029,6 +2030,119 @@ async def _execute_list_show_direct(intent: Intent, user_id: str) -> Optional[st
         return None
 
 
+async def _notify_lists_ui(event_type: str, data: dict) -> None:
+    """Best-effort UI push mirroring mcp_server's list_* notifications.
+    Never raises: a broadcast failure must not turn a successful DB write into
+    ok:false. Imported lazily so intent_router doesn't hard-depend on mcp_server."""
+    try:
+        from mcp_server import _notify_ui
+
+        await _notify_ui("lists", event_type, data)
+    except Exception as exc:  # noqa: BLE001 — UI push is advisory only
+        logger.debug("lists UI notify skipped: %s", exc)
+
+
+async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str]:
+    """Add an item to the user's list straight through the DB, mirroring
+    mcp_server's list_add_item tool (same list resolution, family/personal
+    visibility default, and list creation) so 'add milk to my shopping list'
+    works when the mcporter subprocess is down. Returns a confirming string on
+    success; None only on genuine failure (so ok:false still means real failure)."""
+    slots = intent.slots or {}
+    item = str(slots.get("item") or "").strip()
+    if not item:
+        return None
+    lt = str(slots.get("list_type") or "shopping").strip() or "shopping"
+    ln = str(slots.get("list_name") or "").strip() or lt.capitalize()
+    try:
+        from database import get_db_ctx
+
+        async with get_db_ctx() as db:
+            cursor = await db.execute(
+                "SELECT id FROM lists WHERE list_type=? AND name=? AND deleted=0"
+                " AND (user_id=? OR visibility='family')"
+                " ORDER BY CASE WHEN visibility='family' THEN 0 ELSE 1 END LIMIT 1",
+                (lt, ln, user_id),
+            )
+            row = await cursor.fetchone()
+            if row:
+                list_id = row["id"]
+            else:
+                list_id = str(uuid.uuid4())
+                await db.execute(
+                    "INSERT INTO lists (id, user_id, name, list_type, visibility) VALUES (?,?,?,?,?)",
+                    (list_id, user_id, ln, lt,
+                     "personal" if lt in {"personal", "tasks", "shopping"} else "family"),
+                )
+            item_id = str(uuid.uuid4())
+            await db.execute(
+                "INSERT INTO list_items (id, list_id, text, quantity, category) VALUES (?,?,?,?,?)",
+                (item_id, list_id, item, slots.get("quantity"), slots.get("category")),
+            )
+        await _notify_lists_ui(
+            "list_updated",
+            {"action": "item_added", "list_id": list_id, "item": {"id": item_id, "text": item}},
+        )
+        return _format_response(
+            intent,
+            json.dumps({"item_id": item_id, "list": ln, "list_id": list_id, "text": item, "status": "added"}),
+        )
+    except Exception as exc:
+        logger.warning("list_add direct execution unavailable; falling back to mcporter: %s", exc)
+        return None
+
+
+async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[str]:
+    """Remove (complete) an item from the user's list, mirroring mcp_server's
+    list_remove_item tool (exact case-insensitive match first, LIKE-escaped
+    substring fallback). If the item isn't on the list that's a clean success
+    message (ok:true, 'X wasn't on your list'), not a failure — so brain/tool
+    consumers don't surface a false error. Returns None only on genuine failure."""
+    slots = intent.slots or {}
+    item = str(slots.get("item") or "").strip()
+    if not item:
+        return None
+    lt = str(slots.get("list_type") or "shopping").strip() or "shopping"
+    try:
+        from database import get_db_ctx
+
+        async with get_db_ctx() as db:
+            cursor = await db.execute(
+                "SELECT li.id, li.list_id FROM list_items li JOIN lists l ON li.list_id = l.id"
+                " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=? AND LOWER(li.text)=LOWER(?)"
+                " AND li.deleted=0 AND l.deleted=0 LIMIT 1",
+                (user_id, lt, item),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                cursor = await db.execute(
+                    "SELECT li.id, li.list_id FROM list_items li JOIN lists l ON li.list_id = l.id"
+                    " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=? AND li.text LIKE ? ESCAPE '\\'"
+                    " AND li.deleted=0 AND l.deleted=0 LIMIT 1",
+                    (user_id, lt, f"%{_escape_like_pattern(item)}%"),
+                )
+                row = await cursor.fetchone()
+            if not row:
+                # Not on the list is a clean success, not a failure.
+                friendly = "shopping list" if lt == "shopping" else f"{lt.replace('_', ' ')} list"
+                return f"{item} wasn't on your {friendly}."
+            item_id = row["id"]
+            list_id = row["list_id"]
+            await db.execute(
+                "UPDATE list_items SET completed=1, updated_at=NOW() WHERE id=?", (item_id,)
+            )
+        await _notify_lists_ui(
+            "list_updated",
+            {"action": "item_completed", "list_id": list_id, "item_id": item_id},
+        )
+        return _format_response(
+            intent, json.dumps({"item_id": item_id, "text": item, "status": "completed"})
+        )
+    except Exception as exc:
+        logger.warning("list_remove direct execution unavailable; falling back to mcporter: %s", exc)
+        return None
+
+
 def _say_clock(hhmm: str) -> str:
     """'15:00' → '3 PM', '09:30' → '9:30 AM'. Empty/garbage → ''."""
     try:
@@ -2754,6 +2868,16 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
 
     if intent.name == "list_show":
         direct_result = await _execute_list_show_direct(intent, user_id)
+        if direct_result:
+            return direct_result
+
+    if intent.name == "list_add":
+        direct_result = await _execute_list_add_direct(intent, user_id)
+        if direct_result:
+            return direct_result
+
+    if intent.name == "list_remove":
+        direct_result = await _execute_list_remove_direct(intent, user_id)
         if direct_result:
             return direct_result
 
