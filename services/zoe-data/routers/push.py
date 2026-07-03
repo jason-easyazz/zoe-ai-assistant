@@ -178,12 +178,14 @@ async def send_push_to_user(
                 dead_endpoints.append(row["endpoint"])
 
     # Step 3: fresh short-lived connection only if there's cleanup to do.
+    # Scope by user_id too: uniqueness is (user_id, endpoint), so the same
+    # endpoint can belong to another user whose subscription is still valid.
     if dead_endpoints:
         async for db in get_db():
             for endpoint in dead_endpoints:
                 await db.execute(
-                    "DELETE FROM push_subscriptions WHERE endpoint = ?",
-                    (endpoint,),
+                    "DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?",
+                    (user_id, endpoint),
                 )
             await db.commit()
     return sent
