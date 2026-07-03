@@ -10,6 +10,8 @@ Dependency-free on purpose (pure str → bool) so any module can import it cheap
 """
 from __future__ import annotations
 
+import re
+
 MEMORY_TRIGGER_WORDS = frozenset({
     "remember", "recall", "did i", "have i", "last time", "before",
     "you said", "we talked", "my name", "my preference", "i told you",
@@ -23,7 +25,48 @@ MEMORY_TRIGGER_WORDS = frozenset({
 })
 
 
+# A possessive self-reference ("my dad", "our house") — a strong recall signal.
+# NOTE: deliberately excludes the object pronoun "me" (it appears in request
+# phrases "tell me / give me / remind me" that are not recall).
+_POSSESSIVE_RE = re.compile(r"\b(?:my|mine|our|ours)\b", re.IGNORECASE)
+# A first-person SUBJECT ("I", "we") — the user asking about their own state.
+_FIRST_PERSON_SUBJ_RE = re.compile(
+    r"\b(?:i|i'?m|i'?ve|i'?d|i'?ll|we|we'?re|we'?ve)\b", re.IGNORECASE
+)
+# A question / recall shape — a leading interrogative or request-to-tell.
+_QUESTION_SHAPE_RE = re.compile(
+    r"^\s*(?:hey\s+|ok\s+|so\s+|um\s+|uh\s+|zoe[,\s]+)*"
+    r"(?:who|what|what'?s|when|when'?s|where|where'?s|why|how|which|whose|"
+    r"do|does|did|are|is|was|were|have|has|can|could|would|will|should|am|"
+    r"tell\s+me|remind\s+me)\b",
+    re.IGNORECASE,
+)
+# Procedural "how do/can I …" — a how-to, NOT a recall of stored facts.
+_PROCEDURAL_HOW_RE = re.compile(r"^\s*how\s+(?:do|can|would|should|could)\s+(?:i|we|you)\b", re.IGNORECASE)
+
+
 def message_needs_memory(message: str) -> bool:
-    """True only when the message likely benefits from MemPalace semantic search."""
-    low = (message or "").lower()
-    return any(kw in low for kw in MEMORY_TRIGGER_WORDS)
+    """True when the message likely benefits from MemPalace semantic search.
+
+    Fires on either (a) an explicit trigger word/phrase, or (b) a *structural*
+    signal: a self-reference in a question/recall shape. The structural rule
+    catches natural recall phrasings the keyword list misses ("where do I live",
+    "tell me about my mum", "what team do we support") while staying off
+    non-personal questions ("what's the weather") and procedural how-tos
+    ("how do I make pasta") that would waste the embed.
+    """
+    text = message or ""
+    low = text.lower()
+    if any(kw in low for kw in MEMORY_TRIGGER_WORDS):
+        return True
+    is_question = bool(_QUESTION_SHAPE_RE.match(text)) or low.rstrip().endswith("?")
+    if not is_question:
+        return False
+    # A possessive ("my/our") in a question is recall regardless of phrasing.
+    if _POSSESSIVE_RE.search(text):
+        return True
+    # A first-person subject question ("where do I live") is recall too — unless
+    # it's a procedural "how do I <action>".
+    if _FIRST_PERSON_SUBJ_RE.search(text) and not _PROCEDURAL_HOW_RE.match(text):
+        return True
+    return False
