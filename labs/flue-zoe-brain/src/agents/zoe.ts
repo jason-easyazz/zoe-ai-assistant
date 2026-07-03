@@ -20,6 +20,10 @@
  *                  set_timer, add_reminder, add_calendar_event, create_note (writes)
  *   - Wave 1 (cut-list record §3): note_search (read); add_to_list, list_remove
  *     (writes); journal + people grouped action-dispatch (writes gated per action)
+ *   - Wave 2 (cut-list record §3): media (play/control/volume/setup) + home
+ *     (lights via the validated smart_home intent) grouped action-dispatch (writes gated)
+ *   - Wave 3 (cut-list record §3): remember_fact → the new memory_store intent
+ *     (MemoryService.ingest) — the explicit model-callable memory write (write gated)
  * The open question this answers is whether the local Gemma brain reliably
  * tool-calls; the parity/reliability harness measures it (parity/RESULTS.md,
  * parity/RELIABILITY.md). Acting identity is bound in trusted code (env), never
@@ -77,8 +81,24 @@ export const ACTIVATOR_DOCTRINE = [
   "NEVER claim to know, or to have done, anything a tool didn't actually return or confirm. No tool result means you don't know — say so, or activate the ability and find out.",
 ].join('\n');
 
+// In-session context doctrine, appended AFTER the soul + activator doctrine.
+// The soul's recall imperative ("you do NOT know anything about the person from
+// your own head; ALWAYS call recall_memory first") is correct for PAST-conversation
+// questions, but taken absolutely it made the model distrust the live transcript in
+// front of it: with an empty (fresh-user) recall store, facts the user stated 1–3
+// turns earlier IN THIS SESSION were forgotten ("My name is Alex" → "What's my name?"
+// → "I don't have anything stored about your name"). This block rebalances the
+// precedence WITHOUT weakening anti-fabrication or the past-conversation recall rule.
+export const IN_SESSION_CONTEXT_DOCTRINE = [
+  'One more thing about the recall rule, scoped to THIS conversation only (it adds to that rule, it does not cancel it):',
+  '',
+  'Facts the user tells you DURING this conversation are true and usable immediately — use them straight from the conversation, without calling recall_memory. If they told you their name, a plan, or a feeling a few turns ago, answer from that; do NOT say you have nothing stored about something they literally just told you.',
+  '',
+  'recall_memory is still how you learn anything from PAST conversations, so keep calling it first for those. When someone asks what you know or remember about them in general, call recall_memory first as always — then also weave in anything they told you this session. An empty recall result means nothing is stored from before — NOT that the user never told you this session; never let an empty recall store make you contradict or forget what the user has said in front of you now.',
+].join('\n');
+
 /** The full system instructions the agent runs with (soul + tool doctrine). */
-export const ZOE_INSTRUCTIONS = `${ZOE_SOUL}\n\n${ACTIVATOR_DOCTRINE}`;
+export const ZOE_INSTRUCTIONS = `${ZOE_SOUL}\n\n${ACTIVATOR_DOCTRINE}\n\n${IN_SESSION_CONTEXT_DOCTRINE}`;
 
 // Exporting `route` publishes the HTTP agent endpoints (POST/GET /agents/zoe/:id).
 // FAIL CLOSED: this route drives the live Gemma brain on :11434, so by default a

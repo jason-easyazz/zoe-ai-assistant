@@ -123,8 +123,15 @@ async def _load_voice_history(session_id: str, limit: int = 3) -> list[dict]:
 # dump (~1264 chars) is both slow and noisy. Keep this lean — it sits on the
 # brain-turn critical path.
 _VOICE_RECALL_SEARCH_LIMIT = 8   # one semantic search; re-ranked by hotness
-_VOICE_RECALL_MAX_FACTS = 6      # facts that actually make it into the block
+_VOICE_RECALL_MAX_FACTS = 6      # vector-recall facts that make it into the block
 _VOICE_RECALL_FACT_CHARS = 160   # per-fact truncation so one long memory can't bloat it
+# Overall line budget for the whole "[What you remember]" block (vector recall +
+# the 2c relational lines combined). The compose module can return up to ~25
+# relational lines; without a combined cap a fully-populated relational query
+# would balloon the packet to 30+ lines and blow the "COMPACT" contract this
+# block exists to keep. A little larger than _VOICE_RECALL_MAX_FACTS so a
+# relational turn can carry a few cited people/date facts on top of vector recall.
+_VOICE_RECALL_MAX_LINES = 10
 
 
 async def _voice_recall_packet(text: str, user_id: str) -> Optional[str]:
@@ -152,14 +159,25 @@ async def _voice_recall_packet(text: str, user_id: str) -> Optional[str]:
         logger.debug("voice recall search failed (non-fatal): %s", exc)
         refs = None
 
-    if not refs:
+    # Increment 2c: mirror chat — when ZOE_MEMORY_COMPOSE_ENABLED is ON and the
+    # turn is a person/relationship/date query, fold the SAME cited relational
+    # block chat's /for-prompt packet uses (people/relationships/dates + portrait,
+    # from Postgres) into voice recall. Reuses the shared zoe_memory_compose
+    # builder (same flag + router gate + per-user/approved-only scoping) — no
+    # duplicated compose/gate logic. Flag OFF is a true no-op: compose_packet
+    # cheap-gates and returns None before any DB read, so refs alone drive the
+    # output exactly as pre-2c. (The guest early-return above means this only runs
+    # for non-guest users.) Best-effort — never raises.
+    relational_lines = await _voice_relational_lines(query, user_id)
+
+    if not refs and not relational_lines:
         # Search found nothing relevant — fall back to the for-prompt dump so a
         # recall question still has facts to draw on.
         return await _voice_recall_fallback(user_id)
 
     seen: set[str] = set()
     lines: list[str] = []
-    for ref in refs:
+    for ref in refs or []:
         fact = (getattr(ref, "text", "") or "").strip()
         if not fact:
             continue
@@ -174,9 +192,49 @@ async def _voice_recall_packet(text: str, user_id: str) -> Optional[str]:
         lines.append("- " + line)
         if len(lines) >= _VOICE_RECALL_MAX_FACTS:
             break
+    for line in relational_lines:
+        if len(lines) >= _VOICE_RECALL_MAX_LINES:
+            break
+        key = re.sub(r"\s+", " ", line.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        lines.append("- " + line)
     if not lines:
         return await _voice_recall_fallback(user_id)
     return "[What you remember]\n" + "\n".join(lines)
+
+
+async def _voice_relational_lines(query: str, user_id: str) -> list[str]:
+    """The cited relational lines chat folds into /for-prompt (2c mirror), or [].
+
+    Delegates the gate + DB read + block build to the shared
+    ``zoe_memory_compose.compose_packet`` so voice and chat share ONE composed
+    memory source. Returns the plain (already-cited) fact strings — the caller
+    prefixes each with ``- `` and dedups against the vector recall lines. When the
+    flag is OFF or the query is non-relational, ``compose_packet`` returns None and
+    this is ``[]`` (a true no-op). Best-effort: never raises.
+    """
+    try:
+        from zoe_memory_compose import compose_packet
+
+        block = await compose_packet(user_id, query)
+    except Exception as exc:  # compose_packet already swallows; belt-and-braces
+        logger.debug("voice relational compose failed (non-fatal): %s", exc)
+        return []
+    if not block:
+        return []
+    out: list[str] = []
+    for raw in block.get("lines") or []:
+        # The block lines already start with "- " (see zoe_memory_compose
+        # ._build_lines); strip it so the caller's uniform "- " prefix applies.
+        line = raw.lstrip()
+        if line.startswith("- "):
+            line = line[2:]
+        line = line.strip()
+        if line:
+            out.append(line)
+    return out
 
 
 async def _voice_recall_fallback(user_id: str) -> Optional[str]:

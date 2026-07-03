@@ -55,7 +55,11 @@ import type {
   StreamOptions,
 } from '@earendil-works/pi-ai';
 // .ts extension so the offline strip-types tests can resolve it (see zoe-tools.ts).
-import { discloseTools, progressiveToolsEnabled } from '../tools/tool-groups.ts';
+import {
+  discloseTools,
+  progressiveToolsEnabled,
+  stripCodingBuiltins,
+} from '../tools/tool-groups.ts';
 
 /** Custom api id this module registers; `app.ts` binds the `zoe` provider to it. */
 export const CAPPED_COMPLETIONS_API = 'zoe-capped-completions';
@@ -110,13 +114,21 @@ function applyCap(context: Context): Context {
 }
 
 /**
- * All wire-level policies for one model call, in order: progressive tool
- * disclosure (shrink the schemas the model sees to core + active groups),
- * then the iteration cap (past the cap, strip ALL tools so the turn must
- * finish in plain text). Exported for the offline unit tests only.
+ * All wire-level policies for one model call, in order:
+ *   1. strip pi/Flue coding built-ins (read/write/edit/bash/grep/glob/task)
+ *      that the harness injects on every turn — UNCONDITIONAL safety floor, so
+ *      a family voice brain is never handed bash/write/edit/task even with the
+ *      disclosure kill switch off (see tool-groups.ts CODING_BUILTIN_TOOL_NAMES);
+ *   2. progressive tool disclosure (shrink the Zoe schemas the model sees to
+ *      core + active groups) — also strips the coding built-ins, but step 1
+ *      guarantees it regardless of ZOE_BRAIN_PROGRESSIVE_TOOLS;
+ *   3. the iteration cap (past the cap, strip ALL tools so the turn must finish
+ *      in plain text).
+ * Exported for the offline unit tests only.
  */
 export function applyPolicies(context: Context): Context {
-  const disclosed = progressiveToolsEnabled() ? discloseTools(context) : context;
+  const safe = stripCodingBuiltins(context);
+  const disclosed = progressiveToolsEnabled() ? discloseTools(safe) : safe;
   return applyCap(disclosed);
 }
 
@@ -128,12 +140,50 @@ function asCompletionsModel(model: Model<Api>): Model<'openai-completions'> {
   return { ...model, api: 'openai-completions' } as Model<'openai-completions'>;
 }
 
+const DEFAULT_TEMPERATURE = 0.5;
+
+/**
+ * Sampling temperature for every brain model call, matching the canonical prod
+ * brain (services/zoe-data/zoe_agent.py pins 0.5). Without this, pi-ai sends no
+ * temperature and llama-server's default (0.7) applies — hotter sampling that
+ * measurably raises the MTP draft-acceptance token glitch ("I don'm …") at
+ * "I'm"/"I don't" fork points: flue at 0.7 corrupted ~3.5% of fork-heavy
+ * replies (5/128 pooled); prod at 0.5 was 0/74 and flue at 0.5 was 0/60.
+ * Overridable via ZOE_BRAIN_TEMPERATURE; validated (finite, 0..2) with the
+ * prod-parity default as fallback. Read per call, not at module load.
+ */
+export function brainTemperature(): number {
+  // Number('') is 0, which would silently mean GREEDY sampling — treat an
+  // empty/whitespace env as unset before validating.
+  const raw = (process.env.ZOE_BRAIN_TEMPERATURE ?? '').trim();
+  if (!raw) return DEFAULT_TEMPERATURE;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 && n <= 2 ? n : DEFAULT_TEMPERATURE;
+}
+
+/**
+ * Merge the brain temperature into the caller's options without clobbering an
+ * explicitly-set one (pi may pass its own temperature in some flows; an
+ * explicit caller value wins). Exported for the offline unit tests only.
+ */
+export function withBrainTemperature<T extends { temperature?: number }>(
+  options: T | undefined,
+): T {
+  const merged = { ...(options ?? {}) } as T;
+  if (merged.temperature === undefined) merged.temperature = brainTemperature();
+  return merged;
+}
+
 function cappedStream(
   model: Model<Api>,
   context: Context,
   options?: StreamOptions,
 ): AssistantMessageEventStream {
-  return streamOpenAICompletions(asCompletionsModel(model), applyPolicies(context), options);
+  return streamOpenAICompletions(
+    asCompletionsModel(model),
+    applyPolicies(context),
+    withBrainTemperature(options),
+  );
 }
 
 function cappedStreamSimple(
@@ -141,7 +191,11 @@ function cappedStreamSimple(
   context: Context,
   options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
-  return streamSimpleOpenAICompletions(asCompletionsModel(model), applyPolicies(context), options);
+  return streamSimpleOpenAICompletions(
+    asCompletionsModel(model),
+    applyPolicies(context),
+    withBrainTemperature(options),
+  );
 }
 
 let registered = false;

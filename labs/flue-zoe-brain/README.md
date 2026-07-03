@@ -39,11 +39,14 @@ does NOT mutate real data and instructs the model not to claim success).
 | `list_remove` | write | `list_remove` | `item`, `list_type?` |
 | `journal` | read+write | `journal_create` / `journal_prompt` / `journal_streak` | `action` (create/prompt/streak), `content?`, `mood?` — create is write-gated |
 | `people` | read+write | `people_create` / `people_relate` / `people_search` | `action` (create/relate/search), `name?`, `relationship?`, `related_to?`, `query?`, `notes?` — create/relate are write-gated |
+| `media` | write | `music_play` / `music_control` / `music_volume` / `set_volume` / `music_setup` | `action` (play/control/set_music_volume/system_volume/setup), `query?`, `command?`, `level?`, `direction?` — system_volume = Zoe's TTS volume, not the player |
+| `home` | write | `smart_home` (validated; entity_id built server-side) | `action` (on/off/dim/brighten), `room?` — lights only |
+| `remember_fact` | write | `memory_store` (→ MemoryService.ingest; the one new zoe-data intent) | `fact` |
 | `activate_abilities` | local | none (progressive disclosure, see below) | `group` |
 
 ## Progressive tool disclosure
 
-The model does **not** see all 16 tool schemas every call (on the 4B brain that
+The model does **not** see all 19 tool schemas every call (on the 4B brain that
 bloats the prompt, slows prefill in the 8k context, and hurts tool choice). The
 sidecar ports prod's pattern (`services/zoe-core/extensions/abilities.ts`:
 always-on core + relevance-matched tools) onto its own wire seam:
@@ -57,6 +60,18 @@ always-on core + relevance-matched tools) onto its own wire seam:
   the model calls still executes with unchanged identity fail-closed and
   write-gate semantics — disclosure shrinks what the model *sees*, it is not
   a security boundary.
+- **Coding built-ins are always stripped (safety floor):** Flue's harness
+  injects its framework coding tools — `read`, `write`, `edit`, `bash`, `grep`,
+  `glob`, `task` — into `context.tools` on **every** turn regardless of the
+  agent's declared tool list (verified in `@flue/runtime`'s `createTools`;
+  `defineAgent` exposes no option to suppress them). A family **voice** brain
+  must never be handed `bash`/`write`/`edit`/`task`, and the extra schemas bloat
+  the 4B context. `src/tools/tool-groups.ts` carries an explicit denylist
+  (`CODING_BUILTIN_TOOL_NAMES`) and strips these **unconditionally** —
+  `stripCodingBuiltins` runs in `applyPolicies` even when
+  `ZOE_BRAIN_PROGRESSIVE_TOOLS=false`, so the disclosure kill switch can never
+  re-expose them. Real Zoe tools (including ungrouped future ones) are never
+  affected.
 - **Active set** (`src/tools/tool-groups.ts`, derived statelessly from the
   request's own message window): the always-on core (`get_time`,
   `recall_memory`, `activate_abilities`) + groups keyword-matched against the
@@ -77,6 +92,18 @@ always-on core + relevance-matched tools) onto its own wire seam:
   keyword triggers cover high-value indirect phrasings
   (washing/laundry/outside → weather, "anything on \<day\>" / "am I free" →
   calendar). On-box measurement checklist: `LANDING.md`.
+- **In-session context doctrine** (`IN_SESSION_CONTEXT_DOCTRINE` in
+  `src/agents/zoe.ts`): the parity gate found the imperative recall doctrine
+  ("you do NOT know anything about the person from your own head; ALWAYS call
+  `recall_memory` first") was, taken absolutely, making the model distrust the
+  live transcript — with an empty fresh-user recall store it forgot facts the
+  user stated 1–3 turns earlier THIS session ("My name is Alex" → "What's my
+  name?" → "I don't have anything stored about your name"). The appended
+  doctrine rebalances precedence: facts stated during the conversation are used
+  immediately from context, and an empty recall result means "nothing stored
+  from before", not "never told this session". It does NOT weaken
+  anti-fabrication or the past-conversation `recall_memory` rule — recall still
+  fires ≥90% on standalone recall prompts.
 - **Kill switch:** `ZOE_BRAIN_PROGRESSIVE_TOOLS=false` restores
   all-schemas-every-call (A/B comparison).
 

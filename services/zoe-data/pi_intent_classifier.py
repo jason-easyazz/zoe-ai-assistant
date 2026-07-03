@@ -14,12 +14,14 @@ import logging
 import glob
 import os
 import re
+import subprocess
 import time
 import uuid
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Mapping
 
+from async_subprocess import AsyncPipeProcess, run_to_completion, spawn_pipe_process
 from pi_runtime_probe import probe_pi_runtime
 from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS, intent_group_for_intent
 
@@ -314,19 +316,16 @@ async def _classify_with_pi_print(
     cmd = _pi_command(active_config, prompt)
     run_env = _pi_subprocess_env(runtime_env)
     start = time.perf_counter()
+    # Run-to-completion OFF the event-loop thread (spawn+communicate+timeout+kill
+    # all happen inside a worker thread) so a cold Pi spawn can't stall the loop.
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
+        completed = await run_to_completion(
+            cmd,
             cwd=active_config.cwd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
             env=run_env,
+            timeout=active_config.timeout_seconds,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=active_config.timeout_seconds)
-    except asyncio.TimeoutError:
-        if "proc" in locals():
-            proc.kill()
-            await proc.communicate()
+    except subprocess.TimeoutExpired:
         logger.debug("Pi intent governor timed out after %.2fs", active_config.timeout_seconds)
         return None
     except Exception as exc:
@@ -334,10 +333,10 @@ async def _classify_with_pi_print(
         return None
 
     latency_ms = (time.perf_counter() - start) * 1000
-    if proc.returncode != 0:
-        logger.debug("Pi intent governor failed rc=%s stderr=%s", proc.returncode, stderr.decode(errors="replace")[:500])
+    if completed.returncode != 0:
+        logger.debug("Pi intent governor failed rc=%s stderr=%s", completed.returncode, completed.stderr.decode(errors="replace")[:500])
         return None
-    return _parse_pi_classification(stdout.decode(errors="replace"), latency_ms=latency_ms)
+    return _parse_pi_classification(completed.stdout.decode(errors="replace"), latency_ms=latency_ms)
 
 
 async def _classify_with_pi_rpc(
@@ -433,7 +432,7 @@ class _PiRpcIntentWorker:
     def __init__(self, config: PiIntentClassifierConfig, env: Mapping[str, str]) -> None:
         self.config = config
         self.env = _pi_subprocess_env(env)
-        self.proc: asyncio.subprocess.Process | None = None
+        self.proc: AsyncPipeProcess | None = None
         self._lock = asyncio.Lock()
 
     async def prompt(self, prompt: str, *, timeout_seconds: float) -> str:
@@ -468,12 +467,11 @@ class _PiRpcIntentWorker:
     async def _ensure_started(self) -> None:
         if self.proc and self.proc.returncode is None:
             return
-        self.proc = await asyncio.create_subprocess_exec(
-            *_pi_rpc_command(self.config),
+        # Long-lived RPC process we stream to/from — spawn OFF the event-loop
+        # thread (fork on the loop has stalled the whole service before).
+        self.proc = await spawn_pipe_process(
+            _pi_rpc_command(self.config),
             cwd=self.config.cwd,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
             env=self.env,
         )
 

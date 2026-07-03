@@ -40,6 +40,21 @@
  *       people_relate {name_a,name_b,role} / people_search {query}
  *       (create/relate are write-gated)
  *
+ * Wave 2 — "music & home" action tools (cut-list record §3, Wave 2). Grouped
+ * action-dispatch over EXISTING intents — zero new zoe-data surface:
+ *     - media action=play|control|set_music_volume|system_volume|setup →
+ *       music_play / music_control / music_volume / set_volume / music_setup
+ *       (system_volume drives Zoe's TTS volume, NEVER the player)
+ *     - home  action=on|off|dim|brighten (+room?) → the VALIDATED smart_home
+ *       intent (entity_id built server-side; legacy raw ha_control is NOT ported)
+ *
+ * Wave 3 — "memory write path" (cut-list record §3, Wave 3). The ONE wave with
+ * a zoe-data touch:
+ *     - remember_fact → memory_store {text} (NEW _DISPATCHABLE_INTENTS entry,
+ *       fulfilled via MemoryService.ingest — the explicit model-callable memory
+ *       write covering the legacy mempalace_add / memory_update gap)
+ *
+
  * SECURITY — identity is bound in TRUSTED CODE, never from model args. Tool
  * arguments are model-chosen and are NOT an auth boundary, so the acting
  * `user_id` is read from the env (ZOE_BRAIN_USER_ID), exactly as prod resolves
@@ -690,6 +705,181 @@ const people = defineTool({
   },
 });
 
+// ─── Wave 2: music & home action tools (cut-list record §3, Wave 2) ──────────
+
+/**
+ * Clamp a 0-100 volume level (mirrors prod abilities/media.ts clampLevel).
+ * Non-finite input falls back to 50.
+ */
+function clampLevel(v: unknown): number {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 50;
+}
+
+/**
+ * media — music/audio playback on the home media players, grouped
+ * action-dispatch (mirrors prod's abilities/media.ts EXACTLY). All five actions
+ * map to the already-allowlisted music/set_volume intents — zero new zoe-data
+ * surface.
+ *
+ *   play           → music_play    {query}
+ *   control        → music_control {command}
+ *   set_music_volume → music_volume {level}   (0-100 on the PLAYER)
+ *   system_volume  → set_volume    {direction, level?}  (Zoe's OWN TTS volume)
+ *   setup          → music_setup   {}
+ *
+ * READ-ONLY-on-the-player discipline (cut-list record Wave-2 note): system_volume
+ * drives set_volume (Zoe's speaking/TTS volume) and MUST NOT touch the music
+ * player; set_music_volume is the only path that changes player volume. These
+ * are distinct intents server-side, mirroring abilities/media.ts:74-89.
+ *
+ * WRITE gate: these are device actions, so they run through runWrite — dry-run
+ * unless ZOE_BRAIN_ALLOW_WRITES=true, so a parity run never drives the real
+ * speakers. Identity stays env-bound (never model args).
+ */
+const media = defineTool({
+  name: 'media',
+  description:
+    'Control music/audio playback on the home media players. action=play (start a ' +
+    'track/artist/genre/playlist), control (pause/resume/stop/next/previous/shuffle/' +
+    "mute/unmute/now_playing), set_music_volume (0-100 on the player), system_volume " +
+    "(Zoe's OWN speaking/TTS volume, NOT the player), setup (connect Spotify/etc.). " +
+    'NOT for smart-home lights — use the home tool for those.',
+  input: v.object({
+    action: v.picklist(['play', 'control', 'set_music_volume', 'system_volume', 'setup']),
+    query: v.optional(v.string()),
+    command: v.optional(v.string()),
+    level: v.optional(v.number()),
+    direction: v.optional(v.string()),
+  }),
+  run: async ({ input, signal }) => {
+    switch (input.action) {
+      case 'play': {
+        const query = String(input?.query ?? '').trim() || 'music';
+        return runWrite('music_play', { query }, 'music player', `playing "${query}"`,
+          `Playing ${query}.`, signal);
+      }
+      case 'control': {
+        const command = String(input?.command ?? '').trim();
+        if (!command) return "What would you like — pause, resume, skip, or what's playing?";
+        return runWrite('music_control', { command }, 'music player', `"${command}"`,
+          'Done.', signal);
+      }
+      case 'set_music_volume': {
+        if (input?.level == null) return 'What volume would you like (0-100)?';
+        const level = clampLevel(input.level);
+        return runWrite('music_volume', { level }, 'music player',
+          `setting the music volume to ${level}`, `Music volume set to ${level}.`, signal);
+      }
+      case 'system_volume': {
+        const direction = String(input?.direction ?? 'up').toLowerCase();
+        if (direction === 'set') {
+          if (input?.level == null) return 'What level should I set my speaking volume to (0-100)?';
+          const level = clampLevel(input.level);
+          return runWrite('set_volume', { direction: 'set', level }, 'volume',
+            `setting my speaking volume to ${level}`, `Set my speaking volume to ${level}.`, signal);
+        }
+        // up/down: OMIT `level` entirely — the set_volume intent treats it as
+        // optional and an explicit null could be mishandled vs. absent (mirrors
+        // prod abilities/media.ts). This drives Zoe's TTS volume, never the player.
+        const dir = direction === 'down' ? 'down' : 'up';
+        return runWrite('set_volume', { direction: dir }, 'volume',
+          `turning my speaking volume ${dir}`, `Turned my speaking volume ${dir}.`, signal);
+      }
+      case 'setup':
+        return runWrite('music_setup', {}, 'music player', 'music setup',
+          "Let's get your music connected.", signal);
+    }
+  },
+});
+
+/**
+ * home — smart-home LIGHT control via the validated smart_home intent. action=
+ * on|off|dim|brighten, optionally scoped to a room. Mirrors prod's
+ * abilities/media.ts `home` ability.
+ *
+ * VALIDATED-INTENT discipline (cut-list record item #13): this routes through
+ * the `smart_home` intent, which builds the Home Assistant entity_id
+ * SERVER-SIDE from the room name (services/zoe-data/intent_router.py
+ * _execute_smart_home_intent) — the model NEVER supplies a raw entity_id. The
+ * legacy raw-`entity_id` `ha_control` is Must-NOT-port-as-is; this is its
+ * validated replacement. lights-only, by backend design.
+ *
+ * No "toggle": the smart_home backend only honours explicit turn_on/turn_off/
+ * dim/brighten, so exposing toggle would lie (mirrors abilities/media.ts).
+ *
+ * WRITE gate: device action → runWrite (dry-run unless ZOE_BRAIN_ALLOW_WRITES).
+ */
+const ACTION_MAP: Record<string, string> = {
+  on: 'turn_on', off: 'turn_off', dim: 'dim', brighten: 'brighten',
+};
+const home = defineTool({
+  name: 'home',
+  description:
+    'Control smart-home lights via Home Assistant. action=on|off|dim|brighten, ' +
+    "optionally scoped to a room (kitchen/bedroom/living room). Lights only. NOT " +
+    'for music/media volume — use the media tool for that.',
+  input: v.object({
+    action: v.picklist(['on', 'off', 'dim', 'brighten']),
+    room: v.optional(v.string()),
+  }),
+  run: async ({ input, signal }) => {
+    const action = ACTION_MAP[input.action];
+    const roomRaw = String(input?.room ?? '').trim();
+    const room = roomRaw ? roomRaw.toLowerCase().replace(/\s+/g, '_') : '';
+    const where = room ? `the ${roomRaw} lights` : 'the lights';
+    const label = { on: 'on', off: 'off', dim: 'dimmed', brighten: 'brightened' }[input.action];
+    // entity is fixed 'light' in trusted code; the backend validates room→entity_id.
+    // OMIT `room` entirely when none is given (rather than sending an explicit
+    // null) — mirrors the set_volume up/down pattern and avoids relying on the
+    // backend treating null the same as absent. intent_router's
+    // _execute_smart_home_intent uses slots.get("room") → falls back to the
+    // ZOE_DEFAULT_LIGHT_ENTITY group when the key is missing.
+    const slots: Record<string, unknown> = { action, entity: 'light' };
+    if (room) slots.room = room;
+    return runWrite('smart_home', slots, 'smart home',
+      `turning ${where} ${input.action}`, `Turned ${where} ${label}.`, signal);
+  },
+});
+
+// ─── Wave 3: explicit memory write (cut-list record §3, Wave 3) ──────────────
+
+/**
+ * remember_fact — an EXPLICIT, model-callable memory-write tool. WRITE →
+ * memory_store {text}. This is the ONE Wave-3 path with a zoe-data touch: the
+ * new `memory_store` intent added to _DISPATCHABLE_INTENTS
+ * (services/zoe-data/routers/system.py), fulfilled by execute_intent via
+ * MemoryService.ingest — the same durable write path expert_dispatch uses for
+ * voice facts (PII scrubbing, dedup, scope validation all apply).
+ *
+ * Covers the gap the legacy mempalace_add / memory_update left (cut-list items
+ * 1–3): the model can now DECIDE to persist a fact the user asks it to keep,
+ * rather than relying solely on the ambient end-of-turn capture. recall_memory
+ * stays the READ side; this is the explicit WRITE side.
+ *
+ * WRITE gate: behind ZOE_BRAIN_ALLOW_WRITES (dry-run by default), so a parity
+ * run never writes real memories. Identity stays env-bound (never model args) —
+ * fail-closed on no user, exactly like every other tool here.
+ */
+const rememberFact = defineTool({
+  name: 'remember_fact',
+  description:
+    'Store a durable fact the user explicitly asks you to remember about them, ' +
+    'their life, or their preferences ("remember that my anniversary is June 3rd", ' +
+    '"remember I\'m allergic to penicillin"). Use ONLY when the user clearly wants ' +
+    'something kept for later — not for passing chit-chat. To RECALL stored facts ' +
+    'use recall_memory instead.',
+  input: v.object({
+    fact: v.pipe(v.string(), v.trim(), v.minLength(1)),
+  }),
+  run: async ({ input, signal }) => {
+    const fact = String(input.fact ?? '').trim();
+    if (!fact) return 'What would you like me to remember?';
+    return runWrite('memory_store', { text: fact }, 'memory',
+      `the fact "${fact}"`, "Got it — I'll remember that.", signal);
+  },
+});
+
 // ─── Progressive disclosure activator ────────────────────────────────────────
 
 /**
@@ -757,6 +947,11 @@ export const zoeTools = [
   noteSearch,
   journal,
   people,
+  // Wave 2 — music & home action tools (cut-list record §3; writes gated)
+  media,
+  home,
+  // Wave 3 — explicit memory write (cut-list record §3; write gated)
+  rememberFact,
   // Progressive disclosure — always-on activator for the grouped tools above
   activateAbilities,
 ];

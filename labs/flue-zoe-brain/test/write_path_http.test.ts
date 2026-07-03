@@ -158,6 +158,108 @@ const WRITE_TOOL_CASES: Array<{
     dryRunPattern: /WRITE DISABLED.*link between "Alice" and "Bob".*NOT saved/i,
     successPattern: /Linked Alice and Bob as sibling\./,
   },
+  // ─── Wave 2 write tools (cut-list record §3, Wave 2) ────────────────────────
+  {
+    name: 'media',
+    input: { action: 'play', query: 'some jazz' },
+    expectedPayload: {
+      user_id: ACTING_USER,
+      intent: 'music_play',
+      slots: { query: 'some jazz' },
+    },
+    dryRunPattern: /WRITE DISABLED.*playing "some jazz".*NOT/i,
+    successPattern: /Now playing: some jazz\./,
+  },
+  {
+    name: 'media',
+    input: { action: 'set_music_volume', level: 30 },
+    expectedPayload: {
+      user_id: ACTING_USER,
+      intent: 'music_volume',
+      slots: { level: 30 },
+    },
+    dryRunPattern: /WRITE DISABLED.*music volume to 30.*NOT/i,
+    successPattern: /Music volume set to 30\./,
+  },
+  {
+    name: 'media',
+    input: { action: 'system_volume', direction: 'up' },
+    expectedPayload: {
+      user_id: ACTING_USER,
+      intent: 'set_volume',
+      slots: { direction: 'up' },
+    },
+    dryRunPattern: /WRITE DISABLED.*speaking volume up.*NOT/i,
+    successPattern: /Turned my speaking volume up\./,
+  },
+  {
+    name: 'home',
+    input: { action: 'on', room: 'kitchen' },
+    expectedPayload: {
+      user_id: ACTING_USER,
+      intent: 'smart_home',
+      slots: { action: 'turn_on', entity: 'light', room: 'kitchen' },
+    },
+    dryRunPattern: /WRITE DISABLED.*turning the kitchen lights on.*NOT/i,
+    successPattern: /Kitchen lights on\./,
+  },
+  {
+    name: 'home',
+    // No room → the `room` key is OMITTED from the payload (not sent as null).
+    input: { action: 'off' },
+    expectedPayload: {
+      user_id: ACTING_USER,
+      intent: 'smart_home',
+      slots: { action: 'turn_off', entity: 'light' },
+    },
+    dryRunPattern: /WRITE DISABLED.*turning the lights off.*NOT/i,
+    successPattern: /Lights off\./,
+  },
+  {
+    name: 'media',
+    input: { action: 'control', command: 'pause' },
+    expectedPayload: {
+      user_id: ACTING_USER,
+      intent: 'music_control',
+      slots: { command: 'pause' },
+    },
+    dryRunPattern: /WRITE DISABLED.*"pause".*NOT/i,
+    successPattern: /Paused\./,
+  },
+  {
+    name: 'media',
+    input: { action: 'setup' },
+    expectedPayload: {
+      user_id: ACTING_USER,
+      intent: 'music_setup',
+      slots: {},
+    },
+    dryRunPattern: /WRITE DISABLED.*music setup.*NOT/i,
+    successPattern: /connect Spotify or YouTube Music/i,
+  },
+  {
+    name: 'media',
+    input: { action: 'system_volume', direction: 'set', level: 40 },
+    expectedPayload: {
+      user_id: ACTING_USER,
+      intent: 'set_volume',
+      slots: { direction: 'set', level: 40 },
+    },
+    dryRunPattern: /WRITE DISABLED.*speaking volume to 40.*NOT/i,
+    successPattern: /Set my speaking volume to 40\./,
+  },
+  // ─── Wave 3 write tool (cut-list record §3, Wave 3) ────────────────────────
+  {
+    name: 'remember_fact',
+    input: { fact: 'my anniversary is June 3rd' },
+    expectedPayload: {
+      user_id: ACTING_USER,
+      intent: 'memory_store',
+      slots: { text: 'my anniversary is June 3rd' },
+    },
+    dryRunPattern: /WRITE DISABLED.*the fact "my anniversary is June 3rd".*NOT/i,
+    successPattern: /Got it — I'll remember that\./,
+  },
 ];
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
@@ -200,6 +302,38 @@ function dispatchResult(intent: string, slots: Record<string, unknown>): string 
   }
   if (intent === 'people_search') {
     return `Found:\n  - ${slots.query} (friend)`;
+  }
+  // ─── Wave 2 confirmation strings (mirror intent_router fulfillment) ─────────
+  if (intent === 'memory_store') {
+    return "Got it — I'll remember that.";
+  }
+  if (intent === 'music_play') {
+    return `Now playing: ${slots.query}.`;
+  }
+  if (intent === 'music_control') {
+    const labels: Record<string, string> = {
+      pause: 'Paused', resume: 'Resumed', stop: 'Stopped',
+      next: 'Skipped', previous: 'Went back',
+    };
+    return `${labels[String(slots.command ?? '')] ?? 'Done'}.`;
+  }
+  if (intent === 'music_setup') {
+    return 'To play music, connect Spotify or YouTube Music in settings.';
+  }
+  if (intent === 'music_volume') {
+    return `Music volume set to ${slots.level}.`;
+  }
+  if (intent === 'set_volume') {
+    const dir = String(slots.direction ?? '');
+    if (dir === 'set') return `Set my speaking volume to ${slots.level}.`;
+    return `Turned my speaking volume ${dir}.`;
+  }
+  if (intent === 'smart_home') {
+    const labels: Record<string, string> = { turn_on: 'on', turn_off: 'off', dim: 'dimmed', brighten: 'brightened' };
+    const label = labels[String(slots.action ?? '')] ?? String(slots.action ?? '');
+    const room = slots.room ? String(slots.room).replace(/_/g, ' ') : '';
+    const where = room ? room.replace(/\b\w/g, (c) => c.toUpperCase()) + ' lights' : 'Lights';
+    return `${where} ${label}.`;
   }
   if (intent === 'timer_create') {
     const label = String(slots.label ?? '').trim();
