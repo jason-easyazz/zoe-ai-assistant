@@ -81,6 +81,7 @@ def test_memory_store_is_dispatchable(monkeypatch):
     async def fake_execute_intent(intent, user_id="family-admin"):
         captured["intent"] = intent.name
         captured["slots"] = dict(intent.slots)
+        captured["user_id"] = user_id
         return "Got it — I'll remember that."
 
     monkeypatch.setattr(intent_router, "execute_intent", fake_execute_intent)
@@ -93,8 +94,11 @@ def test_memory_store_is_dispatchable(monkeypatch):
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["ok"] is True
-    assert captured["intent"] == "memory_store"
-    assert captured["slots"] == {"text": "my anniversary is June 3rd"}
+    assert captured == {
+        "intent": "memory_store",
+        "slots": {"text": "my anniversary is June 3rd"},
+        "user_id": "family-admin",
+    }
 
 
 @pytest.mark.asyncio
