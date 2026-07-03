@@ -140,12 +140,50 @@ function asCompletionsModel(model: Model<Api>): Model<'openai-completions'> {
   return { ...model, api: 'openai-completions' } as Model<'openai-completions'>;
 }
 
+const DEFAULT_TEMPERATURE = 0.5;
+
+/**
+ * Sampling temperature for every brain model call, matching the canonical prod
+ * brain (services/zoe-data/zoe_agent.py pins 0.5). Without this, pi-ai sends no
+ * temperature and llama-server's default (0.7) applies — hotter sampling that
+ * measurably raises the MTP draft-acceptance token glitch ("I don'm …") at
+ * "I'm"/"I don't" fork points: flue at 0.7 corrupted ~3.5% of fork-heavy
+ * replies (5/128 pooled); prod at 0.5 was 0/74 and flue at 0.5 was 0/60.
+ * Overridable via ZOE_BRAIN_TEMPERATURE; validated (finite, 0..2) with the
+ * prod-parity default as fallback. Read per call, not at module load.
+ */
+export function brainTemperature(): number {
+  // Number('') is 0, which would silently mean GREEDY sampling — treat an
+  // empty/whitespace env as unset before validating.
+  const raw = (process.env.ZOE_BRAIN_TEMPERATURE ?? '').trim();
+  if (!raw) return DEFAULT_TEMPERATURE;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 && n <= 2 ? n : DEFAULT_TEMPERATURE;
+}
+
+/**
+ * Merge the brain temperature into the caller's options without clobbering an
+ * explicitly-set one (pi may pass its own temperature in some flows; an
+ * explicit caller value wins). Exported for the offline unit tests only.
+ */
+export function withBrainTemperature<T extends { temperature?: number }>(
+  options: T | undefined,
+): T {
+  const merged = { ...(options ?? {}) } as T;
+  if (merged.temperature === undefined) merged.temperature = brainTemperature();
+  return merged;
+}
+
 function cappedStream(
   model: Model<Api>,
   context: Context,
   options?: StreamOptions,
 ): AssistantMessageEventStream {
-  return streamOpenAICompletions(asCompletionsModel(model), applyPolicies(context), options);
+  return streamOpenAICompletions(
+    asCompletionsModel(model),
+    applyPolicies(context),
+    withBrainTemperature(options),
+  );
 }
 
 function cappedStreamSimple(
@@ -153,7 +191,11 @@ function cappedStreamSimple(
   context: Context,
   options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
-  return streamSimpleOpenAICompletions(asCompletionsModel(model), applyPolicies(context), options);
+  return streamSimpleOpenAICompletions(
+    asCompletionsModel(model),
+    applyPolicies(context),
+    withBrainTemperature(options),
+  );
 }
 
 let registered = false;
