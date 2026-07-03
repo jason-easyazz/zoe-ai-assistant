@@ -1541,14 +1541,29 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         return result
 
     elif name == "list_remove_item":
+        from intent_router import _escape_like_pattern
+
         lt = args["list_type"]
         text = args["item_text"]
+        # Prefer an exact (case-insensitive) match so "milk" doesn't complete
+        # "almond milk" when both are on the list; fall back to a substring
+        # match (LIKE-escaped, so literal % / _ in item text aren't treated
+        # as wildcards) only if nothing matches exactly.
         cursor = await db.execute(
             "SELECT li.id, li.list_id FROM list_items li JOIN lists l ON li.list_id = l.id"
-            " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=? AND li.text LIKE ? AND li.deleted=0 AND l.deleted=0 LIMIT 1",
-            (user_id, lt, f"%{text}%"),
+            " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=? AND LOWER(li.text)=LOWER(?)"
+            " AND li.deleted=0 AND l.deleted=0 LIMIT 1",
+            (user_id, lt, text),
         )
         row = await cursor.fetchone()
+        if not row:
+            cursor = await db.execute(
+                "SELECT li.id, li.list_id FROM list_items li JOIN lists l ON li.list_id = l.id"
+                " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=? AND li.text LIKE ? ESCAPE '\\'"
+                " AND li.deleted=0 AND l.deleted=0 LIMIT 1",
+                (user_id, lt, f"%{_escape_like_pattern(text)}%"),
+            )
+            row = await cursor.fetchone()
         if not row:
             return {"error": f"Item '{text}' not found in {lt} lists"}
         item_id = row["id"]
