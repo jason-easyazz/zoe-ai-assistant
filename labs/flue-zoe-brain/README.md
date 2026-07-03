@@ -104,6 +104,16 @@ always-on core + relevance-matched tools) onto its own wire seam:
   from before", not "never told this session". It does NOT weaken
   anti-fabrication or the past-conversation `recall_memory` rule — recall still
   fires ≥90% on standalone recall prompts.
+- **Voice-delivery doctrine** (`VOICE_DELIVERY_DOCTRINE` in `src/agents/zoe.ts`),
+  ported from prod's battle-tested spoken-mode soul (`_ZOE_SOUL_VOICE` in
+  `services/zoe-data/zoe_agent.py`): since this family sidecar IS the voice brain,
+  it now carries the same tight spoken discipline — reply in 1–3 short complete
+  sentences, no markdown/lists/code, lead with the answer, brief but never clipped.
+  The activator doctrine also gained prod's tool-first directives ("act
+  proactively, don't ask a clarifying question first"; "don't claim you can't
+  until a tool has actually tried and failed"). These sharpen *delivery* only —
+  recall/activation/anti-fabrication are unchanged, and the on-box recall gate
+  stays ≥90% (measured 19/20 = 95% at landing).
 - **Kill switch:** `ZOE_BRAIN_PROGRESSIVE_TOOLS=false` restores
   all-schemas-every-call (A/B comparison).
 
