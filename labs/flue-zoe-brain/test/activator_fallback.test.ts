@@ -122,12 +122,28 @@ test('voice-delivery doctrine: spoken-length + no-markdown discipline, present i
   assert.ok(ZOE_INSTRUCTIONS.includes(VOICE_DELIVERY_DOCTRINE));
   assert.match(VOICE_DELIVERY_DOCTRINE, /spoken aloud/);
   assert.match(VOICE_DELIVERY_DOCTRINE, /No markdown/);
-  assert.match(VOICE_DELIVERY_DOCTRINE, /Lead with the answer/);
+  assert.match(VOICE_DELIVERY_DOCTRINE, /lead with it/);
   assert.match(VOICE_DELIVERY_DOCTRINE, /brief but never clipped/);
   // Must NOT weaken the behavioural doctrine: delivery guidance only, no new
   // recall/activation/fabrication rules that could conflict with the above.
   assert.doesNotMatch(VOICE_DELIVERY_DOCTRINE, /recall_memory/);
   assert.doesNotMatch(VOICE_DELIVERY_DOCTRINE, /activate_abilities/);
+});
+
+test('voice delivery is self-scoped + ordered BEFORE the tool doctrine (Greptile #997 P2)', () => {
+  // The delivery block must explicitly defer to the tool rules so "lead with the
+  // answer" can't nudge a 4B model into a direct reply over a needed activation.
+  assert.match(VOICE_DELIVERY_DOCTRINE, /the tool rules above still come first/);
+  assert.match(VOICE_DELIVERY_DOCTRINE, /Once you actually have your answer, lead with it/);
+  // And the behavioural doctrines (activate-first / never-fabricate) must sit
+  // AFTER voice delivery in the assembled instructions, keeping last-position
+  // weight closest to the generation boundary.
+  const iVoice = ZOE_INSTRUCTIONS.indexOf(VOICE_DELIVERY_DOCTRINE);
+  const iActivator = ZOE_INSTRUCTIONS.indexOf(ACTIVATOR_DOCTRINE);
+  const iInSession = ZOE_INSTRUCTIONS.indexOf(IN_SESSION_CONTEXT_DOCTRINE);
+  assert.ok(iVoice >= 0 && iActivator >= 0 && iInSession >= 0);
+  assert.ok(iVoice < iActivator, 'voice delivery must precede the activator doctrine');
+  assert.ok(iActivator < iInSession, 'activator then in-session context stay last');
 });
 
 test('in-session context doctrine: live transcript beats an empty recall store', () => {

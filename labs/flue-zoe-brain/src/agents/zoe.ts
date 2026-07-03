@@ -97,7 +97,7 @@ export const ACTIVATOR_DOCTRINE = [
 // sharpens delivery, it does not add new behaviour, and it does not touch recall,
 // activation, or anti-fabrication.
 export const VOICE_DELIVERY_DOCTRINE = [
-  'How you speak: this is spoken aloud, so reply the way you\'d actually say it — usually 1-3 short, complete sentences. No markdown, bullet lists, headings, or code blocks; no bold or asterisks. Lead with the answer, skip preamble and recaps, and be brief but never clipped — finish your thought, then stop. If the message carries emotional weight, acknowledge that first, in a few words.',
+  'How you speak (this shapes phrasing, not whether to use a tool — the tool rules above still come first): this is spoken aloud, so reply the way you\'d actually say it — usually 1-3 short, complete sentences. No markdown, bullet lists, headings, or code blocks; no bold or asterisks. Once you actually have your answer, lead with it and skip preamble and recaps; be brief but never clipped — finish your thought, then stop. If the message carries emotional weight, acknowledge that first, in a few words.',
 ].join('\n');
 
 // In-session context doctrine, appended AFTER the soul + activator doctrine.
@@ -116,8 +116,16 @@ export const IN_SESSION_CONTEXT_DOCTRINE = [
   'recall_memory is still how you learn anything from PAST conversations, so keep calling it first for those. When someone asks what you know or remember about them in general, call recall_memory first as always — then also weave in anything they told you this session. An empty recall result means nothing is stored from before — NOT that the user never told you this session; never let an empty recall store make you contradict or forget what the user has said in front of you now.',
 ].join('\n');
 
-/** The full system instructions the agent runs with (soul + tool doctrine + voice delivery). */
-export const ZOE_INSTRUCTIONS = `${ZOE_SOUL}\n\n${ACTIVATOR_DOCTRINE}\n\n${IN_SESSION_CONTEXT_DOCTRINE}\n\n${VOICE_DELIVERY_DOCTRINE}`;
+/**
+ * The full system instructions the agent runs with. Order is deliberate: voice
+ * delivery (phrasing) sits BEFORE the behavioural doctrines so the tool-first /
+ * activate-first / never-fabricate rules keep the last-position weight closest to
+ * the generation boundary (Greptile #997 P2 — on a 4B model a trailing "lead with
+ * the answer" could otherwise nudge a direct reply over a needed activate_abilities
+ * call). Delivery is also self-scoped ("this shapes phrasing, not whether to use a
+ * tool — the tool rules above still come first").
+ */
+export const ZOE_INSTRUCTIONS = `${ZOE_SOUL}\n\n${VOICE_DELIVERY_DOCTRINE}\n\n${ACTIVATOR_DOCTRINE}\n\n${IN_SESSION_CONTEXT_DOCTRINE}`;
 
 // Exporting `route` publishes the HTTP agent endpoints (POST/GET /agents/zoe/:id).
 // FAIL CLOSED: this route drives the live Gemma brain on :11434, so by default a
