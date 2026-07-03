@@ -1,11 +1,62 @@
-# LANDING — activate_abilities fallback fix (#965, merged — measurement pending)
+# LANDING — operator on-box checklists (sandbox cannot reach live services)
+
+## Sentinel stream verification (Seam-A streaming mode)
+
+The sidecar now emits the prod text-delta + `__TOOL__`/`__THINKING__` sentinel
+stream (cutover blocker #3, docs/architecture/zoe-flue-integration.md §10) as
+NDJSON via content negotiation. The byte contract is pinned offline
+(`test/sentinel_stream.test.ts`, 59/59 green); this is the live half — eyeball
+sentinels + deltas against the real Gemma brain.
+
+1. Build and start the sidecar on the scratch port (hand-started, lab
+   discipline — do NOT touch the live services):
+
+   ```bash
+   npm install && npm run build
+   ZOE_BRAIN_OPEN=1 ZOE_BRAIN_USER_ID=family-admin ZOE_BRAIN_ALLOW_WRITES=false \
+     ZOE_DATA_URL=http://127.0.0.1:8000 PORT=3579 node dist/server.mjs
+   ```
+
+2. Curl the streaming mode with a prompt that forces a tool call (`-N`
+   disables curl buffering so you see deltas arrive live):
+
+   ```bash
+   curl -N -sS -X POST \
+     -H 'Accept: application/x-ndjson' -H 'Content-Type: application/json' \
+     -d '{"message":"whats the weather looking like right now?"}' \
+     'http://127.0.0.1:3579/agents/zoe/sentinel-check-1'
+   ```
+
+3. Eyeball the stream (one JSON value per line, in order):
+   - `"__TOOL__:{\"phase\": \"start\", ...}"` then `phase=args` BEFORE the
+     tool result — this is the line the voice filler (#844) keys off;
+   - `phase=result` after the tool runs;
+   - then plain-string text deltas arriving incrementally (not one blob);
+   - a final `{"done": true}` line.
+
+4. Confirm the whole-result mode still answers identically (regression guard):
+
+   ```bash
+   curl -sS -X POST -H 'Content-Type: application/json' \
+     -d '{"message":"whats the weather looking like right now?"}' \
+     'http://127.0.0.1:3579/agents/zoe/sentinel-check-2?wait=result'
+   ```
+
+5. Kill the sidecar by PORT ONLY when done — **NEVER `pkill -f`**, and
+   **NEVER restart :8000 (zoe-data) or :11434 (llama-server)**:
+
+   ```bash
+   lsof -ti tcp:3579 | xargs -r kill
+   ```
+
+## activate_abilities fallback fix (#965, merged — measurement pending)
 
 Operator checklist for the on-box half of #965's verification. The sandbox the
 change was built in cannot reach the live services (zoe-data :8000, llama-server
 :11434), so the measurement below is the operator's half — it has not been run
 yet.
 
-## What changed in #965 (already unit-tested, 38/38 green)
+### What changed in #965 (already unit-tested, 38/38 green)
 
 - `src/agents/zoe.ts` — imperative activator doctrine appended to the
   instructions (group catalogue + "you have NO weather/calendar/… knowledge of
@@ -16,7 +67,7 @@ yet.
   description + instructions); widened triggers: washing/laundry/outside →
   weather, "anything on <day>" / "am I free" → calendar.
 
-## On-box measurement (operator)
+### On-box measurement (operator)
 
 1. Build and start the sidecar (from `labs/flue-zoe-brain/`, hand-started, lab
    discipline — do NOT touch the live services):
@@ -51,7 +102,7 @@ yet.
    **NEVER restart :8000 (zoe-data) or :11434 (llama-server)** as part of this
    test.
 
-## Housekeeping note
+### Housekeeping note
 
 A stale git-worktree entry `~/.worktrees/flue-fallback` (branch
 `flue/activator-fallback`) exists on the box only as prunable metadata from an
