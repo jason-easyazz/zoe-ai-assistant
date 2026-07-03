@@ -13,6 +13,7 @@ THE production Zoe API: FastAPI app served by host uvicorn on port 8000. Owns ch
 - Memory: `hindsight_memory.py`, `hindsight_retain_candidates.py`, `conversation_context.py`.
 - Memory ops: Ingest (`memory_digest.py` dreaming), Query (`memory_service.py` search), and Lint (`memory_lint.py`) — the report-only scan for contradictions/stale/orphan/duplicate rows.
 - Streaming/UI protocol: `ag_ui_stream.py`, `card_service.py`, `card_contract.py`.
+- Voice capability helpers: `tts_waterfall.py` (TTS engine mechanics — Kokoro sidecar/ONNX singletons, Edge TTS, espeak-ng, speech-text cleaning; the waterfall ORDER is policy and stays inline in the `routers/voice_tts.py` handlers, pinned by `test_canonical_invariants.py`) and `stt_wake_strip.py` (Moonshine wake-word strip from #854). `routers/voice_tts.py` re-exports their symbols so importers and monkeypatching tests keep targeting the router module.
 - Local LLM endpoint: `gemma_endpoint.py` — `gemma_base()` resolves `GEMMA_SERVER_URL` to a `/v1`-free base. Modules that append `/v1/chat/completions` MUST build the URL via this helper (the live unit sets the value WITH `/v1`; appending again 404s). `zoe_agent`/`memory_digest` own their own convention.
 - Engineering loop: `greptile_client.py` and `background_runner.py`. The Greploop guard script is NOT here — it lives at `scripts/maintenance/greploop_guard.py` (see `scripts/AGENTS.md`).
 

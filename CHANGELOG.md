@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Service dependencies** - Correct dependency ordering in docker-compose
 
 ### Removed
+- **docs stale-doc cascade purge 2 (1/1)** — removed the 23 second-order stale docs left behind by the first purge: the 6 stale referrers (ALL_DOCUMENTATION_INDEX, IMPLEMENTATION_SUMMARY_V2.4.0, QUALITY_MAINTENANCE_GUIDE, TEST_FILE_MIGRATION_2025-11-16, LITELLM_RULES, INTENT_SYSTEM_RULES) + 2 second-order referrers (GOVERNANCE_IMPLEMENTATION_COMPLETE, SECURITY_FIXES_2025-11-17) + the 15 architecture docs they kept alive (LiteLLM/HassIL/code-execution/RouteLLM-era, all retired per docs/CANONICAL.md); reference-closure verified repo-wide; git history keeps every byte
 - **docs/architecture stale-doc purge 1/1** — removed 33 one-shot fix reports, status diaries, and test-result dumps (the 2025-11 batch: CHAT_*_FIX, CODE_EXECUTION status/results, FIXES_*, PAGE_HEALTH_REPORT, etc.); zero live references verified repo-wide; git history keeps every byte (`git log -- docs/architecture`)
 - **docs/archive purge 13/13** — removed the final 40 retired files; `docs/archive/` is now fully gone from the tree, git history keeps every byte (`git log -- docs/archive`)
 - **docs/archive purge 12/13** — removed 43 retired files; git history keeps them (`git log -- docs/archive`)

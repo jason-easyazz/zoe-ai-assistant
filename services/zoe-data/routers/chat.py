@@ -934,8 +934,12 @@ async def _build_panel_intent_card(intent, db, user_id: str) -> str:
                     if proc is not None and proc.returncode is None:
                         with contextlib.suppress(ProcessLookupError):
                             proc.kill()
+                        # Reap with wait(), not a second communicate(): the
+                        # timed-out communicate() was cancelled mid-read, and
+                        # re-entering it on a half-consumed transport can hang
+                        # or raise. wait() only reaps the exit status.
                         with contextlib.suppress(Exception):
-                            await proc.communicate()
+                            await _aio.wait_for(proc.wait(), timeout=5.0)
             ssh_dot = ("🟢 SSH ok" if reachable else "🔴 SSH unreachable") if reachable is not None else "⚪ no IP"
             lines.append(f"**{r['name'] or r['panel_id']}** · {ip or 'no IP'} · {ssh_dot} · last seen {r['last_seen_at'] or 'never'}")
         return "\n".join(lines)

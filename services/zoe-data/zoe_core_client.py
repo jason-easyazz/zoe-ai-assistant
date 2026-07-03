@@ -314,12 +314,15 @@ async def _spawn_pi_process(env: dict[str, str]) -> _AsyncPipeProcess:
 
     popen = await loop.run_in_executor(_SPAWN_POOL, _blocking_popen)
 
-    reader = asyncio.StreamReader(loop=loop)
-    read_protocol = asyncio.StreamReaderProtocol(reader, loop=loop)
+    # No explicit loop= args: this coroutine runs on the loop these objects
+    # will use, and the loop parameter was removed from asyncio's high-level
+    # APIs in 3.10 — the constructors bind the running loop themselves.
+    reader = asyncio.StreamReader()
+    read_protocol = asyncio.StreamReaderProtocol(reader)
     await loop.connect_read_pipe(lambda: read_protocol, popen.stdout)
 
     write_transport, write_protocol = await loop.connect_write_pipe(
-        lambda: asyncio.streams.FlowControlMixin(loop=loop), popen.stdin
+        asyncio.streams.FlowControlMixin, popen.stdin
     )
     writer = asyncio.StreamWriter(write_transport, write_protocol, reader, loop)
 
