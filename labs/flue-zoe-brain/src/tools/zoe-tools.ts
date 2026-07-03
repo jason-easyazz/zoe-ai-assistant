@@ -57,11 +57,14 @@
 
  * SECURITY — identity is bound in TRUSTED CODE, never from model args. Tool
  * arguments are model-chosen and are NOT an auth boundary, so the acting
- * `user_id` is read from the env (ZOE_BRAIN_USER_ID), exactly as prod resolves
- * the acting user per session (abilities.ts reads ZOE_CORE_USER_ID). A tool that
- * needs a user FAILS CLOSED when no user is configured rather than acting as a
- * default identity. The model may only choose the *content* (the item text, the
- * recall query) — never *whose* data it touches.
+ * `user_id` is resolved from two trusted sources ONLY: first the per-request
+ * identity threaded from the route (currentUserId(), set from the seam-forwarded
+ * user_id — see src/request-identity.ts), then the env fallback
+ * (ZOE_BRAIN_USER_ID) when no request identity is present (non-HTTP / test
+ * paths). Both are trusted server-side sources; NEITHER is ever a model tool arg.
+ * A tool that needs a user FAILS CLOSED when no user is configured rather than
+ * acting as a default identity. The model may only choose the *content* (the
+ * item text, the recall query) — never *whose* data it touches.
  *
  * LAB ONLY — read-ish by default. shopping_list_add is the one writer; it is
  * gated behind ZOE_BRAIN_ALLOW_WRITES (default OFF → dry-run, so a parity run
@@ -72,6 +75,7 @@ import * as v from 'valibot';
 // .ts extension so the offline strip-types tests (node --experimental-strip-types)
 // can resolve it too; tsconfig has allowImportingTsExtensions and the flue build
 // bundles .ts specifiers fine.
+import { currentUserId } from '../request-identity.ts';
 import { ACTIVATOR_TOOL_NAME, GROUP_NAMES, GROUP_SUMMARY, TOOL_GROUPS } from './tool-groups.ts';
 
 // zoe-data base URL — the live capability backend. Overridable for the lab.
@@ -107,10 +111,15 @@ const GUEST_IDENTITIES = new Set(['guest', 'anonymous', 'anon', 'unknown', 'none
 const ALLOW_WRITES =
   (process.env.ZOE_BRAIN_ALLOW_WRITES ?? 'false').toLowerCase() === 'true';
 
-// The acting user, bound in trusted code (env), NOT from model args. Read fresh
-// each call so a single process is never pinned to one identity at module load.
+// The acting user, bound in trusted code, NOT from model args. Prefer the
+// per-request identity threaded from the route (the seam-forwarded user_id,
+// carried in an AsyncLocalStorage) so each family member's turn acts as THEM;
+// fall back to the env (ZOE_BRAIN_USER_ID) only when no request identity is
+// present — non-HTTP / test paths. Read fresh each call so a single process is
+// never pinned to one identity. BOTH sources are trusted server-side; the model
+// can never supply this id.
 function actingUserId(): string {
-  const id = (process.env.ZOE_BRAIN_USER_ID ?? '').trim();
+  const id = (currentUserId() || process.env.ZOE_BRAIN_USER_ID || '').trim();
   // Fail closed on guest-style identities: zoe-data returns a *successful* empty
   // packet for them, which would otherwise look like "nothing stored" and hide an
   // invalid acting identity.

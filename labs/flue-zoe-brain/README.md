@@ -14,9 +14,23 @@ of `get_time` (answered locally) and `recall_memory` (GET
 `_DISPATCHABLE_INTENTS` allowlist (`services/zoe-data/routers/system.py`). Slot
 shapes mirror the prod abilities (`services/zoe-core/abilities/*.ts`).
 
-**Security:** the acting `user_id` is bound in trusted code from
-`ZOE_BRAIN_USER_ID` (env) — never from model args. Tools fail closed when no
-real user is configured. The model only chooses *content*, never *whose* data.
+**Security & per-request identity:** the acting `user_id` is bound in trusted
+code, **never** from model args. It is resolved from two trusted server-side
+sources, in order:
+
+1. **Per-request identity** — the `route` handler (`src/agents/zoe.ts`) reads the
+   trusted `user_id` the zoe-data seam forwards in the request body
+   (`services/zoe-data/zoe_flue_client.py`), then runs the whole turn inside a
+   `runWithUserId(...)` context (`src/request-identity.ts`, an
+   `AsyncLocalStorage`). Every tool call of that turn acts as **that** user, so
+   each family member's turn touches their own memories/lists. The id is trusted
+   because zoe-data resolved it from auth in trusted code and the route already
+   fails closed on the bearer token — an unauthorized caller can't reach it.
+2. **`ZOE_BRAIN_USER_ID` (env) fallback** — used only when no per-request identity
+   is present (non-HTTP / test paths).
+
+Tools fail closed (refuse) when neither yields a real user, and on guest-style
+ids. The model only ever chooses *content*, never *whose* data.
 
 **Writes:** gated behind `ZOE_BRAIN_ALLOW_WRITES` (default OFF → dry-run that
 does NOT mutate real data and instructs the model not to claim success).
@@ -158,7 +172,7 @@ npm test                   # offline unit tests (node --test, type-stripping)
 | --- | --- | --- |
 | `ZOE_DATA_URL` | `http://127.0.0.1:8000` | zoe-data capability backend |
 | `ZOE_INTERNAL_TOKEN` | `''` | sent as `X-Internal-Token` |
-| `ZOE_BRAIN_USER_ID` | *(unset → fail closed)* | acting user, bound in trusted code |
+| `ZOE_BRAIN_USER_ID` | *(unset → fail closed)* | **fallback** acting user; used only when the request forwards no `user_id` (per-request identity from the seam wins — see Security above) |
 | `ZOE_BRAIN_ALLOW_WRITES` | `false` | `true` enables real writes (otherwise dry-run) |
 | `ZOE_BRAIN_TOOL_TIMEOUT_MS` | `8000` | per-call HTTP timeout against zoe-data |
 | `ZOE_BRAIN_TOKEN` | *(unset)* | bearer token for the agent HTTP route |

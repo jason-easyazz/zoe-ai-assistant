@@ -44,6 +44,7 @@
 import { type AgentRouteHandler, defineAgent } from '@flue/runtime';
 // .ts extensions so the offline strip-types tests can resolve these too (see
 // the note in zoe-tools.ts; the flue build bundles .ts specifiers fine).
+import { runWithUserId } from '../request-identity.ts';
 import { GROUP_SUMMARY } from '../tools/tool-groups.ts';
 import { zoeTools } from '../tools/zoe-tools.ts';
 
@@ -137,12 +138,59 @@ export const ZOE_INSTRUCTIONS = `${ZOE_SOUL}\n\n${VOICE_DELIVERY_DOCTRINE}\n\n${
 // With neither set, every request is rejected, so a sidecar accidentally bound to
 // a reachable interface can't let any LAN caller drive completions / contend with
 // the voice brain.
+//
+// PER-REQUEST IDENTITY: after auth passes, read the TRUSTED forwarded `user_id`
+// from the request body (the zoe-data seam sets it in trusted server code from
+// authenticated session state — it is NOT model-chosen and NOT a tool arg) and
+// run the rest of the turn inside a runWithUserId(...) context. The whole agent
+// operation + every tool call it makes then acts as THAT user, instead of the
+// process-wide ZOE_BRAIN_USER_ID fallback (see src/request-identity.ts and
+// actingUserId() in src/tools/zoe-tools.ts). The acting id is only ever set from
+// the route body/env, NEVER from model input — that separation holds in every mode.
+//
+// TRUST BOUNDARY — honest about the two modes:
+//   - PRODUCTION (ZOE_BRAIN_TOKEN set, ZOE_BRAIN_OPEN unset): the auth block above
+//     rejects any caller without the bearer token, so the ONLY caller that can
+//     reach this line is zoe-data's seam. The forwarded body user_id is trusted
+//     PRECISELY BECAUSE the token gate means zoe-data — which resolved it from
+//     auth — is the sole caller. THIS token gate is the security boundary.
+//   - ZOE_BRAIN_OPEN=1 (lab/dev only): the auth block is bypassed, so the body
+//     user_id is CALLER-SUPPLIED and is NOT a trust boundary — any localhost
+//     caller can name any user_id. That is acceptable ONLY because open mode is
+//     localhost-bound smoke/lab use, never production, and writes still stay
+//     dry-run-gated behind ZOE_BRAIN_ALLOW_WRITES. Do NOT rely on the forwarded
+//     user_id being trustworthy in open mode.
 export const route: AgentRouteHandler = async (c, next) => {
-  if (process.env.ZOE_BRAIN_OPEN === '1') return next();
-  const token = process.env.ZOE_BRAIN_TOKEN;
-  if (token && c.req.header('authorization') === `Bearer ${token}`) return next();
-  return c.json({ error: 'unauthorized' }, 401);
+  if (process.env.ZOE_BRAIN_OPEN !== '1') {
+    const token = process.env.ZOE_BRAIN_TOKEN;
+    if (!token || c.req.header('authorization') !== `Bearer ${token}`) {
+      return c.json({ error: 'unauthorized' }, 401);
+    }
+  }
+  return runWithUserId(await forwardedUserId(c), next);
 };
+
+/**
+ * Read the trusted, seam-forwarded `user_id` from a POST body without disturbing
+ * Flue's own downstream body parse. Flue clones `c.req.raw` BEFORE this route
+ * middleware runs and parses the turn payload from that clone
+ * (flue agentRouteHandler → handleAgentRequest), so peeking here is safe. We use
+ * Hono's `c.req.json()`, which caches the parsed body on the context; it never
+ * consumes Flue's separate clone. Returns '' for non-POST requests (e.g. the GET
+ * stream-read route has no body) or any malformed/absent id — the tools then
+ * fall back to the env, unchanged.
+ */
+async function forwardedUserId(c: Parameters<AgentRouteHandler>[0]): Promise<string> {
+  if (c.req.method !== 'POST') return '';
+  try {
+    const body = (await c.req.json()) as { user_id?: unknown } | null;
+    const uid = body && typeof body.user_id === 'string' ? body.user_id.trim() : '';
+    return uid;
+  } catch {
+    // No JSON body / parse failure: fall back to env identity (return '').
+    return '';
+  }
+}
 
 export default defineAgent(() => ({
   model: 'zoe/local',
