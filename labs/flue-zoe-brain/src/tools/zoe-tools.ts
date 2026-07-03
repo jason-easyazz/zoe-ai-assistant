@@ -820,11 +820,18 @@ const home = defineTool({
   run: async ({ input, signal }) => {
     const action = ACTION_MAP[input.action];
     const roomRaw = String(input?.room ?? '').trim();
-    const room = roomRaw ? roomRaw.toLowerCase().replace(/\s+/g, '_') : null;
+    const room = roomRaw ? roomRaw.toLowerCase().replace(/\s+/g, '_') : '';
     const where = room ? `the ${roomRaw} lights` : 'the lights';
     const label = { on: 'on', off: 'off', dim: 'dimmed', brighten: 'brightened' }[input.action];
     // entity is fixed 'light' in trusted code; the backend validates room→entity_id.
-    return runWrite('smart_home', { action, entity: 'light', room }, 'smart home',
+    // OMIT `room` entirely when none is given (rather than sending an explicit
+    // null) — mirrors the set_volume up/down pattern and avoids relying on the
+    // backend treating null the same as absent. intent_router's
+    // _execute_smart_home_intent uses slots.get("room") → falls back to the
+    // ZOE_DEFAULT_LIGHT_ENTITY group when the key is missing.
+    const slots: Record<string, unknown> = { action, entity: 'light' };
+    if (room) slots.room = room;
+    return runWrite('smart_home', slots, 'smart home',
       `turning ${where} ${input.action}`, `Turned ${where} ${label}.`, signal);
   },
 });

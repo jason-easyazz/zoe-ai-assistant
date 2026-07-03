@@ -205,14 +205,48 @@ const WRITE_TOOL_CASES: Array<{
   },
   {
     name: 'home',
+    // No room → the `room` key is OMITTED from the payload (not sent as null).
     input: { action: 'off' },
     expectedPayload: {
       user_id: ACTING_USER,
       intent: 'smart_home',
-      slots: { action: 'turn_off', entity: 'light', room: null },
+      slots: { action: 'turn_off', entity: 'light' },
     },
     dryRunPattern: /WRITE DISABLED.*turning the lights off.*NOT/i,
     successPattern: /Lights off\./,
+  },
+  {
+    name: 'media',
+    input: { action: 'control', command: 'pause' },
+    expectedPayload: {
+      user_id: ACTING_USER,
+      intent: 'music_control',
+      slots: { command: 'pause' },
+    },
+    dryRunPattern: /WRITE DISABLED.*"pause".*NOT/i,
+    successPattern: /Paused\./,
+  },
+  {
+    name: 'media',
+    input: { action: 'setup' },
+    expectedPayload: {
+      user_id: ACTING_USER,
+      intent: 'music_setup',
+      slots: {},
+    },
+    dryRunPattern: /WRITE DISABLED.*music setup.*NOT/i,
+    successPattern: /connect Spotify or YouTube Music/i,
+  },
+  {
+    name: 'media',
+    input: { action: 'system_volume', direction: 'set', level: 40 },
+    expectedPayload: {
+      user_id: ACTING_USER,
+      intent: 'set_volume',
+      slots: { direction: 'set', level: 40 },
+    },
+    dryRunPattern: /WRITE DISABLED.*speaking volume to 40.*NOT/i,
+    successPattern: /Set my speaking volume to 40\./,
   },
 ];
 
@@ -260,6 +294,16 @@ function dispatchResult(intent: string, slots: Record<string, unknown>): string 
   // ─── Wave 2 confirmation strings (mirror intent_router fulfillment) ─────────
   if (intent === 'music_play') {
     return `Now playing: ${slots.query}.`;
+  }
+  if (intent === 'music_control') {
+    const labels: Record<string, string> = {
+      pause: 'Paused', resume: 'Resumed', stop: 'Stopped',
+      next: 'Skipped', previous: 'Went back',
+    };
+    return `${labels[String(slots.command ?? '')] ?? 'Done'}.`;
+  }
+  if (intent === 'music_setup') {
+    return 'To play music, connect Spotify or YouTube Music in settings.';
   }
   if (intent === 'music_volume') {
     return `Music volume set to ${slots.level}.`;
