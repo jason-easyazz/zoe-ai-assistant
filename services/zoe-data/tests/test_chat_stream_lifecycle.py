@@ -240,6 +240,42 @@ async def test_failed_normal_save_leaves_reply_recoverable(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_failed_normal_save_reports_error_not_completed(monkeypatch):
+    """If the normal assistant save returns False and nothing else fails, the run
+    must not report completed: the reply the user saw is not in history."""
+    _stub_brain_branch(monkeypatch)
+
+    saves: list[dict] = []
+
+    async def failing_save(session_id, role, content, user_id=None, *, truncated=False):
+        saves.append({"role": role, "content": content, "truncated": truncated})
+        return False
+
+    monkeypatch.setattr(chat_router, "_save_chat_message", failing_save)
+
+    states: list[str] = []
+
+    async def record_state(run_id, session_id, user_id, *, status, **k):
+        states.append(status)
+
+    monkeypatch.setattr(chat_router, "_record_run_state", record_state)
+
+    gen = chat_router.chat_stream_generator("tell me a story", "sess-savefalse", _user())
+    async for _ in gen:
+        pass
+
+    assert "completed" not in states, states
+    assert "error" in states, states
+    assistant_saves = [s for s in saves if s["role"] == "assistant"]
+    assert assistant_saves[0] == {
+        "role": "assistant", "content": "Hello world", "truncated": False,
+    }
+    assert assistant_saves[-1] == {
+        "role": "assistant", "content": "Hello world", "truncated": True,
+    }
+
+
+@pytest.mark.asyncio
 async def test_successful_normal_save_skips_truncated_fallback(monkeypatch):
     """Complement: when the normal-path save SUCCEEDS, a later error must not
     re-persist the reply as a truncated duplicate."""

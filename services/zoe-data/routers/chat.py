@@ -2876,6 +2876,8 @@ async def chat_stream_generator(
                     persisted_assistant = await _save_chat_message(
                         session_id, "assistant", response_text, user_id=user_id
                     )
+                    if not persisted_assistant:
+                        raise RuntimeError("assistant reply save failed")
 
             else:
                 # Explicit OpenClaw fallback path.
