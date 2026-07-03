@@ -26,7 +26,9 @@ const { activeToolNames, CORE_TOOL_NAMES, GROUP_NAMES, GROUP_SUMMARY } = await i
   '../src/tools/tool-groups.ts'
 );
 const { zoeTools } = await import('../src/tools/zoe-tools.ts');
-const { ACTIVATOR_DOCTRINE, ZOE_INSTRUCTIONS } = await import('../src/agents/zoe.ts');
+const { ACTIVATOR_DOCTRINE, IN_SESSION_CONTEXT_DOCTRINE, ZOE_INSTRUCTIONS } = await import(
+  '../src/agents/zoe.ts'
+);
 
 import type { Message } from '@earendil-works/pi-ai';
 
@@ -106,4 +108,16 @@ test('activator doctrine is imperative: MUST activate first, NEVER fabricate', (
   assert.match(ACTIVATOR_DOCTRINE, /MUST use a tool FIRST/);
   assert.match(ACTIVATOR_DOCTRINE, /activate_abilities/);
   assert.match(ACTIVATOR_DOCTRINE, /NEVER claim/);
+});
+
+test('in-session context doctrine: live transcript beats an empty recall store', () => {
+  // The soul's recall imperative stays intact...
+  assert.match(ZOE_INSTRUCTIONS, /ALWAYS call recall_memory FIRST/);
+  // ...but the in-session doctrine is appended and rebalances precedence so the
+  // model trusts facts stated this session even when the recall store is empty.
+  assert.ok(ZOE_INSTRUCTIONS.includes(IN_SESSION_CONTEXT_DOCTRINE));
+  assert.match(IN_SESSION_CONTEXT_DOCTRINE, /DURING this conversation are true and usable immediately/);
+  assert.match(IN_SESSION_CONTEXT_DOCTRINE, /empty recall result means nothing is stored from before/);
+  // Anti-fabrication / past-conversation recall must NOT be weakened away.
+  assert.match(IN_SESSION_CONTEXT_DOCTRINE, /still call recall_memory first/);
 });

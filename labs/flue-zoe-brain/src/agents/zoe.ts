@@ -79,8 +79,24 @@ export const ACTIVATOR_DOCTRINE = [
   "NEVER claim to know, or to have done, anything a tool didn't actually return or confirm. No tool result means you don't know — say so, or activate the ability and find out.",
 ].join('\n');
 
+// In-session context doctrine, appended AFTER the soul + activator doctrine.
+// The soul's recall imperative ("you do NOT know anything about the person from
+// your own head; ALWAYS call recall_memory first") is correct for PAST-conversation
+// questions, but taken absolutely it made the model distrust the live transcript in
+// front of it: with an empty (fresh-user) recall store, facts the user stated 1–3
+// turns earlier IN THIS SESSION were forgotten ("My name is Alex" → "What's my name?"
+// → "I don't have anything stored about your name"). This block rebalances the
+// precedence WITHOUT weakening anti-fabrication or the past-conversation recall rule.
+export const IN_SESSION_CONTEXT_DOCTRINE = [
+  'One more thing that overrides the recall rule for THIS conversation only:',
+  '',
+  'Facts the user tells you DURING this conversation are true and usable immediately — use them straight from the conversation, without calling recall_memory. If they told you their name, a plan, or a feeling a few turns ago, answer from that; do NOT say you have nothing stored about something they literally just told you.',
+  '',
+  'recall_memory is for recalling things from PAST conversations. An empty recall result means nothing is stored from before — NOT that the user never told you this session. So: for questions about what you know from before, still call recall_memory first; but never let an empty recall store make you contradict or forget what the user has said in front of you now.',
+].join('\n');
+
 /** The full system instructions the agent runs with (soul + tool doctrine). */
-export const ZOE_INSTRUCTIONS = `${ZOE_SOUL}\n\n${ACTIVATOR_DOCTRINE}`;
+export const ZOE_INSTRUCTIONS = `${ZOE_SOUL}\n\n${ACTIVATOR_DOCTRINE}\n\n${IN_SESSION_CONTEXT_DOCTRINE}`;
 
 // Exporting `route` publishes the HTTP agent endpoints (POST/GET /agents/zoe/:id).
 // FAIL CLOSED: this route drives the live Gemma brain on :11434, so by default a
