@@ -115,6 +115,7 @@ jobs:
             services/zoe-data/tests/test_main_multica_poll.py \
             services/zoe-data/tests/test_kanban_phase_budget.py \
             services/homeassistant-mcp-bridge/tests/test_ha_bridge.py \
+            tests/unit/test_remediate_ownerless_memories.py \
             -x -q \
             --override-ini="asyncio_mode=auto"
           PYTHONPATH="${{ github.workspace }}/services/zoe-auth:${{ github.workspace }}/services/zoe-auth/tests" pytest \
