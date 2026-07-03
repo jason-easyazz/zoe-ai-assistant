@@ -123,7 +123,17 @@ async def trigger_morning_brief(user: dict = Depends(get_current_user), db=Depen
 
     user_id = user["user_id"]
     username = user.get("username", "")
-    today = datetime.now(timezone.utc).date().isoformat()
+
+    # Use the same local-timezone resolution as the scheduled path
+    # (proactive/triggers/morning_checkin.py's _ZOE_TZ) so `today` matches the
+    # user's actual local date, not UTC. During the Perth morning (00:00-08:00
+    # local == still "yesterday" in UTC) the UTC-based date previously queried
+    # yesterday's calendar/context while the displayed day string (already
+    # tz-correct below) showed today — a self-contradictory brief.
+    from proactive.triggers.morning_checkin import _ZOE_TZ
+    now_local = datetime.now(_ZOE_TZ)
+    today = now_local.date().isoformat()
+    day_str = now_local.strftime("%A, %B %d")
 
     try:
         ctx = await _build_morning_context(db, user_id, today)
@@ -131,10 +141,6 @@ async def trigger_morning_brief(user: dict = Depends(get_current_user), db=Depen
         log.error("trigger-morning: context build failed: %s", exc)
         ctx = {}
 
-    from datetime import datetime as _dt
-    import zoneinfo
-    _tz = zoneinfo.ZoneInfo("Australia/Perth")
-    day_str = _dt.now(_tz).strftime("%A, %B %d")
     ctx["day"] = day_str
 
     message = _compose_morning_message(ctx, username, day_str)
