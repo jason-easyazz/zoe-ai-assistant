@@ -42,9 +42,14 @@
  * Sessions are per-conversation, so in practice a typical turn carries 3
  * schemas instead of all 19.
  *
- * Unknown tool names (registered on the agent but absent from the grouping
- * map) are ALWAYS disclosed — adding a 12th tool without grouping it here
- * must not make it silently invisible.
+ * Unknown Zoe tool names (registered on the agent but absent from the grouping
+ * map) are ALWAYS disclosed — adding a 12th Zoe tool without grouping it here
+ * must not make it silently invisible. The ONE exception is the pi/Flue coding
+ * built-ins (read/write/edit/bash/grep/glob/task), which the Flue harness
+ * injects on every turn regardless of the sidecar's tool list: those are
+ * unconditionally STRIPPED (see CODING_BUILTIN_TOOL_NAMES) — a family voice
+ * assistant must never be handed bash/write/edit/task, and they bloat the 4B
+ * context.
  *
  * Kill switch: ZOE_BRAIN_PROGRESSIVE_TOOLS=false restores the old
  * all-schemas-every-call behaviour (used for A/B latency comparison).
@@ -55,6 +60,42 @@ import type { Context, Message } from '@earendil-works/pi-ai';
 
 /** The always-disclosed activator tool (defined in zoe-tools.ts). */
 export const ACTIVATOR_TOOL_NAME = 'activate_abilities';
+
+/**
+ * pi/Flue coding-agent built-ins that the harness injects into EVERY model
+ * turn regardless of the sidecar's own tool list.
+ *
+ * WHY THIS EXISTS: Flue's harness always assembles the framework's built-in
+ * coding toolset alongside the agent's declared tools — verified in the
+ * runtime dist, `createBuiltinToolGroups` → `createTools(env, …)` in
+ * @flue/runtime (skill-package chunk: `createReadTool`/`createWriteTool`/
+ * `createEditTool`/`createBashTool`/`createGrepTool`/`createGlobTool`, plus the
+ * optional `createTaskTool`). `defineAgent` exposes NO option to suppress them,
+ * so the sidecar cannot avoid registering them; they arrive on `context.tools`
+ * on every wire call. That is a correctness AND safety defect for a family
+ * VOICE assistant: it must never be handed `bash`/`write`/`edit`/`task`, and
+ * the extra schemas bloat the ~8k context on the 4B brain. Production's brain
+ * never sends these.
+ *
+ * These names are NOT in any Zoe ability group, so before this denylist the
+ * "unknown tool names always survive" rule below waved them straight through.
+ * We strip them unconditionally at the disclosure chokepoint (the one place
+ * that already rewrites `context.tools` every call). The names are the exact
+ * ones the framework registers (confirmed from the @flue/runtime source).
+ *
+ * NOTE: this denylist is intentionally the framework CODING built-ins only. It
+ * must NOT list `activate_abilities` or any real Zoe tool — those are handled
+ * by the disclosure logic and must keep flowing.
+ */
+export const CODING_BUILTIN_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'read',
+  'write',
+  'edit',
+  'bash',
+  'grep',
+  'glob',
+  'task',
+]);
 
 /** Always-on core: cheap, every-turn-relevant, plus the activator itself. */
 export const CORE_TOOL_NAMES: readonly string[] = [
@@ -252,15 +293,43 @@ export function activeToolNames(messages: Message[]): Set<string> {
 /**
  * Filter `context.tools` down to the disclosed set (returns a shallow copy;
  * the original context — which the agent loop uses for tool EXECUTION — is
- * never mutated). Unknown tool names always survive the filter.
+ * never mutated). Rules, in order:
+ *   - pi/Flue coding built-ins (`CODING_BUILTIN_TOOL_NAMES`) are ALWAYS
+ *     stripped — a family voice assistant must never be handed
+ *     bash/write/edit/task, and they bloat the 4B context (see the denylist
+ *     header for why the harness injects them unavoidably);
+ *   - a disclosed grouped/core Zoe tool passes;
+ *   - an UNKNOWN tool name (a real Zoe tool added without grouping it here)
+ *     still survives — so adding a 12th Zoe tool without grouping it can't make
+ *     it silently invisible. The coding-built-in strip takes precedence over
+ *     this survive rule, so the two never conflict.
  */
 export function discloseTools(context: Context): Context {
   const tools = context.tools;
   if (!tools || tools.length === 0) return context;
   const active = activeToolNames(context.messages);
   const disclosed = tools.filter(
-    (tool) => active.has(tool.name) || !KNOWN_TOOL_NAMES.has(tool.name),
+    (tool) =>
+      !CODING_BUILTIN_TOOL_NAMES.has(tool.name) &&
+      (active.has(tool.name) || !KNOWN_TOOL_NAMES.has(tool.name)),
   );
   if (disclosed.length === tools.length) return context;
   return { ...context, tools: disclosed };
+}
+
+/**
+ * Strip ONLY the pi/Flue coding built-ins (`CODING_BUILTIN_TOOL_NAMES`) from
+ * `context.tools`, leaving every Zoe tool untouched. This is the SAFETY floor:
+ * it runs unconditionally, independent of the progressive-disclosure kill
+ * switch, so `ZOE_BRAIN_PROGRESSIVE_TOOLS=false` can never re-expose
+ * bash/write/edit/task to the voice brain. `discloseTools` already removes
+ * these when disclosure is ON; this covers the disclosure-OFF path. Returns a
+ * shallow copy only when something was actually removed (never mutates).
+ */
+export function stripCodingBuiltins(context: Context): Context {
+  const tools = context.tools;
+  if (!tools || tools.length === 0) return context;
+  const kept = tools.filter((tool) => !CODING_BUILTIN_TOOL_NAMES.has(tool.name));
+  if (kept.length === tools.length) return context;
+  return { ...context, tools: kept };
 }
