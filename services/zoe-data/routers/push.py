@@ -2,6 +2,7 @@
 Web Push Notifications via VAPID.
 Generates VAPID keys on first run, stores subscriptions, sends push messages.
 """
+import asyncio
 import json
 import os
 import logging
@@ -133,34 +134,58 @@ async def send_push_to_user(
     if extra:
         payload_data.update({k: v for k, v in extra.items() if k != "url"})
 
-    sent = 0
+    # Step 1: short-lived pooled connection — read subscriptions, then release
+    # it BEFORE making any outbound push HTTP calls. webpush() is synchronous
+    # (requests-based); holding a pooled DB connection across it — and calling
+    # it directly on the event loop instead of via an executor — would block
+    # every other request/WebSocket/scheduler callback in the process for the
+    # duration of each push (potentially unbounded without an explicit timeout).
+    rows = []
     async for db in get_db():
         async with db.execute(
             "SELECT endpoint, keys_p256dh, keys_auth FROM push_subscriptions WHERE user_id = ?",
             (user_id,),
         ) as cur:
             rows = await cur.fetchall()
-        for row in rows:
-            sub_info = {
-                "endpoint": row["endpoint"],
-                "keys": {"p256dh": row["keys_p256dh"], "auth": row["keys_auth"]},
-            }
-            payload = json.dumps(payload_data)
-            try:
-                webpush(
+
+    # Step 2: NO pooled connection held here. Each webpush() call runs in a
+    # thread executor so it can't block the event loop.
+    sent = 0
+    dead_endpoints: list[str] = []
+    loop = asyncio.get_running_loop()
+    for row in rows:
+        sub_info = {
+            "endpoint": row["endpoint"],
+            "keys": {"p256dh": row["keys_p256dh"], "auth": row["keys_auth"]},
+        }
+        payload = json.dumps(payload_data)
+        try:
+            await loop.run_in_executor(
+                None,
+                lambda sub_info=sub_info, payload=payload: webpush(
                     subscription_info=sub_info,
                     data=payload,
                     vapid_private_key=keys["private_key"],
                     vapid_claims=VAPID_CLAIMS.copy(),
                     content_encoding="aes128gcm",
+                    timeout=10,
+                ),
+            )
+            sent += 1
+        except WebPushException as e:
+            logger.warning(f"Push failed for {row['endpoint'][:40]}...: {e}")
+            if "410" in str(e) or "404" in str(e):
+                dead_endpoints.append(row["endpoint"])
+
+    # Step 3: fresh short-lived connection only if there's cleanup to do.
+    # Scope by user_id too: uniqueness is (user_id, endpoint), so the same
+    # endpoint can belong to another user whose subscription is still valid.
+    if dead_endpoints:
+        async for db in get_db():
+            for endpoint in dead_endpoints:
+                await db.execute(
+                    "DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?",
+                    (user_id, endpoint),
                 )
-                sent += 1
-            except WebPushException as e:
-                logger.warning(f"Push failed for {row['endpoint'][:40]}...: {e}")
-                if "410" in str(e) or "404" in str(e):
-                    await db.execute(
-                        "DELETE FROM push_subscriptions WHERE endpoint = ?",
-                        (row["endpoint"],),
-                    )
-                    await db.commit()
+            await db.commit()
     return sent
