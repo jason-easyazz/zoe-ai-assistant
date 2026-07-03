@@ -40,7 +40,7 @@
  * Trade-off (documented in README): the per-session set grows monotonically —
  * a long session that touches every domain converges back to all schemas.
  * Sessions are per-conversation, so in practice a typical turn carries 3
- * schemas instead of all 16.
+ * schemas instead of all 18.
  *
  * Unknown tool names (registered on the agent but absent from the grouping
  * map) are ALWAYS disclosed — adding a 12th tool without grouping it here
@@ -76,6 +76,8 @@ export const TOOL_GROUPS = {
   notes: ['create_note', 'note_search'],
   journal: ['journal'],
   people: ['people'],
+  media: ['media'],
+  home: ['home'],
 } as const satisfies Record<string, readonly string[]>;
 
 export type AbilityGroup = keyof typeof TOOL_GROUPS;
@@ -98,6 +100,8 @@ export const GROUP_PURPOSES: Record<AbilityGroup, string> = {
   notes: 'save or search notes',
   journal: 'diary entries, journaling prompts, streak',
   people: 'save or look up people/contacts',
+  media: 'play/control music, set music or speaking volume',
+  home: 'turn on/off, dim, or brighten the lights',
 };
 
 /**
@@ -141,6 +145,15 @@ const GROUP_TRIGGERS: Record<AbilityGroup, RegExp> = {
     // contacts ask; a false positive only discloses one extra schema, but the
     // bare noun would trip on most small talk.
     /\bcontacts?\b|\bwho\s+is\b|\b(?:add|save|remember|link|relate)\b[^.?!]*\b(?:person|people|friend|colleague|contact)\b/i,
+  // Playback verbs, transport controls, and volume phrasings (incl. "turn it
+  // up/down", "louder/quieter"). "volume" alone trips media — set_music_volume
+  // vs system_volume is the model's action choice, not disclosure's.
+  media:
+    /\b(play|put on)\b|\b(pause|resume|unpause|stop|skip|next|previous|shuffle|mute|unmute)\b|\bwhat(?:'s| is)(?: currently)? playing\b|\bvolume\b|\b(louder|quieter|turn it (?:up|down))\b|\b(?:spotify|music)\b/i,
+  // Light control only — the day-word-free "lights" noun with an on/off/dim/
+  // brighten verb, or the "<verb> the lights" shape.
+  home:
+    /\blights?\b|\b(?:turn|switch|flip)\s+(?:on|off)\b|\b(?:dim|brighten)\b/i,
 };
 
 /** Reverse map: tool name → its group. */
