@@ -112,7 +112,22 @@ def classify(p: SerenaProc, *, swap_mb: int, grace_min: int) -> str | None:
     return None
 
 
+def _still_serena(pid: int) -> bool:
+    """Re-confirm the pid is still a serena server, just before signalling."""
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            return SERENA_MARKER in fh.read().replace(b"\0", b" ").decode(errors="replace")
+    except (FileNotFoundError, ProcessLookupError, PermissionError):
+        return False
+
+
 def reap(pid: int, term_wait: float) -> str:
+    # Guard the scan()->reap() window: the target may have exited and its pid
+    # been recycled by an unrelated same-uid process (PermissionError only
+    # catches cross-uid reuse). Re-read the cmdline and bail if the marker is
+    # gone, so we never signal an innocent recycled pid.
+    if not _still_serena(pid):
+        return "PID reused/exited (cmdline no longer serena)"
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
@@ -126,6 +141,10 @@ def reap(pid: int, term_wait: float) -> str:
         except ProcessLookupError:
             return "terminated"
         time.sleep(0.2)
+    # Re-verify before the harder SIGKILL: the pid could have been recycled
+    # during term_wait after the original exited.
+    if not _still_serena(pid):
+        return "terminated"
     try:
         os.kill(pid, signal.SIGKILL)
         return "killed (ignored SIGTERM)"
@@ -149,7 +168,7 @@ def main() -> int:
 
     my_uid = os.getuid()
     procs = scan()
-    reaped = kept = 0
+    reaped = kept = skipped = 0
     for p in sorted(procs, key=lambda x: -x.swap_kb):
         reason = classify(p, swap_mb=args.swap_mb, grace_min=args.grace_min)
         ident = (f"pid={p.pid} age={p.age_s/3600:.1f}h swap={p.swap_kb//1024}MB "
@@ -159,19 +178,24 @@ def main() -> int:
             print(f"KEEP  {ident}")
             continue
         if p.uid != my_uid:
+            skipped += 1
             print(f"SKIP  {ident} — {reason}, but owned by uid {p.uid}")
             continue
         if args.execute:
             outcome = reap(p.pid, args.term_wait)
             print(f"REAP  {ident} — {reason} -> {outcome}")
-            if "SKIPPED" not in outcome:
+            if "SKIPPED" in outcome:
+                skipped += 1
+            else:
                 reaped += 1
         else:
             print(f"WOULD-REAP  {ident} — {reason} (dry run; pass --execute)")
             reaped += 1
 
     mode = "reaped" if args.execute else "would reap"
-    print(f"\n{len(procs)} serena server(s): {mode} {reaped}, kept {kept}")
+    # reaped + kept + skipped == len(procs) always (every process hits exactly
+    # one bucket), so the operator can verify the run at a glance.
+    print(f"\n{len(procs)} serena server(s): {mode} {reaped}, kept {kept}, skipped {skipped}")
     return 0
 
 

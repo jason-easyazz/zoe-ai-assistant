@@ -62,3 +62,18 @@ def test_scan_finds_only_serena_processes():
     # Live smoke: scan() must not crash and must only match the marker.
     for p in reaper.scan():
         assert reaper.SERENA_MARKER in p.cmdline
+
+
+def test_reap_bails_on_pid_reuse(monkeypatch):
+    # If the pid's cmdline is no longer serena (exited/recycled), reap must not
+    # signal anything.
+    monkeypatch.setattr(reaper, "_still_serena", lambda pid: False)
+    sent = []
+    monkeypatch.setattr(reaper.os, "kill", lambda *a: sent.append(a))
+    outcome = reaper.reap(4242, term_wait=0.0)
+    assert "PID reused" in outcome and sent == []
+
+
+def test_still_serena_false_for_dead_pid():
+    # A pid that cannot exist must classify as not-serena (never signalled).
+    assert reaper._still_serena(2**31 - 1) is False
