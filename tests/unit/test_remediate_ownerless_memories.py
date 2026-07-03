@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import sqlite3
 import types
 from pathlib import Path
 
@@ -73,7 +74,9 @@ def fake_store(monkeypatch):
 
 def make_db(tmp_path: Path) -> Path:
     db = tmp_path / "chroma.sqlite3"
-    db.write_bytes(b"sqlite fixture")
+    with sqlite3.connect(db) as conn:
+        conn.execute("create table fixture(id integer primary key)")
+        conn.execute("insert into fixture(id) values (1)")
     return db
 
 
@@ -167,3 +170,40 @@ def test_refuses_to_remediate_owned_allowlisted_row(fake_store, tmp_path):
 
     with pytest.raises(SystemExit, match="ownership metadata"):
         remediate.main(["--db", str(db), "--delete", "--ids", "zoe_owned"])
+
+
+def test_refuses_missing_allowlisted_id(fake_store, tmp_path):
+    db = make_db(tmp_path)
+
+    with pytest.raises(SystemExit, match="target ids not found"):
+        remediate.main(["--db", str(db), "--delete", "--ids", "zoe_missing"])
+
+
+def test_all_ownerless_execute_requires_explicit_confirmation(fake_store, tmp_path):
+    db = make_db(tmp_path)
+
+    with pytest.raises(SystemExit):
+        remediate.main(["--db", str(db), "--delete", "--all-ownerless", "--execute"])
+
+
+def test_all_ownerless_execute_with_confirmation_removes_ownerless_only(fake_store, tmp_path):
+    collection, _ = fake_store
+    db = make_db(tmp_path)
+
+    assert (
+        remediate.main(
+            [
+                "--db",
+                str(db),
+                "--delete",
+                "--all-ownerless",
+                "--confirm-all-ownerless",
+                "--execute",
+            ]
+        )
+        == 0
+    )
+
+    assert "zoe_01075f3d7a996d38eea9" not in collection.rows
+    assert "zoe_2859092b35dda8771a52" not in collection.rows
+    assert "zoe_owned" in collection.rows

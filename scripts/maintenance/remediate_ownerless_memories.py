@@ -31,8 +31,8 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import os
 import shutil
+import sqlite3
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -187,8 +187,11 @@ def create_backup(db_path: Path) -> Path:
         )
         suffix += 1
     try:
-        shutil.copy2(source, backup_path)
-    except OSError as exc:
+        with sqlite3.connect(str(source)) as src, sqlite3.connect(str(backup_path)) as dest:
+            src.backup(dest)
+        shutil.copystat(source, backup_path)
+    except (OSError, sqlite3.Error) as exc:
+        backup_path.unlink(missing_ok=True)
         raise SystemExit(f"Refusing to execute; backup failed: {exc}") from exc
     print(f"Backup created: {backup_path}")
     return backup_path
@@ -273,6 +276,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="target every row that is missing user_id, wing, and visibility",
     )
     parser.add_argument(
+        "--confirm-all-ownerless",
+        action="store_true",
+        help="required with --all-ownerless --execute",
+    )
+    parser.add_argument(
         "--user-id",
         default=DEFAULT_BACKFILL_USER_ID,
         help="owner used by --backfill (default: family-admin)",
@@ -289,6 +297,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--execute is only valid with --backfill or --delete")
     if args.audit and args.all_ownerless:
         parser.error("--all-ownerless is only valid with --backfill or --delete")
+    if args.execute and args.all_ownerless and not args.confirm_all_ownerless:
+        parser.error("--all-ownerless --execute requires --confirm-all-ownerless")
     return run(args)
 
 
