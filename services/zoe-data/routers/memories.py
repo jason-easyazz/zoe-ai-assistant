@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -248,6 +249,46 @@ async def search_memories(
 _PROMPT_PACKET_MAX_FACTS = 12
 
 
+# Near-duplicate collapse for the packet. The store still holds near-dupes the
+# write-time gate didn't merge ("My mum likes ncis." / "your mum likes NCIS.")
+# which otherwise waste the small packet's slots. Compare content tokens
+# (stopwords stripped) — collapse only clear repeats, never distinct or *richer*
+# facts (a superset like "My dad's name is Neil. My mum likes ncis. I have two
+# sisters…" is kept alongside "My dad's name is Neil" — it carries more).
+_DEDUP_STOPWORDS = frozenset({
+    "the", "a", "an", "is", "are", "was", "were", "be", "been", "my", "your",
+    "our", "i", "you", "we", "of", "to", "in", "on", "at", "and", "or", "that",
+    "this", "it", "s", "for", "with", "has", "have", "had",
+})
+
+
+def _dedup_tokens(text: str) -> frozenset:
+    return frozenset(
+        t for t in re.findall(r"[a-z0-9]+", text.lower())
+        if len(t) > 1 and t not in _DEDUP_STOPWORDS
+    )
+
+
+def _is_near_duplicate(cand: frozenset, kept: list) -> bool:
+    """True when `cand` adds nothing over an already-kept line — i.e. it is a
+    near-repeat. Drops only when the CANDIDATE's own tokens are (near-)fully
+    covered by a kept line (``inter / len(cand) >= 0.85``) or the two are highly
+    similar (jaccard >= 0.7). Crucially this is asymmetric: a *richer* candidate
+    (a superset with new tokens) is NOT covered, so it survives — dropping it
+    would lose information. Tiny (<2 content-token) facts are never collapsed."""
+    if len(cand) < 2:
+        return False
+    for other in kept:
+        if len(other) < 2:
+            continue
+        inter = len(cand & other)
+        if not inter:
+            continue
+        if inter / len(cand) >= 0.85 or inter / len(cand | other) >= 0.7:
+            return True
+    return False
+
+
 def _build_memory_prompt_packet(
     facts: list[MemoryRef],
     hits: list[MemoryRef],
@@ -262,6 +303,7 @@ def _build_memory_prompt_packet(
     Message-relevant semantic hits lead; general facts follow.
     """
     seen: set[str] = set()
+    kept_tokens: list[frozenset] = []
     lines: list[str] = []
     refs: list[dict[str, Any]] = []
 
@@ -282,7 +324,14 @@ def _build_memory_prompt_packet(
         text = (ref.text or "").strip()
         if not text or ref.id in seen:
             return
+        # Collapse near-duplicate content (the store still holds un-merged
+        # near-dupes). Search hits are considered first, so the higher-ranked
+        # phrasing of a repeated fact wins its slot.
+        tokens = _dedup_tokens(text)
+        if _is_near_duplicate(tokens, kept_tokens):
+            return
         seen.add(ref.id)
+        kept_tokens.append(tokens)
         cite = f"[mem:{str(ref.id)[:8]}]"
         prefix = "(uncertain) " if status == "disputed" else ""
         lines.append(f"- {prefix}{text[:200]} {cite}")
