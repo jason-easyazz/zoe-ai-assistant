@@ -314,6 +314,27 @@ def test_chroma_lock_error_prints_maintenance_window_guidance(monkeypatch, tmp_p
         remediate.main(["--db", str(db), "--audit"])
 
 
+def test_chroma_non_lock_error_points_to_configuration(monkeypatch, tmp_path):
+    db = make_db(tmp_path)
+
+    def bad_collection(path):
+        raise RuntimeError("collection not found")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "chromadb",
+        types.SimpleNamespace(PersistentClient=bad_collection),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        remediate.main(["--db", str(db), "--audit"])
+
+    message = str(exc_info.value)
+    assert "collection not found" in message
+    assert "--collection" in message
+    assert "maintenance window" not in message
+
+
 def test_delete_revalidates_ownerless_immediately_before_mutation(fake_store, tmp_path):
     collection, _ = fake_store
     db = make_db(tmp_path)

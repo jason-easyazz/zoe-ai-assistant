@@ -57,6 +57,9 @@ MAINTENANCE_WINDOW_GUIDANCE = (
     "Do not force the remediation; rerun during a maintenance window when "
     "zoe-data has released the store."
 )
+NON_LOCK_STORE_GUIDANCE = (
+    "Check --db, --collection, and zoe-data's exact ChromaDB version/venv."
+)
 LEGACY_OWNERLESS_IDS = (
     "zoe_01075f3d7a996d38eea9",
     "zoe_2859092b35dda8771a52",
@@ -127,7 +130,7 @@ def is_lock_error(exc: BaseException) -> bool:
 def system_exit_for_store_error(exc: BaseException, *, action: str) -> SystemExit:
     if isinstance(exc, sqlite3.OperationalError) and is_lock_error(exc):
         return SystemExit(f"Refusing to {action}: {exc}. {MAINTENANCE_WINDOW_GUIDANCE}")
-    return SystemExit(f"Refusing to {action}: {exc}. {MAINTENANCE_WINDOW_GUIDANCE}")
+    return SystemExit(f"Refusing to {action}: {exc}. {NON_LOCK_STORE_GUIDANCE}")
 
 
 def load_collection(db_path: Path, collection_name: str):
@@ -228,11 +231,7 @@ def create_backup(db_path: Path) -> Path:
         )
         suffix += 1
     try:
-        shutil.copytree(
-            store_dir,
-            backup_path,
-            ignore=shutil.ignore_patterns(f"*.{BACKUP_MARKER}.*.bak"),
-        )
+        shutil.copytree(store_dir, backup_path)
         shutil.copymode(store_dir, backup_path)
     except OSError as exc:
         if backup_path.exists():
