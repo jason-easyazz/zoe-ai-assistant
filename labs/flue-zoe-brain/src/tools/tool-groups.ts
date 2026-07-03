@@ -97,17 +97,38 @@ export const GROUP_PURPOSES: Record<AbilityGroup, string> = {
 };
 
 /**
+ * The model-facing group catalogue — every group with its purpose line, derived
+ * from the canonical map (never hand-maintained). Used in BOTH places the model
+ * can learn its groups from: the `activate_abilities` tool description
+ * (zoe-tools.ts) and the agent's system instructions (agents/zoe.ts). The E2E
+ * finding behind the latter: a catalogue that lives only in a tool description
+ * is invisible while the model is deciding whether to call any tool at all.
+ */
+export const GROUP_SUMMARY = GROUP_NAMES.map(
+  (group) => `${group} (${GROUP_PURPOSES[group]})`,
+).join(', ');
+
+/**
  * Deterministic relevance triggers per group, matched (case-insensitively)
  * against the last user message — prod's keyword/example matching analogue.
- * Misses are fine: the activator tool is the model-driven fallback.
+ * Misses are fine: the activator tool is the model-driven fallback. Widened
+ * for high-value INDIRECT phrasings (E2E: keyword-free prompts never reached
+ * the activator, so pre-disclosure is the defence-in-depth layer): weather
+ * gains washing/laundry/outside ("can I hang the washing out?"), calendar
+ * gains "anything on <day>"-style asks and "am I free". A false positive
+ * only discloses one extra schema; a false negative loses the whole ability.
  */
 const GROUP_TRIGGERS: Record<AbilityGroup, RegExp> = {
   weather:
-    /\b(weather|temperature|forecast|rain|raining|rainy|snow|sunny|wind|windy|umbrella|jacket|degrees|hot|cold)\b/i,
+    /\b(weather|temperature|forecast|rain|raining|rainy|snow|sunny|wind|windy|umbrella|jacket|degrees|hot|cold|washing|laundry|outside)\b/i,
   lists: /\b(lists?|shopping|grocer(?:y|ies)|to-?dos?|tasks?)\b/i,
   timers: /\b(timers?|countdown)\b/i,
   reminders: /\bremind(?:er|ers)?\b/i,
-  calendar: /\b(calendar|schedule|appointments?|meetings?|events?|agenda)\b/i,
+  calendar:
+    // Direct nouns; "anything/what's on|for|planned|happening … <day-word>";
+    // "am I free". The day-word requirement keeps "what's on my shopping
+    // list?" from tripping calendar.
+    /\b(calendar|schedule|appointments?|meetings?|events?|agenda)\b|\b(?:anything|something|nothing|plans|what(?:'s| is)?|what do (?:i|we) have)\s+(?:on|for|planned|happening|going on)\b[^.?!]*\b(?:today|tonight|tomorrow|weekend|week|(?:mon|tues?|wednes|thurs?|fri|satur|sun)day)\b|\bam i free\b/i,
   notes: /\bnotes?\b|\bjot\b|\bwrite (?:this|that|it) down\b/i,
 };
 
