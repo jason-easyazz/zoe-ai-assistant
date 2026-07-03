@@ -13,13 +13,16 @@ Tiered architecture (Jetson + Pi):
   Also used as direct path when Zoe Agent is bypassed.
 """
 import asyncio
+import concurrent.futures
 import json
 import logging
 import pathlib
 import re
+import subprocess
 import time
 import uuid
 import os
+from collections import OrderedDict
 from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, Request, Depends
@@ -27,7 +30,25 @@ from fastapi.responses import StreamingResponse
 from intent_router import detect_intent, detect_and_extract_intent, execute_intent, openclaw_user_message, Intent
 from browser_broker import create_default_browser_broker
 from conversation_context import ConversationContext as _CC
-_CHAT_CONTEXTS: dict[str, "_CC"] = {}
+
+# Bounded via _bounded_lru_set below: these module-level maps are keyed by
+# session_id with no other eviction (sessions are pruned WITHIN a session but
+# never removed), so without a cap they grow for the life of the process.
+_CHAT_CONTEXTS: "OrderedDict[str, _CC]" = OrderedDict()
+_MAX_CHAT_CONTEXT_SESSIONS = int(os.environ.get("ZOE_CHAT_CONTEXT_MAX_SESSIONS", "2000"))
+
+
+def _bounded_lru_set(store: "OrderedDict[str, object]", key: str, value: object, *, max_size: int) -> None:
+    """Insert/update key in an OrderedDict-backed store, evicting the
+    least-recently-touched entries once over max_size.
+
+    Keeps long-lived in-memory session maps (chat context, frustration
+    tracker) from growing unbounded across the process lifetime.
+    """
+    store[key] = value
+    store.move_to_end(key)
+    while len(store) > max_size:
+        store.popitem(last=False)
 
 # Intent → touch panel navigation map (page + optional form to open).
 _INTENT_PANEL_NAV = {
@@ -650,9 +671,10 @@ _BROWSER_BROKER = create_default_browser_broker(_OPENCLAW_GW)
 # ── Frustration signal detection ──────────────────────────────────────────────
 # Lightweight in-memory tracker: session_id → list of (normalized_msg, ts) tuples
 # Not persisted — session-scoped only. Proposals written via evolution_notice.
-_frustration_tracker: dict[str, list[tuple[str, float]]] = {}
+_frustration_tracker: "OrderedDict[str, list[tuple[str, float]]]" = OrderedDict()
 _FRUSTRATION_WINDOW_S = 1800  # 30 minute session window
 _FRUSTRATION_THRESHOLD = 3    # same message N times = frustration signal
+_MAX_FRUSTRATION_SESSIONS = int(os.environ.get("ZOE_FRUSTRATION_MAX_SESSIONS", "2000"))
 
 
 def _chat_pi_context_turns(context: object | None) -> str:
@@ -781,7 +803,7 @@ def _check_frustration(session_id: str, user_id: str, message: str) -> None:
         if now - t < _FRUSTRATION_WINDOW_S
     ]
     entries.append((norm, now))
-    _frustration_tracker[session_id] = entries
+    _bounded_lru_set(_frustration_tracker, session_id, entries, max_size=_MAX_FRUSTRATION_SESSIONS)
 
     # Count similar entries (simple: exact match after normalization)
     similar = sum(1 for m, _ in entries if m == norm)
@@ -852,6 +874,30 @@ async def _restart_hermes() -> None:
         logger.warning("Hermes restart after token write failed: %s", exc)
 
 
+# Off-loop runner for the panel_status ssh reachability probe (AGENTS.md fork
+# rule: never fork on the event loop thread — same pattern as
+# tts_waterfall._spawn_tts_cli / kanban_adapter._spawn_cli).
+_SSH_PROBE_POOL = concurrent.futures.ThreadPoolExecutor(
+    max_workers=2, thread_name_prefix="ssh-probe"
+)
+_SSH_PROBE_WAIT_GRACE_S = 5.0
+
+
+async def _spawn_ssh_probe(
+    args: list[str], *, timeout: float
+) -> "subprocess.CompletedProcess[bytes]":
+    """Run a short-lived reachability CLI off the event loop, bounded even if fork() wedges."""
+    loop = asyncio.get_running_loop()
+
+    def _blocking() -> "subprocess.CompletedProcess[bytes]":
+        return subprocess.run(args, capture_output=True, timeout=timeout, check=False)
+
+    return await asyncio.wait_for(
+        loop.run_in_executor(_SSH_PROBE_POOL, _blocking),
+        timeout=timeout + _SSH_PROBE_WAIT_GRACE_S,
+    )
+
+
 async def _build_panel_intent_card(intent, db, user_id: str) -> str:
     """Build an AG-UI markdown status card for touch panel intents."""
     import httpx as _httpx
@@ -890,18 +936,21 @@ async def _build_panel_intent_card(intent, db, user_id: str) -> str:
             reachable = None
             if ip:
                 try:
-                    import asyncio as _aio
-                    proc = await _aio.wait_for(
-                        _aio.create_subprocess_exec(
+                    # Off-loop spawn (AGENTS.md fork rule): run-to-completion
+                    # subprocess.run in a small dedicated pool — never a fork on
+                    # the event loop thread. run()'s own timeout kills+reaps a
+                    # stalled ssh child in the worker thread; the coroutine-side
+                    # wait_for still bounds this turn even if the fork itself
+                    # wedges (run()'s timeout only starts once Popen returns).
+                    result = await _spawn_ssh_probe(
+                        [
                             "ssh", "-o", "ConnectTimeout=4", "-o", "StrictHostKeyChecking=no",
                             "-o", "BatchMode=yes", "-p", str(r["ssh_port"] or 22),
                             f"{r['ssh_user'] or 'pi'}@{ip}", "echo ok",
-                            stdout=_aio.subprocess.PIPE, stderr=_aio.subprocess.PIPE,
-                        ),
+                        ],
                         timeout=6.0,
                     )
-                    await proc.communicate()
-                    reachable = proc.returncode == 0
+                    reachable = result.returncode == 0
                 except Exception:
                     reachable = False
             ssh_dot = ("🟢 SSH ok" if reachable else "🔴 SSH unreachable") if reachable is not None else "⚪ no IP"
@@ -2213,7 +2262,7 @@ async def chat_stream_generator(
         ) if use_intent_fast_path else None
         if intent:
             _chat_ctx.activate(intent.name, getattr(intent, "slots", {}), message_for_processing)
-            _CHAT_CONTEXTS[session_id] = _chat_ctx
+            _bounded_lru_set(_CHAT_CONTEXTS, session_id, _chat_ctx, max_size=_MAX_CHAT_CONTEXT_SESSIONS)
 
         # Tier 0.5: LLM classifier for short missed utterances
         _tier05_hint: Optional[Intent] = None
@@ -2228,7 +2277,7 @@ async def chat_stream_generator(
                 if _classified and _classified.confidence >= CONFIDENCE_EXECUTE_THRESHOLD:
                     intent = _classified
                     _chat_ctx.activate(intent.name, getattr(intent, "slots", {}), message_for_processing)
-                    _CHAT_CONTEXTS[session_id] = _chat_ctx
+                    _bounded_lru_set(_CHAT_CONTEXTS, session_id, _chat_ctx, max_size=_MAX_CHAT_CONTEXT_SESSIONS)
                     logger.info("Tier 0.5 hit: %s confidence=%.2f", intent.name, intent.confidence)
                 elif _classified and _classified.confidence >= CONFIDENCE_HINT_THRESHOLD:
                     _tier05_hint = _classified
