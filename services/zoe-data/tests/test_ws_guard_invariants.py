@@ -23,11 +23,14 @@ def _main_src() -> str:
 def test_allowlist_includes_self_lan_origins():
     src = _main_src()
     assert "_SELF_LAN_ORIGINS" in src, "self-LAN origin set missing"
-    m = re.search(r"def _allowed_browser_origins.*?return (.+)", src, re.DOTALL)
+    # Capture ONLY the return line ([^\n]+, not .+ under DOTALL which greedily
+    # matches to end-of-file and made this assertion vacuously true).
+    m = re.search(r"def _allowed_browser_origins.*?\n\s*return ([^\n]+)", src, re.DOTALL)
     assert m and "_SELF_LAN_ORIGINS" in m.group(1), (
-        "_allowed_browser_origins() must include the host's own LAN origin — "
-        "the kiosk connects with Origin: https://<this-host-ip> and was 403'd "
-        "when the CSWSH guard shipped without it (panel outage 2026-07-03)"
+        "_allowed_browser_origins() must include the host's own LAN origin in "
+        "its return expression — the kiosk connects with "
+        "Origin: https://<this-host-ip> and was 403'd when the CSWSH guard "
+        "shipped without it (panel outage 2026-07-03)"
     )
 
 

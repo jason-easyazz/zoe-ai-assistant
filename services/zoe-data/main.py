@@ -1741,8 +1741,16 @@ def _self_lan_origins() -> frozenset[str]:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                 s.connect(("8.8.8.8", 80))
                 ips.add(s.getsockname()[0])
-        except OSError:
-            pass
+        except OSError as exc:
+            # Do NOT stay silent: with no self origin the kiosk's websockets are
+            # 403'd again (the exact 2026-07-03 incident) and nothing would say
+            # why. Surface it and point at the manual overrides.
+            logger.warning(
+                "Self-LAN origin discovery failed (%s) — the touch kiosk's "
+                "Origin (https://<host-ip>) will NOT be allowlisted; set "
+                "ZOE_HOST_LAN_IP or ZOE_ALLOWED_WS_ORIGINS to restore it",
+                exc,
+            )
     return frozenset(f"https://{ip}" for ip in ips if ip)
 
 
