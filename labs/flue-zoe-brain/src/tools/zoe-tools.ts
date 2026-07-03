@@ -41,7 +41,7 @@ import * as v from 'valibot';
 // .ts extension so the offline strip-types tests (node --experimental-strip-types)
 // can resolve it too; tsconfig has allowImportingTsExtensions and the flue build
 // bundles .ts specifiers fine.
-import { ACTIVATOR_TOOL_NAME, GROUP_NAMES, GROUP_PURPOSES, TOOL_GROUPS } from './tool-groups.ts';
+import { ACTIVATOR_TOOL_NAME, GROUP_NAMES, GROUP_SUMMARY, TOOL_GROUPS } from './tool-groups.ts';
 
 // zoe-data base URL — the live capability backend. Overridable for the lab.
 // Defaults to the live local endpoint (same default as prod's ZOE_DATA_URL).
@@ -515,22 +515,24 @@ const createNote = defineTool({
  * same identity fail-closed semantics and ZOE_BRAIN_ALLOW_WRITES gate as
  * before. Disclosure only shrinks what the model SEES per call.
  */
-// Derived from the canonical map (never hand-maintained): every group the
-// picklist accepts is guaranteed to appear here with its purpose line, so the
-// description cannot drift when a group is added (GROUP_PURPOSES is a total
-// Record — a missing purpose is a compile error).
-const GROUP_SUMMARY = GROUP_NAMES.map(
-  (group) => `${group} (${GROUP_PURPOSES[group]})`,
-).join(', ');
-
 const activateAbilities = defineTool({
   name: ACTIVATOR_TOOL_NAME,
   description:
     'Unlock a group of additional tools when the user asks for something none of ' +
     `your currently available tools can do. Groups: ${GROUP_SUMMARY}. ` +
     'After it returns, call the unlocked tool you need.',
+  // DEAD-SIMPLE wire schema, kept that way on purpose for the 4B brain: one
+  // required string property whose JSON schema is a bare enum of group names
+  // (Flue requires a top-level OBJECT schema — tool.ts assertToolDefinition —
+  // so a root-level enum is not an option). GROUP_SUMMARY (used in the
+  // description above) is derived from the same canonical map as the picklist,
+  // so the catalogue and the enum cannot drift apart. The exact wire shape is
+  // pinned by a unit test (test/activator_fallback.test.ts).
   input: v.object({
-    group: v.picklist(GROUP_NAMES),
+    group: v.pipe(
+      v.picklist(GROUP_NAMES),
+      v.description(`The ability group to unlock — one of: ${GROUP_NAMES.join(', ')}.`),
+    ),
   }),
   run: async ({ input }) => {
     const tools = TOOL_GROUPS[input.group];
