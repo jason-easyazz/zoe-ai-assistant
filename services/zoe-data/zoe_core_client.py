@@ -306,13 +306,55 @@ class _ZoeCoreWorker:
         streamed_any = False   # whether we've yielded anything this whole turn
         saw_turn_end = False   # at least one turn has completed
         prompt_accepted = False
-        # Count of tool calls that started but haven't reported tool_execution_end.
+        # Tool calls that started but haven't reported a MATCHING tool_execution_end.
         # A slow tool (web search / deep research ~60s / CloakBrowser) produces a
         # long stdout gap with NO events; if we applied the idle timeout during
         # that gap we'd time out, return the pre-tool fragment as a "complete"
         # answer, and leave the worker mid-generation. So while a tool is
         # outstanding we use the full remaining deadline, never the idle window.
-        tools_outstanding = 0
+        outstanding_tool_ids: dict[str, int] = {}
+        outstanding_tool_names: dict[str, int] = {}
+
+        def _tools_outstanding() -> int:
+            return sum(outstanding_tool_ids.values()) + sum(outstanding_tool_names.values())
+
+        def _decrement_pending_tool(bucket: dict[str, int], key: str) -> None:
+            remaining = bucket[key] - 1
+            if remaining > 0:
+                bucket[key] = remaining
+            else:
+                del bucket[key]
+
+        def _remember_tool_start(tool_call: Mapping) -> None:
+            tc_id = tool_call.get("id")
+            tc_name = tool_call.get("name")
+            if tc_id:
+                key = str(tc_id)
+                outstanding_tool_ids[key] = outstanding_tool_ids.get(key, 0) + 1
+            elif tc_name:
+                key = str(tc_name)
+                outstanding_tool_names[key] = outstanding_tool_names.get(key, 0) + 1
+
+        def _mark_tool_end(event: Mapping) -> bool:
+            tc_id = event.get("toolCallId") or event.get("callId")
+            if tc_id:
+                key = str(tc_id)
+                if key in outstanding_tool_ids:
+                    _decrement_pending_tool(outstanding_tool_ids, key)
+                    return True
+                logger.debug("zoe-core: ignoring unmatched tool_execution_end id=%s", key)
+                return False
+            tc_name = event.get("name") or event.get("toolName")
+            if tc_name:
+                key = str(tc_name)
+                if key in outstanding_tool_names:
+                    _decrement_pending_tool(outstanding_tool_names, key)
+                    return True
+                logger.debug("zoe-core: ignoring unmatched tool_execution_end name=%s", key)
+                return False
+            logger.debug("zoe-core: ignoring id-less/name-less tool_execution_end")
+            return False
+
         deadline = time.monotonic() + timeout_s
         while True:
             remaining = deadline - time.monotonic()
@@ -322,7 +364,7 @@ class _ZoeCoreWorker:
             # flight — bound each read to the idle window: if agent_end never comes,
             # return rather than hang. With a tool outstanding, the gap is expected
             # work, so wait out the full remaining deadline instead.
-            idle_eligible = streamed_any and saw_turn_end and tools_outstanding == 0
+            idle_eligible = streamed_any and saw_turn_end and _tools_outstanding() == 0
             read_timeout = min(remaining, _IDLE_TIMEOUT_S) if idle_eligible else remaining
             try:
                 line = await asyncio.wait_for(self.proc.stdout.readline(), timeout=read_timeout)
@@ -385,15 +427,8 @@ class _ZoeCoreWorker:
                     if tc is not None:
                         tc_id = tc.get("id")
                         tc_name = tc.get("name")
-                        # Count a tool as in-flight ONLY under the exact guard that
-                        # makes it trackable (id AND name — the same condition as the
-                        # start sentinel). _toolcall_block_from_amev accepts any
-                        # type=="toolCall" block, so an id-without-name (or unnamed)
-                        # block would otherwise increment the counter with no matching
-                        # tool_execution_end and leave the turn permanently
-                        # non-idle-eligible (phantom pending tool).
+                        _remember_tool_start(tc)
                         if tc_id and tc_name:
-                            tools_outstanding += 1
                             yield "__TOOL__:" + json.dumps(
                                 {"phase": "start", "id": str(tc_id), "name": str(tc_name)}
                             )
@@ -408,12 +443,14 @@ class _ZoeCoreWorker:
                 for sentinel in _tool_args_sentinels(event):
                     yield sentinel
             elif etype == "tool_execution_end":
-                # Tool finished — re-arm the idle timeout (clamp at 0 in case a
-                # start event was missed) now that events should resume promptly.
-                tools_outstanding = max(0, tools_outstanding - 1)
-                sentinel = _tool_result_sentinel(event)
-                if sentinel is not None:
-                    yield sentinel
+                # Tool finished — re-arm the idle timeout only when this end frame
+                # matches a tracked start. Stray/duplicate end frames are common
+                # enough to be ignored; letting them clear the counter can truncate a
+                # slow, still-running tool turn.
+                if _mark_tool_end(event):
+                    sentinel = _tool_result_sentinel(event)
+                    if sentinel is not None:
+                        yield sentinel
             # Only fall back to the whole-message field when NOTHING has streamed
             # for this turn yet. Once text_delta chunks have streamed, a terminal
             # message/text_end/agent_end event re-delivers the COMPLETE message;

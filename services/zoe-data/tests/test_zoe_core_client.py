@@ -428,11 +428,15 @@ async def test_tool_execution_end_emits_result_sentinel():
     """tool_execution_end yields a phase=result sentinel with the result text."""
     out = await _run_read_turn([
         _accept(),
+        _toolcall_start("tc-1", "list_add"),
         _tool_exec_end(tc_id="tc-1", result="Added bread."),
         _agent_end(),
     ])
     tools = [_parse_tool(s) for s in out if s.startswith("__TOOL__:")]
-    assert tools == [{"phase": "result", "id": "tc-1", "result": "Added bread."}]
+    assert tools == [
+        {"phase": "start", "id": "tc-1", "name": "list_add"},
+        {"phase": "result", "id": "tc-1", "result": "Added bread."},
+    ]
 
 
 @pytest.mark.asyncio
@@ -440,12 +444,15 @@ async def test_tool_execution_end_nested_result_content():
     """A nested {result:{content:...}} envelope is unwrapped to a string result."""
     out = await _run_read_turn([
         _accept(),
+        _toolcall_start("tc-2", "web_search"),
         _tool_exec_end(tc_id="tc-2", result={"content": "Hermes web result: sunny, 24."}),
         _agent_end(),
     ])
     tools = [_parse_tool(s) for s in out if s.startswith("__TOOL__:")]
-    assert tools == [{"phase": "result", "id": "tc-2",
-                      "result": "Hermes web result: sunny, 24."}]
+    assert tools == [
+        {"phase": "start", "id": "tc-2", "name": "web_search"},
+        {"phase": "result", "id": "tc-2", "result": "Hermes web result: sunny, 24."},
+    ]
 
 
 @pytest.mark.asyncio
@@ -573,6 +580,124 @@ async def test_slow_tool_gap_does_not_truncate(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_duplicate_tool_end_does_not_clear_other_pending_tool(monkeypatch):
+    """A duplicated end for one tool must not clear a different slow tool.
+
+    The scalar counter bug decremented on every tool_execution_end: start slow +
+    start fast + fast end + duplicate fast end dropped the count to zero, so the
+    idle window returned the pre-tool fragment while the slow tool was still
+    running."""
+    import zoe_core_client as zc
+    monkeypatch.setattr(zc, "_IDLE_TIMEOUT_S", 0.05)
+
+    out = await _run_read_turn_streamed(
+        [
+            (0.0, [
+                _accept(),
+                _delta("Let me check"),
+                _toolcall_start("tc-slow", "web_search"),
+                _toolcall_start("tc-fast", "calendar_lookup"),
+                _tool_exec_end(tc_id="tc-fast", result="Calendar ready."),
+                {"type": "turn_end", "id": "req-1"},
+                _tool_exec_end(tc_id="tc-fast", result="Duplicate calendar end."),
+            ]),
+            (0.30, [
+                _tool_exec_end(tc_id="tc-slow", result="Saturday is sunny."),
+                {"type": "message_start", "id": "req-1"},
+                _delta("Saturday looks sunny."),
+                _agent_end(),
+            ]),
+        ],
+        timeout_s=5.0,
+    )
+    text = [c for c in out if not c.startswith("__TOOL__:") and not c.startswith("__THINKING__:")]
+    assert text == ["Let me check", "Saturday looks sunny."]
+
+
+@pytest.mark.asyncio
+async def test_idless_stray_tool_end_does_not_clear_pending_tool(monkeypatch):
+    """An id-less/name-less stray end must not zero a real matched tool."""
+    import zoe_core_client as zc
+    monkeypatch.setattr(zc, "_IDLE_TIMEOUT_S", 0.05)
+
+    out = await _run_read_turn_streamed(
+        [
+            (0.0, [
+                _accept(),
+                _delta("Let me search"),
+                _toolcall_start("tc-1", "web_search"),
+                {"type": "turn_end", "id": "req-1"},
+                _tool_exec_end(result="stray result without id or name"),
+            ]),
+            (0.30, [
+                _tool_exec_end(tc_id="tc-1", result="Saturday is sunny."),
+                {"type": "message_start", "id": "req-1"},
+                _delta("It'll be sunny."),
+                _agent_end(),
+            ]),
+        ],
+        timeout_s=5.0,
+    )
+    text = [c for c in out if not c.startswith("__TOOL__:") and not c.startswith("__THINKING__:")]
+    assert text == ["Let me search", "It'll be sunny."]
+
+
+@pytest.mark.asyncio
+async def test_wrong_named_tool_end_does_not_clear_pending_tool(monkeypatch):
+    """An id-less end naming a different tool must not match the outstanding start."""
+    import zoe_core_client as zc
+    monkeypatch.setattr(zc, "_IDLE_TIMEOUT_S", 0.05)
+
+    out = await _run_read_turn_streamed(
+        [
+            (0.0, [
+                _accept(),
+                _delta("Let me search"),
+                _toolcall_start("tc-1", "web_search"),
+                {"type": "turn_end", "id": "req-1"},
+                _tool_exec_end(result="wrong tool done", name="calendar_lookup"),
+            ]),
+            (0.30, [
+                _tool_exec_end(tc_id="tc-1", result="Saturday is sunny."),
+                {"type": "message_start", "id": "req-1"},
+                _delta("The weather is sunny."),
+                _agent_end(),
+            ]),
+        ],
+        timeout_s=5.0,
+    )
+    text = [c for c in out if not c.startswith("__TOOL__:") and not c.startswith("__THINKING__:")]
+    assert text == ["Let me search", "The weather is sunny."]
+
+
+@pytest.mark.asyncio
+async def test_idless_tool_start_matches_end_by_name_and_completes(monkeypatch):
+    """When a start has no id, fall back to matching the outstanding tool by name."""
+    import zoe_core_client as zc
+    monkeypatch.setattr(zc, "_IDLE_TIMEOUT_S", 0.05)
+
+    out = await _run_read_turn_streamed(
+        [
+            (0.0, [
+                _accept(),
+                _delta("Let me search"),
+                _toolcall_start(None, "web_search"),
+                {"type": "turn_end", "id": "req-1"},
+            ]),
+            (0.30, [
+                _tool_exec_end(result="Saturday is sunny.", name="web_search"),
+                {"type": "message_start", "id": "req-1"},
+                _delta("It'll be sunny."),
+                _agent_end(),
+            ]),
+        ],
+        timeout_s=5.0,
+    )
+    text = [c for c in out if not c.startswith("__TOOL__:") and not c.startswith("__THINKING__:")]
+    assert text == ["Let me search", "It'll be sunny."]
+
+
+@pytest.mark.asyncio
 async def test_idle_timeout_with_pending_tool_raises_not_truncates(monkeypatch):
     """If the deadline is reached while a tool is STILL outstanding, _read_turn
     raises (so stream() resets the worker) rather than silently returning the
@@ -652,13 +777,10 @@ async def test_malformed_toolcall_start_does_not_block_idle(monkeypatch):
     assert out == ["All done"]
 
 
-async def test_unnamed_toolcall_start_does_not_block_idle(monkeypatch):
-    """A toolCall block WITH an id but WITHOUT a usable name passes
-    _toolcall_block_from_amev (it accepts any type=="toolCall" block) but is NOT
-    trackable — the start sentinel is suppressed and no tool_execution_end will
-    match it. It must therefore not count as outstanding either (count under the
-    exact same id-AND-name guard as the sentinel), or the turn stays permanently
-    non-idle-eligible (Greptile #920 round 2)."""
+async def test_unnamed_toolcall_start_matches_end_by_id(monkeypatch):
+    """A toolCall block WITH an id but WITHOUT a usable name is still trackable by
+    id. It must stay outstanding across the idle window and complete only when the
+    matching tool_execution_end arrives."""
     import zoe_core_client as zc
     monkeypatch.setattr(zc, "_IDLE_TIMEOUT_S", 0.05)
 
@@ -666,9 +788,10 @@ async def test_unnamed_toolcall_start_does_not_block_idle(monkeypatch):
         [
             (0.0, [
                 _accept(),
-                _delta("All done"),
-                # Valid-shaped block but name missing: accepted by the parser,
-                # suppressed by the sentinel guard — must not be counted.
+                _delta("Let me check"),
+                # Valid-shaped block but name missing: accepted by the parser and
+                # tracked by id. The start sentinel remains suppressed because chat
+                # tool UI needs both id and name.
                 {"type": "message_update", "id": "req-1",
                  "assistantMessageEvent": {
                      "type": "toolcall_start",
@@ -680,9 +803,14 @@ async def test_unnamed_toolcall_start_does_not_block_idle(monkeypatch):
                  }},
                 {"type": "turn_end", "id": "req-1"},
             ]),
-            (5.0, [_agent_end()]),
+            (0.30, [
+                _tool_exec_end(tc_id="tc-noname", result="Done."),
+                {"type": "message_start", "id": "req-1"},
+                _delta("Done."),
+                _agent_end(),
+            ]),
         ],
-        timeout_s=2.0,
+        timeout_s=5.0,
     )
-    assert out == ["All done"]
-    assert not any(c.startswith("__TOOL__:") for c in out)
+    assert [c for c in out if not c.startswith("__TOOL__:")] == ["Let me check", "Done."]
+    assert [_parse_tool(c)["phase"] for c in out if c.startswith("__TOOL__:")] == ["result"]
