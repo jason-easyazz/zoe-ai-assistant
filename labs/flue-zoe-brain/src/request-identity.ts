@@ -78,7 +78,11 @@ const IDENTITY_ENVELOPE_RE = /^ zoe-uid:([^\n]*)\n/;
  * pollutes the conversation. An empty id yields the message unchanged.
  */
 export function wrapMessageWithIdentity(message: string, userId: string): string {
-  const uid = (userId ?? '').trim();
+  // Strip embedded CR/LF too — trim() only removes leading/trailing whitespace,
+  // but a newline inside the id would terminate the single-line envelope early and
+  // leak the remainder into the prompt the model sees. Ids come from trusted server
+  // code; this keeps the wire contract tight regardless.
+  const uid = (userId ?? '').trim().replace(/[\r\n]/g, '');
   if (!uid) return message;
   return `${IDENTITY_ENVELOPE_PREFIX}${uid}\n${message}`;
 }
