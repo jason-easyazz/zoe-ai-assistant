@@ -15,6 +15,7 @@ import logging
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 
 from auth import get_current_user, require_admin, require_internal_token
 from database import get_db
@@ -165,7 +166,10 @@ async def create_memory_proposal(
     if ref is None:
         # Silent drops (PII / dedup / opt-out) return 202 so the caller can
         # distinguish "we took no action" from a hard failure.
-        return {"status": "dropped", "reason": "pii_or_dedup"}, 202
+        return JSONResponse(
+            status_code=202,
+            content={"status": "dropped", "reason": "pii_or_dedup"},
+        )
     return _ref_to_dict(ref)
 
 

@@ -9,6 +9,18 @@ Each test maps to a finding fixed in the same PR:
 
 The tests inject a fake Chroma collection so they need neither a real MemPalace
 store nor fastembed.
+
+Additional adversarially-verified findings fixed alongside the above:
+
+  FIX 5  re-ingesting a fact whose deterministic mem_id already has a reviewed
+         (approved/rejected/archived) row must not clobber it back to pending
+  FIX 6  the idempotency key must include lane fields (memory_type/scope/
+         entity), matching _memory_id, so same-text-different-lane facts don't
+         collide in the dedup cache
+  FIX 7  delete_user must purge that user's _seen_keys entries so re-teaching a
+         forgotten fact isn't dropped as a stale duplicate
+  FIX 8  review(decision='edit') must carry forward scope/visibility/
+         source_excerpt/extra metadata instead of defaulting them away
 """
 
 import threading
@@ -76,6 +88,19 @@ class FakeCollection:
                 self.rows[_id]["document"] = documents[i]
             if metadatas is not None:
                 self.rows[_id]["metadata"] = dict(metadatas[i])
+
+    # ---- deletes ------------------------------------------------------------
+    def delete(self, *, ids=None, where=None):
+        if ids is not None:
+            targets = list(ids)
+        elif where is not None:
+            targets = [
+                _id for _id, row in self.rows.items() if _match_where(where, row["metadata"])
+            ]
+        else:
+            targets = []
+        for _id in targets:
+            self.rows.pop(_id, None)
 
     # ---- reads ------------------------------------------------------------
     def get(self, *, ids=None, where=None, include=None):
@@ -279,3 +304,117 @@ async def test_unique_query_count_does_not_inflate_after_saturation(svc):
     assert meta["unique_query_count"] == _MAX_QUERY_HASHES, "re-seen query must not re-count"
     # access_count keeps climbing even while the distinct-query signal is frozen.
     assert meta["access_count"] == _MAX_QUERY_HASHES + 2
+
+
+# ── FIX 5: re-ingest must not clobber an already-reviewed row back to pending ──
+
+async def test_reingest_after_restart_does_not_clobber_approved_status(svc):
+    """Simulates the real failure scenario: propose -> approve -> process
+    restart (in-memory _seen_keys lost) -> the same proposal is POSTed again.
+    The durable mem_id is deterministic (text+lanes only), so the second
+    ingest must not resurrect a fresh 'pending' row over the approved one."""
+    ref = await svc.ingest(
+        "I prefer tea", user_id="u1", source="test", status="pending"
+    )
+    approved = await svc.review(ref.id, decision="approve", actor="reviewer")
+    assert approved.metadata["status"] == "approved"
+
+    # Simulate a process restart: the fast-path cache is gone.
+    svc._seen_keys = _BoundedKeySet()
+    svc._seen_keys_by_user = {}
+
+    replay = await svc.ingest(
+        "I prefer tea", user_id="u1", source="test", status="pending"
+    )
+    assert replay is None, "replayed proposal must be dropped as a duplicate"
+
+    row = await svc.get(ref.id)
+    assert row.metadata["status"] == "approved", "status must not regress to pending"
+    assert row.metadata.get("reviewed_by") == "reviewer", "review history must survive"
+
+
+async def test_reingest_of_still_pending_row_is_allowed(svc):
+    """A row that was never reviewed (still 'pending') has no review history to
+    lose, so a duplicate ingest attempt for it may proceed normally."""
+    ref = await svc.ingest(
+        "likes rainy days", user_id="u1", source="test", status="pending"
+    )
+    svc._seen_keys = _BoundedKeySet()
+    svc._seen_keys_by_user = {}
+
+    again = await svc.ingest(
+        "likes rainy days", user_id="u1", source="test", status="pending"
+    )
+    assert again is not None
+    assert again.id == ref.id
+
+
+# ── FIX 6: idempotency key must be lane-aware, matching _memory_id ─────────────
+
+async def test_idempotency_key_distinguishes_lanes(svc):
+    """Same text, different memory_type, ingested back-to-back in one process
+    (no restart) must both land as distinct rows, not have the second dropped
+    as a false-positive duplicate."""
+    fact_ref = await svc.ingest(
+        "loves jazz", user_id="u1", source="test", memory_type="fact"
+    )
+    pref_ref = await svc.ingest(
+        "loves jazz", user_id="u1", source="test", memory_type="preference"
+    )
+    assert fact_ref is not None
+    assert pref_ref is not None
+    assert fact_ref.id != pref_ref.id
+    assert len(svc._fake.rows) == 2
+
+
+# ── FIX 7: delete_user must purge that user's idempotency-cache entries ────────
+
+async def test_delete_user_purges_seen_keys_for_reteaching(svc):
+    ref = await svc.ingest("owns a cat named milo", user_id="u1", source="test")
+    assert ref is not None
+    idem_key = ref.metadata["idempotency_key"]
+    assert idem_key in svc._seen_keys
+
+    await svc.delete_user("u1", actor="admin")
+    assert idem_key not in svc._seen_keys, "forgotten user's cache entries must be purged"
+    assert "u1" not in svc._seen_keys_by_user
+
+    # Re-teaching the same fact after the forget must succeed, not be dropped.
+    retaught = await svc.ingest("owns a cat named milo", user_id="u1", source="test")
+    assert retaught is not None
+
+
+async def test_delete_user_does_not_purge_other_users_keys(svc):
+    ref1 = await svc.ingest("fact for u1", user_id="u1", source="test")
+    ref2 = await svc.ingest("fact for u2", user_id="u2", source="test")
+    assert ref1 is not None and ref2 is not None
+    key2 = ref2.metadata["idempotency_key"]
+
+    await svc.delete_user("u1", actor="admin")
+    assert key2 in svc._seen_keys, "unrelated user's cache entries must survive"
+
+
+# ── FIX 8: edit must carry forward scope/visibility/source_excerpt/extras ─────
+
+async def test_edit_preserves_shared_scope_and_extras(svc):
+    ref = await svc.ingest(
+        "family wifi password rotated monthly",
+        user_id="u1",
+        source="test",
+        status="pending",
+        scope="shared",
+        source_excerpt="said during dinner",
+        metadata={"custom_note": "from kitchen assistant"},
+    )
+    assert ref.metadata["visibility"] == "family"
+    assert ref.metadata["scope"] == "shared"
+    assert ref.metadata.get("candidate_custom_note") == "from kitchen assistant"
+
+    edited = await svc.review(
+        ref.id, decision="edit", edits="family wifi password rotated quarterly",
+        actor="tester",
+    )
+    assert edited.metadata["visibility"] == "family", "edit must not downgrade visibility"
+    assert edited.metadata["scope"] == "shared"
+    assert edited.metadata.get("source_excerpt") == "said during dinner"
+    assert edited.metadata.get("candidate_custom_note") == "from kitchen assistant"
