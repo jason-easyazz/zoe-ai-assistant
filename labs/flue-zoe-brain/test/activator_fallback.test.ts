@@ -75,7 +75,8 @@ test('a genuinely tool-free prompt still discloses only the core', () => {
 // ─── the activator wire schema: a dead-simple single-enum object ─────────────
 
 test('activate_abilities wire schema is exactly one required enum-of-groups property', () => {
-  const activator = zoeTools.find((t) => t.name === 'activate_abilities')!;
+  const activator = zoeTools.find((t) => t.name === 'activate_abilities');
+  assert.ok(activator, 'activate_abilities must be registered in zoeTools');
   // Same conversion Flue applies at the wire (valibotToJsonSchema strips
   // $schema and passes errorMode: 'ignore') — see @flue/runtime dist tool module.
   const { $schema: _schema, ...wire } = toJsonSchema(
