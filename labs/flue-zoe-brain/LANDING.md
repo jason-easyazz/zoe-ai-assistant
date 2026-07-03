@@ -1,5 +1,43 @@
 # LANDING — operator on-box checklists (sandbox cannot reach live services)
 
+## Per-request identity verification (multi-user)
+
+The sidecar now threads the trusted, seam-forwarded `user_id` (request body)
+through an `AsyncLocalStorage` (`src/request-identity.ts`) so every tool call in a
+turn acts as **that** user, not the process-wide `ZOE_BRAIN_USER_ID`. Offline
+proof is pinned in `test/request_identity.test.ts` + `test/route_identity.test.ts`
+(90/90 green). Live half — prove two identities produce two different memory
+recalls against the real Gemma brain + zoe-data (scratch port only; do NOT touch
+the live `:3578` sidecar):
+
+```bash
+npm install && npm run build
+ZOE_BRAIN_OPEN=1 ZOE_BRAIN_ALLOW_WRITES=false \
+  ZOE_DATA_URL=http://127.0.0.1:8000 PORT=3579 node dist/server.mjs
+```
+
+The cleanest proof is at the tool layer (bypasses 4B tool-call flakiness and
+zoe-data's message-relevance filter, both of which muddy an end-to-end recall
+comparison):
+
+```bash
+ZOE_DATA_URL=http://127.0.0.1:8000 node --experimental-strip-types -e '
+const { runWithUserId } = await import("./src/request-identity.ts");
+const { zoeTools } = await import("./src/tools/zoe-tools.ts");
+const recall = zoeTools.find(t => t.name === "recall_memory");
+console.log("ADMIN  =>", await runWithUserId("family-admin", () => recall.run({ input: { query: "birthday" } })));
+console.log("NOBODY =>", await runWithUserId("zzz-nobody-probe", () => recall.run({ input: { query: "birthday" } })));
+'
+```
+
+Expect the `family-admin` line to carry real stored memories and the `NOBODY`
+line to be `"I don't have anything stored about that yet."` — same tool, same
+query, differing only in the bound identity. (An HTTP `?wait=result` recall with
+`user_id` in the body also works, but the 4B may not always call the tool or may
+fabricate on top of an empty packet, so prefer the tool-layer probe as the gate.)
+
+Kill by port when done: `lsof -ti tcp:3579 | xargs -r kill` (never `pkill -f`).
+
 ## Sentinel stream verification (Seam-A streaming mode)
 
 The sidecar now emits the prod text-delta + `__TOOL__`/`__THINKING__` sentinel

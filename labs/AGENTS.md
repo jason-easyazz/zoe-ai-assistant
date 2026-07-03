@@ -53,7 +53,9 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
   cut-list record `docs/knowledge/flue-cutover-tool-cut-list.md` §3 — the parity
   target) with progressive
   tool disclosure at the wire (always-on core + activated groups per call;
-  `src/tools/tool-groups.ts`), identity fail-closed, writes dry-run-gated.
+  `src/tools/tool-groups.ts`), per-request acting identity (the seam-forwarded
+  `user_id` threaded via `src/request-identity.ts` AsyncLocalStorage, env
+  fallback), identity fail-closed, writes dry-run-gated.
   Emits the Seam-A text-delta + `__TOOL__`/`__THINKING__` sentinel stream
   (byte-pinned to the prod contract) via content-negotiated NDJSON on the
   agent route (`src/streaming.ts`); whole-result `?wait=result` unchanged.
