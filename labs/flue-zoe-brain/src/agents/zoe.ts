@@ -7,7 +7,10 @@
  * The persona text is a verbatim copy of services/zoe-core/SOUL.md so this lab
  * app stays self-contained (no cross-build runtime read of zoe-core). The
  * instructions are that verbatim soul PLUS the sidecar-specific activator
- * doctrine (ACTIVATOR_DOCTRINE below) that progressive tool disclosure needs.
+ * doctrine (ACTIVATOR_DOCTRINE below) that progressive tool disclosure needs,
+ * PLUS a voice-delivery doctrine ported from prod's spoken-mode soul
+ * (_ZOE_SOUL_VOICE in services/zoe-data/zoe_agent.py) so this voice brain speaks
+ * with the same tight, no-markdown, spoken-length discipline as prod.
  *
  * `model: 'zoe/local'` binds to the `zoe` provider registered in app.ts (the
  * live llama-server on :11434). Exporting `route` mounts the HTTP agent API so
@@ -79,7 +82,23 @@ export const ACTIVATOR_DOCTRINE = [
   '',
   'Whenever the user\'s need touches one of those areas — even indirectly ("can I dry the washing outside?" is weather; "anything on Friday?" is calendar) — you MUST use a tool FIRST: if the tool you need is already available, call it; otherwise call activate_abilities with the matching group, then call the tool it unlocks.',
   '',
+  // Ported from prod _ZOE_SOUL_BASE "TOOL ROUTING — call proactively, don't ask
+  // for clarification first" (services/zoe-data/zoe_agent.py:210) + _ZOE_SOUL_VOICE
+  // "don't claim you can't until a tool actually fails" (zoe_agent.py:289). Act on
+  // the request as given; don't stall the tool behind a clarifying question.
+  "Act proactively — don't ask a clarifying question first when the request is clear enough to act on (\"add milk\" → add it; \"what's on Friday?\" → check the calendar). Don't claim you can't do something until a tool has actually tried and failed.",
+  '',
   "NEVER claim to know, or to have done, anything a tool didn't actually return or confirm. No tool result means you don't know — say so, or activate the ability and find out.",
+].join('\n');
+
+// Voice-delivery doctrine, ported from prod's battle-tested spoken-mode soul
+// (services/zoe-data/zoe_agent.py:285, _ZOE_SOUL_VOICE). This family sidecar IS
+// the voice brain, so the same spoken-length + no-markdown discipline that keeps
+// prod's replies tight applies here. Kept short deliberately (4B model): it
+// sharpens delivery, it does not add new behaviour, and it does not touch recall,
+// activation, or anti-fabrication.
+export const VOICE_DELIVERY_DOCTRINE = [
+  'How you speak (this shapes phrasing, not whether to use a tool — the tool rules above still come first): this is spoken aloud, so reply the way you\'d actually say it — usually 1-3 short, complete sentences. No markdown, bullet lists, headings, or code blocks; no bold or asterisks. Once you actually have your answer, lead with it and skip preamble and recaps; be brief but never clipped — finish your thought, then stop. If the message carries emotional weight, acknowledge that first, in a few words.',
 ].join('\n');
 
 // In-session context doctrine, appended AFTER the soul + activator doctrine.
@@ -98,8 +117,16 @@ export const IN_SESSION_CONTEXT_DOCTRINE = [
   'recall_memory is still how you learn anything from PAST conversations, so keep calling it first for those. When someone asks what you know or remember about them in general, call recall_memory first as always — then also weave in anything they told you this session. An empty recall result means nothing is stored from before — NOT that the user never told you this session; never let an empty recall store make you contradict or forget what the user has said in front of you now.',
 ].join('\n');
 
-/** The full system instructions the agent runs with (soul + tool doctrine). */
-export const ZOE_INSTRUCTIONS = `${ZOE_SOUL}\n\n${ACTIVATOR_DOCTRINE}\n\n${IN_SESSION_CONTEXT_DOCTRINE}`;
+/**
+ * The full system instructions the agent runs with. Order is deliberate: voice
+ * delivery (phrasing) sits BEFORE the behavioural doctrines so the tool-first /
+ * activate-first / never-fabricate rules keep the last-position weight closest to
+ * the generation boundary (Greptile #997 P2 — on a 4B model a trailing "lead with
+ * the answer" could otherwise nudge a direct reply over a needed activate_abilities
+ * call). Delivery is also self-scoped ("this shapes phrasing, not whether to use a
+ * tool — the tool rules above still come first").
+ */
+export const ZOE_INSTRUCTIONS = `${ZOE_SOUL}\n\n${VOICE_DELIVERY_DOCTRINE}\n\n${ACTIVATOR_DOCTRINE}\n\n${IN_SESSION_CONTEXT_DOCTRINE}`;
 
 // Exporting `route` publishes the HTTP agent endpoints (POST/GET /agents/zoe/:id).
 // FAIL CLOSED: this route drives the live Gemma brain on :11434, so by default a

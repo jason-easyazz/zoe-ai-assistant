@@ -26,9 +26,8 @@ const { activeToolNames, CORE_TOOL_NAMES, GROUP_NAMES, GROUP_SUMMARY } = await i
   '../src/tools/tool-groups.ts'
 );
 const { zoeTools } = await import('../src/tools/zoe-tools.ts');
-const { ACTIVATOR_DOCTRINE, IN_SESSION_CONTEXT_DOCTRINE, ZOE_INSTRUCTIONS } = await import(
-  '../src/agents/zoe.ts'
-);
+const { ACTIVATOR_DOCTRINE, IN_SESSION_CONTEXT_DOCTRINE, VOICE_DELIVERY_DOCTRINE, ZOE_INSTRUCTIONS } =
+  await import('../src/agents/zoe.ts');
 
 import type { Message } from '@earendil-works/pi-ai';
 
@@ -108,6 +107,43 @@ test('activator doctrine is imperative: MUST activate first, NEVER fabricate', (
   assert.match(ACTIVATOR_DOCTRINE, /MUST use a tool FIRST/);
   assert.match(ACTIVATOR_DOCTRINE, /activate_abilities/);
   assert.match(ACTIVATOR_DOCTRINE, /NEVER claim/);
+});
+
+test('activator doctrine carries the ported tool-first directives (no over-clarify, no premature refusal)', () => {
+  // Ported from prod _ZOE_SOUL_BASE / _ZOE_SOUL_VOICE (services/zoe-data/zoe_agent.py).
+  assert.match(ACTIVATOR_DOCTRINE, /Act proactively/);
+  assert.match(ACTIVATOR_DOCTRINE, /don't ask a clarifying question first/);
+  assert.match(ACTIVATOR_DOCTRINE, /until a tool has actually tried and failed/);
+});
+
+test('voice-delivery doctrine: spoken-length + no-markdown discipline, present in instructions', () => {
+  // Ported from prod _ZOE_SOUL_VOICE (services/zoe-data/zoe_agent.py). This is the
+  // voice brain, so the same tight spoken discipline applies.
+  assert.ok(ZOE_INSTRUCTIONS.includes(VOICE_DELIVERY_DOCTRINE));
+  assert.match(VOICE_DELIVERY_DOCTRINE, /spoken aloud/);
+  assert.match(VOICE_DELIVERY_DOCTRINE, /No markdown/);
+  assert.match(VOICE_DELIVERY_DOCTRINE, /lead with it/);
+  assert.match(VOICE_DELIVERY_DOCTRINE, /brief but never clipped/);
+  // Must NOT weaken the behavioural doctrine: delivery guidance only, no new
+  // recall/activation/fabrication rules that could conflict with the above.
+  assert.doesNotMatch(VOICE_DELIVERY_DOCTRINE, /recall_memory/);
+  assert.doesNotMatch(VOICE_DELIVERY_DOCTRINE, /activate_abilities/);
+});
+
+test('voice delivery is self-scoped + ordered BEFORE the tool doctrine (Greptile #997 P2)', () => {
+  // The delivery block must explicitly defer to the tool rules so "lead with the
+  // answer" can't nudge a 4B model into a direct reply over a needed activation.
+  assert.match(VOICE_DELIVERY_DOCTRINE, /the tool rules above still come first/);
+  assert.match(VOICE_DELIVERY_DOCTRINE, /Once you actually have your answer, lead with it/);
+  // And the behavioural doctrines (activate-first / never-fabricate) must sit
+  // AFTER voice delivery in the assembled instructions, keeping last-position
+  // weight closest to the generation boundary.
+  const iVoice = ZOE_INSTRUCTIONS.indexOf(VOICE_DELIVERY_DOCTRINE);
+  const iActivator = ZOE_INSTRUCTIONS.indexOf(ACTIVATOR_DOCTRINE);
+  const iInSession = ZOE_INSTRUCTIONS.indexOf(IN_SESSION_CONTEXT_DOCTRINE);
+  assert.ok(iVoice >= 0 && iActivator >= 0 && iInSession >= 0);
+  assert.ok(iVoice < iActivator, 'voice delivery must precede the activator doctrine');
+  assert.ok(iActivator < iInSession, 'activator then in-session context stay last');
 });
 
 test('in-session context doctrine: live transcript beats an empty recall store', () => {
