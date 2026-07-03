@@ -1236,9 +1236,14 @@ async def _ensure_user_and_chat_session(session_id: str, user_id: str) -> None:
 
 
 async def _save_chat_message(
-    session_id: str, role: str, content: str, user_id: str | None = None
-) -> None:
+    session_id: str, role: str, content: str, user_id: str | None = None,
+    *, truncated: bool = False,
+) -> bool:
     """Persist a single chat turn to chat_messages.
+
+    Returns True only when the row was actually committed (False for empty
+    content or a swallowed DB failure), so callers can decide whether the
+    reply still needs a recovery save.
 
     Mirrors the OpenClaw gateway pattern: the caller sends only the new message;
     the server owns the transcript. Zoe Agent reads this table for conversation
@@ -1251,10 +1256,15 @@ async def _save_chat_message(
     """
     clean_content = (content or "").strip()
     if not clean_content:
-        return
-    metadata = None
+        return False
+    meta: dict = {}
     if user_id and user_id not in ("guest", "voice-daemon", ""):
-        metadata = json.dumps({"user_id": user_id})
+        meta["user_id"] = user_id
+    if truncated:
+        # Flags a partial reply persisted after a mid-stream failure (P3-A): the
+        # tokens the user saw before the brain raised, saved so history isn't lost.
+        meta["truncated"] = True
+    metadata = json.dumps(meta) if meta else None
     # Use the context-managed pool acquire (deterministic release). The bare
     # `async for db in get_db(): ... break` form leaves the generator suspended
     # at the yield when broken out of, so the connection isn't returned to the
@@ -1270,8 +1280,15 @@ async def _save_chat_message(
             )
             await _touch_chat_session(db, session_id=session_id, content=clean_content)
             await db.commit()
+        return True
     except Exception as _sme:
-        logger.debug("_save_chat_message failed (non-fatal): %s", _sme)
+        # Warning, not debug: a dropped save means the reply the user saw is
+        # missing from history, and callers use the False return to recover.
+        logger.warning(
+            "_save_chat_message failed (%s turn for session %s dropped): %s",
+            role, session_id, _sme,
+        )
+        return False
 
 
 async def _touch_chat_session(db, *, session_id: str, content: str, user_id: str | None = None) -> None:
@@ -1391,6 +1408,26 @@ async def _iter_openclaw_heartbeats(emit, task: asyncio.Task, *, phase_label: st
                 },
             )
         )
+
+
+async def _cancel_if_pending(task: asyncio.Task) -> None:
+    """Cancel an agent task that's still running and await its teardown.
+
+    Called from the `finally` of every heartbeat-driven agent block. On a normal
+    finish the task is already done and this is a no-op. On SSE client disconnect
+    the generator is closed (GeneratorExit thrown at a `yield`), `await task` is
+    skipped, and without this the multi-minute browser/agent run would keep going
+    orphaned — burning CPU/GPU and holding the single brain slot. We cancel it and
+    swallow the resulting CancelledError (and any error it surfaces while tearing
+    down) so the original GeneratorExit/exception keeps propagating unchanged.
+    """
+    if task.done():
+        return
+    task.cancel()
+    try:
+        await task
+    except (asyncio.CancelledError, Exception):
+        logger.debug("agent task cancelled on stream close", exc_info=True)
 
 
 async def chat_inject_background(user_message: str, assistant_response: str, intent_name: str, user_id: str = "family-admin", session_id: str = "web"):
@@ -1814,6 +1851,11 @@ async def chat_stream_generator(
     recorder = AgRunRecorder()
     run_id, assistant_message_id = new_run_ids()
     run_mode = "hermes" if force_agent == "hermes" else "chat"
+    # P3-A: accumulate brain tokens at generator scope so the error path can
+    # recover the partial the user already saw. `persisted_assistant` guards
+    # against double-saving once the normal-path save has been scheduled.
+    full_response = ""
+    persisted_assistant = False
 
     def emit(ev):
         return recorder.emit(enc, ev)
@@ -2388,9 +2430,12 @@ async def chat_stream_generator(
                     task = asyncio.create_task(
                         _brain_oneshot(message_for_processing, session_id, user_id)
                     )
-                    async for hb in _iter_openclaw_heartbeats(emit, task, phase_label="Zoe"):
-                        yield hb
-                    response_text = await task
+                    try:
+                        async for hb in _iter_openclaw_heartbeats(emit, task, phase_label="Zoe"):
+                            yield hb
+                        response_text = await task
+                    finally:
+                        await _cancel_if_pending(task)
                 else:
                     yield emit(
                         StateSnapshotEvent(
@@ -2430,9 +2475,12 @@ async def chat_stream_generator(
                             allow_openclaw=True,
                         )
                     )
-                    async for hb in _iter_openclaw_heartbeats(emit, task):
-                        yield hb
-                    response_text = await task
+                    try:
+                        async for hb in _iter_openclaw_heartbeats(emit, task):
+                            yield hb
+                        response_text = await task
+                    finally:
+                        await _cancel_if_pending(task)
                 _, actions = _extract_ui_actions(response_text)
                 if actions:
                     asyncio.ensure_future(_queue_ui_actions_background(actions, user_id, session_id))
@@ -2819,9 +2867,17 @@ async def chat_stream_generator(
                 except Exception as _psc:
                     logger.debug("pending suggestion cards (non-fatal): %s", _psc)
                 asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
-                # Persist assistant reply so Zoe Agent has context on the next turn
+                # Persist assistant reply so Zoe Agent has context on the next turn.
+                # Awaited (not fire-and-forget) so `persisted_assistant` reflects
+                # whether the row actually landed: marking it persisted while the
+                # scheduled save could still fail would make the error handler skip
+                # the truncated-partial fallback and silently lose the reply.
                 if response_text:
-                    asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text, user_id=user_id))
+                    persisted_assistant = await _save_chat_message(
+                        session_id, "assistant", response_text, user_id=user_id
+                    )
+                    if not persisted_assistant:
+                        raise RuntimeError("assistant reply save failed")
 
             else:
                 # Explicit OpenClaw fallback path.
@@ -2863,9 +2919,12 @@ async def chat_stream_generator(
                         allow_openclaw=True,
                     )
                 )
-                async for hb in _iter_openclaw_heartbeats(emit, task):
-                    yield hb
-                response_text = await task
+                try:
+                    async for hb in _iter_openclaw_heartbeats(emit, task):
+                        yield hb
+                    response_text = await task
+                finally:
+                    await _cancel_if_pending(task)
                 _, actions = _extract_ui_actions(response_text)
                 if actions:
                     asyncio.ensure_future(_queue_ui_actions_background(actions, user_id, session_id))
@@ -2907,6 +2966,18 @@ async def chat_stream_generator(
         )
     except Exception as e:
         logger.exception("Error in chat stream: %s", e)
+        # P3-A: if the brain streamed tokens before failing, the user already saw
+        # them. Don't drop that partial — persist it (flagged truncated) so the
+        # next turn's history matches the screen. Skip if the normal save already
+        # ran (persisted_assistant) to avoid a duplicate row. CancelledError is a
+        # BaseException and never reaches here, so the cancellation path is intact.
+        if full_response.strip() and not persisted_assistant:
+            try:
+                await _save_chat_message(
+                    session_id, "assistant", full_response, user_id=user_id, truncated=True
+                )
+            except Exception:
+                logger.debug("partial persist on error failed (non-fatal)", exc_info=True)
         yield emit(
             RunErrorEvent(
                 type=EventType.RUN_ERROR,
