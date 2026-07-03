@@ -40,7 +40,7 @@ import time
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Callable, Iterable, Mapping, Optional
 
 try:
     from memory_metrics import (
@@ -146,22 +146,31 @@ class _BoundedKeySet:
     """Insertion-ordered set with a hard cap; oldest entries evict first (FIFO).
 
     Drop-in for the ``in`` / ``.add`` usage of a plain set, but bounded so it cannot
-    grow without limit across the process lifetime.
+    grow without limit across the process lifetime. Each key may carry an opaque
+    value (e.g. its owner); ``on_evict(key, value)`` fires for every evicted entry
+    so side indexes can stay in sync.
     """
 
-    def __init__(self, maxlen: int = _SEEN_KEYS_MAX):
+    def __init__(
+        self,
+        maxlen: int = _SEEN_KEYS_MAX,
+        on_evict: Optional[Callable[[str, Any], None]] = None,
+    ):
         self._maxlen = maxlen
-        self._items: "OrderedDict[str, None]" = OrderedDict()
+        self._on_evict = on_evict
+        self._items: "OrderedDict[str, Any]" = OrderedDict()
 
     def __contains__(self, key: object) -> bool:
         return key in self._items
 
-    def add(self, key: str) -> None:
+    def add(self, key: str, value: Any = None) -> None:
         if key in self._items:
             return
-        self._items[key] = None
+        self._items[key] = value
         while len(self._items) > self._maxlen:
-            self._items.popitem(last=False)
+            evicted_key, evicted_value = self._items.popitem(last=False)
+            if self._on_evict is not None:
+                self._on_evict(evicted_key, evicted_value)
 
     def __len__(self) -> int:
         return len(self._items)
@@ -325,13 +334,15 @@ class MemoryService:
     def __init__(self, data_dir: str = _MEMPALACE_DATA):
         self._data_dir = data_dir
         self._user_locks: dict[str, asyncio.Lock] = {}
-        self._seen_keys: _BoundedKeySet = _BoundedKeySet()
+        self._seen_keys: _BoundedKeySet = _BoundedKeySet(
+            on_evict=self._on_seen_key_evicted
+        )
         # Tracks which idempotency keys belong to which user_id, purely so
         # delete_user() can invalidate a forgotten user's cached keys without
-        # scanning the whole (hashed) _seen_keys set. Bounded implicitly by
-        # delete_user popping a user's whole entry on forget; a user who never
-        # deletes accumulates one small set, capped in practice by _seen_keys
-        # eviction (a key here always maps to at most one live _seen_keys entry).
+        # scanning the whole (hashed) _seen_keys set. Kept in exact sync with
+        # _seen_keys: delete_user pops a user's whole entry on forget, and the
+        # _seen_keys eviction callback (_on_seen_key_evicted) prunes each key
+        # here as it ages out, so total size is hard-capped at _SEEN_KEYS_MAX.
         self._seen_keys_by_user: dict[str, set[str]] = {}
         self._background_tasks: set[asyncio.Task[Any]] = set()
 
@@ -941,8 +952,18 @@ class MemoryService:
     def _remember_seen_key(self, user_id: str, idem_key: str) -> None:
         """Add an idempotency key to the fast-path cache, tracked by user_id
         so delete_user() can purge it (see _seen_keys_by_user)."""
-        self._seen_keys.add(idem_key)
+        self._seen_keys.add(idem_key, user_id)
         self._seen_keys_by_user.setdefault(user_id, set()).add(idem_key)
+
+    def _on_seen_key_evicted(self, idem_key: str, user_id: Any) -> None:
+        """Keep _seen_keys_by_user in sync when _seen_keys evicts an old key,
+        so the per-user index cannot grow beyond the live cache."""
+        keys = self._seen_keys_by_user.get(user_id)
+        if keys is None:
+            return
+        keys.discard(idem_key)
+        if not keys:
+            self._seen_keys_by_user.pop(user_id, None)
 
     def _bump(self, status: str, source: str) -> None:
         if _METRICS_OK:

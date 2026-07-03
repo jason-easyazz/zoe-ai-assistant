@@ -260,7 +260,25 @@ async def test_seen_keys_is_bounded(svc):
         await svc.ingest(f"fact number {i}", user_id="u1", source="test",
                          user_turn_id=f"turn-{i}")
     assert len(svc._seen_keys) <= 5
+    # The per-user index must shrink with evictions too, not just _seen_keys
+    # itself — otherwise it leaks one sha256 string per ingest forever.
+    assert sum(len(v) for v in svc._seen_keys_by_user.values()) <= 5
     svc._seen_keys._maxlen = cap  # restore
+
+
+def test_bounded_key_set_eviction_callback_prunes_per_user_index():
+    """_seen_keys eviction must notify _seen_keys_by_user (heap-leak guard)."""
+    svc = memory_service.MemoryService.__new__(memory_service.MemoryService)
+    svc._seen_keys_by_user = {}
+    svc._seen_keys = _BoundedKeySet(maxlen=2, on_evict=svc._on_seen_key_evicted)
+    svc._remember_seen_key("u1", "k1")
+    svc._remember_seen_key("u1", "k2")
+    svc._remember_seen_key("u2", "k3")  # evicts k1 (oldest)
+    assert "k1" not in svc._seen_keys
+    assert svc._seen_keys_by_user == {"u1": {"k2"}, "u2": {"k3"}}
+    svc._remember_seen_key("u2", "k4")  # evicts k2 -> u1's set empties out
+    assert "u1" not in svc._seen_keys_by_user, "empty per-user sets must be dropped"
+    assert svc._seen_keys_by_user == {"u2": {"k3", "k4"}}
 
 
 async def test_query_hashes_blob_is_bounded(svc):
