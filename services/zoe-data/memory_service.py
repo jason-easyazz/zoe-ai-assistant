@@ -40,7 +40,7 @@ import time
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Callable, Iterable, Mapping, Optional
 
 try:
     from memory_metrics import (
@@ -146,25 +146,37 @@ class _BoundedKeySet:
     """Insertion-ordered set with a hard cap; oldest entries evict first (FIFO).
 
     Drop-in for the ``in`` / ``.add`` usage of a plain set, but bounded so it cannot
-    grow without limit across the process lifetime.
+    grow without limit across the process lifetime. Each key may carry an opaque
+    value (e.g. its owner); ``on_evict(key, value)`` fires for every evicted entry
+    so side indexes can stay in sync.
     """
 
-    def __init__(self, maxlen: int = _SEEN_KEYS_MAX):
+    def __init__(
+        self,
+        maxlen: int = _SEEN_KEYS_MAX,
+        on_evict: Optional[Callable[[str, Any], None]] = None,
+    ):
         self._maxlen = maxlen
-        self._items: "OrderedDict[str, None]" = OrderedDict()
+        self._on_evict = on_evict
+        self._items: "OrderedDict[str, Any]" = OrderedDict()
 
     def __contains__(self, key: object) -> bool:
         return key in self._items
 
-    def add(self, key: str) -> None:
+    def add(self, key: str, value: Any = None) -> None:
         if key in self._items:
             return
-        self._items[key] = None
+        self._items[key] = value
         while len(self._items) > self._maxlen:
-            self._items.popitem(last=False)
+            evicted_key, evicted_value = self._items.popitem(last=False)
+            if self._on_evict is not None:
+                self._on_evict(evicted_key, evicted_value)
 
     def __len__(self) -> int:
         return len(self._items)
+
+    def discard(self, key: str) -> None:
+        self._items.pop(key, None)
 
 
 def _memory_visible_to_user(metadata: Mapping[str, Any], user_id: str) -> bool:
@@ -322,7 +334,16 @@ class MemoryService:
     def __init__(self, data_dir: str = _MEMPALACE_DATA):
         self._data_dir = data_dir
         self._user_locks: dict[str, asyncio.Lock] = {}
-        self._seen_keys: _BoundedKeySet = _BoundedKeySet()
+        self._seen_keys: _BoundedKeySet = _BoundedKeySet(
+            on_evict=self._on_seen_key_evicted
+        )
+        # Tracks which idempotency keys belong to which user_id, purely so
+        # delete_user() can invalidate a forgotten user's cached keys without
+        # scanning the whole (hashed) _seen_keys set. Kept in exact sync with
+        # _seen_keys: delete_user pops a user's whole entry on forget, and the
+        # _seen_keys eviction callback (_on_seen_key_evicted) prunes each key
+        # here as it ages out, so total size is hard-capped at _SEEN_KEYS_MAX.
+        self._seen_keys_by_user: dict[str, set[str]] = {}
         self._background_tasks: set[asyncio.Task[Any]] = set()
 
     async def ingest(
@@ -369,7 +390,15 @@ class MemoryService:
             )
             return None
 
-        idem_key = self._idempotency_key(user_id, user_turn_id, scrubbed)
+        idem_key = self._idempotency_key(
+            user_id,
+            user_turn_id,
+            scrubbed,
+            memory_type=memory_type,
+            scope=scope,
+            entity_type=entity_type,
+            entity_id=entity_id,
+        )
         if idem_key in self._seen_keys:
             self._bump("dedup", source)
             if _METRICS_OK:
@@ -401,6 +430,26 @@ class MemoryService:
             )
 
             mem_id = _memory_id(user_id, scrubbed, metadata)
+
+            # Durable dedup guard: the in-memory _seen_keys cache is lost on
+            # restart, but mem_id is deterministic (text+lanes only, no
+            # status/review fields), so a re-POSTed proposal can compute the
+            # same mem_id as a row that has already been reviewed. Without
+            # this check the upsert below would clobber an approved/rejected/
+            # archived row's status and review metadata back to a fresh
+            # 'pending' write. Treat that case as a no-op duplicate instead.
+            existing = await self._run_sync(self._get_sync, mem_id)
+            if existing is not None:
+                existing_status = str(
+                    existing.metadata.get("status", "") or ""
+                ).strip().lower()
+                if existing_status not in {"", "pending"}:
+                    self._bump("dedup", source)
+                    if _METRICS_OK:
+                        memory_dedup_skip_count.inc()
+                    self._remember_seen_key(user_id, idem_key)
+                    return None
+
             try:
                 await self._run_sync(
                     self._write_row, mem_id, scrubbed, metadata
@@ -411,7 +460,7 @@ class MemoryService:
                                user_id, source, exc)
                 raise MemoryServiceError(f"write failed: {exc}") from exc
 
-            self._seen_keys.add(idem_key)
+            self._remember_seen_key(user_id, idem_key)
             await self._append_audit(
                 mem_id=mem_id,
                 user_id=user_id,
@@ -496,6 +545,13 @@ class MemoryService:
                 await self._run_sync(self._delete_audit_for_user_sync, user_id)
             except Exception as exc:
                 raise MemoryServiceError(f"delete_user failed: {exc}") from exc
+            # Purge this user's idempotency-cache entries so re-teaching a
+            # previously known fact after a forget isn't dropped as a
+            # duplicate for the rest of the process lifetime.
+            stale_keys = self._seen_keys_by_user.pop(user_id, None)
+            if stale_keys:
+                for key in stale_keys:
+                    self._seen_keys.discard(key)
             _invalidate_agent_user_facts_cache(user_id)
             return len(ids)
 
@@ -680,6 +736,7 @@ class MemoryService:
             scrubbed, reject = scrub_pii(new_text)
             if reject:
                 raise MemoryServiceError(f"edit rejected by PII scrubber: {reject}")
+            current_scope = current.metadata.get("scope")
             new_meta = self._build_metadata(
                 user_id=user_id,
                 source=current.metadata.get("source", "review_ui"),
@@ -692,8 +749,36 @@ class MemoryService:
                 entity_type=current.metadata.get("entity_type"),
                 entity_id=current.metadata.get("entity_id"),
                 expires_at=current.metadata.get("expires_at"),
-                idem_key=self._idempotency_key(user_id, mem_id, scrubbed),
+                source_excerpt=current.metadata.get("source_excerpt"),
+                scope=current_scope,
+                idem_key=self._idempotency_key(
+                    user_id,
+                    mem_id,
+                    scrubbed,
+                    memory_type=current.metadata.get("memory_type", "fact"),
+                    scope=current_scope,
+                    entity_type=current.metadata.get("entity_type"),
+                    entity_id=current.metadata.get("entity_id"),
+                ),
             )
+            # _build_metadata only knows the first-class params above; carry
+            # forward any remaining provenance/event metadata (candidate_*
+            # extras, event_id, evidence_refs, relationships, supersedes,
+            # retention_policy, etc.) from the row being edited so an edit
+            # doesn't silently drop it.
+            _EDIT_CARRY_FORWARD_SKIP = {
+                "user_id", "wing", "room", "visibility", "memory_type", "confidence",
+                "source", "status", "added_by", "added_at", "last_accessed",
+                "access_count", "embedding_model_version", "idempotency_key", "tags",
+                "concept_tags", "related_ids", "unique_query_count", "consolidation_count",
+                "session_id", "user_turn_id", "entity_type", "entity_id", "expires_at",
+                "source_excerpt", "scope", "supersedes_id", "reviewed_by", "reviewed_at",
+                "review_note", "superseded_by_id", "_query_hashes",
+            }
+            for key, value in current.metadata.items():
+                if key in _EDIT_CARRY_FORWARD_SKIP or key in new_meta:
+                    continue
+                new_meta[key] = value
             new_id = _memory_id(user_id, scrubbed, new_meta)
             new_meta["supersedes_id"] = mem_id
             new_meta["reviewed_by"] = actor
@@ -770,8 +855,24 @@ class MemoryService:
             raise MemoryServiceError(msg)
 
     @staticmethod
-    def _idempotency_key(user_id: str, turn_id: Optional[str], text: str) -> str:
-        basis = f"{user_id}|{turn_id or ''}|{text}".encode()
+    def _idempotency_key(
+        user_id: str,
+        turn_id: Optional[str],
+        text: str,
+        *,
+        memory_type: str = "",
+        scope: Optional[str] = None,
+        entity_type: Optional[str] = None,
+        entity_id: Optional[str] = None,
+    ) -> str:
+        # Include the same lane-distinguishing fields _memory_id hashes into the
+        # durable row id, so two legitimately distinct memories (same text,
+        # different memory_type/scope/entity) don't collide in this cache and
+        # have the second one silently dropped.
+        basis = (
+            f"{user_id}|{turn_id or ''}|{text}|{memory_type or ''}|"
+            f"{scope or ''}|{entity_type or ''}|{entity_id or ''}"
+        ).encode()
         return hashlib.sha256(basis).hexdigest()
 
     @staticmethod
@@ -847,6 +948,22 @@ class MemoryService:
                 continue
             md[target_key] = _metadata_value(value)
         return md
+
+    def _remember_seen_key(self, user_id: str, idem_key: str) -> None:
+        """Add an idempotency key to the fast-path cache, tracked by user_id
+        so delete_user() can purge it (see _seen_keys_by_user)."""
+        self._seen_keys.add(idem_key, user_id)
+        self._seen_keys_by_user.setdefault(user_id, set()).add(idem_key)
+
+    def _on_seen_key_evicted(self, idem_key: str, user_id: Any) -> None:
+        """Keep _seen_keys_by_user in sync when _seen_keys evicts an old key,
+        so the per-user index cannot grow beyond the live cache."""
+        keys = self._seen_keys_by_user.get(user_id)
+        if keys is None:
+            return
+        keys.discard(idem_key)
+        if not keys:
+            self._seen_keys_by_user.pop(user_id, None)
 
     def _bump(self, status: str, source: str) -> None:
         if _METRICS_OK:
