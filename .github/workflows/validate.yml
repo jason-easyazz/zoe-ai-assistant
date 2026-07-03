@@ -121,6 +121,7 @@ jobs:
             --override-ini="asyncio_mode=auto"
           PYTHONPATH="${{ github.workspace }}:${{ github.workspace }}/services/zoe-data" pytest \
             tests/unit/test_remediate_ownerless_memories.py \
+            tests/unit/test_memory_service_fixes.py \
             -x -q \
             --override-ini="asyncio_mode=auto"
           PYTHONPATH="${{ github.workspace }}/services/zoe-auth:${{ github.workspace }}/services/zoe-auth/tests" pytest \

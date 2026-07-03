@@ -1,15 +1,23 @@
 #!/usr/bin/env python3
 """
 Daily Memory Consolidation Script
-Runs at 2am to create daily summaries
+Runs at 2am to create daily summaries (+ weekly summaries on Sundays).
+
+Historically this imported `memory_consolidator` from the retired
+`services/zoe-core` SQLite service (archived in docs/archive/retired-services/
+and later purged). That module no longer exists; the live replacement is
+`memory_digest.py` in `services/zoe-data`, which is Postgres-backed and
+already wired into the nightly maintenance path (see
+`scripts/maintenance/zoe-nightly-dreaming.py`). This script now calls the
+same functions directly so a standalone 2am cron/timer still works.
 """
 import sys
 import os
-from datetime import date, timedelta
+from datetime import date
 import asyncio
 import logging
 
-sys.path.append('/home/zoe/assistant/services/zoe-core')
+sys.path.append('/home/zoe/assistant/services/zoe-data')
 sys.path.append('/app')
 
 # Setup logging
@@ -23,44 +31,39 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-from memory_consolidation import memory_consolidator
-
 
 async def run_daily_consolidation():
-    """Run consolidation for all users"""
-    
+    """Run daily (and, on Sundays, weekly) memory consolidation for all users."""
+    from db_pool import close_pool, get_db_ctx, init_pool
+    from memory_digest import run_digest_for_all_active_users, run_weekly_consolidation_for_all
+
     logger.info("🌙 Starting daily memory consolidation")
-    
-    # For now, consolidate for default user
-    # TODO: Get all users from database
-    users = ["default"]
-    
-    yesterday = date.today() - timedelta(days=1)
-    
-    for user_id in users:
-        try:
-            logger.info(f"📝 Consolidating memories for user: {user_id}")
-            
-            # Create daily summary
-            summary = await memory_consolidator.create_daily_summary(user_id, yesterday)
-            
-            logger.info(f"✅ Daily summary created for {user_id}")
-            logger.info(f"   Summary: {summary[:100]}...")
-            
-        except Exception as e:
-            logger.error(f"❌ Consolidation failed for {user_id}: {e}")
-    
-    # Create weekly summary on Sundays
-    if date.today().weekday() == 6:  # Sunday
-        logger.info("📅 Sunday - Creating weekly summaries")
-        
-        for user_id in users:
+
+    await init_pool()
+    try:
+        async with get_db_ctx() as db:
             try:
-                weekly_summary = await memory_consolidator.create_weekly_summary(user_id)
-                logger.info(f"✅ Weekly summary created for {user_id}")
+                results = await run_digest_for_all_active_users(db=db)
+                logger.info(f"✅ Daily digest complete: {len(results)} user(s) processed")
+                for row in results:
+                    logger.info(f"   {row}")
             except Exception as e:
-                logger.error(f"❌ Weekly summary failed for {user_id}: {e}")
-    
+                logger.error(f"❌ Daily consolidation failed: {e}")
+
+            if date.today().weekday() == 6:  # Sunday
+                logger.info("📅 Sunday - Creating weekly summaries")
+                try:
+                    weekly_results = await run_weekly_consolidation_for_all(db=db)
+                    logger.info(
+                        f"✅ Weekly consolidation complete: {len(weekly_results)} user(s) processed"
+                    )
+                    for row in weekly_results:
+                        logger.info(f"   {row}")
+                except Exception as e:
+                    logger.error(f"❌ Weekly consolidation failed: {e}")
+    finally:
+        await close_pool()
+
     logger.info("🌅 Memory consolidation complete!")
 
 
@@ -76,15 +79,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-
-
-
-
-
-
-
-
-
-
-
-
