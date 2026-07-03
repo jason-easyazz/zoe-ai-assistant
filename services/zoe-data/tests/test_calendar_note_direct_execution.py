@@ -224,6 +224,29 @@ async def test_note_create_genuine_failure_returns_none(monkeypatch):
     assert result is None
 
 
+@pytest.mark.asyncio
+async def test_note_create_survives_memory_mirror_runtime_error(monkeypatch):
+    """Best-effort semantics: if _store_note_memory imports fine but raises at
+    runtime, the note write still lands and returns a success confirmation
+    (ok:true), never degrading to None/ok:false."""
+    db = _FakeDB()
+    _silence_ui(monkeypatch)
+    monkeypatch.setattr("database.get_db_ctx", _fake_db_ctx(db))
+    _fail_mcporter(monkeypatch)
+
+    async def boom(*_args, **_kwargs):
+        raise RuntimeError("mempalace down")
+
+    monkeypatch.setattr("routers.notes._store_note_memory", boom)
+
+    result = await execute_intent(
+        Intent("note_create", {"content": "milk and eggs"}), "family-admin"
+    )
+
+    assert result == "Saved your note."
+    assert len(db.sql_matching("INSERT INTO notes")) == 1
+
+
 # --- journal_create ---------------------------------------------------------
 
 

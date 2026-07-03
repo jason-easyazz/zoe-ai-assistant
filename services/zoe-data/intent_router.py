@@ -2260,9 +2260,11 @@ async def _execute_calendar_create_direct(intent: Intent, user_id: str) -> Optio
     calendar_create_event tool (same events columns, category default 'general',
     visibility 'family') so 'add X to my calendar' works when the mcporter
     subprocess is down. Slots are normalised with the same _parse_date/_parse_time
-    that _build_command's calendar_create branch used. Returns a confirming
-    string on success; None only on genuine failure (so ok:false still means
-    real failure)."""
+    that _build_command's calendar_create branch used. Unlike the note/journal/
+    people executors there is deliberately NO MemPalace mirror here — mcp_server's
+    calendar_create_event tool doesn't write one either, so matching it means
+    omitting it. Returns a confirming string on success; None only on genuine
+    failure (so ok:false still means real failure)."""
     slots = intent.slots or {}
     title = str(slots.get("title") or "").strip()
     if not title:
