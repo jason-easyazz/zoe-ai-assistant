@@ -152,12 +152,17 @@ per-process multi-user workaround in `zoe_core_client.py`.
   identity value supplied by the bridge, and never let multiple senders collapse
   into a shared `guest`. Retiring Hermes Telegram happens only **after** this
   channel is live and verified (gates below).
-- **Phase 2 — Flue brain behind the `run_zoe_core` seam.** Stand up the Flue sidecar
-  as a *third* brain implementation: `registerProvider` Gemma, port `soul` →
-  instructions, emit the text-delta/sentinel contract. **Lab-prove parity** vs the
-  Pi-CLI brain on the voice corpus + #735; demo-users only.
-- **Phase 3 — Tools & memory (Seam B).** Give the Flue brain Zoe's abilities/memory
-  via `defineTool`/MCP, so it has full parity with the extension brain.
+- **Phase 2 — Flue brain behind the `run_zoe_core` seam. ✅ DELIVERED** (PR trail
+  in §10). The sidecar lives at `labs/flue-zoe-brain/` (`registerProvider` Gemma,
+  `soul` → instructions); zoe-data reaches it through the **default-OFF**
+  `ZOE_BRAIN_BACKEND=flue` seam (#904 — default path byte-identical). E2E-verified
+  through the seam. It is a **lab sidecar, not canonical** — the voice-corpus
+  parity gate (§4) has not been run, and the sentinel contract is not yet emitted
+  (both are Phase-4 blockers, §10).
+- **Phase 3 — Tools & memory (Seam B). ✅ DELIVERED for the 12-tool lab surface**
+  — `defineTool` HTTP wrappers over zoe-data intents (#915 reliability, #952
+  progressive disclosure, #965 activator hardening). Full parity with the
+  extension brain's ~56 tools is still open (Phase-4 blocker, §10).
 - **Phase 4 — Cut over + retire (gated, reversible).** Flip `_USE_ZOE_CORE` → Flue
   for real users **only after** §4's gates pass (voice-corpus parity + #735 +
   operator sign-off), and keep the flip reversible (the Pi-CLI brain stays as the
@@ -252,10 +257,55 @@ Four parallel deep-dive threads (2026-06-28), each evidence-backed:
 
 ---
 
-## 9. Status & next action
+## 10. Status — brain lane delivered (Phases 2–3); cutover (Phase 4) blocked
 
-- **Now:** Phase 0 done (#858); a Flue Telegram bot runs as an `/api/chat` bridge
-  (proof) — to be re-slotted as the Phase-1 front-door channel.
-- **Next:** Phase 1 — add the `channel` tag through the front door so Telegram is
-  "another channel into the single core," then begin Phase 2 (Flue brain behind the
-  `run_zoe_core` seam, lab-proved before any real-user cutover).
+### Delivered — the merged PR trail
+
+- **#947** — event-loop fork-deadlock fix in zoe-data: forking the hermes CLI on
+  the event loop wedged the loop thread (child stuck in `futex_wait` for
+  **3.9 days**, every endpoint timing out); CLI spawns now run off-loop with real
+  timeouts, and `/api/memories/for-prompt` answers in **18–66 ms**.
+- **#915 / #939** — reliable `recall_memory` + all tools (recall fires **97%**),
+  hard per-turn tool-iteration cap, real per-tool timeouts.
+- **#944** — the parity harness's dry-run preflight made non-mutating.
+- **#960** — `reminder_list` direct executor (an empty list no longer surfaces as
+  a dispatch failure).
+- **#904** — the prod seam: `ZOE_BRAIN_BACKEND=flue` in zoe-data — **default OFF,
+  default path byte-identical**.
+- **#952** — progressive tool disclosure: **11 → 3 schemas** on a typical turn
+  (always-on core `get_time` / `recall_memory` / `activate_abilities`; keyword
+  groups in `labs/flue-zoe-brain/src/tools/tool-groups.ts`; wire filter in
+  `src/providers/capped-completions.ts`; kill switch
+  `ZOE_BRAIN_PROGRESSIVE_TOOLS=false`). Also the operator opt-in systemd unit
+  template `scripts/setup/systemd/flue-zoe-brain.service` and the lab runbook
+  (`labs/flue-zoe-brain/README.md`).
+- **#965** — activator fallback hardening: imperative activate-first /
+  never-fabricate doctrine + the `GROUP_SUMMARY` group catalogue in the agent
+  instructions; the activator's wire schema pinned to a bare enum by test;
+  widened weather/calendar keyword triggers. The **on-box measurement checklist**
+  is `labs/flue-zoe-brain/LANDING.md` — **the operator has not yet run it**.
+
+**E2E-verified through the seam:** real memories returned; `ZOE_BRAIN_BACKEND=flue`
+works end-to-end; on pure chat the sidecar is **~2× faster** than the prod
+Pi-CLI core.
+
+### Cutover blockers — Phase 4 stays closed until each is cleared
+
+1. **Voice-parity gate unrun.** The Samantha bar (§4) against the real-voice
+   corpus needs the operator and a quiet box; it has not been run.
+2. **Tool coverage: 12 vs ~56.** The sidecar serves 12 tools; the extension brain
+   exposes ~56. Parity — or a deliberate, signed-off cut list — is required.
+3. **No streaming / sentinels.** The sidecar returns whole results without the
+   text-delta + `__TOOL__`/`__THINKING__` sentinel stream (Seam A contract), so
+   the voice filler (#844) would go dark on cutover.
+4. **Write path unexercised.** Writes have only ever run dry
+   (`ZOE_BRAIN_ALLOW_WRITES` defaults OFF); no real write has been verified
+   end-to-end.
+
+### Next action
+
+Operator runs the `labs/flue-zoe-brain/LANDING.md` on-box activator measurement
+(acceptance: ≥50% activator fire on trigger-free prompts, zero fabricated tool
+claims, recall ≥90%), then the blockers above, in order. Phase 1 (Telegram as a
+front-door channel) remains in flight independently — the bot is built (#870);
+the re-slot through `/api/chat` with a `channel` tag is still open.
