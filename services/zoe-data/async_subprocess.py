@@ -27,8 +27,10 @@ import contextlib
 import subprocess
 from typing import Mapping, Sequence
 
-# Shared, small: fork+exec is quick; this only bounds concurrent spawns, not the
-# lifetime of the spawned processes.
+# Shared, small pool used ONLY for the quick blocking fork+exec (subprocess.Popen)
+# and the run_to_completion() run. Long blocking waits do NOT go here — see
+# AsyncPipeProcess.wait() — so a stuck process can't hold a spawn slot for its
+# whole lifetime and starve new fork+execs.
 _SPAWN_POOL = concurrent.futures.ThreadPoolExecutor(
     max_workers=4, thread_name_prefix="zoe-async-spawn"
 )
@@ -66,7 +68,10 @@ class AsyncPipeProcess:
 
     async def wait(self) -> int:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(_SPAWN_POOL, self._popen.wait)
+        # Default executor, NOT _SPAWN_POOL: popen.wait() blocks for the process's
+        # whole remaining lifetime, so parking it in the small spawn pool could
+        # starve new fork+execs.
+        return await loop.run_in_executor(None, self._popen.wait)
 
 
 async def spawn_pipe_process(
@@ -94,18 +99,28 @@ async def spawn_pipe_process(
 
     popen = await loop.run_in_executor(_SPAWN_POOL, _blocking_popen)
 
-    # connect_read_pipe/connect_write_pipe wrap the already-open fds — no fork.
-    # No explicit loop= args: this coroutine runs on the loop these objects will
-    # use, and the loop parameter was removed from asyncio's high-level APIs in
-    # 3.10; the constructors bind the running loop themselves.
-    reader = asyncio.StreamReader()
-    read_protocol = asyncio.StreamReaderProtocol(reader)
-    await loop.connect_read_pipe(lambda: read_protocol, popen.stdout)
+    # The child is alive now. If wiring the pipe transports fails (fd exhaustion,
+    # OOM, or a loop-shutdown/cancellation race), the caller never gets a handle
+    # to clean up — so kill+reap the child here rather than orphan it.
+    try:
+        # connect_read_pipe/connect_write_pipe wrap the already-open fds — no fork.
+        # No explicit loop= args: this coroutine runs on the loop these objects
+        # will use, and the loop parameter was removed from asyncio's high-level
+        # APIs in 3.10; the constructors bind the running loop themselves.
+        reader = asyncio.StreamReader()
+        read_protocol = asyncio.StreamReaderProtocol(reader)
+        await loop.connect_read_pipe(lambda: read_protocol, popen.stdout)
 
-    write_transport, write_protocol = await loop.connect_write_pipe(
-        asyncio.streams.FlowControlMixin, popen.stdin
-    )
-    writer = asyncio.StreamWriter(write_transport, write_protocol, reader, loop)
+        write_transport, write_protocol = await loop.connect_write_pipe(
+            asyncio.streams.FlowControlMixin, popen.stdin
+        )
+        writer = asyncio.StreamWriter(write_transport, write_protocol, reader, loop)
+    except BaseException:  # incl. CancelledError — never leak the child
+        with contextlib.suppress(ProcessLookupError):
+            popen.kill()
+        with contextlib.suppress(Exception):
+            await loop.run_in_executor(_SPAWN_POOL, popen.wait)
+        raise
 
     return AsyncPipeProcess(popen, writer, reader)
 

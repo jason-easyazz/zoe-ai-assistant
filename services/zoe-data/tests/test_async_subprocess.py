@@ -62,6 +62,35 @@ async def test_spawn_pipe_process_env_and_cwd(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_spawn_pipe_process_kills_child_if_wiring_fails(monkeypatch):
+    """If pipe-transport wiring raises after the child is alive, the child must
+    be killed+reaped, not orphaned (Greptile P1 on #987)."""
+    import async_subprocess as mod
+
+    created: list = []
+    real_popen = subprocess.Popen
+
+    def _spy_popen(*a, **k):
+        p = real_popen(*a, **k)
+        created.append(p)
+        return p
+
+    monkeypatch.setattr(mod.subprocess, "Popen", _spy_popen)
+
+    async def _boom(*a, **k):
+        raise RuntimeError("connect_read_pipe failed")
+
+    import asyncio as _asyncio
+    monkeypatch.setattr(_asyncio.get_running_loop(), "connect_read_pipe", _boom)
+
+    with pytest.raises(RuntimeError):
+        await mod.spawn_pipe_process([sys.executable, "-c", "import time; time.sleep(30)"])
+
+    assert created, "child should have been spawned before the failure"
+    assert created[0].poll() is not None, "orphaned child — should have been killed+reaped"
+
+
+@pytest.mark.asyncio
 async def test_run_to_completion_returns_rc_and_streams():
     completed = await run_to_completion(
         [sys.executable, "-c", "import sys; sys.stdout.write('out'); sys.stderr.write('err'); sys.exit(3)"]
