@@ -44,7 +44,9 @@ async def test_stop_proactive_engine_cancels_cleanup_task(monkeypatch, engine_ta
 
     assert engine._slow_loop_task is None
     assert engine._cleanup_loop_task is None
-    assert slow_task.cancelling()
-    assert cleanup_task.cancelling()
 
+    # Task.cancelling() is Python 3.11+; the box runs 3.10. Awaiting the tasks
+    # and checking they ended cancelled proves the same thing portably.
     await asyncio.gather(slow_task, cleanup_task, return_exceptions=True)
+    assert slow_task.cancelled()
+    assert cleanup_task.cancelled()
