@@ -96,13 +96,6 @@ async def fire_notification(
 
     if not force and _is_in_quiet_hours():
         log.info("Quiet hours active — deferring notification for user %s", user_id)
-        # Mark the scheduled row as fired so reminder_scan can reschedule it.
-        if pending_id:
-            async with _get_compat_db() as db:
-                await db.execute(
-                    "UPDATE proactive_scheduled SET fired = 1 WHERE id = ?", (pending_id,)
-                )
-                await db.commit()
         # Reschedule for the start of the next quiet-end window.
         now_local = datetime.now(_ZOE_TZ)
         next_ok = now_local.replace(hour=_QUIET_END, minute=0, second=0, microsecond=0)
@@ -116,8 +109,29 @@ async def fire_notification(
                 send_at=next_ok.astimezone(timezone.utc),
                 item_id=item_id,
             )
+            # Only mark the OLD scheduled row fired once the follow-up job is
+            # actually registered. If schedule_reminder fails, leave this row
+            # unfired (and still claimed) rather than losing the notification:
+            # reconcile_scheduled_jobs() only re-registers unfired rows, and this
+            # keeps the row visible to it once the claim goes stale, instead of
+            # being permanently invisible to every recovery path (this is the
+            # same stuck-claim residual documented in _fire_reminder's docstring,
+            # not a new failure mode). This matters most for item_id='' one-shot
+            # nudges (POST /api/proactive/schedule): reminder_scan's recovery only
+            # covers item_id != '' rows sourced from the `reminders` table, so a
+            # lost item_id='' row had no recovery path at all.
+            if pending_id:
+                async with _get_compat_db() as db:
+                    await db.execute(
+                        "UPDATE proactive_scheduled SET fired = 1 WHERE id = ?", (pending_id,)
+                    )
+                    await db.commit()
         except Exception as _qe:
-            log.warning("quiet-hours reschedule failed: %s", _qe)
+            log.error(
+                "quiet-hours reschedule failed for pending %s (user %s): row left unfired "
+                "for stuck-claim recovery: %s",
+                pending_id, user_id, _qe,
+            )
         return
 
     # LLM-compose only for non-reminder types (reminders already have a good message).
@@ -162,7 +176,7 @@ async def fire_notification(
                     ),
                 )
                 await db.commit()
-            await _broadcaster.broadcast("all", "notification_created", {"id": _new_id, "type": "reminder", "title": "Reminder", "message": message, "delivered": False})
+            await _broadcaster.broadcast("all", "notification_created", {"id": _new_id, "type": "reminder", "title": "Reminder", "message": message, "delivered": False}, user_id=user_id)
             in_app_fallback_ok = True
             log.info("reminder fallback: in-app notification created for user %s (no WS subscribers)", user_id)
         except Exception as _fe:
@@ -194,26 +208,58 @@ async def _send_push(user_id: str, message: str, extra: dict | None = None) -> i
 
 
 async def _slow_loop() -> None:
-    """Tier 2 loop: poll registered triggers every SLOW_LOOP_INTERVAL seconds."""
+    """Tier 2 loop: poll registered triggers every SLOW_LOOP_INTERVAL seconds.
+
+    POOL DISCIPLINE: a pooled connection is held ONLY for the discrete
+    trigger.check() DB reads, never across fire_notification() — which can run
+    an LLM compose_message call plus push delivery, each potentially tens of
+    seconds. Firing multiple Tier-2 results in one cycle while pinning a pool
+    slot for the whole cycle risks pool exhaustion (same class of bug fixed in
+    450f45c3 for idle-consolidation).
+
+    The whole iteration body is wrapped in try/except so a transient failure
+    (including the connection acquisition itself) is logged and the loop keeps
+    running, rather than the acquisition exception escaping the while-True and
+    silently killing this background task for the rest of the process
+    lifetime.
+    """
     log.info("Proactive slow loop started (interval=%ss)", SLOW_LOOP_INTERVAL)
     while True:
         await asyncio.sleep(SLOW_LOOP_INTERVAL)
-        if _is_in_quiet_hours():
-            continue
-        async with _get_compat_db() as db:
-            for trigger in _slow_triggers:
+        try:
+            if _is_in_quiet_hours():
+                continue
+
+            # Step 1: short-lived conn — run every trigger.check(), then release
+            # before any fire_notification() (LLM + push) work happens.
+            pending: list[Any] = []
+            async with _get_compat_db() as db:
+                for trigger in _slow_triggers:
+                    try:
+                        results = await trigger.check(db)
+                        pending.extend(results)
+                    except Exception as exc:
+                        log.error("Trigger %s raised: %s", trigger.trigger_type, exc)
+
+            # Step 2: NO pooled connection held across compose_message/push.
+            for r in pending:
                 try:
-                    results = await trigger.check(db)
-                    for r in results:
-                        await fire_notification(
-                            user_id=r.user_id,
-                            message=r.message,
-                            trigger_type=r.trigger_type,
-                            item_id=r.item_id,
-                            context=r.context,
-                        )
+                    await fire_notification(
+                        user_id=r.user_id,
+                        message=r.message,
+                        trigger_type=r.trigger_type,
+                        item_id=r.item_id,
+                        context=r.context,
+                    )
                 except Exception as exc:
-                    log.error("Trigger %s raised: %s", trigger.trigger_type, exc)
+                    log.error("fire_notification failed for trigger result (user=%s, type=%s): %s",
+                              getattr(r, "user_id", "?"), getattr(r, "trigger_type", "?"), exc)
+        except Exception as exc:
+            # Covers connection-acquisition failures (e.g. transient pool
+            # exhaustion / DB restart) that would otherwise escape this loop
+            # and permanently kill the Tier-2 background task.
+            log.error("_slow_loop iteration failed: %s", exc)
+            await asyncio.sleep(min(SLOW_LOOP_INTERVAL, 30))
 
 
 async def _cleanup_expired_pending() -> None:
@@ -421,7 +467,7 @@ async def _ensure_reminder_job(row, *, catch_up: bool, delay: timedelta | None =
         log.error("reminder %s exceeded %d attempts; giving up", row["id"], _MAX_FIRE_ATTEMPTS)
         return False
 
-    from proactive.scheduler import register_job
+    from proactive.scheduler import register_job, run_blocking
     from proactive.triggers.reminders import _fire_reminder
 
     now = datetime.now(timezone.utc)
@@ -438,7 +484,8 @@ async def _ensure_reminder_job(row, *, catch_up: bool, delay: timedelta | None =
         run_at = now + delay
 
     job_id = row["apscheduler_job_id"] or f"{_REMINDER_JOB_PREFIX}{row['id']}"
-    register_job(
+    await run_blocking(
+        register_job,
         func=_fire_reminder,
         run_at=run_at,
         job_id=job_id,
@@ -473,7 +520,7 @@ async def reconcile_scheduled_jobs() -> int:
     it would risk a double delivery. The in-job atomic claim is the final
     backstop even if a job is registered here.
     """
-    from proactive.scheduler import job_exists
+    from proactive.scheduler import job_exists, run_blocking
     from proactive.triggers.reminders import _STUCK_CLAIM_SECONDS
 
     stuck_cutoff = (
@@ -496,7 +543,7 @@ async def reconcile_scheduled_jobs() -> int:
     for row in rows:
         job_id = row["apscheduler_job_id"] or f"{_REMINDER_JOB_PREFIX}{row['id']}"
         try:
-            if job_exists(job_id):
+            if await run_blocking(job_exists, job_id):
                 continue
             if await _ensure_reminder_job(row, catch_up=False):
                 recovered += 1

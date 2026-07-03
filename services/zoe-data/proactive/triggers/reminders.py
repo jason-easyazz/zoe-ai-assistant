@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 
 from db_compat import get_compat_db as _get_compat_db
-from proactive.scheduler import register_job, cancel_job, CancelResult
+from proactive.scheduler import register_job, cancel_job, CancelResult, run_blocking
 
 log = logging.getLogger(__name__)
 
@@ -225,7 +225,8 @@ async def schedule_reminder(
     # row would otherwise linger as a "scheduled" reminder that can never fire,
     # so compensate by deleting the orphan row before re-raising.
     try:
-        register_job(
+        await run_blocking(
+            register_job,
             func=_fire_reminder,
             run_at=send_at,
             job_id=job_id,
@@ -273,7 +274,7 @@ async def cancel_reminder(scheduled_id: str) -> bool:
 
     # May raise on a real scheduler failure — intentionally NOT caught, so the
     # DB row below is reached only after a confirmed REMOVED/ABSENT outcome.
-    result = cancel_job(job_id)
+    result = await run_blocking(cancel_job, job_id)
 
     async with _get_compat_db() as db:
         await db.execute(
