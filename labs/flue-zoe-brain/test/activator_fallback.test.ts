@@ -26,9 +26,8 @@ const { activeToolNames, CORE_TOOL_NAMES, GROUP_NAMES, GROUP_SUMMARY } = await i
   '../src/tools/tool-groups.ts'
 );
 const { zoeTools } = await import('../src/tools/zoe-tools.ts');
-const { ACTIVATOR_DOCTRINE, IN_SESSION_CONTEXT_DOCTRINE, ZOE_INSTRUCTIONS } = await import(
-  '../src/agents/zoe.ts'
-);
+const { ACTIVATOR_DOCTRINE, IN_SESSION_CONTEXT_DOCTRINE, VOICE_DELIVERY_DOCTRINE, ZOE_INSTRUCTIONS } =
+  await import('../src/agents/zoe.ts');
 
 import type { Message } from '@earendil-works/pi-ai';
 
@@ -108,6 +107,27 @@ test('activator doctrine is imperative: MUST activate first, NEVER fabricate', (
   assert.match(ACTIVATOR_DOCTRINE, /MUST use a tool FIRST/);
   assert.match(ACTIVATOR_DOCTRINE, /activate_abilities/);
   assert.match(ACTIVATOR_DOCTRINE, /NEVER claim/);
+});
+
+test('activator doctrine carries the ported tool-first directives (no over-clarify, no premature refusal)', () => {
+  // Ported from prod _ZOE_SOUL_BASE / _ZOE_SOUL_VOICE (services/zoe-data/zoe_agent.py).
+  assert.match(ACTIVATOR_DOCTRINE, /Act proactively/);
+  assert.match(ACTIVATOR_DOCTRINE, /don't ask a clarifying question first/);
+  assert.match(ACTIVATOR_DOCTRINE, /until a tool has actually tried and failed/);
+});
+
+test('voice-delivery doctrine: spoken-length + no-markdown discipline, present in instructions', () => {
+  // Ported from prod _ZOE_SOUL_VOICE (services/zoe-data/zoe_agent.py). This is the
+  // voice brain, so the same tight spoken discipline applies.
+  assert.ok(ZOE_INSTRUCTIONS.includes(VOICE_DELIVERY_DOCTRINE));
+  assert.match(VOICE_DELIVERY_DOCTRINE, /spoken aloud/);
+  assert.match(VOICE_DELIVERY_DOCTRINE, /No markdown/);
+  assert.match(VOICE_DELIVERY_DOCTRINE, /Lead with the answer/);
+  assert.match(VOICE_DELIVERY_DOCTRINE, /brief but never clipped/);
+  // Must NOT weaken the behavioural doctrine: delivery guidance only, no new
+  // recall/activation/fabrication rules that could conflict with the above.
+  assert.doesNotMatch(VOICE_DELIVERY_DOCTRINE, /recall_memory/);
+  assert.doesNotMatch(VOICE_DELIVERY_DOCTRINE, /activate_abilities/);
 });
 
 test('in-session context doctrine: live transcript beats an empty recall store', () => {
