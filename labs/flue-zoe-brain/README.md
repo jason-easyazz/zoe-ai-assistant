@@ -132,3 +132,20 @@ journalctl --user -u flue-zoe-brain -f
 ```
 
 For hand runs (no unit): `PORT=3578 npm start` with the same env exported.
+
+**Stopping a hand-started sidecar — kill by port ONLY:**
+
+```sh
+lsof -ti tcp:3578 | xargs -r kill
+```
+
+Never `pkill -f` (it can take out unrelated node processes), and never restart
+zoe-data (`:8000`) or llama-server (`:11434`) as part of a lab run.
+
+## Operator measurement (pending)
+
+The on-box measurement checklist for the #965 activator-fallback hardening —
+sidecar on a scratch port, ~10 trigger-free prompts, score `tool_start` events,
+re-run `parity/recall_reliability.py` — lives in [`LANDING.md`](LANDING.md).
+Acceptance: ≥50% activator fire on the trigger-free set, zero fabricated tool
+claims, recall ≥90%. It has not been run yet.
