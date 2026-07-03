@@ -1712,10 +1712,57 @@ ALLOWED_ORIGINS = [
 ]
 
 
+def _self_lan_origins() -> frozenset[str]:
+    """Origins that point at THIS host's own LAN address (https://<own-ip>).
+
+    The touch kiosk loads the UI from the server's LAN IP
+    (https://192.168.1.218/touch/skybridge.html — see
+    scripts/setup/touchscreen/config.json), so its browser sends
+    ``Origin: https://<this-host's-ip>``. That origin is same-site by
+    construction — the page was served BY this stack — yet the name-based
+    allowlist above can't express it, and when the CSWSH guard shipped without
+    it the panel's voice+push websockets were 403'd and the kiosk went dead
+    (2026-07-03 incident). Deriving it from the host's own addresses keeps the
+    allowlist correct on any deployment without hardcoding an IP; it can never
+    admit a foreign origin because it only ever names this machine.
+
+    ZOE_HOST_LAN_IP overrides discovery when set (multi-homed hosts).
+    """
+    ips: set[str] = set()
+    env_ip = (os.getenv("ZOE_HOST_LAN_IP") or "").strip()
+    if env_ip:
+        ips.add(env_ip)
+    else:
+        try:
+            import socket
+
+            # UDP "connect" selects the primary outbound interface without
+            # sending traffic; works headless and needs no DNS.
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("8.8.8.8", 80))
+                ips.add(s.getsockname()[0])
+        except OSError as exc:
+            # Do NOT stay silent: with no self origin the kiosk's websockets are
+            # 403'd again (the exact 2026-07-03 incident) and nothing would say
+            # why. Surface it and point at the manual overrides.
+            logger.warning(
+                "Self-LAN origin discovery failed (%s) — the touch kiosk's "
+                "Origin (https://<host-ip>) will NOT be allowlisted; set "
+                "ZOE_HOST_LAN_IP or ZOE_ALLOWED_WS_ORIGINS to restore it",
+                exc,
+            )
+    return frozenset(f"https://{ip}" for ip in ips if ip)
+
+
+_SELF_LAN_ORIGINS = _self_lan_origins()  # resolved once at import
+
+
 def _allowed_browser_origins() -> frozenset[str]:
     """The credentialed-origin allowlist shared by HTTP CORS and the WebSocket
-    CSWSH guard: the base ALLOWED_ORIGINS plus any extra panel/kiosk hosts
-    configured via ZOE_ALLOWED_WS_ORIGINS (comma-separated).
+    CSWSH guard: the base ALLOWED_ORIGINS, this host's own LAN origin(s)
+    (see _self_lan_origins — the kiosk connects with Origin:https://<own-ip>),
+    plus any extra panel/kiosk hosts configured via ZOE_ALLOWED_WS_ORIGINS
+    (comma-separated).
 
     The env var lets an operator add a LAN hostname/IP-based origin the browser
     kiosk uses without a code change; it is empty by default. Because both the
@@ -1724,7 +1771,7 @@ def _allowed_browser_origins() -> frozenset[str]:
     """
     raw = os.getenv("ZOE_ALLOWED_WS_ORIGINS", "")
     extra = [o.strip() for o in raw.split(",") if o.strip()]
-    return frozenset(ALLOWED_ORIGINS) | frozenset(extra)
+    return frozenset(ALLOWED_ORIGINS) | _SELF_LAN_ORIGINS | frozenset(extra)
 
 
 def _ws_origin_allowed(websocket: WebSocket) -> bool:
@@ -1943,9 +1990,16 @@ async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> 
     if not panel_id:
         return None
     try:
-        from database import get_db
+        # get_db_ctx, NOT `async for db in get_db()`: this guard RETURNS from inside
+        # the DB block, and returning out of get_db()'s generator LEAKS the pooled
+        # connection (see #953). The panel kiosk retries its push socket every few
+        # seconds, so each leaked conn compounds — max_size=10 drained the WHOLE
+        # pool within a minute of deploy and took every DB-backed endpoint down
+        # (voice, chat, API) while /health stayed green. The context manager
+        # releases on ANY exit path.
+        from db_pool import get_db_ctx
 
-        async for db in get_db():
+        async with get_db_ctx() as db:
             # (1) CANONICAL: a REGISTERED panel (a bound row whose panel_id exists
             # in `panels`) for this session + user. The connecting id is tied into
             # the choice via `(s.panel_id = ?) DESC`, which ranks the row for the
@@ -1992,9 +2046,13 @@ async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> 
 async def _panel_allows_guest_push(panel_id: str) -> bool:
     """Return true when a registered active panel explicitly allows guest use."""
     try:
-        from database import get_db
+        # get_db_ctx, NOT `async for db in get_db()` — returning from inside the
+        # generator leaks the pooled connection (#953); this function returns from
+        # inside the block and runs on every kiosk push reconnect. See
+        # _resolve_subscribable_panel for the incident this caused.
+        from db_pool import get_db_ctx
 
-        async for db in get_db():
+        async with get_db_ctx() as db:
             cursor = await db.execute(
                 "SELECT allow_guest, is_active FROM panels WHERE panel_id = ? LIMIT 1",
                 (panel_id,),
