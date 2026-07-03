@@ -97,8 +97,10 @@ jobs:
             services/zoe-data/tests/test_guest_policy.py \
             services/zoe-data/tests/test_voice_scope.py \
             services/zoe-data/tests/test_chat_session_title.py \
+            services/zoe-data/tests/test_chat_stream_lifecycle.py \
             services/zoe-data/tests/test_ui_orchestrator_types.py \
             services/zoe-data/tests/test_skybridge_static.py \
+            services/zoe-data/tests/test_zoe_core_client.py \
             services/zoe-data/tests/test_greptile_client.py \
             services/zoe-data/tests/test_db_pool_release_race.py \
             services/zoe-data/tests/test_greploop_guard.py \
@@ -115,6 +117,10 @@ jobs:
             services/zoe-data/tests/test_main_multica_poll.py \
             services/zoe-data/tests/test_kanban_phase_budget.py \
             services/homeassistant-mcp-bridge/tests/test_ha_bridge.py \
+            -x -q \
+            --override-ini="asyncio_mode=auto"
+          PYTHONPATH="${{ github.workspace }}:${{ github.workspace }}/services/zoe-data" pytest \
+            tests/unit/test_remediate_ownerless_memories.py \
             -x -q \
             --override-ini="asyncio_mode=auto"
           PYTHONPATH="${{ github.workspace }}/services/zoe-auth:${{ github.workspace }}/services/zoe-auth/tests" pytest \

@@ -16,6 +16,7 @@ This is **knowledge / records** (descriptive facts), not a DOX contract. See the
 - [Runtime topology](runtime-topology.md) — the live runtime: host, services, ports, where each is served from and logs to, the touch panel, and the no-pipeline deploy. Orientation before touching the running system.
 - [Voice pipeline](voice-pipeline.md) — the STT → brain → TTS path, the replay-sample regression corpus, and the caveat that the warm harness understates real live latency.
 - [Merge & deploy discipline](merge-and-deploy.md) — merged ≠ live, the protected-`main` gates, and the Greptile/greploop gotchas (large-PR skip, thread resolution, REST-not-GraphQL).
+- [Production incident runbook](incident-runbook.md) — verified failure signatures + fixes: the zoe-data accept-queue hang (health 000, service "active") and root-owned lab-container files blocking every deploy; prevention rules for lab containers.
 
 ## Bundles
 

@@ -63,8 +63,43 @@ always-on core + relevance-matched tools) onto its own wire seam:
   per-conversation, so a typical turn carries 3 schemas instead of 11. An
   `activate_abilities` round costs one extra tool iteration when keywords miss
   (counted against `ZOE_BRAIN_MAX_TOOL_ITERS`).
+- **Activator fallback hardening** (E2E found indirect, keyword-free prompts
+  never reached `activate_abilities`, and one reply fabricated a forecast):
+  the agent instructions now carry the group catalogue (`GROUP_SUMMARY`) plus
+  an imperative activate-first / never-fabricate doctrine
+  (`src/agents/zoe.ts`); the activator's wire schema is pinned to a
+  dead-simple single-enum object (`test/activator_fallback.test.ts`); and the
+  keyword triggers cover high-value indirect phrasings
+  (washing/laundry/outside → weather, "anything on \<day\>" / "am I free" →
+  calendar). On-box measurement checklist: `LANDING.md`.
 - **Kill switch:** `ZOE_BRAIN_PROGRESSIVE_TOOLS=false` restores
   all-schemas-every-call (A/B comparison).
+
+## Seam-A sentinel streaming
+
+The prod brain seam (`run_zoe_core_streaming`, docs/architecture/
+zoe-flue-integration.md §3 Seam A) is a stream of text deltas plus
+`__TOOL__:`/`__THINKING__:` sentinel chunks — the voice tool filler (#844)
+keys off the `__TOOL__` phase=start sentinel arriving MID-turn. The sidecar
+emits that exact contract via **content negotiation** on the existing route:
+
+- `POST /agents/zoe/:sid` with `Accept: application/x-ndjson` (and **no**
+  `?wait=result`) → a live NDJSON stream. Each line is a JSON string holding
+  exactly one Seam-A chunk (text delta or sentinel, byte-identical to what
+  `services/zoe-data/zoe_core_client.py` yields — Python `json.dumps` default
+  separators, `ensure_ascii`), terminated by `{"done": true}` on success or
+  `{"error": "..."}` on failure.
+- `POST ... ?wait=result` (today's whole-result mode) and the plain 202
+  admission are **untouched** — `?wait=result` wins even if the Accept header
+  is also present.
+
+Auth is unchanged (the streaming path upgrades the response only after the
+fail-closed route + admission succeed); identity binding and the write gate
+are tool-level and unaffected. Events come from the runtime's in-process
+`observe()` feed (the durable stream buffers deltas ~3 s — too slow for voice
+TTFT). Contract + framing details and known limits: `src/streaming.ts`;
+byte-pinned tests: `test/sentinel_stream.test.ts`. Kill switch:
+`ZOE_BRAIN_STREAM=0` restores pre-streaming behaviour entirely.
 
 ## Build / typecheck / test
 
@@ -88,6 +123,8 @@ npm test                   # offline unit tests (node --test, type-stripping)
 | `ZOE_BRAIN_OPEN` | *(unset)* | `1` opts into an open route (local smoke runs only) |
 | `ZOE_BRAIN_MAX_TOOL_ITERS` | `8` | hard per-turn tool-iteration ceiling |
 | `ZOE_BRAIN_PROGRESSIVE_TOOLS` | `true` | `false` disables progressive tool disclosure |
+| `ZOE_BRAIN_STREAM` | `on` | `0`/`false` disables the NDJSON sentinel-stream mode |
+| `ZOE_BRAIN_STREAM_TIMEOUT_S` | `180` | streamed-turn deadline (mirrors prod `ZOE_CORE_TIMEOUT_S`) |
 | `ZOE_BRAIN_BASE_URL` | `http://127.0.0.1:11434/v1` | OpenAI-compatible brain endpoint |
 | `ZOE_BRAIN_API_KEY` | `local-no-key` | placeholder key for the completions client |
 | `ZOE_BRAIN_DB` | `<package>/data/zoe-brain.db` | Flue durability sqlite path |
@@ -123,3 +160,20 @@ journalctl --user -u flue-zoe-brain -f
 ```
 
 For hand runs (no unit): `PORT=3578 npm start` with the same env exported.
+
+**Stopping a hand-started sidecar — kill by port ONLY:**
+
+```sh
+lsof -ti tcp:3578 | xargs -r kill
+```
+
+Never `pkill -f` (it can take out unrelated node processes), and never restart
+zoe-data (`:8000`) or llama-server (`:11434`) as part of a lab run.
+
+## Operator measurement (pending)
+
+The on-box measurement checklist for the #965 activator-fallback hardening —
+sidecar on a scratch port, ~10 trigger-free prompts, score `tool_start` events,
+re-run `parity/recall_reliability.py` — lives in [`LANDING.md`](LANDING.md).
+Acceptance: ≥50% activator fire on the trigger-free set, zero fabricated tool
+claims, recall ≥90%. It has not been run yet.
