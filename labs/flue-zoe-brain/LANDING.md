@@ -109,3 +109,64 @@ A stale git-worktree entry `~/.worktrees/flue-fallback` (branch
 earlier attempt. The operator may inspect it and prune it
 (`git worktree prune` / `git worktree remove`); nothing in this PR depends on
 it.
+
+## Live write verification (operator)
+
+The sandbox half now proves the write tools' HTTP method/path/payloads against a
+fake zoe-data server. The live half must be run on the box because this sandbox
+cannot reach zoe-data `:8000` or llama-server `:11434`.
+
+**Safety rails:**
+
+- Use a NON-admin demo user only. Do **not** run this against
+  `family-admin` or Jason's real data.
+- Start only the lab sidecar on `:3579` with `ZOE_BRAIN_ALLOW_WRITES=true`.
+- Do **not** restart zoe-data `:8000` or llama-server `:11434`.
+- Kill the sidecar by port only when done. Never use `pkill -f`.
+
+1. Create or pick a disposable non-admin demo user ID that is allowed to use
+   lists, reminders, calendar, and notes in zoe-data. Record it as
+   `DEMO_USER_ID`.
+
+2. Build and start the sidecar from `labs/flue-zoe-brain/`:
+
+   ```bash
+   npm install && npm run build
+   DEMO_USER_ID=<non-admin-demo-user>
+   ZOE_BRAIN_OPEN=1 ZOE_BRAIN_USER_ID="$DEMO_USER_ID" ZOE_BRAIN_ALLOW_WRITES=true \
+     ZOE_DATA_URL=http://127.0.0.1:8000 PORT=3579 node dist/server.mjs
+   ```
+
+3. In a separate shell, use `POST /agents/zoe/<sid>` on `:3579` to perform one
+   reversible write per family:
+
+   - list: add `flue write path test milk` to the shopping list
+   - reminder: remind me to `delete flue reminder test` tomorrow at 9am
+   - calendar: add `Flue write path cleanup test` tomorrow at 9:15am
+   - note: create note `Flue write path test` with content
+     `Delete after verification`
+   - timer: set a 1 minute timer named `flue write path test`; this is expected
+     to fail closed unless zoe-data has gained a real timer confirmation path
+
+4. Verify each persisted write via zoe-data read paths as the same demo user:
+
+   - lists: read the shopping list and confirm the test item exists
+   - reminders: list reminders and confirm the test reminder exists
+   - calendar: show tomorrow's calendar and confirm the test event exists
+   - notes: read/search notes and confirm the test note exists
+   - timer: confirm the sidecar did **not** falsely claim a real timer started
+     unless the backend returned an explicit non-canned timer confirmation
+
+5. Clean up immediately using the demo user's normal UI/API flows: remove the
+   list item, delete/complete the reminder, delete the calendar event, and
+   delete the note. Re-read each family to prove cleanup.
+
+6. Kill the sidecar by port only:
+
+   ```bash
+   lsof -ti tcp:3579 | xargs -r kill
+   ```
+
+7. Record the live result in the cutover handoff: demo user ID, timestamp, each
+   write family, readback evidence, cleanup evidence, and whether timer remained
+   fail-closed.
