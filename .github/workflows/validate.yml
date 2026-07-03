@@ -117,6 +117,10 @@ jobs:
             services/homeassistant-mcp-bridge/tests/test_ha_bridge.py \
             -x -q \
             --override-ini="asyncio_mode=auto"
+          PYTHONPATH="${{ github.workspace }}:${{ github.workspace }}/services/zoe-data" pytest \
+            tests/unit/test_remediate_ownerless_memories.py \
+            -x -q \
+            --override-ini="asyncio_mode=auto"
           PYTHONPATH="${{ github.workspace }}/services/zoe-auth:${{ github.workspace }}/services/zoe-auth/tests" pytest \
             services/zoe-auth/tests/test_auth.py \
             services/zoe-auth/tests/test_smoke.py \
