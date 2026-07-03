@@ -84,6 +84,37 @@ def test_memory_command_with_question_word_still_stored():
     assert storable is True
 
 
+# Real junk observed in jason's live store (source=voice person-extractor echoes
+# and source=synthesis meta-commentary) that the gate must now reject.
+@pytest.mark.parametrize("text", [
+    "Zoe: is being addressed in a conversation",
+    "Zoe: is being addressed in a message",
+    "Jason: is being addressed in a conversation",
+    "Zoe: Has something scheduled on her calendar",
+    "Jason: Has nothing scheduled for this week",
+    "Zoe: Add work to my calendar at 9am",
+    "The provided facts primarily relate to the characteristics and associations of individuals within a social context.",
+    'The provided facts illustrate that the concept of a "gift" is being used as a prompt or placeholder.',
+])
+def test_observed_live_junk_is_rejected(text):
+    storable, reason = is_storable_fact(text)
+    assert storable is False, f"{text!r} should be rejected (reason={reason})"
+
+
+# Real GOOD facts from jason's store must still be accepted (no over-rejection).
+@pytest.mark.parametrize("text", [
+    "My dad's name is Neil, spelled N-E-I-L.",
+    "My mum's name is Janice.",
+    "My mum's birthday is the 17th of the 11th, 1947.",
+    "I have two sisters, Karen and Julie.",
+    "User lives in Geraldton",
+    "My mum likes NCIS.",
+])
+def test_observed_live_good_facts_are_accepted(text):
+    storable, reason = is_storable_fact(text)
+    assert storable is True, f"{text!r} should be accepted (reason={reason})"
+
+
 # ---------------------------------------------------------------------------
 # classify_against_existing — ADD vs UPDATE/supersede
 # ---------------------------------------------------------------------------

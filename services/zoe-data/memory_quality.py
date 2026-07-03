@@ -73,6 +73,21 @@ _META_OPENER_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Dialogue-transcript echoes stored as "facts": "Zoe: is being addressed in a
+# conversation", "Jason: Has nothing scheduled for this week". A leading
+# "<Speaker>:" turn attribution — a generic role label, or any capitalised name
+# followed by a third-person predicate — is transcript noise, never a
+# first-person fact. (These slip past the personal-subject check below because
+# the capitalised speaker name reads as a "concrete token" and is accepted.)
+_SPEAKER_ECHO_RE = re.compile(
+    r"^\s*(?:zoe|assistant|the\s+assistant|user|human|ai|bot|system|speaker\s*\d*)\s*:",
+    re.IGNORECASE,
+)
+_TRANSCRIPT_ECHO_RE = re.compile(
+    r"^\s*[A-Z][A-Za-z'-]+\s*:\s+(?i:is|are|was|were|has|have|had|will|would|"
+    r"does|do|did|likes?|wants?|needs?|said|says|asked|mentioned|added)\b",
+)
+
 # A first/second-person subject — "I …", "my …", "you …", "your …", "we / our".
 # A genuine personal fact almost always has one. Memory-command forms
 # ("remember that …", "note that …") are personal facts too.
@@ -150,6 +165,11 @@ def is_storable_fact(text: str) -> tuple[bool, str]:
     # LLM meta-rambling — never a personal fact.
     if _META_OPENER_RE.match(raw):
         return False, "meta_rambling"
+
+    # Dialogue-transcript echoes ("Zoe: is being addressed…", "Jason: Has
+    # nothing scheduled…") — a speaker-attributed turn, never a stored fact.
+    if _SPEAKER_ECHO_RE.match(raw) or _TRANSCRIPT_ECHO_RE.match(raw):
+        return False, "transcript_echo"
 
     if has_memory_command:
         return True, ""

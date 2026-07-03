@@ -45,6 +45,20 @@ _ZOE_TIMEZONE = os.environ.get("ZOE_TIMEZONE", "Australia/Perth")
 _GUEST_USERS = ("guest", "anonymous", "voice-guest", "voice-daemon", "")
 
 
+def _passes_quality_gate(text: str) -> bool:
+    """Quality gate for the digest/synthesis LLM passes, which occasionally emit
+    non-facts ("The provided facts illustrate…", transcript echoes) that then
+    pollute recall. Mirrors the gate the conversational writers already apply.
+    Degrades to accept if the gate is unavailable so we never silently drop a
+    real fact."""
+    try:
+        from memory_quality import is_storable_fact
+        ok, _reason = is_storable_fact(text)
+        return ok
+    except Exception:
+        return True
+
+
 def _message_owner_expr() -> str:
     guests = ", ".join("'" + user.replace("'", "''") + "'" for user in _GUEST_USERS)
     # chat_messages.metadata is TEXT and legacy rows may contain non-JSON.
@@ -244,6 +258,9 @@ async def run_turn_digest(
             if overlap > 0.7:
                 result["skipped_duplicates"] += 1
                 continue
+            if not _passes_quality_gate(fact):
+                result["skipped_duplicates"] += 1
+                continue
             try:
                 ref = await svc.ingest(
                     fact,
@@ -367,6 +384,8 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                 continue
 
             tags = ["digest", item.get("type", "unknown")]
+            if not _passes_quality_gate(fact):
+                continue
             try:
                 ref = await svc.ingest(
                     fact,
@@ -1100,6 +1119,11 @@ async def _synthesis_pass(user_id: str) -> dict:
                     )
                 synthesis_text = resp.json()["choices"][0]["message"]["content"].strip()
                 if len(synthesis_text) < 10:
+                    continue
+                # The synthesis LLM often returns meta-commentary ("The provided
+                # facts illustrate…") instead of a stored-shaped insight — gate it.
+                if not _passes_quality_gate(synthesis_text):
+                    logger.debug("synthesis: dropped non-fact insight: %r", synthesis_text[:60])
                     continue
 
                 ref = await svc.ingest(
