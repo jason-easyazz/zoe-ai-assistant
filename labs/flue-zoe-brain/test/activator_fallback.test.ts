@@ -118,6 +118,11 @@ test('in-session context doctrine: live transcript beats an empty recall store',
   assert.ok(ZOE_INSTRUCTIONS.includes(IN_SESSION_CONTEXT_DOCTRINE));
   assert.match(IN_SESSION_CONTEXT_DOCTRINE, /DURING this conversation are true and usable immediately/);
   assert.match(IN_SESSION_CONTEXT_DOCTRINE, /empty recall result means nothing is stored from before/);
-  // Anti-fabrication / past-conversation recall must NOT be weakened away.
-  assert.match(IN_SESSION_CONTEXT_DOCTRINE, /still call recall_memory first/);
+  // Anti-fabrication / past-conversation recall must NOT be weakened away: the
+  // doctrine must still tell the model to consult recall_memory for the past, and
+  // must not use the strong "overrides" framing (Greptile P2 #988) that could
+  // suppress genuine past-conversation lookups.
+  assert.match(IN_SESSION_CONTEXT_DOCTRINE, /keep calling it first/);
+  assert.match(IN_SESSION_CONTEXT_DOCTRINE, /it adds to that rule, it does not cancel it/);
+  assert.doesNotMatch(IN_SESSION_CONTEXT_DOCTRINE, /overrides the recall rule/);
 });

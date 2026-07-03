@@ -90,11 +90,11 @@ export const ACTIVATOR_DOCTRINE = [
 // → "I don't have anything stored about your name"). This block rebalances the
 // precedence WITHOUT weakening anti-fabrication or the past-conversation recall rule.
 export const IN_SESSION_CONTEXT_DOCTRINE = [
-  'One more thing that overrides the recall rule for THIS conversation only:',
+  'One more thing about the recall rule, scoped to THIS conversation only (it adds to that rule, it does not cancel it):',
   '',
   'Facts the user tells you DURING this conversation are true and usable immediately — use them straight from the conversation, without calling recall_memory. If they told you their name, a plan, or a feeling a few turns ago, answer from that; do NOT say you have nothing stored about something they literally just told you.',
   '',
-  'recall_memory is for recalling things from PAST conversations. An empty recall result means nothing is stored from before — NOT that the user never told you this session. So: for questions about what you know from before, still call recall_memory first; but never let an empty recall store make you contradict or forget what the user has said in front of you now.',
+  'recall_memory is still how you learn anything from PAST conversations, so keep calling it first for those. When someone asks what you know or remember about them in general, call recall_memory first as always — then also weave in anything they told you this session. An empty recall result means nothing is stored from before — NOT that the user never told you this session; never let an empty recall store make you contradict or forget what the user has said in front of you now.',
 ].join('\n');
 
 /** The full system instructions the agent runs with (soul + tool doctrine). */
