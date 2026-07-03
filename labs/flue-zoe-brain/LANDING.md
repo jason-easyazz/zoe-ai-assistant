@@ -1,10 +1,11 @@
-# LANDING — activate_abilities fallback fix (feature/flue-activator-fallback)
+# LANDING — activate_abilities fallback fix (#965, merged — measurement pending)
 
-Operator checklist for landing this change on the box. The sandbox this PR was
-built in cannot reach the live services (zoe-data :8000, llama-server :11434),
-so the on-box measurement below is the operator's half of the verification.
+Operator checklist for the on-box half of #965's verification. The sandbox the
+change was built in cannot reach the live services (zoe-data :8000, llama-server
+:11434), so the measurement below is the operator's half — it has not been run
+yet.
 
-## What changed (already unit-tested, 38/38 green)
+## What changed in #965 (already unit-tested, 38/38 green)
 
 - `src/agents/zoe.ts` — imperative activator doctrine appended to the
   instructions (group catalogue + "you have NO weather/calendar/… knowledge of
