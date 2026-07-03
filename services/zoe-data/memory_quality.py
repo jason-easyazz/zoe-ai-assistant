@@ -277,10 +277,17 @@ def _value_only(text: str, attr_key: Optional[str]) -> set[str]:
 
 
 def _same_value(a: str, b: str, attr_key: Optional[str]) -> bool:
-    """True when two same-attribute facts assert the same underlying value (they
-    share at least one salient value token beyond the attribute itself). False
-    means the value genuinely differs → a correction, not a rephrasing."""
-    return bool(_value_only(a, attr_key) & _value_only(b, attr_key))
+    """True when two same-attribute facts assert the same underlying value.
+
+    One fact's value tokens must be a SUBSET of the other's: a pure rephrasing
+    has equal token sets ("red Toyota" / "Toyota red") and a richer restatement
+    is a superset ("Neil" / "Neil, spelled N-E-I-L"), so both still merge. A
+    correction that swaps the distinctive value keeps a leftover token on EACH
+    side ("red Toyota" vs "red Honda"), so a merely-shared incidental modifier
+    ("red", "iced", "small brown") can no longer mask it — the difference is
+    non-empty in both directions → False → supersede, not skip."""
+    va, vb = _value_only(a, attr_key), _value_only(b, attr_key)
+    return bool(va and vb) and (va <= vb or vb <= va)
 
 
 def _information(text: str) -> int:
