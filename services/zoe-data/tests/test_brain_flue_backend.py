@@ -136,8 +136,11 @@ async def test_flue_selected_and_hits_sidecar(monkeypatch):
     # Bearer token sent (sidecar fails closed without it).
     assert cap["headers"]["Authorization"] == "Bearer sekret"
     assert cap["headers"]["Content-Type"] == "application/json"
-    # Body shape includes the acting user identity when known.
-    assert json.loads(cap["content"]) == {"message": "ping", "user_id": "jason"}
+    # Body carries ONLY {message}: the acting user identity rides an envelope
+    # prefix on the message (" zoe-uid:<id>\n<msg>"), NOT a separate body field,
+    # because the sidecar's Flue payload schema drops any field other than
+    # {message, images}. The sidecar reads + strips this prefix before the model.
+    assert json.loads(cap["content"]) == {"message": " zoe-uid:jason\nping"}
 
 
 @pytest.mark.asyncio

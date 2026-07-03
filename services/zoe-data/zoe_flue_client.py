@@ -81,6 +81,27 @@ def _headers() -> dict[str, str]:
     return headers
 
 
+# Machine-readable acting-identity envelope. MUST match the sidecar's parser
+# (labs/flue-zoe-brain src/request-identity.ts IDENTITY_ENVELOPE_PREFIX / _RE):
+# a leading " zoe-uid:<id>\n" line the sidecar reads then strips before the model
+# sees the message. Kept here so the trusted user_id rides the one field Flue
+# persists into the agent fiber (the message) rather than a body field it drops.
+_IDENTITY_ENVELOPE_PREFIX = " zoe-uid:"
+
+
+def _wrap_message_with_identity(message: str, user_id: str) -> str:
+    """Prefix ``message`` with the acting-identity envelope, or return it unchanged.
+
+    An empty/blank ``user_id`` yields the message untouched so the sidecar falls
+    back to its env identity. The id is placed on its own leading line terminated
+    by a newline, matching the sidecar's single-line regex.
+    """
+    uid = (user_id or "").strip()
+    if not uid:
+        return message
+    return f"{_IDENTITY_ENVELOPE_PREFIX}{uid}\n{message}"
+
+
 def _text_from_body(body: Any) -> str:
     """Pull the reply text out of the sidecar's {result:{text}} envelope.
 
@@ -129,13 +150,18 @@ async def run_flue_brain_streaming(
     persona/memory/tools, so they're intentionally ignored here.
     """
     url = _endpoint(session_id)
-    body_obj: dict[str, str] = {"message": message}
     # Forward the caller's identity when known so the sidecar isn't pinned to one
-    # env-configured user. Omit empty/guest ids so the sidecar's own fail-closed
-    # identity handling applies rather than sending a blank user.
+    # env-configured user. The id is carried as an ENVELOPE PREFIX on the message,
+    # not a separate body field: the sidecar's Flue payload schema accepts only
+    # {message, images} and silently drops any other field, so a top-level
+    # ``user_id`` never reaches the agent fiber. The sidecar reads this prefix and
+    # strips it before the model sees the text (see labs/flue-zoe-brain
+    # src/request-identity.ts wrapMessageWithIdentity / forwardedIdentityFromMessages).
+    # Keep the format byte-for-byte in sync with that module. Omit empty/guest ids
+    # so the sidecar's own fail-closed identity handling applies.
     uid = (user_id or "").strip()
-    if uid:
-        body_obj["user_id"] = uid
+    outbound_message = _wrap_message_with_identity(message, uid)
+    body_obj: dict[str, str] = {"message": outbound_message}
     payload = json.dumps(body_obj).encode()
     try:
         import httpx

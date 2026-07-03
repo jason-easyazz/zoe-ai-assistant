@@ -1,29 +1,32 @@
 /**
  * Unit coverage for per-request acting identity (LAB-ONLY, offline, no network).
  *
- * Proves:
- *   - runWithUserId(id, fn) makes currentUserId() return `id` inside fn,
- *     including across awaits / nested async, and '' outside any context;
- *   - actingUserId() (via a tool's observable behaviour) prefers the ALS user
- *     when set, falls back to the env when the ALS is empty, and still fails
- *     closed on guest identities and the empty id.
+ * The mechanism (see src/request-identity.ts): the acting user for a turn is keyed
+ * by that turn's AbortSignal — the provider binds it (bindTurnUserId), the tool
+ * reads it (currentUserId(signal)). The trusted id reaches the provider on the
+ * turn message via an envelope (wrapMessageWithIdentity), which the provider
+ * extracts (forwardedIdentityFromMessages) and strips (stripIdentityEnvelope)
+ * before the model sees it.
  *
- * The ALS-vs-env preference is proved END-TO-END through recall_memory: the
- * tool builds its request URL with `user_id=<actingUserId()>`, so we stub fetch,
- * capture the URL, and read back which identity the tool acted as.
+ * Proves, in isolation:
+ *   - bindTurnUserId(signal, id) makes currentUserId(signal) return the trimmed id;
+ *     a different/absent signal returns '' — so concurrent turns never cross;
+ *   - the envelope round-trips: wrap → forwardedIdentityFromMessages recovers the
+ *     id, stripIdentityEnvelope removes the marker line (string and array content);
+ *   - actingUserId() (via recall_memory's observable behaviour) prefers the
+ *     signal-bound user, falls back to the env when nothing is bound for the
+ *     signal, and still fails closed on guest identities and the empty id.
+ *
+ * The signal-vs-env preference is proved END-TO-END through recall_memory: the
+ * tool builds its request URL with `user_id=<actingUserId(signal)>`, so we stub
+ * fetch, capture the URL, and read back which identity the tool acted as.
  *
  * Run (Node 22, type-stripping):
  *   node --experimental-strip-types --test test/request_identity.test.ts
  *
- * Env is set BEFORE importing the modules (zoe-tools reads ZOE_BRAIN_USER_ID at
- * call time, but ALLOW_WRITES at module load — keep the dynamic-import pattern
- * the other tests use so env is always in place first).
- *
- * The assignment MUST happen at module scope (before the dynamic imports below,
- * because ALLOW_WRITES is read at module load), so it can't live in a hook. To
- * avoid leaking ZOE_BRAIN_USER_ID into sibling test files that share this
- * `node --test` worker, we capture the original value here and restore it in a
- * top-level `after` hook once this file's tests finish.
+ * ZOE_BRAIN_USER_ID is set at module scope (before the dynamic imports) because
+ * zoe-tools reads ALLOW_WRITES at module load; the original is restored in `after`
+ * so sibling test files sharing this worker aren't affected.
  */
 const ORIGINAL_ZOE_BRAIN_USER_ID = process.env.ZOE_BRAIN_USER_ID;
 process.env.ZOE_BRAIN_USER_ID = 'env-user';
@@ -36,7 +39,13 @@ after(() => {
   else process.env.ZOE_BRAIN_USER_ID = ORIGINAL_ZOE_BRAIN_USER_ID;
 });
 
-const { runWithUserId, currentUserId } = await import('../src/request-identity.ts');
+const {
+  bindTurnUserId,
+  currentUserId,
+  wrapMessageWithIdentity,
+  forwardedIdentityFromMessages,
+  stripIdentityEnvelope,
+} = await import('../src/request-identity.ts');
 const { zoeTools } = await import('../src/tools/zoe-tools.ts');
 
 type RunnableTool = {
@@ -44,6 +53,11 @@ type RunnableTool = {
   run: (ctx: { input: Record<string, unknown>; signal?: AbortSignal }) => Promise<unknown>;
 };
 const recallMemory = zoeTools.find((t) => t.name === 'recall_memory')! as unknown as RunnableTool;
+
+/** A fresh, distinct AbortSignal for a "turn". */
+function turnSignal(): AbortSignal {
+  return new AbortController().signal;
+}
 
 /**
  * Stub global fetch to capture the request URL and return a fixed memory packet,
@@ -66,69 +80,117 @@ async function withCapturedFetch(
   }
 }
 
-// ─── runWithUserId / currentUserId ───────────────────────────────────────────
+// ─── bindTurnUserId / currentUserId (signal-keyed) ───────────────────────────
 
-test('currentUserId() is empty outside any runWithUserId context', () => {
-  assert.equal(currentUserId(), '');
+test('currentUserId(undefined) is empty — no signal, no identity', () => {
+  assert.equal(currentUserId(undefined), '');
 });
 
-test('runWithUserId binds the id synchronously inside fn, empty again after', () => {
-  const inside = runWithUserId('alice', () => currentUserId());
-  assert.equal(inside, 'alice');
-  assert.equal(currentUserId(), '');
+test('currentUserId(signal) is empty before any bind', () => {
+  assert.equal(currentUserId(turnSignal()), '');
 });
 
-test('runWithUserId propagates across awaits and nested async', async () => {
-  await runWithUserId('alice', async () => {
-    assert.equal(currentUserId(), 'alice');
-    await Promise.resolve();
-    assert.equal(currentUserId(), 'alice');
-    // A nested async helper still sees the same bound id.
-    const nested = async () => {
-      await new Promise((r) => setTimeout(r, 1));
-      return currentUserId();
-    };
-    assert.equal(await nested(), 'alice');
-  });
-  assert.equal(currentUserId(), '');
+test('bindTurnUserId binds (and trims) the id for that signal only', () => {
+  const a = turnSignal();
+  const b = turnSignal();
+  bindTurnUserId(a, '  alice  ');
+  assert.equal(currentUserId(a), 'alice');
+  // A DIFFERENT signal is unaffected — concurrent turns never cross.
+  assert.equal(currentUserId(b), '');
 });
 
-test('runWithUserId trims the id; nested runWithUserId overrides then restores', () => {
-  runWithUserId('  bob  ', () => {
-    assert.equal(currentUserId(), 'bob');
-    runWithUserId('carol', () => assert.equal(currentUserId(), 'carol'));
-    // Inner context popped — outer id restored.
-    assert.equal(currentUserId(), 'bob');
-  });
+test('two concurrent turns keep independent identities (no race)', () => {
+  const a = turnSignal();
+  const b = turnSignal();
+  bindTurnUserId(a, 'alice');
+  bindTurnUserId(b, 'bob');
+  // Rebinding one does not disturb the other, regardless of order.
+  assert.equal(currentUserId(a), 'alice');
+  assert.equal(currentUserId(b), 'bob');
+  bindTurnUserId(a, 'alice2');
+  assert.equal(currentUserId(a), 'alice2');
+  assert.equal(currentUserId(b), 'bob');
+});
+
+test('bindTurnUserId with no signal is a no-op (does not throw)', () => {
+  assert.doesNotThrow(() => bindTurnUserId(undefined, 'nobody'));
+});
+
+// ─── identity envelope round-trip ────────────────────────────────────────────
+
+test('wrap → forwardedIdentityFromMessages recovers the id', () => {
+  const wrapped = wrapMessageWithIdentity('what do you know about me?', 'alice');
+  assert.equal(
+    forwardedIdentityFromMessages([{ role: 'user', content: wrapped }]),
+    'alice',
+  );
+});
+
+test('an empty id leaves the message unchanged and yields no forwarded id', () => {
+  const msg = 'hello';
+  assert.equal(wrapMessageWithIdentity(msg, ''), msg);
+  assert.equal(forwardedIdentityFromMessages([{ role: 'user', content: msg }]), '');
+});
+
+test('forwardedIdentityFromMessages reads the LAST user message only', () => {
+  const messages = [
+    { role: 'user', content: wrapMessageWithIdentity('first', 'alice') },
+    { role: 'assistant', content: 'ok' },
+    { role: 'user', content: wrapMessageWithIdentity('second', 'bob') },
+  ];
+  assert.equal(forwardedIdentityFromMessages(messages), 'bob');
+});
+
+test('stripIdentityEnvelope removes the marker line (string content)', () => {
+  const wrapped = wrapMessageWithIdentity('the real message', 'alice');
+  const [msg] = stripIdentityEnvelope([{ role: 'user', content: wrapped }]);
+  assert.equal(msg.content, 'the real message');
+});
+
+test('stripIdentityEnvelope removes the marker from array text content', () => {
+  const wrapped = wrapMessageWithIdentity('the real message', 'alice');
+  const [msg] = stripIdentityEnvelope([
+    { role: 'user', content: [{ type: 'text', text: wrapped }] },
+  ]);
+  assert.deepEqual(msg.content, [{ type: 'text', text: 'the real message' }]);
+});
+
+test('stripIdentityEnvelope leaves envelope-free messages untouched (same ref)', () => {
+  const messages = [{ role: 'user', content: 'plain' }];
+  assert.equal(stripIdentityEnvelope(messages), messages);
 });
 
 // ─── actingUserId() preference, observed through recall_memory ───────────────
 
-test('recall_memory acts as the ALS user when a request identity is set', async () => {
+test('recall_memory acts as the signal-bound user when one is set', async () => {
   await withCapturedFetch('alice-facts', async (getUrl) => {
-    const out = await runWithUserId('alice', () => recallMemory.run({ input: {} }));
+    const signal = turnSignal();
+    bindTurnUserId(signal, 'alice');
+    const out = await recallMemory.run({ input: {}, signal });
     assert.equal(out, 'alice-facts');
     assert.match(getUrl(), /[?&]user_id=alice(&|$)/);
   });
 });
 
-test('recall_memory falls back to the env user when no ALS identity is set', async () => {
+test('recall_memory falls back to the env user when no identity is bound', async () => {
   await withCapturedFetch('env-facts', async (getUrl) => {
-    const out = await recallMemory.run({ input: {} });
+    const out = await recallMemory.run({ input: {}, signal: turnSignal() });
     assert.equal(out, 'env-facts');
     assert.match(getUrl(), /[?&]user_id=env-user(&|$)/);
   });
 });
 
-test('an empty ALS identity falls through to the env user (does not blank identity)', async () => {
+test('an empty bound identity falls through to the env user (does not blank identity)', async () => {
   await withCapturedFetch('env-facts', async (getUrl) => {
-    const out = await runWithUserId('', () => recallMemory.run({ input: {} }));
+    const signal = turnSignal();
+    bindTurnUserId(signal, '');
+    const out = await recallMemory.run({ input: {}, signal });
     assert.equal(out, 'env-facts');
     assert.match(getUrl(), /[?&]user_id=env-user(&|$)/);
   });
 });
 
-test('recall_memory fails closed on a guest ALS identity (no fetch, refuses)', async () => {
+test('recall_memory fails closed on a guest bound identity (no fetch, refuses)', async () => {
   let fetched = false;
   const real = globalThis.fetch;
   globalThis.fetch = (async () => {
@@ -136,7 +198,9 @@ test('recall_memory fails closed on a guest ALS identity (no fetch, refuses)', a
     return { ok: true, status: 200, json: async () => ({ packet: 'leak' }) };
   }) as unknown as typeof fetch;
   try {
-    const out = (await runWithUserId('guest', () => recallMemory.run({ input: {} }))) as string;
+    const signal = turnSignal();
+    bindTurnUserId(signal, 'guest');
+    const out = (await recallMemory.run({ input: {}, signal })) as string;
     assert.equal(fetched, false, 'must not call zoe-data with a guest identity');
     assert.match(out, /can't do that safely/i);
   } finally {
