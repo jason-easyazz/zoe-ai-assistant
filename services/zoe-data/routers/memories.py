@@ -378,21 +378,15 @@ async def memory_for_prompt(
     # Increment 2b: fold the relational half (Postgres people/relationships/dates
     # + portrait) into the packet, behind ZOE_MEMORY_COMPOSE_ENABLED (default OFF)
     # and router-gated to relational queries. OFF (or a non-relational query) is a
-    # true no-op: compose_enabled() short-circuits before any DB read, so the
-    # packet above is returned byte-for-byte. Best-effort — never breaks a turn.
-    from zoe_memory_compose import compose_enabled, needs_relational
+    # true no-op: compose_packet() cheap-gates before any DB read, so the packet
+    # above is returned byte-for-byte. The gate + DB context + block build live in
+    # the shared zoe_memory_compose.compose_packet so chat and voice can't drift.
+    # Best-effort — compose_packet never raises.
+    from zoe_memory_compose import compose_packet
 
-    if compose_enabled() and message.strip() and needs_relational(message):
-        try:
-            from db_pool import get_db_ctx
-            from zoe_memory_compose import compose_relational_block
-
-            async with get_db_ctx() as db:
-                block = await compose_relational_block(user_id, message, db)
-            if block:
-                result = _fold_relational_block(result, block)
-        except Exception:
-            logger.exception("memories: relational compose failed; vector-only packet")
+    block = await compose_packet(user_id, message)
+    if block:
+        result = _fold_relational_block(result, block)
     return result
 
 
