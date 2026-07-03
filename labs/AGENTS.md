@@ -52,9 +52,12 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
   tools against zoe-data + the `activate_abilities` activator) with progressive
   tool disclosure at the wire (always-on core + activated groups per call;
   `src/tools/tool-groups.ts`), identity fail-closed, writes dry-run-gated.
+  Emits the Seam-A text-delta + `__TOOL__`/`__THINKING__` sentinel stream
+  (byte-pinned to the prod contract) via content-negotiated NDJSON on the
+  agent route (`src/streaming.ts`); whole-result `?wait=result` unchanged.
   Reached from prod only via the default-OFF `ZOE_BRAIN_BACKEND=flue` seam; may
   be supervised via the opt-in unit template (see Forbidden above). Operator
-  measurement checklist pending in `flue-zoe-brain/LANDING.md`.
+  measurement checklists pending in `flue-zoe-brain/LANDING.md`.
 - `flue-zoe-telegram/` — Flue Telegram channel: long-poll bot bridged to zoe-data's
   `/api/chat` (NOT a Flue LLM agent; `src/agents/zoe.ts` is a build-only placeholder
   and registers no model provider — never points at the voice brain on `:11434`).
