@@ -74,6 +74,17 @@ test('a non-string user_id is ignored (downstream sees empty)', async () => {
 });
 
 test('reading the body does not starve the downstream handler of the body', async () => {
+  // COVERAGE NOTE: this exercises HONO'S body caching — a second c.req.json() in
+  // the same request returns the cached parse — NOT Flue's actual raw-clone path.
+  // In the real runtime, flue's agentRouteHandler clones c.req.raw BEFORE this
+  // route middleware runs and parses the turn payload from that separate clone
+  // (never from Hono's JSON cache), which is what truly makes our peek safe. That
+  // internal behaviour can't be reproduced without standing up the flue runtime,
+  // so if a future flue version stopped pre-cloning (e.g. read c.req.json()
+  // itself), this test would still pass while production broke — re-verify the
+  // clone assumption on any @flue/runtime bump (see the peek rationale in
+  // src/agents/zoe.ts forwardedUserId()).
+  //
   // The downstream (flue) parses the turn payload from its own clone of the raw
   // request; here we assert our peek left a re-readable body for a second reader.
   const app = new Hono();

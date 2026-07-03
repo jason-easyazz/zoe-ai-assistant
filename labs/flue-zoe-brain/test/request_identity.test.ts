@@ -18,11 +18,23 @@
  * Env is set BEFORE importing the modules (zoe-tools reads ZOE_BRAIN_USER_ID at
  * call time, but ALLOW_WRITES at module load — keep the dynamic-import pattern
  * the other tests use so env is always in place first).
+ *
+ * The assignment MUST happen at module scope (before the dynamic imports below,
+ * because ALLOW_WRITES is read at module load), so it can't live in a hook. To
+ * avoid leaking ZOE_BRAIN_USER_ID into sibling test files that share this
+ * `node --test` worker, we capture the original value here and restore it in a
+ * top-level `after` hook once this file's tests finish.
  */
+const ORIGINAL_ZOE_BRAIN_USER_ID = process.env.ZOE_BRAIN_USER_ID;
 process.env.ZOE_BRAIN_USER_ID = 'env-user';
 
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
+
+after(() => {
+  if (ORIGINAL_ZOE_BRAIN_USER_ID === undefined) delete process.env.ZOE_BRAIN_USER_ID;
+  else process.env.ZOE_BRAIN_USER_ID = ORIGINAL_ZOE_BRAIN_USER_ID;
+});
 
 const { runWithUserId, currentUserId } = await import('../src/request-identity.ts');
 const { zoeTools } = await import('../src/tools/zoe-tools.ts');
