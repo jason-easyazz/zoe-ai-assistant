@@ -48,6 +48,12 @@
  *     - home  action=on|off|dim|brighten (+room?) → the VALIDATED smart_home
  *       intent (entity_id built server-side; legacy raw ha_control is NOT ported)
  *
+ * Wave 3 — "memory write path" (cut-list record §3, Wave 3). The ONE wave with
+ * a zoe-data touch:
+ *     - remember_fact → memory_store {text} (NEW _DISPATCHABLE_INTENTS entry,
+ *       fulfilled via MemoryService.ingest — the explicit model-callable memory
+ *       write covering the legacy mempalace_add / memory_update gap)
+ *
 
  * SECURITY — identity is bound in TRUSTED CODE, never from model args. Tool
  * arguments are model-chosen and are NOT an auth boundary, so the acting
@@ -836,6 +842,44 @@ const home = defineTool({
   },
 });
 
+// ─── Wave 3: explicit memory write (cut-list record §3, Wave 3) ──────────────
+
+/**
+ * remember_fact — an EXPLICIT, model-callable memory-write tool. WRITE →
+ * memory_store {text}. This is the ONE Wave-3 path with a zoe-data touch: the
+ * new `memory_store` intent added to _DISPATCHABLE_INTENTS
+ * (services/zoe-data/routers/system.py), fulfilled by execute_intent via
+ * MemoryService.ingest — the same durable write path expert_dispatch uses for
+ * voice facts (PII scrubbing, dedup, scope validation all apply).
+ *
+ * Covers the gap the legacy mempalace_add / memory_update left (cut-list items
+ * 1–3): the model can now DECIDE to persist a fact the user asks it to keep,
+ * rather than relying solely on the ambient end-of-turn capture. recall_memory
+ * stays the READ side; this is the explicit WRITE side.
+ *
+ * WRITE gate: behind ZOE_BRAIN_ALLOW_WRITES (dry-run by default), so a parity
+ * run never writes real memories. Identity stays env-bound (never model args) —
+ * fail-closed on no user, exactly like every other tool here.
+ */
+const rememberFact = defineTool({
+  name: 'remember_fact',
+  description:
+    'Store a durable fact the user explicitly asks you to remember about them, ' +
+    'their life, or their preferences ("remember that my anniversary is June 3rd", ' +
+    '"remember I\'m allergic to penicillin"). Use ONLY when the user clearly wants ' +
+    'something kept for later — not for passing chit-chat. To RECALL stored facts ' +
+    'use recall_memory instead.',
+  input: v.object({
+    fact: v.pipe(v.string(), v.trim(), v.minLength(1)),
+  }),
+  run: async ({ input, signal }) => {
+    const fact = String(input.fact ?? '').trim();
+    if (!fact) return 'What would you like me to remember?';
+    return runWrite('memory_store', { text: fact }, 'memory',
+      `the fact "${fact}"`, "Got it — I'll remember that.", signal);
+  },
+});
+
 // ─── Progressive disclosure activator ────────────────────────────────────────
 
 /**
@@ -906,6 +950,8 @@ export const zoeTools = [
   // Wave 2 — music & home action tools (cut-list record §3; writes gated)
   media,
   home,
+  // Wave 3 — explicit memory write (cut-list record §3; write gated)
+  rememberFact,
   // Progressive disclosure — always-on activator for the grouped tools above
   activateAbilities,
 ];

@@ -2205,6 +2205,41 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
             preview = preview[:77] + "…"
         return f"Done — I forgot: \"{preview}\"."
 
+    # "remember that <fact>" — an EXPLICIT, model-callable memory write. This is
+    # the fulfillment for the Flue sidecar's remember_fact tool (Wave 3 of the
+    # cutover cut list, docs/knowledge/flue-cutover-tool-cut-list.md §3): the one
+    # new dispatchable intent. Goes through MemoryService.ingest, the same durable
+    # write path expert_dispatch uses for voice facts — so PII scrubbing, dedup,
+    # and scope validation all apply. A stable idempotency key (user + normalized
+    # text) collapses repeats, matching expert_dispatch.store_fact.
+    if intent.name == "memory_store":
+        text = str((intent.slots or {}).get("text", "")).strip()
+        if not text:
+            return "There's nothing to remember — what would you like me to store?"
+        try:
+            import hashlib
+            from memory_service import get_memory_service
+            norm = re.sub(r"\s+", " ", text.lower()).strip()
+            user_turn_id = "fact-" + hashlib.sha1(f"{user_id}|{norm}".encode()).hexdigest()[:16]
+            svc = get_memory_service()
+            ref = await svc.ingest(
+                text,
+                user_id=user_id,
+                source="brain_tool",
+                user_turn_id=user_turn_id,
+                memory_type="fact",
+                confidence=0.85,
+                tags=["brain", "explicit"],
+            )
+        except Exception as exc:
+            logger.warning("memory_store ingest failed: %s", exc)
+            return "I couldn't reach the memory store right now, so I haven't saved that."
+        if ref is None:
+            # ingest silently drops on PII reject / dedup / opt-out. Don't claim
+            # a durable write the store didn't actually make.
+            return "I couldn't save that just now — it may already be stored or contain something I can't keep."
+        return "Got it — I'll remember that."
+
     # ── A2A Federation Status ──────────────────────────────────────────────────
     if intent.name == "a2a_federation_status":
         try:

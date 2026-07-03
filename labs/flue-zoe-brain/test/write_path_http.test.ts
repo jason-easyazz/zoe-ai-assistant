@@ -248,6 +248,18 @@ const WRITE_TOOL_CASES: Array<{
     dryRunPattern: /WRITE DISABLED.*speaking volume to 40.*NOT/i,
     successPattern: /Set my speaking volume to 40\./,
   },
+  // ─── Wave 3 write tool (cut-list record §3, Wave 3) ────────────────────────
+  {
+    name: 'remember_fact',
+    input: { fact: 'my anniversary is June 3rd' },
+    expectedPayload: {
+      user_id: ACTING_USER,
+      intent: 'memory_store',
+      slots: { text: 'my anniversary is June 3rd' },
+    },
+    dryRunPattern: /WRITE DISABLED.*the fact "my anniversary is June 3rd".*NOT/i,
+    successPattern: /Got it — I'll remember that\./,
+  },
 ];
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
@@ -292,6 +304,9 @@ function dispatchResult(intent: string, slots: Record<string, unknown>): string 
     return `Found:\n  - ${slots.query} (friend)`;
   }
   // ─── Wave 2 confirmation strings (mirror intent_router fulfillment) ─────────
+  if (intent === 'memory_store') {
+    return "Got it — I'll remember that.";
+  }
   if (intent === 'music_play') {
     return `Now playing: ${slots.query}.`;
   }
