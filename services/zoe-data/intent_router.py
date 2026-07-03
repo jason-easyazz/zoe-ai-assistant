@@ -2682,12 +2682,25 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
     # page opens and the timer/recipe widget is pre-filled.  The text response is spoken
     # by the voice daemon; the panel action is dispatched by _broadcast_intent_nav in chat.py.
     if intent.name == "timer_create":
-        # Note: on the touch panel, Skybridge owns timers end-to-end (real
-        # countdown card + alarm) and is consulted before this fast-path, so this
-        # branch is the spoken line for the chat/other surfaces.
+        # On the touch panel, Skybridge owns timers end-to-end (real countdown
+        # card + alarm) and is consulted before this fast-path. But other
+        # callers -- notably POST /api/system/intent-dispatch (the zoe-core Pi
+        # brain's `timers` ability) -- call execute_intent directly and never
+        # go through Skybridge, so this branch must also register a real
+        # timer, not just speak a confirmation (see skybridge_service's
+        # in-memory _TimerStore, shared via create_timer_direct).
         mins = intent.slots.get("minutes", 5)
         label = intent.slots.get("label", "Timer")
         named = "" if str(label).strip().lower() in ("", "timer") else f" for {label}"
+        try:
+            from skybridge_service import create_timer_direct
+
+            resolved = create_timer_direct(user_id, minutes=mins, label=str(label))
+            spoken = resolved.get("spoken_summary")
+            if spoken:
+                return spoken
+        except Exception as exc:
+            logger.warning("timer_create: failed to register real timer (falling back to spoken-only): %s", exc)
         return f"Starting a {mins} minute timer{named}."
 
     if intent.name == "recipe_search":
@@ -3752,7 +3765,8 @@ async def _execute_smart_home_intent(intent: Intent, user_id: str) -> Optional[s
         data.pop("entity_id", None)
         payload = {"entity_id": entity_id, "action": service, "data": data}
         async with _httpx.AsyncClient(timeout=8.0) as c:
-            await c.post(f"{ha_url}/devices/control", json=payload)
+            resp = await c.post(f"{ha_url}/devices/control", json=payload)
+            resp.raise_for_status()
 
         action_labels = {
             "turn_on":  "on",
