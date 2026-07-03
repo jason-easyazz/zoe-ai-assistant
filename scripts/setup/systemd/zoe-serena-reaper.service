@@ -1,0 +1,23 @@
+# Zoe maintenance — reap stale Serena MCP servers (user unit)
+#
+# Why: each Claude Code / Codex session spawns its own multi-GB serena
+# process; leftovers exhausted the box's swap on 2026-07-03 and OOM'd the
+# live voice brain. This oneshot runs the conservative reaper; pair with
+# zoe-serena-reaper.timer (hourly).
+#
+# Install (as the zoe user):
+#   cp scripts/setup/systemd/zoe-serena-reaper.{service,timer} ~/.config/systemd/user/
+#   # ADJUST the ExecStart path below if your checkout is NOT ~/assistant —
+#   # systemd only records the resulting "No such file" failure in the journal.
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now zoe-serena-reaper.timer
+
+[Unit]
+Description=Reap stale Serena MCP servers (swap-exhaustion guard)
+
+[Service]
+Type=oneshot
+# %h = the invoking user's home. This assumes the repo is at ~/assistant (the
+# canonical Zoe checkout). If yours lives elsewhere, edit this absolute path.
+ExecStart=/usr/bin/python3 %h/assistant/scripts/maintenance/reap_stale_serena.py --execute
+Nice=10
