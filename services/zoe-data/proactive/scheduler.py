@@ -6,6 +6,7 @@ Falls back to SQLite if POSTGRES_APSCHEDULER_URL is not set.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import uuid
@@ -135,3 +136,29 @@ def cancel_job(job_id: str) -> CancelResult:
     except JobLookupError:
         log.debug("cancel_job: job %s already absent", job_id)
         return CancelResult.ABSENT
+
+
+# --------------------------------------------------------------------------- #
+# run_blocking() — SQLAlchemyJobStore (psycopg2/sqlite) is a SYNCHRONOUS
+# jobstore, so add_job/remove_job/get_job (register_job/cancel_job/job_exists
+# above) perform blocking DB I/O. Calling them directly from a coroutine that
+# runs on the event loop (request handlers, reconcile) stalls every concurrent
+# request/WebSocket for the duration of that I/O. Callers in async code paths
+# should offload via this helper: `await run_blocking(register_job, **kw)`.
+# A full async-jobstore migration is out of scope; this is the smallest
+# correct mitigation. Kept as a thin helper (not a same-named async twin of
+# each function) so call sites still invoke the exact module-level names
+# (`register_job`, `cancel_job`, `job_exists`) that existing unit tests
+# monkeypatch.
+# --------------------------------------------------------------------------- #
+async def run_blocking(_fn: Callable, *args, **kwargs):
+    """Run a blocking callable in a thread executor.
+
+    Takes the target callable positionally (as `_fn`, not `func`) so it never
+    collides with a `func=` keyword the callable itself expects (e.g.
+    `register_job(func=..., ...)`).
+    """
+    loop = asyncio.get_running_loop()
+    if kwargs:
+        return await loop.run_in_executor(None, lambda: _fn(*args, **kwargs))
+    return await loop.run_in_executor(None, _fn, *args)
