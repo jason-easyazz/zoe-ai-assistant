@@ -70,3 +70,95 @@ def test_happy_path_runs_allowlisted_intent(monkeypatch):
         "slots": {"list_type": "shopping"},
         "user_id": "family-admin",
     }
+
+
+def test_memory_store_is_dispatchable(monkeypatch):
+    """Wave 3 (cut-list record §3): memory_store must be on the allowlist and
+    reach execute_intent — the endpoint no longer rejects it as non-dispatchable."""
+    monkeypatch.setattr(auth, "_ZOE_INTERNAL_TOKEN", "tok")
+    captured = {}
+
+    async def fake_execute_intent(intent, user_id="family-admin"):
+        captured["intent"] = intent.name
+        captured["slots"] = dict(intent.slots)
+        captured["user_id"] = user_id
+        return "Got it — I'll remember that."
+
+    monkeypatch.setattr(intent_router, "execute_intent", fake_execute_intent)
+    resp = TestClient(_app()).post(
+        "/api/system/intent-dispatch",
+        json={"user_id": "family-admin", "intent": "memory_store",
+              "slots": {"text": "my anniversary is June 3rd"}},
+        headers={"X-Internal-Token": "tok"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["ok"] is True
+    assert captured == {
+        "intent": "memory_store",
+        "slots": {"text": "my anniversary is June 3rd"},
+        "user_id": "family-admin",
+    }
+
+
+@pytest.mark.asyncio
+async def test_memory_store_intent_ingests_fact(monkeypatch):
+    """execute_intent(memory_store) routes through MemoryService.ingest with a
+    fact memory_type and a stable idempotency key, returning the confirmation."""
+    import memory_service
+
+    calls = {}
+
+    class _FakeRef:
+        text = "my anniversary is June 3rd"
+
+    class _FakeSvc:
+        async def ingest(self, text, **kwargs):
+            calls["text"] = text
+            calls["kwargs"] = kwargs
+            return _FakeRef()
+
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: _FakeSvc())
+    out = await intent_router.execute_intent(
+        intent_router.Intent("memory_store", {"text": "my anniversary is June 3rd"}),
+        user_id="family-admin",
+    )
+    assert out == "Got it — I'll remember that."
+    assert calls["text"] == "my anniversary is June 3rd"
+    assert calls["kwargs"]["memory_type"] == "fact"
+    assert calls["kwargs"]["source"] == "brain_tool"
+    assert calls["kwargs"]["user_turn_id"].startswith("fact-")
+
+
+@pytest.mark.asyncio
+async def test_memory_store_empty_text_is_a_noop(monkeypatch):
+    """Empty text never reaches the store and never claims a write."""
+    import memory_service
+
+    def _boom():
+        raise AssertionError("get_memory_service must not be called for empty text")
+
+    monkeypatch.setattr(memory_service, "get_memory_service", _boom)
+    out = await intent_router.execute_intent(
+        intent_router.Intent("memory_store", {"text": "   "}),
+        user_id="family-admin",
+    )
+    assert "nothing to remember" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_memory_store_dropped_write_does_not_claim_success(monkeypatch):
+    """ingest returning None (PII reject / dedup / opt-out) must not be reported
+    as a successful 'I'll remember that'."""
+    import memory_service
+
+    class _FakeSvc:
+        async def ingest(self, text, **kwargs):
+            return None
+
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: _FakeSvc())
+    out = await intent_router.execute_intent(
+        intent_router.Intent("memory_store", {"text": "something"}),
+        user_id="family-admin",
+    )
+    assert "couldn't save" in out.lower()

@@ -22,6 +22,8 @@
  *     (writes); journal + people grouped action-dispatch (writes gated per action)
  *   - Wave 2 (cut-list record §3): media (play/control/volume/setup) + home
  *     (lights via the validated smart_home intent) grouped action-dispatch (writes gated)
+ *   - Wave 3 (cut-list record §3): remember_fact → the new memory_store intent
+ *     (MemoryService.ingest) — the explicit model-callable memory write (write gated)
  * The open question this answers is whether the local Gemma brain reliably
  * tool-calls; the parity/reliability harness measures it (parity/RESULTS.md,
  * parity/RELIABILITY.md). Acting identity is bound in trusted code (env), never
