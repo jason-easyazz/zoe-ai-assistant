@@ -33,6 +33,7 @@ import datetime
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import threading
@@ -113,6 +114,7 @@ _HYBRID_STOPWORDS = frozenset(
 )
 
 _HYBRID_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_HYBRID_RECENCY_LAMBDA = math.log(2) / _HYBRID_RECENCY_HALFLIFE_DAYS
 
 
 def _hybrid_retrieval_enabled() -> bool:
@@ -1180,7 +1182,6 @@ class MemoryService:
         # people/topics surface ahead of semantically-close but cold newcomers.
         # Formula: relevance = (1 / (1 + dist)) * conf * decay + 0.05 * log1p(access)
         # The dist→relevance inversion means lower L2 distance → higher score.
-        import math
         _LAMBDA = math.log(2) / 70.0  # 70-day half-life, same as load_for_prompt
         _HOTNESS_WEIGHT = float(os.environ.get("ZOE_SEARCH_HOTNESS_WEIGHT", "0.05"))
 
@@ -1189,7 +1190,6 @@ class MemoryService:
         # byte-for-byte the pre-2a semantic+hotness behaviour.
         _hybrid_on = _hybrid_retrieval_enabled()
         _query_tokens = _hybrid_tokens(query) if _hybrid_on else set()
-        _recency_lambda = math.log(2) / _HYBRID_RECENCY_HALFLIFE_DAYS
 
         def _blend(ref: MemoryRef) -> float:
             md = ref.metadata
@@ -1218,7 +1218,7 @@ class MemoryService:
                 _query_tokens, ref.text
             )
             # 2) Temporal-proximity boost — mild, exponential decay on age.
-            recency = _HYBRID_RECENCY_WEIGHT * math.exp(-_recency_lambda * age_days)
+            recency = _HYBRID_RECENCY_WEIGHT * math.exp(-_HYBRID_RECENCY_LAMBDA * age_days)
             # 3) Preference/importance boost — memory_type / importance signal.
             #    `importance` is not currently written to metadata, so that arm
             #    stays a no-op until a producer emits it; the memory_type arm is

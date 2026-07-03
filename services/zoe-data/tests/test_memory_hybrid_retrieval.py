@@ -83,7 +83,7 @@ def test_flag_off_ordering_is_a_true_noop(monkeypatch):
 
     Golden expectation is derived purely from the semantic distances above
     (all confidences equal, no access_count, so ordering = ascending distance):
-    b (0.1) > c (0.4) > d (0.6) > a (0.9).
+    b (0.3) > c (0.5) > d (0.7) > a (0.9).
     """
     assert "ZOE_HYBRID_RETRIEVAL_ENABLED" not in __import__("os").environ
     service = _make_service(_GOLDEN_QUERY_RESULT)
