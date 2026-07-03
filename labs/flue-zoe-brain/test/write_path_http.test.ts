@@ -189,8 +189,8 @@ async function withTools(
   // ZOE_BRAIN_ALLOW_WRITES at module evaluation, so every gate case imports a
   // fresh URL and the assertions below prove the expected dry-run/write mode.
   // https://nodejs.org/api/esm.html#urls
-  const mod = await import(`../src/tools/zoe-tools.ts?write-path=${Date.now()}-${Math.random()}`);
   try {
+    const mod = await import(`../src/tools/zoe-tools.ts?write-path=${Date.now()}-${Math.random()}`);
     await fn(mod.zoeTools as unknown as RunnableTool[]);
   } finally {
     for (const [key, value] of Object.entries(previousEnv)) {
