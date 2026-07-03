@@ -57,6 +57,10 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
   Emits the Seam-A text-delta + `__TOOL__`/`__THINKING__` sentinel stream
   (byte-pinned to the prod contract) via content-negotiated NDJSON on the
   agent route (`src/streaming.ts`); whole-result `?wait=result` unchanged.
+  Model calls are non-streaming at the wire by default (MTP draft-token
+  corruption mitigation, `src/providers/nonstreaming-completions.ts`;
+  `ZOE_BRAIN_TOKEN_STREAMING=true` restores token streaming), so reply text
+  reaches the sentinel stream as one final chunk.
   Reached from prod only via the default-OFF `ZOE_BRAIN_BACKEND=flue` seam; may
   be supervised via the opt-in unit template (see Forbidden above). Operator
   measurement checklists pending in `flue-zoe-brain/LANDING.md`.

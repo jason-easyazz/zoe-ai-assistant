@@ -60,6 +60,10 @@ import {
   progressiveToolsEnabled,
   stripCodingBuiltins,
 } from '../tools/tool-groups.ts';
+import {
+  streamNonStreamingCompletions,
+  tokenStreamingEnabled,
+} from './nonstreaming-completions.ts';
 
 /** Custom api id this module registers; `app.ts` binds the `zoe` provider to it. */
 export const CAPPED_COMPLETIONS_API = 'zoe-capped-completions';
@@ -140,12 +144,26 @@ function asCompletionsModel(model: Model<Api>): Model<'openai-completions'> {
   return { ...model, api: 'openai-completions' } as Model<'openai-completions'>;
 }
 
+/**
+ * NON-STREAMING BY DEFAULT (the "I don'm" fix): llama-server's MTP speculative
+ * decoding can emit a corrupted draft token into an SSE stream that the
+ * server-side verifier later rejects — the stream cannot retract it. A
+ * non-streaming call serializes the reconciled completion once and is immune.
+ * `streamNonStreamingCompletions` still reuses the REAL pi-ai handler for
+ * request construction and replays the response as the standard event
+ * sequence, so the agent loop and Seam-A sentinels are unchanged (text just
+ * arrives as one final delta). ZOE_BRAIN_TOKEN_STREAMING=true restores
+ * token-level streaming. See src/providers/nonstreaming-completions.ts.
+ */
 function cappedStream(
   model: Model<Api>,
   context: Context,
   options?: StreamOptions,
 ): AssistantMessageEventStream {
-  return streamOpenAICompletions(asCompletionsModel(model), applyPolicies(context), options);
+  const m = asCompletionsModel(model);
+  const ctx = applyPolicies(context);
+  if (tokenStreamingEnabled()) return streamOpenAICompletions(m, ctx, options);
+  return streamNonStreamingCompletions(streamOpenAICompletions, m, ctx, options);
 }
 
 function cappedStreamSimple(
@@ -153,7 +171,10 @@ function cappedStreamSimple(
   context: Context,
   options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
-  return streamSimpleOpenAICompletions(asCompletionsModel(model), applyPolicies(context), options);
+  const m = asCompletionsModel(model);
+  const ctx = applyPolicies(context);
+  if (tokenStreamingEnabled()) return streamSimpleOpenAICompletions(m, ctx, options);
+  return streamNonStreamingCompletions(streamSimpleOpenAICompletions, m, ctx, options);
 }
 
 let registered = false;

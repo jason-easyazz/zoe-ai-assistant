@@ -133,6 +133,27 @@ TTFT). Contract + framing details and known limits: `src/streaming.ts`;
 byte-pinned tests: `test/sentinel_stream.test.ts`. Kill switch:
 `ZOE_BRAIN_STREAM=0` restores pre-streaming behaviour entirely.
 
+## Non-streaming model calls (the "I don'm" mitigation)
+
+llama-server runs Gemma with MTP speculative decoding; token-level SSE
+streaming can surface a draft token the server-side verifier later rejects
+(an SSE stream cannot retract bytes), which showed up as corrupted
+reply-start contractions ("I don'm", "I don've"). The sidecar therefore makes
+its model calls **non-streaming at the wire by default**: the exact request
+body pi-ai builds is captured via the public `onPayload` seam and re-sent
+with `stream: false`, and the complete response is replayed as the standard
+pi-ai event sequence (`src/providers/nonstreaming-completions.ts`). The agent
+loop, tool dispatch, and the Seam-A sentinel stream are unchanged — reply
+text just arrives as one final delta (matching prod's current non-streaming
+voice behaviour). `ZOE_BRAIN_TOKEN_STREAMING=true` restores token-level
+streaming for experiments.
+
+**Honest caveat:** on-box evals show non-streaming *reduces* but has not been
+proven to *eliminate* the corruption — one corrupted contraction was observed
+through a wire-verified `stream: false` call (1/40), so a slice of the defect
+is committed at generation time (MTP draft acceptance), not just at stream
+serialization. See LANDING.md for the eval record.
+
 ## Build / typecheck / test
 
 ```sh
@@ -156,6 +177,8 @@ npm test                   # offline unit tests (node --test, type-stripping)
 | `ZOE_BRAIN_MAX_TOOL_ITERS` | `8` | hard per-turn tool-iteration ceiling |
 | `ZOE_BRAIN_PROGRESSIVE_TOOLS` | `true` | `false` disables progressive tool disclosure |
 | `ZOE_BRAIN_STREAM` | `on` | `0`/`false` disables the NDJSON sentinel-stream mode |
+| `ZOE_BRAIN_TOKEN_STREAMING` | *(unset → non-streaming)* | `true` restores token-level streaming model calls |
+| `ZOE_BRAIN_WIRE_DEBUG` | *(unset)* | `1` logs each model call's wire mode (`stream=…`) to stderr |
 | `ZOE_BRAIN_STREAM_TIMEOUT_S` | `180` | streamed-turn deadline (mirrors prod `ZOE_CORE_TIMEOUT_S`) |
 | `ZOE_BRAIN_BASE_URL` | `http://127.0.0.1:11434/v1` | OpenAI-compatible brain endpoint |
 | `ZOE_BRAIN_API_KEY` | `local-no-key` | placeholder key for the completions client |

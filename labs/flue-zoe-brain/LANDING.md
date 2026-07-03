@@ -31,7 +31,9 @@ sentinels + deltas against the real Gemma brain.
    - `"__TOOL__:{\"phase\": \"start\", ...}"` then `phase=args` BEFORE the
      tool result — this is the line the voice filler (#844) keys off;
    - `phase=result` after the tool runs;
-   - then plain-string text deltas arriving incrementally (not one blob);
+   - then plain-string text — since the non-streaming wire change (below) the
+     reply text arrives as ONE final chunk by default; token-by-token deltas
+     only appear with `ZOE_BRAIN_TOKEN_STREAMING=true`;
    - a final `{"done": true}` line.
 
 4. Confirm the whole-result mode still answers identically (regression guard):
@@ -48,6 +50,34 @@ sentinels + deltas against the real Gemma brain.
    ```bash
    lsof -ti tcp:3579 | xargs -r kill
    ```
+
+## Non-streaming model calls ("I don'm" mitigation) — verified on box 2026-07-03
+
+The sidecar's model calls are now `stream: false` at the wire by default
+(`src/providers/nonstreaming-completions.ts`); `ZOE_BRAIN_TOKEN_STREAMING=true`
+restores token streaming. What was verified live against the real Gemma brain
+(:11434) with the sidecar hand-run on :3579:
+
+- **Sentinel contract:** weather prompt over NDJSON still yields
+  `__TOOL__` start → args → result → text → `{"done":true}`, one JSON value
+  per line (text now one chunk — accepted; matches prod's non-streaming voice).
+- **Wire mode audit:** `ZOE_BRAIN_WIRE_DEBUG=1` logged `stream=false` for
+  every model call of a turn (both the tool-call and the answer call).
+- **Corruption eval (honest):** 40 recall-style sidecar turns (20 NDJSON +
+  20 `?wait=result`) on the non-streaming build → **1 corrupted contraction**
+  ("I don'm sorry, but I don't…", `?wait=result`, wire-verified stream:false
+  build). 45 direct `stream:false` replays of captured bodies against :11434 →
+  0. 25 token-streaming turns same day → 0. Conclusion: today's base rate is
+  too low to demonstrate the differential, and the single stream:false hit
+  proves non-streaming is a MITIGATION, not proven elimination — part of the
+  defect is committed at generation time by MTP draft acceptance
+  (`--spec-type draft-mtp`, verified in llama-server launch flags; the /props
+  `"speculative.types":"none"` field is misleading on this build).
+- **Recall:** `parity/recall_reliability.py` (rebased to :3579) — 31/32 = 97%.
+- **Latency (5 short prompts, medians):** whole-result wall 1.21 s (was
+  0.88 s); time-to-first-NDJSON-line 1.01 s (was 0.35 s). Both far under
+  prod's 5.3 s median; the +0.66 s TTFT delta is the cost of reconciling the
+  full completion server-side before first byte.
 
 ## activate_abilities fallback fix (#965, merged — measurement pending)
 
