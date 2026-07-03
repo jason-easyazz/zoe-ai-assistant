@@ -10,7 +10,8 @@ import logging
 
 from touch_panel.quick_auth import get_quick_auth_manager, QuickAuthResult, TouchPanelConfig
 from touch_panel.cache import cache_manager
-from api.dependencies import get_current_session, optional_session
+from api.dependencies import require_permission
+from core.sessions import AuthSession
 
 logger = logging.getLogger(__name__)
 
@@ -193,9 +194,13 @@ async def touch_panel_logout(
         raise HTTPException(status_code=500, detail="Logout failed")
 
 # Touch Panel Management Endpoints
+# All endpoints below expose or mutate cached-user/device state and are
+# admin-only, matching the /api/admin "system.monitor" gate used for the
+# equivalent sync-data/system-stats endpoints in api/admin.py.
 @router.get("/users")
 async def get_cached_users(
-    device_id: str = Query(..., description="Touch panel device ID")
+    device_id: str = Query(..., description="Touch panel device ID"),
+    current_session: AuthSession = Depends(require_permission("system.monitor"))
 ):
     """
     Get cached users for touch panel (offline display)
@@ -221,7 +226,8 @@ async def get_cached_users(
 
 @router.get("/status")
 async def get_device_status(
-    device_id: str = Query(..., description="Touch panel device ID")
+    device_id: str = Query(..., description="Touch panel device ID"),
+    current_session: AuthSession = Depends(require_permission("system.monitor"))
 ):
     """
     Get touch panel device status
@@ -247,7 +253,8 @@ async def get_device_status(
 
 @router.post("/sync")
 async def sync_device_cache(
-    device_id: str = Query(..., description="Touch panel device ID")
+    device_id: str = Query(..., description="Touch panel device ID"),
+    current_session: AuthSession = Depends(require_permission("system.monitor"))
 ):
     """
     Manually trigger cache sync for touch panel
@@ -276,7 +283,8 @@ async def sync_device_cache(
 
 @router.delete("/cache")
 async def clear_device_cache(
-    device_id: str = Query(..., description="Touch panel device ID")
+    device_id: str = Query(..., description="Touch panel device ID"),
+    current_session: AuthSession = Depends(require_permission("system.monitor"))
 ):
     """
     Clear cache for touch panel device
@@ -306,7 +314,8 @@ async def clear_device_cache(
 # Touch Panel Configuration Endpoints
 @router.get("/config")
 async def get_device_config(
-    device_id: str = Query(..., description="Touch panel device ID")
+    device_id: str = Query(..., description="Touch panel device ID"),
+    current_session: AuthSession = Depends(require_permission("system.monitor"))
 ):
     """
     Get touch panel configuration
@@ -340,7 +349,8 @@ async def get_device_config(
 # Touch Panel Health and Diagnostics
 @router.get("/health")
 async def touch_panel_health(
-    device_id: str = Query(..., description="Touch panel device ID")
+    device_id: str = Query(..., description="Touch panel device ID"),
+    current_session: AuthSession = Depends(require_permission("system.monitor"))
 ):
     """
     Health check for touch panel
@@ -388,7 +398,9 @@ async def touch_panel_health(
 
 # Bulk Operations for Multiple Touch Panels
 @router.get("/devices")
-async def list_touch_panel_devices():
+async def list_touch_panel_devices(
+    current_session: AuthSession = Depends(require_permission("system.monitor"))
+):
     """
     List all registered touch panel devices
     
@@ -419,7 +431,9 @@ async def list_touch_panel_devices():
         raise HTTPException(status_code=500, detail="Failed to list devices")
 
 @router.post("/devices/sync-all")
-async def sync_all_devices():
+async def sync_all_devices(
+    current_session: AuthSession = Depends(require_permission("system.monitor"))
+):
     """
     Trigger sync for all touch panel devices
     
@@ -448,7 +462,9 @@ async def sync_all_devices():
         raise HTTPException(status_code=500, detail="Failed to sync all devices")
 
 @router.delete("/devices/cache-all")
-async def clear_all_device_caches():
+async def clear_all_device_caches(
+    current_session: AuthSession = Depends(require_permission("system.monitor"))
+):
     """
     Clear cache for all touch panel devices
     
