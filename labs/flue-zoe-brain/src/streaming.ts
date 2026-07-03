@@ -417,13 +417,18 @@ function openTurnStream(instanceId: string, observeFn: ObserveFn, timeoutMs: num
       if (latchedOperationId === null) {
         // First prompt operation to START after we subscribed is our turn
         // (submissions serialize per instance; see the header's known limit).
-        if (event.type === 'operation_start' && event.operationKind === 'prompt') {
-          latchedOperationId = String(event.operationId ?? '');
+        // Latch only a real id: if the runtime ever emitted an operation_start
+        // WITHOUT one, an empty-string latch would let any id-less `operation`
+        // event terminate the stream — instead we never latch and the turn
+        // fails safe via the timeout.
+        if (event.type === 'operation_start' && event.operationKind === 'prompt'
+          && typeof event.operationId === 'string' && event.operationId !== '') {
+          latchedOperationId = event.operationId;
         }
         return;
       }
       if (event.type === 'operation' && event.operationKind === 'prompt'
-        && String(event.operationId ?? '') === latchedOperationId) {
+        && event.operationId === latchedOperationId) {
         if (event.isError) {
           const err = event.error;
           let message = 'brain turn failed';

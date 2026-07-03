@@ -354,6 +354,17 @@ test('middleware times out a turn that never terminates', async () => {
   assert.equal(h.unobserved, true);
 });
 
+test('operation_start without an operationId never latches — id-less terminals cannot end the turn', async () => {
+  const h = fakeHarness({ accept: NDJSON_CONTENT_TYPE });
+  const mw = seamAStreamingMiddleware({ observeFn: h.observeFn, timeoutMs: 30 });
+  await mw(h.ctx as never, h.next);
+  const sid = 'sess-1';
+  h.emit({ type: 'operation_start', operationKind: 'prompt', instanceId: sid }); // no operationId
+  // must NOT terminate as done ('' === '' would have): fails safe via timeout
+  h.emit({ type: 'operation', operationKind: 'prompt', isError: false, instanceId: sid });
+  assert.deepEqual(await bodyLines(h.ctx.res), [{ error: 'brain turn timed out' }]);
+});
+
 test('no Accept header → passthrough untouched (202 admission preserved)', async () => {
   const h = fakeHarness({});
   const mw = seamAStreamingMiddleware({ observeFn: h.observeFn });
