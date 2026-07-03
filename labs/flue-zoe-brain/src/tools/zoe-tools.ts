@@ -24,6 +24,22 @@
  *     - add_calendar_event → calendar_create {title,date?,time?,category?}
  *     - create_note        → note_create     {title,content}
  *
+ * Wave 1 — "daily-driver" batch per the signed-off cut-list decision record
+ * (docs/knowledge/flue-cutover-tool-cut-list.md §3). 100% thin HTTP wrappers
+ * over EXISTING _DISPATCHABLE_INTENTS — zero new zoe-data surface:
+ *
+ *   reads:
+ *     - note_search → note_search {query}
+ *   writes (gated behind ZOE_BRAIN_ALLOW_WRITES, dry-run by default):
+ *     - add_to_list → list_add    {item,list_type} (generalises shopping_list_add)
+ *     - list_remove → list_remove {item,list_type}
+ *   grouped action-dispatch (mirrors prod abilities/notes.ts + people.ts):
+ *     - journal action=create|prompt|streak → journal_create {content,mood?} /
+ *       journal_prompt {} / journal_streak {} (create is write-gated)
+ *     - people  action=create|relate|search → people_create {name,relationship,notes?} /
+ *       people_relate {name_a,name_b,role} / people_search {query}
+ *       (create/relate are write-gated)
+ *
  * SECURITY — identity is bound in TRUSTED CODE, never from model args. Tool
  * arguments are model-chosen and are NOT an auth boundary, so the acting
  * `user_id` is read from the env (ZOE_BRAIN_USER_ID), exactly as prod resolves
@@ -498,6 +514,177 @@ const createNote = defineTool({
   },
 });
 
+// ─── Wave 1: daily-driver batch (cut-list record §3, Wave 1) ─────────────────
+
+/**
+ * add_to_list — add an item to ANY of the user's lists. WRITE → list_add
+ * {item,list_type}. Generalises shopping_list_add with a list_type arg (the
+ * cut-list record's Wave-1 `add_to_list`). Gated behind ZOE_BRAIN_ALLOW_WRITES.
+ */
+const addToList = defineTool({
+  name: 'add_to_list',
+  description:
+    "Add an item to one of the user's lists: shopping, tasks/to-do, personal, work, " +
+    'or bucket. Use when they ask to add or put something on a specific list ' +
+    '("add gym to my tasks list", "put Japan on my bucket list").',
+  input: v.object({
+    item: v.pipe(v.string(), v.trim(), v.minLength(1)),
+    list_type: v.optional(v.string()),
+  }),
+  run: async ({ input, signal }) => {
+    const item = String(input.item ?? '').trim();
+    if (!item) return 'I need to know which item to add.';
+    const listType = normalizeListType(input?.list_type);
+    return runWrite(
+      'list_add',
+      { item, list_type: listType },
+      'list',
+      `"${item}"`,
+      `Added "${item}" to your ${listType} list.`,
+      signal,
+    );
+  },
+});
+
+/**
+ * list_remove — remove an item from one of the user's lists. WRITE →
+ * list_remove {item,list_type}. Gated behind ZOE_BRAIN_ALLOW_WRITES.
+ */
+const listRemove = defineTool({
+  name: 'list_remove',
+  description:
+    "Remove an item from one of the user's lists (shopping, tasks/to-do, personal, " +
+    'work, bucket). Use when they ask to remove, delete, or cross something off a list.',
+  input: v.object({
+    item: v.pipe(v.string(), v.trim(), v.minLength(1)),
+    list_type: v.optional(v.string()),
+  }),
+  run: async ({ input, signal }) => {
+    const item = String(input.item ?? '').trim();
+    if (!item) return 'I need to know which item to remove.';
+    const listType = normalizeListType(input?.list_type);
+    return runWrite(
+      'list_remove',
+      { item, list_type: listType },
+      'list',
+      `removing "${item}"`,
+      `Removed "${item}" from your ${listType} list.`,
+      signal,
+    );
+  },
+});
+
+/**
+ * note_search — search the user's saved notes. READ → note_search {query}.
+ */
+const noteSearch = defineTool({
+  name: 'note_search',
+  description:
+    "Search the user's saved notes by keyword or topic (\"find my note about the " +
+    'wifi password"). For saving a new note use create_note.',
+  input: v.object({
+    query: v.pipe(v.string(), v.trim(), v.minLength(1)),
+  }),
+  run: async ({ input, signal }) => {
+    const query = String(input.query ?? '').trim();
+    if (!query) return 'What would you like me to search your notes for?';
+    const out = await dispatchIntent('note_search', { query }, 'notes', signal);
+    if (!out.ok) return out.text;
+    return out.text || `I couldn't find any notes about ${query}.`;
+  },
+});
+
+/**
+ * journal — the user's journal/diary, grouped action-dispatch (mirrors prod's
+ * abilities/notes.ts journal entry). action=create writes an entry (WRITE →
+ * journal_create {content,mood?}, gated); action=prompt / action=streak are
+ * reads (journal_prompt {} / journal_streak {}).
+ */
+const journal = defineTool({
+  name: 'journal',
+  description:
+    "The user's journal/diary. action=create writes a journal entry; action=prompt " +
+    'suggests journaling prompts; action=streak reports their journaling streak. ' +
+    'Reflective diary entries — NOT free-form notes (use create_note for those).',
+  input: v.object({
+    action: v.picklist(['create', 'prompt', 'streak']),
+    content: v.optional(v.string()),
+    mood: v.optional(v.string()),
+  }),
+  run: async ({ input, signal }) => {
+    if (input.action === 'prompt' || input.action === 'streak') {
+      const intent = input.action === 'prompt' ? 'journal_prompt' : 'journal_streak';
+      const out = await dispatchIntent(intent, {}, 'journal', signal);
+      if (!out.ok) return out.text;
+      return out.text ||
+        (input.action === 'prompt'
+          ? "I don't have a journal prompt for you right now."
+          : "I can't see your journaling streak right now.");
+    }
+    const content = String(input?.content ?? '').trim();
+    if (!content) return 'What would you like your journal entry to say?';
+    const slots: Record<string, unknown> = { content };
+    const mood = String(input?.mood ?? '').trim();
+    if (mood) slots.mood = mood;
+    return runWrite('journal_create', slots, 'journal', 'that journal entry',
+      'Saved your journal entry.', signal);
+  },
+});
+
+/**
+ * people — the user's people/contacts memory, grouped action-dispatch (mirrors
+ * prod's abilities/people.ts). action=create saves a person (WRITE →
+ * people_create, gated); action=relate links two known people (WRITE →
+ * people_relate, gated); action=search looks someone up (READ → people_search).
+ * The relationship/context/circle defaults match the prod ability.
+ */
+const people = defineTool({
+  name: 'people',
+  description:
+    "The user's people/contacts memory. action=create saves a new person (name + " +
+    "relationship); action=relate links two known people ('Alice and Bob are " +
+    "siblings' — name + related_to + relationship); action=search looks someone up " +
+    "('who is Sarah?'). NOT for messaging, calendar, or reminders.",
+  input: v.object({
+    action: v.picklist(['create', 'relate', 'search']),
+    name: v.optional(v.string()),
+    relationship: v.optional(v.string()),
+    related_to: v.optional(v.string()),
+    query: v.optional(v.string()),
+    notes: v.optional(v.string()),
+  }),
+  run: async ({ input, signal }) => {
+    if (input.action === 'search') {
+      const query = String(input?.query ?? '').trim() || String(input?.name ?? '').trim();
+      if (!query) return 'Who would you like me to look up?';
+      const out = await dispatchIntent('people_search', { query }, 'contacts', signal);
+      if (!out.ok) return out.text;
+      return out.text || `I couldn't find anyone matching "${query}".`;
+    }
+    if (input.action === 'relate') {
+      const nameA = String(input?.name ?? '').trim();
+      const nameB = String(input?.related_to ?? '').trim();
+      if (!nameA || !nameB) return 'I need two people to link them — give me both names.';
+      const role = String(input?.relationship ?? '').trim() || 'friend';
+      return runWrite('people_relate', { name_a: nameA, name_b: nameB, role }, 'contacts',
+        `the link between "${nameA}" and "${nameB}"`,
+        `Linked ${nameA} and ${nameB} as ${role}.`, signal);
+    }
+    const name = String(input?.name ?? '').trim();
+    if (!name) return 'I need a name to save a new contact.';
+    const slots: Record<string, unknown> = {
+      name,
+      relationship: String(input?.relationship ?? '').trim() || 'friend',
+      context: 'personal',
+      circle: 'circle',
+    };
+    const notes = String(input?.notes ?? '').trim();
+    if (notes) slots.notes = notes;
+    return runWrite('people_create', slots, 'contacts', `contact "${name}"`,
+      `Added ${name} to your contacts.`, signal);
+  },
+});
+
 // ─── Progressive disclosure activator ────────────────────────────────────────
 
 /**
@@ -559,6 +746,12 @@ export const zoeTools = [
   addReminder,
   addCalendarEvent,
   createNote,
+  // Wave 1 — daily-driver batch (cut-list record §3; writes gated as above)
+  addToList,
+  listRemove,
+  noteSearch,
+  journal,
+  people,
   // Progressive disclosure — always-on activator for the grouped tools above
   activateAbilities,
 ];

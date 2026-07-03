@@ -98,6 +98,62 @@ const WRITE_TOOL_CASES: Array<{
     dryRunPattern: /WRITE DISABLED.*that note.*NOT saved/i,
     successPattern: /Note saved: Sandbox write test\./,
   },
+  // ─── Wave 1 write tools (cut-list record §3, Wave 1) ────────────────────────
+  {
+    name: 'add_to_list',
+    input: { item: 'call the plumber', list_type: 'tasks' },
+    expectedPayload: {
+      user_id: ACTING_USER,
+      intent: 'list_add',
+      slots: { item: 'call the plumber', list_type: 'tasks' },
+    },
+    dryRunPattern: /WRITE DISABLED.*call the plumber.*NOT saved/i,
+    successPattern: /Added call the plumber to your tasks list\./,
+  },
+  {
+    name: 'list_remove',
+    input: { item: 'bread', list_type: 'shopping' },
+    expectedPayload: {
+      user_id: ACTING_USER,
+      intent: 'list_remove',
+      slots: { item: 'bread', list_type: 'shopping' },
+    },
+    dryRunPattern: /WRITE DISABLED.*removing "bread".*NOT saved/i,
+    successPattern: /Removed bread from your list\./,
+  },
+  {
+    name: 'journal',
+    input: { action: 'create', content: 'Today was a great day.', mood: 'happy' },
+    expectedPayload: {
+      user_id: ACTING_USER,
+      intent: 'journal_create',
+      slots: { content: 'Today was a great day.', mood: 'happy' },
+    },
+    dryRunPattern: /WRITE DISABLED.*that journal entry.*NOT saved/i,
+    successPattern: /Journal entry created: entry\./,
+  },
+  {
+    name: 'people',
+    input: { action: 'create', name: 'Sarah', relationship: 'colleague' },
+    expectedPayload: {
+      user_id: ACTING_USER,
+      intent: 'people_create',
+      slots: { name: 'Sarah', relationship: 'colleague', context: 'personal', circle: 'circle' },
+    },
+    dryRunPattern: /WRITE DISABLED.*contact "Sarah".*NOT saved/i,
+    successPattern: /Added Sarah to your personal contacts/,
+  },
+  {
+    name: 'people',
+    input: { action: 'relate', name: 'Alice', related_to: 'Bob', relationship: 'sibling' },
+    expectedPayload: {
+      user_id: ACTING_USER,
+      intent: 'people_relate',
+      slots: { name_a: 'Alice', name_b: 'Bob', role: 'sibling' },
+    },
+    dryRunPattern: /WRITE DISABLED.*link between "Alice" and "Bob".*NOT saved/i,
+    successPattern: /Linked Alice and Bob as sibling\./,
+  },
 ];
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
@@ -111,7 +167,19 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
 
 function dispatchResult(intent: string, slots: Record<string, unknown>): string {
   if (intent === 'list_add') {
-    return `Added ${slots.item} to your shopping list.`;
+    return `Added ${slots.item} to your ${slots.list_type} list.`;
+  }
+  if (intent === 'list_remove') {
+    return `Removed ${slots.item} from your list.`;
+  }
+  if (intent === 'journal_create') {
+    return 'Journal entry created: entry.';
+  }
+  if (intent === 'people_create') {
+    return `Added ${slots.name} to your ${slots.context} contacts ○.`;
+  }
+  if (intent === 'people_relate') {
+    return `Linked ${slots.name_a} and ${slots.name_b} as ${slots.role}.`;
   }
   if (intent === 'timer_create') {
     const label = String(slots.label ?? '').trim();
