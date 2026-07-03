@@ -1,0 +1,4 @@
+# Local test-run artifacts (model bake-off outputs, reports, etc.) are never
+# committed. tools/audit/check_home_cleanliness.py points stray result files
+# here; they stay untracked.
+results/

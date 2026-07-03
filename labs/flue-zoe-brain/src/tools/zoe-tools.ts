@@ -38,6 +38,10 @@
  */
 import { defineTool } from '@flue/runtime';
 import * as v from 'valibot';
+// .ts extension so the offline strip-types tests (node --experimental-strip-types)
+// can resolve it too; tsconfig has allowImportingTsExtensions and the flue build
+// bundles .ts specifiers fine.
+import { ACTIVATOR_TOOL_NAME, GROUP_NAMES, GROUP_SUMMARY, TOOL_GROUPS } from './tool-groups.ts';
 
 // zoe-data base URL — the live capability backend. Overridable for the lab.
 // Defaults to the live local endpoint (same default as prod's ZOE_DATA_URL).
@@ -494,6 +498,51 @@ const createNote = defineTool({
   },
 });
 
+// ─── Progressive disclosure activator ────────────────────────────────────────
+
+/**
+ * activate_abilities — the model-facing side of progressive tool disclosure
+ * (see src/tools/tool-groups.ts for the mechanism and rationale).
+ *
+ * Only the always-on core tool schemas are sent to the model each turn; this
+ * tool is how the model reaches everything else. It is deliberately STATELESS:
+ * the activation is the tool CALL itself, which lands in the session
+ * transcript — the wire-level disclosure filter derives the active set from
+ * the transcript, so the requested group's schemas appear on the very next
+ * model request within the same turn. The run body just confirms and steers.
+ *
+ * Not a security boundary: every tool stays registered on the agent, with the
+ * same identity fail-closed semantics and ZOE_BRAIN_ALLOW_WRITES gate as
+ * before. Disclosure only shrinks what the model SEES per call.
+ */
+const activateAbilities = defineTool({
+  name: ACTIVATOR_TOOL_NAME,
+  description:
+    'Unlock a group of additional tools when the user asks for something none of ' +
+    `your currently available tools can do. Groups: ${GROUP_SUMMARY}. ` +
+    'After it returns, call the unlocked tool you need.',
+  // DEAD-SIMPLE wire schema, kept that way on purpose for the 4B brain: one
+  // required string property whose JSON schema is a bare enum of group names
+  // (Flue requires a top-level OBJECT schema — tool.ts assertToolDefinition —
+  // so a root-level enum is not an option). GROUP_SUMMARY (used in the
+  // description above) is derived from the same canonical map as the picklist,
+  // so the catalogue and the enum cannot drift apart. The exact wire shape is
+  // pinned by a unit test (test/activator_fallback.test.ts).
+  input: v.object({
+    group: v.pipe(
+      v.picklist(GROUP_NAMES),
+      v.description(`The ability group to unlock — one of: ${GROUP_NAMES.join(', ')}.`),
+    ),
+  }),
+  run: async ({ input }) => {
+    const tools = TOOL_GROUPS[input.group];
+    return (
+      `Activated the ${input.group} tools: ${tools.join(', ')}. ` +
+      'They are available now — call the one you need next.'
+    );
+  },
+});
+
 /** All Zoe-brain tools, wired onto the agent in src/agents/zoe.ts. */
 export const zoeTools = [
   // Phase 3 increment 1
@@ -510,4 +559,6 @@ export const zoeTools = [
   addReminder,
   addCalendarEvent,
   createNote,
+  // Progressive disclosure — always-on activator for the grouped tools above
+  activateAbilities,
 ];

@@ -1,5 +1,7 @@
 # Zoe Graphiti Fixtures
 
+> **Status (2026-07-03): bake-off concluded — harness retired by removal.** The probe/bake-off modules, maintenance drivers, and tests listed below were removed from the tree per the retire-by-removing doctrine (docs/CANONICAL.md); git history keeps the code. File paths and commands in this document are a historical record of how the evidence was produced and are no longer runnable.
+
 ## Purpose
 
 Graphiti remains Zoe's candidate for temporal relational truth: people, tools, capabilities, failures, fixes, approvals, recurring tasks, causality, and superseded facts.
