@@ -16,6 +16,8 @@ Operator run-sheet, decision of record:
    `zoe_c87f34465c7a705092b6`,
    `zoe_e89b2cbb7d11825a6745`.
 3. `python3 scripts/maintenance/remediate_ownerless_memories.py --delete --execute`
+4. After an executed delete, verify from a fresh process:
+   `python3 scripts/maintenance/remediate_ownerless_memories.py --audit`
 
 Decision of record: DELETE, per Jason 2026-07-03. The rows are April 2026
 test data, not family facts. `--backfill` remains implemented for auditability
@@ -24,9 +26,12 @@ The broader `--all-ownerless --execute` path additionally requires
 `--confirm-all-ownerless`; it is an emergency override, not the run-sheet path.
 
 Do not restart `:8000` or `:11434` for this script. The script talks to the
-Chroma persistent store directly. `zoe-data` may have the store open while the
-script runs; if the installed ChromaDB version requires exclusive access, stop
-and rerun during a maintenance window rather than papering over the lock.
+Chroma persistent store directly. Run it from zoe-data's exact ChromaDB
+version/venv. `zoe-data` may have the store open while the script runs; if the
+installed ChromaDB version requires exclusive access or reports a lock, stop
+and rerun during a maintenance window rather than papering over it. After an
+executed delete, use a fresh-process `--audit`; zoe-data's live client may not
+observe deletions until it reopens the collection.
 """
 
 from __future__ import annotations
@@ -45,7 +50,13 @@ DEFAULT_DB = Path("/home/zoe/.mempalace/chroma.sqlite3")
 DEFAULT_COLLECTION = "mempalace_drawers"
 DEFAULT_BACKFILL_USER_ID = "family-admin"
 DEFAULT_BACKFILL_VISIBILITY = "personal"
+BACKUP_MARKER = "ownerless-remediation"
 OWNER_KEYS = ("user_id", "wing", "visibility")
+MAINTENANCE_WINDOW_GUIDANCE = (
+    "The Chroma/MemPalace store appears locked or unavailable. "
+    "Do not force the remediation; rerun during a maintenance window when "
+    "zoe-data has released the store."
+)
 LEGACY_OWNERLESS_IDS = (
     "zoe_01075f3d7a996d38eea9",
     "zoe_2859092b35dda8771a52",
@@ -102,16 +113,36 @@ def persistent_dir_for_db(db_path: Path) -> Path:
     return db_path.expanduser().resolve().parent
 
 
+def require_existing_db(db_path: Path) -> Path:
+    source = db_path.expanduser().resolve()
+    if not source.is_file():
+        raise SystemExit(f"Refusing to run; database file does not exist: {source}")
+    return source
+
+
+def is_lock_error(exc: BaseException) -> bool:
+    return "database is locked" in str(exc).lower()
+
+
+def system_exit_for_store_error(exc: BaseException, *, action: str) -> SystemExit:
+    if isinstance(exc, sqlite3.OperationalError) and is_lock_error(exc):
+        return SystemExit(f"Refusing to {action}: {exc}. {MAINTENANCE_WINDOW_GUIDANCE}")
+    return SystemExit(f"Refusing to {action}: {exc}. {MAINTENANCE_WINDOW_GUIDANCE}")
+
+
 def load_collection(db_path: Path, collection_name: str):
     try:
         import chromadb  # type: ignore[import]
     except ImportError as exc:
         raise SystemExit(
-            "chromadb is required. Run this on the Zoe host/venv where MemPalace is installed."
+            "chromadb is required. Run this from zoe-data's exact ChromaDB version/venv."
         ) from exc
 
-    client = chromadb.PersistentClient(path=str(persistent_dir_for_db(db_path)))
-    return client.get_collection(collection_name)
+    try:
+        client = chromadb.PersistentClient(path=str(persistent_dir_for_db(db_path)))
+        return client.get_collection(collection_name)
+    except Exception as exc:
+        raise system_exit_for_store_error(exc, action="open Chroma store") from exc
 
 
 def rows_from_result(result: dict[str, Any]) -> list[MemoryRow]:
@@ -166,6 +197,15 @@ def select_target_rows(
     return rows
 
 
+def validate_ownerless_rows(rows: Sequence[MemoryRow], *, context: str) -> None:
+    non_ownerless = [row for row in rows if not row.is_ownerless]
+    if non_ownerless:
+        summary = ", ".join(row.row_id for row in non_ownerless)
+        raise SystemExit(
+            f"Refusing to continue; {context} rows gained ownership metadata: {summary}"
+        )
+
+
 def print_rows(rows: Sequence[MemoryRow], *, prefix: str) -> None:
     for row in rows:
         owner_bits = ", ".join(
@@ -177,23 +217,26 @@ def print_rows(rows: Sequence[MemoryRow], *, prefix: str) -> None:
 
 
 def create_backup(db_path: Path) -> Path:
-    source = db_path.expanduser().resolve()
-    if not source.is_file():
-        raise SystemExit(f"Refusing to execute; database file does not exist: {source}")
+    source = require_existing_db(db_path)
+    store_dir = source.parent
     timestamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    backup_path = source.with_name(f"{source.name}.ownerless-remediation.{timestamp}.bak")
+    backup_path = store_dir.with_name(f"{store_dir.name}.{BACKUP_MARKER}.{timestamp}.bak")
     suffix = 1
     while backup_path.exists():
-        backup_path = source.with_name(
-            f"{source.name}.ownerless-remediation.{timestamp}.{suffix}.bak"
+        backup_path = store_dir.with_name(
+            f"{store_dir.name}.{BACKUP_MARKER}.{timestamp}.{suffix}.bak"
         )
         suffix += 1
     try:
-        with sqlite3.connect(str(source)) as src, sqlite3.connect(str(backup_path)) as dest:
-            src.backup(dest)
-        shutil.copystat(source, backup_path)
-    except (OSError, sqlite3.Error) as exc:
-        backup_path.unlink(missing_ok=True)
+        shutil.copytree(
+            store_dir,
+            backup_path,
+            ignore=shutil.ignore_patterns(f"*.{BACKUP_MARKER}.*.bak"),
+        )
+        shutil.copymode(store_dir, backup_path)
+    except OSError as exc:
+        if backup_path.exists():
+            shutil.rmtree(backup_path, ignore_errors=True)
         raise SystemExit(f"Refusing to execute; backup failed: {exc}") from exc
     print(f"Backup created: {backup_path}")
     return backup_path
@@ -207,29 +250,62 @@ def backfill_rows(collection: Any, rows: Sequence[MemoryRow], *, user_id: str) -
         metadata["wing"] = user_id
         metadata["visibility"] = DEFAULT_BACKFILL_VISIBILITY
         metadatas.append(metadata)
-    collection.update(ids=[row.row_id for row in rows], metadatas=metadatas)
+    try:
+        collection.update(ids=[row.row_id for row in rows], metadatas=metadatas)
+    except Exception as exc:
+        raise system_exit_for_store_error(exc, action="backfill ownerless rows") from exc
 
 
 def delete_rows(collection: Any, rows: Sequence[MemoryRow]) -> None:
-    collection.delete(ids=[row.row_id for row in rows])
+    row_ids = [row.row_id for row in rows]
+    try:
+        refreshed = fetch_rows_by_ids(collection, row_ids)
+    except Exception as exc:
+        raise system_exit_for_store_error(exc, action="re-validate ownerless rows") from exc
+    found = {row.row_id for row in refreshed}
+    missing = [row_id for row_id in row_ids if row_id not in found]
+    if missing:
+        raise SystemExit(
+            "Refusing to delete; targeted rows disappeared before mutation: "
+            + ", ".join(missing)
+        )
+    validate_ownerless_rows(refreshed, context="targeted")
+    try:
+        collection.delete(ids=row_ids)
+    except Exception as exc:
+        raise system_exit_for_store_error(exc, action="delete ownerless rows") from exc
 
 
 def run(args: argparse.Namespace) -> int:
     db_path = Path(args.db)
+    require_existing_db(db_path)
     target_ids = parse_ids(args.ids)
+    if not target_ids and not args.all_ownerless:
+        raise SystemExit("Refusing to continue; --ids parsed to an empty allowlist")
+
+    if args.execute:
+        create_backup(db_path)
     collection = load_collection(db_path, args.collection)
 
     if args.audit:
-        rows = fetch_ownerless_rows(collection)
+        try:
+            rows = fetch_ownerless_rows(collection)
+        except Exception as exc:
+            raise system_exit_for_store_error(exc, action="audit ownerless rows") from exc
         print(f"Ownerless rows: {len(rows)}")
         print_rows(rows, prefix="ownerless")
         return 0
 
-    rows = select_target_rows(
-        collection,
-        ids=target_ids,
-        all_ownerless=bool(args.all_ownerless),
-    )
+    try:
+        rows = select_target_rows(
+            collection,
+            ids=target_ids,
+            all_ownerless=bool(args.all_ownerless),
+        )
+    except Exception as exc:
+        if isinstance(exc, SystemExit):
+            raise
+        raise system_exit_for_store_error(exc, action="select target rows") from exc
     action = "backfill" if args.backfill else "delete"
     print(f"Target ownerless rows: {len(rows)}")
     print_rows(rows, prefix="target")
@@ -249,7 +325,6 @@ def run(args: argparse.Namespace) -> int:
         print(f"DRY RUN: would {action} {len(rows)} row(s). No changes made.")
         return 0
 
-    create_backup(db_path)
     if args.backfill:
         backfill_rows(collection, rows, user_id=args.user_id)
     else:
@@ -299,6 +374,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--execute is only valid with --backfill or --delete")
     if args.audit and args.all_ownerless:
         parser.error("--all-ownerless is only valid with --backfill or --delete")
+    if args.ids and args.all_ownerless:
+        parser.error("--ids cannot be combined with --all-ownerless")
     if args.execute and args.all_ownerless and not args.confirm_all_ownerless:
         parser.error("--all-ownerless --execute requires --confirm-all-ownerless")
     return run(args)
