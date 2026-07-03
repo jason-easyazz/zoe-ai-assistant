@@ -17,6 +17,7 @@ This is **knowledge / records** (descriptive facts), not a DOX contract. See the
 - [Voice pipeline](voice-pipeline.md) — the STT → brain → TTS path, the replay-sample regression corpus, and the caveat that the warm harness understates real live latency.
 - [Merge & deploy discipline](merge-and-deploy.md) — merged ≠ live, the protected-`main` gates, and the Greptile/greploop gotchas (large-PR skip, thread resolution, REST-not-GraphQL).
 - [Production incident runbook](incident-runbook.md) — verified failure signatures + fixes: the zoe-data accept-queue hang (health 000, service "active") and root-owned lab-container files blocking every deploy; prevention rules for lab containers.
+- [Flue cutover tool cut list](flue-cutover-tool-cut-list.md) — decision of record (signed off 2026-07-03) for the Flue brain cutover: the 18-item cut list closing the "~56 tools" parity question, the revised 12 → 20 target via Waves 1–3, and the dispositions for each legacy tool. Re-pointed from `docs/PLANS.md` and `zoe-flue-integration.md` §10.
 
 ## Bundles
 
