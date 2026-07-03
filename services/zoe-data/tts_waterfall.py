@@ -9,11 +9,13 @@ ORDER (which engine is tried before which) is policy and stays inline in the
 by test_canonical_invariants.py and test_voice_smoke_ci.py.
 """
 import asyncio
+import concurrent.futures
 import importlib.util
 import logging
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -62,6 +64,40 @@ def edge_tts_available() -> bool:
     return importlib.util.find_spec("edge_tts") is not None
 
 
+# asyncio.create_subprocess_exec forks() SYNCHRONOUSLY on the calling (event
+# loop) thread. zoe-data is a large multi-GB, multi-threaded process; a fork
+# can wedge post-fork/pre-exec on an atfork lock, freezing the whole event loop
+# (the outage class fixed for the hermes kanban CLI in commit 5e5ec34d — see
+# services/zoe-data/AGENTS.md's "Background loops must not fork on the event
+# loop thread" rule). These TTS fallback CLIs (espeak-ng, ffmpeg) are
+# run-to-completion, so — like the kanban CLI — they're spawned via
+# subprocess.run in a small dedicated thread pool instead, bounded twice: the
+# blocking run()'s own timeout, plus a coroutine-side wait_for that still
+# bounds the caller even if the fork itself wedges (run()'s timeout only starts
+# once Popen returns).
+_TTS_CLI_POOL = concurrent.futures.ThreadPoolExecutor(
+    max_workers=2, thread_name_prefix="tts-cli"
+)
+_TTS_CLI_WAIT_GRACE_S = 5.0
+
+
+async def _spawn_tts_cli(
+    args: list[str], *, timeout: float
+) -> "subprocess.CompletedProcess[bytes]":
+    """Run a TTS-fallback CLI off the event loop, bounded even if fork() wedges."""
+    loop = asyncio.get_running_loop()
+
+    def _blocking() -> "subprocess.CompletedProcess[bytes]":
+        return subprocess.run(
+            args, capture_output=True, timeout=timeout, check=False
+        )
+
+    return await asyncio.wait_for(
+        loop.run_in_executor(_TTS_CLI_POOL, _blocking),
+        timeout=timeout + _TTS_CLI_WAIT_GRACE_S,
+    )
+
+
 async def _synthesize_espeak(text: str, speed: int, pitch: int, volume: int) -> bytes:
     if not _has_espeak_ng():
         raise RuntimeError("espeak-ng is not installed")
@@ -70,25 +106,29 @@ async def _synthesize_espeak(text: str, speed: int, pitch: int, volume: int) -> 
         mono_path = Path(td) / "mono.wav"
         stereo_path = Path(td) / "stereo.wav"
 
-        proc = await asyncio.create_subprocess_exec(
-            "espeak-ng",
-            "-v",
-            "en-au",
-            "-s",
-            str(speed),
-            "-p",
-            str(pitch),
-            "-a",
-            str(volume),
-            "-w",
-            str(mono_path),
-            text,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _, err = await proc.communicate()
+        try:
+            proc = await _spawn_tts_cli(
+                [
+                    "espeak-ng",
+                    "-v",
+                    "en-au",
+                    "-s",
+                    str(speed),
+                    "-p",
+                    str(pitch),
+                    "-a",
+                    str(volume),
+                    "-w",
+                    str(mono_path),
+                    text,
+                ],
+                timeout=15.0,
+            )
+        except (subprocess.TimeoutExpired, asyncio.TimeoutError) as exc:
+            raise RuntimeError("espeak-ng timed out") from exc
         if proc.returncode != 0:
-            raise RuntimeError(f"espeak-ng failed: {err.decode(errors='ignore').strip()}")
+            err = (proc.stderr or b"").decode(errors="ignore").strip()
+            raise RuntimeError(f"espeak-ng failed: {err}")
 
         # Duplicate mono samples to stereo for better USB speaker compatibility.
         import wave
@@ -134,20 +174,23 @@ async def _synthesize_edge_tts(text: str, voice: str) -> Optional[bytes]:
         if shutil.which("ffmpeg") is None:
             return mp3_path.read_bytes()
 
-        proc = await asyncio.create_subprocess_exec(
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(mp3_path),
-            "-ac",
-            "2",
-            "-ar",
-            "22050",
-            str(wav_path),
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        await proc.communicate()
+        try:
+            proc = await _spawn_tts_cli(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    str(mp3_path),
+                    "-ac",
+                    "2",
+                    "-ar",
+                    "22050",
+                    str(wav_path),
+                ],
+                timeout=15.0,
+            )
+        except (subprocess.TimeoutExpired, asyncio.TimeoutError):
+            return mp3_path.read_bytes()
         if proc.returncode != 0:
             return mp3_path.read_bytes()
         return wav_path.read_bytes()
