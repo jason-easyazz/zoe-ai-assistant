@@ -306,12 +306,48 @@ async def compose_relational_block(user_id: str, message: str, db) -> Optional[d
     return {"lines": lines, "refs": refs}
 
 
+async def compose_packet(user_id: str, message: str) -> Optional[dict[str, Any]]:
+    """Gate + open a DB context + build the cited relational block, or None.
+
+    The single shared entry point for the composed relational half, called by
+    BOTH ``routers/memories.py`` (chat's ``/for-prompt`` packet) and
+    ``routers/voice_tts.py`` (the voice recall packet) so the compose/gate logic
+    lives in one place and can't drift between the two paths.
+
+    Returns None (a true no-op for the caller) when the flag is OFF, the router
+    gate says the query is not relational, or there is nothing relational to add
+    — the caller then emits its exact pre-compose output. Otherwise returns
+    ``{"lines": [...], "refs": [...]}``.
+
+    Cheap-gates BEFORE touching the DB pool: ``compose_enabled()`` and
+    ``needs_relational(message)`` are pure/zero-cost, so the common
+    (flag-OFF / non-relational) turn never opens a connection — preserving the
+    hot path. Best-effort: any failure logs and returns None so the packet
+    degrades to vector-only rather than breaking a turn.
+    """
+    if not compose_enabled():
+        return None
+    if not (message and message.strip()):
+        return None
+    if not needs_relational(message):
+        return None
+    try:
+        from db_pool import get_db_ctx
+
+        async with get_db_ctx() as db:
+            return await compose_relational_block(user_id, message, db)
+    except Exception:
+        logger.exception("memory compose: packet build failed (user=%s)", user_id)
+        return None
+
+
 __all__ = [
     "CITE_DATE",
     "CITE_PEOPLE",
     "CITE_PORTRAIT",
     "CITE_RELATIONSHIP",
     "compose_enabled",
+    "compose_packet",
     "compose_relational_block",
     "needs_relational",
 ]
