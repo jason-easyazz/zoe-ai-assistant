@@ -39,6 +39,11 @@
  * LAB ONLY.
  */
 import { registerApiProvider } from '@flue/runtime';
+import {
+  bindTurnUserId,
+  forwardedIdentityFromMessages,
+  stripIdentityEnvelope,
+} from '../request-identity.ts';
 // FLUE-API: built-in OpenAI-completions wire handlers, imported via pi-ai's public
 // subpath export and verified present (streamOpenAICompletions / streamSimpleOpenAICompletions).
 import {
@@ -127,9 +132,27 @@ function applyCap(context: Context): Context {
  * Exported for the offline unit tests only.
  */
 export function applyPolicies(context: Context): Context {
-  const safe = stripCodingBuiltins(context);
+  // Strip the acting-identity envelope BEFORE any other policy so the model — and
+  // every downstream transform — only ever sees the human-authored message text.
+  const clean = { ...context, messages: stripIdentityEnvelope(context.messages) };
+  const safe = stripCodingBuiltins(clean);
   const disclosed = progressiveToolsEnabled() ? discloseTools(safe) : safe;
   return applyCap(disclosed);
+}
+
+/**
+ * Bind the trusted acting identity for the current turn, keyed by the turn's
+ * AbortSignal. Flue calls the provider on every model round of a turn — with that
+ * turn's own `context.messages` and `options.signal` as plain arguments — and
+ * pi-agent-core threads that SAME signal to every tool execution this turn (see
+ * src/request-identity.ts). So we read the seam-forwarded id from this turn's
+ * message envelope and bind it to `signal`; the tool reads it back by its own
+ * `signal`, race-free across concurrent turns. Re-applied on every round
+ * (idempotent). No signal (non-agent path) → no binding; tools fall back to env.
+ * `applyPolicies` strips the envelope so the model never sees it.
+ */
+export function bindIdentityForRound(context: Context, signal?: AbortSignal): void {
+  bindTurnUserId(signal, forwardedIdentityFromMessages(context.messages));
 }
 
 /**
@@ -179,6 +202,7 @@ function cappedStream(
   context: Context,
   options?: StreamOptions,
 ): AssistantMessageEventStream {
+  bindIdentityForRound(context, options?.signal);
   return streamOpenAICompletions(
     asCompletionsModel(model),
     applyPolicies(context),
@@ -191,6 +215,7 @@ function cappedStreamSimple(
   context: Context,
   options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
+  bindIdentityForRound(context, options?.signal);
   return streamSimpleOpenAICompletions(
     asCompletionsModel(model),
     applyPolicies(context),

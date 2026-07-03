@@ -58,10 +58,10 @@
  * SECURITY — identity is bound in TRUSTED CODE, never from model args. Tool
  * arguments are model-chosen and are NOT an auth boundary, so the acting
  * `user_id` is resolved from two trusted sources ONLY: first the per-request
- * identity threaded from the route (currentUserId(), set from the seam-forwarded
- * user_id — see src/request-identity.ts), then the env fallback
- * (ZOE_BRAIN_USER_ID) when no request identity is present (non-HTTP / test
- * paths). Both are trusted server-side sources; NEITHER is ever a model tool arg.
+ * identity for this turn (currentUserId(signal), the seam-forwarded user_id bound
+ * to the turn's AbortSignal by the provider — see src/request-identity.ts), then
+ * the env fallback (ZOE_BRAIN_USER_ID) when no request identity is bound (non-HTTP
+ * / test paths). Both are trusted server-side sources; NEITHER is ever a model tool arg.
  * A tool that needs a user FAILS CLOSED when no user is configured rather than
  * acting as a default identity. The model may only choose the *content* (the
  * item text, the recall query) — never *whose* data it touches.
@@ -112,14 +112,17 @@ const ALLOW_WRITES =
   (process.env.ZOE_BRAIN_ALLOW_WRITES ?? 'false').toLowerCase() === 'true';
 
 // The acting user, bound in trusted code, NOT from model args. Prefer the
-// per-request identity threaded from the route (the seam-forwarded user_id,
-// carried in an AsyncLocalStorage) so each family member's turn acts as THEM;
-// fall back to the env (ZOE_BRAIN_USER_ID) only when no request identity is
-// present — non-HTTP / test paths. Read fresh each call so a single process is
-// never pinned to one identity. BOTH sources are trusted server-side; the model
-// can never supply this id.
-function actingUserId(): string {
-  const id = (currentUserId() || process.env.ZOE_BRAIN_USER_ID || '').trim();
+// per-request identity for THIS turn — the seam-forwarded user_id, keyed by the
+// turn's AbortSignal (carried on the turn message envelope and bound to `signal`
+// by the provider; see src/request-identity.ts and
+// src/providers/capped-completions.ts) — so each family member's turn acts as
+// THEM even when turns run concurrently. Fall back to the env (ZOE_BRAIN_USER_ID)
+// only when no request identity is bound — non-HTTP / test paths. `signal` is the
+// tool's own ToolContext.signal, the same object the provider bound against. Read
+// fresh each call so a single process is never pinned to one identity. BOTH
+// sources are trusted server-side; the model can never supply this id.
+function actingUserId(signal?: AbortSignal): string {
+  const id = (currentUserId(signal) || process.env.ZOE_BRAIN_USER_ID || '').trim();
   // Fail closed on guest-style identities: zoe-data returns a *successful* empty
   // packet for them, which would otherwise look like "nothing stored" and hide an
   // invalid acting identity.
@@ -154,7 +157,7 @@ async function dispatchIntent(
   service: string,
   signal?: AbortSignal,
 ): Promise<{ ok: true; text: string } | { ok: false; text: string }> {
-  const userId = actingUserId();
+  const userId = actingUserId(signal);
   if (!userId) {
     return { ok: false, text: "I'm not sure whose data this would touch, so I can't do that safely right now." };
   }
@@ -257,7 +260,7 @@ const recallMemory = defineTool({
     ),
   }),
   run: async ({ input, signal }) => {
-    const userId = actingUserId();
+    const userId = actingUserId(signal);
     if (!userId) {
       // Fail closed: no known user → don't leak a default user's memories.
       return "I'm not sure whose memories I'd be recalling, so I can't do that safely right now.";
