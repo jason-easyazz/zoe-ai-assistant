@@ -18,6 +18,7 @@ import shlex
 import time
 import shutil
 import unicodedata
+import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
@@ -2029,6 +2030,136 @@ async def _execute_list_show_direct(intent: Intent, user_id: str) -> Optional[st
         return None
 
 
+async def _notify_lists_ui(event_type: str, data: dict) -> None:
+    """Best-effort UI push mirroring mcp_server's list_* notifications.
+    Never raises: a broadcast failure must not turn a successful DB write into
+    ok:false. Imported lazily so intent_router doesn't hard-depend on mcp_server."""
+    try:
+        from mcp_server import _notify_ui
+
+        await _notify_ui("lists", event_type, data)
+    except Exception as exc:  # noqa: BLE001 — UI push is advisory only
+        logger.debug("lists UI notify skipped: %s", exc)
+
+
+async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str]:
+    """Add an item to the user's list straight through the DB, mirroring
+    mcp_server's list_add_item tool (same list resolution, family/personal
+    visibility default, and list creation) so 'add milk to my shopping list'
+    works when the mcporter subprocess is down. Returns a confirming string on
+    success; None only on genuine failure (so ok:false still means real failure)."""
+    slots = intent.slots or {}
+    item = str(slots.get("item") or "").strip()
+    if not item:
+        return None
+    lt = str(slots.get("list_type") or "shopping").strip() or "shopping"
+    ln = str(slots.get("list_name") or "").strip() or lt.capitalize()
+    try:
+        from database import get_db_ctx
+
+        async with get_db_ctx() as db:
+            cursor = await db.execute(
+                "SELECT id FROM lists WHERE list_type=? AND name=? AND deleted=0"
+                " AND (user_id=? OR visibility='family')"
+                " ORDER BY CASE WHEN visibility='family' THEN 0 ELSE 1 END LIMIT 1",
+                (lt, ln, user_id),
+            )
+            row = await cursor.fetchone()
+            item_id = str(uuid.uuid4())
+            if row:
+                # Existing list: a single INSERT is already atomic.
+                list_id = row["id"]
+                await db.execute(
+                    "INSERT INTO list_items (id, list_id, text, quantity, category) VALUES (?,?,?,?,?)",
+                    (item_id, list_id, item, slots.get("quantity"), slots.get("category")),
+                )
+            else:
+                # Fresh list: the list row and its first item must land together,
+                # or a failed item insert leaves an orphaned empty list. asyncpg
+                # auto-commits each statement, so wrap both in one transaction.
+                list_id = str(uuid.uuid4())
+
+                async def _write_new_list_and_item() -> None:
+                    await db.execute(
+                        "INSERT INTO lists (id, user_id, name, list_type, visibility) VALUES (?,?,?,?,?)",
+                        (list_id, user_id, ln, lt,
+                         "personal" if lt in {"personal", "tasks", "shopping"} else "family"),
+                    )
+                    await db.execute(
+                        "INSERT INTO list_items (id, list_id, text, quantity, category) VALUES (?,?,?,?,?)",
+                        (item_id, list_id, item, slots.get("quantity"), slots.get("category")),
+                    )
+
+                txn = getattr(db, "transaction", None)
+                if callable(txn):
+                    async with txn():
+                        await _write_new_list_and_item()
+                else:  # fallback (e.g. a DB shim without transaction support)
+                    await _write_new_list_and_item()
+        await _notify_lists_ui(
+            "list_updated",
+            {"action": "item_added", "list_id": list_id, "item": {"id": item_id, "text": item}},
+        )
+        return _format_response(
+            intent,
+            json.dumps({"item_id": item_id, "list": ln, "list_id": list_id, "text": item, "status": "added"}),
+        )
+    except Exception as exc:
+        logger.warning("list_add direct execution unavailable; falling back to mcporter: %s", exc)
+        return None
+
+
+async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[str]:
+    """Remove (complete) an item from the user's list, mirroring mcp_server's
+    list_remove_item tool (exact case-insensitive match first, LIKE-escaped
+    substring fallback). If the item isn't on the list that's a clean success
+    message (ok:true, 'X wasn't on your list'), not a failure — so brain/tool
+    consumers don't surface a false error. Returns None only on genuine failure."""
+    slots = intent.slots or {}
+    item = str(slots.get("item") or "").strip()
+    if not item:
+        return None
+    lt = str(slots.get("list_type") or "shopping").strip() or "shopping"
+    try:
+        from database import get_db_ctx
+
+        async with get_db_ctx() as db:
+            cursor = await db.execute(
+                "SELECT li.id, li.list_id FROM list_items li JOIN lists l ON li.list_id = l.id"
+                " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=? AND LOWER(li.text)=LOWER(?)"
+                " AND li.deleted=0 AND l.deleted=0 LIMIT 1",
+                (user_id, lt, item),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                cursor = await db.execute(
+                    "SELECT li.id, li.list_id FROM list_items li JOIN lists l ON li.list_id = l.id"
+                    " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=? AND li.text LIKE ? ESCAPE '\\'"
+                    " AND li.deleted=0 AND l.deleted=0 LIMIT 1",
+                    (user_id, lt, f"%{_escape_like_pattern(item)}%"),
+                )
+                row = await cursor.fetchone()
+            if not row:
+                # Not on the list is a clean success, not a failure.
+                friendly = "shopping list" if lt == "shopping" else f"{lt.replace('_', ' ')} list"
+                return f"{item} wasn't on your {friendly}."
+            item_id = row["id"]
+            list_id = row["list_id"]
+            await db.execute(
+                "UPDATE list_items SET completed=1, updated_at=NOW() WHERE id=?", (item_id,)
+            )
+        await _notify_lists_ui(
+            "list_updated",
+            {"action": "item_completed", "list_id": list_id, "item_id": item_id},
+        )
+        return _format_response(
+            intent, json.dumps({"item_id": item_id, "text": item, "status": "completed"})
+        )
+    except Exception as exc:
+        logger.warning("list_remove direct execution unavailable; falling back to mcporter: %s", exc)
+        return None
+
+
 def _say_clock(hhmm: str) -> str:
     """'15:00' → '3 PM', '09:30' → '9:30 AM'. Empty/garbage → ''."""
     try:
@@ -2109,6 +2240,204 @@ async def _execute_calendar_show_direct(intent: Intent, user_id: str) -> Optiona
     n = len(parts)
     lead = f"You've got {n} thing{'s' if n != 1 else ''} on {scope}: "
     return lead + ("; ".join(parts) if n > 1 else parts[0]) + "."
+
+
+async def _notify_ui_channel(channel: str, event_type: str, data: dict) -> None:
+    """Best-effort UI push mirroring mcp_server's per-tool notifications
+    (calendar/notes/journal/all). Never raises: a broadcast failure must not
+    turn a successful DB write into ok:false. Imported lazily so intent_router
+    doesn't hard-depend on mcp_server."""
+    try:
+        from mcp_server import _notify_ui
+
+        await _notify_ui(channel, event_type, data)
+    except Exception as exc:  # noqa: BLE001 — UI push is advisory only
+        logger.debug("%s UI notify skipped: %s", channel, exc)
+
+
+async def _execute_calendar_create_direct(intent: Intent, user_id: str) -> Optional[str]:
+    """Create a calendar event straight through the DB, mirroring mcp_server's
+    calendar_create_event tool (same events columns, category default 'general',
+    visibility 'family') so 'add X to my calendar' works when the mcporter
+    subprocess is down. Slots are normalised with the same _parse_date/_parse_time
+    that _build_command's calendar_create branch used. Unlike the note/journal/
+    people executors there is deliberately NO MemPalace mirror here — mcp_server's
+    calendar_create_event tool doesn't write one either, so matching it means
+    omitting it. Returns a confirming string on success; None only on genuine
+    failure (so ok:false still means real failure)."""
+    slots = intent.slots or {}
+    title = str(slots.get("title") or "").strip()
+    if not title:
+        return None
+    start_date = _parse_date(str(slots.get("date") or "")) if slots.get("date") else None
+    if not start_date:
+        # An event with no resolvable date can't be stored meaningfully; let the
+        # caller see a real failure rather than writing a dateless row.
+        return None
+    start_time = _parse_time(str(slots.get("time") or "")) if slots.get("time") else None
+    category = str(slots.get("category") or "general").strip() or "general"
+    try:
+        from database import get_db_ctx
+
+        event_id = str(uuid.uuid4())
+        async with get_db_ctx() as db:
+            await db.execute(
+                "INSERT INTO events (id, user_id, title, start_date, start_time, end_time,"
+                " category, location, all_day, visibility) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (event_id, user_id, title, start_date, start_time, None, category, None,
+                 0 if start_time else 1, "family"),
+            )
+        await _notify_ui_channel(
+            "calendar", "event_created",
+            {"id": event_id, "title": title, "start_date": start_date,
+             "start_time": start_time, "category": category},
+        )
+        day = _spoken_day(start_date)
+        when = day if day in ("today", "tomorrow") else f"on {day}"
+        clock = _say_clock(start_time) if start_time else ""
+        when_phrase = f"{when} at {clock}" if clock else when
+        return f"Added {title} to your calendar {when_phrase}."
+    except Exception as exc:
+        logger.warning("calendar_create direct execution unavailable; falling back to mcporter: %s", exc)
+        return None
+
+
+async def _execute_note_create_direct(intent: Intent, user_id: str) -> Optional[str]:
+    """Save a note straight through the DB, mirroring mcp_server's note_create
+    tool (same notes columns, category default 'general', visibility 'personal',
+    and best-effort MemPalace mirror via routers.notes._store_note_memory) so
+    'make a note' works when the mcporter subprocess is down. Returns a confirming
+    string on success; None only on genuine failure."""
+    slots = intent.slots or {}
+    content = str(slots.get("content") or "").strip()
+    if not content:
+        return None
+    title = slots.get("title")
+    title = str(title).strip() if title else None
+    category = str(slots.get("category") or "general").strip() or "general"
+    try:
+        from database import get_db_ctx
+
+        note_id = str(uuid.uuid4())
+        async with get_db_ctx() as db:
+            await db.execute(
+                "INSERT INTO notes (id, user_id, title, content, category, visibility)"
+                " VALUES (?,?,?,?,?,?)",
+                (note_id, user_id, title, content, category, "personal"),
+            )
+            # Mirror mcp_server: best-effort MemPalace write inside the same
+            # session, never fatal to the note write itself.
+            try:
+                from routers.notes import _store_note_memory  # type: ignore
+
+                await _store_note_memory(
+                    db, user_id,
+                    {"id": note_id, "title": title, "category": category, "content": content},
+                    "created",
+                )
+            except Exception as mem_exc:  # noqa: BLE001 — memory mirror is advisory
+                logger.debug("note_create memory mirror skipped: %s", mem_exc)
+        await _notify_ui_channel(
+            "notes", "note_created", {"id": note_id, "title": title, "category": category},
+        )
+        return "Saved your note."
+    except Exception as exc:
+        logger.warning("note_create direct execution unavailable; falling back to mcporter: %s", exc)
+        return None
+
+
+async def _execute_journal_create_direct(intent: Intent, user_id: str) -> Optional[str]:
+    """Write a journal entry straight through the DB, mirroring mcp_server's
+    journal_create_entry tool (same journal_entries columns, comma-split tags
+    JSON, visibility 'personal', deleted 0, best-effort MemPalace mirror) so
+    journalling works when the mcporter subprocess is down. Returns a confirming
+    string on success; None only on genuine failure."""
+    slots = intent.slots or {}
+    content = str(slots.get("content") or "").strip()
+    if not content:
+        return None
+    title = slots.get("title")
+    title = str(title).strip() if title else None
+    mood = slots.get("mood") or None
+    mood_score = slots.get("mood_score")
+    tags_str = slots.get("tags")
+    tags_json = (
+        json.dumps([t.strip() for t in str(tags_str).split(",")]) if tags_str else None
+    )
+    try:
+        from database import get_db_ctx
+
+        entry_id = str(uuid.uuid4())
+        async with get_db_ctx() as db:
+            await db.execute(
+                "INSERT INTO journal_entries (id, user_id, content, title, mood, mood_score,"
+                " tags, visibility, deleted) VALUES (?,?,?,?,?,?,?,'personal',0)",
+                (entry_id, user_id, content, title, mood, mood_score, tags_json),
+            )
+            try:
+                from routers.journal import _store_journal_memory  # type: ignore
+
+                await _store_journal_memory(
+                    db, user_id,
+                    {"id": entry_id, "title": title, "mood": mood,
+                     "content": content, "mood_score": mood_score},
+                    "created",
+                )
+            except Exception as mem_exc:  # noqa: BLE001 — memory mirror is advisory
+                logger.debug("journal_create memory mirror skipped: %s", mem_exc)
+        await _notify_ui_channel(
+            "journal", "entry_created", {"id": entry_id, "title": title, "mood": mood},
+        )
+        return "Saved your journal entry."
+    except Exception as exc:
+        logger.warning("journal_create direct execution unavailable; falling back to mcporter: %s", exc)
+        return None
+
+
+async def _execute_people_create_direct(intent: Intent, user_id: str) -> Optional[str]:
+    """Create a person straight through the DB, mirroring mcp_server's
+    people_create tool (same people columns, circle default 'circle', context
+    default 'personal', visibility 'family', best-effort MemPalace mirror) so
+    'add X to my contacts' works when the mcporter subprocess is down. Returns a
+    confirming string on success; None only on genuine failure."""
+    slots = intent.slots or {}
+    name = str(slots.get("name") or "").strip()
+    if not name:
+        return None
+    relationship = slots.get("relationship") or None
+    circle = str(slots.get("circle") or "circle").strip() or "circle"
+    context = str(slots.get("context") or "personal").strip() or "personal"
+    try:
+        from database import get_db_ctx
+
+        person_id = str(uuid.uuid4())
+        async with get_db_ctx() as db:
+            await db.execute(
+                "INSERT INTO people (id, user_id, name, relationship, birthday, phone, email,"
+                " notes, visibility, circle, context) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (person_id, user_id, name, relationship, None, None, None, None,
+                 "family", circle, context),
+            )
+            try:
+                from routers.people import _store_person_memory  # type: ignore
+
+                await _store_person_memory(
+                    db, user_id,
+                    {"id": person_id, "name": name, "relationship": relationship,
+                     "birthday": None, "phone": None, "email": None, "notes": None},
+                    "created",
+                )
+            except Exception as mem_exc:  # noqa: BLE001 — memory mirror is advisory
+                logger.debug("people_create memory mirror skipped: %s", mem_exc)
+        await _notify_ui_channel(
+            "all", "people:created",
+            {"id": person_id, "name": name, "relationship": relationship},
+        )
+        rel_phrase = f" as your {relationship}" if relationship else ""
+        return f"Added {name}{rel_phrase} to your contacts."
+    except Exception as exc:
+        logger.warning("people_create direct execution unavailable; falling back to mcporter: %s", exc)
+        return None
 
 
 async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optional[str]:
@@ -2757,6 +3086,16 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
         if direct_result:
             return direct_result
 
+    if intent.name == "list_add":
+        direct_result = await _execute_list_add_direct(intent, user_id)
+        if direct_result:
+            return direct_result
+
+    if intent.name == "list_remove":
+        direct_result = await _execute_list_remove_direct(intent, user_id)
+        if direct_result:
+            return direct_result
+
     if intent.name == "calendar_show":
         direct_result = await _execute_calendar_show_direct(intent, user_id)
         if direct_result:
@@ -2769,6 +3108,26 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
 
     if intent.name == "reminder_list":
         direct_result = await _execute_reminder_list_direct(intent, user_id)
+        if direct_result:
+            return direct_result
+
+    if intent.name == "calendar_create":
+        direct_result = await _execute_calendar_create_direct(intent, user_id)
+        if direct_result:
+            return direct_result
+
+    if intent.name == "note_create":
+        direct_result = await _execute_note_create_direct(intent, user_id)
+        if direct_result:
+            return direct_result
+
+    if intent.name == "journal_create":
+        direct_result = await _execute_journal_create_direct(intent, user_id)
+        if direct_result:
+            return direct_result
+
+    if intent.name == "people_create":
+        direct_result = await _execute_people_create_direct(intent, user_id)
         if direct_result:
             return direct_result
 
