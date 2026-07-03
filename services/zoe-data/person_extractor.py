@@ -194,6 +194,14 @@ async def _ingest_to_mempalace(
 ) -> Optional[str]:
     """Write one fact to MemPalace and return the mem_id."""
     try:
+        # Quality gate: this LLM person-extraction path was writing transcript
+        # echoes as facts ("Zoe: is being addressed in a conversation"). Drop
+        # anything that isn't shaped like a storable fact before it pollutes recall.
+        from memory_quality import is_storable_fact
+        storable, reason = is_storable_fact(text)
+        if not storable:
+            logger.debug("person_extractor: dropped non-fact (%s): %r", reason, text[:60])
+            return None
         from memory_service import get_memory_service
         ref = await get_memory_service().ingest(
             text,
