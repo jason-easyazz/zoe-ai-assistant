@@ -195,8 +195,26 @@ def test_flag_on_relational_query_includes_cited_facts(monkeypatch, _relational)
     assert "Neil (father)" in block
     assert "builder" in block  # portrait
     # Every folded line renders under the uniform "- " bullet.
-    for ln in block.split("\n")[1:]:
+    body_lines = block.split("\n")[1:]
+    for ln in body_lines:
         assert ln.startswith("- ")
+    # Combined budget: the whole block (vector recall + relational) stays compact.
+    assert len(body_lines) <= v._VOICE_RECALL_MAX_LINES
+
+
+def test_relational_lines_respect_combined_budget(monkeypatch, _relational):
+    """A fully-populated relational query must NOT balloon the packet past the
+    combined line budget (compose can return ~25 relational lines)."""
+    monkeypatch.setenv("ZOE_MEMORY_COMPOSE_ENABLED", "1")
+    # Six vector hits (fills _VOICE_RECALL_MAX_FACTS) + a relational query so the
+    # relational lines pile on top — the combined cap must hold the total down.
+    _patch_search(monkeypatch, [_Ref(f"Vector fact {i}") for i in range(6)])
+    block = _run(v._voice_recall_packet(
+        "who is my dad and my sister and when is their birthday", "jason"))
+    assert block is not None
+    body_lines = block.split("\n")[1:]
+    assert len(body_lines) <= v._VOICE_RECALL_MAX_LINES
+    assert len(block) < 1264  # still smaller than the dump it replaces
 
 
 def test_flag_on_works_even_when_vector_search_empty(monkeypatch, _relational):

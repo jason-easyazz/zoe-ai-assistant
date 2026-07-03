@@ -123,8 +123,15 @@ async def _load_voice_history(session_id: str, limit: int = 3) -> list[dict]:
 # dump (~1264 chars) is both slow and noisy. Keep this lean — it sits on the
 # brain-turn critical path.
 _VOICE_RECALL_SEARCH_LIMIT = 8   # one semantic search; re-ranked by hotness
-_VOICE_RECALL_MAX_FACTS = 6      # facts that actually make it into the block
+_VOICE_RECALL_MAX_FACTS = 6      # vector-recall facts that make it into the block
 _VOICE_RECALL_FACT_CHARS = 160   # per-fact truncation so one long memory can't bloat it
+# Overall line budget for the whole "[What you remember]" block (vector recall +
+# the 2c relational lines combined). The compose module can return up to ~25
+# relational lines; without a combined cap a fully-populated relational query
+# would balloon the packet to 30+ lines and blow the "COMPACT" contract this
+# block exists to keep. A little larger than _VOICE_RECALL_MAX_FACTS so a
+# relational turn can carry a few cited people/date facts on top of vector recall.
+_VOICE_RECALL_MAX_LINES = 10
 
 
 async def _voice_recall_packet(text: str, user_id: str) -> Optional[str]:
@@ -186,6 +193,8 @@ async def _voice_recall_packet(text: str, user_id: str) -> Optional[str]:
         if len(lines) >= _VOICE_RECALL_MAX_FACTS:
             break
     for line in relational_lines:
+        if len(lines) >= _VOICE_RECALL_MAX_LINES:
+            break
         key = re.sub(r"\s+", " ", line.lower())
         if key in seen:
             continue
