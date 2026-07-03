@@ -101,6 +101,7 @@ jobs:
             services/zoe-data/tests/test_ui_orchestrator_types.py \
             services/zoe-data/tests/test_skybridge_static.py \
             services/zoe-data/tests/test_zoe_core_client.py \
+            services/zoe-data/tests/test_async_subprocess.py \
             services/zoe-data/tests/test_greptile_client.py \
             services/zoe-data/tests/test_db_pool_release_race.py \
             services/zoe-data/tests/test_greploop_guard.py \
