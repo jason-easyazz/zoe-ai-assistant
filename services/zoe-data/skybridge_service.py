@@ -206,6 +206,25 @@ def cancel_timer_by_id(owner: str, timer_id: str) -> dict[str, Any] | None:
     return _timers.cancel_by_id(owner or "guest", timer_id)
 
 
+def create_timer_direct(user_id: str, *, minutes: Any = 5, label: str = "") -> dict[str, Any]:
+    """Create a real countdown timer from already-parsed slots (minutes/label).
+
+    Used by non-voice dispatch paths (e.g. intent_router.execute_intent's
+    timer_create branch, reached via POST /api/system/intent-dispatch) that
+    never go through the Skybridge text classifier, so they'd otherwise only
+    speak a confirmation without registering a timer in `_timers`. Reuses the
+    same in-memory store/creation logic as the voice/Skybridge path so both
+    surfaces produce one real, poll-able timer.
+    """
+    try:
+        mins = float(minutes)
+    except (TypeError, ValueError):
+        mins = 5.0
+    seconds = max(1, int(round(mins * 60)))
+    intent = SkybridgeIntent(domain="timer", action="create", duration_seconds=seconds, title=str(label or ""))
+    return _resolve_timer(intent, user_id or "guest")
+
+
 def _resolve_timer(intent: SkybridgeIntent, user_id: str) -> dict[str, Any]:
     owner = (user_id or "guest")
 

@@ -293,8 +293,7 @@ Pi-CLI core.
 
 1. **Voice-parity gate unrun.** The Samantha bar (§4) against the real-voice
    corpus needs the operator and a quiet box; it has not been run.
-2. **Tool coverage: 12 vs ~56.** The sidecar serves 12 tools; the extension brain
-   exposes ~56. Parity — or a deliberate, signed-off cut list — is required.
+2. **Tool coverage: 12 → 20 via Waves 1–3; remainder deliberately cut per [`docs/knowledge/flue-cutover-tool-cut-list.md`](../knowledge/flue-cutover-tool-cut-list.md) (signed off 2026-07-03).** The sidecar serves 12 tools; the extension brain registers 18 (11 abilities + 7 Pi built-ins — see the cut-list record for the pinned file:line evidence). The historical "~56" was a projected full-parity target, not the current surface; the 18-item cut list converts the 36-tool difference into deliberate scope (7 Cut, 6 Must-NOT-port, 1 Must-NOT-port-as-is, 1 Defer). Waves 1–3 grow the sidecar 12 → 20 (see the cut-list record §3).
 3. **No streaming / sentinels.** The sidecar returns whole results without the
    text-delta + `__TOOL__`/`__THINKING__` sentinel stream (Seam A contract), so
    the voice filler (#844) would go dark on cutover.
