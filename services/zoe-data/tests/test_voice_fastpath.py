@@ -22,6 +22,9 @@ class _FakeWS:
     def __init__(self, inbound):
         self._inbound = list(inbound)
         self.sent: list[dict] = []
+        # No Origin header = non-browser client; the CSWSH guard
+        # (main._ws_origin_allowed) allows it by policy.
+        self.headers: dict[str, str] = {}
 
     async def accept(self):
         return None
