@@ -80,6 +80,82 @@ def _metadata_value(value: Any) -> str | int | float | bool:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
+# --- Increment 2a: hybrid retrieval (flag-gated, default OFF) --------------
+#
+# When ``ZOE_HYBRID_RETRIEVAL_ENABLED`` is truthy, ``_semantic_search`` blends
+# three cheap, O(candidates) boosts on top of the existing semantic+hotness
+# score before the final sort. All boosts are additive, small, and bounded so
+# semantic relevance keeps dominating. OFF is a true no-op: the boost term is
+# not computed and the ordering is byte-for-byte the pre-2a behaviour.
+#
+# Weights are named constants so they are easy to tune later. No LLM, no
+# embedder reload, no extra network, no new deps.
+_HYBRID_KEYWORD_WEIGHT = 0.50      # bounded lexical/keyword-overlap boost (primary miss-fix)
+_HYBRID_RECENCY_WEIGHT = 0.05      # mild recency nudge; must never dominate relevance
+_HYBRID_RECENCY_HALFLIFE_DAYS = 30.0  # recency boost half-life
+_HYBRID_PREFERENCE_WEIGHT = 0.05   # preference/importance nudge
+
+# memory_type values treated as preference/important for the preference boost.
+_HYBRID_PREFERENCE_TYPES = frozenset(
+    {"preference", "approval", "emotional_moment", "person", "recurring_task"}
+)
+
+# Tokens ignored for keyword overlap: interrogatives / filler that carry no
+# lexical signal about the target fact (e.g. "what is my dad name").
+_HYBRID_STOPWORDS = frozenset(
+    {
+        "a", "an", "the", "is", "are", "was", "were", "be", "am", "do", "does",
+        "did", "what", "whats", "who", "whos", "whom", "whose", "which", "when",
+        "where", "why", "how", "my", "me", "i", "you", "your", "of", "to", "in",
+        "on", "at", "for", "and", "or", "it", "its", "that", "this", "tell",
+        "about", "name", "names",
+    }
+)
+
+_HYBRID_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def _hybrid_retrieval_enabled() -> bool:
+    """Cheap per-call read of the hybrid-retrieval flag (default OFF).
+
+    Read from the environment each call (same idiom as the other
+    ``os.environ.get`` flags in this module). OFF must be a true no-op, so this
+    stays a plain, cheap truthiness check with no side effects.
+    """
+    return os.environ.get("ZOE_HYBRID_RETRIEVAL_ENABLED", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def _hybrid_tokens(text: str) -> set[str]:
+    """Cheap normalized token set: lowercase alnum tokens minus stopwords."""
+    if not text:
+        return set()
+    return {
+        tok
+        for tok in _HYBRID_TOKEN_RE.findall(text.lower())
+        if tok not in _HYBRID_STOPWORDS and len(tok) > 1
+    }
+
+
+def _hybrid_keyword_overlap(query_tokens: set[str], doc: str) -> float:
+    """Bounded [0,1] lexical overlap of query terms against the fact text.
+
+    Fraction of (content) query tokens that appear in the fact text, matched
+    either as a whole token or as a substring (so "dad" matches "dad's").
+    Cheap: O(query_tokens) per candidate, no TF-IDF, no model loads.
+    """
+    if not query_tokens:
+        return 0.0
+    doc_lower = doc.lower()
+    doc_tokens = _hybrid_tokens(doc)
+    hits = 0
+    for tok in query_tokens:
+        if tok in doc_tokens or tok in doc_lower:
+            hits += 1
+    return hits / len(query_tokens)
+
+
 def _parse_aware_datetime(value: Any) -> datetime.datetime | None:
     if not value:
         return None
@@ -1108,6 +1184,13 @@ class MemoryService:
         _LAMBDA = math.log(2) / 70.0  # 70-day half-life, same as load_for_prompt
         _HOTNESS_WEIGHT = float(os.environ.get("ZOE_SEARCH_HOTNESS_WEIGHT", "0.05"))
 
+        # Increment 2a: hybrid boosts, flag-gated (default OFF). OFF is a true
+        # no-op — the boost term below is skipped entirely and ordering is
+        # byte-for-byte the pre-2a semantic+hotness behaviour.
+        _hybrid_on = _hybrid_retrieval_enabled()
+        _query_tokens = _hybrid_tokens(query) if _hybrid_on else set()
+        _recency_lambda = math.log(2) / _HYBRID_RECENCY_HALFLIFE_DAYS
+
         def _blend(ref: MemoryRef) -> float:
             md = ref.metadata
             dist = ref.score
@@ -1127,7 +1210,30 @@ class MemoryService:
                 age_days = 0.0
             semantic = (1.0 / (1.0 + dist)) * conf * math.exp(-_LAMBDA * age_days)
             hotness  = _HOTNESS_WEIGHT * math.log1p(access_count)
-            return semantic + hotness
+            base = semantic + hotness
+            if not _hybrid_on:
+                return base
+            # 1) Keyword/lexical boost — primary fix for 0-hit semantic misses.
+            keyword = _HYBRID_KEYWORD_WEIGHT * _hybrid_keyword_overlap(
+                _query_tokens, ref.text
+            )
+            # 2) Temporal-proximity boost — mild, exponential decay on age.
+            recency = _HYBRID_RECENCY_WEIGHT * math.exp(-_recency_lambda * age_days)
+            # 3) Preference/importance boost — memory_type / importance signal.
+            #    `importance` is not currently written to metadata, so that arm
+            #    stays a no-op until a producer emits it; the memory_type arm is
+            #    active (values like "preference"/"person").
+            pref_signal = 0.0
+            if str(md.get("memory_type", "")).lower() in _HYBRID_PREFERENCE_TYPES:
+                pref_signal = 1.0
+            else:
+                try:
+                    importance = float(md.get("importance", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    importance = 0.0
+                pref_signal = max(0.0, min(1.0, importance))
+            preference = _HYBRID_PREFERENCE_WEIGHT * pref_signal
+            return base + keyword + recency + preference
 
         hits.sort(key=_blend, reverse=True)
         return hits[:limit]
