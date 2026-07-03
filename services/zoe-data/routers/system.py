@@ -2390,6 +2390,10 @@ _DISPATCHABLE_INTENTS = frozenset({
     "people_create", "people_relate", "people_search",
     "music_play", "music_control", "music_volume", "music_setup", "set_volume",
     "smart_home", "weather", "daily_briefing", "time_query", "date_query", "calculate",
+    # Wave 3 (cut-list record §3): the ONE new dispatchable intent — the explicit
+    # model-callable memory write behind the Flue sidecar's remember_fact tool.
+    # Fulfillment is intent_router.execute_intent → MemoryService.ingest.
+    "memory_store",
 })
 
 

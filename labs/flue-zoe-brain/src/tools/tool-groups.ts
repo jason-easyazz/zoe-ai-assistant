@@ -40,7 +40,7 @@
  * Trade-off (documented in README): the per-session set grows monotonically —
  * a long session that touches every domain converges back to all schemas.
  * Sessions are per-conversation, so in practice a typical turn carries 3
- * schemas instead of all 18.
+ * schemas instead of all 19.
  *
  * Unknown tool names (registered on the agent but absent from the grouping
  * map) are ALWAYS disclosed — adding a 12th tool without grouping it here
@@ -78,6 +78,7 @@ export const TOOL_GROUPS = {
   people: ['people'],
   media: ['media'],
   home: ['home'],
+  memory: ['remember_fact'],
 } as const satisfies Record<string, readonly string[]>;
 
 export type AbilityGroup = keyof typeof TOOL_GROUPS;
@@ -102,6 +103,7 @@ export const GROUP_PURPOSES: Record<AbilityGroup, string> = {
   people: 'save or look up people/contacts',
   media: 'play/control music, set music or speaking volume',
   home: 'turn on/off, dim, or brighten the lights',
+  memory: 'store a fact the user asks you to remember',
 };
 
 /**
@@ -154,6 +156,11 @@ const GROUP_TRIGGERS: Record<AbilityGroup, RegExp> = {
   // brighten verb, or the "<verb> the lights" shape.
   home:
     /\blights?\b|\b(?:turn|switch|flip)\s+(?:on|off)\b|\b(?:dim|brighten)\b/i,
+  // Explicit "remember (that) ...", "don't forget ...", "keep in mind ...",
+  // "make a note that ..." style WRITE requests. Recall is handled by the
+  // always-on core recall_memory, so this only needs the store phrasings.
+  memory:
+    /\bremember (?:that|this|i|my|to keep)\b|\bdon'?t forget\b|\bkeep in mind\b|\bmake a mental note\b/i,
 };
 
 /** Reverse map: tool name → its group. */
