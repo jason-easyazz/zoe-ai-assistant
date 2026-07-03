@@ -5,8 +5,13 @@ FROM python:3.12-slim-bookworm
 # ── System deps ──────────────────────────────────────────────────────────────
 #   git/tmux  : harness runtime (terminal launchers, worktrees)
 #   bubblewrap: omnigent's OS sandbox (relaxed at runtime — the container is the boundary)
+#   lsof      : the startup orphan-runner sweep shells out to `lsof` to find PIDs
+#               holding abandoned conv-*.sock files. Without it, an unclean host
+#               reboot that leaves stale /tmp/omnigent/ap-* sockets makes the
+#               sweep raise FileNotFoundError → lifespan startup fails → the
+#               container crash-loops forever (observed 2026-07-03: 63 restarts).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl ca-certificates git tmux bubblewrap \
+        curl ca-certificates git tmux bubblewrap lsof \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Node 22 ──────────────────────────────────────────────────────────────────
