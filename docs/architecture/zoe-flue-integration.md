@@ -300,19 +300,33 @@ Pi-CLI core.
   tool claims**.
 - **Recall regression: PASS** — `recall_memory` fires **31/32 = 96.9%** (bar ≥90%).
 
-### Voice-parity gate — RUN 2026-07-03: **PASS (same-or-better)**
+### Voice-parity gate — RUN 2026-07-03: **latency clear win; quality ~parity (see confound)**
 
 44-prompt corpus from `tests/voice/comprehensive_conversation_test.py` (chat /
 social / info / memory-recall biased), each brain scored on reply sanity, tool
-correctness, and latency. **Flue 41/44 (93%) vs prod 38/44 (86%); flue median
-2.5 s vs prod 5.3 s** (flue faster at every percentile but the LLM-bound max).
-Flue won on fresh-user recall honesty (4/4 vs prod's stale-fact assertions) and
-emitted zero fabricated tool claims. Identity caveat: prod ran as `guest` (only
-client-mintable identity — `parity-gate-user` needs a zoe-auth admin write,
-denied), so prod's recall was contaminated by residual guest memories; flue ran
-env-bound to `parity-gate-user`. No data mutated (writes dry-run flue-side; the
-3 prod guest writes failed at the service). Full record:
-`labs/flue-zoe-brain/parity/` scratch + this section.
+correctness, and latency.
+
+- **Latency (clean, unconfounded): decisive Flue win** — median **2.5 s vs prod
+  5.3 s**, flue faster at every percentile but the LLM-bound max. This is the
+  headline result and it does not depend on identity.
+- **Quality (confounded — read carefully): roughly at parity, edge to prod.**
+  The raw aggregate (flue 41/44 = 93% vs prod 38/44 = 86%) OVERSTATES flue,
+  because the two brains ran under different identities: prod ran as `guest`
+  (the only client-mintable identity — `parity-gate-user` needs a zoe-auth admin
+  write, which was denied), so prod's memory was contaminated by residual guest
+  facts and it "failed" 4 fresh-user recall prompts by asserting stale data,
+  while flue (env-bound to `parity-gate-user`, empty store) "passed" them by
+  honestly saying it knew nothing. Those 4 points are an artifact of the setup,
+  not flue being better. Removing the 4 identity-decided prompts: **flue 37/40 =
+  92.5% vs prod 38/40 = 95%** — a fair comparison puts prod marginally ahead on
+  quality. Flue emitted zero fabricated tool claims either way. No data mutated
+  (writes dry-run flue-side; the 3 prod guest writes failed at the service).
+
+**Honest read:** the gate does NOT show flue beating prod on answer quality — it
+shows flue *competitive* on quality (within a couple of points, prod slightly
+ahead once the confound is removed) and *clearly faster*. A clean quality
+re-run needs a real authenticated test user on both sides (blocked here by
+zoe-auth provisioning). Full record: `labs/flue-zoe-brain/parity/` scratch.
 
 ### Cutover blockers — Phase 4 stays closed until each is cleared
 
