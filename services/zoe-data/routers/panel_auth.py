@@ -458,6 +458,14 @@ async def create_pin_challenge(payload: dict, user: dict = Depends(get_current_u
     Create a PIN auth challenge for a high-privilege panel action.
     Returns a challenge_id; the panel shows a PIN pad to the user.
     """
+    # get_current_user() falls back to a guest identity (never raises) when no
+    # X-Session-ID is present, per ZOE_UNAUTHENTICATED_ROLE. Challenge creation
+    # broadcasts a PIN-prompt ui_action to the target panel, so an anonymous
+    # caller must never be allowed to trigger it (mirrors the guest rejection
+    # in auth.get_a2a_caller).
+    if user.get("role") == "guest":
+        raise HTTPException(status_code=401, detail="Authentication required to create a PIN challenge")
+
     panel_id = str(payload.get("panel_id") or "").strip()
     action_context = payload.get("action_context") or None
     if not panel_id:
