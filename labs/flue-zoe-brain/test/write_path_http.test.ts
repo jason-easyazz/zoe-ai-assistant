@@ -119,7 +119,11 @@ const WRITE_TOOL_CASES: Array<{
       slots: { item: 'bread', list_type: 'shopping' },
     },
     dryRunPattern: /WRITE DISABLED.*removing "bread".*NOT saved/i,
-    successPattern: /Removed bread from your list\./,
+    // The fake returns an EMPTY result for list_remove (see dispatchResult), so
+    // on an ok:true response the tool falls through to its own successFallback —
+    // this pins that fallback text (quoted item + list type), which is what the
+    // user actually sees when the backend confirms without its own message.
+    successPattern: /Removed "bread" from your shopping list\./,
   },
   {
     name: 'journal',
@@ -170,7 +174,10 @@ function dispatchResult(intent: string, slots: Record<string, unknown>): string 
     return `Added ${slots.item} to your ${slots.list_type} list.`;
   }
   if (intent === 'list_remove') {
-    return `Removed ${slots.item} from your list.`;
+    // Empty on purpose: exercises the tool's own successFallback (see the
+    // list_remove case's successPattern), matching how the real backend can
+    // confirm ok:true without returning its own message.
+    return '';
   }
   if (intent === 'journal_create') {
     return 'Journal entry created: entry.';
@@ -180,6 +187,19 @@ function dispatchResult(intent: string, slots: Record<string, unknown>): string 
   }
   if (intent === 'people_relate') {
     return `Linked ${slots.name_a} and ${slots.name_b} as ${slots.role}.`;
+  }
+  // ─── Wave 1 read intents (surfaced verbatim by the tool on ok:true) ─────────
+  if (intent === 'note_search') {
+    return `Notes found:\n  - ${slots.query}`;
+  }
+  if (intent === 'journal_prompt') {
+    return 'Here are some journal prompts to get you started.';
+  }
+  if (intent === 'journal_streak') {
+    return "You're on a 4-day journaling streak.";
+  }
+  if (intent === 'people_search') {
+    return `Found:\n  - ${slots.query} (friend)`;
   }
   if (intent === 'timer_create') {
     const label = String(slots.label ?? '').trim();
@@ -314,6 +334,65 @@ test('write tools with ZOE_BRAIN_ALLOW_WRITES=true POST exact intent-dispatch pa
         })),
       );
       assert.equal(fake.requests.length, WRITE_TOOL_CASES.length, 'fresh write-enabled module must emit one POST per write tool');
+    });
+  } finally {
+    await fake.close();
+  }
+});
+
+// ─── Wave 1 READ paths — HTTP coverage (cut-list record §3) ───────────────────
+// The read dispatch paths introduced this wave (note_search, journal
+// prompt/streak, people search) are NOT gated by ZOE_BRAIN_ALLOW_WRITES, so
+// they run over HTTP even with writes off. Pin (a) the exact intent name +
+// payload POSTed and (b) that the tool surfaces the backend result verbatim.
+const READ_TOOL_CASES: Array<{
+  name: string;
+  input: Record<string, unknown>;
+  expectedPayload: Record<string, unknown>;
+  resultPattern: RegExp;
+}> = [
+  {
+    name: 'note_search',
+    input: { query: 'wifi password' },
+    expectedPayload: { user_id: ACTING_USER, intent: 'note_search', slots: { query: 'wifi password' } },
+    resultPattern: /Notes found:[\s\S]*wifi password/,
+  },
+  {
+    name: 'journal',
+    input: { action: 'prompt' },
+    expectedPayload: { user_id: ACTING_USER, intent: 'journal_prompt', slots: {} },
+    resultPattern: /journal prompts/i,
+  },
+  {
+    name: 'journal',
+    input: { action: 'streak' },
+    expectedPayload: { user_id: ACTING_USER, intent: 'journal_streak', slots: {} },
+    resultPattern: /4-day journaling streak/,
+  },
+  {
+    name: 'people',
+    input: { action: 'search', query: 'Sarah' },
+    expectedPayload: { user_id: ACTING_USER, intent: 'people_search', slots: { query: 'Sarah' } },
+    resultPattern: /Found:[\s\S]*Sarah/,
+  },
+];
+
+test('read tools POST the exact intent-dispatch payload and surface the backend result (writes OFF)', async () => {
+  const fake = await startFakeZoeData();
+  try {
+    await withTools(fake.baseUrl, undefined, async (tools) => {
+      for (const readCase of READ_TOOL_CASES) {
+        const out = String(await byName(tools, readCase.name).run({ input: readCase.input }));
+        assert.match(out, readCase.resultPattern, `${readCase.name}(${JSON.stringify(readCase.input)}) should surface the backend result`);
+      }
+      assert.deepEqual(
+        fake.requests,
+        READ_TOOL_CASES.map((readCase) => ({
+          method: 'POST',
+          path: '/api/system/intent-dispatch',
+          body: readCase.expectedPayload,
+        })),
+      );
     });
   } finally {
     await fake.close();

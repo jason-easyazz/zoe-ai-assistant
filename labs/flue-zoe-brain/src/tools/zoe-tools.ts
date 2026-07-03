@@ -675,6 +675,11 @@ const people = defineTool({
     const slots: Record<string, unknown> = {
       name,
       relationship: String(input?.relationship ?? '').trim() || 'friend',
+      // Canonical prod defaults (services/zoe-core/abilities/people.ts): context
+      // defaults to 'personal', circle to the tier literally named 'circle' — the
+      // MIDDLE tier of {inner, circle, public} that intent_router maps to the ○
+      // symbol (services/zoe-data/intent_router.py people_create fulfillment).
+      // 'circle' is the real tier value here, NOT a placeholder.
       context: 'personal',
       circle: 'circle',
     };
