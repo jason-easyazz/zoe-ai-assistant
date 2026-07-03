@@ -20,9 +20,14 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Context, Message, Tool } from '@earendil-works/pi-ai';
 
-const { activeToolNames, discloseTools, CORE_TOOL_NAMES, TOOL_GROUPS } = await import(
-  '../src/tools/tool-groups.ts'
-);
+const {
+  activeToolNames,
+  discloseTools,
+  stripCodingBuiltins,
+  CORE_TOOL_NAMES,
+  TOOL_GROUPS,
+  CODING_BUILTIN_TOOL_NAMES,
+} = await import('../src/tools/tool-groups.ts');
 const { applyPolicies } = await import('../src/providers/capped-completions.ts');
 const { zoeTools } = await import('../src/tools/zoe-tools.ts');
 
@@ -54,6 +59,19 @@ function toolResult(name: string, text: string): Message {
 const ALL_WIRE_TOOLS: Tool[] = zoeTools.map(
   (t) => ({ name: t.name, description: t.description, parameters: {} }) as unknown as Tool,
 );
+
+/**
+ * The pi/Flue coding built-ins the harness injects on EVERY turn (verified from
+ * @flue/runtime `createTools`). These are what leaked into the voice brain's
+ * wire before the denylist. A representative `context.tools` is Zoe tools PLUS
+ * these — mirroring exactly what the framework hands the model.
+ */
+const CODING_WIRE_TOOLS: Tool[] = [...CODING_BUILTIN_TOOL_NAMES].map(
+  (name) => ({ name, description: `pi built-in ${name}`, parameters: {} }) as unknown as Tool,
+);
+
+/** Zoe tools + the injected coding built-ins — the real on-the-wire tool list. */
+const WIRE_TOOLS_WITH_CODING: Tool[] = [...ALL_WIRE_TOOLS, ...CODING_WIRE_TOOLS];
 
 function ctx(messages: Message[], tools: Tool[] = ALL_WIRE_TOOLS): Context {
   return { systemPrompt: 'You are Zoe.', messages, tools };
@@ -135,6 +153,60 @@ test('unknown tool names always survive the filter', () => {
   ];
   const out = discloseTools(ctx([userMsg('hello')], withUnknown));
   assert.ok(names(out).includes('future_ungrouped_tool'));
+});
+
+// ─── pi/Flue coding built-ins are stripped, Zoe tools preserved ────────────────
+
+test('discloseTools strips every pi coding built-in from a representative wire list', () => {
+  const out = discloseTools(ctx([userMsg('how do I poach an egg?')], WIRE_TOOLS_WITH_CODING));
+  const outNames = new Set((out.tools ?? []).map((t) => t.name));
+  for (const builtin of CODING_BUILTIN_TOOL_NAMES) {
+    assert.ok(!outNames.has(builtin), `coding built-in ${builtin} must be stripped`);
+  }
+});
+
+test('discloseTools keeps all 20 Zoe tools + activate_abilities in a full-relevance turn', () => {
+  // A message that trips no group still keeps the core; to prove NO real Zoe
+  // tool is ever collateral-stripped, disclose the sticky-maximal set: mark
+  // every group used so activeToolNames == all Zoe tools, then confirm each
+  // survives while the coding built-ins are gone.
+  const usedEvery = zoeTools.map((t) => assistantToolCall(t.name));
+  const messages = [userMsg('do everything'), ...usedEvery];
+  const out = discloseTools(ctx(messages, WIRE_TOOLS_WITH_CODING));
+  const outNames = new Set((out.tools ?? []).map((t) => t.name));
+  for (const t of zoeTools) assert.ok(outNames.has(t.name), `Zoe tool ${t.name} must survive`);
+  assert.ok(outNames.has('activate_abilities'), 'activator must survive');
+  for (const builtin of CODING_BUILTIN_TOOL_NAMES) {
+    assert.ok(!outNames.has(builtin), `coding built-in ${builtin} must be stripped`);
+  }
+});
+
+test('stripCodingBuiltins removes ONLY the coding built-ins, never a Zoe tool', () => {
+  const out = stripCodingBuiltins(ctx([userMsg('hi')], WIRE_TOOLS_WITH_CODING));
+  const outNames = (out.tools ?? []).map((t) => t.name).sort();
+  assert.deepEqual(outNames, ALL_WIRE_TOOLS.map((t) => t.name).sort());
+});
+
+test('stripCodingBuiltins never mutates the original context', () => {
+  const original = ctx([userMsg('hi')], WIRE_TOOLS_WITH_CODING);
+  const before = original.tools?.length;
+  stripCodingBuiltins(original);
+  assert.equal(original.tools?.length, before);
+});
+
+test('applyPolicies strips coding built-ins even with disclosure OFF (safety floor)', () => {
+  process.env.ZOE_BRAIN_PROGRESSIVE_TOOLS = 'false';
+  try {
+    const out = applyPolicies(ctx([userMsg('hello')], WIRE_TOOLS_WITH_CODING));
+    const outNames = new Set((out.tools ?? []).map((t) => t.name));
+    for (const builtin of CODING_BUILTIN_TOOL_NAMES) {
+      assert.ok(!outNames.has(builtin), `built-in ${builtin} must be stripped with disclosure off`);
+    }
+    // With disclosure off, every Zoe tool still passes through.
+    for (const t of zoeTools) assert.ok(outNames.has(t.name), `Zoe tool ${t.name} must survive`);
+  } finally {
+    delete process.env.ZOE_BRAIN_PROGRESSIVE_TOOLS;
+  }
 });
 
 // ─── applyPolicies: kill switch + cap interplay ───────────────────────────────
