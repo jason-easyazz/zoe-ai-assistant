@@ -2065,20 +2065,37 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
                 (lt, ln, user_id),
             )
             row = await cursor.fetchone()
-            if row:
-                list_id = row["id"]
-            else:
-                list_id = str(uuid.uuid4())
-                await db.execute(
-                    "INSERT INTO lists (id, user_id, name, list_type, visibility) VALUES (?,?,?,?,?)",
-                    (list_id, user_id, ln, lt,
-                     "personal" if lt in {"personal", "tasks", "shopping"} else "family"),
-                )
             item_id = str(uuid.uuid4())
-            await db.execute(
-                "INSERT INTO list_items (id, list_id, text, quantity, category) VALUES (?,?,?,?,?)",
-                (item_id, list_id, item, slots.get("quantity"), slots.get("category")),
-            )
+            if row:
+                # Existing list: a single INSERT is already atomic.
+                list_id = row["id"]
+                await db.execute(
+                    "INSERT INTO list_items (id, list_id, text, quantity, category) VALUES (?,?,?,?,?)",
+                    (item_id, list_id, item, slots.get("quantity"), slots.get("category")),
+                )
+            else:
+                # Fresh list: the list row and its first item must land together,
+                # or a failed item insert leaves an orphaned empty list. asyncpg
+                # auto-commits each statement, so wrap both in one transaction.
+                list_id = str(uuid.uuid4())
+
+                async def _write_new_list_and_item() -> None:
+                    await db.execute(
+                        "INSERT INTO lists (id, user_id, name, list_type, visibility) VALUES (?,?,?,?,?)",
+                        (list_id, user_id, ln, lt,
+                         "personal" if lt in {"personal", "tasks", "shopping"} else "family"),
+                    )
+                    await db.execute(
+                        "INSERT INTO list_items (id, list_id, text, quantity, category) VALUES (?,?,?,?,?)",
+                        (item_id, list_id, item, slots.get("quantity"), slots.get("category")),
+                    )
+
+                txn = getattr(db, "transaction", None)
+                if callable(txn):
+                    async with txn():
+                        await _write_new_list_and_item()
+                else:  # fallback (e.g. a DB shim without transaction support)
+                    await _write_new_list_and_item()
         await _notify_lists_ui(
             "list_updated",
             {"action": "item_added", "list_id": list_id, "item": {"id": item_id, "text": item}},

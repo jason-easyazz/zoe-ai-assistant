@@ -248,3 +248,25 @@ async def test_list_add_uses_direct_path_before_mcporter(monkeypatch):
 
     assert result == "Added milk to your shopping list."
     assert calls == [("list_add", {"item": "milk", "list_type": "shopping"}, "family-admin")]
+
+
+@pytest.mark.asyncio
+async def test_list_remove_uses_direct_path_before_mcporter(monkeypatch):
+    calls = []
+
+    async def fake_direct(intent, user_id):
+        calls.append((intent.name, dict(intent.slots), user_id))
+        return "Removed milk from your list."
+
+    async def fail_mcporter(_cmd):
+        raise AssertionError("list_remove direct path should avoid mcporter")
+
+    monkeypatch.setattr("intent_router._execute_list_remove_direct", fake_direct)
+    monkeypatch.setattr("intent_router._run_mcporter", fail_mcporter)
+
+    result = await execute_intent(
+        Intent("list_remove", {"item": "milk", "list_type": "shopping"}), "family-admin"
+    )
+
+    assert result == "Removed milk from your list."
+    assert calls == [("list_remove", {"item": "milk", "list_type": "shopping"}, "family-admin")]
