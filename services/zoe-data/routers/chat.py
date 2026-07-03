@@ -13,11 +13,12 @@ Tiered architecture (Jetson + Pi):
   Also used as direct path when Zoe Agent is bypassed.
 """
 import asyncio
-import contextlib
+import concurrent.futures
 import json
 import logging
 import pathlib
 import re
+import subprocess
 import time
 import uuid
 import os
@@ -873,6 +874,30 @@ async def _restart_hermes() -> None:
         logger.warning("Hermes restart after token write failed: %s", exc)
 
 
+# Off-loop runner for the panel_status ssh reachability probe (AGENTS.md fork
+# rule: never fork on the event loop thread — same pattern as
+# tts_waterfall._spawn_tts_cli / kanban_adapter._spawn_cli).
+_SSH_PROBE_POOL = concurrent.futures.ThreadPoolExecutor(
+    max_workers=2, thread_name_prefix="ssh-probe"
+)
+_SSH_PROBE_WAIT_GRACE_S = 5.0
+
+
+async def _spawn_ssh_probe(
+    args: list[str], *, timeout: float
+) -> "subprocess.CompletedProcess[bytes]":
+    """Run a short-lived reachability CLI off the event loop, bounded even if fork() wedges."""
+    loop = asyncio.get_running_loop()
+
+    def _blocking() -> "subprocess.CompletedProcess[bytes]":
+        return subprocess.run(args, capture_output=True, timeout=timeout, check=False)
+
+    return await asyncio.wait_for(
+        loop.run_in_executor(_SSH_PROBE_POOL, _blocking),
+        timeout=timeout + _SSH_PROBE_WAIT_GRACE_S,
+    )
+
+
 async def _build_panel_intent_card(intent, db, user_id: str) -> str:
     """Build an AG-UI markdown status card for touch panel intents."""
     import httpx as _httpx
@@ -910,36 +935,24 @@ async def _build_panel_intent_card(intent, db, user_id: str) -> str:
             ip = r["ip_address"]
             reachable = None
             if ip:
-                proc = None
                 try:
-                    import asyncio as _aio
-                    proc = await _aio.wait_for(
-                        _aio.create_subprocess_exec(
+                    # Off-loop spawn (AGENTS.md fork rule): run-to-completion
+                    # subprocess.run in a small dedicated pool — never a fork on
+                    # the event loop thread. run()'s own timeout kills+reaps a
+                    # stalled ssh child in the worker thread; the coroutine-side
+                    # wait_for still bounds this turn even if the fork itself
+                    # wedges (run()'s timeout only starts once Popen returns).
+                    result = await _spawn_ssh_probe(
+                        [
                             "ssh", "-o", "ConnectTimeout=4", "-o", "StrictHostKeyChecking=no",
                             "-o", "BatchMode=yes", "-p", str(r["ssh_port"] or 22),
                             f"{r['ssh_user'] or 'pi'}@{ip}", "echo ok",
-                            stdout=_aio.subprocess.PIPE, stderr=_aio.subprocess.PIPE,
-                        ),
+                        ],
                         timeout=6.0,
                     )
-                    # The wait_for above only bounds the ssh spawn itself; a panel
-                    # whose IP accepts TCP but stalls mid-handshake (or never
-                    # returns output) can hang communicate() forever, wedging this
-                    # chat turn and leaking the ssh child. Bound it separately and
-                    # kill+reap on timeout.
-                    await _aio.wait_for(proc.communicate(), timeout=6.0)
-                    reachable = proc.returncode == 0
+                    reachable = result.returncode == 0
                 except Exception:
                     reachable = False
-                    if proc is not None and proc.returncode is None:
-                        with contextlib.suppress(ProcessLookupError):
-                            proc.kill()
-                        # Reap with wait(), not a second communicate(): the
-                        # timed-out communicate() was cancelled mid-read, and
-                        # re-entering it on a half-consumed transport can hang
-                        # or raise. wait() only reaps the exit status.
-                        with contextlib.suppress(Exception):
-                            await _aio.wait_for(proc.wait(), timeout=5.0)
             ssh_dot = ("🟢 SSH ok" if reachable else "🔴 SSH unreachable") if reachable is not None else "⚪ no IP"
             lines.append(f"**{r['name'] or r['panel_id']}** · {ip or 'no IP'} · {ssh_dot} · last seen {r['last_seen_at'] or 'never'}")
         return "\n".join(lines)
