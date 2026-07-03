@@ -20,6 +20,8 @@ Operator run-sheet, decision of record:
 Decision of record: DELETE, per Jason 2026-07-03. The rows are April 2026
 test data, not family facts. `--backfill` remains implemented for auditability
 and emergency rollback-style remediation, but it is not the chosen action.
+The broader `--all-ownerless --execute` path additionally requires
+`--confirm-all-ownerless`; it is an emergency override, not the run-sheet path.
 
 Do not restart `:8000` or `:11434` for this script. The script talks to the
 Chroma persistent store directly. `zoe-data` may have the store open while the
