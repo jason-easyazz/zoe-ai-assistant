@@ -65,6 +65,8 @@ CRITICAL_FILES = {
         'services/zoe-ui/dist/journal.html',
         'services/zoe-ui/dist/memories.html',
         'services/zoe-ui/dist/settings.html',
+        'services/zoe-ui/dist/music.html',
+        'services/zoe-ui/dist/people.html',
     ],
     'backend': [
         'services/zoe-data/main.py',
