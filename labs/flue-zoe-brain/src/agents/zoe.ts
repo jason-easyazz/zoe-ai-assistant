@@ -137,6 +137,21 @@ export const EMOTIONAL_CAPTURE_DOCTRINE = [
   'Never announce the tool or make it weird ("I\'ve logged your sadness"). Capture it silently and keep responding warmly and naturally — the acknowledgement the person hears is your reply, not the tool.',
 ].join('\n');
 
+// Emotional-recall doctrine — the RECALL companion to EMOTIONAL_CAPTURE and the
+// soul's "call recall_memory when asked about the person" rule. It closes the
+// live gap for Samantha criterion #2 (emotional-thread recall): the soul only
+// pulled memory when directly asked about stored FACTS, so an emotional turn
+// ("I've been so stressed") or a generic "how have I been?" didn't reliably
+// trigger a recall_memory call. Proven on the live 4B brain (4/4 vs a flaky
+// baseline). Kept SHORT and BOUNDED: it widens WHEN to call recall_memory,
+// never weakens anti-fabrication. (An in-turn "volunteer memory on a bare
+// greeting" rule was measured and dropped — a 4B model surfaced only ~1/5 and
+// deflected to "nothing on your calendar"; UNPROMPTED surfacing is delivered
+// deterministically by the proactive engine's morning brief, not model whim.)
+export const EMOTIONAL_RECALL_DOCTRINE = [
+  "One more time to call recall_memory, beyond direct \"what do you know about me\" questions: when the person shares or asks about how they've BEEN — their mood, stress, worries, how they're doing, \"how have I been?\" — call recall_memory first (query it about their feelings / what's been on their mind), so you can speak to what they've actually been carrying instead of a blank check-in. Then reply warmly. Don't invent a feeling recall_memory didn't return; an empty recall just means nothing stored from before.",
+].join('\n');
+
 /**
  * The full system instructions the agent runs with. Order is deliberate: voice
  * delivery (phrasing) sits BEFORE the behavioural doctrines so the tool-first /
@@ -144,11 +159,12 @@ export const EMOTIONAL_CAPTURE_DOCTRINE = [
  * the generation boundary (Greptile #997 P2 — on a 4B model a trailing "lead with
  * the answer" could otherwise nudge a direct reply over a needed activate_abilities
  * call). Delivery is also self-scoped ("this shapes phrasing, not whether to use a
- * tool — the tool rules above still come first"). The emotional-capture doctrine
- * sits LAST, alongside the other behavioural rules, so its "when to capture /
- * when to stay silent" guidance keeps last-position weight.
+ * tool — the tool rules above still come first"). Emotional-recall then
+ * emotional-capture sit LAST, alongside the other behavioural rules, so their
+ * "when to call recall_memory / when to capture / when to stay silent" guidance
+ * keeps last-position weight.
  */
-export const ZOE_INSTRUCTIONS = `${ZOE_SOUL}\n\n${VOICE_DELIVERY_DOCTRINE}\n\n${ACTIVATOR_DOCTRINE}\n\n${IN_SESSION_CONTEXT_DOCTRINE}\n\n${EMOTIONAL_CAPTURE_DOCTRINE}`;
+export const ZOE_INSTRUCTIONS = `${ZOE_SOUL}\n\n${VOICE_DELIVERY_DOCTRINE}\n\n${ACTIVATOR_DOCTRINE}\n\n${IN_SESSION_CONTEXT_DOCTRINE}\n\n${EMOTIONAL_RECALL_DOCTRINE}\n\n${EMOTIONAL_CAPTURE_DOCTRINE}`;
 
 // Exporting `route` publishes the HTTP agent endpoints (POST/GET /agents/zoe/:id).
 // FAIL CLOSED: this route drives the live Gemma brain on :11434, so by default a
