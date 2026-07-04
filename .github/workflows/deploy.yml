@@ -44,10 +44,25 @@ jobs:
           PY
           )" || exit 1
           echo "::add-mask::${AUTH_HEADER}"
-          GIT_CONFIG_COUNT=1 \
-          GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
-          GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${AUTH_HEADER}" \
-            git fetch origin main
+          # Record the currently-deployed SHA so later steps can detect what changed.
+          echo "OLD_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          # Retry the fetch: this checkout's .git is shared with other tooling, so a
+          # concurrent `git fetch` can lose the ref-lock race on refs/remotes/origin/main
+          # ("cannot lock ref ... is at X but expected Y") and fail the whole deploy.
+          # A few retries make the deploy robust to that transient collision.
+          for attempt in 1 2 3 4 5; do
+            if GIT_CONFIG_COUNT=1 \
+               GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+               GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${AUTH_HEADER}" \
+                 git fetch origin main; then
+              break
+            fi
+            if [ "$attempt" = 5 ]; then
+              echo "git fetch failed after 5 attempts"; exit 1
+            fi
+            echo "git fetch attempt ${attempt} failed (likely a concurrent ref-lock); retrying in 5s..."
+            sleep 5
+          done
           unset AUTH_HEADER GITHUB_TOKEN
           git reset --hard FETCH_HEAD
 
@@ -80,6 +95,39 @@ jobs:
         run: |
           export XDG_RUNTIME_DIR="/run/user/$(id -u)"
           systemctl --user restart zoe-data.service
+
+      # The Flue brain sidecar is the production brain when ZOE_BRAIN_BACKEND=flue.
+      # It runs a pre-built dist/ and `flue build` externalizes deps, so a change to
+      # labs/flue-zoe-brain/ on main does NOT reach the running brain until dist is
+      # rebuilt and the service restarted. Do that here — but ONLY when the sidecar
+      # source actually changed (a build is ~1-2 min), and only if the service is
+      # installed (skips cleanly when the seam isn't in use on this host).
+      - name: Rebuild / restart Flue brain sidecar (if changed)
+        run: |
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          if ! systemctl --user list-unit-files flue-zoe-brain.service >/dev/null 2>&1; then
+            echo "flue-zoe-brain.service not installed on this host — skipping."
+            exit 0
+          fi
+          cd /home/zoe/assistant
+          if [ -n "${OLD_SHA:-}" ] \
+             && git diff --quiet "${OLD_SHA}" HEAD -- labs/flue-zoe-brain/ \
+             && [ -f labs/flue-zoe-brain/dist/server.mjs ]; then
+            echo "sidecar source unchanged since ${OLD_SHA} and dist present — no rebuild needed."
+            exit 0
+          fi
+          echo "sidecar changed (or dist missing) — rebuilding and restarting."
+          cd labs/flue-zoe-brain
+          npm install --no-audit --no-fund
+          npm run build
+          systemctl --user restart flue-zoe-brain.service
+          for attempt in $(seq 1 12); do
+            curl -sf http://127.0.0.1:3578/health > /dev/null 2>&1 \
+              && { echo "flue-zoe-brain healthy after ${attempt} attempt(s)"; exit 0; }
+            sleep 5
+          done
+          echo "flue-zoe-brain failed health check after restart"
+          exit 1
 
       - name: Health check
         run: |
