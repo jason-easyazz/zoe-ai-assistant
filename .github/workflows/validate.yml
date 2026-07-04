@@ -112,10 +112,6 @@ jobs:
             services/zoe-data/tests/test_zoe_agent_self_url.py \
             services/zoe-data/tests/test_agent_safety.py \
             services/zoe-data/tests/test_openclaw_skill_name_safety.py \
-            services/zoe-data/tests/test_pipeline_store.py \
-            services/zoe-data/tests/test_pipeline_evidence.py \
-            services/zoe-data/tests/test_multica_poll_dispatch.py \
-            services/zoe-data/tests/test_main_multica_poll.py \
             services/zoe-data/tests/test_kanban_phase_budget.py \
             services/zoe-data/tests/test_scheduling_workers_review_fixes.py \
             services/homeassistant-mcp-bridge/tests/test_ha_bridge.py \

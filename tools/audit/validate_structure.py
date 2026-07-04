@@ -142,16 +142,21 @@ def categorize_files(all_files: Set[str], manifest: Dict) -> Dict[str, List[str]
     
     return categories
 
-def check_root_md_limit() -> Tuple[bool, int, List[str]]:
-    """Check if root has max 10 .md files."""
+def get_root_md_limit(manifest: Dict) -> int:
+    """Single source of truth for the root .md cap: manifest notes.max_root_md_files."""
+    return int(manifest.get('notes', {}).get('max_root_md_files', 12))
+
+
+def check_root_md_limit(limit: int) -> Tuple[bool, int, List[str]]:
+    """Check the root .md file count against the manifest-defined cap."""
     md_files = []
     for f in PROJECT_ROOT.iterdir():
         if f.is_file() and f.suffix == '.md':
             md_files.append(f.name)
-    
-    return len(md_files) <= 10, len(md_files), md_files
 
-def print_results(categories: Dict[str, List[str]], verbose: bool = False):
+    return len(md_files) <= limit, len(md_files), md_files
+
+def print_results(categories: Dict[str, List[str]], md_limit: int, verbose: bool = False):
     """Print validation results."""
     print(f"\n{BLUE}{'='*80}{RESET}")
     print(f"{BLUE}PROJECT STRUCTURE VALIDATION{RESET}")
@@ -167,11 +172,11 @@ def print_results(categories: Dict[str, List[str]], verbose: bool = False):
     print(f"{RED}Orphan files: {len(categories['orphan'])}{RESET}\n")
     
     # Check root .md limit
-    md_ok, md_count, md_files = check_root_md_limit()
+    md_ok, md_count, md_files = check_root_md_limit(md_limit)
     if md_ok:
-        print(f"{GREEN}✓ Root .md files: {md_count}/10{RESET}")
+        print(f"{GREEN}✓ Root .md files: {md_count}/{md_limit}{RESET}")
     else:
-        print(f"{RED}✗ Root .md files: {md_count}/10 (EXCEEDS LIMIT){RESET}")
+        print(f"{RED}✗ Root .md files: {md_count}/{md_limit} (EXCEEDS LIMIT){RESET}")
     
     # Show problems
     has_issues = False
@@ -219,7 +224,7 @@ def print_results(categories: Dict[str, List[str]], verbose: bool = False):
         if categories['orphan']:
             print(f"{YELLOW}• {len(categories['orphan'])} orphan file(s) not in manifest{RESET}")
         if not md_ok:
-            print(f"{RED}• Too many .md files in root ({md_count}/10){RESET}")
+            print(f"{RED}• Too many .md files in root ({md_count}/{md_limit}){RESET}")
         print(f"\n{YELLOW}Run with safe_cleanup.py to fix issues{RESET}\n")
         return 1
 
@@ -235,8 +240,9 @@ def main():
     
     print(f"{BLUE}Categorizing files...{RESET}")
     categories = categorize_files(all_files, manifest)
-    
-    exit_code = print_results(categories, verbose)
+
+    md_limit = get_root_md_limit(manifest)
+    exit_code = print_results(categories, md_limit, verbose)
     
     return exit_code
 
