@@ -2483,3 +2483,47 @@ async def delegate_sync(body: _DelegateSyncBody, _: None = Depends(require_inter
         logger.warning("delegate-sync failed target=%s: %s", target, exc)
         raise HTTPException(status_code=502, detail="delegation failed") from exc
     return {"target": target, "ok": bool(result), "result": result or ""}
+
+
+# ─── Telegram account linking (resolve a verified telegram_id → Zoe user) ─────
+#
+# The Telegram channel (labs/flue-zoe-telegram) forwards NO session, so every
+# message would otherwise land as guest with no memory. A user links their
+# account by storing their numeric telegram_id in their profile (via
+# /api/user/profile, session-authed as themselves). This INTERNAL resolver maps
+# a verified sender's telegram_id back to that Zoe user_id so the bot can act as
+# them. Loopback / X-Internal-Token gated — it exposes an identity mapping and
+# must never be reachable publicly.
+
+
+@router.get("/resolve-telegram/{telegram_id}")
+async def resolve_telegram(
+    telegram_id: str,
+    _: None = Depends(require_internal_token),
+    db=Depends(get_db),
+):
+    """Return {"user_id": <id>} for the profile that registered telegram_id, else
+    {"user_id": null}. Internal-only (loopback or X-Internal-Token).
+
+    The telegram_id lives inside each user's user_preferences.prefs JSON under
+    the "telegram_id" key (see routers/user_profile.py). Mapping is unique per
+    telegram_id (the profile write enforces it), so at most one row matches; if
+    a stale duplicate somehow exists we return the earliest-updated one
+    deterministically.
+    """
+    tid = (telegram_id or "").strip()
+    if not tid:
+        return {"user_id": None}
+    # prefs is a JSON blob; match on the stored telegram_id string. Ordering by
+    # updated_at keeps the result deterministic even if a stale duplicate exists.
+    cursor = await db.execute(
+        """SELECT user_id, prefs FROM user_preferences
+           WHERE prefs::jsonb ->> 'telegram_id' = ?
+           ORDER BY updated_at ASC
+           LIMIT 1""",
+        (tid,),
+    )
+    row = await cursor.fetchone()
+    if not row:
+        return {"user_id": None}
+    return {"user_id": row["user_id"]}
