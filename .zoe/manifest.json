@@ -109,7 +109,6 @@
     ".dockerignore",
     ".env.example",
     ".cursorrules",
-    ".graphifyignore",
     ".pre-commit-config.yaml",
     "AGENTS.md",
     "CLAUDE.md",
