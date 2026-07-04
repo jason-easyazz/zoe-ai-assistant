@@ -12,12 +12,33 @@ Every write also recalculates health_score and increments notification_count.
 
 import asyncio
 import logging
+import os
 import re
 import uuid
 from datetime import datetime
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# ── Temporal-relationships flag (default OFF) ─────────────────────────────────
+#
+# When OFF (default), ``_write_relationship`` behaves byte-for-byte as before:
+# an insert-or-ignore against the (now partial) current-edge index — an existing
+# current edge for the pair is left untouched, NO supersession. When ON, a write
+# with a *different* rel_type for an existing current edge closes the old edge
+# (valid_to + superseded_by) and inserts the new current edge, preserving
+# history. Read lazily (per-call, no import-time side effect) — same idiom as
+# ``zoe_memory_compose.compose_enabled``.
+
+_TEMPORAL_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def temporal_relationships_enabled() -> bool:
+    """Cheap per-call read of the temporal-relationships flag (default OFF)."""
+    return (
+        os.environ.get("ZOE_TEMPORAL_RELATIONSHIPS_ENABLED", "").strip().lower()
+        in _TEMPORAL_TRUTHY
+    )
 
 # ── Regex patterns ────────────────────────────────────────────────────────────
 
@@ -316,6 +337,65 @@ async def _write_bucket(
         logger.debug("_write_bucket failed: %s", exc)
 
 
+async def _current_edge_for_pair(db, user_id: str, pid_a: str, pid_b: str):
+    """Return (id, rel_type) of the CURRENT edge for the pair, or None.
+
+    Current = ``valid_to IS NULL``. Handles both DB param styles: tries the
+    asyncpg ($1) form first and falls back to the SQLite (?) form. Read-only.
+    """
+    sql_pg = (
+        "SELECT id, rel_type FROM person_relationships "
+        "WHERE user_id=$1 AND person_a_id=$2 AND person_b_id=$3 AND valid_to IS NULL"
+    )
+    sql_sqlite = (
+        "SELECT id, rel_type FROM person_relationships "
+        "WHERE user_id=? AND person_a_id=? AND person_b_id=? AND valid_to IS NULL"
+    )
+    try:
+        cur = await db.execute(sql_pg, user_id, pid_a, pid_b)
+    except Exception:
+        cur = await db.execute(sql_sqlite, (user_id, pid_a, pid_b))
+    try:
+        row = await cur.fetchone()
+    finally:
+        # aiosqlite cursors expose close(); asyncpg's execute returns rows
+        # directly and may not — guard so neither path raises.
+        close = getattr(cur, "close", None)
+        if close is not None:
+            try:
+                res = close()
+                if asyncio.iscoroutine(res):
+                    await res
+            except Exception:
+                pass
+    if not row:
+        return None
+    # Row may be a tuple, sqlite Row, or asyncpg Record — all index by position.
+    return (row[0], row[1])
+
+
+async def _supersede_edge(db, user_id: str, old_id: str, new_id: str, now: str) -> None:
+    """Close a current edge: set valid_to + superseded_by + updated_at.
+
+    Runs BEFORE the replacement insert so no current edge remains (keeps the
+    partial unique index satisfiable). Handles both DB param styles.
+    """
+    try:
+        await db.execute(
+            "UPDATE person_relationships "
+            "SET valid_to=$1, superseded_by=$2, updated_at=$3 "
+            "WHERE id=$4 AND user_id=$5",
+            now, new_id, now, old_id, user_id,
+        )
+    except Exception:
+        await db.execute(
+            "UPDATE person_relationships "
+            "SET valid_to=?, superseded_by=?, updated_at=? "
+            "WHERE id=? AND user_id=?",
+            (now, new_id, now, old_id, user_id),
+        )
+
+
 async def _write_relationship(
     user_id: str,
     name_a: str,
@@ -387,21 +467,47 @@ async def _write_relationship(
 
     rel_id = str(uuid.uuid4())
     try:
+        # ── Temporal supersession (flag ON only) ─────────────────────────
+        # When the flag is ON and a *current* edge already exists for this pair
+        # with a DIFFERENT rel_type, close it (valid_to + superseded_by) BEFORE
+        # inserting so no current edge remains and the new one lands cleanly on
+        # the partial (current-only) unique index. Same rel_type → leave it
+        # (dedup). When the flag is OFF this whole block is skipped and the
+        # insert-or-ignore below reproduces the pre-temporal behaviour exactly.
+        if temporal_relationships_enabled():
+            existing = await _current_edge_for_pair(db, user_id, pid_a, pid_b)
+            if existing is not None:
+                existing_id, existing_type = existing
+                if existing_type == rel_type:
+                    # Unchanged relationship — nothing to supersede or insert.
+                    return
+                # rel_type changed → close the old edge, then fall through to
+                # insert the new current edge.
+                await _supersede_edge(db, user_id, existing_id, rel_id, now)
+                await db.commit()
+
+        # ── Insert the new current edge (valid_from=now, valid_to=NULL) ──
+        # ON CONFLICT / INSERT OR IGNORE now target the PARTIAL current-edge
+        # index (person_relationships_pair_active, WHERE valid_to IS NULL).
         try:
             await db.execute(
                 "INSERT INTO person_relationships "
-                "(id, user_id, person_a_id, person_b_id, rel_type, rel_a_to_b, rel_b_to_a, rel_group, created_at, updated_at) "
-                "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) "
-                "ON CONFLICT (user_id, person_a_id, person_b_id) DO NOTHING",
-                rel_id, user_id, pid_a, pid_b, rel_type, lbl_a, lbl_b, rel_group, now, now,
+                "(id, user_id, person_a_id, person_b_id, rel_type, rel_a_to_b, rel_b_to_a, rel_group, "
+                "valid_from, valid_to, superseded_by, created_at, updated_at) "
+                "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,NULL,$10,$11) "
+                "ON CONFLICT (user_id, person_a_id, person_b_id) WHERE valid_to IS NULL DO NOTHING",
+                rel_id, user_id, pid_a, pid_b, rel_type, lbl_a, lbl_b, rel_group, now, now, now,
             )
         except Exception:
             try:
+                # SQLite: INSERT OR IGNORE already honours the partial unique
+                # index (a conflict only fires against a current row).
                 await db.execute(
                     "INSERT OR IGNORE INTO person_relationships "
-                    "(id, user_id, person_a_id, person_b_id, rel_type, rel_a_to_b, rel_b_to_a, rel_group, created_at, updated_at) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
-                    (rel_id, user_id, pid_a, pid_b, rel_type, lbl_a, lbl_b, rel_group, now, now),
+                    "(id, user_id, person_a_id, person_b_id, rel_type, rel_a_to_b, rel_b_to_a, rel_group, "
+                    "valid_from, valid_to, superseded_by, created_at, updated_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,NULL,NULL,?,?)",
+                    (rel_id, user_id, pid_a, pid_b, rel_type, lbl_a, lbl_b, rel_group, now, now, now),
                 )
             except Exception as exc2:
                 logger.debug("_write_relationship: insert failed: %s", exc2)
