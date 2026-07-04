@@ -2556,7 +2556,15 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
         text = str(slots.get("text", "")).strip()
         if not text:
             return "There's nothing to remember — what would you like me to store?"
-        memory_type = str(slots.get("memory_type", "fact")).strip() or "fact"
+        # memory_type is model/caller-controlled, so validate it against an
+        # allowlist rather than forwarding an arbitrary string to the store: a
+        # direct/replayed intent-dispatch (internal-token only) must not be able to
+        # inject unknown types that downstream recall isn't built for. Unknown or
+        # blank → fall back to the safe default "fact".
+        _ALLOWED_MEMORY_TYPES = {"fact", "emotional_moment"}
+        memory_type = str(slots.get("memory_type", "fact")).strip().lower()
+        if memory_type not in _ALLOWED_MEMORY_TYPES:
+            memory_type = "fact"
 
         # Build optional emotional metadata, validating hard so junk never lands.
         emo_metadata: dict[str, Any] = {}
@@ -2574,8 +2582,11 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
             if intensity is not None and math.isfinite(intensity) and 0.0 <= intensity <= 1.0:
                 emo_metadata["intensity"] = intensity
 
-        # emotional_moment carries a slightly higher default confidence than a
-        # plain fact: it's an explicit soul-side judgement of significance.
+        # emotional_moment gets a slightly LOWER default confidence than a plain
+        # fact (0.8 vs 0.85): it's a model-emitted judgement of significance on a
+        # 4B brain, so we stay a touch more conservative than an explicit "remember
+        # X" fact the user directly asked to keep. (Value per the emotional-thread
+        # handoff spec.)
         confidence = 0.8 if memory_type == "emotional_moment" else 0.85
         tags = ["brain", "explicit"]
         if memory_type == "emotional_moment":

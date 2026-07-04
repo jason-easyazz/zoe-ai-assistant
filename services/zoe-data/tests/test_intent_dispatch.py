@@ -126,6 +126,7 @@ async def test_memory_store_intent_ingests_fact(monkeypatch):
     assert out == "Got it — I'll remember that."
     assert calls["text"] == "my anniversary is June 3rd"
     assert calls["kwargs"]["memory_type"] == "fact"
+    assert calls["kwargs"]["confidence"] == 0.85
     assert calls["kwargs"]["source"] == "brain_tool"
     assert calls["kwargs"]["user_turn_id"].startswith("fact-")
 
@@ -199,6 +200,8 @@ async def test_memory_store_emotional_moment_threads_type_and_metadata(monkeypat
     assert out == "Got it — I'll remember that."
     assert calls["text"] == "Jason has been anxious about the house settlement"
     assert calls["kwargs"]["memory_type"] == "emotional_moment"
+    # emotional_moment stays a touch more conservative than an explicit fact.
+    assert calls["kwargs"]["confidence"] == 0.8
     # valence + intensity ride the metadata dict (→ candidate_valence / candidate_intensity).
     assert calls["kwargs"]["metadata"] == {"valence": "neg", "intensity": 0.8}
     # Emotional moments carry the 'emotional' tag and a namespaced idempotency key.
@@ -262,5 +265,35 @@ async def test_memory_store_default_type_is_fact_with_no_metadata(monkeypatch):
         user_id="family-admin",
     )
     assert calls["kwargs"]["memory_type"] == "fact"
+    assert calls["kwargs"]["confidence"] == 0.85
     assert calls["kwargs"]["metadata"] is None
+    assert calls["kwargs"]["user_turn_id"].startswith("fact-")
+
+
+@pytest.mark.asyncio
+async def test_memory_store_unknown_memory_type_falls_back_to_fact(monkeypatch):
+    """memory_type is caller-controlled, so an unknown type must NOT reach the store —
+    it falls back to the safe 'fact' default (allowlist guard against injected types)."""
+    import memory_service
+
+    calls = {}
+
+    class _FakeRef:
+        text = "something"
+
+    class _FakeSvc:
+        async def ingest(self, text, **kwargs):
+            calls["kwargs"] = kwargs
+            return _FakeRef()
+
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: _FakeSvc())
+    await intent_router.execute_intent(
+        intent_router.Intent(
+            "memory_store",
+            {"text": "something", "memory_type": "note; DROP TABLE"},
+        ),
+        user_id="family-admin",
+    )
+    assert calls["kwargs"]["memory_type"] == "fact"
+    assert calls["kwargs"]["confidence"] == 0.85
     assert calls["kwargs"]["user_turn_id"].startswith("fact-")
