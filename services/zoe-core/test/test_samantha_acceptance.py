@@ -222,6 +222,64 @@ def test_continuity_consults_packet(stub):
     assert stub.memory_hits() >= 1, "preference packet was not consulted"
 
 
+def _sample(stub, prompt: str, attempts: int = 3) -> list[str]:
+    """Run the same prompt a few times and return every response (lowercased).
+
+    A 2B model is nondeterministic; a Samantha behaviour is satisfied if it shows
+    up within a few samples, so callers assert `any(needle in t for t in texts)`
+    rather than gambling on one generation (which would flake)."""
+    return [_ok(_run(prompt, stub.url)).lower() for _ in range(attempts)]
+
+
+@pytest.mark.integration
+@requires_env
+def test_emotional_thread_recall(stub):
+    # Criterion #2 — recalls the emotional thread. The packet carries a stored
+    # emotional moment; an emotional query must both consult memory and surface it.
+    stub.packet = {
+        "packet": "## What I know about you\n"
+                  "- Jason has been anxious about his house settlement dragging on [mem:e1]",
+        "count": 1, "user_scoped": True,
+    }
+    texts = _sample(stub, "What have I been anxious about lately?")
+    assert stub.memory_hits() >= 1, "emotional-memory packet was not fetched"
+    assert any("settlement" in t for t in texts), f"never recalled the emotional thread: {texts!r}"
+
+
+@pytest.mark.integration
+@requires_env
+def test_proactive_surfacing(stub):
+    # Criterion #3 — surfaces relevant memory UNPROMPTED. A neutral greeting, with
+    # a timely fact in the packet: a Samantha volunteers it rather than waiting to
+    # be asked.
+    stub.packet = {
+        "packet": "## What I know about you\n"
+                  "- Jason's mum Janice has her birthday tomorrow [mem:d1]",
+        "count": 1, "user_scoped": True,
+    }
+    texts = _sample(stub, "Good morning!", attempts=4)
+    assert stub.memory_hits() >= 1, "packet was not consulted on a neutral turn"
+    assert any("birthday" in t or "janice" in t for t in texts), \
+        f"never proactively surfaced the timely memory: {texts!r}"
+
+
+@pytest.mark.integration
+@requires_env
+def test_understanding_evolves(stub):
+    # Criterion #4 — its understanding of the user evolves (the synthesized
+    # portrait). The packet carries a portrait fact; the brain must apply it to a
+    # request that never names it.
+    stub.packet = {
+        "packet": "## What I know about you\n"
+                  "- Jason is learning to play the guitar [portrait]",
+        "count": 1, "user_scoped": True,
+    }
+    texts = _sample(stub, "Suggest something fun for me to practise tonight.")
+    assert stub.memory_hits() >= 1, "portrait packet was not consulted"
+    assert any("guitar" in t for t in texts), \
+        f"never applied its evolving understanding: {texts!r}"
+
+
 @pytest.mark.integration
 @pytest.mark.performance
 @requires_env
