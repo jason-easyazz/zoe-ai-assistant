@@ -122,6 +122,14 @@ jobs:
             exit 0
           fi
           echo "sidecar changed (or dist missing) — rebuilding and restarting."
+          # The self-hosted runner uses a non-login shell that does not source
+          # nvm, so `npm` is not on PATH (the systemd unit hard-codes
+          # ~/.nvm/current/bin/node for the same reason). Put nvm's active-version
+          # bin on PATH so `npm ci` / `npm run build` resolve — otherwise this
+          # step fails with "npm: command not found" (exit 127) the first time a
+          # commit actually touches labs/flue-zoe-brain/ and triggers the rebuild.
+          export PATH="$HOME/.nvm/current/bin:$PATH"
+          command -v npm >/dev/null || { echo "npm still not found on PATH: $PATH"; exit 1; }
           cd labs/flue-zoe-brain
           # npm ci = reproducible install from the committed lockfile, so the
           # deployed dist matches what was tested (npm install could pull newer
