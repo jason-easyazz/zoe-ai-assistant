@@ -9,7 +9,8 @@
   "scripts": {
     "build": "flue build --target node",
     "dev": "flue dev --target node",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --experimental-strip-types \"src/*.test.ts\""
   },
   "dependencies": {
     "@flue/runtime": "1.0.0-beta.6",

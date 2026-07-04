@@ -341,7 +341,7 @@ from zoe_agent import (
     _build_memory_context,
 )
 from zoe_core_client import run_zoe_core, run_zoe_core_streaming
-from auth import get_current_user
+from auth import get_current_user, resolve_acting_user
 from database import get_db
 from ui_orchestrator import enqueue_ui_action
 from zoe_ui_components import auto_extract_components
@@ -3399,7 +3399,7 @@ def _resolve_channel(body: dict) -> str:
 
 
 @router.post("/")
-async def chat(request: Request, user: dict = Depends(get_current_user), stream: bool = True):
+async def chat(request: Request, user: dict = Depends(resolve_acting_user), stream: bool = True):
     body = await request.json()
     message = body.get("message", "")
     session_id = body.get("session_id", f"web_{uuid.uuid4().hex[:8]}")
