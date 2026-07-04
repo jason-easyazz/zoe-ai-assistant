@@ -24,7 +24,9 @@ _SAFETY_RE = re.compile(
     r"\b("
     r"allerg\w*|anaphyla\w*|epi[\s-]?pen|"
     r"asthma\w*|seizure\w*|epilep\w*|diabet\w*|insulin|"
-    r"medication|medicine|prescri\w*|dosage|"
+    # `medication` (not the broad `medicine`, which fires on "studied medicine"
+    # / "alternative medicine") covers the drug-taking sense.
+    r"medication|prescri\w*|dosage|"
     r"warfarin|blood[\s-]?thinner|pacemaker|"
     r"heart\s+condition|emergency\s+contact"
     r")\b",

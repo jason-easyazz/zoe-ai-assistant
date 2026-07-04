@@ -856,6 +856,12 @@ class MemoryService:
                 "session_id", "user_turn_id", "entity_type", "entity_id", "expires_at",
                 "source_excerpt", "scope", "supersedes_id", "reviewed_by", "reviewed_at",
                 "review_note", "superseded_by_id", "_query_hashes",
+                # importance is a computed function of the row's TEXT (like
+                # memory_type/confidence above), so it must be recomputed for the
+                # edited text by _build_metadata — never carried forward, or an
+                # edit from a high-stakes fact to ordinary text would keep a stale
+                # 0.9 boost.
+                "importance",
             }
             for key, value in current.metadata.items():
                 if key in _EDIT_CARRY_FORWARD_SKIP or key in new_meta:

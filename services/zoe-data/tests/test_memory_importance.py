@@ -31,6 +31,8 @@ def test_high_stakes_facts_score(text, expected):
     "Jason loves his dog Pixel",
     "Jason went to the shops today",
     "Jason's favourite colour is blue",
+    "Jason studied medicine at university",       # bare "medicine" must NOT fire
+    "Jason is interested in alternative medicine",  # (Greptile #1017)
     "",
 ])
 def test_ordinary_facts_score_zero(text):
