@@ -58,7 +58,7 @@ The Pi-as-brain path and the services it depends on. These are real and load-bea
     `extensions/*`, `pi --mode rpc` via `services/zoe-data/zoe_core_client.py`).
     Wired + tested — **not retired**; extend it, don't archive it.
   - **`legacy`** — `services/zoe-data/zoe_agent.py`, the last fallback (only when
-    `ZOE_USE_CORE_BRAIN` is off).
+    `ZOE_BRAIN_BACKEND` is not `flue` AND `ZOE_USE_CORE_BRAIN` is off).
 - **`services/zoe-data`** — FastAPI app (`:8000`): voice/chat path, memory router, Skybridge.
 - **`zoe-database`** — PostgreSQL (asyncpg, `$1` placeholders). Relational + temporal memory.
 - **Chroma / MemPalace** — vector store for memory (raw-first).
