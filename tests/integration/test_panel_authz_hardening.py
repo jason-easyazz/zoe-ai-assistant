@@ -592,3 +592,101 @@ async def test_provision_token_delivered_once_under_concurrency():
     assert with_token[0]["panel_id"] == "living-room"
     # All other polls still see confirmed, just without a token.
     assert all(r["status"] == "confirmed" for r in results)
+
+
+# ── panel_auth._resolve_device_token_user: unbound device → guest ─────────────
+#
+# A device token authenticates the DEVICE, not a person. The acting identity is
+# whoever is bound to that panel (panel_user_bindings.default). A device with no
+# binding must fail closed to GUEST — never the household admin — mirroring the
+# session model where an absent identity resolves to guest.
+
+class _BindingLookupDB:
+    """Fake DB: the panel_user_bindings 'default' SELECT returns a fixed user (or none)."""
+
+    def __init__(self, default_user):
+        self._default_user = default_user  # str (bound) or None (unbound)
+
+    def execute(self, sql, params=None):
+        s = _norm(sql)
+        if s.startswith("SELECT USER_ID FROM PANEL_USER_BINDINGS"):
+            if self._default_user:
+                return _ExecResult([{"user_id": self._default_user}])
+            return _ExecResult([])
+        return _ExecResult([])
+
+    async def commit(self):
+        pass
+
+
+def _patch_binding_db(monkeypatch, default_user):
+    import database as _database
+
+    async def _fake_get_db():
+        yield _BindingLookupDB(default_user)
+
+    monkeypatch.setattr(_database, "get_db", _fake_get_db)
+
+
+@pytest.mark.asyncio
+async def test_device_token_bound_panel_resolves_to_bound_user(monkeypatch):
+    """A device token for a panel bound to a user acts as that user (unchanged behaviour)."""
+    monkeypatch.setattr(
+        panel_auth, "lookup_device_token",
+        lambda t: {"panel_id": "zoe-touch-pi", "role": "voice-daemon"},
+    )
+    _patch_binding_db(monkeypatch, "jason")
+    user = await panel_auth._resolve_device_token_user("tok")
+    assert user is not None
+    assert user["user_id"] == "jason"
+    assert user["role"] != "guest"
+    assert user["panel_id"] == "zoe-touch-pi"
+
+
+@pytest.mark.asyncio
+async def test_device_token_unbound_panel_is_guest_not_admin(monkeypatch):
+    """A device token for a panel with NO binding acts as guest — never family-admin/admin."""
+    monkeypatch.setattr(
+        panel_auth, "lookup_device_token",
+        lambda t: {"panel_id": "bench-panel", "role": "voice-daemon"},
+    )
+    _patch_binding_db(monkeypatch, None)
+    user = await panel_auth._resolve_device_token_user("tok")
+    assert user is not None
+    assert user["user_id"] == "guest"
+    assert user["role"] == "guest"
+    assert user["user_id"] != "family-admin"
+    assert user["permissions"] == []
+
+
+@pytest.mark.asyncio
+async def test_device_token_invalid_returns_none(monkeypatch):
+    """An unknown device token resolves to None → caller falls through to guest auth."""
+    monkeypatch.setattr(panel_auth, "lookup_device_token", lambda t: None)
+    user = await panel_auth._resolve_device_token_user("bad-token")
+    assert user is None
+
+
+@pytest.mark.asyncio
+async def test_device_token_db_failure_fails_closed_to_guest(monkeypatch, caplog):
+    """If the binding lookup RAISES, fail closed to guest (never the bound user or
+    admin) and log at WARNING so operators can observe a bound panel losing context."""
+    monkeypatch.setattr(
+        panel_auth, "lookup_device_token",
+        lambda t: {"panel_id": "zoe-touch-pi", "role": "voice-daemon"},
+    )
+    import database as _database
+
+    async def _boom_get_db():
+        raise RuntimeError("pool exhausted")
+        yield  # pragma: no cover — makes this an async generator
+
+    monkeypatch.setattr(_database, "get_db", _boom_get_db)
+
+    with caplog.at_level("WARNING"):
+        user = await panel_auth._resolve_device_token_user("tok")
+    assert user is not None
+    assert user["user_id"] == "guest"
+    assert user["role"] == "guest"
+    assert user["permissions"] == []
+    assert any("binding lookup FAILED" in r.message for r in caplog.records)
