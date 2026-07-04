@@ -147,23 +147,6 @@ def test_flag_reader_unset(monkeypatch):
 
 # ── 4. endpoint wiring (flag gates BOTH the search fire and the packet float) ──
 
-class _RecordingSvc:
-    """Fake MemoryService that records whether the semantic search fired and
-    returns the emotional row as a hit only when it does."""
-
-    def __init__(self, facts, emo_hit):
-        self._facts = facts
-        self._emo_hit = emo_hit
-        self.searched = False
-
-    async def load_for_prompt(self, user_id, *, limit=20):
-        return self._facts
-
-    async def search(self, q, *, user_id, limit=10):
-        self.searched = True
-        return [self._emo_hit]
-
-
 def _emo_ref(rid, text, intensity):
     return MemoryRef(
         id=rid, text=text, score=0.9,
@@ -177,23 +160,51 @@ def _plain_ref(rid, text):
                      metadata={"status": "approved", "memory_type": "fact"})
 
 
+# The crowded-out emotional row. It is the WORST case the live test exposed: last
+# in the fact window (so truncated from the generic top-12) AND not returned by
+# semantic search — so ONLY the explicit pin can surface it.
+_EMO = _emo_ref("emo00001", "Jason has been anxious about the settlement", 0.9)
+_HEAVY_FACTS = [_plain_ref(f"f{i}", f"ordinary fact {i}") for i in range(12)] + [_EMO]
+
+
+class _RecordingSvc:
+    """Fake MemoryService. `search` returns only what it's told (default: nothing
+    relevant), so a passing 'emotional row surfaced' assertion can only be the pin
+    — not search luck. `load_for_prompt` returns the full window (emo row last),
+    which the packet's max_facts truncates but `_fetch_emotional_moments` scans."""
+
+    def __init__(self, facts, search_hits=None):
+        self._facts = facts
+        self._search_hits = search_hits or []
+        self.searched = False
+
+    async def load_for_prompt(self, user_id, *, limit=20):
+        return self._facts[:limit]
+
+    async def search(self, q, *, user_id, limit=10):
+        self.searched = True
+        return list(self._search_hits)
+
+
 @pytest.fixture
 def _wire(monkeypatch):
-    """Internal token + non-guest + a fake svc whose emotional row is crowded out
-    of the generic facts (so only search/float can surface it), and a stubbed
-    compose so the endpoint needs no DB."""
+    """Internal token + non-guest + a heavy fake svc (emo row crowded out and NOT
+    returned by search) + stubbed compose so the endpoint needs no DB."""
     monkeypatch.setattr(auth, "_ZOE_INTERNAL_TOKEN", "tok")
     monkeypatch.setattr(memory_service, "is_guest_memory_user", lambda uid: uid == "guest")
-
-    emo = _emo_ref("emo00001", "Jason has been anxious about the settlement", 0.9)
-    facts = [_plain_ref(f"f{i}", f"ordinary fact {i}") for i in range(12)]  # fills the packet
-    svc = _RecordingSvc(facts=facts, emo_hit=emo)
+    svc = _RecordingSvc(facts=_HEAVY_FACTS)          # search returns nothing relevant
     monkeypatch.setattr(memories_mod, "_svc", lambda: svc)
 
     async def _no_compose(user_id, message):
         return {}
     monkeypatch.setattr(compose_mod, "compose_packet", _no_compose)
     return svc
+
+
+def _app_with_router():
+    app = FastAPI()
+    app.include_router(memories_router)
+    return app
 
 
 def _get(message):
@@ -204,15 +215,30 @@ def _get(message):
     )
 
 
-def _app_with_router():
-    app = FastAPI()
-    app.include_router(memories_router)
-    return app
+# ── _fetch_emotional_moments unit ─────────────────────────────────────────────
 
+async def test_fetch_emotional_moments_filters_and_orders():
+    svc = _RecordingSvc(facts=[
+        _plain_ref("p", "ordinary fact"),
+        _emo_ref("e_low", "mildly annoyed", 0.2),
+        _emo_ref("e_high", "devastated", 0.95),
+    ])
+    got = await memories_mod._fetch_emotional_moments(svc, "jason")
+    assert [r.id for r in got] == ["e_high", "e_low"]     # type-filtered, intensity desc
+
+
+async def test_fetch_emotional_moments_best_effort_on_error():
+    class _Boom:
+        async def load_for_prompt(self, *a, **k):
+            raise RuntimeError("store down")
+    assert await memories_mod._fetch_emotional_moments(_Boom(), "jason") == []
+
+
+# ── endpoint wiring (pin is the load-bearing mechanism) ───────────────────────
 
 def test_flag_off_emotional_statement_is_noop(monkeypatch, _wire):
-    # "I've been so stressed" is missed by the base gate; with the flag OFF the
-    # emotional detector is not consulted → no search, emotional row stays lost.
+    # "I've been so stressed" is missed by the base gate; flag OFF ⇒ no emotional
+    # detector, no search, no pin ⇒ the crowded-out row stays lost.
     monkeypatch.delenv("ZOE_EMOTIONAL_RECALL_ENABLED", raising=False)
     resp = _get("I've been so stressed lately")
     assert resp.status_code == 200
@@ -220,22 +246,36 @@ def test_flag_off_emotional_statement_is_noop(monkeypatch, _wire):
     assert "anxious about the settlement" not in resp.json()["packet"]
 
 
-def test_flag_on_emotional_statement_surfaces_row(monkeypatch, _wire):
+def test_flag_on_pins_crowded_out_row(monkeypatch, _wire):
+    # Flag ON: search returns NOTHING relevant, yet the pinned emotional moment
+    # surfaces AND leads — proving the pin (not search) carries continuity.
     monkeypatch.setenv("ZOE_EMOTIONAL_RECALL_ENABLED", "1")
     resp = _get("I've been so stressed lately")
     assert resp.status_code == 200
-    assert _wire.searched is True                       # emotional cue fired the search
     packet = resp.json()["packet"]
-    assert "anxious about the settlement" in packet     # crowded-out row now surfaces
-    # and it leads (search hit first)
+    assert "anxious about the settlement" in packet
     first_line = next(l for l in packet.split("\n") if l.startswith("- "))
     assert "anxious about the settlement" in first_line
 
 
+def test_flag_on_pin_dedups_with_search(monkeypatch):
+    # If search ALSO returns the emotional row, the packet must not double-count it.
+    monkeypatch.setattr(auth, "_ZOE_INTERNAL_TOKEN", "tok")
+    monkeypatch.setattr(memory_service, "is_guest_memory_user", lambda uid: uid == "guest")
+    svc = _RecordingSvc(facts=_HEAVY_FACTS, search_hits=[_EMO])   # search returns the emo row too
+    monkeypatch.setattr(memories_mod, "_svc", lambda: svc)
+
+    async def _no_compose(user_id, message):
+        return {}
+    monkeypatch.setattr(compose_mod, "compose_packet", _no_compose)
+    monkeypatch.setenv("ZOE_EMOTIONAL_RECALL_ENABLED", "1")
+    packet = _get("I've been so stressed lately").json()["packet"]
+    assert packet.count("anxious about the settlement") == 1
+
+
 def test_flag_on_neutral_turn_does_not_fire(monkeypatch, _wire):
-    # Flag ON but a non-emotional turn that trips NEITHER the base gate (no
-    # first-person/possessive) nor the emotional cue: no search, no float — a true
-    # no-op, so the flag never touches ordinary traffic.
+    # Flag ON but a non-emotional turn that trips NEITHER the base gate nor the
+    # emotional cue: no search, no pin — a true no-op on ordinary traffic.
     monkeypatch.setenv("ZOE_EMOTIONAL_RECALL_ENABLED", "1")
     resp = _get("what's the weather tomorrow")
     assert resp.status_code == 200

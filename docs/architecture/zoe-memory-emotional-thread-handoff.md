@@ -114,3 +114,13 @@ When substrate first appears, the memory-side wiring above is unblocked and I pi
   lost, ON it surfaces; neutral turns byte-for-byte no-op; 68 gate/packet tests green.
   **Not yet enabled in prod** — flag flip is the deliberate follow-up after merge+deploy
   and a real-user live-verify. Item #2 (intensity → 2a importance arm) still to follow.
+- 2026-07-04 — **Enabled in prod + live test found a gap + fixed it** (`ZOE_EMOTIONAL_RECALL_ENABLED=1`,
+  deployed via #1004). Live-testing on the real service exposed that float+search is NOT
+  robust for a heavy user: a *generic* emotional query ("how have I been doing") has no
+  lexical overlap, so semantic search ranked ordinary facts above the emotional row, and
+  `load_for_prompt`'s top-N had already truncated it — the row never surfaced. Fix (PR
+  #100X, `feat/emotional-thread-recall-pin`): on an emotional turn, **explicitly fetch**
+  the user's `emotional_moment` rows (type-filtered, intensity-ordered) and PIN them to
+  the front of the packet, ahead of search hits, dedup by id. Re-proven on the live
+  service against the exact worst case: OFF the row stays lost, ON the generic emotional
+  query surfaces it AND it leads; neutral stays a no-op. 109 tests green.

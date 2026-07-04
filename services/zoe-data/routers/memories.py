@@ -420,6 +420,31 @@ def _emotional_recall_enabled() -> bool:
     return os.getenv("ZOE_EMOTIONAL_RECALL_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+# On an emotional turn we PIN the user's emotional moments into the packet rather
+# than trust generic semantic ranking. Live-testing showed why: for a topical
+# query the settlement-anxiety row matches, but for a *generic* emotional query
+# ("how have I been doing") there's no lexical overlap, so search ranks ordinary
+# facts above it — and load_for_prompt's top-N may have already truncated it out.
+# An explicit type-filtered fetch, ordered by intensity, guarantees a slot.
+_EMO_PIN_SCAN = 200   # metadata-only read window to find emotional rows past the top-N
+_EMO_PIN_MAX = 3      # how many emotional moments to guarantee in the packet
+
+
+async def _fetch_emotional_moments(svc, user_id: str) -> list[MemoryRef]:
+    """Top emotional_moment rows for the user, highest-intensity first. Best-effort:
+    never raises into the packet path. Same approved-only source as the generic
+    packet (`load_for_prompt`), just type-filtered so a crowded-out emotional row
+    is still found."""
+    try:
+        rows = await svc.load_for_prompt(user_id, limit=_EMO_PIN_SCAN)
+    except Exception:
+        logger.exception("memories: emotional-moment fetch failed")
+        return []
+    emo = [r for r in rows if str((r.metadata or {}).get("memory_type")) == "emotional_moment"]
+    emo.sort(key=_emotional_intensity, reverse=True)
+    return emo[:_EMO_PIN_MAX]
+
+
 @router.get("/for-prompt")
 async def memory_for_prompt(
     user_id: str = Query(..., min_length=1),
@@ -459,9 +484,13 @@ async def memory_for_prompt(
         except Exception:
             logger.exception("memories: semantic prompt search failed")
             hits = []
-    # Float emotional_moment rows only on an emotional turn — not on every packet
-    # (that would be always-on surfacing, criterion #3, not recall). So a
-    # non-emotional turn is a byte-for-byte no-op even with the flag on.
+    # On an emotional turn, PIN the user's emotional moments to the front of the
+    # packet (ahead of semantic hits) so continuity survives even when generic
+    # ranking would bury them. Dedup by id in the packet builder means a moment
+    # search also returned is not double-counted. Only on an emotional turn, so a
+    # non-emotional turn stays a byte-for-byte no-op even with the flag on.
+    if emo_turn:
+        hits = await _fetch_emotional_moments(svc, user_id) + hits
     result = _build_memory_prompt_packet(
         facts, hits, max_facts=limit, boost_emotional=emo_turn
     )
