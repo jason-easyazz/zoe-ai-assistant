@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Zoe Project Context
 
-Zoe production code lives in `/home/zoe/assistant`. The live web/chat API is `services/zoe-data/` running host uvicorn on port 8000. `services/zoe-core/` is retired reference code; do not extend it for new features.
+Zoe production code lives in `/home/zoe/assistant`. The live web/chat API is `services/zoe-data/` running host uvicorn on port 8000. `services/zoe-core/` is the wired default `core` brain fallback (Pi on Gemma 4, `pi --mode rpc`) below the live `flue` sidecar — extend it, do not retire it. The truly-retired thing is the OLD Docker/RouteLLM-MemAgent monolith (git history only).
 
 Repository changes should land through pull requests. Keep `main` protected and treat direct pushes or admin merges as emergency-only operator-approved actions.
 

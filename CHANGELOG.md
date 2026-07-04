@@ -5,6 +5,12 @@ All notable changes to the Zoe AI Assistant project will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+> **Note:** This file is a historical snapshot and is **not** the live source of
+> truth. For current status and direction see [`docs/PLANS.md`](docs/PLANS.md) and
+> [`docs/CANONICAL.md`](docs/CANONICAL.md); for the authoritative record of what
+> actually changed, read the git log (`git log --oneline`). Entries below the
+> `0.1.0` heading are frozen at the dates shown.
+
 ## [0.1.0] - 2025-11-16 "Jetson Optimization & Multi-Platform"
 
 ### Added
