@@ -162,3 +162,105 @@ async def test_memory_store_dropped_write_does_not_claim_success(monkeypatch):
         user_id="family-admin",
     )
     assert "couldn't save" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_memory_store_emotional_moment_threads_type_and_metadata(monkeypatch):
+    """memory_store with memory_type=emotional_moment + valence/intensity threads
+    the type through and passes valence/intensity via the ingest metadata dict (the
+    store has no columns for them). This is the substrate side of the emotional-thread
+    handoff (docs/architecture/zoe-memory-emotional-thread-handoff.md)."""
+    import memory_service
+
+    calls = {}
+
+    class _FakeRef:
+        text = "Jason has been anxious about the house settlement"
+
+    class _FakeSvc:
+        async def ingest(self, text, **kwargs):
+            calls["text"] = text
+            calls["kwargs"] = kwargs
+            return _FakeRef()
+
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: _FakeSvc())
+    out = await intent_router.execute_intent(
+        intent_router.Intent(
+            "memory_store",
+            {
+                "text": "Jason has been anxious about the house settlement",
+                "memory_type": "emotional_moment",
+                "valence": "neg",
+                "intensity": 0.8,
+            },
+        ),
+        user_id="family-admin",
+    )
+    assert out == "Got it — I'll remember that."
+    assert calls["text"] == "Jason has been anxious about the house settlement"
+    assert calls["kwargs"]["memory_type"] == "emotional_moment"
+    # valence + intensity ride the metadata dict (→ candidate_valence / candidate_intensity).
+    assert calls["kwargs"]["metadata"] == {"valence": "neg", "intensity": 0.8}
+    # Emotional moments carry the 'emotional' tag and a namespaced idempotency key.
+    assert "emotional" in calls["kwargs"]["tags"]
+    assert calls["kwargs"]["user_turn_id"].startswith("emo-")
+
+
+@pytest.mark.asyncio
+async def test_memory_store_ignores_junk_valence_and_intensity(monkeypatch):
+    """Malformed valence / out-of-range or non-finite intensity is dropped, never
+    stored. An emotional_moment with only junk emotional metadata sends metadata=None."""
+    import memory_service
+
+    calls = {}
+
+    class _FakeRef:
+        text = "Jason is happy"
+
+    class _FakeSvc:
+        async def ingest(self, text, **kwargs):
+            calls["kwargs"] = kwargs
+            return _FakeRef()
+
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: _FakeSvc())
+    out = await intent_router.execute_intent(
+        intent_router.Intent(
+            "memory_store",
+            {
+                "text": "Jason is happy",
+                "memory_type": "emotional_moment",
+                "valence": "elated",   # not one of pos|neg|mixed → dropped
+                "intensity": 7.5,        # out of 0..1 → dropped
+            },
+        ),
+        user_id="family-admin",
+    )
+    assert out == "Got it — I'll remember that."
+    assert calls["kwargs"]["memory_type"] == "emotional_moment"
+    # No valid emotional metadata survived, so metadata is None (not a junk dict).
+    assert calls["kwargs"]["metadata"] is None
+
+
+@pytest.mark.asyncio
+async def test_memory_store_default_type_is_fact_with_no_metadata(monkeypatch):
+    """remember_fact behaviour is unchanged: no memory_type slot → fact, metadata None."""
+    import memory_service
+
+    calls = {}
+
+    class _FakeRef:
+        text = "my anniversary is June 3rd"
+
+    class _FakeSvc:
+        async def ingest(self, text, **kwargs):
+            calls["kwargs"] = kwargs
+            return _FakeRef()
+
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: _FakeSvc())
+    await intent_router.execute_intent(
+        intent_router.Intent("memory_store", {"text": "my anniversary is June 3rd"}),
+        user_id="family-admin",
+    )
+    assert calls["kwargs"]["memory_type"] == "fact"
+    assert calls["kwargs"]["metadata"] is None
+    assert calls["kwargs"]["user_turn_id"].startswith("fact-")

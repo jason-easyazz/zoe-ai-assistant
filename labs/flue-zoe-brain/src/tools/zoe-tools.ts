@@ -892,6 +892,59 @@ const rememberFact = defineTool({
   },
 });
 
+/**
+ * remember_emotional_moment — the SOUL-side emotional-thread capture signal
+ * (docs/architecture/zoe-memory-emotional-thread-handoff.md). When a turn carries
+ * genuine, durable emotional weight (stress, grief, joy, a milestone, a worry the
+ * user keeps returning to), the brain quietly persists the DURABLE emotional FACT
+ * so future turns can carry the thread forward.
+ *
+ * WRITE → the same `memory_store` intent remember_fact uses, but with
+ * memory_type='emotional_moment' and optional valence/intensity. The store has no
+ * columns for valence/intensity, so zoe-data threads them via ingest metadata
+ * (candidate_valence / candidate_intensity) for the memory side's importance boost.
+ *
+ * The model supplies ONLY the content (the normalised emotional fact + its tone),
+ * NEVER the identity — user_id is env/ALS-bound in trusted code exactly like every
+ * other tool here, and the write is gated behind ZOE_BRAIN_ALLOW_WRITES.
+ *
+ * CONTRACT: store the DURABLE FACT, first/third-person-normalised ("Jason has been
+ * anxious about the house settlement"), NOT the raw transcript line ("I'm so
+ * stressed about the house") — the quality gate rejects speaker/transcript echoes.
+ */
+const VALENCES = new Set(['pos', 'neg', 'mixed']);
+const rememberEmotionalMoment = defineTool({
+  name: 'remember_emotional_moment',
+  description:
+    'Quietly record a genuinely significant, DURABLE emotional thread about the ' +
+    'user — real stress, grief, joy, a milestone, or a worry they keep returning ' +
+    'to ("Jason has been anxious about the house settlement"). Store the durable ' +
+    'FACT in your own words, NOT their transcript line. Use SPARINGLY — only for ' +
+    'genuine, lasting emotional weight, never passing chit-chat or every feeling; ' +
+    'most turns should NOT call this. Never announce that you logged it. To store a ' +
+    'plain fact use remember_fact; to recall use recall_memory.',
+  input: v.object({
+    moment: v.pipe(v.string(), v.trim(), v.minLength(1)),
+    valence: v.optional(v.picklist(['pos', 'neg', 'mixed'])),
+    intensity: v.optional(v.number()),
+  }),
+  run: async ({ input, signal }) => {
+    const moment = String(input.moment ?? '').trim();
+    if (!moment) return 'What emotional moment would you like me to hold onto?';
+    // Content-only slots. Identity is never a model arg (runWrite → dispatchIntent
+    // binds the acting user in trusted code). Omit valence/intensity when absent or
+    // malformed so zoe-data never has to sanitise junk it didn't need to receive.
+    const slots: Record<string, unknown> = { text: moment, memory_type: 'emotional_moment' };
+    const valence = String(input?.valence ?? '').trim().toLowerCase();
+    if (VALENCES.has(valence)) slots.valence = valence;
+    if (typeof input?.intensity === 'number' && Number.isFinite(input.intensity)) {
+      slots.intensity = Math.max(0, Math.min(1, input.intensity));
+    }
+    return runWrite('memory_store', slots, 'memory',
+      'that emotional moment', "Got it — I'll keep that in mind.", signal);
+  },
+});
+
 // ─── Progressive disclosure activator ────────────────────────────────────────
 
 /**
@@ -964,6 +1017,8 @@ export const zoeTools = [
   home,
   // Wave 3 — explicit memory write (cut-list record §3; write gated)
   rememberFact,
+  // Emotional-thread capture signal (handoff: zoe-memory-emotional-thread; write gated)
+  rememberEmotionalMoment,
   // Progressive disclosure — always-on activator for the grouped tools above
   activateAbilities,
 ];

@@ -12,6 +12,7 @@ matching as list_show.
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 import shlex
@@ -20,7 +21,7 @@ import shutil
 import unicodedata
 import uuid
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from fastapi import HTTPException
 
@@ -2535,30 +2536,69 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
         return f"Done — I forgot: \"{preview}\"."
 
     # "remember that <fact>" — an EXPLICIT, model-callable memory write. This is
-    # the fulfillment for the Flue sidecar's remember_fact tool (Wave 3 of the
-    # cutover cut list, docs/knowledge/flue-cutover-tool-cut-list.md §3): the one
-    # new dispatchable intent. Goes through MemoryService.ingest, the same durable
-    # write path expert_dispatch uses for voice facts — so PII scrubbing, dedup,
-    # and scope validation all apply. A stable idempotency key (user + normalized
-    # text) collapses repeats, matching expert_dispatch.store_fact.
+    # the fulfillment for the Flue sidecar's remember_fact + remember_emotional_moment
+    # tools (Wave 3 of the cutover cut list, docs/knowledge/flue-cutover-tool-cut-list.md §3,
+    # plus the emotional-thread capture signal,
+    # docs/architecture/zoe-memory-emotional-thread-handoff.md). Goes through
+    # MemoryService.ingest, the same durable write path expert_dispatch uses for
+    # voice facts — so PII scrubbing, dedup, and scope validation all apply. A stable
+    # idempotency key (user + normalized text) collapses repeats, matching
+    # expert_dispatch.store_fact.
+    #
+    # memory_type / valence / intensity come from the caller's slots. memory_type
+    # defaults to "fact" (unchanged remember_fact behaviour). valence (pos|neg|mixed)
+    # and intensity (0.0–1.0) are the emotional-moment signal; the store has no
+    # columns for them, so they ride the metadata dict (surfacing as
+    # candidate_valence / candidate_intensity) for the memory-side importance boost
+    # to read. Junk valence/intensity is dropped, never stored.
     if intent.name == "memory_store":
-        text = str((intent.slots or {}).get("text", "")).strip()
+        slots = intent.slots or {}
+        text = str(slots.get("text", "")).strip()
         if not text:
             return "There's nothing to remember — what would you like me to store?"
+        memory_type = str(slots.get("memory_type", "fact")).strip() or "fact"
+
+        # Build optional emotional metadata, validating hard so junk never lands.
+        emo_metadata: dict[str, Any] = {}
+        valence = str(slots.get("valence", "")).strip().lower()
+        if valence in {"pos", "neg", "mixed"}:
+            emo_metadata["valence"] = valence
+        raw_intensity = slots.get("intensity")
+        if raw_intensity is not None:
+            try:
+                intensity = float(raw_intensity)
+            except (TypeError, ValueError):
+                intensity = None
+            # Ignore non-finite / out-of-range junk; clamp is intentional not here —
+            # a value outside 0..1 is malformed input, not a saturated signal.
+            if intensity is not None and math.isfinite(intensity) and 0.0 <= intensity <= 1.0:
+                emo_metadata["intensity"] = intensity
+
+        # emotional_moment carries a slightly higher default confidence than a
+        # plain fact: it's an explicit soul-side judgement of significance.
+        confidence = 0.8 if memory_type == "emotional_moment" else 0.85
+        tags = ["brain", "explicit"]
+        if memory_type == "emotional_moment":
+            tags.append("emotional")
+
         try:
             import hashlib
             from memory_service import get_memory_service
             norm = re.sub(r"\s+", " ", text.lower()).strip()
-            user_turn_id = "fact-" + hashlib.sha1(f"{user_id}|{norm}".encode()).hexdigest()[:16]
+            # Namespace the idempotency key by memory_type so an emotional_moment
+            # and a plain fact with identical text don't collapse into one row.
+            key_prefix = "emo-" if memory_type == "emotional_moment" else "fact-"
+            user_turn_id = key_prefix + hashlib.sha1(f"{user_id}|{memory_type}|{norm}".encode()).hexdigest()[:16]
             svc = get_memory_service()
             ref = await svc.ingest(
                 text,
                 user_id=user_id,
                 source="brain_tool",
                 user_turn_id=user_turn_id,
-                memory_type="fact",
-                confidence=0.85,
-                tags=["brain", "explicit"],
+                memory_type=memory_type,
+                confidence=confidence,
+                tags=tags,
+                metadata=(emo_metadata or None),
             )
         except Exception as exc:
             logger.warning("memory_store ingest failed: %s", exc)
