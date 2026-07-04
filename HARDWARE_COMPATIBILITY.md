@@ -16,7 +16,7 @@ Zoe AI Assistant is designed to run across multiple ARM64 platforms with adaptiv
 | **LLM Inference** | GPU-accelerated | CPU-only | CPU-only |
 | **GPU Layers** | 99 (all on GPU) | 0 (CPU only) | 0 (CPU only) |
 | **Concurrent Users** | 10+ | 3-5 | TBD |
-| **Primary Models** | llama-3.2-3b, qwen2.5-7b | phi3:mini, llama3.2:3b | TBD |
+| **Primary Models** | gemma-4-e4b-qat (+ MTP) | phi3:mini, llama3.2:3b | TBD |
 | **Model Size** | Up to 8GB | Up to 4GB | TBD |
 | **Tokens/sec** | 50+ (GPU) | 8-12 (CPU) | TBD |
 | **Context Window** | 4096 tokens | 2048 tokens | TBD |
@@ -59,10 +59,8 @@ run as `systemctl --user` services. `docker-compose.jetson.yml` is a no-op
 compatibility overlay kept only so older compose commands validate.
 
 **Recommended Models:**
-- `llama-3.2-3b-gguf` (2.0GB, Q4_K_M)
-- `qwen2.5-7b-gguf` (4.7GB, Q4_K_M)
-- `qwen2.5-coder-7b-gguf` (4.5GB, Q4_K_M)
-- `phi35-mini-gguf` (2.4GB, Q4_K_M)
+- `gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf` (~3.5GB, Q4_K_XL) — **canonical live brain** (+ `mtp-gemma-4-E4B-it.gguf` drafter), served host-native by `llama-server` on `:11434`
+- `qwen2.5-coder-7b-gguf` (4.5GB, Q4_K_M) — optional coding model
 
 **Performance:**
 - First token: <2s
@@ -183,9 +181,8 @@ def detect_hardware():
 **Jetson Orin NX:**
 ```python
 PRIMARY_MODELS = {
-    "chat": "qwen2.5-7b-gguf",      # 4.7GB, GPU-accelerated
-    "code": "qwen2.5-coder-7b-gguf", # 4.5GB, GPU-accelerated
-    "fast": "llama-3.2-3b-gguf",     # 2.0GB, GPU-accelerated
+    "chat": "gemma-4-E4B-it-qat",     # ~3.5GB Q4_K_XL, GPU-accelerated (canonical brain rock + MTP drafter)
+    "code": "qwen2.5-coder-7b-gguf",  # 4.5GB, GPU-accelerated (optional coding model)
 }
 GPU_CONFIG = {
     "num_gpu": 99,  # All layers on GPU
