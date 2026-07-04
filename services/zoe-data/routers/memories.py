@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from typing import Any, Optional
 
@@ -288,11 +289,26 @@ def _is_near_duplicate(cand: frozenset, kept: list) -> bool:
     return False
 
 
+def _emotional_intensity(ref: MemoryRef) -> float:
+    """Sort key: an `emotional_moment`'s stored intensity (0..1), else -1 so
+    non-emotional facts sort after. Reads `candidate_intensity` (where the
+    memory_store intent parks the signal); missing/garbled → 0.0 for an emotional
+    row so it still floats ahead of plain facts, just behind scored ones."""
+    meta = ref.metadata or {}
+    if str(meta.get("memory_type")) != "emotional_moment":
+        return -1.0
+    try:
+        return float(meta.get("candidate_intensity"))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _build_memory_prompt_packet(
     facts: list[MemoryRef],
     hits: list[MemoryRef],
     *,
     max_facts: int = _PROMPT_PACKET_MAX_FACTS,
+    boost_emotional: bool = False,
 ) -> dict[str, Any]:
     """Compile a compact, cited memory packet for system-prompt injection.
 
@@ -300,7 +316,16 @@ def _build_memory_prompt_packet(
     every line carries a source/evidence id, superseded/archived facts are
     dropped (prefer current), and disputed facts are surfaced as uncertain.
     Message-relevant semantic hits lead; general facts follow.
+
+    When ``boost_emotional`` is set (ZOE_EMOTIONAL_RECALL_ENABLED, Samantha
+    criterion #2), `emotional_moment` rows are floated to the front of the
+    *generic* section — behind semantic hits, ahead of plain facts, ordered by
+    intensity — so a heavy user's emotional continuity isn't crowded out of the
+    small packet by ordinary facts. A stable sort keeps existing order otherwise;
+    OFF is a byte-for-byte no-op.
     """
+    if boost_emotional and facts:
+        facts = sorted(facts, key=_emotional_intensity, reverse=True)
     seen: set[str] = set()
     kept_tokens: list[frozenset] = []
     lines: list[str] = []
@@ -384,6 +409,15 @@ def _fold_relational_block(
 # ONNX+Chroma semantic search only fires when the message looks like a recall query
 # — most turns don't, and the embed+query is the endpoint's main cost.
 from memory_gate import message_needs_memory as _message_needs_memory  # noqa: E402
+from memory_gate import message_needs_emotional_recall as _message_needs_emotional_recall  # noqa: E402
+
+
+def _emotional_recall_enabled() -> bool:
+    """Samantha criterion #2 recall wiring, default OFF. Per-call env read (matches
+    the compose flag) so a restart flips it without code change. When OFF, emotional
+    queries fall back to the base gate and the packet keeps default order — a true
+    no-op — so this ships dark and is lab-proven on real rows before prod."""
+    return os.getenv("ZOE_EMOTIONAL_RECALL_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 @router.get("/for-prompt")
@@ -414,13 +448,23 @@ async def memory_for_prompt(
     # of every turn (the Pi memory extension calls this endpoint on every turn).
     facts = await svc.load_for_prompt(user_id, limit=limit)
     hits: list[MemoryRef] = []
-    if message.strip() and _message_needs_memory(message):
+    # Emotional-recall wiring (Samantha #2), default OFF: when on, an emotional cue
+    # ("how have I been", "feeling overwhelmed") also fires the search so stored
+    # emotional_moment rows lead, and the packet floats them ahead of plain facts.
+    emo_turn = _emotional_recall_enabled() and _message_needs_emotional_recall(message)
+    needs_search = _message_needs_memory(message) or emo_turn
+    if message.strip() and needs_search:
         try:
             hits = await svc.search(message, user_id=user_id, limit=6)
         except Exception:
             logger.exception("memories: semantic prompt search failed")
             hits = []
-    result = _build_memory_prompt_packet(facts, hits, max_facts=limit)
+    # Float emotional_moment rows only on an emotional turn — not on every packet
+    # (that would be always-on surfacing, criterion #3, not recall). So a
+    # non-emotional turn is a byte-for-byte no-op even with the flag on.
+    result = _build_memory_prompt_packet(
+        facts, hits, max_facts=limit, boost_emotional=emo_turn
+    )
     result["user_scoped"] = True
 
     # Increment 2b: fold the relational half (Postgres people/relationships/dates

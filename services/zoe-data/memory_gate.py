@@ -25,6 +25,28 @@ MEMORY_TRIGGER_WORDS = frozenset({
 })
 
 
+# Emotional-state cues — recall of stored `emotional_moment` rows (Samantha
+# criterion #2 continuity). Kept SEPARATE from MEMORY_TRIGGER_WORDS: this set is
+# consulted only by `message_needs_emotional_recall`, which the for-prompt
+# endpoint calls behind ZOE_EMOTIONAL_RECALL_ENABLED — so the default recall gate
+# is unchanged until that flag is on. Substrings, lowercased. Covers the user
+# *asking* about their state ("how have I been", "how am I doing") and *sharing*
+# one ("I've been so stressed", "feeling overwhelmed") — both are cues to pull
+# past emotional continuity. Both valences on purpose (the 4B brain under-captures
+# joy, so we must not also under-recall it).
+EMOTIONAL_TRIGGER_WORDS = frozenset({
+    "feeling", "how i feel", "how i've been", "how have i been", "how i been",
+    "how am i", "how are things", "how's things", "how are you feeling",
+    "stressed", "stressing", "stress about", "anxious", "anxiety",
+    "worried", "worrying", "overwhelmed", "depressed", "burnt out", "burned out",
+    "lonely", "grieving", "grief", "heartbroken", "upset", "struggling",
+    "coping", "mental health", "going through", "my mood", "been down",
+    # positive-valence emotional recall (symmetry with joy capture)
+    "excited about", "so happy", "happy about", "made me happy", "makes me happy",
+    "made me smile", "proud of", "thrilled", "over the moon",
+})
+
+
 # A possessive self-reference ("my dad", "our house") — a strong recall signal.
 # NOTE: deliberately excludes the object pronoun "me" (it appears in request
 # phrases "tell me / give me / remind me" that are not recall).
@@ -72,3 +94,13 @@ def message_needs_memory(message: str) -> bool:
     if _FIRST_PERSON_SUBJ_RE.search(text) and not _PROCEDURAL_HOW_RE.match(text):
         return True
     return False
+
+
+def message_needs_emotional_recall(message: str) -> bool:
+    """True when the message carries an emotional-state cue worth pulling stored
+    `emotional_moment` rows for. Kept SEPARATE from `message_needs_memory` so the
+    default recall gate is unchanged: the for-prompt endpoint ORs this in only
+    when ZOE_EMOTIONAL_RECALL_ENABLED is set. Pure str → bool, no env read here
+    (the flag decision stays at the endpoint), so both callers stay cheap."""
+    low = (message or "").lower()
+    return any(cue in low for cue in EMOTIONAL_TRIGGER_WORDS)
