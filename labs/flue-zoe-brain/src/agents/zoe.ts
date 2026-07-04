@@ -116,6 +116,27 @@ export const IN_SESSION_CONTEXT_DOCTRINE = [
   'recall_memory is still how you learn anything from PAST conversations, so keep calling it first for those. When someone asks what you know or remember about them in general, call recall_memory first as always — then also weave in anything they told you this session. An empty recall result means nothing is stored from before — NOT that the user never told you this session; never let an empty recall store make you contradict or forget what the user has said in front of you now.',
 ].join('\n');
 
+// Emotional-thread capture doctrine — the soul-side signal for Samantha
+// criterion #2 (docs/architecture/zoe-memory-emotional-thread-handoff.md). The
+// store has the emotional_moment type but the brain never emitted one, so
+// emotional continuity had no substrate. This teaches the brain WHEN to call
+// remember_emotional_moment and — just as important — when NOT to. Kept SHORT
+// (4B model): a durable-fact-vs-transcript rule, a strong sparseness bound, and
+// a silence rule. It's a capture behaviour, so it sits at the very end with the
+// other behavioural doctrines (last-position weight), and it never touches
+// recall / activation / anti-fabrication.
+export const EMOTIONAL_CAPTURE_DOCTRINE = [
+  'Emotional memory — this is an ACTION, not just a feeling: when a turn carries GENUINE, durable emotional weight (real stress, grief, fear, a scary event like someone in hospital, joy, a milestone, or a worry the person keeps returning to), you MUST actually CALL the remember_emotional_moment tool that same turn — do not just reply warmly and skip it. Saying you\'ll remember without calling the tool is a failure; only the tool call actually keeps it.',
+  '',
+  'Store the DURABLE FACT in your own words ("Jason has been anxious about the house settlement", "Jason\'s dad is in hospital and he\'s scared"), NOT their raw line ("I\'m so stressed about the house"). Add valence (pos/neg/mixed) and a rough intensity (0-1) when you can.',
+  '',
+  'Do BOTH, in either order: call the tool AND give your warm human reply. The tool call is silent bookkeeping; your spoken reply is separate.',
+  '',
+  'Be SPARSE and high-signal: most turns carry no durable emotional weight — do NOT tag passing chit-chat, small moods, factual questions, or every feeling. Only genuinely significant, lasting threads. When it clearly is one, though, DO call it.',
+  '',
+  'Never announce the tool or make it weird ("I\'ve logged your sadness"). Capture it silently and keep responding warmly and naturally — the acknowledgement the person hears is your reply, not the tool.',
+].join('\n');
+
 /**
  * The full system instructions the agent runs with. Order is deliberate: voice
  * delivery (phrasing) sits BEFORE the behavioural doctrines so the tool-first /
@@ -123,9 +144,11 @@ export const IN_SESSION_CONTEXT_DOCTRINE = [
  * the generation boundary (Greptile #997 P2 — on a 4B model a trailing "lead with
  * the answer" could otherwise nudge a direct reply over a needed activate_abilities
  * call). Delivery is also self-scoped ("this shapes phrasing, not whether to use a
- * tool — the tool rules above still come first").
+ * tool — the tool rules above still come first"). The emotional-capture doctrine
+ * sits LAST, alongside the other behavioural rules, so its "when to capture /
+ * when to stay silent" guidance keeps last-position weight.
  */
-export const ZOE_INSTRUCTIONS = `${ZOE_SOUL}\n\n${VOICE_DELIVERY_DOCTRINE}\n\n${ACTIVATOR_DOCTRINE}\n\n${IN_SESSION_CONTEXT_DOCTRINE}`;
+export const ZOE_INSTRUCTIONS = `${ZOE_SOUL}\n\n${VOICE_DELIVERY_DOCTRINE}\n\n${ACTIVATOR_DOCTRINE}\n\n${IN_SESSION_CONTEXT_DOCTRINE}\n\n${EMOTIONAL_CAPTURE_DOCTRINE}`;
 
 // Exporting `route` publishes the HTTP agent endpoints (POST/GET /agents/zoe/:id).
 // FAIL CLOSED: this route drives the live Gemma brain on :11434, so by default a

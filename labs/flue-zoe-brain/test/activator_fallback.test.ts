@@ -26,8 +26,13 @@ const { activeToolNames, CORE_TOOL_NAMES, GROUP_NAMES, GROUP_SUMMARY } = await i
   '../src/tools/tool-groups.ts'
 );
 const { zoeTools } = await import('../src/tools/zoe-tools.ts');
-const { ACTIVATOR_DOCTRINE, IN_SESSION_CONTEXT_DOCTRINE, VOICE_DELIVERY_DOCTRINE, ZOE_INSTRUCTIONS } =
-  await import('../src/agents/zoe.ts');
+const {
+  ACTIVATOR_DOCTRINE,
+  EMOTIONAL_CAPTURE_DOCTRINE,
+  IN_SESSION_CONTEXT_DOCTRINE,
+  VOICE_DELIVERY_DOCTRINE,
+  ZOE_INSTRUCTIONS,
+} = await import('../src/agents/zoe.ts');
 
 import type { Message } from '@earendil-works/pi-ai';
 
@@ -161,4 +166,51 @@ test('in-session context doctrine: live transcript beats an empty recall store',
   assert.match(IN_SESSION_CONTEXT_DOCTRINE, /keep calling it first/);
   assert.match(IN_SESSION_CONTEXT_DOCTRINE, /it adds to that rule, it does not cancel it/);
   assert.doesNotMatch(IN_SESSION_CONTEXT_DOCTRINE, /overrides the recall rule/);
+});
+
+// ─── emotional-thread capture doctrine (handoff doc) ──────────────────────────
+
+test('emotional-capture doctrine: durable fact, sparse, silent — present and last', () => {
+  assert.ok(ZOE_INSTRUCTIONS.includes(EMOTIONAL_CAPTURE_DOCTRINE));
+  // Calls the right tool, on genuine durable weight only, as an imperative ACTION.
+  assert.match(EMOTIONAL_CAPTURE_DOCTRINE, /remember_emotional_moment/);
+  assert.match(EMOTIONAL_CAPTURE_DOCTRINE, /GENUINE, durable emotional weight/);
+  assert.match(EMOTIONAL_CAPTURE_DOCTRINE, /MUST actually CALL the remember_emotional_moment tool/);
+  // Store the durable fact, not the transcript line.
+  assert.match(EMOTIONAL_CAPTURE_DOCTRINE, /DURABLE FACT in your own words/);
+  assert.match(EMOTIONAL_CAPTURE_DOCTRINE, /NOT their raw line/);
+  // Do BOTH: call the tool AND reply.
+  assert.match(EMOTIONAL_CAPTURE_DOCTRINE, /Do BOTH/);
+  // Sparseness bound + silence rule.
+  assert.match(EMOTIONAL_CAPTURE_DOCTRINE, /SPARSE and high-signal/);
+  assert.match(EMOTIONAL_CAPTURE_DOCTRINE, /Never announce the tool/);
+  // It's a behavioural rule, so it must sit LAST (last-position weight), after the
+  // in-session context doctrine.
+  const iInSession = ZOE_INSTRUCTIONS.indexOf(IN_SESSION_CONTEXT_DOCTRINE);
+  const iEmotional = ZOE_INSTRUCTIONS.indexOf(EMOTIONAL_CAPTURE_DOCTRINE);
+  assert.ok(iInSession >= 0 && iEmotional >= 0);
+  assert.ok(iEmotional > iInSession, 'emotional-capture doctrine must sit last');
+  // Must not weaken recall / activation / anti-fabrication.
+  assert.doesNotMatch(EMOTIONAL_CAPTURE_DOCTRINE, /recall_memory/);
+  assert.doesNotMatch(EMOTIONAL_CAPTURE_DOCTRINE, /activate_abilities/);
+});
+
+test('the memory group discloses remember_emotional_moment on clear emotional turns', () => {
+  for (const prompt of [
+    "I've been really stressed about the house settlement falling through",
+    "my dad's in hospital and I'm scared",
+    "I'm so proud, Mia got into the school she wanted",
+    'we finally bought our new house, I am over the moon',
+    'I just found out my dad has cancer',
+  ]) {
+    const active = activeToolNames([userMsg(prompt)]);
+    assert.ok(
+      active.has('remember_emotional_moment'),
+      `emotional prompt should pre-disclose remember_emotional_moment: "${prompt}"`,
+    );
+  }
+});
+
+test('remember_emotional_moment is a registered Zoe tool in the memory group', () => {
+  assert.ok(zoeTools.some((t) => t.name === 'remember_emotional_moment'));
 });
