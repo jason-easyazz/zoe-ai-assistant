@@ -265,3 +265,11 @@ data/touch_cache/
 graphify-out/
 !.cursor/mcp.json
 .cursor/tmp/
+
+# Runtime artifacts — generated at run time, never load-bearing (untracked in chore/untrack-runtime-artifacts)
+homeassistant/.ha_run.lock
+data/music-assistant/*.log
+data/music-assistant/*.log.*
+data/skills.lock
+# autoresearch run dirs are runtime output; the FEATURE is live but reads live run-dirs, not committed samples
+data/autoresearch/

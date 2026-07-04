@@ -1,0 +1,34 @@
+# Pre-commit hooks for the Zoe repo.
+# Mirrors the repo's own mandated checks so cloned checkouts are protected the
+# same way the local .git/hooks/pre-commit protects this host.
+# Install with:  pre-commit install
+minimum_pre_commit_version: "2.20.0"
+
+repos:
+  # Standard hygiene hooks.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-added-large-files
+        args: ["--maxkb=5120"]
+
+  # Zoe's own mandated structure/critical-file validators (repo: local so they
+  # run against the checkout, no network fetch, no version pinning).
+  - repo: local
+    hooks:
+      - id: zoe-validate-structure
+        name: Zoe project structure validation
+        entry: python3 tools/audit/validate_structure.py
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: zoe-validate-critical-files
+        name: Zoe critical-files presence check
+        entry: python3 tools/audit/validate_critical_files.py
+        language: system
+        pass_filenames: false
+        always_run: true
