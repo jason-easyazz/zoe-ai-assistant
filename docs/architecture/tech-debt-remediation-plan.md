@@ -25,6 +25,26 @@ under `flock /tmp/zoe-voice-harness.lock`; new test files must be reachable by C
 
 **Status key:** 📝 planned · 🔨 active · ✅ done · 🗄️ parked
 
+## Delivery status (2026-07-04) — PRs open, verified, NOT merged (await review)
+| Item | PR | State |
+|---|---|---|
+| Graphify tooling retirement (+ host cleanup) | [#1007](https://github.com/jason-easyazz/zoe-ai-assistant/pull/1007) | ✅ delivered |
+| Wave 1 PR A — brain docs → 3-way dispatch | [#1008](https://github.com/jason-easyazz/zoe-ai-assistant/pull/1008) | ✅ delivered (rocks block intact, invariants pass) |
+| Wave 1 PR B — drift sweep (HW model, agent-zero, CHANGELOG, db archive ptr) | [#1009](https://github.com/jason-easyazz/zoe-ai-assistant/pull/1009) | ✅ delivered |
+| Wave 1 PR C — untrack runtime artifacts + tracked pre-commit | [#1010](https://github.com/jason-easyazz/zoe-ai-assistant/pull/1010) | ✅ delivered |
+| Wave 2 PR D — CI: de-dup + governance-validator reconciliation | [#1013](https://github.com/jason-easyazz/zoe-ai-assistant/pull/1013) | ✅ partial — silent-skip fix DEFERRED (see below) |
+| Wave 2 PR E — reporting-only self-hosted pytest | [#1011](https://github.com/jason-easyazz/zoe-ai-assistant/pull/1011) | ✅ delivered (additive, non-gating) |
+| This plan doc | [#1012](https://github.com/jason-easyazz/zoe-ai-assistant/pull/1012) | ✅ delivered |
+
+**Merge notes:** all branches are behind main by #1006 (branched off #1005) → each needs a branch-update before merge (re-triggers Greptile); no revert risk (merge-base diff is clean). No cross-PR file collisions (#1013 *reads* the manifest, #1010 *writes* it — disjoint keys).
+
+**Deferred / needs a decision (NOT auto-shipped — design or live-voice risk):**
+- **Wave 2 silent-skip fix** — directory-wide CI selection collects clean (30→3763) but a real run has 22 failures that are NOT marker-gated (incl. a Starlette version mismatch), so it can't be proven CI-green off-box. Follow-up = add opt-in `@pytest.mark.ci_safe` + select `-m ci_safe`.
+- **Wave 3 `people_relate`** — advertised across the brain surface but has **no storage backend anywhere** (no tool, no table). Making it work = a schema/memory design decision (person↔person relationships): people-table edge, a relationships table, or a MemPalace relationship memory. NOT a mirror-the-executor fix.
+- **Wave 3 Tier 2 (extract shared calendar/list/people services)** — real anti-drift value, but rewrites live-voice-path SQL → must be one-aggregate-per-PR behind the `~/.zoe-voice-samples` replay gate.
+- **Wave 3 memory-router graphify** — `MemoryBackend.GRAPHIFY` is the *primary* route for code/graph queries with asserting tests; removing it changes routing (memory workstream).
+- **Wave 4** — god-file splits (`voice_tts.py` 4.8k, `chat.py` 4.0k), typed config module, fence the engineering harness out of the prod FastAPI process. Incremental, replay-gated, do-last.
+
 ---
 
 ## Live brain topology (verified — the basis for PR A)
