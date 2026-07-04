@@ -32,17 +32,31 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Signing secret. Prefer an explicit stable secret so tokens survive a zoe-data
-# restart; fall back to the internal token, else a per-process random (tokens are
-# short-lived, so a restart simply invalidates any in-flight ones — acceptable).
+# Signing secret, PURPOSE-SPECIFIC to link tokens. Set ZOE_TELEGRAM_LINK_SECRET
+# (recommended) so tokens survive a zoe-data restart and rotate independently of
+# other credentials; otherwise a per-process random is used (tokens are short-
+# lived, so a restart just invalidates any in-flight ones — acceptable). We do NOT
+# reuse ZOE_INTERNAL_TOKEN here: mixing an internal-auth credential with a token-
+# signing key couples their rotation policies.
 _LINK_SECRET = (
-    os.environ.get("ZOE_TELEGRAM_LINK_SECRET")
-    or os.environ.get("ZOE_INTERNAL_TOKEN")
-    or secrets.token_hex(32)
+    os.environ.get("ZOE_TELEGRAM_LINK_SECRET") or secrets.token_hex(32)
 ).encode()
 
 LINK_TOKEN_TTL_S = 600  # 10 minutes
 _SIG_BYTES = 12  # 96-bit truncated HMAC — ample for a 10-minute single-use token
+
+# Single-use enforcement: signatures of already-redeemed tokens, kept until they
+# would expire anyway. In-process only (a restart clears it, but expired tokens
+# are rejected regardless), which is sufficient — generate + redeem both hit the
+# same zoe-data process. This stops a QR shown on a shared/kiosk screen from being
+# redeemed by a SECOND scanner and silently overwriting the first person's link.
+_consumed_sigs: dict[bytes, int] = {}
+
+
+def _prune_consumed(now: int) -> None:
+    for k, exp in list(_consumed_sigs.items()):
+        if exp < now:
+            del _consumed_sigs[k]
 
 
 def make_link_token(user_id: str, ttl: int = LINK_TOKEN_TTL_S) -> str:
@@ -60,8 +74,11 @@ def make_link_token(user_id: str, ttl: int = LINK_TOKEN_TTL_S) -> str:
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
-def verify_link_token(token: str) -> Optional[str]:
-    """Return the user_id if the token is authentic and unexpired, else None."""
+def verify_link_token(token: str, *, consume: bool = False) -> Optional[str]:
+    """Return the user_id if the token is authentic, unexpired, and (when
+    ``consume`` is set) not already redeemed. With ``consume=True`` the token is
+    marked used so a second redemption within the TTL fails — call it that way
+    exactly once, at redemption time."""
     if not token or len(token) > 128:
         return None
     try:
@@ -74,8 +91,15 @@ def verify_link_token(token: str) -> Optional[str]:
         if not hmac.compare_digest(sig, expected):
             return None
         user_id, exp_s = payload.decode().rsplit(":", 1)
-        if int(exp_s) < int(time.time()):
+        exp = int(exp_s)
+        now = int(time.time())
+        if exp < now:
             return None
+        _prune_consumed(now)
+        if sig in _consumed_sigs:  # already redeemed → reject the replay
+            return None
+        if consume:
+            _consumed_sigs[sig] = exp
         return user_id or None
     except Exception:
         return None

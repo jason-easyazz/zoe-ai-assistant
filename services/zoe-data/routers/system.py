@@ -2550,9 +2550,10 @@ async def consume_telegram_link_token(
     import telegram_link
     from routers.user_profile import _TELEGRAM_ID_RE, _read_prefs, _write_prefs
 
-    user_id = telegram_link.verify_link_token((body.token or "").strip())
+    # consume=True → single-use: a replayed/second scan of the same token fails.
+    user_id = telegram_link.verify_link_token((body.token or "").strip(), consume=True)
     if not user_id:
-        raise HTTPException(status_code=400, detail="invalid or expired link token")
+        raise HTTPException(status_code=400, detail="invalid, expired, or already-used link token")
 
     tid = (body.telegram_id or "").strip()
     if not _TELEGRAM_ID_RE.match(tid):

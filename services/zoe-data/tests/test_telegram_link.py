@@ -11,11 +11,16 @@ def tl(monkeypatch):
     # Pin a stable secret so tokens are deterministic across a reload.
     monkeypatch.setenv("ZOE_TELEGRAM_LINK_SECRET", "unit-test-secret")
     monkeypatch.delenv("ZOE_TELEGRAM_BOT_USERNAME", raising=False)
-    if "telegram_link" in sys.modules:
-        del sys.modules["telegram_link"]
+    # Save + restore the real module so our reloads never leak into other tests.
+    saved = sys.modules.pop("telegram_link", None)
     import telegram_link as m
 
-    return importlib.reload(m)
+    importlib.reload(m)
+    yield m
+    if saved is not None:
+        sys.modules["telegram_link"] = saved
+    else:
+        sys.modules.pop("telegram_link", None)
 
 
 def test_token_roundtrip(tl):
@@ -35,6 +40,18 @@ def test_tampered_token_rejected(tl):
 
 def test_expired_token_rejected(tl):
     assert tl.verify_link_token(tl.make_link_token("jason", ttl=-1)) is None
+
+
+def test_single_use_consume(tl):
+    tok = tl.make_link_token("jason")
+    # Non-consuming verify can be repeated (used by nothing in prod, but safe).
+    assert tl.verify_link_token(tok) == "jason"
+    assert tl.verify_link_token(tok) == "jason"
+    # First redemption consumes it; a second scan of the SAME token is rejected
+    # (kiosk QR can't be hijacked by a later scanner).
+    assert tl.verify_link_token(tok, consume=True) == "jason"
+    assert tl.verify_link_token(tok, consume=True) is None
+    assert tl.verify_link_token(tok) is None  # stays dead even non-consuming
 
 
 def test_wrong_secret_cannot_verify(tl, monkeypatch):
