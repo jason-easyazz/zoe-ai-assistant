@@ -1456,14 +1456,20 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         return {"events": [dict(r) for r in rows]}
 
     elif name == "calendar_create_event":
-        eid = str(uuid.uuid4())
-        await db.execute(
-            "INSERT INTO events (id, user_id, title, start_date, start_time, end_time, category, location, all_day, visibility) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (eid, user_id, args["title"], args["start_date"], args.get("start_time"),
-             args.get("end_time"), args.get("category", "general"), args.get("location"),
-             1 if args.get("all_day") else 0, "family"),
+        from calendar_service import create_event_record
+
+        record = await create_event_record(
+            db,
+            user_id=user_id,
+            title=args["title"],
+            start_date=args["start_date"],
+            start_time=args.get("start_time"),
+            end_time=args.get("end_time"),
+            category=args.get("category", "general"),
+            location=args.get("location"),
+            all_day=bool(args.get("all_day")),
         )
-        result = {"id": eid, "title": args["title"], "start_date": args["start_date"],
+        result = {"id": record["id"], "title": args["title"], "start_date": args["start_date"],
                   "start_time": args.get("start_time"), "category": args.get("category", "general")}
         await _notify_ui("calendar", "event_created", result)
         return {**result, "date": args["start_date"], "status": "created"}
