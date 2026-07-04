@@ -68,7 +68,7 @@
 ### Single Source of Truth:
 - Production web + chat API: **services/zoe-data/** (host uvicorn :8000; OpenClaw CLI bridge, AG-UI SSE, intent fast path). See `docker-compose.yml` header comments.
 - **ONLY ONE production chat router:** services/zoe-data/routers/chat.py
-- **services/zoe-core/** is RETIRED (legacy Docker tree). Do not extend for new features.
+- **services/zoe-core/** is the wired default `core` brain fallback (Pi on local Gemma, `pi --mode rpc`) — extend it, do NOT retire it. The truly-retired thing is the OLD Docker/RouteLLM-MemAgent monolith (git history only).
 - NEVER create chat_v2.py, chat_new.py, chat_optimized.py
 - Use git branches for changes, NOT file duplication
 - Backup files must use git, not file copying
@@ -76,7 +76,7 @@
 ### Intelligent Systems (production zoe-data):
 - Intent fast path + OpenClaw agent path: **services/zoe-data/routers/chat.py** (with intent_router, openclaw_ws, ag_ui_stream)
 - Family / MCP tools: **services/zoe-data/mcp_server.py**
-- **services/zoe-core** still contains older RouteLLM/MemAgent stacks for reference only — retired from production
+- **services/zoe-core** is the wired default `core` brain (Pi on Gemma 4) — the fallback lane below the live `flue` sidecar; extend, don't retire. Only the OLD Docker/RouteLLM/MemAgent monolith is retired (git history only)
 - NEVER hardcode brittle command detection in **production** chat.py for NLU; use intent_router patterns + OpenClaw where appropriate
 - Let specialized systems do their jobs
 
@@ -271,7 +271,7 @@ FEATURES = {
 
 ### Critical Files
 
-**Hardware / LLM**: Host llama-server, Jetson/Pi overlays, and GPU settings are documented in **HARDWARE_COMPATIBILITY.md** and `docker-compose*.yml`. Legacy model helpers under **services/zoe-core/** are **retired** (do not treat as live stack).
+**Hardware / LLM**: Host llama-server, Jetson/Pi overlays, and GPU settings are documented in **HARDWARE_COMPATIBILITY.md** and `docker-compose*.yml`. **services/zoe-core/** is the wired default `core` brain fallback (Pi on Gemma 4) — extend, don't retire; only the OLD Docker/RouteLLM-MemAgent monolith is retired (git history only).
 - `docker-compose.yml` (service configs)
 - `.env` (platform settings)
 

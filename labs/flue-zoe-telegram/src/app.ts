@@ -17,17 +17,27 @@
 import { GrammyError } from 'grammy';
 import { Hono } from 'hono';
 import { flue } from '@flue/runtime/routing';
-import { askZoe, sessionFor } from './brain.ts';
+import { askZoeAs, resolveTelegramUser, sessionFor } from './brain.ts';
+import { handleIncoming } from './handler.ts';
 import { bot, isAllowed } from './telegram.ts';
 
 // --- Telegram long-poll ingress -------------------------------------------
-// Only text messages, only from allow-listed users. Ask Zoe's real brain
-// (/api/chat) with a stable per-chat session id and relay her reply.
+// Only text messages, only from allow-listed users. The allow-list is a COARSE
+// gate (defence in depth); real per-user identity + the resolve→forward /
+// refuse-unlinked decision lives in handleIncoming (src/handler.ts), which is
+// unit-tested without grammY.
 bot.on('message:text', async (ctx) => {
-  if (!isAllowed(ctx.from?.id)) return; // fail closed; strangers get nothing
+  const telegramId = ctx.from?.id;
+  if (!isAllowed(telegramId)) return; // fail closed; strangers get nothing
+  if (telegramId === undefined) return; // no verified sender id → nothing to resolve
+
   try {
-    const reply = await askZoe(ctx.message.text, sessionFor(ctx.chat.id));
-    await ctx.reply(reply);
+    await handleIncoming(telegramId, ctx.chat.id, ctx.message.text, {
+      resolve: resolveTelegramUser,
+      ask: askZoeAs,
+      session: sessionFor,
+      reply: (text) => ctx.reply(text),
+    });
   } catch (err) {
     console.error('Zoe brain/reply error:', err);
   }

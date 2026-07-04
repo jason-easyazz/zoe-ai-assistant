@@ -1,0 +1,38 @@
+# Flue Zoe Telegram channel (lab) — long-poll bot bridged to zoe-data's /api/chat,
+# with per-sender account linking (telegram_id → real Zoe user + their memory).
+#
+# OPTIONAL and NOT enabled by default. Installing/enabling this unit is an
+# explicit operator action (runbook: labs/flue-zoe-telegram/README.md). The bot
+# token is a secret the operator holds; nothing here is auto-installed.
+#
+# Build first (the unit runs the built output, it does not build):
+#   cd ~/assistant/labs/flue-zoe-telegram && npm install && npm run build
+# Then create the env file from the template and fill it in:
+#   cp ~/assistant/labs/flue-zoe-telegram/.env.example ~/assistant/labs/flue-zoe-telegram/.env
+[Unit]
+Description=Flue Zoe Telegram channel (lab)
+# Talks to zoe-data (:8000) for the resolver + /api/chat. A user unit cannot
+# order itself after that reliably on boot; Restart=always recovers start-order
+# races (same pattern as zoe-data.service / flue-zoe-brain.service).
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/assistant/labs/flue-zoe-telegram
+# Adjust the node path if you are not using nvm (same convention as flue-zoe-brain).
+ExecStart=%h/.nvm/current/bin/node dist/server.mjs
+Restart=always
+RestartSec=5
+# Secrets and identity (TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USERS, ZOE_DATA_URL,
+# ZOE_INTERNAL_TOKEN, ...) live in the lab-local .env — copy .env.example and fill
+# it in. NEVER inline values here. The file is required (no '-' prefix): the unit
+# fails loudly if the operator hasn't configured it, and the bot itself throws on
+# a missing TELEGRAM_BOT_TOKEN anyway.
+EnvironmentFile=%h/assistant/labs/flue-zoe-telegram/.env
+
+# Light hardening (user-service compatible).
+NoNewPrivileges=true
+RestrictRealtime=true
+
+[Install]
+WantedBy=default.target
