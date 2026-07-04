@@ -21,6 +21,7 @@ Production runtime services for the Zoe assistant: the web/chat API, static UI, 
 - Memory writes always carry scope (`personal` / `shared` / `ambient`); credentials are per user and per scope, never in global env vars.
 - No `home` / `family` / `household` concepts in kernel code (router, memory schema, auth, tool signatures) — they belong in skills and scopes.
 - `zoe-data` runs as a systemd USER service: `systemctl --user restart zoe-data.service` (never `sudo systemctl`).
+- Exactly ONE calendar-event writer: `zoe-data/calendar_service.py::create_event_record`. All three callers (the voice/direct executor in `intent_router.py`, the `calendar_create_event` MCP tool in `mcp_server.py`, and the `/api/calendar/events` router) INSERT through it — never open a second `INSERT INTO events`. The helper owns only the row write; date parsing, UI notify, MemPalace, and response shape stay per-caller (they differ, and preserving them is what keeps behaviour identical). Voice-path changes here are replay-gated.
 
 ## Work Guidance
 

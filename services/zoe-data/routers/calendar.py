@@ -3,13 +3,13 @@ FastAPI router for calendar events.
 Mounted at prefix="/api/calendar" with tag "calendar".
 """
 import json
-import uuid
 from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from auth import get_current_user
+from calendar_service import create_event_record
 from calendar_utils import row_to_event
 from database import get_db
 from guest_policy import require_feature_access
@@ -111,32 +111,25 @@ async def create_event(
     """Create a new calendar event."""
     await require_feature_access(db, user, feature="calendar", action="create")
     user_id = user["user_id"]
-    event_id = str(uuid.uuid4())
     metadata_json = json.dumps(payload.metadata) if payload.metadata else None
 
-    await db.execute(
-        """INSERT INTO events (
-            id, user_id, title, start_date, start_time, end_date, end_time,
-            duration, category, location, all_day, recurring, metadata,
-            visibility, deleted
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
-        (
-            event_id,
-            user_id,
-            payload.title,
-            payload.start_date,
-            payload.start_time,
-            payload.end_date,
-            payload.end_time,
-            payload.duration,
-            payload.category,
-            payload.location,
-            1 if payload.all_day else 0,
-            payload.recurring,
-            metadata_json,
-            payload.visibility,
-        ),
+    record = await create_event_record(
+        db,
+        user_id=user_id,
+        title=payload.title,
+        start_date=payload.start_date,
+        start_time=payload.start_time,
+        end_date=payload.end_date,
+        end_time=payload.end_time,
+        duration=payload.duration,
+        category=payload.category,
+        location=payload.location,
+        all_day=payload.all_day,
+        recurring=payload.recurring,
+        metadata=metadata_json,
+        visibility=payload.visibility,
     )
+    event_id = record["id"]
     await db.commit()
 
     cursor = await db.execute("SELECT * FROM events WHERE id = ?", [event_id])
