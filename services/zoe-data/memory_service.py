@@ -43,6 +43,8 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Mapping, Optional
 
+from memory_importance import score_importance
+
 try:
     from memory_metrics import (
         memory_write_count,
@@ -505,6 +507,7 @@ class MemoryService:
                 scope=scope,
                 extra_metadata=metadata,
                 idem_key=idem_key,
+                text=scrubbed,
             )
 
             mem_id = _memory_id(user_id, scrubbed, metadata)
@@ -838,6 +841,7 @@ class MemoryService:
                     entity_type=current.metadata.get("entity_type"),
                     entity_id=current.metadata.get("entity_id"),
                 ),
+                text=scrubbed,
             )
             # _build_metadata only knows the first-class params above; carry
             # forward any remaining provenance/event metadata (candidate_*
@@ -852,6 +856,12 @@ class MemoryService:
                 "session_id", "user_turn_id", "entity_type", "entity_id", "expires_at",
                 "source_excerpt", "scope", "supersedes_id", "reviewed_by", "reviewed_at",
                 "review_note", "superseded_by_id", "_query_hashes",
+                # importance is a computed function of the row's TEXT (like
+                # memory_type/confidence above), so it must be recomputed for the
+                # edited text by _build_metadata — never carried forward, or an
+                # edit from a high-stakes fact to ordinary text would keep a stale
+                # 0.9 boost.
+                "importance",
             }
             for key, value in current.metadata.items():
                 if key in _EDIT_CARRY_FORWARD_SKIP or key in new_meta:
@@ -971,6 +981,7 @@ class MemoryService:
         scope: Optional[str] = None,
         extra_metadata: Optional[dict[str, Any]] = None,
         idem_key: str = "",
+        text: str = "",
     ) -> dict[str, Any]:
         """Build durable metadata for a memory row.
 
@@ -1025,6 +1036,14 @@ class MemoryService:
             if target_key in md or value is None:
                 continue
             md[target_key] = _metadata_value(value)
+        # Importance (3b): score high-stakes content (allergy/med/dietary/vital-id)
+        # so the 2a hybrid importance arm can rank it up. Only written when > 0, so
+        # ordinary facts carry no `importance` key and the arm stays a no-op for
+        # them. Guarded on absence so a promoted event field is never clobbered.
+        if "importance" not in md:
+            imp = score_importance(text)
+            if imp > 0.0:
+                md["importance"] = imp
         return md
 
     def _remember_seen_key(self, user_id: str, idem_key: str) -> None:
