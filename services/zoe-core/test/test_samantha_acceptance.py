@@ -249,15 +249,21 @@ def test_emotional_thread_recall(stub):
 @pytest.mark.integration
 @requires_env
 def test_proactive_surfacing(stub):
-    # Criterion #3 — surfaces relevant memory UNPROMPTED. A neutral greeting, with
-    # a timely fact in the packet: a Samantha volunteers it rather than waiting to
-    # be asked.
+    # Criterion #3 — surfaces relevant memory UNPROMPTED. This exercises the CORE
+    # backend's in-turn path, where memory.ts INJECTS the packet every turn so the
+    # timely fact is already in front of the model — reliable there (unlike the
+    # tool-gated Flue path, where in-turn greeting-surfacing measured ~1/5 and was
+    # dropped). The DETERMINISTIC, model-independent mechanism for #3 is the
+    # proactive engine's morning brief, covered by
+    # services/zoe-data/tests/test_morning_brief.py; this test only shows the core
+    # brain WILL volunteer an injected timely fact. Sampled (attempts) because it
+    # is still a 2B generation, same as _asks_identity.
     stub.packet = {
         "packet": "## What I know about you\n"
                   "- Jason's mum Janice has her birthday tomorrow [mem:d1]",
         "count": 1, "user_scoped": True,
     }
-    texts = _sample(stub, "Good morning!", attempts=4)
+    texts = _sample(stub, "Good morning!", attempts=6)
     assert stub.memory_hits() >= 1, "packet was not consulted on a neutral turn"
     assert any("birthday" in t or "janice" in t for t in texts), \
         f"never proactively surfaced the timely memory: {texts!r}"
