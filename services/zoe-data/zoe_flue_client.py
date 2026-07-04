@@ -96,7 +96,10 @@ def _wrap_message_with_identity(message: str, user_id: str) -> str:
     back to its env identity. The id is placed on its own leading line terminated
     by a newline, matching the sidecar's single-line regex.
     """
-    uid = (user_id or "").strip()
+    # Strip embedded CR/LF too: .strip() only trims the ends, but a newline inside
+    # the id would terminate the single-line envelope early and leak the remainder
+    # into the prompt the model sees. Keeps the envelope contract tight on both sides.
+    uid = (user_id or "").strip().replace("\n", "").replace("\r", "")
     if not uid:
         return message
     return f"{_IDENTITY_ENVELOPE_PREFIX}{uid}\n{message}"
