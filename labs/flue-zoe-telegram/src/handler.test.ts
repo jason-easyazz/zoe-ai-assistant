@@ -1,0 +1,132 @@
+/**
+ * Unit tests for the resolve→forward / refuse-unlinked decision (handler.ts) and
+ * the brain.ts bridge (resolver + trusted forwarded-identity headers).
+ *
+ * Run: `node --test --experimental-strip-types src/*.test.ts`
+ * (see package.json "test"). No bot token / no network — global fetch is mocked.
+ */
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+
+import { handleIncoming, unlinkedMessage } from './handler.ts';
+
+// ─── handler: resolve → forward, and unlinked → refuse ───────────────────────
+
+test('linked sender: forwards the turn AS the resolved user and relays the reply', async () => {
+  const asks: Array<{ text: string; session: string; userId: string }> = [];
+  const replies: string[] = [];
+
+  await handleIncoming(99999, 42, 'what did I have for lunch?', {
+    resolve: async (id) => (id === 99999 ? 'jason' : null),
+    ask: async (text, session, userId) => {
+      asks.push({ text, session, userId });
+      return "You mentioned a burrito.";
+    },
+    session: (chatId) => `telegram-${chatId}`,
+    reply: async (t) => {
+      replies.push(t);
+    },
+  });
+
+  assert.deepEqual(asks, [
+    { text: 'what did I have for lunch?', session: 'telegram-42', userId: 'jason' },
+  ]);
+  assert.deepEqual(replies, ['You mentioned a burrito.']);
+});
+
+test('unlinked sender: refuses with the link instructions incl. their numeric id, never asks the brain', async () => {
+  let asked = false;
+  const replies: string[] = [];
+
+  await handleIncoming(77777, 42, 'hi', {
+    resolve: async () => null, // not linked
+    ask: async () => {
+      asked = true;
+      return 'should not be called';
+    },
+    session: (chatId) => `telegram-${chatId}`,
+    reply: async (t) => {
+      replies.push(t);
+    },
+  });
+
+  assert.equal(asked, false, 'the brain must NOT be asked for an unlinked sender');
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0], unlinkedMessage(77777));
+  assert.match(replies[0], /77777/); // includes their numeric id to copy
+  assert.match(replies[0], /not linked/i);
+});
+
+// ─── brain.ts: resolver + trusted forwarded-identity headers ─────────────────
+
+async function withMockedFetch(
+  impl: (url: string, init?: RequestInit) => Promise<Response>,
+  fn: () => Promise<void>,
+): Promise<void> {
+  const original = globalThis.fetch;
+  globalThis.fetch = impl as typeof fetch;
+  try {
+    await fn();
+  } finally {
+    globalThis.fetch = original;
+  }
+}
+
+test('resolveTelegramUser: hits the internal resolver and returns the user_id', async () => {
+  process.env.ZOE_DATA_URL = 'http://127.0.0.1:8000';
+  process.env.ZOE_INTERNAL_TOKEN = 'seekrit';
+  const { resolveTelegramUser } = await import('./brain.ts');
+
+  let seenUrl = '';
+  let seenToken: string | null = null;
+  await withMockedFetch(
+    async (url, init) => {
+      seenUrl = url;
+      seenToken = new Headers(init?.headers).get('X-Internal-Token');
+      return new Response(JSON.stringify({ user_id: 'jason' }), { status: 200 });
+    },
+    async () => {
+      const uid = await resolveTelegramUser(99999);
+      assert.equal(uid, 'jason');
+    },
+  );
+  assert.equal(seenUrl, 'http://127.0.0.1:8000/api/system/resolve-telegram/99999');
+  assert.equal(seenToken, 'seekrit'); // internal token forwarded
+});
+
+test('resolveTelegramUser: unlinked id resolves to null', async () => {
+  const { resolveTelegramUser } = await import('./brain.ts');
+  await withMockedFetch(
+    async () => new Response(JSON.stringify({ user_id: null }), { status: 200 }),
+    async () => {
+      assert.equal(await resolveTelegramUser(12345), null);
+    },
+  );
+});
+
+test('askZoeAs: forwards the acting user via X-Zoe-User-Id on the trusted path', async () => {
+  process.env.ZOE_INTERNAL_TOKEN = 'seekrit';
+  const { askZoeAs } = await import('./brain.ts');
+
+  let seenUserId: string | null = null;
+  let seenToken: string | null = null;
+  let seenBody: any = null;
+  await withMockedFetch(
+    async (url, init) => {
+      assert.match(url, /\/api\/chat\/\?stream=false$/);
+      const h = new Headers(init?.headers);
+      seenUserId = h.get('X-Zoe-User-Id');
+      seenToken = h.get('X-Internal-Token');
+      seenBody = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ response: 'hello jason' }), { status: 200 });
+    },
+    async () => {
+      const reply = await askZoeAs('hi', 'telegram-42', 'jason');
+      assert.equal(reply, 'hello jason');
+    },
+  );
+  assert.equal(seenUserId, 'jason'); // trusted forwarded identity
+  assert.equal(seenToken, 'seekrit'); // internal token proves trust off-loopback
+  assert.equal(seenBody.channel, 'telegram');
+  assert.equal(seenBody.session_id, 'telegram-42');
+});
