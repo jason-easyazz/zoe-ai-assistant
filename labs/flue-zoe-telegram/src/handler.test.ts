@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { handleIncoming, unlinkedMessage } from './handler.ts';
+import { handleIncoming, handleTextMessage, startReply, unlinkedMessage } from './handler.ts';
 
 // ─── handler: resolve → forward, and unlinked → refuse ───────────────────────
 
@@ -57,6 +57,68 @@ test('unlinked sender: refuses with the link instructions incl. their numeric id
   assert.match(replies[0], /not linked/i);
 });
 
+// ─── handleTextMessage: linked-OR-allowlisted gate ──────────────────────────
+
+function gateDeps(resolveImpl: (id: number) => Promise<string | null>) {
+  const asks: string[] = [];
+  const replies: string[] = [];
+  return {
+    asks,
+    replies,
+    deps: {
+      resolve: resolveImpl,
+      ask: async (text: string) => {
+        asks.push(text);
+        return 'brain reply';
+      },
+      session: (chatId: number) => `telegram-${chatId}`,
+      reply: async (t: string) => {
+        replies.push(t);
+      },
+    },
+  };
+}
+
+test('gate: LINKED sender is allowed even if NOT in the static allow-list', async () => {
+  const { asks, replies, deps } = gateDeps(async () => 'karen');
+  await handleTextMessage(55555, 42, 'hi', () => false /* not allow-listed */, deps);
+  assert.deepEqual(asks, ['hi']);
+  assert.deepEqual(replies, ['brain reply']);
+});
+
+test('gate: allow-listed but UNLINKED sender is onboarded (told to link), brain not asked', async () => {
+  const { asks, replies, deps } = gateDeps(async () => null);
+  await handleTextMessage(6308082458, 42, 'hi', (id) => id === 6308082458, deps);
+  assert.equal(asks.length, 0);
+  assert.deepEqual(replies, [unlinkedMessage(6308082458)]);
+});
+
+test('gate: STRANGER (not linked, not allow-listed) gets silence — no reply, no brain', async () => {
+  const { asks, replies, deps } = gateDeps(async () => null);
+  await handleTextMessage(11111, 42, 'let me in', () => false, deps);
+  assert.equal(asks.length, 0);
+  assert.equal(replies.length, 0);
+});
+
+// ─── startReply: /start deep-link outcomes ───────────────────────────────────
+
+test('startReply: successful link is a friendly confirmation', () => {
+  const msg = startReply('jason', true);
+  assert.match(msg, /Linked/i);
+});
+
+test('startReply: invalid/expired token tells them to regenerate', () => {
+  const msg = startReply(null, true);
+  assert.match(msg, /expired|invalid/i);
+  assert.match(msg, /Settings/i);
+});
+
+test('startReply: bare /start (no token) is a welcome with instructions', () => {
+  const msg = startReply(null, false);
+  assert.match(msg, /Settings/i);
+  assert.doesNotMatch(msg, /expired/i);
+});
+
 // ─── brain.ts: resolver + trusted forwarded-identity headers ─────────────────
 
 async function withMockedFetch(
@@ -100,6 +162,39 @@ test('resolveTelegramUser: unlinked id resolves to null', async () => {
     async () => new Response(JSON.stringify({ user_id: null }), { status: 200 }),
     async () => {
       assert.equal(await resolveTelegramUser(12345), null);
+    },
+  );
+});
+
+test('consumeLinkToken: posts token + verified sender id and returns the linked user', async () => {
+  process.env.ZOE_INTERNAL_TOKEN = 'seekrit';
+  const { consumeLinkToken } = await import('./brain.ts');
+
+  let seenUrl = '';
+  let seenBody: any = null;
+  await withMockedFetch(
+    async (url, init) => {
+      seenUrl = url;
+      seenBody = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ ok: true, user_id: 'jason' }), { status: 200 });
+    },
+    async () => {
+      const uid = await consumeLinkToken('tok123', 6308082458, 'jbert');
+      assert.equal(uid, 'jason');
+    },
+  );
+  assert.match(seenUrl, /\/api\/system\/telegram\/consume-link-token$/);
+  assert.equal(seenBody.token, 'tok123');
+  assert.equal(seenBody.telegram_id, '6308082458'); // stringified verified id
+  assert.equal(seenBody.telegram_username, 'jbert');
+});
+
+test('consumeLinkToken: invalid/expired token (HTTP 400) resolves to null', async () => {
+  const { consumeLinkToken } = await import('./brain.ts');
+  await withMockedFetch(
+    async () => new Response(JSON.stringify({ detail: 'invalid or expired link token' }), { status: 400 }),
+    async () => {
+      assert.equal(await consumeLinkToken('bad', 123), null);
     },
   );
 });

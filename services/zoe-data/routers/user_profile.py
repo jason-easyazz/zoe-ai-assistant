@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from auth import get_current_user
 from database import get_db
 from guest_policy import require_feature_access
+import telegram_link
 
 router = APIRouter(prefix="/api/user/profile", tags=["user-profile"])
 
@@ -198,3 +199,26 @@ async def set_telegram_link(
     prefs["telegram_id"] = tid
     await _write_prefs(db, user_id, prefs)
     return {"telegram_id": tid, "linked": True}
+
+
+@router.post("/telegram/link-token")
+async def create_telegram_link_token(
+    user: dict = Depends(get_current_user), db=Depends(get_db)
+):
+    """Mint a short-lived link token for the caller and return a Telegram deep
+    link + QR so they can link their account by scanning/tapping (no typing of
+    numeric ids). The token encodes THIS user's id — whoever redeems it in
+    Telegram gets linked to this profile. Session-authed: a guest has no profile
+    to link, so this is gated like the write path above.
+    """
+    await require_feature_access(db, user, feature="user_profile", action="analyze")
+    token = telegram_link.make_link_token(user["user_id"])
+    deep_link = telegram_link.build_deep_link(token)
+    qr_svg = telegram_link.make_qr_svg(deep_link) if deep_link else None
+    return {
+        "token": token,
+        "deep_link": deep_link,
+        "qr_svg": qr_svg,
+        "bot_username": telegram_link.get_bot_username(),
+        "expires_in": telegram_link.LINK_TOKEN_TTL_S,
+    }

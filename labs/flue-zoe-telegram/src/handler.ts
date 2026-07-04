@@ -49,3 +49,51 @@ export async function handleIncoming(
   const answer = await deps.ask(text, deps.session(chatId), userId);
   await deps.reply(answer);
 }
+
+/**
+ * Gate + dispatch a text message under the "linked OR allow-listed" policy:
+ *   - linked (resolves to a Zoe user)      → always allowed; ask the brain as them.
+ *     A linked account is a real Zoe user (linking needs a signed token minted in
+ *     an authenticated session), so it is allowed even if not in the static list.
+ *   - allow-listed but NOT linked          → onboard: tell them to link (they may
+ *     be a known device that hasn't finished the QR/settings step).
+ *   - neither                              → stranger; ignore silently (fail closed).
+ */
+export async function handleTextMessage(
+  telegramId: number,
+  chatId: number,
+  text: string,
+  isAllowed: (id: number) => boolean,
+  deps: IncomingDeps,
+): Promise<void> {
+  const userId = await deps.resolve(telegramId);
+  if (userId) {
+    const answer = await deps.ask(text, deps.session(chatId), userId);
+    await deps.reply(answer);
+    return;
+  }
+  if (isAllowed(telegramId)) {
+    await deps.reply(unlinkedMessage(telegramId));
+  }
+  // else: not linked and not allow-listed → stranger; say nothing.
+}
+
+/** Reply text for a `/start` with no/invalid/expired payload vs a successful link. */
+export function startReply(linkedUserId: string | null, hadToken: boolean): string {
+  if (linkedUserId) {
+    return (
+      `✅ Linked! This Telegram is now connected to your Zoe account. ` +
+      `Say hi and I'll know it's you — your reminders, lists and memory come with you here.`
+    );
+  }
+  if (hadToken) {
+    return (
+      'That link expired or was invalid. Open Zoe → Settings → Telegram, ' +
+      'generate a fresh QR/link, and scan it again.'
+    );
+  }
+  return (
+    "Hi! I'm Zoe. To connect this Telegram to your Zoe account, open Zoe → " +
+    'Settings → Telegram and scan the QR (or tap Connect Telegram).'
+  );
+}

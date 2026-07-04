@@ -17,22 +17,44 @@
 import { GrammyError } from 'grammy';
 import { Hono } from 'hono';
 import { flue } from '@flue/runtime/routing';
-import { askZoeAs, resolveTelegramUser, sessionFor } from './brain.ts';
-import { handleIncoming } from './handler.ts';
+import { askZoeAs, consumeLinkToken, registerBotUsername, resolveTelegramUser, sessionFor } from './brain.ts';
+import { handleTextMessage, startReply } from './handler.ts';
 import { bot, isAllowed } from './telegram.ts';
 
+// --- /start deep-link linking ---------------------------------------------
+// Self-service account linking: the user taps/scans a deep link from Zoe
+// settings, which sends us `/start <token>`. We redeem the signed token via
+// zoe-data, binding THIS verified Telegram id to the Zoe user it was minted for.
+// NOT allow-list gated — a brand-new family member must be able to onboard here;
+// linking is safe because it requires a valid signed token (an authenticated Zoe
+// session), and invalid tokens get only a generic reply. Registered before the
+// message:text handler so `/start` never falls through to the brain.
+bot.command('start', async (ctx) => {
+  const telegramId = ctx.from?.id;
+  if (telegramId === undefined) return;
+  const token = (ctx.match ?? '').trim();
+  try {
+    const linkedUser = token
+      ? await consumeLinkToken(token, telegramId, ctx.from?.username)
+      : null;
+    await ctx.reply(startReply(linkedUser, Boolean(token)));
+  } catch (err) {
+    console.error('Telegram link error:', err);
+    await ctx.reply('Something went wrong linking your account. Please try again in a moment.');
+  }
+});
+
 // --- Telegram long-poll ingress -------------------------------------------
-// Only text messages, only from allow-listed users. The allow-list is a COARSE
-// gate (defence in depth); real per-user identity + the resolve→forward /
-// refuse-unlinked decision lives in handleIncoming (src/handler.ts), which is
-// unit-tested without grammY.
+// Per-user identity + the "linked OR allow-listed" gate live in
+// handleTextMessage (src/handler.ts), which is unit-tested without grammY. A
+// linked user is auto-allowed (linking proves a real Zoe account); the static
+// allow-list is a coarse onboarding gate for known-but-unlinked devices.
 bot.on('message:text', async (ctx) => {
   const telegramId = ctx.from?.id;
-  if (!isAllowed(telegramId)) return; // fail closed; strangers get nothing
   if (telegramId === undefined) return; // no verified sender id → nothing to resolve
 
   try {
-    await handleIncoming(telegramId, ctx.chat.id, ctx.message.text, {
+    await handleTextMessage(telegramId, ctx.chat.id, ctx.message.text, isAllowed, {
       resolve: resolveTelegramUser,
       ask: askZoeAs,
       session: sessionFor,
@@ -64,6 +86,8 @@ void bot.api
       onStart: (me) => {
         polling = true;
         console.log(`Zoe Telegram bot @${me.username} polling (took the bot over)`);
+        // Tell zoe-data our @username so the settings UI can build deep links.
+        void registerBotUsername(me.username);
       },
     }),
   )
