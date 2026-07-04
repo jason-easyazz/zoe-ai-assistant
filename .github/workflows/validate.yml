@@ -114,6 +114,9 @@ jobs:
             services/zoe-data/tests/test_openclaw_skill_name_safety.py \
             services/zoe-data/tests/test_kanban_phase_budget.py \
             services/zoe-data/tests/test_scheduling_workers_review_fixes.py \
+            services/zoe-data/tests/test_memory_emotional_recall.py \
+            services/zoe-data/tests/test_telegram_account_linking.py \
+            services/zoe-data/tests/test_morning_brief.py \
             services/homeassistant-mcp-bridge/tests/test_ha_bridge.py \
             -x -q \
             --override-ini="asyncio_mode=auto"
