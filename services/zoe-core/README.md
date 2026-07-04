@@ -17,11 +17,14 @@ via Pi's extension hooks.
 > (extensions/tools). The retired Docker monolith that once held this name was
 > removed from the working tree and remains in git history only — do not revive it.
 
-> **Status: lab-only / additive.** zoe-core is the destination brain (Pi on
-> Gemma 4 E4B-QAT), built and proven *beside* the live system. `zoe_agent` remains
-> the production chat brain until zoe-core clears the Samantha tests +
-> Pi-vs-`zoe_agent` benchmarks — then cutover. Nothing here is wired into
-> production yet.
+> **Status: wired default `core` brain fallback.** zoe-core (Pi on Gemma 4 E4B-QAT)
+> is the code default in `services/zoe-data/brain_dispatch.py` (`pi --mode rpc` via
+> `zoe_core_client.py`) — the fallback lane below the live `flue` sidecar
+> (`labs/flue-zoe-brain`, reached via `ZOE_BRAIN_BACKEND=flue`, live on this
+> deployment since 2026-07-03). `zoe_agent.py` is the *legacy* last-resort fallback,
+> not the brain. Dispatch priority: **flue > core > legacy**. Extend zoe-core; do
+> not retire it. Only the OLD Docker monolith that once held this name is retired
+> (git history only).
 
 ## Architecture (target)
 

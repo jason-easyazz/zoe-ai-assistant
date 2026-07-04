@@ -31,8 +31,11 @@ systemd user services for the latency-sensitive ones.
 Boot order matters and is documented in
 [docs/guides/OPERATOR_RUNBOOK.md](docs/guides/OPERATOR_RUNBOOK.md).
 
-Retired services (`zoe-core` and older trees) are archived under
-`docs/archive/`. The active layout is described in
+`services/zoe-core` is **not** retired: it's the wired default `core` brain
+(Pi on Gemma 4) — the fallback lane below the live `flue` sidecar in
+`services/zoe-data/brain_dispatch.py`. The old Docker/RouteLLM-MemAgent monolith
+that once carried the name was removed and lives in git history only
+(`docs/archive/` was purged 2026-06-25). The active layout is described in
 [docs/guides/REPO_LAYOUT.md](docs/guides/REPO_LAYOUT.md).
 
 ## Prerequisites
