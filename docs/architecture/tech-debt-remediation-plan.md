@@ -150,9 +150,10 @@ hears "done." So extract-a-service does **not** close the bug class on its own. 
 
 - **Tier 1 — the actual fix (lower risk, closes the class):** stop depending on the dead mcporter
   fallback for dispatchable writes — add the missing in-process direct executors and/or make
-  `execute_intent` fail loudly instead of spawning the broken subprocess. **Known live gap:**
-  `people_relate` (`intent_router.py:3905`) is a dispatchable write with no direct executor →
-  returns `ok:false` today. *(also a live-issue below)*
+  `execute_intent` fail loudly instead of spawning the broken subprocess. **Note:** `people_relate`
+  (`intent_router.py:3905`) is a dispatchable write with no direct executor, but — unlike
+  list/calendar — it also has **no storage backend at all** (no tool, no table), so it is a design
+  decision (see Deferred), NOT an executor-add. *(also a live-issue below)*
 - **Tier 2 — the dedup the review described (cleanup, not bug fix):** extract one
   `<aggregate>_service.py` (calendar/list/people; `reminder_service.py` already exists as the
   precedent — though `mcp_server.reminder_create:1577` still bypasses it, a latent drift) and
@@ -177,8 +178,11 @@ hears "done." So extract-a-service does **not** close the bug class on its own. 
   Separate process or walled subpackage before the Flue-recreation phase grows it.
 
 ## Live issues found during verification (separate from the plan — surface to Jason)
-1. **`people_relate` silently fails on the live Flue path today** — dispatchable write, no direct
-   executor → `ok:false`. Small standalone fix (Wave 3 Tier 1, first target).
+1. **`people_relate` returns `ok:false` on the live Flue path today** — dispatchable write with no
+   direct executor AND no storage backend anywhere (no tool, no table). **NOT a small fix** — making
+   it work is the person↔person-relationship design decision (see Deferred → Wave 3 `people_relate`).
+   Note the common "X is my brother" case routes to `people_create` (which works); only third-party
+   relates ("A is B's sister") hit this gap.
 2. **`docs/archive/` exists on disk with 241 UNTRACKED files.**
    `test_canonical_invariants.py::test_no_docs_archive_graveyard` asserts it's gone — CI passes
    only because they're untracked (clean checkout); it likely fails locally. Any branch that
