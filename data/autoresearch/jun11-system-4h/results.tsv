@@ -1,4 +1,0 @@
-round	commit	score	status	description
-1	926c99a	102	baseline	current Zoe system quality after scorer path correction
-2	3e47c5f	106	keep	narrow populate_multica subprocess exception handling
-3	24e2ba9	120	keep	narrow Multica client error handling
