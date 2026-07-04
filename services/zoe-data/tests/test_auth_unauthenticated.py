@@ -74,3 +74,30 @@ def test_family_admin_opt_in_still_possible(monkeypatch):
     user = asyncio.run(auth.get_current_user(req))
     assert user["role"] == "admin"
     assert user["user_id"] == auth.DEFAULT_USER_ID
+
+
+def test_degraded_user_is_guest_never_admin(monkeypatch):
+    """Fail-OPEN degraded mode (auth service down, ZOE_AUTH_FAIL_CLOSED disabled)
+    must resolve to GUEST, never the household admin — an outage can't elevate."""
+    monkeypatch.setenv("ZOE_AUTH_FAIL_CLOSED", "false")
+    auth = _reload_auth(monkeypatch, role=None)
+    degraded = auth._degraded_user()
+    assert degraded is not None
+    assert degraded["user_id"] == "guest"
+    assert degraded["role"] == "guest"
+    assert degraded["user_id"] != auth.DEFAULT_USER_ID
+    monkeypatch.delenv("ZOE_AUTH_FAIL_CLOSED", raising=False)
+
+
+def test_validated_user_without_id_falls_back_to_guest(monkeypatch):
+    """A malformed auth response (200 but no user_id/id) normalises to guest,
+    not the admin id."""
+    auth = _reload_auth(monkeypatch, role=None)
+    # No id anywhere → guest, never family-admin.
+    assert auth._normalize_auth_user({"role": "user"})["user_id"] == "guest"
+    assert auth._normalize_auth_user({})["user_id"] == "guest"
+    assert auth._normalize_auth_user({"user": {"role": "member"}})["user_id"] == "guest"
+    assert auth._normalize_auth_user({"role": "user"})["user_id"] != auth.DEFAULT_USER_ID
+    # A well-formed response still resolves the real user.
+    assert auth._normalize_auth_user({"user_id": "jason", "role": "user"})["user_id"] == "jason"
+    assert auth._normalize_auth_user({"user": {"id": "karen"}})["user_id"] == "karen"

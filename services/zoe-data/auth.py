@@ -22,20 +22,28 @@ _AUTH_FAIL_CLOSED = os.environ.get("ZOE_AUTH_FAIL_CLOSED", "true").lower() in (
     "1", "true", "yes",
 )
 CACHE_TTL_SECONDS = 30
+# The household-admin identity. Used ONLY for the explicit, opt-in
+# ZOE_UNAUTHENTICATED_ROLE=family-admin override below — never as a silent
+# fallback. Every other "we can't determine the user" path resolves to GUEST
+# (least privilege), so a malformed auth response or a downed auth service can
+# never accidentally grant admin.
 DEFAULT_USER_ID = "family-admin"
+GUEST_USER_ID = "guest"
 _DEGRADED_MARK = "__zoe_degraded__"
 
 _session_cache: Dict[str, Tuple[dict, float]] = {}
 
 
 def _degraded_user() -> Optional[Dict[str, Any]]:
-    """When zoe-auth is down: fail closed (None) or legacy degraded member (ZOE-4319)."""
+    """When zoe-auth is down: fail closed (None), or — only if ZOE_AUTH_FAIL_CLOSED
+    is explicitly disabled — a degraded GUEST (never admin) so an outage cannot
+    silently elevate an anonymous caller (ZOE-4319)."""
     if _AUTH_FAIL_CLOSED:
         return None
     return {
         _DEGRADED_MARK: True,
-        "user_id": DEFAULT_USER_ID,
-        "role": "member",
+        "user_id": GUEST_USER_ID,
+        "role": "guest",
         "username": "guest",
         "permissions": [],
     }
@@ -59,20 +67,23 @@ def _cache_set(session_id: str, user: dict):
     _session_cache[session_id] = (user, time.monotonic())
 
 
+def _normalize_auth_user(data: Any) -> dict:
+    """Normalise a zoe-auth response (flat user object OR {"user": {...}}) to the
+    internal user dict. A validated session that returns no user_id is a malformed
+    auth response — fall back to GUEST (least privilege), never the admin id."""
+    user = data.get("user") if isinstance(data, dict) and isinstance(data.get("user"), dict) else data
+    if not isinstance(user, dict):
+        user = {}
+    return {
+        "user_id": user.get("user_id") or user.get("id") or GUEST_USER_ID,
+        "role": user.get("role", "user"),
+        "username": user.get("username") or user.get("name", ""),
+        "permissions": user.get("permissions", []),
+    }
+
+
 async def _validate_with_auth_service(session_id: str) -> Optional[dict]:
     """Call zoe-auth to validate session. Returns user dict, degraded-user dict, or None if invalid."""
-    def _normalize_auth_user(data: Any) -> dict:
-        # zoe-auth may return either a flat user object or {"user": {...}}.
-        user = data.get("user") if isinstance(data, dict) and isinstance(data.get("user"), dict) else data
-        if not isinstance(user, dict):
-            user = {}
-        return {
-            "user_id": user.get("user_id") or user.get("id", DEFAULT_USER_ID),
-            "role": user.get("role", "user"),
-            "username": user.get("username") or user.get("name", ""),
-            "permissions": user.get("permissions", []),
-        }
-
     try:
         timeout = httpx.Timeout(5.0, connect=3.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
