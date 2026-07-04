@@ -74,3 +74,36 @@ def test_family_admin_opt_in_still_possible(monkeypatch):
     user = asyncio.run(auth.get_current_user(req))
     assert user["role"] == "admin"
     assert user["user_id"] == auth.DEFAULT_USER_ID
+
+
+def test_degraded_user_is_guest_never_admin(monkeypatch):
+    """Fail-OPEN degraded mode (auth service down, ZOE_AUTH_FAIL_CLOSED disabled)
+    must resolve to GUEST, never the household admin — an outage can't elevate."""
+    auth = _reload_auth(monkeypatch, role=None)
+    # Patch the already-loaded module global directly (no env-set + reload).
+    monkeypatch.setattr(auth, "_AUTH_FAIL_CLOSED", False)
+    degraded = auth._degraded_user()
+    assert degraded is not None
+    assert degraded["user_id"] == "guest"
+    assert degraded["role"] == "guest"
+    assert degraded["user_id"] != auth.DEFAULT_USER_ID
+
+
+def test_validated_user_without_id_falls_back_to_guest(monkeypatch):
+    """A malformed auth response (200 but no user_id/id) normalises to guest,
+    not the admin id."""
+    auth = _reload_auth(monkeypatch, role=None)
+    # No id anywhere → guest, never family-admin.
+    assert auth._normalize_auth_user({"role": "user"})["user_id"] == "guest"
+    assert auth._normalize_auth_user({})["user_id"] == "guest"
+    assert auth._normalize_auth_user({"user": {"role": "member"}})["user_id"] == "guest"
+    assert auth._normalize_auth_user({"role": "user"})["user_id"] != auth.DEFAULT_USER_ID
+    # CRITICAL: a malformed `{"role": "admin"}` with no id must ALSO drop the role —
+    # otherwise user_id=guest + role=admin would pass require_admin.
+    bad = auth._normalize_auth_user({"role": "admin"})
+    assert bad["user_id"] == "guest" and bad["role"] == "guest"
+    assert auth._normalize_auth_user({"user": {"role": "admin"}})["role"] == "guest"
+    # A well-formed response still resolves the real user + role.
+    assert auth._normalize_auth_user({"user_id": "jason", "role": "user"})["user_id"] == "jason"
+    assert auth._normalize_auth_user({"user": {"id": "karen"}})["user_id"] == "karen"
+    assert auth._normalize_auth_user({"user_id": "amy", "role": "admin"})["role"] == "admin"
