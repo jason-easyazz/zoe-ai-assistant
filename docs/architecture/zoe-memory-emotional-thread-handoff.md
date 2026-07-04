@@ -119,7 +119,7 @@ When substrate first appears, the memory-side wiring above is unblocked and I pi
   robust for a heavy user: a *generic* emotional query ("how have I been doing") has no
   lexical overlap, so semantic search ranked ordinary facts above the emotional row, and
   `load_for_prompt`'s top-N had already truncated it — the row never surfaced. Fix (PR
-  #100X, `feat/emotional-thread-recall-pin`): on an emotional turn, **explicitly fetch**
+  #1005, `feat/emotional-thread-recall-pin`): on an emotional turn, **explicitly fetch**
   the user's `emotional_moment` rows (type-filtered, intensity-ordered) and PIN them to
   the front of the packet, ahead of search hits, dedup by id. Re-proven on the live
   service against the exact worst case: OFF the row stays lost, ON the generic emotional
