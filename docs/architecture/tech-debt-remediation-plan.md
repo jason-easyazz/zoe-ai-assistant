@@ -40,7 +40,7 @@ under `flock /tmp/zoe-voice-harness.lock`; new test files must be reachable by C
 
 **Deferred / needs a decision (NOT auto-shipped — design or live-voice risk):**
 - **Wave 2 silent-skip fix** — directory-wide CI selection collects clean (30→3763) but a real run has 22 failures that are NOT marker-gated (incl. a Starlette version mismatch), so it can't be proven CI-green off-box. Follow-up = add opt-in `@pytest.mark.ci_safe` + select `-m ci_safe`.
-- **Wave 3 `people_relate`** — advertised across the brain surface but has **no storage backend anywhere** (no tool, no table). Making it work = a schema/memory design decision (person↔person relationships): people-table edge, a relationships table, or a MemPalace relationship memory. NOT a mirror-the-executor fix.
+- **Wave 3 `people_relate`** — ⚠️ **CORRECTED 2026-07-04** (earlier note was wrong): the relationship backend **already exists and is live** — `person_relationships` (migration `0007`, typed directed edges w/ inverse roles) + `person_extractor._write_relationship` (upserts edges, auto-creates partial stubs) running on every chat/voice turn, composed into the cited memory packet since 2026-07-03. The `people_relate` *intent* is a **redundant dead path**, NOT a missing schema. Fix = remove it or alias it to `_write_relationship`. Full design + Samantha-grade roadmap: [`docs/adr/ADR-relationship-memory.md`](../adr/ADR-relationship-memory.md).
 - **Wave 3 Tier 2 (extract shared calendar/list/people services)** — real anti-drift value, but rewrites live-voice-path SQL → must be one-aggregate-per-PR behind the `~/.zoe-voice-samples` replay gate.
 - **Wave 3 memory-router graphify** — `MemoryBackend.GRAPHIFY` is the *primary* route for code/graph queries with asserting tests; removing it changes routing (memory workstream).
 - **Wave 4** — god-file splits (`voice_tts.py` 4.8k, `chat.py` 4.0k), typed config module, fence the engineering harness out of the prod FastAPI process. Incremental, replay-gated, do-last.
@@ -151,9 +151,10 @@ hears "done." So extract-a-service does **not** close the bug class on its own. 
 - **Tier 1 — the actual fix (lower risk, closes the class):** stop depending on the dead mcporter
   fallback for dispatchable writes — add the missing in-process direct executors and/or make
   `execute_intent` fail loudly instead of spawning the broken subprocess. **Note:** `people_relate`
-  (`intent_router.py:3905`) is a dispatchable write with no direct executor, but — unlike
-  list/calendar — it also has **no storage backend at all** (no tool, no table), so it is a design
-  decision (see Deferred), NOT an executor-add. *(also a live-issue below)*
+  (`intent_router.py:3905`) is a dispatchable write with no direct executor — but its backend DOES
+  exist (`person_relationships` + `person_extractor._write_relationship`, live), and natural-language
+  relationships are already captured by the per-turn extractor, so the intent is **redundant**: remove
+  or alias it rather than build it. See [`docs/adr/ADR-relationship-memory.md`](../adr/ADR-relationship-memory.md).
 - **Tier 2 — the dedup the review described (cleanup, not bug fix):** extract one
   `<aggregate>_service.py` (calendar/list/people; `reminder_service.py` already exists as the
   precedent — though `mcp_server.reminder_create:1577` still bypasses it, a latent drift) and
@@ -178,11 +179,12 @@ hears "done." So extract-a-service does **not** close the bug class on its own. 
   Separate process or walled subpackage before the Flue-recreation phase grows it.
 
 ## Live issues found during verification (separate from the plan — surface to Jason)
-1. **`people_relate` returns `ok:false` on the live Flue path today** — dispatchable write with no
-   direct executor AND no storage backend anywhere (no tool, no table). **NOT a small fix** — making
-   it work is the person↔person-relationship design decision (see Deferred → Wave 3 `people_relate`).
-   Note the common "X is my brother" case routes to `people_create` (which works); only third-party
-   relates ("A is B's sister") hit this gap.
+1. **`people_relate` intent returns `ok:false` on the live Flue path** — dispatchable write with no
+   direct executor. ⚠️ **CORRECTED:** this is NOT a missing backend — `person_relationships` +
+   `person_extractor._write_relationship` exist and run live, and the per-turn extractor already
+   captures natural-language relationships ("A is B's sister"). So the intent is a **redundant dead
+   path**: remove/alias it (small), don't build new storage. The common "X is my brother" case routes
+   to `people_create` (works). See [`docs/adr/ADR-relationship-memory.md`](../adr/ADR-relationship-memory.md).
 2. **`docs/archive/` exists on disk with 241 UNTRACKED files.**
    `test_canonical_invariants.py::test_no_docs_archive_graveyard` asserts it's gone — CI passes
    only because they're untracked (clean checkout); it likely fails locally. Any branch that
