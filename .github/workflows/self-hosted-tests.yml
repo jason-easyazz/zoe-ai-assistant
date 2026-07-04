@@ -36,6 +36,11 @@ jobs:
   host-tests:
     # Same self-hosted Jetson runner as deploy.yml.
     runs-on: self-hosted
+    # Hard cap so a hung/stalled test can never hold the shared Jetson runner (and
+    # queue deploys behind it) for the 6h GitHub default. `continue-on-error` only
+    # fires when a step EXITS; it does nothing for a process that stalls — this
+    # timeout is what bounds that case.
+    timeout-minutes: 20
 
     env:
       # Mirror the PYTHONPATH the validate.yml / repo pytest.ini use so local
@@ -78,6 +83,7 @@ jobs:
       # memory store (demo users only) and needs the model server up. Still
       # reporting-only.
       - name: Samantha live memory suite (opt-in, reporting-only)
+        id: live_suite
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_live_memory }}
         continue-on-error: true
         env:
@@ -92,5 +98,6 @@ jobs:
         if: ${{ always() }}
         run: |
           echo "Integration + e2e outcome: ${{ steps.host_suites.outcome }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Samantha live memory outcome: ${{ steps.live_suite.outcome || 'not run' }}" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "This workflow is reporting-only and does not gate or roll back deploys." >> "$GITHUB_STEP_SUMMARY"
