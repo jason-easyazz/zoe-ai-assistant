@@ -278,16 +278,58 @@ async def get_a2a_caller(request: Request) -> dict:
 _ZOE_INTERNAL_TOKEN = os.environ.get("ZOE_INTERNAL_TOKEN", "")
 
 
-async def require_internal_token(request: Request) -> None:
-    """Dependency for internal-only endpoints (e.g. MCP → main.py bridge calls)."""
+def _is_internal_request(request: Request) -> bool:
+    """True when the request is a TRUSTED internal caller.
+
+    Trust basis (identical to require_internal_token): the request is loopback,
+    OR it carries a valid X-Internal-Token. This is the ONLY gate under which an
+    internal service (e.g. the Telegram bridge) may assert an acting identity —
+    a public/browser request must never satisfy it.
+    """
     client_host = request.client.host if request.client else ""
     if client_host in ("127.0.0.1", "::1", "localhost"):
-        return
+        return True
     if _ZOE_INTERNAL_TOKEN:
         provided = request.headers.get("X-Internal-Token", "")
         if provided and hmac.compare_digest(provided, _ZOE_INTERNAL_TOKEN):
-            return
+            return True
+    return False
+
+
+async def require_internal_token(request: Request) -> None:
+    """Dependency for internal-only endpoints (e.g. MCP → main.py bridge calls)."""
+    if _is_internal_request(request):
+        return
     raise HTTPException(
         status_code=403,
         detail="Internal endpoint: loopback or valid X-Internal-Token required",
     )
+
+
+async def resolve_acting_user(request: Request) -> dict:
+    """get_current_user, plus a TRUSTED internal-caller identity override.
+
+    A trusted internal caller (loopback OR valid X-Internal-Token — the same
+    boundary as require_internal_token) MAY specify the acting user via the
+    ``X-Zoe-User-Id`` header. This lets the Telegram bridge forward a verified,
+    already-resolved Zoe user_id so the turn runs as that real user (with their
+    memory) instead of guest.
+
+    SECURITY: the override is applied ONLY when _is_internal_request() is true.
+    A public/browser request that sets X-Zoe-User-Id is ignored entirely and
+    falls through to normal session/guest auth — it can never impersonate a user
+    this way. Session auth still runs for internal callers that do NOT send the
+    header, so existing loopback session flows are unchanged.
+    """
+    override = request.headers.get("X-Zoe-User-Id", "").strip()
+    if override and _is_internal_request(request):
+        return {
+            "user_id": override,
+            # A forwarded, pre-resolved real user acts as a normal member; the
+            # bridge is not an admin console. Downstream role checks still apply.
+            "role": "user",
+            "username": override,
+            "permissions": [],
+        }
+    # No trusted override → standard session / device-token / guest resolution.
+    return await get_current_user(request)

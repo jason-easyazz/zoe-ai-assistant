@@ -1,9 +1,14 @@
-# flue-zoe-brain (LAB ONLY)
+# flue-zoe-brain (LAB-HOSTED, PRODUCTION-REACHABLE)
 
-A Flue-hosted Pi `Agent` on Zoe's local Gemma brain — a spike toward replacing
-the per-turn `pi --mode rpc` subprocess behind the `run_zoe_core` seam
-(`docs/architecture/zoe-flue-integration.md` Phase 2). **Not wired into
-production.**
+A Flue-hosted Pi `Agent` on Zoe's local Gemma brain — replaces the per-turn
+`pi --mode rpc` subprocess behind the `run_zoe_core` seam
+(`docs/architecture/zoe-flue-integration.md` Phase 2).
+
+**Wiring status:** lab-hosted but production-reachable via zoe-data's
+`ZOE_BRAIN_BACKEND=flue` seam (`services/zoe-data/brain_dispatch.py`, priority
+flue > core > legacy). The **shipped repo default is OFF** (`core` =
+`services/zoe-core`); **this deployment flipped it live on 2026-07-03** (host
+`ZOE_BRAIN_BACKEND=flue`, sidecar on `:3578` under a systemd user unit).
 
 ## Tools
 

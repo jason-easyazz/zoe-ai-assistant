@@ -16,18 +16,24 @@ with its own README/RUNBOOK and is self-contained.
 
 - Do **not** wire any lab code into the live voice path, `zoe-data`, a systemd
   unit, a Docker image, or CI. Labs run as hand-started processes only.
-  (Deliberate exception: `flue-zoe-brain/` ships an **operator opt-in** user-unit
-  *template* — `scripts/setup/systemd/flue-zoe-brain.service`, port 3578 — that is
-  never auto-installed or auto-enabled; production reaches the sidecar only
-  through zoe-data's default-OFF `ZOE_BRAIN_BACKEND=flue` seam. No other lab may
-  ship a unit without amending this contract.)
+  (Deliberate exceptions, each an **operator opt-in** user-unit *template* that is
+  never auto-installed or auto-enabled:
+  `flue-zoe-brain/` → `scripts/setup/systemd/flue-zoe-brain.service` (port 3578);
+  production reaches the sidecar only through zoe-data's `ZOE_BRAIN_BACKEND=flue`
+  seam. The **shipped repo default is OFF** (`core` = `services/zoe-core`), but the
+  seam is production-reachable and **this deployment flipped it live on 2026-07-03**
+  — so `flue-zoe-brain/` is lab-hosted yet production-reachable, not "never live";
+  `flue-zoe-telegram/` → `scripts/setup/systemd/flue-zoe-telegram.service` (the
+  long-poll Telegram bot; the operator installs it with their own bot token).
+  No other lab may ship a unit without amending this contract.)
 - Do **not** let lab **harness/agent** work point at the local voice brain on
   `:11434` (Gemma-4-E4B) for *its own* engineering work — harnesses must use a
   separate harness model so the live GPU slot is never contended. (Exception: a
   spike whose explicit subject **is** the Gemma brain — e.g. `flue-zoe-brain/`,
   porting Zoe's brain onto Flue per `docs/architecture/zoe-flue-integration.md`
-  Seam M — points at `:11434` by design; it stays demo-grade and is never wired
-  into a live turn — the prod seam that can reach it defaults OFF.)
+  Seam M — points at `:11434` by design. The prod seam that reaches it ships
+  default-OFF (`core`), but is production-reachable and is **live on this
+  deployment since 2026-07-03** via `ZOE_BRAIN_BACKEND=flue`.)
 - Do **not** promote a spike to prod without passing its stated acceptance bar
   (the "Samantha tests") and showing no voice-latency regression.
 
@@ -63,10 +69,18 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
   Emits the Seam-A text-delta + `__TOOL__`/`__THINKING__` sentinel stream
   (byte-pinned to the prod contract) via content-negotiated NDJSON on the
   agent route (`src/streaming.ts`); whole-result `?wait=result` unchanged.
-  Reached from prod only via the default-OFF `ZOE_BRAIN_BACKEND=flue` seam; may
-  be supervised via the opt-in unit template (see Forbidden above). Operator
-  measurement checklists pending in `flue-zoe-brain/LANDING.md`.
+  Reached from prod via the `ZOE_BRAIN_BACKEND=flue` seam — shipped default-OFF
+  (`core`) but production-reachable and **live on this deployment since
+  2026-07-03**; supervised via the opt-in unit template (see Forbidden above).
+  Operator measurement checklists pending in `flue-zoe-brain/LANDING.md`.
 - `flue-zoe-telegram/` — Flue Telegram channel: long-poll bot bridged to zoe-data's
   `/api/chat` (NOT a Flue LLM agent; `src/agents/zoe.ts` is a build-only placeholder
   and registers no model provider — never points at the voice brain on `:11434`).
-  Hand-started, demo-only; README is a record, not a contract.
+  Maps each verified sender to their **real Zoe user** via account linking: a user
+  stores their numeric telegram id in their profile (`PUT /api/user/profile/telegram`),
+  the bot resolves it (`GET /api/system/resolve-telegram/<id>`, internal-only) and
+  forwards the turn as that user over zoe-data's **trusted** `/api/chat` override
+  (`X-Zoe-User-Id`, honoured only for loopback / valid `X-Internal-Token` — a public
+  request can't impersonate; `auth.resolve_acting_user`). Unlinked senders are told
+  their id and refused (never reach the brain as a real user). Ships the opt-in unit
+  template above. Hand-started, demo-only; README is a record, not a contract.
