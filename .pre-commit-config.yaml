@@ -16,19 +16,17 @@ repos:
       - id: check-added-large-files
         args: ["--maxkb=5120"]
 
-  # Zoe's own mandated structure/critical-file validators (repo: local so they
-  # run against the checkout, no network fetch, no version pinning).
+  # Zoe's own mandated structure validator (repo: local so it runs against the
+  # checkout, no network fetch, no version pinning). NOTE: validate_critical_files
+  # is intentionally NOT wired here — it hard-codes services/zoe-ui/dist/ artifact
+  # paths that may be absent on a fresh clone / failed UI build, which would block
+  # every local commit. It still runs in CI (validate.yml) where the full tree is
+  # present.
   - repo: local
     hooks:
       - id: zoe-validate-structure
         name: Zoe project structure validation
         entry: python3 tools/audit/validate_structure.py
-        language: system
-        pass_filenames: false
-        always_run: true
-      - id: zoe-validate-critical-files
-        name: Zoe critical-files presence check
-        entry: python3 tools/audit/validate_critical_files.py
         language: system
         pass_filenames: false
         always_run: true

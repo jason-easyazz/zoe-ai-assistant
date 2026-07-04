@@ -51,7 +51,7 @@ data/time_location_settings.json
 data/learning-archives/
 data/memvid/
 data/archives/
-data/autoresearch/
+data/autoresearch/*/
 **/results.tsv
 
 # Database backup files
@@ -272,4 +272,4 @@ data/music-assistant/*.log
 data/music-assistant/*.log.*
 data/skills.lock
 # autoresearch run dirs are runtime output; the FEATURE is live but reads live run-dirs, not committed samples
-data/autoresearch/
+data/autoresearch/*/
