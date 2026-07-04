@@ -105,7 +105,12 @@ jobs:
       - name: Rebuild / restart Flue brain sidecar (if changed)
         run: |
           export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-          if ! systemctl --user list-unit-files flue-zoe-brain.service >/dev/null 2>&1; then
+          # Guard on the unit ACTUALLY appearing in the listing — `list-unit-files`
+          # exits 0 with empty output on some systemd versions when the unit is
+          # absent, so an exit-code-only check would fall through and then fail on
+          # restart. Match the unit name in the output instead.
+          if ! systemctl --user list-unit-files flue-zoe-brain.service 2>/dev/null \
+               | grep -q '^flue-zoe-brain\.service'; then
             echo "flue-zoe-brain.service not installed on this host — skipping."
             exit 0
           fi
@@ -118,7 +123,15 @@ jobs:
           fi
           echo "sidecar changed (or dist missing) — rebuilding and restarting."
           cd labs/flue-zoe-brain
-          npm install --no-audit --no-fund
+          # npm ci = reproducible install from the committed lockfile, so the
+          # deployed dist matches what was tested (npm install could pull newer
+          # transitive deps between merge and deploy). Fall back to npm install
+          # only if the lockfile is somehow absent.
+          if [ -f package-lock.json ]; then
+            npm ci --no-audit --no-fund
+          else
+            npm install --no-audit --no-fund
+          fi
           npm run build
           systemctl --user restart flue-zoe-brain.service
           for attempt in $(seq 1 12); do
