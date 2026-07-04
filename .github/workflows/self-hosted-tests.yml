@@ -1,0 +1,96 @@
+name: Self-Hosted Tests
+
+# Host-only integration/e2e suites that can ONLY run on the Jetson self-hosted
+# runner (they import local service modules, start the FastAPI lifespan, and hit
+# the live brain/DB — see tests/AGENTS.md). deploy.yml runs on the same runner
+# but only curls health endpoints; it never runs pytest. This job is a SEPARATE,
+# REPORTING-ONLY signal: it runs post-merge on main so those suites actually get
+# exercised on real hardware.
+#
+# It does NOT gate or roll back deploys — deploy.yml owns deploy and runs
+# independently. Every pytest step here is `continue-on-error: true`, so a red
+# suite surfaces in the run summary without failing the workflow or blocking
+# anything downstream.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_live_memory:
+        description: "Also run the samantha_live memory suite (ZOE_LIVE_TESTS=1; needs live Gemma)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  # Serialize with itself so overlapping post-merge runs don't fight over the
+  # shared checkout / live services on the single Jetson runner. Keep it separate
+  # from deploy.yml's `production` group so it never blocks a deploy.
+  group: self-hosted-tests
+  cancel-in-progress: false
+
+jobs:
+  host-tests:
+    # Same self-hosted Jetson runner as deploy.yml.
+    runs-on: self-hosted
+
+    env:
+      # Mirror the PYTHONPATH the validate.yml / repo pytest.ini use so local
+      # service imports (routers, zoe_agent, mcp_server) resolve.
+      PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/services/zoe-data
+      # Keep these suites off any real identity / live memory unless explicitly
+      # opted in via the workflow_dispatch input below.
+      ZOE_MEMORY_STARTUP_STRICT: "false"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The self-hosted runner is NOT a fresh box: it's the Jetson that already
+      # runs the live stack, so the Jetson-specific Python deps (torch, onnx,
+      # whisper, MemPalace, etc.) are already installed for the user that owns
+      # the runner. We intentionally do NOT pip-install the heavy requirements
+      # here (that's ~3 GB and would fight the live services). Record the
+      # interpreter for the run log so drift is visible.
+      - name: Show Python environment
+        run: |
+          python3 --version
+          python3 -c "import sys; print('executable:', sys.executable)"
+
+      # Host-only integration + e2e suites. Reporting-only: allowed to fail so a
+      # red suite is visible in the summary without failing the workflow or
+      # touching deploy. Uses the repo pytest.ini (asyncio_mode=auto) and the
+      # PYTHONPATH set at job level.
+      - name: Integration + e2e tests (reporting-only)
+        id: host_suites
+        continue-on-error: true
+        run: |
+          cd "${{ github.workspace }}"
+          python3 -m pytest tests/integration tests/e2e -q
+
+      # Live Samantha memory proofs. Self-skips (collects 0 items) unless
+      # ZOE_LIVE_TESTS=1 AND live Gemma is reachable — see
+      # services/zoe-data/tests/samantha_live/AGENTS.md. Only armed on manual
+      # dispatch with the run_live_memory input, since it writes to the live
+      # memory store (demo users only) and needs the model server up. Still
+      # reporting-only.
+      - name: Samantha live memory suite (opt-in, reporting-only)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_live_memory }}
+        continue-on-error: true
+        env:
+          ZOE_LIVE_TESTS: "1"
+        run: |
+          cd "${{ github.workspace }}"
+          python3 -m pytest services/zoe-data/tests/samantha_live -q
+
+      # Make the reporting nature explicit in the run summary: surface whether
+      # the host suites passed without ever failing the job.
+      - name: Report result
+        if: ${{ always() }}
+        run: |
+          echo "Integration + e2e outcome: ${{ steps.host_suites.outcome }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "This workflow is reporting-only and does not gate or roll back deploys." >> "$GITHUB_STEP_SUMMARY"
