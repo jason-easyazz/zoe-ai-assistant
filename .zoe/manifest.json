@@ -109,7 +109,6 @@
     ".dockerignore",
     ".env.example",
     ".cursorrules",
-    ".graphifyignore",
     "AGENTS.md",
     "CLAUDE.md",
     ".mcp.json",
