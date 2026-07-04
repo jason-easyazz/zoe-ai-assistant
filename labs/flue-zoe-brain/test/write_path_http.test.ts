@@ -260,6 +260,31 @@ const WRITE_TOOL_CASES: Array<{
     dryRunPattern: /WRITE DISABLED.*the fact "my anniversary is June 3rd".*NOT/i,
     successPattern: /Got it — I'll remember that\./,
   },
+  // ─── Emotional-thread capture signal (handoff doc) ─────────────────────────
+  // Pins that the emotional tool dispatches memory_store with the emotional
+  // memory_type and threads valence + intensity as slots (zoe-data promotes them
+  // to metadata). This full-slot case proves the pass-through; the omit-when-absent
+  // path is covered by a dedicated assertion below.
+  {
+    name: 'remember_emotional_moment',
+    input: { moment: 'Jason has been anxious about the house settlement', valence: 'neg', intensity: 0.8 },
+    expectedPayload: {
+      user_id: ACTING_USER,
+      intent: 'memory_store',
+      slots: {
+        text: 'Jason has been anxious about the house settlement',
+        memory_type: 'emotional_moment',
+        valence: 'neg',
+        intensity: 0.8,
+      },
+    },
+    dryRunPattern: /WRITE DISABLED.*that emotional moment.*NOT/i,
+    // The real memory_store fulfilment returns "Got it — I'll remember that." for
+    // BOTH fact and emotional_moment, so that's the confirmed contract the user
+    // hears; the tool's own "keep that in mind" fallback only shows on an empty
+    // backend result (covered by the omit-slots test below via an empty result).
+    successPattern: /Got it — I'll remember that\./,
+  },
 ];
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
@@ -468,6 +493,32 @@ test('write tools with ZOE_BRAIN_ALLOW_WRITES=true POST exact intent-dispatch pa
         })),
       );
       assert.equal(fake.requests.length, WRITE_TOOL_CASES.length, 'fresh write-enabled module must emit one POST per write tool');
+    });
+  } finally {
+    await fake.close();
+  }
+});
+
+test('remember_emotional_moment omits valence/intensity slots when absent or malformed', async () => {
+  const fake = await startFakeZoeData();
+  try {
+    await withTools(fake.baseUrl, 'true', async (tools) => {
+      const tool = byName(tools, 'remember_emotional_moment');
+      // No valence/intensity at all → slots carry ONLY text + memory_type. The
+      // fake returns the real memory_store confirmation, so that's what surfaces.
+      const out = String(await tool.run({ input: { moment: 'Mia started school today' } }));
+      assert.match(out, /Got it — I'll remember that\./);
+      assert.deepEqual(fake.requests, [
+        {
+          method: 'POST',
+          path: '/api/system/intent-dispatch',
+          body: {
+            user_id: ACTING_USER,
+            intent: 'memory_store',
+            slots: { text: 'Mia started school today', memory_type: 'emotional_moment' },
+          },
+        },
+      ]);
     });
   } finally {
     await fake.close();

@@ -55,7 +55,8 @@ does NOT mutate real data and instructs the model not to claim success).
 | `people` | read+write | `people_create` / `people_relate` / `people_search` | `action` (create/relate/search), `name?`, `relationship?`, `related_to?`, `query?`, `notes?` — create/relate are write-gated |
 | `media` | write | `music_play` / `music_control` / `music_volume` / `set_volume` / `music_setup` | `action` (play/control/set_music_volume/system_volume/setup), `query?`, `command?`, `level?`, `direction?` — system_volume = Zoe's TTS volume, not the player |
 | `home` | write | `smart_home` (validated; entity_id built server-side) | `action` (on/off/dim/brighten), `room?` — lights only |
-| `remember_fact` | write | `memory_store` (→ MemoryService.ingest; the one new zoe-data intent) | `fact` |
+| `remember_fact` | write | `memory_store` (→ MemoryService.ingest) | `fact` |
+| `remember_emotional_moment` | write | `memory_store` with `memory_type=emotional_moment` (→ MemoryService.ingest; valence/intensity ride ingest metadata) | `moment`, `valence?` (pos/neg/mixed), `intensity?` (0–1) |
 | `activate_abilities` | local | none (progressive disclosure, see below) | `group` |
 
 ## Progressive tool disclosure

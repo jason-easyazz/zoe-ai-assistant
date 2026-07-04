@@ -119,7 +119,7 @@ export const TOOL_GROUPS = {
   people: ['people'],
   media: ['media'],
   home: ['home'],
-  memory: ['remember_fact'],
+  memory: ['remember_fact', 'remember_emotional_moment'],
 } as const satisfies Record<string, readonly string[]>;
 
 export type AbilityGroup = keyof typeof TOOL_GROUPS;
@@ -144,7 +144,7 @@ export const GROUP_PURPOSES: Record<AbilityGroup, string> = {
   people: 'save or look up people/contacts',
   media: 'play/control music, set music or speaking volume',
   home: 'turn on/off, dim, or brighten the lights',
-  memory: 'store a fact the user asks you to remember',
+  memory: 'store a fact the user asks you to remember, or a durable emotional moment',
 };
 
 /**
@@ -198,10 +198,15 @@ const GROUP_TRIGGERS: Record<AbilityGroup, RegExp> = {
   home:
     /\blights?\b|\b(?:turn|switch|flip)\s+(?:on|off)\b|\b(?:dim|brighten)\b/i,
   // Explicit "remember (that) ...", "don't forget ...", "keep in mind ...",
-  // "make a note that ..." style WRITE requests. Recall is handled by the
-  // always-on core recall_memory, so this only needs the store phrasings.
+  // "make a note that ..." style WRITE requests, PLUS genuine emotional-weight
+  // cues so remember_emotional_moment is pre-disclosed on emotional turns (the
+  // doctrine in agents/zoe.ts is the always-on fallback via the activator, but
+  // pre-disclosing the tool on clear emotional language is the defence-in-depth
+  // layer — same rationale as weather's washing/laundry widening). The model still
+  // decides SPARSELY whether to actually call it; a false positive only discloses
+  // one extra schema. Recall stays the always-on core recall_memory.
   memory:
-    /\bremember (?:that|this|i|my|to keep)\b|\bdon'?t forget\b|\bkeep in mind\b|\bmake a mental note\b/i,
+    /\bremember (?:that|this|i|my|to keep)\b|\bdon'?t forget\b|\bkeep in mind\b|\bmake a mental note\b|\b(?:stressed|anxious|worried|scared|afraid|terrified|heartbroken|grieving|devastated|overwhelmed|depressed|miserable|ecstatic|overjoyed|thrilled|proud|delighted)\b|\b(?:passed away|in hospital|has cancer|diagnosed|so happy|really happy|over the moon|breaking up|broke up|lost my|miss(?:ing)? (?:him|her|them|my)|got (?:the|our) keys|bought (?:a|our|my) (?:new )?(?:house|home)|got engaged|getting married|had (?:a|our) baby)\b/i,
 };
 
 /** Reverse map: tool name → its group. */
