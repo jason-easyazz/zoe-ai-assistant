@@ -380,7 +380,6 @@ def step_d_create_runtime() -> str:
 # ── Step E — Create skills ────────────────────────────────────────────────────
 
 _SKILL_DEFS = [
-    ("skills/agent-zero-research/SKILL.md", "Agent Zero Research"),
     ("skills/calendar-events/SKILL.md", "Calendar Events"),
     ("skills/channel-setup/SKILL.md", "Channel Setup"),
     ("skills/personal-facts/SKILL.md", "Personal Facts"),

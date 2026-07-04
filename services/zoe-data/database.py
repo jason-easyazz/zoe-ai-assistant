@@ -69,7 +69,7 @@ async def init_db():
         import logging as _log
         _log.getLogger(__name__).warning(
             "Stale SQLite file detected at %s — this file is no longer the active "
-            "database (PostgreSQL is). Archive it to docs/archive/ to suppress this warning.",
+            "database (PostgreSQL is). Move it to backups/ (or delete it) to suppress this warning.",
             _stale,
         )
 

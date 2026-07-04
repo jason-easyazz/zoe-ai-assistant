@@ -1,5 +1,0 @@
-round	commit	score	status	description
-1	780e018	130	baseline	pipeline broad exception quality
-2	c35c95d	132	keep	narrow ticket metadata parse errors
-3	3159ca3	135	keep	narrow pipeline persistence recovery errors
-4	cd90f13	137	keep	narrow Kanban pipeline recovery errors
