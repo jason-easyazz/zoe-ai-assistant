@@ -132,6 +132,23 @@ test('an empty id leaves the message unchanged and yields no forwarded id', () =
   assert.equal(forwardedIdentityFromMessages([{ role: 'user', content: msg }]), '');
 });
 
+test('an embedded newline in the id cannot break the single-line envelope', () => {
+  // A \n/\r inside the id would otherwise terminate the envelope line early and
+  // leak the remainder into the model prompt. The invariant that MUST hold for
+  // every input: the recovered id contains no CR/LF, so the envelope is one line.
+  for (const raw of ['ali\nce', 'ali\rce', 'ali\r\nce', '\nalice\n', 'alice\ninjected line']) {
+    const wrapped = wrapMessageWithIdentity('what do you know about me?', raw);
+    const recovered = forwardedIdentityFromMessages([{ role: 'user', content: wrapped }]);
+    assert.equal(/[\r\n]/.test(recovered), false, `recovered id has no newline for ${JSON.stringify(raw)}`);
+  }
+  // The newline-in-"alice" variants all sanitize to exactly 'alice'.
+  for (const raw of ['ali\nce', 'ali\rce', 'ali\r\nce', '\nalice\n']) {
+    const wrapped = wrapMessageWithIdentity('hi', raw);
+    assert.equal(forwardedIdentityFromMessages([{ role: 'user', content: wrapped }]), 'alice',
+      `id sanitized to 'alice' for ${JSON.stringify(raw)}`);
+  }
+});
+
 test('forwardedIdentityFromMessages reads the LAST user message only', () => {
   const messages = [
     { role: 'user', content: wrapMessageWithIdentity('first', 'alice') },

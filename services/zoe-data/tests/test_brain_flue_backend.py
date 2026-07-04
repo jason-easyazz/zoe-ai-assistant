@@ -236,3 +236,21 @@ async def test_chat_router_helper_selects_flue(monkeypatch):
     assert chat._use_flue_brain() is False
     monkeypatch.delenv("ZOE_BRAIN_BACKEND", raising=False)
     assert chat._use_flue_brain() is False
+
+
+def test_identity_envelope_strips_embedded_newlines():
+    """A newline inside the user_id must not break the single-line identity
+    envelope (which would leak the remainder into the model prompt)."""
+    import zoe_flue_client as zc
+
+    for raw in ("ali\nce", "ali\rce", "ali\r\nce", "\nalice\n"):
+        wrapped = zc._wrap_message_with_identity("what do you know about me?", raw)
+        first_line = wrapped.split("\n", 1)[0]
+        # Envelope stays one clean line; the id carries no CR/LF.
+        assert "\r" not in first_line and "\n" not in first_line
+        assert first_line == f"{zc._IDENTITY_ENVELOPE_PREFIX}alice"
+    # An injection attempt is flattened, not split across lines.
+    wrapped = zc._wrap_message_with_identity("hi", "alice\ninjected")
+    assert wrapped.split("\n", 1)[0] == f"{zc._IDENTITY_ENVELOPE_PREFIX}aliceinjected"
+    # Empty/whitespace id leaves the message untouched.
+    assert zc._wrap_message_with_identity("hi", "  ") == "hi"
