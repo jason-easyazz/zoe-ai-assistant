@@ -76,6 +76,8 @@ Merge mechanics & gotchas — canonical record: **[docs/knowledge/merge-and-depl
 - GitGuardian scans **branch history**: a leaked/test cred in an intermediate commit fails even with a clean head tree. Scrub via a clean re-branch (squash to one commit on a new branch, replacement PR) — force-push is blocked by design.
 - Never `--admin`/`--force`; squash-only; the **human merges** (or armed auto-merge does) — agents never bypass the gate.
 
+Local pre-commit — a tracked `.pre-commit-config.yaml` at repo root runs the repo's own `tools/audit/validate_structure.py` + `validate_critical_files.py` plus standard hygiene hooks. Run `pre-commit install` once per clone to arm it. `validate_structure.py` treats any root file not in `.zoe/manifest.json` `approved_root_files` as an orphan and fails — register new root files there.
+
 ## Cursor MCP
 
 The tracked Cursor MCP config intentionally includes only non-secret local servers. `zoe-tools` launches the operator-local helper at `/home/zoe/bin/zoe-tools-mcp.py` through `uv run --with fastmcp --with httpx`; provision that helper on Zoe hosts before relying on the repo-local MCP entry. Keep token-backed servers such as Greptile in user-global Cursor config or environment-backed local config, never in tracked repo files.
