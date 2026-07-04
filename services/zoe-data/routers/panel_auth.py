@@ -125,6 +125,7 @@ async def _resolve_device_token_user(raw_token: str) -> dict | None:
     role = info.get("role", "voice")
 
     bound_user_id: Optional[str] = None
+    lookup_failed = False
     try:
         from database import get_db
 
@@ -140,14 +141,24 @@ async def _resolve_device_token_user(raw_token: str) -> dict | None:
                 bound_user_id = row["user_id"]
             break
     except Exception as exc:
-        logger.debug("panel binding lookup failed for %s: %s", panel_id, exc)
-
-    # Unbound device → guest (fail-closed). No personal data; guest-only scope.
-    if not bound_user_id:
-        logger.info(
-            "device token for panel %s has no default user binding — acting as guest",
-            panel_id,
+        # Could NOT determine the binding (transient pool exhaustion, connection
+        # drop, schema mismatch). We still fail closed to guest — the safe, least-
+        # privilege direction — but a bound panel (e.g. the kitchen kiosk) may lose
+        # its personal context here, so this must be VISIBLE, not a debug whisper.
+        lookup_failed = True
+        logger.warning(
+            "panel binding lookup FAILED for %s (%s) — treating device as guest; "
+            "a bound panel will lose personal context until the DB recovers",
+            panel_id, exc,
         )
+
+    # No binding (or lookup failed) → guest (fail-closed). No personal data.
+    if not bound_user_id:
+        if not lookup_failed:
+            logger.info(
+                "device token for panel %s has no default user binding — acting as guest",
+                panel_id,
+            )
         return {
             "user_id": "guest",
             "role": "guest",

@@ -665,3 +665,28 @@ async def test_device_token_invalid_returns_none(monkeypatch):
     monkeypatch.setattr(panel_auth, "lookup_device_token", lambda t: None)
     user = await panel_auth._resolve_device_token_user("bad-token")
     assert user is None
+
+
+@pytest.mark.asyncio
+async def test_device_token_db_failure_fails_closed_to_guest(monkeypatch, caplog):
+    """If the binding lookup RAISES, fail closed to guest (never the bound user or
+    admin) and log at WARNING so operators can observe a bound panel losing context."""
+    monkeypatch.setattr(
+        panel_auth, "lookup_device_token",
+        lambda t: {"panel_id": "zoe-touch-pi", "role": "voice-daemon"},
+    )
+    import database as _database
+
+    async def _boom_get_db():
+        raise RuntimeError("pool exhausted")
+        yield  # pragma: no cover — makes this an async generator
+
+    monkeypatch.setattr(_database, "get_db", _boom_get_db)
+
+    with caplog.at_level("WARNING"):
+        user = await panel_auth._resolve_device_token_user("tok")
+    assert user is not None
+    assert user["user_id"] == "guest"
+    assert user["role"] == "guest"
+    assert user["permissions"] == []
+    assert any("binding lookup FAILED" in r.message for r in caplog.records)
