@@ -2278,16 +2278,20 @@ async def _execute_calendar_create_direct(intent: Intent, user_id: str) -> Optio
     start_time = _parse_time(str(slots.get("time") or "")) if slots.get("time") else None
     category = str(slots.get("category") or "general").strip() or "general"
     try:
+        from calendar_service import create_event_record
         from database import get_db_ctx
 
-        event_id = str(uuid.uuid4())
         async with get_db_ctx() as db:
-            await db.execute(
-                "INSERT INTO events (id, user_id, title, start_date, start_time, end_time,"
-                " category, location, all_day, visibility) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (event_id, user_id, title, start_date, start_time, None, category, None,
-                 0 if start_time else 1, "family"),
+            record = await create_event_record(
+                db,
+                user_id=user_id,
+                title=title,
+                start_date=start_date,
+                start_time=start_time,
+                category=category,
+                all_day=not start_time,
             )
+        event_id = record["id"]
         await _notify_ui_channel(
             "calendar", "event_created",
             {"id": event_id, "title": title, "start_date": start_date,
