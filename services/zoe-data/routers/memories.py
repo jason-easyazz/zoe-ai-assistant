@@ -425,21 +425,17 @@ def _emotional_recall_enabled() -> bool:
 # query the settlement-anxiety row matches, but for a *generic* emotional query
 # ("how have I been doing") there's no lexical overlap, so search ranks ordinary
 # facts above it — and load_for_prompt's top-N may have already truncated it out.
-# An explicit type-filtered fetch, ordered by intensity, guarantees a slot.
-_EMO_PIN_SCAN = 200   # metadata-only read window to find emotional rows past the top-N
+# An explicit type-filtered pick, ordered by intensity, guarantees a slot.
+_EMO_PIN_SCAN = 200   # wider read window (emotional turns only) to see rows past the top-N
 _EMO_PIN_MAX = 3      # how many emotional moments to guarantee in the packet
 
 
-async def _fetch_emotional_moments(svc, user_id: str) -> list[MemoryRef]:
-    """Top emotional_moment rows for the user, highest-intensity first. Best-effort:
-    never raises into the packet path. Same approved-only source as the generic
-    packet (`load_for_prompt`), just type-filtered so a crowded-out emotional row
-    is still found."""
-    try:
-        rows = await svc.load_for_prompt(user_id, limit=_EMO_PIN_SCAN)
-    except Exception:
-        logger.exception("memories: emotional-moment fetch failed")
-        return []
+def _pick_emotional_moments(rows: list[MemoryRef]) -> list[MemoryRef]:
+    """Top emotional_moment rows from an already-loaded slice, highest-intensity
+    first. Pure filter over rows the caller already read (no extra store round-trip)
+    — on an emotional turn the endpoint widens its single load_for_prompt to
+    `_EMO_PIN_SCAN` and feeds the result here, so a crowded-out emotional row is
+    still found without a second read."""
     emo = [r for r in rows if str((r.metadata or {}).get("memory_type")) == "emotional_moment"]
     emo.sort(key=_emotional_intensity, reverse=True)
     return emo[:_EMO_PIN_MAX]
@@ -471,12 +467,19 @@ async def memory_for_prompt(
     # Facts (cheap metadata read) always run. The semantic search is an ONNX embed
     # + Chroma query — keyword-gate it so it only fires on recall-ish turns instead
     # of every turn (the Pi memory extension calls this endpoint on every turn).
-    facts = await svc.load_for_prompt(user_id, limit=limit)
-    hits: list[MemoryRef] = []
     # Emotional-recall wiring (Samantha #2), default OFF: when on, an emotional cue
-    # ("how have I been", "feeling overwhelmed") also fires the search so stored
-    # emotional_moment rows lead, and the packet floats them ahead of plain facts.
+    # ("how have I been", "feeling overwhelmed") fires the search AND pins the
+    # user's emotional moments into the packet. Decide it first so a single
+    # load_for_prompt can widen its window on an emotional turn — no second read.
     emo_turn = _emotional_recall_enabled() and _message_needs_emotional_recall(message)
+    # One metadata read. On an emotional turn we scan wider (_EMO_PIN_SCAN) so a
+    # crowded-out emotional row is visible to the pin below; the generic packet
+    # still uses only the first `limit` rows (load_for_prompt returns a stable
+    # prefix, so this slice == the narrow read).
+    scan = _EMO_PIN_SCAN if emo_turn else limit
+    all_rows = await svc.load_for_prompt(user_id, limit=scan)
+    facts = all_rows[:limit]
+    hits: list[MemoryRef] = []
     needs_search = _message_needs_memory(message) or emo_turn
     if message.strip() and needs_search:
         try:
@@ -486,11 +489,12 @@ async def memory_for_prompt(
             hits = []
     # On an emotional turn, PIN the user's emotional moments to the front of the
     # packet (ahead of semantic hits) so continuity survives even when generic
-    # ranking would bury them. Dedup by id in the packet builder means a moment
-    # search also returned is not double-counted. Only on an emotional turn, so a
+    # ranking would bury them. Filtered from the rows already loaded above — no
+    # extra round-trip. Dedup by id in the packet builder means a moment search
+    # also returned is not double-counted. Only on an emotional turn, so a
     # non-emotional turn stays a byte-for-byte no-op even with the flag on.
     if emo_turn:
-        hits = await _fetch_emotional_moments(svc, user_id) + hits
+        hits = _pick_emotional_moments(all_rows) + hits
     result = _build_memory_prompt_packet(
         facts, hits, max_facts=limit, boost_emotional=emo_turn
     )

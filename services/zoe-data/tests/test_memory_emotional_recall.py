@@ -215,23 +215,23 @@ def _get(message):
     )
 
 
-# ── _fetch_emotional_moments unit ─────────────────────────────────────────────
+# ── _pick_emotional_moments unit ──────────────────────────────────────────────
 
-async def test_fetch_emotional_moments_filters_and_orders():
-    svc = _RecordingSvc(facts=[
+def test_pick_emotional_moments_filters_and_orders():
+    rows = [
         _plain_ref("p", "ordinary fact"),
         _emo_ref("e_low", "mildly annoyed", 0.2),
         _emo_ref("e_high", "devastated", 0.95),
-    ])
-    got = await memories_mod._fetch_emotional_moments(svc, "jason")
+    ]
+    got = memories_mod._pick_emotional_moments(rows)
     assert [r.id for r in got] == ["e_high", "e_low"]     # type-filtered, intensity desc
 
 
-async def test_fetch_emotional_moments_best_effort_on_error():
-    class _Boom:
-        async def load_for_prompt(self, *a, **k):
-            raise RuntimeError("store down")
-    assert await memories_mod._fetch_emotional_moments(_Boom(), "jason") == []
+def test_pick_emotional_moments_caps_at_max():
+    rows = [_emo_ref(f"e{i}", f"moment {i}", 0.9 - i * 0.1) for i in range(6)]
+    got = memories_mod._pick_emotional_moments(rows)
+    assert len(got) == memories_mod._EMO_PIN_MAX
+    assert [r.id for r in got] == ["e0", "e1", "e2"]      # highest-intensity first
 
 
 # ── endpoint wiring (pin is the load-bearing mechanism) ───────────────────────
