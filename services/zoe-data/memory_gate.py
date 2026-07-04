@@ -35,12 +35,22 @@ MEMORY_TRIGGER_WORDS = frozenset({
 # past emotional continuity. Both valences on purpose (the 4B brain under-captures
 # joy, so we must not also under-recall it).
 EMOTIONAL_TRIGGER_WORDS = frozenset({
-    "feeling", "how i feel", "how i've been", "how have i been", "how i been",
-    "how am i", "how are things", "how's things", "how are you feeling",
+    # "how have I been" style state-of-being recall. NOTE: bare "feeling" and bare
+    # "how am i" are deliberately NOT here — they over-fire ("feeling like pizza",
+    # "how am I supposed to configure this"); anchor to the emotional phrasings.
+    "how i feel", "how i'm feeling", "how i've been feeling", "how i've been",
+    "how have i been", "how i been", "been feeling", "how are you feeling",
+    "feeling down", "feeling low", "feeling anxious", "feeling overwhelmed",
+    "feeling stressed", "feeling sad", "feeling lonely", "feeling numb",
+    "how am i doing", "how am i feeling", "how am i holding up",
+    "how are things", "how's things",
     "stressed", "stressing", "stress about", "anxious", "anxiety",
     "worried", "worrying", "overwhelmed", "depressed", "burnt out", "burned out",
     "lonely", "grieving", "grief", "heartbroken", "upset", "struggling",
-    "coping", "mental health", "going through", "my mood", "been down",
+    "coping", "mental health", "my mood", "been down",
+    # "going through" anchored so it doesn't fire on "going through my email".
+    "going through a lot", "going through a hard", "going through a rough",
+    "going through a tough",
     # positive-valence emotional recall (symmetry with joy capture)
     "excited about", "so happy", "happy about", "made me happy", "makes me happy",
     "made me smile", "proud of", "thrilled", "over the moon",

@@ -17,6 +17,10 @@ os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 
 MEMPALACE = os.environ.get("MEMPALACE_PATH", "/home/zoe/.mempalace")
 DATA_URL = os.environ.get("ZOE_DATA_URL", "http://127.0.0.1:8000")
+# /for-prompt is internal-auth: loopback is allowed unconditionally, but a remote
+# ZOE_DATA_URL needs the shared token or it silently 401s (and the recall check
+# would look empty). Send it when present so the check works either way.
+INTERNAL_TOKEN = os.environ.get("ZOE_INTERNAL_TOKEN", "")
 EMO_QUERIES = ["how have I been feeling lately", "what have I been stressed about"]
 
 
@@ -38,8 +42,11 @@ def _recall(user_id):
     hits = []
     for q in EMO_QUERIES:
         url = f"{DATA_URL}/api/memories/for-prompt?user_id={user_id}&message={urllib.parse.quote(q)}"
+        req = urllib.request.Request(url)
+        if INTERNAL_TOKEN:
+            req.add_header("X-Internal-Token", INTERNAL_TOKEN)
         try:
-            with urllib.request.urlopen(url, timeout=8) as r:
+            with urllib.request.urlopen(req, timeout=8) as r:
                 packet = json.load(r).get("packet", "")
         except Exception as e:
             hits.append((q, f"<error: {e}>"))

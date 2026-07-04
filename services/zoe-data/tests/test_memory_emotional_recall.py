@@ -13,9 +13,21 @@ Two pieces, both no-ops until the flag is on:
 from types import SimpleNamespace
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
+import auth
+import memory_service
+import routers.memories as memories_mod
+import zoe_memory_compose as compose_mod
 from memory_gate import message_needs_emotional_recall, message_needs_memory
-from routers.memories import _build_memory_prompt_packet, _emotional_intensity
+from memory_service import MemoryRef
+from routers.memories import (
+    _build_memory_prompt_packet,
+    _emotional_intensity,
+    _emotional_recall_enabled,
+    router as memories_router,
+)
 
 
 # ── 1. emotional-cue detection ────────────────────────────────────────────────
@@ -37,7 +49,8 @@ def test_emotional_cues_fire(msg):
     assert message_needs_emotional_recall(msg) is True, f"{msg!r} should be an emotional cue"
 
 
-# Non-emotional messages must NOT be treated as emotional cues.
+# Non-emotional messages must NOT be treated as emotional cues — including the
+# broad-substring false positives that tightening "feeling" / "how am i" fixes.
 @pytest.mark.parametrize("msg", [
     "what's the weather",
     "where do I live",
@@ -45,6 +58,10 @@ def test_emotional_cues_fire(msg):
     "what should I cook for dinner tonight",
     "how do I make pasta",
     "what time is it",
+    "I was feeling like pizza tonight",        # bare "feeling" must NOT fire
+    "what's the feeling in the market",         # bare "feeling" must NOT fire
+    "how am I supposed to configure this",      # procedural "how am i" must NOT fire
+    "I'm going through my email",               # bare "going through" must NOT fire
 ])
 def test_non_emotional_messages_do_not_fire(msg):
     assert message_needs_emotional_recall(msg) is False, f"{msg!r} is not an emotional cue"
@@ -110,3 +127,117 @@ def test_boost_does_not_drop_or_duplicate():
     off = _build_memory_prompt_packet(facts, [], max_facts=12, boost_emotional=False)
     on = _build_memory_prompt_packet(facts, [], max_facts=12, boost_emotional=True)
     assert off["count"] == on["count"] == 2       # same rows, only order differs
+
+
+# ── 3. flag reader ────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("val,expected", [
+    ("1", True), ("true", True), ("TRUE", True), ("yes", True), ("on", True),
+    ("0", False), ("false", False), ("off", False), ("", False), ("nope", False),
+])
+def test_flag_reader(monkeypatch, val, expected):
+    monkeypatch.setenv("ZOE_EMOTIONAL_RECALL_ENABLED", val)
+    assert _emotional_recall_enabled() is expected
+
+
+def test_flag_reader_unset(monkeypatch):
+    monkeypatch.delenv("ZOE_EMOTIONAL_RECALL_ENABLED", raising=False)
+    assert _emotional_recall_enabled() is False
+
+
+# ── 4. endpoint wiring (flag gates BOTH the search fire and the packet float) ──
+
+class _RecordingSvc:
+    """Fake MemoryService that records whether the semantic search fired and
+    returns the emotional row as a hit only when it does."""
+
+    def __init__(self, facts, emo_hit):
+        self._facts = facts
+        self._emo_hit = emo_hit
+        self.searched = False
+
+    async def load_for_prompt(self, user_id, *, limit=20):
+        return self._facts
+
+    async def search(self, q, *, user_id, limit=10):
+        self.searched = True
+        return [self._emo_hit]
+
+
+def _emo_ref(rid, text, intensity):
+    return MemoryRef(
+        id=rid, text=text, score=0.9,
+        metadata={"status": "approved", "memory_type": "emotional_moment",
+                  "candidate_intensity": intensity},
+    )
+
+
+def _plain_ref(rid, text):
+    return MemoryRef(id=rid, text=text, score=0.0,
+                     metadata={"status": "approved", "memory_type": "fact"})
+
+
+@pytest.fixture
+def _wire(monkeypatch):
+    """Internal token + non-guest + a fake svc whose emotional row is crowded out
+    of the generic facts (so only search/float can surface it), and a stubbed
+    compose so the endpoint needs no DB."""
+    monkeypatch.setattr(auth, "_ZOE_INTERNAL_TOKEN", "tok")
+    monkeypatch.setattr(memory_service, "is_guest_memory_user", lambda uid: uid == "guest")
+
+    emo = _emo_ref("emo00001", "Jason has been anxious about the settlement", 0.9)
+    facts = [_plain_ref(f"f{i}", f"ordinary fact {i}") for i in range(12)]  # fills the packet
+    svc = _RecordingSvc(facts=facts, emo_hit=emo)
+    monkeypatch.setattr(memories_mod, "_svc", lambda: svc)
+
+    async def _no_compose(user_id, message):
+        return {}
+    monkeypatch.setattr(compose_mod, "compose_packet", _no_compose)
+    return svc
+
+
+def _get(message):
+    return TestClient(_app_with_router()).get(
+        "/api/memories/for-prompt",
+        params={"user_id": "jason", "message": message},
+        headers={"X-Internal-Token": "tok"},
+    )
+
+
+def _app_with_router():
+    app = FastAPI()
+    app.include_router(memories_router)
+    return app
+
+
+def test_flag_off_emotional_statement_is_noop(monkeypatch, _wire):
+    # "I've been so stressed" is missed by the base gate; with the flag OFF the
+    # emotional detector is not consulted → no search, emotional row stays lost.
+    monkeypatch.delenv("ZOE_EMOTIONAL_RECALL_ENABLED", raising=False)
+    resp = _get("I've been so stressed lately")
+    assert resp.status_code == 200
+    assert _wire.searched is False
+    assert "anxious about the settlement" not in resp.json()["packet"]
+
+
+def test_flag_on_emotional_statement_surfaces_row(monkeypatch, _wire):
+    monkeypatch.setenv("ZOE_EMOTIONAL_RECALL_ENABLED", "1")
+    resp = _get("I've been so stressed lately")
+    assert resp.status_code == 200
+    assert _wire.searched is True                       # emotional cue fired the search
+    packet = resp.json()["packet"]
+    assert "anxious about the settlement" in packet     # crowded-out row now surfaces
+    # and it leads (search hit first)
+    first_line = next(l for l in packet.split("\n") if l.startswith("- "))
+    assert "anxious about the settlement" in first_line
+
+
+def test_flag_on_neutral_turn_does_not_fire(monkeypatch, _wire):
+    # Flag ON but a non-emotional turn that trips NEITHER the base gate (no
+    # first-person/possessive) nor the emotional cue: no search, no float — a true
+    # no-op, so the flag never touches ordinary traffic.
+    monkeypatch.setenv("ZOE_EMOTIONAL_RECALL_ENABLED", "1")
+    resp = _get("what's the weather tomorrow")
+    assert resp.status_code == 200
+    assert _wire.searched is False
+    assert "anxious about the settlement" not in resp.json()["packet"]
