@@ -274,6 +274,7 @@
         .settings-layout .settings-section:has(.section-header[onclick*="'weather'"]) { order: 31; }
         .settings-layout .settings-section:has(.section-header[onclick*="'calendar'"]) { order: 32; }
         .settings-layout .settings-section:has(.section-header[onclick*="'music'"]) { order: 33; }
+        .settings-layout .settings-section:has(.section-header[onclick*="'telegram'"]) { order: 35; }
         .settings-layout .settings-section:has(.section-header[onclick*="'productivity'"]) { order: 34; }
         .settings-layout .settings-section:has(.section-header[onclick*="'intelligence'"]) { order: 40; }
         .settings-layout .settings-section:has(.section-header[onclick*="'ai-training'"]) { order: 41; }
@@ -991,6 +992,40 @@
                         <button class="btn primary" onclick="savePanelIdentity()">💾 Save panel settings</button>
                         <button class="btn" onclick="loadPanelIdentity()">↻ Reload</button>
                         <button class="btn" onclick="clearPanelIdentity()" style="margin-left:auto;">Clear panel identity</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Telegram -->
+            <div class="settings-section" id="telegramSection">
+                <div class="section-header" onclick="toggleSection('telegram')">
+                    <div class="section-title">✈️ Telegram</div>
+                    <div class="section-subtitle">Scan a QR to message Zoe from Telegram as yourself — your reminders, lists and memory come with you</div>
+                </div>
+                <div class="section-content" id="telegram">
+                    <div id="tgStatus" style="padding: 10px 12px; border-radius: 8px; background: rgba(123, 97, 255, 0.05); font-size: 13px; margin-bottom: 12px;">Loading…</div>
+
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px;">
+                        <button class="btn primary" onclick="startTelegramLink()" id="tgConnectBtn">Connect Telegram</button>
+                        <button class="btn" onclick="unlinkTelegram()" id="tgUnlinkBtn" style="display:none;">Disconnect</button>
+                    </div>
+
+                    <div id="tgLinkArea" style="display:none; text-align:center; margin-bottom:12px;">
+                        <div id="tgQr" style="display:inline-block; background:#fff; padding:12px; border-radius:12px; line-height:0;"></div>
+                        <div style="margin-top:10px; font-size:13px; color:#666;">Scan this with your phone's camera or Telegram, then send the message it opens. This screen updates automatically once you're linked.</div>
+                        <div id="tgLinkHint" style="margin-top:6px; font-size:12px; color:#888;"></div>
+                        <div id="tgDeepLinkWrap" style="margin-top:8px;"><a id="tgDeepLink" href="#" target="_blank" rel="noopener" class="btn">Open in Telegram</a></div>
+                    </div>
+
+                    <div class="setting-item" style="flex-direction: column; align-items: stretch; gap: 6px;">
+                        <div class="setting-info">
+                            <div class="setting-name">Link manually</div>
+                            <div class="setting-description">Prefer to type it? Message <b>@<span id="tgBotName">your Zoe bot</span></b> and it will tell you your numeric Telegram ID, then enter it here.</div>
+                        </div>
+                        <div style="display:flex; gap:8px;">
+                            <input type="text" id="tgManualId" class="form-input" placeholder="e.g. 6308082458" inputmode="numeric" style="flex:1;">
+                            <button class="btn primary" onclick="setTelegramManual()">Save</button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -5298,6 +5333,97 @@
             panelCurrent = null;
             loadPanelIdentity();
         }
+
+        // ── Telegram self-service linking (kiosk) ─────────────────────────────
+        let _tgPollTouch = null;
+        function stopTgPollTouch() { if (_tgPollTouch) { clearInterval(_tgPollTouch); _tgPollTouch = null; } }
+
+        // Silent authed GET (raw fetch) — apiRequest toasts on every error, which
+        // would spam the poll loop. Returns parsed JSON or null.
+        async function tgGetLinkStatus() {
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+                const sess = window.zoeAuth?.getCurrentSession?.();
+                if (sess && sess.token) headers['Authorization'] = `Bearer ${sess.token}`;
+                const r = await fetch('/api/user/profile/telegram', { headers, credentials: 'include' });
+                if (!r.ok) return null;
+                return await r.json();
+            } catch (e) { return null; }
+        }
+
+        function renderTgStatusTouch(tid) {
+            const s = document.getElementById('tgStatus');
+            const c = document.getElementById('tgConnectBtn');
+            const u = document.getElementById('tgUnlinkBtn');
+            if (!s) return;
+            if (tid) {
+                s.innerHTML = `✅ <b>Connected</b> — Telegram ID <code>${tid}</code>`;
+                if (c) c.textContent = 'Reconnect';
+                if (u) u.style.display = '';
+            } else {
+                s.innerHTML = 'Not connected — Telegram messages are treated as a guest until you link.';
+                if (c) c.textContent = 'Connect Telegram';
+                if (u) u.style.display = 'none';
+            }
+        }
+
+        async function loadTelegramLink() {
+            stopTgPollTouch();
+            const r = await tgGetLinkStatus();
+            if (r) renderTgStatusTouch(r.telegram_id);
+            else { const s = document.getElementById('tgStatus'); if (s) s.textContent = "Couldn't load status."; }
+        }
+
+        async function startTelegramLink() {
+            const area = document.getElementById('tgLinkArea');
+            const qr = document.getElementById('tgQr');
+            const dl = document.getElementById('tgDeepLink');
+            const dlw = document.getElementById('tgDeepLinkWrap');
+            const hint = document.getElementById('tgLinkHint');
+            try {
+                const r = await apiRequest('/api/user/profile/telegram/link-token', { method: 'POST' });
+                if (r.bot_username) { const bn = document.getElementById('tgBotName'); if (bn) bn.textContent = r.bot_username; }
+                if (r.qr_svg) { qr.innerHTML = r.qr_svg; qr.style.display = 'inline-block'; } else { qr.style.display = 'none'; }
+                if (r.deep_link) { dl.href = r.deep_link; dlw.style.display = ''; hint.textContent = ''; }
+                else { dlw.style.display = 'none'; hint.textContent = 'The Telegram bot is still starting — use “Link manually” below.'; }
+                area.style.display = '';
+                stopTgPollTouch();
+                let tries = 0;
+                _tgPollTouch = setInterval(async () => {
+                    if (++tries > 60) return stopTgPollTouch();
+                    const s = await tgGetLinkStatus();
+                    if (s && s.telegram_id) {
+                        stopTgPollTouch();
+                        area.style.display = 'none';
+                        renderTgStatusTouch(s.telegram_id);
+                        if (typeof showNotification === 'function') showNotification('Telegram connected 🎉', 'success');
+                    }
+                }, 5000);
+            } catch (e) { /* apiRequest already surfaced the error */ }
+        }
+
+        async function setTelegramManual() {
+            const v = (document.getElementById('tgManualId').value || '').trim();
+            if (!v) return;
+            try {
+                const r = await apiRequest('/api/user/profile/telegram', { method: 'PUT', body: JSON.stringify({ telegram_id: v }) });
+                stopTgPollTouch();
+                document.getElementById('tgLinkArea').style.display = 'none';
+                renderTgStatusTouch(r.telegram_id);
+                if (typeof showNotification === 'function') showNotification('Telegram linked', 'success');
+            } catch (e) { /* surfaced by apiRequest */ }
+        }
+
+        async function unlinkTelegram() {
+            try {
+                await apiRequest('/api/user/profile/telegram', { method: 'PUT', body: JSON.stringify({ telegram_id: null }) });
+                stopTgPollTouch();
+                document.getElementById('tgLinkArea').style.display = 'none';
+                renderTgStatusTouch(null);
+            } catch (e) { /* surfaced by apiRequest */ }
+        }
+
+        document.addEventListener('DOMContentLoaded', loadTelegramLink);
 
         function clearNewUserForm() {
             document.getElementById('newUsername').value = '';

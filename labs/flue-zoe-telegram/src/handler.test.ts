@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { handleIncoming, handleTextMessage, startReply, unlinkedMessage } from './handler.ts';
+import { handleIncoming, startReply, unlinkedMessage } from './handler.ts';
 
 // ─── handler: resolve → forward, and unlinked → refuse ───────────────────────
 
@@ -55,49 +55,6 @@ test('unlinked sender: refuses with the link instructions incl. their numeric id
   assert.equal(replies[0], unlinkedMessage(77777));
   assert.match(replies[0], /77777/); // includes their numeric id to copy
   assert.match(replies[0], /not linked/i);
-});
-
-// ─── handleTextMessage: linked-OR-allowlisted gate ──────────────────────────
-
-function gateDeps(resolveImpl: (id: number) => Promise<string | null>) {
-  const asks: string[] = [];
-  const replies: string[] = [];
-  return {
-    asks,
-    replies,
-    deps: {
-      resolve: resolveImpl,
-      ask: async (text: string) => {
-        asks.push(text);
-        return 'brain reply';
-      },
-      session: (chatId: number) => `telegram-${chatId}`,
-      reply: async (t: string) => {
-        replies.push(t);
-      },
-    },
-  };
-}
-
-test('gate: LINKED sender is allowed even if NOT in the static allow-list', async () => {
-  const { asks, replies, deps } = gateDeps(async () => 'karen');
-  await handleTextMessage(55555, 42, 'hi', () => false /* not allow-listed */, deps);
-  assert.deepEqual(asks, ['hi']);
-  assert.deepEqual(replies, ['brain reply']);
-});
-
-test('gate: allow-listed but UNLINKED sender is onboarded (told to link), brain not asked', async () => {
-  const { asks, replies, deps } = gateDeps(async () => null);
-  await handleTextMessage(6308082458, 42, 'hi', (id) => id === 6308082458, deps);
-  assert.equal(asks.length, 0);
-  assert.deepEqual(replies, [unlinkedMessage(6308082458)]);
-});
-
-test('gate: STRANGER (not linked, not allow-listed) gets silence — no reply, no brain', async () => {
-  const { asks, replies, deps } = gateDeps(async () => null);
-  await handleTextMessage(11111, 42, 'let me in', () => false, deps);
-  assert.equal(asks.length, 0);
-  assert.equal(replies.length, 0);
 });
 
 // ─── startReply: /start deep-link outcomes ───────────────────────────────────

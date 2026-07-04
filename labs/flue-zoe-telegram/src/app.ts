@@ -18,8 +18,8 @@ import { GrammyError } from 'grammy';
 import { Hono } from 'hono';
 import { flue } from '@flue/runtime/routing';
 import { askZoeAs, consumeLinkToken, registerBotUsername, resolveTelegramUser, sessionFor } from './brain.ts';
-import { handleTextMessage, startReply } from './handler.ts';
-import { bot, isAllowed } from './telegram.ts';
+import { handleIncoming, startReply } from './handler.ts';
+import { bot } from './telegram.ts';
 
 // --- /start deep-link linking ---------------------------------------------
 // Self-service account linking: the user taps/scans a deep link from Zoe
@@ -45,16 +45,17 @@ bot.command('start', async (ctx) => {
 });
 
 // --- Telegram long-poll ingress -------------------------------------------
-// Per-user identity + the "linked OR allow-listed" gate live in
-// handleTextMessage (src/handler.ts), which is unit-tested without grammY. A
-// linked user is auto-allowed (linking proves a real Zoe account); the static
-// allow-list is a coarse onboarding gate for known-but-unlinked devices.
+// Identity IS the gate (no static allow-list): handleIncoming (src/handler.ts,
+// unit-tested without grammY) resolves the sender → their Zoe user and runs the
+// brain AS them; an unlinked sender is guided to link and never reaches the
+// brain. Linking requires a signed token from an authenticated Zoe session, so
+// "linked ⇒ allowed" is a sufficient gate for real-user access.
 bot.on('message:text', async (ctx) => {
   const telegramId = ctx.from?.id;
   if (telegramId === undefined) return; // no verified sender id → nothing to resolve
 
   try {
-    await handleTextMessage(telegramId, ctx.chat.id, ctx.message.text, isAllowed, {
+    await handleIncoming(telegramId, ctx.chat.id, ctx.message.text, {
       resolve: resolveTelegramUser,
       ask: askZoeAs,
       session: sessionFor,
