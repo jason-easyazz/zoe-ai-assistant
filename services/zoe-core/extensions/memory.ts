@@ -15,6 +15,20 @@ const ZOE_DATA_URL = process.env.ZOE_DATA_URL ?? "http://127.0.0.1:8000";
 const INTERNAL_TOKEN = process.env.ZOE_INTERNAL_TOKEN ?? "";
 const TIMEOUT_MS = Number(process.env.ZOE_CORE_MEMORY_TIMEOUT_MS ?? 2000);
 
+// How the brain should USE the packet. Without this the model treats the facts
+// as a passive dump and answers only what it is directly asked (Samantha
+// criterion #3 — "surfaces relevant memory unprompted" — fails). This tells it
+// to weave in what is timely or relevant even when not asked, while bounding it
+// so it does not recite the whole list or force a fact when none fits.
+const MEMORY_USAGE_DIRECTIVE = [
+  "Use what you know about the user (below) naturally, the way a close friend would.",
+  "When they greet you or open a conversation, and you know of something timely — a",
+  "date in the next day or two, or a worry they've been carrying — LEAD with it warmly",
+  "(e.g. \"Morning! Don't forget the dentist at 3 today.\"), then ask how they are.",
+  "If something is clearly relevant to what they just said, bring it up even unasked.",
+  "Don't recite the whole list, don't force a fact when none fits, never mention citation ids.",
+].join(" ");
+
 // The acting user is resolved PER TURN (not baked at module load), with NO
 // default identity: if the user is unknown we inject NO memory packet rather
 // than leak a default user's memories. zoe-data drives one Pi session per
@@ -46,7 +60,9 @@ export default function (pi: ExtensionAPI) {
     const packet = await fetchMemoryPacket(String((event as { prompt?: unknown })?.prompt ?? ""));
     if (!packet) return;
     const base = event.systemPrompt ?? "";
-    // Compose under the soul (soul.ts runs earlier and sets the persona).
-    return { systemPrompt: base ? `${base}\n\n${packet}` : packet };
+    // Compose under the soul (soul.ts runs earlier and sets the persona): the
+    // usage directive first, then the cited packet it refers to.
+    const block = `${MEMORY_USAGE_DIRECTIVE}\n\n${packet}`;
+    return { systemPrompt: base ? `${base}\n\n${block}` : block };
   });
 }
