@@ -109,6 +109,7 @@
     ".dockerignore",
     ".env.example",
     ".cursorrules",
+    ".pre-commit-config.yaml",
     "AGENTS.md",
     "CLAUDE.md",
     ".mcp.json",
