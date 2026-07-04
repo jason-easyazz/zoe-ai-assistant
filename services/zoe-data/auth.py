@@ -74,8 +74,14 @@ def _normalize_auth_user(data: Any) -> dict:
     user = data.get("user") if isinstance(data, dict) and isinstance(data.get("user"), dict) else data
     if not isinstance(user, dict):
         user = {}
+    uid = user.get("user_id") or user.get("id")
+    if not uid:
+        # Malformed response (200 with no identity): DROP the payload's role/perms
+        # too — a `{"role": "admin"}` with no user_id must NOT yield an admin. Fail
+        # closed to a fully guest principal.
+        return {"user_id": GUEST_USER_ID, "role": "guest", "username": "guest", "permissions": []}
     return {
-        "user_id": user.get("user_id") or user.get("id") or GUEST_USER_ID,
+        "user_id": uid,
         "role": user.get("role", "user"),
         "username": user.get("username") or user.get("name", ""),
         "permissions": user.get("permissions", []),
