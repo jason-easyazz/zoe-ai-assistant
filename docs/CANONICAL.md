@@ -44,7 +44,21 @@ rocks:
 
 The Pi-as-brain path and the services it depends on. These are real and load-bearing.
 
-- **`services/zoe-core`** — the **Pi agent** = Zoe's brain (TypeScript coding-agent + `extensions/memory.ts`, the single memory seam).
+- **Brain dispatch** — `services/zoe-data/brain_dispatch.py` picks the brain 3 ways,
+  priority **flue > core > legacy** (all share the Gemma 4 E4B-QAT + MTP rock on
+  host-native `llama-server :11434`):
+  - **`flue`** (LIVE on this deployment) — the Flue Pi-Agent sidecar
+    `labs/flue-zoe-brain` on `:3578` (systemd user unit, token auth), reached via
+    `ZOE_BRAIN_BACKEND=flue`. It reimplements Zoe's persona + ability slot-shapes
+    and calls back into zoe-data via `POST /api/system/intent-dispatch`
+    (`services/zoe-data/zoe_flue_client.py`). See
+    [`architecture/zoe-flue-integration.md`](architecture/zoe-flue-integration.md).
+  - **`core`** (shipped default, currently the dormant fallback) —
+    **`services/zoe-core`**, the **Pi agent** (TypeScript coding-agent +
+    `extensions/*`, `pi --mode rpc` via `services/zoe-data/zoe_core_client.py`).
+    Wired + tested — **not retired**; extend it, don't archive it.
+  - **`legacy`** — `services/zoe-data/zoe_agent.py`, the last fallback (only when
+    `ZOE_USE_CORE_BRAIN` is off).
 - **`services/zoe-data`** — FastAPI app (`:8000`): voice/chat path, memory router, Skybridge.
 - **`zoe-database`** — PostgreSQL (asyncpg, `$1` placeholders). Relational + temporal memory.
 - **Chroma / MemPalace** — vector store for memory (raw-first).
