@@ -110,15 +110,21 @@ def _request_has_panel_device_token(request: Request | None, panel_id: str) -> b
 async def _resolve_device_token_user(raw_token: str) -> dict | None:
     """Resolve a device token to a user dict for use in get_current_user().
 
-    Uses panel_user_bindings default user when configured (ZOE-4321).
+    A device token authenticates the DEVICE, not a person. The acting user is
+    the one bound to that panel in panel_user_bindings (binding_type='default').
+    A device with NO such binding is treated as **guest** (fail-closed): an
+    unassigned device gets only guest-allowed capabilities, never a real user's
+    (let alone admin's) data. This mirrors the session model where an absent
+    identity resolves to guest. Bind a panel to a user to give its voice/kiosk
+    that user's personal context. (ZOE-4321; unbound-device→guest hardening.)
     """
     info = lookup_device_token(raw_token)
     if not info:
         return None
     panel_id = info.get("panel_id", "unknown")
     role = info.get("role", "voice")
-    user_role = "member" if role in ("voice", "panel", "kiosk") else "admin" if role == "admin" else "member"
-    user_id = "family-admin"
+
+    bound_user_id: Optional[str] = None
     try:
         from database import get_db
 
@@ -131,12 +137,29 @@ async def _resolve_device_token_user(raw_token: str) -> dict | None:
                 )
             ).fetchone()
             if row and row["user_id"]:
-                user_id = row["user_id"]
+                bound_user_id = row["user_id"]
             break
     except Exception as exc:
         logger.debug("panel binding lookup failed for %s: %s", panel_id, exc)
+
+    # Unbound device → guest (fail-closed). No personal data; guest-only scope.
+    if not bound_user_id:
+        logger.info(
+            "device token for panel %s has no default user binding — acting as guest",
+            panel_id,
+        )
+        return {
+            "user_id": "guest",
+            "role": "guest",
+            "username": f"panel:{panel_id}",
+            "permissions": [],
+            "panel_id": panel_id,
+            "device_token_role": role,
+        }
+
+    user_role = "member" if role in ("voice", "panel", "kiosk") else "admin" if role == "admin" else "member"
     return {
-        "user_id": user_id,
+        "user_id": bound_user_id,
         "role": user_role,
         "username": f"panel:{panel_id}",
         "permissions": ["chat", "voice"],
