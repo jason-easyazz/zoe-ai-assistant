@@ -590,6 +590,7 @@ const NAV = [
     { id: 'proactive',  icon: '⏰', label: 'Proactive Schedule' },
   ]},
   { group: 'Integrations', items: [
+    { id: 'telegram',   icon: '✈️', label: 'Telegram' },
     { id: 'openclaw',   icon: '🧠', label: 'OpenClaw / ChatGPT' },
     { id: 'music',      icon: '🎵', label: 'Music' },
     { id: 'touch-panels', icon: '📺', label: 'Touch Panels' },
@@ -995,6 +996,36 @@ function buildSections() {
     </div>
   </div>
 
+  <!-- Telegram -->
+  <div class="section" id="sec-telegram">
+    <div class="section-title">Telegram</div>
+    <div class="section-desc">Connect your Telegram so messaging Zoe there runs as <b>you</b> — your reminders, lists and memory come with you. Until you connect, Telegram messages are treated as a guest.</div>
+
+    <div class="card">
+      <div class="card-header">Connection</div>
+      <div id="tg-status" class="row"><div class="row-info"><div class="row-label"><span class="spinner"></span> Checking…</div></div></div>
+      <div style="padding:0 12px 12px;display:flex;gap:8px">
+        <button class="btn btn-primary" id="tg-connect-btn" onclick="startTelegramLink()">Connect Telegram</button>
+        <button class="btn" id="tg-unlink-btn" onclick="unlinkTelegram()" style="display:none">Disconnect</button>
+      </div>
+      <div id="tg-link-area" style="display:none;padding:0 12px 16px;text-align:center">
+        <div id="tg-qr" style="display:inline-block;background:#fff;padding:10px;border-radius:10px;line-height:0"></div>
+        <div style="margin-top:10px;font-size:13px;color:var(--text-muted)">Scan the code with your phone's camera, or <a id="tg-deeplink" href="#" target="_blank" rel="noopener">tap to open Telegram</a> — then send the message it opens. This page updates automatically once you're linked.</div>
+        <div id="tg-link-hint" style="margin-top:6px;font-size:12px;color:var(--text-muted)"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">Link manually</div>
+      <div class="row"><div class="row-info"><div class="row-sub">Prefer to type it? Message <b>@<span id="tg-botname">your Zoe bot</span></b> and it will tell you your numeric Telegram ID, then enter it here.</div></div></div>
+      <div style="padding:0 12px 12px;display:flex;gap:8px;align-items:center">
+        <input type="text" id="tg-manual-id" placeholder="e.g. 6308082458" inputmode="numeric"
+          style="flex:1;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text)">
+        <button class="btn btn-primary" onclick="setTelegramManual()">Save</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Evolution Proposals -->
   <div class="section" id="sec-evolution">
     <div class="section-title">Evolution Proposals</div>
@@ -1030,7 +1061,96 @@ const sectionLoaders = {
   music:          loadMusicStatus,
   evolution:      loadEvolutionProposals,
   'touch-panels': loadTouchPanels,
+  telegram:       loadTelegram,
 };
+
+/* ── Telegram linking ─────────────────────────────────────── */
+let _tgPoll = null;
+function stopTgPoll() { if (_tgPoll) { clearInterval(_tgPoll); _tgPoll = null; } }
+
+function renderTgStatus(tid) {
+  const statusEl = document.getElementById('tg-status');
+  const connectBtn = document.getElementById('tg-connect-btn');
+  const unlinkBtn = document.getElementById('tg-unlink-btn');
+  if (tid) {
+    statusEl.innerHTML = `<div class="row-info"><div class="row-label">✅ Connected</div><div class="row-sub">Telegram ID ${tid}</div></div>`;
+    connectBtn.textContent = 'Reconnect';
+    unlinkBtn.style.display = '';
+  } else {
+    statusEl.innerHTML = `<div class="row-info"><div class="row-label">Not connected</div><div class="row-sub">Messaging Zoe on Telegram is treated as a guest until you connect.</div></div>`;
+    connectBtn.textContent = 'Connect Telegram';
+    unlinkBtn.style.display = 'none';
+  }
+}
+
+async function loadTelegram() {
+  stopTgPoll();
+  try {
+    const r = await apiCall('GET', '/api/user/profile/telegram');
+    renderTgStatus(r.telegram_id);
+  } catch (e) {
+    document.getElementById('tg-status').innerHTML =
+      `<div class="row-info"><div class="row-label">Couldn't load status</div><div class="row-sub">${e.message}</div></div>`;
+  }
+}
+
+async function startTelegramLink() {
+  const area = document.getElementById('tg-link-area');
+  const qr = document.getElementById('tg-qr');
+  const deeplink = document.getElementById('tg-deeplink');
+  const hint = document.getElementById('tg-link-hint');
+  try {
+    const r = await apiCall('POST', '/api/user/profile/telegram/link-token');
+    if (r.bot_username) { const bn = document.getElementById('tg-botname'); if (bn) bn.textContent = r.bot_username; }
+    if (r.qr_svg) { qr.innerHTML = r.qr_svg; qr.style.display = 'inline-block'; } else { qr.style.display = 'none'; }
+    if (r.deep_link) {
+      deeplink.href = r.deep_link; deeplink.style.display = ''; hint.textContent = '';
+    } else {
+      deeplink.style.display = 'none';
+      hint.textContent = 'The Telegram bot is still starting up — use “Link manually” below for now.';
+    }
+    area.style.display = '';
+    // Poll for the link to complete (bot redeems the token when the user sends /start).
+    stopTgPoll();
+    let tries = 0;
+    _tgPoll = setInterval(async () => {
+      if (++tries > 60) return stopTgPoll(); // ~5 minutes, then give up quietly
+      try {
+        const s = await apiCall('GET', '/api/user/profile/telegram');
+        if (s.telegram_id) {
+          stopTgPoll();
+          area.style.display = 'none';
+          renderTgStatus(s.telegram_id);
+          toast('Telegram connected 🎉', 'success');
+        }
+      } catch {}
+    }, 5000);
+  } catch (e) {
+    toast(e.message || 'Could not start linking', 'error');
+  }
+}
+
+async function setTelegramManual() {
+  const v = (document.getElementById('tg-manual-id').value || '').trim();
+  if (!v) return;
+  try {
+    const r = await apiCall('PUT', '/api/user/profile/telegram', { telegram_id: v });
+    stopTgPoll();
+    document.getElementById('tg-link-area').style.display = 'none';
+    renderTgStatus(r.telegram_id);
+    toast('Telegram linked', 'success');
+  } catch (e) { toast(e.message || 'Invalid Telegram ID', 'error'); }
+}
+
+async function unlinkTelegram() {
+  try {
+    await apiCall('PUT', '/api/user/profile/telegram', { telegram_id: null });
+    stopTgPoll();
+    document.getElementById('tg-link-area').style.display = 'none';
+    renderTgStatus(null);
+    toast('Telegram disconnected', 'info');
+  } catch (e) { toast(e.message, 'error'); }
+}
 
 /* ── Profile ──────────────────────────────────────────────── */
 async function loadProfile() {

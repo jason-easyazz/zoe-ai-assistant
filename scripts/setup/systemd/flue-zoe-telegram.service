@@ -23,7 +23,7 @@ WorkingDirectory=%h/assistant/labs/flue-zoe-telegram
 ExecStart=%h/.nvm/current/bin/node dist/server.mjs
 Restart=always
 RestartSec=5
-# Secrets and identity (TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USERS, ZOE_DATA_URL,
+# Secrets and identity (TELEGRAM_BOT_TOKEN, ZOE_DATA_URL,
 # ZOE_INTERNAL_TOKEN, ...) live in the lab-local .env — copy .env.example and fill
 # it in. NEVER inline values here. The file is required (no '-' prefix): the unit
 # fails loudly if the operator hasn't configured it, and the bot itself throws on

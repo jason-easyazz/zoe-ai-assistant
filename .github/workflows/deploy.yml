@@ -70,7 +70,8 @@ jobs:
         run: |
           pip3 install --quiet --user \
             "apscheduler==3.10.4" "tzlocal>=2,<3" "sqlalchemy>=2.0,<3.0" \
-            alembic asyncpg psycopg2-binary pywebpush py-vapid
+            alembic asyncpg psycopg2-binary pywebpush py-vapid \
+            segno
 
       - name: Apply database migrations
         run: |
