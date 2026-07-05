@@ -151,6 +151,53 @@ jobs:
           echo "flue-zoe-brain failed health check after restart"
           exit 1
 
+      # The Telegram bot (flue-zoe-telegram) is a front-door channel that also runs
+      # a pre-built dist/, so a change to labs/flue-zoe-telegram/ on main does NOT
+      # reach the running bot until dist is rebuilt and the service restarted.
+      # Rebuild it here on the same terms as the brain sidecar — ONLY when its
+      # source changed, and only if the unit is installed (skips cleanly on hosts
+      # not running the bot). Without this, bot code silently drifts from main.
+      - name: Rebuild / restart Flue Telegram bot (if changed)
+        run: |
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          if ! systemctl --user list-unit-files flue-zoe-telegram.service 2>/dev/null \
+               | grep -q '^flue-zoe-telegram\.service'; then
+            echo "flue-zoe-telegram.service not installed on this host — skipping."
+            exit 0
+          fi
+          cd /home/zoe/assistant
+          if [ -n "${OLD_SHA:-}" ] \
+             && git diff --quiet "${OLD_SHA}" HEAD -- labs/flue-zoe-telegram/ \
+             && [ -f labs/flue-zoe-telegram/dist/server.mjs ]; then
+            echo "bot source unchanged since ${OLD_SHA} and dist present — no rebuild needed."
+            exit 0
+          fi
+          echo "bot changed (or dist missing) — rebuilding and restarting."
+          # Same non-login-shell PATH fix as the brain step: nvm isn't sourced, so
+          # put its active-version bin on PATH for npm.
+          export PATH="$HOME/.nvm/current/bin:$PATH"
+          command -v npm >/dev/null || { echo "npm still not found on PATH: $PATH"; exit 1; }
+          cd labs/flue-zoe-telegram
+          if [ -f package-lock.json ]; then
+            npm ci --no-audit --no-fund
+          else
+            npm install --no-audit --no-fund
+          fi
+          npm run build
+          systemctl --user restart flue-zoe-telegram.service
+          # /health returns 200 {"polling":true} once the bot has taken the token
+          # over and is long-polling; 503 while polling is still down. Retry over a
+          # warmup window — takeover (deleteWebhook + getMe + register-bot) takes a
+          # few seconds. A sustained 503 is a real fault (e.g. another consumer
+          # holds the token → 409), so fail loudly rather than ship a dead bot.
+          for attempt in $(seq 1 12); do
+            curl -sf http://127.0.0.1:3582/health > /dev/null 2>&1 \
+              && { echo "flue-zoe-telegram healthy after ${attempt} attempt(s)"; exit 0; }
+            sleep 5
+          done
+          echo "flue-zoe-telegram failed health check after restart"
+          exit 1
+
       - name: Health check
         run: |
           # zoe-data cold-starts slowly (model warmup), so a single early curl
