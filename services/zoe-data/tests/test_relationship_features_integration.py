@@ -99,6 +99,27 @@ async def test_relationship_features_compose_with_flags_on(monkeypatch):
         hood2 = {h["person_id"] for h in await rg.neighbors(db, USER, sarah, max_depth=2, limit=50)}
         assert hood2 == {tom, bob}, "owner-scoped: another user's edges never traversed"
 
+        # 2b. TEMPORAL-AWARE TRAVERSAL — a *superseded-only* edge is history, not a
+        # live hop. Hand-craft a closed edge Sarah→OldPal with NO current replacement
+        # (a relationship that simply ended); the traversal must NOT reach OldPal.
+        # This is what makes step 1's supersession meaningful: had the BFS ignored
+        # valid_to, OldPal (and the superseded sibling edge) would leak in.
+        oldpal = "oldpal_" + uuid.uuid4().hex[:8]
+        await db.execute(
+            "INSERT INTO people (id, user_id, name, is_partial, deleted, visibility) VALUES (?,?,?,0,0,'personal')",
+            (oldpal, USER, "Old Pal"),
+        )
+        await db.execute(
+            "INSERT INTO person_relationships (id, user_id, person_a_id, person_b_id, rel_type,"
+            " rel_a_to_b, rel_b_to_a, rel_group, valid_from, valid_to)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?)",
+            ("closed1", USER, sarah, oldpal, "friend", "friend", "friend", "personal", "t0", "t1"),
+        )
+        await db.commit()
+        hood3 = {h["person_id"] for h in await rg.neighbors(db, USER, sarah, max_depth=2, limit=50)}
+        assert oldpal not in hood3, "superseded/closed edge is NOT traversed (temporal-aware BFS)"
+        assert hood3 == {tom, bob}, "only current edges hop; history stays history"
+
         # 3. PERSON-MERGE — fold the Tom stub into a real contact.
         await db.execute(
             "INSERT INTO person_activities (id, person_id, user_id, description) VALUES ('a1', ?, ?, 'x')",
@@ -118,8 +139,11 @@ async def test_relationship_features_compose_with_flags_on(monkeypatch):
         assert stub["deleted"] == 1 and stub["updated_at"] is not None
         assert isinstance(result["repointed"], dict)
 
-        # 4. POST-MERGE — graph reaches the REAL Tom, not the deleted stub.
-        ids = {h["person_id"] for h in await rg.neighbors(db, USER, sarah, max_depth=2, limit=50)}
-        assert real_tom in ids and tom not in ids
+        # 4. POST-MERGE — graph reaches the REAL Tom at depth 1 via the re-pointed
+        # *current* spouse edge (the superseded sibling edge, also re-pointed, is
+        # history and must not be what carries the hop), never the deleted stub.
+        hood4 = {h["person_id"]: h["depth"] for h in await rg.neighbors(db, USER, sarah, max_depth=2, limit=50)}
+        assert hood4.get(real_tom) == 1, "real Tom reachable at depth 1 via the current edge"
+        assert tom not in hood4, "deleted stub is never reached"
     finally:
         await db.close()

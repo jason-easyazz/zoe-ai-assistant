@@ -52,7 +52,8 @@ async def _make_db(edges, *, people=None, extra_users=None):
         "CREATE TABLE person_relationships ("
         " id TEXT PRIMARY KEY, user_id TEXT, person_a_id TEXT, person_b_id TEXT,"
         " rel_type TEXT, rel_a_to_b TEXT, rel_b_to_a TEXT, rel_group TEXT,"
-        " notes TEXT, created_at TEXT, updated_at TEXT)"
+        " notes TEXT, created_at TEXT, updated_at TEXT,"
+        " valid_from TEXT, valid_to TEXT, superseded_by TEXT)"  # 0015 temporal cols
     )
 
     seeded: dict[str, tuple] = {}
