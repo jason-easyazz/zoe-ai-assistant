@@ -147,17 +147,6 @@ const WRITE_TOOL_CASES: Array<{
     dryRunPattern: /WRITE DISABLED.*contact "Sarah".*NOT saved/i,
     successPattern: /Added Sarah to your personal contacts/,
   },
-  {
-    name: 'people',
-    input: { action: 'relate', name: 'Alice', related_to: 'Bob', relationship: 'sibling' },
-    expectedPayload: {
-      user_id: ACTING_USER,
-      intent: 'people_relate',
-      slots: { name_a: 'Alice', name_b: 'Bob', role: 'sibling' },
-    },
-    dryRunPattern: /WRITE DISABLED.*link between "Alice" and "Bob".*NOT saved/i,
-    successPattern: /Linked Alice and Bob as sibling\./,
-  },
   // ─── Wave 2 write tools (cut-list record §3, Wave 2) ────────────────────────
   {
     name: 'media',
@@ -311,9 +300,6 @@ function dispatchResult(intent: string, slots: Record<string, unknown>): string 
   }
   if (intent === 'people_create') {
     return `Added ${slots.name} to your ${slots.context} contacts ○.`;
-  }
-  if (intent === 'people_relate') {
-    return `Linked ${slots.name_a} and ${slots.name_b} as ${slots.role}.`;
   }
   // ─── Wave 1 read intents (surfaced verbatim by the tool on ok:true) ─────────
   if (intent === 'note_search') {
