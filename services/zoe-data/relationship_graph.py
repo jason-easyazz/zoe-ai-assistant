@@ -125,42 +125,17 @@ ORDER BY depth, pid
 LIMIT ?
 """
 
-_NEIGHBORS_SQL_N = """
-WITH RECURSIVE rg(pid, depth, path) AS (
-    SELECT $1, 0, '|' || $2 || '|'
-    UNION ALL
-    SELECT e.other, rg.depth + 1, rg.path || e.other || '|'
-    FROM rg
-    JOIN (
-        SELECT pr.person_a_id AS src, pr.person_b_id AS other
-        FROM person_relationships pr WHERE pr.user_id = $3
-        UNION ALL
-        SELECT pr.person_b_id AS src, pr.person_a_id AS other
-        FROM person_relationships pr WHERE pr.user_id = $4
-    ) e ON e.src = rg.pid
-    WHERE rg.depth < $5
-      AND rg.path NOT LIKE '%|' || e.other || '|%'
-)
-SELECT pid, MIN(depth) AS depth
-FROM rg
-WHERE pid <> $6
-GROUP BY pid
-ORDER BY depth, pid
-LIMIT $7
-"""
+async def _run(db, sql: str, args: tuple) -> list:
+    """Execute a SELECT via the ``?``-placeholder form.
 
-
-async def _run(db, sql_q: str, sql_n: str, args: tuple) -> list:
-    """Execute a SELECT with the ?-placeholder form, falling back to $N.
-
-    Mirrors the try-$N-except-? portability idiom in person_extractor.py: the
-    ?-form works on SQLite natively and on production via AsyncpgCompat's ?->$N
-    rewrite; the $N-form is a fallback for a raw asyncpg connection.
+    This is the proven production path: aiosqlite runs ``?`` natively (tests) and
+    production's ``AsyncpgCompat`` rewrites ``?``->``$N`` and returns a
+    cursor-like exposing ``fetchall`` — exactly what ``zoe_memory_compose`` uses.
+    There is deliberately NO raw-asyncpg fallback: ``asyncpg.Connection.execute``
+    returns a status string (not a cursor), so ``.fetchall()`` on it would crash;
+    if a raw connection is ever needed, use ``connection.fetch``.
     """
-    try:
-        cursor = await db.execute(sql_q, args)
-    except Exception:
-        cursor = await db.execute(sql_n, *args)
+    cursor = await db.execute(sql, args)
     return await cursor.fetchall()
 
 
@@ -194,7 +169,7 @@ async def neighbors(
     # 1) Bounded BFS over the edge graph → [(pid, depth), ...]
     args = (start_person_id, start_person_id, user_id, user_id, md, start_person_id, lim)
     try:
-        hop_rows = await _run(db, _NEIGHBORS_SQL_Q, _NEIGHBORS_SQL_N, args)
+        hop_rows = await _run(db, _NEIGHBORS_SQL_Q, args)
     except Exception as exc:
         logger.warning("neighbors: BFS query failed for %r: %s", start_person_id, exc)
         return []
@@ -247,18 +222,13 @@ async def _resolve_names(db, user_id: str, pids: list[str]) -> dict[str, str]:
     if not pids:
         return {}
     placeholders_q = ",".join(["?"] * len(pids))
-    placeholders_n = ",".join(f"${i + 2}" for i in range(len(pids)))
     sql_q = (
         f"SELECT id, name FROM people "
         f"WHERE user_id = ? AND deleted = 0 AND id IN ({placeholders_q})"
     )
-    sql_n = (
-        f"SELECT id, name FROM people "
-        f"WHERE user_id = $1 AND deleted = 0 AND id IN ({placeholders_n})"
-    )
     args = (user_id, *pids)
     try:
-        rows = await _run(db, sql_q, sql_n, args)
+        rows = await _run(db, sql_q, args)
     except Exception as exc:
         logger.warning("_resolve_names failed: %s", exc)
         return {}
@@ -275,12 +245,6 @@ async def _resolve_via_labels(db, user_id: str, pids: list[str]) -> dict[str, st
     if not pids:
         return {}
     placeholders_q = ",".join(["?"] * len(pids))
-    # $1 = user_id (a side), then a-side pids, then user_id again (b side), then
-    # b-side pids. Build the $N form to mirror the ? ordering exactly.
-    n = len(pids)
-    a_ph_n = ",".join(f"${i + 2}" for i in range(n))          # $2..$(n+1)
-    b_uid_n = f"${n + 2}"                                      # $(n+2)
-    b_ph_n = ",".join(f"${n + 3 + i}" for i in range(n))      # $(n+3)..
     sql_q = (
         f"SELECT person_b_id AS pid, rel_a_to_b AS label FROM person_relationships "
         f"WHERE user_id = ? AND person_b_id IN ({placeholders_q}) "
@@ -288,16 +252,9 @@ async def _resolve_via_labels(db, user_id: str, pids: list[str]) -> dict[str, st
         f"SELECT person_a_id AS pid, rel_b_to_a AS label FROM person_relationships "
         f"WHERE user_id = ? AND person_a_id IN ({placeholders_q})"
     )
-    sql_n = (
-        f"SELECT person_b_id AS pid, rel_a_to_b AS label FROM person_relationships "
-        f"WHERE user_id = $1 AND person_b_id IN ({a_ph_n}) "
-        f"UNION ALL "
-        f"SELECT person_a_id AS pid, rel_b_to_a AS label FROM person_relationships "
-        f"WHERE user_id = {b_uid_n} AND person_a_id IN ({b_ph_n})"
-    )
     args = (user_id, *pids, user_id, *pids)
     try:
-        rows = await _run(db, sql_q, sql_n, args)
+        rows = await _run(db, sql_q, args)
     except Exception as exc:
         logger.warning("_resolve_via_labels failed: %s", exc)
         return {}
