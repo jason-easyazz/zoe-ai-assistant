@@ -270,6 +270,12 @@ const recallMemory = defineTool({
       url.searchParams.set('user_id', userId);
       const query = String(input?.query ?? '').trim();
       if (query) url.searchParams.set('message', query.slice(0, 500));
+      // Widen the packet for EXPLICIT recall. The endpoint defaults to 12 facts,
+      // which the per-turn ambient injection wants small — but when the user
+      // directly asks ("tell me about my family"), 12 slots get crowded by
+      // duplicate identity facts and drop whole family members. This tool only
+      // fires on recall-ish turns, so the extra facts cost nothing per-turn.
+      url.searchParams.set('limit', '24');
       const res = await fetch(url, {
         headers: internalHeaders(),
         signal: fetchSignal(signal),
