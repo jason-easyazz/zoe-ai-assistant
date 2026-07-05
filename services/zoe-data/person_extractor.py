@@ -396,6 +396,29 @@ async def _supersede_edge(db, user_id: str, old_id: str, new_id: str, now: str) 
         )
 
 
+async def _reopen_edge(db, user_id: str, edge_id: str, now: str) -> None:
+    """Re-open a superseded edge (compensating action): clear valid_to +
+    superseded_by so the pair keeps a current edge when the replacement insert
+    fails. PostgreSQL auto-commits the supersede UPDATE, so without this a failed
+    insert would leave the pair with NO current edge + a dangling superseded_by.
+    Handles both DB param styles.
+    """
+    try:
+        await db.execute(
+            "UPDATE person_relationships "
+            "SET valid_to=NULL, superseded_by=NULL, updated_at=$1 "
+            "WHERE id=$2 AND user_id=$3",
+            now, edge_id, user_id,
+        )
+    except Exception:
+        await db.execute(
+            "UPDATE person_relationships "
+            "SET valid_to=NULL, superseded_by=NULL, updated_at=? "
+            "WHERE id=? AND user_id=?",
+            (now, edge_id, user_id),
+        )
+
+
 async def _write_relationship(
     user_id: str,
     name_a: str,
@@ -466,6 +489,7 @@ async def _write_relationship(
         return
 
     rel_id = str(uuid.uuid4())
+    superseded_old_id: Optional[str] = None
     try:
         # ── Temporal supersession (flag ON only) ─────────────────────────
         # When the flag is ON and a *current* edge already exists for this pair
@@ -485,6 +509,7 @@ async def _write_relationship(
                 # insert the new current edge.
                 await _supersede_edge(db, user_id, existing_id, rel_id, now)
                 await db.commit()
+                superseded_old_id = existing_id
 
         # ── Insert the new current edge (valid_from=now, valid_to=NULL) ──
         # ON CONFLICT / INSERT OR IGNORE now target the PARTIAL current-edge
@@ -510,7 +535,22 @@ async def _write_relationship(
                     (rel_id, user_id, pid_a, pid_b, rel_type, lbl_a, lbl_b, rel_group, now, now, now),
                 )
             except Exception as exc2:
-                logger.debug("_write_relationship: insert failed: %s", exc2)
+                # Insert failed. If we just superseded a prior edge, RE-OPEN it so
+                # the pair keeps a current edge (no dangling superseded_by).
+                if superseded_old_id is not None:
+                    try:
+                        await _reopen_edge(db, user_id, superseded_old_id, now)
+                        await db.commit()
+                        logger.warning(
+                            "_write_relationship: insert failed after supersede; "
+                            "re-opened prior edge %s: %s", superseded_old_id, exc2)
+                    except Exception as exc3:
+                        logger.warning(
+                            "_write_relationship: insert AND re-open failed; pair "
+                            "may lack a current edge until re-mentioned: %s / %s",
+                            exc2, exc3)
+                else:
+                    logger.debug("_write_relationship: insert failed: %s", exc2)
                 return
         await db.commit()
         # Update context for both people

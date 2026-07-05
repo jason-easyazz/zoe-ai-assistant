@@ -33,6 +33,10 @@ from alembic.operations import Operations
 import person_extractor
 import zoe_memory_compose as compose_mod
 
+# Slim-dep-safe (real in-memory sqlite, no mempalace/model loads) → runs on the
+# GitHub CI lane via -m ci_safe. See tests/AGENTS.md (marker-based selection).
+pytestmark = pytest.mark.ci_safe
+
 VERSIONS = Path(__file__).resolve().parents[1] / "alembic" / "versions"
 
 
@@ -346,6 +350,47 @@ async def test_flag_on_changed_rel_type_supersedes():
         assert old["superseded_by"] == new["id"]      # points at replacement
         assert new["valid_to"] is None                # current
         assert new["superseded_by"] is None
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_flag_on_insert_failure_reopens_superseded_edge():
+    """If the replacement INSERT fails after a supersede, the old edge is
+    RE-OPENED so the pair never ends up with no current edge + a dangling
+    superseded_by (Greptile: PG auto-commits the supersede before the insert)."""
+    os.environ["ZOE_TEMPORAL_RELATIONSHIPS_ENABLED"] = "1"
+    db = await _open_db()
+    try:
+        await _seed_people(db)
+        await person_extractor._write_relationship(
+            "jason", "Alice", "Bob", "spouse", "family", db
+        )
+
+        # Force EVERY person_relationships INSERT to fail (both PG + SQLite forms),
+        # leaving the supersede/re-open UPDATEs to run normally.
+        orig_execute = db.execute
+
+        async def _failing_execute(sql, *a, **k):
+            if "INSERT" in sql.upper() and "person_relationships" in sql:
+                raise RuntimeError("simulated insert failure")
+            return await orig_execute(sql, *a, **k)
+
+        db.execute = _failing_execute
+        await person_extractor._write_relationship(
+            "jason", "Alice", "Bob", "ex_spouse", "family", db
+        )
+        db.execute = orig_execute  # restore for inspection
+
+        current = await _current_edges(db)
+        allrows = await _all_edges(db)
+        # The old edge was re-opened; still exactly one current edge for the pair.
+        assert len(current) == 1
+        assert current[0]["rel_type"] == "spouse"
+        assert current[0]["valid_to"] is None
+        assert current[0]["superseded_by"] is None
+        # The failed replacement was never persisted.
+        assert not any(r["rel_type"] == "ex_spouse" for r in allrows)
     finally:
         await db.close()
 
