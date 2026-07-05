@@ -7,6 +7,11 @@ re-raised exception used to bubble out of the dependency teardown as log spam.
 These tests pin that the release race is swallowed and the connection is still
 acquired/released exactly once.
 """
+
+import pytest
+
+pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m ci_safe` lane
+
 import asyncio
 
 import asyncpg

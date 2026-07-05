@@ -13,6 +13,10 @@ Pure stdlib + agent_safety only, so it runs in the slim CI environment and uses
 only IP literals / ``localhost`` (no external DNS or network).
 """
 
+import pytest
+
+pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m ci_safe` lane
+
 import importlib
 
 import pytest

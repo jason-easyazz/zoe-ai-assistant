@@ -1,5 +1,9 @@
 """Tests for ui_orchestrator allowed action types."""
 
+import pytest
+
+pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m ci_safe` lane
+
 import sys
 import os
 import json

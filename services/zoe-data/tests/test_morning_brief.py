@@ -7,6 +7,11 @@ emotional moments + calendar + portrait and composes a pushed brief. In-turn
 4B surfacing was measured ~1/5 and rejected. This locks the deterministic
 composition so a regression in the real #3 path is caught (Greptile #1014).
 """
+
+import pytest
+
+pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m ci_safe` lane
+
 from proactive.triggers.morning_checkin import _compose_morning_message
 
 

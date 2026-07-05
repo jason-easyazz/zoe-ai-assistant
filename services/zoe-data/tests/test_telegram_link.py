@@ -1,5 +1,9 @@
 """Unit tests for the stateless Telegram link-token lifecycle (telegram_link.py)."""
 
+import pytest
+
+pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m ci_safe` lane
+
 import importlib
 import sys
 

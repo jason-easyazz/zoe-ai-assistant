@@ -1,3 +1,7 @@
+import pytest
+
+pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m ci_safe` lane
+
 from chat_session_title import derive_session_title, title_is_weak
 
 
