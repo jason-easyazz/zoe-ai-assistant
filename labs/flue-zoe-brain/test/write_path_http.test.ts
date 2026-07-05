@@ -511,6 +511,32 @@ test('remember_emotional_moment omits valence/intensity slots when absent or mal
   }
 });
 
+test('add_calendar_event without a date still dispatches (zoe-data defaults it to today)', async () => {
+  const fake = await startFakeZoeData();
+  try {
+    await withTools(fake.baseUrl, 'true', async (tools) => {
+      const tool = byName(tools, 'add_calendar_event');
+      // "add lunch with Jess at 12pm" — time but no day. The tool must NOT ask
+      // "which day?"; it passes through and zoe-data defaults the date to today.
+      const out = String(await tool.run({ input: { title: 'lunch with Jess', time: '12pm' } }));
+      assert.doesNotMatch(out, /what day/i, 'must NOT ask which day when a time is given');
+      assert.deepEqual(fake.requests, [
+        {
+          method: 'POST',
+          path: '/api/system/intent-dispatch',
+          body: {
+            user_id: ACTING_USER,
+            intent: 'calendar_create',
+            slots: { title: 'lunch with Jess', time: '12pm' }, // no date → zoe-data → today
+          },
+        },
+      ]);
+    });
+  } finally {
+    await fake.close();
+  }
+});
+
 // ─── Wave 1 READ paths — HTTP coverage (cut-list record §3) ───────────────────
 // The read dispatch paths introduced this wave (note_search, journal
 // prompt/streak, people search) are NOT gated by ZOE_BRAIN_ALLOW_WRITES, so

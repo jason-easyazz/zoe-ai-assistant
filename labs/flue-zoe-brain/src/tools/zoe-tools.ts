@@ -507,6 +507,9 @@ const addCalendarEvent = defineTool({
   run: async ({ input, signal }) => {
     const title = String(input.title ?? '').trim();
     if (!title) return 'I need a title for the event. What should I call it?';
+    // Pass date/time through when given; when the day is omitted (e.g. "add lunch
+    // with Jess at 12pm"), zoe-data defaults it to TODAY rather than failing, so
+    // the natural quick-add just works. Only title is required here.
     const slots: Record<string, unknown> = { title };
     const date = String(input?.date ?? '').trim();
     const time = String(input?.time ?? '').trim();

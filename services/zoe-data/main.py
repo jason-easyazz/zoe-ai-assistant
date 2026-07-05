@@ -997,12 +997,16 @@ async def lifespan(app: FastAPI):
         from proactive.triggers.openclaw_trigger import OpenClawTrigger
         from proactive.triggers.people_health import PeopleHealthTrigger
         from proactive.triggers.people_birthday import PeopleBirthdayTrigger
+        from proactive.triggers.emotional_followup import EmotionalFollowUpTrigger
         register_trigger(ReminderScanTrigger())
         register_trigger(MorningCheckInTrigger())
         register_trigger(EveningWindDownTrigger())
         register_trigger(OpenClawTrigger())
         register_trigger(PeopleHealthTrigger())
         register_trigger(PeopleBirthdayTrigger())
+        # Samantha proactivity: gentle follow-up on captured worries. Registered
+        # always; gated OFF by ZOE_EMOTIONAL_FOLLOWUP_ENABLED (check() no-ops when off).
+        register_trigger(EmotionalFollowUpTrigger())
         # EvolutionWeeklyDigestTrigger registered after evolve-weekly-digest is built
         try:
             from proactive.triggers.evolution_weekly_digest import EvolutionWeeklyDigestTrigger
