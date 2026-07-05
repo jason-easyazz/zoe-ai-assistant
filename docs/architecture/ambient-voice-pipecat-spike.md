@@ -1,9 +1,16 @@
 ---
 type: spike-plan
-status: ready
+status: partial (2026-07-05) — feasibility half run; loaded/live half pending a maintenance window
 owner: ambient-voice (VISION pillar 2)
 decides: docs/adr/ADR-ambient-voice-framework.md
 ---
+
+> **Results so far** live in the ADR's [`## Spike results`](../adr/ADR-ambient-voice-framework.md)
+> section. Feasibility validated (installs light, reuses Jetson torch, Kokoro+Gemma+Smart
+> Turn+SmallWebRTC present) with three frictions (Moonshine not a native service; numpy-2.x
+> vs Jetson-torch ABI; a memory-saturated box). Verdict so far: **partial GO, leaning toward
+> the "borrow Smart Turn + build barge-in on LiveKit" fallback.** M1/M3/M4/M6 still need a
+> controlled window + a human mic and were **not** run against the live brain.
 
 # Spike — Pipecat on the Jetson with Zoe's rocks
 
