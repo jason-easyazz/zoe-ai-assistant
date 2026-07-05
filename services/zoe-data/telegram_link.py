@@ -74,11 +74,9 @@ def make_link_token(user_id: str, ttl: int = LINK_TOKEN_TTL_S) -> str:
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
-def verify_link_token(token: str, *, consume: bool = False) -> Optional[str]:
-    """Return the user_id if the token is authentic, unexpired, and (when
-    ``consume`` is set) not already redeemed. With ``consume=True`` the token is
-    marked used so a second redemption within the TTL fails — call it that way
-    exactly once, at redemption time."""
+def _decode(token: str):
+    """Return (user_id, sig, exp) for an authentic, unexpired, un-redeemed token,
+    else None. No side effects — does NOT mark the token consumed."""
     if not token or len(token) > 128:
         return None
     try:
@@ -98,11 +96,27 @@ def verify_link_token(token: str, *, consume: bool = False) -> Optional[str]:
         _prune_consumed(now)
         if sig in _consumed_sigs:  # already redeemed → reject the replay
             return None
-        if consume:
-            _consumed_sigs[sig] = exp
-        return user_id or None
+        return (user_id or None, sig, exp)
     except Exception:
         return None
+
+
+def verify_link_token(token: str) -> Optional[str]:
+    """Return the user_id if the token is authentic, unexpired, and not already
+    redeemed — WITHOUT consuming it. Caller must call mark_token_consumed() only
+    AFTER the link is durably written, so a transient DB failure can't burn the
+    token (leaving the user with a dead QR and no link)."""
+    decoded = _decode(token)
+    return decoded[0] if decoded else None
+
+
+def mark_token_consumed(token: str) -> None:
+    """Record the token as redeemed so a second scan within its TTL is rejected.
+    Call this ONLY after the link write has committed successfully."""
+    decoded = _decode(token)
+    if decoded:
+        _, sig, exp = decoded
+        _consumed_sigs[sig] = exp
 
 
 # ── Bot identity (self-registered by the Telegram bot at startup) ──────────────

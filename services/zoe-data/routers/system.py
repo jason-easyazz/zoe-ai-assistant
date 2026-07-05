@@ -2550,8 +2550,9 @@ async def consume_telegram_link_token(
     import telegram_link
     from routers.user_profile import _TELEGRAM_ID_RE, _read_prefs, _write_prefs
 
-    # consume=True → single-use: a replayed/second scan of the same token fails.
-    user_id = telegram_link.verify_link_token((body.token or "").strip(), consume=True)
+    # Validate WITHOUT consuming; we mark single-use only after the link write
+    # commits (below), so a transient DB failure can't burn the token.
+    user_id = telegram_link.verify_link_token((body.token or "").strip())
     if not user_id:
         raise HTTPException(status_code=400, detail="invalid, expired, or already-used link token")
 
@@ -2577,6 +2578,9 @@ async def consume_telegram_link_token(
     prefs = await _read_prefs(db, user_id)
     prefs["telegram_id"] = tid
     await _write_prefs(db, user_id, prefs)
+    # Mark single-use ONLY after the link is durably written — if a write above
+    # threw, the token stays valid so the user can just re-scan the same QR.
+    telegram_link.mark_token_consumed((body.token or "").strip())
     logger.info("telegram self-service link: %s → user %s", tid, user_id)
     return {"ok": True, "user_id": user_id, "telegram_id": tid}
 
