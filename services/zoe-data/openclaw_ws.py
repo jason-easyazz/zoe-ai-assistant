@@ -93,7 +93,7 @@ _BUILDER_INTENT_PREFIXES = ("[ZOE_SELF_BUILD:", "[ZOE_CONNECT:")
 async def openclaw_cli(
     message: str,
     session_id: str,
-    user_id: str = "family-admin",
+    user_id: str = "guest",
     *,
     user_role: str | None = None,
     username: str | None = None,
@@ -130,7 +130,7 @@ async def openclaw_cli(
     return _INJECT_ECHO.sub("", text).strip()
 
 
-async def chat_inject(message: str, user_id: str = "family-admin", session_id: str = "web") -> bool:
+async def chat_inject(message: str, user_id: str = "guest", session_id: str = "web") -> bool:
     """Inject a note into the correct user's OpenClaw session transcript."""
     try:
         env = os.environ.copy()

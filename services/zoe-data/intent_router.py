@@ -832,51 +832,9 @@ def detect_intent(
     if m_intro:
         return Intent("people_introduce", {"name": m_intro.group(1).strip()})
 
-    # --- CONTACTS RELATE ---
-    # Match: "link/connect Alice and Bob as siblings"
-    # Two names (1–3 words each), joined by and/with/to, followed by role.
-    _NAME2 = r"((?:\w+(?:\s+\w+){0,2}?))"  # 1-3 words, lazy
-    _ROLE_LIST = (
-        r"spouses?|partners?|siblings?|twins?|best\s+friends?|friends?|"
-        r"colleagues?|coworkers?|co-?workers?|boss(?:es)?|mentors?|mentees?|"
-        r"clients?|parents?|children|cousins?|in-?laws?|relatives?"
-    )
-    _RELATE_ROLE_MAP = {
-        # plurals / variants → canonical key (same as RELATIONSHIP_TYPES)
-        "spouse": "spouse",   "spouses": "spouse",
-        "partner": "partner", "partners": "partner",
-        "sibling": "sibling", "siblings": "sibling", "twins": "sibling",
-        "best friend": "best_friend", "best friends": "best_friend",
-        "friend": "friend",   "friends": "friend",
-        "colleague": "colleague", "colleagues": "colleague",
-        "coworker": "colleague", "coworkers": "colleague",
-        "co-worker": "colleague", "co-workers": "colleague",
-        "boss": "boss",       "bosses": "boss",
-        "mentor": "mentor",   "mentors": "mentor",
-        "mentee": "mentor",   "mentees": "mentor",
-        "client": "client",   "clients": "client",
-        "parent": "parent",   "parents": "parent",
-        "children": "parent", "child": "parent",
-        "cousin": "cousin",   "cousins": "cousin",
-        "in-law": "in_law",   "in-laws": "in_law",
-        "relative": "sibling","relatives": "sibling",
-    }
-    _RELATE_RE = re.compile(
-        r"(?:link|connect|relate|add\s+relationship(?:\s+between)?|set\s+up)[\s,]+"
-        r"([\w]+(?:\s+[\w]+){0,2}?)"          # name_a (1–3 words)
-        r"\s+(?:and|with|to)\s+"
-        r"([\w]+(?:\s+[\w]+){0,2}?)"          # name_b (1–3 words)
-        r"\s+(?:as|are|is)\s+"
-        r"(" + _ROLE_LIST + r")",
-        re.IGNORECASE,
-    )
-    m_relate = _RELATE_RE.search(t)
-    if m_relate:
-        name_a = " ".join(w.capitalize() for w in m_relate.group(1).strip().split())
-        name_b = " ".join(w.capitalize() for w in m_relate.group(2).strip().split())
-        role_raw = m_relate.group(3).lower().strip()
-        role = _RELATE_ROLE_MAP.get(role_raw, role_raw.rstrip("s"))
-        return Intent("people_relate", {"name_a": name_a, "name_b": name_b, "role": role})
+    # Note: third-party person-to-person relationships (e.g. "Sarah is Tom's
+    # sister") are captured from natural language by person_extractor on every
+    # turn (→ _write_relationship); there is no dedicated relate intent.
 
     # --- CONTACTS CREATE ---
     m = re.match(
@@ -2278,16 +2236,20 @@ async def _execute_calendar_create_direct(intent: Intent, user_id: str) -> Optio
     start_time = _parse_time(str(slots.get("time") or "")) if slots.get("time") else None
     category = str(slots.get("category") or "general").strip() or "general"
     try:
+        from calendar_service import create_event_record
         from database import get_db_ctx
 
-        event_id = str(uuid.uuid4())
         async with get_db_ctx() as db:
-            await db.execute(
-                "INSERT INTO events (id, user_id, title, start_date, start_time, end_time,"
-                " category, location, all_day, visibility) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (event_id, user_id, title, start_date, start_time, None, category, None,
-                 0 if start_time else 1, "family"),
+            record = await create_event_record(
+                db,
+                user_id=user_id,
+                title=title,
+                start_date=start_date,
+                start_time=start_time,
+                category=category,
+                all_day=not start_time,
             )
+        event_id = record["id"]
         await _notify_ui_channel(
             "calendar", "event_created",
             {"id": event_id, "title": title, "start_date": start_date,
@@ -3902,15 +3864,6 @@ def _build_command(intent: Intent, user_id: str) -> Optional[str]:
             f'context={context} circle={circle} user_id={user_id}'
         )
 
-    if intent.name == "people_relate":
-        name_a = s.get("name_a", "")
-        name_b = s.get("name_b", "")
-        role = s.get("role", "friend")
-        return (
-            f'{base} zoe-data.people_relate name_a="{name_a}" '
-            f'name_b="{name_b}" role="{role}" user_id={user_id}'
-        )
-
     if intent.name == "people_search":
         query = s.get("query", "")
         return f'{base} zoe-data.people_search query="{query}"'
@@ -4043,12 +3996,6 @@ def _format_response(intent: Intent, raw_output: str) -> str:
         circle = s.get("circle", "circle")
         tier_symbol = {"inner": "●", "circle": "○", "public": "□"}.get(circle, "○")
         return f"Added {name} to your {context} contacts {tier_symbol}."
-
-    if intent.name == "people_relate":
-        name_a = s.get("name_a", "")
-        name_b = s.get("name_b", "")
-        role = s.get("role", "")
-        return f"Linked {name_a} and {name_b} as {role}."
 
     if intent.name == "people_search":
         people = data.get("people", [])

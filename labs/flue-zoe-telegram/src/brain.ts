@@ -57,6 +57,51 @@ export async function resolveTelegramUser(telegramId: number): Promise<string | 
 }
 
 /**
+ * Redeem a self-service link token: the user tapped/scanned a deep link from Zoe
+ * settings and sent us `/start <token>`. We forward the token + the VERIFIED
+ * sender id to zoe-data, which links that Telegram account to the Zoe user the
+ * token was minted for. Returns the linked Zoe user_id, or null if the token was
+ * invalid/expired.
+ */
+export async function consumeLinkToken(
+  token: string,
+  telegramId: number,
+  telegramUsername?: string,
+): Promise<string | null> {
+  const res = await fetch(`${DATA_URL}/api/system/telegram/consume-link-token`, {
+    method: 'POST',
+    headers: internalHeaders(),
+    body: JSON.stringify({
+      token,
+      telegram_id: String(telegramId),
+      telegram_username: telegramUsername ?? null,
+    }),
+  });
+  if (res.status === 400) return null; // invalid / expired token
+  if (!res.ok) throw new Error(`consume-link-token ${res.status} ${await res.text().catch(() => '')}`);
+  const data = (await res.json()) as { user_id?: string | null };
+  return data.user_id ?? null;
+}
+
+/**
+ * Tell zoe-data our @username at startup so the settings UI can build
+ * `https://t.me/<bot>?start=<token>` deep links. Best-effort — logs and swallows
+ * failures so a transient zoe-data hiccup never blocks the bot from polling.
+ */
+export async function registerBotUsername(username: string): Promise<void> {
+  try {
+    const res = await fetch(`${DATA_URL}/api/system/telegram/register-bot`, {
+      method: 'POST',
+      headers: internalHeaders(),
+      body: JSON.stringify({ username }),
+    });
+    if (!res.ok) console.warn(`register-bot ${res.status} ${await res.text().catch(() => '')}`);
+  } catch (e) {
+    console.warn('register-bot failed (non-fatal):', e);
+  }
+}
+
+/**
  * Ask Zoe's brain AS a resolved Zoe user and return her reply text.
  *
  * The user_id is forwarded via zoe-data's trusted internal path (X-Zoe-User-Id +

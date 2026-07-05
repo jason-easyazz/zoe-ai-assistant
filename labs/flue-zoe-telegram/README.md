@@ -24,7 +24,9 @@ Telegram ──(long-poll)──► bridge ──► zoe-data /api/chat ──�
 - **Durable per-chat memory** — a stable `telegram-<chatId>` session id keeps
   zoe-data context per chat; `src/db.ts` (file-backed SQLite) persists Flue's
   own state across restarts.
-- **Allow-listed** — only `TELEGRAM_ALLOWED_USERS` get through (fail-closed).
+- **Identity-gated** — no allow-list. A sender reaches the brain only if their id
+  resolves to a **linked** Zoe user; linking needs a signed token from an
+  authenticated Zoe session. Unlinked senders are only guided to link.
 - **Proactive-ready** — `bot.api` is callable from anywhere (a cron can message
   you first); the scheduled-push increment is not wired yet.
 
@@ -76,7 +78,7 @@ trusting it live.
 cd labs/flue-zoe-telegram
 npm install
 npm run build          # flue build --target node
-cp .env.example .env   # fill TELEGRAM_BOT_TOKEN + TELEGRAM_ALLOWED_USERS (+ ZOE_INTERNAL_TOKEN if off-box)
+cp .env.example .env   # fill TELEGRAM_BOT_TOKEN (+ ZOE_INTERNAL_TOKEN if off-box)
 node dist/server.mjs   # or `npm run dev` for watch mode
 ```
 
