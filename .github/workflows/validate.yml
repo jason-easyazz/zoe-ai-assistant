@@ -97,6 +97,7 @@ jobs:
           # on the Jetson (self-hosted-tests.yml) as the catch-all safety net, so an
           # UNMARKED new test still runs somewhere. See tests/AGENTS.md.
           pytest services/zoe-data/tests -m ci_safe \
+            --ignore=services/zoe-data/tests/samantha_live \
             -x -q \
             --override-ini="asyncio_mode=auto"
           pytest \
