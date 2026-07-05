@@ -42,16 +42,25 @@ def test_expired_token_rejected(tl):
     assert tl.verify_link_token(tl.make_link_token("jason", ttl=-1)) is None
 
 
-def test_single_use_consume(tl):
+def test_verify_reserves_release_and_consume(tl):
     tok = tl.make_link_token("jason")
-    # Non-consuming verify can be repeated (used by nothing in prod, but safe).
+    # verify atomically RESERVES → a concurrent second verify is blocked.
     assert tl.verify_link_token(tok) == "jason"
+    assert tl.verify_link_token(tok) is None
+    # release (failure path) frees the reservation → the user can re-scan.
+    tl.release_token(tok)
     assert tl.verify_link_token(tok) == "jason"
-    # First redemption consumes it; a second scan of the SAME token is rejected
-    # (kiosk QR can't be hijacked by a later scanner).
-    assert tl.verify_link_token(tok, consume=True) == "jason"
-    assert tl.verify_link_token(tok, consume=True) is None
-    assert tl.verify_link_token(tok) is None  # stays dead even non-consuming
+    # mark_token_consumed (after a committed write) kills it permanently.
+    tl.mark_token_consumed(tok)
+    assert tl.verify_link_token(tok) is None
+    tl.release_token(tok)  # release after consume must NOT revive a dead token
+    assert tl.verify_link_token(tok) is None
+
+
+def test_release_and_mark_ignore_bad_tokens(tl):
+    for bad in ("garbage", "", "a.b.c"):
+        tl.release_token(bad)       # must not raise
+        tl.mark_token_consumed(bad)  # must not raise
 
 
 def test_wrong_secret_cannot_verify(tl, monkeypatch):
