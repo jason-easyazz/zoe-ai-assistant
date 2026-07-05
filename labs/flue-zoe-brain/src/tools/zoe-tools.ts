@@ -507,17 +507,14 @@ const addCalendarEvent = defineTool({
   run: async ({ input, signal }) => {
     const title = String(input.title ?? '').trim();
     if (!title) return 'I need a title for the event. What should I call it?';
+    // Pass date/time through when given; when the day is omitted (e.g. "add lunch
+    // with Jess at 12pm"), zoe-data defaults it to TODAY rather than failing, so
+    // the natural quick-add just works. Only title is required here.
+    const slots: Record<string, unknown> = { title };
     const date = String(input?.date ?? '').trim();
-    // A calendar event needs a day. zoe-data intentionally REJECTS a dateless
-    // create (intent_router._execute_calendar_create_direct returns None rather
-    // than store a dateless row → ok:false), which otherwise surfaces to the user
-    // as a confusing "the calendar service didn't respond". Ask for the day up
-    // front instead of dispatching a doomed write — the model still has the title
-    // in context, so it can re-call with both once the user answers.
-    if (!date) return `What day should I add "${title}" to your calendar?`;
-    const slots: Record<string, unknown> = { title, date };
     const time = String(input?.time ?? '').trim();
     const category = String(input?.category ?? '').trim();
+    if (date) slots.date = date;
     if (time) slots.time = time;
     if (category) slots.category = category;
     return runWrite('calendar_create', slots, 'calendar', `"${title}"`,
