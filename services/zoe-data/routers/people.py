@@ -567,6 +567,38 @@ async def _archive_person_mempalace(person_id: str, user_id: str) -> None:
         _lg.getLogger(__name__).debug("MemPalace archive failed for %s: %s", person_id, exc)
 
 
+# ── Person merge / entity resolution (roadmap item 4) ─────────────────────────
+
+@router.post("/{source_id}/merge-into/{target_id}")
+async def merge_person_endpoint(
+    source_id: str,
+    target_id: str,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Fold an ``is_partial`` stub (``source_id``) into a real contact (``target_id``),
+    re-pointing all its relationships + satellite facts. Explicit, user-triggered,
+    owner-scoped; off the chat hot path. Flag-gated (``ZOE_PERSON_MERGE_ENABLED``,
+    default OFF) — 404 disabled before any DB work when off."""
+    from person_merge import PersonMergeError, merge_person, person_merge_enabled
+
+    if not person_merge_enabled():
+        raise HTTPException(status_code=404, detail="Person merge is disabled")
+
+    await require_feature_access(db, user, feature="people", action="update")
+    user_id = user["user_id"]
+    try:
+        result = await merge_person(db, user_id, source_id, target_id)
+    except PersonMergeError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    await broadcaster.broadcast(
+        "people", "people:merged",
+        {"source_id": source_id, "target_id": target_id}, user_id=user_id,
+    )
+    return result
+
+
 # ── Mark notifications read ───────────────────────────────────────────────────
 
 @router.put("/{person_id}/mark-read")
