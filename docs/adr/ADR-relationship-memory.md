@@ -88,6 +88,17 @@ is four bounded increments on top of what's live (none require a graph DB):
    **person-merge / entity-resolution** path for `is_partial` stubs (name collisions, stub
    → real-contact promotion).
 
+### Delivery status (2026-07-05) — merged but dark
+
+Increments 2–4 are **merged behind env flags, default OFF**, lab-proved end-to-end (all three
+flags on, isolated SQLite) in `services/zoe-data/tests/test_relationship_features_integration.py`
+(#1044): temporal edges (migration `0015`, #1024), recursive-CTE traversal (`GET /people/{id}/graph`,
+#1025/#1029, now current-edge-only), person-merge (#1036). Increment 4's confidence/admission-gating
+of *writes* remains open. Turning the flags on in prod is an operator procedure —
+[`docs/knowledge/relationship-memory-flag-enable.md`](../knowledge/relationship-memory-flag-enable.md):
+migrate `0015` first, flip the three flags incrementally behind the `~/.zoe-voice-samples` replay
+gate, verify on a demo user, and roll back with the flags (a `0015` downgrade is intentionally lossy).
+
 ## Acceptance criteria (for future increments)
 
 - Multi-hop relationship answers (siblings, circles, "how is X connected to Y") without a
