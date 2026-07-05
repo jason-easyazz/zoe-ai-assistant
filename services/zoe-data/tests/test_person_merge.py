@@ -60,7 +60,8 @@ async def _open_db():
             visibility   TEXT,
             deleted      INTEGER NOT NULL DEFAULT 0,
             is_partial   INTEGER NOT NULL DEFAULT 0,
-            introduced_by_person_id TEXT
+            introduced_by_person_id TEXT,
+            updated_at   TEXT
         )
         """
     )
