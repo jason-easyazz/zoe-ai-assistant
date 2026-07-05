@@ -95,7 +95,7 @@ _TRANSCRIPT_ECHO_RE = re.compile(
 _WEATHER_REPORT_RE = re.compile(
     r"\bfeels?\s+like\b[^.]*\bdegrees?\b"                       # "feels like 10 degrees"
     r"|\bdegrees?\b[^.]*\bfeels?\s+like\b"                      # "10 degrees ... feels like"
-    r"|\bdegrees?\b[^.]*\b(?:mainly\s+)?(?:clear|cloudy|sunny|overcast|rain(?:ing|y)?|showers?|drizzle|storm|snow|sleet|humid|windy)\b"
+    r"|\bdegrees?\b[^.]*\b(?:mainly\s+)?(?:clear|cloudy|sunny|overcast|rain(?:ing|y)?|showers?|drizzle|storm|snow|sleet|humid|windy|fog(?:gy)?|haz[ey]|frost(?:y)?|freezing|breezy|hail|mist(?:y)?)\b"
     r"|\b(?:mainly\s+clear|clear\s+sky|partly\s+cloudy|mostly\s+(?:sunny|cloudy))\b[^.]*\bdegrees?\b",
     re.IGNORECASE,
 )
@@ -188,8 +188,12 @@ def is_storable_fact(text: str) -> tuple[bool, str]:
 
     # Ephemeral weather report captured as a "fact" (e.g. an extractor scraping an
     # assistant weather reply). Never durable — reject before the concrete-token
-    # fallback would otherwise accept it on its numbers.
-    if _WEATHER_REPORT_RE.search(raw):
+    # fallback would otherwise accept it on its numbers. Only a SUBJECTLESS report
+    # ("It's 17 degrees and clear…") is dropped: a first/second-person sentence
+    # ("my baby feels like she has 38 degrees fever", "my room feels 15 degrees
+    # colder") is a real owned fact and must fall through to the personal-subject
+    # accept below — false-rejecting a real fact is worse than storing one.
+    if _WEATHER_REPORT_RE.search(raw) and not _PERSONAL_SUBJECT_RE.search(raw):
         return False, "weather_report"
 
     # Accept the structured-extraction summary shapes ("User's name is …").

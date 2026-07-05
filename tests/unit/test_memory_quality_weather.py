@@ -18,6 +18,10 @@ WEATHER_REPORTS = [
     "it feels like 10 degrees.",
     "It's 30 degrees and sunny outside.",
     "Currently 12 degrees, overcast with a chance of showers.",
+    # extra condition words
+    "Currently 8 degrees and foggy in Perth.",
+    "It's 15 degrees with a light frost.",
+    "About 5 degrees and freezing out there.",
 ]
 
 # Real facts / preferences that mention temperature or "feels like" but are NOT
@@ -31,6 +35,10 @@ REAL_FACTS = [
     "My thermostat is set to 21 degrees",
     "I feel like going for a walk",
     "Remember it's 22 degrees and sunny for the wedding",  # explicit command wins
+    # first/second-person owned facts that hit the weather pattern but are REAL —
+    # the personal-subject guard must let these through.
+    "My baby feels like she has 38 degrees fever",
+    "My room feels like it's 15 degrees colder than the hall",
 ]
 
 
