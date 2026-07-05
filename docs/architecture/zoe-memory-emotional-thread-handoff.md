@@ -1,6 +1,6 @@
 ---
 type: handoff
-status: open
+status: delivered — full loop live-verified 2026-07-05
 owner: Flue brain team (soul-side signal) + Zoe memory (store-side wiring)
 opened: 2026-07-04
 related:
@@ -13,11 +13,19 @@ related:
 
 ## TL;DR
 
-Fact recall (#1) and evolving understanding (#4) are **delivered + live-verified**.
-Emotional-thread continuity (#2) is **blocked on a capture signal that only the Flue
-brain can emit** — it is not a memory-store change we can prove out alone. This note is
-the ask to the Flue team, with the exact contract the memory side will honour once the
-signal exists.
+**DELIVERED + live-verified end-to-end (2026-07-05).** All four Samantha criteria
+(fact recall, emotional thread, proactive surfacing, evolving understanding) are live.
+The full emotional loop is proven on the deployed brain: **capture** (the Flue brain
+emits `emotional_moment` rows on a worry — verified 2/4 strong-emotional turns,
+neg/0.9, durable third-person facts, silent tool + warm reply) → **recall** (emotional
+queries surface it, incl. the crowded-out worst case) → **follow-up** (a one-time gentle
+check-in a day later). Everything below is now the *record* of how it was built, not an
+open ask. The one remaining variable is not code: **real substrate must accumulate for a
+real user** — Jason is now feeding it via the Telegram channel (correctly linked to
+`user_id=jason`), so the loop activates on his own data as worries get captured.
+
+Honest ceiling: capture is ~50% per strong-emotional turn on the 4B brain — significant/
+recurring worries land, passing ones may not (tunable via doctrine, not fixable outright).
 
 ## Evidence (why this is a capture gap, not a wiring gap)
 
@@ -124,3 +132,27 @@ When substrate first appears, the memory-side wiring above is unblocked and I pi
   the front of the packet, ahead of search hits, dedup by id. Re-proven on the live
   service against the exact worst case: OFF the row stays lost, ON the generic emotional
   query surfaces it AND it leads; neutral stays a no-op. 109 tests green.
+- 2026-07-04 — **Emotional-recall doctrine on the LIVE Flue brain + acceptance suite**
+  (#1014). The live backend is `ZOE_BRAIN_BACKEND=flue`, which pulls memory via the
+  `recall_memory` *tool*, not the `memory.ts` every-turn inject — so recall wiring in the
+  endpoint wasn't enough. Added `EMOTIONAL_RECALL_DOCTRINE` to the Flue persona
+  (`labs/flue-zoe-brain/src/agents/zoe.ts`): measured **4/4** emotional recall on the live
+  4B brain. Acceptance suite (`test_samantha_acceptance.py`) extended to all four criteria,
+  8/8 on the box. #3 proactive delivered by the deterministic morning brief (in-turn 4B
+  surfacing measured ~1/5 and rejected). #1017 added 3b importance scoring.
+- 2026-07-05 — **Proactive emotional follow-up (#1031) — cares unprompted (VISION #3).**
+  New `EmotionalFollowUpTrigger` (`proactive/triggers/emotional_followup.py`): after a
+  captured worry (neg/mixed, intensity≥0.6, aged 20h–7d) it checks in ONCE, at a waking
+  hour, then never nags (one-per-moment-ever + ≤1/user/day). `ZOE_EMOTIONAL_FOLLOWUP_ENABLED=1`
+  enabled in prod; live e2e verified (seeded demo active user → 1 follow-up produced;
+  dedup blocks a second). The first behaviour that turns *knows you* into *cares*.
+- 2026-07-05 — **FULL LOOP live-verified end-to-end + real-user path confirmed.** Drove
+  the deployed :3578 brain (demo users, cleaned up): **capture** 2/4 strong-emotional turns
+  → non-archived `emotional_moment` neg/0.9 with durable third-person text and a warm
+  reply (tool stayed silent); **recall** surfaces it; **follow-up** fires once. Real-user
+  path: Jason's **Telegram is correctly linked to `user_id=jason`** (`user_preferences`
+  prefs.telegram_id), and the identity layer was hardened (#1015/#1021/#1032: unresolved
+  callers → `guest`, never silent `family-admin`; panel + Telegram bound to jason). Cleaned
+  15 residual `family-admin` junk rows from a **retired** `nightly_session_scrub` path
+  (jason untouched). Net: the machinery is done and proven; it now activates on Jason's own
+  memories as he feeds worries via Telegram. Monitor with `scripts/maintenance/check_emotional_thread.py`.
