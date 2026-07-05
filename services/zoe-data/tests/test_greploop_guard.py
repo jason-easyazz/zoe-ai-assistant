@@ -1,3 +1,7 @@
+import pytest
+
+pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m ci_safe` lane
+
 import asyncio
 import json
 import os

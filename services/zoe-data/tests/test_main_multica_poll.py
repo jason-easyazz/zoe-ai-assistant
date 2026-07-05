@@ -1,5 +1,9 @@
 """Tests for main.py Multica poll-loop helpers."""
 
+import pytest
+
+pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m ci_safe` lane
+
 from pathlib import Path
 
 import pytest

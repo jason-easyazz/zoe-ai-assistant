@@ -6,6 +6,11 @@ the /api/calendar/events router). These tests pin the exact column list, the
 value mapping, the all_day 0/1 coercion, the defaults, and that a voice-caller
 subset (no end_date/duration/recurring/metadata) inserts NULLs cleanly.
 """
+
+import pytest
+
+pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m ci_safe` lane
+
 import re
 
 import pytest

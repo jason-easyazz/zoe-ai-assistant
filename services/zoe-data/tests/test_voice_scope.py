@@ -5,6 +5,10 @@ Covers every branch of the classifier with 40+ phrases. No I/O.
 
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m ci_safe` lane
+
 from dataclasses import dataclass
 from typing import Any, Optional
 

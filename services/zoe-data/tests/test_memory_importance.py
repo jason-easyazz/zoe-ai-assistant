@@ -4,6 +4,11 @@
 importance arm can rank them up; `MemoryService._build_metadata` writes it onto a
 row's metadata only when > 0 (ordinary facts stay boost-free).
 """
+
+import pytest
+
+pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m ci_safe` lane
+
 import pytest
 
 from memory_importance import score_importance

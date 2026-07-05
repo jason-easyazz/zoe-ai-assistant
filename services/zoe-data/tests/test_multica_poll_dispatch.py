@@ -1,4 +1,9 @@
 """Tests for Multica poll-loop dispatch helpers."""
+
+import pytest
+
+pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m ci_safe` lane
+
 import datetime as dt
 
 from multica_poll_dispatch import (
