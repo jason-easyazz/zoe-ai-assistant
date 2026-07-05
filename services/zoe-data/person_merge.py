@@ -93,7 +93,10 @@ async def _exec(db, sql_pg: str, sql_q: str, params: tuple) -> int:
         cur = await db.execute(sql_pg, *params)
     except Exception:
         cur = await db.execute(sql_q, params)
-    return getattr(cur, "rowcount", 0) or 0
+    try:
+        return getattr(cur, "rowcount", 0) or 0
+    finally:
+        await _close_cursor(cur)
 
 
 async def _load_person(db, user_id: str, person_id: str) -> Optional[dict]:
