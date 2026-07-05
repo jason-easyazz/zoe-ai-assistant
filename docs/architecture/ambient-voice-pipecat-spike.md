@@ -40,7 +40,7 @@ Runs like every Zoe increment: **lab-prove before prod**, behind isolation, non-
 - Spare port (e.g. `:8788`) for the SmallWebRTC signalling + a tiny static test page.
 
 ## Steps
-1. **Isolate + install.** Create the venv; `pip install "pipecat-ai[moonshine,kokoro,silero,webrtc,turn]==<pinned>"` (exact extras verified against the pinned version). Confirm ARM64 wheels resolve on the Orin.
+1. **Isolate + install.** Create the venv; `pip install "pipecat-ai[moonshine,kokoro,silero,webrtc,local-smart-turn]==<pinned>"` (the on-device Smart Turn v3 extra is `local-smart-turn`, not `turn`; **re-confirm every extra name against the pinned version's PyPI metadata** before running — extras get renamed between releases). Confirm ARM64 wheels resolve on the Orin.
 2. **Wire the pipeline** (a ~100-line script): `SmallWebRTCTransport` (browser mic in / audio out) → **Moonshine STT** → **Gemma LLM** (OpenAI-compat @ :11434) → **Kokoro TTS** (point at our ONNX) → transport out. Enable **Smart Turn v3** turn detection and **interruption** (barge-in) in the pipeline config.
 3. **Serve a one-file test page** for SmallWebRTC and talk to it from a laptop/phone browser on the LAN.
 4. **Drive the measurements** below (record every number in a results table).
