@@ -121,19 +121,22 @@ memory unprompted; its understanding of the user evolves.
 - [x] **3b** importance — BUILT. `memory_importance.score_importance` (new) scores high-stakes content — safety/medical (0.9), dietary restriction (0.7), vital-id (0.6), ordinary → 0.0 — and `MemoryService._build_metadata` writes it onto the row (only when >0, so ordinary facts stay boost-free). Activates the 2a importance arm for plain `fact`-type rows (a penicillin allergy typed "fact" now boosts, where emotional_moment/preference/person already scored 1.0 via the type arm). Lab-proven: allergy fact stored `importance=0.9`, ordinary fact none. Tests: `tests/test_memory_importance.py` (16). Effect is a mild 0.05-weight nudge by design.
 - [x] **3c** proactive surfacing — the **proactive engine's morning brief** (`proactive/triggers/morning_checkin.py`, started in main lifespan) deterministically surfaces recent emotional moments + calendar + portrait into a pushed brief (proven: brief renders "I've been thinking about you — Jason has been anxious about the settlement…"). In-turn 4B surfacing was measured (~1/5) and **rejected** — unprompted surfacing is the deterministic morning brief, not model whim.
 - [x] **Acceptance test EXTENDED + GREEN (all 4 criteria)** — `services/zoe-core/test/test_samantha_acceptance.py` now covers emotional-thread recall, proactive surfacing, and evolving understanding alongside identity/recall/tool/continuity/latency. **8/8 pass on the box** (live pi + Gemma). NOTE: this harness drives the *core* backend; the LIVE backend is `ZOE_BRAIN_BACKEND=flue`, verified separately against the live Flue brain.
+- [x] **Oblique-recall lift + FINAL LIVE EVAL = 100% (2026-07-05)**. A whole-system eval on the LIVE Flue brain first read **88%** single-shot; every miss was the 4B model skipping `recall_memory` on OBLIQUE personal questions ("where do I live", "do I have allergies", "do I prefer tea") — memory itself was ~100%, the gap was brain recall-call behaviour. Fixed with **`PERSONAL_RECALL_DOCTRINE`** (#1026, Flue `zoe.ts`): widen recall to ANY question about the user's own facts, with a hard general-knowledge bound (recipes/maths/world facts answered directly, no recall). Merged + **auto-deployed** (first clean Flue auto-rebuild after the #1016 npm-PATH fix). **Re-run of the full 8-question eval on the deployed :3578 brain: 40/40 = 100%** (dog/dad/mum/home/preference/2×emotional/allergy all 5/5, morning brief PASS; contention 500s retried past). Prior arc PRs: #1004/#1005 (emotional gate+pin), #1014 (emotional-recall doctrine + acceptance suite), #1016 (deploy npm-PATH fix), #1017 (3b importance, incl. a real stale-importance-on-edit bug caught+fixed).
+- [x] **Voice regression clean** — 25 `~/.zoe-voice-samples` via `scripts/maintenance/voice_regression_probe.py` → 24/25 OK, fail=0, no regression from any memory change.
 - [ ] (carry-over) identity deploy `#768` — FF-deploy when the tooling/classifier outage clears
 
 ## 7. NEXT ACTION (always exactly one)
-→ **All four Samantha acceptance criteria are met and live-verified** (fact recall, emotional
-thread, proactive surfacing, evolving understanding — §6). The acceptance suite is green (8/8) and
-the live Flue brain delivers emotional recall (4/4). The remaining work is **monitoring, not
-building**: jason still has **0 real `emotional_moment` rows** — the whole emotional path is proven
-on demo/seeded data, but does nothing for him until a genuine emotional conversation is captured by
-the live brain. Watch with `scripts/maintenance/check_emotional_thread.py`; when real substrate
-appears, spot-check that recall + the morning brief surface it. Only *then* consider the optional
-low-value **3b importance** producer (deferred — see §6) if ranking evidence shows a need. Do NOT
-resurrect the dead idle-consolidation path (§8) as "the" memory path — the live memory is the
-immediate voice/chat writers + the for-prompt packet + the Flue `recall_memory` tool.
+→ **Build phase COMPLETE. All four Samantha criteria are met and measured at 100% on the LIVE Flue
+brain** (2026-07-05 full eval: 40/40 usable across fact recall ×5, emotional recall ×2, safety
+recall, + morning brief PASS — §6). 3a/3b/3c done; the acceptance suite is 8/8. The remaining work
+is **monitoring, not building** — and the one thing that would move the needle is **not a code
+task**: jason still has **0 real `emotional_moment` rows**, so the entire emotional path is proven on
+seeded/demo data and does nothing for him until a genuine emotional conversation is captured by the
+live brain. Watch with `scripts/maintenance/check_emotional_thread.py`; when the first real row
+appears, spot-check that recall + the morning brief surface it, then this is truly done for a real
+user. Do NOT resurrect the dead idle-consolidation path (§8) as "the" memory path — the live memory
+is the immediate voice/chat writers + the for-prompt packet + the Flue `recall_memory` tool
+(governed by the live persona doctrines in `labs/flue-zoe-brain/src/agents/zoe.ts`).
 
 ## 8. Increment 1c — enable runbooks
 
