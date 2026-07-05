@@ -45,8 +45,15 @@ Migration is a **separate deploy step** — it does **not** run at service start
 ## Procedure
 
 ### 0. Pre-flight
-- Confirm `main` is deployed to the live checkout: `git -C /home/zoe/assistant log --oneline -1`
-  should include the merged relationship work (temporal #1024 … integration #1044 `58e67241`).
+- Confirm the merged relationship work is actually present in the live checkout — an **ancestry**
+  check, not just "what's at HEAD" (later commits can sit on top of it):
+  ```
+  git -C /home/zoe/assistant merge-base --is-ancestor 58e67241 HEAD \
+    && echo "OK — relationship work present" \
+    || echo "MISSING #1024–#1044 — do NOT proceed"
+  ```
+  (`58e67241` = the #1044 integration-test squash; if it isn't an ancestor of HEAD the temporal/
+  graph/merge code may be absent and the flags will error.)
 - Confirm flags are currently OFF: `grep -E 'ZOE_(TEMPORAL_RELATIONSHIPS|RELATIONSHIP_GRAPH|PERSON_MERGE)_ENABLED' services/zoe-data/.env` → expect none/`0`.
 - **Baseline the voice replay corpus** so every later flip has something to diff against:
   ```
