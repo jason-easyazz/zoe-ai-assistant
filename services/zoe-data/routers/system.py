@@ -2587,8 +2587,12 @@ async def consume_telegram_link_token(
         prefs = await _read_prefs(db, user_id)
         prefs["telegram_id"] = tid
         await _write_prefs(db, user_id, prefs)
-    except Exception:
+    except BaseException:
         # Failure before commit → free the reservation so the user can re-scan.
+        # BaseException (not Exception) so asyncio.CancelledError — raised when
+        # uvicorn cancels the handler on a client disconnect mid-await — ALSO
+        # releases, instead of stranding the token in _pending_sigs for the TTL.
+        # The bare `raise` re-raises CancelledError, preserving shutdown semantics.
         telegram_link.release_token(token)
         raise
 
