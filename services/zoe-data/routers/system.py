@@ -2550,37 +2550,50 @@ async def consume_telegram_link_token(
     import telegram_link
     from routers.user_profile import _TELEGRAM_ID_RE, _read_prefs, _write_prefs
 
-    # Validate WITHOUT consuming; we mark single-use only after the link write
-    # commits (below), so a transient DB failure can't burn the token.
-    user_id = telegram_link.verify_link_token((body.token or "").strip())
+    token = (body.token or "").strip()
+    # verify_link_token validates AND atomically RESERVES the token (single-use).
+    # From here on, ANY exit path must either mark_token_consumed (success) or
+    # release_token (failure) — otherwise the reservation would strand the token.
+    user_id = telegram_link.verify_link_token(token)
     if not user_id:
         raise HTTPException(status_code=400, detail="invalid, expired, or already-used link token")
 
-    tid = (body.telegram_id or "").strip()
-    if not _TELEGRAM_ID_RE.match(tid):
-        raise HTTPException(
-            status_code=400,
-            detail="telegram_id must be a positive numeric Telegram user id",
+    try:
+        tid = (body.telegram_id or "").strip()
+        if not _TELEGRAM_ID_RE.match(tid):
+            raise HTTPException(
+                status_code=400,
+                detail="telegram_id must be a positive numeric Telegram user id",
+            )
+
+        # The token's user must still exist (a since-deleted user would otherwise
+        # 500 on the FK). Clean 400 instead, and the reservation is released below.
+        cur = await db.execute("SELECT 1 FROM users WHERE id = ? LIMIT 1", (user_id,))
+        if not await cur.fetchone():
+            raise HTTPException(status_code=400, detail="link target user no longer exists")
+
+        # Last-writer-wins uniqueness: a telegram_id maps to at most one Zoe user.
+        cursor = await db.execute(
+            """SELECT user_id, prefs FROM user_preferences
+               WHERE prefs::jsonb ->> 'telegram_id' = ? AND user_id != ?""",
+            (tid, user_id),
         )
+        for row in await cursor.fetchall():
+            other_prefs = await _read_prefs(db, row["user_id"])
+            if other_prefs.get("telegram_id") == tid:
+                other_prefs.pop("telegram_id", None)
+                await _write_prefs(db, row["user_id"], other_prefs)
 
-    # Last-writer-wins uniqueness: a telegram_id maps to at most one Zoe user.
-    cursor = await db.execute(
-        """SELECT user_id, prefs FROM user_preferences
-           WHERE prefs::jsonb ->> 'telegram_id' = ? AND user_id != ?""",
-        (tid, user_id),
-    )
-    for row in await cursor.fetchall():
-        other_prefs = await _read_prefs(db, row["user_id"])
-        if other_prefs.get("telegram_id") == tid:
-            other_prefs.pop("telegram_id", None)
-            await _write_prefs(db, row["user_id"], other_prefs)
+        prefs = await _read_prefs(db, user_id)
+        prefs["telegram_id"] = tid
+        await _write_prefs(db, user_id, prefs)
+    except Exception:
+        # Failure before commit → free the reservation so the user can re-scan.
+        telegram_link.release_token(token)
+        raise
 
-    prefs = await _read_prefs(db, user_id)
-    prefs["telegram_id"] = tid
-    await _write_prefs(db, user_id, prefs)
-    # Mark single-use ONLY after the link is durably written — if a write above
-    # threw, the token stays valid so the user can just re-scan the same QR.
-    telegram_link.mark_token_consumed((body.token or "").strip())
+    # Link is durably written — now burn the token so a replay/second scan fails.
+    telegram_link.mark_token_consumed(token)
     logger.info("telegram self-service link: %s → user %s", tid, user_id)
     return {"ok": True, "user_id": user_id, "telegram_id": tid}
 

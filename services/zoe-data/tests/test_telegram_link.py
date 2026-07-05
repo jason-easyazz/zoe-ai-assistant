@@ -42,21 +42,25 @@ def test_expired_token_rejected(tl):
     assert tl.verify_link_token(tl.make_link_token("jason", ttl=-1)) is None
 
 
-def test_single_use_mark_consumed(tl):
+def test_verify_reserves_release_and_consume(tl):
     tok = tl.make_link_token("jason")
-    # verify has NO side effect — can be called repeatedly before redemption
-    # (so a failed DB write doesn't burn the token).
+    # verify atomically RESERVES → a concurrent second verify is blocked.
     assert tl.verify_link_token(tok) == "jason"
+    assert tl.verify_link_token(tok) is None
+    # release (failure path) frees the reservation → the user can re-scan.
+    tl.release_token(tok)
     assert tl.verify_link_token(tok) == "jason"
-    # mark_token_consumed (called only after the link write commits) kills it:
+    # mark_token_consumed (after a committed write) kills it permanently.
     tl.mark_token_consumed(tok)
     assert tl.verify_link_token(tok) is None
-    tl.mark_token_consumed(tok)  # idempotent / safe on an already-dead token
+    tl.release_token(tok)  # release after consume must NOT revive a dead token
+    assert tl.verify_link_token(tok) is None
 
 
-def test_mark_consumed_ignores_bad_token(tl):
-    tl.mark_token_consumed("garbage")  # must not raise
-    tl.mark_token_consumed("")
+def test_release_and_mark_ignore_bad_tokens(tl):
+    for bad in ("garbage", "", "a.b.c"):
+        tl.release_token(bad)       # must not raise
+        tl.mark_token_consumed(bad)  # must not raise
 
 
 def test_wrong_secret_cannot_verify(tl, monkeypatch):

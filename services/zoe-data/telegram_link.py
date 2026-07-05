@@ -45,18 +45,25 @@ _LINK_SECRET = (
 LINK_TOKEN_TTL_S = 600  # 10 minutes
 _SIG_BYTES = 12  # 96-bit truncated HMAC — ample for a 10-minute single-use token
 
-# Single-use enforcement: signatures of already-redeemed tokens, kept until they
-# would expire anyway. In-process only (a restart clears it, but expired tokens
-# are rejected regardless), which is sufficient — generate + redeem both hit the
-# same zoe-data process. This stops a QR shown on a shared/kiosk screen from being
-# redeemed by a SECOND scanner and silently overwriting the first person's link.
+# Single-use enforcement. In-process only (a restart clears it, but expired tokens
+# are rejected regardless) — generate + redeem both hit the same zoe-data process.
+# Two sets so single-use holds ACROSS the async DB write without burning the token
+# on failure:
+#   _pending_sigs  — reserved by verify_link_token() the instant a token validates
+#                    (synchronous, no await before the reservation), so a second
+#                    concurrent scan of the same QR can't also pass verification.
+#   _consumed_sigs — permanently redeemed (moved here after the link write commits).
+# A token whose sig is in EITHER set is rejected. On a failed write the caller
+# calls release_token() to drop the reservation so the user can just re-scan.
+_pending_sigs: dict[bytes, int] = {}
 _consumed_sigs: dict[bytes, int] = {}
 
 
-def _prune_consumed(now: int) -> None:
-    for k, exp in list(_consumed_sigs.items()):
-        if exp < now:
-            del _consumed_sigs[k]
+def _prune(now: int) -> None:
+    for store in (_pending_sigs, _consumed_sigs):
+        for k, exp in list(store.items()):
+            if exp < now:
+                del store[k]
 
 
 def make_link_token(user_id: str, ttl: int = LINK_TOKEN_TTL_S) -> str:
@@ -74,9 +81,10 @@ def make_link_token(user_id: str, ttl: int = LINK_TOKEN_TTL_S) -> str:
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
-def _decode(token: str):
-    """Return (user_id, sig, exp) for an authentic, unexpired, un-redeemed token,
-    else None. No side effects — does NOT mark the token consumed."""
+def _decode_raw(token: str):
+    """Return (user_id, sig, exp) for an authentic, unexpired token, else None.
+    Validates signature + expiry ONLY — no pending/consumed check, no side effect.
+    Used by mark/release which operate on an already-reserved sig."""
     if not token or len(token) > 128:
         return None
     try:
@@ -90,11 +98,7 @@ def _decode(token: str):
             return None
         user_id, exp_s = payload.decode().rsplit(":", 1)
         exp = int(exp_s)
-        now = int(time.time())
-        if exp < now:
-            return None
-        _prune_consumed(now)
-        if sig in _consumed_sigs:  # already redeemed → reject the replay
+        if exp < int(time.time()):
             return None
         return (user_id or None, sig, exp)
     except Exception:
@@ -102,21 +106,41 @@ def _decode(token: str):
 
 
 def verify_link_token(token: str) -> Optional[str]:
-    """Return the user_id if the token is authentic, unexpired, and not already
-    redeemed — WITHOUT consuming it. Caller must call mark_token_consumed() only
-    AFTER the link is durably written, so a transient DB failure can't burn the
-    token (leaving the user with a dead QR and no link)."""
-    decoded = _decode(token)
-    return decoded[0] if decoded else None
+    """Validate a token AND atomically reserve it (single-use). Returns the
+    user_id, or None if invalid/expired/already-claimed. There is NO ``await``
+    between the claim check and the reservation, so two concurrent redemptions of
+    the same token cannot both pass. The caller MUST then either mark_token_consumed
+    (on a successful, committed link) or release_token (on any failure) — the
+    reservation alone never permanently burns the token (it expires with the TTL)."""
+    decoded = _decode_raw(token)
+    if not decoded:
+        return None
+    user_id, sig, exp = decoded
+    now = int(time.time())
+    _prune(now)
+    if sig in _pending_sigs or sig in _consumed_sigs:
+        return None  # already claimed by a concurrent request, or already redeemed
+    _pending_sigs[sig] = exp  # reserve — synchronous, no await before this point
+    return user_id
 
 
 def mark_token_consumed(token: str) -> None:
-    """Record the token as redeemed so a second scan within its TTL is rejected.
-    Call this ONLY after the link write has committed successfully."""
-    decoded = _decode(token)
+    """Promote a reserved token to permanently redeemed. Call ONLY after the link
+    write has committed successfully."""
+    decoded = _decode_raw(token)
     if decoded:
         _, sig, exp = decoded
+        _pending_sigs.pop(sig, None)
         _consumed_sigs[sig] = exp
+
+
+def release_token(token: str) -> None:
+    """Drop a token's reservation so it can be redeemed again. Call on ANY failure
+    after verify_link_token so a transient error (DB hiccup, missing user) doesn't
+    leave the user with a dead QR."""
+    decoded = _decode_raw(token)
+    if decoded:
+        _pending_sigs.pop(decoded[1], None)
 
 
 # ── Bot identity (self-registered by the Telegram bot at startup) ──────────────
