@@ -53,9 +53,10 @@ RUN mkdir -p -m 755 /etc/apt/keyrings \
 # RUN curl https://cursor.com/install -fsS | bash && /root/.local/bin/cursor-agent --version
 
 # ── Locally-built dependency ─────────────────────────────────────────────────
-# omnigent depends on cel-expr-python, which ships NO linux/aarch64 wheel and no sdist
-# (upstream's build hardcodes amd64 bazelisk). This wheel was compiled from source for
-# aarch64 — see wheels/ and README. UV_FIND_LINKS lets uv resolve it locally.
+# omnigent <0.4.0 depended on cel-expr-python, which ships NO linux/aarch64 wheel (this
+# wheel was compiled from source for aarch64 — see wheels/ and README). As of omnigent
+# 0.4.0 the dep is EXCLUDED on aarch64 upstream, so the wheel is no longer required; the
+# COPY + UV_FIND_LINKS stay as a harmless belt-and-braces for any transitive resolver hit.
 COPY wheels/ /opt/wheels/
 ENV UV_FIND_LINKS=/opt/wheels
 
@@ -64,8 +65,13 @@ ENV UV_FIND_LINKS=/opt/wheels
 # pyyaml is for the entrypoint's idempotent ~/.omnigent/config.yaml seed (the
 # OpenRouter gateway provider for the pi worker) — the system python3 the
 # entrypoint runs has no yaml otherwise.
+# omnigent is PINNED (bump deliberately): an unpinned install is Docker-layer-cached, so
+# upgrades silently DON'T happen on rebuild — and unpinned surprise upgrades bit us before
+# (the 0.3.0 jump arrived as a side effect of a pi rebuild). 0.4.0 verified on this stack
+# 2026-07-05: providers-mapping format, RUNNER_ENV_PASSTHROUGH, header auth, and the
+# entrypoint workspace-patch marker all unchanged.
 RUN pip install --no-cache-dir uv pyyaml \
-    && uv tool install --force -q --python 3.12 omnigent
+    && uv tool install --force -q --python 3.12 omnigent==0.4.0
 ENV PATH="/root/.local/bin:${PATH}"
 RUN timeout 30s omnigent --version || echo "WARN: confirm 'omnigent --version' at runtime"
 
