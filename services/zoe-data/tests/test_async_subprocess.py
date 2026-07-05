@@ -4,6 +4,11 @@ Mirrors the intent behind PR #975's _spawn_pi_process tests: prove the helpers
 round-trip against a REAL subprocess (fork+exec happens in the thread pool, not
 on the loop) and that timeouts/exit codes propagate.
 """
+
+import pytest
+
+pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m ci_safe` lane
+
 import subprocess
 import sys
 

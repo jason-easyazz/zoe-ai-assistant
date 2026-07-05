@@ -10,6 +10,11 @@ If a rock legitimately changes, update the expected value here in the SAME commi
 that keeps the intent explicit and visible in review. See feedback_fixed_models_are_rocks
 and project_zoe_voice_live_topology in memory.
 """
+
+import pytest
+
+pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m ci_safe` lane
+
 import os
 import re
 

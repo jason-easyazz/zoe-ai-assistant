@@ -13,6 +13,10 @@ CONFLICT, and the `prefs::jsonb ->> 'telegram_id'` match).
 """
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m ci_safe` lane
+
 import json
 import sys
 from pathlib import Path

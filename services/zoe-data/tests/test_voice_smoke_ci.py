@@ -21,6 +21,11 @@ Two invariants are guarded:
 See test_canonical_invariants.py for the static rock-default guards; this file proves
 the same rocks are wired in the live code path, not just declared.
 """
+
+import pytest
+
+pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m ci_safe` lane
+
 import asyncio
 
 import pytest

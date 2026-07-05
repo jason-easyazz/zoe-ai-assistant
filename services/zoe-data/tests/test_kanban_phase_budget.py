@@ -15,6 +15,10 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m ci_safe` lane
+
+import pytest
+
 import kanban_phase_budget as kb
 
 

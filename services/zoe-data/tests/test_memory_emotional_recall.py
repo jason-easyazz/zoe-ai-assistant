@@ -10,6 +10,11 @@ Two pieces, both no-ops until the flag is on:
      section, so a heavy user's emotional continuity isn't crowded out of the
      small packet.
 """
+
+import pytest
+
+pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m ci_safe` lane
+
 from types import SimpleNamespace
 
 import pytest

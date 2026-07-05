@@ -5,6 +5,10 @@ ZOE_UNAUTHENTICATED_ROLE=family-admin but is opt-in and logs a warning on every
 request. See plan `memory_and_self-learning_audit` > `auth-close-unauth`.
 """
 
+import pytest
+
+pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m ci_safe` lane
+
 import asyncio
 import importlib
 import sys

@@ -14,6 +14,10 @@ legitimate skill names still operate exactly as before.
 """
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m ci_safe` lane
+
 import json
 from pathlib import Path
 
