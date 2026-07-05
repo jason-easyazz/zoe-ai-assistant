@@ -97,9 +97,12 @@ def _clamp_limit(limit: int) -> int:
 # ``?`` placeholders (SQLite-native; AsyncpgCompat rewrites ?->$N). A ``$N``
 # variant is kept for a direct-asyncpg fallback (try-$N-except-? idiom).
 #
-# TODO(temporal): once migration 0015 (PR #1024) lands adding valid_from/valid_to
-# to person_relationships, add "AND pr.valid_to IS NULL" to each edge SELECT so we
-# traverse only *current* edges (was-married-now-divorced returns current truth).
+# Temporal: migration 0015 (PR #1024, merged) added valid_from/valid_to to
+# person_relationships. Each edge SELECT filters "AND pr.valid_to IS NULL" so we
+# traverse only *current* edges — a superseded relationship (was-married-now-
+# divorced) is history, not a live hop, so it never widens the neighbourhood.
+# This couples the graph endpoint to 0015: enable ZOE_RELATIONSHIP_GRAPH_ENABLED
+# only on a schema that has the temporal columns (they deploy together).
 
 _NEIGHBORS_SQL_Q = """
 WITH RECURSIVE rg(pid, depth, path) AS (
@@ -109,10 +112,10 @@ WITH RECURSIVE rg(pid, depth, path) AS (
     FROM rg
     JOIN (
         SELECT pr.person_a_id AS src, pr.person_b_id AS other
-        FROM person_relationships pr WHERE pr.user_id = ?
+        FROM person_relationships pr WHERE pr.user_id = ? AND pr.valid_to IS NULL
         UNION ALL
         SELECT pr.person_b_id AS src, pr.person_a_id AS other
-        FROM person_relationships pr WHERE pr.user_id = ?
+        FROM person_relationships pr WHERE pr.user_id = ? AND pr.valid_to IS NULL
     ) e ON e.src = rg.pid
     WHERE rg.depth < ?
       AND rg.path NOT LIKE '%|' || e.other || '|%'
