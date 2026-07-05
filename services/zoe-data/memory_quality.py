@@ -87,6 +87,18 @@ _TRANSCRIPT_ECHO_RE = re.compile(
     r"^\s*[A-Z][A-Za-z'-]+\s*:\s+(?i:is|are|was|were|has|have|had|will|would|"
     r"does|do|did|likes?|wants?|needs?|said|says|asked|mentioned|added)\b",
 )
+# A weather report ("It's 17 degrees and mainly clear ... feels like 10 degrees")
+# is ephemeral, never a durable personal fact — a background extractor turning an
+# assistant weather reply into a "memory" pollutes recall. Require BOTH a
+# temperature signal AND a weather-condition marker so a real preference like
+# "I like it at 20 degrees" is NOT caught.
+_WEATHER_REPORT_RE = re.compile(
+    r"\bfeels?\s+like\b[^.]*\bdegrees?\b"                       # "feels like 10 degrees"
+    r"|\bdegrees?\b[^.]*\bfeels?\s+like\b"                      # "10 degrees ... feels like"
+    r"|\bdegrees?\b[^.]*\b(?:mainly\s+)?(?:clear|cloudy|sunny|overcast|rain(?:ing|y)?|showers?|drizzle|storm|snow|sleet|humid|windy)\b"
+    r"|\b(?:mainly\s+clear|clear\s+sky|partly\s+cloudy|mostly\s+(?:sunny|cloudy))\b[^.]*\bdegrees?\b",
+    re.IGNORECASE,
+)
 
 # A first/second-person subject — "I …", "my …", "you …", "your …", "we / our".
 # A genuine personal fact almost always has one. Memory-command forms
@@ -173,6 +185,12 @@ def is_storable_fact(text: str) -> tuple[bool, str]:
 
     if has_memory_command:
         return True, ""
+
+    # Ephemeral weather report captured as a "fact" (e.g. an extractor scraping an
+    # assistant weather reply). Never durable — reject before the concrete-token
+    # fallback would otherwise accept it on its numbers.
+    if _WEATHER_REPORT_RE.search(raw):
+        return False, "weather_report"
 
     # Accept the structured-extraction summary shapes ("User's name is …").
     if _EXTRACTED_PREFIX_RE.match(raw):
