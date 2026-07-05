@@ -3101,6 +3101,7 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
             user_id=user_id,
             forecast=bool(intent.slots.get("forecast")),
             advice=str(intent.slots.get("advice") or ""),
+            location=str(intent.slots.get("location") or ""),
         )
 
     if intent.name == "list_show":
@@ -3299,7 +3300,7 @@ def _spoken_day(raw: str) -> str:
 
 
 async def _execute_weather_direct(user_id: str, forecast: bool = False,
-                                  advice: str = "") -> Optional[str]:
+                                  advice: str = "", location: str = "") -> Optional[str]:
     """Direct weather path used by voice fast-intent execution.
 
     This bypasses mcporter so household voice weather works even if external
@@ -3307,30 +3308,49 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False,
 
     `advice` ("rain"|"warmth") returns a DIRECT yes/no answer to questions like
     "do I need an umbrella" / "should I take a jacket" instead of a forecast dump.
+
+    `location` is a free-text place the user named ("weather in Perth"). When set
+    it is geocoded and used INSTEAD of the user's saved home area; if it can't be
+    resolved we say so rather than silently answering for the wrong place.
     """
     try:
         from database import get_db
-        from routers.weather import _row_to_prefs, _resolve_location, _get_current, _get_forecast, _weather_cache
+        from routers.weather import (
+            _row_to_prefs, _resolve_location, _geocode,
+            _get_current, _get_forecast, _weather_cache,
+        )
+        adhoc = bool(location.strip())
         async for db in get_db():
-            cursor = await db.execute(
-                "SELECT * FROM weather_preferences WHERE user_id = ?",
-                [user_id],
-            )
-            prefs = _row_to_prefs(await cursor.fetchone())
-            lat, lon, city, country = _resolve_location(prefs)
-            # Voice replies should be instant: prefer the warm cache (kept fresh by the
-            # panel's periodic /weather/current poll) and only pay the ~1s live API call
-            # when it's cold. The panel UI route still always fetches live, so this does
-            # not affect on-screen freshness.
-            current = _weather_cache.get("current") or {}
-            # Only trust the shared warm cache when it holds a reading for THIS
-            # user's resolved city (the cache is one flat slot across users) and
-            # has a real temp (`is None` so a legit 0° isn't treated as missing).
-            _cached_city = str(current.get("city") or "").strip().lower()
-            if current.get("temp") is None or (
-                city and _cached_city and _cached_city != str(city).strip().lower()
-            ):
-                current = await _get_current(lat, lon, city, country)
+            if adhoc:
+                geo = await _geocode(location)
+                if not geo:
+                    return f"I couldn't find a place called {location.strip()} to check the weather for."
+                lat, lon, city, country = geo
+            else:
+                cursor = await db.execute(
+                    "SELECT * FROM weather_preferences WHERE user_id = ?",
+                    [user_id],
+                )
+                prefs = _row_to_prefs(await cursor.fetchone())
+                lat, lon, city, country = _resolve_location(prefs)
+            if adhoc:
+                # Named location: always fetch live AND uncached (cache=False) so a
+                # "weather in Perth" query never pollutes the single shared home
+                # cache the panel forecast path reuses.
+                current = await _get_current(lat, lon, city, country, cache=False)
+            else:
+                # Voice replies should be instant: prefer the warm cache (kept fresh by
+                # the panel's periodic /weather/current poll) and only pay the ~1s live
+                # API call when it's cold. The panel UI route still always fetches live.
+                current = _weather_cache.get("current") or {}
+                # Only trust the shared warm cache when it holds a reading for THIS
+                # user's resolved city (the cache is one flat slot across users) and
+                # has a real temp (`is None` so a legit 0° isn't treated as missing).
+                _cached_city = str(current.get("city") or "").strip().lower()
+                if current.get("temp") is None or (
+                    city and _cached_city and _cached_city != str(city).strip().lower()
+                ):
+                    current = await _get_current(lat, lon, city, country)
             city_name = current.get("city") or city or "your area"
             # Speak numbers naturally: "18.3" → "18 point 3" (bare decimals get
             # mangled to "18 3" by TTS), and avoid markdown/°C which also mangle.
@@ -3351,7 +3371,7 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False,
                 today_hi = None
                 today_desc = cur_desc
                 try:
-                    f = await _get_forecast(lat, lon)
+                    f = await _get_forecast(lat, lon, cache=not adhoc)
                     d0 = (f.get("daily") or [{}])[0]
                     today_hi = d0.get("high")
                     today_desc = (str(d0.get("description", "")) or cur_desc).lower()
@@ -3384,7 +3404,7 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False,
                 temp_part = f" — it's around {_say_num(round(ref))} degrees" if ref is not None else ""
                 return f"No, you should be fine without a jacket{temp_part} in {city_name}."
             if forecast:
-                f = await _get_forecast(lat, lon)
+                f = await _get_forecast(lat, lon, cache=not adhoc)
                 daily = f.get("daily", [])[:5]
                 if not daily:
                     return f"I couldn't get the forecast for {city_name} right now."

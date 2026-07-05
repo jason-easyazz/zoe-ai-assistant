@@ -241,3 +241,65 @@ class TestMulticaRoutedIntents:
             # and if detected locally, check name
             if name is not None:
                 assert isinstance(name, str), f"Intent name should be a string for: {msg!r}"
+
+
+# ── Weather: ad-hoc named location (geocode branch) ───────────────────────────
+# _execute_weather_direct is the voice/telegram fast-path. These cover the new
+# `location` branch: geocode success uses the named place (uncached, so it can't
+# poison the shared home cache), and a geocode miss says so instead of silently
+# answering for home.
+import asyncio
+
+
+def _stub_weather_and_db(monkeypatch, *, geocode_result):
+    import types
+    wx = types.ModuleType("routers.weather")
+    calls: dict = {}
+    cache: dict = {}
+
+    async def _geocode(name):
+        calls["geocode"] = name
+        return geocode_result
+
+    async def _get_current(lat, lon, city, country, cache=True):
+        calls["get_current"] = {"city": city, "cache": cache}
+        return {"temp": 15.4, "description": "clear", "city": city, "feels_like": 15.4}
+
+    async def _get_forecast(lat, lon, cache=True):
+        return {"daily": [], "hourly": []}
+
+    wx._geocode = _geocode
+    wx._get_current = _get_current
+    wx._get_forecast = _get_forecast
+    wx._weather_cache = cache
+    wx._row_to_prefs = lambda row: {}
+    wx._resolve_location = lambda prefs: (-28.7, 114.6, "Geraldton", "AU")
+    monkeypatch.setitem(sys.modules, "routers.weather", wx)
+
+    dbmod = types.ModuleType("database")
+
+    async def _get_db():
+        yield mock.MagicMock()
+
+    dbmod.get_db = _get_db
+    monkeypatch.setitem(sys.modules, "database", dbmod)
+    return calls, cache
+
+
+def test_weather_named_location_uses_geocode_uncached(ir, monkeypatch):
+    calls, cache = _stub_weather_and_db(monkeypatch, geocode_result=(-31.95, 115.86, "Perth", "AU"))
+    reply = asyncio.run(ir._execute_weather_direct("jason", location="Perth"))
+    assert "Perth" in reply and "Geraldton" not in reply
+    assert calls["geocode"] == "Perth"
+    assert calls["get_current"]["city"] == "Perth"
+    # ad-hoc MUST fetch uncached so it can't poison the shared home cache
+    assert calls["get_current"]["cache"] is False
+    assert cache == {}
+
+
+def test_weather_named_location_not_found(ir, monkeypatch):
+    calls, cache = _stub_weather_and_db(monkeypatch, geocode_result=None)
+    reply = asyncio.run(ir._execute_weather_direct("jason", location="Nowheresville-xyz"))
+    assert "couldn't find" in reply.lower()
+    assert "Nowheresville-xyz" in reply
+    assert "get_current" not in calls  # never fetched weather for an unresolved place
