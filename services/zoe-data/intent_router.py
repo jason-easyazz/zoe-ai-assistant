@@ -3319,8 +3319,9 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False,
             _row_to_prefs, _resolve_location, _geocode,
             _get_current, _get_forecast, _weather_cache,
         )
+        adhoc = bool(location.strip())
         async for db in get_db():
-            if location.strip():
+            if adhoc:
                 geo = await _geocode(location)
                 if not geo:
                     return f"I couldn't find a place called {location.strip()} to check the weather for."
@@ -3332,19 +3333,24 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False,
                 )
                 prefs = _row_to_prefs(await cursor.fetchone())
                 lat, lon, city, country = _resolve_location(prefs)
-            # Voice replies should be instant: prefer the warm cache (kept fresh by the
-            # panel's periodic /weather/current poll) and only pay the ~1s live API call
-            # when it's cold. The panel UI route still always fetches live, so this does
-            # not affect on-screen freshness.
-            current = _weather_cache.get("current") or {}
-            # Only trust the shared warm cache when it holds a reading for THIS
-            # user's resolved city (the cache is one flat slot across users) and
-            # has a real temp (`is None` so a legit 0° isn't treated as missing).
-            _cached_city = str(current.get("city") or "").strip().lower()
-            if current.get("temp") is None or (
-                city and _cached_city and _cached_city != str(city).strip().lower()
-            ):
-                current = await _get_current(lat, lon, city, country)
+            if adhoc:
+                # Named location: always fetch live AND uncached (cache=False) so a
+                # "weather in Perth" query never pollutes the single shared home
+                # cache the panel forecast path reuses.
+                current = await _get_current(lat, lon, city, country, cache=False)
+            else:
+                # Voice replies should be instant: prefer the warm cache (kept fresh by
+                # the panel's periodic /weather/current poll) and only pay the ~1s live
+                # API call when it's cold. The panel UI route still always fetches live.
+                current = _weather_cache.get("current") or {}
+                # Only trust the shared warm cache when it holds a reading for THIS
+                # user's resolved city (the cache is one flat slot across users) and
+                # has a real temp (`is None` so a legit 0° isn't treated as missing).
+                _cached_city = str(current.get("city") or "").strip().lower()
+                if current.get("temp") is None or (
+                    city and _cached_city and _cached_city != str(city).strip().lower()
+                ):
+                    current = await _get_current(lat, lon, city, country)
             city_name = current.get("city") or city or "your area"
             # Speak numbers naturally: "18.3" → "18 point 3" (bare decimals get
             # mangled to "18 3" by TTS), and avoid markdown/°C which also mangle.
@@ -3365,7 +3371,7 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False,
                 today_hi = None
                 today_desc = cur_desc
                 try:
-                    f = await _get_forecast(lat, lon)
+                    f = await _get_forecast(lat, lon, cache=not adhoc)
                     d0 = (f.get("daily") or [{}])[0]
                     today_hi = d0.get("high")
                     today_desc = (str(d0.get("description", "")) or cur_desc).lower()
@@ -3398,7 +3404,7 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False,
                 temp_part = f" — it's around {_say_num(round(ref))} degrees" if ref is not None else ""
                 return f"No, you should be fine without a jacket{temp_part} in {city_name}."
             if forecast:
-                f = await _get_forecast(lat, lon)
+                f = await _get_forecast(lat, lon, cache=not adhoc)
                 daily = f.get("daily", [])[:5]
                 if not daily:
                     return f"I couldn't get the forecast for {city_name} right now."

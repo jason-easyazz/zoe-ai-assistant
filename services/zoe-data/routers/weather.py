@@ -217,7 +217,7 @@ async def _get_system_default_location(db) -> dict:
 
 # ─── Open-Meteo implementation (no API key) ───────────────────────────────────
 
-async def _fetch_openmeteo_current(lat: float, lon: float, city: str, country: str) -> dict:
+async def _fetch_openmeteo_current(lat: float, lon: float, city: str, country: str, cache: bool = True) -> dict:
     params = {
         "latitude": lat,
         "longitude": lon,
@@ -279,16 +279,22 @@ async def _fetch_openmeteo_current(lat: float, lon: float, city: str, country: s
             },
             "_daily_raw": daily_d,
         }
-        _weather_cache["current"] = result
+        # Skip the shared cache for ad-hoc/named-location queries so "weather in
+        # Perth" can't poison the home-area cache the panel forecast path reuses.
+        if cache:
+            _weather_cache["current"] = result
         return result
     except Exception:
         logger.exception("open-meteo current weather fetch failed")
         return _weather_cache.get("current", {"cached": False, "error": "Weather provider unavailable"})
 
 
-async def _fetch_openmeteo_forecast(lat: float, lon: float) -> dict:
+async def _fetch_openmeteo_forecast(lat: float, lon: float, cache: bool = True) -> dict:
     """Build hourly+daily forecast from Open-Meteo."""
-    cached = _weather_cache.get("current", {})
+    # For a named location (cache=False) NEVER reuse the shared cache's hourly —
+    # it belongs to the home area and would produce a home forecast for the wrong
+    # coords. Force a fresh fetch for these coords instead.
+    cached = _weather_cache.get("current", {}) if cache else {}
     hourly_raw = cached.get("_hourly_raw") or {}
     daily_raw  = cached.get("_daily_raw") or {}
 
@@ -355,13 +361,14 @@ async def _fetch_openmeteo_forecast(lat: float, lon: float) -> dict:
             break
 
     result = {"hourly": hourly, "daily": daily}
-    _weather_cache["forecast"] = result
+    if cache:
+        _weather_cache["forecast"] = result
     return result
 
 
 # ─── OpenWeatherMap implementation (when API key is set) ──────────────────────
 
-async def _fetch_owm_current(lat: float, lon: float, city: str, country: str) -> dict:
+async def _fetch_owm_current(lat: float, lon: float, city: str, country: str, cache: bool = True) -> dict:
     params = {"appid": OPENWEATHERMAP_API_KEY, "units": "metric", "lat": lat, "lon": lon}
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -389,14 +396,15 @@ async def _fetch_owm_current(lat: float, lon: float, city: str, country: str) ->
             "pressure":    data.get("main", {}).get("pressure"),
             "visibility":  data.get("visibility"),
         }
-        _weather_cache["current"] = result
+        if cache:
+            _weather_cache["current"] = result
         return result
     except Exception:
         logger.exception("openweathermap current weather fetch failed")
         return _weather_cache.get("current", {"cached": False, "error": "Weather provider unavailable"})
 
 
-async def _fetch_owm_forecast(lat: float, lon: float) -> dict:
+async def _fetch_owm_forecast(lat: float, lon: float, cache: bool = True) -> dict:
     params = {"appid": OPENWEATHERMAP_API_KEY, "units": "metric", "cnt": 40, "lat": lat, "lon": lon}
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -459,7 +467,8 @@ async def _fetch_owm_forecast(lat: float, lon: float) -> dict:
                 break
 
         result = {"hourly": hourly, "daily": daily}
-        _weather_cache["forecast"] = result
+        if cache:
+            _weather_cache["forecast"] = result
         return result
     except Exception:
         logger.exception("openweathermap forecast fetch failed")
@@ -468,16 +477,16 @@ async def _fetch_owm_forecast(lat: float, lon: float) -> dict:
 
 # ─── Public route helpers ─────────────────────────────────────────────────────
 
-async def _get_current(lat, lon, city, country):
+async def _get_current(lat, lon, city, country, cache: bool = True):
     if OPENWEATHERMAP_API_KEY:
-        return await _fetch_owm_current(lat, lon, city, country)
-    return await _fetch_openmeteo_current(lat, lon, city, country)
+        return await _fetch_owm_current(lat, lon, city, country, cache=cache)
+    return await _fetch_openmeteo_current(lat, lon, city, country, cache=cache)
 
 
-async def _get_forecast(lat, lon):
+async def _get_forecast(lat, lon, cache: bool = True):
     if OPENWEATHERMAP_API_KEY:
-        return await _fetch_owm_forecast(lat, lon)
-    return await _fetch_openmeteo_forecast(lat, lon)
+        return await _fetch_owm_forecast(lat, lon, cache=cache)
+    return await _fetch_openmeteo_forecast(lat, lon, cache=cache)
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
