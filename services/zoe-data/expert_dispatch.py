@@ -249,7 +249,7 @@ def _plan(domain: str, text: str):
         return ("memory_expert", {}, "expert")
     if domain == "people":
         det = detect_intent(text, log_miss=False)
-        if det and det.name in ("people_search", "people_relate"):
+        if det and det.name == "people_search":
             return (det.name, det.slots, "read")
         return ("people_expert", {}, "expert")
 

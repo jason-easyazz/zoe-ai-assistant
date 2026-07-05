@@ -62,6 +62,12 @@ table + `_write_relationship` + live extraction) already exists. **Fix = remove
 `people_relate` from the advertised brain surface, or make it a thin alias to
 `_write_relationship`. No new schema.**
 
+> **Done (2026-07-05):** the redundant `people_relate` intent was removed from every
+> advertised surface (intent_router classifier + mcporter/response branches,
+> `_DISPATCHABLE_INTENTS`, `expert_dispatch`, the flue `people` tool, and
+> `zoe-core/abilities/people.ts`). NL person-to-person capture via `person_extractor`
+> is untouched. Roadmap item 1 complete.
+
 ## Consequences / roadmap to Samantha-grade
 
 The design is correct for the constraints; making it *understand the evolving thread*
