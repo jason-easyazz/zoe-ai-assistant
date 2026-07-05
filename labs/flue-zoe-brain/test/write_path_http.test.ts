@@ -511,6 +511,24 @@ test('remember_emotional_moment omits valence/intensity slots when absent or mal
   }
 });
 
+test('add_calendar_event without a date asks for the day and does NOT dispatch', async () => {
+  const fake = await startFakeZoeData();
+  try {
+    // Writes ENABLED so we prove the short-circuit happens BEFORE the write path,
+    // not because writes are off. zoe-data rejects a dateless create (ok:false),
+    // which would otherwise surface as "the calendar service didn't respond".
+    await withTools(fake.baseUrl, 'true', async (tools) => {
+      const tool = byName(tools, 'add_calendar_event');
+      const out = String(await tool.run({ input: { title: 'lunch with Jess' } }));
+      assert.match(out, /what day/i, 'should ask which day');
+      assert.match(out, /lunch with Jess/, 'should name the event');
+      assert.deepEqual(fake.requests, [], 'a dateless calendar add must emit NO dispatch');
+    });
+  } finally {
+    await fake.close();
+  }
+});
+
 // ─── Wave 1 READ paths — HTTP coverage (cut-list record §3) ───────────────────
 // The read dispatch paths introduced this wave (note_search, journal
 // prompt/streak, people search) are NOT gated by ZOE_BRAIN_ALLOW_WRITES, so
