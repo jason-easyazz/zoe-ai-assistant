@@ -186,6 +186,7 @@ async def _fetch_relational(db, user_id: str) -> dict[str, list[dict[str, Any]]]
              JOIN people pa ON pa.id = pr.person_a_id AND pa.deleted = 0
              JOIN people pb ON pb.id = pr.person_b_id AND pb.deleted = 0
             WHERE pr.user_id = ?
+              AND pr.valid_to IS NULL
             ORDER BY pr.updated_at DESC
             LIMIT ?""",
         (user_id, _MAX_RELATIONSHIPS),

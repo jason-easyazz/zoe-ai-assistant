@@ -56,10 +56,14 @@ def _columns(conn, table: str) -> dict:
 # ─── 0014 is wired correctly into the chain ───────────────────────────────────
 
 def test_0014_is_single_head_after_0013():
+    # 0014 chains off 0013. The current single head is now 0015 (temporal
+    # relationship edges), which chains off 0014.
     script = ScriptDirectory.from_config(_alembic_config())
-    assert list(script.get_heads()) == ["0014"], "expected exactly one head: 0014"
+    assert list(script.get_heads()) == ["0015"], "expected exactly one head: 0015"
     rev = script.get_revision("0014")
     assert rev.down_revision == "0013"
+    rev15 = script.get_revision("0015")
+    assert rev15.down_revision == "0014"
 
 
 # ─── 0014 creates the table, is rerun-safe, and downgrades cleanly ────────────
