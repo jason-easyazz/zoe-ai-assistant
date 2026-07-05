@@ -196,7 +196,7 @@ async def neighbors(
     try:
         hop_rows = await _run(db, _NEIGHBORS_SQL_Q, _NEIGHBORS_SQL_N, args)
     except Exception as exc:
-        logger.debug("neighbors: BFS query failed for %r: %s", start_person_id, exc)
+        logger.warning("neighbors: BFS query failed for %r: %s", start_person_id, exc)
         return []
 
     depth_by_pid: dict[str, int] = {}
@@ -260,7 +260,7 @@ async def _resolve_names(db, user_id: str, pids: list[str]) -> dict[str, str]:
     try:
         rows = await _run(db, sql_q, sql_n, args)
     except Exception as exc:
-        logger.debug("_resolve_names failed: %s", exc)
+        logger.warning("_resolve_names failed: %s", exc)
         return {}
     return {r[0]: r[1] for r in rows}
 
@@ -299,7 +299,7 @@ async def _resolve_via_labels(db, user_id: str, pids: list[str]) -> dict[str, st
     try:
         rows = await _run(db, sql_q, sql_n, args)
     except Exception as exc:
-        logger.debug("_resolve_via_labels failed: %s", exc)
+        logger.warning("_resolve_via_labels failed: %s", exc)
         return {}
     out: dict[str, str] = {}
     for r in rows:
