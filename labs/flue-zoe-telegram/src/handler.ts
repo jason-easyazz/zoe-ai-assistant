@@ -2,12 +2,11 @@
  * Per-message identity + dispatch decision for the Telegram channel, extracted
  * as a pure function so it is unit-testable without grammY or a bot token.
  *
- * Flow (defence in depth):
- *   1. allow-list gate (done by the caller BEFORE us) — strangers never get here.
- *   2. resolve the verified sender's telegram_id → their real Zoe user_id.
- *        linked   → ask Zoe's brain AS that user and relay the reply.
- *        unlinked → tell them their numeric id + how to link; NEVER run the brain
- *                   as a real user for an unlinked sender.
+ * Identity IS the gate (no static allow-list):
+ *   resolve the verified sender's telegram_id → their real Zoe user_id.
+ *     linked   → ask Zoe's brain AS that user and relay the reply.
+ *     unlinked → guide them to link (self-service); NEVER run the brain for an
+ *                unlinked sender, so an unknown/stranger id can reach no data.
  *
  * LAB ONLY.
  */
@@ -23,17 +22,23 @@ export interface IncomingDeps {
   reply: (text: string) => Promise<unknown>;
 }
 
-/** The exact refuse message for an unlinked sender (id interpolated). */
+/** Onboarding reply for an unlinked sender (id interpolated for manual linking). */
 export function unlinkedMessage(telegramId: number): string {
   return (
-    `You're not linked to a Zoe account yet — set your Telegram ID (${telegramId}) ` +
-    'in your Zoe settings, then message me again.'
+    "You're not linked to a Zoe account yet. Open Zoe → Settings → Telegram and " +
+    'scan the QR (or tap Connect), or send /start to begin. Prefer to type it? Your ' +
+    `Telegram ID is ${telegramId}.`
   );
 }
 
 /**
- * Handle one already-allow-listed text message. `telegramId` is the verified
- * sender id; `chatId` the chat to reply into; `text` the message body.
+ * Handle one text message. `telegramId` is the Telegram-verified sender id;
+ * `chatId` the chat to reply into; `text` the message body.
+ *
+ * Identity is the gate: a linked sender runs the brain as their real Zoe user;
+ * an unlinked sender is guided to link and NEVER reaches the brain (so an unknown
+ * id can access no data). Linking requires a signed token minted in an
+ * authenticated Zoe session, so "linked ⇒ allowed" needs no separate allow-list.
  */
 export async function handleIncoming(
   telegramId: number,
@@ -48,4 +53,24 @@ export async function handleIncoming(
   }
   const answer = await deps.ask(text, deps.session(chatId), userId);
   await deps.reply(answer);
+}
+
+/** Reply text for a `/start` with no/invalid/expired payload vs a successful link. */
+export function startReply(linkedUserId: string | null, hadToken: boolean): string {
+  if (linkedUserId) {
+    return (
+      `✅ Linked! This Telegram is now connected to your Zoe account. ` +
+      `Say hi and I'll know it's you — your reminders, lists and memory come with you here.`
+    );
+  }
+  if (hadToken) {
+    return (
+      'That link expired or was invalid. Open Zoe → Settings → Telegram, ' +
+      'generate a fresh QR/link, and scan it again.'
+    );
+  }
+  return (
+    "Hi! I'm Zoe. To connect this Telegram to your Zoe account, open Zoe → " +
+    'Settings → Telegram and scan the QR (or tap Connect Telegram).'
+  );
 }

@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { handleIncoming, unlinkedMessage } from './handler.ts';
+import { handleIncoming, startReply, unlinkedMessage } from './handler.ts';
 
 // ─── handler: resolve → forward, and unlinked → refuse ───────────────────────
 
@@ -57,6 +57,25 @@ test('unlinked sender: refuses with the link instructions incl. their numeric id
   assert.match(replies[0], /not linked/i);
 });
 
+// ─── startReply: /start deep-link outcomes ───────────────────────────────────
+
+test('startReply: successful link is a friendly confirmation', () => {
+  const msg = startReply('jason', true);
+  assert.match(msg, /Linked/i);
+});
+
+test('startReply: invalid/expired token tells them to regenerate', () => {
+  const msg = startReply(null, true);
+  assert.match(msg, /expired|invalid/i);
+  assert.match(msg, /Settings/i);
+});
+
+test('startReply: bare /start (no token) is a welcome with instructions', () => {
+  const msg = startReply(null, false);
+  assert.match(msg, /Settings/i);
+  assert.doesNotMatch(msg, /expired/i);
+});
+
 // ─── brain.ts: resolver + trusted forwarded-identity headers ─────────────────
 
 async function withMockedFetch(
@@ -100,6 +119,39 @@ test('resolveTelegramUser: unlinked id resolves to null', async () => {
     async () => new Response(JSON.stringify({ user_id: null }), { status: 200 }),
     async () => {
       assert.equal(await resolveTelegramUser(12345), null);
+    },
+  );
+});
+
+test('consumeLinkToken: posts token + verified sender id and returns the linked user', async () => {
+  process.env.ZOE_INTERNAL_TOKEN = 'seekrit';
+  const { consumeLinkToken } = await import('./brain.ts');
+
+  let seenUrl = '';
+  let seenBody: any = null;
+  await withMockedFetch(
+    async (url, init) => {
+      seenUrl = url;
+      seenBody = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ ok: true, user_id: 'jason' }), { status: 200 });
+    },
+    async () => {
+      const uid = await consumeLinkToken('tok123', 6308082458, 'jbert');
+      assert.equal(uid, 'jason');
+    },
+  );
+  assert.match(seenUrl, /\/api\/system\/telegram\/consume-link-token$/);
+  assert.equal(seenBody.token, 'tok123');
+  assert.equal(seenBody.telegram_id, '6308082458'); // stringified verified id
+  assert.equal(seenBody.telegram_username, 'jbert');
+});
+
+test('consumeLinkToken: invalid/expired token (HTTP 400) resolves to null', async () => {
+  const { consumeLinkToken } = await import('./brain.ts');
+  await withMockedFetch(
+    async () => new Response(JSON.stringify({ detail: 'invalid or expired link token' }), { status: 400 }),
+    async () => {
+      assert.equal(await consumeLinkToken('bad', 123), null);
     },
   );
 });

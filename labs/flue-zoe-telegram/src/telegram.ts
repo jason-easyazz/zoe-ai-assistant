@@ -23,21 +23,10 @@ function requiredEnv(name: string): string {
 /** The bot owns both long-poll ingress (bot.start) and outbound (bot.api). */
 export const bot = new Bot(requiredEnv('TELEGRAM_BOT_TOKEN'));
 
-/**
- * Allow-list of Telegram user IDs (comma-separated `TELEGRAM_ALLOWED_USERS`).
- * Fail CLOSED: an empty list rejects everyone, so a misconfigured deploy can't
- * accidentally expose Zoe to strangers who message the bot.
- */
-const allowed = new Set(
-  (process.env.TELEGRAM_ALLOWED_USERS ?? '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean),
-);
-
-export function isAllowed(userId: number | undefined): boolean {
-  return userId !== undefined && allowed.has(String(userId));
-}
+// No static allow-list: identity is the gate. A sender only reaches Zoe's brain
+// if their telegram_id resolves to a linked Zoe user (see src/handler.ts), and
+// linking requires a signed token minted in an authenticated Zoe session. An
+// unlinked/unknown sender is only ever guided to link — it can access no data.
 
 // The agent instance id encodes the chat, so the same chat reopens the same
 // durable session. Keep it a simple, reversible string.
