@@ -537,6 +537,31 @@ test('add_calendar_event without a date still dispatches (zoe-data defaults it t
   }
 });
 
+test('get_weather forwards a named location and omits it when absent', async () => {
+  const fake = await startFakeZoeData();
+  try {
+    await withTools(fake.baseUrl, undefined, async (tools) => {
+      const tool = byName(tools, 'get_weather');
+      await tool.run({ input: { location: 'Perth' } }); // "weather in Perth"
+      await tool.run({ input: {} }); // no place → home area
+      assert.deepEqual(fake.requests, [
+        {
+          method: 'POST',
+          path: '/api/system/intent-dispatch',
+          body: { user_id: ACTING_USER, intent: 'weather', slots: { forecast: false, location: 'Perth' } },
+        },
+        {
+          method: 'POST',
+          path: '/api/system/intent-dispatch',
+          body: { user_id: ACTING_USER, intent: 'weather', slots: { forecast: false } },
+        },
+      ]);
+    });
+  } finally {
+    await fake.close();
+  }
+});
+
 // ─── Wave 1 READ paths — HTTP coverage (cut-list record §3) ───────────────────
 // The read dispatch paths introduced this wave (note_search, journal
 // prompt/streak, people search) are NOT gated by ZOE_BRAIN_ALLOW_WRITES, so

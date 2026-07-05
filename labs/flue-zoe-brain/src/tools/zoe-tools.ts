@@ -339,13 +339,18 @@ function normalizeListType(raw: unknown): string {
 const getWeather = defineTool({
   name: 'get_weather',
   description:
-    "Get the current weather or a short forecast for the user's area. Use when they " +
-    'ask about weather, temperature, rain, or whether to bring a jacket/umbrella.',
+    "Get the current weather or a short forecast. Defaults to the user's home area; " +
+    'pass `location` when they name a specific place ("what\'s the weather in Perth"). ' +
+    'Use when they ask about weather, temperature, rain, or whether to bring a jacket/umbrella.',
   input: v.object({
     forecast: v.optional(v.boolean()),
+    location: v.optional(v.string()),
   }),
   run: async ({ input, signal }) => {
-    const out = await dispatchIntent('weather', { forecast: Boolean(input?.forecast) }, 'weather', signal);
+    const slots: Record<string, unknown> = { forecast: Boolean(input?.forecast) };
+    const location = String(input?.location ?? '').trim();
+    if (location) slots.location = location; // a named place → weather THERE, not home
+    const out = await dispatchIntent('weather', slots, 'weather', signal);
     if (!out.ok) return out.text;
     return out.text || "I don't have the current weather right now.";
   },

@@ -103,6 +103,37 @@ def _resolve_location(prefs: Optional[dict], fallback: Optional[dict] = None) ->
     return DEFAULT_LAT, DEFAULT_LON, DEFAULT_CITY, DEFAULT_COUNTRY
 
 
+async def _geocode(name: str) -> Optional[tuple]:
+    """Resolve a free-text place name ("Perth", "Perth, WA") to
+    (lat, lon, city, country) so the user can ask about weather somewhere other
+    than their saved home area. Uses Open-Meteo's free, keyless geocoding API
+    regardless of the weather provider. Returns None if it can't be resolved."""
+    q = (name or "").strip()
+    if not q:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(
+                "https://geocoding-api.open-meteo.com/v1/search",
+                params={"name": q, "count": 1, "language": "en", "format": "json"},
+            )
+            r.raise_for_status()
+            data = r.json()
+        results = data.get("results") or []
+        if not results:
+            return None
+        top = results[0]
+        lat, lon = top.get("latitude"), top.get("longitude")
+        if lat is None or lon is None:
+            return None
+        city = top.get("name") or q
+        country = top.get("country_code") or top.get("country") or ""
+        return float(lat), float(lon), city, country
+    except Exception:
+        logger.warning("weather geocode failed for %r", q, exc_info=True)
+        return None
+
+
 def _timezone_from_name(name: str | None):
     if not name:
         return timezone.utc

@@ -3101,6 +3101,7 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
             user_id=user_id,
             forecast=bool(intent.slots.get("forecast")),
             advice=str(intent.slots.get("advice") or ""),
+            location=str(intent.slots.get("location") or ""),
         )
 
     if intent.name == "list_show":
@@ -3299,7 +3300,7 @@ def _spoken_day(raw: str) -> str:
 
 
 async def _execute_weather_direct(user_id: str, forecast: bool = False,
-                                  advice: str = "") -> Optional[str]:
+                                  advice: str = "", location: str = "") -> Optional[str]:
     """Direct weather path used by voice fast-intent execution.
 
     This bypasses mcporter so household voice weather works even if external
@@ -3307,17 +3308,30 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False,
 
     `advice` ("rain"|"warmth") returns a DIRECT yes/no answer to questions like
     "do I need an umbrella" / "should I take a jacket" instead of a forecast dump.
+
+    `location` is a free-text place the user named ("weather in Perth"). When set
+    it is geocoded and used INSTEAD of the user's saved home area; if it can't be
+    resolved we say so rather than silently answering for the wrong place.
     """
     try:
         from database import get_db
-        from routers.weather import _row_to_prefs, _resolve_location, _get_current, _get_forecast, _weather_cache
+        from routers.weather import (
+            _row_to_prefs, _resolve_location, _geocode,
+            _get_current, _get_forecast, _weather_cache,
+        )
         async for db in get_db():
-            cursor = await db.execute(
-                "SELECT * FROM weather_preferences WHERE user_id = ?",
-                [user_id],
-            )
-            prefs = _row_to_prefs(await cursor.fetchone())
-            lat, lon, city, country = _resolve_location(prefs)
+            if location.strip():
+                geo = await _geocode(location)
+                if not geo:
+                    return f"I couldn't find a place called {location.strip()} to check the weather for."
+                lat, lon, city, country = geo
+            else:
+                cursor = await db.execute(
+                    "SELECT * FROM weather_preferences WHERE user_id = ?",
+                    [user_id],
+                )
+                prefs = _row_to_prefs(await cursor.fetchone())
+                lat, lon, city, country = _resolve_location(prefs)
             # Voice replies should be instant: prefer the warm cache (kept fresh by the
             # panel's periodic /weather/current poll) and only pay the ~1s live API call
             # when it's cold. The panel UI route still always fetches live, so this does
