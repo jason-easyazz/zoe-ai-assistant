@@ -2228,11 +2228,20 @@ async def _execute_calendar_create_direct(intent: Intent, user_id: str) -> Optio
     title = str(slots.get("title") or "").strip()
     if not title:
         return None
-    start_date = _parse_date(str(slots.get("date") or "")) if slots.get("date") else None
-    if not start_date:
-        # An event with no resolvable date can't be stored meaningfully; let the
-        # caller see a real failure rather than writing a dateless row.
-        return None
+    raw_date = slots.get("date")
+    if raw_date:
+        start_date = _parse_date(str(raw_date)) or None
+        if not start_date:
+            # A date WAS given but couldn't be parsed — fail rather than silently
+            # dropping it onto today, which would land the event on a day the user
+            # didn't intend. (Distinct from the no-date case below.)
+            return None
+    else:
+        # No day given → default to TODAY. A natural quick-add like "add lunch with
+        # Jess at 12pm" means today; asking "which day?" every time is worse UX than
+        # defaulting. The confirmation names the day ("...today at 12 PM"), so the
+        # user can move it if they meant otherwise.
+        start_date = today_for_zoe_tz().isoformat()
     start_time = _parse_time(str(slots.get("time") or "")) if slots.get("time") else None
     category = str(slots.get("category") or "general").strip() or "general"
     try:

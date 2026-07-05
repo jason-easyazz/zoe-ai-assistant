@@ -511,18 +511,26 @@ test('remember_emotional_moment omits valence/intensity slots when absent or mal
   }
 });
 
-test('add_calendar_event without a date asks for the day and does NOT dispatch', async () => {
+test('add_calendar_event without a date still dispatches (zoe-data defaults it to today)', async () => {
   const fake = await startFakeZoeData();
   try {
-    // Writes ENABLED so we prove the short-circuit happens BEFORE the write path,
-    // not because writes are off. zoe-data rejects a dateless create (ok:false),
-    // which would otherwise surface as "the calendar service didn't respond".
     await withTools(fake.baseUrl, 'true', async (tools) => {
       const tool = byName(tools, 'add_calendar_event');
-      const out = String(await tool.run({ input: { title: 'lunch with Jess' } }));
-      assert.match(out, /what day/i, 'should ask which day');
-      assert.match(out, /lunch with Jess/, 'should name the event');
-      assert.deepEqual(fake.requests, [], 'a dateless calendar add must emit NO dispatch');
+      // "add lunch with Jess at 12pm" — time but no day. The tool must NOT ask
+      // "which day?"; it passes through and zoe-data defaults the date to today.
+      const out = String(await tool.run({ input: { title: 'lunch with Jess', time: '12pm' } }));
+      assert.doesNotMatch(out, /what day/i, 'must NOT ask which day when a time is given');
+      assert.deepEqual(fake.requests, [
+        {
+          method: 'POST',
+          path: '/api/system/intent-dispatch',
+          body: {
+            user_id: ACTING_USER,
+            intent: 'calendar_create',
+            slots: { title: 'lunch with Jess', time: '12pm' }, // no date → zoe-data → today
+          },
+        },
+      ]);
     });
   } finally {
     await fake.close();
