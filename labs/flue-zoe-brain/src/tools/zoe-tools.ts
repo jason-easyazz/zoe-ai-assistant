@@ -36,9 +36,9 @@
  *   grouped action-dispatch (mirrors prod abilities/notes.ts + people.ts):
  *     - journal action=create|prompt|streak → journal_create {content,mood?} /
  *       journal_prompt {} / journal_streak {} (create is write-gated)
- *     - people  action=create|relate|search → people_create {name,relationship,notes?} /
- *       people_relate {name_a,name_b,role} / people_search {query}
- *       (create/relate are write-gated)
+ *     - people  action=create|search → people_create {name,relationship,notes?} /
+ *       people_search {query}
+ *       (create is write-gated)
  *
  * Wave 2 — "music & home" action tools (cut-list record §3, Wave 2). Grouped
  * action-dispatch over EXISTING intents — zero new zoe-data surface:
@@ -661,22 +661,21 @@ const journal = defineTool({
 /**
  * people — the user's people/contacts memory, grouped action-dispatch (mirrors
  * prod's abilities/people.ts). action=create saves a person (WRITE →
- * people_create, gated); action=relate links two known people (WRITE →
- * people_relate, gated); action=search looks someone up (READ → people_search).
+ * people_create, gated); action=search looks someone up (READ → people_search).
  * The relationship/context/circle defaults match the prod ability.
+ * (Third-party person-to-person relationships are captured from natural language
+ * by zoe-data's person_extractor on every turn — no dedicated relate action.)
  */
 const people = defineTool({
   name: 'people',
   description:
     "The user's people/contacts memory. action=create saves a new person (name + " +
-    "relationship); action=relate links two known people ('Alice and Bob are " +
-    "siblings' — name + related_to + relationship); action=search looks someone up " +
-    "('who is Sarah?'). NOT for messaging, calendar, or reminders.",
+    "relationship); action=search looks someone up ('who is Sarah?'). NOT for " +
+    "messaging, calendar, or reminders.",
   input: v.object({
-    action: v.picklist(['create', 'relate', 'search']),
+    action: v.picklist(['create', 'search']),
     name: v.optional(v.string()),
     relationship: v.optional(v.string()),
-    related_to: v.optional(v.string()),
     query: v.optional(v.string()),
     notes: v.optional(v.string()),
   }),
@@ -687,15 +686,6 @@ const people = defineTool({
       const out = await dispatchIntent('people_search', { query }, 'contacts', signal);
       if (!out.ok) return out.text;
       return out.text || `I couldn't find anyone matching "${query}".`;
-    }
-    if (input.action === 'relate') {
-      const nameA = String(input?.name ?? '').trim();
-      const nameB = String(input?.related_to ?? '').trim();
-      if (!nameA || !nameB) return 'I need two people to link them — give me both names.';
-      const role = String(input?.relationship ?? '').trim() || 'friend';
-      return runWrite('people_relate', { name_a: nameA, name_b: nameB, role }, 'contacts',
-        `the link between "${nameA}" and "${nameB}"`,
-        `Linked ${nameA} and ${nameB} as ${role}.`, signal);
     }
     const name = String(input?.name ?? '').trim();
     if (!name) return 'I need a name to save a new contact.';
