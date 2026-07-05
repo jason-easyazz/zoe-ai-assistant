@@ -2,10 +2,11 @@
 
 ## Status
 
-**Proposed — decision pending a time-boxed Pipecat spike** (see
-[`docs/architecture/ambient-voice-pipecat-spike.md`](../architecture/ambient-voice-pipecat-spike.md)).
-This records the landscape research and the *provisional* choice so the spike has a
-clear hypothesis to prove or kill. Nothing live changes until the spike lands.
+**Proposed — spike PARTIALLY run (2026-07-05), feasibility validated with real
+caveats; live/loaded measurements still pending a controlled window.** See
+[`## Spike results`](#spike-results-2026-07-05) below and
+[`docs/architecture/ambient-voice-pipecat-spike.md`](../architecture/ambient-voice-pipecat-spike.md).
+The frictions found **narrow the recommendation** (see Verdict). Nothing live changed.
 
 ## Context
 
@@ -90,6 +91,64 @@ keeping LiveKit.
   call is cheap to reverse.
 - **Sequencing** — ambient (barge-in) first; phone (SIP) and room hardware (Wyoming) are
   later, separable increments, each its own ADR/PR.
+
+## Spike results (2026-07-05)
+
+Ran the **safe (feasibility) half** of the spike on the live Orin, non-destructively
+(isolated venv `~/.spikes/pipecat-voice`, 267 MB, `--system-site-packages` to reuse the
+Jetson-native CUDA torch). Live services stayed healthy throughout (zoe-data / flue-brain /
+llama-server all 200). The **live/loaded** half was **deliberately NOT run** — see why below.
+
+**What passed (GO signals):**
+- **Install is light + ARM64-clean.** `pipecat-ai 0.0.108` (the *latest* — the earlier
+  "v1.4/v1.5" note was wrong; it's still 0.0.x) installs by **reusing the system Jetson
+  torch** (only pulls `torchaudio` + small deps — **no 2 GB torch download**). Isolated
+  venv = 267 MB.
+- **Key pieces import + are present:** `KokoroTTSService` (our TTS rock, native) ✓,
+  `OpenAILLMService` (→ Gemma on `:11434`) ✓, **`LocalSmartTurnAnalyzerV3`** (the
+  differentiating turn/barge-in model) ✓, `SmallWebRTCTransport` (lightweight, no media
+  server) ✓, `SileroVADAnalyzer` ✓.
+
+**Frictions found (these narrow the recommendation):**
+1. **Moonshine STT is NOT a native Pipecat service** (corrects this ADR's research). 0.0.108
+   ships `whisper`, `riva`, `nvidia`, `kokoro`, `piper`… but **no `moonshine`**. Pipecat's
+   `whisper` service *does* match our live `.env` (`ZOE_WHISPER_MODEL=base.en`, CUDA), so
+   STT is covered either by Whisper or a **custom Moonshine wrapper** — but "native rocks"
+   is only fully true for **Kokoro**, not Moonshine.
+2. **numpy-2.x vs Jetson-torch ABI conflict.** Pipecat 0.0.108 forces **numpy 2.x**; the
+   Jetson's torch 2.8.0 is built against **numpy 1.x** → runtime warning *"module compiled
+   with NumPy 1.x cannot run in NumPy 2.2.6, may crash."* Imports survive, but this is a
+   real stability risk to resolve (version-pin or a numpy-1.x path) before trusting it
+   under load.
+3. **Env conflicts → must be its own process.** Pipecat pulls numpy 2.x + newer
+   pydantic/httpx/websockets that conflict with zoe-data's pins — so it can **never** live
+   in zoe-data's env; it's a separate isolated service (which is the right shape anyway).
+4. **The box is memory-saturated — the binding constraint.** Measured **1.1–2.6 GB free**
+   with swap already **23 GB deep** (llama-server holds 5.4 GB). There is **no headroom to
+   run a Pipecat stack in parallel** with the live LiveKit path — a migration would have to
+   **replace** the current voice path, not run alongside it.
+
+**Not yet answered (needs a controlled window + a human at a mic):** barge-in quality (M1),
+audio quality on `SmallWebRTC`/Tegra (M6), real end-to-end latency (M3), loaded RAM (M4).
+Running a full loaded stack now would risk **OOM-killing the live brain** the operator is
+actively using (Telegram), and barge-in/audio need a person speaking + interrupting — so
+those measurements are **deferred to a maintenance window**, not forced against live.
+
+### Verdict: PARTIAL GO — but the frictions tilt toward the fallback
+
+Feasibility is real: it installs light, keeps Kokoro + Gemma + Smart Turn + a lightweight
+transport. **But** three of the four gaps (Moonshine not native, numpy/torch ABI, and a
+memory-saturated box with no room for parallel) mean a **full Pipecat migration is more
+disruptive than the ADR first assumed** — it needs an isolated service, a custom Moonshine
+wrapper (or a Whisper swap), an ABI fix, and a *replacement* of the LiveKit path.
+
+The **"borrow the piece" fallback now looks stronger**: **Smart Turn v3 is a standalone,
+importable model** — we can pull *just that* into the existing LiveKit agent and hand-build
+barge-in there, getting the same two wins (real turn detection + interruption) with far
+less disruption and no env/ABI/memory upheaval. **Recommendation shifts to: prototype
+barge-in + Smart Turn on the existing LiveKit agent first**, and only pursue a full Pipecat
+migration if that proves insufficient. Final call still needs the live barge-in session
+(same script serves either path).
 
 ## Links
 
