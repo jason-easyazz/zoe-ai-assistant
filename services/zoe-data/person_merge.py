@@ -159,46 +159,57 @@ async def merge_person(db, user_id: str, source_id: str, target_id: str) -> dict
     if target is None:
         raise PersonMergeError(f"target person {target_id!r} not found for this user")
 
-    repointed: dict[str, int] = {}
+    async def _apply() -> tuple[dict, int, int]:
+        repointed: dict[str, int] = {}
 
-    # ── 2. Re-point satellite tables ─────────────────────────────────────────
-    for table in _SATELLITE_TABLES:
-        moved = await _exec(
+        # ── 2. Re-point satellite tables ─────────────────────────────────────
+        for table in _SATELLITE_TABLES:
+            repointed[table] = await _exec(
+                db,
+                f"UPDATE {table} SET person_id=$1 WHERE person_id=$2 AND user_id=$3",
+                f"UPDATE {table} SET person_id=? WHERE person_id=? AND user_id=?",
+                (target_id, source_id, user_id),
+            )
+
+        # ── 3. Re-point the introduced_by self-FK ────────────────────────────
+        repointed["people.introduced_by_person_id"] = await _exec(
             db,
-            f"UPDATE {table} SET person_id=$1 WHERE person_id=$2 AND user_id=$3",
-            f"UPDATE {table} SET person_id=? WHERE person_id=? AND user_id=?",
+            "UPDATE people SET introduced_by_person_id=$1 "
+            "WHERE introduced_by_person_id=$2 AND user_id=$3",
+            "UPDATE people SET introduced_by_person_id=? "
+            "WHERE introduced_by_person_id=? AND user_id=?",
             (target_id, source_id, user_id),
         )
-        repointed[table] = moved
 
-    # ── 3. Re-point the introduced_by self-FK ────────────────────────────────
-    repointed["people.introduced_by_person_id"] = await _exec(
-        db,
-        "UPDATE people SET introduced_by_person_id=$1 "
-        "WHERE introduced_by_person_id=$2 AND user_id=$3",
-        "UPDATE people SET introduced_by_person_id=? "
-        "WHERE introduced_by_person_id=? AND user_id=?",
-        (target_id, source_id, user_id),
-    )
+        # ── 4. Re-point relationship edges + resolve conflicts ───────────────
+        deduped, dropped, rep_edges = await _repoint_relationships(
+            db, user_id, source_id, target_id
+        )
+        repointed["person_relationships"] = rep_edges
 
-    # ── 4. Re-point relationship edges + resolve conflicts ───────────────────
-    deduped_edges, dropped_self_edges, repointed_edges = await _repoint_relationships(
-        db, user_id, source_id, target_id
-    )
-    repointed["person_relationships"] = repointed_edges
+        # ── 5. Merge people row fields (target wins; fill blanks from source) ─
+        await _merge_people_fields(db, user_id, source, target)
 
-    # ── 5. Merge people row fields (target wins; fill blanks from source) ─────
-    await _merge_people_fields(db, user_id, source, target)
+        # ── 6. Soft-delete the source ────────────────────────────────────────
+        await _exec(
+            db,
+            "UPDATE people SET deleted=1, updated_at=$1 WHERE id=$2 AND user_id=$3",
+            "UPDATE people SET deleted=1, updated_at=? WHERE id=? AND user_id=?",
+            (datetime.utcnow().isoformat() + "Z", source_id, user_id),
+        )
+        return repointed, deduped, dropped
 
-    # ── 6. Soft-delete the source ────────────────────────────────────────────
-    await _exec(
-        db,
-        "UPDATE people SET deleted=1, updated_at=$1 WHERE id=$2 AND user_id=$3",
-        "UPDATE people SET deleted=1, updated_at=? WHERE id=? AND user_id=?",
-        (datetime.utcnow().isoformat() + "Z", source_id, user_id),
-    )
-
-    await db.commit()
+    # Atomic: every re-point + the soft-delete land together, or none do. asyncpg
+    # auto-commits each statement, so WITHOUT a transaction a mid-merge failure would
+    # leave a half-merged person (satellites re-pointed, edges/deleted not). Fall back
+    # to sequential + explicit commit only if the connection lacks transaction().
+    txn = getattr(db, "transaction", None)
+    if callable(txn):
+        async with txn():
+            repointed, deduped_edges, dropped_self_edges = await _apply()
+    else:
+        repointed, deduped_edges, dropped_self_edges = await _apply()
+        await db.commit()
 
     return {
         "source_id": source_id,
