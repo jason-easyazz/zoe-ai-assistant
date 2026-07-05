@@ -2387,7 +2387,7 @@ _DISPATCHABLE_INTENTS = frozenset({
     "reminder_create", "reminder_list", "timer_create",
     "note_create", "note_search",
     "journal_create", "journal_prompt", "journal_streak",
-    "people_create", "people_relate", "people_search",
+    "people_create", "people_search",
     "music_play", "music_control", "music_volume", "music_setup", "set_volume",
     "smart_home", "weather", "daily_briefing", "time_query", "date_query", "calculate",
     # Wave 3 (cut-list record §3): the ONE new dispatchable intent — the explicit
