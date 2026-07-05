@@ -24,8 +24,10 @@ that accepts either style; in tests it is a raw ``aiosqlite`` connection.)
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+from datetime import datetime
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -55,13 +57,29 @@ def person_merge_enabled() -> bool:
     return os.environ.get("ZOE_PERSON_MERGE_ENABLED", "").strip().lower() in _TRUTHY
 
 
+async def _close_cursor(cur) -> None:
+    """Best-effort cursor close (aiosqlite exposes close(); asyncpg may not)."""
+    close = getattr(cur, "close", None)
+    if close is None:
+        return
+    try:
+        res = close()
+        if asyncio.iscoroutine(res):
+            await res
+    except Exception:
+        pass
+
+
 async def _fetchone(db, sql_pg: str, sql_q: str, params: tuple):
     """Run a SELECT with the $N form, falling back to the ? form; return one row."""
     try:
         cur = await db.execute(sql_pg, *params)
     except Exception:
         cur = await db.execute(sql_q, params)
-    return await cur.fetchone()
+    try:
+        return await cur.fetchone()
+    finally:
+        await _close_cursor(cur)
 
 
 async def _exec(db, sql_pg: str, sql_q: str, params: tuple) -> int:
@@ -172,9 +190,9 @@ async def merge_person(db, user_id: str, source_id: str, target_id: str) -> dict
     # ── 6. Soft-delete the source ────────────────────────────────────────────
     await _exec(
         db,
-        "UPDATE people SET deleted=1 WHERE id=$1 AND user_id=$2",
-        "UPDATE people SET deleted=1 WHERE id=? AND user_id=?",
-        (source_id, user_id),
+        "UPDATE people SET deleted=1, updated_at=$1 WHERE id=$2 AND user_id=$3",
+        "UPDATE people SET deleted=1, updated_at=? WHERE id=? AND user_id=?",
+        (datetime.utcnow().isoformat() + "Z", source_id, user_id),
     )
 
     await db.commit()
@@ -193,7 +211,10 @@ async def _fetchall(db, sql_pg: str, sql_q: str, params: tuple) -> list:
         cur = await db.execute(sql_pg, *params)
     except Exception:
         cur = await db.execute(sql_q, params)
-    return list(await cur.fetchall())
+    try:
+        return list(await cur.fetchall())
+    finally:
+        await _close_cursor(cur)
 
 
 async def _repoint_relationships(
@@ -305,6 +326,9 @@ async def _merge_people_fields(db, user_id: str, source: dict, target: dict) -> 
 
     if not updates:
         return
+
+    # Fields changed → bump updated_at so ordering/audit reflect the merge.
+    updates.append(("updated_at", datetime.utcnow().isoformat() + "Z"))
 
     set_cols = ", ".join(f"{col}=$" + str(i + 1) for i, (col, _) in enumerate(updates))
     set_cols_q = ", ".join(f"{col}=?" for col, _ in updates)
