@@ -562,6 +562,42 @@ test('get_weather forwards a named location and omits it when absent', async () 
   }
 });
 
+test('recall_memory requests a widened packet (limit=24) from for-prompt', async () => {
+  const prevEnv = { url: process.env.ZOE_DATA_URL, uid: process.env.ZOE_BRAIN_USER_ID };
+  const original = globalThis.fetch;
+  let seenUrl = '';
+  globalThis.fetch = (async (url: string | URL) => {
+    seenUrl = String(url);
+    return new Response(JSON.stringify({ packet: '## What I know about you\n- family' }), { status: 200 });
+  }) as typeof fetch;
+  process.env.ZOE_DATA_URL = 'http://127.0.0.1:8000';
+  process.env.ZOE_BRAIN_USER_ID = 'demo-user';
+  try {
+    const mod = await import(`../src/tools/zoe-tools.ts?recall=${Date.now()}-${Math.random()}`);
+    const tool = (mod.zoeTools as unknown as RunnableTool[]).find((t) => t.name === 'recall_memory');
+    assert.ok(tool, 'recall_memory tool must be registered');
+    await tool.run({ input: { query: 'tell me about my family' } });
+    const u = new URL(seenUrl);
+    assert.equal(u.pathname, '/api/memories/for-prompt');
+    assert.equal(u.searchParams.get('user_id'), 'demo-user');
+    assert.equal(u.searchParams.get('message'), 'tell me about my family');
+    // The explicit-recall widening: 12 slots crowd out family members behind
+    // duplicate identity facts; 24 lets the whole family surface.
+    assert.equal(u.searchParams.get('limit'), '24');
+
+    // No query → still widened (guards against the limit being moved inside the
+    // `if (query)` block, which would silently revert to the endpoint default).
+    await tool.run({ input: {} });
+    const u2 = new URL(seenUrl);
+    assert.equal(u2.searchParams.get('limit'), '24');
+    assert.equal(u2.searchParams.get('message'), null, 'no query → no message param');
+  } finally {
+    globalThis.fetch = original;
+    if (prevEnv.url === undefined) delete process.env.ZOE_DATA_URL; else process.env.ZOE_DATA_URL = prevEnv.url;
+    if (prevEnv.uid === undefined) delete process.env.ZOE_BRAIN_USER_ID; else process.env.ZOE_BRAIN_USER_ID = prevEnv.uid;
+  }
+});
+
 // ─── Wave 1 READ paths — HTTP coverage (cut-list record §3) ───────────────────
 // The read dispatch paths introduced this wave (note_search, journal
 // prompt/streak, people search) are NOT gated by ZOE_BRAIN_ALLOW_WRITES, so
