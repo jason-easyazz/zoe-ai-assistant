@@ -145,7 +145,9 @@ async def test_daily_cap_one_per_user(wired):
 # ── gates ─────────────────────────────────────────────────────────────────────
 
 async def test_flag_off_is_a_true_noop(monkeypatch):
-    monkeypatch.setattr(efu, "datetime", _FrozenNow)
+    # Deliberately NOT freezing the clock: the flag check must short-circuit
+    # BEFORE datetime.now() is reached. If a refactor ever moved the clock read
+    # ahead of the flag gate, this test would hit the live clock and expose it.
     monkeypatch.delenv("ZOE_EMOTIONAL_FOLLOWUP_ENABLED", raising=False)
 
     class _Boom:

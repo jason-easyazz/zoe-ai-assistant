@@ -93,28 +93,38 @@ class EmotionalFollowUpTrigger(ProactiveTrigger):
             return []
 
         # Active users (anyone who chatted in the last 7 days) — same population
-        # the morning brief serves.
-        async with db.execute(
-            """SELECT DISTINCT user_id FROM chat_sessions
-               WHERE created_at::timestamptz > (CURRENT_TIMESTAMP - INTERVAL '7 days')"""
-        ) as cur:
-            users = [row[0] async for row in cur]
+        # the morning brief serves. Best-effort: a transient DB error here must not
+        # crash the slow-loop cycle for every trigger (peer triggers do the same).
+        try:
+            async with db.execute(
+                """SELECT DISTINCT user_id FROM chat_sessions
+                   WHERE created_at::timestamptz > (CURRENT_TIMESTAMP - INTERVAL '7 days')"""
+            ) as cur:
+                users = [row[0] async for row in cur]
+        except Exception as exc:
+            log.warning("emotional_followup: active-user query failed: %s", exc)
+            return []
 
         results: list[TriggerResult] = []
         for user_id in users:
             if not user_id:
                 continue
-            # Daily cap: at most one emotional follow-up per user per day (any
-            # claimed/unclaimed row today) so multiple worries never barrage.
-            async with db.execute(
-                "SELECT 1 FROM proactive_pending WHERE trigger_type=? AND user_id=? "
-                "AND created_at::date = CURRENT_DATE LIMIT 1",
-                (self.trigger_type, user_id),
-            ) as cur:
-                if await cur.fetchone():
-                    continue
-
-            moment = await self._pick_moment(db, user_id, now)
+            # Per-user DB work is guarded so one user's transient error doesn't
+            # lose the follow-up for everyone else in this cycle.
+            try:
+                # Daily cap: at most one emotional follow-up per user per day (any
+                # claimed/unclaimed row today) so multiple worries never barrage.
+                async with db.execute(
+                    "SELECT 1 FROM proactive_pending WHERE trigger_type=? AND user_id=? "
+                    "AND created_at::date = CURRENT_DATE LIMIT 1",
+                    (self.trigger_type, user_id),
+                ) as cur:
+                    if await cur.fetchone():
+                        continue
+                moment = await self._pick_moment(db, user_id, now)
+            except Exception as exc:
+                log.warning("emotional_followup: check failed for user %s: %s", user_id, exc)
+                continue
             if moment is None:
                 continue
             mem_id, fact, meta = moment
