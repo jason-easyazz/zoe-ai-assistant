@@ -1254,7 +1254,7 @@ def _invalidate_user_facts_cache(user_id: str) -> None:
 
 async def _mempalace_search(
     query: str,
-    user_id: str = "family-admin",
+    user_id: str = "guest",
     limit: int = 5,
     timeout_s: float = 2.0,
 ) -> list[dict]:
@@ -1293,7 +1293,7 @@ async def _mempalace_search(
 
 async def _mempalace_add(
     summary: str,
-    user_id: str = "family-admin",
+    user_id: str = "guest",
     tags: list[str] | None = None,
     added_by: str = "zoe_agent",
 ) -> bool:
@@ -1461,7 +1461,7 @@ from memory_gate import (  # noqa: E402
 )
 
 
-async def _build_memory_context(message: str, user_id: str = "family-admin") -> str:
+async def _build_memory_context(message: str, user_id: str = "guest") -> str:
     """Semantic search of user's MemPalace facts — keyword-gated to avoid ONNX cost on every turn.
 
     Only runs for messages containing _MEMORY_TRIGGER_WORDS.
@@ -2737,7 +2737,7 @@ def _zoe_base_url() -> str:
     return str(os.environ.get("ZOE_CHAT_URL", "http://localhost:8000")).rstrip("/")
 
 
-async def _dispatch_tool(tool_name: str, args: dict, user_id: str = "family-admin") -> str:
+async def _dispatch_tool(tool_name: str, args: dict, user_id: str = "guest") -> str:
     """Dispatch a tool call and return result as string."""
     if tool_name in {
         "calendar_today",
@@ -3368,7 +3368,7 @@ async def _llm_call(
 async def run_zoe_agent(
     message: str,
     session_id: str,
-    user_id: str = "family-admin",
+    user_id: str = "guest",
     *,
     history: list[dict] | None = None,
     db_memory_context: str | None = None,
@@ -3697,7 +3697,7 @@ def _fast_memory_extract(user_msg: str, _assistant_reply: str = "") -> list[str]
 
 
 async def _background_memory_save(
-    user_msg: str, assistant_reply: str, user_id: str = "family-admin"
+    user_msg: str, assistant_reply: str, user_id: str = "guest"
 ) -> None:
     """Shim for legacy tests and call sites.
 
@@ -3739,7 +3739,7 @@ async def _background_memory_save(
 
 
 def _fire_memory_capture(
-    user_msg: str, assistant_reply: str, user_id: str = "family-admin"
+    user_msg: str, assistant_reply: str, user_id: str = "guest"
 ) -> None:
     """Schedule rule-based memory extraction as a background task (non-blocking, zero GPU)."""
     try:
@@ -3755,7 +3755,7 @@ def _fire_memory_capture(
 async def run_zoe_agent_streaming(
     message: str,
     session_id: str,
-    user_id: str = "family-admin",
+    user_id: str = "guest",
     *,
     history: list[dict] | None = None,
     db_memory_context: str | None = None,
