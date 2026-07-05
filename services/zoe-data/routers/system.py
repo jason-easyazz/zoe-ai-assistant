@@ -2527,3 +2527,70 @@ async def resolve_telegram(
     if not row:
         return {"user_id": None}
     return {"user_id": row["user_id"]}
+
+
+class _ConsumeLinkBody(BaseModel):
+    token: str
+    telegram_id: str
+    telegram_username: Optional[str] = None
+
+
+@router.post("/telegram/consume-link-token")
+async def consume_telegram_link_token(
+    body: _ConsumeLinkBody,
+    _: None = Depends(require_internal_token),
+    db=Depends(get_db),
+):
+    """Internal-only. The Telegram bot calls this after a user sends `/start
+    <token>`. We verify the signed token, recover the user_id it was minted for,
+    and link the VERIFIED sender's telegram_id to that profile. The sender id
+    comes from Telegram (not the user), and this endpoint is loopback/token-gated,
+    so a token can only ever link the redeemer's own Telegram account.
+    """
+    import telegram_link
+    from routers.user_profile import _TELEGRAM_ID_RE, _read_prefs, _write_prefs
+
+    # consume=True → single-use: a replayed/second scan of the same token fails.
+    user_id = telegram_link.verify_link_token((body.token or "").strip(), consume=True)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="invalid, expired, or already-used link token")
+
+    tid = (body.telegram_id or "").strip()
+    if not _TELEGRAM_ID_RE.match(tid):
+        raise HTTPException(
+            status_code=400,
+            detail="telegram_id must be a positive numeric Telegram user id",
+        )
+
+    # Last-writer-wins uniqueness: a telegram_id maps to at most one Zoe user.
+    cursor = await db.execute(
+        """SELECT user_id, prefs FROM user_preferences
+           WHERE prefs::jsonb ->> 'telegram_id' = ? AND user_id != ?""",
+        (tid, user_id),
+    )
+    for row in await cursor.fetchall():
+        other_prefs = await _read_prefs(db, row["user_id"])
+        if other_prefs.get("telegram_id") == tid:
+            other_prefs.pop("telegram_id", None)
+            await _write_prefs(db, row["user_id"], other_prefs)
+
+    prefs = await _read_prefs(db, user_id)
+    prefs["telegram_id"] = tid
+    await _write_prefs(db, user_id, prefs)
+    logger.info("telegram self-service link: %s → user %s", tid, user_id)
+    return {"ok": True, "user_id": user_id, "telegram_id": tid}
+
+
+class _RegisterBotBody(BaseModel):
+    username: str
+
+
+@router.post("/telegram/register-bot")
+async def register_telegram_bot(
+    body: _RegisterBotBody, _: None = Depends(require_internal_token)
+):
+    """Internal-only. The Telegram bot self-registers its @username at startup so
+    the settings UI can build `https://t.me/<bot>?start=<token>` deep links."""
+    import telegram_link
+    telegram_link.set_bot_username(body.username)
+    return {"ok": True, "bot_username": telegram_link.get_bot_username()}
