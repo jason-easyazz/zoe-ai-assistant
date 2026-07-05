@@ -152,6 +152,21 @@ export const EMOTIONAL_RECALL_DOCTRINE = [
   "One more time to call recall_memory, beyond direct \"what do you know about me\" questions: when the person shares or asks about how they've BEEN — their mood, stress, worries, how they're doing, \"how have I been?\" — call recall_memory first (query it about their feelings / what's been on their mind), so you can speak to what they've actually been carrying instead of a blank check-in. Then reply warmly. Don't invent a feeling recall_memory didn't return; an empty recall just means nothing stored from before.",
 ].join('\n');
 
+// Personal-recall doctrine — closes the measured live gap where OBLIQUE factual
+// questions about the user's own life ("where do I live?", "do I have any
+// allergies?", "do I prefer tea?") only triggered recall_memory ~60-80% of the
+// time: the soul's rule keys on the "what do you know/remember about me" framing,
+// so a specific personal question sometimes got answered from nothing ("I don't
+// actually know where you live"). This generalises the trigger to ANY question
+// about THIS person's own facts, while keeping the hard bound that general-
+// knowledge questions are still answered from the model's own head (no recall) —
+// so it doesn't add a tool round-trip to every recipe/maths/world-fact turn.
+export const PERSONAL_RECALL_DOCTRINE = [
+  "This is the big one, so treat it as a firm rule: ANY question about the user's own life or details — where they live, their name, what they like or prefer, who's in their family, their pets, their health or allergies, their plans, their past — you call recall_memory FIRST and answer from what it returns, even when they DON'T phrase it as \"what do you remember about me\". \"Where do I live?\", \"Do I have any allergies?\", \"Do I prefer tea or coffee?\", \"Who's my dad?\" — every one needs a recall_memory call before you answer. NEVER answer a question about this person from your own head, and never say you don't know or have nothing stored, until recall_memory has actually come back empty.",
+  '',
+  "The bound that keeps this from firing on everything: this is ONLY for facts about THIS PERSON. General-knowledge questions — recipes, cooking, maths, science, how things work, facts about the world — you still answer directly from your own knowledge, with NO recall_memory call. Personal question → recall first; world question → answer directly.",
+].join('\n');
+
 /**
  * The full system instructions the agent runs with. Order is deliberate: voice
  * delivery (phrasing) sits BEFORE the behavioural doctrines so the tool-first /
@@ -159,12 +174,12 @@ export const EMOTIONAL_RECALL_DOCTRINE = [
  * the generation boundary (Greptile #997 P2 — on a 4B model a trailing "lead with
  * the answer" could otherwise nudge a direct reply over a needed activate_abilities
  * call). Delivery is also self-scoped ("this shapes phrasing, not whether to use a
- * tool — the tool rules above still come first"). Emotional-recall then
- * emotional-capture sit LAST, alongside the other behavioural rules, so their
- * "when to call recall_memory / when to capture / when to stay silent" guidance
- * keeps last-position weight.
+ * tool — the tool rules above still come first"). Personal-recall, emotional-
+ * recall then emotional-capture sit LAST, alongside the other behavioural rules,
+ * so their "when to call recall_memory / when to capture / when to stay silent"
+ * guidance keeps last-position weight.
  */
-export const ZOE_INSTRUCTIONS = `${ZOE_SOUL}\n\n${VOICE_DELIVERY_DOCTRINE}\n\n${ACTIVATOR_DOCTRINE}\n\n${IN_SESSION_CONTEXT_DOCTRINE}\n\n${EMOTIONAL_RECALL_DOCTRINE}\n\n${EMOTIONAL_CAPTURE_DOCTRINE}`;
+export const ZOE_INSTRUCTIONS = `${ZOE_SOUL}\n\n${VOICE_DELIVERY_DOCTRINE}\n\n${ACTIVATOR_DOCTRINE}\n\n${IN_SESSION_CONTEXT_DOCTRINE}\n\n${PERSONAL_RECALL_DOCTRINE}\n\n${EMOTIONAL_RECALL_DOCTRINE}\n\n${EMOTIONAL_CAPTURE_DOCTRINE}`;
 
 // Exporting `route` publishes the HTTP agent endpoints (POST/GET /agents/zoe/:id).
 // FAIL CLOSED: this route drives the live Gemma brain on :11434, so by default a
