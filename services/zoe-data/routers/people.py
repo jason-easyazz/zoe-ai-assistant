@@ -28,6 +28,8 @@ from models import (
 )
 from people_utils import row_to_person
 from push import broadcaster
+from relationship_graph import neighbors as _graph_neighbors
+from relationship_graph import relationship_graph_enabled
 
 router = APIRouter(prefix="/api/people", tags=["people"])
 
@@ -1047,6 +1049,44 @@ async def delete_relationship(
     )
     await db.commit()
     return {"ok": True}
+
+
+@router.get("/{person_id}/graph")
+async def person_relationship_graph(
+    person_id: str,
+    depth: int = Query(2, ge=1, le=4),
+    limit: int = Query(50, ge=1, le=200),
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Bounded, read-only multi-hop relationship traversal (ADR increment 3).
+
+    Returns the caller's people reachable from ``person_id`` within ``depth``
+    bidirectional relationship hops. Read-only, additive, and OFF the chat hot
+    path — an explicit-query capability only.
+
+    Flag-gated behind ``ZOE_RELATIONSHIP_GRAPH_ENABLED`` (default OFF): when OFF
+    this returns HTTP 404 with a clear message BEFORE any DB work. Owner-scoped:
+    only the caller's edges/people are ever traversed or returned.
+    """
+    if not relationship_graph_enabled():
+        raise HTTPException(
+            status_code=404,
+            detail="Relationship graph traversal is disabled "
+                   "(set ZOE_RELATIONSHIP_GRAPH_ENABLED to enable).",
+        )
+    await require_feature_access(db, user, feature="people", action="read")
+    user_id = user["user_id"]
+    start = await _get_person_or_404(db, person_id, user_id)
+
+    nodes = await _graph_neighbors(
+        db, user_id, person_id, max_depth=depth, limit=limit,
+    )
+    return {
+        "start": {"id": person_id, "name": start.get("name")},
+        "nodes": nodes,
+        "count": len(nodes),
+    }
 
 
 @router.put("/{person_id}/bucket-list/{item_id}/done")
