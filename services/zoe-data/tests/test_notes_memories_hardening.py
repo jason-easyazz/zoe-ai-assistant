@@ -126,7 +126,14 @@ async def test_memory_prompt_search_failure_is_logged_and_nonfatal(monkeypatch, 
     monkeypatch.setattr(memories, "_message_needs_memory", lambda _message: True)
     caplog.set_level(logging.ERROR, logger=memories.__name__)
 
-    result = await memories.memory_for_prompt(user_id="U1", message="what do you remember")
+    # Direct call bypasses FastAPI, so pass limit explicitly: the Query(12)
+    # default is a sentinel object and #1005's `all_rows[:limit]` slice needs
+    # a real int (FastAPI resolves it in production).
+    result = await memories.memory_for_prompt(
+        user_id="U1",
+        message="what do you remember",
+        limit=memories._PROMPT_PACKET_MAX_FACTS,
+    )
 
     assert result == {"packet": "", "refs": [], "count": 0, "user_scoped": True}
     assert "semantic prompt search failed" in caplog.text
