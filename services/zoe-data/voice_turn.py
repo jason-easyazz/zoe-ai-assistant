@@ -9,7 +9,8 @@ clip truncated mid-sentence scored 0.02 — the discrimination a silence timer
 cannot make. Inference ≈200 ms on one CPU thread; it runs once per candidate
 endpoint (when the silence window elapses), never per frame.
 
-Design mirrors ``voice_vad``: lazy singleton, graceful degradation. If the
+Design mirrors ``voice_vad`` (same degradation contract): lazy singleton,
+graceful degradation. If the
 model file, transformers, or soxr are unavailable the factory returns ``None``
 and callers keep today's fixed-silence behaviour — this module must never take
 down the voice loop.
