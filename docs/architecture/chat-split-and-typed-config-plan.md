@@ -97,17 +97,30 @@ own equivalent helpers"). All voice paths (`routers/voice_tts.py:3391`,
   (:339) — KEEP `_mempalace_load_user_facts, _mempalace_add, _fire_memory_capture,
   _build_memory_context` from that import. Verify with grep that no other use of the four
   removed names remains in chat.py before deleting.
-- `_USE_ZOE_CORE` (:497) **stays** — it still feeds `_USE_LOCAL_BRAIN` (:500). Do not touch it.
+- `_USE_ZOE_CORE` (:497) **stays a module constant** — it feeds the lane-entry gate
+  `_USE_LOCAL_BRAIN` (:500), which is checked at :2467, :2546 and :3657 and is monkeypatched as a
+  constant by `test_hermes_routing.py:383-384` and `test_chat_stream_lifecycle.py:62/124/185`, so
+  neither may become a function. To keep the lane-entry gate and the dispatch functions agreeing
+  on the SAME parse, redefine it as an import-time snapshot of the canonical parser:
+  `_USE_ZOE_CORE = use_core_brain()` (add `use_core_brain` to the `brain_dispatch` import).
 
 **Edit `services/zoe-data/brain_dispatch.py`:** update the docstring (lines 5–8) — chat.py now
 consumes this module; the "keeps its own equivalent helpers" sentence is stale after this PR.
 
-**Declared behavior delta (put verbatim in the PR body):** chat's old `_brain_streaming`/
-`_brain_oneshot` chose core-vs-legacy via the **import-time** constant `_USE_ZOE_CORE`;
-`brain_dispatch.use_core_brain()` reads `ZOE_USE_CORE_BRAIN` at **call time** and treats only
-`{"0","false","no","off"}` as false (old parser: `.lower() == "true"`). Call-time is what every
-voice path already does and honors the `runtime_env` bootstrap; with the env unset/`true` (the
-default and the live value) dispatch is identical. This is the ONLY intended delta.
+**Declared behavior deltas (put verbatim in the PR body — there are TWO):**
+1. Dispatch timing: chat's old `_brain_streaming`/`_brain_oneshot` chose core-vs-legacy via the
+   **import-time** constant `_USE_ZOE_CORE`; `brain_dispatch.use_core_brain()` reads
+   `ZOE_USE_CORE_BRAIN` at **call time**. Call-time is what every voice path already does and
+   honors the `runtime_env` bootstrap.
+2. Parse: both the dispatch functions AND `_USE_ZOE_CORE`/`_USE_LOCAL_BRAIN` now use
+   `use_core_brain()`'s parse (only `{"0","false","no","off"}` → false) instead of
+   `.lower() == "true"` — so a value like `"1"`/`"yes"` no longer disables the brain lane in chat
+   while enabling it in voice. Lane gate and dispatch cannot disagree on the parse; the only
+   residual divergence is import-time snapshot (gate) vs call-time re-read (dispatch), which
+   matters only if the env changes mid-process — same as today across chat-vs-voice.
+
+With the env unset/`true` (the default and the live value) all of this is byte-identical.
+These are the ONLY intended deltas.
 
 **Tests (existing, must stay green):** `test_brain_flue_backend.py` (asserts
 `chat._use_flue_brain()` toggles by env, :234–238), `test_brain_dispatch.py`,
@@ -157,9 +170,12 @@ Its other deps (`iter_openclaw_text_chunks`, `AgRunRecorder`, `EventEncoder`,
 **Tests:** existing `test_brain_tool_cards.py`, `test_ag_ui_chat_contract.py`,
 `test_chat_stream_lifecycle.py`, `test_hermes_routing.py`, `test_intent_router_safety.py`
 (imports `chat_inject_background`, `run_openclaw_agent` — both stay in chat.py). Add ONE new
-slim test `tests/test_chat_stream_protocol_shim.py` (`ci_safe`-marked) asserting the re-exports:
-`from routers import chat` and `import chat_stream_protocol`; assert the twelve names above are
-the same objects in both namespaces. Then the common gate incl. replay.
+test `tests/test_chat_stream_protocol_shim.py` asserting the re-exports: `from routers import
+chat` and `import chat_stream_protocol`; assert the twelve names above are the same objects in
+both namespaces. **Do NOT mark it `ci_safe`** — it imports `routers.chat` (heavy service
+imports), which per `tests/AGENTS.md` runs ONLY on the self-hosted Jetson lane; the full-dir
+self-hosted job picks it up automatically, no marker or YAML edit needed. Then the common gate
+incl. replay.
 
 ## PR W4-C3 — extract Hermes provider mechanics → `services/zoe-data/chat_hermes_stream.py` + delete dead code
 
@@ -172,7 +188,7 @@ removing — no `_old` copies.
 
 | Symbol (def at) | Notes |
 |---|---|
-| `_HERMES_API_URL` (:3042), `_HERMES_MODEL` (:3043), `_HERMES_API_KEY` (:3044), `_ZOE_SOUL_HERMES` (:3050) | module constants the cluster reads |
+| `_HERMES_API_URL` (:3042), `_HERMES_MODEL` (:3043), `_HERMES_API_KEY` (:3044), `_ZOE_SOUL_HERMES` (:3050) | module constants — deliberately NOT re-exported; verified 2026-07-06 their only readers are inside the moved/deleted functions (:3067, :3079, :3139–3140, :3171, :3227, :3300) and no other repo module imports them. **Pre-move checklist:** re-run `grep -rn "_HERMES_API_URL\|_HERMES_MODEL\|_HERMES_API_KEY\|_ZOE_SOUL_HERMES" services/ --include="*.py"` and confirm every hit is inside the move/delete set before cutting — any surviving chat.py reader would be a `NameError` |
 | `_build_hermes_payload` (:3058) | calls `_load_zoe_self_compact_for_chat` — moves with it |
 | `_hermes_progress_message` (:3087), `_hermes_progress_events` (:3109) | progress event mapping |
 | `_hermes_request_headers` (:3137) | auth headers |
@@ -289,9 +305,9 @@ replay gate + `test_zoe_agent_skills.py`-adjacent focused tests.
 ~300 lines. `mcp_server.py` sites feed subprocess workers — confirm `runtime_env.bootstrap_runtime_env()`
 ordering is unchanged (bootstrap must still run before the first read of a bootstrapped key).
 
-**The `ZOE_USE_CORE_BRAIN` divergence** (chat.py:497 vs brain_dispatch.py:28): do NOT fix as a
-side effect of a migration PR. After Part 1 W4-C1 lands, `chat.py:497` only feeds
-`_USE_LOCAL_BRAIN`; align it to `env_bool` semantics in its own tiny PR with the delta declared.
+**The `ZOE_USE_CORE_BRAIN` divergence** (chat.py:497 vs brain_dispatch.py:28) is fixed by Part 1
+W4-C1 (`_USE_ZOE_CORE = use_core_brain()`, delta declared there) — do NOT re-fix or re-parse it
+in a typed_env migration PR; those PRs stay byte-equivalent.
 
 Later modules (system.py 18, intent_router.py 14, voice_livekit.py 14, …) follow the same
 per-module recipe; stop when marginal value drops — 100% conversion is NOT a goal.
@@ -303,8 +319,8 @@ per-module recipe; stop when marginal value drops — 100% conversion is NOT a g
 - Do NOT create `chat_v2.py`/`chat_new.py`/any parallel chat router, and do NOT put helper
   modules under `routers/` — helpers are top-level `services/zoe-data/` modules the one router imports.
 - Do NOT change lane ordering, policy tables, prompts, or event shapes in a move PR. Moves are
-  byte-identical relocations; the only declared behavior delta in this packet is W4-C1's
-  call-time `use_core_brain()` (and the separately-PR'd `ZOE_USE_CORE_BRAIN` parse alignment).
+  byte-identical relocations; the only declared behavior deltas in this packet are W4-C1's two
+  (call-time dispatch + the `ZOE_USE_CORE_BRAIN` parse alignment).
 - Do NOT break monkeypatch seams: keep re-exports in chat.py, keep bare-name call sites, never
   move `_record_run_state` / `_persist_ag_ui_run` / `_safe_load_portrait` /
   `_save_chat_message` / `_ensure_user_and_chat_session` / `_check_frustration` /
@@ -325,6 +341,6 @@ per-module recipe; stop when marginal value drops — 100% conversion is NOT a g
 
 # Execution order
 
-W4-C1 → W4-C2 → W4-C3 → W4-T1 → W4-T2 → W4-T3 → W4-T4 → (optional W4-C4, parse-alignment PR).
+W4-C1 → W4-C2 → W4-C3 → W4-T1 → W4-T2 → W4-T3 → W4-T4 → (optional W4-C4).
 C-track and T-track touch disjoint files after C1, so T1 may run in parallel with C2/C3 from
 separate worktrees; the voice replay gate serializes T2+ (one harness lock).
