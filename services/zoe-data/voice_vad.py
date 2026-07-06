@@ -83,15 +83,6 @@ def _get_session():
         return _session
 
 
-def _reset_for_tests() -> None:
-    """Drop the cached session/failure state (tests only)."""
-    global _session, _session_failed, _warned
-    with _session_lock:
-        _session = None
-        _session_failed = False
-        _warned = False
-
-
 class SileroVAD:
     """One per audio stream — carries the model's recurrent state across calls."""
 

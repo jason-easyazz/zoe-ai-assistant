@@ -387,19 +387,23 @@ _needs_model = pytest.mark.skipif(
 
 
 def _fresh_voice_vad(monkeypatch):
-    """Import the real module with a clean singleton + default model path."""
+    """Import the real module with a clean singleton + default model path.
+
+    Globals are reset via monkeypatch.setattr (repo rule: pytest restores them
+    automatically even if a test is interrupted mid-run)."""
     monkeypatch.delenv("ZOE_SILERO_VAD_MODEL", raising=False)
     monkeypatch.delenv("ZOE_VAD_SPEECH_THRESHOLD", raising=False)
     import voice_vad
-    voice_vad._reset_for_tests()
+    monkeypatch.setattr(voice_vad, "_session", None)
+    monkeypatch.setattr(voice_vad, "_session_failed", False)
+    monkeypatch.setattr(voice_vad, "_warned", False)
     return voice_vad
 
 
 @pytest.fixture
 def real_voice_vad(monkeypatch):
-    vad_mod = _fresh_voice_vad(monkeypatch)
-    yield vad_mod
-    vad_mod._reset_for_tests()  # don't leak a poisoned/failed singleton
+    # monkeypatch teardown restores the singleton globals automatically.
+    yield _fresh_voice_vad(monkeypatch)
 
 
 @_needs_model
@@ -452,9 +456,8 @@ def test_silero_graceful_degradation_on_bogus_path(monkeypatch):
     import voice_vad
 
     monkeypatch.setenv("ZOE_SILERO_VAD_MODEL", "/nonexistent/silero_vad.onnx")
-    voice_vad._reset_for_tests()
-    try:
-        assert voice_vad.create_vad() is None, "missing model must degrade to None"
-        assert voice_vad.create_vad() is None  # cached failure, still None, no raise
-    finally:
-        voice_vad._reset_for_tests()
+    monkeypatch.setattr(voice_vad, "_session", None)
+    monkeypatch.setattr(voice_vad, "_session_failed", False)
+    monkeypatch.setattr(voice_vad, "_warned", False)
+    assert voice_vad.create_vad() is None, "missing model must degrade to None"
+    assert voice_vad.create_vad() is None  # cached failure, still None, no raise
