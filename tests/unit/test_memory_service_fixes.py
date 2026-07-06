@@ -35,6 +35,9 @@ from memory_service import (
     _SEEN_KEYS_MAX,
 )
 
+# Slim-dep green: opts into the GitHub-runner fast lane (see tests/AGENTS.md).
+pytestmark = pytest.mark.ci_safe
+
 
 def _match_where(where, meta):
     """Minimal Chroma where-clause matcher: $and / $or / equality."""

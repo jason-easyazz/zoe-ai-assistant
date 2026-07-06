@@ -16,6 +16,7 @@ import math
 import os
 import re
 import shlex
+import subprocess
 import time
 import shutil
 import unicodedata
@@ -74,22 +75,6 @@ def _daily_briefing_cache_set(user_id: str, response: str) -> None:
     _daily_briefing_cache_sweep()
     _DAILY_BRIEFING_RESPONSE_CACHE[user_id] = (time.time(), response)
     _daily_briefing_cache_sweep()
-
-
-def _daily_briefing_cached_weather() -> Optional[dict]:
-    try:
-        from routers.weather import _weather_cache
-
-        current = _weather_cache.get("current") or {}
-        if current.get("temp") is None:
-            return None
-        return {
-            "temp": current.get("temp"),
-            "city": current.get("city") or "your area",
-            "description": current.get("description", ""),
-        }
-    except Exception:
-        return None
 
 
 def _spoken_day_ordinal(day: int) -> str:
@@ -1846,22 +1831,23 @@ def _sanitize_list_item(raw: str) -> str:
 
 
 async def _run_mcporter(cmd: str) -> Optional[str]:
-    """Run a single mcporter-safe command, return raw stdout or None on failure."""
+    """Run a single mcporter-safe command, return raw stdout or None on failure.
+
+    Spawns via async_subprocess.run_to_completion so the fork happens OFF the
+    event-loop thread — asyncio.create_subprocess_exec forks on the loop and
+    can wedge the whole API (the 2026-06-29 outage class, #947).
+    """
     env = os.environ.copy()
     env["PATH"] = f"{NODE_BIN}:{env.get('PATH', '')}"
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *shlex.split(cmd),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+        from async_subprocess import run_to_completion
+
+        proc = await run_to_completion(shlex.split(cmd), env=env, timeout=10)
         if proc.returncode != 0:
-            logger.warning(f"mcporter-safe failed: {stderr.decode()}")
+            logger.warning(f"mcporter-safe failed: {proc.stderr.decode()}")
             return None
-        return stdout.decode().strip()
-    except asyncio.TimeoutError:
+        return proc.stdout.decode().strip()
+    except subprocess.TimeoutExpired:
         logger.warning("mcporter-safe timed out")
         return None
     except (OSError, UnicodeError, ValueError) as e:
@@ -3224,9 +3210,9 @@ async def _execute_daily_briefing(user_id: str) -> Optional[str]:
 
 
 async def _daily_briefing_weather(user_id: str) -> Optional[dict]:
-    cached_weather = _daily_briefing_cached_weather()
-    if cached_weather:
-        return cached_weather
+    # _get_current short-circuits on a fresh keyed-cache hit for the user's
+    # resolved coords, so the warm path (panel-polled home area) is instant —
+    # no separate flat-slot peek needed.
     try:
         from database import get_db
         from routers.weather import _get_current, _resolve_location, _row_to_prefs
@@ -3320,7 +3306,7 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False,
         from database import get_db
         from routers.weather import (
             _row_to_prefs, _resolve_location, _geocode,
-            _get_current, _get_forecast, _weather_cache,
+            _get_current, _get_forecast,
         )
         adhoc = bool(location.strip())
         async for db in get_db():
@@ -3336,24 +3322,13 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False,
                 )
                 prefs = _row_to_prefs(await cursor.fetchone())
                 lat, lon, city, country = _resolve_location(prefs)
-            if adhoc:
-                # Named location: always fetch live AND uncached (cache=False) so a
-                # "weather in Perth" query never pollutes the single shared home
-                # cache the panel forecast path reuses.
-                current = await _get_current(lat, lon, city, country, cache=False)
-            else:
-                # Voice replies should be instant: prefer the warm cache (kept fresh by
-                # the panel's periodic /weather/current poll) and only pay the ~1s live
-                # API call when it's cold. The panel UI route still always fetches live.
-                current = _weather_cache.get("current") or {}
-                # Only trust the shared warm cache when it holds a reading for THIS
-                # user's resolved city (the cache is one flat slot across users) and
-                # has a real temp (`is None` so a legit 0° isn't treated as missing).
-                _cached_city = str(current.get("city") or "").strip().lower()
-                if current.get("temp") is None or (
-                    city and _cached_city and _cached_city != str(city).strip().lower()
-                ):
-                    current = await _get_current(lat, lon, city, country)
+            # One call for both home and named ("weather in Perth") locations:
+            # the cache is keyed by coords, so a fresh hit for THESE coords is
+            # instant (panel-warmed home area) and an ad-hoc city can never
+            # pollute — or be fed by — another location's reading. This replaces
+            # the old adhoc cache=False bypass AND the cached-city mismatch guard
+            # the flat single-slot cache used to require.
+            current = await _get_current(lat, lon, city, country)
             city_name = current.get("city") or city or "your area"
             # Speak numbers naturally: "18.3" → "18 point 3" (bare decimals get
             # mangled to "18 3" by TTS), and avoid markdown/°C which also mangle.
@@ -3374,7 +3349,7 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False,
                 today_hi = None
                 today_desc = cur_desc
                 try:
-                    f = await _get_forecast(lat, lon, cache=not adhoc)
+                    f = await _get_forecast(lat, lon)
                     d0 = (f.get("daily") or [{}])[0]
                     today_hi = d0.get("high")
                     today_desc = (str(d0.get("description", "")) or cur_desc).lower()
@@ -3407,7 +3382,7 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False,
                 temp_part = f" — it's around {_say_num(round(ref))} degrees" if ref is not None else ""
                 return f"No, you should be fine without a jacket{temp_part} in {city_name}."
             if forecast:
-                f = await _get_forecast(lat, lon, cache=not adhoc)
+                f = await _get_forecast(lat, lon)
                 daily = f.get("daily", [])[:5]
                 if not daily:
                     return f"I couldn't get the forecast for {city_name} right now."

@@ -100,7 +100,7 @@ body:not(.sky-empty) .sky-card.dashboard-card.sky-premium-card { display: flex !
   cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--sky-space-3, 12px);
   min-height: 64px;
   padding: 0 var(--sky-space-5, 20px);
   border-radius: var(--sky-radius-md, 16px);
@@ -116,11 +116,13 @@ body:not(.sky-empty) .sky-card.dashboard-card.sky-premium-card { display: flex !
   width: 38px; height: 38px; flex: 0 0 auto;
   display: grid; place-items: center;
   border-radius: 50%;
-  background: rgba(var(--sky-accent-cyan-rgb, 55,192,230), .16);
+  /* ds1 accents are hex; the old rgba(var(--sky-accent-cyan-rgb)) form leaned on
+     an undefined *-rgb token. Same rendered colour, real token. */
+  background: color-mix(in srgb, var(--sky-accent-cyan, #37c0e6) 16%, transparent);
 }
 .dashboard-card .dash-ctrl-svg { width: 22px; height: 22px; fill: var(--sky-accent-cyan, #37c0e6); }
 .dashboard-card .dash-ctrl-label { font-size: 17px; font-weight: 500; }
-.dashboard-card .dash-ctrl-signin .dash-ctrl-glyph { background: rgba(155,140,255,.18); }
+.dashboard-card .dash-ctrl-signin .dash-ctrl-glyph { background: color-mix(in srgb, var(--sky-accent-violet, #9b8cff) 18%, transparent); }
 .dashboard-card .dash-ctrl-signin .dash-ctrl-svg { fill: var(--sky-accent-violet, #9b8cff); }
 
 /* ── Light mode (re-point the ink scale; global light only flips --text-*) ─ */

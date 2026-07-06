@@ -329,8 +329,12 @@ correctness, and latency.
 **Honest read:** the gate does NOT show flue beating prod on answer quality — it
 shows flue *competitive* on quality (within a couple of points, prod slightly
 ahead once the confound is removed) and *clearly faster*. A clean quality
-re-run needs a real authenticated test user on both sides (blocked here by
-zoe-auth provisioning). Full record: `labs/flue-zoe-brain/parity/` scratch.
+re-run needs a real authenticated test user on both sides — now unblocked:
+`scripts/maintenance/provision_parity_test_user.py` (operator-run) mints
+`parity-gate-user` through AuthService with demo-user guardrails; log in via
+`POST :8002/api/auth/login` and pass the session as `X-Session-ID` on the prod
+side, same user through the Seam-A identity envelope on the flue side. Full
+record: `labs/flue-zoe-brain/parity/` scratch.
 
 ### Cutover — DONE 2026-07-03 (operator-authorized), fix-after in progress
 
@@ -351,23 +355,34 @@ sidecar store. Rollback is one env removal + a zoe-data restart (~15 s).
   ~~no streaming/sentinels~~ (#971, verified on-box); ~~coding tools leaking into
   the voice brain~~ (#989 strips pi/Flue built-ins).
 
-**Fix-after (post-cutover, in progress):**
-1. **Write intents with no direct executor** returned `ok:false` through the seam
-   (same `_run_mcporter`-None root cause as #960). `list_add`/`list_remove`
-   **fixed + live-verified (#993)**; `calendar_create`/`note_create` in progress.
-2. **Multi-user identity.** The sidecar env-pins `ZOE_BRAIN_USER_ID=family-admin`
-   and ignores the per-request user the seam forwards — every family member's turn
-   acts as family-admin. Flue's `ToolContext` exposes no per-request principal
-   (api/agent-api), so the correct fix threads identity via `AsyncLocalStorage`
-   set in the exported `route` middleware. Fine for a single-identity household;
-   required before multi-user.
+**Fix-after (post-cutover):**
+1. ~~**Write intents with no direct executor** returned `ok:false` through the
+   seam~~ ✅ **CLOSED 2026-07-06 — real root cause one level deeper.** The
+   `_run_mcporter`-None failures were a **stale rotated `POSTGRES_URL` baked
+   into `~/.mcporter/mcporter.json`** pre-empting `bootstrap_runtime_env()`'s
+   canonical `.env` load (a pre-set env key wins by design): every spawned
+   `mcp_server.py` failed DB auth, limped on, and crashed mid-call. Fixes:
+   baked credential **removed** from mcporter.json (the subprocess now
+   self-loads the current URL — rotation-proof); `run_stdio_server` **exits 1
+   loudly** on pool-init failure; `_run_mcporter` migrated to
+   `async_subprocess.run_to_completion` (off-loop fork, the #947 outage class).
+   Residual fallback intents (`journal_prompt`/`journal_streak`/`note_search`/
+   `people_search`/`transaction_*`) verified working. Direct executors added
+   along the way (#993 lists; calendar/note/reminder/journal/people) remain the
+   first-choice paths.
+2. ~~**Multi-user identity.**~~ ✅ **DONE (#998/#1000/#1001, live).** The shipped
+   mechanism is NOT the `AsyncLocalStorage` fix this doc originally proposed —
+   ALS was proven broken through the `?wait=result` path (the agent fiber does
+   not inherit the route's ALS store). The working design keys identity by the
+   turn's `AbortSignal` in a `WeakMap`, carried by a trusted ` zoe-uid:` message
+   envelope from the seam; see `labs/flue-zoe-brain/src/request-identity.ts`.
 3. **Quality is marginally below the old core** (92.5% vs 95%, confound-corrected)
-   — the deliberate trade for the ~2× latency win; watch it in daily use.
+   — the deliberate trade for the ~2× latency win; watch it in daily use. A clean
+   re-run still needs an authenticated test user (zoe-auth provisioning).
 4. **Tool coverage: 12 → 20 via Waves 1–3; remainder deliberately cut per [`docs/knowledge/flue-cutover-tool-cut-list.md`](../knowledge/flue-cutover-tool-cut-list.md) (signed off 2026-07-03).** The parity corpus barely probed this gap — it stands separately.
 
 ### Next action
 
-Drain the remaining broken write intents (calendar/notes), then wire per-request
-identity (fix-after #2). Phase 1 (Telegram as a front-door channel) remains in
-flight independently — the bot is built (#870); the re-slot through `/api/chat`
-with a `channel` tag is still open.
+Fix-after #1 and #2 are closed. Next: Phase 1 Telegram front door — re-slot the
+bot (#870) through `/api/chat` with a `channel` tag — then §8.1 Multica
+recreation (gates before any deletion).

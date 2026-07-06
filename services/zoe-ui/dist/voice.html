@@ -514,6 +514,11 @@ function handleVoiceEvent(msg) {
         scheduleAutoListen();
       }
     });
+  } else if (type === 'stop_playback') {
+    // Barge-in: server detected the user talking over Zoe — stop TTS now.
+    // No playback_done is sent (the server already moved to LISTENING).
+    stopCurrentPlayback();
+    setOrbState('listening');
   } else if (type === 'text') {
     // Fallback if no TTS audio is returned
     setOrbState('ambient');
@@ -526,6 +531,17 @@ function handleVoiceEvent(msg) {
 }
 
 // ── Audio playback ────────────────────────────────────────────────────────
+let currentPlaybackAudio = null;   // handle for barge-in stop_playback
+function stopCurrentPlayback() {
+  if (currentPlaybackAudio) {
+    try { currentPlaybackAudio.pause(); } catch(_e) {}
+    if (currentPlaybackAudio._zoeUrl) {
+      try { URL.revokeObjectURL(currentPlaybackAudio._zoeUrl); } catch(_e) {}
+    }
+    currentPlaybackAudio = null;
+  }
+  speaking = false;
+}
 function playAudioBase64(b64, mimeType, onDone) {
   try {
     const bin = atob(b64);
@@ -534,15 +550,27 @@ function playAudioBase64(b64, mimeType, onDone) {
     const blob = new Blob([bytes], { type: mimeType });
     const url  = URL.createObjectURL(blob);
     const audio = new Audio(url);
+    audio._zoeUrl = url;
+    currentPlaybackAudio = audio;
     speaking = true;
     setOrbState('responding');
     audio.onended = () => {
       speaking = false;
+      if (currentPlaybackAudio === audio) currentPlaybackAudio = null;
       URL.revokeObjectURL(url);
       if (onDone) onDone();
     };
-    audio.onerror = () => { speaking = false; URL.revokeObjectURL(url); if (onDone) onDone(); };
-    audio.play().catch(() => { speaking = false; if (onDone) onDone(); });
+    audio.onerror = () => {
+      speaking = false;
+      if (currentPlaybackAudio === audio) currentPlaybackAudio = null;
+      URL.revokeObjectURL(url);
+      if (onDone) onDone();
+    };
+    audio.play().catch(() => {
+      speaking = false;
+      if (currentPlaybackAudio === audio) currentPlaybackAudio = null;
+      if (onDone) onDone();
+    });
   } catch(e) {
     speaking = false;
     if (onDone) onDone();

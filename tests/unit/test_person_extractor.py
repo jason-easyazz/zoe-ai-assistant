@@ -11,6 +11,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../services/zoe-d
 
 from person_extractor import _parse_birthday, _BDAY_RE, _PREF_RE, _MEETING_RE, _GIFT_IDEA_RE, _BUCKET_RE
 
+# Slim-dep green: opts into the GitHub-runner fast lane (see tests/AGENTS.md).
+pytestmark = pytest.mark.ci_safe
+
+
 
 class TestParseBirthday:
     def test_day_then_month(self):

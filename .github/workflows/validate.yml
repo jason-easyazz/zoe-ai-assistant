@@ -96,27 +96,31 @@ jobs:
           # `pytestmark = pytest.mark.ci_safe` line, no YAML edit. The full dir runs
           # on the Jetson (self-hosted-tests.yml) as the catch-all safety net, so an
           # UNMARKED new test still runs somewhere. See tests/AGENTS.md.
-          # test_zoe_core_client.py (whole file) + 2 relationship-graph endpoint tests
-          # are EXCLUDED here: they pass in isolation but fail in the full -m ci_safe
-          # run due to a PRE-EXISTING cross-test isolation leak (a prior test leaves
-          # guest_policy/auth global state that forces a guest verdict). This mechanism
-          # EXPOSED the latent bug; it is not caused by it. They still run on the
-          # self-hosted full-dir lane (self-hosted-tests.yml). Fix tracked in
-          # docs/architecture/tech-debt-remediation-plan.md (remove these exclusions after).
+          # The cross-test isolation leak that used to force --deselect exclusions
+          # here is FIXED: test_auth_unauthenticated (bisected as the necessary
+          # poison) swapped in a new `auth` module object without restoring the
+          # original, so later dependency_overrides keyed by the new object never
+          # matched → guest verdicts → 403s. Its fixture now restores the saved
+          # module IDENTITY (test_metrics_auth_regression got the same fix).
           pytest services/zoe-data/tests -m ci_safe \
             --ignore=services/zoe-data/tests/samantha_live \
-            --ignore=services/zoe-data/tests/test_zoe_core_client.py \
-            --deselect "services/zoe-data/tests/test_relationship_graph.py::test_endpoint_flag_on_returns_graph" \
-            --deselect "services/zoe-data/tests/test_relationship_graph.py::test_endpoint_unknown_person_404" \
             -x -q \
             --override-ini="asyncio_mode=auto"
           pytest \
             services/homeassistant-mcp-bridge/tests/test_ha_bridge.py \
             -x -q \
             --override-ini="asyncio_mode=auto"
+          # Repo-root tests/unit uses the SAME marker lane as zoe-data (no
+          # hand-enumerated file list — that list silently dropped every other
+          # tests/unit file out of CI). Slim-dep-green files opt in with a
+          # co-located `pytestmark = pytest.mark.ci_safe`; unmarked files
+          # (live-service smokes, PyJWT/yaml-dependent) run in the full-dir
+          # tests/unit catch-all on the Jetson (self-hosted-tests.yml).
+          # test_remediate_ownerless_memories.py + test_memory_service_fixes.py
+          # (the two formerly enumerated here) are ci_safe-marked, so they
+          # still run in this lane. See tests/AGENTS.md.
           PYTHONPATH="${{ github.workspace }}:${{ github.workspace }}/services/zoe-data" pytest \
-            tests/unit/test_remediate_ownerless_memories.py \
-            tests/unit/test_memory_service_fixes.py \
+            tests/unit -m ci_safe \
             -x -q \
             --override-ini="asyncio_mode=auto"
           PYTHONPATH="${{ github.workspace }}/services/zoe-auth:${{ github.workspace }}/services/zoe-auth/tests" pytest \

@@ -198,10 +198,16 @@ async def test_identity_streams_as_zoe(stub):
 async def test_web_query_delegates_and_synthesizes(stub):
     """A web/research query delegates to Hermes AND folds the result into a
     spoken answer. Guards the post-tool-synthesis fix: the agent loop must run
-    to agent_end (not stop at the tool-call turn_end) so the answer isn't empty."""
+    to agent_end (not stop at the tool-call turn_end) so the answer isn't empty.
+
+    The prompt must be answerable ONLY via web delegation: the old weather-
+    phrased prompt became ambiguous once the brain grew a weather tool — the
+    live model validly picked either tool, flaking ~1-in-3 on the full-stack
+    host (the test skips on GitHub)."""
     s, zc = stub
     answer = await zc.run_zoe_core(
-        "Search the web for this weekend's weather forecast.", "deleg", "family-admin"
+        "Search the web for the latest headlines about the Mars sample return mission.",
+        "deleg", "family-admin"
     )
     assert len(s.delegations()) >= 1, f"did not delegate; requests={s.requests}"
     assert answer.strip(), "delegated but produced no synthesized answer (post-tool synthesis broken)"
