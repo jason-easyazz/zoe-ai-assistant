@@ -180,7 +180,8 @@ hears "done." So extract-a-service does **not** close the bug class on its own. 
 ## Wave 4 — Opportunistic, larger, do last 📝
 - **God-file splits:** `voice_tts.py` (4812) → router/session/STT; `chat.py` (4035) →
   SSE-protocol/routing-policy. Incremental, replay-gated. Note `chat.py:629` carries a duplicate
-  `use_flue_brain()`.
+  `use_flue_brain()`. Execution packet for the `voice_tts.py` split (symbols verified, 6 seam
+  PRs, per-PR gates): [`voice-tts-split-plan.md`](voice-tts-split-plan.md).
 - **Typed config module:** verified **533** `os.getenv/environ` reads across **112** files (worse
   than the review's ~400/~110); rocks test guards only ~3. Extend `runtime_env.py`/`gemma_endpoint.py`.
 - **Fence the engineering harness:** `greploop_guard.py`, `pipeline_store.py`,
