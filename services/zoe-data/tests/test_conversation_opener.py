@@ -228,3 +228,22 @@ def test_ender_ack_rotates():
     seen = {next_ender_ack() for _ in range(6)}
     assert len(seen) >= 2                   # rotation across defaults
     assert all(s.strip() for s in seen)
+
+
+@pytest.mark.parametrize("text", [
+    "that's all, thanks.", "Thanks, that's all", "That's all thank you",
+    "okay that's it, thanks", "no thanks, that's all",
+])
+def test_ender_with_courtesy_edges_fires(text):
+    # STT commonly appends/prepends courtesy words; edges are stripped (e2e
+    # caught "That's all, thanks." not matching).
+    assert is_conversation_ender(text) is True
+
+
+@pytest.mark.parametrize("text", [
+    "thanks",                      # courtesy alone is not an ender
+    "thank you so much",
+    "thanks for the recipe that's all about pasta",
+])
+def test_courtesy_alone_or_mid_sentence_does_not_fire(text):
+    assert is_conversation_ender(text) is False
