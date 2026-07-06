@@ -10,9 +10,9 @@
    - Full dark (default) + light ([data-theme="light"]); fills the stage at panel
      scale with a responsive tile grid.
 
-   NOTE on tokens: the spec's shared css/skybridge-tokens.css ramp is documented but
-   not yet committed, so design-system primitives are declared locally below, scoped
-   to .people-card. When the shared file lands these can collapse to var(--sky-*).
+   NOTE on tokens: the shared ds1 ramp (css/skybridge-ds.css) has landed, so the
+   local --people-s and --people-r primitives below now alias the canonical
+   --sky- tokens (with the original values kept as fallbacks).
 
    NOTE on specificity: legacy .people-card rules live inline in skybridge.html and
    in css/skybridge-data-widgets.css at ~(0,2..3,1) !important (they paint a flat
@@ -24,18 +24,18 @@
    never collide with the legacy .sky-people-* selectors. */
 
 .people-card {
-  /* --- spacing scale (§6, 4px) --- */
-  --people-s2: 8px;
-  --people-s3: 12px;
-  --people-s4: 16px;
-  --people-s5: 20px;
-  --people-s6: 24px;
-  --people-s8: 32px;
-  /* --- radius (§6) --- */
-  --people-r-sm: 12px;
-  --people-r-md: 20px;
-  --people-r-lg: 28px;
-  --people-r-xl: 38px;
+  /* --- spacing scale (§6, 4px) — aliases the canonical ds1 scale --- */
+  --people-s2: var(--sky-space-2, 8px);
+  --people-s3: var(--sky-space-3, 12px);
+  --people-s4: var(--sky-space-4, 16px);
+  --people-s5: var(--sky-space-5, 20px);
+  --people-s6: var(--sky-space-6, 24px);
+  --people-s8: var(--sky-space-8, 32px);
+  /* --- radius (§6) — aliases the canonical ds1 scale --- */
+  --people-r-sm: var(--sky-radius-sm, 12px);
+  --people-r-md: var(--sky-radius-md, 20px);
+  --people-r-lg: var(--sky-radius-lg, 28px);
+  --people-r-xl: var(--sky-radius-xl, 38px);
   /* --- neutral ramp (§4) — dark default: white → 26% white --- */
   --people-ink-0: #f6f8fb;
   --people-ink-1: rgba(246, 248, 251, 0.74);
@@ -53,7 +53,7 @@
   --people-accent-b: #4cc8ff;
   --people-accent-soft: rgba(94, 224, 194, 0.16);
 
-  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-family: var(--sky-font-sans, "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif);
   color: var(--people-ink-0);
 }
 
@@ -148,7 +148,9 @@ body:not(.sky-empty) .sky-card.people-card.sky-premium-card {
   display: inline-flex;
   align-items: center;
   gap: var(--people-s2);
-  min-height: 44px;
+  /* Finger target: >=48px tap height (was 44px, under the 48px bar). !important
+     because touch-adapter.css's button rule pins min-height to 44px important. */
+  min-height: 48px !important;
   padding: 0 var(--people-s4);
   border-radius: var(--people-r-sm);
   background: var(--people-tile-bg);
@@ -258,8 +260,8 @@ body:not(.sky-empty) .sky-card.people-card.sky-premium-card {
   font: inherit;
   color: inherit;
   overflow: hidden;
-  transition: transform 180ms cubic-bezier(0.32, 0.72, 0, 1),
-              border-color 180ms ease, box-shadow 180ms ease;
+  transition: transform var(--sky-dur-fast, 180ms) cubic-bezier(0.32, 0.72, 0, 1),
+              border-color var(--sky-dur-fast, 180ms) ease, box-shadow var(--sky-dur-fast, 180ms) ease;
 }
 
 /* accent wash on the tile surface (the subtle tint — colour with intent §4) */
@@ -274,7 +276,7 @@ body:not(.sky-empty) .sky-card.people-card.sky-premium-card {
       color-mix(in srgb, var(--people-accent-b) calc(var(--people-tint) * 42%), transparent) 70%,
       transparent);
   opacity: 0.9;
-  transition: opacity 180ms ease;
+  transition: opacity var(--sky-dur-fast, 180ms) ease;
 }
 
 .people-card .people-tile:hover {
@@ -346,7 +348,7 @@ body:not(.sky-empty) .sky-card.people-card.sky-premium-card {
   letter-spacing: 1.4px;
   text-transform: uppercase;
   padding: 3px 10px;
-  border-radius: 999px;
+  border-radius: var(--sky-radius-pill, 999px);
   color: color-mix(in srgb, var(--people-accent-a) 72%, white);
   background: rgba(var(--people-accent), 0.18);
   border: 1px solid rgba(var(--people-accent), 0.34);
@@ -390,7 +392,7 @@ body:not(.sky-empty) .sky-card.people-card.sky-premium-card {
   width: 6px;
   flex: 1 1 auto;
   min-height: 38px;
-  border-radius: 999px;
+  border-radius: var(--sky-radius-pill, 999px);
   background: var(--people-track);
   overflow: hidden;
   box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.16);
