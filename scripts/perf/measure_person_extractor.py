@@ -116,6 +116,10 @@ async def main() -> int:
         with open(args.turns_file, encoding="utf-8") as f:
             turns = [ln.strip() for ln in f if ln.strip()]
 
+    if not turns:
+        print("No turns to measure (empty --turns-file?).")
+        return 0
+
     rows = []
     for text in turns:
         ms, facts = await _llm_extract(text)
