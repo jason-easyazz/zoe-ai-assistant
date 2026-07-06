@@ -1,0 +1,97 @@
+"""ZOE_INTENT_DISPATCH_REQUIRE_TOKEN — strict token gate for the brain's
+write funnel (/api/system/intent-dispatch).
+
+The body carries an arbitrary ``user_id`` under loopback trust — the same
+impersonation class #1054 closed for the ``X-Zoe-User-Id`` header. The strict
+gate ships DARK (flag default OFF) because the flue brain sidecar does not
+send ``X-Internal-Token`` until its env is provisioned; unset-flag behavior is
+byte-for-byte today's trust plus a readiness WARNING per unproven caller.
+"""
+import logging
+
+import pytest
+
+pytestmark = pytest.mark.ci_safe  # pure dependency logic via fake Request
+
+import auth as auth_mod
+from auth import require_intent_dispatch_auth
+from fastapi import HTTPException
+
+
+class _Req:
+    """Minimal Request stand-in: client host + headers."""
+
+    def __init__(self, host="127.0.0.1", token=None):
+        self.client = type("C", (), {"host": host})()
+        self.headers = {"X-Internal-Token": token} if token else {}
+
+
+def _set_token(monkeypatch, value):
+    # module constant read at import in auth.py — patch the module attribute
+    monkeypatch.setattr(auth_mod, "_ZOE_INTERNAL_TOKEN", value)
+
+
+# ── flag OFF (default): today's trust + readiness warning ───────────────────
+
+@pytest.mark.asyncio
+async def test_flag_off_loopback_allowed_with_warning(monkeypatch, caplog):
+    monkeypatch.delenv("ZOE_INTENT_DISPATCH_REQUIRE_TOKEN", raising=False)
+    _set_token(monkeypatch, "sekrit")
+    caplog.set_level(logging.WARNING, logger=auth_mod.__name__)
+    await require_intent_dispatch_auth(_Req(host="127.0.0.1"))  # no exception
+    assert any("WITHOUT a proven X-Internal-Token" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_flag_off_loopback_with_valid_token_no_warning(monkeypatch, caplog):
+    monkeypatch.delenv("ZOE_INTENT_DISPATCH_REQUIRE_TOKEN", raising=False)
+    _set_token(monkeypatch, "sekrit")
+    caplog.set_level(logging.WARNING, logger=auth_mod.__name__)
+    await require_intent_dispatch_auth(_Req(host="127.0.0.1", token="sekrit"))
+    assert not caplog.records, "a token-proven caller must not warn"
+
+
+@pytest.mark.asyncio
+async def test_flag_off_external_still_403(monkeypatch):
+    monkeypatch.delenv("ZOE_INTENT_DISPATCH_REQUIRE_TOKEN", raising=False)
+    _set_token(monkeypatch, "sekrit")
+    with pytest.raises(HTTPException) as exc:
+        await require_intent_dispatch_auth(_Req(host="203.0.113.9"))
+    assert exc.value.status_code == 403
+
+
+# ── flag ON: token-proven only, loopback insufficient ────────────────────────
+
+@pytest.mark.asyncio
+async def test_flag_on_loopback_without_token_denied(monkeypatch):
+    monkeypatch.setenv("ZOE_INTENT_DISPATCH_REQUIRE_TOKEN", "1")
+    _set_token(monkeypatch, "sekrit")
+    with pytest.raises(HTTPException) as exc:
+        await require_intent_dispatch_auth(_Req(host="127.0.0.1"))
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_flag_on_wrong_token_denied(monkeypatch):
+    monkeypatch.setenv("ZOE_INTENT_DISPATCH_REQUIRE_TOKEN", "1")
+    _set_token(monkeypatch, "sekrit")
+    with pytest.raises(HTTPException):
+        await require_intent_dispatch_auth(_Req(host="127.0.0.1", token="wrong"))
+
+
+@pytest.mark.asyncio
+async def test_flag_on_valid_token_allowed_even_nonloopback(monkeypatch):
+    monkeypatch.setenv("ZOE_INTENT_DISPATCH_REQUIRE_TOKEN", "1")
+    _set_token(monkeypatch, "sekrit")
+    await require_intent_dispatch_auth(_Req(host="127.0.0.1", token="sekrit"))
+    await require_intent_dispatch_auth(_Req(host="10.0.0.5", token="sekrit"))
+
+
+@pytest.mark.asyncio
+async def test_flag_on_but_token_unconfigured_denies_everything(monkeypatch):
+    """Misconfiguration (flag on, no token provisioned) fails CLOSED — never
+    silently falls back to loopback trust."""
+    monkeypatch.setenv("ZOE_INTENT_DISPATCH_REQUIRE_TOKEN", "1")
+    _set_token(monkeypatch, "")
+    with pytest.raises(HTTPException):
+        await require_intent_dispatch_auth(_Req(host="127.0.0.1", token="anything"))
