@@ -147,15 +147,23 @@ async def test_calendar_create_no_date_defaults_to_today(monkeypatch):
 async def test_calendar_create_unparseable_date_returns_none(monkeypatch):
     """#1038 (review fix): a date that WAS given but can't be parsed must FAIL
     (None → ok:false), not silently land the event on today — the wrong day with
-    no signal. Distinct from the absent-date case above."""
+    no signal. Distinct from the absent-date case above.
+
+    The direct executor *declines* this case (returns None) and execute_intent
+    falls through to mcporter by design — so a spy (not _fail_mcporter) proves
+    the decline actually happened rather than the direct path being skipped,
+    while a dead return still exercises the ok:false end state."""
     db = _FakeDB()
     _silence_ui(monkeypatch)
     monkeypatch.setattr("database.get_db_ctx", _fake_db_ctx(db))
 
-    async def dead_mcporter(_cmd):
+    mcporter_calls = []
+
+    async def spy_dead_mcporter(cmd):
+        mcporter_calls.append(cmd)
         return None
 
-    monkeypatch.setattr("intent_router._run_mcporter", dead_mcporter)
+    monkeypatch.setattr("intent_router._run_mcporter", spy_dead_mcporter)
 
     result = await execute_intent(
         Intent("calendar_create", {"title": "Dentist", "date": "the twelfth of never"}),
@@ -164,6 +172,9 @@ async def test_calendar_create_unparseable_date_returns_none(monkeypatch):
 
     assert result is None
     assert db.sql_matching("INSERT INTO events") == []
+    # The fall-through fired → the direct executor really declined (no vacuous
+    # pass where the direct path was never reached at all).
+    assert mcporter_calls, "expected fall-through to mcporter after the direct decline"
 
 
 @pytest.mark.asyncio
