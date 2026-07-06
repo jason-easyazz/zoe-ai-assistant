@@ -124,6 +124,29 @@
         return cardFrame(props, body, { tone: 'timer' + (expired ? ' sky-timer-ringing' : ''), hideHeader: true, hideStatus: true });
     }
 
+    // ── zoe-compose adapters ────────────────────────────────────────────────
+    // The generic renderers below are thin props→tree adapters over the shared
+    // primitive catalog (window.ZoeCompose, loaded before this file). Producers
+    // are untouched — servers keep emitting the same card shapes; only the BODY
+    // markup is composed from catalog primitives. Actions stay on the cardFrame
+    // path (props.actions → buttonHtml) so open/route semantics are unchanged.
+    function composedBody(tree, fallbackText) {
+        if (window.ZoeCompose && typeof window.ZoeCompose.render === 'function') {
+            return '<div class="zx-card-body">' + window.ZoeCompose.render(tree) + '</div>';
+        }
+        // zoe-compose.js failed to load: degrade to a minimal escaped-text body
+        // so the panel can never blank.
+        return '<div class="zx-card-body"><p>' + escapeHtml(fallbackText || '') + '</p></div>';
+    }
+    function textNode(text, role) {
+        return { component: 'Text', text: text, role: role || 'body' };
+    }
+    function listRowNode(title, detail) {
+        const node = { component: 'ListRow', title: title };
+        if (detail) node.detail = detail;
+        return node;
+    }
+
     function renderStatus(props) {
         if (props.source === 'calendar_show') return renderCalendar(props);
         if (props.source === 'weather_current' || props.source === 'weather_forecast') return renderWeather(props);
@@ -131,11 +154,14 @@
         if (props.source === 'people_directory') return renderPeopleDirectory(props);
         if (props.source === 'person_profile') return renderPersonProfile(props);
         if (props.source === 'clock_show') return renderClock(props);
-        const body = [
-            props.metric ? '<div class="sky-widget-metric"><strong>' + escapeHtml(props.metric) + '</strong><span>' + escapeHtml(props.metric_label || '') + '</span></div>' : '',
-            '<div class="sky-card-body">' + escapeHtml(props.body || props.message || '') + '</div>'
-        ].join('');
-        return cardFrame(props, body, { wide: !!props.wide, tone: props.tone || '' });
+        // Generic tail: kicker/title/status render on the cardFrame header as
+        // before; the body becomes a composed tree (optional metric Stat + text).
+        const message = props.body || props.message || '';
+        const children = [];
+        if (props.metric) children.push({ component: 'Stat', value: props.metric, label: props.metric_label || '' });
+        children.push(textNode(message, 'body'));
+        const tree = { component: 'Stack', gap: 'md', children: children };
+        return cardFrame(props, composedBody(tree, message), { wide: !!props.wide, tone: props.tone || '' });
     }
 
     function formatEventTime(item) {
@@ -1065,12 +1091,16 @@
             ['Surface', props.title || 'Page'],
             ['Best for', props.summary || 'Zoe context'],
             ['Mode', 'Open, summarize, or keep as context']
-        ].map(pair => '<div class="sky-field"><span>' + escapeHtml(pair[0]) + '</span><strong>' + escapeHtml(pair[1]) + '</strong></div>').join('');
+        ].map(pair => listRowNode(pair[0], pair[1]));
         var cardActions = [
             { label: 'Open page', route: props.route, type: 'open' },
             { label: 'Show related settings', query: props.title + ' settings' }
         ];
-        return cardFrame(Object.assign({}, props, { actions: cardActions, status: props.status || 'Surface' }), '<div class="sky-card-body">' + escapeHtml(props.summary || '') + '</div><div class="sky-widget-strip">' + fields + '</div>', { wide: false, tone: 'page-card' });
+        const tree = { component: 'Stack', gap: 'md', children: [
+            textNode(props.summary || '', 'body'),
+            { component: 'Stack', gap: 'sm', children: fields }
+        ] };
+        return cardFrame(Object.assign({}, props, { actions: cardActions, status: props.status || 'Surface' }), composedBody(tree, props.summary || ''), { wide: false, tone: 'page-card' });
     }
 
     function renderSetting(props) {
@@ -1079,61 +1109,138 @@
         const fields = [
             ['Risk', risk],
             ['Control area', props.domain || 'settings']
-        ].map(pair => '<div class="sky-field"><span>' + escapeHtml(pair[0]) + '</span><strong>' + escapeHtml(pair[1]) + '</strong></div>').join('');
+        ].map(pair => listRowNode(pair[0], pair[1]));
         var settingActions = [
             { label: 'Open settings', route: props.route, type: 'open' },
             { label: changeLabel, query: 'change ' + props.title, kind: risk === 'critical' ? 'warn' : 'normal' }
         ];
-        return cardFrame(Object.assign({ status: risk }, props, { actions: settingActions }), '<div class="sky-card-body">' + escapeHtml(props.summary || '') + '</div><div class="sky-widget-strip">' + fields + '</div>', { wide: false, tone: 'setting-card' });
+        const tree = { component: 'Stack', gap: 'md', children: [
+            textNode(props.summary || '', 'body'),
+            { component: 'Stack', gap: 'sm', children: fields }
+        ] };
+        return cardFrame(Object.assign({ status: risk }, props, { actions: settingActions }), composedBody(tree, props.summary || ''), { wide: false, tone: 'setting-card' });
     }
 
     function renderPageGrid(props) {
-        const items = (props.items || []).slice(0, 4).map(item => {
-            return '<div class="sky-field"><span>' + escapeHtml(item.title) + '</span><strong>' + escapeHtml(item.summary) + '</strong></div>';
-        }).join('');
-        return cardFrame(Object.assign({ status: 'Map' }, props), '<div class="sky-card-grid">' + items + '</div>', { wide: true, tone: 'map-card' });
+        const rows = (props.items || []).slice(0, 4).map(item => listRowNode(item.title, item.summary));
+        const tree = { component: 'Grid', columns: 2, children: rows };
+        return cardFrame(Object.assign({ status: 'Map' }, props), composedBody(tree, props.summary || props.title || ''), { wide: true, tone: 'map-card' });
     }
 
     function renderSettingsOverview(props) {
-        const items = (props.items || []).slice(0, 4).map(item => {
-            return '<div class="sky-field"><span>' + escapeHtml(item.title) + ' · ' + escapeHtml(item.risk) + '</span><strong>' + escapeHtml(item.summary) + '</strong></div>';
-        }).join('');
-        return cardFrame(Object.assign({ status: 'Settings' }, props), '<div class="sky-card-grid">' + items + '</div>', { wide: true, tone: 'map-card' });
+        const rows = (props.items || []).slice(0, 4).map(item => {
+            const label = item.risk ? item.title + ' · ' + item.risk : item.title;
+            return listRowNode(label, item.summary);
+        });
+        const tree = { component: 'Grid', columns: 2, children: rows };
+        return cardFrame(Object.assign({ status: 'Settings' }, props), composedBody(tree, props.summary || props.title || ''), { wide: true, tone: 'map-card' });
     }
 
     function renderList(props) {
         const rows = (props.items || []).slice(0, 6).map((item, index) => {
             const title = typeof item === 'string' ? item : item.title || item.text || item.label || JSON.stringify(item);
             const detail = typeof item === 'object' && item ? (item.summary || item.description || item.value || '') : '';
-            return '<div class="sky-field"><span>' + escapeHtml(String(index + 1).padStart(2, '0')) + '</span><strong>' + escapeHtml(title) + '</strong>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</div>';
-        }).join('');
-        return cardFrame(Object.assign({ status: props.status || 'List' }, props), '<div class="sky-card-grid">' + rows + '</div>', { wide: false, tone: 'list-card' });
+            // Preserve the legacy zero-padded position cue (01, 02, ...) — generic
+            // lists are often ordered (results, rankings); it rides the detail slot.
+            const cue = String(index + 1).padStart(2, '0');
+            return listRowNode(title, detail ? cue + ' · ' + detail : cue);
+        });
+        const tree = { component: 'Stack', gap: 'sm', children: rows };
+        return cardFrame(Object.assign({ status: props.status || 'List' }, props), composedBody(tree, props.title || ''), { wide: false, tone: 'list-card' });
+    }
+
+    // smart_home cards (contract: content {title, devices}). No live producer
+    // emits this card_type yet — panel_show_smart_home uses the executor
+    // overlay — so the shape follows the card-contract registry, tolerating the
+    // overlay's entities/items aliases.
+    function renderSmartHome(props) {
+        const devices = props.devices || props.entities || props.items || [];
+        const rows = devices.slice(0, 8).map(device => {
+            if (typeof device !== 'object' || !device) return listRowNode(String(device || 'Device'), '');
+            return listRowNode(device.name || device.entity_id || device.title || 'Device', device.state || device.status || '');
+        });
+        const tree = rows.length
+            ? { component: 'Grid', columns: 2, children: rows }
+            : { component: 'Stack', children: [textNode('No devices available.', 'caption')] };
+        return cardFrame(Object.assign({ status: props.status || 'Smart home' }, props), composedBody(tree, props.title || ''), { wide: true, tone: 'smart-home-card' });
+    }
+
+    // media cards (contract: content {title, items}). No live producer emits
+    // this card_type yet (panel_show_media uses the executor overlay); items
+    // render as ListRows, upgraded to a MediaTile when a same-origin artwork
+    // src exists (foreign URLs stay text-only — same policy as zoe-compose).
+    function renderMedia(props) {
+        const items = props.items || [];
+        const children = items.slice(0, 6).map(item => {
+            if (typeof item !== 'object' || !item) return listRowNode(String(item || 'Media'), '');
+            const title = item.title || item.name || item.track || 'Media';
+            const subtitle = item.subtitle || item.artist || item.album || '';
+            const src = String(item.artwork || item.album_art || item.image || item.art || '');
+            if (src.charAt(0) === '/' && src.charAt(1) !== '/') {
+                return { component: 'MediaTile', src: src, title: title, subtitle: subtitle };
+            }
+            return listRowNode(title, subtitle);
+        });
+        const tree = { component: 'Stack', gap: 'sm', children: children };
+        return cardFrame(Object.assign({ status: props.status || 'Media' }, props), composedBody(tree, props.title || ''), { wide: false, tone: 'media-card' });
+    }
+
+    // research_report cards (contract: content {title, sections}). No live
+    // producer emits this card_type yet (panel_show_research_report uses the
+    // executor overlay); sections render as kicker + body text + ListRows.
+    function renderResearchReport(props) {
+        const sections = props.sections || [];
+        const children = [];
+        sections.slice(0, 4).forEach(section => {
+            if (typeof section !== 'object' || !section) {
+                if (section) children.push(textNode(String(section), 'body'));
+                return;
+            }
+            const heading = section.title || section.heading || '';
+            if (heading) children.push(textNode(heading, 'kicker'));
+            const bodyText = section.body || section.text || section.summary || '';
+            if (bodyText) children.push(textNode(bodyText, 'body'));
+            const items = section.items || section.results || section.sources || [];
+            items.slice(0, 5).forEach(item => {
+                if (typeof item !== 'object' || !item) {
+                    children.push(listRowNode(String(item || 'Result'), ''));
+                    return;
+                }
+                children.push(listRowNode(item.title || item.name || 'Result', item.value || item.summary || item.location || ''));
+            });
+        });
+        const tree = { component: 'Stack', gap: 'md', children: children.length ? children : [textNode('No report sections available.', 'caption')] };
+        return cardFrame(Object.assign({ status: props.status || 'Research' }, props), composedBody(tree, props.title || ''), { wide: true, tone: 'research-card' });
     }
 
     function renderActionForm(props) {
         if (props.source === 'list_create') {
-            const fields = (props.fields || []).slice(0, 2).map(field => {
-                const value = field.value == null || field.value === '' ? 'Not set' : field.value;
-                return '<div class="sky-list-create-field"><span>' + escapeHtml(field.label || field.name || 'Field') + '</span><strong>' + escapeHtml(value) + '</strong></div>';
-            }).join('');
+            const fieldRows = (props.fields || []).slice(0, 2).map(field => {
+                const value = field.value == null || field.value === '' ? 'Not set' : String(field.value);
+                return listRowNode(field.label || field.name || 'Field', value);
+            });
             const actions = props.actions || [];
-            const body = [
-                '<div class="sky-list-create-prompt">',
-                '<div class="sky-list-create-copy"><span>New list</span><h3>Name this list</h3><p>' + escapeHtml(props.summary || 'What should I name it?') + '</p></div>',
-                '<div class="sky-list-create-fields">' + fields + '</div>',
-                '</div>'
-            ].join('');
-            return cardFrame(Object.assign({}, props, { actions }), body, { wide: true, tone: 'zoe-list-card list-create-card personal', hideHeader: true, hideStatus: true });
+            const tree = { component: 'Stack', gap: 'md', children: [
+                textNode('New list', 'kicker'),
+                textNode('Name this list', 'title'),
+                textNode(props.summary || 'What should I name it?', 'body'),
+                { component: 'Grid', columns: 2, children: fieldRows }
+            ] };
+            return cardFrame(Object.assign({}, props, { actions }), composedBody(tree, props.summary || 'What should I name it?'), { wide: true, tone: 'zoe-list-card list-create-card personal', hideHeader: true, hideStatus: true });
         }
-        const fields = (props.fields || []).slice(0, 6).map(field => {
-            const value = field.value == null || field.value === '' ? 'Not set' : field.value;
-            return '<div class="sky-field"><span>' + escapeHtml(field.label || field.name || 'Field') + '</span><strong>' + escapeHtml(value) + '</strong></div>';
-        }).join('');
+        const fieldRows = (props.fields || []).slice(0, 6).map(field => {
+            const value = field.value == null || field.value === '' ? 'Not set' : String(field.value);
+            return listRowNode(field.label || field.name || 'Field', value);
+        });
         const actions = props.actions || [
             { label: 'Review', query: 'review ' + (props.title || 'form') },
             { label: 'Confirm', query: 'confirm ' + (props.form_id || props.title || 'form') }
         ];
-        return cardFrame(Object.assign({ status: 'Form' }, props, { actions }), '<div class="sky-card-body">' + escapeHtml(props.summary || 'Review the fields before Zoe takes action.') + '</div><div class="sky-card-grid">' + fields + '</div>', { wide: true, tone: 'form-card' });
+        const tree = { component: 'Stack', gap: 'md', children: [
+            textNode(props.summary || 'Review the fields before Zoe takes action.', 'body'),
+            { component: 'Grid', columns: 2, children: fieldRows }
+        ] };
+        return cardFrame(Object.assign({ status: 'Form' }, props, { actions }), composedBody(tree, props.summary || ''), { wide: true, tone: 'form-card' });
     }
 
     function renderUnsupportedContract(props) {
@@ -1152,10 +1259,12 @@
         // the renderer isn't loaded or the tree is missing, degrade to status.
         var tree = props && props.tree;
         if (!tree || !window.ZoeCompose || typeof window.ZoeCompose.render !== 'function') {
-            return renderStatus({
-                title: (props && props.title) || 'Zoe',
-                body: (props && props.summary) || 'This card could not be displayed.'
-            });
+            // Minimal escaped-text fallback (deliberately NOT the composed
+            // renderStatus: this branch also covers "zoe-compose failed to
+            // load", and its output must never depend on the catalog).
+            var fallbackTitle = (props && props.title) || 'Zoe';
+            var fallbackBody = (props && props.summary) || 'This card could not be displayed.';
+            return cardFrame({ title: fallbackTitle }, '<div class="zx-card-body"><p>' + escapeHtml(fallbackBody) + '</p></div>', { tone: 'compose-card' });
         }
         var body = '<div class="zx-card-body">' + window.ZoeCompose.render(tree) + '</div>';
         return cardFrame(Object.assign({ status: 'Composed' }, props), body, {
@@ -1245,9 +1354,9 @@
         list: renderList,
         action_form: renderActionForm,
         form: renderActionForm,
-        media: renderList,
-        smart_home: renderList,
-        research_report: renderList,
+        media: renderMedia,
+        smart_home: renderSmartHome,
+        research_report: renderResearchReport,
         auth_challenge: renderAuthChallenge,
         timer: renderTimer,
         compose: renderCompose,
