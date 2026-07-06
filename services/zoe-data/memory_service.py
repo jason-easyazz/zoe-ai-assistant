@@ -65,6 +65,16 @@ _MEMPALACE_DATA = os.environ.get(
 )
 
 _AUDIT_COLLECTION = os.environ.get("ZOE_MEMORY_AUDIT_COLLECTION", "mempalace_audit")
+
+# Constant embedding for audit rows — they are metadata-filtered only, never
+# semantically searched, so computing a real MiniLM vector per memory mutation
+# is pure waste. 384-dim to match the collection's existing rows; unit-basis
+# (not all-zero) so it is valid under any hnsw space. Kept as a TUPLE for
+# immutability; chromadb 0.6.3 validation requires a list-of-lists
+# (types.normalize_embeddings: isinstance(target[0], list)), so callers pass a
+# fresh list(...) copy per upsert — which also means no shared mutable object
+# ever reaches chroma. See _append_audit_sync.
+_AUDIT_NULL_EMBEDDING: tuple[float, ...] = (1.0,) + (0.0,) * 383
 _AUDIT_CLIENTS: dict[str, Any] = {}
 _AUDIT_CLIENTS_LOCK = threading.Lock()
 
@@ -1476,7 +1486,24 @@ class MemoryService:
             "after": _json.dumps(after or {}, default=str)[:4000],
             "reason": reason,
         }
-        col.upsert(ids=[audit_id], documents=[summary], metadatas=[metadata])
+        # Audit rows are only ever METADATA-filtered (_delete_audit_for_user_sync
+        # uses col.get(where=...)); nothing queries them semantically. Providing
+        # an explicit constant embedding skips the per-mutation ONNX MiniLM
+        # inference chroma would otherwise run on the summary (opensrc-verified,
+        # chromadb 0.6.3 CollectionCommon._validate_and_prepare_upsert_request:
+        # embeds only when embeddings is None) and stops the audit HNSW index
+        # growing meaningful vectors it will never search. 384-dim matches the
+        # collection's existing MiniLM rows; unit-basis (not all-zero) so the
+        # vector stays valid under any hnsw space. Memory-pressure profile
+        # candidate #5 (docs/knowledge/memory-pressure-profile.md).
+        col.upsert(
+            ids=[audit_id],
+            documents=[summary],
+            metadatas=[metadata],
+            # fresh list per call: chroma 0.6.3 requires list-of-lists, and a
+            # per-call copy means chroma can never mutate the shared constant
+            embeddings=[list(_AUDIT_NULL_EMBEDDING)],
+        )
 
 
     def _entity_ids_sync(self, entity_id: str, user_id: str) -> list[str]:
