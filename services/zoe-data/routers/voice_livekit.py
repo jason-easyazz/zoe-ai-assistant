@@ -13,10 +13,17 @@ PTT fallback: if the browser sends ptt_start / ptt_stop the old PTT path is
 still honoured — VAD only fires when no ptt_start has been received for this
 participant since their last IDLE state.
 
+Barge-in (ZOE_VOICE_BARGE_IN=1, default OFF): frames keep flowing through a
+per-participant Silero VAD during PROCESSING/COOLDOWN; sustained speech cancels
+the in-flight pipeline, sends {"type": "stop_playback"} to the browser, and
+seeds LISTENING with the interrupting speech. When the flag is off (or the
+Silero model is unavailable) the legacy RMS energy VAD runs unchanged.
+
 Data channel messages sent to browser:
   {"type": "state",      "state": "listening"|"thinking"|"responding"|"ambient"}
   {"type": "transcript", "role": "user"|"zoe", "text": "..."}
   {"type": "audio",      "audio_base64": "...", "content_type": "audio/wav"}
+  {"type": "stop_playback"}   — barge-in: stop TTS playback immediately
   {"type": "done"}
 
 Data channel messages accepted from browser:
@@ -66,6 +73,56 @@ _VAD_MIN_SPEECH_FRAMES = int(os.environ.get("ZOE_LK_MIN_SPEECH_FRAMES", "5"))  #
 # Seconds to wait in COOLDOWN before auto-returning to IDLE if no playback_done.
 _COOLDOWN_TIMEOUT_S = float(os.environ.get("ZOE_LK_COOLDOWN_TIMEOUT_S", "4.0"))
 
+# ── Barge-in / Silero VAD (flag-gated, default OFF) ──────────────────────────
+# Silero hop size is 512 samples @16kHz — 32ms per completed hop (voice_vad.HOP_MS;
+# duplicated here so this module never imports voice_vad/numpy at import time).
+_SILERO_HOP_MS = 32.0
+
+
+def _barge_in_enabled() -> bool:
+    """ZOE_VOICE_BARGE_IN — interruptible conversation. Read from os.environ on
+    every frame (like the other opt-in flags here) so a service restart after an
+    env flip is all it takes; default OFF keeps today's half-duplex behaviour."""
+    return os.environ.get("ZOE_VOICE_BARGE_IN", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _barge_min_hops() -> int:
+    """Sustained-speech gate: consecutive 32ms Silero hops ≥ threshold required to
+    barge in (ZOE_BARGE_MIN_MS, default 250ms ≈ 8 hops). This duration gate — plus
+    browser echoCancellation — is what stops Zoe's own TTS residual from
+    triggering an interruption."""
+    try:
+        ms = float(os.environ.get("ZOE_BARGE_MIN_MS", "250"))
+    except (TypeError, ValueError):
+        ms = 250.0
+    return max(1, math.ceil(ms / _SILERO_HOP_MS))
+
+
+def _smart_turn_enabled() -> bool:
+    """ZOE_SMART_TURN_ENABLED — end-of-turn model instead of a bare silence
+    window (V2 endpointing). Only consulted on the barge-in (Silero) path; when
+    OFF, or when the model is unavailable, the silence window ends the turn
+    exactly as before."""
+    return os.environ.get("ZOE_SMART_TURN_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _smart_turn_threshold() -> float:
+    """End-of-turn probability at/above which the turn ends (ZOE_SMART_TURN_THRESHOLD)."""
+    try:
+        return float(os.environ.get("ZOE_SMART_TURN_THRESHOLD", "0.5"))
+    except (TypeError, ValueError):
+        return 0.5
+
+
+def _smart_turn_max_checks() -> int:
+    """Bound on incomplete-verdict extensions per turn (ZOE_SMART_TURN_MAX_CHECKS,
+    default 2). After this many "still mid-thought" verdicts the turn ends anyway
+    — the model can extend a pause, never hang a conversation."""
+    try:
+        return max(1, int(os.environ.get("ZOE_SMART_TURN_MAX_CHECKS", "2")))
+    except (TypeError, ValueError):
+        return 2
+
 _VOICE_HEALTH: dict = {
     "status": "starting",
     "backend": None,
@@ -77,6 +134,7 @@ _VOICE_HEALTH: dict = {
     "pipeline_successes": 0,
     "pipeline_failures": 0,
     "playback_completions": 0,
+    "barge_ins": 0,
     "last_stage": "startup",
     "last_connected_at": None,
     "last_disconnected_at": None,
@@ -437,7 +495,13 @@ async def _prewarm_brain(user_id: str, session_id: str) -> None:
 
 
 async def _run_pipeline(local_participant, frames: list[bytes], user_id: str, session_id: str) -> None:
-    """STT → LLM → TTS pipeline, called once end-of-speech is detected."""
+    """STT → LLM → TTS pipeline, called once end-of-speech is detected.
+
+    Cancellation-safe (barge-in cancels this task): every ``except Exception``
+    below deliberately lets ``asyncio.CancelledError`` (a BaseException)
+    propagate, the STT temp file is unlinked in a ``finally``, and no counters
+    are mutated on the cancel path — so a cancelled turn leaks no state.
+    """
     pipeline_started = time.monotonic()
     await _send_data(local_participant, {"type": "state", "state": "thinking"})
 
@@ -615,6 +679,198 @@ async def _run_text_pipeline(local_participant, message: str, user_id: str, sess
     await _send_data(local_participant, {"type": "done"})
 
 
+def _schedule_pipeline(sid: str, ps: dict, local_participant, frames_snapshot: list) -> None:
+    """Kick off the STT→LLM→TTS pipeline task for an utterance and track its
+    handle in ``ps["pipeline_task"]`` (so barge-in can cancel it)."""
+    task = asyncio.ensure_future(
+        _run_pipeline(
+            local_participant,
+            frames_snapshot,
+            ps.get("user_id", "guest"),
+            ps.get("session_id", f"livekit-{sid[:8]}"),
+        )
+    )
+    ps["pipeline_task"] = task
+    task.add_done_callback(
+        lambda _t, _sid=sid, _ps=ps: _on_pipeline_done(_sid, _ps)
+    )
+
+
+def _ensure_participant_vad(ps: dict):
+    """Lazily create the per-participant Silero VAD stream. Returns None (and
+    remembers the failure) when the model is unavailable → caller falls back to
+    the legacy RMS path. Never raises."""
+    if ps.get("vad_failed"):
+        return None
+    vad = ps.get("vad")
+    if vad is None:
+        try:
+            import voice_vad
+            vad = voice_vad.create_vad()
+        except Exception as exc:  # onnxruntime/numpy missing, etc.
+            logger.debug("Silero VAD init failed (non-fatal): %s", exc)
+            vad = None
+        if vad is None:
+            ps["vad_failed"] = True
+        else:
+            ps["vad"] = vad
+    return vad
+
+
+def _end_turn(sid: str, ps: dict, local_participant) -> None:
+    """LISTENING → PROCESSING: snapshot the utterance and launch the pipeline.
+    Shared by the plain silence endpoint and the smart-turn-approved endpoint."""
+    logger.debug(
+        "LiveKit VAD [%s]: LISTENING → PROCESSING (silero, frames=%d)",
+        sid[:8], len(ps["frames"]),
+    )
+    ps["state"] = _ParticipantState.PROCESSING
+    frames_snapshot = list(ps["frames"])
+    ps["frames"] = []
+    ps["speech_count"] = 0
+    ps["silence_count"] = 0
+    ps["turn_checks"] = 0
+    ps["turn_check_task"] = None
+    _schedule_pipeline(sid, ps, local_participant, frames_snapshot)
+
+
+async def _smart_turn_check(sid: str, ps: dict, local_participant) -> None:
+    """Score end-of-turn on the buffered utterance (smart-turn v3, ~200ms on one
+    CPU thread via to_thread) and either end the turn or extend the listen.
+
+    Discards its verdict if the world moved on while scoring: a barge-in/reset
+    (state left LISTENING) or resumed speech (silence_count went back to 0).
+    Fail-open on any error — the turn ends, matching legacy behaviour."""
+    import numpy as np
+
+    import voice_turn
+
+    prob = 1.0
+    try:
+        det = voice_turn.get_smart_turn()
+        if det is not None:
+            pcm = np.frombuffer(b"".join(ps["frames"]), dtype=np.int16)
+            prob = await asyncio.to_thread(det.end_of_turn_prob, pcm)
+    except Exception as exc:  # never take down the frame loop
+        logger.warning("smart-turn [%s]: check failed (%s) — ending turn", sid[:8], exc)
+    finally:
+        ps["turn_check_task"] = None
+    if ps.get("state") != _ParticipantState.LISTENING:
+        return  # barged / reset while scoring — verdict is moot
+    if ps.get("silence_count", 0) == 0:
+        return  # speech resumed while scoring — keep listening
+    if prob >= _smart_turn_threshold() or ps.get("turn_checks", 0) + 1 >= _smart_turn_max_checks():
+        logger.debug("smart-turn [%s]: p=%.2f → end of turn", sid[:8], prob)
+        _end_turn(sid, ps, local_participant)
+    else:
+        ps["turn_checks"] = ps.get("turn_checks", 0) + 1
+        ps["silence_count"] = max(1, _VAD_SILENCE_FRAMES // 2)
+        logger.debug(
+            "smart-turn [%s]: p=%.2f → still mid-thought, extending listen (check %d/%d)",
+            sid[:8], prob, ps["turn_checks"], _smart_turn_max_checks(),
+        )
+
+
+async def _handle_frame_barge_in(raw: bytes, sid: str, ps: dict, local_participant, vad) -> None:
+    """Silero-VAD state machine for one incoming frame (ZOE_VOICE_BARGE_IN=1).
+
+    Mirrors the legacy RMS state machine for IDLE/LISTENING (same frame/hop-count
+    knobs → same ~150ms speech-start and ~600ms end-of-speech timing), and adds
+    the full-duplex part: during PROCESSING and COOLDOWN frames keep flowing
+    through Silero, and sustained speech (≥ _barge_min_hops consecutive 32ms hops
+    at ≥ threshold) interrupts Zoe — cancel the pipeline, tell the browser to stop
+    playback, and seed LISTENING with the interrupting speech so it isn't lost.
+    """
+    import voice_vad
+
+    threshold = voice_vad.speech_threshold()
+    probs = vad.process_hops(raw)
+    state = ps["state"]
+
+    if state == _ParticipantState.IDLE:
+        # Buffer tentatively (a frame may complete no hop); silent hops discard.
+        ps["frames"].append(raw)
+        if not probs:
+            return
+        if max(probs) >= threshold:
+            ps["speech_count"] = ps.get("speech_count", 0) + 1
+            if ps["speech_count"] >= _VAD_MIN_SPEECH_FRAMES:
+                ps["state"] = _ParticipantState.LISTENING
+                ps["silence_count"] = 0
+                ps["turn_checks"] = 0
+                logger.debug(
+                    "LiveKit VAD [%s]: IDLE → LISTENING (silero p=%.2f)",
+                    sid[:8], max(probs),
+                )
+                await _send_data(local_participant, {"type": "state", "state": "listening"})
+                # Warm the brain worker now so it's ready by end-of-speech.
+                asyncio.ensure_future(_prewarm_brain(ps.get("user_id") or "guest", ps.get("session_id") or ""))
+        else:
+            ps["speech_count"] = 0
+            ps["frames"] = []  # discard sub-threshold noise
+
+    elif state == _ParticipantState.LISTENING:
+        ps["frames"].append(raw)
+        if not probs:
+            return
+        if max(probs) >= threshold:
+            ps["silence_count"] = 0
+        else:
+            ps["silence_count"] = ps.get("silence_count", 0) + 1
+            if ps["silence_count"] >= _VAD_SILENCE_FRAMES:
+                if ps.get("turn_check_task") is not None:
+                    return  # smart-turn verdict in flight — keep buffering
+                # V2 endpointing: before ending the turn on silence alone, ask
+                # the end-of-turn model whether the speaker is actually done
+                # (a mid-thought pause extends the listen instead of cutting off).
+                if _smart_turn_enabled():
+                    import voice_turn
+                    if voice_turn.get_smart_turn() is not None:
+                        ps["turn_check_task"] = asyncio.ensure_future(
+                            _smart_turn_check(sid, ps, local_participant)
+                        )
+                        return
+                _end_turn(sid, ps, local_participant)
+
+    elif state in (_ParticipantState.PROCESSING, _ParticipantState.COOLDOWN):
+        # Full-duplex: keep listening while Zoe thinks/speaks. Count CONSECUTIVE
+        # speech hops — the sustained-speech gate against echo/TTS residual.
+        for p in probs:
+            if p >= threshold:
+                ps["barge_hops"] = ps.get("barge_hops", 0) + 1
+            else:
+                ps["barge_hops"] = 0
+                ps["barge_frames"] = []
+        if ps.get("barge_hops", 0) > 0 or not probs:
+            # Buffer candidate speech (and hop-incomplete frames, cleared on the
+            # next silent hop) so the interruption seeds the next utterance.
+            ps["barge_frames"].append(raw)
+
+        if ps.get("barge_hops", 0) >= _barge_min_hops():
+            speech_ms = int(ps["barge_hops"] * _SILERO_HOP_MS)
+            # LISTENING first: _on_pipeline_done fires when the cancelled task
+            # settles and must not flip us into COOLDOWN.
+            ps["state"] = _ParticipantState.LISTENING
+            ps["frames"] = list(ps["barge_frames"])
+            ps["speech_count"] = 0
+            ps["silence_count"] = 0
+            ps["turn_checks"] = 0
+            ps["barge_hops"] = 0
+            ps["barge_frames"] = []
+            ps["cooldown_deadline"] = 0.0
+            pipeline_task = ps.get("pipeline_task")
+            if state == _ParticipantState.PROCESSING and pipeline_task is not None and not pipeline_task.done():
+                pipeline_task.cancel()
+            _VOICE_HEALTH["barge_ins"] = _VOICE_HEALTH.get("barge_ins", 0) + 1
+            logger.info(
+                "LiveKit BARGE-IN [%s]: %s interrupted after %dms speech",
+                sid[:8], state.name, speech_ms,
+            )
+            await _send_data(local_participant, {"type": "stop_playback"})
+            await _send_data(local_participant, {"type": "state", "state": "listening"})
+            asyncio.ensure_future(_prewarm_brain(ps.get("user_id") or "guest", ps.get("session_id") or ""))
+
+
 async def _collect_audio_stream(
     track,
     sid: str,
@@ -630,6 +886,9 @@ async def _collect_audio_stream(
       silence_count— consecutive below-threshold frames (resets on speech)
       ptt_active   — True while a ptt_start has been received but not ptt_stop
       pipeline_task— the currently running asyncio.Task for the pipeline
+      vad          — per-participant SileroVAD stream (barge-in flag only)
+      barge_hops   — consecutive speech hops seen while PROCESSING/COOLDOWN
+      barge_frames — buffered interrupting-speech frames (seed the next turn)
     """
     global _force_aiortc
     audio_stream = None
@@ -666,14 +925,24 @@ async def _collect_audio_stream(
                 break
 
             raw = bytes(frame_event.frame.data)
-            energy = _rms(raw)
-            state = ps["state"]
 
             # ── PTT override path ─────────────────────────────────────────
             if ps.get("ptt_active"):
                 # Old PTT logic: just buffer frames, pipeline triggered by ptt_stop
                 ps["frames"].append(raw)
                 continue
+
+            # ── Barge-in path (ZOE_VOICE_BARGE_IN=1 + Silero available) ───
+            # Flag OFF (default) or model unavailable → the legacy RMS path
+            # below runs exactly as before (frames ignored while busy).
+            if _barge_in_enabled():
+                vad = _ensure_participant_vad(ps)
+                if vad is not None:
+                    await _handle_frame_barge_in(raw, sid, ps, local_participant, vad)
+                    continue
+
+            energy = _rms(raw)
+            state = ps["state"]
 
             # ── VAD path ──────────────────────────────────────────────────
             if state == _ParticipantState.IDLE:
@@ -708,18 +977,7 @@ async def _collect_audio_stream(
                         ps["frames"] = []
                         ps["speech_count"] = 0
                         ps["silence_count"] = 0
-                        task = asyncio.ensure_future(
-                            _run_pipeline(
-                                local_participant,
-                                frames_snapshot,
-                                ps.get("user_id", "guest"),
-                                ps.get("session_id", f"livekit-{sid[:8]}"),
-                            )
-                        )
-                        ps["pipeline_task"] = task
-                        task.add_done_callback(
-                            lambda _t, _sid=sid, _ps=ps: _on_pipeline_done(_sid, _ps)
-                        )
+                        _schedule_pipeline(sid, ps, local_participant, frames_snapshot)
 
             # PROCESSING and COOLDOWN: ignore incoming frames (no buffering)
 
@@ -783,6 +1041,11 @@ def _make_participant_state(sid: str) -> dict:
         "ptt_active": False,
         "pipeline_task": None,
         "cooldown_deadline": 0.0,
+        # Barge-in (ZOE_VOICE_BARGE_IN): per-participant Silero stream + counters
+        "vad": None,
+        "vad_failed": False,
+        "barge_hops": 0,
+        "barge_frames": [],
         "user_id": "guest",
         "session_id": f"livekit-{sid[:8]}",
     }
