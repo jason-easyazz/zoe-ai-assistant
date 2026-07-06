@@ -16,6 +16,7 @@ import math
 import os
 import re
 import shlex
+import subprocess
 import time
 import shutil
 import unicodedata
@@ -1846,22 +1847,23 @@ def _sanitize_list_item(raw: str) -> str:
 
 
 async def _run_mcporter(cmd: str) -> Optional[str]:
-    """Run a single mcporter-safe command, return raw stdout or None on failure."""
+    """Run a single mcporter-safe command, return raw stdout or None on failure.
+
+    Spawns via async_subprocess.run_to_completion so the fork happens OFF the
+    event-loop thread — asyncio.create_subprocess_exec forks on the loop and
+    can wedge the whole API (the 2026-06-29 outage class, #947).
+    """
     env = os.environ.copy()
     env["PATH"] = f"{NODE_BIN}:{env.get('PATH', '')}"
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *shlex.split(cmd),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+        from async_subprocess import run_to_completion
+
+        proc = await run_to_completion(shlex.split(cmd), env=env, timeout=10)
         if proc.returncode != 0:
-            logger.warning(f"mcporter-safe failed: {stderr.decode()}")
+            logger.warning(f"mcporter-safe failed: {proc.stderr.decode()}")
             return None
-        return stdout.decode().strip()
-    except asyncio.TimeoutError:
+        return proc.stdout.decode().strip()
+    except subprocess.TimeoutExpired:
         logger.warning("mcporter-safe timed out")
         return None
     except (OSError, UnicodeError, ValueError) as e:

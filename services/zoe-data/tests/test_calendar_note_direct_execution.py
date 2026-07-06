@@ -120,15 +120,16 @@ async def test_calendar_create_all_day_when_no_time(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_calendar_create_no_date_returns_none(monkeypatch):
-    """A dateless event can't be stored meaningfully → None → ok:false, and no
-    mcporter fallback fires."""
+async def test_calendar_create_no_date_defaults_to_today(monkeypatch):
+    """A dateless event defaults to today (#1038): stored via the direct
+    executor, confirmed to the user, and the mcporter fallback never fires.
+    (Was asserting None — stale expectation from before #1038.)"""
     db = _FakeDB()
     _silence_ui(monkeypatch)
     monkeypatch.setattr("database.get_db_ctx", _fake_db_ctx(db))
 
     async def dead_mcporter(_cmd):
-        return None
+        raise AssertionError("mcporter fallback must not fire")
 
     monkeypatch.setattr("intent_router._run_mcporter", dead_mcporter)
 
@@ -136,8 +137,8 @@ async def test_calendar_create_no_date_returns_none(monkeypatch):
         Intent("calendar_create", {"title": "Someday"}), "family-admin"
     )
 
-    assert result is None
-    assert db.sql_matching("INSERT INTO events") == []
+    assert result is not None and "today" in result.lower()
+    assert db.sql_matching("INSERT INTO events")
 
 
 @pytest.mark.asyncio
