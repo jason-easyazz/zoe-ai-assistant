@@ -102,8 +102,8 @@ before acting.
   (after #1059 merges) and docs/architecture/chat-split-and-typed-config-plan.md
   (merged, #1060) step by step — one PR per step, replay gate as specified in
   each packet. Do not batch steps."
-- *Ambient voice next increment:* "Read
-  docs/architecture/ambient-voice-migration-plan.md (#1056). Execute its
-  first fallback-first increment (Smart Turn v3 endpointing on the LiveKit
-  agent) in the lab, gated per the plan. NOTE: reconcile with PR #1051 first —
-  it may already implement part of this."
+- *Ambient voice next increment:* "OVERTAKEN — #1051 already shipped barge-in +
+  Smart Turn v3 endpointing (real-voice verified #1081, prod flags ON #1082), and the
+  #1056 migration-plan doc was retired as redundant. The remaining ambient-voice work
+  is tracked in docs/architecture/samantha-evolution-plan.md: W1.3 (sentence-streamed
+  TTS in the LiveKit lane) + W1.4 (M3 latency / M4 RAM measurement session)."

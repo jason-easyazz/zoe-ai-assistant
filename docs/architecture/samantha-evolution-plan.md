@@ -49,7 +49,10 @@ Samantha is seven fused capabilities. The scorecard, strongest → weakest:
 - **No Pipecat migration as the default path.** The spike (ADR, 2026-07-05) found Moonshine
   is NOT native, a numpy-2/Jetson-torch ABI conflict, and no RAM headroom to run parallel.
   The ADR's own verdict shifted to **borrow Smart Turn v3 + hand-build barge-in on the
-  existing LiveKit agent**. Only revisit Pipecat if W1 proves insufficient.
+  existing LiveKit agent** — since executed (#1051). Re-open Pipecat only on an explicit
+  trigger: W1 fails on barge-in/turn *quality* despite correct integration; the aiortc
+  transport itself becomes the bottleneck (audio artefacts / instability); or the RAM/ABI
+  constraints materially change (new hardware, numpy-compatible Jetson torch).
 - **No in-turn model spontaneity bets.** Measured ~1/5. Deterministic scaffolds + Gemma phrasing.
 - **No heavy new model without a RAM check first.** The Pipecat spike died on this; the
   Kokoro "2.3 GB" scare was the non-default PyTorch backend (ONNX default is ~600 MB) —
@@ -84,6 +87,8 @@ emotional thread) stands on capture.
 
 The highest felt-difference item: converts "let's talk" from walkie-talkie to conversation.
 Executes the ADR's shifted verdict — **borrow the piece, keep LiveKit**.
+**Status: steps 1+2 shipped and LIVE (#1051/#1081, flags ON per #1082) — see §6 before
+starting anything here; remaining = step 3 (streamed TTS) + the M3/M4 measurements.**
 
 - **Grounding:** `voice_livekit.py` drops incoming frames during PROCESSING/COOLDOWN (ADR gap 1);
   endpointing is energy-RMS `_rms()` (gap 2); LiveKit TTS is one whole-utterance `synthesize`
@@ -284,10 +289,20 @@ regression, ever (replay harness is the enforcement).
 ## 6. Status / where am I
 
 - [ ] **W0** capture positive-control turn (buildplan §6 carry-over) — NOT STARTED
-- [ ] **W1.1** barge-in on LiveKit agent — NOT STARTED
-- [ ] **W1.2** Smart Turn v3 endpointer — NOT STARTED
-- [ ] **W1.3** sentence-streamed TTS in conversation mode — NOT STARTED
-- [ ] **W1.4** live barge-in/latency/RAM measurement session (ADR M1/M3/M4) — NOT STARTED
+- [x] **W1.1** barge-in on LiveKit agent — **DONE + LIVE** (#1051: Silero VAD `voice_vad.py`,
+  frames flow during PROCESSING/COOLDOWN, ≥250 ms sustained speech cancels the pipeline +
+  `stop_playback`; #1081 fixed the barge gate against real voice — triggers 6/6, was 0/6;
+  prod flags ON per #1082)
+- [x] **W1.2** Smart Turn v3 endpointer — **DONE + LIVE** (#1051: `voice_turn.py`, 8.3 MB ONNX,
+  complete-utterance 0.90 vs mid-sentence 0.02 on real voice; `ZOE_SMART_TURN_ENABLED` ON in prod)
+- [ ] **W1.3** sentence-streamed TTS in conversation mode — NOT STARTED (LiveKit lane still
+  whole-utterance `synthesize`)
+- [~] **W1.4** live measurement session (ADR M1/M3/M4) — PARTIAL: M1 barge-in quality verified
+  on real voice (#1081); M3 end-to-end latency + M4 loaded-RAM numbers still unmeasured.
+  Bars (from the retired #1056 plan's A3 gate): barge time-to-stop < ~300 ms over 10
+  interrupts; Smart Turn beats energy VAD on false-cutoffs + false-waits over 15 utterances
+  incl. mid-thought pauses; end-of-speech → first TTS audio median-of-10 ≤ the prior path;
+  full replay corpus green
 - [ ] **W2.1** presence-check primitive — NOT STARTED
 - [ ] **W2.2** spoken-delivery adapter (morning brief only) — NOT STARTED
 - [ ] **W3.1** ccd-cli fleet cleanup (operational) — NOT STARTED
@@ -306,5 +321,9 @@ regression, ever (replay harness is the enforcement).
 
 → **W0**: run the capture positive-control (one organic authenticated voice turn → new
 `chat_messages` row with `metadata.user_id` → consolidation sweep picks it up). In parallel,
-kick off **W3.1** (ccd-cli fleet cleanup — operational, zero risk) and start the **W1.1**
-barge-in branch. Update this section when W0 resolves.
+kick off **W3.1** (ccd-cli fleet cleanup — operational, zero risk). W1.1/W1.2 are already
+**live** (#1051/#1081/#1082 — do NOT redo); the remaining W1 work is **W1.3**
+(sentence-streamed TTS in the LiveKit lane) + the **M3/M4** measurements (bars in §6).
+The #1056 migration-plan doc was retired as overtaken by #1051; its surviving pieces
+(Pipecat re-open triggers → §2, A3 gate bars → W1.4) are folded here. Update this
+section when W0 resolves.
