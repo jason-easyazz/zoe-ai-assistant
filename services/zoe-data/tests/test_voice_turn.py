@@ -9,10 +9,13 @@ import glob
 import os
 import wave
 
-import numpy as np
 import pytest
 
-import voice_turn
+# The GitHub CI runner has no numpy/onnxruntime (host-only deps); skip the whole
+# module there rather than failing collection. Host runs exercise everything.
+np = pytest.importorskip("numpy")
+
+import voice_turn  # noqa: E402  (needs numpy; import after the skip guard)
 
 
 @pytest.fixture(autouse=True)
