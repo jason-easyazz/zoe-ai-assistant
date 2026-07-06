@@ -31,6 +31,7 @@ _ENABLED_ENV = {"ZOE_CONVERSATION_OPENER_ENABLED": "1"}
 @pytest.fixture(autouse=True)
 def _reset_opener_state(monkeypatch):
     monkeypatch.setattr(conversation_opener, "_OPENER_ACK_CURSOR", 0)
+    monkeypatch.setattr(conversation_opener, "_BACKGROUND_TASKS", set())
     # The flag must never leak in from the ambient environment.
     monkeypatch.delenv("ZOE_CONVERSATION_OPENER_ENABLED", raising=False)
     monkeypatch.delenv("ZOE_CONVERSATION_OPENER_PHRASES", raising=False)
