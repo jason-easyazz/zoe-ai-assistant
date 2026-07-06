@@ -150,9 +150,16 @@ the *fulfillment bodies* are copied. The bug class (#960/#993/#995) is a **broke
 `mcp_server.py` that dies on DB-pool init → returns `None` → mapped to `ok:false` while the user
 hears "done." So extract-a-service does **not** close the bug class on its own. Re-split:
 
-- **Tier 1 — the actual fix (lower risk, closes the class):** stop depending on the dead mcporter
-  fallback for dispatchable writes — add the missing in-process direct executors and/or make
-  `execute_intent` fail loudly instead of spawning the broken subprocess. **Note:** `people_relate`
+- **Tier 1 — the actual fix (lower risk, closes the class):** ✅ **DONE 2026-07-06 — and the root
+  cause sat one level deeper still.** The subprocess wasn't intrinsically broken: a **stale rotated
+  `POSTGRES_URL` baked into `~/.mcporter/mcporter.json`** pre-empted `bootstrap_runtime_env()`'s
+  canonical `.env` load (pre-set env wins by design), so the spawned `mcp_server.py` failed DB auth,
+  limped on, and crashed mid-call on `get_pool()`. Landed: baked credential removed from
+  mcporter.json (subprocess self-loads the current URL — rotation-proof; **never bake POSTGRES_URL
+  into agent configs**); `run_stdio_server` exits 1 loudly on pool-init failure; `_run_mcporter`
+  migrated off the on-loop fork (`async_subprocess.run_to_completion`, #947 class); regression
+  tests in `tests/test_mcporter_fallback.py`. All residual fallback intents verified working.
+  Remaining from the original bullet: `people_relate`
   (`intent_router.py:3905`) is a dispatchable write with no direct executor — but its backend DOES
   exist (`person_relationships` + `person_extractor._write_relationship`, live), and natural-language
   relationships are already captured by the per-turn extractor, so the intent is **redundant**: remove
