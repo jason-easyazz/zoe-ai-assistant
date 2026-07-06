@@ -179,10 +179,13 @@ async def test_pending_actions_skips_superseded_skybridge_voice_cards(monkeypatc
     monkeypatch.setattr(ui_actions, "require_feature_access", allow)
 
     db = _PendingDb()
+    # Since the panel-hijack fix (#921) /actions/pending is gated by
+    # _authorize_panel: the poller must be the panel's own device-token
+    # daemon (user dict carries panel_id) or a bound human session.
     result = await ui_actions.get_pending_ui_actions(
         panel_id="zoe-touch-pi",
         limit=10,
-        user={"user_id": "guest", "role": "guest"},
+        user={"user_id": "guest", "role": "guest", "panel_id": "zoe-touch-pi"},
         db=db,
     )
 
