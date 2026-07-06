@@ -15,7 +15,9 @@ async def test_openmeteo_forecast_filters_hourly_and_today_in_provider_timezone(
     perth = ZoneInfo("Australia/Perth")
     monkeypatch.setattr(weather, "_weather_now", lambda tz: datetime(2026, 6, 29, 7, 0, tzinfo=perth))
     weather._weather_cache.clear()
-    weather._weather_cache["current"] = {
+    # Seed the keyed cache for the SAME coords the forecast call uses — the
+    # hourly-reuse path only trusts a fresh current reading for these coords.
+    weather._cache_put("current", -31.95, 115.86, {
         "_hourly_raw": {
             "timezone": "Australia/Perth",
             "times": [
@@ -32,7 +34,7 @@ async def test_openmeteo_forecast_filters_hourly_and_today_in_provider_timezone(
             "temperature_2m_min": [10, 11, 12],
             "weathercode": [0, 1, 2],
         },
-    }
+    })
 
     forecast = await weather._fetch_openmeteo_forecast(-31.95, 115.86)
 
