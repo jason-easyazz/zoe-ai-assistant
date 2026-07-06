@@ -1217,13 +1217,15 @@ def voice_command(pa: pyaudio.PyAudio, oww) -> None:
             conv_deadline = time.monotonic() + CONV_MAX_S
             conv_turns = 0
             silent_windows = 0
+            conv_beeped = False
             while (time.monotonic() < conv_deadline
                    and conv_turns < CONV_MAX_TURNS
                    and silent_windows < CONV_SILENT_WINDOWS):
                 threading.Thread(target=_notify_wake_background, daemon=True,
                                  name="conv-notify").start()
-                if CONV_BEEP == "every" or (CONV_BEEP == "first" and conv_turns == 0):
+                if CONV_BEEP == "every" or (CONV_BEEP == "first" and not conv_beeped):
                     play_follow_up_beep()
+                    conv_beeped = True
                 _recording_active.set()
                 conv_wav = _follow_up_listen(pa, window_s=CONV_WINDOW_S)
                 if conv_wav is None:
