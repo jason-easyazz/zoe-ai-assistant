@@ -160,7 +160,9 @@ def test_portrait_regenerate_exception_returns_generic_message_and_logs(monkeypa
 
 @pytest.mark.asyncio
 async def test_weather_provider_fallback_returns_generic_error_and_logs(monkeypatch, caplog):
-    weather._weather_cache.clear()
+    # Private dict via monkeypatch (auto-restored) — never mutate the module's
+    # real cache in place, it leaks entries into other tests' keyed lookups.
+    monkeypatch.setattr(weather, "_weather_cache", {})
 
     class FakeResponse:
         def raise_for_status(self):

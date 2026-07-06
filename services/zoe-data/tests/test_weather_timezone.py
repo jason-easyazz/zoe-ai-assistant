@@ -14,7 +14,9 @@ from routers import weather
 async def test_openmeteo_forecast_filters_hourly_and_today_in_provider_timezone(monkeypatch):
     perth = ZoneInfo("Australia/Perth")
     monkeypatch.setattr(weather, "_weather_now", lambda tz: datetime(2026, 6, 29, 7, 0, tzinfo=perth))
-    weather._weather_cache.clear()
+    # Swap in a private dict (monkeypatch restores the original after) so the
+    # seeded entry can't leak into other tests' keyed lookups.
+    monkeypatch.setattr(weather, "_weather_cache", {})
     # Seed the keyed cache for the SAME coords the forecast call uses — the
     # hourly-reuse path only trusts a fresh current reading for these coords.
     weather._cache_put("current", -31.95, 115.86, {
