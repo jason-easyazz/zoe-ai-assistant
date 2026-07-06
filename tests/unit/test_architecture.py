@@ -16,6 +16,11 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 import re
 
+import pytest
+# Slim-dep green: opts into the GitHub-runner fast lane (see tests/AGENTS.md).
+pytestmark = pytest.mark.ci_safe
+
+
 class Colors:
     GREEN = '\033[92m'
     RED = '\033[91m'

@@ -14,6 +14,10 @@ import re
 
 import pytest
 
+# Slim-dep green: opts into the GitHub-runner fast lane (see tests/AGENTS.md).
+pytestmark = pytest.mark.ci_safe
+
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../services/zoe-data'))
 
 

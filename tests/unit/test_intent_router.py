@@ -13,20 +13,42 @@ import sys
 import types
 import unittest.mock as mock
 
+import pytest
+# Slim-dep green: opts into the GitHub-runner fast lane (see tests/AGENTS.md).
+pytestmark = pytest.mark.ci_safe
+
+
 
 # ── Minimal stubs so intent_router can be imported without infra ──────────────
+
+# Names WE inserted into sys.modules (not ones that were already imported).
+# teardown_module pops them so later test files import the real modules —
+# leaking the stubs broke e.g. `from openclaw_ws import NODE_BIN` downstream.
+_INSERTED_STUBS: list[str] = []
+
 
 def _stub_psycopg2():
     m = types.ModuleType("psycopg2")
     m.connect = mock.MagicMock(return_value=mock.MagicMock())
-    sys.modules.setdefault("psycopg2", m)
+    if "psycopg2" not in sys.modules:
+        sys.modules["psycopg2"] = m
+        _INSERTED_STUBS.append("psycopg2")
 
 
 def _stub_module(name: str, **attrs):
     m = types.ModuleType(name)
     for k, v in attrs.items():
         setattr(m, k, v)
-    sys.modules.setdefault(name, m)
+    if name not in sys.modules:
+        sys.modules[name] = m
+        _INSERTED_STUBS.append(name)
+
+
+def teardown_module(module):  # noqa: ARG001 — pytest hook signature
+    """Remove our sys.modules stubs so other test files see real modules."""
+    for name in _INSERTED_STUBS:
+        sys.modules.pop(name, None)
+    _INSERTED_STUBS.clear()
 
 
 def _setup_stubs():
@@ -64,9 +86,6 @@ def _load_intent_router():
         except Exception:
             pass  # Some intents need DB; we'll test regex paths only
     return module
-
-
-import pytest
 
 
 @pytest.fixture(scope="module")
