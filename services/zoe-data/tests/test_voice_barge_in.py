@@ -676,10 +676,10 @@ def test_real_voice_triggers_barge_from_cooldown(monkeypatch):
     total = 0
     for wav_path in sorted(glob.glob(os.path.join(_CORPUS_DIR, "*.wav")))[-6:]:
         try:
-            w = wave.open(wav_path)
-            if w.getframerate() != 16000 or w.getnchannels() != 1:
-                continue
-            raw = w.readframes(w.getnframes())
+            with wave.open(wav_path) as w:
+                if w.getframerate() != 16000 or w.getnchannels() != 1:
+                    continue
+                raw = w.readframes(w.getnframes())
         except Exception:
             continue
         total += 1
