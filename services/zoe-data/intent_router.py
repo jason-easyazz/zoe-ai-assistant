@@ -1642,7 +1642,7 @@ def _extract_simple_reminder_slots(text: str) -> Optional[dict]:
 
 async def detect_and_extract_intent(
     text: str,
-    user_id: str = "family-admin",
+    user_id: str = "guest",  # fail-open to least-privilege, not admin (#1021/#1032 posture)
     context: "Optional[ConversationContext]" = None,
 ) -> Optional["Intent"]:
     """
@@ -2412,7 +2412,10 @@ async def _execute_people_create_direct(intent: Intent, user_id: str) -> Optiona
         return None
 
 
-async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optional[str]:
+async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str]:
+    # ^ shared write funnel: fail-open to least-privilege guest, not admin, when a
+    #   caller omits identity (#1021/#1032 posture). All live callers pass an explicit
+    #   user_id; this default is defense-in-depth for future forgetful callers.
     if intent.name == "lets_talk":
         # Navigation is handled by _broadcast_intent_nav via _INTENT_PANEL_NAV in chat.py.
         # Return a short TTS reply confirming we're opening voice mode.
