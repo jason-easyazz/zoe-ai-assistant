@@ -314,6 +314,12 @@ W8 (leaves the house) ── after W3 ──────────────
 Parallelizable from day one: **W0, W1, W2, W3** (four independent lanes). W2 + W1 together
 are the biggest felt change per week of work.
 
+OS-horizon (§9) placement: **W9** (digital-life ingestion) needs only W0's capture trust —
+it can start early and is the single biggest "Samantha does this, Zoe doesn't" gap;
+**W10** (Zoe's own thread) after W7's first loop-close (it rides the proposal pipeline);
+**W11** (expressive delivery) is best after W4 (it consumes the emotion signal) but rung 1
+works without it; **W12** rungs 1–2 after W8's Telegram start, rung 3 (SIP) is its own ADR.
+
 ## 5. Acceptance bar — extend the Samantha tests
 
 Extend `services/zoe-core/test/test_samantha_acceptance.py` (and live gates where CI can't
@@ -468,3 +474,118 @@ actually consulted.
 - **Wyoming satellites / HA Voice PE**: the borrow-don't-build room-hardware layer when
   satellites come (already runs `wyoming-piper` locally; ADR names it).
 - **LiveKit SIP** stays the phone bridge candidate (already in-house) per the ADR.
+
+## 9. The OS horizon — Samantha was an operating system (W9–W12)
+
+In *Her*, Samantha isn't an app with a good memory. She's **OS1**: the interface to
+Theodore's entire digital life (her first scene is triaging his inbox), a presence with
+her **own** inner life that grows, an **evolving interface** rather than a fixed one, and
+a **direct link** — in his ear on the beach, at his desk, at 3am, anywhere. W0–W8 build
+the ears, the voice-first initiative, and the first steps off the wall. These are the
+remaining structural gaps. Same rules apply: flags default OFF, lab-prove, scaffolds
+decide / Gemma phrases, rocks fixed.
+
+### W9 — Digital-life ingestion & mediation (the inbox scene)
+
+Zoe's memory only ingests what is *said to her*. There is no email/docs/photos
+integration anywhere in zoe-data (verified 2026-07-07: the only "email" fields are
+contact attributes on `people`). Samantha's defining first act — "you have some emails
+from…, I've sorted them" — has zero coverage.
+
+- **Ladder (each rung its own flag + PR):**
+  1. **Read-only email triage → the morning brief.** A consented mailbox (IMAP, or the
+     fleet's existing Gmail MCP pattern) polled off the hot path; a deterministic triage
+     scaffold picks the 2–3 items worth mentioning; Gemma phrases them into the existing
+     brief. Senders resolve against the `people` graph (the join is already built).
+  2. **Memory admission.** Email-derived facts go through the *existing* admission gate
+     as low-trust candidates, cited `[email]` — never straight to facts.
+  3. **Drafting with human send.** Zoe composes replies; Jason sends. **Auto-send is
+     forbidden** (the Alexa intrusiveness lesson, with real-world blast radius).
+  4. Files/photos ingestion — later, same consent + admission shape.
+- **Privacy:** per-account opt-in scope; processing on-box; message bodies are transient
+  context, not stored verbatim in memory (only gated distillates).
+- **DoD (rung 1):** the morning brief says "two emails worth a look — Neil, and the
+  settlement lawyer" and it's right.
+
+### W10 — Zoe's own thread (inner life; the persona that grows)
+
+Everything today models *Jason* (portraits, emotional threads, relationship graph).
+Nothing models *Zoe*. Samantha changes over the film; the audit named the gap: humor as
+a capability, opinions with continuity ("as I said last week…"), persona evolution.
+
+- **First-person memory lane:** a `zoe_self` memory scope — opinions she has voiced,
+  commitments made, jokes that landed or flopped (panel/laugh signals are weak; start
+  with explicit feedback), what she *did* (the weekly evolution digest of merged PRs is
+  ready-made material: "I got better at hearing you this week — I learned to stop
+  talking when you interrupt"). Recall packet gains a small cited `[self]` block so
+  continuity is real, not stylistic.
+- **Persona evolution stays human-gated:** persona doctrines are contracts. A weekly
+  deterministic "Zoe reflection" job composes a *proposed* persona diff and submits it
+  through the **existing** evolution proposal contract (W7's pipeline) — persona changes
+  become reviewable PRs with the trail visible. The model never edits its own soul
+  silently.
+- **DoD:** Zoe references her own last-week statement unprompted and correctly; one
+  persona-diff PR has flowed through the proposal pipeline.
+
+### W11 — Expressive delivery (Samantha's voice *acts*)
+
+Samantha's voice carries the emotion; Kokoro today renders every reply with one fixed
+delivery. **No rock change needed:** the sidecar already accepts per-request `voice` and
+`speed` (`scripts/setup/kokoro_sidecar.py`), and the reply is already sentence-split.
+
+- **Delivery profile per reply:** a deterministic mapper from (reply content + the W4
+  valence/arousal signal + conversation state) → per-sentence speed, inter-sentence
+  pause lengths, and voice variant. Late-night consolation is slower and softer than a
+  timer confirmation. Flag `ZOE_EXPRESSIVE_TTS`, default OFF; replay-gated (delivery
+  changes must not regress said-vs-did).
+- **Micro-dynamics (after W1.3):** short deterministic backchannels ("mm-hm") during
+  long user turns — the `_phrase_cache` warm-phrase mechanism is the natural home; only
+  viable once barge-in echo handling is proven (Zoe must never trigger herself).
+- **Non-goals:** synthetic laughter and singing — the model can't; don't fake it badly.
+- **DoD:** A/B on the voice corpus — listeners identify the intended mood better than
+  chance with zero transcript regressions.
+
+### W12 — The direct link (the earpiece, even remote)
+
+Samantha's channel is a persistent earpiece that works *anywhere*. W8's Telegram voice
+notes are the pocket start; this is the ladder above it:
+
+1. **Remote live voice:** the existing voice web app over the already-live Cloudflare
+   tunnel — measure WAN round-trip against the ~2.5s home median; PWA on the phone +
+   earbuds = Zoe on a walk. No new stack, one measurement session + auth hardening.
+2. **Proactive outbound to the pocket:** when W2's presence check finds nobody home,
+   deliver the brief as a **Telegram voice note** instead of silence — Zoe "calls" you.
+   (W2 adapter × W8 transcode; both already planned.)
+3. **Phone calls (SIP):** LiveKit SIP + a trunk, per the ADR. Includes the
+   **receptionist convergence** (W5 × SIP): Zoe answering *other people* on Jason's
+   behalf needs per-caller policy — greet, take a message, never disclose. Own ADR when
+   it starts.
+4. **Always-in-ear hardware:** watch the wearable space (§8.6's players folded);
+   hardware-gated, not software-blocked — rungs 1–3 make any future earpiece a client,
+   not a platform.
+
+### Convergence goals (name them so they don't dissolve)
+
+- **Wake-word retirement** — the true "no ceremony" end-state of pillar 1 = W1 barge-in
+  × W5 speaker-ID × W6 consent, at home, per room. Gate: measured false-trigger rate at
+  ambient sensitivity with TV/music playing. Do not attempt before W5 shadow-mode data.
+- **The evolving interface is its own lane, on purpose:** the Skybridge design system +
+  generative-cards plan (tokens → primitives → generative engine;
+  [`skybridge-design-system.md`](skybridge-design-system.md)) is the OS-shell pillar —
+  this plan does not duplicate it. Join points: W2/W9 briefs render as composed cards;
+  W10's self-thread gives the interface a voice that is consistently *hers*.
+- **Multi-party conversation** (the double-date scene): per-speaker turn policies and a
+  group mode — parked until W5 produces real multi-speaker shadow data.
+
+### §6 addenda (checklist)
+
+- [ ] **W9.1** read-only email triage → morning brief — NOT STARTED
+- [ ] **W9.2** email-derived memory via admission gate — NOT STARTED (needs W9.1)
+- [ ] **W9.3** draft-with-human-send — NOT STARTED (auto-send forbidden)
+- [ ] **W10.1** `zoe_self` first-person memory lane + `[self]` recall block — NOT STARTED
+- [ ] **W10.2** weekly Zoe-reflection → persona-diff PRs via the proposal contract — NOT STARTED (after W7)
+- [ ] **W11.1** delivery-profile mapper (speed/pauses/voice per sentence) — NOT STARTED (best after W4)
+- [ ] **W11.2** backchannels — NOT STARTED (needs W1.3 + proven echo handling)
+- [ ] **W12.1** remote live voice over the tunnel (measure WAN latency) — NOT STARTED
+- [ ] **W12.2** proactive outbound voice note when nobody's home — NOT STARTED (W2×W8)
+- [ ] **W12.3** SIP phone calls + receptionist policy — NOT STARTED (own ADR)
