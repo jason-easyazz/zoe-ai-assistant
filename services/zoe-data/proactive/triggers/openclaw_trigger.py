@@ -40,7 +40,11 @@ class OpenClawTrigger(ProactiveTrigger):
 
     trigger_type: str = "openclaw"
     _prompt: str = ""
-    _user_id: str = "family-admin"
+    # Subclasses set the real notify target; the base is a dormant no-op (empty
+    # _prompt → check() returns early), so this default is never consumed live.
+    # Default to guest, not admin, so a subclass that forgets to set it fails
+    # least-privilege rather than silently targeting the admin (#1021/#1032 posture).
+    _user_id: str = "guest"
 
     def get_user_ids(self) -> list[str]:
         return [self._user_id]
