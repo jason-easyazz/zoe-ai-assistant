@@ -318,7 +318,9 @@ OS-horizon (§9) placement: **W9** (digital-life ingestion) needs only W0's capt
 it can start early and is the single biggest "Samantha does this, Zoe doesn't" gap;
 **W10** (Zoe's own thread) after W7's first loop-close (it rides the proposal pipeline);
 **W11** (expressive delivery) is best after W4 (it consumes the emotion signal) but rung 1
-works without it; **W12** rungs 1–2 after W8's Telegram start, rung 3 (SIP) is its own ADR.
+works without it; **W12** rungs 1–2 after W8's Telegram start, rung 3 (SIP) is its own ADR;
+**W13** (interface agency) rung 1 pairs naturally with W2, rung 2 rides the zoe-compose
+lane already merging, rung 3 needs W7 closed once.
 
 ## 5. Acceptance bar — extend the Samantha tests
 
@@ -475,14 +477,14 @@ actually consulted.
   satellites come (already runs `wyoming-piper` locally; ADR names it).
 - **LiveKit SIP** stays the phone bridge candidate (already in-house) per the ADR.
 
-## 9. The OS horizon — Samantha was an operating system (W9–W12)
+## 9. The OS horizon — Samantha was an operating system (W9–W13)
 
 In *Her*, Samantha isn't an app with a good memory. She's **OS1**: the interface to
 Theodore's entire digital life (her first scene is triaging his inbox), a presence with
 her **own** inner life that grows, an **evolving interface** rather than a fixed one, and
-a **direct link** — in his ear on the beach, at his desk, at 3am, anywhere. W0–W8 build
-the ears, the voice-first initiative, and the first steps off the wall. These are the
-remaining structural gaps. Same rules apply: flags default OFF, lab-prove, scaffolds
+a **direct link** — in his ear on the beach, at his desk, at 3am, anywhere — and the interface
+itself is *hers* to reshape. W0–W8 build the ears, the voice-first initiative, and the
+first steps off the wall. These are the remaining structural gaps. Same rules apply: flags default OFF, lab-prove, scaffolds
 decide / Gemma phrases, rocks fixed.
 
 ### W9 — Digital-life ingestion & mediation (the inbox scene)
@@ -564,20 +566,63 @@ notes are the pocket start; this is the ladder above it:
    hardware-gated, not software-blocked — rungs 1–3 make any future earpiece a client,
    not a platform.
 
+### W13 — The interface is hers: control, compose, author
+
+Samantha's interface is never fixed — it reshapes itself around the moment, because *she*
+drives it. Zoe must be able to **control** the touch screen, **compose** what's on it,
+and eventually **author new cards/interfaces herself**. Three rungs, each grounded in
+what already exists:
+
+1. **Control — built, under-used.** Eleven `panel_*` MCP tools already let the brain
+   drive the kiosk (`panel_navigate` / `panel_clear` / `panel_show_fullscreen` /
+   `panel_set_mode` / `panel_show_smart_home` / `panel_show_media` / `panel_announce` /
+   `panel_browser_screenshot` …), and `ui_orchestrator.py` validates a wider action
+   vocabulary (`show_card`, `panel_stream_text`, `panel_open_form`, `panel_list_update`).
+   The step: make the *proactive* engine a first-class caller — W2's spoken brief also
+   **shows** (announce + `show_card` together), and `panel_browser_screenshot` closes the
+   loop as Zoe's own eyes ("did what I put on screen actually render?") — the same
+   verify-what-you-did pattern the engineering harness uses.
+2. **Compose — landing now (the zoe-compose lane).** #1053 shipped the primitive catalog
+   (~14 A2UI-aligned primitives, grammar-constrained JSON-schema decoding on the local
+   llama-server, server-side re-validation, **catalog-only, never free-form HTML**);
+   #1062 shipped `ui_compose.compose_card()` behind `ZOE_COMPOSE_UI` (default OFF,
+   post-answer, can never delay tokens); #1068/#1069 unified the renderers. The step:
+   drive the flag through the lab→prod gates and extend compose beyond chat turns to
+   proactive surfaces (the brief as a composed card) and panel-initiated views.
+3. **Author — the missing top rung.** Today the catalog is human-authored; Zoe cannot
+   create a *new* card type. Close it with the W7 pipeline: Zoe proposes a new catalog
+   primitive or card adapter → the proposal carries its own acceptance test (DGM rule)
+   **plus a panel-verify screenshot** → PR → human-gated merge → the catalog grows.
+   The catalog + validator stay the hard safety boundary (whitelisted primitives, depth/
+   node caps, validated actions) — she extends the vocabulary through review, never
+   bypasses it at runtime.
+
+- **Relationship to the design-system lane:** tokens/primitives/polish
+  ([`skybridge-design-system.md`](skybridge-design-system.md)) stays its own lane — W13
+  is the *agency* layer on top of it (who drives the screen), not the pixels.
+- **Gates:** compose stays flag-gated until the catalog validator has a week of clean
+  live output; authoring rung requires W7 closed once. Panel-verify (screenshot check on
+  the real kiosk) is mandatory for any authored card — the panel froze invisible once
+  before; never ship a renderer sight-unseen.
+- **DoD:** (1) a morning brief that Zoe both *speaks* and *shows* as a composed card,
+  unprompted; (2) one new card type Zoe authored herself lands through the proposal
+  pipeline and renders on the physical panel.
+
 ### Convergence goals (name them so they don't dissolve)
 
 - **Wake-word retirement** — the true "no ceremony" end-state of pillar 1 = W1 barge-in
   × W5 speaker-ID × W6 consent, at home, per room. Gate: measured false-trigger rate at
   ambient sensitivity with TV/music playing. Do not attempt before W5 shadow-mode data.
-- **The evolving interface is its own lane, on purpose:** the Skybridge design system +
-  generative-cards plan (tokens → primitives → generative engine;
-  [`skybridge-design-system.md`](skybridge-design-system.md)) is the OS-shell pillar —
-  this plan does not duplicate it. Join points: W2/W9 briefs render as composed cards;
-  W10's self-thread gives the interface a voice that is consistently *hers*.
+- **The evolving interface splits deliberately:** the *pixels* (tokens → primitives →
+  polish) belong to the Skybridge design-system lane
+  ([`skybridge-design-system.md`](skybridge-design-system.md)); the *agency* (Zoe
+  controlling, composing, and authoring the screen) is **W13 here**. Join points: W2/W9
+  briefs render as W13-composed cards; W10's self-thread gives the interface a voice
+  that is consistently *hers*.
 - **Multi-party conversation** (the double-date scene): per-speaker turn policies and a
   group mode — parked until W5 produces real multi-speaker shadow data.
 
-### §6 addenda (checklist)
+### §9 addenda (checklist)
 
 - [ ] **W9.1** read-only email triage → morning brief — NOT STARTED
 - [ ] **W9.2** email-derived memory via admission gate — NOT STARTED (needs W9.1)
@@ -589,3 +634,6 @@ notes are the pocket start; this is the ladder above it:
 - [ ] **W12.1** remote live voice over the tunnel (measure WAN latency) — NOT STARTED
 - [ ] **W12.2** proactive outbound voice note when nobody's home — NOT STARTED (W2×W8)
 - [ ] **W12.3** SIP phone calls + receptionist policy — NOT STARTED (own ADR)
+- [ ] **W13.1** proactive show: brief speaks (W2) AND shows (`show_card`), screenshot-verified — NOT STARTED
+- [ ] **W13.2** `ZOE_COMPOSE_UI` through lab→prod gates; compose beyond chat turns — IN FLIGHT elsewhere (#1053/#1062/#1068/#1069 merged, flag OFF)
+- [ ] **W13.3** Zoe authors a new card type via the W7 pipeline (test + panel-verify + human merge) — NOT STARTED (needs W7)
