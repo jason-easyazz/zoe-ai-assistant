@@ -117,8 +117,11 @@ lane runs the full dir (see tech-debt plan Wave 2).
 grep -n -E "^(class |def |async def |@router\.)" services/zoe-data/routers/voice_tts.py
 # who imports voice_tts from outside
 grep -rn "routers.voice_tts" services/zoe-data --include=*.py | grep -v routers/voice_tts.py
-# which tests patch what on the router module
+# which tests patch what on the router module (monkeypatch.setattr style)
 grep -rn "setattr(v\(oice_tts\|t\)\?, \|setattr(vt, \|setattr(v, " services/zoe-data/tests
+# ...and decorator/context-manager patch styles (@patch / mock.patch / mocker.patch).
+# None exist today, but a moved symbol would silently escape one — always re-check.
+grep -rn "patch(.*voice_tts" services/zoe-data/tests tests
 ```
 External importers as of main@5c95e66a (all keep working via the shim — do not edit
 them): `main.py` (health detail, `warm_moonshine`, `_transcribe_audio`,
@@ -183,9 +186,17 @@ them): `main.py` (health detail, `warm_moonshine`, `_transcribe_audio`,
   `/transcribe` handler; `_prewarm_stt_on_wake` + `_stt_prewarm_on_wake_enabled`
   (`test_stt_prewarm_on_wake.py` patches `v._ensure_moonshine` and calls the prewarm —
   the caller must keep resolving through router globals).
-- **Shim:** re-export ALL moved names (main.py health reads `moonshine_ready` /
-  `moonshine_error` / `moonshine_arch` off the router module; `main.py:942` imports
-  `warm_moonshine` from `routers.voice_tts`).
+- **Shim:** re-export the moved CALLABLES and constants (main.py health reads
+  `moonshine_ready` / `moonshine_error` / `moonshine_arch` off the router module;
+  `main.py:942` imports `warm_moonshine` from `routers.voice_tts`). Safe because those
+  accessors are *functions* that read `stt_moonshine`'s own globals at call time
+  (`moonshine_ready()` → `_moonshine_model is not None`) — a `from`-import of a
+  function stays live. **Do NOT re-export the mutable singletons**
+  (`_moonshine_model`, `_moonshine_load_error`, the two locks): a `from`-import of a
+  later-reassigned module variable is a frozen snapshot — the router's copy would stay
+  `None` after warmup and lie to anything reading it. They have zero readers outside
+  the moved functions today (verified by grep); keep them private to
+  `stt_moonshine.py`, reached only through the accessor functions.
 - **Test edit required (same PR, values byte-identical):**
   `test_canonical_invariants.py::test_stt_live_default_arch_is_moonshine_medium` —
   change the two file paths (`routers/voice_tts.py` → `stt_moonshine.py`) and the

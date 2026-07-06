@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import db_pool
 import voice_presence
 from voice_presence import (
     is_wake_payload,
@@ -30,6 +31,38 @@ def _reset_voice_presence_state(monkeypatch):
     monkeypatch.setattr(voice_presence, "_AUDIO_CACHE", {})
     monkeypatch.setattr(voice_presence, "_VARIANT_CURSOR", 0)
     monkeypatch.setattr(voice_presence, "_PROCESSING_ACK_CURSOR", 0)
+
+
+def _drop_cached_db_pool():
+    """Best-effort discard of any asyncpg pool cached by a previous lifespan."""
+    stale = db_pool._pool
+    db_pool._pool = None
+    db_pool._pool_loop = None
+    if stale is not None:
+        try:
+            stale.terminate()
+        except Exception:
+            # The previous test's event loop is already closed; asyncpg's
+            # terminate() can raise "Event loop is closed" from the transport
+            # abort. Connections die with the pytest process either way.
+            pass
+
+
+@pytest.fixture(autouse=True)
+def _fresh_db_pool_per_test():
+    """Isolate db_pool state across `with TestClient(main.app)` lifespans.
+
+    Each TestClient context runs main's lifespan on a fresh event loop, and the
+    lifespan never calls close_pool on shutdown — so the asyncpg pool leaks,
+    bound to a loop that is closed by the time the NEXT test starts. Since #880
+    init_pool() discards such stale pools via pool.terminate(), which raises
+    RuntimeError("Event loop is closed") out of app startup and failed every
+    second lifespan-entering test in this file. Dropping the cached pool around
+    each test makes every lifespan build a fresh pool on its own loop.
+    """
+    _drop_cached_db_pool()
+    yield
+    _drop_cached_db_pool()
 
 
 def test_is_wake_text_matches_only_wake_phrase():
