@@ -37,18 +37,18 @@ body:not(.sky-empty) .sky-card.clock-card.sky-premium-card {
 }
 .clock-card .clock-main {
   flex: 1.7;
-  padding: 40px 48px;
+  padding: var(--sky-space-10, 40px) var(--sky-space-12, 48px);
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 4px;
+  gap: var(--sky-space-1, 4px);
 }
 .clock-card .clock-greet {
   font-size: 22px;
   font-weight: 500;
   color: #ffd9a8;
   letter-spacing: 0.2px;
-  margin-bottom: 8px;
+  margin-bottom: var(--sky-space-2, 8px);
 }
 :root[data-theme="light"] .clock-card .clock-greet { color: #b9601f; }
 
@@ -76,14 +76,14 @@ body:not(.sky-empty) .sky-card.clock-card.sky-premium-card {
   font-size: 40px;
   font-weight: 500;
   color: rgba(255,255,255,0.72);
-  margin-left: 8px;
+  margin-left: var(--sky-space-2, 8px);
 }
 :root[data-theme="light"] .clock-card .clock-mer { color: rgba(20,50,80,0.62); }
 .clock-card .clock-date {
   font-size: 22px;
   font-weight: 400;
   color: rgba(255,255,255,0.7);
-  margin-top: 12px;
+  margin-top: var(--sky-space-3, 12px);
   letter-spacing: 0.2px;
 }
 :root[data-theme="light"] .clock-card .clock-date { color: rgba(20,50,80,0.6); }
@@ -93,12 +93,12 @@ body:not(.sky-empty) .sky-card.clock-card.sky-premium-card {
 :root[data-theme="light"] .clock-card .clock-div { background: rgba(20,50,80,0.16); }
 .clock-card .clock-side {
   flex: 0 0 250px;
-  padding: 40px 30px;
+  padding: var(--sky-space-10, 40px) 30px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 24px;
+  gap: var(--sky-space-6, 24px);
 }
 .clock-card .clock-glyph { display: block; line-height: 0; }
 .clock-card .clock-glyph svg { filter: drop-shadow(0 0 16px rgba(255,206,112,0.4)); }

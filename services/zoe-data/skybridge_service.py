@@ -1603,24 +1603,15 @@ async def _resolve_weather(intent: SkybridgeIntent, user_id: str, db: Any) -> di
     prefs = _row_to_prefs(row)
     fallback = await _get_system_default_location(db)
     lat, lon, city, country = _resolve_location(prefs, fallback=fallback)
-    # Voice replies must feel instant: prefer the warm cache (kept fresh by the panel's
-    # periodic /weather/current + /forecast polls); only pay the ~1s live API when cold.
-    from routers.weather import _weather_cache as _wc
-    current = _wc.get("current") or {}
-    # Only trust the shared warm caches (current AND forecast) when the cached
-    # reading is for THIS user's resolved city — the cache is one flat slot across
-    # users, so a Perth refresh must not feed a Sydney user. `is None` so a
-    # legitimate 0° reading isn't treated as missing.
-    _cached_city = str(current.get("city") or "").strip().lower()
-    _cache_ok = current.get("temp") is not None and not (
-        city and _cached_city and _cached_city != str(city).strip().lower()
-    )
-    if not _cache_ok:
-        current = await _get_current(lat, lon, city, country)
+    # Voice replies must feel instant: _get_current/_get_forecast short-circuit on
+    # a fresh keyed-cache hit for THESE coords (kept warm by the panel's periodic
+    # /weather/current + /forecast polls), so the warm path is a dict lookup and
+    # only a cold location pays the ~1s live API. The cache is keyed by (kind,
+    # lat, lon) — another user's/city's refresh can never feed this one, so the
+    # old cached-city mismatch guard is structurally unnecessary.
+    current = await _get_current(lat, lon, city, country)
     current = {k: v for k, v in current.items() if not str(k).startswith("_")}
-    # Forecast shares the same flat cache slot — only reuse it when current was a
-    # trusted same-city hit, else fetch live for the right location.
-    forecast = (_wc.get("forecast") if _cache_ok else None) or await _get_forecast(lat, lon)
+    forecast = await _get_forecast(lat, lon)
 
     def _say_num(n) -> str:
         s = str(n)
