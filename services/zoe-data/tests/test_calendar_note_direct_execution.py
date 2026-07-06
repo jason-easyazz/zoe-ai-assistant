@@ -120,9 +120,11 @@ async def test_calendar_create_all_day_when_no_time(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_calendar_create_no_date_returns_none(monkeypatch):
-    """A dateless event can't be stored meaningfully → None → ok:false, and no
-    mcporter fallback fires."""
+async def test_calendar_create_no_date_defaults_to_today(monkeypatch):
+    """#1038: a dateless quick-add ("add lunch with Jess") means TODAY — the
+    direct executor fills today_for_zoe_tz() and succeeds; no mcporter fallback."""
+    from time_utils import today_for_zoe_tz
+
     db = _FakeDB()
     _silence_ui(monkeypatch)
     monkeypatch.setattr("database.get_db_ctx", _fake_db_ctx(db))
@@ -136,8 +138,43 @@ async def test_calendar_create_no_date_returns_none(monkeypatch):
         Intent("calendar_create", {"title": "Someday"}), "family-admin"
     )
 
+    assert result is not None and "today" in result.lower()
+    _sql, params = db.sql_matching("INSERT INTO events")[0]
+    assert today_for_zoe_tz().isoformat() in params
+
+
+@pytest.mark.asyncio
+async def test_calendar_create_unparseable_date_returns_none(monkeypatch):
+    """#1038 (review fix): a date that WAS given but can't be parsed must FAIL
+    (None → ok:false), not silently land the event on today — the wrong day with
+    no signal. Distinct from the absent-date case above.
+
+    The direct executor *declines* this case (returns None) and execute_intent
+    falls through to mcporter by design — so a spy (not _fail_mcporter) proves
+    the decline actually happened rather than the direct path being skipped,
+    while a dead return still exercises the ok:false end state."""
+    db = _FakeDB()
+    _silence_ui(monkeypatch)
+    monkeypatch.setattr("database.get_db_ctx", _fake_db_ctx(db))
+
+    mcporter_calls = []
+
+    async def spy_dead_mcporter(cmd):
+        mcporter_calls.append(cmd)
+        return None
+
+    monkeypatch.setattr("intent_router._run_mcporter", spy_dead_mcporter)
+
+    result = await execute_intent(
+        Intent("calendar_create", {"title": "Dentist", "date": "the twelfth of never"}),
+        "family-admin",
+    )
+
     assert result is None
     assert db.sql_matching("INSERT INTO events") == []
+    # The fall-through fired → the direct executor really declined (no vacuous
+    # pass where the direct path was never reached at all).
+    assert mcporter_calls, "expected fall-through to mcporter after the direct decline"
 
 
 @pytest.mark.asyncio
