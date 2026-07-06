@@ -16,7 +16,17 @@ from runtime_env import bootstrap_runtime_env
 from agent_safety import SSRFBlocked, assert_panel_url, assert_public_url, guard_browser_page
 from time_utils import today_for_zoe_tz
 
-bootstrap_runtime_env()
+# Load .env secrets ONLY when running as the spawned stdio worker (`python
+# mcp_server.py` via mcporter has no systemd EnvironmentFile). Guarded so that
+# merely IMPORTING this module (intent_router's lazy _notify_ui, zoe_agent,
+# tests) does not inject the production environment into the host process —
+# an unguarded call here leaked the real POSTGRES_URL into pytest, silently
+# repointing alembic dialect-render tests (and anything else that reads it
+# lazily) at production. In-process importers run inside zoe-data, which gets
+# its env from systemd; the worker executes this at top level with
+# __name__ == "__main__", BEFORE the module-level os.environ reads below.
+if __name__ == "__main__":
+    bootstrap_runtime_env()
 
 OPENWEATHERMAP_API_KEY = os.environ.get("OPENWEATHERMAP_API_KEY", "")
 _BROADCAST_URL = "http://127.0.0.1:8000/api/internal/broadcast"
