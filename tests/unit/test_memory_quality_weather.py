@@ -11,6 +11,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "services
 
 import memory_quality as mq  # noqa: E402
 
+import pytest
+# Slim-dep green: opts into the GitHub-runner fast lane (see tests/AGENTS.md).
+pytestmark = pytest.mark.ci_safe
+
+
 
 WEATHER_REPORTS = [
     "It's 17 point 6 degrees and mainly clear in Geraldton, and it feels like 10 degrees.",

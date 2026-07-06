@@ -19,19 +19,25 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _restore_auth_after_each(monkeypatch):
-    monkeypatch.delenv("ZOE_UNAUTHENTICATED_ROLE", raising=False)
-    if "auth" in sys.modules:
-        del sys.modules["auth"]
-    import auth
+    """Restore the ORIGINAL auth module object after each test.
 
-    importlib.reload(auth)
+    The old teardown del-and-reloaded auth, which "resets" env-derived state but
+    swaps in a brand-new module object. Everything imported at collection time
+    (e.g. routers' ``Depends(get_current_user)``) still holds the ORIGINAL
+    function, so later tests that key ``app.dependency_overrides`` by the new
+    object never match → the real auth runs → guest → 403s. That was the
+    cross-test isolation leak behind the validate.yml --deselect exclusions
+    (bisected 2026-07-06: this file was the necessary poison). Restoring the
+    saved module IDENTITY (same pattern as test_telegram_link) heals it.
+    """
+    saved = sys.modules.get("auth")
+    monkeypatch.delenv("ZOE_UNAUTHENTICATED_ROLE", raising=False)
     yield
     monkeypatch.delenv("ZOE_UNAUTHENTICATED_ROLE", raising=False)
-    if "auth" in sys.modules:
-        del sys.modules["auth"]
-    import auth as a2
-
-    importlib.reload(a2)
+    if saved is not None:
+        sys.modules["auth"] = saved
+    else:
+        sys.modules.pop("auth", None)
 
 
 def _reload_auth(monkeypatch, *, role: str | None):

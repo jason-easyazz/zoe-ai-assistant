@@ -54,7 +54,7 @@ body:not(.sky-empty) .sky-authx .sky-auth-profile-grid {
      full-width slab, and any count stays a tidy, evenly-sized grid. */
   grid-template-columns: repeat(auto-fit, min(196px, 100%)) !important;
   justify-content: center !important;
-  gap: 16px !important;
+  gap: var(--sky-space-4, 16px) !important;
   min-height: 0 !important;
   align-content: center !important;
 }
@@ -74,7 +74,7 @@ body:not(.sky-empty) .sky-authx .sky-auth-profile {
   box-shadow: inset 0 1px 0 rgba(255,255,255,.1) !important;
   color: var(--sky-ink-0, #fff);
   text-align: center;
-  transition: transform 180ms var(--sky-ease-spring, ease), background 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+  transition: transform var(--sky-dur-fast, 180ms) var(--sky-ease-spring, ease), background var(--sky-dur-fast, 180ms) ease, border-color var(--sky-dur-fast, 180ms) ease, box-shadow var(--sky-dur-fast, 180ms) ease;
 }
 body:not(.sky-empty) .sky-authx .sky-auth-profile:hover,
 body:not(.sky-empty) .sky-authx .sky-auth-profile:focus-visible {
@@ -85,8 +85,11 @@ body:not(.sky-empty) .sky-authx .sky-auth-profile:focus-visible {
 }
 body:not(.sky-empty) .sky-authx .sky-auth-profile:active { transform: scale(.98); }
 body:not(.sky-empty) .sky-authx .sky-auth-profile.is-default {
-  border-color: rgba(var(--sky-accent-cyan-rgb, 55,192,230), .55) !important;
-  box-shadow: 0 0 0 1px rgba(var(--sky-accent-cyan-rgb, 55,192,230), .35) inset, 0 16px 40px -18px rgba(0,0,0,.5) !important;
+  /* ds1 accents are hex — rgba(var(--sky-accent-*-rgb)) leaned on an undefined
+     *-rgb token and only worked via its fallback triple. color-mix keeps the
+     exact same rendered colour while actually reading the canonical token. */
+  border-color: color-mix(in srgb, var(--sky-accent-cyan, #37c0e6) 55%, transparent) !important;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--sky-accent-cyan, #37c0e6) 35%, transparent) inset, 0 16px 40px -18px rgba(0,0,0,.5) !important;
 }
 
 /* ── Avatar disc — gradient, canonical accents cycled by position ───────── */
@@ -126,7 +129,7 @@ body:not(.sky-empty) .sky-authx .sky-auth-loading,
 body:not(.sky-empty) .sky-authx .sky-auth-empty {
   grid-column: 1 / -1;
   min-height: 150px !important;
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--sky-space-3, 12px);
   color: var(--sky-ink-2, rgba(255,255,255,.6));
   font-size: 15px;
 }

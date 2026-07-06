@@ -16,7 +16,17 @@ from runtime_env import bootstrap_runtime_env
 from agent_safety import SSRFBlocked, assert_panel_url, assert_public_url, guard_browser_page
 from time_utils import today_for_zoe_tz
 
-bootstrap_runtime_env()
+# Load .env secrets ONLY when running as the spawned stdio worker (`python
+# mcp_server.py` via mcporter has no systemd EnvironmentFile). Guarded so that
+# merely IMPORTING this module (intent_router's lazy _notify_ui, zoe_agent,
+# tests) does not inject the production environment into the host process —
+# an unguarded call here leaked the real POSTGRES_URL into pytest, silently
+# repointing alembic dialect-render tests (and anything else that reads it
+# lazily) at production. In-process importers run inside zoe-data, which gets
+# its env from systemd; the worker executes this at top level with
+# __name__ == "__main__", BEFORE the module-level os.environ reads below.
+if __name__ == "__main__":
+    bootstrap_runtime_env()
 
 OPENWEATHERMAP_API_KEY = os.environ.get("OPENWEATHERMAP_API_KEY", "")
 _BROADCAST_URL = "http://127.0.0.1:8000/api/internal/broadcast"
@@ -3328,8 +3338,17 @@ async def run_stdio_server():
         from db_pool import init_pool, close_pool
         await init_pool()
     except Exception as _pool_err:
+        # Fail LOUD and exit non-zero. Limping on used to crash mid-call on
+        # get_pool() instead, which mcporter surfaced as a generic "Connection
+        # closed" → intent_router mapped to None → ok:false while the user heard
+        # "done" (the #960/#993/#995 bug class). Exiting here puts the real
+        # cause (e.g. a stale rotated DB password) in stderr, which
+        # _run_mcporter logs. POSTGRES_URL comes from bootstrap_runtime_env();
+        # never bake it into agent configs like ~/.mcporter/mcporter.json —
+        # a pre-set env value blocks the bootstrap and rots on rotation.
         import sys as _sys
         print(f"[mcp_server] DB pool init failed: {_pool_err}", file=_sys.stderr)
+        raise SystemExit(1)
 
     reader = asyncio.StreamReader()
     protocol = asyncio.StreamReaderProtocol(reader)

@@ -256,6 +256,11 @@
                 this.emit({ type: 'skybridge_context', context: msg.context || {} });
             } else if (type === 'agui' || type === 'ui_component') {
                 this.emit({ type: 'card', card: msg.data || msg });
+            } else if (type === 'stop_playback') {
+                // Barge-in: the server detected the user talking over Zoe —
+                // kill current TTS playback immediately and show listening.
+                this.stopPlayback();
+                this.emit({ type: 'state', state: 'listening' });
             } else if (type === 'done') {
                 this.serverBusy = false;
                 if (msg.conversation_mode === true) this.enterConversationMode();
@@ -328,7 +333,11 @@
         async startRecording() {
             if (this.isRecording || this.speaking || this.serverBusy) return;
             if (!this.micStream) {
-                this.micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                // Echo cancellation is required for barge-in: without it Zoe's own
+                // TTS playback bleeds into the mic and can trigger interruptions.
+                this.micStream = await navigator.mediaDevices.getUserMedia({
+                    audio: { echoCancellation: true, noiseSuppression: true }
+                });
             }
             this.audioCtx = this.audioCtx || new (window.AudioContext || window.webkitAudioContext)();
             const source = this.audioCtx.createMediaStreamSource(this.micStream);

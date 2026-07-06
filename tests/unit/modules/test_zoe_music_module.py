@@ -11,6 +11,10 @@ from fastapi.testclient import TestClient
 
 from conftest import load_music_main
 
+# Slim-dep green: opts into the GitHub-runner fast lane (see tests/AGENTS.md).
+pytestmark = pytest.mark.ci_safe
+
+
 TOKEN = "test-service-token-123"
 
 

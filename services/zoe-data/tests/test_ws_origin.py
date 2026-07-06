@@ -86,11 +86,19 @@ async def test_enforce_passes_allowed_and_missing():
 
 # --- CORS/WS allowlist parity (no drift) ------------------------------------
 
+def _middleware_kwargs(mw):
+    """Starlette renamed Middleware.options to .kwargs (~0.35); accept both."""
+    kwargs = getattr(mw, "kwargs", None)
+    if kwargs is None:
+        kwargs = getattr(mw, "options", {})
+    return kwargs
+
+
 def _cors_allow_origins(app):
     """The allow_origins the CORSMiddleware was wired with."""
     for mw in app.user_middleware:
         if mw.cls is CORSMiddleware:
-            return mw.options.get("allow_origins")
+            return _middleware_kwargs(mw).get("allow_origins")
     raise AssertionError("CORSMiddleware is not installed on the app")
 
 
@@ -111,7 +119,8 @@ def test_env_extra_origin_widens_both_cors_and_ws():
         "import json\n"
         "from starlette.middleware.cors import CORSMiddleware\n"
         "import main\n"
-        "cors = [m.options.get('allow_origins') for m in main.app.user_middleware "
+        "cors = [(getattr(m, 'kwargs', None) or getattr(m, 'options', {}))"
+        ".get('allow_origins') for m in main.app.user_middleware "
         "if m.cls is CORSMiddleware][0]\n"
         "ws = sorted(main._allowed_browser_origins())\n"
         "print(json.dumps({'cors': sorted(cors), 'ws': ws}))\n"
@@ -186,6 +195,14 @@ def test_authenticated_ws_accepts_allowed_origin(client, monkeypatch):
         return {"user_id": "u1", "role": "member"}
 
     monkeypatch.setattr(main, "_resolve_ws_session", _fake_resolve)
+    # The broadcaster is a process-global singleton with ONE cumulative
+    # _sequence — any earlier test that broadcast anything bumps it, so the
+    # strict `sequence: 0` handshake assertion below is order-dependent and
+    # fails in full-directory runs only. Reset it (monkeypatch auto-restores)
+    # so the assertion stays strict without depending on run composition.
+    from push import broadcaster as _bc
+
+    monkeypatch.setattr(_bc, "_sequence", 0)
     with client.websocket_connect(
         "/api/lists/ws",
         headers={"origin": "https://zoe.local", "X-Session-ID": "sess-1"},
