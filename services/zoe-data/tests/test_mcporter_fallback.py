@@ -53,3 +53,21 @@ def test_run_mcporter_returns_none_on_nonzero_exit():
     from intent_router import _run_mcporter
 
     assert asyncio.run(_run_mcporter("false")) is None
+
+
+def test_run_mcporter_returns_none_on_timeout(monkeypatch):
+    """Locks the exception contract: run_to_completion raises
+    subprocess.TimeoutExpired (NOT asyncio.TimeoutError — unrelated classes, so
+    a swap-back would escape the handler); _run_mcporter must map it to None."""
+    import subprocess
+
+    import async_subprocess
+    from intent_router import _run_mcporter
+
+    async def timeout_spawn(cmd, **_kwargs):
+        raise subprocess.TimeoutExpired(cmd=list(cmd), timeout=10)
+
+    # _run_mcporter imports run_to_completion at call time, so patching the
+    # module attribute is seen.
+    monkeypatch.setattr(async_subprocess, "run_to_completion", timeout_spawn)
+    assert asyncio.run(_run_mcporter("echo never-runs")) is None
