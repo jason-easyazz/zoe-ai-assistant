@@ -171,18 +171,30 @@ def maybe_conversation_opener(
     return {"phrase": opener_ack_phrase(env), "conversation_mode": True}
 
 
+_COURTESY_TOKENS = ("thanks", "thank", "you", "please", "no", "okay", "ok")
+
+
 def is_conversation_ender(text: str | None) -> bool:
     """True when the (post wake-strip) utterance is a conversation ender.
 
-    Same normalization + fullmatch discipline as the opener: long sentences
-    that merely contain the words never fire.
+    Same normalization + fullmatch discipline as the opener, with one
+    extra allowance: courtesy words at the EDGES are stripped before matching,
+    so "That's all, thanks." and "Thanks, that's all" both end the
+    conversation while long sentences that merely contain the words never do.
     """
     norm = _normalize(text)
     if not norm:
         return False
     if norm.endswith(" zoe"):
         norm = norm[: -len(" zoe")].strip()
-    return norm in _ENDER_PHRASES
+    if norm in _ENDER_PHRASES:
+        return True
+    words = norm.split()
+    while words and words[0] in _COURTESY_TOKENS:
+        words.pop(0)
+    while words and words[-1] in _COURTESY_TOKENS:
+        words.pop()
+    return " ".join(words) in _ENDER_PHRASES if words else False
 
 
 def next_ender_ack() -> str:
