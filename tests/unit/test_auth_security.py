@@ -10,7 +10,11 @@ To fix: Update test framework to create sessions via /api/auth/login and use
 the returned X-Session-ID header instead of JWT tokens.
 """
 import pytest
-import jwt
+
+# importorskip keeps COLLECTION safe on slim CI hosts without PyJWT — a plain
+# `import jwt` here aborts the whole `pytest tests/unit -m ci_safe` run even
+# though this module is skip-marked (marks apply after import).
+jwt = pytest.importorskip("jwt")
 from datetime import datetime, timedelta
 
 # Skip all tests in this module until test framework is updated
