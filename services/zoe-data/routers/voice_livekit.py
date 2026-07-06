@@ -97,6 +97,32 @@ def _barge_min_hops() -> int:
         ms = 250.0
     return max(1, math.ceil(ms / _SILERO_HOP_MS))
 
+
+def _smart_turn_enabled() -> bool:
+    """ZOE_SMART_TURN_ENABLED — end-of-turn model instead of a bare silence
+    window (V2 endpointing). Only consulted on the barge-in (Silero) path; when
+    OFF, or when the model is unavailable, the silence window ends the turn
+    exactly as before."""
+    return os.environ.get("ZOE_SMART_TURN_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _smart_turn_threshold() -> float:
+    """End-of-turn probability at/above which the turn ends (ZOE_SMART_TURN_THRESHOLD)."""
+    try:
+        return float(os.environ.get("ZOE_SMART_TURN_THRESHOLD", "0.5"))
+    except (TypeError, ValueError):
+        return 0.5
+
+
+def _smart_turn_max_checks() -> int:
+    """Bound on incomplete-verdict extensions per turn (ZOE_SMART_TURN_MAX_CHECKS,
+    default 2). After this many "still mid-thought" verdicts the turn ends anyway
+    — the model can extend a pause, never hang a conversation."""
+    try:
+        return max(1, int(os.environ.get("ZOE_SMART_TURN_MAX_CHECKS", "2")))
+    except (TypeError, ValueError):
+        return 2
+
 _VOICE_HEALTH: dict = {
     "status": "starting",
     "backend": None,
@@ -691,6 +717,60 @@ def _ensure_participant_vad(ps: dict):
     return vad
 
 
+def _end_turn(sid: str, ps: dict, local_participant) -> None:
+    """LISTENING → PROCESSING: snapshot the utterance and launch the pipeline.
+    Shared by the plain silence endpoint and the smart-turn-approved endpoint."""
+    logger.debug(
+        "LiveKit VAD [%s]: LISTENING → PROCESSING (silero, frames=%d)",
+        sid[:8], len(ps["frames"]),
+    )
+    ps["state"] = _ParticipantState.PROCESSING
+    frames_snapshot = list(ps["frames"])
+    ps["frames"] = []
+    ps["speech_count"] = 0
+    ps["silence_count"] = 0
+    ps["turn_checks"] = 0
+    ps["turn_check_task"] = None
+    _schedule_pipeline(sid, ps, local_participant, frames_snapshot)
+
+
+async def _smart_turn_check(sid: str, ps: dict, local_participant) -> None:
+    """Score end-of-turn on the buffered utterance (smart-turn v3, ~200ms on one
+    CPU thread via to_thread) and either end the turn or extend the listen.
+
+    Discards its verdict if the world moved on while scoring: a barge-in/reset
+    (state left LISTENING) or resumed speech (silence_count went back to 0).
+    Fail-open on any error — the turn ends, matching legacy behaviour."""
+    import numpy as np
+
+    import voice_turn
+
+    prob = 1.0
+    try:
+        det = voice_turn.get_smart_turn()
+        if det is not None:
+            pcm = np.frombuffer(b"".join(ps["frames"]), dtype=np.int16)
+            prob = await asyncio.to_thread(det.end_of_turn_prob, pcm)
+    except Exception as exc:  # never take down the frame loop
+        logger.warning("smart-turn [%s]: check failed (%s) — ending turn", sid[:8], exc)
+    finally:
+        ps["turn_check_task"] = None
+    if ps.get("state") != _ParticipantState.LISTENING:
+        return  # barged / reset while scoring — verdict is moot
+    if ps.get("silence_count", 0) == 0:
+        return  # speech resumed while scoring — keep listening
+    if prob >= _smart_turn_threshold() or ps.get("turn_checks", 0) + 1 >= _smart_turn_max_checks():
+        logger.debug("smart-turn [%s]: p=%.2f → end of turn", sid[:8], prob)
+        _end_turn(sid, ps, local_participant)
+    else:
+        ps["turn_checks"] = ps.get("turn_checks", 0) + 1
+        ps["silence_count"] = max(1, _VAD_SILENCE_FRAMES // 2)
+        logger.debug(
+            "smart-turn [%s]: p=%.2f → still mid-thought, extending listen (check %d/%d)",
+            sid[:8], prob, ps["turn_checks"], _smart_turn_max_checks(),
+        )
+
+
 async def _handle_frame_barge_in(raw: bytes, sid: str, ps: dict, local_participant, vad) -> None:
     """Silero-VAD state machine for one incoming frame (ZOE_VOICE_BARGE_IN=1).
 
@@ -717,6 +797,7 @@ async def _handle_frame_barge_in(raw: bytes, sid: str, ps: dict, local_participa
             if ps["speech_count"] >= _VAD_MIN_SPEECH_FRAMES:
                 ps["state"] = _ParticipantState.LISTENING
                 ps["silence_count"] = 0
+                ps["turn_checks"] = 0
                 logger.debug(
                     "LiveKit VAD [%s]: IDLE → LISTENING (silero p=%.2f)",
                     sid[:8], max(probs),
@@ -737,16 +818,19 @@ async def _handle_frame_barge_in(raw: bytes, sid: str, ps: dict, local_participa
         else:
             ps["silence_count"] = ps.get("silence_count", 0) + 1
             if ps["silence_count"] >= _VAD_SILENCE_FRAMES:
-                logger.debug(
-                    "LiveKit VAD [%s]: LISTENING → PROCESSING (silero, frames=%d)",
-                    sid[:8], len(ps["frames"]),
-                )
-                ps["state"] = _ParticipantState.PROCESSING
-                frames_snapshot = list(ps["frames"])
-                ps["frames"] = []
-                ps["speech_count"] = 0
-                ps["silence_count"] = 0
-                _schedule_pipeline(sid, ps, local_participant, frames_snapshot)
+                if ps.get("turn_check_task") is not None:
+                    return  # smart-turn verdict in flight — keep buffering
+                # V2 endpointing: before ending the turn on silence alone, ask
+                # the end-of-turn model whether the speaker is actually done
+                # (a mid-thought pause extends the listen instead of cutting off).
+                if _smart_turn_enabled():
+                    import voice_turn
+                    if voice_turn.get_smart_turn() is not None:
+                        ps["turn_check_task"] = asyncio.ensure_future(
+                            _smart_turn_check(sid, ps, local_participant)
+                        )
+                        return
+                _end_turn(sid, ps, local_participant)
 
     elif state in (_ParticipantState.PROCESSING, _ParticipantState.COOLDOWN):
         # Full-duplex: keep listening while Zoe thinks/speaks. Count CONSECUTIVE
@@ -770,6 +854,7 @@ async def _handle_frame_barge_in(raw: bytes, sid: str, ps: dict, local_participa
             ps["frames"] = list(ps["barge_frames"])
             ps["speech_count"] = 0
             ps["silence_count"] = 0
+            ps["turn_checks"] = 0
             ps["barge_hops"] = 0
             ps["barge_frames"] = []
             ps["cooldown_deadline"] = 0.0

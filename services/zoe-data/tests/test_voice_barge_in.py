@@ -461,3 +461,187 @@ def test_silero_graceful_degradation_on_bogus_path(monkeypatch):
     monkeypatch.setattr(voice_vad, "_warned", False)
     assert voice_vad.create_vad() is None, "missing model must degrade to None"
     assert voice_vad.create_vad() is None  # cached failure, still None, no raise
+
+
+# ── Smart Turn v3 endpointing (V2, ZOE_SMART_TURN_ENABLED) ───────────────────
+#
+# The end-of-turn model refines the silence endpoint on the Silero path: at the
+# silence window, score the buffered utterance — complete → end turn; mid-thought
+# → extend the listen (bounded by ZOE_SMART_TURN_MAX_CHECKS, fail-open).
+
+
+def _install_fake_voice_turn(monkeypatch, prob=None, delay_s=0.0):
+    """Fake voice_turn module. prob=None → get_smart_turn() returns None
+    (unavailable). Otherwise a detector whose end_of_turn_prob returns `prob`
+    after `delay_s` (simulating the ~200ms inference in a worker thread)."""
+    import time as _time
+
+    mod = types.ModuleType("voice_turn")
+
+    class _FakeDetector:
+        def __init__(self):
+            self.calls = 0
+
+        def end_of_turn_prob(self, _pcm):
+            self.calls += 1
+            if delay_s:
+                _time.sleep(delay_s)
+            return prob if not callable(prob) else prob(self.calls)
+
+    det = None if prob is None else _FakeDetector()
+    mod.get_smart_turn = lambda: det
+    mod._det = det
+    monkeypatch.setitem(sys.modules, "voice_turn", mod)
+    return mod
+
+
+def _listening_ps(sid):
+    ps = v._make_participant_state(sid)
+    ps["state"] = v._ParticipantState.LISTENING
+    ps["frames"] = [_loud()]
+    return ps
+
+
+def _capture_end_turn(monkeypatch):
+    calls = []
+    monkeypatch.setattr(v, "_schedule_pipeline", lambda *a, **k: calls.append(a))
+    return calls
+
+
+async def _feed_silence_until_window(ps, vad_mod, local, sid, n=None):
+    frames = n if n is not None else v._VAD_SILENCE_FRAMES
+    for _ in range(frames):
+        await v._handle_frame_barge_in(_silence(), sid, ps, local, ps["_vad"])
+
+
+def _mk_vad_all_silence(monkeypatch, n_frames):
+    return _install_fake_voice_vad(monkeypatch, [[0.0]] * n_frames)
+
+
+def test_smart_turn_flag_off_silence_ends_turn_immediately(monkeypatch):
+    """Regression lock: without ZOE_SMART_TURN_ENABLED the silence window ends
+    the turn exactly as before — no smart-turn consultation."""
+    monkeypatch.setenv("ZOE_VOICE_BARGE_IN", "1")
+    monkeypatch.delenv("ZOE_SMART_TURN_ENABLED", raising=False)
+    _clean_env(monkeypatch)
+    vad_mod = _mk_vad_all_silence(monkeypatch, v._VAD_SILENCE_FRAMES + 2)
+    turn_mod = _install_fake_voice_turn(monkeypatch, prob=0.0)  # would say "incomplete"
+    pipeline = _capture_end_turn(monkeypatch)
+
+    sid = "sid-st-off"
+    ps = _listening_ps(sid)
+    ps["_vad"] = vad_mod.create_vad()
+    local = _FakeLocalParticipant()
+    _run(_feed_silence_until_window(ps, vad_mod, local, sid))
+
+    assert pipeline, "flag off → silence window must end the turn immediately"
+    assert ps["state"] == v._ParticipantState.PROCESSING
+    assert turn_mod._det.calls == 0, "smart turn must not be consulted when off"
+
+
+def test_smart_turn_complete_verdict_ends_turn(monkeypatch):
+    monkeypatch.setenv("ZOE_VOICE_BARGE_IN", "1")
+    monkeypatch.setenv("ZOE_SMART_TURN_ENABLED", "1")
+    _clean_env(monkeypatch)
+    vad_mod = _mk_vad_all_silence(monkeypatch, v._VAD_SILENCE_FRAMES + 2)
+    _install_fake_voice_turn(monkeypatch, prob=0.92)
+    pipeline = _capture_end_turn(monkeypatch)
+
+    sid = "sid-st-done"
+    ps = _listening_ps(sid)
+    ps["_vad"] = vad_mod.create_vad()
+    local = _FakeLocalParticipant()
+
+    async def scenario():
+        await _feed_silence_until_window(ps, vad_mod, local, sid)
+        assert ps["turn_check_task"] is not None, "check task must launch at the window"
+        await asyncio.wait_for(ps_task(ps), timeout=2)
+
+    def ps_task(ps):
+        return ps["turn_check_task"]
+
+    _run(scenario())
+    assert pipeline, "complete verdict must end the turn"
+    assert ps["state"] == v._ParticipantState.PROCESSING
+    assert ps["turn_checks"] == 0 and ps["turn_check_task"] is None
+
+
+def test_smart_turn_incomplete_extends_then_bounded_end(monkeypatch):
+    """Mid-thought verdict extends the listen (halved silence window); the
+    MAX_CHECKS bound guarantees the turn still ends (fail-open, never hangs)."""
+    monkeypatch.setenv("ZOE_VOICE_BARGE_IN", "1")
+    monkeypatch.setenv("ZOE_SMART_TURN_ENABLED", "1")
+    monkeypatch.setenv("ZOE_SMART_TURN_MAX_CHECKS", "2")
+    _clean_env(monkeypatch)
+    total = v._VAD_SILENCE_FRAMES * 3
+    vad_mod = _mk_vad_all_silence(monkeypatch, total)
+    _install_fake_voice_turn(monkeypatch, prob=0.05)  # always "mid-thought"
+    pipeline = _capture_end_turn(monkeypatch)
+
+    sid = "sid-st-extend"
+    ps = _listening_ps(sid)
+    ps["_vad"] = vad_mod.create_vad()
+    local = _FakeLocalParticipant()
+
+    async def scenario():
+        # First window → check #1 → incomplete → extended (no pipeline yet).
+        await _feed_silence_until_window(ps, vad_mod, local, sid)
+        await asyncio.wait_for(ps["turn_check_task"], timeout=2)
+        assert not pipeline, "first incomplete verdict must extend, not end"
+        assert ps["turn_checks"] == 1
+        assert 0 < ps["silence_count"] < v._VAD_SILENCE_FRAMES, "silence window must be halved"
+        # Second window → check #2 → bound reached → turn ends despite verdict.
+        await _feed_silence_until_window(ps, vad_mod, local, sid)
+        await asyncio.wait_for(ps["turn_check_task"], timeout=2)
+
+    _run(scenario())
+    assert pipeline, "MAX_CHECKS bound must force the turn to end"
+    assert ps["state"] == v._ParticipantState.PROCESSING
+
+
+def test_smart_turn_speech_resume_discards_verdict(monkeypatch):
+    """If speech resumes while the model is scoring, the verdict is moot —
+    stay LISTENING with the new speech, no pipeline launch."""
+    monkeypatch.setenv("ZOE_VOICE_BARGE_IN", "1")
+    monkeypatch.setenv("ZOE_SMART_TURN_ENABLED", "1")
+    _clean_env(monkeypatch)
+    script = [[0.0]] * v._VAD_SILENCE_FRAMES + [[0.9]]  # silence window, then speech
+    vad_mod = _install_fake_voice_vad(monkeypatch, script)
+    _install_fake_voice_turn(monkeypatch, prob=0.99, delay_s=0.15)  # slow "complete"
+    pipeline = _capture_end_turn(monkeypatch)
+
+    sid = "sid-st-resume"
+    ps = _listening_ps(sid)
+    ps["_vad"] = vad_mod.create_vad()
+    local = _FakeLocalParticipant()
+
+    async def scenario():
+        await _feed_silence_until_window(ps, vad_mod, local, sid)
+        task = ps["turn_check_task"]
+        assert task is not None
+        # Speech resumes while the check is still scoring.
+        await v._handle_frame_barge_in(_loud(), sid, ps, local, ps["_vad"])
+        assert ps["silence_count"] == 0
+        await asyncio.wait_for(task, timeout=2)
+
+    _run(scenario())
+    assert not pipeline, "verdict must be discarded when speech resumed"
+    assert ps["state"] == v._ParticipantState.LISTENING
+
+
+def test_smart_turn_unavailable_falls_back_to_immediate_end(monkeypatch):
+    monkeypatch.setenv("ZOE_VOICE_BARGE_IN", "1")
+    monkeypatch.setenv("ZOE_SMART_TURN_ENABLED", "1")
+    _clean_env(monkeypatch)
+    vad_mod = _mk_vad_all_silence(monkeypatch, v._VAD_SILENCE_FRAMES + 2)
+    _install_fake_voice_turn(monkeypatch, prob=None)  # detector unavailable
+    pipeline = _capture_end_turn(monkeypatch)
+
+    sid = "sid-st-none"
+    ps = _listening_ps(sid)
+    ps["_vad"] = vad_mod.create_vad()
+    local = _FakeLocalParticipant()
+    _run(_feed_silence_until_window(ps, vad_mod, local, sid))
+
+    assert pipeline, "model unavailable → legacy immediate end"
+    assert ps["state"] == v._ParticipantState.PROCESSING
