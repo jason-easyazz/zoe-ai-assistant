@@ -257,7 +257,7 @@ def _acting_user_app() -> FastAPI:
 
 def test_internal_caller_may_set_acting_user(monkeypatch):
     monkeypatch.setattr(auth, "_ZOE_INTERNAL_TOKEN", "tok")
-    # Loopback TestClient IS an internal caller → override honoured.
+    # Valid X-Internal-Token → override honoured (loopback alone is NOT enough).
     client = TestClient(_acting_user_app())
     r = client.post(
         "/echo-identity",
@@ -265,6 +265,34 @@ def test_internal_caller_may_set_acting_user(monkeypatch):
     )
     assert r.status_code == 200
     assert r.json() == {"user_id": "jason", "role": "user"}
+
+
+def test_loopback_without_token_cannot_impersonate(monkeypatch):
+    """CRITICAL (2026-07-04 review residual): bare loopback + X-Zoe-User-Id must
+    NOT grant impersonation — a loopback SSRF or compromised local process would
+    otherwise inherit acting-as-any-user. Token required, full stop."""
+    monkeypatch.setattr(auth, "_ZOE_INTERNAL_TOKEN", "tok")
+    # TestClient is loopback-equivalent; force the internal check True to model
+    # the strongest version of the old trust.
+    monkeypatch.setattr(auth, "_is_internal_request", lambda request: True)
+    client = TestClient(_acting_user_app())
+    r = client.post("/echo-identity", headers={"X-Zoe-User-Id": "jason"})
+    assert r.status_code == 200
+    assert r.json()["user_id"] == "guest"
+
+
+def test_override_disabled_when_token_unprovisioned(monkeypatch):
+    """With ZOE_INTERNAL_TOKEN unset the override is disabled entirely — even a
+    caller that SENDS some token header cannot impersonate (nothing to match)."""
+    monkeypatch.setattr(auth, "_ZOE_INTERNAL_TOKEN", "")
+    monkeypatch.setattr(auth, "_is_internal_request", lambda request: True)
+    client = TestClient(_acting_user_app())
+    r = client.post(
+        "/echo-identity",
+        headers={"X-Zoe-User-Id": "jason", "X-Internal-Token": "anything"},
+    )
+    assert r.status_code == 200
+    assert r.json()["user_id"] == "guest"
 
 
 def test_public_caller_cannot_impersonate(monkeypatch):
