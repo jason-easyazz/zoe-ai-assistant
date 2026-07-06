@@ -157,6 +157,8 @@ def _validate_prop(component: str, pname: str, pspec: dict[str, Any], value: Any
     elif t in ("integer", "number"):
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             _fail(f"{component}.{pname} must be a number")
+        if t == "integer" and not isinstance(value, int):
+            _fail(f"{component}.{pname} must be an integer")
         lo, hi = pspec.get("minimum"), pspec.get("maximum")
         if lo is not None and value < lo:
             _fail(f"{component}.{pname} below minimum {lo}")
@@ -197,10 +199,13 @@ def validate_component_tree(tree: Any) -> dict[str, Any]:
             if pspec is None:
                 _fail(f"{name} does not accept prop {key!r}")
             out[key] = _validate_prop(name, key, pspec, value)
-            if isinstance(out[key], str):
-                counters["text"] += len(out[key])
-                if counters["text"] > MAX_TEXT_CHARS:
-                    _fail(f"tree text exceeds {MAX_TEXT_CHARS} chars")
+            validated = out[key]
+            if isinstance(validated, str):
+                counters["text"] += len(validated)
+            elif isinstance(validated, dict):  # action payloads: count their text too
+                counters["text"] += sum(len(v) for v in validated.values() if isinstance(v, str))
+            if counters["text"] > MAX_TEXT_CHARS:
+                _fail(f"tree text exceeds {MAX_TEXT_CHARS} chars")
         for req in spec.get("required", []):
             if req not in out:
                 _fail(f"{name} missing required prop {req!r}")

@@ -123,3 +123,32 @@ def test_enum_violation_rejected():
 def test_progress_bounds():
     with pytest.raises(CardContractError):
         validate_component_tree(_card([{"component": "Progress", "value": 150}]))
+
+
+def test_integer_prop_rejects_float():
+    with pytest.raises(CardContractError):
+        validate_component_tree({"component": "Grid", "columns": 2.7,
+                                 "children": [{"component": "Text", "text": "x"}]})
+
+
+def test_action_text_counts_toward_budget():
+    big = "x" * 200
+    kids = [{"component": "ActionButton", "action": {"label": big, "query": big}}
+            for _ in range(15)]  # 15 * 400 = 6000 > MAX_TEXT_CHARS
+    with pytest.raises(CardContractError):
+        validate_component_tree(_card(kids))
+
+
+def test_js_glyphs_match_python_catalog():
+    """The JS renderer's GLYPHS dict must cover exactly the server's _GLYPHS enum —
+    otherwise the server accepts a glyph the renderer silently falls back on."""
+    import re
+    from pathlib import Path
+    import ui_catalog
+    js = (Path(ui_catalog.__file__).resolve().parents[1] / "zoe-ui" / "dist" / "touch"
+          / "js" / "zoe-compose.js").read_text(encoding="utf-8")
+    block = js[js.index("var GLYPHS = {"):js.index("};", js.index("var GLYPHS = {"))]
+    js_names = set(re.findall(r"^\s{8}([a-z]+):", block, re.M))
+    from ui_catalog import CATALOG
+    py_names = set(CATALOG["Glyph"]["props"]["name"]["enum"])
+    assert js_names == py_names, f"glyph drift: js-only={js_names - py_names} py-only={py_names - js_names}"
