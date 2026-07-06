@@ -629,6 +629,41 @@ def _use_flue_brain() -> bool:
     return (os.environ.get("ZOE_BRAIN_BACKEND", "core") or "").strip().lower() == "flue"
 
 
+# Hard wall-clock budget for the flag-gated compose step inside the chat
+# stream. compose_card has its own HTTP timeout, but that can still hold the
+# stream's RUN_FINISHED for many seconds when the model server is slow — this
+# budget caps the wait as seen by the stream, whatever the cause.
+_COMPOSE_STREAM_BUDGET_S = float(os.environ.get("ZOE_COMPOSE_STREAM_BUDGET_S", "6"))
+
+
+async def maybe_compose_event(user_message, answer_text, *, user_id, emitted_domains):
+    """Flag-gated generative-UI step: returns the zoe.ui_component CustomEvent
+    carrying a composed card, or None (flag off / a domain card already emitted /
+    compose failed / budget exceeded). Never raises; bounded by
+    _COMPOSE_STREAM_BUDGET_S so the stream can never hang on composition."""
+    try:
+        from ui_compose import compose_card, compose_enabled
+
+        if not compose_enabled() or emitted_domains:
+            return None
+        composed = await asyncio.wait_for(
+            compose_card(user_message, answer_text, user_id=user_id),
+            timeout=_COMPOSE_STREAM_BUDGET_S,
+        )
+        if not composed:
+            return None
+        return CustomEvent(
+            name="zoe.ui_component",
+            value={"type": "compose", "data": {"action": "Composed view"}, "card": composed},
+        )
+    except asyncio.TimeoutError:
+        logger.info("compose skipped: exceeded stream budget %.1fs", _COMPOSE_STREAM_BUDGET_S)
+        return None
+    except Exception as exc:  # noqa: BLE001 — additive, never break the turn
+        logger.debug("compose hook failed (non-fatal): %s", exc)
+        return None
+
+
 def _brain_streaming(message, session_id, user_id="", **kwargs):
     """Brain streaming dispatch — Flue (opt-in) > zoe-core (Pi, default) > legacy.
 
@@ -2736,25 +2771,18 @@ async def chat_stream_generator(
                 # ── Generative UI (PR-B, flag-gated): if the brain answered with
                 # text only (no domain card was emitted this turn) compose a card
                 # from the answer via the catalog grammar. Runs AFTER the full text
-                # has streamed, so it can never delay tokens; any failure means
-                # simply no card (ui_compose returns None, never raises).
+                # has streamed (never delays tokens) and is bounded by a hard
+                # stream budget so a slow/down model server can never hold
+                # RUN_FINISHED hostage; any failure = simply no card.
                 if not escalate_signal and full_response.strip():
-                    try:
-                        from ui_compose import compose_card, compose_enabled
-
-                        if compose_enabled() and not _brain_card_domains:
-                            _composed = await compose_card(
-                                message_for_processing, full_response, user_id=user_id
-                            )
-                            if _composed:
-                                yield emit(CustomEvent(
-                                    name="zoe.ui_component",
-                                    value={"type": "compose",
-                                           "data": {"action": "Composed view"},
-                                           "card": _composed},
-                                ))
-                    except Exception as _ce:  # noqa: BLE001 — additive, never break the turn
-                        logger.debug("compose hook failed (non-fatal): %s", _ce)
+                    _compose_ev = await maybe_compose_event(
+                        message_for_processing,
+                        full_response,
+                        user_id=user_id,
+                        emitted_domains=_brain_card_domains,
+                    )
+                    if _compose_ev is not None:
+                        yield emit(_compose_ev)
                 if escalate_signal:
                     is_background = escalate_signal.startswith("__ESCALATE_BG__:")
                     is_hermes = escalate_signal.startswith("__ESCALATE_HERMES__:")
