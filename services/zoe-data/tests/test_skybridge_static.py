@@ -695,6 +695,97 @@ def test_skybridge_weather_renderer_accepts_temperature_aliases():
     assert "['temp', 'temperature', 'temperature_c', 'temp_c', 'high']" in renderer
 
 
+def test_skybridge_generic_renderers_compose_on_catalog(tmp_path):
+    """The 7 legacy generic renderers (status/page/setting/page_grid/
+    settings_overview/list/action_form) plus the media/smart_home/
+    research_report adapters now build their card BODY as zoe-compose trees.
+    Behavioral: render each type through the real renderer (zoe-compose.js
+    loaded first, like skybridge.html) and assert (a) zx- catalog classes,
+    (b) no legacy sky-card-body/sky-field markup, (c) injection is escaped,
+    (d) card actions still carry data-sky-action."""
+    node = shutil.which("node") or shutil.which("nodejs")
+    if not node:
+        pytest.skip("Node.js is not installed on this host")
+    harness = tmp_path / "compose_rebuild_harness.cjs"
+    harness.write_text(
+        """
+const fs = require('fs');
+const vm = require('vm');
+const sandbox = { window: {} };
+vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(process.argv[2], 'utf8'), sandbox); // zoe-compose first
+vm.runInContext(fs.readFileSync(process.argv[3], 'utf8'), sandbox); // then renderer
+const R = sandbox.window.SkybridgeRenderer;
+const INJ = 'sneaky <b>x</b>';
+const cards = {
+  status: { component: 'status', props: { title: 'Status ' + INJ, body: 'Body ' + INJ, metric: '42', metric_label: 'answers', actions: [{ label: 'More', query: 'more status' }] } },
+  page: { component: 'page', props: { title: 'Calendar ' + INJ, summary: 'Summary ' + INJ, route: '/touch/calendar.html' } },
+  setting: { component: 'setting', props: { title: 'Trust Gate ' + INJ, summary: 'Summary ' + INJ, risk: 'critical', domain: 'security', route: '/touch/settings.html#trust-gate' } },
+  page_grid: { component: 'page_grid', props: { title: 'Map', items: [{ title: 'A ' + INJ, summary: 'sa' }, { title: 'B', summary: 'sb ' + INJ }], actions: [{ label: 'Open', query: 'open map' }] } },
+  settings_overview: { component: 'settings_overview', props: { title: 'Settings', items: [{ title: 'API ' + INJ, risk: 'high', summary: 'keys' }], actions: [{ label: 'Open', query: 'open settings' }] } },
+  list: { component: 'list', props: { title: 'Related', items: ['plain ' + INJ, { title: 'obj ' + INJ, summary: 'detail ' + INJ }], actions: [{ label: 'One', query: 'one' }] } },
+  action_form: { component: 'action_form', props: { title: 'Form ' + INJ, form_id: 'f1', summary: 'Check ' + INJ, fields: [{ label: 'Who ' + INJ, value: 'me ' + INJ }, { label: 'Empty', value: '' }] } },
+  form: { component: 'form', props: { title: 'Form2 ' + INJ, form_id: 'f2', fields: [{ name: 'x', value: 'y ' + INJ }] } },
+  list_create: { component: 'action_form', props: { source: 'list_create', title: 'New list', summary: 'Name it ' + INJ, fields: [{ label: 'List type', value: 'Personal' }, { label: 'Name', value: '' }], actions: [{ label: 'Create', query: 'create it' }] } },
+  smart_home: { component: 'smart_home', props: { title: 'Lights', devices: [{ name: 'Lamp ' + INJ, state: 'on' }, { entity_id: 'light.hall', state: 'off' }], actions: [{ label: 'All off', query: 'lights off' }] } },
+  media: { component: 'media', props: { title: 'Now playing', items: [{ title: 'Song ' + INJ, artist: 'Band', artwork: '/touch/img/art.png' }, { title: 'NoArt', artist: 'X', artwork: 'https://evil.example/a.png' }], actions: [{ label: 'Pause', query: 'pause music' }] } },
+  research_report: { component: 'research_report', props: { title: 'Report', sections: [{ title: 'Findings ' + INJ, body: 'Text ' + INJ, items: [{ name: 'Opt ' + INJ, value: '$5' }] }], actions: [{ label: 'Sources', query: 'show sources' }] } }
+};
+const out = {};
+for (const [name, card] of Object.entries(cards)) {
+  const html = R.render(card);
+  out[name] = {
+    zx: html.includes('zx-root') && (html.includes('zx-listrow') || html.includes('zx-text') || html.includes('zx-stat')),
+    no_legacy: !html.includes('sky-card-body') && !html.includes('sky-field') && !html.includes('sky-card-grid') && !html.includes('sky-widget-strip'),
+    escaped: !html.includes('<b>x</b>') && html.includes('&lt;b&gt;x&lt;/b&gt;'),
+    action: html.includes('data-sky-action=')
+  };
+}
+// Type-specific structure checks.
+out.status.metric = R.render(cards.status).includes('zx-stat');
+out.page.open_route = /data-sky-action=\\"open\\"[^>]*data-route=\\"\\/touch\\/calendar.html\\"/.test(R.render(cards.page));
+out.setting.warn_change = R.render(cards.setting).includes('warn');
+out.page_grid.grid = R.render(cards.page_grid).includes('zx-grid zx-cols-2');
+out.settings_overview.risk_in_row = R.render(cards.settings_overview).includes('API sneaky &lt;b&gt;x&lt;/b&gt; · high');
+out.action_form.not_set = R.render(cards.action_form).includes('Not set');
+out.list_create.kicker = R.render(cards.list_create).includes('zx-text-kicker') && R.render(cards.list_create).includes('list-create-card');
+out.smart_home.grid_state = R.render(cards.smart_home).includes('zx-grid') && R.render(cards.smart_home).includes('<em>on</em>');
+out.media.tile = R.render(cards.media).includes('zx-mediatile') && R.render(cards.media).includes('/touch/img/art.png');
+out.media.foreign_art_dropped = !R.render(cards.media).includes('evil.example');
+out.research_report.kicker = R.render(cards.research_report).includes('zx-text-kicker');
+// Guard: without zoe-compose the renderer still emits a readable escaped body.
+const bare = { window: {} };
+vm.createContext(bare);
+vm.runInContext(fs.readFileSync(process.argv[3], 'utf8'), bare);
+const bareHtml = bare.window.SkybridgeRenderer.render(cards.status);
+out.no_compose_fallback = {
+  text: bareHtml.includes('Body sneaky') && bareHtml.includes('&lt;b&gt;x&lt;/b&gt;'),
+  shell: bareHtml.includes('sky-card'),
+  no_tree: !bareHtml.includes('zx-root')
+};
+process.stdout.write(JSON.stringify(out));
+""",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [node, str(harness), str(UI / "js" / "zoe-compose.js"), str(UI / "js" / "skybridge-renderer.js")],
+        check=True, capture_output=True, text=True,
+    )
+    import json
+    out = json.loads(proc.stdout)
+    failures = {
+        f"{card}.{check}": ok
+        for card, checks in out.items()
+        for check, ok in checks.items()
+        if not ok
+    }
+    assert not failures, f"composed generic renderers failed: {failures}"
+
+    # The legacy list_create CSS died with the legacy markup.
+    css = read(UI / "css" / "skybridge-data-widgets.css")
+    assert "sky-list-create" not in css
+
+
 def test_skybridge_list_create_has_database_conflict_guard():
     service = read(DATA / "skybridge_service.py")
     migration = read(DATA / "alembic" / "versions" / "0011_unique_active_list_names.py")
