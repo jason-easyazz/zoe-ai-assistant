@@ -17,6 +17,11 @@ a link to the detail + where it's up to. Mark ✅ when done so nothing lingers h
 
 ## 🔨 Active
 
+### Samantha evolution — the post-memory frontier (ears, voice-first initiative, presence)
+- **Goal:** with memory (pillar 1) delivered, close the remaining Samantha gaps in leverage order: conversation-grade voice (barge-in + real turn detection + streamed TTS), Zoe **speaking first** (proactive → spoken via `panel_announce` + a presence check), a **RAM-reclamation workstream** (≥2 GB; the box gates everything), prosody **emotion sensing** (small SER model feeding the existing `emotional_moment` pipeline), speaker-ID enable, attributed ambient capture, closing the self-evolution loop once, and a first surface that leaves the house (Telegram voice notes).
+- **Detail / executable plan:** [`docs/architecture/samantha-evolution-plan.md`](architecture/samantha-evolution-plan.md) (workstreams W0–W8, gates, dependency graph, NEXT ACTION pointer). Grounded in the 2026-07-06 capability audit, the ambient-voice ADR spike verdict, and [`docs/knowledge/memory-pressure-profile.md`](knowledge/memory-pressure-profile.md).
+- **Now (📝→🔨):** W0 — verify the live capture pipeline (the memory buildplan's own open question: no `chat_messages` row since 2026-06-22, owner-stamping unconfirmed on organic traffic). In parallel: W3.1 ccd-cli fleet cleanup (operational, ~3.6 GB swap) and the W1.1 barge-in branch.
+
 ### Samantha-grade memory
 - **Goal:** local, fast, **no-nightly** companion memory — tell it in the morning, reference it in the afternoon; recalls the emotional thread; feels like Samantha.
 - **Detail / executable plan:** [`docs/architecture/zoe-memory-samantha-buildplan.md`](architecture/zoe-memory-samantha-buildplan.md) (has the NEXT ACTION pointer + checklist).
@@ -24,8 +29,8 @@ a link to the detail + where it's up to. Mark ✅ when done so nothing lingers h
 
 ### Ambient voice (VISION pillar 2 — always-there presence)
 - **Goal:** continuous, wake-free, **interruptible** voice conversation (barge-in + real turn detection), and — adjacent — **phone calls**. The next Samantha frontier after memory.
-- **Decision:** [`docs/adr/ADR-ambient-voice-framework.md`](adr/ADR-ambient-voice-framework.md) — landscape researched (Pipecat / LiveKit / TEN / full-duplex S2S / Jambonz / Wyoming). **Provisional pick: Pipecat** for the ambient agent layer (native Moonshine+Kokoro rocks, ARM64-proven, gives barge-in + Smart Turn v3 the current LiveKit-on-Tegra agent lacks). TEN rejected (Agora cloud dep); S2S models (Moshi) parked (replace the brain rock + need 24 GB VRAM).
-- **Now (🔨 NEXT):** the **Pipecat spike** — [`docs/architecture/ambient-voice-pipecat-spike.md`](architecture/ambient-voice-pipecat-spike.md): a non-destructive, time-boxed PoC on the Jetson wiring our Moonshine+Kokoro+Gemma, measuring barge-in / turn-detection / latency / RAM vs the live LiveKit agent. GO → migration plan; NO-GO → borrow Smart Turn + hand-build barge-in on LiveKit. **Phone (SIP) + Wyoming room satellites are later, separable increments.**
+- **Decision:** [`docs/adr/ADR-ambient-voice-framework.md`](adr/ADR-ambient-voice-framework.md) — landscape researched (Pipecat / LiveKit / TEN / full-duplex S2S / Jambonz / Wyoming). TEN rejected (Agora cloud dep); S2S models (Moshi) parked (replace the brain rock + need 24 GB VRAM). **Spike RUN 2026-07-05 (#1045): PARTIAL GO, verdict shifted to the fallback** — Moonshine not native in Pipecat, numpy-2/Jetson-torch ABI conflict, and no RAM headroom for a parallel stack → **borrow Smart Turn v3 standalone + hand-build barge-in on the existing LiveKit agent**; full Pipecat migration only if that proves insufficient.
+- **Now (🔨 NEXT):** execute the fallback as **W1 of the Samantha evolution plan** ([`samantha-evolution-plan.md`](architecture/samantha-evolution-plan.md)): barge-in (stop dropping audio during PROCESSING/COOLDOWN) + Smart Turn v3 ONNX endpointer + sentence-streamed TTS in conversation mode, then the deferred live measurements (M1/M3/M4). **Phone (SIP) + Wyoming room satellites are later, separable increments (W8).**
 
 ### Agent + tooling readiness (for Jason to work on Zoe remotely)
 - **Goal:** Omnigent + Claude Code + Codex + Cursor all set up correctly and **actually using** the repo's tools (Serena, codebase-memory, opensrc, Greptile/greploop, Dox), with a shared command center (this) so ideas/plans don't scatter.
