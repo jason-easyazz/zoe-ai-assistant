@@ -88,14 +88,33 @@ def _barge_in_enabled() -> bool:
 
 def _barge_min_hops() -> int:
     """Sustained-speech gate: consecutive 32ms Silero hops ≥ threshold required to
-    barge in (ZOE_BARGE_MIN_MS, default 250ms ≈ 8 hops). This duration gate — plus
+    barge in (ZOE_BARGE_MIN_MS, default 192ms ≈ 6 hops — set from live replay of real voice: best 12-hop speech windows measured 6-7 hops). This duration gate — plus
     browser echoCancellation — is what stops Zoe's own TTS residual from
     triggering an interruption."""
     try:
-        ms = float(os.environ.get("ZOE_BARGE_MIN_MS", "250"))
+        ms = float(os.environ.get("ZOE_BARGE_MIN_MS", "192"))
     except (TypeError, ValueError):
-        ms = 250.0
+        ms = 192.0
     return max(1, math.ceil(ms / _SILERO_HOP_MS))
+
+
+def _barge_speech_threshold() -> float:
+    """Silero prob at/above which a hop counts as speech FOR BARGE COUNTING
+    (ZOE_BARGE_SPEECH_THRESHOLD, default 0.30). Deliberately lower than the
+    IDLE/LISTENING threshold (0.5): live replay of Jason's real voice showed
+    natural speech dips below 0.5 between syllables (per-hop p90 ≈ 0.4-0.6),
+    while the measured noise floor maxes ≈ 0.31 — and the windowed duration
+    gate below still requires ~200ms of such hops, which noise never sustains."""
+    try:
+        return float(os.environ.get("ZOE_BARGE_SPEECH_THRESHOLD", "0.30"))
+    except (TypeError, ValueError):
+        return 0.30
+
+
+def _barge_window_hops() -> int:
+    """Rolling-window size for barge counting: 2x the required speech hops
+    (~384ms at defaults), so speech with natural micro-dips still accumulates."""
+    return _barge_min_hops() * 2
 
 
 def _smart_turn_enabled() -> bool:
@@ -833,21 +852,29 @@ async def _handle_frame_barge_in(raw: bytes, sid: str, ps: dict, local_participa
                 _end_turn(sid, ps, local_participant)
 
     elif state in (_ParticipantState.PROCESSING, _ParticipantState.COOLDOWN):
-        # Full-duplex: keep listening while Zoe thinks/speaks. Count CONSECUTIVE
-        # speech hops — the sustained-speech gate against echo/TTS residual.
+        # Full-duplex: keep listening while Zoe thinks/speaks. Count speech hops
+        # in a ROLLING WINDOW (live replay of real voice proved a strictly-
+        # consecutive counter never fires: natural speech dips between syllables
+        # reset it — 0/6 real clips triggered). The duration gate stays: ≥
+        # _barge_min_hops speech hops within a ~2x window (~200ms of speech in
+        # ~384ms), which echo/TTS residual and the ≤0.31 noise floor never sustain.
+        barge_th = _barge_speech_threshold()
+        window = ps.setdefault("barge_window", [])
         for p in probs:
-            if p >= threshold:
-                ps["barge_hops"] = ps.get("barge_hops", 0) + 1
-            else:
-                ps["barge_hops"] = 0
-                ps["barge_frames"] = []
-        if ps.get("barge_hops", 0) > 0 or not probs:
-            # Buffer candidate speech (and hop-incomplete frames, cleared on the
-            # next silent hop) so the interruption seeds the next utterance.
-            ps["barge_frames"].append(raw)
+            window.append(p >= barge_th)
+        max_window = _barge_window_hops()
+        if len(window) > max_window:
+            del window[: len(window) - max_window]
+        # Buffer the rolling window of candidate frames (speech + hop-incomplete)
+        # so the interruption seeds the next utterance; cap to the window span.
+        ps["barge_frames"].append(raw)
+        max_frames = max_window * 2  # 20ms frames vs 32ms hops → keep a bit extra
+        if len(ps["barge_frames"]) > max_frames:
+            del ps["barge_frames"][: len(ps["barge_frames"]) - max_frames]
+        speech_hops = sum(window)
 
-        if ps.get("barge_hops", 0) >= _barge_min_hops():
-            speech_ms = int(ps["barge_hops"] * _SILERO_HOP_MS)
+        if speech_hops >= _barge_min_hops():
+            speech_ms = int(speech_hops * _SILERO_HOP_MS)
             # LISTENING first: _on_pipeline_done fires when the cancelled task
             # settles and must not flip us into COOLDOWN.
             ps["state"] = _ParticipantState.LISTENING
@@ -855,7 +882,7 @@ async def _handle_frame_barge_in(raw: bytes, sid: str, ps: dict, local_participa
             ps["speech_count"] = 0
             ps["silence_count"] = 0
             ps["turn_checks"] = 0
-            ps["barge_hops"] = 0
+            ps["barge_window"] = []
             ps["barge_frames"] = []
             ps["cooldown_deadline"] = 0.0
             pipeline_task = ps.get("pipeline_task")
@@ -887,7 +914,7 @@ async def _collect_audio_stream(
       ptt_active   — True while a ptt_start has been received but not ptt_stop
       pipeline_task— the currently running asyncio.Task for the pipeline
       vad          — per-participant SileroVAD stream (barge-in flag only)
-      barge_hops   — consecutive speech hops seen while PROCESSING/COOLDOWN
+      barge_window — rolling per-hop speech verdicts while PROCESSING/COOLDOWN
       barge_frames — buffered interrupting-speech frames (seed the next turn)
     """
     global _force_aiortc
@@ -1044,7 +1071,7 @@ def _make_participant_state(sid: str) -> dict:
         # Barge-in (ZOE_VOICE_BARGE_IN): per-participant Silero stream + counters
         "vad": None,
         "vad_failed": False,
-        "barge_hops": 0,
+        "barge_window": [],
         "barge_frames": [],
         "user_id": "guest",
         "session_id": f"livekit-{sid[:8]}",
