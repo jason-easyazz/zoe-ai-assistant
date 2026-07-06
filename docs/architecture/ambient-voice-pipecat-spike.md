@@ -1,6 +1,6 @@
 ---
 type: spike-plan
-status: partial (2026-07-05) — feasibility half run; loaded/live half pending a maintenance window
+status: decided (2026-07-06) — feasibility half run 2026-07-05; verdict converted to a decision in ambient-voice-migration-plan.md (NO-GO Pipecat-now / GO fallback); remaining live measurements fold into that plan's Phase A3
 owner: ambient-voice (VISION pillar 2)
 decides: docs/adr/ADR-ambient-voice-framework.md
 ---
