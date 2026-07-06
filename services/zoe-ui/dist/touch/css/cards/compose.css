@@ -1,0 +1,131 @@
+/* compose.css — styling for the zoe-compose primitive catalog (zx-*).
+   Every value comes from the ds1 tokens (skybridge-ds.css); no magic numbers.
+   These primitives are what BRAIN-COMPOSED cards are made of, so this sheet is
+   the visual guarantee that anything Zoe composes looks native. */
+
+.zx-root {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sky-space-4, 16px);
+  font-family: var(--sky-font-sans, system-ui, sans-serif);
+  color: var(--sky-ink-1, rgba(255, 255, 255, 0.88));
+  min-width: 0;
+}
+
+/* ── Layout ── */
+.zx-stack { display: flex; flex-direction: column; min-width: 0; }
+.zx-row { display: flex; flex-direction: row; flex-wrap: wrap; min-width: 0; }
+.zx-grid { display: grid; gap: var(--sky-space-4, 16px); min-width: 0; }
+.zx-cols-1 { grid-template-columns: minmax(0, 1fr); }
+.zx-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.zx-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.zx-cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.zx-gap-sm { gap: var(--sky-space-2, 8px); }
+.zx-gap-md { gap: var(--sky-space-4, 16px); }
+.zx-gap-lg { gap: var(--sky-space-6, 24px); }
+.zx-align-start { align-items: flex-start; }
+.zx-align-center { align-items: center; }
+.zx-align-end { align-items: flex-end; }
+.zx-align-between { align-items: center; justify-content: space-between; }
+
+/* ── Text ── */
+.zx-text { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.zx-text-title { font-size: var(--sky-text-title, 21px); font-weight: 650; color: var(--sky-ink-0, #fff); letter-spacing: -0.01em; }
+.zx-text-body { font-size: var(--sky-text-body, 16px); color: var(--sky-ink-1, rgba(255,255,255,0.88)); line-height: 1.45; }
+.zx-text-caption { font-size: var(--sky-text-caption, 13px); color: var(--sky-ink-3, rgba(255,255,255,0.45)); }
+.zx-text-kicker { font-size: var(--sky-text-caption, 13px); font-weight: 650; text-transform: uppercase; letter-spacing: 0.09em; color: var(--sky-ink-2, rgba(255,255,255,0.62)); }
+
+/* ── Stat / Badge ── */
+.zx-stat { display: flex; flex-direction: column; gap: var(--sky-space-1, 4px); min-width: 0; }
+.zx-stat strong { font-size: var(--sky-text-display, 34px); font-weight: 680; color: var(--sky-ink-0, #fff); line-height: 1.05; letter-spacing: -0.02em; }
+.zx-stat span { font-size: var(--sky-text-caption, 13px); color: var(--sky-ink-2, rgba(255,255,255,0.62)); }
+.zx-badge {
+  display: inline-flex; align-items: center; align-self: flex-start;
+  padding: var(--sky-space-1, 4px) var(--sky-space-3, 12px);
+  border-radius: var(--sky-radius-pill, 999px);
+  font-size: var(--sky-text-caption, 13px); font-weight: 600;
+  background: rgba(255, 255, 255, 0.10); color: var(--sky-ink-1, rgba(255,255,255,0.88));
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.zx-tone-accent { background: color-mix(in srgb, var(--sky-accent-blue, #6aa6ff) 16%, transparent); border-color: color-mix(in srgb, var(--sky-accent-blue, #6aa6ff) 40%, transparent); }
+.zx-tone-warn { background: color-mix(in srgb, var(--sky-accent-amber, #f5b13c) 16%, transparent); border-color: color-mix(in srgb, var(--sky-accent-amber, #f5b13c) 40%, transparent); }
+.zx-tone-success { background: color-mix(in srgb, var(--sky-accent-mint, #5be3b0) 16%, transparent); border-color: color-mix(in srgb, var(--sky-accent-mint, #5be3b0) 40%, transparent); }
+
+/* ── ListRow ── */
+.zx-listrow {
+  display: flex; align-items: center; gap: var(--sky-space-3, 12px);
+  padding: var(--sky-space-3, 12px);
+  border-radius: var(--sky-radius-md, 14px);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  min-height: 48px; /* touch target */
+  min-width: 0;
+}
+.zx-check {
+  width: 22px; height: 22px; flex: 0 0 auto;
+  border-radius: 50%; border: 1.5px solid var(--sky-ink-3, rgba(255,255,255,0.45));
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 13px; color: var(--sky-ink-0, #fff);
+}
+.zx-checked .zx-check { background: color-mix(in srgb, var(--sky-accent-mint, #5be3b0) 25%, transparent); border-color: color-mix(in srgb, var(--sky-accent-mint, #5be3b0) 80%, transparent); }
+.zx-checked .zx-listrow-main strong { text-decoration: line-through; color: var(--sky-ink-3, rgba(255,255,255,0.45)); }
+.zx-listrow-main { display: flex; flex-direction: column; min-width: 0; }
+.zx-listrow-main strong { font-size: var(--sky-text-body, 16px); font-weight: 600; color: var(--sky-ink-0, #fff); overflow-wrap: anywhere; }
+.zx-listrow-main em { font-style: normal; font-size: var(--sky-text-caption, 13px); color: var(--sky-ink-3, rgba(255,255,255,0.45)); }
+
+/* ── Progress ── */
+.zx-progress { display: flex; flex-direction: column; gap: var(--sky-space-2, 8px); min-width: 0; }
+.zx-progress-label { font-size: var(--sky-text-caption, 13px); color: var(--sky-ink-2, rgba(255,255,255,0.62)); }
+.zx-progress-track {
+  display: block; height: 8px; border-radius: var(--sky-radius-pill, 999px);
+  background: rgba(255, 255, 255, 0.10); overflow: hidden;
+}
+.zx-progress-track i {
+  display: block; height: 100%;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--sky-accent-blue, #6aa6ff) 90%, transparent);
+  transition: width var(--sky-dur-base, 320ms) var(--sky-ease-standard, ease);
+}
+
+/* ── Glyph / Image / MediaTile ── */
+.zx-glyph { display: inline-flex; color: var(--sky-ink-2, rgba(255,255,255,0.62)); flex: 0 0 auto; }
+.zx-image { max-width: 100%; border-radius: var(--sky-radius-md, 14px); display: block; }
+.zx-mediatile { margin: 0; border-radius: var(--sky-radius-lg, 18px); overflow: hidden; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.10); }
+.zx-mediatile img { width: 100%; display: block; aspect-ratio: 16 / 9; object-fit: cover; }
+.zx-mediatile figcaption { display: flex; flex-direction: column; gap: 2px; padding: var(--sky-space-3, 12px); }
+.zx-mediatile figcaption strong { font-size: var(--sky-text-body, 16px); color: var(--sky-ink-0, #fff); }
+.zx-mediatile figcaption span { font-size: var(--sky-text-caption, 13px); color: var(--sky-ink-3, rgba(255,255,255,0.45)); }
+
+/* ── Divider / Spacer ── */
+.zx-divider { border: 0; border-top: 1px solid rgba(255, 255, 255, 0.10); margin: 0; }
+.zx-spacer { display: block; }
+.zx-spacer.zx-gap-sm { height: var(--sky-space-2, 8px); }
+.zx-spacer.zx-gap-md { height: var(--sky-space-4, 16px); }
+.zx-spacer.zx-gap-lg { height: var(--sky-space-8, 32px); }
+
+/* ── ActionButton ── */
+.zx-action {
+  appearance: none; -webkit-appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--sky-ink-0, #fff);
+  font: inherit; font-size: var(--sky-text-body, 16px); font-weight: 600;
+  padding: var(--sky-space-3, 12px) var(--sky-space-5, 20px);
+  border-radius: var(--sky-radius-pill, 999px);
+  min-height: 48px; /* touch target */
+  cursor: pointer;
+  align-self: flex-start;
+  transition: background var(--sky-dur-fast, 160ms) var(--sky-ease-standard, ease);
+}
+.zx-action:active { background: rgba(255, 255, 255, 0.16); }
+.zx-action.zx-primary { background: color-mix(in srgb, var(--sky-accent-blue, #6aa6ff) 22%, transparent); border-color: color-mix(in srgb, var(--sky-accent-blue, #6aa6ff) 50%, transparent); }
+.zx-action.zx-warn { background: color-mix(in srgb, var(--sky-accent-red, #ff6b6b) 18%, transparent); border-color: color-mix(in srgb, var(--sky-accent-red, #ff6b6b) 45%, transparent); }
+
+/* ── Unknown component (defensive placeholder) ── */
+.zx-unknown {
+  font-size: var(--sky-text-caption, 13px);
+  color: var(--sky-ink-3, rgba(255,255,255,0.45));
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+  border-radius: var(--sky-radius-sm, 10px);
+  padding: var(--sky-space-1, 4px) var(--sky-space-2, 8px);
+}

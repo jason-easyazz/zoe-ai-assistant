@@ -1145,6 +1145,27 @@
         }, '<div class="sky-card-body">This card was not rendered because its schema version is newer than the current Skybridge renderer.</div>', { wide: true, tone: 'warn' });
     }
 
+    function renderCompose(props) {
+        // Brain-composed card: a server-validated component tree rendered by the
+        // shared catalog renderer (window.ZoeCompose from zoe-compose.js), wrapped
+        // in the standard card shell. Composition never bypasses the catalog — if
+        // the renderer isn't loaded or the tree is missing, degrade to status.
+        var tree = props && props.tree;
+        if (!tree || !window.ZoeCompose || typeof window.ZoeCompose.render !== 'function') {
+            return renderStatus({
+                title: (props && props.title) || 'Zoe',
+                body: (props && props.summary) || 'This card could not be displayed.'
+            });
+        }
+        var body = '<div class="zx-card-body">' + window.ZoeCompose.render(tree) + '</div>';
+        return cardFrame(Object.assign({ status: 'Composed' }, props), body, {
+            wide: !!(props && props.wide),
+            tone: 'compose-card',
+            hideHeader: !(props && props.title),
+            hideStatus: true
+        });
+    }
+
     function normalizeCard(card) {
         if (!card) return { component: 'status', props: { title: 'Empty card', body: '' } };
         if (card.component) return { component: card.component, props: card.props || {} };
@@ -1229,6 +1250,7 @@
         research_report: renderList,
         auth_challenge: renderAuthChallenge,
         timer: renderTimer,
+        compose: renderCompose,
         stream_text: renderStatus,
         unsupported_contract: renderUnsupportedContract
     };
