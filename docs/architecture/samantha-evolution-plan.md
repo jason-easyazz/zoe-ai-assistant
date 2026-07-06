@@ -120,18 +120,28 @@ starting anything here; remaining = step 3 (streamed TTS) + the M3/M4 measuremen
 The proactive engine is real (nine triggers incl. morning brief, emotional follow-up #1031,
 quiet hours, LLM composition) but delivers only web-push. `panel_announce` already exists as
 an MCP tool (`mcp_server.py`, queued panel action + TTS on the panel). Wire them together.
+Prior art (§8.2): Home Assistant's `assist_satellite.announce` is this exact primitive —
+automation-triggered spoken announcements on a voice satellite, incl. an "ask question"
+variant that listens for a reply; Alexa's Hunches/"By the way" are the cautionary tale
+(default-on proactive speech reads as intrusive; users hunt for the off switch).
 
 - **Steps (flag `ZOE_PROACTIVE_SPOKEN`, default OFF):**
   1. A **presence check** primitive: "is someone plausibly near the panel?" — recent panel
      touch/voice activity, an active voice session, or motion if HA exposes it. No presence
      signal → fall back to push (today's behaviour). This is what makes speaking-first
-     appropriate rather than creepy.
+     appropriate rather than creepy. Zero-hardware first; if the software signals prove
+     too coarse, room-grade presence is a solved cheap-hardware problem via the live HA
+     instance (mmWave like Aqara FP2 — device-free, multi-zone, local; or ESPresense BLE
+     room tracking — §8.2), not something to build.
   2. A spoken-delivery adapter in `proactive/` that routes a composed message to
      `panel_announce` when presence passes and quiet hours don't veto; push remains the
      fallback + receipt.
   3. Start with **exactly one trigger**: the morning brief. Watch a week. Then extend
      per-trigger (each trigger opts in; reminders next, emotional follow-up last —
-     it's the most sensitive to tone and timing).
+     it's the most sensitive to tone and timing). Alexa's lesson (§8.2): per-trigger
+     opt-in, never default-on for a new spoken trigger, and keep spoken messages *short*
+     (NN/g found users visibly annoyed by assistants "droning on" — the composed brief
+     should be tighter spoken than pushed).
   4. Once W5 lands: suppress spoken delivery when the presence signal identifies a
      *different* enrolled speaker (don't read Jason's brief to a guest).
 - **Gates:** quiet hours honoured (already in engine); presence-check false-positive rate
@@ -176,13 +186,20 @@ machinery it feeds (emotional gate + pin, morning brief, emotional follow-up tri
 built and waiting. Add a small speech-emotion-recognition (SER) model scoring
 valence/arousal per utterance. Additive, flag-gated, rocks untouched.
 
-- **Model shortlist (researched; pick by measured RAM/latency on the Orin, in this order):**
+- **Model shortlist (researched — §8.4; pick by measured RAM/latency on the Orin, in this order):**
   1. **Wav2Small** — distilled to 72K params (teacher-distilled from a wav2vec2 dimensional
      teacher; MobileNetV4-S variant 3.12M params, valence CCC 0.42 ≈ an 87.9M wav2vec2)
      ([paper](https://arxiv.org/pdf/2408.13920)) — the RAM-frugal default.
-  2. **emotion2vec** (~19M params) — better quality, still edge-viable.
-  3. **audeering wav2vec2 dimensional (MSP-Podcast)** — the quality ceiling / labelling
-     reference; likely too heavy resident, usable as the lab judge for calibrating 1–2.
+  2. **emotion2vec** (~19M params, MIT-licensed) — better quality, still edge-viable;
+     ONNX export is community-driven (FunASR runtime), verify at bake-off.
+  3. **SenseVoiceSmall** (FunAudioLLM) — categorical emotion (not valence/arousal) fused
+     with ASR; proven embedded deployment path via **sherpa-onnx** (runs on Raspberry
+     Pi-class hardware). Only if 1–2 fail: it duplicates STT work Moonshine already does.
+  4. **audeering wav2vec2 dimensional (MSP-Podcast)** — the quality ceiling / labelling
+     reference ([w2v2-how-to](https://github.com/audeering/w2v2-how-to)); too heavy
+     resident, use as the lab judge for calibrating 1–3.
+  License + provenance check is part of the bake-off gate (emotion2vec MIT confirmed;
+  verify the others' model-weight licenses before any prod enable).
 - **Steps (flag `ZOE_PROSODY_EMOTION`, default OFF):**
   1. RAM/latency bake-off of shortlist models as ONNX on the box (lab, isolated venv) —
      kill criterion: >300 MB resident or >150 ms per utterance.
@@ -207,6 +224,12 @@ valence/arousal per utterance. Additive, flag-gated, rocks untouched.
 (enroll endpoint, resemblyzer 256-dim embeddings, cosine threshold
 `ZOE_SPEAKER_ID_THRESHOLD=0.82`, daemon integration, settings-page listing) is built and
 dormant — default OFF, zero enrolled profiles.
+Prior-art check (§8.5): resemblyzer (GE2E, 2019-era) is the community's "easiest MVP"
+pick — right for shadow mode with a handful of household speakers. If shadow-mode
+false-accept/false-reject rates disappoint, the named upgrade path is **ECAPA-TDNN**
+(SpeechBrain/WeSpeaker, ONNX-exportable, light 512-channel variants for embedded) —
+swap the embedder behind the same enroll/match seam, don't redesign the flow. pyannote
+is already in requirements (unimported) and its source is cached in opensrc for evaluation.
 
 - **Steps:** (1) enrollment session for Jason (+ family who consent) via the existing
   endpoint/settings page; (2) enable in **shadow mode** — identify + log, don't act — for a
@@ -228,9 +251,13 @@ but is flag-OFF and — critically — the insert path stores **no speaker attri
   W4 helps (emotional context on ambient snippets). Do not ship before them (§2).
 - **Steps (flag stays OFF until consent design is operator-approved):**
   1. Thread `speaker_id` through the ambient insert path (schema is ready).
-  2. **Consent model first-class:** only enrolled, explicitly-opted-in speakers are ever
-     attributed; unknown voices are discarded (not stored unattributed); a per-room/per-panel
-     kill switch; retention window on `ambient_memory` rows.
+  2. **Consent model first-class** (pattern-matched to the best shipped prior art, §8.6:
+     Limitless's "Consent Mode" — voice-ID detects a new speaker and *stops capturing*
+     until explicit consent; Bee's default-always-listening is the anti-pattern):
+     only enrolled, explicitly-opted-in speakers are ever attributed; unknown voices are
+     discarded (not stored unattributed); a per-room/per-panel kill switch; a
+     user-configurable retention window on `ambient_memory` rows (Limitless ships
+     1 day → forever; default ours short).
   3. Ambient→memory promotion goes through the existing admission gate + consolidation
      (ambient rows are raw signal, never direct facts).
   4. Recall integration: ambient context is scoped (existing visibility/scope primitives)
@@ -247,9 +274,15 @@ real improvement (e.g. a prompt-doctrine tweak or a new replay-corpus entry) →
 digest → harness picks it up → PR → Greptile → human-gated merge → deployed → Zoe's next
 digest notes the improvement landed.
 
-- **DoD:** one merged PR whose origin is a Zoe-generated proposal, with the trail
-  documented; the friction points found become the backlog for making it routine.
-  Human gate stays (by design).
+- Prior art (§8.7): Sakana's **Darwin Gödel Machine** is the strongest published version
+  of this loop (agent modifies its own code, each change *empirically validated* on a
+  benchmark, sandboxed, human-supervised — SWE-bench 20%→50%). The piece to borrow is
+  **empirical validation per change**: every Zoe proposal must name the test/metric that
+  proves it helped, and the harness runs it before merge. Voyager's ever-growing skill
+  library maps to `skills/` as the natural place self-built capabilities accumulate.
+- **DoD:** one merged PR whose origin is a Zoe-generated proposal, carrying its own
+  acceptance test, with the trail documented; the friction points found become the
+  backlog for making it routine. Human gate stays (by design).
 
 ### W8 — A surface that leaves the house (named, sequenced last, not forgotten)
 
@@ -258,6 +291,11 @@ Samantha's intimacy is substantially the earpiece. Full satellites (Wyoming) and
 notes** on the existing lab bot (#870) — inbound voice note → Moonshine → brain → Kokoro
 voice reply — giving Zoe a pocket presence with zero new hardware; PWA background voice
 second; Wyoming/SIP after W3 proves sustained headroom.
+Mechanics verified against the Bot API (§8.8): inbound voice notes arrive as **OGG/Opus**
+(decode for Moonshine); replies via `sendVoice` must be OGG-Opus to render as a playable
+voice bubble (Kokoro emits WAV → one ffmpeg/opus transcode step), ≤50 MB. Note Home
+Assistant's ecosystem (already live here) ships **Wyoming satellites + Voice PE** with
+`assist_satellite.announce` — when satellites come, that's the borrow-don't-build layer.
 
 ## 4. Sequencing & dependencies
 
@@ -327,3 +365,106 @@ kick off **W3.1** (ccd-cli fleet cleanup — operational, zero risk). W1.1/W1.2 
 The #1056 migration-plan doc was retired as overtaken by #1051; its surviving pieces
 (Pipecat re-open triggers → §2, A3 gate bars → W1.4) are folded here. Update this
 section when W0 resolves.
+
+## 8. Prior art & external grounding (researched 2026-07-06/07)
+
+Per VISION principle 6 — *borrow the piece, not the framework* — each workstream names
+the external project it learns from and the single piece taken. Links are the sources
+actually consulted.
+
+### 8.1 W1 — turn-taking & barge-in
+- **Smart Turn v3** (Pipecat/Daily): standalone open model, ~8M params on a Whisper-Tiny
+  trunk, int8 ONNX, 12–60 ms CPU inference — [repo](https://github.com/pipecat-ai/smart-turn),
+  [weights](https://huggingface.co/pipecat-ai/smart-turn-v3),
+  [announcement](https://www.daily.co/blog/announcing-smart-turn-v3-with-cpu-inference-in-just-12ms/).
+  **Borrowed and shipped** (#1051). Watch: v3.2 improved noisy-environment + short-response
+  accuracy ([Daily](https://www.daily.co/blog/smart-turn-v3-2-handling-noisy-environments-and-short-responses/)) —
+  a drop-in weight upgrade candidate for W1.4's measurement session.
+- **Full-duplex S2S** (Moshi, Step-Audio): the future paradigm, rejected for now — replaces
+  the brain rock, needs ≥24 GB (ADR). Re-check when hardware changes.
+
+### 8.2 W2 — proactive spoken delivery & presence
+- **Home Assistant `assist_satellite.announce`**
+  ([integration](https://www.home-assistant.io/integrations/assist_satellite/),
+  [dev docs](https://developers.home-assistant.io/docs/core/entity/assist-satellite/)):
+  the shipped shape of "an automation makes the assistant speak in a room," including an
+  ask-question variant (announce → listen → match answer) — the natural W2 follow-up once
+  spoken briefs land ("want me to move it?"). Zoe's `panel_announce` is the same primitive.
+- **Alexa Hunches / "By the way"**
+  ([overview](https://voicebot.ai/2020/12/15/alexa-can-now-act-on-hunches-without-needing-to-ask/),
+  [the off-switch cottage industry](https://smartspeakerbox.com/how-to-turn-off-by-the-way-suggestions-on-alexa/)):
+  proactive speech that users experience as intrusive gets disabled wholesale. Lessons
+  encoded in W2: per-trigger opt-in, presence-gated, quiet hours, short messages.
+  **NN/g's assistant usability study** ([nngroup](https://www.nngroup.com/articles/intelligent-assistant-usability/)):
+  users get visibly annoyed by long spoken content — compose *tighter* for voice than push.
+- **Room presence is solved hardware, not software to build**: Aqara FP2 mmWave
+  (device-free, multi-person, 30 zones, local — [product](https://www.aqara.com/us/product/presence-sensor-fp2/)),
+  ESPresense BLE room tracking, both HA-native
+  ([comparison](https://joinhomeshift.com/home-assistant-presence-detection)). W2 starts
+  zero-hardware (panel activity); this is the upgrade shelf.
+
+### 8.3 W3 — memory-tight edge inference
+- Internal SSOT: [`memory-pressure-profile.md`](../knowledge/memory-pressure-profile.md)
+  (2026-07-06, per-process VmSwap ownership + candidate sizes). External practice folded
+  in already: on-demand reap (LiveKit pattern), MALLOC_ARENA_MAX, zram cost accounting
+  (~1.7:1 — compressed swap *spends* RAM).
+
+### 8.4 W4 — speech emotion recognition on-device
+- **Wav2Small** ([arXiv 2408.13920](https://arxiv.org/pdf/2408.13920)): distillation of a
+  wav2vec2 valence/arousal/dominance teacher to 72K params; MobileNetV4-S student
+  (3.12M params) reaches valence CCC 0.42 ≈ an 87.9M-param wav2vec2. The RAM-frugal default.
+- **emotion2vec** ([repo](https://github.com/ddlBoJack/emotion2vec)): ~19M params,
+  MIT-licensed (commercial OK); ONNX export community-driven via FunASR
+  ([issue #55](https://github.com/ddlBoJack/emotion2vec/issues/55)) — verify at bake-off.
+- **SenseVoiceSmall** ([FunAudioLLM](https://github.com/FunAudioLLM/SenseVoice),
+  [HF](https://huggingface.co/FunAudioLLM/SenseVoiceSmall)): ASR + categorical SER + audio
+  events, non-autoregressive, with a proven embedded path via sherpa-onnx (Raspberry
+  Pi-class). Fallback only — categorical not dimensional, and it duplicates Moonshine's job.
+- **audeering w2v2 dimensional** ([w2v2-how-to](https://github.com/audeering/w2v2-how-to)):
+  MSP-Podcast valence/arousal/dominance reference model — the lab judge, not the resident.
+- Dimensional (valence/arousal) over categorical is the right target: it maps 1:1 onto the
+  existing `emotional_moment` valence+intensity schema.
+
+### 8.5 W5 — speaker identification
+- Community consensus ([survey of embedding stacks](https://github.com/topics/speaker-embedding)):
+  **resemblyzer = easiest MVP** (GE2E d-vectors, 2019-era, unmaintained but stable);
+  **ECAPA-TDNN = the accuracy/control standard** (SpeechBrain / WeSpeaker, e.g.
+  [wespeaker-ecapa-tdnn512](https://huggingface.co/Wespeaker/wespeaker-ecapa-tdnn512-LM),
+  ONNX-exportable, light 512-channel variants for embedded).
+- Plan: keep the built resemblyzer path for enrollment + shadow mode (household-scale,
+  few speakers, cooperative conditions); ECAPA behind the same seam is the named upgrade
+  if measured FA/FR disappoints. pyannote-audio (already in requirements, unimported;
+  source cached in opensrc) is the diarization-grade option if W6 ever needs
+  who-spoke-when segmentation, not just per-utterance ID.
+
+### 8.6 W6 — ambient capture consent (the wearable-recorder generation)
+- **Limitless Pendant** ([privacy](https://www.limitless.ai/privacy)): the strongest
+  shipped consent design — **Consent Mode**: voice-ID detects an unenrolled speaker and
+  *pauses capture until explicit consent*; user-configurable retention (1 day → forever);
+  ToS obligates notice+consent. Borrow: consent-gated capture keyed on speaker-ID (W5),
+  configurable retention, short default.
+- **Bee** ([Latent.Space profile](https://www.latent.space/p/bee)): default
+  always-listening = the anti-pattern (captures third parties pre-consent).
+- Both companies were acquired into Big Tech in 2025 (Limitless→Meta, Bee→Amazon) — the
+  ambient-audio-in-the-cloud model concentrates exactly the data Zoe's local-first rule
+  exists to keep home. Validates the architecture; changes nothing in it.
+
+### 8.7 W7 — self-evolution loops
+- **Darwin Gödel Machine** (Sakana/UBC — [paper](https://arxiv.org/abs/2505.22954),
+  [post](https://sakana.ai/dgm/), [code](https://github.com/jennyzzt/dgm)): agent
+  rewrites its own code; every modification is **empirically validated on a benchmark**
+  before adoption; sandboxed, human-overseen (SWE-bench 20→50%). Borrow: *validation per
+  change* — a Zoe proposal must carry the test/metric proving it helped.
+- **Voyager** (skill library): self-built capabilities accumulate as reusable, inspectable
+  skills — maps to Zoe's `skills/` + the existing proposal contract
+  ([zoe-evolution-proposal-contract.md](zoe-evolution-proposal-contract.md)).
+- Zoe's human-gated design (proposal → digest → harness → human merge) is deliberately
+  *more* conservative than DGM's archive loop; keep it that way.
+
+### 8.8 W8 — surfaces that leave the house
+- **Telegram Bot API** ([docs](https://core.telegram.org/bots/api)): inbound voice notes
+  are OGG/Opus; outbound `sendVoice` requires OGG-Opus (≤50 MB) to render as a voice
+  bubble → one Kokoro-WAV→Opus transcode step. Everything else exists (#870 bot).
+- **Wyoming satellites / HA Voice PE**: the borrow-don't-build room-hardware layer when
+  satellites come (already runs `wyoming-piper` locally; ADR names it).
+- **LiveKit SIP** stays the phone bridge candidate (already in-house) per the ADR.
