@@ -110,9 +110,17 @@ jobs:
             services/homeassistant-mcp-bridge/tests/test_ha_bridge.py \
             -x -q \
             --override-ini="asyncio_mode=auto"
+          # Repo-root tests/unit uses the SAME marker lane as zoe-data (no
+          # hand-enumerated file list — that list silently dropped every other
+          # tests/unit file out of CI). Slim-dep-green files opt in with a
+          # co-located `pytestmark = pytest.mark.ci_safe`; unmarked files
+          # (live-service smokes, PyJWT/yaml-dependent) run in the full-dir
+          # tests/unit catch-all on the Jetson (self-hosted-tests.yml).
+          # test_remediate_ownerless_memories.py + test_memory_service_fixes.py
+          # (the two formerly enumerated here) are ci_safe-marked, so they
+          # still run in this lane. See tests/AGENTS.md.
           PYTHONPATH="${{ github.workspace }}:${{ github.workspace }}/services/zoe-data" pytest \
-            tests/unit/test_remediate_ownerless_memories.py \
-            tests/unit/test_memory_service_fixes.py \
+            tests/unit -m ci_safe \
             -x -q \
             --override-ini="asyncio_mode=auto"
           PYTHONPATH="${{ github.workspace }}/services/zoe-auth:${{ github.workspace }}/services/zoe-auth/tests" pytest \

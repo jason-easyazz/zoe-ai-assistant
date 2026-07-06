@@ -77,8 +77,10 @@ def test_chat_router_maps_core_brain_tool_sentinels_to_ag_ui_events():
     ],
 )
 async def test_chat_tool_calling_returns_structured_response(message):
+    # Canonical route is POST /api/chat/ (router prefix "/api/chat" + route "/");
+    # the slash-less URL 307-redirects, which httpx does not follow by default.
     response = await _post_or_skip(
-        f"{ZOE_API}/chat?stream=false",
+        f"{ZOE_API}/chat/?stream=false",
         json={"message": message, "user_id": "test_user"},
         timeout=30.0,
     )

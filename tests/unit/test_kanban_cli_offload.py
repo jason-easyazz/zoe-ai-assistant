@@ -18,6 +18,10 @@ import pytest
 
 import executors.kanban_adapter as ka
 
+# Slim-dep green: opts into the GitHub-runner fast lane (see tests/AGENTS.md).
+pytestmark = pytest.mark.ci_safe
+
+
 
 async def test_worktree_command_runs_off_the_event_loop(monkeypatch, tmp_path):
     """subprocess.run (and therefore fork()) must execute on a worker thread."""
