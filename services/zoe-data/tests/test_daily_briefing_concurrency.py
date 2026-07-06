@@ -152,21 +152,41 @@ def test_daily_briefing_cache_evicts_oldest_when_capped(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_daily_briefing_weather_uses_router_weather_cache(monkeypatch):
+    """A fresh keyed-cache reading for the user's resolved coords is served
+    without a provider fetch — the briefing rides _get_current's cache
+    short-circuit instead of the old flat-slot peek."""
     from intent_router import _daily_briefing_weather
     import routers.weather as weather
 
-    weather._weather_cache["current"] = {"temp": 22, "city": "Geraldton", "description": "clear sky"}
+    class _Cursor:
+        async def fetchone(self):
+            return None  # no stored prefs → _resolve_location falls to defaults
 
-    async def fail_get_current(*_args, **_kwargs):
+    class _FakeDB:
+        async def execute(self, *_a, **_k):
+            return _Cursor()
+
+    async def _fake_get_db():
+        yield _FakeDB()
+
+    monkeypatch.setattr("database.get_db", _fake_get_db)
+    monkeypatch.setattr(weather, "_weather_cache", {})
+    # Seed the keyed cache at the coords _resolve_location resolves to
+    # (no prefs → the Geraldton defaults).
+    weather._cache_put(
+        "current", weather.DEFAULT_LAT, weather.DEFAULT_LON,
+        {"temp": 22, "city": "Geraldton", "description": "clear sky"},
+    )
+
+    async def fail_fetch(*_args, **_kwargs):
         raise AssertionError("cached daily briefing weather should not refetch")
 
-    try:
-        monkeypatch.setattr(weather, "_get_current", fail_get_current)
-        result = await _daily_briefing_weather("family-admin")
+    monkeypatch.setattr(weather, "_fetch_openmeteo_current", fail_fetch)
+    monkeypatch.setattr(weather, "_fetch_owm_current", fail_fetch)
 
-        assert result == {"temp": 22, "city": "Geraldton", "description": "clear sky"}
-    finally:
-        weather._weather_cache.pop("current", None)
+    result = await _daily_briefing_weather("family-admin")
+
+    assert result == {"temp": 22, "city": "Geraldton", "description": "clear sky"}
 
 @pytest.mark.asyncio
 async def test_daily_briefing_does_not_cache_degraded_partial_result(monkeypatch):
