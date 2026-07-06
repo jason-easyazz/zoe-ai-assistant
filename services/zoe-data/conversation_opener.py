@@ -37,6 +37,34 @@ _OPENER_PHRASES = frozenset(
     }
 )
 
+# Conversation ENDERS — honoured ONLY while the daemon reports an active
+# conversation (payload {"conversation": true}), so bare words like "stop" can
+# never hijack normal one-shot commands. Fullmatch after the same normalization
+# as openers (optional trailing "zoe" allowed).
+_ENDER_PHRASES = frozenset(
+    {
+        "stop",
+        "stop talking",
+        "thats all",
+        "thats it",
+        "thats enough",
+        "were done",
+        "im done",
+        "goodbye",
+        "bye",
+        "end conversation",
+        "no thats all",
+        "thanks thats all",
+        "thank you thats all",
+    }
+)
+
+_ENDER_ACK_PHRASES = (
+    "Okay — I'm here when you need me.|No worries. Talk soon.|Okay."
+)
+
+_ENDER_ACK_CURSOR = 0
+
 _DEFAULT_OPENER_ACK_PHRASES = (
     "I'm here — what's on your mind?|Of course. What's going on?|I'm listening."
 )
@@ -141,3 +169,31 @@ def maybe_conversation_opener(
         return None
     _warm_livekit()
     return {"phrase": opener_ack_phrase(env), "conversation_mode": True}
+
+
+def is_conversation_ender(text: str | None) -> bool:
+    """True when the (post wake-strip) utterance is a conversation ender.
+
+    Same normalization + fullmatch discipline as the opener: long sentences
+    that merely contain the words never fire.
+    """
+    norm = _normalize(text)
+    if not norm:
+        return False
+    if norm.endswith(" zoe"):
+        norm = norm[: -len(" zoe")].strip()
+    return norm in _ENDER_PHRASES
+
+
+def next_ender_ack() -> str:
+    """Rotate the short goodbye acks (mirrors the opener ack rotation)."""
+    global _ENDER_ACK_CURSOR
+    phrases = [p for p in os.environ.get(
+        "ZOE_CONVERSATION_ENDER_ACKS", _ENDER_ACK_PHRASES
+    ).split("|") if p.strip()]
+    if not phrases:
+        return "Okay."
+    with _OPENER_ACK_LOCK:
+        phrase = phrases[_ENDER_ACK_CURSOR % len(phrases)]
+        _ENDER_ACK_CURSOR += 1
+    return phrase

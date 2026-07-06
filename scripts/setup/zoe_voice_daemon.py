@@ -115,6 +115,23 @@ _FOLLOW_UP_MAX_TURNS_RAW = int(os.environ.get("FOLLOW_UP_MAX_TURNS", "5"))
 # FOLLOW_UP_MAX_TURNS counts turns AFTER the initial response.
 FOLLOW_UP_MAX_TURNS = max(0, _FOLLOW_UP_MAX_TURNS_RAW)
 FOLLOW_UP_VAD_THRESHOLD = float(os.environ.get("FOLLOW_UP_VAD_THRESHOLD", "0.35"))
+
+# ── Conversation mode: "hey zoe, let's talk" ─────────────────────────────
+# The server's turn_stream fast-path answers an opener phrase with
+# {"conversation_mode": true} on the done frame; the daemon then holds an OPEN
+# conversation: long no-wake-word listen windows, unlimited-ish turns, until an
+# ender phrase ({"conversation_end": true}), sustained silence, or the caps.
+CONV_WINDOW_S = float(os.environ.get("CONV_WINDOW_S", "12.0"))
+CONV_MAX_TURNS = int(os.environ.get("CONV_MAX_TURNS", "40"))
+CONV_MAX_S = float(os.environ.get("CONV_MAX_S", "300"))
+CONV_SILENT_WINDOWS = int(os.environ.get("CONV_SILENT_WINDOWS", "2"))
+# "first" = beep only when the conversation opens; "every" = each window; "off".
+CONV_BEEP = os.environ.get("CONV_BEEP", "first").strip().lower()
+
+# Flags from the LAST turn's done frame (conversation_mode / conversation_end).
+# Set by the turn functions, read by voice_command right after the turn —
+# avoids changing every bool return path in the turn functions.
+_last_turn_flags: dict = {}
 # Note: debounce_time on oww.predict() requires a matching `threshold` dict in some openwakeword versions
 # and was crashing the daemon — post-play cooldown + oww.reset() handle repeats instead.
 # Transcripts (usually Whisper hallucinations on silence or TTS bleed) — do not send to chat.
@@ -795,7 +812,7 @@ def _feed_pcm_chunk(aplay, wav_bytes: bytes):
     return aplay
 
 
-def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = True) -> bool:
+def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = True, conversation: bool = False) -> bool:
     """Streaming turn: POST audio to /api/voice/turn_stream and play each TTS
     sentence chunk as it arrives (no buffer phrase — first audio ~1.3s). Falls
     back to the blocking _do_single_turn on any error."""
@@ -810,7 +827,12 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
             log.info("Speaker identified: %s", identified_user_id)
     except Exception:
         pass
+    _last_turn_flags.clear()
     payload: dict = {"audio_base64": audio_b64_wav, "panel_id": PANEL_ID}
+    if conversation:
+        # Tell the server we're inside an open conversation so ender phrases
+        # ("that's all", "goodbye") are honoured; outside one they never fire.
+        payload["conversation"] = True
     if identified_user_id:
         payload["identified_user_id"] = identified_user_id
 
@@ -866,6 +888,9 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
                 continue
             if obj.get("done"):
                 reply = obj.get("reply", "") or reply
+                for _k in ("conversation_mode", "conversation_end"):
+                    if obj.get(_k):
+                        _last_turn_flags[_k] = True
                 break
             if "transcript" in obj and "chunk" not in obj:
                 transcript = obj.get("transcript", "") or transcript
@@ -951,7 +976,7 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     return _do_single_turn(pa, wav, prompt_on_empty=prompt_on_empty)
 
 
-def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = True) -> bool:
+def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = True, conversation: bool = False) -> bool:
     """Process one recorded WAV: combined STT+LLM+TTS via /api/voice/turn.
 
     Returns True if audio was played (eligible for follow-up listening).
@@ -1057,8 +1082,9 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
         return False
 
 
-def _follow_up_listen(pa: pyaudio.PyAudio) -> bytes | None:
-    """Listen for speech without wake word for FOLLOW_UP_LISTEN_S seconds.
+def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None) -> bytes | None:
+    """Listen for speech without wake word for `window_s` (default
+    FOLLOW_UP_LISTEN_S) seconds.
 
     Uses Silero VAD on a fresh mic stream. If speech is detected, continues
     recording on the SAME stream (no gap where words get lost) and returns
@@ -1089,7 +1115,7 @@ def _follow_up_listen(pa: pyaudio.PyAudio) -> bytes | None:
         except Exception:
             break
 
-    deadline = time.monotonic() + FOLLOW_UP_LISTEN_S
+    deadline = time.monotonic() + (window_s if window_s is not None else FOLLOW_UP_LISTEN_S)
     speech_detected = False
     # Keep a short ring of the chunks scanned BEFORE VAD fires. Silero VAD only
     # crosses threshold a chunk or two into speech, so without this lookback the
@@ -1180,6 +1206,43 @@ def voice_command(pa: pyaudio.PyAudio, oww) -> None:
 
         _turn_fn = _do_single_turn_stream if VOICE_STREAM_ENABLED else _do_single_turn
         played_audio = _turn_fn(pa, wav)
+
+        # ── Conversation mode ("hey zoe, let's talk") ──
+        # The server's opener fast-path marks the done frame with
+        # conversation_mode; hold an open conversation: long no-wake-word
+        # windows, many turns, until an ender / sustained silence / the caps.
+        if _last_turn_flags.get("conversation_mode"):
+            log.info("Conversation mode OPEN (window=%.0fs, max %ds/%d turns)",
+                     CONV_WINDOW_S, int(CONV_MAX_S), CONV_MAX_TURNS)
+            conv_deadline = time.monotonic() + CONV_MAX_S
+            conv_turns = 0
+            silent_windows = 0
+            while (time.monotonic() < conv_deadline
+                   and conv_turns < CONV_MAX_TURNS
+                   and silent_windows < CONV_SILENT_WINDOWS):
+                threading.Thread(target=_notify_wake_background, daemon=True,
+                                 name="conv-notify").start()
+                if CONV_BEEP == "every" or (CONV_BEEP == "first" and conv_turns == 0):
+                    play_follow_up_beep()
+                _recording_active.set()
+                conv_wav = _follow_up_listen(pa, window_s=CONV_WINDOW_S)
+                if conv_wav is None:
+                    silent_windows += 1
+                    log.info("Conversation: silent window %d/%d",
+                             silent_windows, CONV_SILENT_WINDOWS)
+                    continue
+                silent_windows = 0
+                _turn_fn(pa, conv_wav, prompt_on_empty=False, conversation=True)
+                conv_turns += 1
+                if _last_turn_flags.get("conversation_end"):
+                    log.info("Conversation CLOSED by ender after %d turns", conv_turns)
+                    break
+            else:
+                log.info("Conversation CLOSED (%s) after %d turns",
+                         "silence" if silent_windows >= CONV_SILENT_WINDOWS else "cap",
+                         conv_turns)
+            return  # conversation supersedes the regular follow-up loop
+
         if FOLLOW_UP_LISTEN_S > 0 and FOLLOW_UP_MAX_TURNS <= 0:
             log.info("Follow-up disabled by config (FOLLOW_UP_MAX_TURNS=%d).", _FOLLOW_UP_MAX_TURNS_RAW)
 
