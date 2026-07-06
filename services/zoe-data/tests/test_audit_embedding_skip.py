@@ -38,8 +38,13 @@ def test_audit_upsert_provides_explicit_embedding(svc_with_fake_audit):
     )
     assert len(fake.upserts) == 1
     kw = fake.upserts[0]
-    # Explicit embeddings → chroma never calls the embedding function.
-    assert kw["embeddings"] == [_AUDIT_NULL_EMBEDDING]
+    # Explicit embeddings → chroma never calls the embedding function. The
+    # payload is a fresh list-of-lists (chroma 0.6.3 rejects tuple inners:
+    # types.normalize_embeddings requires isinstance(target[0], list)), values
+    # equal to the immutable module constant.
+    assert kw["embeddings"] == [list(_AUDIT_NULL_EMBEDDING)]
+    assert isinstance(kw["embeddings"][0], list)
+    assert kw["embeddings"][0] is not _AUDIT_NULL_EMBEDDING
     # The audit payload itself is unchanged.
     assert kw["documents"] == ["edit mem-1 by test-actor for u1"]
     md = kw["metadatas"][0]
