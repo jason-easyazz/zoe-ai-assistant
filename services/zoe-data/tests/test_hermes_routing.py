@@ -347,8 +347,11 @@ async def test_zoe_agent_hermes_escalation_stays_in_parent_agui_run(monkeypatch)
     agui_runs = []
     persisted_candidates = []
 
-    async def fake_save(session_id, role, content, user_id=None):
+    async def fake_save(session_id, role, content, user_id=None, **kwargs):
         saved_messages.append((session_id, role, content))
+        # Production _save_chat_message returns True on a committed row (#920);
+        # the stream raises "assistant reply save failed" on a falsy return.
+        return True
 
     async def fake_record_run_state(*args, **kwargs):
         recorded_runs.append((args, kwargs))
