@@ -261,11 +261,11 @@ def _stub_weather_and_db(monkeypatch, *, geocode_result):
         calls["geocode"] = name
         return geocode_result
 
-    async def _get_current(lat, lon, city, country, cache=True):
-        calls["get_current"] = {"city": city, "cache": cache}
+    async def _get_current(lat, lon, city, country):
+        calls["get_current"] = {"city": city, "lat": lat, "lon": lon}
         return {"temp": 15.4, "description": "clear", "city": city, "feels_like": 15.4}
 
-    async def _get_forecast(lat, lon, cache=True):
+    async def _get_forecast(lat, lon):
         return {"daily": [], "hourly": []}
 
     wx._geocode = _geocode
@@ -292,8 +292,11 @@ def test_weather_named_location_uses_geocode_uncached(ir, monkeypatch):
     assert "Perth" in reply and "Geraldton" not in reply
     assert calls["geocode"] == "Perth"
     assert calls["get_current"]["city"] == "Perth"
-    # ad-hoc MUST fetch uncached so it can't poison the shared home cache
-    assert calls["get_current"]["cache"] is False
+    # Ad-hoc queries route by the GEOCODED coords — under the keyed cache that
+    # is the whole no-poisoning guarantee (a Perth reading lives under Perth's
+    # key, structurally separate from the home area's).
+    assert (calls["get_current"]["lat"], calls["get_current"]["lon"]) == (-31.95, 115.86)
+    # The intent path never writes the router cache directly.
     assert cache == {}
 
 
