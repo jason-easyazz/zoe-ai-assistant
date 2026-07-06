@@ -2594,6 +2594,9 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
     <link rel="stylesheet" href="css/dark-mode-shared.css">
+    <!-- Shared compose-tree renderer + styles (same files the touch panel loads) -->
+    <link rel="stylesheet" href="/touch/css/cards/compose.css">
+    <script src="/touch/js/zoe-compose.js?v=compose1"></script>
 </head>
 <body>
     <!-- Navigation -->
@@ -3412,7 +3415,16 @@
             if (t === 'CUSTOM' && data.name === 'zoe.ui_component') {
                 // Append to group (below the bubble), NOT contentEl — RUN_FINISHED
                 // replaces contentEl.innerHTML which would wipe anything inside it.
-                renderChatComponent(data.value || {}, null, group);
+                const uiPayload = data.value || {};
+                if (zoeComposeTreeFromUiComponent(uiPayload)) {
+                    // Compose-tree shape ({type:'compose', card:{props:{tree}}}):
+                    // route the card through the shared zoe-compose renderer.
+                    // renderZoeComponent falls back to the generic zc- card when
+                    // window.ZoeCompose isn't loaded, so this stays additive.
+                    renderZoeComponent(uiPayload.card || {}, group);
+                    return;
+                }
+                renderChatComponent(uiPayload, null, group);
                 return;
             }
             if (t === 'CUSTOM' && data.name === 'zoe.component') {
@@ -4632,9 +4644,94 @@
             tryPrompt(text);
         }
 
+        // —— Shared compose-tree renderer bridge (/touch/js/zoe-compose.js) ——
+        // Compose catalog trees render through window.ZoeCompose so chat and the
+        // touch panel can never drift. Everything here is additive: when the
+        // renderer is missing or the tree malformed, the generic zc- card path
+        // handles the payload exactly as before.
+
+        // Extract the catalog tree from a zoe.component value:
+        // { component:'compose', props:{ tree } } → tree, else null. Pure.
+        function zoeComposeTreeFromComponentValue(value) {
+            if (!value || typeof value !== 'object' || value.component !== 'compose') return null;
+            const props = value.props;
+            if (!props || typeof props !== 'object') return null;
+            const tree = props.tree;
+            return (tree && typeof tree === 'object') ? tree : null;
+        }
+
+        // Extract the catalog tree from a zoe.ui_component payload (the PR-B shape):
+        // { type:'compose', card:{ component:'compose', props:{ tree } } } → tree, else null. Pure.
+        function zoeComposeTreeFromUiComponent(payload) {
+            if (!payload || typeof payload !== 'object' || payload.type !== 'compose') return null;
+            const card = payload.card;
+            if (!card || typeof card !== 'object') return null;
+            return zoeComposeTreeFromComponentValue(card);
+        }
+
+        // Render a compose tree through the shared renderer. Pure: returns the
+        // HTML string, or null when the renderer is unavailable or throws
+        // (callers fall back to the generic path).
+        function buildZoeComposeCardHtml(tree, composeRenderer) {
+            if (!tree || !composeRenderer || typeof composeRenderer.render !== 'function') return null;
+            try { return composeRenderer.render(tree); } catch (e) { return null; }
+        }
+
+        // Decide how a zoe.component value renders. Pure + unit-tested:
+        // { mode:'compose', html } via ZoeCompose when the value carries a tree
+        // and the renderer is available, else { mode:'generic', html, actions }
+        // from buildZoeComponentHtml — identical to the pre-compose behaviour.
+        function buildZoeComponentCard(value, composeRenderer) {
+            const tree = zoeComposeTreeFromComponentValue(value);
+            if (tree) {
+                const composeHtml = buildZoeComposeCardHtml(tree, composeRenderer);
+                if (composeHtml != null) return { mode: 'compose', html: composeHtml, actions: [] };
+            }
+            const built = buildZoeComponentHtml(value);
+            return { mode: 'generic', html: built.html, actions: built.actions };
+        }
+
+        // Delegated click handler for compose action buttons. The query is plain
+        // text lifted from a data attribute and submitted through the normal
+        // chat send path — never evaluated, never re-injected as HTML.
+        function onZoeComposeActionClick(ev) {
+            const target = ev.target;
+            const btn = target && target.closest ? target.closest('[data-sky-action="query"]') : null;
+            if (!btn || !ev.currentTarget.contains(btn)) return;
+            const query = String(btn.getAttribute('data-query') || '');
+            if (!query.trim()) return;
+            if (isStreaming) {
+                showNotification('Zoe is still responding — try again in a moment.', 'info');
+                return;
+            }
+            tryPrompt(query);
+        }
+
+        // Mount pre-rendered compose HTML into the message group (survives the
+        // RUN_FINISHED innerHTML replace, same contract as renderZoeComponent).
+        function mountZoeComposeCard(html, messageGroup) {
+            const container = document.createElement('div');
+            container.className = 'ui-component zoe-compose-card';
+            container.innerHTML = html;
+            container.addEventListener('click', onZoeComposeActionClick);
+            if (messageGroup) {
+                messageGroup.appendChild(container);
+                // Keep the trace disclosure last, like renderChatComponent does.
+                const trace = messageGroup.querySelector('.trace-disclosure');
+                if (trace) messageGroup.appendChild(trace);
+            }
+            scrollToBottom();
+            return container;
+        }
+
         // Mount a generic component card into the message group (survives RUN_FINISHED).
         function renderZoeComponent(value, messageGroup) {
-            const built = buildZoeComponentHtml(value);
+            const card = buildZoeComponentCard(value,
+                (typeof window !== 'undefined' && window.ZoeCompose) ? window.ZoeCompose : null);
+            if (card.mode === 'compose') {
+                return mountZoeComposeCard(card.html, messageGroup);
+            }
+            const built = { html: card.html, actions: card.actions };
             const container = document.createElement('div');
             container.className = 'ui-component zoe-component-card';
             container.innerHTML = built.html;
