@@ -36,8 +36,16 @@ data/wyoming/
 *.cert
 *secret*
 *password*
-*token*
-!services/zoe-auth/oidc/tokens.py
+# Token secrets by ARTIFACT shape, not blanket *token* — the blanket silently
+# dropped a legitimate test file (test_intent_dispatch_token_gate.py,
+# 2026-07-07) and had already needed a tokens.py exception. Source/tests/docs
+# with "token" in the name are trackable; credential-shaped files are not.
+*.token
+*.tokens
+*token*.json
+*token*.txt
+*token*.env
+*token*.secret
 *api_key*
 data/billing/
 data/logs/
