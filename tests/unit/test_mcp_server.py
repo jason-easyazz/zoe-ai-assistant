@@ -10,6 +10,10 @@ from pathlib import Path
 
 import pytest
 
+# Slim-dep green: opts into the GitHub-runner fast lane (see tests/AGENTS.md).
+pytestmark = pytest.mark.ci_safe
+
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ZOE_DATA = PROJECT_ROOT / "services" / "zoe-data"
 
