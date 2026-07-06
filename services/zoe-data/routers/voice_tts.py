@@ -4134,6 +4134,64 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     except Exception:
         pass
 
+    # ── Conversation opener / ender fast-path (the REAL panel lane) ──
+    # "hey zoe, let's talk" → instant warm ack + {"conversation_mode": true} on
+    # the done frame; the panel daemon then holds an open conversation (long
+    # no-wake-word listen windows). An ender ("that's all" / "goodbye") is
+    # honoured ONLY when the daemon reports an active conversation in its
+    # payload, and closes it with {"conversation_end": true}. Both skip the
+    # brain entirely (voice_presence-style fast-path). Flag-gated OFF.
+    try:
+        from conversation_opener import (
+            conversation_opener_enabled,
+            is_conversation_ender,
+            maybe_conversation_opener,
+            next_ender_ack,
+        )
+        _fast_ack = None
+        _fast_flags: dict = {}
+        if conversation_opener_enabled():
+            _in_conv = bool((payload or {}).get("conversation"))
+            _opener = maybe_conversation_opener(transcript)
+            if _opener:
+                _fast_ack = str(_opener.get("phrase") or "I'm listening.")
+                _fast_flags = {"conversation_mode": True}
+            elif _in_conv and is_conversation_ender(transcript):
+                _fast_ack = next_ender_ack()
+                _fast_flags = {"conversation_end": True}
+    except Exception as _conv_exc:  # never let the fast-path break a turn
+        logger.debug("voice/turn_stream conversation fast-path skipped: %s", _conv_exc)
+        _fast_ack = None
+        _fast_flags = {}
+    if _fast_ack:
+        logger.info(
+            "voice/turn_stream panel=%s conversation %s: %r",
+            panel_id, "OPENED" if _fast_flags.get("conversation_mode") else "ENDED", transcript[:60],
+        )
+        _ack_audio = None
+        try:
+            _ack_audio = await _synthesize_kokoro_sidecar(_fast_ack)
+            if not _ack_audio:
+                _ack_audio = await _synthesize_kokoro(_fast_ack)
+        except Exception as _tts_exc:
+            logger.warning("voice/turn_stream conversation ack TTS failed: %s", _tts_exc)
+
+        async def _fast_stream():
+            yield (_json.dumps({"transcript": transcript}) + "\n").encode()
+            if _ack_audio:
+                yield (_json.dumps({"chunk": 0, "text": _fast_ack, "provider": "kokoro"}) + "\n").encode()
+                yield base64.b64encode(_ack_audio) + b"\n"
+            yield (_json.dumps({"done": True, "reply": _fast_ack, "panel_id": panel_id, **_fast_flags}) + "\n").encode()
+
+        try:
+            from voice_metrics import voice_turn_count
+            voice_turn_count.labels(outcome="ok", path="turn_stream").inc()
+        except Exception:
+            pass
+        return StreamingResponse(
+            _fast_stream(), media_type="application/x-zoe-audio-stream", headers={"Cache-Control": "no-cache"}
+        )
+
     command_payload = {
         "text": transcript,
         "panel_id": panel_id,
