@@ -112,6 +112,17 @@ def _fake_get_collection(_path):
 # Patch MemPalace imports before importing zoe_agent
 # ---------------------------------------------------------------------------
 
+# The keys we shadow in sys.modules, and their pre-test originals. Consumers
+# (zoe_agent._mempalace_add, memory_service) bind mempalace LAZILY per call, so
+# whatever sits in sys.modules at call time wins — installing the stubs
+# permanently at import poisoned every later-running memory test in the full
+# suite (bisected 2026-07-06: MemoryService.ingest in test_memory_importance_edit
+# silently wrote into this file's _GLOBAL_COLLECTION and returned None). The
+# stubs must exist ONLY while this module's own tests run.
+_STUB_KEYS = ("mempalace", "mempalace.palace", "mempalace.searcher")
+_ORIG_MODULES = {k: sys.modules.get(k) for k in _STUB_KEYS}
+
+
 def _install_mempalace_stubs():
     """Install mempalace module stubs so zoe_agent doesn't require the real package."""
     palace_mod = types.ModuleType("mempalace")
@@ -131,6 +142,15 @@ def _install_mempalace_stubs():
     sys.modules["mempalace.searcher"] = searcher_sub
 
 
+def _restore_mempalace_modules():
+    """Put the pre-import sys.modules entries back (pop keys that were absent)."""
+    for key, mod in _ORIG_MODULES.items():
+        if mod is not None:
+            sys.modules[key] = mod
+        else:
+            sys.modules.pop(key, None)
+
+
 _install_mempalace_stubs()
 
 # Now we can import zoe_agent functions
@@ -147,6 +167,11 @@ from zoe_agent import (
 from routers.chat import _persist_memory_candidates
 from memory_service import MemoryService
 
+# Imports done — hand sys.modules back so OTHER collected test modules never see
+# the stubs (collection-time shadowing was the leak). Each test in THIS file
+# re-installs them via the autouse fixture below.
+_restore_mempalace_modules()
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -160,7 +185,13 @@ def fresh_collection():
     (idempotency `_seen_keys`, per-user locks, access-tick queue) does
     not leak between tests — the fake collection is cleared, but the
     service remembers what it wrote.
+
+    Installs the mempalace stubs for THIS test only and restores the
+    original sys.modules entries afterwards: consumers resolve mempalace
+    lazily per call, so a permanently-installed stub redirected every
+    later memory test's writes into this file's _GLOBAL_COLLECTION.
     """
+    _install_mempalace_stubs()
     _reset_collection()
     try:
         import memory_service as _ms
@@ -174,6 +205,7 @@ def fresh_collection():
     except Exception:
         pass
     yield
+    _restore_mempalace_modules()
 
 
 # ---------------------------------------------------------------------------
