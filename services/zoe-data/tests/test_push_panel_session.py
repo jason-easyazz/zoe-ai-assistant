@@ -13,6 +13,7 @@ push socket should subscribe to (the channel ``ui_actions`` are pushed to), or
 
 from __future__ import annotations
 
+import contextlib
 import sys
 import types
 from pathlib import Path
@@ -64,25 +65,35 @@ def cur(row=None, rows=None):
 
 
 def _install_database(monkeypatch: pytest.MonkeyPatch, db: _Db):
-    module = types.ModuleType("database")
+    """Back the resolver's ``db_pool.get_db_ctx`` with a fake connection.
 
-    async def get_db():
+    Since #978 the push guards acquire their connection via
+    ``async with db_pool.get_db_ctx()`` (the #953 pool-leak fix), not
+    ``async for db in database.get_db()`` — so that is what must be faked.
+    """
+    module = types.ModuleType("db_pool")
+
+    @contextlib.asynccontextmanager
+    async def get_db_ctx():
         yield db
 
-    module.get_db = get_db
-    monkeypatch.setitem(sys.modules, "database", module)
+    module.get_db_ctx = get_db_ctx
+    monkeypatch.setitem(sys.modules, "db_pool", module)
     return db
 
 
 def _install_empty_database(monkeypatch: pytest.MonkeyPatch):
-    module = types.ModuleType("database")
+    """DB unavailable: acquiring a pooled connection fails, so the guard's
+    except-path must reject (return None/False), never grant access."""
+    module = types.ModuleType("db_pool")
 
-    async def get_db():
-        if False:
-            yield None
+    @contextlib.asynccontextmanager
+    async def get_db_ctx():
+        raise RuntimeError("db pool unavailable")
+        yield None  # pragma: no cover - makes this a generator
 
-    module.get_db = get_db
-    monkeypatch.setitem(sys.modules, "database", module)
+    module.get_db_ctx = get_db_ctx
+    monkeypatch.setitem(sys.modules, "db_pool", module)
 
 
 def _member(monkeypatch, user_id="u1", role="member"):
@@ -93,8 +104,8 @@ def _member(monkeypatch, user_id="u1", role="member"):
 
 
 async def _install_real_db(monkeypatch: pytest.MonkeyPatch):
-    """Back ``database.get_db`` with a real in-memory aiosqlite connection so the
-    resolver's actual SQL (incl. the ORDER BY tie-break) runs, not a canned row.
+    """Back ``db_pool.get_db_ctx`` with a real in-memory aiosqlite connection so
+    the resolver's actual SQL (incl. the ORDER BY tie-break) runs, not a canned row.
 
     Seeds two REGISTERED panels (A and B) on one session/user where B wins the
     is_foreground/last_seen_at ordering, to prove resolution follows the
@@ -124,13 +135,14 @@ async def _install_real_db(monkeypatch: pytest.MonkeyPatch):
     )
     await conn.commit()
 
-    module = types.ModuleType("database")
+    module = types.ModuleType("db_pool")
 
-    async def get_db():
+    @contextlib.asynccontextmanager
+    async def get_db_ctx():
         yield conn
 
-    module.get_db = get_db
-    monkeypatch.setitem(sys.modules, "database", module)
+    module.get_db_ctx = get_db_ctx
+    monkeypatch.setitem(sys.modules, "db_pool", module)
     return conn
 
 
