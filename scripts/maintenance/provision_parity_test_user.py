@@ -5,7 +5,7 @@ The 2026-07-03 flue-vs-prod parity run was quality-confounded because prod ran
 as `guest` (contaminated memory) while flue ran as an empty-store env-bound
 user — `parity-gate-user` could not be created at gate time (zoe-auth admin
 write denied). This script is the sanctioned, operator-run path: it mints a
-real zoe-auth account through AuthService.create_user (full validation,
+real zoe-auth account through AuthManager.create_user (full validation,
 password history, audit log), so BOTH brains can run the gate as the same
 fresh authenticated identity.
 
@@ -75,7 +75,7 @@ def main() -> None:
 
     _ensure_postgres_url()
     sys.path.insert(0, str(ZOE_AUTH_DIR))
-    from core.auth import AuthService  # noqa: E402 — needs sys.path + env first
+    from core.auth import auth_manager  # noqa: E402 — needs sys.path + env first
     from models.database import auth_db  # noqa: E402
 
     with auth_db.get_connection() as conn:
@@ -90,8 +90,16 @@ def main() -> None:
         print("If the password is lost, deactivate the row and re-run to mint a fresh one.")
         return
 
-    password = secrets.token_urlsafe(24)
-    ok, result = AuthService().create_user(
+    # One guaranteed character per policy class (upper/lower/digit/special) —
+    # token_urlsafe alone is base64url and can never satisfy require_special.
+    password = (
+        secrets.token_urlsafe(18)
+        + secrets.choice("ABCDEFGHJKMNPQRSTUVWXYZ")
+        + secrets.choice("abcdefghjkmnpqrstuvwxyz")
+        + secrets.choice("23456789")
+        + secrets.choice("!@#$%^&*")
+    )
+    ok, result = auth_manager.create_user(
         username=username,
         email=email,
         password=password,
