@@ -2485,6 +2485,45 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
             if not message_text:
                 continue
 
+            # ── "Let's talk" conversation-session opener (flag-gated) ──────────
+            # Mirrors the wake-ack early-return above: a session opener is
+            # acknowledged instantly with a warm line and NEVER enters the
+            # skybridge/intent/brain lanes. On a hit the LiveKit room is warmed
+            # fire-and-forget and the final "done" event carries
+            # conversation_mode=true so the panel can switch to the continuous
+            # LiveKit mode. DEFAULT OFF via ZOE_CONVERSATION_OPENER_ENABLED
+            # (checked per call inside maybe_conversation_opener).
+            _co_ack = None
+            try:
+                from conversation_opener import maybe_conversation_opener
+                _co_ack = maybe_conversation_opener(message_text)
+            except Exception as _co_exc:
+                logger.debug("conversation opener fast-path skipped: %s", _co_exc)
+                _co_ack = None
+            if _co_ack:
+                import base64 as _b64co
+                await websocket.send_json({"type": "state", "state": "responding"})
+                await websocket.send_json(
+                    {"type": "transcript", "role": "zoe", "text": _co_ack["phrase"]}
+                )
+                try:
+                    from routers.voice_tts import _synthesize_kokoro_sidecar as _co_tts
+                    _co_wav = await _co_tts(_co_ack["phrase"])
+                    if _co_wav:
+                        await websocket.send_json({
+                            "type": "audio",
+                            "audio_base64": _b64co.b64encode(_co_wav).decode("ascii"),
+                            "content_type": "audio/wav",
+                        })
+                except Exception as _co_tts_exc:
+                    logger.debug(
+                        "conversation opener TTS failed (text already sent): %s",
+                        _co_tts_exc,
+                    )
+                await websocket.send_json({"type": "state", "state": "ambient"})
+                await websocket.send_json({"type": "done", "conversation_mode": True})
+                continue
+
             # Reset cancel flag at the start of each new pipeline
             _ws_cancelled[0] = False
 
