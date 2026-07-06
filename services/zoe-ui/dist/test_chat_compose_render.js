@@ -192,4 +192,17 @@ check('missing ZoeCompose renderer falls back without throwing', () => {
     assert.strictEqual(broken.mode, 'generic', 'tree-less compose value falls back');
 });
 
+// f) zoe.ui_component compose payload + missing renderer: detected, no throw, generic path
+check('ui_component compose payload + missing renderer falls back (no throw)', () => {
+    const uiPayload = { type: 'compose', data: { action: 'Composed view' },
+        card: { component: 'compose', props: { tree: { component: 'Stack', children: [{ component: 'Text', text: 'x' }] } } } };
+    const detected = api.zoeComposeTreeFromUiComponent(uiPayload);
+    assert.ok(detected, 'compose ui_component shape is detected');
+    const card = api.buildZoeComponentCard(uiPayload.card, null);
+    assert.strictEqual(card.mode, 'generic', 'missing renderer -> generic path');
+    assert.ok(!String(card.html || '').includes('zx-root'), 'no zx markup on fallback');
+    // non-compose ui_component payloads are not detected
+    assert.strictEqual(api.zoeComposeTreeFromUiComponent({ type: 'calendar', card: {} }), null);
+});
+
 console.log('\n' + passed + ' checks passed' + (process.exitCode ? ' (with failures)' : ''));
