@@ -1137,10 +1137,13 @@
     }
 
     function renderList(props) {
-        const rows = (props.items || []).slice(0, 6).map(item => {
+        const rows = (props.items || []).slice(0, 6).map((item, index) => {
             const title = typeof item === 'string' ? item : item.title || item.text || item.label || JSON.stringify(item);
             const detail = typeof item === 'object' && item ? (item.summary || item.description || item.value || '') : '';
-            return listRowNode(title, detail);
+            // Preserve the legacy zero-padded position cue (01, 02, ...) — generic
+            // lists are often ordered (results, rankings); it rides the detail slot.
+            const cue = String(index + 1).padStart(2, '0');
+            return listRowNode(title, detail ? cue + ' · ' + detail : cue);
         });
         const tree = { component: 'Stack', gap: 'sm', children: rows };
         return cardFrame(Object.assign({ status: props.status || 'List' }, props), composedBody(tree, props.title || ''), { wide: false, tone: 'list-card' });
@@ -1158,7 +1161,7 @@
         });
         const tree = rows.length
             ? { component: 'Grid', columns: 2, children: rows }
-            : textNode('No devices available.', 'caption');
+            : { component: 'Stack', children: [textNode('No devices available.', 'caption')] };
         return cardFrame(Object.assign({ status: props.status || 'Smart home' }, props), composedBody(tree, props.title || ''), { wide: true, tone: 'smart-home-card' });
     }
 

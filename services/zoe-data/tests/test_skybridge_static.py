@@ -750,6 +750,11 @@ out.settings_overview.risk_in_row = R.render(cards.settings_overview).includes('
 out.action_form.not_set = R.render(cards.action_form).includes('Not set');
 out.list_create.kicker = R.render(cards.list_create).includes('zx-text-kicker') && R.render(cards.list_create).includes('list-create-card');
 out.smart_home.grid_state = R.render(cards.smart_home).includes('zx-grid') && R.render(cards.smart_home).includes('<em>on</em>');
+out.list.index_cue = R.render(cards.list).includes('01') && R.render(cards.list).includes('02');
+out.smart_home.empty_container = (function(){
+  var h = R.render({ component: 'smart_home', props: { title: 'Lights', devices: [] } });
+  return h.includes('zx-stack') && h.includes('No devices available.');
+})();
 out.media.tile = R.render(cards.media).includes('zx-mediatile') && R.render(cards.media).includes('/touch/img/art.png');
 out.media.foreign_art_dropped = !R.render(cards.media).includes('evil.example');
 out.research_report.kicker = R.render(cards.research_report).includes('zx-text-kicker');
