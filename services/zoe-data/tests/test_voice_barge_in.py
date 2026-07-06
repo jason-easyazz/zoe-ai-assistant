@@ -228,7 +228,7 @@ def test_flag_on_cooldown_barge_triggers_stop_playback_and_seeds_frames(monkeypa
     assert {"type": "state", "state": "listening"} in local.sent
     assert len(ps["frames"]) >= v._barge_min_hops(), \
         "the interrupting speech must seed the next utterance"
-    assert ps["barge_hops"] == 0 and ps["barge_frames"] == []
+    assert ps["barge_window"] == [] and ps["barge_frames"] == []
     assert ps["cooldown_deadline"] == 0.0, "cooldown watchdog state must be reset"
     assert v._VOICE_HEALTH["barge_ins"] == barge_ins_before + 1
 
@@ -238,8 +238,9 @@ def test_flag_on_brief_noise_does_not_trigger(monkeypatch):
     monkeypatch.setenv("ZOE_VOICE_BARGE_IN", "1")
     _clean_env(monkeypatch)
     mod = _install_fake_aiortc(monkeypatch)
-    # 5 speech hops (below the 8-hop gate), a silent hop resets, 4 more speech.
-    script = [[0.9]] * 5 + [[0.1]] + [[0.9]] * 4 + [[]] * 2
+    # Genuinely brief noise: 4 speech hops (~128ms — under the 6-hop/192ms
+    # windowed gate) then sustained silence. A cough/echo blip, not speech.
+    script = [[0.9]] * 4 + [[0.05]] * 14 + [[]] * 2
     _install_fake_voice_vad(monkeypatch, script)
     monkeypatch.setattr(v, "_prewarm_brain", _noop_prewarm)
 
@@ -361,11 +362,11 @@ def test_flag_on_but_silero_unavailable_falls_back_to_rms(monkeypatch):
 
 def test_barge_min_hops_env_knob(monkeypatch):
     _clean_env(monkeypatch)
-    assert v._barge_min_hops() == 8  # 250ms / 32ms → ceil = 8
+    assert v._barge_min_hops() == 6  # 192ms / 32ms → ceil = 6
     monkeypatch.setenv("ZOE_BARGE_MIN_MS", "500")
     assert v._barge_min_hops() == 16
     monkeypatch.setenv("ZOE_BARGE_MIN_MS", "garbage")
-    assert v._barge_min_hops() == 8
+    assert v._barge_min_hops() == 6
     monkeypatch.setenv("ZOE_BARGE_MIN_MS", "1")
     assert v._barge_min_hops() == 1
 
@@ -645,3 +646,64 @@ def test_smart_turn_unavailable_falls_back_to_immediate_end(monkeypatch):
 
     assert pipeline, "model unavailable → legacy immediate end"
     assert ps["state"] == v._ParticipantState.PROCESSING
+
+
+# ── real-voice barge replay (host-only) ───────────────────────────────────────
+# The regression that motivated the rolling-window gate: with the original
+# strictly-consecutive counter, 0/6 REAL voice clips triggered a barge (natural
+# speech dips between syllables reset the counter). This replays Jason's actual
+# saved voice through the real Silero model and the real state machine.
+
+_CORPUS_DIR = "/home/zoe/.zoe-voice-samples"
+
+
+@pytest.mark.skipif(
+    not os.path.isfile(_MODEL_PATH) or not os.path.isdir(_CORPUS_DIR),
+    reason="Silero model or voice corpus not on this host",
+)
+def test_real_voice_triggers_barge_from_cooldown(monkeypatch):
+    import glob
+    import wave
+
+    monkeypatch.setenv("ZOE_VOICE_BARGE_IN", "1")
+    _clean_env(monkeypatch)
+    import voice_vad
+    monkeypatch.setattr(voice_vad, "_session", None)
+    monkeypatch.setattr(voice_vad, "_session_failed", False)
+    monkeypatch.setattr(voice_vad, "_warned", False)
+
+    fired = 0
+    total = 0
+    for wav_path in sorted(glob.glob(os.path.join(_CORPUS_DIR, "*.wav")))[-6:]:
+        try:
+            with wave.open(wav_path) as w:
+                if w.getframerate() != 16000 or w.getnchannels() != 1:
+                    continue
+                raw = w.readframes(w.getnframes())
+        except Exception:
+            continue
+        total += 1
+        sid = f"replay-{total}"
+        ps = v._make_participant_state(sid)
+        ps["state"] = v._ParticipantState.COOLDOWN
+        ps["cooldown_deadline"] = 10**12
+        vad = voice_vad.create_vad()
+        assert vad is not None
+        local = _FakeLocalParticipant()
+
+        async def replay():
+            for i in range(0, len(raw), 640):
+                await v._handle_frame_barge_in(raw[i : i + 640], sid, ps, local, vad)
+                if any(m.get("type") == "stop_playback" for m in local.sent):
+                    return True
+            return False
+
+        if _run(replay()):
+            fired += 1
+            assert ps["state"] == v._ParticipantState.LISTENING
+            assert ps["frames"], "interrupting speech must seed the next utterance"
+    if total < 3:
+        pytest.skip("not enough loadable 16k mono clips")
+    assert fired >= max(2, int(total * 0.6)), (
+        f"real voice must reliably barge in: fired {fired}/{total}"
+    )
