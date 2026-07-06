@@ -1,4 +1,6 @@
 import pytest
+
+pytestmark = pytest.mark.ci_safe  # slim-dep write-path guards -> GitHub blocking lane (#960/#993 suites)
 from fastapi import HTTPException
 
 from intent_router import Intent, _load_direct_execution_user, execute_intent
