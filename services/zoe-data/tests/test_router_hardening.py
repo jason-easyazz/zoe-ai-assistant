@@ -160,7 +160,9 @@ def test_portrait_regenerate_exception_returns_generic_message_and_logs(monkeypa
 
 @pytest.mark.asyncio
 async def test_weather_provider_fallback_returns_generic_error_and_logs(monkeypatch, caplog):
-    weather._weather_cache.clear()
+    # Private dict via monkeypatch (auto-restored) — never mutate the module's
+    # real cache in place, it leaks entries into other tests' keyed lookups.
+    monkeypatch.setattr(weather, "_weather_cache", {})
 
     class FakeResponse:
         def raise_for_status(self):
@@ -193,7 +195,10 @@ async def test_weather_provider_fallback_returns_generic_error_and_logs(monkeypa
 @pytest.mark.asyncio
 async def test_weather_cached_fallback_success_shape_unchanged(monkeypatch):
     cached = {"temp": 23, "city": "Perth", "country": "AU"}
-    monkeypatch.setattr(weather, "_weather_cache", {"current": cached})
+    monkeypatch.setattr(weather, "_weather_cache", {})
+    # Keyed cache: the provider-down fallback only serves a stale reading for
+    # the SAME coords — seed it where the fetch below will look.
+    weather._cache_put("current", 1.0, 2.0, cached)
 
     class FakeClient:
         def __init__(self, *args, **kwargs):

@@ -195,6 +195,14 @@ def test_authenticated_ws_accepts_allowed_origin(client, monkeypatch):
         return {"user_id": "u1", "role": "member"}
 
     monkeypatch.setattr(main, "_resolve_ws_session", _fake_resolve)
+    # The broadcaster is a process-global singleton with ONE cumulative
+    # _sequence — any earlier test that broadcast anything bumps it, so the
+    # strict `sequence: 0` handshake assertion below is order-dependent and
+    # fails in full-directory runs only. Reset it (monkeypatch auto-restores)
+    # so the assertion stays strict without depending on run composition.
+    from push import broadcaster as _bc
+
+    monkeypatch.setattr(_bc, "_sequence", 0)
     with client.websocket_connect(
         "/api/lists/ws",
         headers={"origin": "https://zoe.local", "X-Session-ID": "sess-1"},
