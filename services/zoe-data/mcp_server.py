@@ -3328,8 +3328,17 @@ async def run_stdio_server():
         from db_pool import init_pool, close_pool
         await init_pool()
     except Exception as _pool_err:
+        # Fail LOUD and exit non-zero. Limping on used to crash mid-call on
+        # get_pool() instead, which mcporter surfaced as a generic "Connection
+        # closed" → intent_router mapped to None → ok:false while the user heard
+        # "done" (the #960/#993/#995 bug class). Exiting here puts the real
+        # cause (e.g. a stale rotated DB password) in stderr, which
+        # _run_mcporter logs. POSTGRES_URL comes from bootstrap_runtime_env();
+        # never bake it into agent configs like ~/.mcporter/mcporter.json —
+        # a pre-set env value blocks the bootstrap and rots on rotation.
         import sys as _sys
         print(f"[mcp_server] DB pool init failed: {_pool_err}", file=_sys.stderr)
+        raise SystemExit(1)
 
     reader = asyncio.StreamReader()
     protocol = asyncio.StreamReaderProtocol(reader)
