@@ -121,14 +121,14 @@ body:not(.sky-empty) .sky-card.zoe-list-card.sky-premium-card {
 /* ── Progress: a slim accent bar (no ring) ──────────────────────────────── */
 .zoe-list-card .lst-progress {
   height: 6px;
-  border-radius: 999px;
+  border-radius: var(--sky-radius-pill, 999px);
   background: var(--sky-fill-3, rgba(255,255,255,.12));
   overflow: hidden;
 }
 .zoe-list-card .lst-progress-fill {
   display: block;
   height: 100%;
-  border-radius: 999px;
+  border-radius: var(--sky-radius-pill, 999px);
   background: rgb(var(--lst-accent));
   transition: width var(--sky-dur-slow, 520ms) var(--sky-ease-spring, ease);
 }
@@ -144,8 +144,11 @@ body:not(.sky-empty) .sky-card.zoe-list-card.sky-premium-card {
   cursor: pointer;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  height: 40px;
+  gap: var(--sky-space-2, 8px);
+  /* Finger target: >=48px tap height (was a fixed 40px, under the 48px bar).
+     !important because touch-adapter.css clamps every button to 44px with an
+     important min-height; same importance -> this higher-specificity rule wins. */
+  min-height: 48px !important;
   padding: 0 14px;
   border-radius: var(--sky-radius-pill, 999px);
   border: 1px solid var(--sky-hairline, rgba(255,255,255,.1));
@@ -176,7 +179,7 @@ body:not(.sky-empty) .sky-card.zoe-list-card.sky-premium-card {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   min-width: 20px; height: 20px; padding: 0 6px;
-  border-radius: 999px;
+  border-radius: var(--sky-radius-pill, 999px);
   display: inline-flex; align-items: center; justify-content: center;
   background: var(--sky-fill-2, rgba(255,255,255,.1));
   color: var(--sky-ink-2, rgba(255,255,255,.7));
@@ -340,7 +343,7 @@ body:not(.sky-empty) .sky-card.zoe-list-card.sky-premium-card {
 .zoe-list-card .lst-col-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .zoe-list-card .lst-col-head strong { font-size: 17px; font-weight: 600; color: var(--sky-ink-0, #fff); }
 .zoe-list-card .lst-col-head em { font-style: normal; font-size: 13px; color: var(--sky-ink-3, rgba(255,255,255,.5)); }
-.zoe-list-card .lst-col-bar { height: 5px; border-radius: 999px; background: var(--sky-fill-3, rgba(255,255,255,.12)); overflow: hidden; }
+.zoe-list-card .lst-col-bar { height: 5px; border-radius: var(--sky-radius-pill, 999px); background: var(--sky-fill-3, rgba(255,255,255,.12)); overflow: hidden; }
 .zoe-list-card .lst-col-bar i { display: block; height: 100%; background: rgb(var(--lst-accent)); }
 .zoe-list-card .lst-col ul { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .zoe-list-card .lst-col li { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--sky-ink-1, rgba(255,255,255,.84)); }
