@@ -56,12 +56,33 @@ def _ensure_postgres_url() -> None:
     sys.exit("POSTGRES_URL is not set and services/zoe-data/.env has no value — aborting.")
 
 
+def _mint_password() -> str:
+    """Policy-compliant random password: one guaranteed character per policy
+    class (upper/lower/digit/special) — token_urlsafe alone is base64url and
+    can never satisfy require_special."""
+    return (
+        secrets.token_urlsafe(18)
+        + secrets.choice("ABCDEFGHJKMNPQRSTUVWXYZ")
+        + secrets.choice("abcdefghjkmnpqrstuvwxyz")
+        + secrets.choice("23456789")
+        + secrets.choice("!@#$%^&*")
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--username", default="parity-gate-user")
     parser.add_argument(
         "--email", default=None,
         help="defaults to <username>@parity.zoe.invalid (never routable)",
+    )
+    parser.add_argument(
+        "--rotate-password", action="store_true",
+        help="if the user already exists (active OR deactivated), set a fresh "
+        "password and reactivate — the recovery path for a lost credential. "
+        "(create_user cannot be re-run: its _user_exists check matches "
+        "deactivated rows too, so deletion-free recovery must go through an "
+        "UPDATE.)",
     )
     args = parser.parse_args()
 
@@ -75,30 +96,38 @@ def main() -> None:
 
     _ensure_postgres_url()
     sys.path.insert(0, str(ZOE_AUTH_DIR))
+    import bcrypt  # noqa: E402 — zoe-auth's own hash dependency
     from core.auth import auth_manager  # noqa: E402 — needs sys.path + env first
     from models.database import auth_db  # noqa: E402
 
+    # Match ANY row (active or deactivated): create_user would refuse both, so
+    # the existing/recovery branches must see both.
     with auth_db.get_connection() as conn:
         cur = conn.execute(
-            "SELECT user_id FROM auth_users WHERE username = ? AND is_active = 1",
+            "SELECT user_id, is_active FROM auth_users WHERE username = ?",
             (username,),
         )
         row = cur.fetchone()
+
     if row:
-        user_id = row[0] if not hasattr(row, "keys") else row["user_id"]
-        print(f"EXISTS: {username} → user_id={user_id} (password unchanged).")
-        print("If the password is lost, deactivate the row and re-run to mint a fresh one.")
+        user_id = row["user_id"] if hasattr(row, "keys") else row[0]
+        if not args.rotate_password:
+            print(f"EXISTS: {username} → user_id={user_id} (password unchanged).")
+            print("Lost the password? Re-run with --rotate-password to mint a fresh one.")
+            return
+        password = _mint_password()
+        password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+        with auth_db.get_connection() as conn:
+            conn.execute(
+                "UPDATE auth_users SET password_hash = ?, is_active = 1 WHERE user_id = ?",
+                (password_hash, user_id),
+            )
+        print(f"ROTATED: {username} → user_id={user_id} (reactivated if needed)")
+        print(f"  password: {password}")
+        print("  ^ shown ONCE — feed it to the parity harness login, do not store it in the repo.")
         return
 
-    # One guaranteed character per policy class (upper/lower/digit/special) —
-    # token_urlsafe alone is base64url and can never satisfy require_special.
-    password = (
-        secrets.token_urlsafe(18)
-        + secrets.choice("ABCDEFGHJKMNPQRSTUVWXYZ")
-        + secrets.choice("abcdefghjkmnpqrstuvwxyz")
-        + secrets.choice("23456789")
-        + secrets.choice("!@#$%^&*")
-    )
+    password = _mint_password()
     ok, result = auth_manager.create_user(
         username=username,
         email=email,
