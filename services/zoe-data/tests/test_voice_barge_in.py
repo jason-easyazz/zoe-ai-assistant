@@ -149,8 +149,15 @@ async def _noop_prewarm(*_a, **_k):
 
 
 def _clean_env(monkeypatch):
+    # Tests must not inherit ambient/prod env (these flags are now ON in the
+    # live .env — an inherited ZOE_SMART_TURN_ENABLED turns the plain silence
+    # endpoint into a smart-turn check and breaks the endpoint tests).
     monkeypatch.delenv("ZOE_BARGE_MIN_MS", raising=False)
     monkeypatch.delenv("ZOE_VAD_SPEECH_THRESHOLD", raising=False)
+    monkeypatch.delenv("ZOE_BARGE_SPEECH_THRESHOLD", raising=False)
+    monkeypatch.delenv("ZOE_SMART_TURN_ENABLED", raising=False)
+    monkeypatch.delenv("ZOE_SMART_TURN_THRESHOLD", raising=False)
+    monkeypatch.delenv("ZOE_SMART_TURN_MAX_CHECKS", raising=False)
 
 
 # ── 1. Flag OFF: today's behaviour, locked ───────────────────────────────────
@@ -542,8 +549,8 @@ def test_smart_turn_flag_off_silence_ends_turn_immediately(monkeypatch):
 
 def test_smart_turn_complete_verdict_ends_turn(monkeypatch):
     monkeypatch.setenv("ZOE_VOICE_BARGE_IN", "1")
-    monkeypatch.setenv("ZOE_SMART_TURN_ENABLED", "1")
     _clean_env(monkeypatch)
+    monkeypatch.setenv("ZOE_SMART_TURN_ENABLED", "1")
     vad_mod = _mk_vad_all_silence(monkeypatch, v._VAD_SILENCE_FRAMES + 2)
     _install_fake_voice_turn(monkeypatch, prob=0.92)
     pipeline = _capture_end_turn(monkeypatch)
@@ -571,9 +578,9 @@ def test_smart_turn_incomplete_extends_then_bounded_end(monkeypatch):
     """Mid-thought verdict extends the listen (halved silence window); the
     MAX_CHECKS bound guarantees the turn still ends (fail-open, never hangs)."""
     monkeypatch.setenv("ZOE_VOICE_BARGE_IN", "1")
+    _clean_env(monkeypatch)
     monkeypatch.setenv("ZOE_SMART_TURN_ENABLED", "1")
     monkeypatch.setenv("ZOE_SMART_TURN_MAX_CHECKS", "2")
-    _clean_env(monkeypatch)
     total = v._VAD_SILENCE_FRAMES * 3
     vad_mod = _mk_vad_all_silence(monkeypatch, total)
     _install_fake_voice_turn(monkeypatch, prob=0.05)  # always "mid-thought"
@@ -604,8 +611,8 @@ def test_smart_turn_speech_resume_discards_verdict(monkeypatch):
     """If speech resumes while the model is scoring, the verdict is moot —
     stay LISTENING with the new speech, no pipeline launch."""
     monkeypatch.setenv("ZOE_VOICE_BARGE_IN", "1")
-    monkeypatch.setenv("ZOE_SMART_TURN_ENABLED", "1")
     _clean_env(monkeypatch)
+    monkeypatch.setenv("ZOE_SMART_TURN_ENABLED", "1")
     script = [[0.0]] * v._VAD_SILENCE_FRAMES + [[0.9]]  # silence window, then speech
     vad_mod = _install_fake_voice_vad(monkeypatch, script)
     _install_fake_voice_turn(monkeypatch, prob=0.99, delay_s=0.15)  # slow "complete"
@@ -632,8 +639,8 @@ def test_smart_turn_speech_resume_discards_verdict(monkeypatch):
 
 def test_smart_turn_unavailable_falls_back_to_immediate_end(monkeypatch):
     monkeypatch.setenv("ZOE_VOICE_BARGE_IN", "1")
-    monkeypatch.setenv("ZOE_SMART_TURN_ENABLED", "1")
     _clean_env(monkeypatch)
+    monkeypatch.setenv("ZOE_SMART_TURN_ENABLED", "1")
     vad_mod = _mk_vad_all_silence(monkeypatch, v._VAD_SILENCE_FRAMES + 2)
     _install_fake_voice_turn(monkeypatch, prob=None)  # detector unavailable
     pipeline = _capture_end_turn(monkeypatch)
