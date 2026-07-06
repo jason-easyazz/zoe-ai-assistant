@@ -37,8 +37,12 @@ def test_wake_prewarm_warms_facts_cache(monkeypatch):
 
     warmed = {"brain": False, "facts": False}
 
-    async def _fake_prewarm(user_id, session_id):
-        warmed["brain"] = (user_id, session_id) == ("jason", "sess-1")
+    async def _fake_prewarm(user_id, session_id, *, voice_mode=False):
+        # #843: the wake path must warm the SAME voice-capped worker the turn
+        # will use, so it passes voice_mode=True — require it here.
+        warmed["brain"] = (
+            (user_id, session_id) == ("jason", "sess-1") and voice_mode is True
+        )
         return True
 
     async def _fake_mem(user_id):
