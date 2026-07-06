@@ -2,8 +2,12 @@
 
 ## Status
 
-**Proposed — spike PARTIALLY run (2026-07-05), feasibility validated with real
-caveats; live/loaded measurements still pending a controlled window.** See
+**Decided 2026-07-06 — fallback-first.** The GO/NO-GO call + executable plan live in
+[`docs/architecture/ambient-voice-migration-plan.md`](../architecture/ambient-voice-migration-plan.md):
+NO-GO on a full Pipecat migration now; GO on the "borrow the piece" fallback (Smart Turn
+v3 + hand-built barge-in on the existing LiveKit agent); Pipecat parked with explicit
+re-open triggers. Spike feasibility half ran 2026-07-05; live/loaded measurements
+(M1/M3/M4/M6) close during the plan's Phase A3 window. See
 [`## Spike results`](#spike-results-2026-07-05) below and
 [`docs/architecture/ambient-voice-pipecat-spike.md`](../architecture/ambient-voice-pipecat-spike.md).
 The frictions found **narrow the recommendation** (see Verdict). Nothing live changed.
