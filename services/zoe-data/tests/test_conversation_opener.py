@@ -194,3 +194,37 @@ def test_warm_livekit_without_running_loop_is_best_effort(monkeypatch):
     result = maybe_conversation_opener("talk to me", _ENABLED_ENV)
     assert result is not None
     assert result["conversation_mode"] is True
+
+
+# ── Conversation ENDERS (turn_stream lane) ────────────────────────────────────
+# Honoured only when the daemon reports an active conversation; fullmatch after
+# normalization so long sentences containing the words never fire.
+
+from conversation_opener import is_conversation_ender, next_ender_ack
+
+
+@pytest.mark.parametrize("text", [
+    "stop", "Stop.", "stop talking", "that's all", "thats all", "that's it",
+    "that's enough", "we're done", "I'm done", "goodbye", "bye", "Bye, Zoe!",
+    "end conversation", "no that's all", "thanks, that's all",
+])
+def test_ender_phrases_fire(text):
+    assert is_conversation_ender(text) is True, f"{text!r} should end a conversation"
+
+
+@pytest.mark.parametrize("text", [
+    "stop the music",                      # command, not an ender
+    "that's all the milk we have",         # sentence containing the words
+    "goodbye parties are fun",
+    "don't stop",
+    "add stop to my list",
+    "",
+])
+def test_non_ender_phrases_do_not_fire(text):
+    assert is_conversation_ender(text) is False, f"{text!r} must NOT end a conversation"
+
+
+def test_ender_ack_rotates():
+    seen = {next_ender_ack() for _ in range(6)}
+    assert len(seen) >= 2                   # rotation across defaults
+    assert all(s.strip() for s in seen)
