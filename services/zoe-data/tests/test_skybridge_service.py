@@ -15,6 +15,16 @@ from card_contract import validate_component  # noqa: E402
 from skybridge_service import classify_skybridge_intent, resolve_skybridge_request  # noqa: E402
 
 
+def _freeze_today(monkeypatch, frozen: date = date(2026, 6, 11)) -> None:
+    """Freeze the service's clock seam.
+
+    ``skybridge_service`` reads "today" through ``today_for_zoe_tz`` (imported
+    into its module namespace), so that is the name to patch — patching the
+    ``date`` class does nothing to the clock.
+    """
+    monkeypatch.setattr(skybridge_service, "today_for_zoe_tz", lambda: frozen)
+
+
 class Cursor:
     def __init__(self, row=None):
         self.row = row
@@ -341,12 +351,7 @@ def test_calendar_create_requires_unambiguous_bare_time():
 
 
 def test_classify_calendar_date_and_range_requests(monkeypatch):
-    class FrozenDate(date):
-        @classmethod
-        def today(cls):
-            return cls(2026, 6, 11)
-
-    monkeypatch.setattr(skybridge_service, "date", FrozenDate)
+    _freeze_today(monkeypatch)
 
     dated = classify_skybridge_intent("show me my calendar on the 17th of June")
     assert dated.domain == "calendar"
@@ -523,12 +528,7 @@ async def test_calendar_update_does_not_confirm_family_event_owned_by_someone_el
 
 @pytest.mark.asyncio
 async def test_calendar_context_add_event_refreshes_calendar_card(monkeypatch):
-    class FrozenDate(date):
-        @classmethod
-        def today(cls):
-            return cls(2026, 6, 11)
-
-    monkeypatch.setattr(skybridge_service, "date", FrozenDate)
+    _freeze_today(monkeypatch)
     context = {"intent": {"domain": "calendar"}, "cards": [{"content": {"source": "calendar_show", "start_date": "2026-06-17", "events": []}}]}
     db = FakeDb(events=[])
 
@@ -556,12 +556,7 @@ async def test_calendar_empty_state_still_returns_data_card():
 
 @pytest.mark.asyncio
 async def test_calendar_explicit_date_queries_requested_day(monkeypatch):
-    class FrozenDate(date):
-        @classmethod
-        def today(cls):
-            return cls(2026, 6, 11)
-
-    monkeypatch.setattr(skybridge_service, "date", FrozenDate)
+    _freeze_today(monkeypatch)
 
     db = FakeDb(events=[])
     result = await resolve_skybridge_request("show my calendar on the 17th of June", "family-admin", db=db)
@@ -579,12 +574,7 @@ async def test_calendar_explicit_date_queries_requested_day(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_calendar_happening_this_week_queries_range(monkeypatch):
-    class FrozenDate(date):
-        @classmethod
-        def today(cls):
-            return cls(2026, 6, 11)
-
-    monkeypatch.setattr(skybridge_service, "date", FrozenDate)
+    _freeze_today(monkeypatch)
 
     db = FakeDb(events=[])
     result = await resolve_skybridge_request("what is happening this week", "family-admin", db=db)
