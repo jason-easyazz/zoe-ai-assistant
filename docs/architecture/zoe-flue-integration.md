@@ -325,8 +325,12 @@ correctness, and latency.
 **Honest read:** the gate does NOT show flue beating prod on answer quality — it
 shows flue *competitive* on quality (within a couple of points, prod slightly
 ahead once the confound is removed) and *clearly faster*. A clean quality
-re-run needs a real authenticated test user on both sides (blocked here by
-zoe-auth provisioning). Full record: `labs/flue-zoe-brain/parity/` scratch.
+re-run needs a real authenticated test user on both sides — now unblocked:
+`scripts/maintenance/provision_parity_test_user.py` (operator-run) mints
+`parity-gate-user` through AuthService with demo-user guardrails; log in via
+`POST :8002/api/auth/login` and pass the session as `X-Session-ID` on the prod
+side, same user through the Seam-A identity envelope on the flue side. Full
+record: `labs/flue-zoe-brain/parity/` scratch.
 
 ### Cutover — DONE 2026-07-03 (operator-authorized), fix-after in progress
 
