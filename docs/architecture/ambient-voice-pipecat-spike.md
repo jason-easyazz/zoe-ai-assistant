@@ -1,6 +1,6 @@
 ---
 type: spike-plan
-status: decided (2026-07-06) — feasibility half run 2026-07-05; verdict converted to a decision in ambient-voice-migration-plan.md (NO-GO Pipecat-now / GO fallback); remaining live measurements fold into that plan's Phase A3
+status: decided + executed (2026-07-06) — feasibility half run 2026-07-05; NO-GO Pipecat-now / GO fallback, shipped in #1051 (barge-in + Smart Turn v3 on the LiveKit agent, prod flags ON); remaining M3/M4 measurements tracked as samantha-evolution-plan.md W1.4
 owner: ambient-voice (VISION pillar 2)
 decides: docs/adr/ADR-ambient-voice-framework.md
 ---

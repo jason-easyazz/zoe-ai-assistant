@@ -2,12 +2,14 @@
 
 ## Status
 
-**Decided 2026-07-06 — fallback-first.** The GO/NO-GO call + executable plan live in
-[`docs/architecture/ambient-voice-migration-plan.md`](../architecture/ambient-voice-migration-plan.md):
-NO-GO on a full Pipecat migration now; GO on the "borrow the piece" fallback (Smart Turn
-v3 + hand-built barge-in on the existing LiveKit agent); Pipecat parked with explicit
-re-open triggers. Spike feasibility half ran 2026-07-05; live/loaded measurements
-(M1/M3/M4/M6) close during the plan's Phase A3 window. See
+**Decided 2026-07-06 — fallback-first — and EXECUTED.** NO-GO on a full Pipecat
+migration now; GO on the "borrow the piece" fallback — **shipped in #1051** (Silero VAD
+barge-in + Smart Turn v3 endpointing on the existing LiveKit agent), real-voice verified
+in #1081 (barge gate 6/6), prod flags ON (#1082). Pipecat stays parked with explicit
+re-open triggers (see the Samantha evolution plan §2,
+[`docs/architecture/samantha-evolution-plan.md`](../architecture/samantha-evolution-plan.md)).
+Spike feasibility half ran 2026-07-05; M1 (barge quality) is verified on real voice; the
+remaining M3 latency / M4 RAM measurements are tracked as the plan's W1.4. See
 [`## Spike results`](#spike-results-2026-07-05) below and
 [`docs/architecture/ambient-voice-pipecat-spike.md`](../architecture/ambient-voice-pipecat-spike.md).
 The frictions found **narrow the recommendation** (see Verdict). Nothing live changed.
