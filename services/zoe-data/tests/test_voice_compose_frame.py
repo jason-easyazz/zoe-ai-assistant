@@ -59,3 +59,12 @@ async def test_compose_failure_returns_none(monkeypatch):
         raise RuntimeError("model down")
     monkeypatch.setattr("ui_compose.compose_card", boom)
     assert await _voice_compose_cards_frame("q", "a", "u") is None
+
+
+@pytest.mark.asyncio
+async def test_compose_none_returns_none(monkeypatch):
+    monkeypatch.setenv("ZOE_COMPOSE_UI", "1")
+    async def none_compose(*a, **k):
+        return None  # compose_card's own graceful-failure contract
+    monkeypatch.setattr("ui_compose.compose_card", none_compose)
+    assert await _voice_compose_cards_frame("q", "a", "u") is None

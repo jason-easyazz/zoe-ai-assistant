@@ -2720,7 +2720,10 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
             # delay speech. The panel renders via the deployed `compose` entry.
             if not _ws_cancelled[0] and _stream_llm_reply:
                 _cframe = await _voice_compose_cards_frame(message_text, _stream_llm_reply, user_id)
-                if _cframe:
+                # Re-check cancel AFTER the compose window (a cancel can arrive
+                # during the up-to-8s compose await; the card must not land on a
+                # turn the user already cancelled).
+                if _cframe and not _ws_cancelled[0]:
                     await websocket.send_json(_cframe)
 
             await websocket.send_json({"type": "done"})
