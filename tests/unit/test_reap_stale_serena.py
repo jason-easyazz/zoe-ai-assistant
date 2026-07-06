@@ -8,6 +8,11 @@ import importlib.util
 import pathlib
 import sys
 
+import pytest
+# Slim-dep green: opts into the GitHub-runner fast lane (see tests/AGENTS.md).
+pytestmark = pytest.mark.ci_safe
+
+
 _SCRIPT = (
     pathlib.Path(__file__).resolve().parents[2]
     / "scripts" / "maintenance" / "reap_stale_serena.py"

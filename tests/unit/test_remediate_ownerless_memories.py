@@ -10,6 +10,10 @@ import pytest
 from memory_service import _memory_visible_to_user
 from scripts.maintenance import remediate_ownerless_memories as remediate
 
+# Slim-dep green: opts into the GitHub-runner fast lane (see tests/AGENTS.md).
+pytestmark = pytest.mark.ci_safe
+
+
 
 class FakeCollection:
     def __init__(self, rows):

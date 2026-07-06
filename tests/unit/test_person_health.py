@@ -12,6 +12,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../services/zoe-d
 
 from person_health import calc_health_score, _next_occurrence
 
+# Slim-dep green: opts into the GitHub-runner fast lane (see tests/AGENTS.md).
+pytestmark = pytest.mark.ci_safe
+
+
 
 class TestNextOccurrence:
     def test_future_this_year(self):
