@@ -1,0 +1,100 @@
+"""zoe-compose renderer — behavioral node-harness tests (escaping, actions, integration)."""
+import json
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+UI = ROOT / "zoe-ui" / "dist" / "touch"
+
+
+def _run_node(harness_path, *args):
+    node = shutil.which("node") or shutil.which("nodejs")
+    if not node:
+        pytest.skip("Node.js is not installed on this host")
+    proc = subprocess.run([node, str(harness_path), *map(str, args)],
+                          check=True, capture_output=True, text=True)
+    return json.loads(proc.stdout)
+
+
+def test_compose_renderer_escapes_and_wires_actions(tmp_path):
+    harness = tmp_path / "compose_harness.cjs"
+    harness.write_text(
+        """
+const fs = require('fs');
+const vm = require('vm');
+const sandbox = { window: {} };
+vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(process.argv[2], 'utf8'), sandbox);
+const Z = sandbox.window.ZoeCompose;
+const tree = { component: 'Stack', children: [
+  { component: 'Text', text: 'Hello <script>alert(1)</script>', role: 'title' },
+  { component: 'Row', children: [
+    { component: 'Stat', value: '19\\u00b0', label: 'Geraldton <b>x</b>' },
+    { component: 'Badge', text: 'Clear', tone: 'success' }
+  ]},
+  { component: 'ListRow', title: 'milk "quoted"', detail: 'dairy', variant: 'check', checked: true },
+  { component: 'Progress', value: 62, label: 'Day' },
+  { component: 'Image', src: 'https://evil.example/x.png', alt: 'nope' },
+  { component: 'Image', src: '/touch/img/ok.png', alt: 'ok' },
+  { component: 'ActionButton', action: { label: 'Show <em>week</em>', query: 'show my week', kind: 'primary' } },
+  { component: 'TotallyFake', text: 'nope' }
+]};
+const html = Z.render(tree);
+process.stdout.write(JSON.stringify({
+  no_raw_script: !html.includes('<script>alert(1)</script>'),
+  escaped_script: html.includes('&lt;script&gt;'),
+  escaped_label_markup: !html.includes('<em>week</em>') && html.includes('&lt;em&gt;week&lt;/em&gt;'),
+  action_attrs: /zx-action[^>]*data-sky-action=\\"query\\"[^>]*data-query=\\"show my week\\"/.test(html),
+  primary_kind: html.includes('zx-primary'),
+  foreign_image_dropped: !html.includes('evil.example'),
+  same_origin_image_kept: html.includes('/touch/img/ok.png'),
+  checked_row: html.includes('zx-checked'),
+  progress_width: html.includes('width:62%'),
+  unknown_inert: html.includes('zx-unknown') && html.includes('TotallyFake'),
+  quotes_escaped: html.includes('milk &quot;quoted&quot;')
+}));
+""",
+        encoding="utf-8",
+    )
+    checks = _run_node(harness, UI / "js" / "zoe-compose.js")
+    assert all(checks.values()), f"compose renderer failed: {checks}"
+
+
+def test_compose_card_renders_through_skybridge_registry(tmp_path):
+    harness = tmp_path / "integration_harness.cjs"
+    harness.write_text(
+        """
+const fs = require('fs');
+const vm = require('vm');
+const sandbox = { window: {} };
+vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(process.argv[2], 'utf8'), sandbox); // zoe-compose first
+vm.runInContext(fs.readFileSync(process.argv[3], 'utf8'), sandbox); // then renderer
+const R = sandbox.window.SkybridgeRenderer;
+const card = { component: 'compose', props: { title: 'Morning', tree: {
+  component: 'Stack', children: [ { component: 'Text', text: 'composed!', role: 'body' } ]
+} } };
+const html = R.render(card);
+const missing = R.render({ component: 'compose', props: { title: 'X', summary: 'fallback body' } });
+process.stdout.write(JSON.stringify({
+  card_shell: html.includes('sky-card'),
+  compose_tone: html.includes('compose-card'),
+  tree_rendered: html.includes('composed!') && html.includes('zx-text'),
+  fallback_is_status: missing.includes('fallback body') && !missing.includes('zx-root')
+}));
+""",
+        encoding="utf-8",
+    )
+    checks = _run_node(harness, UI / "js" / "zoe-compose.js", UI / "js" / "skybridge-renderer.js")
+    assert all(checks.values()), f"compose integration failed: {checks}"
+
+
+def test_skybridge_page_loads_compose_assets():
+    html = (UI / "skybridge.html").read_text(encoding="utf-8")
+    assert "cards/compose.css" in html
+    assert "zoe-compose.js" in html
+    # Load order: the catalog renderer must be available before skybridge-renderer.
+    assert html.index("zoe-compose.js") < html.index("js/skybridge-renderer.js?")

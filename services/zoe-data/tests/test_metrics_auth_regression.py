@@ -7,6 +7,26 @@ import pytest
 from fastapi.testclient import TestClient
 
 
+@pytest.fixture(autouse=True)
+def _restore_swapped_modules():
+    """Put the ORIGINAL auth/main module objects back after each test.
+
+    _load_main_with_internal_token pops + reloads both; without restoring the
+    saved identities, every later-collected module that resolves ``auth``/
+    ``main`` gets a different object than collection-time importers captured —
+    the same dependency_overrides-never-match leak class bisected to
+    test_auth_unauthenticated on 2026-07-06 (this file leaks identically on the
+    self-hosted full-dir lane).
+    """
+    saved = {name: sys.modules.get(name) for name in ("auth", "main")}
+    yield
+    for name, mod in saved.items():
+        if mod is not None:
+            sys.modules[name] = mod
+        else:
+            sys.modules.pop(name, None)
+
+
 def _load_main_with_internal_token(monkeypatch):
     monkeypatch.delenv("ZOE_INTERNAL_TOKEN", raising=False)
     for module_name in ("auth", "main"):

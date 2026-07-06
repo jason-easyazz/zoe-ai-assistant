@@ -323,30 +323,58 @@ async def require_internal_token(request: Request) -> None:
     )
 
 
+def _has_valid_internal_token(request: Request) -> bool:
+    """True only when ZOE_INTERNAL_TOKEN is configured AND the request carries it.
+
+    Deliberately STRICTER than _is_internal_request: loopback alone does not
+    qualify. Acting-as-another-user is the highest-privilege internal capability,
+    and loopback is reachable by any SSRF'd or compromised local process — the
+    residual the 2026-07-04 review flagged. Unset token ⇒ always False (the
+    override is disabled until the operator provisions the secret).
+    """
+    if not _ZOE_INTERNAL_TOKEN:
+        return False
+    provided = request.headers.get("X-Internal-Token", "")
+    return bool(provided) and hmac.compare_digest(provided, _ZOE_INTERNAL_TOKEN)
+
+
 async def resolve_acting_user(request: Request) -> dict:
-    """get_current_user, plus a TRUSTED internal-caller identity override.
+    """get_current_user, plus a TOKEN-PROVEN internal-caller identity override.
 
-    A trusted internal caller (loopback OR valid X-Internal-Token — the same
-    boundary as require_internal_token) MAY specify the acting user via the
-    ``X-Zoe-User-Id`` header. This lets the Telegram bridge forward a verified,
-    already-resolved Zoe user_id so the turn runs as that real user (with their
-    memory) instead of guest.
+    An internal caller that presents a valid ``X-Internal-Token`` MAY specify
+    the acting user via the ``X-Zoe-User-Id`` header. This lets the Telegram
+    bridge forward a verified, already-resolved Zoe user_id so the turn runs as
+    that real user (with their memory) instead of guest.
 
-    SECURITY: the override is applied ONLY when _is_internal_request() is true.
-    A public/browser request that sets X-Zoe-User-Id is ignored entirely and
-    falls through to normal session/guest auth — it can never impersonate a user
-    this way. Session auth still runs for internal callers that do NOT send the
-    header, so existing loopback session flows are unchanged.
+    SECURITY: the override requires the shared secret — being loopback is NOT
+    enough (unlike require_internal_token's boundary). A loopback SSRF or
+    compromised local process must not inherit impersonation. If
+    ZOE_INTERNAL_TOKEN is unset, the override is disabled entirely and we log
+    why, so a missing provisioning step surfaces in the journal instead of as
+    silently-degraded Telegram identity. A public/browser request that sets
+    X-Zoe-User-Id is ignored and falls through to normal session/guest auth.
+    Session auth still runs for internal callers that do NOT send the header,
+    so existing loopback session flows are unchanged.
     """
     override = request.headers.get("X-Zoe-User-Id", "").strip()
-    if override and _is_internal_request(request):
-        return {
-            "user_id": override,
-            # A forwarded, pre-resolved real user acts as a normal member; the
-            # bridge is not an admin console. Downstream role checks still apply.
-            "role": "user",
-            "username": override,
-            "permissions": [],
-        }
+    if override:
+        if _has_valid_internal_token(request):
+            return {
+                "user_id": override,
+                # A forwarded, pre-resolved real user acts as a normal member;
+                # the bridge is not an admin console. Downstream role checks
+                # still apply.
+                "role": "user",
+                "username": override,
+                "permissions": [],
+            }
+        if _is_internal_request(request):
+            logger.warning(
+                "X-Zoe-User-Id override DENIED for internal caller: %s — "
+                "loopback alone no longer grants impersonation; the caller must "
+                "send X-Internal-Token matching ZOE_INTERNAL_TOKEN%s",
+                override,
+                "" if _ZOE_INTERNAL_TOKEN else " (which is NOT provisioned on this host)",
+            )
     # No trusted override → standard session / device-token / guest resolution.
     return await get_current_user(request)
