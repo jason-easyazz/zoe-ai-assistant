@@ -2733,6 +2733,28 @@ async def chat_stream_generator(
                         ),
                     )
                 message_open = True
+                # ── Generative UI (PR-B, flag-gated): if the brain answered with
+                # text only (no domain card was emitted this turn) compose a card
+                # from the answer via the catalog grammar. Runs AFTER the full text
+                # has streamed, so it can never delay tokens; any failure means
+                # simply no card (ui_compose returns None, never raises).
+                if not escalate_signal and full_response.strip():
+                    try:
+                        from ui_compose import compose_card, compose_enabled
+
+                        if compose_enabled() and not _brain_card_domains:
+                            _composed = await compose_card(
+                                message_for_processing, full_response, user_id=user_id
+                            )
+                            if _composed:
+                                yield emit(CustomEvent(
+                                    name="zoe.ui_component",
+                                    value={"type": "compose",
+                                           "data": {"action": "Composed view"},
+                                           "card": _composed},
+                                ))
+                    except Exception as _ce:  # noqa: BLE001 — additive, never break the turn
+                        logger.debug("compose hook failed (non-fatal): %s", _ce)
                 if escalate_signal:
                     is_background = escalate_signal.startswith("__ESCALATE_BG__:")
                     is_hermes = escalate_signal.startswith("__ESCALATE_HERMES__:")
