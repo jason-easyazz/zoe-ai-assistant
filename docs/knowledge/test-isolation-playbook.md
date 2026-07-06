@@ -76,14 +76,20 @@ swallowed by `capsys` in passing tests, which hides earlier writers:
 
 ```python
 # conftest-style plugin, load with -p; PYTHONPATH to its dir
+_state = {"test": "<collection>"}   # mutable container — a bare module global
+                                    # assigned inside the hook would need
+                                    # `global` and is easy to get wrong
 _orig = os.environ.__class__.__setitem__
 def _spy(self, k, v):
     if k == "POSTGRES_URL":
         with open(LOG, "a") as f:
-            f.write(f"SET during {CUR_TEST}\n" + "".join(traceback.format_stack(limit=9)))
+            f.write(f"SET during {_state['test']}\n"
+                    + "".join(traceback.format_stack(limit=9)))
     return _orig(self, k, v)
 os.environ.__class__.__setitem__ = _spy
-def pytest_runtest_setup(item): CUR_TEST = item.nodeid   # track current test
+
+def pytest_runtest_setup(item):
+    _state["test"] = item.nodeid    # track current test
 ```
 
 The same shape works for `sys.modules` (wrap `__setitem__` on a dict subclass)
