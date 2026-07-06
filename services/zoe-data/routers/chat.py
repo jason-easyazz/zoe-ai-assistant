@@ -1395,7 +1395,7 @@ INTENT_LABELS = {
 async def run_openclaw_agent(
     message: str,
     session_id: str,
-    user_id: str = "family-admin",
+    user_id: str = "guest",  # fail-open to least-privilege, not admin (#1021/#1032 posture)
     *,
     user_role: str | None = None,
     username: str | None = None,
@@ -1479,7 +1479,7 @@ async def _cancel_if_pending(task: asyncio.Task) -> None:
         logger.debug("agent task cancelled on stream close", exc_info=True)
 
 
-async def chat_inject_background(user_message: str, assistant_response: str, intent_name: str, user_id: str = "family-admin", session_id: str = "web"):
+async def chat_inject_background(user_message: str, assistant_response: str, intent_name: str, user_id: str = "guest", session_id: str = "web"):
     """Optionally mirror an intent summary into OpenClaw for legacy debugging."""
     if os.environ.get("ZOE_MIRROR_INTENTS_TO_OPENCLAW", "false").lower() != "true":
         return

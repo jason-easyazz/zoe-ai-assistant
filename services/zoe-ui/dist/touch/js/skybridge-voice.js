@@ -36,6 +36,7 @@
             this.stopped = true;
             this.silenceThreshold = 0.01;
             this.silenceMs = 1600;
+            this.pendingConversationMode = false;
         }
 
         emit(event) {
@@ -262,10 +263,41 @@
                 this.emit({ type: 'state', state: 'listening' });
             } else if (type === 'done') {
                 this.serverBusy = false;
+                if (msg.conversation_mode === true) this.enterConversationMode();
                 this.emit({ type: 'done' });
             } else if (type === 'text') {
                 this.emit({ type: 'transcript', role: 'zoe', text: msg.content || msg.text || '' });
             }
+        }
+
+        // ── Conversation-session opener: mode switch ────────────────────────
+        // When a server response carries conversation_mode:true (the "let's
+        // talk" opener fast-path), a local-mode session upgrades to the
+        // continuous LiveKit mode once the ack audio finishes playing. In
+        // livekit mode the session is already continuous — nothing to do.
+        enterConversationMode() {
+            if (this.stopped || this.mode === 'livekit') return;
+            if (this.speaking) {
+                this.pendingConversationMode = true;
+                return;
+            }
+            this.switchToLiveKit();
+        }
+
+        switchToLiveKit() {
+            this.pendingConversationMode = false;
+            if (this.stopped || this.mode === 'livekit') return;
+            this.mode = 'livekit';
+            clearTimeout(this.reconnectTimer);
+            if (this.ws) {
+                const ws = this.ws;
+                this.ws = null;
+                ws.onclose = null; // deliberate switch, not a disconnect error
+                try { ws.close(); } catch (_) {}
+            }
+            // Reuse the existing connect logic — it already falls back to
+            // local mode by itself when LiveKit is unavailable.
+            this.connectLiveKit();
         }
 
         async sendText(message) {
@@ -415,6 +447,7 @@
                     if (this.currentAudio === audio) this.currentAudio = null;
                     this.speaking = false;
                     this.emit({ type: 'state', state: 'ambient' });
+                    if (this.pendingConversationMode) this.switchToLiveKit();
                 };
                 audio.onerror = audio.onended;
                 audio.play().catch(audio.onended);
