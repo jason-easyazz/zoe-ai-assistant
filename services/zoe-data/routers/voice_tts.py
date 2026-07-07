@@ -4265,9 +4265,9 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     # Delegate LLM + per-sentence TTS to the existing streaming pipeline.
     # (voice_command's stream generator records the downstream llm_first_token /
     # tts_first_byte / total stage metrics + a path="command" turn count.)
-    # Launch the brain WITHOUT awaiting: voice_command does its tier routing /
-    # brain work BEFORE returning (measured live: 5-11s on chat turns, with the
-    # stream only starting afterwards). Racing it as a task lets the response
+    # Launch the brain WITHOUT awaiting it here: voice_command does its tier
+    # routing / brain work BEFORE returning (measured live: 5-11s on chat turns,
+    # with the stream only starting afterwards). Racing it as a task lets the response
     # begin immediately — and lets the thinking filler actually speak while the
     # brain is still working, instead of timing an already-finished wait.
     sub_task = asyncio.ensure_future(voice_command(command_payload, caller=caller, stream=True, db=db))
