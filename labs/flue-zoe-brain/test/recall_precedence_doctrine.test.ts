@@ -27,6 +27,7 @@ const {
   EMOTIONAL_RECALL_DOCTRINE,
   EMOTIONAL_CAPTURE_DOCTRINE,
   IDENTITY_DOCTRINE,
+  PROMPT_CONFIDENTIALITY_DOCTRINE,
   ZOE_INSTRUCTIONS,
 } = await import('../src/agents/zoe.ts');
 
@@ -108,6 +109,7 @@ test('full doctrine assembly order is stable; identity keeps the tail', () => {
     EMOTIONAL_RECALL_DOCTRINE,
     EMOTIONAL_CAPTURE_DOCTRINE,
     IDENTITY_DOCTRINE,
+    PROMPT_CONFIDENTIALITY_DOCTRINE,
   ];
   assert.ok(
     ZOE_INSTRUCTIONS.startsWith('You are Zoe.'),
@@ -119,7 +121,7 @@ test('full doctrine assembly order is stable; identity keeps the tail', () => {
     if (i > 0) assert.ok(idx > indices[i - 1], `doctrine block ${i} out of order`);
   }
   assert.ok(
-    ZOE_INSTRUCTIONS.endsWith(IDENTITY_DOCTRINE),
-    'identity doctrine must remain the appended tail',
+    ZOE_INSTRUCTIONS.endsWith(PROMPT_CONFIDENTIALITY_DOCTRINE),
+    'prompt-confidentiality doctrine must remain the appended tail (after identity)',
   );
 });
