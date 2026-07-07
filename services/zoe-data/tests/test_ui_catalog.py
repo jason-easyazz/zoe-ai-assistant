@@ -196,3 +196,44 @@ def test_glyph_size_and_tone():
 def test_invalid_glyph_size_rejected():
     with pytest.raises(CardContractError):
         validate_component_tree(_card([{"component": "Glyph", "name": "star", "size": "huge"}]))
+
+
+# ── long-tail shapes: Steps (auto-numbered) + Compare (labeled options) ──
+
+def test_steps_and_step_validate():
+    tree = _card([{"component": "Steps", "children": [
+        {"component": "Step", "title": "Act fast", "detail": "Blot, don't rub."},
+        {"component": "Step", "title": "Apply solution", "detail": "Vinegar + dish soap."},
+    ]}])
+    out = validate_component_tree(tree)
+    steps = out["children"][0]
+    assert steps["component"] == "Steps" and len(steps["children"]) == 2
+    assert steps["children"][0]["component"] == "Step"
+
+
+def test_step_requires_title():
+    with pytest.raises(CardContractError):
+        validate_component_tree(_card([{"component": "Steps", "children": [
+            {"component": "Step", "detail": "no title"}]}]))
+
+
+def test_compare_and_option_validate():
+    tree = _card([{"component": "Compare", "children": [
+        {"component": "Option", "label": "Drive", "value": "4h", "caption": "Flexible", "tone": "warm", "glyph": "home", "status": "Cheaper"},
+        {"component": "Option", "label": "Fly", "value": "1h", "caption": "Fastest", "tone": "cool"},
+    ]}])
+    out = validate_component_tree(tree)
+    comp = out["children"][0]
+    assert comp["component"] == "Compare"
+    assert comp["children"][0]["label"] == "Drive" and comp["children"][0]["status"] == "Cheaper"
+
+
+def test_option_requires_label():
+    with pytest.raises(CardContractError):
+        validate_component_tree(_card([{"component": "Compare", "children": [
+            {"component": "Option", "value": "no label"}]}]))
+
+
+def test_steps_is_container_requires_children():
+    with pytest.raises(CardContractError):
+        validate_component_tree(_card([{"component": "Steps"}]))

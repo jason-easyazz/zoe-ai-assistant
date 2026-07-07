@@ -118,6 +118,25 @@
                 '<span class="zx-listrow-main"><strong>' + escapeHtml(n.title) + '</strong>' +
                 (n.detail ? '<em>' + escapeHtml(n.detail) + '</em>' : '') + '</span></div>';
         },
+        Steps: function (n, kids) {
+            return '<ol class="zx-steps">' + kids + '</ol>';
+        },
+        Step: function (n) {
+            return '<li class="zx-step"><span class="zx-step-body"><strong>' + escapeHtml(n.title) + '</strong>' +
+                (n.detail ? '<em>' + escapeHtml(n.detail) + '</em>' : '') + '</span></li>';
+        },
+        Compare: function (n, kids) {
+            return '<div class="zx-compare">' + kids + '</div>';
+        },
+        Option: function (n) {
+            return '<div class="zx-option' + toneClass(n.tone) + '">' +
+                (n.glyph ? '<span class="zx-option-glyph">' + glyphSvg(n.glyph, 26) + '</span>' : '') +
+                '<span class="zx-option-label">' + escapeHtml(n.label) + '</span>' +
+                (n.value ? '<span class="zx-option-value">' + escapeHtml(n.value) + '</span>' : '') +
+                (n.caption ? '<span class="zx-option-caption">' + escapeHtml(n.caption) + '</span>' : '') +
+                (n.status ? '<span class="zx-badge zx-tone-accent zx-option-status">' + escapeHtml(n.status) + '</span>' : '') +
+                '</div>';
+        },
         Progress: function (n) {
             var v = Math.max(0, Math.min(100, Number(n.value) || 0));
             return '<div class="zx-progress"' + (n.label ? '' : ' aria-label="progress"') + '>' +

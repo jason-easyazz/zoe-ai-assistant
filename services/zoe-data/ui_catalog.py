@@ -61,6 +61,17 @@ CATALOG: dict[str, dict[str, Any]] = {
                            "checked": {"type": "boolean"}, "variant": {"enum": ["plain", "check"]},
                            "icon": {"enum": _GLYPHS}},
                  "required": ["title"]},
+    # Steps — an auto-numbered sequence (how-tos, recipes, workouts). Children
+    # are Step items; numbering is automatic (CSS counter).
+    "Steps": {"container": True, "props": {}},
+    "Step": {"props": {"title": {"type": "string"}, "detail": {"type": "string"}}, "required": ["title"]},
+    # Compare — side-by-side labeled options (drive vs fly, plan A vs B). Children
+    # are Option columns; each can carry its own tone/glyph/status.
+    "Compare": {"container": True, "props": {}},
+    "Option": {"props": {"label": {"type": "string"}, "value": {"type": "string"},
+                          "caption": {"type": "string"}, "glyph": {"enum": _GLYPHS},
+                          "tone": {"enum": _TONES}, "status": {"type": "string"}},
+                "required": ["label"]},
     "Progress": {"props": {"value": {"type": "number", "minimum": 0, "maximum": 100},
                             "label": {"type": "string"}}, "required": ["value"]},
     "Glyph": {"props": {"name": {"enum": _GLYPHS}, "size": {"enum": _GLYPH_SIZES}, "tone": {"enum": _TONES}}, "required": ["name"]},
