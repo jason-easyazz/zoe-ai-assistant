@@ -10,6 +10,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 import httpx
 from database import init_db
 from gemma_endpoint import gemma_base
+from typed_env import env_float, env_int, env_list, env_str
 from push import broadcaster
 from auth import require_internal_token
 from routers import (
@@ -80,10 +81,9 @@ _READINESS_CACHE_LOCK = asyncio.Lock()
 
 
 def _ws_idle_timeout_seconds() -> float:
-    try:
-        value = float(os.environ.get("ZOE_WS_IDLE_TIMEOUT_SECONDS", "120"))
-    except (TypeError, ValueError):
-        return 120.0
+    # typed_env (Wave-4 W4-T4): absent/empty/invalid -> default, same as the old
+    # local try/except, + typed_env's warn-once on invalid values.
+    value = env_float("ZOE_WS_IDLE_TIMEOUT_SECONDS", 120.0)
     if value <= 0:
         return 120.0
     return value
@@ -102,10 +102,9 @@ def _canonical_gemma_model(model_id: str) -> bool:
 
 
 def _env_float(name: str, default: float) -> float:
-    try:
-        return float(os.environ.get(name, str(default)))
-    except (TypeError, ValueError):
-        return default
+    # Delegates to typed_env (Wave-4 W4-T4). Same absent/empty/invalid -> default
+    # semantics as the old local try/except, + typed_env's warn-once on invalid.
+    return env_float(name, default)
 
 
 async def _check_brain_ready(timeout_s: float = 2.0) -> dict:
@@ -165,7 +164,7 @@ async def _check_stt_ready() -> dict:
 async def _check_tts_ready(timeout_s: float = 2.0) -> dict:
     from routers import voice_tts
 
-    mode = os.environ.get("ZOE_TTS_MODE", "hybrid").strip().lower() or "hybrid"
+    mode = env_str("ZOE_TTS_MODE", "hybrid").lower()
     sidecar_url = os.environ.get("ZOE_KOKORO_SIDECAR_URL", "http://127.0.0.1:10201").rstrip("/")
     detail: dict = {
         "ok": False,
@@ -1075,27 +1074,13 @@ async def lifespan(app: FastAPI):
         except Exception as _log_exc:  # pragma: no cover - logging setup must never break the loop
             logger.warning("multica_poll: could not attach poll-loop file log: %s", _log_exc)
         _last_worktree_prune = 0.0
-        try:
-            _prune_interval_s = float(os.environ.get("ZOE_WORKTREE_PRUNE_INTERVAL_S", "86400") or "86400")
-        except ValueError:
-            logger.warning(
-                "multica_poll: invalid ZOE_WORKTREE_PRUNE_INTERVAL_S=%r; using 86400",
-                os.environ.get("ZOE_WORKTREE_PRUNE_INTERVAL_S"),
-            )
-            _prune_interval_s = 86400.0
+        _prune_interval_s = env_float("ZOE_WORKTREE_PRUNE_INTERVAL_S", 86400.0)
         # Cadence when dispatch is paused. The per-issue chain reconcile below
         # (poll_ref → worktree+git ops) costs ~30s CPU and a multi-GB transient
         # allocation each pass; running it every 30s while nothing is being
         # dispatched is pure waste. Poll every 30s when active, every
         # ZOE_MULTICA_PAUSED_POLL_S (default 300s) when paused.
-        try:
-            _paused_poll_s = float(os.environ.get("ZOE_MULTICA_PAUSED_POLL_S", "300") or "300")
-        except ValueError:
-            logger.warning(
-                "multica_poll: invalid ZOE_MULTICA_PAUSED_POLL_S=%r; using 300",
-                os.environ.get("ZOE_MULTICA_PAUSED_POLL_S"),
-            )
-            _paused_poll_s = 300.0
+        _paused_poll_s = env_float("ZOE_MULTICA_PAUSED_POLL_S", 300.0)
         _ACTIVE_POLL_S = 30.0
         _pause_check_warned = False
         # Bind the typed outage exception once so the loop-level handler can tell a
@@ -1213,18 +1198,8 @@ async def lifespan(app: FastAPI):
                         # Bound every chain poll and reclaim zombie in_progress
                         # chains, so one dead executor ref can neither wedge the
                         # loop nor jam the single lane indefinitely.
-                        try:
-                            _poll_timeout = float(
-                                os.environ.get("ZOE_MULTICA_POLL_REF_TIMEOUT_S", "20") or "20"
-                            )
-                        except ValueError:
-                            _poll_timeout = 20.0
-                        try:
-                            _stale_ip_hours = float(
-                                os.environ.get("ZOE_MULTICA_STALE_IN_PROGRESS_HOURS", "6") or "6"
-                            )
-                        except ValueError:
-                            _stale_ip_hours = 6.0
+                        _poll_timeout = env_float("ZOE_MULTICA_POLL_REF_TIMEOUT_S", 20.0)
+                        _stale_ip_hours = env_float("ZOE_MULTICA_STALE_IN_PROGRESS_HOURS", 6.0)
                         _chain_cache: dict[str, dict] = {}
 
                         async def _poll_chain(_issue: dict) -> dict:
@@ -1252,10 +1227,7 @@ async def lifespan(app: FastAPI):
                         # Throttle first-dispatch: cap new chains per cycle so a
                         # wave of assigned todos can't spawn N concurrent chains
                         # (mirrors the compatibility sync limit / kanban.max_in_progress).
-                        try:
-                            _wh_limit = int(os.environ.get("ZOE_MULTICA_POLL_DISPATCH_LIMIT", "1") or "1")
-                        except ValueError:
-                            _wh_limit = 1
+                        _wh_limit = env_int("ZOE_MULTICA_POLL_DISPATCH_LIMIT", 1)
                         if (
                             _wh_limit > 0
                             and os.environ.get("ZOE_MULTICA_AUTO_ADMIT", "false").lower() == "true"
@@ -1428,12 +1400,7 @@ async def lifespan(app: FastAPI):
                         # blocked chains we probe per cycle (rotating across cycles) — probing
                         # all of them every cycle can starve admission and OOM the host.
                         if _wh_dispatched < _wh_limit:
-                            try:
-                                _blk_budget = int(
-                                    os.environ.get("ZOE_MULTICA_BLOCKED_RESUME_BUDGET", "4") or "4"
-                                )
-                            except ValueError:
-                                _blk_budget = 4
+                            _blk_budget = env_int("ZOE_MULTICA_BLOCKED_RESUME_BUDGET", 4)
                             if _blk_budget <= 0:
                                 logger.warning(
                                     "multica_poll: ZOE_MULTICA_BLOCKED_RESUME_BUDGET=%s is not "
@@ -1477,12 +1444,7 @@ async def lifespan(app: FastAPI):
                 # Read the poll timeout once per cycle (not per tracked issue). The
                 # dispatch path resolves the same env var separately; this branch may
                 # run when that block was skipped, so it keeps its own local.
-                try:
-                    _reconcile_timeout = float(
-                        os.environ.get("ZOE_MULTICA_POLL_REF_TIMEOUT_S", "20") or "20"
-                    )
-                except ValueError:
-                    _reconcile_timeout = 20.0
+                _reconcile_timeout = env_float("ZOE_MULTICA_POLL_REF_TIMEOUT_S", 20.0)
                 from multica_poll_dispatch import chain_needs_reconcile  # type: ignore[import]
 
                 for issue in issues:
@@ -1733,7 +1695,7 @@ def _self_lan_origins() -> frozenset[str]:
     ZOE_HOST_LAN_IP overrides discovery when set (multi-homed hosts).
     """
     ips: set[str] = set()
-    env_ip = (os.getenv("ZOE_HOST_LAN_IP") or "").strip()
+    env_ip = env_str("ZOE_HOST_LAN_IP")
     if env_ip:
         ips.add(env_ip)
     else:
@@ -1773,8 +1735,7 @@ def _allowed_browser_origins() -> frozenset[str]:
     CORS middleware and the WS guard read this one function, adding an origin
     here cannot leave the HTTP and WebSocket policies inconsistent.
     """
-    raw = os.getenv("ZOE_ALLOWED_WS_ORIGINS", "")
-    extra = [o.strip() for o in raw.split(",") if o.strip()]
+    extra = env_list("ZOE_ALLOWED_WS_ORIGINS")
     return frozenset(ALLOWED_ORIGINS) | _SELF_LAN_ORIGINS | frozenset(extra)
 
 
