@@ -4279,18 +4279,48 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
       # try/finally: if the client disconnects mid-stream, Starlette closes this
       # generator — without the cancel, sub_task (brain+TTS) would keep burning
       # resources for a dead connection.
+      _first_task = None
       try:
         # Lead with the transcript so the panel can show/log what was heard
         # before the first audio chunk arrives.
         yield (_json.dumps({"transcript": transcript}) + "\n").encode()
-        # ── Thinking filler: if the brain isn't done within
-        # ZOE_VOICE_FILLER_AFTER_S (1.6s), speak a short ack NOW. ──
-        sub = None
-        if _filler_enabled():
+        # ── Thinking filler: if the first REAL audio isn't ready within
+        # ZOE_VOICE_FILLER_AFTER_S (1.6s), speak a short ack NOW. The wait has
+        # two lazy boundaries: voice_command returning (some tiers do all their
+        # routing/brain work before returning) AND the first body chunk (the
+        # chat tier returns its StreamingResponse instantly and does the brain
+        # work inside the generator) — the filler must race BOTH. ──
+        _t_stream0 = time.monotonic()
+        try:
+            _after = float(os.environ.get("ZOE_VOICE_FILLER_AFTER_S", "1.6"))
+        except (TypeError, ValueError):
+            _after = 1.6
+
+        async def _filler_lines():
+            _fillers = [p for p in os.environ.get(
+                "ZOE_VOICE_FILLER_PHRASES", "Let me check.|One sec.|Hmm, let me look."
+            ).split("|") if p.strip()]
+            _phrase = random.choice(_fillers) if _fillers else "One sec."
             try:
-                _after = float(os.environ.get("ZOE_VOICE_FILLER_AFTER_S", "1.6"))
-            except (TypeError, ValueError):
-                _after = 1.6
+                _fill_audio = await _synthesize_kokoro_sidecar(_phrase)
+                if not _fill_audio:
+                    _fill_audio = await _synthesize_kokoro(_phrase)
+                if _fill_audio:
+                    logger.info("voice/turn_stream filler spoken (%r) while brain works", _phrase)
+                    return [
+                        (_json.dumps({"chunk": -1, "text": _phrase, "provider": "filler"}) + "\n").encode(),
+                        base64.b64encode(_fill_audio) + b"\n",
+                    ]
+            except Exception as _f_exc:
+                logger.debug("voice filler skipped: %s", _f_exc)
+            return []
+
+        sub = None
+        # One filler attempt per turn: gate on attempted (not spoken), or a
+        # failed synthesis in the first race would let the second race fire a
+        # too-late filler on its 0.1s floor budget.
+        _filler_attempted = False
+        if _filler_enabled():
             try:
                 sub = await asyncio.wait_for(asyncio.shield(sub_task), timeout=_after)
             except asyncio.TimeoutError:
@@ -4298,20 +4328,9 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
             except Exception:
                 sub = None  # brain failed fast — the unified error frame below reports it
             if sub is None and not sub_task.done():
-                _fillers = [p for p in os.environ.get(
-                    "ZOE_VOICE_FILLER_PHRASES", "Let me check.|One sec.|Hmm, let me look."
-                ).split("|") if p.strip()]
-                _phrase = random.choice(_fillers) if _fillers else "One sec."
-                try:
-                    _fill_audio = await _synthesize_kokoro_sidecar(_phrase)
-                    if not _fill_audio:
-                        _fill_audio = await _synthesize_kokoro(_phrase)
-                    if _fill_audio:
-                        logger.info("voice/turn_stream filler spoken (%r) while brain works", _phrase)
-                        yield (_json.dumps({"chunk": -1, "text": _phrase, "provider": "filler"}) + "\n").encode()
-                        yield base64.b64encode(_fill_audio) + b"\n"
-                except Exception as _f_exc:
-                    logger.debug("voice filler skipped: %s", _f_exc)
+                _filler_attempted = True
+                for _line in await _filler_lines():
+                    yield _line
         if sub is None:
             try:
                 sub = await sub_task
@@ -4328,7 +4347,34 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
         except Exception:
             pass
         if hasattr(sub, "body_iterator"):
-            async for chunk in sub.body_iterator:
+            _body = sub.body_iterator
+            if _filler_enabled() and not _filler_attempted:
+                # voice_command returned fast, but its generator is lazy — the
+                # brain work happens on the first pull. Race the first chunk
+                # against whatever is left of the filler budget.
+                _budget = max(0.1, _after - (time.monotonic() - _t_stream0))
+                _first_task = asyncio.ensure_future(_body.__anext__())
+                _first = None
+                _ended = False
+                try:
+                    _first = await asyncio.wait_for(asyncio.shield(_first_task), timeout=_budget)
+                except asyncio.TimeoutError:
+                    _filler_attempted = True
+                    for _line in await _filler_lines():
+                        yield _line
+                except StopAsyncIteration:
+                    _ended = True
+                if _first is None and not _ended:
+                    try:
+                        _first = await _first_task
+                    except StopAsyncIteration:
+                        _ended = True
+                _first_task = None
+                if _first is not None:
+                    yield _first
+                if _ended:
+                    return
+            async for chunk in _body:
                 yield chunk
             return
         # voice_command returns a plain dict (not a StreamingResponse) on the
@@ -4379,6 +4425,8 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
         yield (_json.dumps({"done": True, "reply": reply_text}) + "\n").encode()
 
       finally:
+        if _first_task is not None and not _first_task.done():
+            _first_task.cancel()
         if not sub_task.done():
             sub_task.cancel()
 
