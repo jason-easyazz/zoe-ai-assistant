@@ -16,14 +16,17 @@ pytestmark = pytest.mark.ci_safe  # pure dependency logic via fake Request
 import auth as auth_mod
 from auth import require_intent_dispatch_auth
 from fastapi import HTTPException
+from starlette.datastructures import Headers
 
 
 class _Req:
-    """Minimal Request stand-in: client host + headers."""
+    """Minimal Request stand-in: client host + REAL Starlette Headers, so
+    lookups are case-insensitive exactly like production Request.headers (a
+    plain dict would silently diverge if a caller ever changed header casing)."""
 
     def __init__(self, host="127.0.0.1", token=None):
         self.client = type("C", (), {"host": host})()
-        self.headers = {"X-Internal-Token": token} if token else {}
+        self.headers = Headers({"X-Internal-Token": token} if token else {})
 
 
 def _set_token(monkeypatch, value):
@@ -49,6 +52,18 @@ async def test_flag_off_loopback_with_valid_token_no_warning(monkeypatch, caplog
     caplog.set_level(logging.WARNING, logger=auth_mod.__name__)
     await require_intent_dispatch_auth(_Req(host="127.0.0.1", token="sekrit"))
     assert not caplog.records, "a token-proven caller must not warn"
+
+
+@pytest.mark.asyncio
+async def test_flag_off_token_unprovisioned_loopback_allowed_with_warning(monkeypatch, caplog):
+    """The ACTUAL initial prod state: flag off AND no server-side token yet.
+    Loopback must still be allowed (fail-open guarantee of the dark stage) and
+    the readiness warning must still fire so the journal shows the gap."""
+    monkeypatch.delenv("ZOE_INTENT_DISPATCH_REQUIRE_TOKEN", raising=False)
+    _set_token(monkeypatch, "")
+    caplog.set_level(logging.WARNING, logger=auth_mod.__name__)
+    await require_intent_dispatch_auth(_Req(host="127.0.0.1"))  # no exception
+    assert any("WITHOUT a proven X-Internal-Token" in r.message for r in caplog.records)
 
 
 @pytest.mark.asyncio
