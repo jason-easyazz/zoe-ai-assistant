@@ -181,6 +181,7 @@ async def test_concurrent_calls_spawn_a_single_refresh(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_build_uses_compose_when_enabled_and_static_fallback_otherwise(monkeypatch):
+    monkeypatch.setenv("ZOE_BRIEFING_COMPOSE", "1")  # generative briefing is opt-in now
     facts = ["2 events today.", "19 degrees and clear."]
 
     async def fake_gather(user_id):
