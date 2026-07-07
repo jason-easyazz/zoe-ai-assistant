@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Optional
 
@@ -160,7 +161,255 @@ def _should_skip(user_message: str) -> bool:
     return any(msg.startswith(prefix) for prefix in _SKIP_PREFIXES)
 
 
-def extract_candidates(user_message: str, assistant_response: str = "") -> list[MemoryCandidate]:
+# ── Anaphora context: the PRIOR user turn ────────────────────────────────────
+#
+# Entity-less corrections ("wait no sorry I meant saturday not friday") and
+# pronoun-subject facts ("she's a doctor" right after "my wife's name is Emma")
+# are unanchorable from the current turn alone — live hard-gate 2026-07-07
+# proved both classes stored NOTHING. The prior USER message provides the
+# anchor.
+#
+# The cheapest prior-turn access is an in-process per-(user, session)
+# last-user-message LRU maintained by ``extract_and_ingest`` itself: zero
+# call-site plumbing, no DB read on the turn path. Trade-offs (accepted,
+# documented in the PR): process-local (zoe-data is a single process), cleared
+# on restart (corrections span adjacent turns seconds apart, so a lost anchor
+# across a restart is acceptable — the fact is simply not stored, never
+# mis-anchored), bounded at ``_PREV_TURN_MAX`` sessions.
+#
+# PURITY: only USER-authored text may enter this cache — never the assistant
+# reply (poisoned-store bug 2026-07-07, tests/test_memory_extractor_purity.py).
+_PREV_TURN_MAX = 512
+_prev_user_turns: "OrderedDict[tuple[str, str], str]" = OrderedDict()
+
+
+def _prev_turn_key(user_id: Optional[str], session_id: Optional[str]) -> tuple[str, str]:
+    return ((user_id or "").strip(), (session_id or "").strip())
+
+
+def note_user_turn(user_id: Optional[str], session_id: Optional[str], user_message: str) -> None:
+    """Record the current USER message as the prior turn for the next capture."""
+    msg = (user_message or "").strip()
+    if not msg:
+        return
+    key = _prev_turn_key(user_id, session_id)
+    _prev_user_turns[key] = msg
+    _prev_user_turns.move_to_end(key)
+    while len(_prev_user_turns) > _PREV_TURN_MAX:
+        _prev_user_turns.popitem(last=False)
+
+
+def recall_prev_user_turn(user_id: Optional[str], session_id: Optional[str]) -> str:
+    """The prior USER message for this (user, session), or '' when unknown."""
+    return _prev_user_turns.get(_prev_turn_key(user_id, session_id), "")
+
+
+# Correction shapes with no entity of their own — the entity lives in the
+# PRIOR user message ("my dentist appointment got moved to friday" →
+# "wait no sorry I meant saturday not friday"). Conservative: both the new and
+# the old value must be present, "not <old>" required, and <old> must actually
+# occur in the prior message or nothing is stored (no hallucinated anchor).
+_CORRECTION_RES = (
+    re.compile(
+        r"^(?:oh[,!\s]+)?(?:wait[,!\s]+)?(?:no[,!\s]+)?(?:sorry[,!\s]+)?"
+        r"i\s+meant\s+(?:to\s+say\s+)?(?P<new>.{1,60}?)\s*,?\s+not\s+(?P<old>.{1,60}?)[.!?]*$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^(?:oh[,!\s]+)?(?:no[,!\s]+)?(?:wait[,!\s]+)?(?:sorry[,!\s]+)?"
+        r"actually[,!\s]*(?:it'?s\s+|it\s+is\s+|i\s+meant\s+)?"
+        r"(?P<new>.{1,60}?)\s*,?\s+not\s+(?P<old>.{1,60}?)[.!?]*$",
+        re.IGNORECASE,
+    ),
+)
+
+# Pronoun-subject fact right after a person introduction: "she's a doctor"
+# following "my wife's name is Emma". Anchored ONLY when the prior message
+# introduced a person; gender-incompatible relations refuse the anchor.
+_PRONOUN_FACT_RE = re.compile(
+    r"^(?:and\s+|oh[,\s]+|btw[,\s]+|by\s+the\s+way[,\s]+)?(?P<pron>she|he)\s*(?:'s|\s+is)\s+"
+    r"(?P<pred>(?:a|an)\s+[A-Za-z][\w\s'-]{1,60}?)[.!?]*$",
+    re.IGNORECASE,
+)
+
+_RELATION_WORDS = (
+    "wife|husband|partner|girlfriend|boyfriend|son|daughter|kid|child|brother|sister"
+    "|mom|dad|father|mother|grandma|grandpa|grandfather|grandmother|aunt|uncle|niece|nephew|friend"
+)
+_PERSON_INTRO_RES = (
+    # "my wife's name is Emma" / "my wife is named Emma" / "my wife is called Emma"
+    re.compile(
+        rf"my\s+(?P<rel>{_RELATION_WORDS})"
+        r"(?:'s\s+name\s+is\s+|\s+is\s+named\s+|\s+is\s+called\s+)\s*"
+        r"(?P<name>[A-Za-z][A-Za-z' -]{1,60})",
+        re.IGNORECASE,
+    ),
+    # "my wife is Emma" (bare form, name heuristic — mirrors _TEMPLATE_PATTERNS,
+    # which is searched with re.IGNORECASE at call time, so this carries the
+    # flag too: "My wife is Emma" must still anchor).
+    re.compile(
+        rf"my\s+(?P<rel>{_RELATION_WORDS})\s+is\s+"
+        r"(?P<name>[A-Z][A-Za-z]{1,40})\b(?!\s+(?:a|an|the|very|really|so|going|trying))",
+        re.IGNORECASE,
+    ),
+)
+
+_FEMALE_RELATIONS = frozenset(
+    {"wife", "girlfriend", "daughter", "sister", "mom", "mother", "grandma", "grandmother", "aunt", "niece"}
+)
+_MALE_RELATIONS = frozenset(
+    {"husband", "boyfriend", "son", "brother", "dad", "father", "grandpa", "grandfather", "uncle", "nephew"}
+)
+
+
+def _person_intro_from(prev_user_message: str) -> tuple[str, Optional[str]]:
+    """(name, relation) introduced in the prior USER message, or ('', None).
+
+    Person introductions only — pet/thing patterns deliberately excluded so a
+    pronoun fact is never anchored to a non-person.
+    """
+    for rx in _PERSON_INTRO_RES:
+        m = rx.search(prev_user_message)
+        if m:
+            name = _person_name_from_fragment(m.group("name"))
+            if name:
+                return name, m.group("rel").lower()
+    pm = _PERSON_PATTERN.search(prev_user_message)
+    if pm:
+        name = _person_name_from_fragment(pm.group(1))
+        # Anchor only to the leading Capitalized tokens — "Steve at the market"
+        # must anchor as "Steve", and an all-lowercase fragment is no anchor.
+        cap_tokens: list[str] = []
+        for tok in name.split():
+            if not tok[:1].isupper():
+                break
+            cap_tokens.append(tok)
+        if cap_tokens:
+            return " ".join(cap_tokens), None
+    return "", None
+
+
+def _correction_candidates(
+    user_message: str, prev_user_message: str, seen: set[str]
+) -> list[MemoryCandidate]:
+    """Resolve an entity-less correction against the prior USER message.
+
+    Returns [] unless a correction shape matches AND the corrected-away value
+    actually occurs in the prior message — a correction with no anchor must
+    store nothing rather than guess.
+    """
+    msg = _clean(user_message)
+    match = None
+    for rx in _CORRECTION_RES:
+        match = rx.match(msg)
+        if match:
+            break
+    if not match:
+        return []
+    new_val = _clean(match.group("new"))
+    old_val = _clean(match.group("old"))
+    if not new_val or not old_val or new_val.lower() == old_val.lower():
+        return []
+    prev = _clean(prev_user_message)
+    if not prev:
+        return []
+    old_rx = re.compile(rf"\b{re.escape(old_val)}\b", re.IGNORECASE)
+    if not old_rx.search(prev):
+        return []
+    # Lambda replacement: re.sub would otherwise interpret backslash escapes
+    # (\1, \g<...>) inside user-supplied new_val as template references.
+    corrected = _clean(old_rx.sub(lambda _m: new_val, prev, count=1))
+    source_excerpt = _clean(user_message)[:220]
+    # Prefer re-mining the corrected sentence through the normal templates so a
+    # correctable templated fact ("my wife's name is Emma" → "…Anna") lands in
+    # its canonical shape; otherwise store the corrected sentence itself.
+    mined = _mine_templates(corrected, source_excerpt, seen)
+    if mined:
+        return mined
+    text = f"Correction: {corrected}"
+    key = text.lower()
+    if key in seen:
+        return []
+    seen.add(key)
+    return [
+        MemoryCandidate(
+            text=text,
+            memory_type="fact",
+            confidence=0.8,
+            source_excerpt=source_excerpt,
+        )
+    ]
+
+
+def _pronoun_fact_candidates(
+    user_message: str, prev_user_message: str, seen: set[str]
+) -> list[MemoryCandidate]:
+    """Anchor a pronoun-subject fact to the person the prior message introduced."""
+    m = _PRONOUN_FACT_RE.match(_clean(user_message))
+    if not m:
+        return []
+    name, relation = _person_intro_from(_clean(prev_user_message))
+    if not name:
+        return []
+    pron = m.group("pron").lower()
+    if relation in _FEMALE_RELATIONS and pron == "he":
+        return []
+    if relation in _MALE_RELATIONS and pron == "she":
+        return []
+    pred = _clean(m.group("pred"))
+    if not pred:
+        return []
+    anchor = f"{name} (user's {relation})" if relation else name
+    text = f"{anchor} is {pred}"
+    key = text.lower()
+    if key in seen:
+        return []
+    seen.add(key)
+    return [
+        MemoryCandidate(
+            text=text,
+            memory_type="person",
+            title=name,
+            entity_type="person",
+            entity_id=name.lower().replace(" ", "_"),
+            confidence=0.75,
+            source_excerpt=_clean(user_message)[:220],
+        )
+    ]
+
+
+def _mine_templates(text: str, source_excerpt: str, seen: set[str]) -> list[MemoryCandidate]:
+    """Run the template patterns over ``text`` (behavior-identical extraction loop)."""
+    out: list[MemoryCandidate] = []
+    for pattern, template, confidence in _TEMPLATE_PATTERNS:
+        m = re.search(pattern, text, flags=re.IGNORECASE)
+        if not m:
+            continue
+        groups = tuple(_clean(g) for g in m.groups())
+        if any(not g for g in groups):
+            continue
+        cand_text = _clean(template.format(*groups))
+        key = cand_text.lower()
+        if len(cand_text) < 8 or key in seen:
+            continue
+        seen.add(key)
+        memory_type = "preference" if cand_text.startswith(("Preference:", "Favourite:")) else "fact"
+        out.append(
+            MemoryCandidate(
+                text=cand_text,
+                memory_type=memory_type,
+                confidence=confidence,
+                source_excerpt=source_excerpt,
+            )
+        )
+    return out
+
+
+def extract_candidates(
+    user_message: str,
+    assistant_response: str = "",
+    prev_user_message: Optional[str] = None,
+) -> list[MemoryCandidate]:
     """Extract memory candidates from a user turn.
 
     CONTRACT: user-fact candidates come from ``user_message`` ONLY.
@@ -169,35 +418,19 @@ def extract_candidates(user_message: str, assistant_response: str = "") -> list[
     never become stored user facts, or the recall packet reinforces her past
     denials forever (poisoned-store bug, 2026-07-07). The parameter is kept
     for call-site compatibility. Pinned by tests/test_memory_extractor_purity.py.
+
+    ``prev_user_message`` is the PRIOR user turn (user-authored text only, same
+    purity contract). When present it anchors two otherwise-unstorable shapes:
+    entity-less corrections ("wait no sorry I meant saturday not friday") and
+    pronoun-subject facts ("she's a doctor" after a person introduction).
+    Without it those shapes store nothing — never a guessed anchor.
     """
     if _should_skip(user_message):
         return []
 
     source_excerpt = _clean(user_message)[:220]
-    out: list[MemoryCandidate] = []
     seen: set[str] = set()
-
-    for pattern, template, confidence in _TEMPLATE_PATTERNS:
-        m = re.search(pattern, user_message, flags=re.IGNORECASE)
-        if not m:
-            continue
-        groups = tuple(_clean(g) for g in m.groups())
-        if any(not g for g in groups):
-            continue
-        text = _clean(template.format(*groups))
-        key = text.lower()
-        if len(text) < 8 or key in seen:
-            continue
-        seen.add(key)
-        memory_type = "preference" if text.startswith(("Preference:", "Favourite:")) else "fact"
-        out.append(
-            MemoryCandidate(
-                text=text,
-                memory_type=memory_type,
-                confidence=confidence,
-                source_excerpt=source_excerpt,
-            )
-        )
+    out: list[MemoryCandidate] = _mine_templates(user_message, source_excerpt, seen)
 
     pm = _PERSON_PATTERN.search(user_message)
     if pm:
@@ -222,6 +455,11 @@ def extract_candidates(user_message: str, assistant_response: str = "") -> list[
                     )
                 )
 
+    prev = (prev_user_message or "").strip()
+    if prev:
+        out.extend(_correction_candidates(user_message, prev, seen))
+        out.extend(_pronoun_fact_candidates(user_message, prev, seen))
+
     return out
 
 
@@ -233,14 +471,32 @@ async def extract_and_ingest(
     session_id: Optional[str] = None,
     source: str = "chat_regex",
     auto_approve: bool = True,
+    prev_user_message: Optional[str] = None,
 ) -> int:
     """Extract candidates and ingest them via MemoryService.
 
     Returns the number of successfully written/accepted candidates.
+
+    ``prev_user_message`` overrides the anaphora anchor; when ``None`` (the
+    per-turn call sites) the prior USER message is resolved from the in-process
+    per-(user, session) LRU, and the current message is recorded for the next
+    turn. Pass ``""`` to disable anchoring explicitly.
     """
     from memory_service import get_memory_service
 
-    candidates = extract_candidates(user_message, assistant_response)
+    if prev_user_message is None:
+        prev_user_message = recall_prev_user_turn(user_id, session_id)
+        # A retried/duplicated turn must not anchor to itself.
+        if prev_user_message.strip() == (user_message or "").strip():
+            prev_user_message = ""
+    try:
+        candidates = extract_candidates(
+            user_message, assistant_response, prev_user_message=prev_user_message
+        )
+    finally:
+        # Record the current USER turn even when nothing extracts — the next
+        # turn's correction/pronoun may anchor to it.
+        note_user_turn(user_id, session_id, user_message)
     if not candidates:
         return 0
 
@@ -288,5 +544,11 @@ async def extract_and_ingest(
     return saved
 
 
-__all__ = ["MemoryCandidate", "extract_candidates", "extract_and_ingest"]
+__all__ = [
+    "MemoryCandidate",
+    "extract_candidates",
+    "extract_and_ingest",
+    "note_user_turn",
+    "recall_prev_user_turn",
+]
 
