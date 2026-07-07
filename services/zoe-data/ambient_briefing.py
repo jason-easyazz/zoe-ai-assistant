@@ -108,7 +108,12 @@ async def build_briefing_card(user_id: str) -> Optional[dict[str, Any]]:
         return None
     greeting = greeting_for_hour(datetime.now().hour)
     card: Optional[dict[str, Any]] = None
-    if ui_compose.compose_enabled():
+    # The resting screen must be TRUSTWORTHY: composed briefings have shown
+    # hallucinated stats (e.g. "102 Events Today"), which is worse than plain on
+    # an always-on ambient surface. Deterministic static tree by default;
+    # generative briefing is an explicit opt-in (ZOE_BRIEFING_COMPOSE=1).
+    if (os.environ.get("ZOE_BRIEFING_COMPOSE", "").strip().lower() in ("1", "true", "yes", "on")
+            and ui_compose.compose_enabled()):
         facts_text = greeting + ".\n" + "\n".join(f"- {fact}" for fact in facts)
         card = await ui_compose.compose_card(_COMPOSE_REQUEST, facts_text, user_id=user_id)
     if card is None:
