@@ -266,7 +266,7 @@ _TRUTHY = frozenset({"1", "true", "yes", "on"})
 _FALSY  = frozenset({"0", "false", "no", "off"})
 
 def env_str(key: str, default: str = "") -> str: ...          # strip()ed
-def env_bool(key: str, default: bool = False) -> bool: ...    # canonical sets; unrecognized non-empty value -> default + one warning log
+def env_bool(key: str, default: bool = False) -> bool: ...    # canonical sets; PRESENT-BUT-EMPTY -> False (the live .env uses KEY= as "cleared", and every legacy truthy-set parse yields False for "" — returning the default would silently flip default-true flags during migration); unrecognized non-empty value -> default + one warning log
 def env_int(key: str, default: int) -> int: ...               # invalid -> default + one warning log
 def env_float(key: str, default: float) -> float: ...
 def env_list(key: str, default: tuple[str, ...] = (), sep: str = ",") -> tuple[str, ...]: ...
