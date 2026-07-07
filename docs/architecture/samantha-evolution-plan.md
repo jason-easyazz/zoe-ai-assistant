@@ -25,6 +25,10 @@
   Zoe acts, Gemma phrases *what she says*. Every workstream below follows this pattern.
 - **Don't resurrect** the dead idle-consolidation path as "the" memory path, graphify,
   Pipecat-as-migration (see §2), or anything CANONICAL lists as retired.
+- **The box gates the hot path, not the roadmap.** Capability too big for the 4B/RAM
+  today → build it anyway behind a model seam and run it on an opt-in remote model
+  until the hardware catches up (§11 compute doctrine). Never cut a capability solely
+  because the local model is weak.
 
 ## 1. The Samantha spec and where Zoe stands (audited 2026-07-06)
 
@@ -736,3 +740,48 @@ exist for: P-W0, P-W1.3, P-W1.4, P-W2.1, P-W2.2, P-W3.2, P-W4.1, P-W5.1; the res
 seeded in the packet doc's deferred table and get generated when their gate opens.
 This plan (§0–§9) remains the spec and the source packets are compiled from — if a
 packet and this plan disagree, this plan wins and the packet gets fixed.
+
+## 11. Compute doctrine — build now, localise later
+
+The platform is settled: **Pi/Flue is the brain lane** (live since the 2026-07-03
+cutover; capabilities land as Flue tools/doctrines in `labs/flue-zoe-brain/src/agents/
+zoe.ts` per [`zoe-flue-integration.md`](zoe-flue-integration.md)), and **Omnigent is the
+builder fleet** (claude_code / codex / pi workers — the pi worker already runs on
+OpenRouter, precedent set). The rocks (Gemma/Moonshine/Kokoro) govern the **companion
+hot path**; they were never meant to cap what Zoe can *do*. Doctrine:
+
+1. **Every new capability is built against a model seam** — an OpenAI-compatible
+   endpoint + model name from config, never hard-wired. The repo already has the
+   pattern twice (`ZOE_BRAIN_BACKEND=flue`; Omnigent's pi→OpenRouter config seed).
+   Local-today capabilities cost nothing extra; blocked-today capabilities become a
+   config value instead of a cut.
+2. **Data classes decide what may go remote — not convenience.**
+   - **Never leaves the box:** raw audio, the memory stores (Chroma/Postgres dumps),
+     ambient transcripts, emotional rows, speaker embeddings, `zoe_self`. The
+     companion's *senses and soul* are local, always — that IS the product.
+   - **Opt-in remote (Jason's call, per capability):** operator-initiated task text,
+     engineering/code content (already leaves via GitHub/Greptile — established
+     practice), UI card composition against the validated catalog, W7/W13.3 authoring
+     work. Route via **OpenRouter** to a similar-class model; key handling per
+     [`secret/env topology`] — never baked into configs (the mcporter lesson, #1052).
+3. **Interim-remote capabilities carry a return path.** Each one is listed in the
+   ledger below with the local model it swaps to when hardware allows. The W16
+   scoreboard re-checks the ledger quarterly — nothing quietly stays cloud.
+4. **The hot path is exempt.** Voice STT→brain→TTS latency budgets rule out remote
+   round-trips regardless of privacy — the rocks stay, W1 stays local, full stop.
+5. **The builder fleet does the hard building.** Packets (§10) that exceed a cheap
+   model go to Omnigent workers (claude_code/codex/pi) or Hermes — Zoe's harder
+   self-evolution steps (W7/W13.3) are *fleet* work products landing through the same
+   human-gated PR pipeline, whatever model powered them.
+
+### Interim-remote ledger (capabilities allowed to run remote until localised)
+
+| Capability | Interim (OpenRouter-class) | Return path (when) |
+|---|---|---|
+| W13.3 card/renderer authoring | frontier code model via the fleet | on-box code model when a bigger Jetson/GPU lands |
+| W7 proposal drafting (hard ones) | fleet workers (existing practice) | local Pi agent as local models improve |
+| W9 email triage quality assist | **undecided — needs Jason's explicit opt-in** (email is personal data; W15 fencing required first) | Gemma-class local once measured adequate |
+| Anything else | must be added HERE before it ships remote | — |
+
+Nothing in this section weakens CANONICAL: the rocks are hot-path fixtures, the seam
+rule is how we avoid ever being tempted to swap them under load.
