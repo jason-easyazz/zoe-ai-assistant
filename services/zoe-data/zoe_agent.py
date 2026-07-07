@@ -41,6 +41,7 @@ os.environ.setdefault("ORT_DISABLE_GPU", "1")
 import httpx
 
 from agent_safety import CommandRejected, check_bash_command, guard_browser_page, is_public_url
+from typed_env import env_str
 
 logger = logging.getLogger(__name__)
 
@@ -268,7 +269,7 @@ def _load_zoe_self_summary() -> str:
 
 # Resolve the Zoe server LAN IP from config (env) so a host move doesn't require
 # a code edit + restart. Defaults to the current host's IP.
-_ZOE_HOST_LAN_IP = (os.environ.get("ZOE_HOST_LAN_IP") or "192.168.1.218").strip()
+_ZOE_HOST_LAN_IP = env_str("ZOE_HOST_LAN_IP", "192.168.1.218")
 
 _ZOE_SOUL_STATIC = (
     _ZOE_SOUL_BASE.replace("{ZOE_HOST_LAN_IP}", _ZOE_HOST_LAN_IP)
