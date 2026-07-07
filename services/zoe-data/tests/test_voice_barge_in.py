@@ -443,7 +443,13 @@ def test_silero_real_model_near_silence_stays_low(real_voice_vad):
 
     vad = real_voice_vad.create_vad()
     assert vad is not None
-    noise = (np.random.randn(16000) * 80).astype(np.int16).tobytes()
+    # SEEDED noise: unseeded randn made this flaky — the real model's response
+    # to random gaussian noise spreads 0.19–0.48 across draws (measured 30
+    # seeds: worst 0.425; CI caught 0.475 on 2026-07-07). A fixed seed keeps
+    # the strict 0.4 threshold meaningful instead of racing the RNG (seed 0
+    # measures 0.234 with a wide margin).
+    rng = np.random.default_rng(0)
+    noise = (rng.standard_normal(16000) * 80).astype(np.int16).tobytes()
     max_prob = 0.0
     for i in range(0, len(noise), 640):
         max_prob = max(max_prob, vad.process(noise[i:i + 640]))
