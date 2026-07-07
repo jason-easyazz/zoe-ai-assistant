@@ -166,10 +166,15 @@ async def test_daily_briefing_weather_uses_router_weather_cache(monkeypatch):
         async def execute(self, *_a, **_k):
             return _Cursor()
 
-    async def _fake_get_db():
+    # #1108 converted the briefing path to `async with get_db_ctx()` (leak
+    # sweep 3/3) — fake the context manager, not the old get_db generator.
+    import contextlib
+
+    @contextlib.asynccontextmanager
+    async def _fake_get_db_ctx():
         yield _FakeDB()
 
-    monkeypatch.setattr("database.get_db", _fake_get_db)
+    monkeypatch.setattr("database.get_db_ctx", _fake_get_db_ctx)
     monkeypatch.setattr(weather, "_weather_cache", {})
     # Seed the keyed cache at the coords _resolve_location resolves to
     # (no prefs → the Geraldton defaults).
