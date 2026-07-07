@@ -284,3 +284,4 @@ data/music-assistant/*.log.*
 data/skills.lock
 # autoresearch run dirs are runtime output; the FEATURE is live but reads live run-dirs, not committed samples
 data/autoresearch/*/
+labs/flue-zoe-brain/parity/gate-results/
