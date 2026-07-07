@@ -277,3 +277,5 @@ packet lets identification act.
 | P-W14.1 backup verify+extend | none — start anytime | `scripts/maintenance/postgres-nightly-backup.sh` exists (run-state unverified); Chroma `data/` uncovered; no restore ever drilled |
 | P-W15.1 trust boundary | before P-W9.1 | fencing + per-source tool tiers; injection fixtures into the acceptance suite |
 | P-W16.1 scoreboard | after P-W2.2 (first live counters) | rides the weekly digest cron; acceptance suite + replay summary + log-line counters → OKF trend |
+| P-W17.1 cross-surface thread | after W0 (capture trust) | per-panel session state `voice_tts.py` ~:66-85; for-prompt packet compose seam `zoe_memory_compose.compose_packet` |
+| P-W18.1 voice feedback intent | none — start anytime | endpoint + `chat_feedback` table exist (`routers/chat.py` ~:4022); table currently has NO consumers |
