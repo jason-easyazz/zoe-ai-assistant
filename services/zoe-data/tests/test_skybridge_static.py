@@ -987,7 +987,12 @@ process.stdout.write(JSON.stringify({
   profile_chip: signedIn.includes('dash-ctrl-profile') && signedIn.includes('Jason') && signedIn.includes('Tap to switch'),
   no_signin_when_authed: !signedIn.includes('>Sign in<'),
   auth_action_kept: signedIn.includes('data-sky-action="auth"'),
-  sun_line: signedIn.includes('dash-sun'),
+  // ICU-aware: on stripped-ICU Node, Intl time formatting can yield '' and the
+  // renderer (correctly) omits the sun line — only require it when Intl works.
+  sun_line: (function(){try{
+    var probe=new Intl.DateTimeFormat(undefined,{hour:'numeric',minute:'2-digit',hour12:true}).format(new Date());
+    return probe ? signedIn.includes('dash-sun') : true;
+  }catch(e){return true;}})(),
   guest_still_signin: guest.includes('>Sign in<') && !guest.includes('dash-ctrl-profile')
 }));
 """, encoding="utf-8")
