@@ -143,11 +143,11 @@
 .zx-root.zx-t-mint   { --zx-accent: var(--sky-accent-mint, #5be3b0); }
 .zx-root.zx-t-violet { --zx-accent: var(--sky-accent-violet, #9b8cff); }
 .zx-root.zx-t-sunny  { --zx-accent: var(--sky-accent-cyan, #37c0e6); }
+/* Self-contained tone wash — painted on the root's own box (border-radius
+   inherited from the card shell), so it never depends on the host container's
+   padding to bleed correctly. Renders identically in the chat and touch shells. */
 .zx-root[class*="zx-t-"] {
   position: relative;
-  margin: calc(-1 * var(--sky-space-5, 20px));
-  padding: var(--sky-space-5, 20px);
-  border-radius: var(--sky-radius-lg, 18px);
   background:
     radial-gradient(120% 90% at 100% 0%,
       color-mix(in srgb, var(--zx-accent) 22%, transparent) 0%,
