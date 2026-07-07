@@ -1875,26 +1875,6 @@
         }
     </style>
     <script src="/js/auth.js?v=skybridge-auth-ready-1"></script>
-    <script>
-        // DEBUG: Log session state immediately
-        console.log('🔍 Dashboard loading - Session check:');
-        console.log('  localStorage.zoe_session:', localStorage.getItem('zoe_session'));
-        try {
-            const session = JSON.parse(localStorage.getItem('zoe_session'));
-            console.log('  Parsed session:', session);
-            if (session?.expires_at) {
-                const expiresAt = new Date(session.expires_at);
-                const now = new Date();
-                console.log('  Expires:', expiresAt.toISOString());
-                console.log('  Now:', now.toISOString());
-                console.log('  Is expired?', now >= expiresAt);
-                console.log('  Minutes until expiry:', Math.round((expiresAt - now) / 60000));
-            }
-        } catch (e) {
-            console.error('  Error parsing session:', e);
-        }
-        console.log('  zoeAuth available?', typeof window.zoeAuth);
-    </script>
 <!-- PWA Meta Tags -->
     <meta name="application-name" content="Zoe AI">
     <meta name="apple-mobile-web-app-capable" content="yes">
