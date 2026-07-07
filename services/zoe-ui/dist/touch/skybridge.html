@@ -4950,6 +4950,9 @@
         :root[data-rest-dim="day"]   #skyAmbientClock { filter: brightness(0.9); }
         :root[data-rest-dim="night"] #skyAmbientClock { filter: brightness(0.6); }
         :root[data-rest-dim="deep"]  #skyAmbientClock { filter: brightness(0.34); }
+        /* Deep (sleep) hours: the resting screen is a PURE minimal clock — no
+           briefing card, no information riding the standby time. */
+        :root[data-rest-dim="deep"] #skyAmbientBriefing { display: none !important; }
 
         /* Resting screen background — flatten the body glow toward pure dark so the
            idle screen stays room-safe (returns when a card shows). Deep darker. */
