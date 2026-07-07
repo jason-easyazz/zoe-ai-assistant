@@ -68,7 +68,7 @@ class _FakeClient:
 
 async def _outbound_message(monkeypatch, message, user_id="jason", packet=PACKET):
     """Drive run_flue_brain_streaming with fakes; return the outbound message."""
-    _FakeClient.captured = {}
+    monkeypatch.setattr(_FakeClient, "captured", {})
     import httpx
 
     monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
@@ -124,6 +124,7 @@ async def test_matching_turn_block_rides_after_identity_line(monkeypatch):
     "what's my locker code?",
     "What is my wife's name",
     "do you remember my locker code",
+    "do you remember what I said about the dentist",
     "what did I say about the dentist",
     "when's my anniversary",
     "when did I last go hiking",
@@ -145,6 +146,8 @@ async def test_personal_question_shapes_match(monkeypatch, question):
     "turn off the kitchen lights",
     "tell me a joke",
     "what time is it",
+    "do you remember the alamo",
+    "do you remember who won the election",
 ])
 @pytest.mark.asyncio
 async def test_non_personal_turns_do_not_inject(monkeypatch, message):
@@ -165,7 +168,7 @@ async def test_no_user_id_no_injection(monkeypatch):
 @pytest.mark.asyncio
 async def test_fetch_failure_never_breaks_the_turn(monkeypatch):
     monkeypatch.setenv("ZOE_SEAM_RECALL_INJECT", "1")
-    _FakeClient.captured = {}
+    monkeypatch.setattr(_FakeClient, "captured", {})
     import httpx
 
     monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)

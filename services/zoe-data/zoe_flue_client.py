@@ -132,10 +132,14 @@ _RECALL_INJECT_ENV = "ZOE_SEAM_RECALL_INJECT"
 # weather", "who is Ada Lovelace") never matches.
 _PERSONAL_QUESTION_RE = re.compile(
     r"\b(?:"
-    r"what'?s\s+my|what\s+is\s+my|do\s+you\s+remember|what\s+did\s+i|"
+    r"what'?s\s+my|what\s+is\s+my|"
+    # "do you remember" must itself anchor to self-reference — bare
+    # "do you remember the alamo" is general chat, not personal recall.
+    r"do\s+you\s+remember\s+(?:my|(?:that|what|when|where|if)\s+i)\b|"
+    r"what\s+did\s+i|"
     r"when\s+did\s+i|when'?s\s+my|when\s+is\s+my|where\s+do\s+i|"
     r"who'?s\s+my|who\s+is\s+my|what\s+do\s+you\s+know\s+about\s+me"
-    r")\b",
+    r")",
     re.IGNORECASE,
 )
 
