@@ -318,3 +318,30 @@ async def test_layout_hint_is_bounded(monkeypatch):
     start = user_msg.index(marker) + len(marker)
     end = user_msg.index("\nPrefer this structure")
     assert (end - start) <= ui_compose._LAYOUT_HINT_MAX_CHARS
+
+
+@pytest.mark.asyncio
+async def test_touch_called_on_hint_reuse(monkeypatch):
+    """Greptile: touch() must have a production caller — it fires on hint reuse."""
+    import ui_compose, ui_layouts as ul
+    calls = {"touch": 0}
+    async def fake_get(uid, fam): return {"component": "Stack", "children": []}
+    async def fake_touch(uid, fam): calls["touch"] += 1
+    monkeypatch.setattr(ul, "get_layout", fake_get)
+    monkeypatch.setattr(ul, "touch", fake_touch)
+    monkeypatch.setenv("ZOE_COMPOSE_UI", "1")
+    monkeypatch.setenv("ZOE_LAYOUT_MEMORY", "1")
+
+    class _FR:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self): return {"choices": [{"message": {"content":
+            '{"component":"Stack","children":[{"component":"Text","text":"x"}]}'}}]}
+    class _FC:
+        def __init__(self, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, json=None): return _FR()
+    monkeypatch.setattr(ui_compose.httpx, "AsyncClient", _FC)
+    card = await ui_compose.compose_card("plan my day", "here is your day", user_id="u1")
+    assert card is not None and calls["touch"] == 1

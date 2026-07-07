@@ -75,6 +75,11 @@ async def compose_card(user_message: str, answer_text: str, *, user_id: str = ""
         try:
             layout_family = ui_layouts.intent_family_for(user_message)
             stored = await ui_layouts.get_layout(user_id, layout_family)
+            if stored is not None:
+                # Reuse is the signal that a layout is earning its keep — bump
+                # uses/last_used so convergence tracking reflects reads, not
+                # just writes (touch is no-raise).
+                await ui_layouts.touch(user_id, layout_family)
             if stored:
                 hint_json = json.dumps(stored, separators=(",", ":"))[:_LAYOUT_HINT_MAX_CHARS]
                 layout_hint = (
