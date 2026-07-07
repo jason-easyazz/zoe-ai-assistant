@@ -77,6 +77,16 @@ CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "1280"))
 RECORD_SECONDS = int(os.environ.get("RECORD_SECONDS_MAX", "8"))
 SILENCE_TIMEOUT_S = float(os.environ.get("SILENCE_TIMEOUT_S", "1.5"))
 RECORD_SILENCE_AMPLITUDE = int(os.environ.get("RECORD_SILENCE_AMPLITUDE", "300"))
+# ── VAD endpointing: close the turn on Silero speech-absence, not amplitude ──
+# Amplitude endpointing waits SILENCE_TIMEOUT_S (1.5s) of raw quiet after every
+# utterance — a fixed tail on every single turn. Silero already runs on this Pi
+# (barge-in/ambient), so when enabled the recorder stops after
+# VAD_ENDPOINT_SILENCE_S of speech-absence once speech has been heard; before
+# any speech the longer SILENCE_TIMEOUT_S still applies (slow starters aren't
+# cut off). Falls back to amplitude mode automatically if Silero is unavailable.
+VAD_ENDPOINT_ENABLED = os.environ.get("VAD_ENDPOINT_ENABLED", "false").lower() in ("1", "true", "yes")
+VAD_ENDPOINT_SILENCE_S = float(os.environ.get("VAD_ENDPOINT_SILENCE_S", "0.8"))
+VAD_ENDPOINT_THRESHOLD = float(os.environ.get("VAD_ENDPOINT_THRESHOLD", "0.35"))
 # Default 0.28 — 0.35 misses many real mics/rooms; tune via WAKEWORD_THRESHOLD.
 WAKEWORD_THRESHOLD = float(_env("WAKEWORD_THRESHOLD", "0.28", "OWW_THRESHOLD"))
 VERIFY_SSL = os.environ.get("VERIFY_SSL", "true").lower() not in ("false", "0", "no")
@@ -253,6 +263,52 @@ def _vad_prob(model, chunk_int16: np.ndarray, sample_rate: int = 16000) -> float
         return max_prob
     except Exception:
         return 0.0
+
+
+class _Endpointer:
+    """Decides when a command recording is finished.
+
+    Amplitude mode (legacy): stop after SILENCE_TIMEOUT_S of mean-amplitude
+    quiet. VAD mode (VAD_ENDPOINT_ENABLED): stop after VAD_ENDPOINT_SILENCE_S
+    of Silero speech-absence once speech has been heard — a much shorter tail
+    (0.8s vs 1.5s) that also doesn't stay open on background hum; until speech
+    is heard the amplitude-mode timeout still applies so slow starters aren't
+    cut off. Falls back to amplitude mode when Silero is unavailable.
+    """
+
+    def __init__(self, spoke: bool = False):
+        self.mode = "amplitude"
+        self._model = None
+        if VAD_ENDPOINT_ENABLED:
+            model, _ = _get_silero_vad()
+            if model is not None:
+                self._model = model
+                self.mode = "vad"
+        self._quiet = 0
+        # spoke=True when the caller already confirmed speech (the follow-up
+        # recorder's VAD trigger) so the fast tail applies from the first pause.
+        self._spoke = spoke
+        self._amp_max_silent = int(SILENCE_TIMEOUT_S * SAMPLE_RATE / CHUNK_SIZE)
+        self._vad_max_silent = max(1, int(VAD_ENDPOINT_SILENCE_S * SAMPLE_RATE / CHUNK_SIZE))
+        self._min_frames = int(0.5 * SAMPLE_RATE / CHUNK_SIZE)
+
+    def push(self, data: bytes, n_frames: int) -> bool:
+        """Feed one recorded chunk; True when the recording should stop."""
+        if self.mode == "vad":
+            prob = _vad_prob(self._model, np.frombuffer(data, dtype=np.int16))
+            if prob >= VAD_ENDPOINT_THRESHOLD:
+                self._spoke = True
+                self._quiet = 0
+                return False
+            self._quiet += 1
+            limit = self._vad_max_silent if self._spoke else self._amp_max_silent
+            return self._quiet >= limit and n_frames > self._min_frames
+        amplitude = np.abs(np.frombuffer(data, dtype=np.int16)).mean()
+        if amplitude >= RECORD_SILENCE_AMPLITUDE:
+            self._quiet = 0
+            return False
+        self._quiet += 1
+        return self._quiet >= self._amp_max_silent and n_frames > self._min_frames
 
 
 def _api_post(path: str, data: dict, timeout: int = 60, retries: int | None = None) -> dict:
@@ -708,27 +764,21 @@ def record_command(pa: pyaudio.PyAudio) -> bytes | None:
             log.warning("Mic open failed (%s), retrying in %.2fs [%d/5]...", exc, wait_s, attempt)
             time.sleep(wait_s)
     frames = list(_PREROLL)  # prepend pre-roll so the start of speech is kept
-    silent_chunks = 0
+    endpointer = _Endpointer()
     stop_reason = "max_duration"
-    max_silent = int(SILENCE_TIMEOUT_S * SAMPLE_RATE / CHUNK_SIZE)
     max_chunks = int(RECORD_SECONDS * SAMPLE_RATE / CHUNK_SIZE)
     for _ in range(max_chunks):
         data = stream.read(CHUNK_SIZE, exception_on_overflow=False)
         frames.append(data)
-        amplitude = np.abs(np.frombuffer(data, dtype=np.int16)).mean()
-        if amplitude < RECORD_SILENCE_AMPLITUDE:
-            silent_chunks += 1
-            if silent_chunks >= max_silent and len(frames) > int(0.5 * SAMPLE_RATE / CHUNK_SIZE):
-                stop_reason = "silence"
-                break
-        else:
-            silent_chunks = 0
+        if endpointer.push(data, len(frames)):
+            stop_reason = "silence"
+            break
     stream.stop_stream()
     stream.close()
     duration_s = len(frames) * CHUNK_SIZE / float(SAMPLE_RATE)
     log.info(
-        "Recorded command: duration=%.2fs chunks=%d stop=%s silence_timeout=%.2fs silence_amp=%d",
-        duration_s, len(frames), stop_reason, SILENCE_TIMEOUT_S, RECORD_SILENCE_AMPLITUDE,
+        "Recorded command: duration=%.2fs chunks=%d stop=%s endpoint=%s silence_timeout=%.2fs",
+        duration_s, len(frames), stop_reason, endpointer.mode, SILENCE_TIMEOUT_S,
     )
     if len(frames) < int(0.3 * SAMPLE_RATE / CHUNK_SIZE):
         log.info("Command too short, ignoring.")
@@ -1235,27 +1285,23 @@ def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None) -> byt
         # trigger chunk, which is the last entry in the ring).
         log.info("Recording follow-up command (max %ds)...", RECORD_SECONDS)
         frames = list(lookback)
-        silent_chunks = 0
+        # The trigger chunk was already-detected speech — seed the endpointer so
+        # the fast VAD tail applies from the first pause.
+        endpointer = _Endpointer(spoke=True)
         stop_reason = "max_duration"
-        max_silent = int(SILENCE_TIMEOUT_S * SAMPLE_RATE / CHUNK_SIZE)
         max_chunks = int(RECORD_SECONDS * SAMPLE_RATE / CHUNK_SIZE)
         for _ in range(max_chunks):
             data = stream.read(CHUNK_SIZE, exception_on_overflow=False)
             frames.append(data)
-            amplitude = np.abs(np.frombuffer(data, dtype=np.int16)).mean()
-            if amplitude < RECORD_SILENCE_AMPLITUDE:
-                silent_chunks += 1
-                if silent_chunks >= max_silent and len(frames) > int(0.5 * SAMPLE_RATE / CHUNK_SIZE):
-                    stop_reason = "silence"
-                    break
-            else:
-                silent_chunks = 0
+            if endpointer.push(data, len(frames)):
+                stop_reason = "silence"
+                break
         stream.stop_stream()
         stream.close()
         duration_s = len(frames) * CHUNK_SIZE / float(SAMPLE_RATE)
         log.info(
-            "Recorded follow-up: duration=%.2fs chunks=%d stop=%s silence_timeout=%.2fs silence_amp=%d",
-            duration_s, len(frames), stop_reason, SILENCE_TIMEOUT_S, RECORD_SILENCE_AMPLITUDE,
+            "Recorded follow-up: duration=%.2fs chunks=%d stop=%s endpoint=%s silence_timeout=%.2fs",
+            duration_s, len(frames), stop_reason, endpointer.mode, SILENCE_TIMEOUT_S,
         )
 
         if len(frames) < int(0.3 * SAMPLE_RATE / CHUNK_SIZE):
