@@ -110,3 +110,24 @@ async def test_flag_on_but_token_unconfigured_denies_everything(monkeypatch):
     _set_token(monkeypatch, "")
     with pytest.raises(HTTPException):
         await require_intent_dispatch_auth(_Req(host="127.0.0.1", token="anything"))
+
+
+# ── the same gate covers BOTH actor-asserting endpoints ──────────────────────
+
+def test_delegate_sync_uses_the_same_gate():
+    """delegate-sync also takes a body user_id under internal trust — the same
+    impersonation class. Lock in that its dependency IS the flag-keyed gate,
+    so the two endpoints can never silently diverge."""
+    import inspect
+
+    from routers.system import delegate_sync, intent_dispatch
+
+    def _gate_of(fn):
+        for p in inspect.signature(fn).parameters.values():
+            d = p.default
+            if hasattr(d, "dependency"):
+                return d.dependency
+        return None
+
+    assert _gate_of(intent_dispatch) is auth_mod.require_intent_dispatch_auth
+    assert _gate_of(delegate_sync) is auth_mod.require_intent_dispatch_auth
