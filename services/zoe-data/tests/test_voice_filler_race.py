@@ -85,3 +85,84 @@ def test_brain_error_surfaces_error_frame(monkeypatch):
         raise RuntimeError("brain exploded")
     frames = _post(_app(monkeypatch, broken_brain))
     assert any("brain exploded" in str(f.get("error", "")) for f in frames), frames
+
+
+def _streaming_brain(first_chunk_delay):
+    """voice_command's chat tier: returns a StreamingResponse INSTANTLY and does
+    the brain work lazily inside the generator (the live failure mode: the
+    task-race resolved in <filler_after, then TTFA sat at ~6s with no filler)."""
+    from fastapi.responses import StreamingResponse
+
+    async def brain(payload, caller=None, stream=True, db=None):
+        async def _gen():
+            await asyncio.sleep(first_chunk_delay)
+            yield (json.dumps({"chunk": 0, "text": "Real answer."}) + "\n").encode()
+            yield base64.b64encode(b"RIFFreal") + b"\n"
+            yield (json.dumps({"done": True, "reply": "Real answer."}) + "\n").encode()
+        return StreamingResponse(_gen(), media_type="application/x-zoe-audio-stream")
+    return brain
+
+
+def test_lazy_stream_slow_first_chunk_speaks_filler(monkeypatch):
+    frames = _post(_app(monkeypatch, _streaming_brain(first_chunk_delay=0.6)))
+    kinds = [("filler" if f.get("provider") == "filler" else
+              "chunk0" if f.get("chunk") == 0 else
+              "done" if f.get("done") else "other") for f in frames]
+    assert "filler" in kinds, f"filler must race the first body chunk too: {frames}"
+    assert kinds.index("filler") < kinds.index("chunk0"), "filler must precede the real first chunk"
+    assert any(f.get("done") for f in frames)
+
+
+def test_failed_filler_synthesis_not_retried_late(monkeypatch):
+    """If the first race attempts the filler but TTS fails, the body-chunk race
+    must NOT retry it on its 0.1s floor budget — a >1.6s filler is just noise."""
+    async def slow_brain(payload, caller=None, stream=True, db=None):
+        await asyncio.sleep(0.4)  # > filler_after: first race attempts the filler
+        return await _streaming_brain(first_chunk_delay=0.4)(payload, caller=caller, stream=stream, db=db)
+    app = _app(monkeypatch, slow_brain)
+
+    calls = {"n": 0}
+    async def _broken_tts(_text):
+        calls["n"] += 1
+        return None  # synthesis fails for filler AND fallback
+    import routers.voice_tts as _vt
+    monkeypatch.setattr(_vt, "_synthesize_kokoro_sidecar", _broken_tts)
+    monkeypatch.setattr(_vt, "_synthesize_kokoro", _broken_tts)
+
+    frames = _post(app)
+    assert not any(f.get("provider") == "filler" for f in frames), frames
+    assert calls["n"] == 2, f"one attempt (sidecar+fallback), no late retry: {calls}"
+    assert any(f.get("done") for f in frames)
+
+
+def test_text_only_ack_frame_does_not_defeat_filler(monkeypatch):
+    """The live failure: _generate_voice_stream yields a text-only processing_ack
+    frame at ~0.6s, which satisfied the first-chunk race while real audio was
+    still 4-6s away. Text frames must be forwarded but only AUDIO ends the race."""
+    from fastapi.responses import StreamingResponse
+
+    async def brain(payload, caller=None, stream=True, db=None):
+        async def _gen():
+            yield (json.dumps({"processing_ack": True, "text": "I will check that."}) + "\n").encode()
+            await asyncio.sleep(0.6)  # brain thinking; >> filler_after
+            yield (json.dumps({"chunk": 0, "text": "Real answer."}) + "\n").encode()
+            yield base64.b64encode(b"RIFFreal") + b"\n"
+            yield (json.dumps({"done": True, "reply": "Real answer."}) + "\n").encode()
+        return StreamingResponse(_gen(), media_type="application/x-zoe-audio-stream")
+
+    frames = _post(_app(monkeypatch, brain))
+    kinds = [("ack" if f.get("processing_ack") else
+              "filler" if f.get("provider") == "filler" else
+              "chunk0" if f.get("chunk") == 0 else
+              "done" if f.get("done") else "other") for f in frames]
+    assert "ack" in kinds, f"text-only ack must still be forwarded: {frames}"
+    assert "filler" in kinds, f"text-only ack must not silence the filler: {frames}"
+    assert "chunk0" in kinds, f"audio chunk 0 must be present: {frames}"
+    assert kinds.index("ack") < kinds.index("filler") < kinds.index("chunk0"), kinds
+
+
+def test_lazy_stream_fast_first_chunk_skips_filler(monkeypatch):
+    frames = _post(_app(monkeypatch, _streaming_brain(first_chunk_delay=0.0)))
+    assert not any(f.get("provider") == "filler" for f in frames), frames
+    assert any(f.get("chunk") == 0 for f in frames)
+    assert any(f.get("done") for f in frames)
