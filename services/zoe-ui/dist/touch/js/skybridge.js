@@ -453,6 +453,13 @@
 
     function renderHome(options) {
         const showCards = options && options.showCards;
+        if (showCards) {
+            // The awake home surface IS the ambient dashboard (big time/date +
+            // shortcut tiles) — the same surface as tapping Home over a card or
+            // waking the resting panel. One home, not two.
+            wakeToDashboard();
+            return;
+        }
         clearIdleTimer();
         document.body.classList.add('sky-empty');
         document.body.classList.add('sky-ambient-clock');
@@ -468,12 +475,6 @@
         setVoiceLayerText('Listening. Ask Zoe for anything.');
         updateAllClocks();
         if (!showCards) maybeFetchAmbientBriefing();
-        if (showCards && window.SkybridgeCapabilities && typeof window.SkybridgeCapabilities.getHomeCards === 'function') {
-            setContext('Skybridge home', 'Start with voice, then keep the useful cards in reach.');
-            window.SkybridgeCapabilities.getHomeCards().forEach((card, index) => {
-                addCard(card, false, index * 90);
-            });
-        }
         updateVoiceHint('Touch the orb to speak', getMicGuidance(), 'Start mic');
         requestAnimationFrame(resizeOrb);
     }
@@ -492,6 +493,9 @@
         document.body.classList.remove('sky-empty');
         document.body.classList.remove('sky-ambient-clock');
         document.body.classList.add('sky-has-cards');
+        // The dashboard IS home: the floating Home pill hides on this surface
+        // (stage css) and returns as soon as any other card takes the stage.
+        document.body.classList.add('sky-on-dashboard');
         els.cards.innerHTML = window.SkybridgeRenderer.render({
             component: 'dashboard',
             props: { guest: true, weather: weather || null }
@@ -527,6 +531,7 @@
         els.cards.innerHTML = '';
         document.body.classList.add('sky-empty');
         document.body.classList.add('sky-ambient-clock');
+        document.body.classList.remove('sky-on-dashboard');
         requestAnimationFrame(resizeOrb);
     }
 
@@ -536,6 +541,7 @@
         deckToken++;
         document.body.classList.remove('sky-empty');
         document.body.classList.remove('sky-ambient-clock');
+        document.body.classList.remove('sky-on-dashboard');
         requestAnimationFrame(resizeOrb);
         const wrapper = document.createElement('div');
         wrapper.innerHTML = window.SkybridgeRenderer.render(card);
