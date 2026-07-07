@@ -23,18 +23,23 @@ _MODULE_PATH = os.path.join(
 )
 
 
-def _load_research_evidence():
-    spec = importlib.util.spec_from_file_location("research_evidence", _MODULE_PATH)
-    module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
-    # Register before exec so @dataclass can resolve cls.__module__ in sys.modules.
-    sys.modules["research_evidence"] = module
-    spec.loader.exec_module(module)  # type: ignore[union-attr]
-    return module
-
-
 @pytest.fixture(scope="module")
 def re_mod():
-    return _load_research_evidence()
+    # Register under the real module name before exec so @dataclass can resolve
+    # cls.__module__ via sys.modules. Save + restore in teardown so this
+    # synthetic module never leaks into later test files' imports.
+    prev = sys.modules.get("research_evidence")
+    spec = importlib.util.spec_from_file_location("research_evidence", _MODULE_PATH)
+    module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    sys.modules["research_evidence"] = module
+    try:
+        spec.loader.exec_module(module)  # type: ignore[union-attr]
+        yield module
+    finally:
+        if prev is not None:
+            sys.modules["research_evidence"] = prev
+        else:
+            sys.modules.pop("research_evidence", None)
 
 
 # Personal-data search → NOT research (routes to note_search / recall).

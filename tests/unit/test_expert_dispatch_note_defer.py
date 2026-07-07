@@ -27,18 +27,23 @@ _MODULE_PATH = os.path.join(
 )
 
 
-def _load_expert_dispatch():
-    spec = importlib.util.spec_from_file_location("expert_dispatch", _MODULE_PATH)
-    module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
-    # Register before exec so @dataclass can resolve cls.__module__ in sys.modules.
-    sys.modules["expert_dispatch"] = module
-    spec.loader.exec_module(module)  # type: ignore[union-attr]
-    return module
-
-
 @pytest.fixture(scope="module")
 def ed():
-    return _load_expert_dispatch()
+    # Register under the real module name before exec so @dataclass can resolve
+    # cls.__module__ via sys.modules. Save + restore the prior entry in teardown
+    # so this synthetic module never leaks into later test files' imports.
+    prev = sys.modules.get("expert_dispatch")
+    spec = importlib.util.spec_from_file_location("expert_dispatch", _MODULE_PATH)
+    module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    sys.modules["expert_dispatch"] = module
+    try:
+        spec.loader.exec_module(module)  # type: ignore[union-attr]
+        yield module
+    finally:
+        if prev is not None:
+            sys.modules["expert_dispatch"] = prev
+        else:
+            sys.modules.pop("expert_dispatch", None)
 
 
 # Note/jot phrasings → defer (store_fact returns None → brain → note_create).

@@ -339,30 +339,37 @@ def test_weather_named_location_not_found(ir, monkeypatch):
 
 # ── Fast-path defer-to-brain guards (fix/zoe-data-fastpath-defer-to-brain) ────
 # The deterministic list_add fast path must DEFER to the brain when a
-# competing-capability cue (journal, contacts, note) owns an "add …" turn
+# competing-capability cue (journal, contacts, diary) owns an "add …" turn
 # without an explicit shopping/grocery list target — otherwise it swallowed
-# journal/contacts/note writes as shopping items (LIVE misroute).
+# journal/contacts writes as shopping items (LIVE misroute). Note-creation
+# phrasings route to note_create directly (a dedicated upstream matcher), so
+# they never become list_add either.
 
 class TestListAddDefersToCompetingDomains:
     # Competing-domain "add …" turns must NOT become list_add — they defer to
     # the brain (detect_intent returns None) or route to their own domain.
-    DEFER = [
+    NOT_LIST_ADD = [
         "add a journal entry: grateful for the rain today",
         "add marcus to my contacts as my colleague",
-        "add a note about the leaky tap",
         "add a diary entry for today",
+        "add a note about the leaky tap",   # → note_create, not list_add
+        "make a note: wifi password is hunter2",  # → note_create
     ]
-    # Genuine shopping/list adds must STILL be list_add.
+    # Genuine shopping/list adds must STILL be list_add — including items whose
+    # text merely contains "note(s)" without a note-creation verb frame.
     STILL_LIST_ADD = [
         "add milk to my shopping list",
         "add milk",
         "add eggs and bread",
         "put bananas on the grocery list",
-        "add a notebook to my shopping list",  # 'note'-adjacent word, but explicit list
+        "add a notebook to my shopping list",
+        "add sticky notes to my shopping list",  # bare-note over-defer regression
+        "add sticky notes",                       # no list, but still a shopping add
+        "add a note pad",                         # compound noun, not note creation
     ]
 
     def test_competing_domains_not_list_add(self, ir):
-        for msg in self.DEFER:
+        for msg in self.NOT_LIST_ADD:
             name = _intent_name(ir, msg)
             assert name != "list_add", (
                 f"list_add wrongly swallowed competing-domain turn: {msg!r} -> {name!r}"
@@ -373,4 +380,17 @@ class TestListAddDefersToCompetingDomains:
             name = _intent_name(ir, msg)
             assert name == "list_add", (
                 f"Expected list_add for genuine shopping add: {msg!r}, got {name!r}"
+            )
+
+    def test_note_creation_phrasings_route_to_note_create(self, ir):
+        # These must be captured as note_create (not deferred, not list_add).
+        for msg in [
+            "make a note: wifi password is hunter2",
+            "note that the milk expired",
+            "jot down the gate code",
+            "add a note about the trip",
+        ]:
+            name = _intent_name(ir, msg)
+            assert name == "note_create", (
+                f"Expected note_create for: {msg!r}, got {name!r}"
             )

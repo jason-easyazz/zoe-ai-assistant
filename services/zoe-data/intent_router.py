@@ -890,8 +890,32 @@ def detect_intent(
 
 
     # --- NOTES CREATE ---
+    # Unambiguous note-creation verbs (make/create/write/save/take) accept a
+    # bare space, colon, or connector before the body ("make a note X",
+    # "make a note: X", "write a note about X").
     m = re.match(
-        r"^(?:make|create|write|save|add|take) (?:a )?note(?:s)?(?: (?:titled|called|about|on))? (.+)$", t
+        r"^(?:make|create|write|save|take) (?:a )?note(?:s)?"
+        r"(?:\s*[:\-]\s*|\s+(?:titled|called|about|on)\s+|\s+)(.+)$", t
+    )
+    if m:
+        body = m.group(1).strip()
+        return Intent("note_create", {"title": body[:60], "content": body})
+    # "add a note" is ambiguous with a shopping add ("add a note pad", "add
+    # sticky notes"), so it means note_create ONLY with an explicit colon or
+    # connector ("add a note: X", "add a note about X") — never a bare space.
+    m = re.match(
+        r"^add (?:a )?note(?:s)?(?:\s*[:\-]\s*|\s+(?:titled|called|about|on)\s+)(.+)$", t
+    )
+    if m:
+        body = m.group(1).strip()
+        return Intent("note_create", {"title": body[:60], "content": body})
+
+    # "jot down X" / "jot this down: X" / "note that X" / "note down X" —
+    # imperative note phrasings that aren't caught above. Route straight to
+    # note_create rather than defer, so the note is captured on the fast path.
+    m = re.match(
+        r"^(?:jot(?:\s+(?:this|that|it))?\s+down|note\s+down|note\s+that|note\s+this)"
+        r"(?:\s*[:\-]\s*|\s+)(.+)$", t
     )
     if m:
         body = m.group(1).strip()
@@ -1826,13 +1850,21 @@ def _infer_list(item: str) -> str:
     return "shopping"
 
 
-# Cues that belong to a NON-list capability (journal, people/contacts, notes,
+# Cues that belong to a NON-list capability (journal, people/contacts,
 # calendar, reminders). When one of these appears in an "add …" turn WITHOUT an
 # explicit shopping/grocery-list target, the deterministic list_add fast path
-# must NOT claim the turn — defer to the brain, which routes journal/contacts/
-# notes correctly. An explicit list target overrides (see _has_list_target).
+# must NOT claim the turn — defer to the brain, which routes journal/contacts
+# correctly. An explicit list target overrides (see _EXPLICIT_LIST_TARGET_RE).
+#
+# NOTE (deliberate): bare "note"/"notes" is NOT here. Note-CREATION phrasings
+# ("make a note: …", "note that …", "jot down …") are routed to note_create by
+# the NOTES CREATE matchers *above* this fast path, so they never reach here.
+# A shopping item that merely contains the word ("add sticky notes", "add a
+# note pad") must stay a list_add — including it would over-defer those.
+# "note" as a note-creation cue is a "make/take/write a note" verb frame, which
+# the upstream note_create regex already owns.
 _COMPETING_LIST_CUE_RE = re.compile(
-    r"\b(journal|diary|contact|contacts|note|notes|calendar|reminder|reminders)\b",
+    r"\b(journal|diary|contact|contacts|calendar|reminder|reminders)\b",
     re.IGNORECASE,
 )
 # Explicit shopping/grocery/list target — if present, keep list_add even when a
