@@ -964,10 +964,15 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
         return SkybridgeIntent(domain="people", action="remember_fact", person_name=name, fact_text=fact, birthday=birthday)
     # Timers claim the phrase early so "set a 5 minute timer" isn't misread as a
     # calendar event ("set ... at a time").
-    if re.search(r"\btimer\b|\bcountdown\b", text):
+    if re.search(r"\btimers?\b|\bcountdowns?\b", text):
         if re.search(r"\b(cancel|stop|clear|delete|dismiss|reset|turn off)\b", text):
             return SkybridgeIntent(domain="timer", action="cancel", title=_parse_timer_label(text))
         if re.search(r"\b(how (?:long|much)|left|remaining|status|check on|still going)\b", text):
+            return SkybridgeIntent(domain="timer", action="status")
+        # "show/list my timers" is a status ask too. Without this, the query fell
+        # through to the people fallback ("show my X" -> contact search) and the
+        # dashboard Timers tile rendered an empty people directory (glass-verified).
+        if re.search(r"\b(show|list|view|see|display|what)\b", text):
             return SkybridgeIntent(domain="timer", action="status")
         duration = _parse_timer_duration(text)
         # Only CREATE for an explicit ask — a passing mention ("it's not the timer",
