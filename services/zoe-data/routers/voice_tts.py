@@ -4262,56 +4262,62 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     # Delegate LLM + per-sentence TTS to the existing streaming pipeline.
     # (voice_command's stream generator records the downstream llm_first_token /
     # tts_first_byte / total stage metrics + a path="command" turn count.)
-    sub = await voice_command(command_payload, caller=caller, stream=True, db=db)
-    try:
-        from voice_metrics import voice_turn_count
-        voice_turn_count.labels(outcome="ok", path="turn_stream").inc()
-    except Exception:
-        pass
+    # Launch the brain WITHOUT awaiting: voice_command does its tier routing /
+    # brain work BEFORE returning (measured live: 5-11s on chat turns, with the
+    # stream only starting afterwards). Racing it as a task lets the response
+    # begin immediately — and lets the thinking filler actually speak while the
+    # brain is still working, instead of timing an already-finished wait.
+    sub_task = asyncio.ensure_future(voice_command(command_payload, caller=caller, stream=True, db=db))
+
+    def _filler_enabled() -> bool:
+        return os.environ.get("ZOE_VOICE_FILLER_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on")
 
     async def _wrapped():
         # Lead with the transcript so the panel can show/log what was heard
         # before the first audio chunk arrives.
         yield (_json.dumps({"transcript": transcript}) + "\n").encode()
+        # ── Thinking filler: if the brain isn't done within
+        # ZOE_VOICE_FILLER_AFTER_S (1.6s), speak a short ack NOW. ──
+        sub = None
+        if _filler_enabled():
+            try:
+                _after = float(os.environ.get("ZOE_VOICE_FILLER_AFTER_S", "1.6"))
+            except (TypeError, ValueError):
+                _after = 1.6
+            try:
+                sub = await asyncio.wait_for(asyncio.shield(sub_task), timeout=_after)
+            except asyncio.TimeoutError:
+                _fillers = [p for p in os.environ.get(
+                    "ZOE_VOICE_FILLER_PHRASES", "Let me check.|One sec.|Hmm, let me look."
+                ).split("|") if p.strip()]
+                _phrase = random.choice(_fillers) if _fillers else "One sec."
+                try:
+                    _fill_audio = await _synthesize_kokoro_sidecar(_phrase)
+                    if not _fill_audio:
+                        _fill_audio = await _synthesize_kokoro(_phrase)
+                    if _fill_audio:
+                        logger.info("voice/turn_stream filler spoken (%r) while brain works", _phrase)
+                        yield (_json.dumps({"chunk": -1, "text": _phrase, "provider": "filler"}) + "\n").encode()
+                        yield base64.b64encode(_fill_audio) + b"\n"
+                except Exception as _f_exc:
+                    logger.debug("voice filler skipped: %s", _f_exc)
+        if sub is None:
+            try:
+                sub = await sub_task
+            except Exception as _sub_exc:
+                # Errors used to raise before the StreamingResponse existed; now
+                # the stream has started, so surface them as an error frame the
+                # daemon already understands (logs + aborts the turn).
+                logger.error("voice/turn_stream brain failed: %s", _sub_exc)
+                yield (_json.dumps({"error": str(_sub_exc)[:200], "done": True, "reply": ""}) + "\n").encode()
+                return
+        try:
+            from voice_metrics import voice_turn_count
+            voice_turn_count.labels(outcome="ok", path="turn_stream").inc()
+        except Exception:
+            pass
         if hasattr(sub, "body_iterator"):
-            # ── Thinking filler (ZOE_VOICE_FILLER_ENABLED, default OFF) ──
-            # Tool-heavy turns (weather/calendar) take 5-11s to first audio on
-            # the 4B brain (measured live 2026-07-07); silence that long feels
-            # broken and invites talk-over. If the FIRST real chunk isn't ready
-            # within ZOE_VOICE_FILLER_AFTER_S (1.6s), speak a short ack
-            # immediately, then the real reply follows.
-            it = sub.body_iterator.__aiter__()
-            first_chunk = None
-            if os.environ.get("ZOE_VOICE_FILLER_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on"):
-                try:
-                    _filler_after = float(os.environ.get("ZOE_VOICE_FILLER_AFTER_S", "1.6"))
-                except (TypeError, ValueError):
-                    _filler_after = 1.6
-                _first_task = asyncio.ensure_future(it.__anext__())
-                try:
-                    first_chunk = await asyncio.wait_for(asyncio.shield(_first_task), timeout=_filler_after)
-                except asyncio.TimeoutError:
-                    _fillers = [p for p in os.environ.get(
-                        "ZOE_VOICE_FILLER_PHRASES", "Let me check.|One sec.|Hmm, let me look."
-                    ).split("|") if p.strip()]
-                    _phrase = random.choice(_fillers) if _fillers else "One sec."
-                    try:
-                        _fill_audio = await _synthesize_kokoro_sidecar(_phrase)
-                        if _fill_audio:
-                            yield (_json.dumps({"chunk": -1, "text": _phrase, "provider": "filler"}) + "\n").encode()
-                            yield base64.b64encode(_fill_audio) + b"\n"
-                    except Exception as _f_exc:
-                        logger.debug("voice filler skipped: %s", _f_exc)
-                    try:
-                        first_chunk = await _first_task
-                    except StopAsyncIteration:
-                        first_chunk = None
-                except StopAsyncIteration:
-                    first_chunk = None
-                    _first_task.cancel()
-            if first_chunk is not None:
-                yield first_chunk
-            async for chunk in it:
+            async for chunk in sub.body_iterator:
                 yield chunk
             return
         # voice_command returns a plain dict (not a StreamingResponse) on the
