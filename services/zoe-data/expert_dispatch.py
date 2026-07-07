@@ -53,6 +53,15 @@ _SHOW_RE = re.compile(
     re.IGNORECASE,
 )
 
+# NOTE / JOT cue: phrasings that belong to the notes capability (note_create),
+# NOT memory-store. Deliberately narrow — only explicit "note"/"jot" verbs, so
+# genuine memory teaches ("remember that …", "don't forget …", "keep in mind …")
+# are untouched. When present, store_fact defers to the brain → note_create.
+_NOTE_CUE_RE = re.compile(
+    r"\b(make\s+a\s+note|take\s+a\s+note|note\s+(?:that|this|down)|jot(?:\s+(?:this|that|it))?\s+down|jot\s+down)\b",
+    re.IGNORECASE,
+)
+
 # Question/fragment cue: when a write-domain utterance has no create verb, this
 # prevents defaulting to a bogus CREATE (misheard "what's on my calendar today" →
 # don't add an event). These fall to the brain instead.
@@ -425,6 +434,14 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
     # on-device). _QUESTION_RE also didn't know the "do YOU remember/recall/know"
     # form (only "do i"), so such questions slipped straight through to store.
     low = text.lower()
+    # NOTE / JOT phrasings belong to the notes capability, not memory-store.
+    # "make a note …", "jot this down", "note that …" must NOT be swallowed as a
+    # remembered fact ("Got it — I'll remember …"); defer to the brain, which
+    # routes them to note_create. This is a capability-defer, mirroring the
+    # intent_router list_add guard: when a competing-domain cue owns the turn,
+    # the deterministic fast path steps aside rather than guessing.
+    if _NOTE_CUE_RE.search(low):
+        return None
     asks_recall = bool(re.search(
         r"\b(do|did|does|can|could|would|will)\s+(you|ya)\s+"
         r"(remember|recall|recollect|know|have)\b", low))
