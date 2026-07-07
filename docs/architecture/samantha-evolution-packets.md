@@ -274,3 +274,6 @@ packet lets identification act.
 | P-W9.1 email triage | operator provides the mailbox + consent | brief composer: `proactive/triggers/morning_checkin.py`; people graph join ready |
 | P-W11.1 delivery profiles | best after W4 pick | sidecar accepts `voice`+`speed` (`scripts/setup/kokoro_sidecar.py` :280/:305) |
 | P-W13.1 proactive show | P-W2.2 merged | `show_card` in `ui_orchestrator.ALLOWED_ACTION_TYPES`; compose via `ui_compose.compose_card()` behind `ZOE_COMPOSE_UI` |
+| P-W14.1 backup verify+extend | none — start anytime | `scripts/maintenance/postgres-nightly-backup.sh` exists (run-state unverified); Chroma `data/` uncovered; no restore ever drilled |
+| P-W15.1 trust boundary | before P-W9.1 | fencing + per-source tool tiers; injection fixtures into the acceptance suite |
+| P-W16.1 scoreboard | after P-W2.2 (first live counters) | rides the weekly digest cron; acceptance suite + replay summary + log-line counters → OKF trend |
