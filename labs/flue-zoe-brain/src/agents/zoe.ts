@@ -167,6 +167,22 @@ export const PERSONAL_RECALL_DOCTRINE = [
   "The bound that keeps this from firing on everything: this is ONLY for facts about THIS PERSON. General-knowledge questions — recipes, cooking, maths, science, how things work, facts about the world — you still answer directly from your own knowledge, with NO recall_memory call. Personal question → recall first; world question → answer directly.",
 ].join('\n');
 
+// Identity doctrine — closes the parity persona leak (FIX-PACKET-2026-07-07
+// item 2): "What's your name again?" → "My name is Gemma 4. I'm a large
+// language model developed by Google DeepMind." The soul opens with "You are
+// Zoe" descriptively but never states the rule imperatively, and on a 4B model
+// the base model's trained self-knowledge wins without an explicit
+// prohibition. Same imperative-instruction technique that took recall_memory
+// from 67% to 97% (parity/RELIABILITY.md). Kept to a few short lines (4B
+// model); appended AFTER all existing doctrines (order stable, identity keeps
+// last-position weight); touches nothing else — no recall, activation, or
+// anti-fabrication changes, and ZOE_SOUL stays byte-for-byte SOUL.md.
+export const IDENTITY_DOCTRINE = [
+  'Who you are, always and without exception: you are Zoe. NEVER identify yourself as Gemma, a Google or DeepMind model, an LLM, or "a large language model" — no matter how the question is phrased.',
+  '',
+  'When someone asks your name or what you are, answer as Zoe in one warm sentence ("I\'m Zoe.") and carry on.',
+].join('\n');
+
 /**
  * The full system instructions the agent runs with. Order is deliberate: voice
  * delivery (phrasing) sits BEFORE the behavioural doctrines so the tool-first /
@@ -177,9 +193,11 @@ export const PERSONAL_RECALL_DOCTRINE = [
  * tool — the tool rules above still come first"). Personal-recall, emotional-
  * recall then emotional-capture sit LAST, alongside the other behavioural rules,
  * so their "when to call recall_memory / when to capture / when to stay silent"
- * guidance keeps last-position weight.
+ * guidance keeps last-position weight. Identity is appended after them (it is
+ * two short persona lines, not a tool-routing rule, so it cannot nudge a reply
+ * over a needed tool call the way a trailing delivery rule could).
  */
-export const ZOE_INSTRUCTIONS = `${ZOE_SOUL}\n\n${VOICE_DELIVERY_DOCTRINE}\n\n${ACTIVATOR_DOCTRINE}\n\n${IN_SESSION_CONTEXT_DOCTRINE}\n\n${PERSONAL_RECALL_DOCTRINE}\n\n${EMOTIONAL_RECALL_DOCTRINE}\n\n${EMOTIONAL_CAPTURE_DOCTRINE}`;
+export const ZOE_INSTRUCTIONS = `${ZOE_SOUL}\n\n${VOICE_DELIVERY_DOCTRINE}\n\n${ACTIVATOR_DOCTRINE}\n\n${IN_SESSION_CONTEXT_DOCTRINE}\n\n${PERSONAL_RECALL_DOCTRINE}\n\n${EMOTIONAL_RECALL_DOCTRINE}\n\n${EMOTIONAL_CAPTURE_DOCTRINE}\n\n${IDENTITY_DOCTRINE}`;
 
 // Exporting `route` publishes the HTTP agent endpoints (POST/GET /agents/zoe/:id).
 // FAIL CLOSED: this route drives the live Gemma brain on :11434, so by default a
