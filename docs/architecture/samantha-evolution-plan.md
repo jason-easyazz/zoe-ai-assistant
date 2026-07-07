@@ -481,7 +481,7 @@ actually consulted.
   satellites come (already runs `wyoming-piper` locally; ADR names it).
 - **LiveKit SIP** stays the phone bridge candidate (already in-house) per the ADR.
 
-## 9. The OS horizon — Samantha was an operating system (W9–W16)
+## 9. The OS horizon — Samantha was an operating system (W9–W18)
 
 In *Her*, Samantha isn't an app with a good memory. She's **OS1**: the interface to
 Theodore's entire digital life (her first scene is triaging his inbox), a presence with
@@ -662,6 +662,43 @@ silently (the repo has learned this repeatedly — it's VISION principle 4).
 - **DoD:** two consecutive weekly rows exist and a deliberately-broken lab pillar shows
   up red the following week.
 
+### W17 — One conversation across surfaces
+
+Samantha is a single continuous thread — earpiece to desk to phone, mid-sentence.
+Zoe's lanes are separate threads today (verified): panel voice keeps **one session per
+panel** (`voice_tts.py` "Persist one session_id per panel"), chat.html sessions are
+their own, and the Telegram bot is a third. Facts unify through memory, but the
+*conversational present* ("what we were just talking about") does not cross surfaces.
+
+- **Build:** a per-user **active-thread block** — the last N turns' compact summary,
+  keyed by user (not panel/lane), carried into the for-prompt packet as `[thread]` the
+  same way 2b/2c carry relational facts. Start read-only (each lane contributes turns;
+  every lane reads the shared block); the Flue-convergence Telegram re-slot through
+  `/api/chat` with a `channel` tag (already planned there) is the natural join.
+- **DoD:** say something to the panel, walk away, open Telegram — Zoe picks up the
+  thread ("about that flight you mentioned…") without re-explaining.
+- **Flag:** `ZOE_CROSS_SURFACE_THREAD`, default OFF; hot-path budget applies (no LLM on
+  the read side; summary maintained off-path like consolidation).
+
+### W18 — Close the feedback loop (the signal source for all evolution)
+
+The substrate already exists and is **orphaned** (verified): `POST
+/api/chat/feedback/{interaction_id}` writes thumbs + `corrected_response` into a
+`chat_feedback` table (`routers/chat.py` ~:4022), and `intent_router` logs intent
+misses for self-improvement — but **voice has no feedback path** ("Zoe, that was
+wrong" does nothing special) and **nothing consumes `chat_feedback`**. Samantha adapts
+because Theodore reacts; Zoe currently discards the reactions.
+
+- **Build:** (1) a voice feedback intent — "that's wrong / that's not what I meant /
+  good girl" → a `chat_feedback` row tied to the last interaction (correction text
+  captured verbatim when offered); (2) **consumers**: the weekly reflection (W10) reads
+  the week's feedback, the scoreboard (W16) counts it (net-negative weeks = red), and
+  repeated same-shape corrections become W7 evolution-proposal material; (3) corrected
+  facts route into the existing memory-correction path ("never drop a correction" is
+  already a dedup-gate rule).
+- **DoD:** a spoken correction shows up in the next weekly reflection and moves a
+  scoreboard counter.
+
 ### Adjustments to earlier workstreams (from this gap pass)
 
 - **W1.5 (new): conversational repair.** The voice path currently hardcodes
@@ -683,6 +720,18 @@ silently (the repo has learned this repeatedly — it's VISION principle 4).
   scales: no therapy claims, crisis language triggers a deterministic escalate-to-human
   path (named contact), kids' emotional data gets the strictest retention. A short
   normative doc under `docs/governance/`, referenced by the W4/W6 gates.
+- **W6 gate addition — ambient legality (WA).** The household is in Western Australia:
+  the WA Surveillance Devices Act restricts recording private conversations. W6's
+  consent design gets a legal sanity check for *guests* (not just enrolled family)
+  before any prod enable — likely reinforcing the discard-unknown-voices rule as a
+  legal requirement, not just an ethical one.
+- **W2 gate addition — attention budget.** Quiet hours cap *when*; nothing caps *how
+  much*. A global daily cap on unprompted speech (env, default small) so proactivity
+  stays welcome; the scoreboard tracks it.
+- **W14 addition — deploy continuity.** Every deploy restarts zoe-data and would kill a
+  conversation mid-sentence. The gated deploy helper already checks memory headroom —
+  add an active-voice-session check (defer restart while a session is live, like the
+  voice-harness flock).
 - **Parked, named: sight.** Zoe has no eyes (no vision/mmproj anywhere in the stack).
   The Gemma family is multimodal — a vision path exists in principle without swapping
   the rock — but it is RAM-gated (W3) and privacy-heavy (camera in the home). Watch
@@ -726,6 +775,9 @@ silently (the repo has learned this repeatedly — it's VISION principle 4).
 - [ ] **W5.3** onboarding interview at enrollment — NOT STARTED
 - [ ] **W5.4** per-user personas + kid mode — NOT STARTED (needs W5)
 - [ ] **emotional-safety policy** (`docs/governance/`) — NOT STARTED (gates W4 writes + W10)
+- [ ] **W17.1** cross-surface active-thread block in the for-prompt packet — NOT STARTED
+- [ ] **W18.1** voice feedback intent → `chat_feedback` — NOT STARTED
+- [ ] **W18.2** feedback consumers (W10 reflection + W16 scoreboard + W7 material) — NOT STARTED
 
 ## 10. Execution protocol — how a small model runs this plan
 
