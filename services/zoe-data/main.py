@@ -2435,7 +2435,10 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
     - Text JSON {"type": "text", "message": "..."} → routed through zoe_agent
     - Text JSON {"type": "cancel"} → sets cancel flag for in-flight pipeline
     - Binary → transcribed via Moonshine then routed as text
-    Emits {"type": "state"}, {"type": "transcript"}, {"type": "audio"}, {"type": "done"}.
+    Emits {"type": "state"}, {"type": "transcript"}, {"type": "audio"}, {"type": "done"},
+    plus {"type": "activity", "phase": "start"|"result", "tool": "<name>"} frames
+    during brain tool turns (name+phase only — args/results never cross the wire)
+    so the touch panel's live-activity strip can show what Zoe is doing.
     """
     # CSWSH guard. NOTE: guest authentication for this endpoint is intentionally
     # OUT OF SCOPE here (a separate threat-model decision about LAN-kiosk guest
@@ -2624,17 +2627,32 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
             try:
                 import base64 as _b64
                 from brain_dispatch import brain_streaming  # zoe-core by default
-                from routers.voice_tts import _extract_complete_sentences, _synthesize_kokoro_sidecar  # type: ignore
+                from routers.voice_tts import (  # type: ignore
+                    _extract_complete_sentences,
+                    _forward_voice_activity,
+                    _synthesize_kokoro_sidecar,
+                )
 
                 token_buf = ""
                 full_reply: list[str] = []
                 tts_started = False
+                # id→name map for this turn so a result sentinel (which often
+                # omits the tool name) closes under the tool that started.
+                _activity_tools: dict = {}
 
                 async for delta in brain_streaming(
                     message_text, ws_session_id, user_id=user_id, voice_mode=True
                 ):
                     if _ws_cancelled[0]:
                         break
+                    # Brain "what I'm doing" sentinels (__TOOL__/__THINKING__) ride
+                    # alongside the spoken stream — never buffer them toward TTS.
+                    # Tool start/result phases are forwarded to the panel as
+                    # {"type":"activity","phase":...,"tool":...} frames (name+phase
+                    # only; args/results never cross the wire) so the touch panel's
+                    # live-activity strip can show what Zoe is doing mid-turn.
+                    if await _forward_voice_activity(delta, websocket.send_json, _activity_tools):
+                        continue
                     token_buf += delta
                     sentences, token_buf = _extract_complete_sentences(token_buf)
                     for sentence in sentences:

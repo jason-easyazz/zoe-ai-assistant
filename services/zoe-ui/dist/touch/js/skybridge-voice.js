@@ -254,6 +254,10 @@
                 this.emit({ type: 'card', card: msg.card || msg.data || msg, replace: !!msg.replace });
             } else if (type === 'skybridge_context') {
                 this.emit({ type: 'skybridge_context', context: msg.context || {} });
+            } else if (type === 'activity') {
+                // Live-activity strip: the server forwards brain tool sentinels as
+                // lightweight name+phase frames (never args/results).
+                this.emit({ type: 'activity', phase: msg.phase || '', tool: msg.tool || '' });
             } else if (type === 'agui' || type === 'ui_component') {
                 this.emit({ type: 'card', card: msg.data || msg });
             } else if (type === 'stop_playback') {

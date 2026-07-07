@@ -800,3 +800,49 @@ def test_skybridge_list_create_has_database_conflict_guard():
     assert "ON lists (user_id, lower(name))" in migration
     assert "WHERE deleted = 0" in migration
     assert "UPDATE list_items" in migration
+
+
+def test_skybridge_activity_strip_wiring():
+    """Live-activity strip: server forwards brain tool sentinels as activity
+    frames; the transport demuxes them; the app renders a compact escaped strip."""
+    voice = read(UI / "js" / "skybridge-voice.js")
+    app = read(UI / "js" / "skybridge.js")
+    css = read(UI / "css" / "skybridge-data-widgets.css")
+    main = read(DATA / "main.py")
+    tts = read(DATA / "routers" / "voice_tts.py")
+
+    # Server: the /ws/voice/ brain lane routes every delta through the sentinel
+    # filter/forwarder (never buffers sentinels toward TTS), and the helper
+    # emits name+phase-only activity frames.
+    assert "_forward_voice_activity(delta, websocket.send_json" in main
+    assert "async def _forward_voice_activity" in tts
+    assert '"type": "activity"' in tts
+
+    # Transport demux (skybridge-voice.js) re-emits activity frames.
+    assert "type === 'activity'" in voice
+    assert "phase: msg.phase || ''" in voice
+    assert "tool: msg.tool || ''" in voice
+
+    # App (skybridge.js) consumes them: activity case, verb map, strip element.
+    assert "event.type === 'activity'" in app
+    assert "function showActivity" in app
+    assert "function activityToolVerb" in app
+    assert "function clearActivity" in app
+    assert "skyActivityStrip" in app
+
+    # Escaping discipline: the wire-derived tool name is sanitized by a local
+    # escaper and only ever reaches the DOM via textContent, never innerHTML.
+    assert "replace(/[^a-z0-9_-]/g, '')" in app
+    strip_impl = app.split("function showActivity")[1].split("function setContext")[0]
+    assert "textContent" in strip_impl
+    assert ".innerHTML" not in strip_impl
+
+    # The strip clears when the turn returns to ambient (done → ambient).
+    assert "clearActivity()" in app
+
+    # Style: strip exists, uses ds1 tokens, stays a single non-wrapping line.
+    assert ".sky-activity-strip" in css
+    assert ".sky-activity-strip.is-active" in css
+    assert ".sky-activity-strip.is-done" in css
+    assert "var(--sky-" in css.split(".sky-activity-strip", 1)[1]
+    assert "white-space: nowrap" in css
