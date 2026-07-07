@@ -43,6 +43,9 @@ data/wyoming/
 *.token
 *.tokens
 *token*.json
+*token*.yaml
+*token*.yml
+*token*.toml
 *token*.txt
 *token*.env
 *token*.secret
