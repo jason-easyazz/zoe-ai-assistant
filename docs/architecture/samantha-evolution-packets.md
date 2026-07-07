@@ -302,7 +302,10 @@ obtain-step · **DoD** · **STOP conditions**. Then link it from the plan §6 li
 - **P-W9.1 email triage rung 1:** REQUIRES W15 fencing merged + operator mailbox
   consent. Poller sidecar (NOT in zoe-data — P0 rule) reads via IMAP (stdlib `imaplib`,
   read-only, UID watermark), deterministic triage (sender ∈ people graph, thread
-  recency, flags), writes 2-3 fenced items to a table the morning-brief composer reads.
+  recency, flags), writes 2-3 fenced items to a new table `email_brief_items` (migration: id,
+  user_id, message_uid, sender_person_id NULLABLE FK→people, subject, reason,
+  fenced_summary TEXT, created_at, consumed BOOLEAN default false) that the
+  morning-brief composer reads (and marks consumed).
   No LLM in the poller; Gemma phrases at brief time. Tests: seeded mailbox fixtures →
   correct picks; injection fixture stays fenced. Software: none new (imaplib stdlib).
 - **P-W13.1 proactive show:** after P-W2.2, in the spoken-delivery adapter also enqueue
@@ -319,7 +322,10 @@ obtain-step · **DoD** · **STOP conditions**. Then link it from the plan §6 li
   Software: none new.
 - **P-W16.1 scoreboard:** new `scripts/maintenance/samantha_scoreboard.py` run by the
   existing weekly digest cycle (`routers/system.py` loops): runs the acceptance suite +
-  `voice_regression_probe --summary` + greps the week's log-line counters
+  `voice_regression_probe --summary` **taken with `flock -n` (non-blocking)** — if the
+  harness lock is held, skip the probe column for that week and record "probe skipped
+  (lock held)"; the scoreboard must never block or contend with a live harness/Kokoro
+  run — + greps the week's log-line counters
   (`PROACTIVE_SPOKEN`, barge log, `SPEAKER_ID_SHADOW`), appends one row to
   `docs/knowledge/samantha-scoreboard.md`. Tests: composer unit-tested on fixture logs.
   Software: none.
