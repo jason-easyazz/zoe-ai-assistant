@@ -44,15 +44,23 @@ def test_voice_command_does_not_forward_request_scoped_db_to_skybridge():
     """Source-level pin for the call site: reintroducing db=db here re-breaks
     the fast path only at runtime (and only on the detached-task lane), which
     is exactly how it went unnoticed — so fail fast at test time instead."""
+    import ast
+    import textwrap
+
     import routers.voice_tts as vt
 
-    src = inspect.getsource(vt.voice_command)
-    idx = src.find("resolve_skybridge_request(")
-    assert idx != -1, "skybridge fast path call site not found in voice_command"
-    call_region = src[idx : idx + 400]
-    call_args = call_region[: call_region.find(")")]
-    assert "db=" not in call_args, (
-        "voice_command must NOT forward the request-scoped db to "
-        "resolve_skybridge_request — it can already be released back to the "
-        f"pool on the detached turn_stream lane: {call_args!r}"
-    )
+    src = textwrap.dedent(inspect.getsource(vt.voice_command))
+    calls = [
+        node
+        for node in ast.walk(ast.parse(src))
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "id", getattr(node.func, "attr", None)) == "resolve_skybridge_request"
+    ]
+    assert calls, "skybridge fast path call site not found in voice_command"
+    for call in calls:
+        kwarg_names = {kw.arg for kw in call.keywords}
+        assert "db" not in kwarg_names, (
+            "voice_command must NOT forward the request-scoped db to "
+            "resolve_skybridge_request — it can already be released back to "
+            f"the pool on the detached turn_stream lane (line {call.lineno})"
+        )
