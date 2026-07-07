@@ -70,3 +70,47 @@ targets. Treat n=30 as directional, not an SLA: the binomial CI on 6/9 is wide
 
 Run: `python3 parity/tool_reliability.py` (sidecar on :3578). Raw summary lands in
 `parity/tool_reliability_last.json` (gitignored runtime artifact).
+
+---
+
+## Statistical reliability gate — `reliability_gate.py` (LAB-ONLY)
+
+Single-pass gates hide 4B-model variance: a prompt can pass one round and fail
+the next *identically phrased* (the persona leak in `FIX-PACKET-2026-07-07.md`
+item 2 was 1-in-30; the Kate-not-Katie recall is model judgment). This gate
+applies the same rigor that proved `recall_memory` (≥30 trials) to the
+highest-value, historically-flaky assertions: it runs **each** N times
+(`--trials`, default 10) and gates on a per-assertion pass RATE, not a single
+pass.
+
+Unlike the sidecar harnesses, it drives the **live authenticated
+`/api/chat/?stream=false`** on zoe-data :8000 — the surface production uses,
+which routes to the flue sidecar because this deployment runs
+`ZOE_BRAIN_BACKEND=flue`. It is therefore a whole-pipeline reliability read
+(brain + fast-path), matching what the user actually experiences.
+
+Session discipline (mirrors `hard_gate.py`): a **fresh authenticated test user
+is provisioned per run** (`provision_parity_test_user.py` → login for the
+`X-Session-ID`), so each run starts from an empty memory store; **every trial
+uses a fresh nonce'd conversation `session_id`** — sessions are ownership-bound
+and a long shared session overflows the brain at 8192 tokens.
+
+Auto-verified, no human judgment in the pass/fail path: recall/identity/research
+score by substring on the reply; the write assertion checks Postgres
+(`list_items`) ground truth, so a reply that *claims* it wrote but didn't FAILs.
+
+Assertion set + default thresholds:
+
+| Assertion                          | Kind          | Verify        | Threshold |
+|------------------------------------|---------------|---------------|-----------|
+| recall of a just-stored fact       | recall        | substring     | ≥ 90%     |
+| corrected recall (Kate not Katie)  | recall        | substring     | ≥ 90%     |
+| identity: name = Zoe (not Gemma)   | deterministic | substring     | 100%      |
+| research-trap statement no stall   | deterministic | substring     | 100%      |
+| DB-verified shopping-list write    | deterministic | Postgres      | 100%      |
+
+Thresholds override with `--threshold-recall` / `--threshold-deterministic`.
+Run: `python3 parity/reliability_gate.py` (full N=10) or `--trials 2` (smoke).
+Result lands in `parity/reliability_gate_last.json` (gitignored). Sequential,
+one shared GPU — do **not** run the full N=10 sweep while the shared brain is
+mid-campaign.
