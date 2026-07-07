@@ -323,6 +323,58 @@ async def require_internal_token(request: Request) -> None:
     )
 
 
+def _intent_dispatch_token_required() -> bool:
+    """Dark flag: require a PROVEN X-Internal-Token (loopback insufficient) on
+    /api/system/intent-dispatch. Default OFF — read lazily so tests and a
+    .env+restart can flip it without re-importing."""
+    return os.environ.get(
+        "ZOE_INTENT_DISPATCH_REQUIRE_TOKEN", ""
+    ).strip().lower() in ("1", "true", "yes", "on")
+
+
+async def require_intent_dispatch_auth(request: Request) -> None:
+    """Gate for /api/system/intent-dispatch — the brain's write funnel.
+
+    The body carries an arbitrary ``user_id``, so bare-loopback trust here is
+    the same impersonation class #1054 closed for the ``X-Zoe-User-Id`` header:
+    any SSRF'd or compromised local process could write as any user. Strict
+    enforcement can't be unconditional yet — the flue brain sidecar does not
+    send ``X-Internal-Token`` until its env is provisioned, and hard-requiring
+    it would break live brain writes.
+
+    Two-stage rollout, flag-keyed:
+      * ``ZOE_INTENT_DISPATCH_REQUIRE_TOKEN`` unset (default): today's
+        loopback-or-token trust, PLUS a readiness WARNING for every internal
+        caller that did NOT prove the token — when the journal goes quiet the
+        sidecar is provisioned and the flag is safe to flip.
+      * flag set: only ``_has_valid_internal_token`` passes (#1054 semantics:
+        token configured AND presented; loopback alone is insufficient).
+    Rollback is unsetting the flag + restart.
+    """
+    if _intent_dispatch_token_required():
+        if _has_valid_internal_token(request):
+            return
+        raise HTTPException(
+            status_code=403,
+            detail="intent-dispatch requires a valid X-Internal-Token "
+                   "(ZOE_INTENT_DISPATCH_REQUIRE_TOKEN is enabled)",
+        )
+    if _is_internal_request(request):
+        if not _has_valid_internal_token(request):
+            client_host = request.client.host if request.client else "?"
+            logger.warning(
+                "intent-dispatch caller %s trusted via loopback WITHOUT a "
+                "proven X-Internal-Token — provision ZOE_INTERNAL_TOKEN for "
+                "this caller, then set ZOE_INTENT_DISPATCH_REQUIRE_TOKEN=1",
+                client_host,
+            )
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="Internal endpoint: loopback or valid X-Internal-Token required",
+    )
+
+
 def _has_valid_internal_token(request: Request) -> bool:
     """True only when ZOE_INTERNAL_TOKEN is configured AND the request carries it.
 
