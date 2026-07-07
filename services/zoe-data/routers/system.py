@@ -663,12 +663,15 @@ async def get_openclaw_info(
 async def run_scheduled_openclaw_version_check():
     """Background: daily npm check, notify users, optional auto-upgrade."""
     try:
-        async for db in get_db():
+        # get_db_ctx, not `async for db in get_db()`: the `break` leaked the
+        # pooled connection (#953 / the 2026-07-03 pool drain).
+        from db_pool import get_db_ctx
+
+        async with get_db_ctx() as db:
             latest = await fetch_npm_latest_version()
             if latest:
                 await notify_users_with_notify_preference(db, latest)
                 await process_auto_update_users(db, latest)
-            break
     except Exception:
         logger.exception("run_scheduled_openclaw_version_check failed")
 
