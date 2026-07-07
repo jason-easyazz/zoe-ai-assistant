@@ -73,6 +73,11 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
   (`core`) but production-reachable and **live on this deployment since
   2026-07-03**; supervised via the opt-in unit template (see Forbidden above).
   Operator measurement checklists pending in `flue-zoe-brain/LANDING.md`.
+  Quality gates against the live brain live in `flue-zoe-brain/parity/` — a
+  committed harness (`gatelib.py` shared library + `run_gates.py` runner that
+  discovers `*_gate.py` modules; corpus + adversarial gates today). LAB-only,
+  hand-run against the live host, never CI-wired. See
+  `flue-zoe-brain/parity/README-GATES.md`.
 - `flue-zoe-telegram/` — Flue Telegram channel: long-poll bot bridged to zoe-data's
   `/api/chat` (NOT a Flue LLM agent; `src/agents/zoe.ts` is a build-only placeholder
   and registers no model provider — never points at the voice brain on `:11434`).
