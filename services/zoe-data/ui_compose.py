@@ -12,6 +12,10 @@ Design rules (from the approved ever-evolving-interface plan):
     returns ``None`` — callers already delivered the text answer, so composition
     is strictly additive and can never break or delay a turn.
   - Never called on the voice path before TTS has started.
+  - Layout memory (``ui_layouts``, flag ``ZOE_LAYOUT_MEMORY``, default ON):
+    stored trees are injected as a prompt-side structural hint only and every
+    successful compose is saved back — layouts converge per user+intent over
+    time, and stale stored content is never rendered.
 """
 from __future__ import annotations
 
@@ -22,6 +26,7 @@ from typing import Any, Optional
 
 import httpx
 
+import ui_layouts
 from card_contract import CardContractError
 from ui_catalog import catalog_doc, llm_schema, validate_component_tree
 
@@ -33,6 +38,11 @@ _MAX_TOKENS = int(os.environ.get("ZOE_COMPOSE_MAX_TOKENS", "700"))
 # Composition input is a summary of an already-answered turn; cap it so the
 # compose call stays cheap and can't drag a huge context back through the model.
 _MAX_CONTEXT_CHARS = 1200
+# Layout-memory few-shot hint (ZOE_LAYOUT_MEMORY, see ui_layouts.py) is bounded
+# so a large stored tree can't bloat the compose prompt. Truncation may cut the
+# hint JSON mid-token; that is acceptable — it is a structural *hint*, and the
+# grammar-constrained decoder guarantees output validity regardless.
+_LAYOUT_HINT_MAX_CHARS = 800
 
 _SYSTEM = (
     "You are Zoe's interface composer. Given a user's request and the answer "
@@ -55,9 +65,36 @@ async def compose_card(user_message: str, answer_text: str, *, user_id: str = ""
 
     Never raises. Callers must treat ``None`` as "no card" and move on.
     """
+    # Layout memory (ZOE_LAYOUT_MEMORY, default ON; only reachable when
+    # ZOE_COMPOSE_UI is on since this is the sole compose path). v1 is
+    # layout-as-few-shot: a stored tree is a structural hint in the prompt,
+    # never rendered directly — reuse must not show stale content.
+    layout_family = ""
+    layout_hint = ""
+    if user_id and ui_layouts.layout_memory_enabled():
+        try:
+            layout_family = ui_layouts.intent_family_for(user_message)
+            stored = await ui_layouts.get_layout(user_id, layout_family)
+            if stored is not None:
+                # Reuse is the signal that a layout is earning its keep — bump
+                # uses/last_used so convergence tracking reflects reads, not
+                # just writes (touch is no-raise).
+                await ui_layouts.touch(user_id, layout_family)
+            if stored:
+                hint_json = json.dumps(stored, separators=(",", ":"))[:_LAYOUT_HINT_MAX_CHARS]
+                layout_hint = (
+                    "\nPreviously, a good layout for a similar request was: "
+                    + hint_json
+                    + "\nPrefer this structure, updated with the new content."
+                )
+        except Exception as exc:  # noqa: BLE001 — layout memory never breaks compose
+            logger.info("layout memory lookup skipped (non-fatal): %s", exc)
+            layout_hint = ""
+
     prompt = (
         "User asked: " + (user_message or "")[:_MAX_CONTEXT_CHARS]
         + "\nZoe answered: " + (answer_text or "")[:_MAX_CONTEXT_CHARS]
+        + layout_hint
         + "\nCompose the card now."
     )
     body = {
@@ -87,4 +124,9 @@ async def compose_card(user_message: str, answer_text: str, *, user_id: str = ""
     except Exception as exc:  # noqa: BLE001 — absolutely never break the turn
         logger.warning("compose_card unexpected failure (non-fatal): %s", exc)
         return None
+    if layout_family:  # only set when user_id present and layout memory enabled
+        try:
+            await ui_layouts.save_layout(user_id, layout_family, tree)
+        except Exception:  # noqa: BLE001 — save_layout is no-raise; belt and braces
+            pass
     return {"component": "compose", "props": {"tree": tree}}
