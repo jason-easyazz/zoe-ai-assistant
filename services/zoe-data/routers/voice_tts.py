@@ -624,6 +624,64 @@ def _voice_tool_name_from_sentinel(delta: str) -> "Optional[str]":
     return str(name) if name else None
 
 
+def _voice_activity_frame(delta: str, tool_names: "Optional[dict]" = None) -> "Optional[dict]":
+    """Convert a brain ``__TOOL__:`` sentinel into a lightweight activity frame.
+
+    The touch panel's live-activity strip shows "what Zoe is DOING" during brain
+    turns from these frames: ``{"type": "activity", "phase": "start"|"result",
+    "tool": "<name>"}``. Only the tool NAME and PHASE cross the wire — args and
+    result payloads stay server-side (they can carry user data and the strip
+    doesn't need them). ``tool_names`` is an optional caller-owned id→name map
+    (one per turn) so the result phase — which often omits the name (see
+    zoe_core_client._tool_result_sentinel) — resolves to the tool that started.
+    Returns None for args phases, ``__THINKING__:`` markers, and malformed
+    sentinels: a bad frame must never break the voice turn.
+    """
+    if not delta.startswith("__TOOL__:"):
+        return None
+    try:
+        import json as _json
+        tc = _json.loads(delta[len("__TOOL__:"):])
+    except Exception:
+        return None
+    if not isinstance(tc, dict):
+        return None
+    phase = tc.get("phase")
+    if phase not in ("start", "result"):
+        return None
+    tc_id = str(tc.get("id") or "")
+    name = str(tc.get("name") or "")
+    if tool_names is not None and tc_id:
+        if phase == "start" and name:
+            tool_names[tc_id] = name
+        elif not name:
+            name = str(tool_names.get(tc_id) or "")
+    if phase == "start" and not name:
+        return None
+    return {"type": "activity", "phase": phase, "tool": name}
+
+
+async def _forward_voice_activity(delta: str, send_json, tool_names: dict) -> bool:
+    """Consume a brain sentinel delta on the ``/ws/voice/`` panel lane.
+
+    Returns True when ``delta`` is a sentinel (``__TOOL__:`` / ``__THINKING__:``)
+    — the caller must then skip it entirely (never buffer it toward TTS, where
+    Kokoro would read raw JSON aloud). Tool start/result sentinels are
+    additionally forwarded to the panel as lightweight ``activity`` frames via
+    ``send_json`` (the websocket's send_json). Forwarding is best-effort: a
+    send failure never breaks the spoken turn.
+    """
+    if not delta.startswith(_VOICE_TOOL_SENTINEL_PREFIXES):
+        return False
+    frame = _voice_activity_frame(delta, tool_names)
+    if frame is not None:
+        try:
+            await send_json(frame)
+        except Exception as exc:  # noqa: BLE001 - activity is cosmetic, speech is not
+            logger.debug("voice activity frame send failed (non-fatal): %s", exc)
+    return True
+
+
 def _extract_first_unit(buffer: str) -> tuple[Optional[str], str]:
     """Pull the FIRST speakable unit out of a streaming buffer as early as possible.
 
