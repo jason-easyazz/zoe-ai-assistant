@@ -3214,10 +3214,12 @@ async def _daily_briefing_weather(user_id: str) -> Optional[dict]:
     # resolved coords, so the warm path (panel-polled home area) is instant —
     # no separate flat-slot peek needed.
     try:
-        from database import get_db
+        # get_db_ctx, not `async for db in get_db()`: returning from inside the
+        # generator leaks the pooled connection (#953 / the 2026-07-03 pool drain).
+        from database import get_db_ctx
         from routers.weather import _get_current, _resolve_location, _row_to_prefs
 
-        async for db in get_db():
+        async with get_db_ctx() as db:
             cursor = await db.execute(
                 "SELECT * FROM weather_preferences WHERE user_id = ?",
                 [user_id],
@@ -3303,13 +3305,16 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False,
     resolved we say so rather than silently answering for the wrong place.
     """
     try:
-        from database import get_db
+        # get_db_ctx, not `async for db in get_db()`: the many early `return`s
+        # in this body each leaked the pooled connection (#953 / the 2026-07-03
+        # pool drain).
+        from database import get_db_ctx
         from routers.weather import (
             _row_to_prefs, _resolve_location, _geocode,
             _get_current, _get_forecast,
         )
         adhoc = bool(location.strip())
-        async for db in get_db():
+        async with get_db_ctx() as db:
             if adhoc:
                 geo = await _geocode(location)
                 if not geo:
