@@ -4316,7 +4316,10 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
             return []
 
         sub = None
-        _filler_spoken = False
+        # One filler attempt per turn: gate on attempted (not spoken), or a
+        # failed synthesis in the first race would let the second race fire a
+        # too-late filler on its 0.1s floor budget.
+        _filler_attempted = False
         if _filler_enabled():
             try:
                 sub = await asyncio.wait_for(asyncio.shield(sub_task), timeout=_after)
@@ -4325,8 +4328,8 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
             except Exception:
                 sub = None  # brain failed fast — the unified error frame below reports it
             if sub is None and not sub_task.done():
+                _filler_attempted = True
                 for _line in await _filler_lines():
-                    _filler_spoken = True
                     yield _line
         if sub is None:
             try:
@@ -4345,7 +4348,7 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
             pass
         if hasattr(sub, "body_iterator"):
             _body = sub.body_iterator
-            if _filler_enabled() and not _filler_spoken:
+            if _filler_enabled() and not _filler_attempted:
                 # voice_command returned fast, but its generator is lazy — the
                 # brain work happens on the first pull. Race the first chunk
                 # against whatever is left of the filler budget.
@@ -4356,8 +4359,8 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
                 try:
                     _first = await asyncio.wait_for(asyncio.shield(_first_task), timeout=_budget)
                 except asyncio.TimeoutError:
+                    _filler_attempted = True
                     for _line in await _filler_lines():
-                        _filler_spoken = True
                         yield _line
                 except StopAsyncIteration:
                     _ended = True

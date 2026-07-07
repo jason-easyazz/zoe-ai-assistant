@@ -113,6 +113,28 @@ def test_lazy_stream_slow_first_chunk_speaks_filler(monkeypatch):
     assert any(f.get("done") for f in frames)
 
 
+def test_failed_filler_synthesis_not_retried_late(monkeypatch):
+    """If the first race attempts the filler but TTS fails, the body-chunk race
+    must NOT retry it on its 0.1s floor budget — a >1.6s filler is just noise."""
+    async def slow_brain(payload, caller=None, stream=True, db=None):
+        await asyncio.sleep(0.4)  # > filler_after: first race attempts the filler
+        return await _streaming_brain(first_chunk_delay=0.4)(payload, caller=caller, stream=stream, db=db)
+    app = _app(monkeypatch, slow_brain)
+
+    calls = {"n": 0}
+    async def _broken_tts(_text):
+        calls["n"] += 1
+        return None  # synthesis fails for filler AND fallback
+    import routers.voice_tts as _vt
+    monkeypatch.setattr(_vt, "_synthesize_kokoro_sidecar", _broken_tts)
+    monkeypatch.setattr(_vt, "_synthesize_kokoro", _broken_tts)
+
+    frames = _post(app)
+    assert not any(f.get("provider") == "filler" for f in frames), frames
+    assert calls["n"] == 2, f"one attempt (sidecar+fallback), no late retry: {calls}"
+    assert any(f.get("done") for f in frames)
+
+
 def test_lazy_stream_fast_first_chunk_skips_filler(monkeypatch):
     frames = _post(_app(monkeypatch, _streaming_brain(first_chunk_delay=0.0)))
     assert not any(f.get("provider") == "filler" for f in frames), frames
