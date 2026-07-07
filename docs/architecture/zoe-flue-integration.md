@@ -200,6 +200,10 @@ per-process multi-user workaround in `zoe_core_client.py`.
 
 ### 8.1 Multica — board-driven engineering orchestration
 
+> Executable packet: [`multica-retirement-gates.md`](multica-retirement-gates.md)
+> — code-verified inventory, per-capability proof gates, rollback, sequencing,
+> Forbidden list. The table below is the summary; the packet is normative.
+
 | Capability today (code) | Flue recreation | Retire-gate |
 |---|---|---|
 | Ticket/board orchestration: `executors/kanban_adapter.py`, `multica_ticket_contract.py`, `multica_autopilot_sync.py`, `pipeline_handoff.py` | A **durable Flue workflow** per ticket: bound agent delegates scout → implement → verify → openPR to subagents (the Phase-0 harness pattern, proven in #858). Ticket state lives in Flue run durability; zoe-data stays SoR for anything user-visible. | Flue processes ≥5 real tickets end-to-end (branch → PR → merged) with no stalls; operator sign-off. |
