@@ -4273,6 +4273,10 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
         return os.environ.get("ZOE_VOICE_FILLER_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on")
 
     async def _wrapped():
+      # try/finally: if the client disconnects mid-stream, Starlette closes this
+      # generator — without the cancel, sub_task (brain+TTS) would keep burning
+      # resources for a dead connection.
+      try:
         # Lead with the transcript so the panel can show/log what was heard
         # before the first audio chunk arrives.
         yield (_json.dumps({"transcript": transcript}) + "\n").encode()
@@ -4287,6 +4291,10 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
             try:
                 sub = await asyncio.wait_for(asyncio.shield(sub_task), timeout=_after)
             except asyncio.TimeoutError:
+                pass  # brain still working — speak the filler below
+            except Exception:
+                sub = None  # brain failed fast — the unified error frame below reports it
+            if sub is None and not sub_task.done():
                 _fillers = [p for p in os.environ.get(
                     "ZOE_VOICE_FILLER_PHRASES", "Let me check.|One sec.|Hmm, let me look."
                 ).split("|") if p.strip()]
@@ -4366,6 +4374,10 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
                 yield base64.b64encode(_wav) + b"\n"
                 _chunk += 1
         yield (_json.dumps({"done": True, "reply": reply_text}) + "\n").encode()
+
+      finally:
+        if not sub_task.done():
+            sub_task.cancel()
 
     return StreamingResponse(
         _wrapped(), media_type="application/x-zoe-audio-stream", headers={"Cache-Control": "no-cache"}
