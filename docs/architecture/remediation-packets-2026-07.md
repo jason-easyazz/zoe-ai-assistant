@@ -41,7 +41,11 @@ tests; the dead duplicate was then retired-by-removal (this PR). Do not re-execu
   validate.yml. **Replay gate mandatory.**
 - **Software:** none new. **STOP:** do not touch the happy path or the barge-in logic.
 
-## P-F4 — `ambient_memory` user scoping (migration 0016)
+## P-F4 — `ambient_memory` user scoping (migration 0016) — DONE (PR #1145)
+
+> Landed as migration **0017** (`0016_ui_layouts` took the number after this packet was
+> written; content unchanged). Live `ambient_memory` verified **0 rows** 2026-07-07
+> before writing the downgrade — the STOP condition did not fire.
 
 - **Fix approach:** new alembic `0016_ambient_memory_user_scope.py`: add
   `user_id TEXT` (nullable — table is ~empty, capture flag-OFF; enforce NOT NULL at the
