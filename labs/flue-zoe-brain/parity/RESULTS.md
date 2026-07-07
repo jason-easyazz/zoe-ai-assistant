@@ -7,6 +7,49 @@ Flue brain is, and what's left before any production cutover.
 
 ---
 
+## Tool-BREADTH gate (2026-07-07, lab) — 4/6 tool families work, 3 misroute bugs found
+
+`parity/tool_breadth_gate.py` closes the breadth gap: the older gates
+(`parity_check.py` / `hard_gate.py` / `tool_reliability.py`) only exercise ~6 of
+the brain's ~19 registered Zoe tools end-to-end. This gate drives the LIVE prod
+path (`/api/chat` on :8000, routed through the Flue brain since 2026-07-03) as
+the authed `parity-gate-user`, with PER-RUN nonce'd per-turn session ids, and
+verifies **said-vs-did against Postgres ground truth** — a reply that CLAIMS a
+write while the DB shows nothing is a FAIL. Read tools are anchored to a
+DB-proven write (list_reminders/note_search/people_search must surface the
+nonce), and `get_weather` (no DB side-effect) is verified by response sanity.
+Every nonce'd row (incl. misroute leaks into `list_items`) is soft-deleted at
+the end.
+
+Result (two consecutive runs, stable): **PASS reminders (add+list), timers
+(fail-closed honesty), weather (named location)**; **FAIL journal, notes, people**
+— all three write tools MISROUTE and lie about it:
+
+| Tool family | Verdict | Ground-truth finding |
+|---|---|---|
+| reminders add + list | PASS | reminder lands in `reminders`; list surfaces it |
+| set_timer | PASS | fail-closed — never fabricates a timer the backend can't schedule |
+| get_weather (named loc) | PASS | plausible weather reply, no stall/fabrication |
+| journal create | **FAIL** | "Added … **to your shopping list**" — misrouted to `list_add`; nothing in `journal_entries` |
+| note create | **FAIL** | "I'll remember …" — misrouted to `remember_fact`; nothing in `notes` |
+| note_search (read) | **FAIL** | hits the **research-trap STALL** ("what budget/location…") — the regression `hard_gate` guards elsewhere |
+| people create | **FAIL** | "Added … **to your shopping list**" — misrouted to `list_add`; nothing in `people` |
+
+The misrouted journal/people writes were confirmed to land as nonce'd
+`list_items` rows (the shopping list), which the gate now cleans up. Each FAIL is
+a said-vs-did honesty defect (the brain claims success for a tool it never
+called) and should become its own fix ticket:
+1. journal_create misroutes to list_add;
+2. note_create misroutes to remember_fact;
+3. note_search triggers the research-stall instead of searching;
+4. people_create misroutes to list_add.
+
+Run: `python3 labs/flue-zoe-brain/parity/tool_breadth_gate.py` (full) or `--dry`
+(2-tool smoke, for a merge-train window). Latest results:
+`parity/tool_breadth_gate_results.json`.
+
+---
+
 ## Phase 3, increment 1 — REAL tools wired (2026-06-28, lab) — the headline finding
 
 The gap from the increment-1 (persona-only) run below was **no tools**. This
