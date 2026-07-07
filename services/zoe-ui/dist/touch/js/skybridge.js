@@ -276,6 +276,8 @@
             renderSkybridgeResult(event.result || event);
         } else if (event.type === 'skybridge_context') {
             skybridgeContext = event.context || skybridgeContext || {};
+        } else if (event.type === 'activity') {
+            showActivity(event.phase, event.tool);
         } else if (event.type === 'error') {
             showError(event.message);
             if (/voice disconnected|transport unavailable|livekit unavailable|websocket|microphone|permission/i.test(event.message || '')) {
@@ -962,6 +964,94 @@
         return true;
     }
 
+    // ── Live-activity strip ─────────────────────────────────────────────────
+    // "What Zoe is DOING" during brain turns. The server forwards brain tool
+    // sentinels as {type:'activity', phase:'start'|'result', tool:'calendar'}
+    // frames (name + phase only). A compact one-line strip near the orb pulses
+    // with a friendly verb while a tool runs, flashes a ✓ on result, and clears
+    // when the turn finishes (done/ambient). Never overlaps cards — it lives
+    // inside the orb panel.
+    let activityClearTimer = null;
+
+    // Friendly verb per tool (mirrors chat.html's activityToolVerb, tuned for
+    // the voice-brain tool set). Prefix match so 'calendar_show' → calendar.
+    const ACTIVITY_VERBS = {
+        calendar: 'Checking calendar',
+        lists: 'Looking at your lists',
+        list: 'Looking at your list',
+        reminders: 'Checking reminders',
+        reminder: 'Checking reminders',
+        mempalace_search: 'Checking memory',
+        mempalace_add: 'Saving to memory',
+        memory: 'Checking memory',
+        weather: 'Checking the weather',
+        web_search: 'Searching the web',
+        web: 'Looking that up',
+        search: 'Looking that up',
+        browse: 'Reading a page',
+        ha_control: 'Adjusting the house',
+        bash: 'Running a command',
+        show_map: 'Preparing a map',
+        show_chart: 'Drawing a chart'
+    };
+
+    function activityToolVerb(name) {
+        // Local escaper: the tool name arrives over the wire — keep only safe
+        // identifier characters before it can ever reach the DOM.
+        const key = String(name || '').toLowerCase().replace(/[^a-z0-9_-]/g, '');
+        if (ACTIVITY_VERBS[key]) return ACTIVITY_VERBS[key];
+        for (const k in ACTIVITY_VERBS) {
+            if (key.indexOf(k) === 0) return ACTIVITY_VERBS[k];
+        }
+        return key ? 'Using ' + key.replace(/_/g, ' ') : 'Working';
+    }
+
+    function activityStripEl() {
+        let el = document.getElementById('skyActivityStrip');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'skyActivityStrip';
+            el.className = 'sky-activity-strip';
+            el.setAttribute('aria-live', 'polite');
+            const host = document.querySelector('.sky-orb-panel');
+            const anchor = document.getElementById('skyListeningCopy');
+            if (host && anchor && anchor.parentElement === host) {
+                host.insertBefore(el, anchor);
+            } else if (host) {
+                host.appendChild(el);
+            } else {
+                document.body.appendChild(el);
+            }
+        }
+        return el;
+    }
+
+    function showActivity(phase, tool) {
+        const el = activityStripEl();
+        if (activityClearTimer) { clearTimeout(activityClearTimer); activityClearTimer = null; }
+        const verb = activityToolVerb(tool);
+        if (phase === 'start') {
+            // textContent, never innerHTML: wire-derived text must not be parsed.
+            el.textContent = verb + '…';
+            el.classList.add('is-active', 'is-visible');
+            el.classList.remove('is-done');
+        } else if (phase === 'result') {
+            el.textContent = '✓ ' + verb;
+            el.classList.remove('is-active');
+            el.classList.add('is-done', 'is-visible');
+            activityClearTimer = setTimeout(clearActivity, 1800);
+        }
+    }
+
+    function clearActivity() {
+        if (activityClearTimer) { clearTimeout(activityClearTimer); activityClearTimer = null; }
+        const el = document.getElementById('skyActivityStrip');
+        if (el) {
+            el.classList.remove('is-visible', 'is-active', 'is-done');
+            el.textContent = '';
+        }
+    }
+
     function setContext(title, detail) {
         els.contextTitle.textContent = title;
         els.contextDetail.textContent = detail;
@@ -1023,8 +1113,9 @@
         setStatus(state.charAt(0).toUpperCase() + state.slice(1));
         updateVoiceControl(state);
         // Arm the watchdog while a server-dependent turn is in flight; clear it
-        // once we're back at rest.
-        if (state === 'ambient') { stallDeferrals = 0; clearStallWatchdog(); }
+        // once we're back at rest. Ambient also retires the live-activity strip
+        // — a finished turn must never leave a stale "Checking calendar…" up.
+        if (state === 'ambient') { stallDeferrals = 0; clearStallWatchdog(); clearActivity(); }
         else armStallWatchdog();
     }
 
