@@ -121,6 +121,15 @@ _RESEARCH_FRAME_RE = re.compile(
 )
 
 
+# Personal-data search target: a search whose object is the user's OWN notes /
+# journal / memory / saved data. "search my notes for X", "in my notes",
+# "my journal for" — these are note_search / recall, never web research.
+_PERSONAL_DATA_TARGET_RE = re.compile(
+    r"\b(?:in|through|for)?\s*my\s+(?:notes?|journal|diary|memor(?:y|ies)|saved\s+\w+)\b"
+    r"|\bmy\s+(?:notes?|journal|diary|memor(?:y|ies))\s+for\b"
+)
+
+
 def classify_query(message: str) -> str:
     msg = (message or "").strip().lower()
     factual_starts = (
@@ -134,6 +143,13 @@ def classify_query(message: str) -> str:
     if len(msg.split()) <= 8 and msg.startswith(factual_starts):
         return "simple_factual"
     if _SELF_RECALL_RE.search(msg):
+        return "general"
+    # Personal-scope search ("search my notes for X", "find in my notes …") is
+    # note_search over the user's own data — NOT web research. It must not trip
+    # the "Before I start research…" stall (#1099 follow-up). Web research
+    # ("find me the cheapest flight") has no personal-data target and is
+    # unaffected.
+    if _PERSONAL_DATA_TARGET_RE.search(msg):
         return "general"
     if _RESEARCH_FRAME_RE.search(msg):
         return "research"
