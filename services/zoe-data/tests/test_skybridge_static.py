@@ -414,6 +414,40 @@ process.stdout.write(JSON.stringify(checks));
 
 
 
+def test_skybridge_ambient_briefing_is_wired_throttled_and_silent():
+    """The idle briefing card: fetched on the ambient path, throttled to 5 min,
+    silent on every failure, and rendered ONLY through the shared renderer into
+    a container inside #skyAmbientClock (so night-dim CSS inherits)."""
+    app = read(UI / "js" / "skybridge.js")
+    html = read(UI / "skybridge.html")
+
+    # Fetch wiring + renderer-only rendering.
+    assert "/api/skybridge/briefing" in app
+    assert "function maybeFetchAmbientBriefing" in app
+    assert "if (!showCards) maybeFetchAmbientBriefing();" in app
+    assert "els.ambientBriefing.innerHTML = window.SkybridgeRenderer.render(card);" in app
+
+    # 5-minute throttle constant + 10s fetch timeout.
+    assert "const BRIEFING_REFRESH_MS = 300000;" in app
+    assert "const BRIEFING_FETCH_TIMEOUT_MS = 10000;" in app
+    assert "if (Date.now() - lastBriefingFetchTs < BRIEFING_REFRESH_MS) return;" in app
+
+    # Silent failure — a briefing error must never disturb the resting clock.
+    assert ".catch(() => { /* briefing is best-effort" in app
+    assert "controller.abort()" in app
+
+    # Idle-only, riding the EXISTING 1s clock ticker (no new always-on interval
+    # to fight the stall watchdog).
+    assert "function isRestingOnAmbientClock" in app
+    assert "if (!isRestingOnAmbientClock()) return;" in app
+    assert "maybeFetchAmbientBriefing();\n        }, 1000);" in app
+
+    # Container lives inside the ambient clock; empty renders nothing.
+    ambient_block = html[html.index('id="skyAmbientClock"'):html.index('id="skyOrb"')]
+    assert 'id="skyAmbientBriefing"' in ambient_block
+    assert "#skyAmbientBriefing:empty { display: none; }" in html
+
+
 def test_skybridge_returns_to_ambient_clock_after_card_idle():
     app = read(UI / "js" / "skybridge.js")
     html = read(UI / "skybridge.html")
