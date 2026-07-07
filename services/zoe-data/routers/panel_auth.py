@@ -127,9 +127,11 @@ async def _resolve_device_token_user(raw_token: str) -> dict | None:
     bound_user_id: Optional[str] = None
     lookup_failed = False
     try:
-        from database import get_db
+        # get_db_ctx, not `async for db in get_db()`: the `break` leaked the
+        # pooled connection (#953 / the 2026-07-03 pool drain).
+        from db_pool import get_db_ctx
 
-        async for db in get_db():
+        async with get_db_ctx() as db:
             row = await (
                 await db.execute(
                     """SELECT user_id FROM panel_user_bindings
@@ -139,7 +141,6 @@ async def _resolve_device_token_user(raw_token: str) -> dict | None:
             ).fetchone()
             if row and row["user_id"]:
                 bound_user_id = row["user_id"]
-            break
     except Exception as exc:
         # Could NOT determine the binding (transient pool exhaustion, connection
         # drop, schema mismatch). We still fail closed to guest — the safe, least-
