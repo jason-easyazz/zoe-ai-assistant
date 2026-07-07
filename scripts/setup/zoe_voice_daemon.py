@@ -91,8 +91,10 @@ BARGE_IN_THRESHOLD = float(os.environ.get("BARGE_IN_THRESHOLD", "0.5"))
 # speech chunks (80ms each) within the last BARGE_WINDOW_CHUNKS. Real speech
 # dips between syllables — a single-chunk trigger is too flaky, sustained
 # windows are robust against beeps/echo blips.
-BARGE_MIN_CHUNKS = int(os.environ.get("BARGE_MIN_CHUNKS", "3"))
-BARGE_WINDOW_CHUNKS = int(os.environ.get("BARGE_WINDOW_CHUNKS", "6"))
+# Live-tuned 2026-07-07: Jason's real interrupts scored prob=0.99 with ZERO
+# false fires across a 12-turn session, so 2 chunks (~160ms) is safe and snappy.
+BARGE_MIN_CHUNKS = int(os.environ.get("BARGE_MIN_CHUNKS", "2"))
+BARGE_WINDOW_CHUNKS = int(os.environ.get("BARGE_WINDOW_CHUNKS", "5"))
 # Guard window after TTS ends — ignore VAD for this many ms (Jabra AEC residual).
 POST_TTS_PROTECTION_MS = int(os.environ.get("POST_TTS_PROTECTION_MS", "300"))
 # ── Ambient memory: always-on VAD captures room speech ────────────────────
@@ -434,6 +436,17 @@ class _BargeMonitor:
                 if sum(window) >= max(1, BARGE_MIN_CHUNKS):
                     log.info("Barge-in detected during playback (monitor, prob=%.2f)", prob)
                     _barge_in_requested.set()
+                    # Kill the TTS subprocess DIRECTLY — the stream loop only
+                    # polls the flag at network-chunk boundaries, which can be
+                    # seconds away while the brain generates the next sentence.
+                    with _tts_process_lock:
+                        proc = _tts_process
+                    if proc is not None and proc.poll() is None:
+                        try:
+                            proc.terminate()
+                            log.info("Barge-in: TTS playback terminated immediately.")
+                        except Exception as exc:
+                            log.debug("Barge-in terminate failed: %s", exc)
                     break
         finally:
             try:
