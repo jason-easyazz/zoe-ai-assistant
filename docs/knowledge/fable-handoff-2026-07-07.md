@@ -38,8 +38,11 @@ chat). Statuses as of 2026-07-07 ~00:30 AWST — verify merge states before acti
 2. Take ONE packet from `samantha-evolution-packets.md`, obey its P0 protocol and STOP
    conditions, drive the PR to merge (resolve Greptile threads via GraphQL, REST-verify
    merged), then update plan §6/§7.
-3. Fix-work: `docs/reviews/full-codebase-review-2026-07-07.md` F1→F5 in order (F1 is a
-   one-file fix for a bug that crashes hourly). Each F-item has file:line + fix shape.
+3. Fix-work: `docs/reviews/full-codebase-review-2026-07-07.md` in its corrected order
+   **F1 → F3 → F4 → F5** (F2 is RETRACTED — do not execute; F1 is a one-file fix for a
+   silently-failing prune that has never run, not a crash). Each F-item has file:line +
+   fix shape; the deeper `issue-register-2026-07-07.md` marks which second-pass items
+   are `[V]` verified vs `[A]` verify-before-fixing.
 4. Hard tasks route to the Omnigent fleet (claude_code/codex/pi workers) or Hermes; the
    plan's §11 doctrine covers when remote models are allowed.
 
