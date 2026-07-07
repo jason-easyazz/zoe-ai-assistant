@@ -157,16 +157,20 @@ def provision_user() -> tuple[str, str]:
 def db_item_present(text: str) -> bool:
     """True iff a non-deleted list item matching `text` exists in Postgres."""
     import asyncio
-    sys.path.insert(0, str(REPO_ROOT / "services" / "zoe-data"))
+    zoe_data_path = str(REPO_ROOT / "services" / "zoe-data")
+    if zoe_data_path not in sys.path:  # idempotent — called once per write trial
+        sys.path.insert(0, zoe_data_path)
     from runtime_env import bootstrap_runtime_env  # noqa: E402
     bootstrap_runtime_env()
     import asyncpg  # noqa: E402
 
     async def q():
         conn = await asyncpg.connect(os.environ["POSTGRES_URL"])
-        rows = await conn.fetch(
-            "SELECT deleted FROM list_items WHERE text ILIKE $1", f"%{text}%")
-        await conn.close()
+        try:
+            rows = await conn.fetch(
+                "SELECT deleted FROM list_items WHERE text ILIKE $1", f"%{text}%")
+        finally:
+            await conn.close()  # guarantee teardown even if fetch raises
         return rows
 
     rows = asyncio.run(q())
@@ -197,7 +201,11 @@ def a_corrected_recall(sid: str, extract_wait: float):
     s2 = nonce_session("corrected-ask")
     reply, _ = chat("What's my sister's name?", s2, sid)
     rl = reply.lower()
-    ok = "kate" in rl and "katie" not in rl.replace("kate", "")
+    # "kate" must be present AND "katie" absent — a reply that still says
+    # "katie" (even alongside "kate", e.g. the "name is Katie… called Kate"
+    # waffle) is a FAIL. (Do NOT strip "kate" out first — that turns "katie"
+    # into "i" and would score the waffle as a pass, under-counting failures.)
+    ok = "kate" in rl and "katie" not in rl
     return ok, f"want Kate not Katie :: {reply.strip()[:120]}"
 
 
