@@ -1086,17 +1086,23 @@ def detect_intent(
             return Intent("list_add", {"item": item, "list_type": list_type})
 
     # --- LIST ADD (implicit, no list name) ---
-    for pattern in [
-        r"^add (.+)$",
-        r"^put (.+)$",
-        r"^(?:(?:can|could) you |please )?add (.+)$",
-        r"^(?:(?:can|could) you |please )?put (.+)$",
-    ]:
-        m = re.match(pattern, t)
-        if m:
-            item = _sanitize_list_item(m.group(1))
-            list_type = _infer_list(item)
-            return Intent("list_add", {"item": item, "list_type": list_type})
+    # Defer to the brain when a competing-capability cue is present without an
+    # explicit shopping/grocery-list target: "add a journal entry: …", "add
+    # Marcus to my contacts", "add a note …" must route to their own domains
+    # via the brain, not get swallowed as shopping-list items. Explicit list
+    # phrasings ("… to my shopping list") are handled above and unaffected.
+    if not _has_competing_list_cue(t):
+        for pattern in [
+            r"^add (.+)$",
+            r"^put (.+)$",
+            r"^(?:(?:can|could) you |please )?add (.+)$",
+            r"^(?:(?:can|could) you |please )?put (.+)$",
+        ]:
+            m = re.match(pattern, t)
+            if m:
+                item = _sanitize_list_item(m.group(1))
+                list_type = _infer_list(item)
+                return Intent("list_add", {"item": item, "list_type": list_type})
 
     # --- LIST ADD (natural language shopping) ---
     m = re.match(
@@ -1818,6 +1824,33 @@ def _infer_list(item: str) -> str:
     if any(kw in lower for kw in _TASK_KEYWORDS):
         return "personal"
     return "shopping"
+
+
+# Cues that belong to a NON-list capability (journal, people/contacts, notes,
+# calendar, reminders). When one of these appears in an "add …" turn WITHOUT an
+# explicit shopping/grocery-list target, the deterministic list_add fast path
+# must NOT claim the turn — defer to the brain, which routes journal/contacts/
+# notes correctly. An explicit list target overrides (see _has_list_target).
+_COMPETING_LIST_CUE_RE = re.compile(
+    r"\b(journal|diary|contact|contacts|note|notes|calendar|reminder|reminders)\b",
+    re.IGNORECASE,
+)
+# Explicit shopping/grocery/list target — if present, keep list_add even when a
+# competing word co-occurs ("add notebook to my shopping list" stays a list).
+_EXPLICIT_LIST_TARGET_RE = re.compile(
+    r"\bto\s+(?:the\s+|my\s+)?(?:shopping|grocery|groceries)(?:\s+list)?\b"
+    r"|\b(?:shopping|grocery|groceries)\s+list\b"
+    r"|\bto\s+(?:the\s+|my\s+)?(?:todo|to-do|to do|personal|work|bucket|tasks)\s+list\b",
+    re.IGNORECASE,
+)
+
+
+def _has_competing_list_cue(text: str) -> bool:
+    """True when `text` names a non-list capability and lacks an explicit list
+    target, so the implicit list_add matcher should defer to the brain."""
+    if _EXPLICIT_LIST_TARGET_RE.search(text):
+        return False
+    return bool(_COMPETING_LIST_CUE_RE.search(text))
 
 
 def _sanitize_list_item(raw: str) -> str:

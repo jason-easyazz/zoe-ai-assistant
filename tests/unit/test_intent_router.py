@@ -335,3 +335,42 @@ def test_weather_named_location_not_found(ir, monkeypatch):
     assert "couldn't find" in reply.lower()
     assert "Nowheresville-xyz" in reply
     assert "get_current" not in calls  # never fetched weather for an unresolved place
+
+
+# ── Fast-path defer-to-brain guards (fix/zoe-data-fastpath-defer-to-brain) ────
+# The deterministic list_add fast path must DEFER to the brain when a
+# competing-capability cue (journal, contacts, note) owns an "add …" turn
+# without an explicit shopping/grocery list target — otherwise it swallowed
+# journal/contacts/note writes as shopping items (LIVE misroute).
+
+class TestListAddDefersToCompetingDomains:
+    # Competing-domain "add …" turns must NOT become list_add — they defer to
+    # the brain (detect_intent returns None) or route to their own domain.
+    DEFER = [
+        "add a journal entry: grateful for the rain today",
+        "add marcus to my contacts as my colleague",
+        "add a note about the leaky tap",
+        "add a diary entry for today",
+    ]
+    # Genuine shopping/list adds must STILL be list_add.
+    STILL_LIST_ADD = [
+        "add milk to my shopping list",
+        "add milk",
+        "add eggs and bread",
+        "put bananas on the grocery list",
+        "add a notebook to my shopping list",  # 'note'-adjacent word, but explicit list
+    ]
+
+    def test_competing_domains_not_list_add(self, ir):
+        for msg in self.DEFER:
+            name = _intent_name(ir, msg)
+            assert name != "list_add", (
+                f"list_add wrongly swallowed competing-domain turn: {msg!r} -> {name!r}"
+            )
+
+    def test_genuine_shopping_adds_still_list_add(self, ir):
+        for msg in self.STILL_LIST_ADD:
+            name = _intent_name(ir, msg)
+            assert name == "list_add", (
+                f"Expected list_add for genuine shopping add: {msg!r}, got {name!r}"
+            )
