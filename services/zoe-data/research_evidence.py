@@ -90,6 +90,37 @@ class ResearchEvidencePackage:
     accessibility: dict[str, Any]
 
 
+# Self-recall questions about the user's own life ("what do I do on
+# weekends?") are memory/chat turf, never research briefs — even when they
+# contain research-ish words. Retrospective/habitual auxiliaries only:
+# "can/could" is deliberately absent so "where can I buy X" stays a research ask.
+_SELF_RECALL_RE = re.compile(
+    r"\b(?:what|when|where|who|why|how)\s+(?:do|did|does|have|has|had|am|was|were)\s+i\b"
+)
+
+# A message classifies as research only when an explicit request/imperative
+# research frame is present. Bare topical substrings ("weekend", "best",
+# "recipe", "price"...) previously hijacked first-person statements like
+# "I enjoy hiking on weekends" (live bug — FIX-PACKET-2026-07-07 item 1).
+# A first-person statement without one of these request frames can never
+# match, so it falls through to "general" by construction.
+_RESEARCH_FRAME_RE = re.compile(
+    r"""
+      ^(?:please\s+)?(?:find|search|research|compare|recommend|look\s+up(?!\s+to\b))\b  # imperative opener
+    | \bfind\s+(?:me|us)\b
+    | \bsearch\s+(?:for|the\s+web|online)\b
+    | \blook\s+up\b(?!\s+to\b)                                # "look up prices", not "look up to her"
+    | \b(?:can|could|would|will)\s+you\s+(?:please\s+)?
+      (?:find|search|research|compare|look\s+up|recommend)\b
+    | \b(?:what'?s|what\s+is|what\s+are)\s+the\s+(?:cheapest|best)\b
+    | \bwhere\s+can\s+i\s+(?:buy|get|find|hire|rent)\b
+    | \brecommend\s+(?:me\s+)?(?:a|an|some|the)\b
+    | ^(?:best|cheapest|top)\b                                # elliptical search-style opener
+    """,
+    re.VERBOSE,
+)
+
+
 def classify_query(message: str) -> str:
     msg = (message or "").strip().lower()
     factual_starts = (
@@ -102,20 +133,9 @@ def classify_query(message: str) -> str:
     )
     if len(msg.split()) <= 8 and msg.startswith(factual_starts):
         return "simple_factual"
-    research_markers = (
-        "cheapest",
-        "price",
-        "compare",
-        "find me",
-        "best",
-        "flight",
-        "recipe",
-        "weekend",
-        "events",
-        "deal",
-        "bottle shop",
-    )
-    if any(m in msg for m in research_markers):
+    if _SELF_RECALL_RE.search(msg):
+        return "general"
+    if _RESEARCH_FRAME_RE.search(msg):
         return "research"
     return "general"
 
