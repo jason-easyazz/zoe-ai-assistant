@@ -52,15 +52,16 @@ ZOE_DATA_DIR = "/home/zoe/assistant/services/zoe-data"
 
 # The authed parity-gate-user session (minted via provision_parity_test_user.py
 # + /api/auth/login). Same file hard_gate.py reads.
-SID_FILE = SCRATCH / "pgu.sid"
+# An operator can point at an alternate location with ZOE_PGU_SID (e.g. a
+# scratchpad copy); otherwise the SID lives next to this script as pgu.sid.
+SID_FILE = Path(os.environ.get("ZOE_PGU_SID") or (SCRATCH / "pgu.sid"))
 if not SID_FILE.is_file():
-    # Fall back to the scratchpad copy hard_gate.py uses on this host.
-    alt = Path(
-        "/tmp/claude-1000/-home-zoe-assistant--claude-worktrees-cool-volhard-4d17b3"
-        "/c0a01881-9dc6-4c60-8327-dc9c28eb23e4/scratchpad/pgu.sid"
+    sys.exit(
+        f"[tool_breadth_gate] missing SID file — run "
+        f"scripts/maintenance/provision_parity_test_user.py + /api/auth/login, "
+        f"then drop the session id here (or set ZOE_PGU_SID).\n"
+        f"  looked for: {SID_FILE}"
     )
-    if alt.is_file():
-        SID_FILE = alt
 SID = SID_FILE.read_text().strip()
 
 # Per-run nonce: unique-ish marker embedded in every test item so DB ground
@@ -100,6 +101,23 @@ def chat(msg, session):
 # Mirrors hard_gate.py's db_item_state helper: connect straight to the live
 # Postgres and read the write's real state, unfiltered by user (the nonce makes
 # each row unambiguously this run's). Each helper returns (present, row_repr).
+#
+# asyncpg cannot parameterise identifier tokens (table/column names), so the
+# helpers f-string them into the SQL. Every identifier is a hardcoded literal in
+# this file (never external input), but we gate them through a strict allowlist
+# anyway so this can never become an injection vector if the helpers are later
+# reused with a caller-supplied name.
+ALLOWED_TABLES: frozenset[str] = frozenset(
+    {"reminders", "notes", "journal_entries", "people", "list_items"})
+ALLOWED_COLS: frozenset[str] = frozenset(
+    {"title", "content", "name", "text", "deleted"})
+
+
+def _check_ident(table: str, col: str) -> None:
+    assert table in ALLOWED_TABLES, f"table not allowlisted: {table!r}"
+    assert col in ALLOWED_COLS, f"column not allowlisted: {col!r}"
+
+
 def _pg():
     sys.path.insert(0, ZOE_DATA_DIR)
     from runtime_env import bootstrap_runtime_env
@@ -125,6 +143,7 @@ def db_query(sql: str, param: str):
 
 def db_present(table: str, col: str, needle: str, active: bool = True):
     """(present, repr) — an undeleted row in `table` whose `col` ILIKEs needle."""
+    _check_ident(table, col)
     rows = db_query(
         f"SELECT {col}, deleted FROM {table} WHERE {col} ILIKE $1", f"%{needle}%")
     live = [r for r in rows if not (active and r.get("deleted"))]
@@ -133,6 +152,7 @@ def db_present(table: str, col: str, needle: str, active: bool = True):
 
 def db_soft_delete(table: str, col: str, needle: str) -> int:
     """Best-effort cleanup: soft-delete nonce'd test rows. Returns row count."""
+    _check_ident(table, col)
     asyncpg, url = _pg()
 
     async def q():
@@ -265,8 +285,14 @@ def gate_timers():
     rl = reply.lower()
     if reply.startswith("(ERROR"):
         row("timers", "set a 5 min timer", reply, ms, "ERROR", "transport"); return
+    # The tool's fail-closed line is: "I can't reliably start a real timer right
+    # now … Set it on the kitchen PANEL, or ask me for a REMINDER instead."
+    # (zoe-tools.ts setTimer). So "panel"/"reminder" are that honest deferral's
+    # own words — their presence marks the reply as the safe fail-closed answer,
+    # NOT a fabricated "Starting a … timer" success.
+    honest_deferral = ["can't", "cannot", "won't", "panel", "reminder"]
     fabricated = ("starting a" in rl and "timer" in rl) and \
-                 not any(h in rl for h in ["can't", "cannot", "won't", "panel", "reminder"])
+                 not any(h in rl for h in honest_deferral)
     if fabricated:
         row("timers", "set a 5 min timer", reply, ms, "FAIL",
             "SAID-vs-DID: claimed a timer started that the backend can't schedule")
