@@ -152,3 +152,47 @@ def test_js_glyphs_match_python_catalog():
     from ui_catalog import CATALOG
     py_names = set(CATALOG["Glyph"]["props"]["name"]["enum"])
     assert js_names == py_names, f"glyph drift: js-only={js_names - py_names} py-only={py_names - js_names}"
+
+
+# ── visual-richness v2: tones, Hero, leading icons, glyph sizing ──
+
+def test_hero_primitive_validates():
+    tree = _card([{"component": "Hero", "glyph": "weather", "value": "17",
+                   "unit": "°C", "caption": "Clear in Geraldton", "tone": "cool"}])
+    out = validate_component_tree(tree)
+    assert out["children"][0]["component"] == "Hero"
+    assert out["children"][0]["value"] == "17"
+
+
+def test_hero_requires_value():
+    with pytest.raises(CardContractError):
+        validate_component_tree(_card([{"component": "Hero", "caption": "no value"}]))
+
+
+def test_root_tone_accepted():
+    out = validate_component_tree({"component": "Stack", "tone": "mint",
+                                   "children": [{"component": "Text", "text": "x"}]})
+    assert out["tone"] == "mint"
+
+
+def test_invalid_tone_rejected():
+    with pytest.raises(CardContractError):
+        validate_component_tree({"component": "Stack", "tone": "rainbow",
+                                 "children": [{"component": "Text", "text": "x"}]})
+
+
+def test_listrow_icon_accepted():
+    out = validate_component_tree(_card([{"component": "ListRow", "title": "Dentist",
+                                          "detail": "9am", "icon": "calendar"}]))
+    assert out["children"][0]["icon"] == "calendar"
+
+
+def test_glyph_size_and_tone():
+    out = validate_component_tree(_card([{"component": "Glyph", "name": "droplet",
+                                          "size": "xl", "tone": "cool"}]))
+    assert out["children"][0]["size"] == "xl"
+
+
+def test_invalid_glyph_size_rejected():
+    with pytest.raises(CardContractError):
+        validate_component_tree(_card([{"component": "Glyph", "name": "star", "size": "huge"}]))
