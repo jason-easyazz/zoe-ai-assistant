@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import os
-from fastapi import APIRouter, Depends
+from fastapi import Request, APIRouter, Depends
 
 import ambient_briefing
 from auth import get_current_user
@@ -11,11 +12,14 @@ from database import get_db
 from skybridge_service import active_timers_for, cancel_timer_by_id, resolve_skybridge_request
 
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/skybridge", tags=["skybridge"])
 
 
 @router.get("/status")
 async def get_skybridge_status(
+    request: Request,
     panel_id: str = "",
     user: dict = Depends(get_current_user),
 ):
@@ -42,21 +46,35 @@ async def get_skybridge_status(
         try:
             from db_pool import get_db_ctx  # lazy: only bound-panel lookups touch the pool
 
+            # Device check (anti-enumeration): the display identity is only served
+            # to the machine REGISTERED at this panel's IP — a guest elsewhere on
+            # the LAN can't walk panel_ids to learn household names.
+            fwd = str(request.headers.get("x-forwarded-for", "") or "").split(",")[0].strip()
+            client_ip = fwd or (request.client.host if request.client else "")
             async with get_db_ctx() as db:
-                row = await db.fetchrow(
-                    "SELECT b.user_id, u.name FROM panel_user_bindings b "
-                    "LEFT JOIN users u ON u.id = b.user_id "
-                    "WHERE b.panel_id = $1 AND b.binding_type = 'default' "
-                    "ORDER BY b.priority DESC LIMIT 1",
+                panel = await db.fetchrow(
+                    "SELECT ip_address, is_active FROM panels WHERE panel_id = $1",
                     panel_id,
                 )
+                row = None
+                if panel and panel["is_active"] and panel["ip_address"] and client_ip == str(panel["ip_address"]):
+                    row = await db.fetchrow(
+                        "SELECT b.user_id, u.name FROM panel_user_bindings b "
+                        "LEFT JOIN users u ON u.id = b.user_id "
+                        "WHERE b.panel_id = $1 AND b.binding_type = 'default' "
+                        "ORDER BY b.priority DESC LIMIT 1",
+                        panel_id,
+                    )
+                elif panel is not None:
+                    logger.debug("panel identity refused: client %s != registered %s for %s",
+                                 client_ip, panel["ip_address"], panel_id)
             if row and row["user_id"]:
                 display_user_id = row["user_id"]
                 display_name = row["name"] or row["user_id"]
                 role = "panel"
                 identity_source = "panel_binding"
-        except Exception:
-            pass  # display identity is best-effort; guest stands
+        except Exception as exc:  # display identity is best-effort; guest stands — but LOG it
+            logger.warning("panel display-identity lookup failed for %s: %s", panel_id, exc)
     return {
         "ok": True,
         "surface": "skybridge",
