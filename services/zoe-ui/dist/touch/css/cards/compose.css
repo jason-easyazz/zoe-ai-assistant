@@ -129,3 +129,133 @@
   border-radius: var(--sky-radius-sm, 10px);
   padding: var(--sky-space-1, 4px) var(--sky-space-2, 8px);
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Visual richness (v2): tones, Hero banner, leading icons, bigger display.
+   A `tone` on the root themes the card — accent var + a gradient wash — so a
+   composed card gets the "designed" look of the hand-built hero scenes.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* Per-tone accent variable + a subtle full-card gradient wash on the root. */
+.zx-root { --zx-accent: var(--sky-accent-violet, #9b8cff); border-radius: inherit; }
+.zx-root.zx-t-cool   { --zx-accent: var(--sky-accent-blue, #6aa6ff); }
+.zx-root.zx-t-warm   { --zx-accent: var(--sky-accent-amber, #f5b13c); }
+.zx-root.zx-t-mint   { --zx-accent: var(--sky-accent-mint, #5be3b0); }
+.zx-root.zx-t-violet { --zx-accent: var(--sky-accent-violet, #9b8cff); }
+.zx-root.zx-t-sunny  { --zx-accent: var(--sky-accent-cyan, #37c0e6); }
+/* Self-contained tone wash — painted on the root's own box (border-radius
+   inherited from the card shell), so it never depends on the host container's
+   padding to bleed correctly. Renders identically in the chat and touch shells. */
+.zx-root[class*="zx-t-"] {
+  position: relative;
+  background:
+    radial-gradient(120% 90% at 100% 0%,
+      color-mix(in srgb, var(--zx-accent) 22%, transparent) 0%,
+      transparent 60%),
+    linear-gradient(160deg,
+      color-mix(in srgb, var(--zx-accent) 9%, transparent) 0%,
+      transparent 55%);
+}
+
+/* Hero — the premium headline banner (the composed answer to the weather hero). */
+.zx-hero {
+  display: flex; flex-direction: column; gap: var(--sky-space-2, 8px);
+  padding: var(--sky-space-5, 20px) var(--sky-space-5, 20px) var(--sky-space-6, 24px);
+  border-radius: var(--sky-radius-lg, 18px);
+  background:
+    radial-gradient(90% 120% at 90% -10%,
+      color-mix(in srgb, var(--zx-accent, #9b8cff) 40%, transparent) 0%,
+      transparent 62%),
+    linear-gradient(150deg,
+      color-mix(in srgb, var(--zx-accent, #9b8cff) 20%, transparent) 0%,
+      color-mix(in srgb, var(--zx-accent, #9b8cff) 5%, transparent) 100%);
+  border: 1px solid color-mix(in srgb, var(--zx-accent, #9b8cff) 26%, transparent);
+  overflow: hidden;
+}
+.zx-hero.zx-t-cool   { --zx-accent: var(--sky-accent-blue, #6aa6ff); }
+.zx-hero.zx-t-warm   { --zx-accent: var(--sky-accent-amber, #f5b13c); }
+.zx-hero.zx-t-mint   { --zx-accent: var(--sky-accent-mint, #5be3b0); }
+.zx-hero.zx-t-violet { --zx-accent: var(--sky-accent-violet, #9b8cff); }
+.zx-hero.zx-t-sunny  { --zx-accent: var(--sky-accent-cyan, #37c0e6); }
+.zx-hero-glyph { color: color-mix(in srgb, var(--zx-accent, #9b8cff) 85%, #fff); }
+.zx-hero-glyph .zx-glyph-svg { width: 52px; height: 52px; stroke-width: 1.4; }
+.zx-hero-figure { display: flex; align-items: baseline; gap: var(--sky-space-2, 8px); }
+.zx-hero-value {
+  font-size: clamp(52px, 12vw, 96px); font-weight: 300; line-height: 0.85;
+  letter-spacing: -0.03em; color: var(--sky-ink-0, #fff);
+}
+.zx-hero-unit { font-size: var(--sky-text-title, 21px); font-weight: 500; color: var(--sky-ink-2, rgba(255,255,255,0.62)); }
+.zx-hero-caption { font-size: var(--sky-text-body, 16px); color: var(--sky-ink-1, rgba(255,255,255,0.88)); }
+
+/* Leading icon on a list row. */
+.zx-listrow-icon {
+  display: inline-flex; flex: 0 0 auto;
+  color: color-mix(in srgb, var(--zx-accent, #9b8cff) 80%, var(--sky-ink-2, #aaa));
+}
+
+/* Toned badges/progress inherit the card accent for coherence. */
+.zx-root[class*="zx-t-"] .zx-badge {
+  background: color-mix(in srgb, var(--zx-accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--zx-accent) 42%, transparent);
+}
+.zx-root[class*="zx-t-"] .zx-progress-track i { background: var(--zx-accent); }
+.zx-root[class*="zx-t-"] .zx-action.zx-primary {
+  background: color-mix(in srgb, var(--zx-accent) 26%, transparent);
+  border-color: color-mix(in srgb, var(--zx-accent) 55%, transparent);
+}
+
+/* Sized glyphs. */
+.zx-glyph.zx-t-cool   { color: var(--sky-accent-blue, #6aa6ff); }
+.zx-glyph.zx-t-warm   { color: var(--sky-accent-amber, #f5b13c); }
+.zx-glyph.zx-t-mint   { color: var(--sky-accent-mint, #5be3b0); }
+.zx-glyph.zx-t-violet { color: var(--sky-accent-violet, #9b8cff); }
+.zx-glyph.zx-t-sunny  { color: var(--sky-accent-cyan, #37c0e6); }
+
+/* ── Steps — an auto-numbered sequence (how-tos, recipes, workouts) ──────────
+   Numbering is a CSS counter, so the brain never has to emit numbers. */
+.zx-steps { list-style: none; counter-reset: zx-step; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: var(--sky-space-3, 12px); }
+.zx-step {
+  counter-increment: zx-step;
+  display: flex; align-items: flex-start; gap: var(--sky-space-3, 12px);
+  padding: var(--sky-space-3, 12px);
+  border-radius: var(--sky-radius-md, 14px);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  min-width: 0;
+}
+.zx-step::before {
+  content: counter(zx-step);
+  flex: 0 0 auto;
+  width: 30px; height: 30px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%;
+  font-size: var(--sky-text-caption, 13px); font-weight: 700;
+  color: var(--sky-ink-0, #fff);
+  background: color-mix(in srgb, var(--zx-accent, #9b8cff) 30%, transparent);
+  border: 1px solid color-mix(in srgb, var(--zx-accent, #9b8cff) 55%, transparent);
+}
+.zx-step-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding-top: 3px; }
+.zx-step-body strong { font-size: var(--sky-text-body, 16px); font-weight: 600; color: var(--sky-ink-0, #fff); overflow-wrap: anywhere; }
+.zx-step-body em { font-style: normal; font-size: var(--sky-text-caption, 13px); color: var(--sky-ink-2, rgba(255,255,255,0.62)); line-height: 1.4; overflow-wrap: anywhere; }
+
+/* ── Compare — side-by-side labeled options (A vs B) ─────────────────────────
+   Each Option is a themed column tile; tones let one option read hotter/cooler. */
+.zx-compare { display: flex; gap: var(--sky-space-3, 12px); align-items: stretch; }
+.zx-option {
+  flex: 1 1 0; min-width: 0;
+  display: flex; flex-direction: column; gap: var(--sky-space-1, 4px);
+  padding: var(--sky-space-4, 16px);
+  border-radius: var(--sky-radius-lg, 18px);
+  background:
+    linear-gradient(155deg,
+      color-mix(in srgb, var(--zx-accent, #9b8cff) 16%, transparent) 0%,
+      color-mix(in srgb, var(--zx-accent, #9b8cff) 4%, transparent) 100%);
+  border: 1px solid color-mix(in srgb, var(--zx-accent, #9b8cff) 24%, transparent);
+}
+.zx-option-glyph { color: color-mix(in srgb, var(--zx-accent, #9b8cff) 85%, #fff); margin-bottom: var(--sky-space-1, 4px); }
+.zx-option-label { font-size: var(--sky-text-caption, 13px); font-weight: 650; text-transform: uppercase; letter-spacing: 0.08em; color: var(--sky-ink-2, rgba(255,255,255,0.62)); }
+.zx-option-value { font-size: var(--sky-text-title, 21px); font-weight: 650; color: var(--sky-ink-0, #fff); letter-spacing: -0.01em; }
+.zx-option-caption { font-size: var(--sky-text-caption, 13px); color: var(--sky-ink-1, rgba(255,255,255,0.82)); line-height: 1.4; }
+.zx-option-status { align-self: flex-start; margin-top: var(--sky-space-2, 8px); }
+@media (max-width: 460px) { .zx-compare { flex-direction: column; } }

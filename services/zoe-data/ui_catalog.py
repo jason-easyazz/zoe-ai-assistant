@@ -31,25 +31,50 @@ MAX_TEXT_CHARS = 4000     # total across the tree — a card, not a novel
 _GAP = ["sm", "md", "lg"]
 _TEXT_ROLES = ["title", "body", "caption", "kicker"]
 _BADGE_TONES = ["neutral", "accent", "warn", "success"]
-_GLYPHS = ["calendar", "list", "weather", "person", "clock", "home", "music", "camera", "timer", "note"]
+_GLYPHS = ["calendar", "list", "weather", "person", "clock", "home", "music", "camera", "timer", "note",
+           "droplet", "heart", "check", "star", "dollar", "chart", "flame", "leaf"]
+# Card themes — a tone tints the whole card with a subtle gradient wash and sets
+# the accent every child (Badge/Progress/Hero/Glyph) coordinates to. This is how
+# a composed card gets the "designed" look of the hand-built hero scenes.
+_TONES = ["neutral", "cool", "warm", "mint", "violet", "sunny"]
+_GLYPH_SIZES = ["sm", "md", "lg", "xl"]
 
 # component -> {"props": {name: schema-ish spec}, "required": [...], "container": bool}
 # Spec forms: {"enum": [...]}, {"type": "string"|"boolean"}, {"type": "integer"|"number",
 # "minimum": x, "maximum": y}, {"action": True} (validated via validate_component_action),
 # {"src": True} (same-origin relative path).
 CATALOG: dict[str, dict[str, Any]] = {
-    "Stack": {"container": True, "props": {"gap": {"enum": _GAP}}},
-    "Row": {"container": True, "props": {"gap": {"enum": _GAP}, "align": {"enum": ["start", "center", "end", "between"]}}},
-    "Grid": {"container": True, "props": {"columns": {"type": "integer", "minimum": 1, "maximum": 4}}},
+    # Containers accept an optional card-level `tone` (only themes when on the root).
+    "Stack": {"container": True, "props": {"gap": {"enum": _GAP}, "tone": {"enum": _TONES}}},
+    "Row": {"container": True, "props": {"gap": {"enum": _GAP}, "align": {"enum": ["start", "center", "end", "between"]}, "tone": {"enum": _TONES}}},
+    "Grid": {"container": True, "props": {"columns": {"type": "integer", "minimum": 1, "maximum": 4}, "tone": {"enum": _TONES}}},
     "Text": {"props": {"text": {"type": "string"}, "role": {"enum": _TEXT_ROLES}}, "required": ["text"]},
+    # Hero — the premium headline banner: a big glyph + a large display value(+unit)
+    # + caption on a gradient wash. This is the composed-card answer to the weather
+    # hero's headline moment.
+    "Hero": {"props": {"value": {"type": "string"}, "unit": {"type": "string"},
+                        "caption": {"type": "string"}, "glyph": {"enum": _GLYPHS},
+                        "tone": {"enum": _TONES}}, "required": ["value"]},
     "Stat": {"props": {"value": {"type": "string"}, "label": {"type": "string"}}, "required": ["value"]},
     "Badge": {"props": {"text": {"type": "string"}, "tone": {"enum": _BADGE_TONES}}, "required": ["text"]},
     "ListRow": {"props": {"title": {"type": "string"}, "detail": {"type": "string"},
-                           "checked": {"type": "boolean"}, "variant": {"enum": ["plain", "check"]}},
+                           "checked": {"type": "boolean"}, "variant": {"enum": ["plain", "check"]},
+                           "icon": {"enum": _GLYPHS}},
                  "required": ["title"]},
+    # Steps — an auto-numbered sequence (how-tos, recipes, workouts). Children
+    # are Step items; numbering is automatic (CSS counter).
+    "Steps": {"container": True, "props": {}},
+    "Step": {"props": {"title": {"type": "string"}, "detail": {"type": "string"}}, "required": ["title"]},
+    # Compare — side-by-side labeled options (drive vs fly, plan A vs B). Children
+    # are Option columns; each can carry its own tone/glyph/status.
+    "Compare": {"container": True, "props": {}},
+    "Option": {"props": {"label": {"type": "string"}, "value": {"type": "string"},
+                          "caption": {"type": "string"}, "glyph": {"enum": _GLYPHS},
+                          "tone": {"enum": _TONES}, "status": {"type": "string"}},
+                "required": ["label"]},
     "Progress": {"props": {"value": {"type": "number", "minimum": 0, "maximum": 100},
                             "label": {"type": "string"}}, "required": ["value"]},
-    "Glyph": {"props": {"name": {"enum": _GLYPHS}}, "required": ["name"]},
+    "Glyph": {"props": {"name": {"enum": _GLYPHS}, "size": {"enum": _GLYPH_SIZES}, "tone": {"enum": _TONES}}, "required": ["name"]},
     "Image": {"props": {"src": {"src": True}, "alt": {"type": "string"}}, "required": ["src"]},
     "Divider": {"props": {}},
     "Spacer": {"props": {"size": {"enum": _GAP}}},

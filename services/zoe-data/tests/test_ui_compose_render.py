@@ -98,3 +98,25 @@ def test_skybridge_page_loads_compose_assets():
     assert "zoe-compose.js" in html
     # Load order: the catalog renderer must be available before skybridge-renderer.
     assert html.index("zoe-compose.js") < html.index("js/skybridge-renderer.js?")
+
+
+def test_steps_and_compare_render_and_escape(tmp_path):
+    harness = tmp_path / "sc.cjs"
+    harness.write_text(
+        """
+const fs=require('fs'),vm=require('vm');const s={window:{}};vm.createContext(s);
+vm.runInContext(fs.readFileSync(process.argv[2],'utf8'),s);const Z=s.window.ZoeCompose;
+const t={component:'Stack',children:[
+ {component:'Steps',children:[{component:'Step',title:'Blot <b>x</b>',detail:'don\\'t rub'}]},
+ {component:'Compare',children:[{component:'Option',label:'Drive',value:'4h',tone:'warm',status:'best <i>y</i>'}]}]};
+const h=Z.render(t);
+process.stdout.write(JSON.stringify({
+  steps_ol:h.includes('zx-steps')&&h.includes('zx-step'),
+  compare:h.includes('zx-compare')&&h.includes('zx-option'),
+  option_tone:h.includes('zx-t-warm'),
+  status_badge:h.includes('zx-option-status'),
+  escaped:h.includes('&lt;b&gt;')&&!h.includes('<b>x</b>')&&!h.includes('<i>y</i>')
+}));
+""", encoding="utf-8")
+    checks = _run_node(harness, UI / "js" / "zoe-compose.js")
+    assert all(checks.values()), f"steps/compare render failed: {checks}"

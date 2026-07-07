@@ -37,9 +37,14 @@
   // Resting/idle-screen dimming so the standby clock never lights up the room:
   // deep = sleep hours (22:00–06:00), then night (after sunset) / day.
   function restDim() {
-    var h = new Date().getHours();
+    var now = new Date(), h = now.getHours();
     if (h >= 22 || h < 6) return 'deep';
-    return isDay() ? 'day' : 'night';
+    // Winter sunset can be ~17:30 — dimming the room's panel that early feels
+    // broken while the household is still active. Night dim waits for
+    // max(sunset, 19:30) so early evenings stay readable.
+    if (isDay()) return 'day';
+    var eveningFloor = new Date(now); eveningFloor.setHours(19, 30, 0, 0);
+    return now >= eveningFloor ? 'night' : 'day';
   }
   function apply() {
     var m = mode(), theme = (m === 'light' || m === 'dark') ? m : (isDay() ? 'light' : 'dark');
