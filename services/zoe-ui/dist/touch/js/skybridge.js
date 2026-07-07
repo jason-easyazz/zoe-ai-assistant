@@ -85,6 +85,13 @@
             if (!resp.ok) return;
             const data = await resp.json();
             if (data && data.status === 'ready') setStatus('Skybridge runtime ready');
+            // Real auth state for the dashboard's profile chip (the device-session
+            // user is server-side; localStorage can't see it). If the dashboard is
+            // already up, re-render so "Sign in" corrects to the profile chip.
+            if (data && data.user) {
+                backendUser = data.user;
+                if (document.body.classList.contains('sky-on-dashboard')) renderDashboardSurface(null);
+            }
         } catch (_) {
             // The interface can still render local cards if the API is offline.
         }
@@ -487,7 +494,13 @@
     // weather tile + room/music/sign-in. Sets the stage directly (no clearCards,
     // which would flash the ambient clock back) and bumps the deck token so a
     // pending weather fetch can tell the view changed under it.
+    let backendUser = null;   // from /api/skybridge/status — the authoritative panel user
+
     function panelSignedInName() {
+        if (backendUser && !backendUser.guest && backendUser.username &&
+            String(backendUser.username).toLowerCase() !== 'guest') {
+            return backendUser.username;
+        }
         // Same sources the clock card trusts: the panel auth challenge's selected
         // user first (device session), then a non-guest browser session.
         try {
