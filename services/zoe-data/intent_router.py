@@ -960,11 +960,18 @@ def detect_intent(
             return Intent("weather", {"qualifier": qualifier, "forecast": is_forecast})
 
     # --- JOURNAL ---
+    # Explicit "<verb> a journal entry[: <content>]" — the deterministic, DB-verified
+    # path (_execute_journal_create_direct). "add" is included because the 4B brain
+    # under-fires its journal tool on this exact phrasing (a "grateful for the rain"
+    # entry misroutes to a weather answer); #1150 already stopped list_add from
+    # swallowing "add a journal entry", so routing it positively here is the
+    # completion of that fix, not a regression. A leading ":"/"-"/"—" separator
+    # after "entry" is stripped so the colon doesn't leak into the stored content.
     m = re.match(
-        r"^(?:write|create|make|start|new) (?:a |an )?(?:journal|diary) (?:entry)?(.*)$", t
+        r"^(?:write|create|make|start|new|add) (?:a |an )?(?:journal|diary) (?:entry)?(.*)$", t
     )
     if m:
-        content = m.group(1).strip() if m.group(1) else ""
+        content = (m.group(1) or "").strip().lstrip(":-—").strip()
         return Intent("journal_create", {"content": content})
 
     if re.match(r"^(?:write|log|add) (?:in |to )?(?:my )?(?:journal|diary)$", t):
@@ -2475,6 +2482,66 @@ async def _execute_people_create_direct(intent: Intent, user_id: str) -> Optiona
         return None
 
 
+async def _execute_note_search_direct(intent: Intent, user_id: str) -> Optional[str]:
+    """Search the user's notes straight from the DB (mirrors mcp_server's
+    note_search query) so 'search my notes for X' surfaces the user's OWN notes.
+
+    The mcporter path built the command WITHOUT user_id, so the MCP tool fell back
+    to the family-admin identity and searched the wrong user's rows — an authed
+    user's notes never surfaced. This direct executor binds the acting user_id in
+    trusted code, exactly like the note_create direct executor. Returns the
+    formatted response, or None to fall back to mcporter on genuine failure."""
+    slots = intent.slots or {}
+    query = str(slots.get("query") or "").strip()
+    if not query:
+        return None
+    try:
+        from database import get_db_ctx
+
+        like = f"%{_escape_like_pattern(query)}%"
+        async with get_db_ctx() as db:
+            cursor = await db.execute(
+                "SELECT id, title, content, category, created_at FROM notes"
+                " WHERE (title ILIKE ? ESCAPE '\\' OR content ILIKE ? ESCAPE '\\')"
+                " AND user_id = ? AND deleted = 0 LIMIT 10",
+                (like, like, user_id),
+            )
+            rows = [dict(r) for r in await cursor.fetchall()]
+        return _format_response(intent, json.dumps({"notes": rows}, default=str))
+    except Exception as exc:
+        logger.warning("note_search direct execution unavailable; falling back to mcporter: %s", exc)
+        return None
+
+
+async def _execute_people_search_direct(intent: Intent, user_id: str) -> Optional[str]:
+    """Look up the user's contacts straight from the DB (mirrors mcp_server's
+    people_search query) so 'who is X' surfaces the user's OWN contacts.
+
+    Same root cause as note_search: the mcporter command omitted user_id, so the
+    lookup ran as family-admin and never found an authed user's contacts. Binds
+    the acting user_id in trusted code, mirroring the people_create direct
+    executor. Returns the formatted response, or None to fall back to mcporter."""
+    slots = intent.slots or {}
+    query = str(slots.get("query") or "").strip()
+    if not query:
+        return None
+    try:
+        from database import get_db_ctx
+
+        like = f"%{_escape_like_pattern(query)}%"
+        async with get_db_ctx() as db:
+            cursor = await db.execute(
+                "SELECT id, name, relationship, birthday, phone, email FROM people"
+                " WHERE name ILIKE ? ESCAPE '\\' AND user_id = ? AND deleted = 0 LIMIT 10",
+                (like, user_id),
+            )
+            rows = [dict(r) for r in await cursor.fetchall()]
+        return _format_response(intent, json.dumps({"people": rows}, default=str))
+    except Exception as exc:
+        logger.warning("people_search direct execution unavailable; falling back to mcporter: %s", exc)
+        return None
+
+
 async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str]:
     # ^ shared write funnel: fail-open to least-privilege guest, not admin, when a
     #   caller omits identity (#1021/#1032 posture). All live callers pass an explicit
@@ -3218,6 +3285,19 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
     if intent.name == "people_create":
         direct_result = await _execute_people_create_direct(intent, user_id)
         if direct_result:
+            return direct_result
+
+    # Read/search intents: "no matches" is a VALID answer, so return it even when
+    # empty (a truthiness gate would wrongly fall through to the mcporter path,
+    # which resolves to family-admin and misses the acting user's rows entirely).
+    if intent.name == "note_search":
+        direct_result = await _execute_note_search_direct(intent, user_id)
+        if direct_result is not None:
+            return direct_result
+
+    if intent.name == "people_search":
+        direct_result = await _execute_people_search_direct(intent, user_id)
+        if direct_result is not None:
             return direct_result
 
     try:
