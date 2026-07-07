@@ -106,7 +106,7 @@ _SELF_RECALL_RE = re.compile(
 # match, so it falls through to "general" by construction.
 _RESEARCH_FRAME_RE = re.compile(
     r"""
-      ^(?:please\s+)?(?:find|search|research|compare|recommend|look\s+up)\b  # imperative opener
+      ^(?:please\s+)?(?:find|search|research|compare|recommend|look\s+up(?!\s+to\b))\b  # imperative opener
     | \bfind\s+(?:me|us)\b
     | \bsearch\s+(?:for|the\s+web|online)\b
     | \blook\s+up\b(?!\s+to\b)                                # "look up prices", not "look up to her"

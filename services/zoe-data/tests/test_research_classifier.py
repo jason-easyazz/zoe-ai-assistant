@@ -27,6 +27,7 @@ from research_evidence import classify_query
         "I'm happy with the deal I got on my flight",
         "I like to compare notes with my sister",
         "I look up to her",  # "look up" frame must not fire on "look up to"
+        "look up to your elders",  # imperative opener also guarded against "look up to"
         # Self-recall questions about the user's own life — memory turf.
         "What do I do on weekends?",
         "what did I say about the weekend?",
