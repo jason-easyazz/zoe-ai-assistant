@@ -44,11 +44,15 @@ def _warn_once(key: str, raw: str, kind: str, default: object) -> None:
 
 
 def env_str(key: str, default: str = "") -> str:
-    """String env read, stripped. Absent → default (unstripped, as given)."""
+    """String env read, stripped. Absent OR empty/whitespace-only → default
+    (a `.env` line like ``KEY=`` means "not set", consistently with every
+    other accessor here — callers must never receive a surprise empty
+    string when they asked for a default)."""
     raw = os.environ.get(key)
     if raw is None:
         return default
-    return raw.strip()
+    val = raw.strip()
+    return val if val else default
 
 
 def env_bool(key: str, default: bool = False) -> bool:

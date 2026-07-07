@@ -67,11 +67,13 @@ def test_int_parses_and_defaults(monkeypatch, caplog):
     assert env_int(K, default=7) == 7
 
 
-def test_float_parses_and_defaults(monkeypatch):
+def test_float_parses_and_defaults(monkeypatch, caplog):
     monkeypatch.setenv(K, "2.5")
     assert env_float(K, default=1.0) == 2.5
     monkeypatch.setenv(K, "nope")
+    caplog.set_level(logging.WARNING, logger=typed_env.__name__)
     assert env_float(K, default=1.5) == 1.5
+    assert any("not a valid float" in r.message for r in caplog.records)
     monkeypatch.delenv(K)
     assert env_float(K, default=0.25) == 0.25
 
@@ -82,6 +84,12 @@ def test_str_strips_and_defaults(monkeypatch):
     monkeypatch.setenv(K, "  hello  ")
     assert env_str(K) == "hello"
     monkeypatch.delenv(K)
+    assert env_str(K, default="fallback") == "fallback"
+    # A `.env` line like `KEY=` (present but empty/whitespace) means "not set" —
+    # consistent with every other accessor; never a surprise empty string.
+    monkeypatch.setenv(K, "")
+    assert env_str(K, default="fallback") == "fallback"
+    monkeypatch.setenv(K, "   ")
     assert env_str(K, default="fallback") == "fallback"
 
 
