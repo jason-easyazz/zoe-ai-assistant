@@ -148,9 +148,17 @@ def test_cleanup_expired_pending_prunes_seeded_row(monkeypatch, caplog):
     # Surgical: only the engine module's `asyncio.sleep` lookup is redirected.
     monkeypatch.setattr(engine, "asyncio", types.SimpleNamespace(sleep=fake_sleep))
 
+    async def run_one_iteration():
+        # Catch _StopLoop inside the coroutine so nothing non-standard
+        # propagates through asyncio.run() (BaseException propagation from
+        # run_until_complete tightened after 3.10).
+        try:
+            await engine._cleanup_expired_pending()
+        except _StopLoop:
+            pass
+
     with caplog.at_level(logging.INFO, logger="proactive.engine"):
-        with pytest.raises(_StopLoop):
-            asyncio.run(engine._cleanup_expired_pending())
+        asyncio.run(run_one_iteration())
 
     assert [r["id"] for r in conn.rows] == [2, 3]
     assert "Pruned 1 expired proactive_pending rows" in caplog.text
