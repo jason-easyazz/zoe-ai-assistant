@@ -40,6 +40,12 @@
     // to read a result you just asked for; 3 min is comfortable on a kiosk.
     const configuredIdleMs = Number(queryParams.get('idle_ms') || localStorage.getItem('skybridge_idle_return_ms') || 180000);
     const CARD_IDLE_MS = Number.isFinite(configuredIdleMs) ? Math.max(15000, configuredIdleMs) : 180000;
+    // Ambient composed briefing: refresh at most every 5 min while resting on
+    // the clock (piggybacks on the existing clock ticker — no extra interval).
+    const BRIEFING_REFRESH_MS = 300000;
+    const BRIEFING_FETCH_TIMEOUT_MS = 10000;
+    let lastBriefingFetchTs = 0;
+    let briefingFetchInFlight = false;
 
     const colors = {
         ambient: ['#5fc6ff', '#66d19e'],
@@ -105,6 +111,7 @@
         els.voiceDetail = document.getElementById('skyVoiceDetail');
         els.voiceAction = document.getElementById('skyVoiceAction');
         els.ambientClock = document.getElementById('skyAmbientClock');
+        els.ambientBriefing = document.getElementById('skyAmbientBriefing');
         els.ambientClockHour = document.getElementById('skyAmbientClockHour');
         els.ambientClockMinute = document.getElementById('skyAmbientClockMinute');
         els.ambientClockMeridiem = document.getElementById('skyAmbientClockMeridiem');
@@ -458,6 +465,7 @@
         clearCards();
         setVoiceLayerText('Listening. Ask Zoe for anything.');
         updateAllClocks();
+        if (!showCards) maybeFetchAmbientBriefing();
         if (showCards && window.SkybridgeCapabilities && typeof window.SkybridgeCapabilities.getHomeCards === 'function') {
             setContext('Skybridge home', 'Start with voice, then keep the useful cards in reach.');
             window.SkybridgeCapabilities.getHomeCards().forEach((card, index) => {
@@ -780,7 +788,46 @@
 
     function startClockTicker() {
         updateAllClocks();
-        clockTicker = setInterval(updateAllClocks, 1000);
+        // One shared ticker: the briefing refresh rides along (self-throttled to
+        // BRIEFING_REFRESH_MS and idle-only) — never a second always-on interval.
+        clockTicker = setInterval(function () {
+            updateAllClocks();
+            maybeFetchAmbientBriefing();
+        }, 1000);
+    }
+
+    // ── Ambient composed briefing ───────────────────────────────────────────
+    // While the panel rests on the ambient clock, fetch Zoe's composed briefing
+    // card and show it as a modest card under the clock. The clock stays
+    // primary; the briefing is best-effort — every failure path is silent and
+    // leaves the plain clock exactly as it was. Night-dim is inherited from
+    // #skyAmbientClock's brightness filter (no CSS of its own).
+    function isRestingOnAmbientClock() {
+        return document.body.classList.contains('sky-empty')
+            && document.body.classList.contains('sky-ambient-clock');
+    }
+
+    function maybeFetchAmbientBriefing() {
+        if (!els.ambientBriefing || !window.SkybridgeRenderer) return;
+        if (!isRestingOnAmbientClock()) return;
+        if (briefingFetchInFlight) return;
+        if (Date.now() - lastBriefingFetchTs < BRIEFING_REFRESH_MS) return;
+        briefingFetchInFlight = true;
+        lastBriefingFetchTs = Date.now();
+        const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const timeoutId = controller ? setTimeout(() => controller.abort(), BRIEFING_FETCH_TIMEOUT_MS) : null;
+        fetch('/api/skybridge/briefing', {
+            headers: { 'Accept': 'application/json' },
+            signal: controller ? controller.signal : undefined
+        }).then(resp => (resp.ok ? resp.json() : null)).then(data => {
+            const card = data && data.card;
+            if (!card || !isRestingOnAmbientClock()) return;
+            els.ambientBriefing.innerHTML = window.SkybridgeRenderer.render(card);
+        }).catch(() => { /* briefing is best-effort — the clock alone is fine */ })
+          .finally(() => {
+            briefingFetchInFlight = false;
+            if (timeoutId) clearTimeout(timeoutId);
+        });
     }
 
     function clockParts(timezone) {
