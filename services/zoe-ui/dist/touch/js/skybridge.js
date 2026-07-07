@@ -487,6 +487,22 @@
     // weather tile + room/music/sign-in. Sets the stage directly (no clearCards,
     // which would flash the ambient clock back) and bumps the deck token so a
     // pending weather fetch can tell the view changed under it.
+    function panelSignedInName() {
+        // Same sources the clock card trusts: the panel auth challenge's selected
+        // user first (device session), then a non-guest browser session.
+        try {
+            var c = JSON.parse(sessionStorage.getItem('zoe_panel_auth_challenge') || '{}');
+            if (c.selected_username && String(c.selected_username).toLowerCase() !== 'guest') return c.selected_username;
+        } catch (e) { /* fall through */ }
+        try {
+            var sess = JSON.parse(localStorage.getItem('zoe_session') || '{}');
+            var role = (sess.role || (sess.user_info && sess.user_info.role) || '').toLowerCase();
+            var uname = sess.username || (sess.user_info && sess.user_info.username) || '';
+            if (uname && role && role !== 'guest') return uname;
+        } catch (e) { /* fall through */ }
+        return '';
+    }
+
     function renderDashboardSurface(weather) {
         deckToken++;
         cardSequence = 0;
@@ -498,7 +514,12 @@
         document.body.classList.add('sky-on-dashboard');
         els.cards.innerHTML = window.SkybridgeRenderer.render({
             component: 'dashboard',
-            props: { guest: true, weather: weather || null }
+            props: (function () {
+                var name = panelSignedInName();
+                var sun = null;
+                try { sun = window.SkybridgeTheme && window.SkybridgeTheme.sunTimes ? window.SkybridgeTheme.sunTimes() : null; } catch (e) {}
+                return { guest: !name, user_name: name, sun: sun, weather: weather || null };
+            })()
         });
         requestAnimationFrame(resizeOrb);
     }

@@ -1337,16 +1337,32 @@
             '</span>',
             '</button>'
         ].join('')).join('');
-        const signIn = props.guest !== false
+        // Auth chip: a signed-in panel shows WHO is signed in (tap = switch user
+        // via the same auth picker); only true guests see "Sign in".
+        const authChip = props.guest !== false
             ? '<button type="button" class="dash-ctrl dash-ctrl-signin" data-sky-action="auth"><span class="dash-ctrl-glyph">' + dashGlyph('user') + '</span><span class="dash-ctrl-label">Sign in</span></button>'
-            : '';
+            : '<button type="button" class="dash-ctrl dash-ctrl-signin dash-ctrl-profile" data-sky-action="auth" aria-label="Switch user">' +
+              '<span class="dash-ctrl-glyph">' + dashGlyph('user') + '</span>' +
+              '<span class="dash-ctrl-text"><span class="dash-ctrl-label">' + escapeHtml(props.user_name || 'Signed in') + '</span>' +
+              '<span class="dash-ctrl-sub">Tap to switch</span></span></button>';
+        // Sunrise/sunset line (premium detail, same data the clock card surfaces).
+        let sunLine = '';
+        if (props.sun && props.sun.rise && props.sun.set) {
+            const riseT = fmtClockTime(new Date(props.sun.rise));
+            const setT = fmtClockTime(new Date(props.sun.set));
+            if (riseT && setT) {
+                sunLine = '<span class="dash-sun">' + horizonGlyph(true, 'rgba(245,177,60,.92)') + ' ' + escapeHtml(riseT) +
+                    '&nbsp;&nbsp;' + horizonGlyph(false, 'rgba(155,140,255,.92)') + ' ' + escapeHtml(setT) + '</span>';
+            }
+        }
         const body = [
             '<div class="dash-scene">',
             '<div class="dash-clock sky-live-clock">',
             '<span class="dash-greeting">' + escapeHtml(greeting + name) + '</span>',
             '<div class="dash-time sky-ambient-time tnum"><span data-clock-hour>' + hour12 + '</span><i>:</i><span data-clock-minute>' + ('0' + now.getMinutes()).slice(-2) + '</span><b data-clock-meridiem>' + (h24 < 12 ? 'AM' : 'PM') + '</b></div>',
             '<span class="dash-date sky-ambient-date" data-clock-date>' + escapeHtml(dateText) + '</span>',
-            signIn,
+            sunLine,
+            authChip,
             '</div>',
             '<div class="dash-tiles">' + tiles + '</div>',
             '</div>'

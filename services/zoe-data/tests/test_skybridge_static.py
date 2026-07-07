@@ -969,3 +969,34 @@ def test_skybridge_activity_strip_wiring():
     assert ".sky-activity-strip.is-done" in css
     assert "var(--sky-" in css.split(".sky-activity-strip", 1)[1]
     assert "white-space: nowrap" in css
+
+
+def test_dashboard_auth_chip_and_sun_line(tmp_path):
+    """Signed-in panels show WHO is signed in (not 'Sign in'); sun line renders."""
+    harness = tmp_path / "dash_auth.cjs"
+    harness.write_text(
+        """
+const fs=require('fs'),vm=require('vm');const s={window:{},sessionStorage:{getItem:()=>null}};
+vm.createContext(s);vm.runInContext(fs.readFileSync(process.argv[2],'utf8'),s);
+vm.runInContext(fs.readFileSync(process.argv[3],'utf8'),s);
+const R=s.window.SkybridgeRenderer;
+const sun={rise:new Date().toISOString(), set:new Date().toISOString()};
+const signedIn=R.render({component:'dashboard',props:{guest:false,user_name:'Jason',sun:sun}});
+const guest=R.render({component:'dashboard',props:{guest:true}});
+process.stdout.write(JSON.stringify({
+  profile_chip: signedIn.includes('dash-ctrl-profile') && signedIn.includes('Jason') && signedIn.includes('Tap to switch'),
+  no_signin_when_authed: !signedIn.includes('>Sign in<'),
+  auth_action_kept: signedIn.includes('data-sky-action="auth"'),
+  sun_line: signedIn.includes('dash-sun'),
+  guest_still_signin: guest.includes('>Sign in<') && !guest.includes('dash-ctrl-profile')
+}));
+""", encoding="utf-8")
+    import json as _json
+    node = shutil.which("node") or shutil.which("nodejs")
+    if not node:
+        pytest.skip("Node.js is not installed on this host")
+    proc = subprocess.run([node, str(harness), str(UI / "js" / "zoe-compose.js"),
+                           str(UI / "js" / "skybridge-renderer.js")],
+                          check=True, capture_output=True, text=True)
+    checks = _json.loads(proc.stdout)
+    assert all(checks.values()), f"dashboard auth chip failed: {checks}"

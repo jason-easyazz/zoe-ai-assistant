@@ -85,32 +85,44 @@ body:not(.sky-empty) .sky-card.dashboard-card.sky-premium-card { display: flex !
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  justify-content: center;
-  gap: var(--sky-space-4, 16px);
+  justify-content: space-between;   /* glyph anchors top, text anchors bottom */
+  gap: var(--sky-space-3, 12px);
   min-height: 120px;
   min-width: 48px;
   padding: var(--sky-space-5, 20px);
   border-radius: var(--sky-radius-lg, 24px);
-  border: 1px solid var(--sky-hairline, rgba(255,255,255,.1));
-  background: var(--sky-fill-1, rgba(255,255,255,.05));
+  /* Premium tile: the hero/Option gradient language — a per-accent wash that
+     breathes from the top-right, over a soft base tint. */
+  border: 1px solid color-mix(in srgb, var(--dash-accent, #37c0e6) 26%, transparent);
+  background:
+    radial-gradient(115% 95% at 100% 0%,
+      color-mix(in srgb, var(--dash-accent, #37c0e6) 22%, transparent) 0%,
+      transparent 58%),
+    linear-gradient(158deg,
+      color-mix(in srgb, var(--dash-accent, #37c0e6) 10%, transparent) 0%,
+      color-mix(in srgb, var(--dash-accent, #37c0e6) 3%, transparent) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
   color: var(--sky-ink-0, #fff);
   font-family: inherit;
   text-align: left;
-  transition: background var(--sky-dur-fast, 180ms) ease, transform var(--sky-dur-fast, 180ms) ease, border-color var(--sky-dur-fast, 180ms) ease;
+  transition: filter var(--sky-dur-fast, 180ms) ease, transform var(--sky-dur-fast, 180ms) ease, border-color var(--sky-dur-fast, 180ms) ease;
 }
-.dashboard-card .dash-ctrl:hover { background: var(--sky-fill-2, rgba(255,255,255,.09)); border-color: var(--sky-hairline-strong, rgba(255,255,255,.2)); }
-.dashboard-card .dash-ctrl:active { transform: scale(.98); }
+.dashboard-card .dash-ctrl:hover { filter: brightness(1.12); border-color: color-mix(in srgb, var(--dash-accent, #37c0e6) 45%, transparent); }
+.dashboard-card .dash-ctrl:active { transform: scale(.97); filter: brightness(1.2); }
 .dashboard-card .dash-ctrl-glyph {
-  width: 52px; height: 52px; flex: 0 0 auto;
+  width: 58px; height: 58px; flex: 0 0 auto;
   display: grid; place-items: center;
-  border-radius: 50%;
-  /* ds1 accents are hex; per-tile accents recolour via --dash-accent below. */
-  background: color-mix(in srgb, var(--dash-accent, var(--sky-accent-cyan, #37c0e6)) 16%, transparent);
+  border-radius: 18px;   /* squircle chip reads more premium than a circle */
+  background:
+    linear-gradient(150deg,
+      color-mix(in srgb, var(--dash-accent, var(--sky-accent-cyan, #37c0e6)) 34%, transparent) 0%,
+      color-mix(in srgb, var(--dash-accent, var(--sky-accent-cyan, #37c0e6)) 14%, transparent) 100%);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.12);
 }
-.dashboard-card .dash-ctrl-svg { width: 26px; height: 26px; fill: var(--dash-accent, var(--sky-accent-cyan, #37c0e6)); }
-.dashboard-card .dash-ctrl-glyph .sky-glyph { width: 30px; height: 30px; }
+.dashboard-card .dash-ctrl-svg { width: 30px; height: 30px; fill: color-mix(in srgb, var(--dash-accent, #37c0e6) 85%, #fff); }
+.dashboard-card .dash-ctrl-glyph .sky-glyph { width: 34px; height: 34px; }
 .dashboard-card .dash-ctrl-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.dashboard-card .dash-ctrl-label { font-size: 19px; font-weight: 600; }
+.dashboard-card .dash-ctrl-label { font-size: 21px; font-weight: 650; letter-spacing: -0.01em; }
 .dashboard-card .dash-ctrl-sub {
   font-size: 14px;
   color: var(--sky-ink-2, rgba(255,255,255,.6));
@@ -152,3 +164,24 @@ body:not(.sky-empty) .sky-card.dashboard-card.sky-premium-card { display: flex !
 @media (prefers-reduced-motion: reduce) {
   .dashboard-card .dash-ctrl { transition: none; }
 }
+
+
+/* Sunrise/sunset line under the date (same visual language as the clock card). */
+.dashboard-card .dash-sun {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-top: var(--sky-space-2, 8px);
+  font-size: 15px; color: var(--sky-ink-2, rgba(255,255,255,.62));
+  font-variant-numeric: tabular-nums;
+}
+.dashboard-card .dash-sun svg { vertical-align: -3px; }
+
+/* Signed-in profile chip: identity, not a call-to-action. */
+.dashboard-card .dash-ctrl-profile {
+  flex-direction: row; align-items: center; justify-content: flex-start;
+  gap: var(--sky-space-3, 12px);
+  min-height: 56px; padding: 10px 18px 10px 10px;
+  border-radius: var(--sky-radius-pill, 999px);
+}
+.dashboard-card .dash-ctrl-profile .dash-ctrl-glyph { width: 40px; height: 40px; border-radius: 50%; }
+.dashboard-card .dash-ctrl-profile .dash-ctrl-label { font-size: 17px; }
+.dashboard-card .dash-ctrl-profile .dash-ctrl-sub { font-size: 12.5px; }
