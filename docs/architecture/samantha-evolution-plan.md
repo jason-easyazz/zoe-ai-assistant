@@ -365,11 +365,11 @@ regression, ever (replay harness is the enforcement).
 
 ## 7. NEXT ACTION (always exactly one)
 
-→ **W0**: run the capture positive-control (one organic authenticated voice turn → new
-`chat_messages` row with `metadata.user_id` → consolidation sweep picks it up). In parallel,
+→ **W0**: run the capture positive-control — execute packet **P-W0** in
+[`samantha-evolution-packets.md`](samantha-evolution-packets.md). In parallel,
 kick off **W3.1** (ccd-cli fleet cleanup — operational, zero risk). W1.1/W1.2 are already
 **live** (#1051/#1081/#1082 — do NOT redo); the remaining W1 work is **W1.3**
-(sentence-streamed TTS in the LiveKit lane) + the **M3/M4** measurements (bars in §6).
+(packet P-W1.3) + the **M3/M4** measurements (packet P-W1.4, bars in §6).
 The #1056 migration-plan doc was retired as overtaken by #1051; its surviving pieces
 (Pipecat re-open triggers → §2, A3 gate bars → W1.4) are folded here. Update this
 section when W0 resolves.
@@ -637,3 +637,17 @@ what already exists:
 - [ ] **W13.1** proactive show: brief speaks (W2) AND shows (`show_card`), screenshot-verified — NOT STARTED
 - [ ] **W13.2** `ZOE_COMPOSE_UI` through lab→prod gates; compose beyond chat turns — IN FLIGHT elsewhere (#1053/#1062/#1068/#1069 merged, flag OFF)
 - [ ] **W13.3** Zoe authors a new card type via the W7 pipeline (test + panel-verify + human merge) — NOT STARTED (needs W7)
+
+## 10. Execution protocol — how a small model runs this plan
+
+The near-term workstreams are compiled into **cold-start execution packets** —
+[`samantha-evolution-packets.md`](samantha-evolution-packets.md) — one packet = one
+increment = one session = one PR, with verified file/function/flag names, exact
+commands, test requirements, and explicit STOP conditions. A cheap agent gets **one
+packet**, never this whole plan (the repo's greploop rule). The packet doc's P0
+protocol carries the non-negotiables (worktree, flag-off byte-identity, the replay-gate
+command, the validate.yml test-enumeration trap, merge mechanics, escalation). Packets
+exist for: P-W0, P-W1.3, P-W1.4, P-W2.1, P-W2.2, P-W3.2, P-W4.1, P-W5.1; the rest are
+seeded in the packet doc's deferred table and get generated when their gate opens.
+This plan (§0–§9) remains the spec and the source packets are compiled from — if a
+packet and this plan disagree, this plan wins and the packet gets fixed.
