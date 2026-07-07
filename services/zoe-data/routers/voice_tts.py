@@ -105,8 +105,11 @@ def _get_or_create_voice_session(panel_id: str) -> str:
 async def _load_voice_history(session_id: str, limit: int = 3) -> list[dict]:
     """Load last N chat turns for voice LLM context window (mirrors chat.py pattern)."""
     try:
-        from database import get_db
-        async for db in get_db():
+        # get_db_ctx, not `async for db in get_db()`: returning from inside the
+        # generator leaks the pooled connection (#953 / the 2026-07-03 pool
+        # drain) — and this runs on EVERY voice turn.
+        from db_pool import get_db_ctx
+        async with get_db_ctx() as db:
             rows = await db.execute(
                 "SELECT role, content FROM chat_messages "
                 "WHERE session_id = ? ORDER BY created_at DESC LIMIT ?",
