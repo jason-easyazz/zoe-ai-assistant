@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import Any, AsyncIterator
 from urllib.parse import quote
 
@@ -105,6 +106,124 @@ def _wrap_message_with_identity(message: str, user_id: str) -> str:
     return f"{_IDENTITY_ENVELOPE_PREFIX}{uid}\n{message}"
 
 
+# ── Deterministic recall floor (ZOE_SEAM_RECALL_INJECT, default OFF) ─────────
+#
+# BUG B (live hard-gate 2026-07-07): "my locker code is 31999" sat at the TOP
+# of the /api/memories/for-prompt packet, yet the flue brain answered "I don't
+# have that stored" — the model simply didn't call its recall_memory tool that
+# turn (the known ~97% invocation ceiling; prompt doctrine already pushed).
+# Tool-gated recall can never be 100% on a 4B model, so on a conservative
+# personal-question shape the SEAM prepends the for-prompt packet to the
+# outbound message deterministically. The recall_memory tool stays for deeper
+# queries — this is a floor, not a replacement.
+#
+# ENVELOPE CONTRACT: the block is placed AFTER the identity line. The sidecar's
+# stripIdentityEnvelope (labs/flue-zoe-brain/src/request-identity.ts) matches
+# `^ zoe-uid:<id>\n` anchored at the START of the message, so the wire order is
+# " zoe-uid:<id>\n<block>\n<user message>" — the sidecar strips only the
+# identity line and the model reads block + message.
+#
+# Flag-gated, DEFAULT OFF: the operator enables ZOE_SEAM_RECALL_INJECT via env
+# only after the replay gate passes. Flag off = byte-identical outbound message.
+_RECALL_INJECT_ENV = "ZOE_SEAM_RECALL_INJECT"
+
+# Conservative personal-question shapes only — each alternative pins a
+# possessive/self reference ("my", "I", "me"), so ordinary chat ("what is the
+# weather", "who is Ada Lovelace") never matches.
+_PERSONAL_QUESTION_RE = re.compile(
+    r"\b(?:"
+    r"what'?s\s+my|what\s+is\s+my|"
+    # "do you remember" must itself anchor to self-reference — bare
+    # "do you remember the alamo" is general chat, not personal recall.
+    r"do\s+you\s+remember\s+(?:my|(?:that|what|when|where|if)\s+i)\b|"
+    r"what\s+did\s+i|"
+    r"when\s+did\s+i|when'?s\s+my|when\s+is\s+my|where\s+do\s+i|"
+    r"who'?s\s+my|who\s+is\s+my|what\s+do\s+you\s+know\s+about\s+me"
+    r")",
+    re.IGNORECASE,
+)
+
+_RECALL_BLOCK_OPEN = (
+    "[MEMORY CONTEXT — Zoe's stored notes about this user; "
+    "use them to answer; do not mention this block]"
+)
+_RECALL_BLOCK_CLOSE = "[END MEMORY CONTEXT]"
+_RECALL_MAX_BULLETS = 12
+_RECALL_MAX_CHARS = 1600
+
+
+def _recall_inject_enabled() -> bool:
+    """Per-call env read (matches the module's other env lookups) so the
+    operator can flip the flag with a restart, no code change."""
+    return (os.environ.get(_RECALL_INJECT_ENV) or "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+async def _fetch_for_prompt_packet(user_id: str, message: str) -> str:
+    """The /api/memories/for-prompt packet text, fetched IN-PROCESS.
+
+    Calls the composer function directly (routers.memories.memory_for_prompt)
+    instead of an HTTP self-call — same event loop, no socket round-trip.
+    ``_=None`` skips the FastAPI internal-token dependency, which guards the
+    HTTP surface, not in-process callers; the endpoint itself fails closed for
+    guest/unknown users (empty packet). Lazy import keeps this module
+    slim-importable for tests.
+    """
+    from routers.memories import memory_for_prompt
+
+    result = await memory_for_prompt(
+        user_id=user_id,
+        message=(message or "")[:512],
+        limit=_RECALL_MAX_BULLETS,
+        _=None,
+    )
+    return str((result or {}).get("packet") or "")
+
+
+def _truncate_packet(packet: str) -> str:
+    """Cap the packet at _RECALL_MAX_BULLETS bullet lines / _RECALL_MAX_CHARS."""
+    lines: list[str] = []
+    bullets = 0
+    total = 0
+    for line in packet.splitlines():
+        if line.lstrip().startswith(("-", "•", "*")):
+            bullets += 1
+            if bullets > _RECALL_MAX_BULLETS:
+                break
+        total += len(line) + 1
+        if lines and total > _RECALL_MAX_CHARS:
+            break
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
+async def _recall_context_block(message: str, user_id: str) -> str:
+    """The delimited memory block for this turn, or '' — NEVER raises.
+
+    '' unless the flag is ON, a real user id is present, and the message
+    matches the conservative personal-question shape. A fetch failure logs and
+    returns '' — the turn always proceeds, at worst without the floor.
+    """
+    if not _recall_inject_enabled():
+        return ""
+    if not (user_id or "").strip():
+        return ""
+    if not _PERSONAL_QUESTION_RE.search(message or ""):
+        return ""
+    try:
+        packet = await _fetch_for_prompt_packet(user_id, message)
+    except Exception as exc:  # noqa: BLE001 — the recall floor must never break a turn
+        logger.warning(
+            "seam recall inject: packet fetch failed, continuing without it: %s", exc
+        )
+        return ""
+    packet = _truncate_packet((packet or "").strip())
+    if not packet:
+        return ""
+    return f"{_RECALL_BLOCK_OPEN}\n{packet}\n{_RECALL_BLOCK_CLOSE}"
+
+
 def _text_from_body(body: Any) -> str:
     """Pull the reply text out of the sidecar's {result:{text}} envelope.
 
@@ -163,7 +282,14 @@ async def run_flue_brain_streaming(
     # Keep the format byte-for-byte in sync with that module. Omit empty/guest ids
     # so the sidecar's own fail-closed identity handling applies.
     uid = (user_id or "").strip()
-    outbound_message = _wrap_message_with_identity(message, uid)
+    # Deterministic recall floor (default OFF): on a personal-question turn,
+    # prepend the for-prompt packet so recall no longer depends on the model
+    # electing to call its recall_memory tool. Placed BEFORE the identity wrap
+    # so the block rides AFTER the identity line on the wire (the sidecar's
+    # single-line strip regex is anchored at message start).
+    recall_block = await _recall_context_block(message, uid)
+    brain_message = f"{recall_block}\n{message}" if recall_block else message
+    outbound_message = _wrap_message_with_identity(brain_message, uid)
     body_obj: dict[str, str] = {"message": outbound_message}
     payload = json.dumps(body_obj).encode()
     try:

@@ -79,10 +79,13 @@ With `strict = true` only **one** PR can be up-to-date at a time, so a batch of 
 
 ## CI test discovery — `validate.yml` runs an ENUMERATED list
 
-- `validate.yml` runs an **explicit, enumerated list of test files**, not pytest path-discovery. A new
-  `tests/**` file **silently does not run in CI** unless it is added to that list — so a brand-new
-  regression test can "pass" by never executing.
-- **Whenever you add a test file, add it to `validate.yml`'s test list** and confirm it actually runs
+- Parts of `validate.yml` run an **explicit, enumerated list of test files**, not pytest
+  path-discovery. A new `tests/**` file **silently does not run in CI** unless its lane picks it up —
+  so a brand-new regression test can "pass" by never executing.
+- Lanes that are already enumeration-free: `services/zoe-data/tests` + repo-root `tests/unit`
+  (marker-based, `-m ci_safe`) and `services/zoe-auth/tests` (full-directory run since P-F5 — the old
+  4-file list silently dropped `test_oidc_login`/`test_rbac`/`test_security`). Elsewhere,
+  **whenever you add a test file, add it to `validate.yml`'s test list** and confirm it actually runs
   in the CI job. Greptile flags this repeatedly; don't rely on that as the backstop.
 
 ## Merge queue (evaluated, NOT enabled as of 2026-06-29)

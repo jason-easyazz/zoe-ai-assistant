@@ -65,6 +65,7 @@ import {
   progressiveToolsEnabled,
   stripCodingBuiltins,
 } from '../tools/tool-groups.ts';
+import { windowContextToBudget } from '../context-window.ts';
 
 /** Custom api id this module registers; `app.ts` binds the `zoe` provider to it. */
 export const CAPPED_COMPLETIONS_API = 'zoe-capped-completions';
@@ -120,14 +121,20 @@ function applyCap(context: Context): Context {
 
 /**
  * All wire-level policies for one model call, in order:
- *   1. strip pi/Flue coding built-ins (read/write/edit/bash/grep/glob/task)
+ *   1. prompt-fit history windowing (drop the OLDEST whole user-turn blocks so
+ *      the assembled prompt always fits the model context — the fix for the
+ *      unbounded-session 400/500 wedge; see src/context-window.ts). Runs FIRST
+ *      so tool disclosure derives the active set from the same message window
+ *      the model actually sees; the current turn always survives whole, so the
+ *      iteration-depth count below is unaffected;
+ *   2. strip pi/Flue coding built-ins (read/write/edit/bash/grep/glob/task)
  *      that the harness injects on every turn — UNCONDITIONAL safety floor, so
  *      a family voice brain is never handed bash/write/edit/task even with the
  *      disclosure kill switch off (see tool-groups.ts CODING_BUILTIN_TOOL_NAMES);
- *   2. progressive tool disclosure (shrink the Zoe schemas the model sees to
- *      core + active groups) — also strips the coding built-ins, but step 1
+ *   3. progressive tool disclosure (shrink the Zoe schemas the model sees to
+ *      core + active groups) — also strips the coding built-ins, but step 2
  *      guarantees it regardless of ZOE_BRAIN_PROGRESSIVE_TOOLS;
- *   3. the iteration cap (past the cap, strip ALL tools so the turn must finish
+ *   4. the iteration cap (past the cap, strip ALL tools so the turn must finish
  *      in plain text).
  * Exported for the offline unit tests only.
  */
@@ -135,7 +142,8 @@ export function applyPolicies(context: Context): Context {
   // Strip the acting-identity envelope BEFORE any other policy so the model — and
   // every downstream transform — only ever sees the human-authored message text.
   const clean = { ...context, messages: stripIdentityEnvelope(context.messages) };
-  const safe = stripCodingBuiltins(clean);
+  const windowed = windowContextToBudget(clean);
+  const safe = stripCodingBuiltins(windowed);
   const disclosed = progressiveToolsEnabled() ? discloseTools(safe) : safe;
   return applyCap(disclosed);
 }

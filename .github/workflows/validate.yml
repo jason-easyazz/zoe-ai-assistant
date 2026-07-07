@@ -123,11 +123,10 @@ jobs:
             tests/unit -m ci_safe \
             -x -q \
             --override-ini="asyncio_mode=auto"
+          # Full zoe-auth suite — no hand enumeration (the old 4-file list
+          # silently dropped test_oidc_login / test_rbac / test_security).
           PYTHONPATH="${{ github.workspace }}/services/zoe-auth:${{ github.workspace }}/services/zoe-auth/tests" pytest \
-            services/zoe-auth/tests/test_auth.py \
-            services/zoe-auth/tests/test_smoke.py \
-            services/zoe-auth/tests/test_oidc_jwt.py \
-            services/zoe-auth/tests/test_request_logging.py \
+            services/zoe-auth/tests \
             -x -q
         env:
           PYTHONPATH: ${{ github.workspace }}/services/zoe-data
