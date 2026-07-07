@@ -135,6 +135,31 @@ def test_failed_filler_synthesis_not_retried_late(monkeypatch):
     assert any(f.get("done") for f in frames)
 
 
+def test_text_only_ack_frame_does_not_defeat_filler(monkeypatch):
+    """The live failure: _generate_voice_stream yields a text-only processing_ack
+    frame at ~0.6s, which satisfied the first-chunk race while real audio was
+    still 4-6s away. Text frames must be forwarded but only AUDIO ends the race."""
+    from fastapi.responses import StreamingResponse
+
+    async def brain(payload, caller=None, stream=True, db=None):
+        async def _gen():
+            yield (json.dumps({"processing_ack": True, "text": "I will check that."}) + "\n").encode()
+            await asyncio.sleep(0.6)  # brain thinking; >> filler_after
+            yield (json.dumps({"chunk": 0, "text": "Real answer."}) + "\n").encode()
+            yield base64.b64encode(b"RIFFreal") + b"\n"
+            yield (json.dumps({"done": True, "reply": "Real answer."}) + "\n").encode()
+        return StreamingResponse(_gen(), media_type="application/x-zoe-audio-stream")
+
+    frames = _post(_app(monkeypatch, brain))
+    kinds = [("ack" if f.get("processing_ack") else
+              "filler" if f.get("provider") == "filler" else
+              "chunk0" if f.get("chunk") == 0 else
+              "done" if f.get("done") else "other") for f in frames]
+    assert "ack" in kinds, f"text-only ack must still be forwarded: {frames}"
+    assert "filler" in kinds, f"text-only ack must not silence the filler: {frames}"
+    assert kinds.index("ack") < kinds.index("filler") < kinds.index("chunk0"), kinds
+
+
 def test_lazy_stream_fast_first_chunk_skips_filler(monkeypatch):
     frames = _post(_app(monkeypatch, _streaming_brain(first_chunk_delay=0.0)))
     assert not any(f.get("provider") == "filler" for f in frames), frames
