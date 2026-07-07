@@ -517,6 +517,9 @@
     }
 
     let lastDashboardWeather = null;  // survives in-place re-renders (auth arrival)
+    let dashboardVisit = 0;           // bumped per wake — NOT by in-place re-renders —
+                                      // so late weather from a previous visit is discarded
+                                      // while the auth-arrival re-render can't strand it
 
     function renderDashboardSurface(weather) {
         // Any re-render (e.g. the /status user arriving) keeps the last live
@@ -544,6 +547,8 @@
     }
 
     function wakeToDashboard() {
+        dashboardVisit++;
+        const visit = dashboardVisit;
         renderDashboardSurface(null);
         scheduleIdleReturn();
         // Enrich with live weather (guest-readable); re-render the surface with it,
@@ -553,9 +558,10 @@
             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
             body: JSON.stringify({ message: 'weather' })
         }).then(res => (res.ok ? res.json() : null)).then(data => {
-            // Apply as long as the dashboard is still the active surface — an
-            // in-place re-render (auth arrival) must not strand the live weather.
-            if (!data || !document.body.classList.contains('sky-on-dashboard')) return;
+            // Apply iff this is still the SAME dashboard visit (a late fetch from a
+            // previous visit is stale) and the dashboard is still the active surface.
+            // The auth-arrival re-render bumps neither, so it can't strand us.
+            if (!data || visit !== dashboardVisit || !document.body.classList.contains('sky-on-dashboard')) return;
             // The resolve card carries its data under `content` (props is created
             // later by the renderer's normalization), so read either.
             const wxCard = (Array.isArray(data.cards) ? data.cards : []).find(c => {
