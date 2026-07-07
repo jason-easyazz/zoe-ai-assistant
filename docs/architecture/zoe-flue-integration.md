@@ -381,7 +381,7 @@ sidecar store. Rollback is one env removal + a zoe-data restart (~15 s).
    re-run still needs an authenticated test user (zoe-auth provisioning).
 4. **Tool coverage: 12 → 20 via Waves 1–3; remainder deliberately cut per [`docs/knowledge/flue-cutover-tool-cut-list.md`](../knowledge/flue-cutover-tool-cut-list.md) (signed off 2026-07-03).** The parity corpus barely probed this gap — it stands separately.
 5. ~~**Unbounded session history wedged long-lived sessions permanently** (found
-   2026-07-07)~~ ✅ **FIXED (#1134).** Durable sessions grew without bound and
+   2026-07-07)~~ ✅ **FIXED (#1138).** Durable sessions grew without bound and
    nothing between the store and llama-server ever shrank the assembled prompt;
    once system prompt + tool schemas + history crossed the 8192-token context,
    EVERY subsequent turn on that session 500'd forever (`400 request (8288
