@@ -56,10 +56,13 @@ def _columns(conn, table: str) -> dict:
 # ─── 0014 is wired correctly into the chain ───────────────────────────────────
 
 def test_0014_is_single_head_after_0013():
-    # 0014 chains off 0013. The current single head is now 0015 (temporal
-    # relationship edges), which chains off 0014.
+    # The real guard: the migration graph must never BRANCH (exactly one head).
+    # Deliberately does NOT pin which revision is the head — pinning broke on
+    # every new migration (0015 was asserted; 0016 landed → red on main,
+    # 2026-07-07). The chain facts for the revisions this file owns stay pinned.
     script = ScriptDirectory.from_config(_alembic_config())
-    assert list(script.get_heads()) == ["0015"], "expected exactly one head: 0015"
+    heads = list(script.get_heads())
+    assert len(heads) == 1, f"migration graph branched — heads: {heads}"
     rev = script.get_revision("0014")
     assert rev.down_revision == "0013"
     rev15 = script.get_revision("0015")
