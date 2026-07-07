@@ -338,7 +338,16 @@ regression, ever (replay harness is the enforcement).
 
 ## 6. Status / where am I
 
-- [ ] **W0** capture positive-control turn (buildplan §6 carry-over) — NOT STARTED
+- [x] **W0** capture positive-control — **RUN 2026-07-07 22:50 AWST, ROOT CAUSE FOUND.**
+  Chat-lane capture is ALIVE (fresh `web_*` rows; the 06-22 fear was stale). Panel voice
+  reaches the server (`/api/voice/wake` + `/turn_stream` 200s, panel bound to jason in
+  `ui_panel_sessions`) **but the turn resolves as `voice-guest`, not jason**, and the
+  chat save then dies on FK `users` ("Key (user_id)=(voice-guest) is not present"),
+  swallowed — hence ZERO voice rows ever in Postgres. Two bugs: (a) voice-path identity
+  resolution ignores the panel→jason binding; (b) `_schedule_voice_chat_save`'s skip
+  guard checks "guest" but not "voice-guest", so the doomed write is attempted and the
+  FK error swallowed. Fix = packet **P-F6** in remediation-packets-2026-07.md. Note:
+  synthetic `web_*` eval traffic also runs against the live box (unstamped metadata).
 - [x] **W1.1** barge-in on LiveKit agent — **DONE + LIVE** (#1051: Silero VAD `voice_vad.py`,
   frames flow during PROCESSING/COOLDOWN, ≥250 ms sustained speech cancels the pipeline +
   `stop_playback`; #1081 fixed the barge gate against real voice — triggers 6/6, was 0/6;
@@ -369,8 +378,10 @@ regression, ever (replay harness is the enforcement).
 
 ## 7. NEXT ACTION (always exactly one)
 
-→ **W0**: run the capture positive-control — execute packet **P-W0** in
-[`samantha-evolution-packets.md`](samantha-evolution-packets.md). In parallel,
+→ **P-F6** (remediation-packets-2026-07.md): fix the W0 root cause — thread the
+panel→user binding into voice-turn identity resolution + widen the guest guard +
+surface (don't swallow) FK failures; then RE-RUN P-W0's positive control to completion
+(row with metadata.user_id=jason + consolidation sweep pickup). In parallel,
 kick off **W3.1** (ccd-cli fleet cleanup — operational, zero risk). W1.1/W1.2 are already
 **live** (#1051/#1081/#1082 — do NOT redo); the remaining W1 work is **W1.3**
 (packet P-W1.3) + the **M3/M4** measurements (packet P-W1.4, bars in §6).
