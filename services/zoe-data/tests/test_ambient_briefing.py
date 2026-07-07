@@ -283,7 +283,9 @@ def test_briefing_endpoint_returns_fast_even_when_compose_is_slow(monkeypatch):
 async def test_briefing_is_deterministic_by_default(monkeypatch):
     """Resting-screen trust: composed briefings hallucinated stats, so the static
     tree is the default; compose is an explicit ZOE_BRIEFING_COMPOSE opt-in."""
-    monkeypatch.setenv("ZOE_COMPOSE_UI", "1")
+    # Patch compose_enabled directly (not via env) so the test can't pass or
+    # fail for the wrong reason if module state interferes with env reads.
+    monkeypatch.setattr(ambient_briefing.ui_compose, "compose_enabled", lambda: True)
     monkeypatch.delenv("ZOE_BRIEFING_COMPOSE", raising=False)
     called = {"n": 0}
     async def fake_compose(*a, **k):
