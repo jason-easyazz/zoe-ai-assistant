@@ -89,10 +89,16 @@ buildplan's open question (its §6/§7) — everything else trusts this.
    `"seq": <n>` and `"final": <bool>` keys; flag OFF keeps the single-message path
    untouched (do not refactor it).
 2. Clients: `services/zoe-ui/dist/touch/js/skybridge-voice.js`,
-   `services/zoe-ui/dist/voice.html`, `services/zoe-ui/dist/touch/voice.html` — find the
-   handler for the existing audio message (search for `audio_base64`); make it enqueue
-   and play sequentially; treat a message WITHOUT `seq` exactly as today (backward
-   compatible — old server, new client and vice versa must both work).
+   `services/zoe-ui/dist/voice.html`, `services/zoe-ui/dist/touch/voice.html` — these
+   `dist/` files ARE the canonical, hand-maintained sources (no build step regenerates
+   them; `services/zoe-ui/AGENTS.md`: "hand-maintained HTML/CSS/JS, NOT build output")
+   and #1051 edited `skybridge-voice.js` in place the same way. Read
+   `services/zoe-ui/AGENTS.md` before editing; if a changed file is in the service
+   worker's Workbox precache list, **bump `SW_VERSION` in `dist/sw.js`** (its #1
+   "changes aren't showing up" gotcha). Find the handler for the existing audio message
+   (search for `audio_base64`); make it enqueue and play sequentially; treat a message
+   WITHOUT `seq` exactly as today (backward compatible — old server, new client and
+   vice versa must both work).
 3. Barge-in interplay: the #1051 pipeline-cancel must also stop the queued sentences —
    on `stop_playback`, clear the client queue; server-side, check the turn's cancel
    token between sentences and stop synthesizing.
