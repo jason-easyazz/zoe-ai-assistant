@@ -1,6 +1,8 @@
-/* Guest wake dashboard (Layout B condensed) — a big clock with a smaller weather
-   tile beside it, and room/music/sign-in controls at the base. Glass + Inter +
-   light/dark, like the rest of the cards. */
+/* Ambient wake dashboard (View Assist cue) — the 'home' view while awake.
+   LEFT third: big time + date (ambient-clock typography, ticked live via
+   .sky-live-clock). RIGHT two-thirds: a 2x3 grid of shortcut tiles, each a
+   data-sky-action="query" target big enough for a kitchen glance.
+   Extends PR #851's Layout B guest dashboard; glass + Inter + light/dark. */
 
 .sky-card.dashboard-card {
   display: flex !important;
@@ -18,112 +20,120 @@
 }
 body:not(.sky-empty) .sky-card.dashboard-card.sky-premium-card { display: flex !important; flex-direction: column !important; padding: 0 !important; }
 
+/* ── Scene: time/date third | 2x3 shortcut grid ───────────────────────── */
 .dashboard-card .dash-scene {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sky-space-5, 20px);
+  display: grid;
+  grid-template-columns: minmax(300px, 1fr) minmax(0, 2fr);
+  gap: var(--sky-space-8, 32px);
+  align-items: stretch;
   width: 100%;
   flex: 1 1 auto;
+  min-height: 0;
   padding: var(--sky-space-7, 28px) var(--sky-space-8, 32px);
   box-sizing: border-box;
 }
 
-/* ── Top: clock (≈⅔) + weather tile (≈⅓) ───────────────────────────────── */
-.dashboard-card .dash-top {
-  display: grid;
-  grid-template-columns: 2fr 1fr;
-  gap: var(--sky-space-5, 20px);
-  align-items: stretch;
-  flex: 1 1 auto;
-  min-height: 0;
-}
+/* ── Left: greeting + big time + date (ambient clock typography) ──────── */
 .dashboard-card .dash-clock {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 4px;
+  align-items: flex-start;
+  gap: var(--sky-space-2, 8px);
+  min-width: 0;
 }
 .dashboard-card .dash-greeting {
-  font-size: var(--sky-text-label, 17px);
+  font-size: var(--sky-text-heading, 20px);
   font-weight: 500;
   color: var(--sky-ink-2, rgba(255,255,255,.62));
 }
-.dashboard-card .dash-time {
-  display: flex;
-  align-items: baseline;
-  font-weight: 500;
-  letter-spacing: -2px;
-  line-height: 0.92;
-  font-size: clamp(64px, 12vw, 120px);
-  color: var(--sky-ink-0, #fff);
-}
-.dashboard-card .dash-time i { font-style: normal; opacity: .5; margin: 0 .04em; }
-.dashboard-card .dash-time b { font-weight: 500; font-size: .34em; letter-spacing: 0; margin-left: .18em; color: var(--sky-ink-2, rgba(255,255,255,.6)); }
-.dashboard-card .dash-date {
-  margin-top: 4px;
-  font-size: var(--sky-text-label, 17px);
-  font-weight: 400;
+/* .sky-ambient-time / .sky-ambient-date come from the ambient clock; scale the
+   numerals down from full-screen ambient size to the dashboard third. */
+.dashboard-card .sky-ambient-time { color: var(--sky-ink-0, #fff); }
+.dashboard-card .sky-ambient-time span { font-size: clamp(64px, 8.5vw, 118px); }
+.dashboard-card .sky-ambient-time i { font-size: clamp(50px, 6.5vw, 92px); }
+.dashboard-card .sky-ambient-time b { font-size: clamp(20px, 2.4vw, 30px); }
+.dashboard-card .sky-ambient-date {
   color: var(--sky-ink-2, rgba(255,255,255,.62));
+  font-size: clamp(18px, 2vw, 26px);
 }
-
-/* weather tile */
-.dashboard-card .dash-weather {
-  appearance: none;
-  cursor: pointer;
-  display: flex;
-  flex-direction: column;
+.dashboard-card .dash-ctrl-signin {
+  margin-top: var(--sky-space-4, 16px);
+  flex: 0 0 auto;
+  flex-direction: row;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
-  border-radius: var(--sky-radius-lg, 24px);
-  border: 1px solid var(--sky-hairline, rgba(255,255,255,.1));
-  background: var(--sky-fill-1, rgba(255,255,255,.05));
-  color: inherit;
-  font-family: inherit;
-  transition: background var(--sky-dur-fast, 180ms) ease, transform var(--sky-dur-fast, 180ms) ease;
+  min-height: 52px;
+  min-width: 48px;
+  padding: 0 var(--sky-space-5, 20px) 0 var(--sky-space-3, 12px);
+  border-radius: var(--sky-radius-pill, 999px);
 }
-.dashboard-card .dash-weather:hover { background: var(--sky-fill-2, rgba(255,255,255,.09)); }
-.dashboard-card .dash-weather:active { transform: scale(.985); }
-.dashboard-card .dash-wx-temp { font-size: 40px; font-weight: 500; letter-spacing: -1px; color: var(--sky-ink-0, #fff); }
-.dashboard-card .dash-wx-desc { font-size: 15px; color: var(--sky-ink-2, rgba(255,255,255,.6)); }
-.dashboard-card .dash-weather.is-loading { color: var(--sky-ink-3, rgba(255,255,255,.45)); }
+.dashboard-card .dash-ctrl-signin .dash-ctrl-glyph { width: 32px; height: 32px; }
+.dashboard-card .dash-ctrl-signin .dash-ctrl-svg { width: 18px; height: 18px; }
+.dashboard-card .dash-ctrl-signin .dash-ctrl-label { font-size: 16px; }
 
-/* ── Base: control tiles ───────────────────────────────────────────────── */
-.dashboard-card .dash-controls {
+/* ── Right: the 2x3 shortcut grid ─────────────────────────────────────── */
+.dashboard-card .dash-tiles {
   display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: 1fr;
-  gap: var(--sky-space-3, 14px);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: minmax(120px, 1fr);
+  gap: var(--sky-space-4, 16px);
+  min-height: 0;
 }
 .dashboard-card .dash-ctrl {
   appearance: none;
   cursor: pointer;
   display: flex;
-  align-items: center;
-  gap: var(--sky-space-3, 12px);
-  min-height: 64px;
-  padding: 0 var(--sky-space-5, 20px);
-  border-radius: var(--sky-radius-md, 16px);
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: var(--sky-space-4, 16px);
+  min-height: 120px;
+  min-width: 48px;
+  padding: var(--sky-space-5, 20px);
+  border-radius: var(--sky-radius-lg, 24px);
   border: 1px solid var(--sky-hairline, rgba(255,255,255,.1));
   background: var(--sky-fill-1, rgba(255,255,255,.05));
   color: var(--sky-ink-0, #fff);
   font-family: inherit;
+  text-align: left;
   transition: background var(--sky-dur-fast, 180ms) ease, transform var(--sky-dur-fast, 180ms) ease, border-color var(--sky-dur-fast, 180ms) ease;
 }
 .dashboard-card .dash-ctrl:hover { background: var(--sky-fill-2, rgba(255,255,255,.09)); border-color: var(--sky-hairline-strong, rgba(255,255,255,.2)); }
 .dashboard-card .dash-ctrl:active { transform: scale(.98); }
 .dashboard-card .dash-ctrl-glyph {
-  width: 38px; height: 38px; flex: 0 0 auto;
+  width: 52px; height: 52px; flex: 0 0 auto;
   display: grid; place-items: center;
   border-radius: 50%;
-  /* ds1 accents are hex; the old rgba(var(--sky-accent-cyan-rgb)) form leaned on
-     an undefined *-rgb token. Same rendered colour, real token. */
-  background: color-mix(in srgb, var(--sky-accent-cyan, #37c0e6) 16%, transparent);
+  /* ds1 accents are hex; per-tile accents recolour via --dash-accent below. */
+  background: color-mix(in srgb, var(--dash-accent, var(--sky-accent-cyan, #37c0e6)) 16%, transparent);
 }
-.dashboard-card .dash-ctrl-svg { width: 22px; height: 22px; fill: var(--sky-accent-cyan, #37c0e6); }
-.dashboard-card .dash-ctrl-label { font-size: 17px; font-weight: 500; }
-.dashboard-card .dash-ctrl-signin .dash-ctrl-glyph { background: color-mix(in srgb, var(--sky-accent-violet, #9b8cff) 18%, transparent); }
-.dashboard-card .dash-ctrl-signin .dash-ctrl-svg { fill: var(--sky-accent-violet, #9b8cff); }
+.dashboard-card .dash-ctrl-svg { width: 26px; height: 26px; fill: var(--dash-accent, var(--sky-accent-cyan, #37c0e6)); }
+.dashboard-card .dash-ctrl-glyph .sky-glyph { width: 30px; height: 30px; }
+.dashboard-card .dash-ctrl-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.dashboard-card .dash-ctrl-label { font-size: 19px; font-weight: 600; }
+.dashboard-card .dash-ctrl-sub {
+  font-size: 14px;
+  color: var(--sky-ink-2, rgba(255,255,255,.6));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* colour with intent (§4): one accent per shortcut */
+.dashboard-card .dash-ctrl--weather  { --dash-accent: var(--sky-accent-cyan, #37c0e6); }
+.dashboard-card .dash-ctrl--calendar { --dash-accent: var(--sky-accent-blue, #6aa6ff); }
+.dashboard-card .dash-ctrl--lists    { --dash-accent: var(--sky-accent-mint, #5be3b0); }
+.dashboard-card .dash-ctrl--music    { --dash-accent: var(--sky-accent-violet, #9b8cff); }
+.dashboard-card .dash-ctrl--lights   { --dash-accent: var(--sky-accent-amber, #f5b13c); }
+.dashboard-card .dash-ctrl--timers   { --dash-accent: var(--sky-accent-red, #ff6b6b); }
+.dashboard-card .dash-ctrl-signin    { --dash-accent: var(--sky-accent-violet, #9b8cff); }
+
+/* Narrow fallback (portrait/phone preview): stack clock over a 2-col grid. */
+@media (max-width: 900px) {
+  .dashboard-card .dash-scene { grid-template-columns: 1fr; }
+  .dashboard-card .dash-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 
 /* ── Light mode (re-point the ink scale; global light only flips --text-*) ─ */
 [data-theme="light"] .sky-card.dashboard-card {
@@ -134,7 +144,11 @@ body:not(.sky-empty) .sky-card.dashboard-card.sky-premium-card { display: flex !
   border-color: rgba(20,50,80,.14) !important;
   box-shadow: 0 26px 60px -18px rgba(20,50,80,.28), inset 0 1px 0 rgba(255,255,255,.7) !important;
 }
+[data-theme="light"] .dashboard-card .sky-ambient-time,
+[data-theme="light"] .dashboard-card .sky-ambient-date { color: inherit; }
+[data-theme="light"] .dashboard-card .sky-ambient-time { color: var(--sky-ink-0, #16324d); }
+[data-theme="light"] .dashboard-card .sky-ambient-date { color: var(--sky-ink-2, #3a5e80); }
 
 @media (prefers-reduced-motion: reduce) {
-  .dashboard-card .dash-weather, .dashboard-card .dash-ctrl { transition: none; }
+  .dashboard-card .dash-ctrl { transition: none; }
 }
