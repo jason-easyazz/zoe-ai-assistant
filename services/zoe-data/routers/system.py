@@ -11,7 +11,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from agent_safety import SSRFBlocked, assert_panel_host, is_allowed_panel_host
-from auth import get_current_user, require_admin, get_a2a_caller, require_internal_token
+from auth import (
+    get_current_user,
+    require_admin,
+    get_a2a_caller,
+    require_intent_dispatch_auth,
+    require_internal_token,
+)
 from database import get_db
 from hermes_http import hermes_auth_headers
 from openclaw_maintenance import (
@@ -2407,7 +2413,7 @@ class _IntentDispatchBody(BaseModel):
 
 
 @router.post("/intent-dispatch")
-async def intent_dispatch(body: _IntentDispatchBody, _: None = Depends(require_internal_token)):
+async def intent_dispatch(body: _IntentDispatchBody, _: None = Depends(require_intent_dispatch_auth)):
     """Run one allowlisted intent for a user via the existing fulfillment path.
 
     Internal/service endpoint (loopback or X-Internal-Token) — how the zoe-core
