@@ -4349,32 +4349,57 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
             voice_turn_count.labels(outcome="ok", path="turn_stream").inc()
         except Exception:
             pass
+        def _frame_has_audio(_frame: bytes) -> bool:
+            # A "chunk" or "full_audio" header means audio is on the wire (the
+            # b64 line follows immediately); a non-JSON line IS a b64 audio line.
+            try:
+                _o = _json.loads(_frame)
+            except Exception:
+                return True
+            return isinstance(_o, dict) and ("chunk" in _o or "full_audio" in _o)
+
         if hasattr(sub, "body_iterator"):
             _body = sub.body_iterator
             if _filler_enabled() and not _filler_attempted:
                 # voice_command returned fast, but its generator is lazy — the
-                # brain work happens on the first pull. Race the first chunk
-                # against whatever is left of the filler budget.
-                _budget = max(0.1, _after - (time.monotonic() - _t_stream0))
-                _first_task = asyncio.ensure_future(_body.__anext__())
-                _first = None
+                # brain work happens on the first pull. Race until the first
+                # frame that actually CARRIES AUDIO, forwarding text-only frames
+                # (processing_ack, status lines) as they arrive: a frame the
+                # panel can't play must not silence the filler (live: the
+                # text-only processing_ack landed at 0.6s and defeated the
+                # race while first audio was still 4-6s away).
+                _deadline = _t_stream0 + _after
                 _ended = False
-                try:
-                    _first = await asyncio.wait_for(asyncio.shield(_first_task), timeout=_budget)
-                except asyncio.TimeoutError:
-                    _filler_attempted = True
-                    for _line in await _filler_lines():
-                        yield _line
-                except StopAsyncIteration:
-                    _ended = True
-                if _first is None and not _ended:
+                while True:
+                    _remaining = _deadline - time.monotonic()
+                    if _remaining <= 0:
+                        _filler_attempted = True
+                        for _line in await _filler_lines():
+                            yield _line
+                        break
+                    _first_task = asyncio.ensure_future(_body.__anext__())
                     try:
-                        _first = await _first_task
+                        _frame = await asyncio.wait_for(asyncio.shield(_first_task), timeout=_remaining)
+                        _first_task = None
+                    except asyncio.TimeoutError:
+                        _filler_attempted = True
+                        for _line in await _filler_lines():
+                            yield _line
+                        try:
+                            _frame = await _first_task
+                        except StopAsyncIteration:
+                            _ended = True
+                        _first_task = None
+                        if not _ended:
+                            yield _frame
+                        break
                     except StopAsyncIteration:
+                        _first_task = None
                         _ended = True
-                _first_task = None
-                if _first is not None:
-                    yield _first
+                        break
+                    yield _frame
+                    if _frame_has_audio(_frame):
+                        break
                 if _ended:
                     return
             async for chunk in _body:
