@@ -39,10 +39,20 @@ def test_bool_falsy(monkeypatch, raw):
 
 
 @pytest.mark.parametrize("default", [True, False])
-def test_bool_absent_and_empty_use_default(monkeypatch, default):
+def test_bool_absent_uses_default(monkeypatch, default):
     assert env_bool(K, default=default) is default
+
+
+@pytest.mark.parametrize("default", [True, False])
+def test_bool_present_but_empty_is_false(monkeypatch, default):
+    """KEY= (present but empty) means explicitly CLEARED — False regardless of
+    the default. The live .env uses this state, and every legacy bool parse
+    (truthy-set membership) yields False for "" — if empty returned the
+    default, migrating a default-true flag would silently flip it on."""
+    monkeypatch.setenv(K, "")
+    assert env_bool(K, default=default) is False
     monkeypatch.setenv(K, "   ")
-    assert env_bool(K, default=default) is default
+    assert env_bool(K, default=default) is False
 
 
 def test_bool_unrecognized_falls_back_with_one_warning(monkeypatch, caplog):

@@ -58,14 +58,23 @@ def env_str(key: str, default: str = "") -> str:
 def env_bool(key: str, default: bool = False) -> bool:
     """Canonical bool: 1/true/yes/on ↔ 0/false/no/off (case/space-insensitive).
 
-    Absent or empty → default. Any other non-empty value → default + one
-    warning (never a silent flip)."""
+    Absent → default. **Present-but-empty → False**, deliberately NOT the
+    default: the live ``.env`` uses ``KEY=`` as an explicit "cleared/off"
+    state (3 such keys at the time of writing), and every legacy bool parse
+    in the tree is truthy-set membership, where ``""`` is never truthy. If
+    empty returned the default, migrating a default-true flag (e.g.
+    ``ZOE_VOICE_TOOL_FILLER=`` written to disable it) would silently flip it
+    ON — the exact bug class this module exists to end. Byte-equivalence with
+    the legacy parses requires empty → False.
+
+    Any other unrecognized non-empty value → default + one warning (never a
+    silent flip)."""
     raw = os.environ.get(key)
     if raw is None:
         return default
     val = raw.strip().lower()
     if not val:
-        return default
+        return False
     if val in _TRUTHY:
         return True
     if val in _FALSY:
