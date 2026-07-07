@@ -77,19 +77,53 @@ def test_assistant_first_person_frames_never_become_facts():
 
 # ── call-site lockdown: person extractors get USER text only ────────────────
 
-def _person_extract_first_args(path: Path) -> list[tuple[str, ast.expr]]:
-    """(callee_name, first_positional_arg) for every person-extract call."""
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    calls = []
-    for node in ast.walk(tree):
+_GUARDED_CALLEES = frozenset({
+    "_person_extract", "_person_extract_llm", "process_text", "process_text_llm",
+})
+
+# The text parameter is positional-or-keyword named `text` in both
+# person_extractor.process_text and person_extractor_llm.process_text_llm.
+_TEXT_KWARG = "text"
+
+
+def _person_extract_text_args(source: str) -> list[tuple[str, "ast.expr | None"]]:
+    """(callee_name, text_argument) for every person-extract call.
+
+    Captures the text argument whether it is passed positionally OR as the
+    ``text=`` keyword — a kwarg call site must not silently escape the
+    lockdown. ``None`` means the call passes no recognisable text argument.
+    """
+    calls: list[tuple[str, "ast.expr | None"]] = []
+    for node in ast.walk(ast.parse(source)):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
         name = getattr(func, "id", getattr(func, "attr", ""))
-        if name in {"_person_extract", "_person_extract_llm",
-                    "process_text", "process_text_llm"} and node.args:
-            calls.append((name, node.args[0]))
+        if name not in _GUARDED_CALLEES:
+            continue
+        if node.args:
+            arg: "ast.expr | None" = node.args[0]
+        else:
+            arg = next(
+                (kw.value for kw in node.keywords if kw.arg == _TEXT_KWARG),
+                None,
+            )
+        calls.append((name, arg))
     return calls
+
+
+def _assert_user_text_only(calls, allowed_arg: str, where: str) -> None:
+    assert calls, f"no person-extract calls found in {where} — lockdown is stale"
+    for name, arg in calls:
+        assert arg is not None, (
+            f"{where}: {name}() call passes no recognisable text argument — "
+            "extend the lockdown before changing the call shape"
+        )
+        assert isinstance(arg, ast.Name) and arg.id == allowed_arg, (
+            f"{where}: {name}() must be fed the plain `{allowed_arg}` variable, "
+            f"got {ast.dump(arg)[:120]} — never combine in the assistant reply "
+            "(poisoned-store bug 2026-07-07)"
+        )
 
 
 @pytest.mark.parametrize("router,allowed_arg", [
@@ -97,11 +131,33 @@ def _person_extract_first_args(path: Path) -> list[tuple[str, ast.expr]]:
     ("routers/voice_tts.py", "user_text"),
 ])
 def test_person_extract_call_sites_pass_user_text_only(router, allowed_arg):
-    calls = _person_extract_first_args(_SERVICE_DIR / router)
-    assert calls, f"no person-extract calls found in {router} — lockdown is stale"
-    for name, arg in calls:
-        assert isinstance(arg, ast.Name) and arg.id == allowed_arg, (
-            f"{router}: {name}() must be fed the plain `{allowed_arg}` variable, "
-            f"got {ast.dump(arg)[:120]} — never combine in the assistant reply "
-            "(poisoned-store bug 2026-07-07)"
-        )
+    source = (_SERVICE_DIR / router).read_text(encoding="utf-8")
+    _assert_user_text_only(_person_extract_text_args(source), allowed_arg, router)
+
+
+# ── negative cases: the lockdown itself must catch bad call shapes ──────────
+
+@pytest.mark.parametrize("bad_call", [
+    # positional combined f-string (the original live bug)
+    '_person_extract(f"{user_message}\\n{assistant_response}", user_id=u)',
+    # keyword-argument form must NOT silently escape the AST guard
+    '_person_extract_llm(text=f"{user_message}\\n{assistant_response}", user_id=u)',
+    # keyword-argument passing the wrong variable
+    "process_text(text=assistant_response, user_id=u)",
+    # positional wrong variable
+    "process_text_llm(combined, user_id=u)",
+    # no recognisable text argument at all
+    "process_text(user_id=u)",
+])
+def test_lockdown_rejects_assistant_fed_call_shapes(bad_call):
+    calls = _person_extract_text_args(bad_call)
+    assert calls, "guard failed to even find the call — lockdown is broken"
+    with pytest.raises(AssertionError):
+        _assert_user_text_only(calls, "user_message", "<synthetic>")
+
+
+def test_lockdown_accepts_kwarg_user_text():
+    # A compliant kwarg call site is captured AND passes.
+    calls = _person_extract_text_args("process_text(text=user_message, user_id=u)")
+    assert calls and calls[0][1] is not None
+    _assert_user_text_only(calls, "user_message", "<synthetic>")
