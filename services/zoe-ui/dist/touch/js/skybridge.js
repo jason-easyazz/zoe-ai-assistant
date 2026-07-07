@@ -516,7 +516,13 @@
         return '';
     }
 
+    let lastDashboardWeather = null;  // survives in-place re-renders (auth arrival)
+
     function renderDashboardSurface(weather) {
+        // Any re-render (e.g. the /status user arriving) keeps the last live
+        // weather instead of blanking the tile; a fresh weather payload updates it.
+        if (weather) lastDashboardWeather = weather;
+        else weather = lastDashboardWeather;
         deckToken++;
         cardSequence = 0;
         document.body.classList.remove('sky-empty');
@@ -539,7 +545,6 @@
 
     function wakeToDashboard() {
         renderDashboardSurface(null);
-        const token = deckToken;
         scheduleIdleReturn();
         // Enrich with live weather (guest-readable); re-render the surface with it,
         // but only if the user hasn't moved on (token still current).
@@ -548,7 +553,9 @@
             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
             body: JSON.stringify({ message: 'weather' })
         }).then(res => (res.ok ? res.json() : null)).then(data => {
-            if (!data || token !== deckToken || document.body.classList.contains('sky-empty')) return;
+            // Apply as long as the dashboard is still the active surface — an
+            // in-place re-render (auth arrival) must not strand the live weather.
+            if (!data || !document.body.classList.contains('sky-on-dashboard')) return;
             // The resolve card carries its data under `content` (props is created
             // later by the renderer's normalization), so read either.
             const wxCard = (Array.isArray(data.cards) ? data.cards : []).find(c => {
