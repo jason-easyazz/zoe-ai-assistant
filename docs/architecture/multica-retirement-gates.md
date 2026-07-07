@@ -170,8 +170,11 @@ in place) → C5 port → C1 switch-off.**
    leaned on, so this doubles as the cheapest soak test of Flue durability.
 2. **C4 second.** The greploop guard is already a standalone script with its
    own `--packet-only`/`--once` bounded modes; wrapping it in a Flue step is
-   small, and every PR the fleet opens exercises it, so evidence accumulates
-   fast.
+   small, so evidence accumulates fast. **Scope during the trial (collision
+   rule):** the Flue C4 step takes ONLY PRs that are not owned by a
+   Multica-dispatched chain — Multica chains keep `pipeline_closeout.py` for
+   their own PRs until C3's gate passes (per the C4 rollback row). One PR,
+   one closer, always; the 3-PR gate counts only Flue-owned PRs.
 3. **C3+C2 third — the big one.** The durable-submission ticket lane replaces
    the adapter + journal + recovery machinery. It reuses `worktree_bootstrap`
    (C5) and the already-proven C4 step, so by the time it runs, its two
