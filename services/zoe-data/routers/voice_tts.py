@@ -4679,22 +4679,36 @@ async def voice_ambient(payload: dict, caller: dict = Depends(_require_voice_aut
     if not transcript:
         return {"ok": True, "panel_id": panel_id, "transcript": ""}
 
-    # Store in ambient_memory table.
+    # Store in ambient_memory table — always scoped to the panel's resolved
+    # user. If no user is resolvable for the panel, SKIP the insert entirely:
+    # ownerless ambient audio must never be stored (P-F4).
+    stored = False
     try:
         from db_compat import get_compat_db as _get_compat_db
-        
+
         async with _get_compat_db() as db:
-            await db.execute(
-                """INSERT INTO ambient_memory (panel_id, room, transcript, duration_seconds, source)
-                   VALUES (?, ?, ?, ?, 'ambient')""",
-                (panel_id, room, transcript, duration_s),
-            )
-            await db.commit()
-        logger.debug("ambient_memory: panel=%s chars=%d", panel_id, len(transcript))
+            ambient_user_id = await _resolve_panel_default_user(panel_id, db)
+            if not ambient_user_id:
+                logger.warning(
+                    "ambient_memory: no user resolvable for panel=%s — transcript NOT stored",
+                    panel_id,
+                )
+            else:
+                await db.execute(
+                    """INSERT INTO ambient_memory (panel_id, room, transcript, duration_seconds, source, user_id)
+                       VALUES (?, ?, ?, ?, 'ambient', ?)""",
+                    (panel_id, room, transcript, duration_s, ambient_user_id),
+                )
+                await db.commit()
+                stored = True
+                logger.debug(
+                    "ambient_memory: panel=%s user=%s chars=%d",
+                    panel_id, ambient_user_id, len(transcript),
+                )
     except Exception as exc:
         logger.warning("ambient_memory insert failed: %s", exc)
 
-    return {"ok": True, "panel_id": panel_id, "transcript": transcript}
+    return {"ok": True, "panel_id": panel_id, "transcript": transcript, "stored": stored}
 
 
 # ── Speaker identification ─────────────────────────────────────────────────
