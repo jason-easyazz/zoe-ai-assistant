@@ -97,9 +97,13 @@ with zero tests (rename) · `test_voice_barge_in.py` skips w/o the Silero model 
 - **"ZOE_EXPRESSIVE_TTS / ZOE_LIVEKIT_STREAM_TTS / ZOE_CROSS_SURFACE_THREAD are dead
   flags"** — WRONG: they are *planned* flags named by the Samantha evolution plan/packets
   for unbuilt workstreams (W11/W1.3/W17), intentionally not yet read by code.
-- **"F1 crashes hourly"** — REFRAMED: the exception is caught (`engine.py` ~:279), so the
-  expired-`proactive_pending` prune is a **silent no-op that has never worked** (hourly
-  warning + unbounded table growth). Still fix-first (F1), different blast radius.
+- **"F1 crashes hourly" / "the prune never ran"** — BOTH WRONG (final correction,
+  #1143/#1146): the missing-`rowcount` class in `db_compat.py` was a **dead duplicate**
+  no runtime caller constructs; the engine's real path (`get_compat_db` →
+  `db_pool.AsyncpgCompat`) has had `rowcount` since #860, so **the hourly prune works**.
+  #1143 pinned the live path with regression tests; #1146 removed the dead class.
+  Lesson recorded: verify which copy of a symbol the runtime actually imports before
+  filing against it.
 - **"F3: panel freezes forever on brain hang"** — REFRAMED: `brain_dispatch.py` sets no
   timeout at the call site; actual hang behaviour depends on the underlying HTTP client
   defaults. The fix stands (explicit `asyncio.wait_for` + spoken error), the certainty
