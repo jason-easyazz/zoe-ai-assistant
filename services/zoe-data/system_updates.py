@@ -981,10 +981,11 @@ async def _zoe_update_background_loop() -> None:
     await asyncio.sleep(180)  # 3-minute startup delay, matching OpenClaw pattern
     while True:
         try:
-            from database import get_db
-            async for db in get_db():
+            # get_db_ctx, not `async for db in get_db()`: the `break` leaked
+            # the pooled connection (#953 / the 2026-07-03 pool drain).
+            from db_pool import get_db_ctx
+            async with get_db_ctx() as db:
                 await _check_and_notify_zoe_release(db)
-                break
         except Exception as exc:
             logger.warning("_zoe_update_background_loop: %s", exc)
         await asyncio.sleep(86400)  # daily
