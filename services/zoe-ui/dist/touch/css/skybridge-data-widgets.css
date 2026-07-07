@@ -1608,3 +1608,47 @@ body:not(.sky-empty) .sky-auth-people-only .sky-auth-person strong {
         font-size: 1.35rem;
     }
 }
+
+/* ── Live-activity strip ──────────────────────────────────────────────────
+   One compact line near the orb showing "what Zoe is DOING" during brain
+   turns (fed by {type:'activity'} voice frames). Hidden until a tool starts,
+   pulses while active, flashes a ✓ on result, clears on done/ambient. It
+   lives inside .sky-orb-panel so it can never overlap the card stage. */
+.sky-activity-strip {
+    display: none;
+    max-width: 100%;
+    margin: 10px auto 0;
+    padding: 6px 14px;
+    border: 1px solid var(--sky-border);
+    border-radius: var(--sky-radius);
+    background: var(--sky-panel);
+    color: var(--sky-muted);
+    font-size: 0.85rem;
+    letter-spacing: 0.02em;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: center;
+}
+
+.sky-activity-strip.is-visible {
+    display: block;
+}
+
+.sky-activity-strip.is-active {
+    color: var(--sky-text);
+    border-color: var(--sky-blue);
+    animation: skyActivityPulse 1.6s ease-in-out infinite;
+}
+
+.sky-activity-strip.is-done {
+    color: var(--sky-green);
+    border-color: var(--sky-green);
+    animation: none;
+}
+
+@keyframes skyActivityPulse {
+    0%, 100% { opacity: 0.55; }
+    50% { opacity: 1; }
+}
