@@ -300,7 +300,17 @@ def _stub_weather_and_db(monkeypatch, *, geocode_result):
     async def _get_db():
         yield mock.MagicMock()
 
+    # intent_router's weather paths now use `async with get_db_ctx() as db:`
+    # (the #953 leak fix) — stub the context manager alongside the legacy
+    # generator so both shapes resolve.
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _get_db_ctx():
+        yield mock.MagicMock()
+
     dbmod.get_db = _get_db
+    dbmod.get_db_ctx = _get_db_ctx
     monkeypatch.setitem(sys.modules, "database", dbmod)
     return calls, cache
 
