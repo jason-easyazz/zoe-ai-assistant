@@ -11,10 +11,10 @@ closes the turn after VAD_ENDPOINT_SILENCE_S (0.8s) of Silero speech-absence
 once speech was heard, and still uses the long timeout before any speech so
 slow starters aren't cut off.
 """
+import array
 import os
 import re
 
-import numpy as np
 import pytest
 
 pytestmark = pytest.mark.ci_safe
@@ -24,9 +24,30 @@ _DAEMON = os.path.abspath(
 )
 _SRC = open(_DAEMON, encoding="utf-8").read()
 
+# Pure-stdlib numpy stand-in: the CI validate env has no numpy (the daemon
+# itself runs on the Pi, where it does). Only what _Endpointer.push touches.
+class _AbsView(list):
+    def mean(self):
+        return sum(self) / len(self)
+
+
+class _NpShim:
+    int16 = "int16"
+
+    @staticmethod
+    def frombuffer(data, dtype=None):
+        return array.array("h", data)
+
+    @staticmethod
+    def abs(arr):
+        return _AbsView(abs(x) for x in arr)
+
+
+np = _NpShim()
+
 # 80ms chunks at the daemon defaults (16000Hz / 1280 samples).
-_QUIET = (np.zeros(1280, dtype=np.int16)).tobytes()
-_LOUD = (np.full(1280, 3000, dtype=np.int16)).tobytes()
+_QUIET = array.array("h", [0] * 1280).tobytes()
+_LOUD = array.array("h", [3000] * 1280).tobytes()
 
 
 def test_flag_defaults_and_both_recorders_use_endpointer():
