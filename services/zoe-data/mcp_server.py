@@ -15,6 +15,7 @@ import os
 from runtime_env import bootstrap_runtime_env
 from agent_safety import SSRFBlocked, assert_panel_url, assert_public_url, guard_browser_page
 from time_utils import today_for_zoe_tz
+from typed_env import env_str  # reads env at CALL time — importing it reads nothing
 
 # Load .env secrets ONLY when running as the spawned stdio worker (`python
 # mcp_server.py` via mcporter has no systemd EnvironmentFile). Guarded so that
@@ -31,7 +32,7 @@ if __name__ == "__main__":
 OPENWEATHERMAP_API_KEY = os.environ.get("OPENWEATHERMAP_API_KEY", "")
 _BROADCAST_URL = "http://127.0.0.1:8000/api/internal/broadcast"
 _OPENCLAW_GW = os.environ.get("ZOE_OPENCLAW_GW", "http://127.0.0.1:18789")
-_INTERNAL_TOKEN = os.environ.get("ZOE_INTERNAL_TOKEN", "").strip()
+_INTERNAL_TOKEN = env_str("ZOE_INTERNAL_TOKEN")
 # When true (rollout goal), tools/call without _user_id/user_id is rejected.
 # Until every legacy/tool caller is caught up, default false logs a warning and falls
 # back to family-admin so existing workflows don't break silently.
