@@ -85,3 +85,36 @@ def test_brain_error_surfaces_error_frame(monkeypatch):
         raise RuntimeError("brain exploded")
     frames = _post(_app(monkeypatch, broken_brain))
     assert any("brain exploded" in str(f.get("error", "")) for f in frames), frames
+
+
+def _streaming_brain(first_chunk_delay):
+    """voice_command's chat tier: returns a StreamingResponse INSTANTLY and does
+    the brain work lazily inside the generator (the live failure mode: the
+    task-race resolved in <filler_after, then TTFA sat at ~6s with no filler)."""
+    from fastapi.responses import StreamingResponse
+
+    async def brain(payload, caller=None, stream=True, db=None):
+        async def _gen():
+            await asyncio.sleep(first_chunk_delay)
+            yield (json.dumps({"chunk": 0, "text": "Real answer."}) + "\n").encode()
+            yield base64.b64encode(b"RIFFreal") + b"\n"
+            yield (json.dumps({"done": True, "reply": "Real answer."}) + "\n").encode()
+        return StreamingResponse(_gen(), media_type="application/x-zoe-audio-stream")
+    return brain
+
+
+def test_lazy_stream_slow_first_chunk_speaks_filler(monkeypatch):
+    frames = _post(_app(monkeypatch, _streaming_brain(first_chunk_delay=0.6)))
+    kinds = [("filler" if f.get("provider") == "filler" else
+              "chunk0" if f.get("chunk") == 0 else
+              "done" if f.get("done") else "other") for f in frames]
+    assert "filler" in kinds, f"filler must race the first body chunk too: {frames}"
+    assert kinds.index("filler") < kinds.index("chunk0"), "filler must precede the real first chunk"
+    assert any(f.get("done") for f in frames)
+
+
+def test_lazy_stream_fast_first_chunk_skips_filler(monkeypatch):
+    frames = _post(_app(monkeypatch, _streaming_brain(first_chunk_delay=0.0)))
+    assert not any(f.get("provider") == "filler" for f in frames), frames
+    assert any(f.get("chunk") == 0 for f in frames)
+    assert any(f.get("done") for f in frames)
