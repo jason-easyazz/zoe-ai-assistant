@@ -136,3 +136,21 @@ def test_vad_mode_falls_back_to_amplitude_without_silero():
     }
     exec(compile(m.group(0), _DAEMON, "exec"), g)
     assert g["_Endpointer"]().mode == "amplitude"
+
+
+def test_barge_monitor_requires_live_tts_process():
+    """The monitor must NOT set the barge flag when nothing is playing: speech
+    right after the endpointer closes a recording is the user still talking,
+    and a stale flag aborts a reply that never started (live 22:28:10 — barge
+    prob=0.99 fired 189ms after a 7.84s recording closed, killing the turn).
+    The playback-alive guard must run BEFORE the flag is set / TTS killed,
+    mirroring the legacy queue-fed thread's `if _tts_process is None` guard."""
+    i = _SRC.find("class _BargeMonitor")
+    assert i != -1
+    block = _SRC[i : i + 4500]
+    fire = block.find('log.info("Barge-in detected during playback')
+    guard = block.find("proc = _tts_process")
+    set_flag = block.find("_barge_in_requested.set()")
+    assert guard != -1 and fire != -1 and set_flag != -1
+    assert guard < fire < set_flag, "playback-alive guard must precede fire+flag"
+    assert "proc is None or proc.poll() is not None" in block
