@@ -27,9 +27,15 @@ from ui_catalog import validate_component_tree  # noqa: E402
 def _clean_briefing_state():
     ambient_briefing._cache.clear()
     ambient_briefing._refreshing.clear()
+    ambient_briefing._tasks.clear()
     yield
+    # Cancel any background refresh tasks a test left in flight so they can't
+    # leak across tests or outlive a closing event loop.
+    for _t in list(ambient_briefing._tasks):
+        _t.cancel()
     ambient_briefing._cache.clear()
     ambient_briefing._refreshing.clear()
+    ambient_briefing._tasks.clear()
 
 
 async def _drain_refresh_tasks():
