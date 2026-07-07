@@ -5,6 +5,8 @@ Second-round audit (4 domains: tests/flags · frontend · docs-drift · data lay
 **Every item carries a verification marker:** `[V]` = independently re-verified at the
 cited location this session; `[A]` = agent-reported and plausible, verify before fixing.
 Rejected findings are listed at the bottom **so future audits don't re-report them**.
+**Execution:** fix packets (researched approach, tests, software, STOP conditions) live in
+[`remediation-packets-2026-07.md`](../architecture/remediation-packets-2026-07.md).
 Tree: `6964aa9c`+. Line numbers are anchors — re-search the symbol before editing.
 
 ## HIGH — fix or decide soon
