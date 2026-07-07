@@ -1596,3 +1596,30 @@ async def _gather_real_results():
     # clock (no auth, no db)
     results.append(await resolve_skybridge_request("what time is it", "guest", db=FakeDb()))
     return [r for r in results if r and r.get("handled")]
+
+
+# ── Timers tile regression (glass-verified bug): "show my timers" went to people ──
+
+def test_show_my_timers_classifies_as_timer_status():
+    """Dashboard Timers tile query. Was swallowed by the people 'show my X'
+    fallback (singular-only \\btimer\\b guard) → empty people directory on glass."""
+    for q in ("show my timers", "list my timers", "what timers do I have",
+              "are my timers still going"):
+        intent = classify_skybridge_intent(q, None)
+        assert intent is not None and (intent.domain, intent.action) == ("timer", "status"), q
+
+
+def test_timer_singular_paths_unchanged():
+    for q, want in (("set a timer for 5 minutes", ("timer", "create")),
+                    ("cancel the timers", ("timer", "cancel")),
+                    ("how long left on the timer", ("timer", "status"))):
+        intent = classify_skybridge_intent(q, None)
+        assert intent is not None and (intent.domain, intent.action) == want, q
+
+
+def test_people_and_lists_shows_not_stolen_by_timer_fix():
+    for q, want in (("show my shopping list", ("lists", "show")),
+                    ("show my calendar", ("calendar", "show")),
+                    ("show my people", ("people", "show"))):
+        intent = classify_skybridge_intent(q, None)
+        assert intent is not None and (intent.domain, intent.action) == want, q

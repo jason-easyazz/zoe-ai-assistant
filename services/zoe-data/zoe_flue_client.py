@@ -66,12 +66,25 @@ def _timeout_s() -> float:
         return _DEFAULT_TIMEOUT_S
 
 
-def _endpoint(session_id: str) -> str:
+def _endpoint(session_id: str, *, stream: bool = False) -> str:
     sid = (session_id or "default").strip() or "default"
     # URL-encode the sid as a single path segment: a raw session id containing
     # '/', '?', '#', or '..' would otherwise change the route (path traversal /
     # query injection) instead of addressing that literal Flue session.
-    return f"{_base_url()}/agents/zoe/{quote(sid, safe='')}?wait=result"
+    base = f"{_base_url()}/agents/zoe/{quote(sid, safe='')}"
+    # ?wait=result WINS over the Accept header on the sidecar, so the streaming
+    # request must omit it (src/streaming.ts mode selection).
+    return base if stream else f"{base}?wait=result"
+
+
+def _stream_enabled() -> bool:
+    """Seam-A NDJSON streaming from the sidecar (default OFF, ship-dark).
+
+    When enabled, deltas are yielded as they generate, so voice TTS starts on
+    the first sentence instead of after the WHOLE reply (?wait=result waits for
+    full generation — measured live 2026-07-08: first sentence arrived ~6s
+    before the complete result on a chat turn)."""
+    return (os.environ.get("ZOE_FLUE_STREAM_ENABLED") or "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _headers() -> dict[str, str]:
@@ -271,7 +284,6 @@ async def run_flue_brain_streaming(
     run_zoe_core_streaming signature compatibility; the sidecar owns its own
     persona/memory/tools, so they're intentionally ignored here.
     """
-    url = _endpoint(session_id)
     # Forward the caller's identity when known so the sidecar isn't pinned to one
     # env-configured user. The id is carried as an ENVELOPE PREFIX on the message,
     # not a separate body field: the sidecar's Flue payload schema accepts only
@@ -292,11 +304,93 @@ async def run_flue_brain_streaming(
     outbound_message = _wrap_message_with_identity(brain_message, uid)
     body_obj: dict[str, str] = {"message": outbound_message}
     payload = json.dumps(body_obj).encode()
+
+    if _stream_enabled():
+        # Seam-A NDJSON stream (src/streaming.ts): each line is a JSON string
+        # (one text delta or __TOOL__/__THINKING__ sentinel chunk), terminated
+        # by {"done": true} or {"error": ...}. Yield deltas as they arrive so
+        # sentence-TTS starts DURING generation. If the stream dies after text
+        # was yielded, just end the turn — the sidecar already executed it
+        # (writes included), so falling back to ?wait=result would RE-RUN the
+        # turn (the #1137 duplicate-write class).
+        yielded_any = False
+        admitted = False  # a 2xx means the sidecar is EXECUTING the turn
+        try:
+            import httpx
+
+            headers = dict(_headers())
+            headers["Accept"] = "application/x-ndjson"
+            async with httpx.AsyncClient(timeout=_timeout_s()) as client:
+                async with client.stream(
+                    "POST", _endpoint(session_id, stream=True), content=payload, headers=headers
+                ) as resp:
+                    resp.raise_for_status()
+                    admitted = True
+                    if "application/x-ndjson" in (resp.headers.get("content-type") or ""):
+                        finished = False
+                        async for line in resp.aiter_lines():
+                            line = (line or "").strip()
+                            if not line:
+                                continue
+                            try:
+                                chunk = json.loads(line)
+                            except ValueError:
+                                logger.warning("flue stream: undecodable line %r", line[:120])
+                                continue
+                            if isinstance(chunk, str):
+                                if chunk:
+                                    yielded_any = True
+                                    yield chunk
+                                continue
+                            if isinstance(chunk, dict):
+                                if chunk.get("done"):
+                                    finished = True
+                                    break
+                                if "error" in chunk:
+                                    logger.warning("flue stream reported error: %s", str(chunk["error"])[:200])
+                                    finished = True  # sidecar owned + reported the failure
+                                    if not yielded_any:
+                                        yield _FALLBACK_TEXT
+                                    break
+                        if finished or yielded_any:
+                            return
+                        logger.warning("flue stream ended without a terminal line and no text")
+                        yield _FALLBACK_TEXT
+                        return
+                    # Sidecar ignored the Accept header (older build / stream
+                    # kill-switched via ZOE_BRAIN_STREAM=0): the plain POST was
+                    # a 202 admission and the turn IS NOW RUNNING async — a
+                    # wait=result re-POST would execute it a second time. This
+                    # is an operator misconfig (client flag on, sidecar off):
+                    # flip ZOE_FLUE_STREAM_ENABLED off or ZOE_BRAIN_STREAM on.
+                    logger.error(
+                        "flue stream misconfig: client streaming ON but sidecar replied %r "
+                        "(turn admitted async; reply unavailable — NOT re-POSTing)",
+                        resp.headers.get("content-type"),
+                    )
+                    yield _FALLBACK_TEXT
+                    return
+        except Exception as exc:  # noqa: BLE001 - a brain hiccup must never crash a turn
+            if yielded_any:
+                # Mid-stream failure after real text: the turn executed; ending
+                # here loses the tail but never re-runs it.
+                logger.warning("flue stream died mid-turn (after text): %s", exc)
+                return
+            if admitted:
+                # 2xx received ⇒ the sidecar is already running this turn
+                # (writes included). Re-POSTing via wait=result would execute
+                # it a second time — the #1137 duplicate-write class. Eat the
+                # reply rather than double-run the action.
+                logger.warning("flue stream died after admission, before text (%s) — NOT re-POSTing", exc)
+                yield _FALLBACK_TEXT
+                return
+            logger.warning("flue stream request failed pre-admission (%s) — falling back to wait=result", exc)
+
     try:
         import httpx
 
         async with httpx.AsyncClient(timeout=_timeout_s()) as client:
-            resp = await client.post(url, content=payload, headers=_headers())
+            resp = await client.post(_endpoint(session_id), content=payload, headers=_headers())
             resp.raise_for_status()
             body = resp.json()
     except Exception as exc:  # noqa: BLE001 - a brain hiccup must never crash a turn
@@ -324,8 +418,18 @@ async def run_flue_brain(
     user_id: str = "",
     **kwargs: Any,
 ) -> str:
-    """Non-streaming brain turn — collects the Flue stream into one string."""
+    """Non-streaming brain turn — collects the Flue stream into one string.
+
+    __TOOL__/__THINKING__ are activity sentinels for streaming UI consumers, not
+    reply text. The streaming path strips them before display/TTS; a
+    non-streaming caller must too, or the returned string is raw sentinel JSON
+    prepended to the actual answer (confirmed live: /api/chat?stream=false
+    returned `__TOOL__:{…recall_memory…}…Your locker code is beef42.`). Mirrors
+    the same skip in zoe_core_client.run_zoe_core.
+    """
     chunks: list[str] = []
     async for delta in run_flue_brain_streaming(message, session_id, user_id, **kwargs):
+        if delta.startswith("__TOOL__:") or delta.startswith("__THINKING__:"):
+            continue
         chunks.append(delta)
     return "".join(chunks).strip()

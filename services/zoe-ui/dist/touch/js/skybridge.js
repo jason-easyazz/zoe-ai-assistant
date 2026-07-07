@@ -81,10 +81,18 @@
 
     async function loadBackendStatus() {
         try {
-            const resp = await fetch('/api/skybridge/status', { headers: { 'Accept': 'application/json' } });
+            const pid = new URLSearchParams(location.search).get('panel_id') || localStorage.getItem('zoe_panel_id') || '';
+            const resp = await fetch('/api/skybridge/status' + (pid ? '?panel_id=' + encodeURIComponent(pid) : ''), { headers: { 'Accept': 'application/json' } });
             if (!resp.ok) return;
             const data = await resp.json();
             if (data && data.status === 'ready') setStatus('Skybridge runtime ready');
+            // Real auth state for the dashboard's profile chip (the device-session
+            // user is server-side; localStorage can't see it). If the dashboard is
+            // already up, re-render so "Sign in" corrects to the profile chip.
+            if (data && data.user) {
+                backendUser = data.user;
+                if (document.body.classList.contains('sky-on-dashboard')) renderDashboardSurface(null);
+            }
         } catch (_) {
             // The interface can still render local cards if the API is offline.
         }
@@ -487,7 +495,38 @@
     // weather tile + room/music/sign-in. Sets the stage directly (no clearCards,
     // which would flash the ambient clock back) and bumps the deck token so a
     // pending weather fetch can tell the view changed under it.
+    let backendUser = null;   // from /api/skybridge/status — the authoritative panel user
+
+    function panelSignedInName() {
+        if (backendUser && !backendUser.guest && backendUser.username &&
+            String(backendUser.username).toLowerCase() !== 'guest') {
+            return backendUser.username;
+        }
+        // Same sources the clock card trusts: the panel auth challenge's selected
+        // user first (device session), then a non-guest browser session.
+        try {
+            var c = JSON.parse(sessionStorage.getItem('zoe_panel_auth_challenge') || '{}');
+            if (c.selected_username && String(c.selected_username).toLowerCase() !== 'guest') return c.selected_username;
+        } catch (e) { /* fall through */ }
+        try {
+            var sess = JSON.parse(localStorage.getItem('zoe_session') || '{}');
+            var role = (sess.role || (sess.user_info && sess.user_info.role) || '').toLowerCase();
+            var uname = sess.username || (sess.user_info && sess.user_info.username) || '';
+            if (uname && role && role !== 'guest') return uname;
+        } catch (e) { /* fall through */ }
+        return '';
+    }
+
+    let lastDashboardWeather = null;  // survives in-place re-renders (auth arrival)
+    let dashboardVisit = 0;           // bumped per wake — NOT by in-place re-renders —
+                                      // so late weather from a previous visit is discarded
+                                      // while the auth-arrival re-render can't strand it
+
     function renderDashboardSurface(weather) {
+        // Any re-render (e.g. the /status user arriving) keeps the last live
+        // weather instead of blanking the tile; a fresh weather payload updates it.
+        if (weather) lastDashboardWeather = weather;
+        else weather = lastDashboardWeather;
         deckToken++;
         cardSequence = 0;
         document.body.classList.remove('sky-empty');
@@ -498,14 +537,20 @@
         document.body.classList.add('sky-on-dashboard');
         els.cards.innerHTML = window.SkybridgeRenderer.render({
             component: 'dashboard',
-            props: { guest: true, weather: weather || null }
+            props: (function () {
+                var name = panelSignedInName();
+                var sun = null;
+                try { sun = window.SkybridgeTheme && window.SkybridgeTheme.sunTimes ? window.SkybridgeTheme.sunTimes() : null; } catch (e) {}
+                return { guest: !name, user_name: name, sun: sun, weather: weather || null };
+            })()
         });
         requestAnimationFrame(resizeOrb);
     }
 
     function wakeToDashboard() {
+        dashboardVisit++;
+        const visit = dashboardVisit;
         renderDashboardSurface(null);
-        const token = deckToken;
         scheduleIdleReturn();
         // Enrich with live weather (guest-readable); re-render the surface with it,
         // but only if the user hasn't moved on (token still current).
@@ -514,7 +559,10 @@
             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
             body: JSON.stringify({ message: 'weather' })
         }).then(res => (res.ok ? res.json() : null)).then(data => {
-            if (!data || token !== deckToken || document.body.classList.contains('sky-empty')) return;
+            // Apply iff this is still the SAME dashboard visit (a late fetch from a
+            // previous visit is stale) and the dashboard is still the active surface.
+            // The auth-arrival re-render bumps neither, so it can't strand us.
+            if (!data || visit !== dashboardVisit || !document.body.classList.contains('sky-on-dashboard')) return;
             // The resolve card carries its data under `content` (props is created
             // later by the renderer's normalization), so read either.
             const wxCard = (Array.isArray(data.cards) ? data.cards : []).find(c => {
