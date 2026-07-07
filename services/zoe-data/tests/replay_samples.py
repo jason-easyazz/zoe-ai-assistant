@@ -42,6 +42,7 @@ import os
 import re
 import sys
 import time
+import uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -96,8 +97,12 @@ def _run_session_id() -> str:
     sidecar's durable session store until prompt assembly overflowed the model
     context (8288 > 8192 tokens → HTTP 500 on every turn; 2026-07-07 incident).
     Nothing reads the session between runs, so a per-run id loses no continuity.
+
+    Uses a random token (not a wall-clock second): two runs launched within the
+    same second — e.g. parallel CI workers — must not collide into one shared
+    sidecar session and re-create the very accumulation this guards against.
     """
-    return f"replay-{int(time.time())}"
+    return f"replay-{uuid.uuid4().hex[:12]}"
 
 
 def _classify(transcript: str, reply: str, outcome: str) -> str:
