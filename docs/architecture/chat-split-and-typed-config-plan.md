@@ -301,6 +301,19 @@ pre/post).
 **PR W4-T3 — migrate `zoe_agent.py` (31 reads).** Same rules; it's the legacy brain fallback —
 replay gate + `test_zoe_agent_skills.py`-adjacent focused tests.
 
+> **T-series status + calibration (2026-07-07).** T1 ✅ #1127 (module) + #1130 (env_bool
+> present-but-empty → False — REQUIRED for byte-equivalence, see that PR). T2 ✅ #1132
+> (voice_tts: 18/41 reads migrated; rock-guard `_env_default` extended to parse typed_env
+> shapes). T3 ✅ #1136 — and the honest finding: `zoe_agent.py` yielded exactly **1** of 31
+> reads; the rest are NON-canonical shapes (odd truthy sets like `== "true"`/`!= "false"`,
+> 16 unguarded `int()`/`float()` where crash→default is a behavior change, nested key
+> fallbacks, meaningful empty edges). **Byte-equivalent migration has hit diminishing
+> returns.** The remaining value is a *deliberate-delta normalization* pass — per site:
+> adopt canonical parse + declare the flip cases, convert crash→default+warn with a test —
+> which changes behavior and therefore needs sign-off, not mechanical execution. T4
+> (`main.py`+`mcp_server.py`) executors: expect the same distribution; migrate the exact
+> class, document the rest, don't force-fit.
+
 **PR W4-T4 — migrate `main.py` + `mcp_server.py` (23 each).** May be two PRs if the diff exceeds
 ~300 lines. `mcp_server.py` sites feed subprocess workers — confirm `runtime_env.bootstrap_runtime_env()`
 ordering is unchanged (bootstrap must still run before the first read of a bootstrapped key).
