@@ -137,6 +137,23 @@ always-on core + relevance-matched tools) onto its own wire seam:
 - **Kill switch:** `ZOE_BRAIN_PROGRESSIVE_TOOLS=false` restores
   all-schemas-every-call (A/B comparison).
 
+## Prompt-fit history windowing
+
+Durable sessions grow without bound; before #1138 nothing shrank the assembled
+prompt, so once system prompt + tool schemas + history crossed the 8192-token
+model context every turn on that session failed permanently (`400 request …
+exceeds the available context size`). `src/context-window.ts` (applied first in
+`applyPolicies`) drops the OLDEST whole user-turn blocks until the estimated
+prompt (~4 chars/token + overheads) fits `ZOE_BRAIN_CONTEXT_WINDOW` minus
+`ZOE_BRAIN_REPLY_RESERVE`. The system prompt (soul + doctrines) is never
+touched; the newest turn and its ` zoe-uid:` envelope always survive whole; the
+durable store keeps full history — only the wire prompt is windowed, and
+windowed-out facts stay recoverable via `recall_memory`. Flue's native
+compaction was evaluated and deliberately not enabled (its summarizer runs
+through the same 8k model and stalls the voice path) — rationale + budget
+failure mode in the module header. Kill switch: `ZOE_BRAIN_CONTEXT_WINDOW=0`.
+Tests: `test/context_window.test.ts` (incl. an end-to-end fake llama-server).
+
 ## Seam-A sentinel streaming
 
 The prod brain seam (`run_zoe_core_streaming`, docs/architecture/
@@ -184,6 +201,8 @@ npm test                   # offline unit tests (node --test, type-stripping)
 | `ZOE_BRAIN_TOKEN` | *(unset)* | bearer token for the agent HTTP route |
 | `ZOE_BRAIN_OPEN` | *(unset)* | `1` opts into an open route (local smoke runs only) |
 | `ZOE_BRAIN_MAX_TOOL_ITERS` | `8` | hard per-turn tool-iteration ceiling |
+| `ZOE_BRAIN_CONTEXT_WINDOW` | `8192` | model context budget for prompt-fit history windowing (`src/context-window.ts`); `0` disables windowing |
+| `ZOE_BRAIN_REPLY_RESERVE` | `1536` | tokens held back from the window for the reply + estimator slack |
 | `ZOE_BRAIN_PROGRESSIVE_TOOLS` | `true` | `false` disables progressive tool disclosure |
 | `ZOE_BRAIN_STREAM` | `on` | `0`/`false` disables the NDJSON sentinel-stream mode |
 | `ZOE_BRAIN_STREAM_TIMEOUT_S` | `180` | streamed-turn deadline (mirrors prod `ZOE_CORE_TIMEOUT_S`) |
