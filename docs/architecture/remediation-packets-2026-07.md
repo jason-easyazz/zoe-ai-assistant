@@ -6,8 +6,9 @@
 > **Inherit the P0 protocol from
 > [`samantha-evolution-packets.md`](samantha-evolution-packets.md)** (worktree, flag
 > rules, replay gate command, validate.yml enumeration, merge mechanics, STOP
-> conditions) — it is not repeated here. One packet = one PR. Anchors verified at
-> `66f0cce5`; re-search symbols before editing.
+> conditions) — it is not repeated here. One packet = one PR. Anchors were captured
+> across two nearby snapshots (`6964aa9c` for the register, `66f0cce5` here) — treat ALL
+> line numbers as hints and re-search the quoted symbol before editing (the P0 rule).
 >
 > **Test doctrine for every packet:** ship a regression test that FAILS on the old
 > code; mark it `ci_safe` (module-level `pytestmark = pytest.mark.ci_safe`) so the fast
@@ -61,7 +62,10 @@
   unresolvable → no row; user A cannot read user B's rows via the tool. `ci_safe` +
   validate.yml.
 - **Software:** none new (alembic already in stack). **STOP:** never write a migration
-  `downgrade` that drops user data; downgrade = drop column only.
+  `downgrade` that loses user data. For 0016 specifically: the `user_id` column rollback
+  is `DROP COLUMN`; the P-R4 table drops roll back by recreating the **empty schema
+  shells** (both tables verified zero readers/writers AND zero rows before dropping —
+  verify the zero-rows part live, and STOP if they contain data).
 
 ## P-F5 — zoe-auth CI test selection
 
@@ -120,8 +124,9 @@
   `routers/music.py` before touching it.
 - **P-R4 trust-gate reconcile (decision packet, not code):** add a status header to
   `TRUST_GATE.md` (PROPOSAL, superseded-by-W15) and drop `trust_allowlist`/`trust_audit`
-  in the same 0016 migration as P-F4 (they have zero readers/writers) — or keep them if
-  W15 will use them; record the choice in the samantha plan W15 section.
+  in the same 0016 migration as P-F4 (zero readers/writers; **confirm zero rows live
+  before dropping** — the downgrade only recreates empty shells, per P-F4's STOP note) —
+  or keep them if W15 will use them; record the choice in the samantha plan W15 section.
 - **P-R5 collection-error gate:** add a fast-lane step
   `pytest tests/ --collect-only -q` (collection must succeed even where execution is
   self-hosted-only); then fix the 5 broken-collection files it exposes (DB path,
