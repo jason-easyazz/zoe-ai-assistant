@@ -85,9 +85,10 @@ LiveKit STT temp-file sweep on agent start · zoe-auth CORS allows `http://zoe.l
 
 ## Recommended execution order
 
-1. **F1** (one-file fix, crashes hourly today) → 2. **F2+F3** as the "voice-lane
-   robustness" pair (replay-gated, one PR each) → 3. **F4** ambient scoping migration
-   (before any W6 motion) → 4. **F5 + H4 + H5** infra batch → 5. fold the hygiene list
-   into tech-debt Wave 4 / W1.3 as noted. F1–F5 are cheap-model-executable with the
-   P0 protocol from
+1. **F1** (one-file fix; the prune has never run) → 2. **F3** voice-lane robustness
+   (replay-gated; F2 is retracted) → 3. **F4** ambient scoping migration (before any W6
+   motion) → 4. **F5 + H4 + H5** infra batch → 5. fold the hygiene list into tech-debt
+   Wave 4 / W1.3 as noted; the deeper
+   [`issue-register-2026-07-07.md`](issue-register-2026-07-07.md) carries the verified
+   second-pass items. F-items are cheap-model-executable with the P0 protocol from
    [`samantha-evolution-packets.md`](../architecture/samantha-evolution-packets.md).
