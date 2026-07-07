@@ -418,8 +418,18 @@ async def run_flue_brain(
     user_id: str = "",
     **kwargs: Any,
 ) -> str:
-    """Non-streaming brain turn — collects the Flue stream into one string."""
+    """Non-streaming brain turn — collects the Flue stream into one string.
+
+    __TOOL__/__THINKING__ are activity sentinels for streaming UI consumers, not
+    reply text. The streaming path strips them before display/TTS; a
+    non-streaming caller must too, or the returned string is raw sentinel JSON
+    prepended to the actual answer (confirmed live: /api/chat?stream=false
+    returned `__TOOL__:{…recall_memory…}…Your locker code is beef42.`). Mirrors
+    the same skip in zoe_core_client.run_zoe_core.
+    """
     chunks: list[str] = []
     async for delta in run_flue_brain_streaming(message, session_id, user_id, **kwargs):
+        if delta.startswith("__TOOL__:") or delta.startswith("__THINKING__:"):
+            continue
         chunks.append(delta)
     return "".join(chunks).strip()

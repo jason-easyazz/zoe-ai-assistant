@@ -180,3 +180,23 @@ async def test_flag_off_uses_wait_result_only(flue_env, monkeypatch):
     out = await _collect(zoe_flue_client.run_flue_brain_streaming("hi", "s1", "jason"))
     assert out == ["classic"]
     assert [c[0] for c in flue_env.calls] == ["post"]
+
+
+@pytest.mark.asyncio
+async def test_run_flue_brain_strips_tool_and_thinking_sentinels(monkeypatch):
+    """The non-streaming collector must return ONLY reply text — never the raw
+    __TOOL__/__THINKING__ activity sentinels. Regression for the live leak where
+    /api/chat?stream=false returned
+    `__TOOL__:{…recall_memory…}…Your locker code is beef42.`
+    """
+    async def fake_stream(message, session_id, user_id="", **kwargs):
+        yield '__THINKING__:{"text": "let me check"}'
+        yield '__TOOL__:{"phase": "start", "name": "recall_memory"}'
+        yield '__TOOL__:{"phase": "result", "result": "[{...}]"}'
+        yield "Your locker code is "
+        yield "beef42."
+
+    monkeypatch.setattr(zoe_flue_client, "run_flue_brain_streaming", fake_stream)
+    out = await zoe_flue_client.run_flue_brain("what's my locker code?", "s1", "jason")
+    assert out == "Your locker code is beef42."
+    assert "__TOOL__" not in out and "__THINKING__" not in out
