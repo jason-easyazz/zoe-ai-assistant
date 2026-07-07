@@ -157,6 +157,7 @@ def test_text_only_ack_frame_does_not_defeat_filler(monkeypatch):
               "done" if f.get("done") else "other") for f in frames]
     assert "ack" in kinds, f"text-only ack must still be forwarded: {frames}"
     assert "filler" in kinds, f"text-only ack must not silence the filler: {frames}"
+    assert "chunk0" in kinds, f"audio chunk 0 must be present: {frames}"
     assert kinds.index("ack") < kinds.index("filler") < kinds.index("chunk0"), kinds
 
 
