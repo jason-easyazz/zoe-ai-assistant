@@ -116,6 +116,31 @@ export const IN_SESSION_CONTEXT_DOCTRINE = [
   'recall_memory is still how you learn anything from PAST conversations, so keep calling it first for those. When someone asks what you know or remember about them in general, call recall_memory first as always — then also weave in anything they told you this session. An empty recall result means nothing is stored from before — NOT that the user never told you this session; never let an empty recall store make you contradict or forget what the user has said in front of you now.',
 ].join('\n');
 
+// Recall-precedence doctrine — closes the three recall-USE failures from the
+// 2026-07-07 hard gate, where storage was proven correct (the for-prompt packet
+// contained the right facts) but the model still failed the answer:
+//   1. privacy-refused the user's OWN stored locker code ("check with the
+//      school office") instead of answering from recall;
+//   2. answered a superseded value ("Katie") when the packet held both the
+//      stale entries (listed first) and the explicit correction ("Kate");
+//   3. in-session pronoun/temporal misses ("She's a doctor" after naming wife
+//      Emma → "What does Emma do?" → nothing on file; "yesterday I went to the
+//      gym" → "what did I do yesterday?" → no record).
+// Same exported-block + imperative style as the doctrines above (the technique
+// that took recall 67%→97%, parity/RELIABILITY.md); short lines for the 4B
+// model. It governs how to USE recalled/transcript facts — it never widens
+// what may be invented, so anti-fabrication is untouched: rule (a) applies
+// ONLY to facts recall_memory actually returned.
+export const RECALL_PRECEDENCE_DOCTRINE = [
+  'Three hard rules about USING what recall_memory returns and what the user has said (they add to the recall rules above, never cancel them):',
+  '',
+  "Recalled memories are the user's OWN information — things THEY asked you to keep. NEVER refuse to repeat a recalled fact (a code, a name, a date) on privacy or security grounds; you are handing it back to its owner. If they ask for a personal fact, call recall_memory and answer with exactly what it returned. This never allows stating a fact recall_memory did not return.",
+  '',
+  'When recalled facts conflict, the NEWEST statement wins. An explicit correction ("actually it\'s Kate, not Katie") permanently replaces the earlier value — answer with the corrected one, and never answer with the superseded one even if the stale entry appears first in the list.',
+  '',
+  'In THIS conversation, resolve pronouns against the person just named: "she" right after "my wife Emma" means Emma, so "What does Emma do?" is answered from what they just said about her. Treat time-anchored statements the same way: "yesterday I went to the gym" IS the answer to "what did I do yesterday?" — never say there is no record of something the user said this session.',
+].join('\n');
+
 // Emotional-thread capture doctrine — the soul-side signal for Samantha
 // criterion #2 (docs/architecture/zoe-memory-emotional-thread-handoff.md). The
 // store has the emotional_moment type but the brain never emitted one, so
@@ -190,14 +215,16 @@ export const IDENTITY_DOCTRINE = [
  * the generation boundary (Greptile #997 P2 — on a 4B model a trailing "lead with
  * the answer" could otherwise nudge a direct reply over a needed activate_abilities
  * call). Delivery is also self-scoped ("this shapes phrasing, not whether to use a
- * tool — the tool rules above still come first"). Personal-recall, emotional-
+ * tool — the tool rules above still come first"). Recall-precedence sits right
+ * after in-session context (both govern how to USE known facts, before the
+ * when-to-recall rules). Personal-recall, emotional-
  * recall then emotional-capture sit LAST, alongside the other behavioural rules,
  * so their "when to call recall_memory / when to capture / when to stay silent"
  * guidance keeps last-position weight. Identity is appended after them (it is
  * two short persona lines, not a tool-routing rule, so it cannot nudge a reply
  * over a needed tool call the way a trailing delivery rule could).
  */
-export const ZOE_INSTRUCTIONS = `${ZOE_SOUL}\n\n${VOICE_DELIVERY_DOCTRINE}\n\n${ACTIVATOR_DOCTRINE}\n\n${IN_SESSION_CONTEXT_DOCTRINE}\n\n${PERSONAL_RECALL_DOCTRINE}\n\n${EMOTIONAL_RECALL_DOCTRINE}\n\n${EMOTIONAL_CAPTURE_DOCTRINE}\n\n${IDENTITY_DOCTRINE}`;
+export const ZOE_INSTRUCTIONS = `${ZOE_SOUL}\n\n${VOICE_DELIVERY_DOCTRINE}\n\n${ACTIVATOR_DOCTRINE}\n\n${IN_SESSION_CONTEXT_DOCTRINE}\n\n${RECALL_PRECEDENCE_DOCTRINE}\n\n${PERSONAL_RECALL_DOCTRINE}\n\n${EMOTIONAL_RECALL_DOCTRINE}\n\n${EMOTIONAL_CAPTURE_DOCTRINE}\n\n${IDENTITY_DOCTRINE}`;
 
 // Exporting `route` publishes the HTTP agent endpoints (POST/GET /agents/zoe/:id).
 // FAIL CLOSED: this route drives the live Gemma brain on :11434, so by default a
