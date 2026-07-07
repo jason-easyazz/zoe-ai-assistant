@@ -58,8 +58,12 @@ def discover_gates() -> dict[str, gatelib.GateSpec]:
         sys.modules[path.stem] = module
         try:
             spec.loader.exec_module(module)  # type: ignore[union-attr]
-        except Exception as e:  # noqa: BLE001 — a broken gate shouldn't hide the others
-            print(f"! skipping {path.name}: import failed ({e})")
+        # Catch SystemExit too: standalone gates that sys.exit() at import (e.g.
+        # a missing session file) must be skipped, not crash discovery. Only a
+        # conformant gate (module-level GATE, no import-time side effects) is run
+        # here; a standalone script is left to its own `__main__`.
+        except (Exception, SystemExit) as e:  # noqa: BLE001
+            print(f"! skipping {path.name}: not runner-conformant ({e})")
             continue
         gate = getattr(module, "GATE", None)
         if isinstance(gate, gatelib.GateSpec):
@@ -147,9 +151,17 @@ def main() -> None:
     password = gatelib.provision_user(user)
     sid = gatelib.login(user, password)
 
+    # A REAL second user for two-user isolation checks (hard_gate section G,
+    # security_gate). Reached via the internal override, but provisioned so it's
+    # a faithful account, not a synthetic id — and empty-store like the primary.
+    user_b = f"test-gate-iso-{nonce[-6:]}"
+    gatelib.provision_user(user_b)
+    print(f"provisioned isolation user {user_b}")
+
     # Preflight: a real turn on a nonce'd session must succeed before we measure.
     ctx = gatelib.GateContext(sid=sid, user_id=user, nonce=nonce,
-                              recorder=gatelib.Recorder(), token=gatelib.internal_token())
+                              recorder=gatelib.Recorder(), token=gatelib.internal_token(),
+                              user_b=user_b)
     reply, _ = ctx.chat("preflight — say ready", ctx.session("preflight"))
     if reply.startswith("(ERROR") or any(m in reply.lower() for m in gatelib.BRAIN_FALLBACK_MARKERS):
         sys.exit(f"PREFLIGHT failed: {reply[:120]}")

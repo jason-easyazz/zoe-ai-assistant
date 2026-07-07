@@ -225,6 +225,7 @@ class GateContext:
     nonce: str               # per-run uniqueness
     recorder: Recorder
     token: str = ""          # ZOE_INTERNAL_TOKEN, for the second-user override
+    user_b: str = ""         # a REAL provisioned second user (isolation checks)
 
     def session(self, name: str) -> str:
         """A nonce'd, ownership-safe, single-run session id."""
@@ -233,7 +234,9 @@ class GateContext:
     def _headers(self, who: str, user_b: str) -> dict:
         if who == "A":
             return {"X-Session-ID": self.sid}
-        return {"X-Internal-Token": self.token, "X-Zoe-User-Id": user_b}
+        # Reach the second user through the trusted internal override; default to
+        # the runner-provisioned ctx.user_b so gates never hardcode an identity.
+        return {"X-Internal-Token": self.token, "X-Zoe-User-Id": user_b or self.user_b}
 
     def chat(self, msg: str, session: str, who: str = "A",
              user_b: str = "", timeout: float = 120) -> tuple[str, float]:

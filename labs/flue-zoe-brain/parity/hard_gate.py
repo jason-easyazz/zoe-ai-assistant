@@ -22,10 +22,6 @@ from gatelib import (
     list_item_present,
 )
 
-# The second user for isolation checks (reached via the internal-token override).
-ISO_USER = "test-isolation-gate"
-
-
 def run(ctx: GateContext) -> None:  # noqa: PLR0915 — a flat script of checks reads best linear
     mark = ctx.nonce[-5:]
 
@@ -91,14 +87,14 @@ def run(ctx: GateContext) -> None:  # noqa: PLR0915 — a flat script of checks 
                        "no longer active", "remove said-but-not-done")
 
     # G. two-user isolation (via the token-gated override) -------------------
-    ctx.expect("isolation", "My dog's name is Biscuit", ctx.session("iso-b1"), who="B", user_b=ISO_USER)
+    ctx.expect("isolation", "My dog's name is Biscuit", ctx.session("iso-b1"), who="B", user_b=ctx.user_b)
     time.sleep(45)
     ctx.expect("isolation", "What's my dog's name?", ctx.session("iso-a1"),
                must_not=["biscuit"])  # user A must NOT see B's dog
     ctx.expect("isolation", "What's my dog's name?", ctx.session("iso-b2"),
-               must=["biscuit"], who="B", user_b=ISO_USER)
+               must=["biscuit"], who="B", user_b=ctx.user_b)
     ctx.expect("isolation", "What's my locker code?", ctx.session("iso-b3"),
-               must_not=[mark], who="B", user_b=ISO_USER)  # B must NOT see A's code
+               must_not=[mark], who="B", user_b=ctx.user_b)  # B must NOT see A's code
 
     # H. tool honesty --------------------------------------------------------
     s = ctx.session("honesty")
