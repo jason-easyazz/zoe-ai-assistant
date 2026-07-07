@@ -107,9 +107,13 @@ class _FakeTableConn:
 
     def __init__(self, rows):
         self.rows = rows
+        self.executed_sql = []
 
     async def execute(self, sql, *args):
-        assert "DELETE FROM proactive_pending" in sql
+        # No assert here: an AssertionError raised inside the fake would be
+        # swallowed by the engine's `except Exception` guard and surface as a
+        # misleading "prune failed". Record the SQL and assert after the run.
+        self.executed_sql.append(sql)
         cutoff = args[0]
         before = len(self.rows)
         self.rows = [
@@ -160,6 +164,7 @@ def test_cleanup_expired_pending_prunes_seeded_row(monkeypatch, caplog):
     with caplog.at_level(logging.INFO, logger="proactive.engine"):
         asyncio.run(run_one_iteration())
 
+    assert conn.executed_sql and "DELETE FROM proactive_pending" in conn.executed_sql[0]
     assert [r["id"] for r in conn.rows] == [2, 3]
     assert "Pruned 1 expired proactive_pending rows" in caplog.text
     # The audit's failure mode was an AttributeError caught and logged here —
