@@ -80,8 +80,8 @@ def _endpoint(session_id: str, *, stream: bool = False) -> str:
 def _stream_enabled() -> bool:
     """Seam-A NDJSON streaming from the sidecar (default OFF, ship-dark).
 
-    When on, deltas are yielded as they generate, so voice TTS starts on the
-    first sentence instead of after the WHOLE reply (?wait=result waits for
+    When enabled, deltas are yielded as they generate, so voice TTS starts on
+    the first sentence instead of after the WHOLE reply (?wait=result waits for
     full generation — measured live 2026-07-08: first sentence arrived ~6s
     before the complete result on a chat turn)."""
     return (os.environ.get("ZOE_FLUE_STREAM_ENABLED") or "").strip().lower() in ("1", "true", "yes", "on")
