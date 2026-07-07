@@ -1269,14 +1269,21 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
                 session_id=session_id,
                 source="turn_digest",
             ),
+            # USER MESSAGE ONLY — never mine the assistant reply for facts.
+            # Feeding f"{user_message}\n{assistant_response}" here stored Zoe's
+            # own sentences ("... but I don't have a specific favorite recipe
+            # noted for you right now.") as approved user memories, which then
+            # surfaced in the recall packet and reinforced the wrong answer
+            # (poisoned-store bug, 2026-07-07). Pinned by
+            # tests/test_memory_extractor_purity.py.
             _person_extract(
-                f"{user_message}\n{assistant_response}",
+                user_message,
                 user_id=user_id,
                 source="conversation",
                 session_id=session_id,
             ),
             _person_extract_llm(
-                f"{user_message}\n{assistant_response}",
+                user_message,
                 user_id=user_id,
                 source="conversation",
                 session_id=session_id,
