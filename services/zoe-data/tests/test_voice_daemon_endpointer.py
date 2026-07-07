@@ -154,3 +154,13 @@ def test_barge_monitor_requires_live_tts_process():
     assert guard != -1 and fire != -1 and set_flag != -1
     assert guard < fire < set_flag, "playback-alive guard must precede fire+flag"
     assert "proc is None or proc.poll() is not None" in block
+
+
+def test_daemon_never_reposts_a_processed_turn():
+    """A transcript from turn_stream means the server executed the turn (writes
+    included). Re-POSTing the same wav via the blocking /api/voice/turn runs it
+    again — live 2026-07-07: every barge-aborted list add landed twice. Both
+    the exception path and the clean no-audio path must refuse to re-POST."""
+    assert "blocking fallback." not in _SRC, "the unguarded transcript+no-audio re-POST must stay dead"
+    assert _SRC.count("NOT re-POSTing") >= 2, "both paths must carry the no-re-POST guard"
+    assert "barged before first audio" in _SRC, "barge before audio returns to follow-up, not a re-POST"
