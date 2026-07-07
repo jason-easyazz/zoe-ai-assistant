@@ -28,6 +28,7 @@ CLEANED_FILES = [
     "routers/system.py",
     "routers/voice_tts.py",
     "system_updates.py",
+    "intent_router.py",
 ]
 
 
