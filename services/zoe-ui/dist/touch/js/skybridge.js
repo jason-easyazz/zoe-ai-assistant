@@ -81,7 +81,8 @@
 
     async function loadBackendStatus() {
         try {
-            const resp = await fetch('/api/skybridge/status', { headers: { 'Accept': 'application/json' } });
+            const pid = new URLSearchParams(location.search).get('panel_id') || localStorage.getItem('zoe_panel_id') || '';
+            const resp = await fetch('/api/skybridge/status' + (pid ? '?panel_id=' + encodeURIComponent(pid) : ''), { headers: { 'Accept': 'application/json' } });
             if (!resp.ok) return;
             const data = await resp.json();
             if (data && data.status === 'ready') setStatus('Skybridge runtime ready');
