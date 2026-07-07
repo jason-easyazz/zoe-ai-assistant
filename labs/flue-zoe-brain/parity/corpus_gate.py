@@ -35,11 +35,15 @@ def _load_conversations() -> list[dict]:
 
 
 def run(ctx: GateContext) -> None:
-    for conv in _load_conversations():
+    for i, conv in enumerate(_load_conversations()):
         cat = conv["category"]
-        # One session per conversation preserves multi-turn context; nonce'd so
-        # it is unique to this run and can never wedge a future one.
-        session = ctx.session(f"corpus-{cat}")
+        # One session PER conversation: preserves that conversation's multi-turn
+        # context while isolating it from the others (no cross-conversation
+        # memory bleed, and no single session accumulating every test turn
+        # toward the 8192-token limit). Indexed so it stays unique even if two
+        # conversations ever share a category; nonce'd so it can't wedge a
+        # future run.
+        session = ctx.session(f"corpus-{i}-{cat}")
         for turn in conv["conversation"]:
             q = turn["query"]
             recall = turn.get("expect_recall")
