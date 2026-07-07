@@ -380,6 +380,32 @@ sidecar store. Rollback is one env removal + a zoe-data restart (~15 s).
    — the deliberate trade for the ~2× latency win; watch it in daily use. A clean
    re-run still needs an authenticated test user (zoe-auth provisioning).
 4. **Tool coverage: 12 → 20 via Waves 1–3; remainder deliberately cut per [`docs/knowledge/flue-cutover-tool-cut-list.md`](../knowledge/flue-cutover-tool-cut-list.md) (signed off 2026-07-03).** The parity corpus barely probed this gap — it stands separately.
+5. ~~**Unbounded session history wedged long-lived sessions permanently** (found
+   2026-07-07)~~ ✅ **FIXED (#1138).** Durable sessions grew without bound and
+   nothing between the store and llama-server ever shrank the assembled prompt;
+   once system prompt + tool schemas + history crossed the 8192-token context,
+   EVERY subsequent turn on that session 500'd forever (`400 request (8288
+   tokens) exceeds the available context size (8192 tokens)` — observed live on
+   the harness replay session at 198 stored entries; any long-lived Telegram or
+   voice session hits the same wall). Fix: **prompt-fit history windowing** at
+   the capped-provider wire seam (`labs/flue-zoe-brain/src/context-window.ts`,
+   applied in `applyPolicies`): drop the OLDEST whole user-turn blocks until the
+   estimated prompt (~4 chars/token, Flue's own heuristic) fits
+   `ZOE_BRAIN_CONTEXT_WINDOW` (default 8192, the llama-server rock's
+   `--ctx-size`) minus `ZOE_BRAIN_REPLY_RESERVE` (default 1536). Guarantees:
+   soul + doctrines are NEVER touched (separate Context field); the newest turn
+   and its ` zoe-uid:` identity envelope always survive intact; blocks drop
+   whole, so toolCall/toolResult pairs never split; the durable store keeps
+   full history — only the wire prompt is windowed. Windowed-out facts stay
+   recoverable via `recall_memory` (the per-turn extractor stored them), which
+   is the design reason windowing beats summarization here. Flue's native
+   compaction (`@flue/runtime` `defineAgent({compaction})` +
+   `registerProvider({contextWindow})`) was evaluated first and deliberately
+   NOT enabled: its summarizer runs through the same 8k-window model, so an
+   already-oversized session overflows the summarization call itself (the
+   exact wedge), and it adds nondeterministic multi-second Gemma summarization
+   stalls to the latency-gated voice path. It remains available via config if
+   that trade ever flips.
 
 ### Next action
 

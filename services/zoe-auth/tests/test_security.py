@@ -6,6 +6,7 @@ import sqlite3
 import tempfile
 
 import models.database as db_module
+from sqlite_compat import SQLiteCompatConnection
 from core.security import AuditLogger, RateLimiter, SecurityMonitor
 from core.passcode import passcode_manager
 
@@ -169,9 +170,15 @@ def test_security_monitor_ip_classification():
     assert SecurityMonitor.check_suspicious_ip("8.8.8.8") is False
 
 
-def test_audit_logger_persists_permission_checks():
+def test_audit_logger_persists_permission_checks(monkeypatch):
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
-        db_module.auth_db.db_path = tmp.name
+        # auth_db is Postgres-backed now; route it onto sqlite the same way
+        # test_auth.py / test_smoke.py do (the old `db_path` attribute is gone).
+        monkeypatch.setattr(
+            db_module.auth_db,
+            "get_connection",
+            lambda: SQLiteCompatConnection(tmp.name),
+        )
         _init_audit_table(tmp.name)
 
         AuditLogger.log_permission_check(
