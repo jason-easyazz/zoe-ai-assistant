@@ -15,17 +15,29 @@ router = APIRouter(prefix="/api/skybridge", tags=["skybridge"])
 
 
 @router.get("/status")
-async def get_skybridge_status():
-    """Return the runtime contract for the voice-first Skybridge interface."""
+async def get_skybridge_status(user: dict = Depends(get_current_user)):
+    """Return the runtime contract for the voice-first Skybridge interface.
+
+    Includes the CURRENT USER so the panel can render real auth state (the
+    dashboard's profile chip) — client-side localStorage heuristics cannot see
+    the device-session user (glass-verified: signed-in panel showed "Sign in").
+    """
     livekit_configured = bool(
         os.environ.get("LIVEKIT_URL")
         and os.environ.get("LIVEKIT_API_KEY")
         and os.environ.get("LIVEKIT_API_SECRET")
     )
+    role = str(user.get("role", "guest") or "guest").lower()
     return {
         "ok": True,
         "surface": "skybridge",
         "status": "ready",
+        "user": {
+            "user_id": user.get("user_id", ""),
+            "username": user.get("username", ""),
+            "role": role,
+            "guest": role == "guest" or not user.get("user_id"),
+        },
         "entrypoint": "/touch/skybridge.html",
         "version": 1,
         "card_contract": {

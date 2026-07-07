@@ -85,6 +85,13 @@
             if (!resp.ok) return;
             const data = await resp.json();
             if (data && data.status === 'ready') setStatus('Skybridge runtime ready');
+            // Real auth state for the dashboard's profile chip (the device-session
+            // user is server-side; localStorage can't see it). If the dashboard is
+            // already up, re-render so "Sign in" corrects to the profile chip.
+            if (data && data.user) {
+                backendUser = data.user;
+                if (document.body.classList.contains('sky-on-dashboard')) renderDashboardSurface(null);
+            }
         } catch (_) {
             // The interface can still render local cards if the API is offline.
         }
@@ -487,7 +494,13 @@
     // weather tile + room/music/sign-in. Sets the stage directly (no clearCards,
     // which would flash the ambient clock back) and bumps the deck token so a
     // pending weather fetch can tell the view changed under it.
+    let backendUser = null;   // from /api/skybridge/status — the authoritative panel user
+
     function panelSignedInName() {
+        if (backendUser && !backendUser.guest && backendUser.username &&
+            String(backendUser.username).toLowerCase() !== 'guest') {
+            return backendUser.username;
+        }
         // Same sources the clock card trusts: the panel auth challenge's selected
         // user first (device session), then a non-guest browser session.
         try {
@@ -503,7 +516,16 @@
         return '';
     }
 
+    let lastDashboardWeather = null;  // survives in-place re-renders (auth arrival)
+    let dashboardVisit = 0;           // bumped per wake — NOT by in-place re-renders —
+                                      // so late weather from a previous visit is discarded
+                                      // while the auth-arrival re-render can't strand it
+
     function renderDashboardSurface(weather) {
+        // Any re-render (e.g. the /status user arriving) keeps the last live
+        // weather instead of blanking the tile; a fresh weather payload updates it.
+        if (weather) lastDashboardWeather = weather;
+        else weather = lastDashboardWeather;
         deckToken++;
         cardSequence = 0;
         document.body.classList.remove('sky-empty');
@@ -525,8 +547,9 @@
     }
 
     function wakeToDashboard() {
+        dashboardVisit++;
+        const visit = dashboardVisit;
         renderDashboardSurface(null);
-        const token = deckToken;
         scheduleIdleReturn();
         // Enrich with live weather (guest-readable); re-render the surface with it,
         // but only if the user hasn't moved on (token still current).
@@ -535,7 +558,10 @@
             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
             body: JSON.stringify({ message: 'weather' })
         }).then(res => (res.ok ? res.json() : null)).then(data => {
-            if (!data || token !== deckToken || document.body.classList.contains('sky-empty')) return;
+            // Apply iff this is still the SAME dashboard visit (a late fetch from a
+            // previous visit is stale) and the dashboard is still the active surface.
+            // The auth-arrival re-render bumps neither, so it can't strand us.
+            if (!data || visit !== dashboardVisit || !document.body.classList.contains('sky-on-dashboard')) return;
             // The resolve card carries its data under `content` (props is created
             // later by the renderer's normalization), so read either.
             const wxCard = (Array.isArray(data.cards) ? data.cards : []).find(c => {
