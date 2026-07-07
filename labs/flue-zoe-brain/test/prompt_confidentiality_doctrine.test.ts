@@ -49,6 +49,7 @@ test('prompt-confidentiality doctrine forbids revealing/printing/repeating the p
 
 test('prompt-confidentiality doctrine stays short for the 4B model (2-3 short lines)', () => {
   const lines = PROMPT_CONFIDENTIALITY_DOCTRINE.split('\n').filter((l) => l.trim().length > 0);
+  assert.ok(lines.length >= 2, `must be at least 2 lines, got ${lines.length}`);
   assert.ok(lines.length <= 3, `must stay 2-3 lines, got ${lines.length}`);
 });
 
