@@ -80,24 +80,21 @@ before acting.
 
 ## Cold-start prompts for the rest
 
-- *Intent-dispatch token gate:* "In zoe-ai-assistant, ZOE_INTERNAL_TOKEN is now
-  provisioned in services/zoe-data/.env and the flue sidecar env (verify, and
-  verify both services restarted since). Apply the same token requirement
-  resolve_acting_user got in #1054 to POST /api/system/intent-dispatch in
-  services/zoe-data (it accepts a body user_id under loopback trust — same
-  impersonation class). Regression tests like test_telegram_account_linking's
-  denial tests. Replay-gate: this is the live brain write path — run
-  scripts/maintenance/voice_regression_probe.py under
-  flock /tmp/zoe-voice-harness.lock before merge."
-- *people_relate retirement:* "Branch origin/chore/retire-people-relate exists
-  with no PR. Per docs/adr/ADR-relationship-memory.md and the tech-debt plan,
-  the people_relate intent is a redundant dead path (backend
-  person_extractor._write_relationship is live). Finish the branch or redo
-  small: remove/alias the intent, update tests, PR + Greptile loop."
-- *#982 revival:* "PR #982 (get_db() leak sweep 1/3) is merge-conflicted.
-  Rebase onto fresh main in a worktree (squash to one commit if history is
-  messy), re-run its tests, re-request review, arm auto-merge. Then assess
-  what 2/3 and 3/3 were meant to cover (see the PR body) and open them."
+- *Intent-dispatch token gate:* **DONE 2026-07-07 (#1090, replay-gated 8/8).**
+  Verification found the precondition only ⅔ met (`labs/flue-zoe-brain/.env`
+  still lacks the token), so the strict gate shipped DARK behind
+  `ZOE_INTENT_DISPATCH_REQUIRE_TOKEN` with per-caller readiness warnings.
+  Enable sequence + the remaining same-class residual (`delegate-sync` body
+  `user_id`) recorded in the tech-debt plan's loopback entry.
+- *people_relate retirement:* **OVERTAKEN — already retired on main** (zero
+  `people_relate` references in services/zoe-data as of 2026-07-07; verified
+  `git grep`). The stale draft branch `origin/chore/retire-people-relate`
+  can simply be deleted; do not redo the work.
+- *#982 revival:* **DONE 2026-07-07 — all three parts.** 1/3 merged (`bacbc953`,
+  pattern re-applied over #1015's panel_auth refactor; CI-enumeration hunk
+  replaced with the ci_safe marker). 2/3 (routers/chat.py, 20 sites) and 3/3
+  (intent_router.py, ~12 sites) dispatched same day; `test_get_db_leak_scan.py`
+  enforces cleaned files stay clean.
 - *Wave 4 execution:* "Execute docs/architecture/voice-tts-split-plan.md
   (after #1059 merges) and docs/architecture/chat-split-and-typed-config-plan.md
   (merged, #1060) step by step — one PR per step, replay gate as specified in

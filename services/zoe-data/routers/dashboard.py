@@ -4,6 +4,7 @@ import logging
 from fastapi import APIRouter, Request, Depends, HTTPException
 from auth import get_current_user
 from database import get_db
+from db_pool import get_db_ctx
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
@@ -83,7 +84,9 @@ def _requested_widget_ids(body: dict) -> list[str]:
 @router.get("/layout/")
 async def get_layout(user: dict = Depends(get_current_user)):
     user_id = user["user_id"]
-    async for db in get_db():
+    # get_db_ctx, not `async for db in get_db()`: returning from inside the
+    # generator leaks the pooled connection (#953 / the 2026-07-03 pool drain).
+    async with get_db_ctx() as db:
         row = await _fetchone_layout_row(db, user_id)
         if row:
             return {"layout": json.loads(row["layout"]), "updated_at": row["updated_at"]}
@@ -159,7 +162,8 @@ async def add_widgets(request: Request, user: dict = Depends(get_current_user)):
 @router.delete("/widgets/{widget_id}")
 async def remove_widget(widget_id: str, user: dict = Depends(get_current_user)):
     user_id = user["user_id"]
-    async for db in get_db():
+    # get_db_ctx: the early "No layout found" return leaked the conn (#953).
+    async with get_db_ctx() as db:
         async with db.transaction():
             row = await _fetchone_layout_for_update(db, user_id)
             if not row:

@@ -343,6 +343,7 @@ from zoe_agent import (
 from zoe_core_client import run_zoe_core, run_zoe_core_streaming
 from auth import get_current_user, resolve_acting_user
 from database import get_db
+from db_pool import get_db_ctx
 from ui_orchestrator import enqueue_ui_action
 from zoe_ui_components import auto_extract_components
 from research_evidence import (
@@ -1194,14 +1195,15 @@ async def _persist_ag_ui_run(session_id: str, run_id: str, events: list) -> None
     if not events:
         return
     try:
-        async for db in get_db():
+        # get_db_ctx, not `async for db in get_db()`: exiting the generator
+        # early leaks the pooled connection (#953 / the 2026-07-03 pool drain).
+        async with get_db_ctx() as db:
             await db.execute(
                 """INSERT INTO chat_ag_ui_runs (id, session_id, run_id, events)
                    VALUES (?, ?, ?, ?)""",
                 (uuid.uuid4().hex[:16], session_id, run_id, json.dumps(events)),
             )
             await db.commit()
-            break
     except Exception as e:
         logger.warning("chat_ag_ui_runs persist failed (non-fatal): %s", e)
 
@@ -1299,7 +1301,9 @@ async def _ensure_user_and_chat_session(session_id: str, user_id: str) -> None:
     """Create users row and chat_sessions row if missing (UI sends client session ids before POST /sessions/)."""
     from fastapi import HTTPException
 
-    async for db in get_db():
+    # get_db_ctx, not `async for db in get_db()`: exiting the generator
+    # early leaks the pooled connection (#953 / the 2026-07-03 pool drain).
+    async with get_db_ctx() as db:
         existing = await (
             await db.execute(
                 "SELECT user_id FROM chat_sessions WHERE id = ?", (session_id,)
@@ -1316,7 +1320,6 @@ async def _ensure_user_and_chat_session(session_id: str, user_id: str) -> None:
             (session_id, user_id, "New Chat"),
         )
         await db.commit()
-        break
 
 
 async def _save_chat_message(
@@ -1757,7 +1760,9 @@ async def _queue_ui_actions_background(actions: list, user_id: str, session_id: 
     if not actions:
         return
     try:
-        async for db in get_db():
+        # get_db_ctx, not `async for db in get_db()`: exiting the generator
+        # early leaks the pooled connection (#953 / the 2026-07-03 pool drain).
+        async with get_db_ctx() as db:
             for i, action in enumerate(actions):
                 action_type, payload = _map_ui_payload_to_action(action)
                 if not action_type:
@@ -1771,14 +1776,15 @@ async def _queue_ui_actions_background(actions: list, user_id: str, session_id: 
                     chat_session_id=session_id,
                     idempotency_key=f"{session_id}:{action_type}:{i}",
                 )
-            break
     except Exception as e:
         logger.warning(f"Failed to enqueue UI actions (non-fatal): {e}")
 
 
 async def _create_pending_approval(user_id: str, session_id: str, message: str, risk_level: str, reason: str, normalized_action: str) -> str:
     approval_id = uuid.uuid4().hex[:16]
-    async for db in get_db():
+    # get_db_ctx, not `async for db in get_db()`: exiting the generator
+    # early leaks the pooled connection (#953 / the 2026-07-03 pool drain).
+    async with get_db_ctx() as db:
         await db.execute(
             """INSERT INTO openclaw_approvals
                (id, session_id, user_id, request_text, normalized_action, risk_level, status, reason)
@@ -1786,12 +1792,13 @@ async def _create_pending_approval(user_id: str, session_id: str, message: str, 
             (approval_id, session_id, user_id, message, normalized_action, risk_level, reason),
         )
         await db.commit()
-        break
     return approval_id
 
 
 async def _resolve_approval(user_id: str, approval_id: str) -> dict | None:
-    async for db in get_db():
+    # get_db_ctx, not `async for db in get_db()`: exiting the generator
+    # early leaks the pooled connection (#953 / the 2026-07-03 pool drain).
+    async with get_db_ctx() as db:
         rows = await db.execute_fetchall(
             """SELECT * FROM openclaw_approvals
                WHERE id = ? AND user_id = ? AND status = 'pending'
@@ -1811,7 +1818,9 @@ async def _resolve_approval(user_id: str, approval_id: str) -> dict | None:
 
 
 async def _record_run_state(run_id: str, session_id: str, user_id: str, mode: str, status: str, request_text: str, response_text: str | None = None, metadata: dict | None = None):
-    async for db in get_db():
+    # get_db_ctx, not `async for db in get_db()`: exiting the generator
+    # early leaks the pooled connection (#953 / the 2026-07-03 pool drain).
+    async with get_db_ctx() as db:
         await db.execute(
             """INSERT INTO openclaw_run_state
                (id, session_id, user_id, mode, status, request_text, response_text, metadata, finished_at)
@@ -1834,7 +1843,6 @@ async def _record_run_state(run_id: str, session_id: str, user_id: str, mode: st
             ),
         )
         await db.commit()
-        break
 
 
 async def _stream_openclaw_assistant_ag(
@@ -2611,7 +2619,9 @@ async def chat_stream_generator(
                 # Load recent conversation history so Zoe Agent has context for follow-ups ("yes", etc.)
                 prior_history: list[dict] = []
                 try:
-                    async for db in get_db():
+                    # get_db_ctx, not `async for db in get_db()`: exiting the generator
+                    # early leaks the pooled connection (#953 / the 2026-07-03 pool drain).
+                    async with get_db_ctx() as db:
                         rows = await db.execute(
                             "SELECT role, content FROM chat_messages "
                             "WHERE session_id = ? ORDER BY created_at DESC LIMIT 12",
@@ -2619,7 +2629,6 @@ async def chat_stream_generator(
                         )
                         rows = await rows.fetchall()
                         prior_history = [{"role": r[0], "content": r[1]} for r in reversed(rows)]
-                        break
                 except Exception as _he:
                     logger.debug("history load failed (non-fatal): %s", _he)
                 # Zoe Agent loads MemPalace facts internally. We also load a copy here
@@ -3788,7 +3797,9 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
             resp["ui_components"].append({"component": "research_evidence", "props": pkg})
             if req_panel_id:
                 # Push a touch-optimized report card automatically for research tasks.
-                async for db in get_db():
+                # get_db_ctx, not `async for db in get_db()`: exiting the generator
+                # early leaks the pooled connection (#953 / the 2026-07-03 pool drain).
+                async with get_db_ctx() as db:
                     try:
                         await enqueue_ui_action(
                             db,
@@ -3805,7 +3816,6 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
                         # Non-fatal: research response should still return in chat
                         # even if panel action delivery fails.
                         logger.warning("research panel push skipped: %s", exc)
-                    break
         if actions:
             asyncio.ensure_future(_queue_ui_actions_background(actions, user_id, session_id))
         asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
@@ -3817,7 +3827,9 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
 @router.get("/sessions/")
 async def list_sessions(user: dict = Depends(get_current_user)):
     user_id = user["user_id"]
-    async for db in get_db():
+    # get_db_ctx, not `async for db in get_db()`: exiting the generator
+    # early leaks the pooled connection (#953 / the 2026-07-03 pool drain).
+    async with get_db_ctx() as db:
         rows = await db.execute_fetchall(
             """SELECT s.id, s.title, s.created_at, s.updated_at,
                       (SELECT COUNT(*) FROM chat_messages WHERE session_id = s.id) AS message_count
@@ -3846,7 +3858,9 @@ async def create_session(request: Request, user: dict = Depends(get_current_user
 @router.get("/sessions/{session_id}/messages/")
 async def get_session_messages(session_id: str, user: dict = Depends(get_current_user)):
     user_id = user["user_id"]
-    async for db in get_db():
+    # get_db_ctx, not `async for db in get_db()`: exiting the generator
+    # early leaks the pooled connection (#953 / the 2026-07-03 pool drain).
+    async with get_db_ctx() as db:
         owner = await db.execute_fetchall(
             "SELECT id FROM chat_sessions WHERE id = ? AND user_id = ?", (session_id, user_id)
         )
@@ -3868,7 +3882,9 @@ async def save_message(session_id: str, request: Request, user: dict = Depends(g
     role = body.get("role", "user")
     content = body.get("content", "")
     metadata = json.dumps(body.get("metadata")) if body.get("metadata") else None
-    async for db in get_db():
+    # get_db_ctx, not `async for db in get_db()`: exiting the generator
+    # early leaks the pooled connection (#953 / the 2026-07-03 pool drain).
+    async with get_db_ctx() as db:
         await db.execute(
             "INSERT INTO users (id, name, role) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
             (user_id, user_id, "member"),
@@ -3896,7 +3912,9 @@ async def save_message(session_id: str, request: Request, user: dict = Depends(g
 @router.delete("/sessions/{session_id}")
 async def delete_session(session_id: str, user: dict = Depends(get_current_user)):
     user_id = user["user_id"]
-    async for db in get_db():
+    # get_db_ctx, not `async for db in get_db()`: exiting the generator
+    # early leaks the pooled connection (#953 / the 2026-07-03 pool drain).
+    async with get_db_ctx() as db:
         owner = await db.execute_fetchall(
             "SELECT id FROM chat_sessions WHERE id = ? AND user_id = ?", (session_id, user_id)
         )
@@ -3955,7 +3973,9 @@ async def whatsapp_connect(request: Request, user: dict = Depends(get_current_us
 @router.get("/approvals/pending")
 async def pending_approvals(limit: int = 20, user: dict = Depends(get_current_user)):
     user_id = user["user_id"]
-    async for db in get_db():
+    # get_db_ctx, not `async for db in get_db()`: exiting the generator
+    # early leaks the pooled connection (#953 / the 2026-07-03 pool drain).
+    async with get_db_ctx() as db:
         rows = await db.execute_fetchall(
             """SELECT id, session_id, request_text, risk_level, reason, created_at
                FROM openclaw_approvals
@@ -3970,7 +3990,9 @@ async def pending_approvals(limit: int = 20, user: dict = Depends(get_current_us
 @router.get("/runs/{session_id}/latest")
 async def latest_run(session_id: str, user: dict = Depends(get_current_user)):
     user_id = user["user_id"]
-    async for db in get_db():
+    # get_db_ctx, not `async for db in get_db()`: exiting the generator
+    # early leaks the pooled connection (#953 / the 2026-07-03 pool drain).
+    async with get_db_ctx() as db:
         rows = await db.execute_fetchall(
             """SELECT id, status, request_text, response_text, metadata, started_at, finished_at
                FROM openclaw_run_state
@@ -3988,7 +4010,9 @@ async def latest_run(session_id: str, user: dict = Depends(get_current_user)):
 @router.post("/runs/{session_id}/resume")
 async def resume_run(session_id: str, user: dict = Depends(get_current_user)):
     user_id = user["user_id"]
-    async for db in get_db():
+    # get_db_ctx, not `async for db in get_db()`: exiting the generator
+    # early leaks the pooled connection (#953 / the 2026-07-03 pool drain).
+    async with get_db_ctx() as db:
         rows = await db.execute_fetchall(
             """SELECT request_text FROM openclaw_run_state
                WHERE session_id = ? AND user_id = ?
@@ -4004,7 +4028,9 @@ async def resume_run(session_id: str, user: dict = Depends(get_current_user)):
 @router.post("/runs/{session_id}/cancel")
 async def cancel_latest_run(session_id: str, user: dict = Depends(get_current_user)):
     user_id = user["user_id"]
-    async for db in get_db():
+    # get_db_ctx, not `async for db in get_db()`: exiting the generator
+    # early leaks the pooled connection (#953 / the 2026-07-03 pool drain).
+    async with get_db_ctx() as db:
         await db.execute(
             """UPDATE openclaw_run_state
                SET status='cancelled', finished_at=NOW()::text

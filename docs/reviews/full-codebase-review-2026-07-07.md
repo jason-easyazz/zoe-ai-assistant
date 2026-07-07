@@ -18,9 +18,9 @@ user-scoping on the *active* memory paths are correctly enforced.
 
 | # | Sev | Where | Problem → fix |
 |---|---|---|---|
-| F1 | HIGH | `proactive/engine.py` ~:275 + `db_compat.py` `_Cursor` | `cur.rowcount` doesn't exist on the compat cursor → **AttributeError every hourly cleanup cycle** (noted in buildplan §6 2026-06-26, never fixed). Add a `rowcount` property to `_Cursor` (asyncpg status-tag parse) + a regression test. |
-| F2 | HIGH | `routers/voice_livekit.py` ~:878-890 / ~:1040-1045 | **Barge-in race:** the cancelled pipeline's done-callback can flip PROCESSING→COOLDOWN before/after the barge sets LISTENING, silently eating the interruption under load. Guard the callback with a task-identity check (`if task is ps["pipeline_task"]`) and clear `pipeline_task` atomically with the state flip. |
-| F3 | HIGH | `routers/voice_livekit.py` ~:596 (brain call), ~:554 (empty STT) | **No timeout on `brain_streaming()`** — a wedged llama-server freezes the panel in PROCESSING forever; and an **empty transcript silently returns to ambient** (panel looks dead). Wrap in `asyncio.wait_for(…, ~15s)` with a spoken error + state reset; speak "didn't catch that" on empty STT. |
+| F1 | HIGH | `proactive/engine.py` ~:275 + `db_compat.py` `_Cursor` | `cur.rowcount` doesn't exist on the compat cursor; the exception is **caught**, so the expired-`proactive_pending` prune is a **silent no-op that has never run** (hourly warning + unbounded growth; noted in buildplan §6 2026-06-26, never fixed). Add a `rowcount` property to `_Cursor` + a regression test. *(reframed on verification — see the issue register)* |
+| F2 | ~~HIGH~~ | `routers/voice_livekit.py` ~:878-890 / ~:1040-1045 | **RETRACTED on verification:** the barge handler sets LISTENING and cancels in one synchronous block on a single-threaded loop, and the done-callback checks state at execution time — no realistic race window (the code's ordering comment is load-bearing). A task-identity guard remains optional belt-and-braces only. |
+| F3 | HIGH | `routers/voice_livekit.py` ~:596 (brain call), ~:554 (empty STT) | **No explicit timeout at the brain call site** (`brain_dispatch.py` configures none; hang behaviour depends on HTTP-client defaults — a wedge can hold PROCESSING); and an **empty transcript returns to ambient with zero user feedback**. Wrap in `asyncio.wait_for(…, ~15s)` with a spoken error + state reset; speak "didn't catch that" on empty STT. |
 | F4 | HIGH | `voice_tts.py` ~:4492 (ambient insert), `mcp_server.py` ~:2982 (ambient FTS read) | `ambient_memory` has **no user scoping**: insert binds no user/speaker; the read queries globally. Capture is flag-OFF (table ~empty) so fix is cheap NOW: migration adds `user_id`, both paths enforce it. Hard prerequisite for W6 — folded there as W6.0. |
 | F5 | MED | `.github/workflows/validate.yml` ~:109-131 | zoe-auth tests are **hand-enumerated** — the exact silent-skip class just closed for zoe-data. Move to marker/dir-based selection. |
 
@@ -85,9 +85,10 @@ LiveKit STT temp-file sweep on agent start · zoe-auth CORS allows `http://zoe.l
 
 ## Recommended execution order
 
-1. **F1** (one-file fix, crashes hourly today) → 2. **F2+F3** as the "voice-lane
-   robustness" pair (replay-gated, one PR each) → 3. **F4** ambient scoping migration
-   (before any W6 motion) → 4. **F5 + H4 + H5** infra batch → 5. fold the hygiene list
-   into tech-debt Wave 4 / W1.3 as noted. F1–F5 are cheap-model-executable with the
-   P0 protocol from
+1. **F1** (one-file fix; the prune has never run) → 2. **F3** voice-lane robustness
+   (replay-gated; F2 is retracted) → 3. **F4** ambient scoping migration (before any W6
+   motion) → 4. **F5 + H4 + H5** infra batch → 5. fold the hygiene list into tech-debt
+   Wave 4 / W1.3 as noted; the deeper
+   [`issue-register-2026-07-07.md`](issue-register-2026-07-07.md) carries the verified
+   second-pass items. F-items are cheap-model-executable with the P0 protocol from
    [`samantha-evolution-packets.md`](../architecture/samantha-evolution-packets.md).
