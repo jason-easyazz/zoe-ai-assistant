@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import Any, AsyncIterator
 from urllib.parse import quote
 
@@ -65,12 +66,25 @@ def _timeout_s() -> float:
         return _DEFAULT_TIMEOUT_S
 
 
-def _endpoint(session_id: str) -> str:
+def _endpoint(session_id: str, *, stream: bool = False) -> str:
     sid = (session_id or "default").strip() or "default"
     # URL-encode the sid as a single path segment: a raw session id containing
     # '/', '?', '#', or '..' would otherwise change the route (path traversal /
     # query injection) instead of addressing that literal Flue session.
-    return f"{_base_url()}/agents/zoe/{quote(sid, safe='')}?wait=result"
+    base = f"{_base_url()}/agents/zoe/{quote(sid, safe='')}"
+    # ?wait=result WINS over the Accept header on the sidecar, so the streaming
+    # request must omit it (src/streaming.ts mode selection).
+    return base if stream else f"{base}?wait=result"
+
+
+def _stream_enabled() -> bool:
+    """Seam-A NDJSON streaming from the sidecar (default OFF, ship-dark).
+
+    When enabled, deltas are yielded as they generate, so voice TTS starts on
+    the first sentence instead of after the WHOLE reply (?wait=result waits for
+    full generation — measured live 2026-07-08: first sentence arrived ~6s
+    before the complete result on a chat turn)."""
+    return (os.environ.get("ZOE_FLUE_STREAM_ENABLED") or "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _headers() -> dict[str, str]:
@@ -103,6 +117,124 @@ def _wrap_message_with_identity(message: str, user_id: str) -> str:
     if not uid:
         return message
     return f"{_IDENTITY_ENVELOPE_PREFIX}{uid}\n{message}"
+
+
+# ── Deterministic recall floor (ZOE_SEAM_RECALL_INJECT, default OFF) ─────────
+#
+# BUG B (live hard-gate 2026-07-07): "my locker code is 31999" sat at the TOP
+# of the /api/memories/for-prompt packet, yet the flue brain answered "I don't
+# have that stored" — the model simply didn't call its recall_memory tool that
+# turn (the known ~97% invocation ceiling; prompt doctrine already pushed).
+# Tool-gated recall can never be 100% on a 4B model, so on a conservative
+# personal-question shape the SEAM prepends the for-prompt packet to the
+# outbound message deterministically. The recall_memory tool stays for deeper
+# queries — this is a floor, not a replacement.
+#
+# ENVELOPE CONTRACT: the block is placed AFTER the identity line. The sidecar's
+# stripIdentityEnvelope (labs/flue-zoe-brain/src/request-identity.ts) matches
+# `^ zoe-uid:<id>\n` anchored at the START of the message, so the wire order is
+# " zoe-uid:<id>\n<block>\n<user message>" — the sidecar strips only the
+# identity line and the model reads block + message.
+#
+# Flag-gated, DEFAULT OFF: the operator enables ZOE_SEAM_RECALL_INJECT via env
+# only after the replay gate passes. Flag off = byte-identical outbound message.
+_RECALL_INJECT_ENV = "ZOE_SEAM_RECALL_INJECT"
+
+# Conservative personal-question shapes only — each alternative pins a
+# possessive/self reference ("my", "I", "me"), so ordinary chat ("what is the
+# weather", "who is Ada Lovelace") never matches.
+_PERSONAL_QUESTION_RE = re.compile(
+    r"\b(?:"
+    r"what'?s\s+my|what\s+is\s+my|"
+    # "do you remember" must itself anchor to self-reference — bare
+    # "do you remember the alamo" is general chat, not personal recall.
+    r"do\s+you\s+remember\s+(?:my|(?:that|what|when|where|if)\s+i)\b|"
+    r"what\s+did\s+i|"
+    r"when\s+did\s+i|when'?s\s+my|when\s+is\s+my|where\s+do\s+i|"
+    r"who'?s\s+my|who\s+is\s+my|what\s+do\s+you\s+know\s+about\s+me"
+    r")",
+    re.IGNORECASE,
+)
+
+_RECALL_BLOCK_OPEN = (
+    "[MEMORY CONTEXT — Zoe's stored notes about this user; "
+    "use them to answer; do not mention this block]"
+)
+_RECALL_BLOCK_CLOSE = "[END MEMORY CONTEXT]"
+_RECALL_MAX_BULLETS = 12
+_RECALL_MAX_CHARS = 1600
+
+
+def _recall_inject_enabled() -> bool:
+    """Per-call env read (matches the module's other env lookups) so the
+    operator can flip the flag with a restart, no code change."""
+    return (os.environ.get(_RECALL_INJECT_ENV) or "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+async def _fetch_for_prompt_packet(user_id: str, message: str) -> str:
+    """The /api/memories/for-prompt packet text, fetched IN-PROCESS.
+
+    Calls the composer function directly (routers.memories.memory_for_prompt)
+    instead of an HTTP self-call — same event loop, no socket round-trip.
+    ``_=None`` skips the FastAPI internal-token dependency, which guards the
+    HTTP surface, not in-process callers; the endpoint itself fails closed for
+    guest/unknown users (empty packet). Lazy import keeps this module
+    slim-importable for tests.
+    """
+    from routers.memories import memory_for_prompt
+
+    result = await memory_for_prompt(
+        user_id=user_id,
+        message=(message or "")[:512],
+        limit=_RECALL_MAX_BULLETS,
+        _=None,
+    )
+    return str((result or {}).get("packet") or "")
+
+
+def _truncate_packet(packet: str) -> str:
+    """Cap the packet at _RECALL_MAX_BULLETS bullet lines / _RECALL_MAX_CHARS."""
+    lines: list[str] = []
+    bullets = 0
+    total = 0
+    for line in packet.splitlines():
+        if line.lstrip().startswith(("-", "•", "*")):
+            bullets += 1
+            if bullets > _RECALL_MAX_BULLETS:
+                break
+        total += len(line) + 1
+        if lines and total > _RECALL_MAX_CHARS:
+            break
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
+async def _recall_context_block(message: str, user_id: str) -> str:
+    """The delimited memory block for this turn, or '' — NEVER raises.
+
+    '' unless the flag is ON, a real user id is present, and the message
+    matches the conservative personal-question shape. A fetch failure logs and
+    returns '' — the turn always proceeds, at worst without the floor.
+    """
+    if not _recall_inject_enabled():
+        return ""
+    if not (user_id or "").strip():
+        return ""
+    if not _PERSONAL_QUESTION_RE.search(message or ""):
+        return ""
+    try:
+        packet = await _fetch_for_prompt_packet(user_id, message)
+    except Exception as exc:  # noqa: BLE001 — the recall floor must never break a turn
+        logger.warning(
+            "seam recall inject: packet fetch failed, continuing without it: %s", exc
+        )
+        return ""
+    packet = _truncate_packet((packet or "").strip())
+    if not packet:
+        return ""
+    return f"{_RECALL_BLOCK_OPEN}\n{packet}\n{_RECALL_BLOCK_CLOSE}"
 
 
 def _text_from_body(body: Any) -> str:
@@ -152,7 +284,6 @@ async def run_flue_brain_streaming(
     run_zoe_core_streaming signature compatibility; the sidecar owns its own
     persona/memory/tools, so they're intentionally ignored here.
     """
-    url = _endpoint(session_id)
     # Forward the caller's identity when known so the sidecar isn't pinned to one
     # env-configured user. The id is carried as an ENVELOPE PREFIX on the message,
     # not a separate body field: the sidecar's Flue payload schema accepts only
@@ -163,14 +294,103 @@ async def run_flue_brain_streaming(
     # Keep the format byte-for-byte in sync with that module. Omit empty/guest ids
     # so the sidecar's own fail-closed identity handling applies.
     uid = (user_id or "").strip()
-    outbound_message = _wrap_message_with_identity(message, uid)
+    # Deterministic recall floor (default OFF): on a personal-question turn,
+    # prepend the for-prompt packet so recall no longer depends on the model
+    # electing to call its recall_memory tool. Placed BEFORE the identity wrap
+    # so the block rides AFTER the identity line on the wire (the sidecar's
+    # single-line strip regex is anchored at message start).
+    recall_block = await _recall_context_block(message, uid)
+    brain_message = f"{recall_block}\n{message}" if recall_block else message
+    outbound_message = _wrap_message_with_identity(brain_message, uid)
     body_obj: dict[str, str] = {"message": outbound_message}
     payload = json.dumps(body_obj).encode()
+
+    if _stream_enabled():
+        # Seam-A NDJSON stream (src/streaming.ts): each line is a JSON string
+        # (one text delta or __TOOL__/__THINKING__ sentinel chunk), terminated
+        # by {"done": true} or {"error": ...}. Yield deltas as they arrive so
+        # sentence-TTS starts DURING generation. If the stream dies after text
+        # was yielded, just end the turn — the sidecar already executed it
+        # (writes included), so falling back to ?wait=result would RE-RUN the
+        # turn (the #1137 duplicate-write class).
+        yielded_any = False
+        admitted = False  # a 2xx means the sidecar is EXECUTING the turn
+        try:
+            import httpx
+
+            headers = dict(_headers())
+            headers["Accept"] = "application/x-ndjson"
+            async with httpx.AsyncClient(timeout=_timeout_s()) as client:
+                async with client.stream(
+                    "POST", _endpoint(session_id, stream=True), content=payload, headers=headers
+                ) as resp:
+                    resp.raise_for_status()
+                    admitted = True
+                    if "application/x-ndjson" in (resp.headers.get("content-type") or ""):
+                        finished = False
+                        async for line in resp.aiter_lines():
+                            line = (line or "").strip()
+                            if not line:
+                                continue
+                            try:
+                                chunk = json.loads(line)
+                            except ValueError:
+                                logger.warning("flue stream: undecodable line %r", line[:120])
+                                continue
+                            if isinstance(chunk, str):
+                                if chunk:
+                                    yielded_any = True
+                                    yield chunk
+                                continue
+                            if isinstance(chunk, dict):
+                                if chunk.get("done"):
+                                    finished = True
+                                    break
+                                if "error" in chunk:
+                                    logger.warning("flue stream reported error: %s", str(chunk["error"])[:200])
+                                    finished = True  # sidecar owned + reported the failure
+                                    if not yielded_any:
+                                        yield _FALLBACK_TEXT
+                                    break
+                        if finished or yielded_any:
+                            return
+                        logger.warning("flue stream ended without a terminal line and no text")
+                        yield _FALLBACK_TEXT
+                        return
+                    # Sidecar ignored the Accept header (older build / stream
+                    # kill-switched via ZOE_BRAIN_STREAM=0): the plain POST was
+                    # a 202 admission and the turn IS NOW RUNNING async — a
+                    # wait=result re-POST would execute it a second time. This
+                    # is an operator misconfig (client flag on, sidecar off):
+                    # flip ZOE_FLUE_STREAM_ENABLED off or ZOE_BRAIN_STREAM on.
+                    logger.error(
+                        "flue stream misconfig: client streaming ON but sidecar replied %r "
+                        "(turn admitted async; reply unavailable — NOT re-POSTing)",
+                        resp.headers.get("content-type"),
+                    )
+                    yield _FALLBACK_TEXT
+                    return
+        except Exception as exc:  # noqa: BLE001 - a brain hiccup must never crash a turn
+            if yielded_any:
+                # Mid-stream failure after real text: the turn executed; ending
+                # here loses the tail but never re-runs it.
+                logger.warning("flue stream died mid-turn (after text): %s", exc)
+                return
+            if admitted:
+                # 2xx received ⇒ the sidecar is already running this turn
+                # (writes included). Re-POSTing via wait=result would execute
+                # it a second time — the #1137 duplicate-write class. Eat the
+                # reply rather than double-run the action.
+                logger.warning("flue stream died after admission, before text (%s) — NOT re-POSTing", exc)
+                yield _FALLBACK_TEXT
+                return
+            logger.warning("flue stream request failed pre-admission (%s) — falling back to wait=result", exc)
+
     try:
         import httpx
 
         async with httpx.AsyncClient(timeout=_timeout_s()) as client:
-            resp = await client.post(url, content=payload, headers=_headers())
+            resp = await client.post(_endpoint(session_id), content=payload, headers=_headers())
             resp.raise_for_status()
             body = resp.json()
     except Exception as exc:  # noqa: BLE001 - a brain hiccup must never crash a turn
@@ -198,8 +418,18 @@ async def run_flue_brain(
     user_id: str = "",
     **kwargs: Any,
 ) -> str:
-    """Non-streaming brain turn — collects the Flue stream into one string."""
+    """Non-streaming brain turn — collects the Flue stream into one string.
+
+    __TOOL__/__THINKING__ are activity sentinels for streaming UI consumers, not
+    reply text. The streaming path strips them before display/TTS; a
+    non-streaming caller must too, or the returned string is raw sentinel JSON
+    prepended to the actual answer (confirmed live: /api/chat?stream=false
+    returned `__TOOL__:{…recall_memory…}…Your locker code is beef42.`). Mirrors
+    the same skip in zoe_core_client.run_zoe_core.
+    """
     chunks: list[str] = []
     async for delta in run_flue_brain_streaming(message, session_id, user_id, **kwargs):
+        if delta.startswith("__TOOL__:") or delta.startswith("__THINKING__:"):
+            continue
         chunks.append(delta)
     return "".join(chunks).strip()

@@ -964,10 +964,15 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
         return SkybridgeIntent(domain="people", action="remember_fact", person_name=name, fact_text=fact, birthday=birthday)
     # Timers claim the phrase early so "set a 5 minute timer" isn't misread as a
     # calendar event ("set ... at a time").
-    if re.search(r"\btimer\b|\bcountdown\b", text):
+    if re.search(r"\btimers?\b|\bcountdowns?\b", text):
         if re.search(r"\b(cancel|stop|clear|delete|dismiss|reset|turn off)\b", text):
             return SkybridgeIntent(domain="timer", action="cancel", title=_parse_timer_label(text))
         if re.search(r"\b(how (?:long|much)|left|remaining|status|check on|still going)\b", text):
+            return SkybridgeIntent(domain="timer", action="status")
+        # "show/list my timers" is a status ask too. Without this, the query fell
+        # through to the people fallback ("show my X" -> contact search) and the
+        # dashboard Timers tile rendered an empty people directory (glass-verified).
+        if re.search(r"\b(show|list|view|see|display|what)\b", text):
             return SkybridgeIntent(domain="timer", action="status")
         duration = _parse_timer_duration(text)
         # Only CREATE for an explicit ask — a passing mention ("it's not the timer",
@@ -1963,22 +1968,42 @@ async def _resolve_list_add_item(intent: SkybridgeIntent, user_id: str, db: Any,
             "actions": [],
         }
     list_id, list_type = list_target
-    item_id = str(uuid.uuid4())
-    await db.execute(
+    # Retry idempotency: the voice daemon (and any HTTP retry layer) can
+    # re-submit a turn the server already processed — live 2026-07-07 every
+    # barge-aborted voice add landed twice ~1.5-2.5s apart. An identical
+    # item added to the same list moments ago is a replay, not a new intent;
+    # skip the insert and answer as if it just succeeded (it did).
+    recent_dup = await db.fetchrow(
         """
-        INSERT INTO list_items (id, list_id, text, priority, category, quantity, parent_id, assigned_to)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        SELECT id FROM list_items
+        WHERE list_id = $1 AND lower(text) = lower($2) AND deleted = 0
+          AND created_at > now() - interval '10 seconds'
         """,
-        item_id,
         list_id,
         intent.item_text,
-        "normal",
-        "",
-        "",
-        None,
-        None,
     )
-    await _maybe_commit(db)
+    if recent_dup is not None:
+        # Answer as if the add just succeeded (it did) and point the card's
+        # "recent" highlight at the original row.
+        item_id = str(recent_dup["id"])
+        logger.info("skybridge list add: duplicate %r within 10s on list %s — replay skipped", intent.item_text, list_id)
+    else:
+        item_id = str(uuid.uuid4())
+        await db.execute(
+            """
+            INSERT INTO list_items (id, list_id, text, priority, category, quantity, parent_id, assigned_to)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            """,
+            item_id,
+            list_id,
+            intent.item_text,
+            "normal",
+            "",
+            "",
+            None,
+            None,
+        )
+        await _maybe_commit(db)
     refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type), user_id, db)
     card_content = refreshed.get("cards", [{}])[0].get("content", {}) if refreshed.get("cards") else {}
     items = card_content.get("items")

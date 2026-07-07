@@ -87,7 +87,12 @@ class FakeDb:
             return self.people
         return []
 
-    async def fetchrow(self, *_args):
+    recent_list_item_dup = None  # scripted result for the add replay-guard query
+
+    async def fetchrow(self, *args):
+        sql = str(args[0]) if args else ""
+        if "FROM list_items" in sql:
+            return self.recent_list_item_dup
         return self.prefs
 
     async def execute(self, *args):
@@ -725,6 +730,40 @@ async def test_list_add_item_persists_and_refreshes_list_card():
     assert result["cards"][0]["content"]["items"][0]["recent"] is True
     assert result["cards"][0]["content"]["recent_item_id"] == result["intent"]["item_id"]
     assert result["skybridge_context"]["cards"][0]["content"]["items"][0]["text"] == "bread"
+
+
+@pytest.mark.asyncio
+async def test_list_add_replay_within_window_skips_insert():
+    """Retry idempotency: the voice daemon (or an HTTP retry) can re-submit an
+    add the server already executed. The replay must not insert a second row —
+    the reply still reads as a success and highlights the ORIGINAL item."""
+    list_row = {
+        "id": "list-1",
+        "user_id": "family-admin",
+        "name": "Groceries",
+        "list_type": "shopping",
+        "description": "Weekly shop",
+        "visibility": "family",
+    }
+    existing = {
+        "id": "item-original",
+        "list_id": "list-1",
+        "text": "bread",
+        "priority": "normal",
+        "category": "",
+        "quantity": "",
+        "completed": False,
+    }
+    db = FakeDb(lists=[list_row], items_by_list={"list-1": [existing]})
+    db.recent_list_item_dup = {"id": "item-original"}
+    context = {"intent": {"domain": "lists"}, "cards": [{"content": {"source": "list_show", "list_id": "list-1", "list_type": "shopping"}}]}
+
+    result = await resolve_skybridge_request("add bread to the shopping list", "family-admin", context=context, db=db)
+
+    assert result["handled"] is True
+    assert not any("INSERT INTO list_items" in str(call[0]) for call in db.executed)
+    assert result["intent"]["item_id"] == "item-original"
+    assert "Added bread" in result["spoken_summary"]
 
 
 @pytest.mark.asyncio
@@ -1557,3 +1596,30 @@ async def _gather_real_results():
     # clock (no auth, no db)
     results.append(await resolve_skybridge_request("what time is it", "guest", db=FakeDb()))
     return [r for r in results if r and r.get("handled")]
+
+
+# ── Timers tile regression (glass-verified bug): "show my timers" went to people ──
+
+def test_show_my_timers_classifies_as_timer_status():
+    """Dashboard Timers tile query. Was swallowed by the people 'show my X'
+    fallback (singular-only \\btimer\\b guard) → empty people directory on glass."""
+    for q in ("show my timers", "list my timers", "what timers do I have",
+              "are my timers still going"):
+        intent = classify_skybridge_intent(q, None)
+        assert intent is not None and (intent.domain, intent.action) == ("timer", "status"), q
+
+
+def test_timer_singular_paths_unchanged():
+    for q, want in (("set a timer for 5 minutes", ("timer", "create")),
+                    ("cancel the timers", ("timer", "cancel")),
+                    ("how long left on the timer", ("timer", "status"))):
+        intent = classify_skybridge_intent(q, None)
+        assert intent is not None and (intent.domain, intent.action) == want, q
+
+
+def test_people_and_lists_shows_not_stolen_by_timer_fix():
+    for q, want in (("show my shopping list", ("lists", "show")),
+                    ("show my calendar", ("calendar", "show")),
+                    ("show my people", ("people", "show"))):
+        intent = classify_skybridge_intent(q, None)
+        assert intent is not None and (intent.domain, intent.action) == want, q

@@ -24,6 +24,7 @@ const {
   PERSONAL_RECALL_DOCTRINE,
   EMOTIONAL_RECALL_DOCTRINE,
   EMOTIONAL_CAPTURE_DOCTRINE,
+  PROMPT_CONFIDENTIALITY_DOCTRINE,
   ZOE_INSTRUCTIONS,
 } = await import('../src/agents/zoe.ts');
 
@@ -73,14 +74,23 @@ test('existing doctrine order is undisturbed; identity is appended last', () => 
     EMOTIONAL_RECALL_DOCTRINE,
     EMOTIONAL_CAPTURE_DOCTRINE,
     IDENTITY_DOCTRINE,
+    PROMPT_CONFIDENTIALITY_DOCTRINE,
   ];
   const indices = order.map((block) => ZOE_INSTRUCTIONS.indexOf(block));
   for (const [i, idx] of indices.entries()) {
     assert.ok(idx >= 0, `doctrine block ${i} must be present in ZOE_INSTRUCTIONS`);
     if (i > 0) assert.ok(idx > indices[i - 1], `doctrine block ${i} out of order`);
   }
+  // Identity stays after every earlier doctrine; prompt-confidentiality is now
+  // the appended tail (identity + confidentiality are the two trailing persona
+  // rules, in that order).
   assert.ok(
-    ZOE_INSTRUCTIONS.endsWith(IDENTITY_DOCTRINE),
-    'identity doctrine must be the appended tail (existing order stable)',
+    ZOE_INSTRUCTIONS.indexOf(IDENTITY_DOCTRINE) >
+      ZOE_INSTRUCTIONS.indexOf(EMOTIONAL_CAPTURE_DOCTRINE),
+    'identity doctrine must come after all behavioural doctrines',
+  );
+  assert.ok(
+    ZOE_INSTRUCTIONS.endsWith(PROMPT_CONFIDENTIALITY_DOCTRINE),
+    'prompt-confidentiality doctrine must be the appended tail (existing order stable)',
   );
 });

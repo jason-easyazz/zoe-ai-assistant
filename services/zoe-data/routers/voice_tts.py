@@ -23,6 +23,7 @@ from auth import get_current_user
 from database import get_db
 from hermes_http import hermes_auth_headers
 from stt_wake_strip import _strip_wake_word
+from typed_env import env_bool, env_float, env_int, env_str
 # Waterfall engine mechanics live in tts_waterfall; they are re-exported here so
 # existing importers (main.py health detail, tests that monkeypatch this module,
 # tests/replay_samples.py, scripts/perf/measure_tts.py) keep working unchanged.
@@ -557,7 +558,7 @@ _FIRST_UNIT_SOFT_CAP = 40   # flush at a word boundary by here even without punc
 
 
 def _fast_first_audio_enabled() -> bool:
-    return os.environ.get("ZOE_VOICE_FAST_FIRST_AUDIO", "1").strip().lower() in ("1", "true", "yes", "on")
+    return env_bool("ZOE_VOICE_FAST_FIRST_AUDIO", default=True)
 
 
 # The Pi brain surfaces "what Zoe is doing" as text sentinels riding alongside the
@@ -567,7 +568,7 @@ _VOICE_TOOL_SENTINEL_PREFIXES = ("__TOOL__:", "__THINKING__:")
 
 
 def _voice_tool_filler_enabled() -> bool:
-    return os.environ.get("ZOE_VOICE_TOOL_FILLER", "1").strip().lower() in ("1", "true", "yes", "on")
+    return env_bool("ZOE_VOICE_TOOL_FILLER", default=True)
 
 
 # Short, generic, spoken acknowledgements keyed by tool. Tool turns can sit silent
@@ -715,7 +716,7 @@ def _skybridge_only() -> bool:
     (`/touch/weather.html`, etc.), which yanks the panel off Skybridge whenever the
     Skybridge resolver falls through. Gating them keeps the panel on Skybridge.
     """
-    return os.environ.get("ZOE_SKYBRIDGE_ONLY", "").strip().lower() in ("1", "true", "yes", "on")
+    return env_bool("ZOE_SKYBRIDGE_ONLY", default=False)
 
 
 def _status_card(title: str, summary: str) -> dict:
@@ -1777,21 +1778,19 @@ def _normalize_voice_command_text(text: str) -> str:
 
 
 def _env_float(name: str, default: float) -> float:
-    try:
-        return float(os.environ.get(name, str(default)))
-    except (TypeError, ValueError):
-        return default
+    # Delegates to typed_env (Wave-4 W4-T2). Same semantics as the old local
+    # try/except (absent/empty/invalid -> default) + typed_env's warn-once on
+    # invalid values, so a typo'd tunable is journal-visible.
+    return env_float(name, default)
 
 
 def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.environ.get(name, str(default)))
-    except (TypeError, ValueError):
-        return default
+    # Delegates to typed_env (Wave-4 W4-T2); see _env_float note.
+    return env_int(name, default)
 
 
 def _voice_stt_log_path() -> Path:
-    configured = (os.environ.get("ZOE_VOICE_STT_LOG") or "").strip()
+    configured = env_str("ZOE_VOICE_STT_LOG")
     if configured:
         return Path(configured)
     return Path.home() / ".zoe-voice" / "voice_stt.jsonl"
@@ -1848,7 +1847,7 @@ def _log_voice_stt_sample(
             "transcript": transcript,
             "transcript_chars": len(transcript or ""),
             # Actual backend that produced this transcript (was hardcoded base.en).
-            "model": _stt_backend_var.get() or (os.environ.get("ZOE_STT_BACKEND") or "moonshine").strip(),
+            "model": _stt_backend_var.get() or env_str("ZOE_STT_BACKEND", "moonshine"),
             "moonshine_arch": moonshine_arch(),
         }
         if error:
@@ -1872,7 +1871,7 @@ _moonshine_infer_lock = threading.Lock()
 
 
 def moonshine_arch() -> str:
-    return (os.environ.get("ZOE_MOONSHINE_ARCH") or "MEDIUM_STREAMING").strip()
+    return env_str("ZOE_MOONSHINE_ARCH", "MEDIUM_STREAMING")
 
 
 def moonshine_ready() -> bool:
@@ -1896,7 +1895,7 @@ def _ensure_moonshine():
                 import moonshine_voice as mv
                 from moonshine_voice.transcriber import Transcriber
 
-                archname = (os.environ.get("ZOE_MOONSHINE_ARCH") or "MEDIUM_STREAMING").strip()
+                archname = env_str("ZOE_MOONSHINE_ARCH", "MEDIUM_STREAMING")
                 arch = getattr(mv.ModelArch, archname, mv.ModelArch.MEDIUM_STREAMING)
                 model_path, resolved_arch = mv.get_model_for_language("en", arch)
                 _moonshine_model = Transcriber(model_path, resolved_arch)
@@ -2026,7 +2025,7 @@ async def _maybe_capture_stt(wav_path: str, primary: str) -> None:
     permanent regression corpus (~/.zoe-voice-samples) and log the Moonshine
     transcript. This is corpus capture only — there is NO whisper A/B; whisper
     must never run on a live turn (Moonshine is the only STT engine)."""
-    if (os.environ.get("ZOE_VOICE_SAVE_AUDIO") or "").strip().lower() not in ("1", "true", "yes", "on"):
+    if not env_bool("ZOE_VOICE_SAVE_AUDIO", default=False):
         return
     try:
         import shutil
@@ -2072,7 +2071,7 @@ async def _transcribe_audio_impl(wav_path: str) -> str:
         logger.warning("Moonshine STT failed (backend error, surfacing): %s", exc)
         raise
     if text:
-        _stt_backend_var.set("moonshine:" + (os.environ.get("ZOE_MOONSHINE_ARCH") or "v2").strip())
+        _stt_backend_var.set("moonshine:" + env_str("ZOE_MOONSHINE_ARCH", "v2"))
         return text
     logger.info("Moonshine STT returned empty transcript")
     return ""
@@ -4281,7 +4280,7 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     sub_task = asyncio.ensure_future(voice_command(command_payload, caller=caller, stream=True, db=db))
 
     def _filler_enabled() -> bool:
-        return os.environ.get("ZOE_VOICE_FILLER_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on")
+        return env_bool("ZOE_VOICE_FILLER_ENABLED", default=False)
 
     async def _wrapped():
       # try/finally: if the client disconnects mid-stream, Starlette closes this
@@ -4469,7 +4468,7 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
 
 
 def _brain_prewarm_on_wake_enabled() -> bool:
-    return os.environ.get("ZOE_BRAIN_PREWARM_ON_WAKE", "1").strip().lower() in ("1", "true", "yes", "on")
+    return env_bool("ZOE_BRAIN_PREWARM_ON_WAKE", default=True)
 
 
 async def _prewarm_brain_for_panel(panel_id: str) -> None:
@@ -4530,8 +4529,7 @@ async def _prewarm_brain_for_panel(panel_id: str) -> None:
 
 
 def _stt_prewarm_on_wake_enabled() -> bool:
-    return (os.environ.get("ZOE_STT_PREWARM_ON_WAKE", "1").strip().lower()
-            in ("1", "true", "yes", "on"))
+    return env_bool("ZOE_STT_PREWARM_ON_WAKE", default=True)
 
 
 async def _prewarm_stt_on_wake() -> None:
@@ -4574,7 +4572,7 @@ async def voice_wake(payload: dict, caller: dict = Depends(_require_voice_auth))
     Returns cached or fallback TTS audio for the wake acknowledgement.
     """
     panel_id = str((payload or {}).get("panel_id", caller.get("panel_id") or "unknown"))
-    ack_phrase = os.environ.get("ZOE_WAKE_ACK_PHRASE", "").strip()
+    ack_phrase = env_str("ZOE_WAKE_ACK_PHRASE")
     try:
         from voice_presence import wake_ack_variant
 
@@ -4967,8 +4965,8 @@ async def get_livekit_token(request: Request, user: dict = Depends(get_current_u
     import uuid as _uuid
     import jwt as _jwt
 
-    api_key = os.environ.get("LIVEKIT_API_KEY", "").strip()
-    api_secret = os.environ.get("LIVEKIT_API_SECRET", "").strip()
+    api_key = env_str("LIVEKIT_API_KEY")
+    api_secret = env_str("LIVEKIT_API_SECRET")
 
     if not api_key or not api_secret:
         raise HTTPException(status_code=503, detail="LiveKit credentials not configured")
@@ -4988,7 +4986,7 @@ async def get_livekit_token(request: Request, user: dict = Depends(get_current_u
     # nginx passes the original Host header and X-Forwarded-Proto so we can reconstruct
     # the correct ws(s)://<browser-host>/livekit/ URL.  This works for LAN IPs, the
     # Cloudflare domain, and any other hostname without extra config.
-    env_url = os.environ.get("LIVEKIT_URL", "").strip()
+    env_url = env_str("LIVEKIT_URL")
     # Prefer Origin header (sent by browsers on cross-origin fetches; not sent same-origin)
     origin = request.headers.get("origin", "")
     if origin:

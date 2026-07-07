@@ -10,6 +10,7 @@ See `docs/architecture/memory.md` for the full design.
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 import os
@@ -289,6 +290,115 @@ def _is_near_duplicate(cand: frozenset, kept: list) -> bool:
     return False
 
 
+# ── Conflict-aware recency presentation ─────────────────────────────────────
+#
+# Live bug (2026-07-07): the packet listed stale facts ("sister ... Katie",
+# twice) ABOVE the newer correction ("sister named Kate"), so the brain answered
+# with the superseded value despite the newest-wins recall doctrine. Selection
+# is relevance-ranked (hits by semantic blend, facts by confidence×decay +
+# access hotness), and an old, often-accessed fact legitimately outranks a
+# fresh correction — so relevance stays the SELECTOR, but when two selected
+# bullets look like the SAME underlying fact with a changed value, the group is
+# PRESENTED newest-first (by stored `added_at`). Packets with no conflicting
+# bullets are byte-for-byte unchanged.
+#
+# Deliberately NOT collapsed to one bullet: token overlap alone cannot tell a
+# changed value ("lives in Geraldton" → "lives in Perth") from complementary
+# facts about the same subject ("Kate likes tennis" / "Kate likes running") —
+# distinguishing those needs fuzzy/semantic matching, which is out of scope for
+# this hot read path. Pure rephrasings are already collapsed by the ≥0.85
+# near-dup coverage test above.
+
+_CONFLICT_MIN_OVERLAP = 0.6
+
+
+def _added_at_ts(meta: dict[str, Any]) -> float:
+    """Best-effort epoch seconds from `added_at`; missing/garbled → -inf so
+    undated rows sort as oldest (and all-undated groups keep their order)."""
+    raw = (meta or {}).get("added_at")
+    if not raw:
+        return float("-inf")
+    try:
+        dt = datetime.datetime.fromisoformat(str(raw).strip().replace("Z", "+00:00"))
+    except ValueError:
+        return float("-inf")
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return dt.timestamp()
+
+
+def _is_conflicting_pair(a: frozenset, b: frozenset) -> bool:
+    """True when two kept lines look like the same fact with a differing value:
+    they share most of the smaller side's content tokens (≥ 0.6) while EACH side
+    still has tokens the other lacks (a strict subset is a richer/poorer phrasing
+    pair, not a contradiction). Tiny (<2 content-token) lines never conflict,
+    mirroring the near-dup guard."""
+    if len(a) < 2 or len(b) < 2:
+        return False
+    inter = len(a & b)
+    if inter == len(a) or inter == len(b):  # subset ⇒ enrichment, not conflict
+        return False
+    return inter / min(len(a), len(b)) >= _CONFLICT_MIN_OVERLAP
+
+
+def _present_conflicts_newest_first(
+    lines: list[str],
+    refs: list[dict[str, Any]],
+    tokens: list[frozenset],
+    ts: list[float],
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Reorder ONLY conflicting bullets newest-first, in place of their slots.
+
+    Conflicting lines are grouped transitively (union-find); each group's
+    members are re-dealt into the group's original positions ordered by
+    `added_at` descending (stable — undated/tied rows keep selection order).
+    Non-conflicting lines keep their exact positions, so a packet with no
+    conflicts is returned unchanged.
+
+    Deliberate: this operates on the FLAT bullet list, so a conflict spanning
+    the hits/facts boundary can demote a stale search hit below a newer
+    general-fact correction — that is the point of the fix (the live bug was a
+    relevance-ranked stale value shadowing the correction). Recency outranks
+    the hits-lead convention ONLY within a conflict group; each ref still
+    carries its truthful `from_search` flag.
+    """
+    n = len(lines)
+    if n < 2:
+        return lines, refs
+
+    parent = list(range(n))
+
+    def _find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    any_conflict = False
+    for i in range(n):
+        for j in range(i + 1, n):
+            if _is_conflicting_pair(tokens[i], tokens[j]):
+                ri, rj = _find(i), _find(j)
+                if ri != rj:
+                    parent[rj] = ri
+                any_conflict = True
+    if not any_conflict:
+        return lines, refs
+
+    groups: dict[int, list[int]] = {}
+    for i in range(n):
+        groups.setdefault(_find(i), []).append(i)
+
+    order = list(range(n))
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        ranked = sorted(members, key=lambda i: ts[i], reverse=True)
+        for slot, src in zip(members, ranked):
+            order[slot] = src
+    return [lines[i] for i in order], [refs[i] for i in order]
+
+
 def _emotional_intensity(ref: MemoryRef) -> float:
     """Sort key: an `emotional_moment`'s stored intensity (0..1), else -1 so
     non-emotional facts sort after. Reads `candidate_intensity` (where the
@@ -315,7 +425,10 @@ def _build_memory_prompt_packet(
     Honors the Samantha memory prompt-policy: a small packet (not a raw dump),
     every line carries a source/evidence id, superseded/archived facts are
     dropped (prefer current), and disputed facts are surfaced as uncertain.
-    Message-relevant semantic hits lead; general facts follow.
+    Message-relevant semantic hits lead; general facts follow. Conflicting
+    bullets (same fact, changed value) are presented newest-first within their
+    slots (see ``_present_conflicts_newest_first``) so a correction always
+    appears above its stale sibling.
 
     When ``boost_emotional`` is set (ZOE_EMOTIONAL_RECALL_ENABLED, Samantha
     criterion #2), `emotional_moment` rows are floated to the front of the
@@ -328,6 +441,7 @@ def _build_memory_prompt_packet(
         facts = sorted(facts, key=_emotional_intensity, reverse=True)
     seen: set[str] = set()
     kept_tokens: list[frozenset] = []
+    kept_ts: list[float] = []
     lines: list[str] = []
     refs: list[dict[str, Any]] = []
 
@@ -356,6 +470,7 @@ def _build_memory_prompt_packet(
             return
         seen.add(ref.id)
         kept_tokens.append(tokens)
+        kept_ts.append(_added_at_ts(meta))
         cite = f"[mem:{str(ref.id)[:8]}]"
         prefix = "(uncertain) " if status == "disputed" else ""
         lines.append(f"- {prefix}{text[:200]} {cite}")
@@ -375,6 +490,11 @@ def _build_memory_prompt_packet(
 
     if not lines:
         return {"packet": "", "refs": [], "count": 0}
+    # Newest-wins presentation: relevance selected the bullets above; when two
+    # selected bullets contradict (same fact, changed value), the newer one is
+    # presented first so the brain's newest-wins doctrine sees the correction
+    # before the stale sibling. No conflicts ⇒ byte-for-byte unchanged.
+    lines, refs = _present_conflicts_newest_first(lines, refs, kept_tokens, kept_ts)
     return {"packet": "## What I know about you\n" + "\n".join(lines), "refs": refs, "count": len(refs)}
 
 

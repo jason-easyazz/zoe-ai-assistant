@@ -89,8 +89,10 @@ def _data_src(rel_path: str) -> str:
 
 
 def _env_default(rel_path: str, var: str) -> str | None:
-    """Extract the committed default for an env-resolved setting, supporting both
-    `os.environ.get("VAR", "default")` and `os.environ.get("VAR") or "default"`."""
+    """Extract the committed default for an env-resolved setting, supporting
+    `os.environ.get("VAR", "default")`, `os.environ.get("VAR") or "default"`,
+    and the typed_env accessors (`env_str("VAR", "default")` etc.) that the
+    Wave-4 migrations move call sites onto."""
     src = _data_src(rel_path)
     m = re.search(
         rf'os\.environ\.get\(\s*["\']{re.escape(var)}["\']\s*,\s*["\']([^"\']+)["\']', src
@@ -99,6 +101,11 @@ def _env_default(rel_path: str, var: str) -> str | None:
         return m.group(1)
     m = re.search(
         rf'os\.environ\.get\(\s*["\']{re.escape(var)}["\']\s*\)\s*or\s*["\']([^"\']+)["\']', src
+    )
+    if m:
+        return m.group(1)
+    m = re.search(
+        rf'env_(?:str|bool|int|float|list)\(\s*["\']{re.escape(var)}["\']\s*,\s*["\']([^"\']+)["\']', src
     )
     return m.group(1) if m else None
 

@@ -15,22 +15,15 @@
 > lane runs it; voice-path packets additionally run the replay gate. No new pip/npm
 > dependency is needed unless the packet says so.
 
-## P-F1 — `_Cursor.rowcount` (the prune that never ran)
+## P-F1 — `_Cursor.rowcount` — ✅ RESOLVED (#1143); packet had targeted a stale copy
 
-- **Fix approach (researched):** `db_compat.AsyncpgCompat._do_execute` (~:71) routes
-  SELECT/WITH/EXPLAIN to a fetch; every other statement executes via asyncpg, whose
-  `Connection.execute()` returns a **status string** like `"DELETE 5"` / `"UPDATE 3"`.
-  Capture it: non-query branch stores the status; `_Cursor` gains
-  `_rowcount` (parse the trailing integer, `0` on no-parse) + a `rowcount` property;
-  **add it to `__slots__`** (`("_rows",)` today — attribute set will throw otherwise).
-  `proactive/engine.py:~275` then works unchanged.
-- **Tests:** new `services/zoe-data/tests/test_db_compat_rowcount.py` — DELETE/UPDATE
-  return counts; SELECT cursor's rowcount is len(rows) or 0 (pick + document); the
-  engine's `_cleanup_expired_pending` prunes a seeded expired row (fake db). Add to
-  `validate.yml` list.
-- **Also:** one-off live check after deploy: `proactive_pending` row count drops.
-- **Software:** none new. **STOP:** if other callers rely on `_Cursor.__slots__`
-  behaviour, report instead of widening the shim ad hoc.
+Audit correction: the packet pointed at `db_compat.py`'s local `AsyncpgCompat`/`_Cursor`
+— which turned out to be a **dead duplicate** (no runtime caller constructs them;
+`get_compat_db` yields `db_pool.AsyncpgCompat`, which has had `rowcount` since #860, so
+the proactive prune works on the live path). #1143 pinned the live path with regression
+tests; the dead duplicate was then retired-by-removal (this PR). Do not re-execute.
+
+---
 
 ## P-F3 — LiveKit brain timeout + empty-transcript feedback (voice path — replay gate)
 
