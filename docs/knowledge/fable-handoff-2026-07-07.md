@@ -42,7 +42,9 @@ chat). Statuses as of 2026-07-07 ~00:30 AWST — verify merge states before acti
    **F1 → F3 → F4 → F5** (F2 is RETRACTED — do not execute; F1 is a one-file fix for a
    silently-failing prune that has never run, not a crash). Each F-item has file:line +
    fix shape; the deeper `issue-register-2026-07-07.md` marks which second-pass items
-   are `[V]` verified vs `[A]` verify-before-fixing.
+   are `[V]` verified vs `[A]` verify-before-fixing. **Full fix packets** (researched
+   approach, exact test files to add, software needed, order) are in
+   `docs/architecture/remediation-packets-2026-07.md` — take one packet per session.
 4. Hard tasks route to the Omnigent fleet (claude_code/codex/pi workers) or Hermes; the
    plan's §11 doctrine covers when remote models are allowed.
 
