@@ -65,7 +65,12 @@ def test_recall_questions_are_not_stored(spy, domain, q):
 @pytest.mark.parametrize("s", [
     "my dad's name is Neil",
     "remember that my mum likes NCIS",
-    "note that my lucky number is 47",
+    # Plain personal statement (was "note that my lucky number is 47" — #1150
+    # deliberately reassigned "note that …" to the notes capability, which
+    # defers to the brain rather than storing as memory; that defer is covered
+    # by test_expert_dispatch_note_defer.py. This case keeps validating that a
+    # bare fact statement still stores).
+    "my lucky number is 47",
     "don't forget my sister's birthday is in May",
     "keep in mind my dentist is on Tuesday",
 ])
