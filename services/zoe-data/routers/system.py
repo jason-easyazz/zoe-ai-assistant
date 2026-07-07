@@ -2453,7 +2453,7 @@ class _DelegateSyncBody(BaseModel):
 
 
 @router.post("/delegate-sync")
-async def delegate_sync(body: _DelegateSyncBody, _: None = Depends(require_internal_token)):
+async def delegate_sync(body: _DelegateSyncBody, _: None = Depends(require_intent_dispatch_auth)):
     """Synchronously delegate one task to a peer agent and return its completion.
 
     Internal/service endpoint — how the zoe-core Pi brain delegates work it can't
