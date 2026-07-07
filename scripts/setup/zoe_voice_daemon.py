@@ -1117,8 +1117,21 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
             _recording_active.clear()
             play_follow_up_beep()
         return False
-    log.info("turn_stream: transcript but no audio (reply=%r) — blocking fallback.", reply[:80])
-    return _do_single_turn(pa, wav, prompt_on_empty=prompt_on_empty)
+    # Transcript present ⇒ the server PROCESSED this turn, writes included
+    # (add-to-list, create-event). Re-POSTing the same wav via the blocking
+    # turn executes it a SECOND time — live 2026-07-07: every barge-aborted
+    # add landed twice ~1.5-2.5s apart (the duplicate-writes bug). Same rule
+    # the exception path above already applies: never re-POST a processed turn.
+    if _barge_in_requested.is_set():
+        # User cut in before the first audio chunk — they don't want this
+        # reply. Open the follow-up window for what they're saying instead.
+        log.info("turn_stream: barged before first audio — not re-POSTing (reply=%r).", reply[:80])
+        return True
+    log.warning("turn_stream: transcript but no audio (reply=%r) — NOT re-POSTing (avoid duplicate write).", reply[:80])
+    if prompt_on_empty:
+        _recording_active.clear()
+        play_follow_up_beep()
+    return False
 
 
 def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = True, conversation: bool = False) -> bool:

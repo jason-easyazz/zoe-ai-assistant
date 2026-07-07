@@ -80,7 +80,7 @@ def _silence_ui(monkeypatch):
 async def test_list_add_existing_list_ok_message_and_item_written(monkeypatch):
     """Add to an existing list: ok:true message, and an INSERT into list_items
     actually happens (no new list created)."""
-    db = _FakeListDB([{"id": "list-shopping"}])  # list lookup finds the list
+    db = _FakeListDB([{"id": "list-shopping"}, None])  # list lookup finds the list; dup check: none
     _silence_ui(monkeypatch)
     monkeypatch.setattr("database.get_db_ctx", _fake_db_ctx(db))
     _fail_mcporter(monkeypatch)
@@ -118,8 +118,26 @@ async def test_list_add_fresh_list_creates_list_then_item(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
+async def test_list_add_replay_within_window_skips_insert(monkeypatch):
+    """Retry idempotency: an identical item added seconds ago (voice re-POST /
+    HTTP retry replay) must NOT insert a duplicate — reply stays ok:true."""
+    db = _FakeListDB([{"id": "list-shopping"}, {"id": "existing-item"}])  # dup check hits
+    _silence_ui(monkeypatch)
+    monkeypatch.setattr("database.get_db_ctx", _fake_db_ctx(db))
+    _fail_mcporter(monkeypatch)
+
+    result = await execute_intent(
+        Intent("list_add", {"item": "milk", "list_type": "shopping"}), "family-admin"
+    )
+
+    assert result == "Added milk to your shopping list."
+    assert db.sql_matching("INSERT INTO list_items") == []
+    assert db.sql_matching("INSERT INTO lists") == []
+
+
 async def test_list_add_non_shopping_list_friendly_name(monkeypatch):
-    db = _FakeListDB([{"id": "list-personal"}])
+    db = _FakeListDB([{"id": "list-personal"}, None])
     _silence_ui(monkeypatch)
     monkeypatch.setattr("database.get_db_ctx", _fake_db_ctx(db))
     _fail_mcporter(monkeypatch)
