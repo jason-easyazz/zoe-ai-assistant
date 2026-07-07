@@ -75,13 +75,17 @@ def test_status_panel_binding_display_identity(monkeypatch):
     app = FastAPI()
     app.include_router(sky.router)
     resp = TestClient(app).get("/api/skybridge/status?panel_id=zoe-touch-pi",
-                               headers={"X-Forwarded-For": "192.168.1.61"})
+                               headers={"X-Real-IP": "192.168.1.61"})
     u = resp.json()["user"]
     assert u["guest"] is False and u["username"] == "Jason" and u["source"] == "panel_binding"
     # Anti-enumeration: a caller NOT at the panel's registered IP stays guest.
     resp2 = TestClient(app).get("/api/skybridge/status?panel_id=zoe-touch-pi",
-                                headers={"X-Forwarded-For": "192.168.1.99"})
+                                headers={"X-Real-IP": "192.168.1.99"})
     assert resp2.json()["user"]["guest"] is True
+    # Spoof attempt: client-controlled X-Forwarded-For must be IGNORED entirely.
+    resp3 = TestClient(app).get("/api/skybridge/status?panel_id=zoe-touch-pi",
+                                headers={"X-Forwarded-For": "192.168.1.61"})
+    assert resp3.json()["user"]["guest"] is True
 
 
 def test_status_no_panel_id_stays_guest():

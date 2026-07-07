@@ -49,8 +49,10 @@ async def get_skybridge_status(
             # Device check (anti-enumeration): the display identity is only served
             # to the machine REGISTERED at this panel's IP — a guest elsewhere on
             # the LAN can't walk panel_ids to learn household names.
-            fwd = str(request.headers.get("x-forwarded-for", "") or "").split(",")[0].strip()
-            client_ip = fwd or (request.client.host if request.client else "")
+            # X-Real-IP is set ABSOLUTELY by nginx ($remote_addr) — trustworthy.
+            # X-Forwarded-For is APPENDED to, so its leftmost value is client-
+            # supplied and spoofable; never use it for this check.
+            client_ip = str(request.headers.get("x-real-ip", "") or "").strip()                 or (request.client.host if request.client else "")
             async with get_db_ctx() as db:
                 panel = await db.fetchrow(
                     "SELECT ip_address, is_active FROM panels WHERE panel_id = $1",
