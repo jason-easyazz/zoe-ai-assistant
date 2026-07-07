@@ -2372,6 +2372,43 @@ async def _resolve_ws_user(session_id: str) -> str:
     return "voice-guest"
 
 
+_VOICE_COMPOSE_BUDGET_S = float(os.environ.get("ZOE_COMPOSE_VOICE_BUDGET_S", "8"))
+
+
+async def _voice_compose_cards_frame(message_text: str, reply_text: str, user_id: str):
+    """Flag-gated generative UI for the PANEL: after the brain's spoken reply has
+    fully streamed (audio frames already sent; playback is client-side), compose
+    a card and return the ws `cards` frame for it — or None (flag off / empty
+    reply / failure / budget exceeded). Never raises; never delays speech."""
+    try:
+        from ui_compose import compose_card, compose_enabled
+
+        if not compose_enabled() or not (reply_text or "").strip():
+            return None
+        composed = await asyncio.wait_for(
+            compose_card(message_text, reply_text, user_id=user_id),
+            timeout=_VOICE_COMPOSE_BUDGET_S,
+        )
+        if not composed:
+            return None
+        return {
+            "type": "cards",
+            "result": {
+                "handled": True,
+                "intent": {"domain": "compose", "action": "composed"},
+                "cards": [composed],
+                "spoken_summary": "",
+                "actions": [],
+            },
+        }
+    except asyncio.TimeoutError:
+        logger.info("voice compose skipped: exceeded budget %.1fs", _VOICE_COMPOSE_BUDGET_S)
+        return None
+    except Exception as exc:  # noqa: BLE001 — additive, never break the turn
+        logger.debug("voice compose failed (non-fatal): %s", exc)
+        return None
+
+
 async def _resolve_voice_cards(message_text: str, user_id: str, context: dict | None = None) -> dict:
     """Resolve voice text to real Skybridge data cards when a supported domain exists."""
     try:
@@ -2398,7 +2435,10 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
     - Text JSON {"type": "text", "message": "..."} → routed through zoe_agent
     - Text JSON {"type": "cancel"} → sets cancel flag for in-flight pipeline
     - Binary → transcribed via Moonshine then routed as text
-    Emits {"type": "state"}, {"type": "transcript"}, {"type": "audio"}, {"type": "done"}.
+    Emits {"type": "state"}, {"type": "transcript"}, {"type": "audio"}, {"type": "done"},
+    plus {"type": "activity", "phase": "start"|"result", "tool": "<name>"} frames
+    during brain tool turns (name+phase only — args/results never cross the wire)
+    so the touch panel's live-activity strip can show what Zoe is doing.
     """
     # CSWSH guard. NOTE: guest authentication for this endpoint is intentionally
     # OUT OF SCOPE here (a separate threat-model decision about LAN-kiosk guest
@@ -2587,17 +2627,32 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
             try:
                 import base64 as _b64
                 from brain_dispatch import brain_streaming  # zoe-core by default
-                from routers.voice_tts import _extract_complete_sentences, _synthesize_kokoro_sidecar  # type: ignore
+                from routers.voice_tts import (  # type: ignore
+                    _extract_complete_sentences,
+                    _forward_voice_activity,
+                    _synthesize_kokoro_sidecar,
+                )
 
                 token_buf = ""
                 full_reply: list[str] = []
                 tts_started = False
+                # id→name map for this turn so a result sentinel (which often
+                # omits the tool name) closes under the tool that started.
+                _activity_tools: dict = {}
 
                 async for delta in brain_streaming(
                     message_text, ws_session_id, user_id=user_id, voice_mode=True
                 ):
                     if _ws_cancelled[0]:
                         break
+                    # Brain "what I'm doing" sentinels (__TOOL__/__THINKING__) ride
+                    # alongside the spoken stream — never buffer them toward TTS.
+                    # Tool start/result phases are forwarded to the panel as
+                    # {"type":"activity","phase":...,"tool":...} frames (name+phase
+                    # only; args/results never cross the wire) so the touch panel's
+                    # live-activity strip can show what Zoe is doing mid-turn.
+                    if await _forward_voice_activity(delta, websocket.send_json, _activity_tools):
+                        continue
                     token_buf += delta
                     sentences, token_buf = _extract_complete_sentences(token_buf)
                     for sentence in sentences:
@@ -2660,6 +2715,7 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
                         except Exception as _tts_exc:
                             logger.warning("Voice WS TTS fallback failed: %s", _tts_exc)
                             await websocket.send_json({"type": "text", "content": _fallback_response})
+                        _stream_llm_reply = _fallback_response  # one reply var for the compose hook
                     except Exception as _fallback_exc:
                         logger.error("Voice WS fallback error: %s", _fallback_exc)
 
@@ -2676,6 +2732,17 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
                         })
                     except Exception as _tts_exc:
                         logger.warning("Voice WS TTS synthesize fallback failed: %s", _tts_exc)
+
+            # ── Generative UI on the panel (flag-gated): all audio frames are
+            # already sent (playback is client-side), so composing here cannot
+            # delay speech. The panel renders via the deployed `compose` entry.
+            if not _ws_cancelled[0] and _stream_llm_reply:
+                _cframe = await _voice_compose_cards_frame(message_text, _stream_llm_reply, user_id)
+                # Re-check cancel AFTER the compose window (a cancel can arrive
+                # during the up-to-8s compose await; the card must not land on a
+                # turn the user already cancelled).
+                if _cframe and not _ws_cancelled[0]:
+                    await websocket.send_json(_cframe)
 
             await websocket.send_json({"type": "done"})
             await websocket.send_json({"type": "state", "state": "ambient"})

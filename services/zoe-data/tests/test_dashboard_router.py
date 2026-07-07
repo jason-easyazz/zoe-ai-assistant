@@ -86,10 +86,19 @@ class _SlowSaveDb(_FakeDashboardDb):
 
 
 def _patch_db(monkeypatch, db):
+    from contextlib import asynccontextmanager
+
     async def fake_get_db():
         yield db
 
+    @asynccontextmanager
+    async def fake_get_db_ctx():
+        yield db
+
     monkeypatch.setattr(dashboard, "get_db", fake_get_db)
+    # Endpoints with early returns use get_db_ctx (the #953 leak fix) — stub it
+    # to the same fake db so both acquisition paths are covered.
+    monkeypatch.setattr(dashboard, "get_db_ctx", fake_get_db_ctx)
 
 
 @pytest.mark.asyncio

@@ -11,7 +11,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from agent_safety import SSRFBlocked, assert_panel_host, is_allowed_panel_host
-from auth import get_current_user, require_admin, get_a2a_caller, require_internal_token
+from auth import (
+    get_current_user,
+    require_admin,
+    get_a2a_caller,
+    require_intent_dispatch_auth,
+    require_internal_token,
+)
 from database import get_db
 from hermes_http import hermes_auth_headers
 from openclaw_maintenance import (
@@ -663,12 +669,15 @@ async def get_openclaw_info(
 async def run_scheduled_openclaw_version_check():
     """Background: daily npm check, notify users, optional auto-upgrade."""
     try:
-        async for db in get_db():
+        # get_db_ctx, not `async for db in get_db()`: the `break` leaked the
+        # pooled connection (#953 / the 2026-07-03 pool drain).
+        from db_pool import get_db_ctx
+
+        async with get_db_ctx() as db:
             latest = await fetch_npm_latest_version()
             if latest:
                 await notify_users_with_notify_preference(db, latest)
                 await process_auto_update_users(db, latest)
-            break
     except Exception:
         logger.exception("run_scheduled_openclaw_version_check failed")
 
@@ -2404,7 +2413,7 @@ class _IntentDispatchBody(BaseModel):
 
 
 @router.post("/intent-dispatch")
-async def intent_dispatch(body: _IntentDispatchBody, _: None = Depends(require_internal_token)):
+async def intent_dispatch(body: _IntentDispatchBody, _: None = Depends(require_intent_dispatch_auth)):
     """Run one allowlisted intent for a user via the existing fulfillment path.
 
     Internal/service endpoint (loopback or X-Internal-Token) — how the zoe-core
