@@ -107,10 +107,16 @@ async def test_stream_yields_deltas_and_stops_on_done(flue_env):
         json.dumps("Hello"),
         json.dumps(" there"),
         json.dumps("__TOOL__:" + '{"phase": "start", "id": "t1", "name": "recall_memory"}'),
+        json.dumps("__THINKING__:let me look that up"),
         json.dumps({"done": True}),
     ])
     out = await _collect(zoe_flue_client.run_flue_brain_streaming("hi", "s1", "jason"))
-    assert out == ["Hello", " there", '__TOOL__:{"phase": "start", "id": "t1", "name": "recall_memory"}']
+    assert out == [
+        "Hello",
+        " there",
+        '__TOOL__:{"phase": "start", "id": "t1", "name": "recall_memory"}',
+        "__THINKING__:let me look that up",
+    ]
     # streaming endpoint (no ?wait=result) with the Accept header; no wait=result POST
     kinds = [c[0] for c in flue_env.calls]
     assert kinds == ["stream"]
