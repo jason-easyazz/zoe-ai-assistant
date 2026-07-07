@@ -138,6 +138,21 @@ def test_packet_undated_conflicts_keep_selection_order():
     assert [r["id"] for r in out["refs"]] == ["g1", "p1"]
 
 
+def test_packet_newer_fact_outranks_conflicting_stale_hit():
+    # Cross-section conflict: a stale SEARCH HIT vs a newer general-fact
+    # correction. Recency wins the group — the correction takes the hit's slot
+    # (this was the live failure mode: relevance-ranked stale value shadowing
+    # the correction). from_search flags stay truthful per ref.
+    hits = [_ref("stale001", "User's sister is named Katie",
+                 added_at="2026-06-01T10:00:00Z")]
+    facts = [_ref("fresh001", "User has a sister named Kate",
+                  added_at="2026-07-06T10:00:00Z")]
+    out = _build_memory_prompt_packet(facts, hits)
+    assert [r["id"] for r in out["refs"]] == ["fresh001", "stale001"]
+    assert out["refs"][0]["from_search"] is False
+    assert out["refs"][1]["from_search"] is True
+
+
 def test_packet_richer_superset_is_not_a_conflict():
     # A strict token-subset pair is enrichment, not a contradiction — the newer
     # richer line must NOT jump above the older short one.

@@ -354,6 +354,13 @@ def _present_conflicts_newest_first(
     `added_at` descending (stable — undated/tied rows keep selection order).
     Non-conflicting lines keep their exact positions, so a packet with no
     conflicts is returned unchanged.
+
+    Deliberate: this operates on the FLAT bullet list, so a conflict spanning
+    the hits/facts boundary can demote a stale search hit below a newer
+    general-fact correction — that is the point of the fix (the live bug was a
+    relevance-ranked stale value shadowing the correction). Recency outranks
+    the hits-lead convention ONLY within a conflict group; each ref still
+    carries its truthful `from_search` flag.
     """
     n = len(lines)
     if n < 2:
