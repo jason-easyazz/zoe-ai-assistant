@@ -5303,8 +5303,11 @@
     <link rel="stylesheet" href="/touch/css/cards/lists.css?v=ds1">
     <link rel="stylesheet" href="/touch/css/cards/people.css?v=ds1">
     <link rel="stylesheet" href="/touch/css/cards/auth-challenge.css?v=ds1">
-    <link rel="stylesheet" href="/touch/css/cards/dashboard.css?v=ds1">
+    <link rel="stylesheet" href="/touch/css/cards/dashboard.css?v=stage1">
     <link rel="stylesheet" href="/touch/css/cards/compose.css?v=compose3">
+    <!-- Stage v2 LAST: near-fullscreen cards + floating chrome (Home pill/orb
+         float above the full-bleed card). Wins the cascade by load order. -->
+    <link rel="stylesheet" href="/touch/css/skybridge-stage.css?v=stage1">
 </head>
 <body>
 <!-- Skybridge glyph sprite (design system §5). Cards: <svg><use href="#i-*"/></svg> -->
@@ -5348,7 +5351,7 @@
 	                <div class="sky-ambient-briefing" id="skyAmbientBriefing"></div>
 	            </div>
 	            <canvas id="skyOrb"></canvas>
-	            <button type="button" class="sky-orb-button" id="skyOrbButton" aria-label="Start voice">
+	            <button type="button" class="sky-orb-button sky-float-chrome" id="skyOrbButton" aria-label="Start voice">
 	                <span id="skyOrbButtonText">Tap to talk</span>
 	            </button>
 	            <div class="sky-listening-copy" id="skyListeningCopy">Say what you need. Skybridge will shape the screen around it.</div>
@@ -5364,7 +5367,7 @@
 	        </section>
 
         <section class="sky-stage" aria-label="Skybridge cards">
-            <button type="button" id="skyNavHome" class="sky-nav-home" aria-label="Back to home dashboard">
+            <button type="button" id="skyNavHome" class="sky-nav-home sky-float-chrome" aria-label="Back to home dashboard">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 3 10v10h6v-6h6v6h6V10z"/></svg>
                 <span>Home</span>
             </button>
