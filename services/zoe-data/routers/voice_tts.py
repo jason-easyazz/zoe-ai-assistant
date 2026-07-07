@@ -2273,20 +2273,23 @@ async def _run_voice_memory_passes(
         from person_extractor import process_text as _person_extract
         from person_extractor_llm import process_text_llm as _person_extract_llm
         from latent_intent_detector import detect_and_store as _detect_suggestions
-        combined = f"{user_text}\n{reply}".strip()
         await asyncio.gather(
             _mi(user_text, reply, user_id=user_id, session_id=session_id,
                 source="voice_regex", auto_approve=True),
             _td(user_id, user_text, reply, session_id=session_id,
                 source="voice_turn_digest"),
+            # USER TEXT ONLY — never mine the assistant reply for facts
+            # (poisoned-store bug 2026-07-07: Zoe's own sentences were stored
+            # as approved user memories; see the matching comment in
+            # routers/chat.py and tests/test_memory_extractor_purity.py).
             _person_extract(
-                combined,
+                user_text,
                 user_id=user_id,
                 source="voice",
                 session_id=session_id,
             ),
             _person_extract_llm(
-                combined,
+                user_text,
                 user_id=user_id,
                 source="voice",
                 session_id=session_id,
