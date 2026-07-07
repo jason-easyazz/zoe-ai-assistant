@@ -1290,19 +1290,26 @@
         return { component: card.type || 'status', props: card };
     }
 
-    // Small filled glyphs for the dashboard control tiles (sprite has weather only).
+    // Small filled glyphs for the dashboard shortcut tiles (the shared sprite
+    // ships weather only). Filled/dimensional, never thin line icons (§5).
     function dashGlyph(name) {
         const paths = {
             home: '<path d="M12 3 3 10v10h6v-6h6v6h6V10z"/>',
             music: '<path d="M9 17V5l10-2v12"/><circle cx="6" cy="17" r="3"/><circle cx="16" cy="15" r="3"/>',
-            user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6z"/>'
+            user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6z"/>',
+            calendar: '<path d="M8 2h2.6v3.6H8zM13.4 2H16v3.6h-2.6z"/><path d="M4 4.6h16a1.4 1.4 0 0 1 1.4 1.4v3H2.6V6A1.4 1.4 0 0 1 4 4.6z"/><path d="M2.6 10.4h18.8V19a2 2 0 0 1-2 2H4.6a2 2 0 0 1-2-2z" opacity=".82"/>',
+            list: '<rect x="3" y="4" width="4.4" height="4.4" rx="1.2"/><rect x="3" y="9.8" width="4.4" height="4.4" rx="1.2"/><rect x="3" y="15.6" width="4.4" height="4.4" rx="1.2"/><rect x="9.6" y="5.1" width="11.4" height="2.2" rx="1.1"/><rect x="9.6" y="10.9" width="11.4" height="2.2" rx="1.1"/><rect x="9.6" y="16.7" width="11.4" height="2.2" rx="1.1"/>',
+            bulb: '<path d="M12 2a7 7 0 0 0-4.1 12.66c.66.5 1.1 1.4 1.1 2.34h6c0-.94.44-1.84 1.1-2.34A7 7 0 0 0 12 2z"/><rect x="9" y="18.2" width="6" height="2" rx="1"/><rect x="10" y="21.2" width="4" height="1.6" rx=".8"/>',
+            timer: '<rect x="9.8" y="1.2" width="4.4" height="2.4" rx="1.2"/><path d="M12 5a8 8 0 1 0 0 16 8 8 0 0 0 0-16zm1 8.42 3 2.16-1 1.4-3.6-2.6V8.6h1.6z" fill-rule="evenodd"/>'
         };
         return '<svg class="dash-ctrl-svg" viewBox="0 0 24 24" aria-hidden="true">' + (paths[name] || paths.home) + '</svg>';
     }
 
-    // The guest wake dashboard (Layout B condensed): a big clock + a smaller weather
-    // tile beside it, room/music controls + a sign-in tile at the base. Everything a
-    // guest at the panel can see and reach; personal things gate on tap.
+    // The ambient wake dashboard (extends PR #851's Layout B, View Assist cue):
+    // LEFT third = big time + date (reuses the ambient clock typography classes
+    // and the .sky-live-clock/data-clock-* hooks so the numerals tick live);
+    // RIGHT two-thirds = a 2x3 grid of shortcut tiles. Every tile rides the
+    // existing data-sky-action="query" delegation, so each one works today.
     function renderDashboard(props) {
         const now = new Date();
         const h24 = now.getHours();
@@ -1311,32 +1318,37 @@
         const name = props.user_name ? ', ' + props.user_name : '';
         const dateText = now.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' });
         const wx = props.weather && (props.weather.current || props.weather);
-        const wxDesc = wx && (wx.description || wx.condition || '');
-        const wxTile = wx
-            ? '<button type="button" class="dash-tile dash-weather" data-sky-action="query" data-query="weather" aria-label="Weather">' +
-                glyphSvg(weatherGlyphId(wxDesc, panelIsDark()), 56) +
-                '<div class="dash-wx-temp tnum">' + escapeHtml(formatTemp(weatherValue(wx, ['temp', 'temperature', 'temperature_c', 'temp_c']))) + '</div>' +
-                '<div class="dash-wx-desc">' + escapeHtml(wxDesc || 'Now') + '</div>' +
-              '</button>'
-            : '<button type="button" class="dash-tile dash-weather is-loading" data-sky-action="query" data-query="weather" aria-label="Weather"><span class="dash-wx-desc">Weather</span></button>';
-        const controls = [
-            '<button type="button" class="dash-ctrl" data-sky-action="query" data-query="smart home"><span class="dash-ctrl-glyph">' + dashGlyph('home') + '</span><span class="dash-ctrl-label">Room</span></button>',
-            '<button type="button" class="dash-ctrl" data-sky-action="query" data-query="music"><span class="dash-ctrl-glyph">' + dashGlyph('music') + '</span><span class="dash-ctrl-label">Music</span></button>'
-        ];
-        if (props.guest !== false) {
-            controls.push('<button type="button" class="dash-ctrl dash-ctrl-signin" data-sky-action="auth"><span class="dash-ctrl-glyph">' + dashGlyph('user') + '</span><span class="dash-ctrl-label">Sign in</span></button>');
-        }
+        const wxDesc = wx ? (wx.description || wx.condition || '') : '';
+        const wxTemp = wx ? formatTemp(weatherValue(wx, ['temp', 'temperature', 'temperature_c', 'temp_c'])) : '';
+        const wxSub = wx ? (wxTemp + (wxDesc ? ' · ' + wxDesc : '')) : 'Forecast';
+        const tiles = [
+            { key: 'weather', label: 'Weather', sub: wxSub, query: 'what is the weather',
+              glyph: glyphSvg(weatherGlyphId(wxDesc, panelIsDark()), 40) },
+            { key: 'calendar', label: 'Calendar', sub: 'Today', query: 'show my calendar', glyph: dashGlyph('calendar') },
+            { key: 'lists', label: 'Lists', sub: 'Shopping', query: 'show my shopping list', glyph: dashGlyph('list') },
+            { key: 'music', label: 'Music', sub: 'Play something', query: 'play some music', glyph: dashGlyph('music') },
+            { key: 'lights', label: 'Lights', sub: 'This room', query: 'turn on the lights', glyph: dashGlyph('bulb') },
+            { key: 'timers', label: 'Timers', sub: 'Running now', query: 'show my timers', glyph: dashGlyph('timer') }
+        ].map(tile => [
+            '<button type="button" class="dash-ctrl dash-ctrl--' + tile.key + '" data-sky-action="query" data-query="' + escapeHtml(tile.query) + '" aria-label="' + escapeHtml(tile.label) + '">',
+            '<span class="dash-ctrl-glyph">' + tile.glyph + '</span>',
+            '<span class="dash-ctrl-text"><span class="dash-ctrl-label">' + escapeHtml(tile.label) + '</span>',
+            tile.sub ? '<span class="dash-ctrl-sub">' + escapeHtml(tile.sub) + '</span>' : '',
+            '</span>',
+            '</button>'
+        ].join('')).join('');
+        const signIn = props.guest !== false
+            ? '<button type="button" class="dash-ctrl dash-ctrl-signin" data-sky-action="auth"><span class="dash-ctrl-glyph">' + dashGlyph('user') + '</span><span class="dash-ctrl-label">Sign in</span></button>'
+            : '';
         const body = [
             '<div class="dash-scene">',
-            '<div class="dash-top">',
-            '<div class="dash-clock">',
+            '<div class="dash-clock sky-live-clock">',
             '<span class="dash-greeting">' + escapeHtml(greeting + name) + '</span>',
-            '<div class="dash-time tnum"><span>' + hour12 + '</span><i>:</i><span>' + ('0' + now.getMinutes()).slice(-2) + '</span><b>' + (h24 < 12 ? 'AM' : 'PM') + '</b></div>',
-            '<span class="dash-date">' + escapeHtml(dateText) + '</span>',
+            '<div class="dash-time sky-ambient-time tnum"><span data-clock-hour>' + hour12 + '</span><i>:</i><span data-clock-minute>' + ('0' + now.getMinutes()).slice(-2) + '</span><b data-clock-meridiem>' + (h24 < 12 ? 'AM' : 'PM') + '</b></div>',
+            '<span class="dash-date sky-ambient-date" data-clock-date>' + escapeHtml(dateText) + '</span>',
+            signIn,
             '</div>',
-            wxTile,
-            '</div>',
-            '<div class="dash-controls">' + controls.join('') + '</div>',
+            '<div class="dash-tiles">' + tiles + '</div>',
             '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'Home' }, props), body, { wide: true, tone: 'dashboard-card', hideHeader: true, hideStatus: true, hideActions: true });

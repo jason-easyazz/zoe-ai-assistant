@@ -229,7 +229,8 @@ def test_skybridge_uses_backend_status_contract():
     assert "voice.cancel()" in app
     assert "Notice: " in app
     assert "toggleVoiceCapture" in app
-    assert "getHomeCards()" in app
+    # Home (awake) is the ambient dashboard surface, not the old glance-card loop.
+    assert "wakeToDashboard()" in app
     assert "/api/skybridge/resolve" in app
     assert "resolveCommand(query)" in app
     assert "skybridgeContext" in app
@@ -834,6 +835,94 @@ def test_skybridge_list_create_has_database_conflict_guard():
     assert "ON lists (user_id, lower(name))" in migration
     assert "WHERE deleted = 0" in migration
     assert "UPDATE list_items" in migration
+
+
+def test_skybridge_stage_v2_fullscreen_cards_and_floating_chrome():
+    """Stage v2: while a card shows, the stage is near-fullscreen and the Home
+    pill + orb float above it (fixed, high z-index, blur scrim, >=48px)."""
+    html = read(UI / "skybridge.html")
+    stage = read(UI / "css" / "skybridge-stage.css")
+
+    # Stage sheet is linked LAST (after the ds1 card sheets) with a cache-buster.
+    assert "/touch/css/skybridge-stage.css?v=stage1" in html
+    assert html.index("skybridge-stage.css") > html.index("cards/compose.css")
+
+    # Floating chrome classes present on the Home pill and the orb tap target.
+    assert 'class="sky-nav-home sky-float-chrome"' in html
+    assert 'class="sky-orb-button sky-float-chrome"' in html
+    assert ".sky-float-chrome" in stage
+    assert "position: fixed !important" in stage
+    assert "z-index: 60 !important" in stage
+    assert "backdrop-filter" in stage
+    assert "min-height: 50px" in stage          # Home pill tap target
+    assert "min-height: 48px !important" in stage  # orb tap target floor
+
+    # Near-fullscreen single-card stage; timer tiles keep their layout.
+    assert "inset: 16px !important" in stage
+    assert "min-height: 100% !important" in stage
+    assert ".sky-card.timer" in stage
+    assert "grid-column: span 6 !important" in stage
+
+    # Ambient/idle composition untouched: the stage sheet never targets
+    # sky-empty or the rest-dim curve (PR #1126 territory).
+    assert "body.sky-empty" not in stage
+    assert "data-rest-dim" not in stage
+
+
+def test_skybridge_dashboard_tiles_carry_query_actions(tmp_path):
+    """The ambient wake dashboard (View Assist cue): left third = live clock,
+    right two-thirds = 2x3 shortcut grid. Behavioral: render through the real
+    renderer and assert every tile is a working data-sky-action target."""
+    app = read(UI / "js" / "skybridge.js")
+    css = read(UI / "css" / "cards/dashboard.css")
+
+    # Home taps and panel wake both land on the dashboard surface.
+    assert "wakeToDashboard()" in app
+    assert "function renderDashboardSurface" in app
+    assert "renderHome({ idle: true })" in app  # idle still rests on the clock
+
+    # 2x3 grid + kitchen-glance tile sizing in the ds1 sheet.
+    assert "grid-template-columns: repeat(3, minmax(0, 1fr))" in css
+    assert "minmax(120px, 1fr)" in css
+    assert "min-height: 120px" in css
+
+    node = shutil.which("node") or shutil.which("nodejs")
+    if not node:
+        pytest.skip("Node.js is not installed on this host")
+    harness = tmp_path / "dash_harness.cjs"
+    harness.write_text(
+        """
+const fs = require('fs');
+const vm = require('vm');
+const sandbox = { window: {} };
+vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(process.argv[2], 'utf8'), sandbox);
+const R = sandbox.window.SkybridgeRenderer;
+const html = R.render({ component: 'dashboard', props: { guest: true, weather: { current: { temp: 19, description: 'clear' } } } });
+const tile = q => new RegExp('data-sky-action="query" data-query="' + q + '"').test(html);
+const out = {
+  weather: tile('what is the weather'),
+  calendar: tile('show my calendar'),
+  lists: tile('show my shopping list'),
+  music: tile('play some music'),
+  lights: tile('turn on the lights'),
+  timers: tile('show my timers'),
+  grid: html.includes('dash-tiles') && (html.match(/dash-ctrl--/g) || []).length === 6,
+  clock: html.includes('sky-ambient-time') && html.includes('sky-live-clock') && html.includes('data-clock-hour'),
+  live_weather: html.includes('19°'),
+  signin: html.includes('data-sky-action="auth"')
+};
+process.stdout.write(JSON.stringify(out));
+""",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [node, str(harness), str(UI / "js" / "skybridge-renderer.js")],
+        check=True, capture_output=True, text=True,
+    )
+    import json
+    checks = json.loads(proc.stdout)
+    assert all(checks.values()), f"dashboard tiles failed: {checks}"
 
 
 def test_skybridge_activity_strip_wiring():
