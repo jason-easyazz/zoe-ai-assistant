@@ -13,6 +13,10 @@ import pytest
 
 import db_pool
 
+# Slim-dep-green (imports only db_pool → asyncpg, installed in the GitHub lane).
+# Without this marker the file only ran in the Jetson full-dir catch-all.
+pytestmark = pytest.mark.ci_safe
+
 
 def _run(coro):
     return asyncio.run(coro)
