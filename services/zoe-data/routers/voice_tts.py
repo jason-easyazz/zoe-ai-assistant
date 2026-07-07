@@ -4347,7 +4347,7 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
         except Exception:
             pass
         def _frame_has_audio(_frame: bytes) -> bool:
-            # A "chunk" or "full_audio" header means audio is on the wire (its
+            # A "chunk" or "full_audio" header means audio is on the wire (the
             # b64 line follows immediately); a non-JSON line IS a b64 audio line.
             try:
                 _o = _json.loads(_frame)
