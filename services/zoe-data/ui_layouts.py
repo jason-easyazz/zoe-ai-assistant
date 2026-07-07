@@ -115,7 +115,7 @@ async def save_layout(user_id: str, family: str, tree: dict[str, Any]) -> None:
                 VALUES ($1, $2, $3, $4, 1, $5, $5)
                 ON CONFLICT (user_id, intent_family) DO UPDATE SET
                     tree = EXCLUDED.tree,
-                    uses = ui_layouts.uses + 1,
+                    uses = ui_layouts.uses,
                     last_used_at = EXCLUDED.last_used_at
                 """,
                 uuid.uuid4().hex, user_id, family,

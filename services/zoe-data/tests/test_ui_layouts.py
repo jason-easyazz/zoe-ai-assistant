@@ -122,7 +122,7 @@ async def test_save_layout_upserts(monkeypatch):
     kind, sql, args = db.calls[0]
     assert kind == "execute"
     assert "ON CONFLICT (user_id, intent_family)" in sql
-    assert "uses = ui_layouts.uses + 1" in sql
+    assert "uses = ui_layouts.uses" in sql and "uses + 1" not in sql.split("ON CONFLICT")[1]  # save updates tree only; touch() owns reuse counting
     assert args[1] == "jason" and args[2] == "weather geraldton"
     assert json.loads(args[3]) == TREE
 
