@@ -2014,10 +2014,22 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
             if row:
                 # Existing list: a single INSERT is already atomic.
                 list_id = row["id"]
-                await db.execute(
-                    "INSERT INTO list_items (id, list_id, text, quantity, category) VALUES (?,?,?,?,?)",
-                    (item_id, list_id, item, slots.get("quantity"), slots.get("category")),
+                # Retry idempotency (same guard as the skybridge add): a voice
+                # re-POST replays the identical add seconds later — treat it as
+                # already done instead of inserting a duplicate.
+                dup_cursor = await db.execute(
+                    "SELECT id FROM list_items WHERE list_id=? AND lower(text)=lower(?)"
+                    " AND deleted=0 AND created_at > now() - interval '10 seconds' LIMIT 1",
+                    (list_id, item),
                 )
+                dup_row = await dup_cursor.fetchone()
+                if dup_row:
+                    logger.info("list add: duplicate %r within 10s on list %s — replay skipped", item, list_id)
+                else:
+                    await db.execute(
+                        "INSERT INTO list_items (id, list_id, text, quantity, category) VALUES (?,?,?,?,?)",
+                        (item_id, list_id, item, slots.get("quantity"), slots.get("category")),
+                    )
             else:
                 # Fresh list: the list row and its first item must land together,
                 # or a failed item insert leaves an orphaned empty list. asyncpg
