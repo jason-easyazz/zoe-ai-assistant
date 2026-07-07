@@ -333,14 +333,16 @@ def _intent_dispatch_token_required() -> bool:
 
 
 async def require_intent_dispatch_auth(request: Request) -> None:
-    """Gate for /api/system/intent-dispatch — the brain's write funnel.
+    """Gate for the internal ACTOR-ASSERTING endpoints — the brain's funnels:
+    ``/api/system/intent-dispatch`` (writes as body ``user_id``) and
+    ``/api/system/delegate-sync`` (delegates as body ``user_id``).
 
-    The body carries an arbitrary ``user_id``, so bare-loopback trust here is
-    the same impersonation class #1054 closed for the ``X-Zoe-User-Id`` header:
-    any SSRF'd or compromised local process could write as any user. Strict
-    enforcement can't be unconditional yet — the flue brain sidecar does not
-    send ``X-Internal-Token`` until its env is provisioned, and hard-requiring
-    it would break live brain writes.
+    A body-asserted ``user_id`` under bare-loopback trust is the same
+    impersonation class #1054 closed for the ``X-Zoe-User-Id`` header: any
+    SSRF'd or compromised local process could act as any user. Strict
+    enforcement can't be unconditional yet — the flue brain sidecar (the main
+    caller of both endpoints) does not send ``X-Internal-Token`` until its env
+    is provisioned, and hard-requiring it would break live brain writes.
 
     Two-stage rollout, flag-keyed:
       * ``ZOE_INTENT_DISPATCH_REQUIRE_TOKEN`` unset (default): today's
