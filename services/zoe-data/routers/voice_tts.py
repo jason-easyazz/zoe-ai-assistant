@@ -2815,11 +2815,16 @@ async def voice_command(
         _skybridge_context = _voice_entry.get("skybridge_context") or {}
         _skybridge_user = _scope_identity_user or "guest"
         _sky_t0 = time.monotonic()
+        # No db= here: voice_command runs as a detached task on the turn_stream
+        # lane (raced since #1106), so the request-scoped connection can already
+        # be back in the pool by now — asyncpg then rejects every query with
+        # "connection has been released back to the pool" and the fast path
+        # silently dies. resolve_skybridge_request acquires a fresh pooled
+        # connection itself when db is omitted.
         _skybridge_result = await resolve_skybridge_request(
             text,
             _skybridge_user,
             context=_skybridge_context,
-            db=db,
         )
         _sky_t_resolve = time.monotonic() - _sky_t0
         if _skybridge_result and _skybridge_result.get("auth_required"):
