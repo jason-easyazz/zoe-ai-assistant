@@ -87,6 +87,16 @@ def test_correction_over_templated_fact_lands_in_canonical_shape():
     assert out[0].text == "User's wife is named Anna"
 
 
+def test_correction_value_with_backslash_is_literal():
+    # re.sub template escapes (\1, \g<...>) in the user's replacement value
+    # must be treated literally, never as group references.
+    out = extract_candidates(
+        r"I meant sa\1turday not friday", prev_user_message=DENTIST_PREV
+    )
+    assert len(out) == 1
+    assert r"sa\1turday" in out[0].text
+
+
 def test_identical_new_and_old_values_store_nothing():
     out = extract_candidates(
         "I meant friday not friday", prev_user_message=DENTIST_PREV
@@ -104,6 +114,14 @@ def test_emma_doctor_stores_anchored_person_fact():
     assert c.memory_type == "person"
     assert c.entity_type == "person"
     assert c.entity_id == "emma"
+
+
+def test_pronoun_anchor_survives_sentence_initial_capital():
+    # "My wife is Emma" (capital M) must anchor like "my wife is Emma" — the
+    # bare intro pattern carries re.IGNORECASE like the template set it mirrors.
+    out = extract_candidates("she's a nurse", prev_user_message="My wife is Emma")
+    assert len(out) == 1
+    assert out[0].text == "Emma (user's wife) is a nurse"
 
 
 def test_pronoun_fact_without_person_intro_stores_nothing():
@@ -229,7 +247,10 @@ async def test_explicit_empty_prev_disables_anchoring(fake_memory_service):
     assert not any("saturday" in row["text"].lower() for row in svc.ingested)
 
 
-def test_lru_is_bounded():
+def test_lru_is_bounded(monkeypatch):
+    monkeypatch.setattr(memory_extractor, "_prev_user_turns", type(
+        memory_extractor._prev_user_turns
+    )())
     for i in range(memory_extractor._PREV_TURN_MAX + 50):
         memory_extractor.note_user_turn(f"user-{i}", "s", "hello there")
     assert len(memory_extractor._prev_user_turns) <= memory_extractor._PREV_TURN_MAX

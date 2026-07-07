@@ -244,10 +244,13 @@ _PERSON_INTRO_RES = (
         r"(?P<name>[A-Za-z][A-Za-z' -]{1,60})",
         re.IGNORECASE,
     ),
-    # "my wife is Emma" (bare form, name heuristic — mirrors _TEMPLATE_PATTERNS)
+    # "my wife is Emma" (bare form, name heuristic — mirrors _TEMPLATE_PATTERNS,
+    # which is searched with re.IGNORECASE at call time, so this carries the
+    # flag too: "My wife is Emma" must still anchor).
     re.compile(
         rf"my\s+(?P<rel>{_RELATION_WORDS})\s+is\s+"
         r"(?P<name>[A-Z][A-Za-z]{1,40})\b(?!\s+(?:a|an|the|very|really|so|going|trying))",
+        re.IGNORECASE,
     ),
 )
 
@@ -313,7 +316,9 @@ def _correction_candidates(
     old_rx = re.compile(rf"\b{re.escape(old_val)}\b", re.IGNORECASE)
     if not old_rx.search(prev):
         return []
-    corrected = _clean(old_rx.sub(new_val, prev, count=1))
+    # Lambda replacement: re.sub would otherwise interpret backslash escapes
+    # (\1, \g<...>) inside user-supplied new_val as template references.
+    corrected = _clean(old_rx.sub(lambda _m: new_val, prev, count=1))
     source_excerpt = _clean(user_message)[:220]
     # Prefer re-mining the corrected sentence through the normal templates so a
     # correctable templated fact ("my wife's name is Emma" → "…Anna") lands in
