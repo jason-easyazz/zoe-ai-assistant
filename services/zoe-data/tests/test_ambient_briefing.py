@@ -181,6 +181,7 @@ async def test_concurrent_calls_spawn_a_single_refresh(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_build_uses_compose_when_enabled_and_static_fallback_otherwise(monkeypatch):
+    monkeypatch.setenv("ZOE_BRIEFING_COMPOSE", "1")  # generative briefing is opt-in now
     facts = ["2 events today.", "19 degrees and clear."]
 
     async def fake_gather(user_id):
@@ -276,3 +277,28 @@ def test_briefing_endpoint_returns_fast_even_when_compose_is_slow(monkeypatch):
     assert resp.status_code == 200
     assert resp.json() == {"card": None}   # first hit: nothing cached yet
     assert elapsed < 1.0                   # never waited on the 5s compose
+
+
+@pytest.mark.asyncio
+async def test_briefing_is_deterministic_by_default(monkeypatch):
+    """Resting-screen trust: composed briefings hallucinated stats, so the static
+    tree is the default; compose is an explicit ZOE_BRIEFING_COMPOSE opt-in."""
+    # Patch compose_enabled directly (not via env) so the test can't pass or
+    # fail for the wrong reason if module state interferes with env reads.
+    monkeypatch.setattr(ambient_briefing.ui_compose, "compose_enabled", lambda: True)
+    monkeypatch.delenv("ZOE_BRIEFING_COMPOSE", raising=False)
+    called = {"n": 0}
+    async def fake_compose(*a, **k):
+        called["n"] += 1
+        return {"component": "compose", "props": {"tree": {"component": "Stack", "children": [
+            {"component": "Text", "text": "composed"}]}}}
+    monkeypatch.setattr(ambient_briefing.ui_compose, "compose_card", fake_compose)
+    async def fake_facts(uid):
+        return ["17C clear", "2 events today"]
+    monkeypatch.setattr(ambient_briefing, "gather_facts", fake_facts)
+    card = await ambient_briefing.build_briefing_card("u1")
+    assert called["n"] == 0, "compose must NOT run without the opt-in"
+    assert card is not None  # static tree built instead
+    monkeypatch.setenv("ZOE_BRIEFING_COMPOSE", "1")
+    card2 = await ambient_briefing.build_briefing_card("u1")
+    assert called["n"] == 1 and card2["props"]["tree"]["children"][0]["text"] == "composed"
