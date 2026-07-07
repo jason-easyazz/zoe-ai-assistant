@@ -1,4 +1,5 @@
 import asyncio
+import random
 import base64
 import contextvars
 import importlib.util
@@ -104,8 +105,11 @@ def _get_or_create_voice_session(panel_id: str) -> str:
 async def _load_voice_history(session_id: str, limit: int = 3) -> list[dict]:
     """Load last N chat turns for voice LLM context window (mirrors chat.py pattern)."""
     try:
-        from database import get_db
-        async for db in get_db():
+        # get_db_ctx, not `async for db in get_db()`: returning from inside the
+        # generator leaks the pooled connection (#953 / the 2026-07-03 pool
+        # drain) — and this runs on EVERY voice turn.
+        from db_pool import get_db_ctx
+        async with get_db_ctx() as db:
             rows = await db.execute(
                 "SELECT role, content FROM chat_messages "
                 "WHERE session_id = ? ORDER BY created_at DESC LIMIT ?",
@@ -619,6 +623,64 @@ def _voice_tool_name_from_sentinel(delta: str) -> "Optional[str]":
         return None
     name = tc.get("name")
     return str(name) if name else None
+
+
+def _voice_activity_frame(delta: str, tool_names: "Optional[dict]" = None) -> "Optional[dict]":
+    """Convert a brain ``__TOOL__:`` sentinel into a lightweight activity frame.
+
+    The touch panel's live-activity strip shows "what Zoe is DOING" during brain
+    turns from these frames: ``{"type": "activity", "phase": "start"|"result",
+    "tool": "<name>"}``. Only the tool NAME and PHASE cross the wire — args and
+    result payloads stay server-side (they can carry user data and the strip
+    doesn't need them). ``tool_names`` is an optional caller-owned id→name map
+    (one per turn) so the result phase — which often omits the name (see
+    zoe_core_client._tool_result_sentinel) — resolves to the tool that started.
+    Returns None for args phases, ``__THINKING__:`` markers, and malformed
+    sentinels: a bad frame must never break the voice turn.
+    """
+    if not delta.startswith("__TOOL__:"):
+        return None
+    try:
+        import json as _json
+        tc = _json.loads(delta[len("__TOOL__:"):])
+    except Exception:
+        return None
+    if not isinstance(tc, dict):
+        return None
+    phase = tc.get("phase")
+    if phase not in ("start", "result"):
+        return None
+    tc_id = str(tc.get("id") or "")
+    name = str(tc.get("name") or "")
+    if tool_names is not None and tc_id:
+        if phase == "start" and name:
+            tool_names[tc_id] = name
+        elif not name:
+            name = str(tool_names.get(tc_id) or "")
+    if phase == "start" and not name:
+        return None
+    return {"type": "activity", "phase": phase, "tool": name}
+
+
+async def _forward_voice_activity(delta: str, send_json, tool_names: dict) -> bool:
+    """Consume a brain sentinel delta on the ``/ws/voice/`` panel lane.
+
+    Returns True when ``delta`` is a sentinel (``__TOOL__:`` / ``__THINKING__:``)
+    — the caller must then skip it entirely (never buffer it toward TTS, where
+    Kokoro would read raw JSON aloud). Tool start/result sentinels are
+    additionally forwarded to the panel as lightweight ``activity`` frames via
+    ``send_json`` (the websocket's send_json). Forwarding is best-effort: a
+    send failure never breaks the spoken turn.
+    """
+    if not delta.startswith(_VOICE_TOOL_SENTINEL_PREFIXES):
+        return False
+    frame = _voice_activity_frame(delta, tool_names)
+    if frame is not None:
+        try:
+            await send_json(frame)
+        except Exception as exc:  # noqa: BLE001 - activity is cosmetic, speech is not
+            logger.debug("voice activity frame send failed (non-fatal): %s", exc)
+    return True
 
 
 def _extract_first_unit(buffer: str) -> tuple[Optional[str], str]:
@@ -4215,7 +4277,44 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
         # before the first audio chunk arrives.
         yield (_json.dumps({"transcript": transcript}) + "\n").encode()
         if hasattr(sub, "body_iterator"):
-            async for chunk in sub.body_iterator:
+            # ── Thinking filler (ZOE_VOICE_FILLER_ENABLED, default OFF) ──
+            # Tool-heavy turns (weather/calendar) take 5-11s to first audio on
+            # the 4B brain (measured live 2026-07-07); silence that long feels
+            # broken and invites talk-over. If the FIRST real chunk isn't ready
+            # within ZOE_VOICE_FILLER_AFTER_S (1.6s), speak a short ack
+            # immediately, then the real reply follows.
+            it = sub.body_iterator.__aiter__()
+            first_chunk = None
+            if os.environ.get("ZOE_VOICE_FILLER_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on"):
+                try:
+                    _filler_after = float(os.environ.get("ZOE_VOICE_FILLER_AFTER_S", "1.6"))
+                except (TypeError, ValueError):
+                    _filler_after = 1.6
+                _first_task = asyncio.ensure_future(it.__anext__())
+                try:
+                    first_chunk = await asyncio.wait_for(asyncio.shield(_first_task), timeout=_filler_after)
+                except asyncio.TimeoutError:
+                    _fillers = [p for p in os.environ.get(
+                        "ZOE_VOICE_FILLER_PHRASES", "Let me check.|One sec.|Hmm, let me look."
+                    ).split("|") if p.strip()]
+                    _phrase = random.choice(_fillers) if _fillers else "One sec."
+                    try:
+                        _fill_audio = await _synthesize_kokoro_sidecar(_phrase)
+                        if _fill_audio:
+                            yield (_json.dumps({"chunk": -1, "text": _phrase, "provider": "filler"}) + "\n").encode()
+                            yield base64.b64encode(_fill_audio) + b"\n"
+                    except Exception as _f_exc:
+                        logger.debug("voice filler skipped: %s", _f_exc)
+                    try:
+                        first_chunk = await _first_task
+                    except StopAsyncIteration:
+                        first_chunk = None
+                except StopAsyncIteration:
+                    first_chunk = None
+                    _first_task.cancel()
+            if first_chunk is not None:
+                yield first_chunk
+            async for chunk in it:
                 yield chunk
             return
         # voice_command returns a plain dict (not a StreamingResponse) on the

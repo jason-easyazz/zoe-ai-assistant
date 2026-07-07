@@ -184,23 +184,11 @@ non-allowlisted trigger → push only; enqueue raising → push still sent.
 
 ---
 
-## P-W3.2 — Stop embedding audit rows
+## P-W3.2 — Stop embedding audit rows — ✅ DONE, do not execute
 
-**Goal:** memory-mutation audit rows stop paying an embedding per write.
-**Facts (verified in [`memory-pressure-profile.md`](../knowledge/memory-pressure-profile.md)):**
-`memory_service.py` audit upsert (~:1480) passes `documents=[summary]`, forcing the
-shared ONNX MiniLM to embed text that is only ever read back by **metadata filters**
-(`col.get(where=…)` at ~:1273 and ~:1468-1473) — never semantically queried.
-**Change:** store the summary in the row's **metadata** (e.g. `summary` key) instead of
-as a document; pass no documents (or an empty-embedding-safe equivalent — check
-chromadb 0.6.3 semantics via `opensrc path pypi:chromadb@0.6.3` before choosing).
-Update BOTH read sites to read the metadata key, tolerating old rows that still carry a
-document (migration-free: read summary from metadata, fall back to document).
-**Tests:** extend the existing memory_service audit tests; add old-row-fallback case.
-**DoD:** a memory mutation in the lab produces an audit row with no embedding call
-(assert via mocked embedder) and audit reads still return summaries for old + new rows.
-**STOP:** if chromadb 0.6.3 can't upsert without a document, report options; don't
-invent an embedding-function bypass.
+Shipped as **#1084** (`memory_service.py` `_AUDIT_NULL_EMBEDDING` — audit upserts pass a
+constant unit-basis embedding; reads unchanged). Kept only so a session holding a stale
+copy of this doc doesn't redo it.
 
 ---
 

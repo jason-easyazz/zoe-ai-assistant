@@ -356,7 +356,7 @@ regression, ever (replay harness is the enforcement).
 - [ ] **W2.1** presence-check primitive — NOT STARTED
 - [ ] **W2.2** spoken-delivery adapter (morning brief only) — NOT STARTED
 - [ ] **W3.1** ccd-cli fleet cleanup (operational) — NOT STARTED
-- [ ] **W3.2** audit-row embedding stop — NOT STARTED
+- [x] **W3.2** audit-row embedding stop — **DONE** (#1084: `_AUDIT_NULL_EMBEDDING`, executed from the profile's candidate list)
 - [ ] **W3.3** reap generalization (HA / music-assistant) — NOT STARTED
 - [ ] **W3.4** zram rebalance (measure-first) — NOT STARTED
 - [ ] **W3.5** harness fence-out (with tech-debt Wave 4) — NOT STARTED
