@@ -251,19 +251,103 @@ packet lets identification act.
 
 ---
 
-## Deferred packets (generate only when their gate opens)
+## Software & model manifest (verified on the host, 2026-07-07)
+
+| Need | Status | Used by |
+|---|---|---|
+| Smart Turn v3.2 ONNX (`/home/zoe/models/smart-turn-v3.2-cpu.onnx`) | ✅ present | W1 (live) |
+| Silero VAD (`/home/zoe/models/silero_vad.onnx`) | ✅ present | W1 (live) |
+| resemblyzer (`requirements.txt:42`) | ✅ installed | W5 speaker-ID |
+| ffmpeg (`~/.local/bin/ffmpeg`) | ✅ present | W8 OGG/Opus transcode |
+| uv (`~/.local/bin/uv`) | ✅ present | H4 lock file; venv spikes |
+| onnxruntime | ✅ in-process already (Moonshine/Kokoro) | W4 SER runtime |
+| SER model weights (Wav2Small / emotion2vec) | ❌ obtain at P-W4.1 (license check is the gate) | W4 |
+| Presence hardware (FP2 mmWave / ESPresense) | ❌ optional shelf, not required for W2 rung 1 | W2 |
+| SIP trunk account + LiveKit SIP config | ❌ operator decision at W12.3 (own ADR) | W12 |
+| Email account credentials (IMAP/Gmail) | ❌ operator provides at W9.1 (consent step) | W9 |
+| Nothing else — every other workstream runs on the installed stack. | | |
+
+## Packet template (for authoring gate-opened packets)
+
+Measurement-gated workstreams (W4.2, W5.2, W6.x, W11, W12.3) get their packet written
+AFTER their gate produces numbers — by design, since the measurements change the design.
+Whoever opens the gate authors the packet using this exact shape (the standard every
+packet above follows): **Goal** (one sentence) · **Flag** (name, default OFF) ·
+**Facts (verified)** — file:line anchors re-checked against fresh main, never copied
+from an older doc · **Change** — numbered steps naming symbols to reuse (search for
+existing machinery FIRST; this plan's biggest recurring discovery is that the mechanism
+already exists) · **Tests** — named file, cases, must-fail-on-old-code, `ci_safe` +
+validate.yml, replay gate if voice · **Software** — from the manifest above, or the
+obtain-step · **DoD** · **STOP conditions**. Then link it from the plan §6 line.
+
+## Pre-packets (design-stable; verify anchors, then execute like any packet)
+
+- **P-W2.5 follow-through:** table `zoe_commitments` (new migration: id, user_id, text,
+  source_interaction, due_hint, status) written when the brain's reply matches promise
+  patterns ("I'll remind you / I'll keep an eye on") — detector is deterministic regex +
+  intent metadata, NOT model judgment; a proactive trigger (reuse `triggers/base.py`
+  shape) checks status and composes a follow-up. Tests: promise detected + row written;
+  trigger fires once; no promise → no row. Software: none.
+- **P-W5.3 onboarding interview:** extend the enroll flow (voice_tts `/api/voice/enroll`
+  UI) with a 5-question guided voice interview whose answers write through the EXISTING
+  people/person_relationships writers (`person_extractor` fulfillment path) + a consent
+  row. Deterministic script, Gemma phrases. Tests: interview answers land in people
+  graph attributed to the new user. Software: none.
+- **P-W8.1 Telegram voice notes:** in `labs/flue-zoe-telegram/src/app.ts` add
+  `bot.on('message:voice')` → download OGG/Opus (Bot API `getFile`) → ffmpeg → WAV 16k →
+  POST to zoe-data STT (`_transcribe_audio` route) → brain via the existing bot path →
+  reply text AND `sendVoice` (Kokoro WAV → `ffmpeg -c:a libopus` OGG). Flag
+  `ZOE_TG_VOICE_NOTES`, allow-list enforced (existing). Tests: mocked update → transcode
+  called, sendVoice OGG. Software: ffmpeg ✅.
+- **P-W9.1 email triage rung 1:** REQUIRES W15 fencing merged + operator mailbox
+  consent. Poller sidecar (NOT in zoe-data — P0 rule) reads via IMAP (stdlib `imaplib`,
+  read-only, UID watermark), deterministic triage (sender ∈ people graph, thread
+  recency, flags), writes 2-3 fenced items to a table the morning-brief composer reads.
+  No LLM in the poller; Gemma phrases at brief time. Tests: seeded mailbox fixtures →
+  correct picks; injection fixture stays fenced. Software: none new (imaplib stdlib).
+- **P-W13.1 proactive show:** after P-W2.2, in the spoken-delivery adapter also enqueue
+  `show_card` (already in `ui_orchestrator.ALLOWED_ACTION_TYPES`) with a compose tree
+  from `ui_compose.compose_card()` when `ZOE_COMPOSE_UI` is ON; screenshot-verify via
+  `panel_browser_screenshot`. Tests: presence+flags ON → announce + show_card both
+  enqueued; compose failure → announce still delivered. Software: none.
+- **P-W14.1 backup verify+extend:** shell + doc work: confirm
+  `postgres-nightly-backup.sh` is scheduled (systemd timer/cron) and dumps are fresh;
+  add Chroma `data/` tar + `.env`-flag snapshot (no secret VALUES — names only) to the
+  script; rsync target for off-box copy (operator names the destination). Restore drill
+  = restore into a throwaway postgres container + point a lab zoe-data at it + run the
+  memory acceptance suite. Tests: the drill IS the test; record in `docs/knowledge/`.
+  Software: none new.
+- **P-W16.1 scoreboard:** new `scripts/maintenance/samantha_scoreboard.py` run by the
+  existing weekly digest cycle (`routers/system.py` loops): runs the acceptance suite +
+  `voice_regression_probe --summary` + greps the week's log-line counters
+  (`PROACTIVE_SPOKEN`, barge log, `SPEAKER_ID_SHADOW`), appends one row to
+  `docs/knowledge/samantha-scoreboard.md`. Tests: composer unit-tested on fixture logs.
+  Software: none.
+- **P-W17.1 cross-surface thread:** maintain `user_active_thread` (new small table:
+  user_id, updated_at, summary TEXT) — updated post-turn off the hot path (same
+  `_spawn_bg` pattern as `_run_voice_memory_passes`), read into the for-prompt packet
+  via `zoe_memory_compose.compose_packet` as a `[thread]` block behind
+  `ZOE_CROSS_SURFACE_THREAD`. Summary = last 6 turns truncated, deterministic (no LLM).
+  Tests: turn on panel → block visible to a chat-lane packet for same user; flag OFF
+  byte-identical. Software: none.
+- **P-W18.1 voice feedback intent:** add feedback patterns to the intent layer
+  ("that's wrong", "that's not what I meant", "good girl/thanks that's right") →
+  INSERT into the EXISTING `chat_feedback` table (`routers/chat.py` ~:4022 shape) keyed
+  to the session's last interaction id; capture a following correction utterance
+  verbatim into `corrected_response`. Tests: each phrase → row; unrelated phrase → none.
+  Software: none.
+
+## Deferred packets (author at gate-open, using the template above)
 
 | Packet | Gate | Seed facts already verified |
 |---|---|---|
 | P-W3.3 reap generalization | operator picks the usage signals | pattern `voice_livekit.py` :90-93; targets homeassistant (370 MB swap) / music-assistant (325 MB) |
-| P-W4.2 SER scoring hook | P-W4.1 pick + P-W3 headroom | hook points in P-W4.1 preview above |
+| P-W4.2 SER scoring hook | P-W4.1 pick + W3 headroom | hook points in P-W4.1 preview; subprocess/sidecar only |
 | P-W5.2 identification acts | P-W5.1 shadow numbers | threshold env exists; PIN challenge stays for sensitive scopes |
-| P-W6.x ambient attribution | W5 live + consent design operator-approved | `ambient_memory` insert (`voice_tts.py` ~:4434) lacks `speaker_id`; schema + index ready (alembic 0001 :585/:694) |
-| P-W9.1 email triage | operator provides the mailbox + consent | brief composer: `proactive/triggers/morning_checkin.py`; people graph join ready |
-| P-W11.1 delivery profiles | best after W4 pick | sidecar accepts `voice`+`speed` (`scripts/setup/kokoro_sidecar.py` :280/:305) |
-| P-W13.1 proactive show | P-W2.2 merged | `show_card` in `ui_orchestrator.ALLOWED_ACTION_TYPES`; compose via `ui_compose.compose_card()` behind `ZOE_COMPOSE_UI` |
-| P-W14.1 backup verify+extend | none — start anytime | `scripts/maintenance/postgres-nightly-backup.sh` exists (run-state unverified); Chroma `data/` uncovered; no restore ever drilled |
-| P-W15.1 trust boundary | before P-W9.1 | fencing + per-source tool tiers; injection fixtures into the acceptance suite |
-| P-W16.1 scoreboard | after P-W2.2 (first live counters) | rides the weekly digest cron; acceptance suite + replay summary + log-line counters → OKF trend |
-| P-W17.1 cross-surface thread | after W0 (capture trust) | per-panel session state `voice_tts.py` ~:66-85; for-prompt packet compose seam `zoe_memory_compose.compose_packet` |
-| P-W18.1 voice feedback intent | none — start anytime | endpoint + `chat_feedback` table exist (`routers/chat.py` ~:4022); table currently has NO consumers |
+| P-W6.x ambient attribution | W5 live + consent design + P-F4 scoping merged | insert `voice_tts.py` ~:4434; schema ready |
+| P-W9.2/9.3 email memory + drafts | P-W9.1 watch week | admission gate + `[email]` citations; auto-send forbidden |
+| P-W10.x Zoe's own thread | W7 loop closed once | rides the proposal contract; `zoe_self` scope |
+| P-W11.x expressive delivery | P-W4.1 pick (or rung 1 without) | sidecar `voice`+`speed` params (`kokoro_sidecar.py` :280/:305) |
+| P-W12.x remote link | W8.1 merged (rung 2 = W2×W8) | tunnel live; SIP = own ADR |
+| P-W13.2/13.3 compose gates + authoring | ZOE_COMPOSE_UI watch week; W7 closed | catalog validator is the boundary |
+| P-W15.1 trust boundary | before P-W9.1 | fencing + per-source tool tiers + injection fixtures |
