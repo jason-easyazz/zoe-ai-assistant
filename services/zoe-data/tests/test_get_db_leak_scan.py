@@ -19,9 +19,10 @@ pytestmark = pytest.mark.ci_safe
 
 DATA = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Cleaned files — append per sweep PR. chat.py + intent_router.py join when
-# their conversions land.
+# Cleaned files — append per sweep PR. intent_router.py joins when its
+# conversion lands.
 CLEANED_FILES = [
+    "routers/chat.py",
     "routers/dashboard.py",
     "routers/panel_auth.py",
     "routers/system.py",
