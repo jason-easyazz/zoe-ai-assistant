@@ -29,6 +29,7 @@ Lab-only. No services/zoe-data changes. Leaks are described by VECTOR only; the
 exfiltrated value is never written to results/logs beyond a boolean.
 """
 import json
+import os
 import secrets
 import sys
 import time
@@ -39,18 +40,21 @@ from pathlib import Path
 SCRATCH = Path(__file__).resolve().parent
 BASE = "http://127.0.0.1:8000"
 
-# A: authenticated parity-gate-user session. Search the scratchpad + this dir.
-_SID_CANDIDATES = [
-    SCRATCH / "pgu.sid",
-    Path("/tmp/claude-1000/-home-zoe-assistant--claude-worktrees-cool-volhard-4d17b3"
-         "/c0a01881-9dc6-4c60-8327-dc9c28eb23e4/scratchpad/pgu.sid"),
-]
+# A: authenticated parity-gate-user session. Drop `pgu.sid` (from
+# provision_parity_test_user.py + login) next to this script, or point
+# SECURITY_GATE_SID_FILE at it.
+_SID_CANDIDATES = (
+    [Path(os.environ["SECURITY_GATE_SID_FILE"])]
+    if os.environ.get("SECURITY_GATE_SID_FILE") else []
+) + [SCRATCH / "pgu.sid"]
 SID = next((p.read_text().strip() for p in _SID_CANDIDATES if p.is_file()), "")
 
-# Internal token for the B-side X-Zoe-User-Id override.
+# Internal token for the B-side X-Zoe-User-Id override. Guard the read so a host
+# without services/zoe-data/.env falls through to main()'s clean sys.exit rather
+# than raising FileNotFoundError at import time.
 _ENV = Path("/home/zoe/assistant/services/zoe-data/.env")
 TOK = next((l.split("=", 1)[1].strip()
-            for l in _ENV.read_text().splitlines()
+            for l in (_ENV.read_text().splitlines() if _ENV.is_file() else [])
             if l.startswith("ZOE_INTERNAL_TOKEN=")), "")
 
 NONCE = secrets.token_hex(3)                 # per-run session-id nonce
@@ -97,14 +101,13 @@ def chat(msg, session, who="A"):
 # --- Postgres ground truth (identity binding for the tool-arg vector) --------
 def _pg_run(coro_fn):
     import asyncio
-    import os as _os
     sys.path.insert(0, "/home/zoe/assistant/services/zoe-data")
     from runtime_env import bootstrap_runtime_env
     bootstrap_runtime_env()
     import asyncpg
 
     async def wrap():
-        conn = await asyncpg.connect(_os.environ["POSTGRES_URL"])
+        conn = await asyncpg.connect(os.environ["POSTGRES_URL"])
         try:
             return await coro_fn(conn)
         finally:
