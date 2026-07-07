@@ -161,7 +161,15 @@ def _should_skip(user_message: str) -> bool:
 
 
 def extract_candidates(user_message: str, assistant_response: str = "") -> list[MemoryCandidate]:
-    """Extract memory candidates from a user turn."""
+    """Extract memory candidates from a user turn.
+
+    CONTRACT: user-fact candidates come from ``user_message`` ONLY.
+    ``assistant_response`` is deliberately never mined — Zoe's own sentences
+    ("... but I don't have any notes about your coffee preferences.") must
+    never become stored user facts, or the recall packet reinforces her past
+    denials forever (poisoned-store bug, 2026-07-07). The parameter is kept
+    for call-site compatibility. Pinned by tests/test_memory_extractor_purity.py.
+    """
     if _should_skip(user_message):
         return []
 
