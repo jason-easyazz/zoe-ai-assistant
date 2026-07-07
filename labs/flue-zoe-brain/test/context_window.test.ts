@@ -218,6 +218,20 @@ test('the newest turn is kept whole even when it alone exceeds the budget', () =
   assert.equal(last.content, giant, 'newest message never truncated or dropped');
 });
 
+test('over-budget stray preamble before the first user turn is dropped', () => {
+  resetEnv();
+  // All user-turn blocks fit; the overshoot comes entirely from non-user
+  // messages before the first user message. The window must still come back
+  // under budget as a contiguous suffix starting at a user message.
+  const preamble = assistantMsg('p'.repeat(64_000)); // ~16k estimated tokens
+  const messages = [preamble, userMsg('hello'), assistantMsg('hi'), userMsg('bye')];
+  const windowed = windowContextToBudget(baseContext(messages));
+  assert.ok(estimateContextTokens(windowed) <= promptBudget());
+  assert.equal(windowed.messages[0].role, 'user');
+  assert.equal(windowed.messages[0].content, 'hello');
+  assert.equal(windowed.messages.length, 3);
+});
+
 test('an under-budget context passes through by reference (no-alloc idiom)', () => {
   resetEnv();
   const context = baseContext([userMsg('hello'), assistantMsg('hi'), userMsg('how are you?')]);

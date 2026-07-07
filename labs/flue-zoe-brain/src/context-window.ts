@@ -224,6 +224,9 @@ export function windowContextToBudget(context: Context): Context {
     used += blockTokens[keptFrom];
   }
 
-  if (keptFrom === 0) return context;
+  // keptFrom === 0 with an over-budget estimate means the overshoot comes from
+  // messages BEFORE the first user turn (stray preamble): every user-turn block
+  // fits, so drop the preamble and keep the invariant that the result is a
+  // contiguous suffix starting at a user message (Greptile #1138 P2).
   return { ...context, messages: messages.slice(blockStarts[keptFrom]) };
 }
