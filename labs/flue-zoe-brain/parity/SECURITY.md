@@ -80,3 +80,6 @@ description only.
 - Transient backend blips (transport `connection refused`, or the app-level
   "trouble reaching my brain" fallback) are retried once so they don't
   masquerade as FAILs.
+- The Vector-2 Postgres ground-truth checks are fault-isolated: a transient DB
+  error records an `ERROR`-verdict row (never a false PASS) and lets the run
+  finish, so every accumulated Vector-1/2 result is still written.
