@@ -490,19 +490,28 @@ class _BargeMonitor:
                 prob = _vad_prob(model, np.frombuffer(chunk, dtype=np.int16))
                 window.append(prob >= BARGE_IN_THRESHOLD)
                 if sum(window) >= max(1, BARGE_MIN_CHUNKS):
+                    with _tts_process_lock:
+                        proc = _tts_process
+                    if proc is None or proc.poll() is not None:
+                        # Nothing is playing — this is the user STILL TALKING
+                        # (e.g. the endpointer closed on a long pause), not an
+                        # interruption of Zoe. Setting the flag now would abort
+                        # a reply that hasn't even started (live 22:28:10: user
+                        # spoke 189ms after a 7.84s recording closed, prob=0.99,
+                        # turn died with no audio ever played). Keep watching —
+                        # the window ages out in ~400ms, so only speech that
+                        # actually overlaps playback fires.
+                        continue
                     log.info("Barge-in detected during playback (monitor, prob=%.2f)", prob)
                     _barge_in_requested.set()
                     # Kill the TTS subprocess DIRECTLY — the stream loop only
                     # polls the flag at network-chunk boundaries, which can be
                     # seconds away while the brain generates the next sentence.
-                    with _tts_process_lock:
-                        proc = _tts_process
-                    if proc is not None and proc.poll() is None:
-                        try:
-                            proc.terminate()
-                            log.info("Barge-in: TTS playback terminated immediately.")
-                        except Exception as exc:
-                            log.debug("Barge-in terminate failed: %s", exc)
+                    try:
+                        proc.terminate()
+                        log.info("Barge-in: TTS playback terminated immediately.")
+                    except Exception as exc:
+                        log.debug("Barge-in terminate failed: %s", exc)
                     break
         finally:
             try:
