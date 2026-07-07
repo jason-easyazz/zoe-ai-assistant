@@ -2372,6 +2372,43 @@ async def _resolve_ws_user(session_id: str) -> str:
     return "voice-guest"
 
 
+_VOICE_COMPOSE_BUDGET_S = float(os.environ.get("ZOE_COMPOSE_VOICE_BUDGET_S", "8"))
+
+
+async def _voice_compose_cards_frame(message_text: str, reply_text: str, user_id: str):
+    """Flag-gated generative UI for the PANEL: after the brain's spoken reply has
+    fully streamed (audio frames already sent; playback is client-side), compose
+    a card and return the ws `cards` frame for it — or None (flag off / empty
+    reply / failure / budget exceeded). Never raises; never delays speech."""
+    try:
+        from ui_compose import compose_card, compose_enabled
+
+        if not compose_enabled() or not (reply_text or "").strip():
+            return None
+        composed = await asyncio.wait_for(
+            compose_card(message_text, reply_text, user_id=user_id),
+            timeout=_VOICE_COMPOSE_BUDGET_S,
+        )
+        if not composed:
+            return None
+        return {
+            "type": "cards",
+            "result": {
+                "handled": True,
+                "intent": {"domain": "compose", "action": "composed"},
+                "cards": [composed],
+                "spoken_summary": "",
+                "actions": [],
+            },
+        }
+    except asyncio.TimeoutError:
+        logger.info("voice compose skipped: exceeded budget %.1fs", _VOICE_COMPOSE_BUDGET_S)
+        return None
+    except Exception as exc:  # noqa: BLE001 — additive, never break the turn
+        logger.debug("voice compose failed (non-fatal): %s", exc)
+        return None
+
+
 async def _resolve_voice_cards(message_text: str, user_id: str, context: dict | None = None) -> dict:
     """Resolve voice text to real Skybridge data cards when a supported domain exists."""
     try:
@@ -2678,6 +2715,7 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
                         except Exception as _tts_exc:
                             logger.warning("Voice WS TTS fallback failed: %s", _tts_exc)
                             await websocket.send_json({"type": "text", "content": _fallback_response})
+                        _stream_llm_reply = _fallback_response  # one reply var for the compose hook
                     except Exception as _fallback_exc:
                         logger.error("Voice WS fallback error: %s", _fallback_exc)
 
@@ -2694,6 +2732,17 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
                         })
                     except Exception as _tts_exc:
                         logger.warning("Voice WS TTS synthesize fallback failed: %s", _tts_exc)
+
+            # ── Generative UI on the panel (flag-gated): all audio frames are
+            # already sent (playback is client-side), so composing here cannot
+            # delay speech. The panel renders via the deployed `compose` entry.
+            if not _ws_cancelled[0] and _stream_llm_reply:
+                _cframe = await _voice_compose_cards_frame(message_text, _stream_llm_reply, user_id)
+                # Re-check cancel AFTER the compose window (a cancel can arrive
+                # during the up-to-8s compose await; the card must not land on a
+                # turn the user already cancelled).
+                if _cframe and not _ws_cancelled[0]:
+                    await websocket.send_json(_cframe)
 
             await websocket.send_json({"type": "done"})
             await websocket.send_json({"type": "state", "state": "ambient"})
