@@ -4931,28 +4931,6 @@
            The clock stays primary; the briefing lives inside #skyAmbientClock so
            the time-of-day brightness dim above applies to it for free (night-dim
            untouched — css inherits). Empty container renders nothing. */
-        #skyAmbientBriefing { max-width: min(560px, 84vw); width: 100%; }
-        #skyAmbientBriefing:empty { display: none; }
-        #skyAmbientBriefing .sky-card {
-            margin: 0 auto;
-            padding: 14px 20px;
-            background: rgba(255, 255, 255, 0.04);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: 18px;
-            box-shadow: none;
-            font-size: 14px;
-            animation: none;
-        }
-        #skyAmbientBriefing .zx-text-kicker { opacity: 0.75; }
-
-        /* Time-of-day dimming — room-safe. day: bright-ish; evening/night: softer;
-           deep night (sleep hours): barely a night-light. */
-        :root[data-rest-dim="day"]   #skyAmbientClock { filter: brightness(0.9); }
-        :root[data-rest-dim="night"] #skyAmbientClock { filter: brightness(0.6); }
-        :root[data-rest-dim="deep"]  #skyAmbientClock { filter: brightness(0.34); }
-        /* Deep (sleep) hours: the resting screen is a PURE minimal clock — no
-           briefing card, no information riding the standby time. */
-        :root[data-rest-dim="deep"] #skyAmbientBriefing { display: none !important; }
 
         /* Resting screen background — flatten the body glow toward pure dark so the
            idle screen stays room-safe (returns when a card shows). Deep darker. */
@@ -5348,7 +5326,6 @@
 	            <div class="sky-ambient-clock" id="skyAmbientClock" aria-label="Ambient clock">
 	                <div class="sky-ambient-time"><span data-clock-hour id="skyAmbientClockHour">--</span><i>:</i><span data-clock-minute id="skyAmbientClockMinute">--</span><b data-clock-meridiem id="skyAmbientClockMeridiem"></b></div>
 	                <div class="sky-ambient-date" data-clock-date id="skyAmbientClockDate"></div>
-	                <div class="sky-ambient-briefing" id="skyAmbientBriefing"></div>
 	            </div>
 	            <canvas id="skyOrb"></canvas>
 	            <button type="button" class="sky-orb-button sky-float-chrome" id="skyOrbButton" aria-label="Start voice">
