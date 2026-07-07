@@ -87,6 +87,12 @@ BARGE_IN_ENABLED = os.environ.get("BARGE_IN_ENABLED", "true").lower() in ("1", "
 SPEAKER_ID_ENABLED = os.environ.get("SPEAKER_ID_ENABLED", "false").lower() in ("1", "true", "yes")
 # VAD probability threshold for barge-in detection (0.0-1.0).
 BARGE_IN_THRESHOLD = float(os.environ.get("BARGE_IN_THRESHOLD", "0.5"))
+# Rolling-window trigger for the playback barge monitor: >= BARGE_MIN_CHUNKS
+# speech chunks (80ms each) within the last BARGE_WINDOW_CHUNKS. Real speech
+# dips between syllables — a single-chunk trigger is too flaky, sustained
+# windows are robust against beeps/echo blips.
+BARGE_MIN_CHUNKS = int(os.environ.get("BARGE_MIN_CHUNKS", "3"))
+BARGE_WINDOW_CHUNKS = int(os.environ.get("BARGE_WINDOW_CHUNKS", "6"))
 # Guard window after TTS ends — ignore VAD for this many ms (Jabra AEC residual).
 POST_TTS_PROTECTION_MS = int(os.environ.get("POST_TTS_PROTECTION_MS", "300"))
 # ── Ambient memory: always-on VAD captures room speech ────────────────────
@@ -368,6 +374,73 @@ def play_audio_b64(audio_b64: str, content_type: str = "audio/wav"):
             pass
     except Exception as exc:
         log.warning("Audio playback failed: %s", exc)
+
+
+class _BargeMonitor:
+    """Dedicated mic reader for barge-in DURING TTS playback.
+
+    The always-on wake stream is CLOSED for the whole command cycle (the Jabra
+    cannot hold two input streams — PyAudio -9985), so the queue-fed barge
+    thread hears nothing exactly when barge-in matters. This monitor opens its
+    own short-lived stream while Zoe is speaking (no other input stream is open
+    then) and sets _barge_in_requested on sustained speech: >= BARGE_MIN_CHUNKS
+    speech chunks within the last BARGE_WINDOW_CHUNKS (~240ms in ~480ms).
+    """
+
+    def __init__(self, pa: "pyaudio.PyAudio"):
+        self._pa = pa
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if not BARGE_IN_ENABLED or self._thread is not None:
+            return
+        self._thread = threading.Thread(target=self._run, daemon=True, name="barge-monitor")
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        t = self._thread
+        if t is not None:
+            t.join(timeout=1.5)
+        self._thread = None
+
+    def _run(self) -> None:
+        model, _ = _get_silero_vad()
+        if model is None:
+            return
+        kw: dict = dict(
+            format=pyaudio.paInt16, channels=1, rate=SAMPLE_RATE,
+            input=True, frames_per_buffer=CHUNK_SIZE,
+        )
+        if _INPUT_DEVICE_INDEX is not None:
+            kw["input_device_index"] = _INPUT_DEVICE_INDEX
+        try:
+            stream = self._pa.open(**kw)
+        except OSError as exc:
+            log.debug("Barge monitor mic open failed: %s", exc)
+            return
+        log.debug("Barge monitor listening (th=%.2f, %d/%d chunks)",
+                  BARGE_IN_THRESHOLD, BARGE_MIN_CHUNKS, BARGE_WINDOW_CHUNKS)
+        window: deque = deque(maxlen=max(1, BARGE_WINDOW_CHUNKS))
+        try:
+            while not self._stop.is_set() and not _shutdown.is_set():
+                try:
+                    chunk = stream.read(CHUNK_SIZE, exception_on_overflow=False)
+                except Exception:
+                    break
+                prob = _vad_prob(model, np.frombuffer(chunk, dtype=np.int16))
+                window.append(prob >= BARGE_IN_THRESHOLD)
+                if sum(window) >= max(1, BARGE_MIN_CHUNKS):
+                    log.info("Barge-in detected during playback (monitor, prob=%.2f)", prob)
+                    _barge_in_requested.set()
+                    break
+        finally:
+            try:
+                stream.stop_stream()
+                stream.close()
+            except Exception:
+                pass
 
 
 def _barge_in_vad_thread():
@@ -1205,7 +1278,16 @@ def voice_command(pa: pyaudio.PyAudio, oww) -> None:
             return
 
         _turn_fn = _do_single_turn_stream if VOICE_STREAM_ENABLED else _do_single_turn
-        played_audio = _turn_fn(pa, wav)
+        # Barge monitor: the wake stream is closed for this whole cycle, so
+        # nothing else can hear the room while Zoe thinks/speaks. Run a
+        # dedicated mic stream for the duration of the turn (record streams are
+        # closed by now; follow-up windows open AFTER we stop it).
+        _monitor = _BargeMonitor(pa)
+        _monitor.start()
+        try:
+            played_audio = _turn_fn(pa, wav)
+        finally:
+            _monitor.stop()
 
         # ── Conversation mode ("hey zoe, let's talk") ──
         # The server's opener fast-path marks the done frame with
@@ -1234,7 +1316,12 @@ def voice_command(pa: pyaudio.PyAudio, oww) -> None:
                              silent_windows, CONV_SILENT_WINDOWS)
                     continue
                 silent_windows = 0
-                _turn_fn(pa, conv_wav, prompt_on_empty=False, conversation=True)
+                _monitor = _BargeMonitor(pa)
+                _monitor.start()
+                try:
+                    _turn_fn(pa, conv_wav, prompt_on_empty=False, conversation=True)
+                finally:
+                    _monitor.stop()
                 conv_turns += 1
                 if _last_turn_flags.get("conversation_end"):
                     log.info("Conversation CLOSED by ender after %d turns", conv_turns)
@@ -1260,7 +1347,12 @@ def voice_command(pa: pyaudio.PyAudio, oww) -> None:
                 break
             # Follow-up misses should fall back silently to wake mode, not speak a
             # robotic retry prompt after a successful prior answer.
-            played_audio = _turn_fn(pa, follow_wav, prompt_on_empty=False)
+            _monitor = _BargeMonitor(pa)
+            _monitor.start()
+            try:
+                played_audio = _turn_fn(pa, follow_wav, prompt_on_empty=False)
+            finally:
+                _monitor.stop()
             follow_ups_done += 1
 
         if POST_PLAY_TAIL_S > 0:
