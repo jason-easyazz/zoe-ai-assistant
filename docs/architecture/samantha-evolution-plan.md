@@ -378,11 +378,14 @@ regression, ever (replay harness is the enforcement).
 
 ## 7. NEXT ACTION (always exactly one)
 
-→ **P-F6** (remediation-packets-2026-07.md): fix the W0 root cause — thread the
-panel→user binding into voice-turn identity resolution + widen the guest guard +
-surface (don't swallow) FK failures; then RE-RUN P-W0's positive control to completion
-(row with metadata.user_id=jason + consolidation sweep pickup). In parallel,
-kick off **W3.1** (ccd-cli fleet cleanup — operational, zero risk). W1.1/W1.2 are already
+→ **W3.1 (RAM), then merge P-F6.** P-F6 is **BUILT and CI-validated (PR #1160)** but
+**BLOCKED**: the mandatory voice replay gate self-skips because the live box is under the
+1.5 GB free threshold (measured 215–880 MB 2026-07-08). So the true next action is
+operator-side: **free RAM via W3.1** (18 ccd-cli processes hold ~3.6 GB swap — the sized
+candidate in memory-pressure-profile.md) → re-run `voice_regression_probe.py` on #1160
+(and P-F3 #1161, same block) → merge → deploy → **RE-RUN P-W0's positive control**
+(spoken panel turn → `chat_messages` row with `metadata.user_id=jason` → consolidation
+sweep pickup). Do NOT bypass the replay gate to merge a voice change. W1.1/W1.2 are already
 **live** (#1051/#1081/#1082 — do NOT redo); the remaining W1 work is **W1.3**
 (packet P-W1.3) + the **M3/M4** measurements (packet P-W1.4, bars in §6).
 The #1056 migration-plan doc was retired as overtaken by #1051; its surviving pieces
