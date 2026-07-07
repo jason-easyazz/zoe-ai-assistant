@@ -4253,8 +4253,6 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
                     _first_task.cancel()
             if first_chunk is not None:
                 yield first_chunk
-            elif not os.environ.get("ZOE_VOICE_FILLER_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on"):
-                pass  # flag off: fall through to the plain loop below
             async for chunk in it:
                 yield chunk
             return
