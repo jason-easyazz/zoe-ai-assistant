@@ -1,7 +1,7 @@
 ---
 type: Runbook
 title: Relationship-Memory Flag-Enable Runbook
-description: Operator procedure to turn on the three relationship-memory features (temporal edges, graph traversal, person-merge) in prod — the migrate-first order, the incremental replay-gated flag flips, live verification, and the flag-off (not schema-downgrade) rollback. All three ship OFF; this is how they go live safely.
+description: Operator procedure to turn on the three relationship-memory features (temporal edges, graph traversal, person-merge) in prod — the migrate-first order, the incremental replay-gated flag flips, live verification, and the flag-off (not schema-downgrade) rollback. All three ship OFF; this is how they go live safely. Also covers the independent recall-dossier flags (ZOE_MEMORY_COMPOSE_ENABLED + ZOE_PERSON_DOSSIER_ENABLED) that render a compact per-person line into the brain's recall packet.
 tags: [relationships, memory, flags, deploy, migration, runbook, voice-replay]
 timestamp: 2026-07-05T00:00:00Z
 ---
@@ -11,7 +11,9 @@ timestamp: 2026-07-05T00:00:00Z
 The relationship-memory roadmap (temporal edges, recursive-CTE graph traversal, person-merge
 / entity resolution) is **merged but dark**: all three features default **OFF** and ship behind
 env flags. This is the operator procedure to turn them on in prod without regressing the live
-voice write-path or losing relationship history.
+voice write-path or losing relationship history. It also covers the independent **recall
+dossier** flags (`ZOE_MEMORY_COMPOSE_ENABLED` + `ZOE_PERSON_DOSSIER_ENABLED`, last section) that
+control how a person is rendered into the brain's recall packet.
 
 Design SSOT: [`docs/adr/ADR-relationship-memory.md`](../adr/ADR-relationship-memory.md).
 Deploy discipline this depends on: [merge-and-deploy.md](merge-and-deploy.md) (merged ≠ live),
@@ -128,3 +130,37 @@ is intentionally lossy to reverse — roll back with the flags, not the schema.
   SQLite) — run it before a prod flip if the code has moved since #1044.
 - Only `ZOE_TEMPORAL_RELATIONSHIPS_ENABLED` is truly on the voice hot path; it is the flag the
   replay gate exists for. The other two still need a restart-and-smoke.
+
+## Recall dossier — compact per-person line (independent add-on)
+
+Separate from the three flags above (no migration, no write-path change): this controls how a
+person is *rendered into the brain's recall packet*. OFF, a person is a thin `Name (rel) — notes`
+line; ON, it becomes a compact cited dossier sourced from fields already in the DB:
+
+```
+- Alex Example (brother · family, score 82) — likes chocolate, fruit loops · enjoys travelling · alex@example.com, 555-0100, b.Jan 1 [people]
+```
+
+(relationship · circle · `health_score`→score, top-3 recent likes from `person_activities` with
+same-verb grouping, notes, and email/phone/birthday; clipped so a chatty contact can't crowd the
+prompt. PRs #1169 + #1170.)
+
+| Flag (env, in `services/zoe-data/.env`) | Turns on | Reader |
+|---|---|---|
+| `ZOE_MEMORY_COMPOSE_ENABLED` | The whole relational recall block (increment 2b). **Gates everything below** — the dossier does nothing without it. **Already `=1` in prod** (2026-07-08). | `zoe_memory_compose.py:43` |
+| `ZOE_PERSON_DOSSIER_ENABLED` | Swaps the thin person line for the dossier + adds one bounded batch read of recent likes. Default OFF. | `zoe_memory_compose.py` (`person_dossier_enabled`) |
+
+**Enable:** set `ZOE_PERSON_DOSSIER_ENABLED=1` (compose is already on) → `systemctl --user restart
+zoe-data.service`. No migration — reads existing `people` + `person_activities` columns.
+
+**Independent of the three relationship flags:** the dossier reads people + activities, not the
+temporal/graph/merge machinery, so it works with those flags on *or* off. It is, however, on the
+voice **recall** path (compose runs when `needs_relational` fires), so treat a flip as
+voice-path-adjacent — run the `~/.zoe-voice-samples` replay at deploy when there's RAM headroom.
+
+**Rollback:** unset `ZOE_PERSON_DOSSIER_ENABLED` → restart. Instant, lossless (render-only; the thin
+line returns). OFF is a byte-for-byte no-op — the dossier columns and the likes read only run when
+the flag is on.
+
+**Lab proof:** `services/zoe-data/tests/test_person_dossier_compose.py` (flag OFF no-op + ON
+assembly + `_group_facts`/`_fmt_score` helpers).

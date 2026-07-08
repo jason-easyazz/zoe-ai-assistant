@@ -17,7 +17,7 @@ USER = "demo_dossier_user"
 
 
 def _person(**kw):
-    base = {"id": "p1", "name": "Jason Bertelsen", "relationship": "brother",
+    base = {"id": "p1", "name": "Alex Example", "relationship": "brother",
             "circle": "family", "context": None, "notes": None, "email": None,
             "phone": None, "birthday": None, "preferences": None, "health_score": 0.82}
     base.update(kw)
@@ -28,25 +28,25 @@ def test_off_is_thin_line(monkeypatch):
     monkeypatch.delenv("ZOE_PERSON_DOSSIER_ENABLED", raising=False)
     data = {"people": [_person(notes="met at work")], "relationships": [], "dates": [], "facts": {}}
     lines, _ = zc._build_lines(data, "")
-    assert lines == ["- Jason Bertelsen (brother) — met at work [people]"]
+    assert lines == ["- Alex Example (brother) — met at work [people]"]
 
 
 def test_on_builds_dossier(monkeypatch):
     monkeypatch.setenv("ZOE_PERSON_DOSSIER_ENABLED", "1")
     data = {
-        "people": [_person(email="j@x.io", phone="555-1", birthday="Aug 4")],
+        "people": [_person(email="alex@example.com", phone="555-0100", birthday="Jan 1")],
         "relationships": [], "dates": [],
-        "facts": {"p1": ["Jason likes chocolate", "Jason likes fruit loops", "Jason enjoys travelling"]},
+        "facts": {"p1": ["Alex likes chocolate", "Alex likes fruit loops", "Alex enjoys travelling"]},
     }
     lines, _ = zc._build_lines(data, "")
     line = lines[0]
-    assert line.startswith("- Jason Bertelsen (brother · family, score 82) —")
+    assert line.startswith("- Alex Example (brother · family, score 82) —")
     # same-verb likes are grouped, own-name prefix stripped, compact
     assert "likes chocolate, fruit loops" in line and "enjoys travelling" in line
     assert "likes fruit loops" not in line  # verb not repeated — grouped
-    assert "Jason likes chocolate" not in line  # name prefix stripped
+    assert "Alex likes chocolate" not in line  # name prefix stripped
     # contact folded in
-    assert "j@x.io" in line and "555-1" in line and "b.Aug 4" in line
+    assert "alex@example.com" in line and "555-0100" in line and "b.Jan 1" in line
     assert line.endswith("[people]")
 
 
