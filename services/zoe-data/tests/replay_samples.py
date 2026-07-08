@@ -42,11 +42,18 @@ import os
 import re
 import sys
 import time
+import uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
+
+# The canonical "brain unreachable" fallback: the flue client NEVER raises on a
+# failed brain turn — it yields this text instead (transport error, non-2xx, or
+# an HTTP-200-but-empty result all surface identically). Imported, not
+# duplicated, so the harness can't drift from the client's actual fallback.
+from zoe_flue_client import _FALLBACK_TEXT as _BRAIN_FALLBACK_TEXT  # noqa: E402
 
 # Replies that mean "I couldn't do what you asked" — a capability gap to fix.
 # Targeted at capability DISCLAIMERS (no access / not on file / can't act), NOT
@@ -81,10 +88,33 @@ def _select(sample_dir: str, args) -> list[str]:
     return files
 
 
+def _run_session_id() -> str:
+    """Fresh brain/flue session id per harness RUN (all samples in one run share
+    it, preserving the within-run conversational continuity the old fixed id
+    gave).
+
+    A hardcoded "replay" id accumulated history ACROSS runs in the flue
+    sidecar's durable session store until prompt assembly overflowed the model
+    context (8288 > 8192 tokens → HTTP 500 on every turn; 2026-07-07 incident).
+    Nothing reads the session between runs, so a per-run id loses no continuity.
+
+    Uses a random token (not a wall-clock second): two runs launched within the
+    same second — e.g. parallel CI workers — must not collide into one shared
+    sidecar session and re-create the very accumulation this guards against.
+    """
+    return f"replay-{uuid.uuid4().hex[:12]}"
+
+
 def _classify(transcript: str, reply: str, outcome: str) -> str:
     if not transcript:
         return "EMPTY"
     if outcome.startswith("<"):
+        return "ERROR"
+    if reply and _BRAIN_FALLBACK_TEXT in reply:
+        # HARD failure: the brain lane silently degraded. The flue client
+        # swallows sidecar failures and yields this fallback text instead of
+        # raising, so without this check a dead brain still counted as OK and
+        # weakened replay-gate evidence (2026-07-07 incident).
         return "ERROR"
     if reply and _CANT_DO_RE.search(reply):
         return "CANT_DO"
@@ -115,6 +145,7 @@ async def _run(args) -> int:
     sr.warm()
 
     user = args.user
+    session_id = _run_session_id()
     sample_dir = os.environ.get("ZOE_VOICE_SAMPLE_DIR") or "/home/zoe/.zoe-voice-samples"
     files = _select(sample_dir, args)
     if not files:
@@ -122,6 +153,7 @@ async def _run(args) -> int:
         return 1
 
     print(f"Replaying {len(files)} sample(s) from {sample_dir} as user={user}"
+          f" session={session_id}"
           f"{' [EXECUTE writes]' if args.execute else ' [dry]'}"
           f"{' [+brain]' if args.brain else ''}\n")
 
@@ -156,7 +188,7 @@ async def _run(args) -> int:
                 # Mirror live voice: channel="voice" (margin + defer people/memory),
                 # real router decision, dry keeps allow_writes off so writes defer.
                 res = await ft.resolve(
-                    transcript, user, "replay", channel="voice",
+                    transcript, user, session_id, channel="voice",
                     router_decision=rr, allow_writes=bool(args.execute),
                     extra_ctx={"panel_id": "replay"},
                 )
@@ -178,7 +210,7 @@ async def _run(args) -> int:
                     domain_ctx = await _voice_domain_context(rr, user)
                     db_mem = _merge_brain_context(db_mem, domain_ctx)
                     reply = (await brain_oneshot(
-                        transcript, "replay", user_id=user, voice_mode=True,
+                        transcript, session_id, user_id=user, voice_mode=True,
                         db_memory_context=db_mem, portrait=portrait,
                     ) or "").strip()
                     outcome = "brain"

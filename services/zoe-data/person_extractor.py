@@ -130,6 +130,29 @@ _ROLE_TO_TYPE: dict[str, tuple[str, str]] = {
     "colleagues":  ("colleague",  "work"),
 }
 
+# Capitalized tokens the name regex over-captures but which are never a person's
+# name — subject pronouns and sentence-openers. "She is Tom's sister" / "He is
+# Jason's brother" must NOT mint a "She"/"He" person node + relationship edge.
+# Deliberately conservative: real given names that collide with calendar words
+# (April, May, June, Grace, Will) are intentionally NOT listed, so recall is kept.
+_NON_NAME_TOKENS = frozenset({
+    "he", "she", "they", "we", "it", "you", "i", "him", "her", "them", "us", "me",
+    "there", "here", "this", "that", "these", "those", "then", "now", "who", "what",
+    "the", "a", "an", "yes", "no", "well", "so", "but", "and", "or",
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+})
+
+
+def _looks_like_person_name(name: str) -> bool:
+    """False for the pronouns / sentence-openers the name regex over-captures.
+
+    Multi-word captures ("Mary Jane") and any token outside the conservative
+    stop-set pass through; the regex already requires an initial capital, so a
+    case-insensitive membership test is enough to reject "She"/"He"/"There".
+    """
+    return name.strip().lower() not in _NON_NAME_TOKENS
+
+
 # ── Month name → int ──────────────────────────────────────────────────────────
 _MONTHS = {
     "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
@@ -751,13 +774,19 @@ async def process_text(
                 name_b = m.group("d").strip()
                 role = m.group("role2").lower().rstrip("s")
             rel_info = _ROLE_TO_TYPE.get(role)
-            if rel_info:
+            if rel_info and _looks_like_person_name(name_a) and _looks_like_person_name(name_b):
                 rel_type, rel_group = rel_info
                 try:
                     await _write_relationship(user_id, name_a, name_b, rel_type, rel_group, _db)
                     written += 1
                 except Exception as exc:
                     logger.debug("person_extractor: relationship write failed: %s", exc)
+            elif rel_info:
+                # A pronoun / sentence-opener captured as a name ("She is Tom's
+                # sister") would silently mint a junk person node + edge. Drop it.
+                logger.debug(
+                    "person_extractor: skipped non-name relationship %r/%r", name_a, name_b
+                )
 
         if not tasks:
             return written

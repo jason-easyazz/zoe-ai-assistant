@@ -554,6 +554,23 @@ async def _run_pipeline(local_participant, frames: list[bytes], user_id: str, se
     if not transcript:
         _VOICE_HEALTH["pipeline_failures"] += 1
         _health_update(last_stage="stt_empty", last_error="empty transcript")
+        # P-F3: audible feedback instead of a silent return to ambient. Uses the
+        # same synthesize path as the reply TTS below; any failure degrades to
+        # today's behaviour (silent ambient) — never crash the loop.
+        try:
+            canned = "Sorry, I didn't catch that."
+            from routers.voice_tts import synthesize as _synth
+            tts_resp = await _synth(
+                {"text": canned}, caller={"source": "livekit", "user_id": user_id}
+            )
+            await _send_data(local_participant, {"type": "transcript", "role": "zoe", "text": canned})
+            await _send_data(local_participant, {
+                "type": "audio",
+                "audio_base64": base64.b64encode(tts_resp.body).decode("ascii"),
+                "content_type": tts_resp.media_type,
+            })
+        except Exception as exc:
+            logger.debug("LiveKit empty-transcript feedback failed: %s", exc)
         await _send_data(local_participant, {"type": "state", "state": "ambient"})
         return
 
@@ -596,7 +613,17 @@ async def _run_pipeline(local_participant, frames: list[bytes], user_id: str, se
         _health_update(last_stage="llm")
         try:
             from brain_dispatch import brain_oneshot
-            response = await brain_oneshot(transcript, session_id, user_id, voice_mode=True)
+            # P-F3: a hung brain must never wedge the pipeline — bound the call
+            # and route a timeout through the same apology path as any LLM error.
+            response = await asyncio.wait_for(
+                brain_oneshot(transcript, session_id, user_id, voice_mode=True),
+                timeout=float(os.environ.get("ZOE_LIVEKIT_BRAIN_TIMEOUT_S", "20")),
+            )
+        except asyncio.TimeoutError:
+            llm_ok = False
+            _VOICE_HEALTH["pipeline_failures"] += 1
+            _health_update(last_stage="llm_timeout", last_error="brain_oneshot timed out")
+            logger.error("LiveKit LLM timed out after ZOE_LIVEKIT_BRAIN_TIMEOUT_S")
         except Exception as exc:
             llm_ok = False
             _VOICE_HEALTH["pipeline_failures"] += 1
