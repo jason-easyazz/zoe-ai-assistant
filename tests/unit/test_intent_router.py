@@ -523,3 +523,18 @@ def test_people_search_empty_is_not_found_line(ir, monkeypatch):
         ir._execute_people_search_direct(ir.Intent("people_search", {"query": "nobody"}), "u1")
     )
     assert reply == 'No contacts found for "nobody".'
+
+
+def test_people_search_empty_query_lists_user_contacts_not_mcporter(ir, monkeypatch):
+    # "show my contacts" → empty query. Must list the USER's own contacts
+    # in-process (user-scoped), NEVER return None to the mcporter fallback that
+    # omits user_id and would surface family-admin's contacts.
+    db = _stub_search_db(monkeypatch, [{"name": "Sarah Mitchell", "relationship": "friend"}])
+    reply = asyncio.run(
+        ir._execute_people_search_direct(ir.Intent("people_search", {"query": ""}), "parity-gate-user")
+    )
+    assert reply is not None  # did NOT fall through to mcporter
+    assert "Sarah Mitchell" in reply
+    sql, params = db.calls[-1]
+    assert "user_id = ?" in sql and "parity-gate-user" in params
+    assert "ILIKE" not in sql  # no name filter on the list-all path

@@ -2523,18 +2523,28 @@ async def _execute_people_search_direct(intent: Intent, user_id: str) -> Optiona
     executor. Returns the formatted response, or None to fall back to mcporter."""
     slots = intent.slots or {}
     query = str(slots.get("query") or "").strip()
-    if not query:
-        return None
     try:
         from database import get_db_ctx
 
-        like = f"%{_escape_like_pattern(query)}%"
         async with get_db_ctx() as db:
-            cursor = await db.execute(
-                "SELECT id, name, relationship, birthday, phone, email FROM people"
-                " WHERE name ILIKE ? ESCAPE '\\' AND user_id = ? AND deleted = 0 LIMIT 10",
-                (like, user_id),
-            )
+            if query:
+                like = f"%{_escape_like_pattern(query)}%"
+                cursor = await db.execute(
+                    "SELECT id, name, relationship, birthday, phone, email FROM people"
+                    " WHERE name ILIKE ? ESCAPE '\\' AND user_id = ? AND deleted = 0 LIMIT 10",
+                    (like, user_id),
+                )
+            else:
+                # Empty query = "show my contacts" / "open contacts page"
+                # navigation. List the acting user's OWN contacts directly —
+                # never return None here, or the intent falls through to the
+                # mcporter command (which omits user_id and would surface
+                # family-admin's contacts to any authed user).
+                cursor = await db.execute(
+                    "SELECT id, name, relationship, birthday, phone, email FROM people"
+                    " WHERE user_id = ? AND deleted = 0 ORDER BY name LIMIT 20",
+                    (user_id,),
+                )
             rows = [dict(r) for r in await cursor.fetchall()]
         return _format_response(intent, json.dumps({"people": rows}, default=str))
     except Exception as exc:
