@@ -79,9 +79,15 @@ async def test_real_relationship_still_extracts():
 
 
 @pytest.mark.parametrize("text", [
+    # "is" branch, pronoun on the left (name_a)
     "She is Tom's sister",
     "He is Jason's brother",
     "There is Something's friend",
+    # "are" branch, pronoun on the left (name_a via the c/d groups)
+    "She and Tom are siblings",
+    "They and Bob are friends",
+    # "are" branch, pronoun on the RIGHT (name_b) — the other guarded endpoint
+    "Sarah and She are friends",
 ])
 @pytest.mark.asyncio
 async def test_pronoun_relationship_is_dropped(text):
@@ -90,7 +96,8 @@ async def test_pronoun_relationship_is_dropped(text):
         n = await pe.process_text(text, user_id=USER, db=db)
         edges, names = await _counts(db)
         assert n == 0 and edges == 0, f"junk edge written for {text!r}"
-        # no junk node minted for the pronoun (nor for the other side — whole edge skipped)
-        assert not ({"He", "She", "They", "There"} & names), f"junk node minted for {text!r}: {names}"
+        # nothing written at all — a strictly stronger guard than a fixed pronoun set
+        # (also catches an unexpected node from any future stop-set addition).
+        assert names == set(), f"unexpected person node(s) minted for {text!r}: {names}"
     finally:
         await db.close()
