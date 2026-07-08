@@ -833,15 +833,28 @@
         return 'show my ' + listLabel(list) + ' list';
     }
 
+    // Top tab-row switcher: the ACTIVE tab IS the list's title (no separate big
+    // heading — that only wasted vertical space on the 7" kiosk). Each tab carries
+    // its open-item count so the shopper scans lists at a glance. The row is
+    // indented past the top-left Home pill (see .lst-switcher padding in CSS).
     function renderListSwitcher(lists, selectedId) {
         const tabs = (Array.isArray(lists) ? lists : []).slice(0, 6).map(list => {
             const accent = listAccentClass(list.list_type);
             const selected = selectedId && String(list.id || '') === String(selectedId) ? ' is-active' : '';
-            const count = Array.isArray(list.items) ? list.items.length : null;
+            const items = Array.isArray(list.items) ? list.items : null;
+            // Prefer the authoritative open_count from the payload; else derive from
+            // the items slice. Shows items still to do (0 reads as "all done").
+            let count = null;
+            if (typeof list.open_count === 'number') count = list.open_count;
+            else if (items) count = items.filter(it => !(typeof it === 'object' && it && it.completed)).length;
             const countTag = count != null ? '<i class="lst-tab-count" aria-hidden="true">' + escapeHtml(count) + '</i>' : '';
-            return '<button type="button" class="lst-tab lst-a-' + escapeHtml(accent) + selected + '" data-sky-action="query" data-query="' + escapeHtml(listQuery(list)) + '"><span class="lst-tab-dot" aria-hidden="true"></span><span class="lst-tab-name">' + escapeHtml(listLabel(list)) + '</span>' + countTag + '</button>';
+            return '<button type="button" class="lst-tab lst-a-' + escapeHtml(accent) + selected + '" role="tab" aria-selected="' + (selected ? 'true' : 'false') + '" data-sky-action="query" data-query="' + escapeHtml(listQuery(list)) + '"><span class="lst-tab-dot" aria-hidden="true"></span><span class="lst-tab-name">' + escapeHtml(listLabel(list)) + '</span>' + countTag + '</button>';
         }).join('');
-        return '<div class="lst-switcher" role="tablist">' + tabs + '<button type="button" class="lst-tab lst-tab-new" data-sky-action="query" data-query="new list"><span class="lst-tab-name">+ New</span></button></div>';
+        // Only real list tabs live in the tablist; "+ New" is an action, not a tab,
+        // so it sits outside the tablist (a11y). .lst-tablist is display:contents so
+        // the tabs still flex within .lst-switcher.
+        return '<div class="lst-switcher"><div class="lst-tablist" role="tablist">' + tabs + '</div>' +
+            '<button type="button" class="lst-tab lst-tab-new" data-sky-action="query" data-query="new list"><span class="lst-tab-name">+ New</span></button></div>';
     }
 
     // The tap query for a row. Open item → tick off; done item → restore. Direction
@@ -948,54 +961,45 @@
         const selectedId = props.list_id && props.list_id !== 'lists-overview' ? props.list_id : '';
         const visibleItems = items.slice(0, 24);
         const rows = visibleItems.map((item, index) => renderListItemRow(item, index, listType, accent)).join('');
-        const overviewCols = !items.length && lists.length ? '<div class="lst-cols">' + lists.slice(0, 6).map(renderListColumn).join('') + '</div>' : '';
+        // Overview = the multi-list catalog, shown only when NO single list is
+        // selected. A selected-but-empty list gets the dedicated empty state below.
+        const overviewCols = !items.length && !selectedId && lists.length ? '<div class="lst-cols">' + lists.slice(0, 6).map(renderListColumn).join('') + '</div>' : '';
         const empty = [
             '<div class="sky-empty-data lst-empty">',
             '<strong>No items in ' + escapeHtml(props.list_name || 'this list') + '</strong>',
-            '<span>Zoe did not find active items for this request.</span>',
+            '<span>Tap “Add item” or ask Zoe to put something on this list.</span>',
             '</div>'
         ].join('');
         const isOverview = !rows && !!overviewCols;
-        const headerTitle = isOverview
-            ? 'Lists'
-            : (props.list_name || (selectedId && listLabel(lists.find(l => String(l.id || '') === String(selectedId)) || {})) || 'List');
-        // Progress is over the WHOLE list (not just the visible slice) so the hero %
-        // is honest even when more than 16 items exist.
-        const totalDone = items.filter(it => typeof it === 'object' && it && it.completed).length;
         const ident = listIdentity(accent);
 
-        let countLabel;
-        if (isOverview) {
-            countLabel = lists.length === 1 ? '1 list' : lists.length + ' lists';
-        } else if (!items.length) {
-            countLabel = 'Empty';
-        } else {
-            const noun = items.length === 1 ? 'item' : 'items';
-            countLabel = totalDone ? totalDone + ' of ' + items.length + ' ' + noun + ' done' : items.length + ' ' + noun;
-        }
-
-        // Compact progress: a slim bar in the list's accent (detail view only).
-        // The list itself is the hero now — no ring stealing a third of a 7" screen.
+        // Progress is over the WHOLE list (not just the visible slice) so the % is
+        // honest even when more than 24 items exist.
+        const totalDone = items.filter(it => typeof it === 'object' && it && it.completed).length;
         const openCount = Math.max(0, items.length - totalDone);
         const pct = items.length ? Math.round((totalDone / items.length) * 100) : 0;
+        // Slim progress + open-first count line ("3 left · 2 done") — the shopper's
+        // view. Sits just under the tab row; the active tab is the title now.
+        let progressLabel = '';
+        if (isOverview) {
+            progressLabel = lists.length === 1 ? '1 list' : lists.length + ' lists';
+        } else if (!items.length) {
+            progressLabel = 'Empty list';
+        } else if (totalDone) {
+            progressLabel = openCount + ' left · ' + totalDone + ' done';
+        } else {
+            progressLabel = items.length + (items.length === 1 ? ' item' : ' items');
+        }
         const progressBar = (!isOverview && items.length)
             ? '<div class="lst-progress" role="img" aria-label="' + totalDone + ' of ' + items.length + ' done"><span class="lst-progress-fill" style="width:' + pct + '%"></span></div>'
             : '';
-        // Header count: open-first ("3 left · 2 done") — the shopper's view.
-        let headCount = countLabel;
-        if (!isOverview && items.length && totalDone) {
-            headCount = openCount + ' left · ' + totalDone + ' done';
-        }
+        const meta = '<div class="lst-meta"><span class="lst-meta-count">' + escapeHtml(progressLabel) + '</span>' + progressBar + '</div>';
 
-        const header = [
-            '<header class="lst-header">',
-            '<div class="lst-heading">',
-            '<span class="lst-id-badge">' + listIdentityGlyph(ident.glyph) + '</span>',
-            '<div class="lst-headtext"><span class="lst-kicker">' + (isOverview ? 'Your lists' : 'List') + '</span><h3 class="lst-name">' + escapeHtml(headerTitle) + '</h3></div>',
-            '</div>',
-            '<span class="lst-count">' + escapeHtml(headCount) + '</span>',
-            '</header>'
-        ].join('');
+        // Fallback title chip: only when there are NO tabs to act as the title
+        // (e.g. guest sessions with no list catalog). Normally the active tab titles.
+        const fallbackTitle = !lists.length
+            ? '<div class="lst-solo-title"><span class="lst-id-badge">' + listIdentityGlyph(ident.glyph) + '</span><h3 class="lst-name">' + escapeHtml(props.list_name || 'List') + '</h3></div>'
+            : '';
 
         // "+ Add item" — tapping opens the composer prefilled "add ⟂ to the <type> list"
         // (caret after "add ") so you can type or speak the item. Shown on any
@@ -1007,16 +1011,47 @@
               '<span class="lst-box lst-add-plus" aria-hidden="true">+</span>' +
               '<span class="lst-text lst-add-label">Add item</span></button>'
             : '';
-        // Flow into two columns once a single list outgrows the screen (§5).
-        const multiCol = (!isOverview && items.length > 8) ? ' is-2col' : '';
-        const itemsClass = 'lst-items ' + (rows ? 'is-detail' : 'is-overview') + multiCol;
-        const itemsInner = isOverview ? overviewCols : ((rows || empty) + addRow);
+
+        // Orb keep-out: an invisible layout reservation pinned to the bottom-left
+        // grid cells so items flow AROUND the Zoe orb + voice pill (never behind
+        // them). Explicitly placed, so grid auto-flow fills every other cell.
+        const keepOut = '<i class="lst-keepout" aria-hidden="true"></i>';
+
+        let itemsClass;
+        let itemsInner;
+        let itemsStyle = '';
+        if (isOverview) {
+            itemsClass = 'lst-items is-overview';
+            itemsInner = overviewCols;
+        } else if (rows) {
+            // Multi-column grid (newspaper flow) so a long list fills the width
+            // instead of one tall skinny column, wrapping around the orb. A short
+            // list uses only as many rows as it needs (no fixed ~604px reservation)
+            // and skips the orb keep-out — it's too short to reach the bottom-left
+            // orb zone, so it never overlaps.
+            const cells = visibleItems.length + 1; // items + add-row
+            const compact = cells <= 6;
+            itemsClass = 'lst-items is-grid';
+            if (compact) {
+                itemsStyle = ' style="--lst-rows:' + Math.max(3, cells) + '"';
+                itemsInner = addRow + rows;               // no keep-out needed
+            } else {
+                itemsInner = keepOut + addRow + rows;      // 9-row wrap around the orb
+            }
+        } else {
+            // Add-row pinned to the top (clear of the bottom-left orb); the empty
+            // message fills the remaining space, centered.
+            itemsClass = 'lst-items is-empty';
+            itemsInner = addRow + empty;
+        }
+
         const body = [
             '<div class="lst-scene lst-a-' + escapeHtml(accent) + ' lst-tint-' + ident.tint + '">',
-            header,
-            progressBar,
-            lists.length ? renderListSwitcher(lists, selectedId) : '',
-            '<div class="' + itemsClass + '">' + itemsInner + '</div>',
+            '<div class="lst-top">',
+            lists.length ? renderListSwitcher(lists, selectedId) : fallbackTitle,
+            meta,
+            '</div>',
+            '<div class="' + itemsClass + '"' + itemsStyle + '>' + itemsInner + '</div>',
             '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'Lists', icon: 'L' }, props), body, { wide: true, tone: 'zoe-list-card ' + accent, hideHeader: true, hideStatus: true, hideActions: true });
