@@ -394,3 +394,147 @@ class TestListAddDefersToCompetingDomains:
             assert name == "note_create", (
                 f"Expected note_create for: {msg!r}, got {name!r}"
             )
+
+
+# ── Journal "add …" positive routing (tool-breadth gate failure #1) ──────────
+# The 4B flue brain under-fires its journal tool on "add a journal entry: …"
+# (a "grateful for the rain" entry misrouted to a weather answer because "rain"
+# tripped the sidecar's weather disclosure). #1150 stopped list_add swallowing
+# it; this completes the fix by routing the explicit phrasing to the
+# deterministic, DB-verified journal_create executor.
+
+class TestJournalAddRouting:
+    JOURNAL_CREATE = [
+        "add a journal entry: grateful for the rain today",
+        "add a journal entry grateful for the sunshine",
+        "add a diary entry: slept well",
+        "write a journal entry: had a great day",
+        "make a diary entry about the trip",
+    ]
+
+    def test_add_journal_entry_routes_to_journal_create(self, ir):
+        for msg in self.JOURNAL_CREATE:
+            name = _intent_name(ir, msg)
+            assert name == "journal_create", (
+                f"Expected journal_create for: {msg!r}, got {name!r}"
+            )
+
+    def test_content_strips_leading_colon(self, ir):
+        # The ":" separator after "entry" must not leak into stored content.
+        result = ir.detect_intent("add a journal entry: grateful for the rain today")
+        assert result is not None and result.name == "journal_create"
+        content = (result.slots or {}).get("content", "")
+        assert content == "grateful for the rain today", repr(content)
+
+    def test_add_journal_does_not_steal_shopping(self, ir):
+        # A journal verb must not hijack genuine shopping/list or calendar adds.
+        assert _intent_name(ir, "add milk to my shopping list") == "list_add"
+        assert _intent_name(ir, "add sugar to the grocery list") == "list_add"
+
+
+# ── note_search / people_search direct executors (tool-breadth failures #2/#3) ─
+# The mcporter command for these searches omitted user_id, so the MCP tool fell
+# back to the family-admin identity and never surfaced an authed user's own
+# rows. The new direct executors bind the acting user_id in trusted code and
+# query the DB directly (mirroring the *_create direct executors). These tests
+# assert: (a) the query is scoped to the passed user_id, (b) rows format into
+# the found-response, (c) an empty result formats as the not-found line (a valid
+# answer, never a fall-through), and (d) LIKE wildcards in the query are escaped.
+
+class _FakeCursor:
+    def __init__(self, rows):
+        self._rows = rows
+
+    async def fetchall(self):
+        return self._rows
+
+
+class _FakeDB:
+    """Records (sql, params) and returns preset rows for the next execute()."""
+
+    def __init__(self, rows):
+        self._rows = rows
+        self.calls: list[tuple[str, tuple]] = []
+
+    async def execute(self, sql, params):
+        self.calls.append((sql, params))
+        return _FakeCursor(self._rows)
+
+
+def _stub_search_db(monkeypatch, rows):
+    import types
+    from contextlib import asynccontextmanager
+
+    db = _FakeDB(rows)
+    dbmod = types.ModuleType("database")
+
+    @asynccontextmanager
+    async def _get_db_ctx():
+        yield db
+
+    dbmod.get_db_ctx = _get_db_ctx
+    monkeypatch.setitem(sys.modules, "database", dbmod)
+    return db
+
+
+def test_note_search_scopes_to_user_and_formats(ir, monkeypatch):
+    db = _stub_search_db(monkeypatch, [{"id": "1", "title": "wifi", "content": "pw"}])
+    reply = asyncio.run(
+        ir._execute_note_search_direct(ir.Intent("note_search", {"query": "wifi"}), "parity-gate-user")
+    )
+    assert "wifi" in reply and "No matching notes" not in reply
+    sql, params = db.calls[-1]
+    assert "user_id = ?" in sql and "parity-gate-user" in params
+    assert "ILIKE" in sql  # case-insensitive
+
+
+def test_note_search_empty_is_not_found_line(ir, monkeypatch):
+    _stub_search_db(monkeypatch, [])
+    reply = asyncio.run(
+        ir._execute_note_search_direct(ir.Intent("note_search", {"query": "zzz"}), "u1")
+    )
+    assert reply == "No matching notes found."
+
+
+def test_note_search_escapes_like_wildcards(ir, monkeypatch):
+    db = _stub_search_db(monkeypatch, [])
+    asyncio.run(
+        ir._execute_note_search_direct(ir.Intent("note_search", {"query": "50%"}), "u1")
+    )
+    _sql, params = db.calls[-1]
+    # The literal % must be escaped so it can't match everything.
+    assert all("50\\%" in p for p in params if isinstance(p, str) and "50" in p)
+
+
+def test_people_search_scopes_to_user_and_formats(ir, monkeypatch):
+    db = _stub_search_db(monkeypatch, [{"name": "Sarah Mitchell", "relationship": "friend"}])
+    reply = asyncio.run(
+        ir._execute_people_search_direct(ir.Intent("people_search", {"query": "sarah"}), "parity-gate-user")
+    )
+    assert "Sarah Mitchell" in reply and "No contacts found" not in reply
+    sql, params = db.calls[-1]
+    assert "user_id = ?" in sql and "parity-gate-user" in params
+    assert "ILIKE" in sql
+
+
+def test_people_search_empty_is_not_found_line(ir, monkeypatch):
+    _stub_search_db(monkeypatch, [])
+    reply = asyncio.run(
+        ir._execute_people_search_direct(ir.Intent("people_search", {"query": "nobody"}), "u1")
+    )
+    assert reply == 'No contacts found for "nobody".'
+
+
+def test_people_search_empty_query_lists_user_contacts_not_mcporter(ir, monkeypatch):
+    # "show my contacts" → empty query. Must list the USER's own contacts
+    # in-process (user-scoped), NEVER return None to the mcporter fallback that
+    # omits user_id and would surface family-admin's contacts.
+    db = _stub_search_db(monkeypatch, [{"name": "Sarah Mitchell", "relationship": "friend"}])
+    reply = asyncio.run(
+        ir._execute_people_search_direct(ir.Intent("people_search", {"query": ""}), "parity-gate-user")
+    )
+    assert reply is not None  # did NOT fall through to mcporter
+    assert "Sarah Mitchell" in reply
+    sql, params = db.calls[-1]
+    assert "user_id = ?" in sql and "parity-gate-user" in params
+    assert "ILIKE" not in sql  # no name filter on the list-all path
