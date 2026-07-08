@@ -1,7 +1,7 @@
 ---
 type: Runbook
 title: Relationship-Memory Flag-Enable Runbook
-description: Operator procedure to turn on the three relationship-memory features (temporal edges, graph traversal, person-merge) in prod — the migrate-first order, the incremental replay-gated flag flips, live verification, and the flag-off (not schema-downgrade) rollback. All three ship OFF; this is how they go live safely.
+description: Operator procedure to turn on the three relationship-memory features (temporal edges, graph traversal, person-merge) in prod — the migrate-first order, the incremental replay-gated flag flips, live verification, and the flag-off (not schema-downgrade) rollback. All three ship OFF; this is how they go live safely. Also covers the independent recall-dossier flags (ZOE_MEMORY_COMPOSE_ENABLED + ZOE_PERSON_DOSSIER_ENABLED) that render a compact per-person line into the brain's recall packet.
 tags: [relationships, memory, flags, deploy, migration, runbook, voice-replay]
 timestamp: 2026-07-05T00:00:00Z
 ---
@@ -11,7 +11,9 @@ timestamp: 2026-07-05T00:00:00Z
 The relationship-memory roadmap (temporal edges, recursive-CTE graph traversal, person-merge
 / entity resolution) is **merged but dark**: all three features default **OFF** and ship behind
 env flags. This is the operator procedure to turn them on in prod without regressing the live
-voice write-path or losing relationship history.
+voice write-path or losing relationship history. It also covers the independent **recall
+dossier** flags (`ZOE_MEMORY_COMPOSE_ENABLED` + `ZOE_PERSON_DOSSIER_ENABLED`, last section) that
+control how a person is rendered into the brain's recall packet.
 
 Design SSOT: [`docs/adr/ADR-relationship-memory.md`](../adr/ADR-relationship-memory.md).
 Deploy discipline this depends on: [merge-and-deploy.md](merge-and-deploy.md) (merged ≠ live),
@@ -128,3 +130,90 @@ is intentionally lossy to reverse — roll back with the flags, not the schema.
   SQLite) — run it before a prod flip if the code has moved since #1044.
 - Only `ZOE_TEMPORAL_RELATIONSHIPS_ENABLED` is truly on the voice hot path; it is the flag the
   replay gate exists for. The other two still need a restart-and-smoke.
+
+## Recall dossier — compact per-person line (independent add-on)
+
+Separate from the three flags above (no migration, no write-path change): this controls how a
+person is *rendered into the brain's recall packet*. OFF, a person is a thin `Name (rel) — notes`
+line; ON, it becomes a compact cited dossier sourced from fields already in the DB:
+
+```
+- Alex Example (brother · family, score 82) — likes chocolate, fruit loops · enjoys travelling · alex@example.com, 555-0100, b.Jan 1 [people]
+```
+
+(relationship · circle · `health_score`→score, top-3 recent likes from `person_activities` with
+same-verb grouping, notes, and email/phone/birthday; clipped so a chatty contact can't crowd the
+prompt. PRs #1169 + #1170.)
+
+| Flag (env, in `services/zoe-data/.env`) | Turns on | Reader |
+|---|---|---|
+| `ZOE_MEMORY_COMPOSE_ENABLED` | The whole relational recall block (increment 2b). **Gates everything below** — the dossier does nothing without it. **Already `=1` in prod** (2026-07-08). | `zoe_memory_compose.py:43` |
+| `ZOE_PERSON_DOSSIER_ENABLED` | Swaps the thin person line for the dossier + adds one bounded batch read of recent likes. Default OFF. | `zoe_memory_compose.py` (`person_dossier_enabled`) |
+
+**Enable:** set `ZOE_PERSON_DOSSIER_ENABLED=1` (compose is already on) → `systemctl --user restart
+zoe-data.service`. No migration — reads existing `people` + `person_activities` columns.
+
+**Independent of the three relationship flags:** the dossier reads people + activities, not the
+temporal/graph/merge machinery, so it works with those flags on *or* off. It is, however, on the
+voice **recall** path (compose runs when `needs_relational` fires), so treat a flip as
+voice-path-adjacent — run the `~/.zoe-voice-samples` replay at deploy when there's RAM headroom.
+
+**Rollback:** unset `ZOE_PERSON_DOSSIER_ENABLED` → restart. Instant, lossless (render-only; the thin
+line returns). OFF is a byte-for-byte no-op — the dossier columns and the likes read only run when
+the flag is on.
+
+**Lab proof:** `services/zoe-data/tests/test_person_dossier_compose.py` (flag OFF no-op + ON
+assembly + `_group_facts`/`_fmt_score` helpers).
+
+### Ready-to-run flip (verified 2026-07-08)
+
+Run on the host as `zoe`. The restart is **operator-authorized** (the turn classifier blocks it for
+agents). State at verification: dossier code live at `ec41cb2a`, `ZOE_MEMORY_COMPOSE_ENABLED=1`,
+`ZOE_PERSON_DOSSIER_ENABLED` unset — so this is a one-flag flip. Re-check step 0 before flipping in
+case the tree has moved.
+
+The whole block is safe to paste and safe to re-run: the flip is **guarded** on the dossier code
+being live (won't flip a tree that lacks it) and the `.env` write is **idempotent**.
+
+```bash
+ENV=/home/zoe/assistant/services/zoe-data/.env
+health() { for _ in 1 2 3 4 5 6 7 8; do
+  code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/health)
+  [ "$code" = 200 ] && { echo "health 200"; return 0; }; sleep 2
+done; echo "health $code (not up after ~16s)"; return 1; }
+
+# 0. Pre-flight — expect all three OK
+git -C /home/zoe/assistant merge-base --is-ancestor ec41cb2a HEAD \
+  && echo "OK: dossier code live" || echo "STOP: deploy main first"
+grep -E 'ZOE_MEMORY_COMPOSE_ENABLED|ZOE_PERSON_DOSSIER_ENABLED' "$ENV"  # expect COMPOSE=1, no DOSSIER
+health
+
+# 1. (optional, if RAM ≥ ~1.5 GB free) baseline the voice replay — compose is on the recall path
+free -m | awk '/Mem:/{print "avail="$7"MB"}'
+flock /tmp/zoe-voice-harness.lock \
+  python /home/zoe/assistant/scripts/maintenance/voice_regression_probe.py
+
+# 2. Flip + restart — GUARDED on the code being live, IDEMPOTENT write (safe to re-run)
+if git -C /home/zoe/assistant merge-base --is-ancestor ec41cb2a HEAD; then
+  grep -qxF 'ZOE_PERSON_DOSSIER_ENABLED=1' "$ENV" || echo 'ZOE_PERSON_DOSSIER_ENABLED=1' >> "$ENV"
+  systemctl --user restart zoe-data.service
+  health
+else
+  echo "STOP: dossier code not live in the checkout — deploy main first; did NOT flip"
+fi
+
+# 3. Verify — a RELATIONAL message for a real contact; look in "packet" for a dossier-shaped
+#    [people] line: Name (rel · circle, score N) — likes … · contact
+curl -s 'http://127.0.0.1:8000/api/memories/for-prompt' --get \
+  --data-urlencode 'user_id=<your-user-id>' \
+  --data-urlencode 'message=tell me about my brother' | python3 -m json.tool
+
+# 4. Rollback (instant, lossless — thin line returns)
+sed -i '/^ZOE_PERSON_DOSSIER_ENABLED=/d' "$ENV"
+systemctl --user restart zoe-data.service && health
+```
+
+Notes: the dossier `[people]` line only renders when the message trips the relational gate (a
+relationship word or "tell me about X") *and* the contact has data. If `/health` returns `000` on the
+host (service "active"), that is the accept-queue-hang signature ([incident-runbook.md](incident-runbook.md)) — a
+restart clears it.
