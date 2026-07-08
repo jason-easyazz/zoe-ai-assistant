@@ -595,6 +595,60 @@ process.stdout.write(JSON.stringify({ earliest_first: html.indexOf('EarlyEvent')
     assert checks["earliest_first"], "calendar events must render earliest-first"
 
 
+def test_skybridge_calendar_ribbon_and_now_line(tmp_path):
+    """Behavioral coverage for the ribbon helpers (calMinutes/calDuration/
+    calHourLabel/calGutter/calendarRibbon): a busy 'today' renders the ribbon with
+    hour ticks + event blocks, and the live now-line stays inside the rail even
+    when the current time lands exactly on an hour boundary (was clipped at 100%)."""
+    node = shutil.which("node") or shutil.which("nodejs")
+    if not node:
+        pytest.skip("Node.js is not installed on this host")
+    harness = tmp_path / "cal_ribbon.cjs"
+    harness.write_text(
+        """
+const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+// Freeze "now" to an EXACT hour boundary (23:00) on the card's date so the
+// now-line's window end is driven by nowMin — the case that used to clip.
+const FIXED = new Date('2026-06-23T23:00:00').getTime();
+class FakeDate extends Date {
+  constructor(...a){ if (a.length === 0) super(FIXED); else super(...a); }
+  static now(){ return FIXED; }
+}
+const sandbox = { window: {}, Date: FakeDate };
+vm.createContext(sandbox);
+vm.runInContext(src, sandbox);
+const R = sandbox.window.SkybridgeRenderer;
+const html = R.render({ card_type: 'generic', schema_version: '1.0.0', card_id: 'c', content: {
+  source: 'calendar_show', qualifier: 'today', date: '2026-06-23',
+  events: [
+    { id: 'a', title: 'Standup', start_time: '08:00', end_time: '08:30', start_date: '2026-06-23' },
+    { id: 'b', title: 'Lunch', start_time: '12:00', end_time: '13:00', start_date: '2026-06-23' }
+  ]
+} });
+const m = html.match(/cal-ribbon-now[^>]*left:([0-9.]+)%/);
+process.stdout.write(JSON.stringify({
+  ribbon: html.includes('cal-ribbon'),
+  ticks: html.includes('cal-tick'),
+  blocks: html.includes('cal-block'),
+  now_line: !!m,
+  now_left: m ? parseFloat(m[1]) : -1
+}));
+""",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [node, str(harness), str(UI / "js" / "skybridge-renderer.js")],
+        check=True, capture_output=True, text=True,
+    )
+    import json
+    c = json.loads(proc.stdout)
+    assert c["ribbon"] and c["ticks"] and c["blocks"], f"ribbon markup missing: {c}"
+    assert c["now_line"], "live now-line should render on today"
+    assert 0 <= c["now_left"] < 99.5, f"now-line clipped at boundary: left={c['now_left']}"
+
+
 def test_skybridge_is_registered_in_touch_menu():
     menu = read(UI / "js" / "touch-menu.js")
 
@@ -1059,13 +1113,29 @@ vm.runInContext(fs.readFileSync(process.argv[3],'utf8'),s);
 const R=s.window.SkybridgeRenderer;
 const html=R.render({card_type:'now_playing',schema_version:'1.0.0',card_id:'np',
   content:{source:'music_now_playing',title:'Song <b>x</b>',artist:'Artist',state:'playing',player_name:'Kitchen',transport:true}});
+// Same-origin album art → blurred backdrop + <img>; cross-origin-ish paths are dropped.
+const artHtml=R.render({card_type:'now_playing',schema_version:'1.0.0',card_id:'np2',
+  content:{source:'music_now_playing',title:'T',artist:'A',album:'Alb',state:'playing',player_name:'Den',image:'/media/cover.png',transport:true,elapsed:60,duration:180}});
+const badHtml=R.render({card_type:'now_playing',schema_version:'1.0.0',card_id:'np3',
+  content:{source:'music_now_playing',title:'T',state:'playing',image:'//evil.example/x.png"onerror=alert(1)',transport:true}});
+const absHtml=R.render({card_type:'now_playing',schema_version:'1.0.0',card_id:'np4',
+  content:{source:'music_now_playing',title:'T',state:'playing',image:'https://cdn.example.com/a/cover.png',transport:true}});
+const angleHtml=R.render({card_type:'now_playing',schema_version:'1.0.0',card_id:'np5',
+  content:{source:'music_now_playing',title:'T',state:'playing',image:'/media/c<over>.png',transport:true}});
 process.stdout.write(JSON.stringify({
   card: html.includes('now-playing-card'),
   transport: html.includes('np-transport') && html.includes('np-btn'),
   pause_when_playing: html.includes('data-query="pause music"'),
   actions_wired: html.includes('data-sky-action="query"') && html.includes('data-query="next song"'),
   escaped: html.includes('&lt;b&gt;') && !html.includes('<b>x</b>'),
-  no_dup_header: (html.match(/np-title/g)||[]).length===1
+  no_dup_header: (html.match(/np-title/g)||[]).length===1,
+  ambient: html.includes('np-ambient'),
+  placeholder_when_no_art: html.includes('np-art-empty'),
+  art_backdrop_same_origin: artHtml.includes('np-art-bg') && artHtml.includes('src="/media/cover.png"'),
+  art_backdrop_absolute: absHtml.includes('np-art-bg') && absHtml.includes('src="https://cdn.example.com/a/cover.png"'),
+  progress_when_elapsed: artHtml.includes('np-progress') && artHtml.includes('1:00'),
+  reject_protocol_relative: !badHtml.includes('np-art-bg') && badHtml.includes('np-art-empty') && !badHtml.includes('onerror'),
+  reject_angle_brackets: !angleHtml.includes('np-art-bg') && angleHtml.includes('np-art-empty')
 }));
 """, encoding="utf-8")
     node = shutil.which("node") or shutil.which("nodejs")
