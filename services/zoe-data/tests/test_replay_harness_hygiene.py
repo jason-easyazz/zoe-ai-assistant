@@ -69,16 +69,19 @@ def test_normal_brain_reply_still_ok():
 
 # ── per-run session id ────────────────────────────────────────────────────────
 
-def test_session_id_is_per_run_not_hardcoded(monkeypatch):
+def test_session_id_is_per_run_not_hardcoded():
     rs = _harness()
-    monkeypatch.setattr(rs.time, "time", lambda: 1751900000.9)
     sid = rs._run_session_id()
-    assert sid == "replay-1751900000"
+    # replay-<uuid4 hex[:12]> — a RANDOM token, not a wall-clock second, so two
+    # runs in the same second (parallel CI workers) can't collide into one
+    # sidecar session and re-create the durable-session-growth incident.
+    assert sid.startswith("replay-")
     assert sid != "replay"  # the durable-session-growth incident id
+    suffix = sid[len("replay-"):]
+    assert len(suffix) == 12 and all(c in "0123456789abcdef" for c in suffix)
 
 
-def test_session_id_differs_across_runs(monkeypatch):
+def test_session_id_differs_across_runs():
     rs = _harness()
-    ticks = iter([1751900000.0, 1751900137.0])
-    monkeypatch.setattr(rs.time, "time", lambda: next(ticks))
+    # Random ids: distinct even when generated back-to-back in the same second.
     assert rs._run_session_id() != rs._run_session_id()
