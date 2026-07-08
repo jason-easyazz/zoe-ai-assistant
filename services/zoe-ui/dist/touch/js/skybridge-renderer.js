@@ -1345,7 +1345,9 @@
             play: '<path d="M8 5v14l11-7z"/>',
             pause: '<path d="M8 5h3v14H8zM13 5h3v14h-3z"/>',
             voldown: '<path d="M4 9v6h4l5 4V5L8 9zM17 12h4"/>',
-            volup: '<path d="M4 9v6h4l5 4V5L8 9zM17 9h4M19 7v4"/>'
+            volup: '<path d="M4 9v6h4l5 4V5L8 9zM17 9h4M19 7v4"/>',
+            // Filled music note for the empty-art placeholder (matches dashGlyph music).
+            note: '<path d="M9 17V5l10-2v12"/><circle cx="6" cy="17" r="3"/><circle cx="16" cy="15" r="3"/>'
         };
         return '<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true">' + (paths[name] || paths.play) + '</svg>';
     }
@@ -1353,43 +1355,104 @@
         return '<button type="button" class="np-btn' + (cls ? ' ' + cls : '') + '" data-sky-action="query" data-query="' + escapeHtml(query) + '" aria-label="' + escapeHtml(query) + '">' + npIcon(icon) + '</button>';
     }
 
+    // Stable on-brand ambient wash: hash the track/album to pick a ds1 accent
+    // pair so each song gets a consistent tint (and a placeholder that isn't
+    // always the same violet). Colors are literal ds1 hexes — safe to inline.
+    function npTint(seed) {
+        var pairs = [
+            ['#9b8cff', '#6aa6ff'], // violet → blue (ds1 default)
+            ['#37c0e6', '#5be3b0'], // cyan → mint
+            ['#6aa6ff', '#37c0e6'], // blue → cyan
+            ['#f5b13c', '#ff6b6b'], // amber → coral
+            ['#9b8cff', '#ff6b6b'], // violet → coral
+            ['#5be3b0', '#6aa6ff']  // mint → blue
+        ];
+        var s = String(seed || 'zoe'), h = 0;
+        for (var i = 0; i < s.length; i++) { h = (h * 31 + s.charCodeAt(i)) >>> 0; }
+        return pairs[h % pairs.length];
+    }
+
+    function npTime(secs) {
+        secs = Math.max(0, Math.floor(secs));
+        var m = Math.floor(secs / 60), s = secs % 60;
+        return m + ':' + (s < 10 ? '0' : '') + s;
+    }
+
     function renderNowPlaying(props) {
-        // Music Assistant now-playing card. The SVG transport row is built here
-        // from state; each button carries data-sky-action=query so tap + voice
-        // share one resolver path.
+        // Music Assistant now-playing card — album-art-forward ambient look.
+        // The SVG transport row is built here from state; each button carries
+        // data-sky-action=query so tap + voice share one resolver path.
         var img = String(props.image || '');
-        var sameOrigin = img && (img.charAt(0) === '/' || img.indexOf('http') === 0);
-        var art = sameOrigin
-            ? '<img class="np-art" src="' + escapeHtml(img) + '" alt="" loading="lazy">'
-            : '<div class="np-art np-art-empty">' + npIcon('play') + '</div>';
+        var sameOrigin = img && ((img.charAt(0) === '/' && img.charAt(1) !== '/') || /^https?:\/\//i.test(img));
+        // Strict URL shape (no quotes/parens/backslash/whitespace/angle brackets,
+        // which are invalid in URL paths per RFC 3986) so it is safe to drop into a
+        // CSS url() inside a style attribute as well as an <img>.
+        var safeArt = (sameOrigin && /^(?:\/[^"'()\\\s<>]+|https?:\/\/[^"'()\\\s<>]+)$/i.test(img)) ? img : '';
         var playing = props.state === 'playing';
         var hasTrack = playing || props.state === 'paused';
         var stateBadge = playing ? 'Playing' : (props.state === 'paused' ? 'Paused' : 'Ready');
+        var tint = npTint(props.album || props.artist || props.title || 'zoe');
+
+        // Ambient wash filling the whole card (behind the scene). Two accent
+        // radials over a deep neutral base; hex+alpha is valid, tokens are hex.
+        var ambient = 'background:'
+            + 'radial-gradient(120% 120% at 10% -6%,' + tint[0] + 'E6 0%,' + tint[0] + '00 52%),'
+            + 'radial-gradient(120% 115% at 104% 28%,' + tint[1] + 'BF 0%,' + tint[1] + '00 55%),'
+            + 'radial-gradient(140% 140% at 80% 118%,' + tint[0] + '80 0%,' + tint[0] + '00 55%),'
+            + 'linear-gradient(155deg,#0f1220F2 0%,#0a0d16F2 100%)';
+
+        var artInner = safeArt
+            ? '<img class="np-art" src="' + escapeHtml(safeArt) + '" alt="" loading="lazy">'
+            : '<div class="np-art np-art-empty" style="--np-c1:' + tint[0] + ';--np-c2:' + tint[1] + '">' + npIcon('note') + '</div>';
+        // Blurred art backdrop (same-origin guard already applied to safeArt).
+        var artBg = safeArt
+            ? '<div class="np-art-bg" style="background-image:url(&quot;' + escapeHtml(safeArt) + '&quot;)"></div>'
+            : '';
+
+        var eq = playing ? '<span class="np-eq" aria-hidden="true"><i></i><i></i><i></i><i></i></span>' : '';
+        var kicker = '<span class="np-kicker">' + eq + '<span>' + escapeHtml(stateBadge)
+            + (props.player_name ? ' · ' + escapeHtml(props.player_name) : '') + '</span></span>';
+
+        // Optional progress — only if the producer sends elapsed + duration.
+        var progress = '';
+        var elapsed = Number(props.elapsed != null ? props.elapsed : props.position);
+        var duration = Number(props.duration != null ? props.duration : props.length);
+        if (hasTrack && isFinite(elapsed) && isFinite(duration) && duration > 0 && elapsed >= 0) {
+            var frac = Math.max(0, Math.min(1, elapsed / duration));
+            progress = '<div class="np-progress"><div class="np-bar"><span style="width:'
+                + (frac * 100).toFixed(1) + '%"></span></div>'
+                + '<div class="np-times"><span>' + npTime(elapsed) + '</span><span>' + npTime(duration) + '</span></div></div>';
+        }
+
         var transport = hasTrack ? [
             '<div class="np-transport">',
+            npBtn('voldown', 'turn the music down'),
             npBtn('prev', 'previous song'),
             playing ? npBtn('pause', 'pause music', 'np-primary') : npBtn('play', 'resume music', 'np-primary'),
             npBtn('next', 'next song'),
-            npBtn('voldown', 'turn the music down'),
             npBtn('volup', 'turn the music up'),
             '</div>'
         ].join('') : '';
         // Browse/suggestion chips (idle card) come through props.actions.
         var chips = (!hasTrack && Array.isArray(props.actions) && props.actions.length)
             ? '<div class="sky-actions np-chips">' + props.actions.map(buttonHtml).join('') + '</div>' : '';
+
         var body = [
+            '<div class="np-ambient" style="' + ambient + '"></div>',
+            artBg,
+            '<div class="np-scrim"></div>',
             '<div class="np-scene">',
-            art,
+            '<div class="np-art-wrap">' + artInner + '</div>',
             '<div class="np-meta">',
-            '<span class="np-state">' + escapeHtml(stateBadge) +
-                (props.player_name ? ' · ' + escapeHtml(props.player_name) : '') + '</span>',
+            kicker,
             '<span class="np-title">' + escapeHtml(props.title || 'Nothing playing') + '</span>',
             props.artist ? '<span class="np-artist">' + escapeHtml(props.artist) + '</span>' : '',
             props.album ? '<span class="np-album">' + escapeHtml(props.album) + '</span>' : '',
-            '</div>',
-            '</div>',
+            progress,
             transport,
-            chips
+            chips,
+            '</div>',
+            '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'Music' }, props), body,
             { wide: true, tone: 'now-playing-card', hideHeader: true, hideStatus: true, hideActions: true });
