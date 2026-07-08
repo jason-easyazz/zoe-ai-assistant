@@ -164,14 +164,6 @@
         return cardFrame(props, composedBody(tree, message), { wide: !!props.wide, tone: props.tone || '' });
     }
 
-    function formatEventTime(item) {
-        const start = item.start_time || '';
-        const end = item.end_time || '';
-        if (item.all_day) return 'All day';
-        if (start && end) return start + ' - ' + end;
-        return start || item.start_date || 'Scheduled';
-    }
-
     function formatCalendarDate(value) {
         const raw = String(value || '');
         const datePart = raw.slice(0, 10);
@@ -307,86 +299,235 @@
         return 'night';
     }
 
-    function renderCalendar(props) {
-        const events = Array.isArray(props.events) ? props.events : [];
-        const sorted = events.slice().sort((a, b) => calendarEventSortKey(a) - calendarEventSortKey(b)).slice(0, 8);
-        const dateMeta = formatCalendarDate(props.date || props.start_date || (sorted[0] && sorted[0].start_date));
-        const qualifier = String(props.qualifier || 'today').trim();
-        const countLabel = events.length + ' ' + (events.length === 1 ? 'event' : 'events') + (qualifier ? ' ' + qualifier : '');
-        const nowMs = Date.now();
+    // Minutes-since-midnight for an "HH:MM[:SS]" clock string, or NaN.
+    function calMinutes(t) {
+        const m = /^(\d{1,2}):(\d{2})/.exec(String(t || ''));
+        if (!m) return NaN;
+        return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+    }
 
-        // The hero is the soonest UPCOMING event by wall-clock — not simply sorted[0],
-        // because an all-day event sorts at 00:00 and would otherwise hijack the hero
-        // ahead of a timed meeting later today. Prefer the first event whose start is
-        // still in the future; fall back to the first sorted event (e.g. all past, or
-        // only all-day) so the card never collapses to an empty agenda.
-        let heroIndex = sorted.findIndex(item => {
-            if (item.all_day) return false;
-            const ms = calendarEventStartMs(item);
-            return Number.isFinite(ms) && ms >= nowMs;
+    // Event length in minutes (end − start), defaulting to 60 when the end is
+    // missing/invalid so a point event still paints a legible ribbon block.
+    function calDuration(item) {
+        const s = calMinutes(item.start_time);
+        const e = calMinutes(item.end_time);
+        return (Number.isFinite(s) && Number.isFinite(e) && e > s) ? (e - s) : 60;
+    }
+
+    // Compact hour label for the ribbon axis: 6 → "6a", 12 → "12p", 18 → "6p".
+    function calHourLabel(h) {
+        h = ((h % 24) + 24) % 24;
+        let hr = h % 12;
+        if (hr === 0) hr = 12;
+        return hr + (h < 12 ? 'a' : 'p');
+    }
+
+    // The time gutter for an agenda row: a big start + small end (or "All / day").
+    function calGutter(item) {
+        if (item.all_day) return { start: 'All', end: 'day' };
+        const s = String(item.start_time || '').slice(0, 5);
+        const e = String(item.end_time || '').slice(0, 5);
+        if (!s) return { start: '—', end: '' };
+        return { start: s, end: (e && e !== s) ? e : '' };
+    }
+
+    // The day RIBBON (Fantastical "DayTicker" / Apple day-timeline idea): a
+    // full-width rail spanning the day's active window with each timed event
+    // plotted as a category-coloured block, hour ticks for orientation, and a live
+    // "now" marker. It makes the day's SHAPE glanceable and uses the wide panel.
+    function calendarRibbon(timed, isToday, nowMs) {
+        if (!timed.length) return '';
+        let winStart = 6 * 60, winEnd = 22 * 60;
+        timed.forEach(function (e) {
+            const s = calMinutes(e.start_time);
+            if (!Number.isFinite(s)) return;
+            winStart = Math.min(winStart, Math.floor(s / 60) * 60);
+            winEnd = Math.max(winEnd, Math.ceil((s + calDuration(e)) / 60) * 60);
         });
-        if (heroIndex < 0) heroIndex = 0;
-        const heroEvent = sorted[heroIndex] || null;
-        const restEvents = sorted.filter((_, i) => i !== heroIndex);
+        // Keep the live "now" marker inside the window on today's view.
+        let nowMin = NaN;
+        if (isToday) {
+            const d = new Date(nowMs);
+            nowMin = d.getHours() * 60 + d.getMinutes();
+            winStart = Math.min(winStart, Math.floor(nowMin / 60) * 60);
+            winEnd = Math.max(winEnd, Math.ceil(nowMin / 60) * 60);
+        }
+        winStart = Math.max(0, winStart);
+        winEnd = Math.min(24 * 60, Math.max(winEnd, winStart + 60));
+        const span = winEnd - winStart;
+        const pct = function (min) { return ((min - winStart) / span) * 100; };
 
-        let heroBlock = '';
-        if (heroEvent) {
-            const title = heroEvent.title || heroEvent.name || 'Calendar event';
-            const category = calendarCategoryClass(heroEvent.category);
-            const detail = [heroEvent.location].filter(Boolean).join(' · ');
-            const countdown = calendarCountdown(heroEvent, nowMs);
-            const isPast = (function () {
-                const ms = calendarEventStartMs(heroEvent);
-                return Number.isFinite(ms) && ms < nowMs && !heroEvent.all_day;
-            })();
-            heroBlock = [
-                '<button type="button" class="cal-hero sky-accent-' + escapeHtml(category) + (isPast ? ' is-past' : '') + '" data-sky-action="query" data-query="' + escapeHtml(calendarEditQuery(heroEvent, title)) + '">',
-                '<span class="cal-hero-rail" aria-hidden="true"></span>',
-                '<span class="cal-hero-kicker">' + escapeHtml(isPast ? 'Earlier' : 'Up next') + '</span>',
-                '<span class="cal-hero-time"><span class="cal-hero-clock">' + escapeHtml(formatEventTime(heroEvent)) + '</span>' +
-                    (countdown ? '<b class="cal-hero-rel">' + escapeHtml(countdown) + '</b>' : '') + '</span>',
-                '<span class="cal-hero-title">' + escapeHtml(title) + '</span>',
-                detail ? '<span class="cal-hero-loc">' + escapeHtml(detail) + '</span>' : '',
-                '</button>'
-            ].join('');
+        // ~7 evenly-spaced hour labels across the window.
+        const stepH = Math.max(1, Math.round((span / 60) / 7));
+        let ticks = '';
+        for (let h = Math.ceil(winStart / 60); h * 60 <= winEnd; h += stepH) {
+            ticks += '<span class="cal-tick" style="left:' + pct(h * 60).toFixed(2) + '%">' +
+                escapeHtml(calHourLabel(h)) + '</span>';
         }
 
-        const rows = restEvents.map(item => {
-            const title = item.title || item.name || 'Calendar event';
-            const category = calendarCategoryClass(item.category);
-            const detail = [item.location].filter(Boolean).join(' · ');
-            const start = String(item.start_time || '').slice(0, 5) || (item.all_day ? 'All day' : '—');
-            return [
-                '<button type="button" class="cal-row sky-accent-' + escapeHtml(category) + '" data-sky-action="query" data-query="' + escapeHtml(calendarEditQuery(item, title)) + '">',
-                '<span class="cal-row-time tnum">' + escapeHtml(start) + '</span>',
-                '<span class="cal-row-marker" aria-hidden="true"></span>',
-                '<span class="cal-row-body"><strong>' + escapeHtml(title) + '</strong>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</span>',
-                '</button>'
-            ].join('');
+        const blocks = timed.map(function (e) {
+            const s = calMinutes(e.start_time);
+            if (!Number.isFinite(s)) return '';
+            const left = Math.max(0, pct(s));
+            const width = Math.max(2.4, Math.min(100 - left, (calDuration(e) / span) * 100));
+            const cat = calendarCategoryClass(e.category);
+            const label = (e.title || e.name || 'Event') + ' · ' + String(e.start_time || '').slice(0, 5);
+            return '<span class="cal-block sky-accent-' + escapeHtml(cat) + '" ' +
+                'style="left:' + left.toFixed(2) + '%;width:' + width.toFixed(2) + '%" ' +
+                'title="' + escapeHtml(label) + '"></span>';
         }).join('');
 
-        const timeline = restEvents.length
-            ? '<div class="cal-timeline">' + rows + '</div>'
-            : (heroEvent ? '<div class="cal-rest-empty">Nothing else scheduled</div>' : '');
+        let nowLine = '';
+        if (Number.isFinite(nowMin) && nowMin >= winStart && nowMin <= winEnd) {
+            nowLine = '<span class="cal-ribbon-now" style="left:' + pct(nowMin).toFixed(2) + '%"></span>';
+        }
 
-        const empty = [
-            '<div class="cal-empty">',
-            '<span class="cal-empty-mark" aria-hidden="true">' + calendarGlyphSvg() + '</span>',
-            '<strong>Nothing scheduled</strong>',
-            '<span>Your day is clear ' + escapeHtml(qualifier || 'for now') + '.</span>',
+        return [
+            '<div class="cal-ribbon" aria-hidden="true">',
+            '<div class="cal-ribbon-rail">', blocks, nowLine, '</div>',
+            '<div class="cal-ribbon-axis">', ticks, '</div>',
             '</div>'
         ].join('');
+    }
 
-        const body = [
-            '<div class="cal-scene" data-daypart="' + calendarDaypart(nowMs) + '">',
+    // Card header: weekday + date on the left; a live "now" chip (today only) and
+    // the event count on the right.
+    function calendarHead(dateMeta, countLabel, isToday, nowMs) {
+        const clock = isToday
+            ? '<span class="cal-now-chip"><span class="cal-now-dot" aria-hidden="true"></span>' +
+                escapeHtml(new Date(nowMs).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })) + '</span>'
+            : '';
+        return [
             '<header class="cal-head">',
             '<div class="cal-head-day">',
             '<span class="cal-head-weekday">' + escapeHtml(dateMeta.weekday) + '</span>',
             '<span class="cal-head-date">' + escapeHtml(dateMeta.monthDay) + '</span>',
             '</div>',
+            '<div class="cal-head-meta">' + clock +
             '<span class="cal-head-count">' + escapeHtml(countLabel) + '</span>',
-            '</header>',
-            heroEvent ? ('<div class="cal-body">' + heroBlock + timeline + '</div>') : empty,
+            '</div>',
+            '</header>'
+        ].join('');
+    }
+
+    function renderCalendar(props) {
+        const events = Array.isArray(props.events) ? props.events : [];
+        const sorted = events.slice().sort((a, b) => calendarEventSortKey(a) - calendarEventSortKey(b)).slice(0, 12);
+        const dateMeta = formatCalendarDate(props.date || props.start_date || (sorted[0] && sorted[0].start_date));
+        const qualifier = String(props.qualifier || 'today').trim();
+        const countLabel = events.length + ' ' + (events.length === 1 ? 'event' : 'events');
+        const nowMs = Date.now();
+
+        // Local (not UTC) "today", so the ribbon's now-line + live chip only appear
+        // when the shown day really is today.
+        const nowDate = new Date(nowMs);
+        const pad = n => String(n).padStart(2, '0');
+        const todayStr = nowDate.getFullYear() + '-' + pad(nowDate.getMonth() + 1) + '-' + pad(nowDate.getDate());
+        const dates = [];
+        sorted.forEach(function (e) {
+            const d = String(e.start_date || e.date || '').slice(0, 10);
+            if (d && dates.indexOf(d) < 0) dates.push(d);
+        });
+        const singleDay = dates.length <= 1;
+        const shownDay = dates.length === 1 ? dates[0] : (dates.length === 0 && qualifier === 'today' ? todayStr : '');
+        const isToday = singleDay && shownDay === todayStr;
+
+        // Empty state — calm "Nothing scheduled".
+        if (!sorted.length) {
+            const emptyBody = [
+                '<div class="cal-scene" data-daypart="' + calendarDaypart(nowMs) + '">',
+                calendarHead(dateMeta, countLabel, isToday, nowMs),
+                '<div class="cal-empty">',
+                '<span class="cal-empty-mark" aria-hidden="true">' + calendarGlyphSvg() + '</span>',
+                '<strong>Nothing scheduled</strong>',
+                '<span>Your day is clear ' + escapeHtml(qualifier || 'for now') + '.</span>',
+                '</div>',
+                '</div>'
+            ].join('');
+            return cardFrame(Object.assign({ status: 'Calendar', icon: 'C' }, props), emptyBody, { wide: true, tone: 'calendar-card', hideHeader: true, hideStatus: true });
+        }
+
+        // All-day events live in a pinned chip band; the agenda below is the timed
+        // (and untimed) events. Keeping them separate stops an all-day event from
+        // being shown twice AND from hijacking the next-up highlight (it sorts 00:00).
+        const allDay = sorted.filter(e => e.all_day);
+        const agendaEvents = sorted.filter(e => !e.all_day);
+        const timed = singleDay ? agendaEvents.filter(e => Number.isFinite(calMinutes(e.start_time))) : [];
+        const ribbon = calendarRibbon(timed, isToday, nowMs);
+
+        // next-up = soonest UPCOMING event; fall back to the first agenda event when
+        // all are already past, so the highlight never lands on nothing.
+        let heroIndex = agendaEvents.findIndex(item => {
+            const ms = calendarEventStartMs(item);
+            return Number.isFinite(ms) && ms >= nowMs;
+        });
+        if (heroIndex < 0) heroIndex = 0;
+
+        const alldayBand = allDay.length ? (
+            '<div class="cal-allday">' + allDay.map(function (e) {
+                const cat = calendarCategoryClass(e.category);
+                const label = e.title || e.name || 'All-day';
+                return '<button type="button" class="cal-chip sky-accent-' + escapeHtml(cat) + '" data-sky-action="query" data-query="' + escapeHtml(calendarEditQuery(e, label)) + '">' +
+                    '<span class="cal-chip-dot" aria-hidden="true"></span>' + escapeHtml(label) + '</button>';
+            }).join('') + '</div>'
+        ) : '';
+
+        // Agenda: every timed event as a tap-to-edit row, next-up emphasised as
+        // .cal-hero. Grouped by day when the range spans more than one date.
+        let lastDate = null;
+        const rows = agendaEvents.map(function (item, i) {
+            const isHero = i === heroIndex;
+            const cat = calendarCategoryClass(item.category);
+            const title = item.title || item.name || 'Calendar event';
+            const detail = [item.location].filter(Boolean).join(' · ');
+            const gutter = calGutter(item);
+            const when = isHero ? calendarCountdown(item, nowMs) : '';
+            const isPast = (function () {
+                const ms = calendarEventStartMs(item);
+                return Number.isFinite(ms) && ms < nowMs && !item.all_day;
+            })();
+
+            let dayHead = '';
+            if (!singleDay) {
+                const d = String(item.start_date || item.date || '').slice(0, 10);
+                if (d && d !== lastDate) {
+                    lastDate = d;
+                    const dm = formatCalendarDate(d);
+                    dayHead = '<div class="cal-daygroup">' + escapeHtml(dm.weekday + ' · ' + dm.monthDay) + '</div>';
+                }
+            }
+
+            const cls = 'cal-row' + (isHero ? ' cal-hero is-next' : '') + (isPast ? ' is-past' : '') + ' sky-accent-' + cat;
+            const btn = [
+                '<button type="button" class="' + cls + '" data-sky-action="query" data-query="' + escapeHtml(calendarEditQuery(item, title)) + '">',
+                (isHero ? '<span class="cal-kicker">' + escapeHtml(isPast ? 'Earlier' : 'Up next') + '</span>' : ''),
+                '<span class="cal-time tnum"><b>' + escapeHtml(gutter.start) + '</b>' +
+                    (gutter.end ? '<i>' + escapeHtml(gutter.end) + '</i>' : '') + '</span>',
+                '<span class="cal-node" aria-hidden="true"></span>',
+                '<span class="cal-body"><strong>' + escapeHtml(title) + '</strong>' +
+                    (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</span>',
+                (isHero && when ? '<span class="cal-when">' + escapeHtml(when) + '</span>' : ''),
+                '</button>'
+            ].join('');
+            return dayHead + btn;
+        }).join('');
+
+        // Flow the agenda into two columns on the wide panel once the day is busy,
+        // so a long list fills the width instead of scrolling off the bottom.
+        const cols = (singleDay && agendaEvents.length >= 6) ? '2' : '1';
+
+        // A calm free-time note on light days keeps the wide card from reading empty.
+        const freeNote = (singleDay && isToday && agendaEvents.length && agendaEvents.length <= 2)
+            ? '<div class="cal-freenote">The rest of your day is clear.</div>'
+            : '';
+
+        const body = [
+            '<div class="cal-scene" data-daypart="' + calendarDaypart(nowMs) + '">',
+            calendarHead(dateMeta, countLabel, isToday, nowMs),
+            ribbon,
+            alldayBand,
+            '<div class="cal-agenda" data-cols="' + cols + '">' + rows + '</div>',
+            freeNote,
             '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'Calendar', icon: 'C' }, props), body, { wide: true, tone: 'calendar-card', hideHeader: true, hideStatus: true });
