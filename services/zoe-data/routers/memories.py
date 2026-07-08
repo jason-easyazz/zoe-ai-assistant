@@ -635,6 +635,33 @@ async def memory_for_prompt(
     return result
 
 
+@router.post("/backfill-contacts")
+async def backfill_contacts_endpoint(
+    user_id: str = Query(..., min_length=1),
+    session_id: str = Query(
+        "backfill",
+        min_length=1,
+        description="Session the proposals are stored under. Pass the user's "
+        "ACTIVE session so `list_active`/`load_for_prompt` surface them — the "
+        "suggestions retrieval paths filter by session_id, so proposals left in "
+        "the default 'backfill' session are never shown in a live chat.",
+    ),
+    _: None = Depends(require_internal_token),
+    db=Depends(get_db),
+):
+    """One-shot admin pass: turn a user's known-but-not-a-contact people into
+    accept-able `person_create` proposals (Phase 2b, ADR-contacts-from-known-people).
+
+    Internal/service endpoint (loopback or `X-Internal-Token`), matching
+    `/for-prompt`. Flag-gated behind `ZOE_CONTACT_BACKFILL_ENABLED`; a no-op that
+    proposes nothing when the flag is off. Never creates contacts directly — it
+    emits pending suggestions the user accepts through the suggestions UI.
+    """
+    from contact_backfill import backfill_contacts
+
+    return await backfill_contacts(user_id, session_id=session_id, db=db)
+
+
 @router.get("/people")
 async def people_with_memories(
     limit: int = Query(100, ge=1, le=500),

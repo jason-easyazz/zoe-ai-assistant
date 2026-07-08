@@ -164,14 +164,6 @@
         return cardFrame(props, composedBody(tree, message), { wide: !!props.wide, tone: props.tone || '' });
     }
 
-    function formatEventTime(item) {
-        const start = item.start_time || '';
-        const end = item.end_time || '';
-        if (item.all_day) return 'All day';
-        if (start && end) return start + ' - ' + end;
-        return start || item.start_date || 'Scheduled';
-    }
-
     function formatCalendarDate(value) {
         const raw = String(value || '');
         const datePart = raw.slice(0, 10);
@@ -307,86 +299,238 @@
         return 'night';
     }
 
-    function renderCalendar(props) {
-        const events = Array.isArray(props.events) ? props.events : [];
-        const sorted = events.slice().sort((a, b) => calendarEventSortKey(a) - calendarEventSortKey(b)).slice(0, 8);
-        const dateMeta = formatCalendarDate(props.date || props.start_date || (sorted[0] && sorted[0].start_date));
-        const qualifier = String(props.qualifier || 'today').trim();
-        const countLabel = events.length + ' ' + (events.length === 1 ? 'event' : 'events') + (qualifier ? ' ' + qualifier : '');
-        const nowMs = Date.now();
+    // Minutes-since-midnight for an "HH:MM[:SS]" clock string, or NaN.
+    function calMinutes(t) {
+        const m = /^(\d{1,2}):(\d{2})/.exec(String(t || ''));
+        if (!m) return NaN;
+        return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+    }
 
-        // The hero is the soonest UPCOMING event by wall-clock — not simply sorted[0],
-        // because an all-day event sorts at 00:00 and would otherwise hijack the hero
-        // ahead of a timed meeting later today. Prefer the first event whose start is
-        // still in the future; fall back to the first sorted event (e.g. all past, or
-        // only all-day) so the card never collapses to an empty agenda.
-        let heroIndex = sorted.findIndex(item => {
-            if (item.all_day) return false;
-            const ms = calendarEventStartMs(item);
-            return Number.isFinite(ms) && ms >= nowMs;
+    // Event length in minutes (end − start), defaulting to 60 when the end is
+    // missing/invalid so a point event still paints a legible ribbon block.
+    function calDuration(item) {
+        const s = calMinutes(item.start_time);
+        const e = calMinutes(item.end_time);
+        return (Number.isFinite(s) && Number.isFinite(e) && e > s) ? (e - s) : 60;
+    }
+
+    // Compact hour label for the ribbon axis: 6 → "6a", 12 → "12p", 18 → "6p".
+    function calHourLabel(h) {
+        h = ((h % 24) + 24) % 24;
+        let hr = h % 12;
+        if (hr === 0) hr = 12;
+        return hr + (h < 12 ? 'a' : 'p');
+    }
+
+    // The time gutter for an agenda row: a big start + small end (or "All / day").
+    function calGutter(item) {
+        if (item.all_day) return { start: 'All', end: 'day' };
+        const s = String(item.start_time || '').slice(0, 5);
+        const e = String(item.end_time || '').slice(0, 5);
+        if (!s) return { start: '—', end: '' };
+        return { start: s, end: (e && e !== s) ? e : '' };
+    }
+
+    // The day RIBBON (Fantastical "DayTicker" / Apple day-timeline idea): a
+    // full-width rail spanning the day's active window with each timed event
+    // plotted as a category-coloured block, hour ticks for orientation, and a live
+    // "now" marker. It makes the day's SHAPE glanceable and uses the wide panel.
+    function calendarRibbon(timed, isToday, nowMs) {
+        if (!timed.length) return '';
+        let winStart = 6 * 60, winEnd = 22 * 60;
+        timed.forEach(function (e) {
+            const s = calMinutes(e.start_time);
+            if (!Number.isFinite(s)) return;
+            winStart = Math.min(winStart, Math.floor(s / 60) * 60);
+            winEnd = Math.max(winEnd, Math.ceil((s + calDuration(e)) / 60) * 60);
         });
-        if (heroIndex < 0) heroIndex = 0;
-        const heroEvent = sorted[heroIndex] || null;
-        const restEvents = sorted.filter((_, i) => i !== heroIndex);
+        // Keep the live "now" marker inside the window on today's view.
+        let nowMin = NaN;
+        if (isToday) {
+            const d = new Date(nowMs);
+            nowMin = d.getHours() * 60 + d.getMinutes();
+            winStart = Math.min(winStart, Math.floor(nowMin / 60) * 60);
+            // Round UP to the next hour (exclusive) so the now-line always has room
+            // to its right — on an exact hour boundary Math.ceil returns nowMin
+            // unchanged, leaving the marker at the far edge (100%) where it clips.
+            winEnd = Math.max(winEnd, (Math.floor(nowMin / 60) + 1) * 60);
+        }
+        winStart = Math.max(0, winStart);
+        winEnd = Math.min(24 * 60, Math.max(winEnd, winStart + 60));
+        const span = winEnd - winStart;
+        const pct = function (min) { return ((min - winStart) / span) * 100; };
 
-        let heroBlock = '';
-        if (heroEvent) {
-            const title = heroEvent.title || heroEvent.name || 'Calendar event';
-            const category = calendarCategoryClass(heroEvent.category);
-            const detail = [heroEvent.location].filter(Boolean).join(' · ');
-            const countdown = calendarCountdown(heroEvent, nowMs);
-            const isPast = (function () {
-                const ms = calendarEventStartMs(heroEvent);
-                return Number.isFinite(ms) && ms < nowMs && !heroEvent.all_day;
-            })();
-            heroBlock = [
-                '<button type="button" class="cal-hero sky-accent-' + escapeHtml(category) + (isPast ? ' is-past' : '') + '" data-sky-action="query" data-query="' + escapeHtml(calendarEditQuery(heroEvent, title)) + '">',
-                '<span class="cal-hero-rail" aria-hidden="true"></span>',
-                '<span class="cal-hero-kicker">' + escapeHtml(isPast ? 'Earlier' : 'Up next') + '</span>',
-                '<span class="cal-hero-time"><span class="cal-hero-clock">' + escapeHtml(formatEventTime(heroEvent)) + '</span>' +
-                    (countdown ? '<b class="cal-hero-rel">' + escapeHtml(countdown) + '</b>' : '') + '</span>',
-                '<span class="cal-hero-title">' + escapeHtml(title) + '</span>',
-                detail ? '<span class="cal-hero-loc">' + escapeHtml(detail) + '</span>' : '',
-                '</button>'
-            ].join('');
+        // ~7 evenly-spaced hour labels across the window.
+        const stepH = Math.max(1, Math.round((span / 60) / 7));
+        let ticks = '';
+        for (let h = Math.ceil(winStart / 60); h * 60 <= winEnd; h += stepH) {
+            ticks += '<span class="cal-tick" style="left:' + pct(h * 60).toFixed(2) + '%">' +
+                escapeHtml(calHourLabel(h)) + '</span>';
         }
 
-        const rows = restEvents.map(item => {
-            const title = item.title || item.name || 'Calendar event';
-            const category = calendarCategoryClass(item.category);
-            const detail = [item.location].filter(Boolean).join(' · ');
-            const start = String(item.start_time || '').slice(0, 5) || (item.all_day ? 'All day' : '—');
-            return [
-                '<button type="button" class="cal-row sky-accent-' + escapeHtml(category) + '" data-sky-action="query" data-query="' + escapeHtml(calendarEditQuery(item, title)) + '">',
-                '<span class="cal-row-time tnum">' + escapeHtml(start) + '</span>',
-                '<span class="cal-row-marker" aria-hidden="true"></span>',
-                '<span class="cal-row-body"><strong>' + escapeHtml(title) + '</strong>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</span>',
-                '</button>'
-            ].join('');
+        const blocks = timed.map(function (e) {
+            const s = calMinutes(e.start_time);
+            if (!Number.isFinite(s)) return '';
+            const left = Math.max(0, pct(s));
+            const width = Math.max(2.4, Math.min(100 - left, (calDuration(e) / span) * 100));
+            const cat = calendarCategoryClass(e.category);
+            const label = (e.title || e.name || 'Event') + ' · ' + String(e.start_time || '').slice(0, 5);
+            return '<span class="cal-block sky-accent-' + escapeHtml(cat) + '" ' +
+                'style="left:' + left.toFixed(2) + '%;width:' + width.toFixed(2) + '%" ' +
+                'title="' + escapeHtml(label) + '"></span>';
         }).join('');
 
-        const timeline = restEvents.length
-            ? '<div class="cal-timeline">' + rows + '</div>'
-            : (heroEvent ? '<div class="cal-rest-empty">Nothing else scheduled</div>' : '');
+        let nowLine = '';
+        if (Number.isFinite(nowMin) && nowMin >= winStart && nowMin <= winEnd) {
+            nowLine = '<span class="cal-ribbon-now" style="left:' + pct(nowMin).toFixed(2) + '%"></span>';
+        }
 
-        const empty = [
-            '<div class="cal-empty">',
-            '<span class="cal-empty-mark" aria-hidden="true">' + calendarGlyphSvg() + '</span>',
-            '<strong>Nothing scheduled</strong>',
-            '<span>Your day is clear ' + escapeHtml(qualifier || 'for now') + '.</span>',
+        return [
+            '<div class="cal-ribbon" aria-hidden="true">',
+            '<div class="cal-ribbon-rail">', blocks, nowLine, '</div>',
+            '<div class="cal-ribbon-axis">', ticks, '</div>',
             '</div>'
         ].join('');
+    }
 
-        const body = [
-            '<div class="cal-scene" data-daypart="' + calendarDaypart(nowMs) + '">',
+    // Card header: weekday + date on the left; a live "now" chip (today only) and
+    // the event count on the right.
+    function calendarHead(dateMeta, countLabel, isToday, nowMs) {
+        const clock = isToday
+            ? '<span class="cal-now-chip"><span class="cal-now-dot" aria-hidden="true"></span>' +
+                escapeHtml(new Date(nowMs).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })) + '</span>'
+            : '';
+        return [
             '<header class="cal-head">',
             '<div class="cal-head-day">',
             '<span class="cal-head-weekday">' + escapeHtml(dateMeta.weekday) + '</span>',
             '<span class="cal-head-date">' + escapeHtml(dateMeta.monthDay) + '</span>',
             '</div>',
+            '<div class="cal-head-meta">' + clock +
             '<span class="cal-head-count">' + escapeHtml(countLabel) + '</span>',
-            '</header>',
-            heroEvent ? ('<div class="cal-body">' + heroBlock + timeline + '</div>') : empty,
+            '</div>',
+            '</header>'
+        ].join('');
+    }
+
+    function renderCalendar(props) {
+        const events = Array.isArray(props.events) ? props.events : [];
+        const sorted = events.slice().sort((a, b) => calendarEventSortKey(a) - calendarEventSortKey(b)).slice(0, 12);
+        const dateMeta = formatCalendarDate(props.date || props.start_date || (sorted[0] && sorted[0].start_date));
+        const qualifier = String(props.qualifier || 'today').trim();
+        const countLabel = events.length + ' ' + (events.length === 1 ? 'event' : 'events');
+        const nowMs = Date.now();
+
+        // Local (not UTC) "today", so the ribbon's now-line + live chip only appear
+        // when the shown day really is today.
+        const nowDate = new Date(nowMs);
+        const pad = n => String(n).padStart(2, '0');
+        const todayStr = nowDate.getFullYear() + '-' + pad(nowDate.getMonth() + 1) + '-' + pad(nowDate.getDate());
+        const dates = [];
+        sorted.forEach(function (e) {
+            const d = String(e.start_date || e.date || '').slice(0, 10);
+            if (d && dates.indexOf(d) < 0) dates.push(d);
+        });
+        const singleDay = dates.length <= 1;
+        const shownDay = dates.length === 1 ? dates[0] : (dates.length === 0 && qualifier === 'today' ? todayStr : '');
+        const isToday = singleDay && shownDay === todayStr;
+
+        // Empty state — calm "Nothing scheduled".
+        if (!sorted.length) {
+            const emptyBody = [
+                '<div class="cal-scene" data-daypart="' + calendarDaypart(nowMs) + '">',
+                calendarHead(dateMeta, countLabel, isToday, nowMs),
+                '<div class="cal-empty">',
+                '<span class="cal-empty-mark" aria-hidden="true">' + calendarGlyphSvg() + '</span>',
+                '<strong>Nothing scheduled</strong>',
+                '<span>Your day is clear ' + escapeHtml(qualifier || 'for now') + '.</span>',
+                '</div>',
+                '</div>'
+            ].join('');
+            return cardFrame(Object.assign({ status: 'Calendar', icon: 'C' }, props), emptyBody, { wide: true, tone: 'calendar-card', hideHeader: true, hideStatus: true });
+        }
+
+        // All-day events live in a pinned chip band; the agenda below is the timed
+        // (and untimed) events. Keeping them separate stops an all-day event from
+        // being shown twice AND from hijacking the next-up highlight (it sorts 00:00).
+        const allDay = sorted.filter(e => e.all_day);
+        const agendaEvents = sorted.filter(e => !e.all_day);
+        const timed = singleDay ? agendaEvents.filter(e => Number.isFinite(calMinutes(e.start_time))) : [];
+        const ribbon = calendarRibbon(timed, isToday, nowMs);
+
+        // next-up = soonest UPCOMING event; fall back to the first agenda event when
+        // all are already past, so the highlight never lands on nothing.
+        let heroIndex = agendaEvents.findIndex(item => {
+            const ms = calendarEventStartMs(item);
+            return Number.isFinite(ms) && ms >= nowMs;
+        });
+        if (heroIndex < 0) heroIndex = 0;
+
+        const alldayBand = allDay.length ? (
+            '<div class="cal-allday">' + allDay.map(function (e) {
+                const cat = calendarCategoryClass(e.category);
+                const label = e.title || e.name || 'All-day';
+                return '<button type="button" class="cal-chip sky-accent-' + escapeHtml(cat) + '" data-sky-action="query" data-query="' + escapeHtml(calendarEditQuery(e, label)) + '">' +
+                    '<span class="cal-chip-dot" aria-hidden="true"></span>' + escapeHtml(label) + '</button>';
+            }).join('') + '</div>'
+        ) : '';
+
+        // Agenda: every timed event as a tap-to-edit row, next-up emphasised as
+        // .cal-hero. Grouped by day when the range spans more than one date.
+        let lastDate = null;
+        const rows = agendaEvents.map(function (item, i) {
+            const isHero = i === heroIndex;
+            const cat = calendarCategoryClass(item.category);
+            const title = item.title || item.name || 'Calendar event';
+            const detail = [item.location].filter(Boolean).join(' · ');
+            const gutter = calGutter(item);
+            const when = isHero ? calendarCountdown(item, nowMs) : '';
+            const isPast = (function () {
+                const ms = calendarEventStartMs(item);
+                return Number.isFinite(ms) && ms < nowMs && !item.all_day;
+            })();
+
+            let dayHead = '';
+            if (!singleDay) {
+                const d = String(item.start_date || item.date || '').slice(0, 10);
+                if (d && d !== lastDate) {
+                    lastDate = d;
+                    const dm = formatCalendarDate(d);
+                    dayHead = '<div class="cal-daygroup">' + escapeHtml(dm.weekday + ' · ' + dm.monthDay) + '</div>';
+                }
+            }
+
+            const cls = 'cal-row' + (isHero ? ' cal-hero is-next' : '') + (isPast ? ' is-past' : '') + ' sky-accent-' + cat;
+            const btn = [
+                '<button type="button" class="' + cls + '" data-sky-action="query" data-query="' + escapeHtml(calendarEditQuery(item, title)) + '">',
+                (isHero ? '<span class="cal-kicker">' + escapeHtml(isPast ? 'Earlier' : 'Up next') + '</span>' : ''),
+                '<span class="cal-time tnum"><b>' + escapeHtml(gutter.start) + '</b>' +
+                    (gutter.end ? '<i>' + escapeHtml(gutter.end) + '</i>' : '') + '</span>',
+                '<span class="cal-node" aria-hidden="true"></span>',
+                '<span class="cal-body"><strong>' + escapeHtml(title) + '</strong>' +
+                    (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</span>',
+                (isHero && when ? '<span class="cal-when">' + escapeHtml(when) + '</span>' : ''),
+                '</button>'
+            ].join('');
+            return dayHead + btn;
+        }).join('');
+
+        // Flow the agenda into two columns on the wide panel once the day is busy,
+        // so a long list fills the width instead of scrolling off the bottom.
+        const cols = (singleDay && agendaEvents.length >= 6) ? '2' : '1';
+
+        // A calm free-time note on light days keeps the wide card from reading empty.
+        const freeNote = (singleDay && isToday && agendaEvents.length && agendaEvents.length <= 2)
+            ? '<div class="cal-freenote">The rest of your day is clear.</div>'
+            : '';
+
+        const body = [
+            '<div class="cal-scene" data-daypart="' + calendarDaypart(nowMs) + '">',
+            calendarHead(dateMeta, countLabel, isToday, nowMs),
+            ribbon,
+            alldayBand,
+            '<div class="cal-agenda" data-cols="' + cols + '">' + rows + '</div>',
+            freeNote,
             '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'Calendar', icon: 'C' }, props), body, { wide: true, tone: 'calendar-card', hideHeader: true, hideStatus: true });
@@ -689,15 +833,28 @@
         return 'show my ' + listLabel(list) + ' list';
     }
 
+    // Top tab-row switcher: the ACTIVE tab IS the list's title (no separate big
+    // heading — that only wasted vertical space on the 7" kiosk). Each tab carries
+    // its open-item count so the shopper scans lists at a glance. The row is
+    // indented past the top-left Home pill (see .lst-switcher padding in CSS).
     function renderListSwitcher(lists, selectedId) {
         const tabs = (Array.isArray(lists) ? lists : []).slice(0, 6).map(list => {
             const accent = listAccentClass(list.list_type);
             const selected = selectedId && String(list.id || '') === String(selectedId) ? ' is-active' : '';
-            const count = Array.isArray(list.items) ? list.items.length : null;
+            const items = Array.isArray(list.items) ? list.items : null;
+            // Prefer the authoritative open_count from the payload; else derive from
+            // the items slice. Shows items still to do (0 reads as "all done").
+            let count = null;
+            if (typeof list.open_count === 'number') count = list.open_count;
+            else if (items) count = items.filter(it => !(typeof it === 'object' && it && it.completed)).length;
             const countTag = count != null ? '<i class="lst-tab-count" aria-hidden="true">' + escapeHtml(count) + '</i>' : '';
-            return '<button type="button" class="lst-tab lst-a-' + escapeHtml(accent) + selected + '" data-sky-action="query" data-query="' + escapeHtml(listQuery(list)) + '"><span class="lst-tab-dot" aria-hidden="true"></span><span class="lst-tab-name">' + escapeHtml(listLabel(list)) + '</span>' + countTag + '</button>';
+            return '<button type="button" class="lst-tab lst-a-' + escapeHtml(accent) + selected + '" role="tab" aria-selected="' + (selected ? 'true' : 'false') + '" data-sky-action="query" data-query="' + escapeHtml(listQuery(list)) + '"><span class="lst-tab-dot" aria-hidden="true"></span><span class="lst-tab-name">' + escapeHtml(listLabel(list)) + '</span>' + countTag + '</button>';
         }).join('');
-        return '<div class="lst-switcher" role="tablist">' + tabs + '<button type="button" class="lst-tab lst-tab-new" data-sky-action="query" data-query="new list"><span class="lst-tab-name">+ New</span></button></div>';
+        // Only real list tabs live in the tablist; "+ New" is an action, not a tab,
+        // so it sits outside the tablist (a11y). .lst-tablist is display:contents so
+        // the tabs still flex within .lst-switcher.
+        return '<div class="lst-switcher"><div class="lst-tablist" role="tablist">' + tabs + '</div>' +
+            '<button type="button" class="lst-tab lst-tab-new" data-sky-action="query" data-query="new list"><span class="lst-tab-name">+ New</span></button></div>';
     }
 
     // The tap query for a row. Open item → tick off; done item → restore. Direction
@@ -804,54 +961,45 @@
         const selectedId = props.list_id && props.list_id !== 'lists-overview' ? props.list_id : '';
         const visibleItems = items.slice(0, 24);
         const rows = visibleItems.map((item, index) => renderListItemRow(item, index, listType, accent)).join('');
-        const overviewCols = !items.length && lists.length ? '<div class="lst-cols">' + lists.slice(0, 6).map(renderListColumn).join('') + '</div>' : '';
+        // Overview = the multi-list catalog, shown only when NO single list is
+        // selected. A selected-but-empty list gets the dedicated empty state below.
+        const overviewCols = !items.length && !selectedId && lists.length ? '<div class="lst-cols">' + lists.slice(0, 6).map(renderListColumn).join('') + '</div>' : '';
         const empty = [
             '<div class="sky-empty-data lst-empty">',
             '<strong>No items in ' + escapeHtml(props.list_name || 'this list') + '</strong>',
-            '<span>Zoe did not find active items for this request.</span>',
+            '<span>Tap “Add item” or ask Zoe to put something on this list.</span>',
             '</div>'
         ].join('');
         const isOverview = !rows && !!overviewCols;
-        const headerTitle = isOverview
-            ? 'Lists'
-            : (props.list_name || (selectedId && listLabel(lists.find(l => String(l.id || '') === String(selectedId)) || {})) || 'List');
-        // Progress is over the WHOLE list (not just the visible slice) so the hero %
-        // is honest even when more than 16 items exist.
-        const totalDone = items.filter(it => typeof it === 'object' && it && it.completed).length;
         const ident = listIdentity(accent);
 
-        let countLabel;
-        if (isOverview) {
-            countLabel = lists.length === 1 ? '1 list' : lists.length + ' lists';
-        } else if (!items.length) {
-            countLabel = 'Empty';
-        } else {
-            const noun = items.length === 1 ? 'item' : 'items';
-            countLabel = totalDone ? totalDone + ' of ' + items.length + ' ' + noun + ' done' : items.length + ' ' + noun;
-        }
-
-        // Compact progress: a slim bar in the list's accent (detail view only).
-        // The list itself is the hero now — no ring stealing a third of a 7" screen.
+        // Progress is over the WHOLE list (not just the visible slice) so the % is
+        // honest even when more than 24 items exist.
+        const totalDone = items.filter(it => typeof it === 'object' && it && it.completed).length;
         const openCount = Math.max(0, items.length - totalDone);
         const pct = items.length ? Math.round((totalDone / items.length) * 100) : 0;
+        // Slim progress + open-first count line ("3 left · 2 done") — the shopper's
+        // view. Sits just under the tab row; the active tab is the title now.
+        let progressLabel = '';
+        if (isOverview) {
+            progressLabel = lists.length === 1 ? '1 list' : lists.length + ' lists';
+        } else if (!items.length) {
+            progressLabel = 'Empty list';
+        } else if (totalDone) {
+            progressLabel = openCount + ' left · ' + totalDone + ' done';
+        } else {
+            progressLabel = items.length + (items.length === 1 ? ' item' : ' items');
+        }
         const progressBar = (!isOverview && items.length)
             ? '<div class="lst-progress" role="img" aria-label="' + totalDone + ' of ' + items.length + ' done"><span class="lst-progress-fill" style="width:' + pct + '%"></span></div>'
             : '';
-        // Header count: open-first ("3 left · 2 done") — the shopper's view.
-        let headCount = countLabel;
-        if (!isOverview && items.length && totalDone) {
-            headCount = openCount + ' left · ' + totalDone + ' done';
-        }
+        const meta = '<div class="lst-meta"><span class="lst-meta-count">' + escapeHtml(progressLabel) + '</span>' + progressBar + '</div>';
 
-        const header = [
-            '<header class="lst-header">',
-            '<div class="lst-heading">',
-            '<span class="lst-id-badge">' + listIdentityGlyph(ident.glyph) + '</span>',
-            '<div class="lst-headtext"><span class="lst-kicker">' + (isOverview ? 'Your lists' : 'List') + '</span><h3 class="lst-name">' + escapeHtml(headerTitle) + '</h3></div>',
-            '</div>',
-            '<span class="lst-count">' + escapeHtml(headCount) + '</span>',
-            '</header>'
-        ].join('');
+        // Fallback title chip: only when there are NO tabs to act as the title
+        // (e.g. guest sessions with no list catalog). Normally the active tab titles.
+        const fallbackTitle = !lists.length
+            ? '<div class="lst-solo-title"><span class="lst-id-badge">' + listIdentityGlyph(ident.glyph) + '</span><h3 class="lst-name">' + escapeHtml(props.list_name || 'List') + '</h3></div>'
+            : '';
 
         // "+ Add item" — tapping opens the composer prefilled "add ⟂ to the <type> list"
         // (caret after "add ") so you can type or speak the item. Shown on any
@@ -863,16 +1011,47 @@
               '<span class="lst-box lst-add-plus" aria-hidden="true">+</span>' +
               '<span class="lst-text lst-add-label">Add item</span></button>'
             : '';
-        // Flow into two columns once a single list outgrows the screen (§5).
-        const multiCol = (!isOverview && items.length > 8) ? ' is-2col' : '';
-        const itemsClass = 'lst-items ' + (rows ? 'is-detail' : 'is-overview') + multiCol;
-        const itemsInner = isOverview ? overviewCols : ((rows || empty) + addRow);
+
+        // Orb keep-out: an invisible layout reservation pinned to the bottom-left
+        // grid cells so items flow AROUND the Zoe orb + voice pill (never behind
+        // them). Explicitly placed, so grid auto-flow fills every other cell.
+        const keepOut = '<i class="lst-keepout" aria-hidden="true"></i>';
+
+        let itemsClass;
+        let itemsInner;
+        let itemsStyle = '';
+        if (isOverview) {
+            itemsClass = 'lst-items is-overview';
+            itemsInner = overviewCols;
+        } else if (rows) {
+            // Multi-column grid (newspaper flow) so a long list fills the width
+            // instead of one tall skinny column, wrapping around the orb. A short
+            // list uses only as many rows as it needs (no fixed ~604px reservation)
+            // and skips the orb keep-out — it's too short to reach the bottom-left
+            // orb zone, so it never overlaps.
+            const cells = visibleItems.length + 1; // items + add-row
+            const compact = cells <= 6;
+            itemsClass = 'lst-items is-grid';
+            if (compact) {
+                itemsStyle = ' style="--lst-rows:' + Math.max(3, cells) + '"';
+                itemsInner = addRow + rows;               // no keep-out needed
+            } else {
+                itemsInner = keepOut + addRow + rows;      // 9-row wrap around the orb
+            }
+        } else {
+            // Add-row pinned to the top (clear of the bottom-left orb); the empty
+            // message fills the remaining space, centered.
+            itemsClass = 'lst-items is-empty';
+            itemsInner = addRow + empty;
+        }
+
         const body = [
             '<div class="lst-scene lst-a-' + escapeHtml(accent) + ' lst-tint-' + ident.tint + '">',
-            header,
-            progressBar,
-            lists.length ? renderListSwitcher(lists, selectedId) : '',
-            '<div class="' + itemsClass + '">' + itemsInner + '</div>',
+            '<div class="lst-top">',
+            lists.length ? renderListSwitcher(lists, selectedId) : fallbackTitle,
+            meta,
+            '</div>',
+            '<div class="' + itemsClass + '"' + itemsStyle + '>' + itemsInner + '</div>',
             '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'Lists', icon: 'L' }, props), body, { wide: true, tone: 'zoe-list-card ' + accent, hideHeader: true, hideStatus: true, hideActions: true });
@@ -1201,7 +1380,9 @@
             play: '<path d="M8 5v14l11-7z"/>',
             pause: '<path d="M8 5h3v14H8zM13 5h3v14h-3z"/>',
             voldown: '<path d="M4 9v6h4l5 4V5L8 9zM17 12h4"/>',
-            volup: '<path d="M4 9v6h4l5 4V5L8 9zM17 9h4M19 7v4"/>'
+            volup: '<path d="M4 9v6h4l5 4V5L8 9zM17 9h4M19 7v4"/>',
+            // Filled music note for the empty-art placeholder (matches dashGlyph music).
+            note: '<path d="M9 17V5l10-2v12"/><circle cx="6" cy="17" r="3"/><circle cx="16" cy="15" r="3"/>'
         };
         return '<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true">' + (paths[name] || paths.play) + '</svg>';
     }
@@ -1209,43 +1390,104 @@
         return '<button type="button" class="np-btn' + (cls ? ' ' + cls : '') + '" data-sky-action="query" data-query="' + escapeHtml(query) + '" aria-label="' + escapeHtml(query) + '">' + npIcon(icon) + '</button>';
     }
 
+    // Stable on-brand ambient wash: hash the track/album to pick a ds1 accent
+    // pair so each song gets a consistent tint (and a placeholder that isn't
+    // always the same violet). Colors are literal ds1 hexes — safe to inline.
+    function npTint(seed) {
+        var pairs = [
+            ['#9b8cff', '#6aa6ff'], // violet → blue (ds1 default)
+            ['#37c0e6', '#5be3b0'], // cyan → mint
+            ['#6aa6ff', '#37c0e6'], // blue → cyan
+            ['#f5b13c', '#ff6b6b'], // amber → coral
+            ['#9b8cff', '#ff6b6b'], // violet → coral
+            ['#5be3b0', '#6aa6ff']  // mint → blue
+        ];
+        var s = String(seed || 'zoe'), h = 0;
+        for (var i = 0; i < s.length; i++) { h = (h * 31 + s.charCodeAt(i)) >>> 0; }
+        return pairs[h % pairs.length];
+    }
+
+    function npTime(secs) {
+        secs = Math.max(0, Math.floor(secs));
+        var m = Math.floor(secs / 60), s = secs % 60;
+        return m + ':' + (s < 10 ? '0' : '') + s;
+    }
+
     function renderNowPlaying(props) {
-        // Music Assistant now-playing card. The SVG transport row is built here
-        // from state; each button carries data-sky-action=query so tap + voice
-        // share one resolver path.
+        // Music Assistant now-playing card — album-art-forward ambient look.
+        // The SVG transport row is built here from state; each button carries
+        // data-sky-action=query so tap + voice share one resolver path.
         var img = String(props.image || '');
-        var sameOrigin = img && (img.charAt(0) === '/' || img.indexOf('http') === 0);
-        var art = sameOrigin
-            ? '<img class="np-art" src="' + escapeHtml(img) + '" alt="" loading="lazy">'
-            : '<div class="np-art np-art-empty">' + npIcon('play') + '</div>';
+        var sameOrigin = img && ((img.charAt(0) === '/' && img.charAt(1) !== '/') || /^https?:\/\//i.test(img));
+        // Strict URL shape (no quotes/parens/backslash/whitespace/angle brackets,
+        // which are invalid in URL paths per RFC 3986) so it is safe to drop into a
+        // CSS url() inside a style attribute as well as an <img>.
+        var safeArt = (sameOrigin && /^(?:\/[^"'()\\\s<>]+|https?:\/\/[^"'()\\\s<>]+)$/i.test(img)) ? img : '';
         var playing = props.state === 'playing';
         var hasTrack = playing || props.state === 'paused';
         var stateBadge = playing ? 'Playing' : (props.state === 'paused' ? 'Paused' : 'Ready');
+        var tint = npTint(props.album || props.artist || props.title || 'zoe');
+
+        // Ambient wash filling the whole card (behind the scene). Two accent
+        // radials over a deep neutral base; hex+alpha is valid, tokens are hex.
+        var ambient = 'background:'
+            + 'radial-gradient(120% 120% at 10% -6%,' + tint[0] + 'E6 0%,' + tint[0] + '00 52%),'
+            + 'radial-gradient(120% 115% at 104% 28%,' + tint[1] + 'BF 0%,' + tint[1] + '00 55%),'
+            + 'radial-gradient(140% 140% at 80% 118%,' + tint[0] + '80 0%,' + tint[0] + '00 55%),'
+            + 'linear-gradient(155deg,#0f1220F2 0%,#0a0d16F2 100%)';
+
+        var artInner = safeArt
+            ? '<img class="np-art" src="' + escapeHtml(safeArt) + '" alt="" loading="lazy">'
+            : '<div class="np-art np-art-empty" style="--np-c1:' + tint[0] + ';--np-c2:' + tint[1] + '">' + npIcon('note') + '</div>';
+        // Blurred art backdrop (same-origin guard already applied to safeArt).
+        var artBg = safeArt
+            ? '<div class="np-art-bg" style="background-image:url(&quot;' + escapeHtml(safeArt) + '&quot;)"></div>'
+            : '';
+
+        var eq = playing ? '<span class="np-eq" aria-hidden="true"><i></i><i></i><i></i><i></i></span>' : '';
+        var kicker = '<span class="np-kicker">' + eq + '<span>' + escapeHtml(stateBadge)
+            + (props.player_name ? ' · ' + escapeHtml(props.player_name) : '') + '</span></span>';
+
+        // Optional progress — only if the producer sends elapsed + duration.
+        var progress = '';
+        var elapsed = Number(props.elapsed != null ? props.elapsed : props.position);
+        var duration = Number(props.duration != null ? props.duration : props.length);
+        if (hasTrack && isFinite(elapsed) && isFinite(duration) && duration > 0 && elapsed >= 0) {
+            var frac = Math.max(0, Math.min(1, elapsed / duration));
+            progress = '<div class="np-progress"><div class="np-bar"><span style="width:'
+                + (frac * 100).toFixed(1) + '%"></span></div>'
+                + '<div class="np-times"><span>' + npTime(elapsed) + '</span><span>' + npTime(duration) + '</span></div></div>';
+        }
+
         var transport = hasTrack ? [
             '<div class="np-transport">',
+            npBtn('voldown', 'turn the music down'),
             npBtn('prev', 'previous song'),
             playing ? npBtn('pause', 'pause music', 'np-primary') : npBtn('play', 'resume music', 'np-primary'),
             npBtn('next', 'next song'),
-            npBtn('voldown', 'turn the music down'),
             npBtn('volup', 'turn the music up'),
             '</div>'
         ].join('') : '';
         // Browse/suggestion chips (idle card) come through props.actions.
         var chips = (!hasTrack && Array.isArray(props.actions) && props.actions.length)
             ? '<div class="sky-actions np-chips">' + props.actions.map(buttonHtml).join('') + '</div>' : '';
+
         var body = [
+            '<div class="np-ambient" style="' + ambient + '"></div>',
+            artBg,
+            '<div class="np-scrim"></div>',
             '<div class="np-scene">',
-            art,
+            '<div class="np-art-wrap">' + artInner + '</div>',
             '<div class="np-meta">',
-            '<span class="np-state">' + escapeHtml(stateBadge) +
-                (props.player_name ? ' · ' + escapeHtml(props.player_name) : '') + '</span>',
+            kicker,
             '<span class="np-title">' + escapeHtml(props.title || 'Nothing playing') + '</span>',
             props.artist ? '<span class="np-artist">' + escapeHtml(props.artist) + '</span>' : '',
             props.album ? '<span class="np-album">' + escapeHtml(props.album) + '</span>' : '',
-            '</div>',
-            '</div>',
+            progress,
             transport,
-            chips
+            chips,
+            '</div>',
+            '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'Music' }, props), body,
             { wide: true, tone: 'now-playing-card', hideHeader: true, hideStatus: true, hideActions: true });
