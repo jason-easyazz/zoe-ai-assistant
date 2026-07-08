@@ -192,6 +192,28 @@ async def test_existing_contacts_are_skipped(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_self_name_filter_is_exact_not_prefix(monkeypatch):
+    # Regression: the self-name skip must be an EXACT match. A prefix test would
+    # drop a legit contact whose name is a prefix of the user_id (user "jason"
+    # swallowing a contact "Jan"). The user's own name IS still skipped.
+    monkeypatch.setenv("ZOE_CONTACT_BACKFILL_ENABLED", "1")
+    db = await _open()
+    try:
+        mems = [_Ref("Jan loves tea."), _Ref("Jason works at Acme.")]
+        _fake_memory_source(monkeypatch, mems)
+        _use_db(monkeypatch, db)
+        stored = _capture_store(monkeypatch)
+
+        await cb.backfill_contacts("jason")  # user_id "jason"
+
+        names = {s["pre_filled_slots"]["name"] for s in stored}
+        assert "Jan" in names       # prefix of "jason" — must NOT be dropped
+        assert "Jason" not in names  # the user's own name — skipped
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
 async def test_non_person_memories_ignored(monkeypatch):
     monkeypatch.setenv("ZOE_CONTACT_BACKFILL_ENABLED", "1")
     db = await _open()

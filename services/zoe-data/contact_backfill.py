@@ -55,29 +55,33 @@ _ROLE_ALT = "|".join(sorted(_ROLE_TO_TYPE, key=len, reverse=True))
 # re.IGNORECASE (which would let it over-capture a trailing lowercase word, e.g.
 # "Bob came" from "my friend Bob came over"). Python scoped inline flags do this.
 _ROLE_ALT_CI = f"(?i:{_ROLE_ALT})"
+# Wrap `_NAME` in a NAMED group so every call site reads `m.group("name")` —
+# robust to `_NAME` ever gaining internal capturing groups (positional indices
+# would silently shift otherwise). Only one `_NAME` appears per pattern below.
+_NM = rf"(?P<name>{_NAME})"
 
 # "my mother Janice" / "my friend Bob"
-_MY_REL_RE = re.compile(rf"\b(?i:my)\s+(?P<rel>{_ROLE_ALT_CI})\s+{_NAME}")
+_MY_REL_RE = re.compile(rf"\b(?i:my)\s+(?P<rel>{_ROLE_ALT_CI})\s+{_NM}")
 # "Janice is my mother" / "Janice, my mother"
 _REL_MY_RE = re.compile(
-    rf"{_NAME}\s*,?\s+(?:(?i:is)\s+)?(?i:my)\s+(?P<rel>{_ROLE_ALT_CI})\b"
+    rf"{_NM}\s*,?\s+(?:(?i:is)\s+)?(?i:my)\s+(?P<rel>{_ROLE_ALT_CI})\b"
 )
 # "Jason's mother is Janice" / "Jason's sister, Karen"
 _POSS_REL_RE = re.compile(
-    rf"[A-Z][a-z]+'s\s+(?P<rel>{_ROLE_ALT_CI})\s+(?:(?i:is|are)|,)\s+{_NAME}"
+    rf"[A-Z][a-z]+'s\s+(?P<rel>{_ROLE_ALT_CI})\s+(?:(?i:is|are)|,)\s+{_NM}"
 )
 # "Janice (mother)" — relationship in parens; validated against the role set below.
-_PAREN_REL_RE = re.compile(rf"{_NAME}\s*\(\s*(?P<rel>[A-Za-z ]{{2,20}}?)\s*\)")
+_PAREN_REL_RE = re.compile(rf"{_NM}\s*\(\s*(?P<rel>[A-Za-z ]{{2,20}}?)\s*\)")
 
 # Name-only signals (a person is clearly named, no relationship stated). These
 # mirror person_extractor's fact patterns so a person mentioned only through a
 # like/birthday/work/meeting fact still becomes a proposal. Keyword literals are
 # case-insensitive; `_NAME` stays case-sensitive (see note above).
 _NAME_ONLY_RES = (
-    re.compile(rf"{_NAME}\s+(?i:loves?|likes?|hates?|prefers?|enjoys?|dislikes?)\s"),
-    re.compile(rf"{_NAME}(?:'s)?\s+(?i:birthday)\b"),
-    re.compile(rf"{_NAME}\s+(?i:works?)\s+(?i:at|for)\b"),
-    re.compile(rf"(?i:met|caught\s+up\s+with)\s+{_NAME}\b"),
+    re.compile(rf"{_NM}\s+(?i:loves?|likes?|hates?|prefers?|enjoys?|dislikes?)\s"),
+    re.compile(rf"{_NM}(?:'s)?\s+(?i:birthday)\b"),
+    re.compile(rf"{_NM}\s+(?i:works?)\s+(?i:at|for)\b"),
+    re.compile(rf"(?i:met|caught\s+up\s+with)\s+{_NM}\b"),
 )
 
 
@@ -125,20 +129,20 @@ def _extract_people(text: str) -> list[tuple[str, str | None]]:
             _add(out, m.group("d"), rel)
 
     for m in _MY_REL_RE.finditer(text):
-        _add(out, m.group(2), _norm_rel(m.group("rel")))
+        _add(out, m.group("name"), _norm_rel(m.group("rel")))
     for m in _REL_MY_RE.finditer(text):
-        _add(out, m.group(1), _norm_rel(m.group("rel")))
+        _add(out, m.group("name"), _norm_rel(m.group("rel")))
     for m in _POSS_REL_RE.finditer(text):
-        _add(out, m.group(2), _norm_rel(m.group("rel")))
+        _add(out, m.group("name"), _norm_rel(m.group("rel")))
     for m in _PAREN_REL_RE.finditer(text):
         rel = _norm_rel(m.group("rel"))
         if rel:  # only trust parens when they hold a real role
-            _add(out, m.group(1), rel)
+            _add(out, m.group("name"), rel)
 
     # Name-only fills (do not overwrite a relationship already found above).
     for rx in _NAME_ONLY_RES:
         for m in rx.finditer(text):
-            _add(out, m.group(1), None)
+            _add(out, m.group("name"), None)
 
     return list(out.values())
 
@@ -196,8 +200,11 @@ async def backfill_contacts(
             continue
         for name, rel in _extract_people(getattr(ref, "text", "") or ""):
             key = name.lower()
-            # Never propose the user themselves as their own contact.
-            if key == self_name or self_name.startswith(key):
+            # Never propose the user themselves as their own contact. Exact
+            # match only — a substring/prefix test would drop legitimate
+            # contacts whose name is a prefix of the user_id (e.g. user "jason"
+            # must not swallow a contact "Jan").
+            if key == self_name:
                 continue
             existing = people.get(key)
             if existing is None:
