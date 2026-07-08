@@ -368,7 +368,7 @@ def _catalogue_card(cat: list[dict[str, Any]]) -> dict[str, Any]:
     for p in cat:
         if p.get("connected"):
             continue
-        label = ("✓ " if p.get("connected") else "") + p["name"]
+        label = p["name"]  # connected providers are skipped above
         verb = "connect radio" if p["auth"] == "free" and p["domain"] == "radiobrowser" else f"connect {p['domain']}"
         actions.append({"label": label, "query": verb})
     return {

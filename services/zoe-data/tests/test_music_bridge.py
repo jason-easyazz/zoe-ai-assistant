@@ -149,3 +149,61 @@ async def test_setup_save_gated_by_token(monkeypatch):
     assert r2["ok"] is True and saved["n"] == 1
     r3 = await ms_router.setup_save({"token": tok, "provider": "ytmusic", "values": {"username": "x"}})
     assert r3["ok"] is False and saved["n"] == 1  # single-use
+
+
+# ── Spotify OAuth (slice 3): WS driver + token-gated endpoints ────────────────
+
+import music_oauth
+
+
+def test_oauth_values_from_entries_extracts_token():
+    entries = [
+        {"key": "auth", "type": "action", "value": None},
+        {"key": "refresh_token_global", "type": "secure_string", "value": "RT123"},
+        {"key": "library_sync_tracks", "type": "boolean", "value": True},
+        {"key": "client_id", "type": "secure_string", "value": None},  # None skipped
+    ]
+    v = music_oauth._values_from_entries(entries)
+    assert v == {"refresh_token_global": "RT123", "library_sync_tracks": True}
+
+
+def test_oauth_status_unknown_for_bad_id():
+    assert music_oauth.oauth_status("nope")["state"] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_oauth_start_endpoint_gated_by_token(monkeypatch):
+    from routers import music_setup as ms
+    started = {"n": 0}
+    async def fake_start(provider):
+        started["n"] += 1
+        return {"oauth_id": "oid1", "auth_url": "https://accounts.spotify.com/authorize?x", "state": "pending"}
+    monkeypatch.setattr(music_oauth, "start_oauth", fake_start)
+    # bad token → refused, WS never opened
+    r = await ms.oauth_start({"token": "bad", "provider": "spotify"})
+    assert r["ok"] is False and started["n"] == 0
+    # valid token → started, URL returned
+    tok = music_setup.mint("spotify")["token"]
+    r2 = await ms.oauth_start({"token": tok, "provider": "spotify"})
+    assert r2["ok"] is True and r2["auth_url"].startswith("https://accounts.spotify.com") and started["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_oauth_status_endpoint_consumes_on_connected(monkeypatch):
+    from routers import music_setup as ms
+    monkeypatch.setattr(music_oauth, "oauth_status", lambda oid: {"state": "connected", "provider": "spotify"})
+    tok = music_setup.mint("spotify")["token"]
+    r = await ms.oauth_status(oauth_id="oid1", token=tok)
+    assert r["ok"] is True and r["state"] == "connected"
+    assert music_setup.verify(tok) is None  # consumed on success
+
+
+@pytest.mark.asyncio
+async def test_oauth_start_returns_failed_when_no_url(monkeypatch):
+    from routers import music_setup as ms
+    async def no_url(provider):
+        return {"oauth_id": "x", "auth_url": None, "state": "failed", "error": "sign-in timed out"}
+    monkeypatch.setattr(music_oauth, "start_oauth", no_url)
+    tok = music_setup.mint("spotify")["token"]
+    r = await ms.oauth_start({"token": tok, "provider": "spotify"})
+    assert r["ok"] is False and "timed out" in (r.get("reason") or "")

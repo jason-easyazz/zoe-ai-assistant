@@ -94,9 +94,19 @@
       $('subtitle').textContent = form.fields.length
         ? 'Enter your ' + form.name + ' details below.'
         : 'Ready to connect ' + form.name + '.';
+      // OAuth providers (Spotify etc.): one button → sign in on the provider →
+      // Zoe saves the token. No fields to type.
+      if (form.auth === 'oauth') {
+        $('subtitle').textContent = 'Tap below to sign in to ' + form.name + '. A new tab opens — sign in, then come back here.';
+        $('fields').innerHTML = '';
+        $('submit').textContent = 'Sign in with ' + form.name;
+        $('form').setAttribute('data-oauth', '1');
+        show('form');
+        return;
+      }
       var html = '';
       form.fields.forEach(function (f) {
-        if (f.type === 'action') return; // OAuth actions handled in a later slice
+        if (f.type === 'action') return; // OAuth actions handled via the oauth branch
         if (f.type === 'boolean') {
           html += '<div class="field switch"><label>' + esc(f.label) + '</label>' +
             '<input type="checkbox" data-key="' + esc(f.key) + '"' + (f.default ? ' checked' : '') + '></div>';
@@ -113,8 +123,33 @@
     })
     .catch(function () { fail('Could not reach your Zoe. Make sure your phone is on the same wifi.'); });
 
+  function runOAuth() {
+    var btn = $('submit'); btn.disabled = true; btn.textContent = 'Opening sign-in…';
+    fetch('/api/music/setup/oauth/start', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: token, provider: provider })
+    }).then(function (r) { return r.json(); }).then(function (res) {
+      if (!res.ok || !res.auth_url) { btn.disabled = false; btn.textContent = 'Try again'; fail(res.reason || 'Could not start sign-in.'); return; }
+      // Open the provider login in a new tab; keep THIS page to poll for success.
+      window.open(res.auth_url, '_blank');
+      btn.textContent = 'Waiting for sign-in…';
+      $('subtitle').textContent = 'Finish signing in on the other tab, then return here.';
+      var tries = 0;
+      var poll = setInterval(function () {
+        tries++;
+        fetch('/api/music/setup/oauth/status?oauth_id=' + encodeURIComponent(res.oauth_id) + '&token=' + encodeURIComponent(token))
+          .then(function (r) { return r.json(); }).then(function (s) {
+            if (s.state === 'connected') { clearInterval(poll); $('doneTitle').textContent = 'Signed in — connected!'; show('done'); }
+            else if (s.state === 'failed' || s.state === 'unknown') { clearInterval(poll); btn.disabled = false; btn.textContent = 'Try again'; fail(s.error || 'Sign-in didn’t complete.'); }
+          }).catch(function () {});
+        if (tries > 60) { clearInterval(poll); btn.disabled = false; btn.textContent = 'Try again'; }
+      }, 2000);
+    }).catch(function () { btn.disabled = false; btn.textContent = 'Try again'; fail('Could not reach your Zoe.'); });
+  }
+
   $('form').addEventListener('submit', function (e) {
     e.preventDefault();
+    if ($('form').getAttribute('data-oauth')) { runOAuth(); return; }
     var values = {}, missing = false;
     Array.prototype.forEach.call(document.querySelectorAll('[data-key]'), function (el) {
       var key = el.getAttribute('data-key');
