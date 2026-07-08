@@ -169,6 +169,27 @@ async def control(action: str, player_id: str = "", value: Any = None) -> bool:
     return False
 
 
+async def transfer(target_player_id: str, source_player_id: str = "") -> bool:
+    """Move current playback to another speaker.
+
+    Transfers the source queue (an explicit source, else the active
+    playing/paused player MA is using now) onto the target player's queue via
+    MA's `player_queues/transfer`. `queue_id == player_id` for a solo player
+    (see `now_playing`). Best-effort — MA carries over play state via auto_play;
+    never raises. Returns True when a transfer command was dispatched."""
+    if not target_player_id:
+        return False
+    players = await get_players()
+    source = _pick_player(players, source_player_id) if source_player_id else _pick_player(players)
+    if source is None:
+        return False
+    source_id = source.get("player_id", "")
+    if not source_id or source_id == target_player_id:
+        return False
+    await _ma("player_queues/transfer", source_queue_id=source_id, target_queue_id=target_player_id)
+    return True
+
+
 async def search_and_play(query: str, player_id: str = "") -> Optional[dict[str, Any]]:
     """Search MA and play the top hit on the target player. Returns the matched
     item {name, media_type} or None. Local-first: searches all configured

@@ -1165,3 +1165,63 @@ def test_nowplaying_miniplayer_present_and_wired():
     assert "/api/music/control" in js
     assert "startNowPlayingWatch" in js
     assert "what's playing" in js  # tap-to-expand opens the full music card
+
+
+def test_music_hub_output_picker_and_add_source_wired():
+    """Music hub: the now-playing card carries a speaker/output picker + a
+    persistent 'Add source' affordance; the mini-player carries a compact output
+    button + popover; skybridge.js persists the pick and threads it everywhere."""
+    html = read(UI / "skybridge.html")
+    renderer = read(UI / "js" / "skybridge-renderer.js")
+    js = read(UI / "js" / "skybridge.js")
+
+    # Card renderer: output button (client-side picker) + inline picker container
+    # + persistent add-source button reusing the "add music" resolver flow.
+    assert "data-music-output" in renderer
+    assert "data-music-picker" in renderer
+    assert 'class="np-output"' in renderer
+    assert "np-out-name" in renderer
+    assert 'data-sky-action="query" data-query="add music"' in renderer  # add source
+
+    # Mini-player: compact output button + floating popover container.
+    assert 'class="snp-btn snp-btn-sm snp-out" data-music-output' in html
+    assert 'id="skyNpOutputs"' in html
+    assert "data-music-picker" in html
+    assert ".snp-outputs" in html
+
+    # skybridge.js: persist the chosen speaker + thread it into poll/control,
+    # fetch players, render the picker, and transfer live playback on select.
+    assert "zoe_music_player_id" in js
+    assert "function getMusicPlayerId" in js
+    assert "function selectMusicPlayer" in js
+    assert "function toggleMusicPicker" in js
+    assert "/api/music/players" in js
+    assert "/api/music/transfer" in js
+    # Poll targets the persisted speaker; control POSTs the persisted speaker.
+    assert "'?player_id=' + encodeURIComponent(pid)" in js
+    assert "player_id: getMusicPlayerId() || npPlayerId" in js
+    # Selection routes on both the card grid and the mini-player.
+    assert "data-music-player" in js
+    assert "target_player_id: id, source_player_id: prev" in js
+
+    # ds1 tokens for the new picker chrome (no rgba(var()); accents via color-mix).
+    css = read(UI / "css" / "cards/dashboard.css")
+    assert ".np-output" in css
+    assert ".mp-opt" in css
+    assert "rgba(var(" not in css
+
+
+def test_music_transfer_endpoint_shape():
+    """POST /api/music/transfer delegates to music_service.transfer, which speaks
+    MA's player_queues/transfer command with source/target queue ids."""
+    router = read(DATA / "routers" / "music.py")
+    service = read(DATA / "music_service.py")
+
+    assert '@router.post("/transfer")' in router
+    assert "async def music_transfer" in router
+    assert "target_player_id" in router
+    assert "music_service.transfer(target, source_player_id=source)" in router
+
+    assert "async def transfer(target_player_id: str, source_player_id: str = \"\")" in service
+    assert '"player_queues/transfer"' in service
+    assert "source_queue_id=source_id, target_queue_id=target_player_id" in service
