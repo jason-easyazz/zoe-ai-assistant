@@ -217,3 +217,41 @@ Notes: the dossier `[people]` line only renders when the message trips the relat
 relationship word or "tell me about X") *and* the contact has data. If `/health` returns `000` on the
 host (service "active"), that is the accept-queue-hang signature ([incident-runbook.md](incident-runbook.md)) — a
 restart clears it.
+
+## Contacts from known people (propose / backfill / promote)
+
+Turns people Zoe knows only *narratively* (portrait / MemPalace facts) into structured, editable
+contacts — via **user-confirmed suggestions**, never silent writes. Design SSOT:
+[`docs/adr/ADR-contacts-from-known-people.md`](../adr/ADR-contacts-from-known-people.md). All merged
+**dark** (Phases 1/2a/2b/3, PRs #1177/#1181/#1182/#1180). No migration — reads existing
+`people` + `person_activities` columns.
+
+| Flag (env) | Turns on | Reader |
+|---|---|---|
+| `ZOE_PERSON_SUGGEST_ENABLED` | Propose-on-mention (a mentioned person → "add to contacts?" card) **and** the `person_create` accept-executor (creates a full, **private-by-default** contact) **and** promote-on-confirm (stub→full) | `pending_suggestions.person_suggestions_enabled` |
+| `ZOE_CONTACT_BACKFILL_ENABLED` | The one-shot backfill admin pass (`POST /api/memories/backfill-contacts`) that proposes contacts for people already known | `contact_backfill.contact_backfill_enabled` |
+| `ZOE_PERSON_BIRTHDAY_CAPTURE_ENABLED` | A birthday mentioned for a not-yet-contact creates the person so the date lands (voice write-path; replay-gate at enable) | `person_extractor.birthday_capture_enabled` |
+
+### Enable — propose-on-mention (works end-to-end today)
+```bash
+ENV=/home/zoe/assistant/services/zoe-data/.env
+grep -qxF 'ZOE_PERSON_SUGGEST_ENABLED=1' "$ENV" || echo 'ZOE_PERSON_SUGGEST_ENABLED=1' >> "$ENV"
+systemctl --user restart zoe-data.service
+```
+Now, when the user mentions a person who isn't a contact, Zoe surfaces an "Add X to contacts?" card
+in that live chat; accepting creates a full editable contact (and promotes a matching stub). This
+path stores the proposal under the **live** session, so it surfaces correctly.
+
+### Backfill — ⚠️ has a delivery gap (do NOT rely on it live yet)
+`ZOE_CONTACT_BACKFILL_ENABLED=1` + `POST /api/memories/backfill-contacts?user_id=<u>&session_id=<s>`
+generates correct `person_create` proposals from known people — **but** suggestion retrieval
+(`list_active` / `load_for_prompt`) filters `WHERE user_id=$1 AND session_id=$2`. A live chat/panel
+uses a **per-conversation** session id, so proposals stored under the default `'backfill'` session
+(or any static session) **never surface in the user's UI**. The endpoint docstring says as much.
+Until a **non-session-scoped delivery** for backfill proposals lands (a "suggested contacts" review
+view, or routing onto the user's next active session), running the backfill live is a **no-op for
+the user** — it just accumulates orphan rows. Treat backfill as **blocked on that follow-up**.
+
+### Rollback
+Unset the flag(s) → restart. Reversible; created contacts (from accepted suggestions) persist as
+normal editable people rows — delete via the contacts UI if unwanted.
