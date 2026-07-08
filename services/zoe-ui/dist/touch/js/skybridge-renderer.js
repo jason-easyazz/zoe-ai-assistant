@@ -1240,9 +1240,10 @@
         // data-sky-action=query so tap + voice share one resolver path.
         var img = String(props.image || '');
         var sameOrigin = img && ((img.charAt(0) === '/' && img.charAt(1) !== '/') || /^https?:\/\//i.test(img));
-        // Strict URL shape (no quotes/parens/backslash/whitespace) so it is safe
-        // to drop into a CSS url() inside a style attribute as well as an <img>.
-        var safeArt = (sameOrigin && /^(?:\/[^"'()\\\s]+|https?:\/\/[^"'()\\\s]+)$/i.test(img)) ? img : '';
+        // Strict URL shape (no quotes/parens/backslash/whitespace/angle brackets,
+        // which are invalid in URL paths per RFC 3986) so it is safe to drop into a
+        // CSS url() inside a style attribute as well as an <img>.
+        var safeArt = (sameOrigin && /^(?:\/[^"'()\\\s<>]+|https?:\/\/[^"'()\\\s<>]+)$/i.test(img)) ? img : '';
         var playing = props.state === 'playing';
         var hasTrack = playing || props.state === 'paused';
         var stateBadge = playing ? 'Playing' : (props.state === 'paused' ? 'Paused' : 'Ready');
