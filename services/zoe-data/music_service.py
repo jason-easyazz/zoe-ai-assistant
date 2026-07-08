@@ -21,6 +21,32 @@ logger = logging.getLogger(__name__)
 
 _TIMEOUT_S = 5.0
 
+# YouTube Music needs a companion PO-token generator (the bgutil provider) that
+# MA pings at `po_token_server_url` (MA's own default is http://127.0.0.1:4416).
+# Zoe runs that generator locally as a docker-compose.modules service on :4416,
+# so the user never has to type this URL: the setup form hides the field and
+# save_provider() fills it server-side. Override with ZOE_YTMUSIC_POTOKEN_URL
+# only if the generator is moved to another host/port.
+_YTMUSIC_DOMAIN = "ytmusic"
+_YTMUSIC_POTOKEN_KEY = "po_token_server_url"
+
+
+def _ytmusic_potoken_url() -> str:
+    return os.environ.get("ZOE_YTMUSIC_POTOKEN_URL", "http://localhost:4416").rstrip("/")
+
+
+async def _potoken_reachable(url: str) -> bool:
+    """Best-effort probe of the local PO-token generator's /ping. MA fails the
+    ytmusic login if this URL is unreachable, so we check at setup time rather
+    than persisting a dead URL and surfacing it as a confusing first-play error."""
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as c:
+            r = await c.get(f"{url}/ping")
+            return r.status_code == 200
+    except Exception as exc:  # noqa: BLE001 — probe is advisory, never raises
+        logger.debug("PO-token generator probe failed for %s: %s", url, exc)
+        return False
+
 
 def _ma_url() -> str:
     return os.environ.get("MUSIC_ASSISTANT_URL", "http://localhost:8095").rstrip("/")
@@ -169,6 +195,27 @@ async def control(action: str, player_id: str = "", value: Any = None) -> bool:
     return False
 
 
+async def transfer(target_player_id: str, source_player_id: str = "") -> bool:
+    """Move current playback to another speaker.
+
+    Transfers the source queue (an explicit source, else the active
+    playing/paused player MA is using now) onto the target player's queue via
+    MA's `player_queues/transfer`. `queue_id == player_id` for a solo player
+    (see `now_playing`). Best-effort — MA carries over play state via auto_play;
+    never raises. Returns True when a transfer command was dispatched."""
+    if not target_player_id:
+        return False
+    players = await get_players()
+    source = _pick_player(players, source_player_id) if source_player_id else _pick_player(players)
+    if source is None:
+        return False
+    source_id = source.get("player_id", "")
+    if not source_id or source_id == target_player_id:
+        return False
+    await _ma("player_queues/transfer", source_queue_id=source_id, target_queue_id=target_player_id)
+    return True
+
+
 async def search_and_play(query: str, player_id: str = "") -> Optional[dict[str, Any]]:
     """Search MA and play the top hit on the target player. Returns the matched
     item {name, media_type} or None. Local-first: searches all configured
@@ -253,6 +300,25 @@ def _result(spoken: str, card: dict[str, Any], action: str) -> dict[str, Any]:
     }
 
 
+def _match_player_by_name(players: list[dict[str, Any]], name: str) -> Optional[dict[str, Any]]:
+    """Find the speaker whose display name best matches a spoken room name
+    ("kitchen", "living room"). Exact → prefix → substring, case-insensitive."""
+    q = (name or "").strip().lower()
+    if not players or not q:
+        return None
+    cand = [(p, str(p.get("display_name") or p.get("name") or "").strip().lower()) for p in players]
+    for p, n in cand:
+        if n and n == q:
+            return p
+    for p, n in cand:
+        if n and (n.startswith(q) or q.startswith(n)):
+            return p
+    for p, n in cand:
+        if n and (q in n or n in q):
+            return p
+    return None
+
+
 async def resolve_music(intent: Any) -> dict[str, Any]:
     """The Skybridge music domain resolver. `intent` has .action and .query."""
     action = getattr(intent, "action", "status")
@@ -260,6 +326,25 @@ async def resolve_music(intent: Any) -> dict[str, Any]:
 
     if action == "setup":
         return await resolve_music_setup(query)
+
+    if action == "transfer" and query:
+        # Voice path for speaker switching: "move/switch music to the kitchen".
+        players = await get_players()
+        target = _match_player_by_name(players, query)
+        if target is None:
+            names = ", ".join(
+                str(p.get("display_name") or p.get("name")) for p in players
+                if (p.get("display_name") or p.get("name")))
+            return _result(
+                f"I couldn't find a speaker called “{query}”." + (f" You have: {names}." if names else ""),
+                _browse_card(), "transfer")
+        np0 = await now_playing()
+        tname = target.get("display_name") or target.get("name") or "there"
+        if not await transfer(target.get("player_id", "")):
+            return _result(f"I couldn't move the music to {tname}.",
+                           now_playing_card(np0 or {}), "transfer")
+        np = await now_playing(target.get("player_id", "")) or np0 or {}
+        return _result(f"Moved the music to {tname}.", now_playing_card(np), "transfer")
 
     if action == "play" and query:
         hit = await search_and_play(query)
@@ -346,7 +431,12 @@ async def provider_setup_form(provider: str) -> Optional[dict[str, Any]]:
     entries = await _ma("config/providers/get_entries", provider_domain=provider)
     if entries is None:
         return None
-    return {**meta, "fields": _clean_entries(entries)}
+    fields = _clean_entries(entries)
+    if provider == _YTMUSIC_DOMAIN:
+        # Hide the PO-token server field — Zoe runs the generator locally and
+        # sets it in save_provider(). The phone only asks for username + cookie.
+        fields = [f for f in fields if f["key"] != _YTMUSIC_POTOKEN_KEY]
+    return {**meta, "fields": fields}
 
 
 async def save_provider(provider: str, values: dict[str, Any]) -> Optional[dict[str, Any]]:
@@ -356,6 +446,11 @@ async def save_provider(provider: str, values: dict[str, Any]) -> Optional[dict[
     merged = {e["key"]: e.get("default_value") for e in entries
               if isinstance(e, dict) and e.get("key") and e.get("type") not in _HIDDEN_ENTRY_TYPES}
     merged.update({k: v for k, v in (values or {}).items() if v is not None})
+    if provider == _YTMUSIC_DOMAIN:
+        # Always point YouTube Music at Zoe's local PO-token generator, whatever
+        # the phone sent (the field is hidden from that form). Reachability is
+        # checked by the phone save endpoint so the user gets an accurate message.
+        merged[_YTMUSIC_POTOKEN_KEY] = _ytmusic_potoken_url()
     saved = await _ma("config/providers/save", provider_domain=provider, values=merged)
     return saved if isinstance(saved, dict) else None
 

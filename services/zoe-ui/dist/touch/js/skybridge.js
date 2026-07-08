@@ -58,6 +58,7 @@
         renderHome();
         restoreTimers();   // a reload resumes any still-running countdown
         loadBackendStatus();
+        startNowPlayingWatch();
         setMode(mode);
         syncVoiceFallbackState();
         if (typeof TouchMenu !== 'undefined') TouchMenu.init({ page: 'skybridge' });
@@ -121,6 +122,11 @@
         els.ambientClockDate = document.getElementById('skyAmbientClockDate');
         els.canvas = document.getElementById('skyOrb');
         els.ctx = els.canvas.getContext('2d');
+        els.nowPlaying = document.getElementById('skyNowPlaying');
+        els.npArt = document.getElementById('skyNpArt');
+        els.npTitle = document.getElementById('skyNpTitle');
+        els.npArtist = document.getElementById('skyNpArtist');
+        els.npOutputs = document.getElementById('skyNpOutputs');
     }
 
     function bindEvents() {
@@ -154,11 +160,35 @@
             // Always-visible Home while a card is up → back to the dashboard hub.
             els.navHome.addEventListener('click', () => wakeToDashboard());
         }
+        if (els.nowPlaying) {
+            // Mini-player: transport/volume + tap-the-track-to-expand + output picker.
+            els.nowPlaying.addEventListener('click', event => {
+                // Note: no stopPropagation here — the document-level handlers below
+                // must still see the click (outside-tap picker-close; the wake-tap
+                // handler already excludes .sky-nowplaying), otherwise an open picker
+                // couldn't be dismissed by tapping the mini-player's own inert areas.
+                const playerBtn = event.target.closest('[data-music-player]');
+                if (playerBtn && event.target.closest('[data-music-picker]')) {
+                    selectMusicPlayer(playerBtn.dataset.musicPlayer);
+                    return;
+                }
+                const outBtn = event.target.closest('[data-music-output]');
+                if (outBtn) { toggleMusicPicker(outBtn, els.npOutputs); return; }
+                const btn = event.target.closest('[data-np-action]');
+                if (!btn) return;
+                npControl(btn.dataset.npAction);
+            });
+        }
+        // Any outside tap closes an open speaker picker (card or mini-player).
+        document.addEventListener('click', event => {
+            if (event.target.closest('[data-music-picker], [data-music-output]')) return;
+            closeMusicPickers();
+        });
         // Touch the resting panel anywhere (not a control) to wake it to the
         // dashboard — the ambient clock should be a door, not a dead end.
         document.addEventListener('click', event => {
             if (!document.body.classList.contains('sky-empty')) return;
-            if (event.target.closest('button, a, input, textarea, label, [data-sky-action], .sky-command, .sky-orb-button')) return;
+            if (event.target.closest('button, a, input, textarea, label, [data-sky-action], .sky-command, .sky-orb-button, .sky-nowplaying')) return;
             wakeToDashboard();
         });
         ['pointerdown', 'keydown', 'touchstart'].forEach(type => {
@@ -173,6 +203,18 @@
             const cancelBtn = event.target.closest('[data-timer-cancel]');
             if (cancelBtn) {
                 cancelTimerLocal(cancelBtn.dataset.timerCancel);
+                return;
+            }
+            // Music hub: speaker picker on the now-playing card (client-side, not
+            // a resolver query). Select a speaker → persist + transfer + refresh.
+            const playerBtn = event.target.closest('[data-music-player]');
+            if (playerBtn && event.target.closest('[data-music-picker]')) {
+                selectMusicPlayer(playerBtn.dataset.musicPlayer);
+                return;
+            }
+            const outBtn = event.target.closest('[data-music-output]');
+            if (outBtn) {
+                toggleMusicPicker(outBtn, outBtn.closest('.sky-card').querySelector('[data-music-picker]'));
                 return;
             }
             const btn = event.target.closest('button[data-sky-action]');
@@ -837,6 +879,194 @@
         if (orbState !== 'ambient') setState('ambient');
     }
 
+    // ── Persistent now-playing mini-player ──────────────────────────────────
+    // Polls MA's now-playing snapshot and keeps the floating mini-player in sync.
+    // Shown only while something is playing/paused; its controls hit the same
+    // /api/music/control endpoint the cards use. Every failure path is silent and
+    // just hides the player — it must never disrupt voice or the resting clock.
+    const NP_POLL_MS = 5000;
+    let npPollHandle = null;
+    let npInFlight = false;
+    let npPlayerId = '';          // stick to the active player for control calls
+    let npLastArt = '';           // avoid reloading identical album art each poll
+    let npActive = false;         // true while something is actually playing/paused
+    const MUSIC_PLAYER_KEY = 'zoe_music_player_id';  // persisted preferred speaker
+
+    // The chosen output speaker persists so the whole panel (poll, control, and
+    // any play) consistently targets it once the user picks e.g. "Kitchen".
+    function getMusicPlayerId() {
+        try { return localStorage.getItem(MUSIC_PLAYER_KEY) || ''; } catch (_) { return ''; }
+    }
+    function setMusicPlayerId(id) {
+        try { if (id) localStorage.setItem(MUSIC_PLAYER_KEY, id); } catch (_) {}
+    }
+
+    function startNowPlayingWatch() {
+        // Require the whole mini-player subtree so applyNowPlaying can trust its
+        // element refs (keeps DOM-missing distinct from network failures).
+        if (!els.nowPlaying || !els.npTitle || !els.npArtist || !els.npArt) return;
+        pollNowPlaying();
+        npPollHandle = setInterval(pollNowPlaying, NP_POLL_MS);
+    }
+
+    async function pollNowPlaying() {
+        if (npInFlight || !els.nowPlaying) return;
+        npInFlight = true;
+        try {
+            const pid = getMusicPlayerId();
+            const url = '/api/music/now-playing' + (pid ? '?player_id=' + encodeURIComponent(pid) : '');
+            const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
+            if (!resp.ok) { hideNowPlaying(); return; }
+            const data = await resp.json();
+            const np = data && data.available ? (data.now_playing || {}) : null;
+            const state = np && String(np.state || '').toLowerCase();
+            if (np && (state === 'playing' || state === 'paused')) {
+                applyNowPlaying(np, state === 'playing');
+            } else {
+                hideNowPlaying();
+            }
+        } catch (_) {
+            hideNowPlaying();   // MA unreachable → no mini-player, no noise
+        } finally {
+            npInFlight = false;
+        }
+    }
+
+    function applyNowPlaying(np, isPlaying) {
+        npPlayerId = np.player_id || '';
+        els.npTitle.textContent = np.title || np.player_name || 'Now playing';
+        els.npArtist.textContent = np.artist || '';
+        // Same-origin / absolute http(s) art only, mirroring the card's guard.
+        const art = typeof np.image === 'string' && /^(https?:\/\/|\/)[^"'()\\<>\s]+$/.test(np.image) ? np.image : '';
+        if (art !== npLastArt) {
+            npLastArt = art;
+            const glyph = els.npArt.querySelector('svg');
+            const oldImg = els.npArt.querySelector('img');
+            if (oldImg) oldImg.remove();
+            if (art) {
+                const img = document.createElement('img');
+                img.alt = '';
+                img.src = art;
+                img.onerror = () => { img.remove(); els.npArt.classList.remove('has-art'); if (glyph) glyph.style.display = ''; };
+                els.npArt.appendChild(img);
+                els.npArt.classList.add('has-art');
+            } else {
+                els.npArt.classList.remove('has-art');
+            }
+        }
+        els.nowPlaying.classList.toggle('is-playing', !!isPlaying);
+        els.nowPlaying.hidden = false;
+        npActive = true;
+    }
+
+    function hideNowPlaying() {
+        npActive = false;
+        if (els.nowPlaying && !els.nowPlaying.hidden) {
+            els.nowPlaying.hidden = true;
+            els.nowPlaying.classList.remove('is-playing');
+        }
+    }
+
+    async function npControl(action) {
+        if (action === 'expand') { submitCommand("what's playing"); return; }
+        // Optimistic: flip the play/pause glyph immediately, then confirm by poll.
+        if (action === 'play_pause' && els.nowPlaying) {
+            els.nowPlaying.classList.toggle('is-playing');
+        }
+        try {
+            const resp = await fetch('/api/music/control', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action, player_id: getMusicPlayerId() || npPlayerId })
+            });
+            // On a non-2xx, reconcile immediately so an optimistic glyph flip that
+            // didn't actually take doesn't linger until the next scheduled poll.
+            if (!resp.ok) { pollNowPlaying(); return; }
+        } catch (_) { pollNowPlaying(); return; }  // network fail → reconcile now
+        // Re-poll shortly after so state (track change / real play state) catches up.
+        setTimeout(pollNowPlaying, 350);
+    }
+
+    // ── Speaker / output picker (music hub) ──────────────────────────────────
+    // Shared by the now-playing card and the mini-player: fetch MA's speakers,
+    // let the user pick one, persist it, and (when playback is live) move it
+    // there via /api/music/transfer. All best-effort — never breaks a turn.
+    async function fetchMusicPlayers() {
+        try {
+            const resp = await fetch('/api/music/players', { headers: { 'Accept': 'application/json' } });
+            if (!resp.ok) return [];
+            const data = await resp.json();
+            return (data && Array.isArray(data.players)) ? data.players : [];
+        } catch (_) { return []; }
+    }
+
+    function musicPlayerName(p) {
+        return (p && (p.display_name || p.name)) || 'Speaker';
+    }
+
+    function pickerItemsHtml(players, activeId) {
+        const esc = window.SkybridgeRenderer.escapeHtml;
+        const rows = (players || [])
+            .filter(p => p && p.player_id && p.available !== false)
+            .map(p => {
+                const id = p.player_id;
+                const on = id === activeId;
+                return '<button type="button" class="mp-opt' + (on ? ' is-active' : '') + '"'
+                    + ' role="option" aria-selected="' + (on ? 'true' : 'false') + '"'
+                    + ' data-music-player="' + esc(id) + '">'
+                    + '<span class="mp-opt-name">' + esc(musicPlayerName(p)) + '</span>'
+                    + (on ? '<span class="mp-opt-check" aria-hidden="true">✓</span>' : '')
+                    + '</button>';
+            }).join('');
+        return rows || '<div class="mp-empty">No speakers found</div>';
+    }
+
+    function closeMusicPickers() {
+        document.querySelectorAll('[data-music-picker]').forEach(el => { el.hidden = true; });
+        document.querySelectorAll('[data-music-output]').forEach(b => b.setAttribute('aria-expanded', 'false'));
+    }
+
+    async function toggleMusicPicker(btn, container) {
+        if (!container) return;
+        const wasOpen = container.hidden === false;
+        closeMusicPickers();
+        if (wasOpen) return;   // second tap on the same button just closes it
+        container.innerHTML = '<div class="mp-empty">Finding speakers…</div>';
+        container.hidden = false;
+        if (btn) btn.setAttribute('aria-expanded', 'true');
+        const players = await fetchMusicPlayers();
+        if (container.hidden) return;   // closed again while fetching
+        container.innerHTML = pickerItemsHtml(players, getMusicPlayerId() || npPlayerId);
+    }
+
+    async function selectMusicPlayer(id) {
+        if (!id) return;
+        const prev = npPlayerId || getMusicPlayerId();
+        const wasActive = npActive;
+        setMusicPlayerId(id);
+        npPlayerId = id;
+        closeMusicPickers();
+        // Move live playback to the newly chosen speaker; if nothing's playing we
+        // only set the preferred target (degrades gracefully, no transfer).
+        if (wasActive && prev && prev !== id) {
+            try {
+                await fetch('/api/music/transfer', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ target_player_id: id, source_player_id: prev })
+                });
+            } catch (_) { /* best-effort */ }
+        }
+        // Reflect the new speaker name wherever the card shows it, then reconcile.
+        const players = await fetchMusicPlayers();
+        const chosen = players.find(p => p && p.player_id === id);
+        if (chosen) {
+            const name = musicPlayerName(chosen);
+            document.querySelectorAll('.np-out-name').forEach(el => { el.textContent = name; });
+        }
+        setTimeout(pollNowPlaying, 300);
+    }
+
     function startClockTicker() {
         updateAllClocks();
         // One shared 1s ticker for the live clock numerals.
@@ -1350,6 +1580,7 @@
     window.addEventListener('beforeunload', () => {
         if (animationFrame) cancelAnimationFrame(animationFrame);
         if (clockTicker) clearInterval(clockTicker);
+        if (npPollHandle) clearInterval(npPollHandle);
         clearIdleTimer();
         if (voice) voice.stop();
     });
