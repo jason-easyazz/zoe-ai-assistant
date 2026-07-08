@@ -1146,3 +1146,22 @@ process.stdout.write(JSON.stringify({
     import json as _j
     checks = _j.loads(proc.stdout)
     assert all(checks.values()), f"now-playing render failed: {checks}"
+
+
+def test_nowplaying_miniplayer_present_and_wired():
+    """The persistent now-playing mini-player: markup in the shell + poll/control
+    wiring in skybridge.js. It's floating chrome shown only while music plays."""
+    html = read(UI / "skybridge.html")
+    # DOM: the container + the five transport/volume actions + tap-to-expand.
+    assert 'id="skyNowPlaying"' in html
+    for action in ("expand", "previous", "play_pause", "next", "volume_down", "volume_up"):
+        assert f'data-np-action="{action}"' in html, f"missing mini-player action: {action}"
+    # CSS: centered floating pill by default; repositioned under the clock at rest.
+    assert ".sky-nowplaying" in html
+    assert "body.sky-empty .sky-nowplaying" in html
+    js = read(UI / "js" / "skybridge.js")
+    # Behaviour: polls now-playing, drives control, expands to the full card.
+    assert "/api/music/now-playing" in js
+    assert "/api/music/control" in js
+    assert "startNowPlayingWatch" in js
+    assert "what's playing" in js  # tap-to-expand opens the full music card
