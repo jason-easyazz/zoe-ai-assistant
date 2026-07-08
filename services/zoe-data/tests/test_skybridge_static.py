@@ -492,6 +492,16 @@ def test_skybridge_list_renderer_has_switcher_columns_and_new_list_action():
     assert "lst-tab" in css
     assert "lst-row" in css
 
+    # Redesign contract: the switcher is the TOP tab row (active tab == title, so
+    # there is no separate big heading), items flow into a multi-column grid, and
+    # a keep-out cell reserves the bottom-left corner so items wrap around the orb.
+    assert "lst-header" not in renderer  # the old vertical-space-wasting title block is gone
+    assert "is-grid" in renderer
+    assert "lst-keepout" in renderer
+    assert "is-grid" in css
+    assert "lst-keepout" in css
+    assert "grid-auto-flow: column" in css
+
 
 
 def test_skybridge_calendar_renderer_handles_datetime_dates_and_ordering(tmp_path):

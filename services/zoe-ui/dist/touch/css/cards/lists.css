@@ -53,36 +53,51 @@ body:not(.sky-empty) .sky-card.zoe-list-card.sky-premium-card {
 .zoe-list-card .lst-a-general,
 .zoe-list-card .lst-a-all       { --lst-accent: var(--sky-accent-general, 90,224,224); }
 
-/* ── Scene: single column, the list fills it ────────────────────────────── */
+/* ── Scene: tab row on top, the multi-column list fills the rest ─────────────
+   The list card OWNS its safe-areas so items can wrap around the bottom-left orb
+   instead of the whole bottom band being reserved (the shared stage rule pads
+   .lst-scene 88px/112px full-width; here we reclaim it and keep ONLY the corner
+   clear via the .lst-keepout grid cell). Higher specificity + !important beats
+   `html body:not(.sky-empty) .sky-card .lst-scene`. */
 .zoe-list-card .lst-scene {
+  position: relative;
   display: flex;
   flex-direction: column;
   width: 100%;
   min-height: 0;
   flex: 1 1 auto;
-  padding: var(--sky-space-6, 24px) var(--sky-space-7, 28px) var(--sky-space-5, 20px);
-  gap: var(--sky-space-4, 16px);
+  padding: var(--sky-space-5, 20px) var(--sky-space-7, 28px) var(--sky-space-4, 16px);
+  gap: var(--sky-space-3, 12px);
   /* a calm accent wash, top-left, very subtle (function over flair) */
   background: radial-gradient(130% 80% at 0% 0%, rgba(var(--lst-accent), .10), transparent 58%);
 }
-
-/* ── Header: identity badge + name + count ──────────────────────────────── */
-.zoe-list-card .lst-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sky-space-4, 16px);
+html body:not(.sky-empty) .sky-card.zoe-list-card .lst-scene {
+  /* Reclaim the shared full-width safe-area padding: the tab row is indented past
+     the Home pill (padding-left below) and the bottom-left orb is handled by the
+     .lst-keepout grid cell, so the list can use the whole bottom-right band. */
+  padding-top: var(--sky-space-5, 20px) !important;
+  padding-bottom: var(--sky-space-4, 16px) !important;
 }
-.zoe-list-card .lst-heading {
+
+/* ── Top row: tab switcher + a slim meta line (count + progress) ─────────── */
+.zoe-list-card .lst-top {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sky-space-2, 8px);
+}
+
+/* Fallback title chip (only when there is no tab row, e.g. guest sessions). */
+.zoe-list-card .lst-solo-title {
   display: flex;
   align-items: center;
-  gap: var(--sky-space-3, 14px);
+  gap: var(--sky-space-3, 12px);
   min-width: 0;
+  padding-left: 96px; /* clear the Home pill top-left */
 }
 .zoe-list-card .lst-id-badge {
   flex: 0 0 auto;
-  width: 44px;
-  height: 44px;
+  width: 40px;
+  height: 40px;
   border-radius: var(--sky-radius-md, 14px);
   display: inline-flex;
   align-items: center;
@@ -90,18 +105,9 @@ body:not(.sky-empty) .sky-card.zoe-list-card.sky-premium-card {
   background: rgba(var(--lst-accent), .20);
   box-shadow: inset 0 0 0 1px rgba(var(--lst-accent), .42);
 }
-.zoe-list-card .lst-id-glyph { width: 24px; height: 24px; fill: rgb(var(--lst-accent)); }
-.zoe-list-card .lst-headtext { min-width: 0; }
-.zoe-list-card .lst-kicker {
-  display: block;
-  font-size: var(--sky-text-micro, 11px);
-  font-weight: 600;
-  letter-spacing: 1.6px;
-  text-transform: uppercase;
-  color: rgb(var(--lst-accent));
-}
+.zoe-list-card .lst-id-glyph { width: 22px; height: 22px; fill: rgb(var(--lst-accent)); }
 .zoe-list-card .lst-name {
-  margin: 1px 0 0;
+  margin: 0;
   font-size: var(--sky-text-title, 24px);
   font-weight: 600;
   letter-spacing: -0.3px;
@@ -110,7 +116,15 @@ body:not(.sky-empty) .sky-card.zoe-list-card.sky-premium-card {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.zoe-list-card .lst-count {
+
+/* Meta line: item count on the left, progress bar filling the rest. */
+.zoe-list-card .lst-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--sky-space-3, 12px);
+  padding-left: 2px;
+}
+.zoe-list-card .lst-meta-count {
   flex: 0 0 auto;
   font-size: var(--sky-text-label, 15px);
   font-weight: 500;
@@ -120,6 +134,9 @@ body:not(.sky-empty) .sky-card.zoe-list-card.sky-premium-card {
 
 /* ── Progress: a slim accent bar (no ring) ──────────────────────────────── */
 .zoe-list-card .lst-progress {
+  flex: 1 1 auto;
+  min-width: 60px;
+  max-width: 320px;
   height: 6px;
   border-radius: var(--sky-radius-pill, 999px);
   background: var(--sky-fill-3, rgba(255,255,255,.12));
@@ -133,11 +150,15 @@ body:not(.sky-empty) .sky-card.zoe-list-card.sky-premium-card {
   transition: width var(--sky-dur-slow, 520ms) var(--sky-ease-spring, ease);
 }
 
-/* ── List switcher (when several lists exist): horizontal pills ──────────── */
+/* ── List switcher: the TOP tab row (active tab == the list title) ───────────
+   Indented past the top-left Home pill; wraps to a second line if it must. */
 .zoe-list-card .lst-switcher {
   display: flex;
   flex-wrap: wrap;
   gap: var(--sky-space-2, 8px);
+  padding-left: 96px; /* clear the fixed Home pill (top-left, ~78px + margin) */
+  min-height: 50px;   /* align the tab row with the Home pill height */
+  align-content: center;
 }
 .zoe-list-card .lst-tab {
   appearance: none;
@@ -165,11 +186,21 @@ body:not(.sky-empty) .sky-card.zoe-list-card.sky-premium-card {
 }
 .zoe-list-card .lst-tab:hover { color: var(--sky-ink-0, #fff); background: var(--sky-fill-2, rgba(255,255,255,.08)); }
 .zoe-list-card .lst-tab:active { transform: scale(0.97); }
+/* The active tab IS the list title — a filled accent box, larger label, so it
+   reads as the heading (no separate title needed). */
 .zoe-list-card .lst-tab.is-active {
   color: var(--sky-ink-0, #fff);
-  background: rgba(var(--lst-accent), .18);
-  border-color: rgba(var(--lst-accent), .42);
+  background: rgba(var(--lst-accent), .22);
+  border-color: rgba(var(--lst-accent), .5);
+  box-shadow: inset 0 0 0 1px rgba(var(--lst-accent), .35), 0 6px 18px -10px rgba(var(--lst-accent), .8);
+  padding: 0 var(--sky-space-4, 16px);
 }
+.zoe-list-card .lst-tab.is-active .lst-tab-name {
+  font-size: var(--sky-text-body, 17px);
+  font-weight: 600;
+  letter-spacing: -0.2px;
+}
+.zoe-list-card .lst-tab.is-active .lst-tab-dot { width: 10px; height: 10px; }
 .zoe-list-card .lst-tab-name { font-style: normal; }
 .zoe-list-card .lst-tab-new { color: var(--sky-ink-3, rgba(255,255,255,.5)); }
 .zoe-list-card .lst-tab-new .lst-tab-dot { display: none; }
@@ -184,28 +215,61 @@ body:not(.sky-empty) .sky-card.zoe-list-card.sky-premium-card {
   background: var(--sky-fill-2, rgba(255,255,255,.1));
   color: var(--sky-ink-2, rgba(255,255,255,.7));
 }
+.zoe-list-card .lst-tab.is-active .lst-tab-count {
+  background: rgba(var(--lst-accent), .3);
+  color: var(--sky-ink-0, #fff);
+}
 
-/* ── Items: a clean, tappable list (the hero) ───────────────────────────── */
+/* ── Items ───────────────────────────────────────────────────────────────
+   The list is the hero. Long lists flow into a responsive multi-column grid
+   (newspaper flow: down a column, then the next) so they fill the width instead
+   of one tall skinny column — and wrap AROUND the bottom-left orb. */
 .zoe-list-card .lst-items {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sky-space-2, 8px);
   min-height: 0;
   flex: 1 1 auto;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
 
-/* Two columns once a single list outgrows the screen (§5) — flows the rows into
-   a 2-col grid; the add-row spans the full width at the bottom. */
-.zoe-list-card .lst-items.is-2col {
+/* Multi-column grid. Fixed row tracks + column auto-flow give a deterministic
+   bottom-left cell we can reserve for the orb (.lst-keepout). Rows are packed to
+   the top; on the 1280x800 kiosk this yields 1–3 wide columns as the list grows.
+   --lst-rows / --lst-keep set how many rows fit and where the orb corner starts. */
+.zoe-list-card .lst-items.is-grid {
+  --lst-rows: 9;
+  --lst-keep: 8; /* keep-out spans from this row line to the end (bottom 2 of col 1) */
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  grid-auto-rows: min-content;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(var(--lst-rows), 60px);
+  grid-auto-columns: minmax(0, 1fr);
   gap: var(--sky-space-2, 8px) var(--sky-space-3, 14px);
   align-content: start;
+  overflow-x: hidden;
 }
-.zoe-list-card .lst-items.is-2col .lst-add { grid-column: 1 / -1; }
+
+/* Orb keep-out: reserves the bottom-left cells of the first column so items flow
+   around the Zoe orb + voice pill. ~1/3 card width x ~2 rows ≈ 360x120px. It is
+   an explicitly-placed grid item, so auto-flow skips it and fills every other
+   cell. Invisible + non-interactive — pure layout. */
+.zoe-list-card .lst-items.is-grid .lst-keepout {
+  grid-column: 1;
+  grid-row: var(--lst-keep) / -1;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+/* Grid rows fill their fixed track so the columns align cleanly. */
+.zoe-list-card .lst-items.is-grid .lst-row { height: 100%; }
+
+/* Empty state wrapper: add-row pinned to the top, message centered in the rest
+   (so nothing lands under the bottom-left orb). */
+.zoe-list-card .lst-items.is-empty {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sky-space-3, 12px);
+}
+.zoe-list-card .lst-items.is-empty .lst-add { flex: 0 0 auto; }
+.zoe-list-card .lst-items.is-empty .lst-empty { flex: 1 1 auto; }
 
 /* Add-item row: a calm dashed affordance in the list's accent, set apart from the
    real items but clearly part of the same surface (§6 cohesion). */
@@ -229,12 +293,12 @@ body:not(.sky-empty) .sky-card.zoe-list-card.sky-premium-card {
 .zoe-list-card .lst-row {
   appearance: none;
   width: 100%;
-  min-height: 64px;
+  min-height: 56px; /* >=48px tap target; fits the 60px grid row track */
   cursor: pointer;
   display: flex;
   align-items: center;
-  gap: var(--sky-space-4, 16px);
-  padding: 0 var(--sky-space-5, 20px);
+  gap: var(--sky-space-3, 12px);
+  padding: 0 var(--sky-space-4, 16px);
   border: 1px solid var(--sky-hairline, rgba(255,255,255,.08));
   border-radius: var(--sky-radius-md, 16px);
   background: var(--sky-fill-1, rgba(255,255,255,.05));
@@ -355,6 +419,7 @@ body:not(.sky-empty) .sky-card.zoe-list-card.sky-premium-card {
 /* ── Empty state ────────────────────────────────────────────────────────── */
 .zoe-list-card .lst-empty {
   display: flex; flex-direction: column; gap: 6px;
+  align-items: center; justify-content: center;
   padding: var(--sky-space-8, 32px);
   text-align: center;
   margin: auto;
