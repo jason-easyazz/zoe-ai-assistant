@@ -1007,13 +1007,29 @@ vm.runInContext(fs.readFileSync(process.argv[3],'utf8'),s);
 const R=s.window.SkybridgeRenderer;
 const html=R.render({card_type:'now_playing',schema_version:'1.0.0',card_id:'np',
   content:{source:'music_now_playing',title:'Song <b>x</b>',artist:'Artist',state:'playing',player_name:'Kitchen',transport:true}});
+// Same-origin album art → blurred backdrop + <img>; cross-origin-ish paths are dropped.
+const artHtml=R.render({card_type:'now_playing',schema_version:'1.0.0',card_id:'np2',
+  content:{source:'music_now_playing',title:'T',artist:'A',album:'Alb',state:'playing',player_name:'Den',image:'/media/cover.png',transport:true,elapsed:60,duration:180}});
+const badHtml=R.render({card_type:'now_playing',schema_version:'1.0.0',card_id:'np3',
+  content:{source:'music_now_playing',title:'T',state:'playing',image:'//evil.example/x.png"onerror=alert(1)',transport:true}});
+const absHtml=R.render({card_type:'now_playing',schema_version:'1.0.0',card_id:'np4',
+  content:{source:'music_now_playing',title:'T',state:'playing',image:'https://cdn.example.com/a/cover.png',transport:true}});
+const angleHtml=R.render({card_type:'now_playing',schema_version:'1.0.0',card_id:'np5',
+  content:{source:'music_now_playing',title:'T',state:'playing',image:'/media/c<over>.png',transport:true}});
 process.stdout.write(JSON.stringify({
   card: html.includes('now-playing-card'),
   transport: html.includes('np-transport') && html.includes('np-btn'),
   pause_when_playing: html.includes('data-query="pause music"'),
   actions_wired: html.includes('data-sky-action="query"') && html.includes('data-query="next song"'),
   escaped: html.includes('&lt;b&gt;') && !html.includes('<b>x</b>'),
-  no_dup_header: (html.match(/np-title/g)||[]).length===1
+  no_dup_header: (html.match(/np-title/g)||[]).length===1,
+  ambient: html.includes('np-ambient'),
+  placeholder_when_no_art: html.includes('np-art-empty'),
+  art_backdrop_same_origin: artHtml.includes('np-art-bg') && artHtml.includes('src="/media/cover.png"'),
+  art_backdrop_absolute: absHtml.includes('np-art-bg') && absHtml.includes('src="https://cdn.example.com/a/cover.png"'),
+  progress_when_elapsed: artHtml.includes('np-progress') && artHtml.includes('1:00'),
+  reject_protocol_relative: !badHtml.includes('np-art-bg') && badHtml.includes('np-art-empty') && !badHtml.includes('onerror'),
+  reject_angle_brackets: !angleHtml.includes('np-art-bg') && angleHtml.includes('np-art-empty')
 }));
 """, encoding="utf-8")
     node = shutil.which("node") or shutil.which("nodejs")
