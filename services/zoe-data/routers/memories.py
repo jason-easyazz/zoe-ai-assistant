@@ -638,6 +638,14 @@ async def memory_for_prompt(
 @router.post("/backfill-contacts")
 async def backfill_contacts_endpoint(
     user_id: str = Query(..., min_length=1),
+    session_id: str = Query(
+        "backfill",
+        min_length=1,
+        description="Session the proposals are stored under. Pass the user's "
+        "ACTIVE session so `list_active`/`load_for_prompt` surface them — the "
+        "suggestions retrieval paths filter by session_id, so proposals left in "
+        "the default 'backfill' session are never shown in a live chat.",
+    ),
     _: None = Depends(require_internal_token),
     db=Depends(get_db),
 ):
@@ -651,7 +659,7 @@ async def backfill_contacts_endpoint(
     """
     from contact_backfill import backfill_contacts
 
-    return await backfill_contacts(user_id, db=db)
+    return await backfill_contacts(user_id, session_id=session_id, db=db)
 
 
 @router.get("/people")

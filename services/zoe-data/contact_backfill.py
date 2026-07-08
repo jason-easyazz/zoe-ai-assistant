@@ -169,6 +169,11 @@ async def backfill_contacts(
     Returns a summary: ``proposed`` (suggestions stored), ``skipped_existing``
     (candidates already a contact), ``candidates`` (distinct people found). A
     byte-for-byte no-op — no reads, no writes — when the flag is off.
+
+    ``session_id`` is the session the proposals are stored under. The suggestions
+    retrieval paths (``list_active`` / ``load_for_prompt``) filter by session, so
+    pass the user's ACTIVE session to have them surface in a live chat; the
+    ``"backfill"`` default just parks them for an out-of-band accept flow.
     """
     summary = {
         "enabled": False,
