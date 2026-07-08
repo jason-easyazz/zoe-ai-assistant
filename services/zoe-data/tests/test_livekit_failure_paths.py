@@ -29,6 +29,21 @@ _APOLOGY = "Sorry, I had trouble with that."
 _DIDNT_CATCH = "Sorry, I didn't catch that."
 
 
+@pytest.fixture(autouse=True)
+def _reset_voice_health():
+    """Restore the shared module global between tests. The pipeline mutates
+    `_VOICE_HEALTH` in place (pipeline_failures/successes, last_error), so an
+    absolute assertion in one test would otherwise leak into the next — the
+    isolation-leak class this repo fights. Production ships `_INITIAL_VOICE_HEALTH`
+    (a deepcopy snapshot) for exactly this restore."""
+    import copy
+    v._VOICE_HEALTH.clear()
+    v._VOICE_HEALTH.update(copy.deepcopy(v._INITIAL_VOICE_HEALTH))
+    yield
+    v._VOICE_HEALTH.clear()
+    v._VOICE_HEALTH.update(copy.deepcopy(v._INITIAL_VOICE_HEALTH))
+
+
 def _run(coro, timeout=5.0):
     """Drive a coroutine on a fresh loop with a hard test-level timeout —
     a wedged pipeline must fail the test, not hang the suite."""
@@ -152,10 +167,30 @@ def test_brain_hang_times_out_to_apology_and_state_reset(monkeypatch):
     assert v._VOICE_HEALTH["last_error"] == "brain_oneshot timed out"
 
 
-def test_brain_timeout_env_knob_default_is_20s(monkeypatch):
+def test_brain_timeout_default_is_20s_when_env_unset(monkeypatch):
+    """Exercise production: with the env unset, the pipeline must wrap the brain
+    call in a 20s wait_for. Capturing the actual timeout voice_livekit passes
+    (not re-testing os.environ) means changing the "20" default breaks this."""
     monkeypatch.delenv("ZOE_LIVEKIT_BRAIN_TIMEOUT_S", raising=False)
-    import os
-    assert float(os.environ.get("ZOE_LIVEKIT_BRAIN_TIMEOUT_S", "20")) == 20.0
+
+    seen_timeouts: list[float] = []
+    real_wait_for = asyncio.wait_for
+
+    async def _recording_wait_for(aw, timeout=None):
+        seen_timeouts.append(timeout)
+        return await real_wait_for(aw, timeout=timeout)
+
+    monkeypatch.setattr(v.asyncio, "wait_for", _recording_wait_for)
+
+    async def _fast_brain(*_a, **_k):
+        return "It is noon."
+
+    _install_fakes(monkeypatch, transcript="what time is it", brain=_fast_brain)
+    local = _FakeLocalParticipant()
+    _run(_pipeline_with_state_wiring(local))
+
+    assert 20.0 in seen_timeouts, \
+        f"brain call must default to a 20s timeout when the env is unset; saw {seen_timeouts}"
 
 
 # ── 2. Empty transcript → one audible canned line, then ambient ───────────────
