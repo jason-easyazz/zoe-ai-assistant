@@ -49,6 +49,19 @@ def compose_enabled() -> bool:
     return os.environ.get("ZOE_MEMORY_COMPOSE_ENABLED", "").strip().lower() in _TRUTHY
 
 
+def person_dossier_enabled() -> bool:
+    """Compact per-person dossier line (default OFF).
+
+    When ON, a person is rendered as ``Name (relationship · circle, score N) —
+    likes … · notes · contact`` instead of the thin ``Name (rel) — notes`` line,
+    and an extra bounded batch read pulls each person's recent facts/likes. OFF
+    is a byte-for-byte no-op: the thin line is emitted and the facts read is
+    skipped entirely. Requires ``ZOE_MEMORY_COMPOSE_ENABLED`` to matter at all
+    (the whole relational block is gated by that first).
+    """
+    return os.environ.get("ZOE_PERSON_DOSSIER_ENABLED", "").strip().lower() in _TRUTHY
+
+
 # ── Router gate: does this query want relational facts? ────────────────────
 #
 # Cheap keyword/pattern classifier — NO LLM. Attaching all relational data on
@@ -124,6 +137,8 @@ _MAX_RELATIONSHIPS = 8
 _MAX_DATES = 8
 _MAX_LINE_CHARS = 200
 _PORTRAIT_MAX_CHARS = 600
+_MAX_DOSSIER_FACTS = 3      # top-N recent likes/facts folded into a dossier line
+_DOSSIER_MAX_CHARS = 240    # a dossier packs more than a thin line, so a wider clip
 
 # Citation tags — kept in one place so the soul + tests share the vocabulary.
 CITE_PEOPLE = "[people]"
@@ -162,11 +177,15 @@ async def _fetch_relational(db, user_id: str) -> dict[str, list[dict[str, Any]]]
     excluded. Relationship + date rows are scoped by ``user_id`` (they are
     always owner-scoped in the schema).
     """
-    out: dict[str, list[dict[str, Any]]] = {"people": [], "relationships": [], "dates": []}
+    out: dict[str, list[dict[str, Any]]] = {"people": [], "relationships": [], "dates": [], "facts": {}}
+    dossier = person_dossier_enabled()
 
     # People — visibility-scoped, non-deleted, non-partial preferred first.
+    # The extra dossier columns are selected ONLY when the flag is on, so the OFF
+    # path's SQL (and output) is byte-identical to pre-dossier.
+    _extra = ", email, phone, birthday, preferences, health_score" if dossier else ""
     async with db.execute(
-        """SELECT id, name, relationship, circle, context, notes
+        f"""SELECT id, name, relationship, circle, context, notes{_extra}
              FROM people
             WHERE deleted = 0
               AND (visibility = 'family' OR user_id = ?)
@@ -207,6 +226,33 @@ async def _fetch_relational(db, user_id: str) -> dict[str, list[dict[str, Any]]]
         rows = await cur.fetchall()
     out["dates"] = [dict(r) for r in rows]
 
+    # Recent facts/likes per person — ONE bounded batch read (IN over the ≤8
+    # people already fetched, no N+1), gated by the dossier flag so the default
+    # path pays nothing. Grouped in Python; each person keeps its most-recent
+    # _MAX_DOSSIER_FACTS. Uses the (person_id, created_at DESC) index.
+    if person_dossier_enabled() and out["people"]:
+        ids = [p["id"] for p in out["people"]]
+        placeholders = ",".join("?" for _ in ids)
+        async with db.execute(
+            f"""SELECT person_id, description
+                  FROM person_activities
+                 WHERE user_id = ?
+                   AND person_id IN ({placeholders})
+                   AND activity_type IN ('fact', 'preference')
+                 ORDER BY created_at DESC""",
+            (user_id, *ids),
+        ) as cur:
+            frows = await cur.fetchall()
+        facts: dict[str, list[str]] = {}
+        for r in frows:
+            r = dict(r)
+            bucket = facts.setdefault(r["person_id"], [])
+            if len(bucket) < _MAX_DOSSIER_FACTS:
+                desc = (r.get("description") or "").strip()
+                if desc:
+                    bucket.append(desc)
+        out["facts"] = facts
+
     return out
 
 
@@ -225,23 +271,96 @@ async def _load_portrait(db, user_id: str) -> str:
     return text
 
 
+def _fmt_score(raw: Any) -> Optional[str]:
+    """health_score (0..1 REAL) → "score 82"; None/unparseable → omitted."""
+    try:
+        return f"score {round(float(raw) * 100)}"
+    except (TypeError, ValueError):
+        return None
+
+
+def _shorten_fact(desc: str, name: str) -> str:
+    """"Jason likes chocolate" → "likes chocolate" (drop a leading own-name).
+
+    The extractor stores preference/facts as full sentences prefixed with the
+    person's name; stripping it keeps the dossier compact and non-repetitive.
+    Only strips an exact leading "<name> "; anything else is left verbatim.
+    """
+    desc = desc.strip()
+    name = name.strip()
+    # Try the full name, then the first-name token (the extractor prefixes facts
+    # with whatever name it captured — often just the first name).
+    candidates = [name]
+    first = name.split()[0] if name else ""
+    if first and first != name:
+        candidates.append(first)
+    for cand in candidates:
+        prefix = cand + " "
+        if desc.lower().startswith(prefix.lower()):
+            return desc[len(prefix):].strip() or desc
+    return desc
+
+
+def _dossier_line(p: dict[str, Any], facts: list[str]) -> str:
+    """Compact one-line dossier: ``Name (rel · circle, score N) — likes … · notes · contact``.
+
+    Every segment is optional; missing data just drops its segment. The whole
+    line is clipped to ``_DOSSIER_MAX_CHARS`` by the caller so a chatty contact
+    cannot crowd the packet.
+    """
+    name = (p.get("name") or "").strip()
+    # Head: name + (relationship · circle, score)
+    rel = (p.get("relationship") or "").strip()
+    circle = (p.get("circle") or "").strip()
+    rel_circle = " · ".join(x for x in (rel, circle) if x)
+    score = _fmt_score(p.get("health_score"))
+    meta = ", ".join(x for x in (rel_circle, score) if x)
+    head = f"{name} ({meta})" if meta else name
+
+    # Body segments, joined by " · ".
+    segs: list[str] = []
+    likes = [_shorten_fact(f, name) for f in (facts or []) if f]
+    if likes:
+        segs.append(" · ".join(likes))
+    notes = (p.get("notes") or "").strip()
+    if notes:
+        segs.append(notes)
+    contact = ", ".join(
+        x for x in (
+            (p.get("email") or "").strip(),
+            (p.get("phone") or "").strip(),
+            (f"b.{p['birthday']}" if (p.get("birthday") or "").strip() else ""),
+        ) if x
+    )
+    if contact:
+        segs.append(contact)
+
+    return f"{head} — {' · '.join(segs)}" if segs else head
+
+
 def _build_lines(data: dict[str, list[dict[str, Any]]], portrait: str) -> tuple[list[str], list[dict[str, Any]]]:
     """Turn the batched rows into cited packet lines + a structured ref list."""
     lines: list[str] = []
     refs: list[dict[str, Any]] = []
+    dossier = person_dossier_enabled()
+    facts_by_person: dict[str, list[str]] = data.get("facts") or {}  # type: ignore[assignment]
 
     for p in data.get("people", []):
         name = (p.get("name") or "").strip()
         if not name:
             continue
         rel = (p.get("relationship") or "").strip()
-        notes = (p.get("notes") or "").strip()
-        desc = name
-        if rel:
-            desc += f" ({rel})"
-        if notes:
-            desc += f" — {notes}"
-        lines.append(f"- {_clip(desc)} {CITE_PEOPLE}")
+        if dossier:
+            desc = _dossier_line(p, facts_by_person.get(p.get("id"), []))
+            lines.append(f"- {_clip(desc, _DOSSIER_MAX_CHARS)} {CITE_PEOPLE}")
+        else:
+            notes = (p.get("notes") or "").strip()
+            desc = name
+            if rel:
+                desc += f" ({rel})"
+            if notes:
+                desc += f" — {notes}"
+            lines.append(f"- {_clip(desc)} {CITE_PEOPLE}")
         refs.append({"source": "people", "name": name, "relationship": rel or None})
 
     for r in data.get("relationships", []):
