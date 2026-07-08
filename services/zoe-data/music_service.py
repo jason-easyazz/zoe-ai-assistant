@@ -195,6 +195,27 @@ async def control(action: str, player_id: str = "", value: Any = None) -> bool:
     return False
 
 
+async def transfer(target_player_id: str, source_player_id: str = "") -> bool:
+    """Move current playback to another speaker.
+
+    Transfers the source queue (an explicit source, else the active
+    playing/paused player MA is using now) onto the target player's queue via
+    MA's `player_queues/transfer`. `queue_id == player_id` for a solo player
+    (see `now_playing`). Best-effort — MA carries over play state via auto_play;
+    never raises. Returns True when a transfer command was dispatched."""
+    if not target_player_id:
+        return False
+    players = await get_players()
+    source = _pick_player(players, source_player_id) if source_player_id else _pick_player(players)
+    if source is None:
+        return False
+    source_id = source.get("player_id", "")
+    if not source_id or source_id == target_player_id:
+        return False
+    await _ma("player_queues/transfer", source_queue_id=source_id, target_queue_id=target_player_id)
+    return True
+
+
 async def search_and_play(query: str, player_id: str = "") -> Optional[dict[str, Any]]:
     """Search MA and play the top hit on the target player. Returns the matched
     item {name, media_type} or None. Local-first: searches all configured
@@ -279,6 +300,25 @@ def _result(spoken: str, card: dict[str, Any], action: str) -> dict[str, Any]:
     }
 
 
+def _match_player_by_name(players: list[dict[str, Any]], name: str) -> Optional[dict[str, Any]]:
+    """Find the speaker whose display name best matches a spoken room name
+    ("kitchen", "living room"). Exact → prefix → substring, case-insensitive."""
+    q = (name or "").strip().lower()
+    if not players or not q:
+        return None
+    cand = [(p, str(p.get("display_name") or p.get("name") or "").strip().lower()) for p in players]
+    for p, n in cand:
+        if n and n == q:
+            return p
+    for p, n in cand:
+        if n and (n.startswith(q) or q.startswith(n)):
+            return p
+    for p, n in cand:
+        if n and (q in n or n in q):
+            return p
+    return None
+
+
 async def resolve_music(intent: Any) -> dict[str, Any]:
     """The Skybridge music domain resolver. `intent` has .action and .query."""
     action = getattr(intent, "action", "status")
@@ -286,6 +326,25 @@ async def resolve_music(intent: Any) -> dict[str, Any]:
 
     if action == "setup":
         return await resolve_music_setup(query)
+
+    if action == "transfer" and query:
+        # Voice path for speaker switching: "move/switch music to the kitchen".
+        players = await get_players()
+        target = _match_player_by_name(players, query)
+        if target is None:
+            names = ", ".join(
+                str(p.get("display_name") or p.get("name")) for p in players
+                if (p.get("display_name") or p.get("name")))
+            return _result(
+                f"I couldn't find a speaker called “{query}”." + (f" You have: {names}." if names else ""),
+                _browse_card(), "transfer")
+        np0 = await now_playing()
+        tname = target.get("display_name") or target.get("name") or "there"
+        if not await transfer(target.get("player_id", "")):
+            return _result(f"I couldn't move the music to {tname}.",
+                           now_playing_card(np0 or {}), "transfer")
+        np = await now_playing(target.get("player_id", "")) or np0 or {}
+        return _result(f"Moved the music to {tname}.", now_playing_card(np), "transfer")
 
     if action == "play" and query:
         hit = await search_and_play(query)

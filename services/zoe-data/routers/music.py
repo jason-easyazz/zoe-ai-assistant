@@ -212,6 +212,19 @@ async def music_control(payload: dict) -> dict[str, Any]:
     return {"ok": ok, "action": action}
 
 
+@router.post("/transfer")
+async def music_transfer(payload: dict) -> dict[str, Any]:
+    """Move current playback to another speaker. body: {target_player_id,
+    source_player_id?}. source defaults to the active player MA is using now."""
+    import music_service
+    target = str((payload or {}).get("target_player_id") or "")
+    source = str((payload or {}).get("source_player_id") or "")
+    if not target:
+        return {"ok": False, "reason": "missing target_player_id"}
+    ok = await music_service.transfer(target, source_player_id=source)
+    return {"ok": ok, "target_player_id": target}
+
+
 @router.post("/play")
 async def music_play(payload: dict) -> dict[str, Any]:
     """Search MA and play the top hit. body: {query, player_id?}."""

@@ -1386,6 +1386,16 @@
         };
         return '<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true">' + (paths[name] || paths.play) + '</svg>';
     }
+    // Outline glyphs for the output/hub controls (stroke-only; the airplay
+    // triangle is the one filled shape).
+    function npGlyph(name) {
+        var paths = {
+            airplay: '<path d="M5 16H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-1"/><path d="M8 20l4-5 4 5z" fill="currentColor" stroke="none"/>',
+            chevron: '<path d="M6 9l6 6 6-6"/>',
+            plus: '<path d="M12 5v14M5 12h14"/>'
+        };
+        return '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (paths[name] || '') + '</svg>';
+    }
     function npBtn(icon, query, cls) {
         return '<button type="button" class="np-btn' + (cls ? ' ' + cls : '') + '" data-sky-action="query" data-query="' + escapeHtml(query) + '" aria-label="' + escapeHtml(query) + '">' + npIcon(icon) + '</button>';
     }
@@ -1472,6 +1482,25 @@
         var chips = (!hasTrack && Array.isArray(props.actions) && props.actions.length)
             ? '<div class="sky-actions np-chips">' + props.actions.map(buttonHtml).join('') + '</div>' : '';
 
+        // Music-hub footer: speaker/output picker + a persistent "Add source"
+        // affordance. The output button is client-side (data-music-output → the
+        // panel fetches /api/music/players, persists the pick, transfers); the
+        // add-source button reuses the existing "add music" resolver flow.
+        var outName = props.player_name || 'This speaker';
+        var outputRow = [
+            '<div class="np-output">',
+            '<button type="button" class="np-out-btn" data-music-output data-music-player="' + escapeHtml(props.player_id || '') + '" aria-haspopup="listbox" aria-expanded="false">',
+            npGlyph('airplay'),
+            '<span class="np-out-name">' + escapeHtml(outName) + '</span>',
+            npGlyph('chevron'),
+            '</button>',
+            '<button type="button" class="np-add-src" data-sky-action="query" data-query="add music" aria-label="Add a music source">',
+            npGlyph('plus'), '<span>Add source</span>',
+            '</button>',
+            '</div>',
+            '<div class="np-outputs" data-music-picker hidden role="listbox" aria-label="Choose a speaker"></div>'
+        ].join('');
+
         var body = [
             '<div class="np-ambient" style="' + ambient + '"></div>',
             artBg,
@@ -1486,6 +1515,7 @@
             progress,
             transport,
             chips,
+            outputRow,
             '</div>',
             '</div>'
         ].join('');
