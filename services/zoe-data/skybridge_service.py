@@ -1973,11 +1973,14 @@ async def _resolve_list_add_item(intent: SkybridgeIntent, user_id: str, db: Any,
     # barge-aborted voice add landed twice ~1.5-2.5s apart. An identical
     # item added to the same list moments ago is a replay, not a new intent;
     # skip the insert and answer as if it just succeeded (it did).
+    # created_at is a TEXT column — cast before the timestamp comparison, or
+    # `created_at > now() - interval` throws `operator does not exist:
+    # text > timestamp` on Postgres and breaks the skybridge fast path.
     recent_dup = await db.fetchrow(
         """
         SELECT id FROM list_items
         WHERE list_id = $1 AND lower(text) = lower($2) AND deleted = 0
-          AND created_at > now() - interval '10 seconds'
+          AND created_at::timestamptz > now() - interval '10 seconds'
         """,
         list_id,
         intent.item_text,
