@@ -182,6 +182,11 @@ def db_item_present(text: str) -> bool:
 # Each runs entirely within its own fresh nonce'd session(s).
 # --------------------------------------------------------------------------- #
 def a_recall_just_stored(sid: str, extract_wait: float):
+    # Fresh USER per trial (not the shared run-user): recall writes a persistent
+    # memory fact, so reusing one user across trials piles up conflicting "locker
+    # code" facts and measures conflict-resolution, not recall. A clean store per
+    # trial is what a real user has. (The passed `sid` is deliberately ignored.)
+    _user, sid = provision_user()
     mark = secrets.token_hex(3)
     fact = f"my locker code is {mark}"
     s1 = nonce_session("recall-store")
@@ -194,6 +199,9 @@ def a_recall_just_stored(sid: str, extract_wait: float):
 
 
 def a_corrected_recall(sid: str, extract_wait: float):
+    # Fresh USER per trial — same reason as a_recall_just_stored: a reused user
+    # accumulates sister-name facts across trials. Passed `sid` ignored.
+    _user, sid = provision_user()
     s = nonce_session("corrected")
     chat("My sister's name is Katie", s, sid)
     chat("Actually sorry, it's Kate, not Katie", s, sid)
