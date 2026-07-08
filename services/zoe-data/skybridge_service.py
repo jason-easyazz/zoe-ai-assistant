@@ -1198,7 +1198,7 @@ def _classify_music(text: str) -> "SkybridgeIntent | None":
             return SkybridgeIntent(domain="music", action="volume_down")
     # Play X — "play some jazz", "put on the beatles", "play the news".
     m = re.search(r"\b(?:play|put on|start playing|listen to)\s+(?:some\s+|the\s+|a\s+)?(.+?)\s*$", text)
-    if m and (has_ctx or re.search(r"\b(play|put on|listen to)\b", text)):
+    if m and (has_ctx or re.search(r"\b(play|put on|listen to|start playing)\b", text)):
         query = m.group(1).strip()
         # "play music" / "play some music" with no real target → just show/resume.
         if query in ("music", "something", "a song", "songs", "tunes", "some tunes", ""):

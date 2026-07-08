@@ -157,7 +157,11 @@ async def control(action: str, player_id: str = "", value: Any = None) -> bool:
         await _ma(_QUEUE_CMDS[action], queue_id=pid)
         return True
     if action == "volume_set" and value is not None:
-        await _ma("players/cmd/volume_set", player_id=pid, volume_level=int(value))
+        try:
+            vol = int(value)
+        except (TypeError, ValueError):
+            return False  # never raise — a bad volume just no-ops
+        await _ma("players/cmd/volume_set", player_id=pid, volume_level=vol)
         return True
     if action in _PLAYER_CMDS:
         await _ma(_PLAYER_CMDS[action], player_id=pid)
