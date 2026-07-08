@@ -283,6 +283,43 @@ body:not(.sky-empty) .sky-card.now-playing-card::after { content: none !importan
 /* Idle browse chips. */
 .now-playing-card .np-chips { margin-top: 24px; }
 
+/* ── Music hub: output/speaker picker + persistent "Add source" ──────────── */
+.now-playing-card .np-output { display: flex; align-items: center; gap: 12px; margin-top: 24px; flex-wrap: wrap; }
+.now-playing-card .np-out-btn, .now-playing-card .np-add-src {
+  display: inline-flex; align-items: center; gap: 9px; min-height: 48px; padding: 0 18px;
+  border-radius: var(--sky-radius-pill, 999px); border: 1px solid rgba(255,255,255,.18);
+  background: rgba(255,255,255,.09); color: var(--sky-ink-0, #fff); cursor: pointer;
+  font: inherit; font-size: var(--sky-text-body, 16px); font-weight: 560;
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  transition: background var(--sky-dur-fast, 160ms) ease, border-color var(--sky-dur-fast, 160ms) ease, transform var(--sky-dur-fast, 160ms) ease;
+}
+.now-playing-card .np-out-btn svg, .now-playing-card .np-add-src svg { flex: 0 0 auto; }
+.now-playing-card .np-out-name { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.now-playing-card .np-out-btn:hover, .now-playing-card .np-add-src:hover { background: rgba(255,255,255,.16); border-color: rgba(255,255,255,.26); }
+.now-playing-card .np-out-btn:active, .now-playing-card .np-add-src:active { transform: scale(.97); }
+.now-playing-card .np-out-btn[aria-expanded="true"] { border-color: color-mix(in srgb, var(--sky-accent-mint, #5be3b0) 55%, transparent); }
+
+.now-playing-card .np-outputs {
+  margin-top: 14px; display: flex; flex-direction: column; gap: 6px;
+  max-width: 520px; max-height: 260px; overflow: auto; padding: 8px;
+  border-radius: var(--sky-radius-md, 14px); border: 1px solid rgba(255,255,255,.14);
+  background: rgba(10,13,22,.6); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+}
+.now-playing-card .np-outputs[hidden] { display: none; }
+
+/* Shared picker options (card list + mini-player popover). */
+.mp-opt {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  width: 100%; min-height: 44px; padding: 0 14px; border: 0; border-radius: 10px;
+  background: transparent; color: var(--sky-ink-1, rgba(246,248,251,.86));
+  cursor: pointer; font: inherit; font-size: 15px; text-align: left;
+}
+.mp-opt:hover { background: rgba(255,255,255,.08); }
+.mp-opt.is-active { color: var(--sky-ink-0, #fff); background: color-mix(in srgb, var(--sky-accent-mint, #5be3b0) 16%, transparent); }
+.mp-opt-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mp-opt-check { flex: 0 0 auto; color: var(--sky-accent-mint, #5be3b0); font-weight: 700; }
+.mp-empty { padding: 12px 14px; color: var(--sky-ink-2, rgba(246,248,251,.62)); font-size: 14px; }
+
 /* Narrow fallback (panel is fixed 1280 landscape; this only guards overflow). */
 @media (max-width: 720px) {
   .now-playing-card .np-scene { flex-direction: column; align-items: flex-start; gap: 22px; }

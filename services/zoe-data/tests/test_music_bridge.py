@@ -97,6 +97,40 @@ async def test_control_never_raises_when_ma_down(monkeypatch):
     assert await music_service.now_playing() is None
 
 
+# ── Speaker transfer (music hub) ─────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_transfer_moves_active_queue_to_target(monkeypatch):
+    async def players():
+        return [
+            {"player_id": "kitchen", "available": True, "powered": True, "playback_state": "playing"},
+            {"player_id": "living", "available": True, "powered": True},
+        ]
+    calls = []
+    async def fake_ma(command, **args):
+        calls.append((command, args)); return {}
+    monkeypatch.setattr(music_service, "get_players", players)
+    monkeypatch.setattr(music_service, "_ma", fake_ma)
+
+    # No explicit source → picks the active (playing) player as the source queue.
+    assert await music_service.transfer("living") is True
+    assert calls == [("player_queues/transfer",
+                      {"source_queue_id": "kitchen", "target_queue_id": "living"})]
+
+
+@pytest.mark.asyncio
+async def test_transfer_guards(monkeypatch):
+    async def players():
+        return [{"player_id": "kitchen", "available": True, "powered": True, "playback_state": "playing"}]
+    async def fake_ma(command, **args):
+        raise AssertionError("MA must not be called on a no-op transfer")
+    monkeypatch.setattr(music_service, "get_players", players)
+    monkeypatch.setattr(music_service, "_ma", fake_ma)
+
+    assert await music_service.transfer("") is False           # no target
+    assert await music_service.transfer("kitchen") is False     # source == target (no-op)
+
+
 # ── Add-source (QR→phone setup) — token + resolver + guards ──────────────────
 
 import music_setup
