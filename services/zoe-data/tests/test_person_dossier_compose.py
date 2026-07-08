@@ -41,12 +41,26 @@ def test_on_builds_dossier(monkeypatch):
     lines, _ = zc._build_lines(data, "")
     line = lines[0]
     assert line.startswith("- Jason Bertelsen (brother · family, score 82) —")
-    # likes are folded in, own-name prefix stripped, compact
-    assert "likes chocolate" in line and "likes fruit loops" in line and "enjoys travelling" in line
+    # same-verb likes are grouped, own-name prefix stripped, compact
+    assert "likes chocolate, fruit loops" in line and "enjoys travelling" in line
+    assert "likes fruit loops" not in line  # verb not repeated — grouped
     assert "Jason likes chocolate" not in line  # name prefix stripped
     # contact folded in
     assert "j@x.io" in line and "555-1" in line and "b.Aug 4" in line
     assert line.endswith("[people]")
+
+
+def test_group_facts_merges_same_verb():
+    # same verb merges (order preserved); different verbs stay distinct segments
+    assert zc._group_facts(["likes chocolate", "likes fruit loops", "enjoys travel"]) == [
+        "likes chocolate, fruit loops", "enjoys travel"]
+    # distinct verbs never merge; first-seen order kept
+    assert zc._group_facts(["loves hiking", "likes tea", "loves jazz"]) == [
+        "loves hiking, jazz", "likes tea"]
+    # a non-preference fact (no known verb) is kept verbatim, in place
+    assert zc._group_facts(["likes tea", "born in Perth"]) == ["likes tea", "born in Perth"]
+    # a bare verb with no object is not grouped
+    assert zc._group_facts(["likes"]) == ["likes"]
 
 
 def test_dossier_line_drops_missing_segments(monkeypatch):
