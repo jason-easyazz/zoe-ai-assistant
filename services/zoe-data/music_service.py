@@ -35,6 +35,19 @@ def _ytmusic_potoken_url() -> str:
     return os.environ.get("ZOE_YTMUSIC_POTOKEN_URL", "http://localhost:4416").rstrip("/")
 
 
+async def _potoken_reachable(url: str) -> bool:
+    """Best-effort probe of the local PO-token generator's /ping. MA fails the
+    ytmusic login if this URL is unreachable, so we check at setup time rather
+    than persisting a dead URL and surfacing it as a confusing first-play error."""
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as c:
+            r = await c.get(f"{url}/ping")
+            return r.status_code == 200
+    except Exception as exc:  # noqa: BLE001 — probe is advisory, never raises
+        logger.debug("PO-token generator probe failed for %s: %s", url, exc)
+        return False
+
+
 def _ma_url() -> str:
     return os.environ.get("MUSIC_ASSISTANT_URL", "http://localhost:8095").rstrip("/")
 
@@ -377,8 +390,16 @@ async def save_provider(provider: str, values: dict[str, Any]) -> Optional[dict[
     if provider == _YTMUSIC_DOMAIN:
         # Always point YouTube Music at Zoe's local PO-token generator, whatever
         # the phone sent (the field is hidden from that form). Without a reachable
-        # generator MA's ytmusic provider fails login, so this is not optional.
-        merged[_YTMUSIC_POTOKEN_KEY] = _ytmusic_potoken_url()
+        # generator MA's ytmusic provider fails login, so this is not optional —
+        # probe it up front and refuse to persist a dead URL.
+        potoken_url = _ytmusic_potoken_url()
+        if not await _potoken_reachable(potoken_url):
+            logger.warning(
+                "YouTube Music setup aborted: PO-token generator at %s is unreachable. "
+                "Start the 'ytmusic-potoken' service (docker compose -f "
+                "docker-compose.modules.yml up -d ytmusic-potoken).", potoken_url)
+            return None
+        merged[_YTMUSIC_POTOKEN_KEY] = potoken_url
     saved = await _ma("config/providers/save", provider_domain=provider, values=merged)
     return saved if isinstance(saved, dict) else None
 
