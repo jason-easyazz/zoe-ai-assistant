@@ -81,7 +81,7 @@ async def _get_queue_items(queue_id: str, limit: int = 50) -> list | None:
         async with httpx.AsyncClient(timeout=5.0) as c:
             r = await c.post(
                 f"{_ma_url()}/api",
-                json={"command": "player_queues/items", "queue_id": queue_id, "limit": limit},
+                json={"command": "player_queues/items", "args": {"queue_id": queue_id, "limit": limit}},
                 headers=_ma_headers(),
             )
             if r.status_code == 200:
@@ -186,3 +186,39 @@ async def available_providers() -> dict[str, Any]:
         result.append({**p, "connected": connected})
 
     return {"available": True, "providers": result}
+
+
+# ── Control (Music Assistant bridge) ─────────────────────────────────────────
+# Transport/volume + search-and-play, delegated to music_service (the single
+# place that speaks MA). The panel primarily drives these via the Skybridge
+# resolver (data-sky-action), but these give a direct API surface too.
+
+@router.get("/now-playing")
+async def music_now_playing(player_id: str = "") -> dict[str, Any]:
+    import music_service
+    np = await music_service.now_playing(player_id)
+    return {"available": np is not None, "now_playing": np or {}}
+
+
+@router.post("/control")
+async def music_control(payload: dict) -> dict[str, Any]:
+    """action ∈ play|pause|play_pause|resume|stop|next|previous|volume_up|
+    volume_down|volume_set (value); optional player_id."""
+    import music_service
+    action = str((payload or {}).get("action") or "").strip()
+    player_id = str((payload or {}).get("player_id") or "")
+    value = (payload or {}).get("value")
+    ok = await music_service.control(action, player_id=player_id, value=value)
+    return {"ok": ok, "action": action}
+
+
+@router.post("/play")
+async def music_play(payload: dict) -> dict[str, Any]:
+    """Search MA and play the top hit. body: {query, player_id?}."""
+    import music_service
+    query = str((payload or {}).get("query") or "").strip()
+    player_id = str((payload or {}).get("player_id") or "")
+    if not query:
+        return {"ok": False, "reason": "empty query"}
+    hit = await music_service.search_and_play(query, player_id=player_id)
+    return {"ok": hit is not None, "playing": hit}

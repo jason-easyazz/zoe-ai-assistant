@@ -980,6 +980,9 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
         # the cue; "set a timer" with no duration still defaults to 5 minutes.
         if duration or re.search(r"\b(set|start|make|create|run|new|put|begin)\b", text):
             return SkybridgeIntent(domain="timer", action="create", title=_parse_timer_label(text), duration_seconds=duration or 300)
+    music_intent = _classify_music(text)
+    if music_intent is not None:
+        return music_intent
     calendar_update = _calendar_update_from_text(raw_message, context)
     if calendar_update:
         target, target_time = calendar_update
@@ -1104,6 +1107,10 @@ async def resolve_skybridge_request(
     if intent.domain == "timer":
         return _attach_skybridge_context(_resolve_timer(intent, user_id))
 
+    if intent.domain == "music":
+        from music_service import resolve_music
+        return _attach_skybridge_context(await resolve_music(intent))
+
     if db is not None:
         return _attach_skybridge_context(await _resolve_with_db(intent, user_id, db, context=context))
 
@@ -1157,6 +1164,50 @@ def _is_guest_user(user_id: str | None) -> bool:
 def skybridge_intent_requires_identity(intent: SkybridgeIntent | None) -> bool:
     """Return whether a Skybridge intent reads or mutates personal user data."""
     return bool(intent and intent.domain in {"calendar", "lists", "people"})
+
+
+# Music context anchors: a word clearly about audio playback. "play <x>" is only
+# treated as music when paired with one of these OR a clear play verb, so
+# "play a game" / "play along" never steal the music domain.
+_MUSIC_CTX = re.compile(r"\b(music|song|songs|track|tune|tunes|album|playlist|artist|radio|spotify|now\s+playing)\b")
+_MUSIC_STOPWORDS = re.compile(r"\b(play\s+(?:a\s+)?(?:game|along|nice|fair|pretend|dead|catch))\b")
+
+
+def _classify_music(text: str) -> "SkybridgeIntent | None":
+    """Classify a music command for the Music Assistant bridge. `text` is the
+    lowercased message padded with surrounding spaces."""
+    if _MUSIC_STOPWORDS.search(text):
+        return None
+    has_ctx = bool(_MUSIC_CTX.search(text))
+    # Transport / volume — only with clear music context so bare "pause"/"next"
+    # (which could be timers, reading, etc.) don't get hijacked.
+    if has_ctx or re.search(r"\bplaying\b", text):
+        if re.search(r"\b(pause|hold)\b", text):
+            return SkybridgeIntent(domain="music", action="pause")
+        if re.search(r"\b(resume|unpause|keep playing|carry on)\b", text):
+            return SkybridgeIntent(domain="music", action="resume")
+        if re.search(r"\b(next|skip|forward)\b", text):
+            return SkybridgeIntent(domain="music", action="next")
+        if re.search(r"\b(previous|back|last)\s+(?:song|track|tune)\b|\bgo back\b", text):
+            return SkybridgeIntent(domain="music", action="previous")
+        if re.search(r"\b(stop|turn off)\b", text):
+            return SkybridgeIntent(domain="music", action="stop")
+        if re.search(r"\b(up|louder|higher|turn it up)\b", text):
+            return SkybridgeIntent(domain="music", action="volume_up")
+        if re.search(r"\b(down|quieter|lower|softer|turn it down)\b", text):
+            return SkybridgeIntent(domain="music", action="volume_down")
+    # Play X — "play some jazz", "put on the beatles", "play the news".
+    m = re.search(r"\b(?:play|put on|start playing|listen to)\s+(?:some\s+|the\s+|a\s+)?(.+?)\s*$", text)
+    if m and (has_ctx or re.search(r"\b(play|put on|listen to)\b", text)):
+        query = m.group(1).strip()
+        # "play music" / "play some music" with no real target → just show/resume.
+        if query in ("music", "something", "a song", "songs", "tunes", "some tunes", ""):
+            return SkybridgeIntent(domain="music", action="status")
+        return SkybridgeIntent(domain="music", action="play", query=query)
+    # Status: "what's playing", "now playing", "show music", bare "music".
+    if (has_ctx or re.search(r"\bplaying\b", text)) and re.search(r"\b(what|show|see|playing|song|music)\b", text):
+        return SkybridgeIntent(domain="music", action="status")
+    return None
 
 
 async def _resolve_with_db(intent: SkybridgeIntent, user_id: str, db: Any, *, context: dict[str, Any] | None = None) -> dict[str, Any]:
