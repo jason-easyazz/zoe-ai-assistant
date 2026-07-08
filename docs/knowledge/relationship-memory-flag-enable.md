@@ -138,7 +138,7 @@ person is *rendered into the brain's recall packet*. OFF, a person is a thin `Na
 line; ON, it becomes a compact cited dossier sourced from fields already in the DB:
 
 ```
-- Jason Bertelsen (brother · family, score 82) — likes chocolate, fruit loops · enjoys travelling · j@x.io, 555-1, b.Aug 4 [people]
+- Alex Example (brother · family, score 82) — likes chocolate, fruit loops · enjoys travelling · alex@example.com, 555-0100, b.Jan 1 [people]
 ```
 
 (relationship · circle · `health_score`→score, top-3 recent likes from `person_activities` with
