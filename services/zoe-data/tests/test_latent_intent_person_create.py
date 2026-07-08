@@ -27,6 +27,12 @@ _PERSON_JSON = (
 )
 
 
+def _set_flag(monkeypatch, on):
+    """Stub the gate directly — self-contained, no dependency on
+    pending_suggestions/db_pool being importable in the slim CI lane."""
+    monkeypatch.setattr(lid, "_person_enabled", lambda: on)
+
+
 def _mock_llm(monkeypatch, raw):
     async def _fake(prompt):
         return raw
@@ -48,7 +54,7 @@ def _no_dedup(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_emitted_when_flag_on(monkeypatch):
-    monkeypatch.setenv("ZOE_PERSON_SUGGEST_ENABLED", "1")
+    _set_flag(monkeypatch, True)
     _stub_intent_router(monkeypatch)
     _mock_llm(monkeypatch, _PERSON_JSON)
     _no_dedup(monkeypatch)
@@ -65,7 +71,7 @@ async def test_emitted_when_flag_on(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_dropped_when_flag_off(monkeypatch):
-    monkeypatch.delenv("ZOE_PERSON_SUGGEST_ENABLED", raising=False)
+    _set_flag(monkeypatch, False)
     _stub_intent_router(monkeypatch)
     _mock_llm(monkeypatch, _PERSON_JSON)  # LLM offers one anyway…
     _no_dedup(monkeypatch)
@@ -77,7 +83,7 @@ async def test_dropped_when_flag_off(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_dropped_for_pronoun_name(monkeypatch):
-    monkeypatch.setenv("ZOE_PERSON_SUGGEST_ENABLED", "1")
+    _set_flag(monkeypatch, True)
     _stub_intent_router(monkeypatch)
     _mock_llm(
         monkeypatch,
@@ -94,7 +100,7 @@ async def test_dropped_for_pronoun_name(monkeypatch):
 @pytest.mark.asyncio
 async def test_existing_actions_unaffected_when_flag_on(monkeypatch):
     """A normal list_add still flows through unchanged with the flag on."""
-    monkeypatch.setenv("ZOE_PERSON_SUGGEST_ENABLED", "1")
+    _set_flag(monkeypatch, True)
     _stub_intent_router(monkeypatch)
     _mock_llm(
         monkeypatch,

@@ -162,8 +162,13 @@ async def detect(
                 slots = {}
             name = (slots.get("name") or item.get("name") or "").strip()
             # Don't trust the LLM: drop bad/empty names via the shared precision
-            # guard (rejects pronouns / sentence-openers). Import lazily.
-            from person_extractor import _looks_like_person_name
+            # guard (rejects pronouns / sentence-openers) — the same #1168 guard
+            # the Phase-1 executor reuses. Import lazily + guarded so an import
+            # failure fails safe (drop the proposal) rather than raising.
+            try:
+                from person_extractor import _looks_like_person_name
+            except Exception:
+                continue
             if not name or not _looks_like_person_name(name):
                 continue
             if await _already_a_contact(name, user_id):
