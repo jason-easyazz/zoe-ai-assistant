@@ -20,6 +20,29 @@ services:
       retries: 5
       start_period: 60s
 
+  # ── YT Music PO-Token generator (companion for MA's ytmusic provider) ───────
+  # Music Assistant's YouTube Music provider requires a proof-of-origin token
+  # server it pings at `po_token_server_url` (MA default: http://127.0.0.1:4416).
+  # This is the widely-used bgutil provider (yt-dlp's recommended POT provider).
+  # music-assistant runs network_mode:host, so it reaches this via the published
+  # localhost port 4416. Additive: a new, separate container — it does not touch
+  # the live zoe-music-assistant/zoe-data services. The image ships no wget/curl,
+  # so the healthcheck uses the bundled node runtime to hit /ping (http.get form
+  # works on Node 10+, unlike global fetch which needs Node 18+).
+  ytmusic-potoken:
+    image: brainicism/bgutil-ytdlp-pot-provider:1.3.1
+    container_name: zoe-ytmusic-potoken
+    init: true
+    ports:
+    - "4416:4416"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:4416/ping',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
   # ── Multica — A2A board visibility (opt-in: ZOE_MULTICA=true) ───────────────
   # Uses the base zoe-database container's separate 'multica' database.
   multica-backend:

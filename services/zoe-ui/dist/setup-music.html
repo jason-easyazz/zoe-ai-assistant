@@ -49,6 +49,11 @@
   .state h2 { color:var(--ink0); font-size:22px; margin:0 0 8px; }
   .err { color:var(--warn); }
   .hidden { display:none; }
+  .guide { background:rgba(255,255,255,.05); border:1px solid var(--line); border-radius:14px; padding:14px 16px; margin:0 0 18px; }
+  .guide h3 { color:var(--ink0); font-size:14px; font-weight:650; margin:0 0 6px; }
+  .guide p { color:var(--ink2); font-size:12.5px; line-height:1.5; margin:0 0 8px; }
+  .guide ol { margin:0; padding-left:20px; color:var(--ink1); font-size:13px; line-height:1.65; }
+  .guide code { background:rgba(255,255,255,.12); border-radius:5px; padding:1px 5px; font-size:12px; }
 </style>
 </head>
 <body>
@@ -85,6 +90,22 @@
 
   if (!provider || !token) { fail('This link is missing its setup code.'); return; }
 
+  // YouTube Music has no clean sign-in for playback, so Zoe needs the login
+  // cookie from a signed-in browser session. (The proof-of-origin token server
+  // is run for you by Zoe — you never see or set it.)
+  var YTM_GUIDE =
+    '<div class="guide">' +
+      '<h3>How to get your YouTube Music cookie</h3>' +
+      '<p>Do this once on a <b>computer</b> where you are signed in to YouTube Music.</p>' +
+      '<ol>' +
+        '<li>Open <code>music.youtube.com</code> and make sure you are signed in.</li>' +
+        '<li>Press <code>F12</code> (or right-click → Inspect) and open the <b>Network</b> tab.</li>' +
+        '<li>Reload the page, then click the top <code>music.youtube.com</code> request.</li>' +
+        '<li>Under <b>Request Headers</b>, find <code>cookie:</code> and copy its whole value.</li>' +
+        '<li>Paste it into the Cookie box below. Your username is your Google account email.</li>' +
+      '</ol>' +
+    '</div>';
+
   fetch('/api/music/setup/form?provider=' + encodeURIComponent(provider) + '&token=' + encodeURIComponent(token))
     .then(function (r) { return r.json(); })
     .then(function (data) {
@@ -118,7 +139,7 @@
             '" autocapitalize="off" autocorrect="off" spellcheck="false"></div>';
         }
       });
-      $('fields').innerHTML = html;
+      $('fields').innerHTML = (form.domain === 'ytmusic' ? YTM_GUIDE : '') + html;
       show('form');
     })
     .catch(function () { fail('Could not reach your Zoe. Make sure your phone is on the same wifi.'); });

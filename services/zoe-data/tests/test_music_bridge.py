@@ -140,6 +140,8 @@ async def test_setup_save_gated_by_token(monkeypatch):
     saved = {"n": 0}
     async def fake_save(prov, vals): saved["n"] += 1; return {"name": prov}
     monkeypatch.setattr(music_service, "save_provider", fake_save)
+    async def _up(url): return True
+    monkeypatch.setattr(music_service, "_potoken_reachable", _up)  # ytmusic helper "up"
     # invalid token → refused, MA never touched
     r = await ms_router.setup_save({"token": "bad", "provider": "ytmusic", "values": {"username": "x"}})
     assert r["ok"] is False and saved["n"] == 0
@@ -149,6 +151,116 @@ async def test_setup_save_gated_by_token(monkeypatch):
     assert r2["ok"] is True and saved["n"] == 1
     r3 = await ms_router.setup_save({"token": tok, "provider": "ytmusic", "values": {"username": "x"}})
     assert r3["ok"] is False and saved["n"] == 1  # single-use
+
+
+# ── YouTube Music: hide PO-token field + inject local generator ──────────────
+
+# MA's ytmusic provider config entries (shape from config/providers/get_entries).
+_YTM_ENTRIES = [
+    {"key": "username", "type": "string", "label": "Username", "required": True},
+    {"key": "cookie", "type": "secure_string", "label": "Cookie",
+     "description": "The Login cookie you grabbed from an existing session.", "required": True},
+    {"key": "po_token_server_url", "type": "string", "label": "PO Token Server URL",
+     "required": True, "default_value": "http://127.0.0.1:4416"},
+    {"key": "library_sync_playlists", "type": "boolean", "default_value": True},
+    {"key": "log_level", "type": "string", "default_value": "GLOBAL"},
+]
+
+
+@pytest.mark.asyncio
+async def test_ytmusic_form_hides_potoken_keeps_credentials(monkeypatch):
+    async def fake_ma(command, **args):
+        assert command == "config/providers/get_entries" and args["provider_domain"] == "ytmusic"
+        return list(_YTM_ENTRIES)
+    monkeypatch.setattr(music_service, "_ma", fake_ma)
+    form = await music_service.provider_setup_form("ytmusic")
+    assert form is not None and form["domain"] == "ytmusic"
+    keys = {f["key"] for f in form["fields"]}
+    # PO-token field hidden; library-sync/log_level already filtered generically.
+    assert "po_token_server_url" not in keys
+    assert keys == {"username", "cookie"}
+    cookie = next(f for f in form["fields"] if f["key"] == "cookie")
+    assert cookie["type"] == "secure_string" and cookie["required"] is True
+    assert next(f for f in form["fields"] if f["key"] == "username")["required"] is True
+
+
+@pytest.mark.asyncio
+async def test_ytmusic_save_injects_local_potoken(monkeypatch):
+    monkeypatch.delenv("ZOE_YTMUSIC_POTOKEN_URL", raising=False)
+    captured = {}
+    async def fake_ma(command, **args):
+        if command == "config/providers/get_entries":
+            return list(_YTM_ENTRIES)
+        if command == "config/providers/save":
+            captured.update(args)
+            return {"name": "YouTube Music", "values": args.get("values")}
+        return None
+    monkeypatch.setattr(music_service, "_ma", fake_ma)
+    # User supplies only username + cookie (as the phone form allows).
+    saved = await music_service.save_provider("ytmusic", {"username": "jason", "cookie": "SECRET"})
+    assert saved is not None
+    vals = captured["values"]
+    assert vals["username"] == "jason" and vals["cookie"] == "SECRET"
+    # PO-token URL filled server-side from the default, not from the phone.
+    assert vals["po_token_server_url"] == "http://localhost:4416"
+
+
+@pytest.mark.asyncio
+async def test_ytmusic_save_potoken_url_env_override(monkeypatch):
+    monkeypatch.setenv("ZOE_YTMUSIC_POTOKEN_URL", "http://10.0.0.5:4416/")
+    captured = {}
+    async def fake_ma(command, **args):
+        if command == "config/providers/get_entries":
+            return list(_YTM_ENTRIES)
+        if command == "config/providers/save":
+            captured.update(args); return {"name": "YouTube Music"}
+        return None
+    monkeypatch.setattr(music_service, "_ma", fake_ma)
+    await music_service.save_provider("ytmusic", {"username": "j", "cookie": "c"})
+    # trailing slash trimmed; other providers untouched by this logic.
+    assert captured["values"]["po_token_server_url"] == "http://10.0.0.5:4416"
+
+
+@pytest.mark.asyncio
+async def test_ytmusic_setup_save_refuses_with_accurate_msg_when_generator_down(monkeypatch):
+    from routers import music_setup as ms_router
+    async def down(url): return False
+    monkeypatch.setattr(music_service, "_potoken_reachable", down)
+    saved = {"n": 0}
+    async def fake_save(prov, vals): saved["n"] += 1; return {"name": prov}
+    monkeypatch.setattr(music_service, "save_provider", fake_save)
+    tok = music_setup.mint("ytmusic")["token"]
+    r = await ms_router.setup_save({"token": tok, "provider": "ytmusic",
+                                    "values": {"username": "j", "cookie": "c"}})
+    # Generator down → refused with an actionable message, MA never saved.
+    assert r["ok"] is False and "helper isn't running" in r["reason"] and saved["n"] == 0
+
+
+@pytest.mark.asyncio
+async def test_ytmusic_setup_save_ok_when_generator_up(monkeypatch):
+    from routers import music_setup as ms_router
+    async def up(url): return True
+    monkeypatch.setattr(music_service, "_potoken_reachable", up)
+    async def fake_save(prov, vals): return {"name": prov}
+    monkeypatch.setattr(music_service, "save_provider", fake_save)
+    tok = music_setup.mint("ytmusic")["token"]
+    r = await ms_router.setup_save({"token": tok, "provider": "ytmusic",
+                                    "values": {"username": "j", "cookie": "c"}})
+    assert r["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_non_ytmusic_save_has_no_potoken_key(monkeypatch):
+    captured = {}
+    async def fake_ma(command, **args):
+        if command == "config/providers/get_entries":
+            return [{"key": "username", "type": "string", "required": True}]
+        if command == "config/providers/save":
+            captured.update(args); return {"name": "Qobuz"}
+        return None
+    monkeypatch.setattr(music_service, "_ma", fake_ma)
+    await music_service.save_provider("qobuz", {"username": "j"})
+    assert "po_token_server_url" not in captured["values"]
 
 
 # ── Spotify OAuth (slice 3): WS driver + token-gated endpoints ────────────────
