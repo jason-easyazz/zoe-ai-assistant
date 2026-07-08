@@ -21,6 +21,19 @@ logger = logging.getLogger(__name__)
 
 _TIMEOUT_S = 5.0
 
+# YouTube Music needs a companion PO-token generator (the bgutil provider) that
+# MA pings at `po_token_server_url` (MA's own default is http://127.0.0.1:4416).
+# Zoe runs that generator locally as a docker-compose.modules service on :4416,
+# so the user never has to type this URL: the setup form hides the field and
+# save_provider() fills it server-side. Override with ZOE_YTMUSIC_POTOKEN_URL
+# only if the generator is moved to another host/port.
+_YTMUSIC_DOMAIN = "ytmusic"
+_YTMUSIC_POTOKEN_KEY = "po_token_server_url"
+
+
+def _ytmusic_potoken_url() -> str:
+    return os.environ.get("ZOE_YTMUSIC_POTOKEN_URL", "http://localhost:4416").rstrip("/")
+
 
 def _ma_url() -> str:
     return os.environ.get("MUSIC_ASSISTANT_URL", "http://localhost:8095").rstrip("/")
@@ -346,7 +359,12 @@ async def provider_setup_form(provider: str) -> Optional[dict[str, Any]]:
     entries = await _ma("config/providers/get_entries", provider_domain=provider)
     if entries is None:
         return None
-    return {**meta, "fields": _clean_entries(entries)}
+    fields = _clean_entries(entries)
+    if provider == _YTMUSIC_DOMAIN:
+        # Hide the PO-token server field — Zoe runs the generator locally and
+        # sets it in save_provider(). The phone only asks for username + cookie.
+        fields = [f for f in fields if f["key"] != _YTMUSIC_POTOKEN_KEY]
+    return {**meta, "fields": fields}
 
 
 async def save_provider(provider: str, values: dict[str, Any]) -> Optional[dict[str, Any]]:
@@ -356,6 +374,11 @@ async def save_provider(provider: str, values: dict[str, Any]) -> Optional[dict[
     merged = {e["key"]: e.get("default_value") for e in entries
               if isinstance(e, dict) and e.get("key") and e.get("type") not in _HIDDEN_ENTRY_TYPES}
     merged.update({k: v for k, v in (values or {}).items() if v is not None})
+    if provider == _YTMUSIC_DOMAIN:
+        # Always point YouTube Music at Zoe's local PO-token generator, whatever
+        # the phone sent (the field is hidden from that form). Without a reachable
+        # generator MA's ytmusic provider fails login, so this is not optional.
+        merged[_YTMUSIC_POTOKEN_KEY] = _ytmusic_potoken_url()
     saved = await _ma("config/providers/save", provider_domain=provider, values=merged)
     return saved if isinstance(saved, dict) else None
 
