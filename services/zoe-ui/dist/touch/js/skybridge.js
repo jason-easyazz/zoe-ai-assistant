@@ -863,7 +863,9 @@
     let npLastArt = '';           // avoid reloading identical album art each poll
 
     function startNowPlayingWatch() {
-        if (!els.nowPlaying) return;
+        // Require the whole mini-player subtree so applyNowPlaying can trust its
+        // element refs (keeps DOM-missing distinct from network failures).
+        if (!els.nowPlaying || !els.npTitle || !els.npArtist || !els.npArt) return;
         pollNowPlaying();
         npPollHandle = setInterval(pollNowPlaying, NP_POLL_MS);
     }
@@ -929,12 +931,15 @@
             els.nowPlaying.classList.toggle('is-playing');
         }
         try {
-            await fetch('/api/music/control', {
+            const resp = await fetch('/api/music/control', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ action, player_id: npPlayerId })
             });
-        } catch (_) { /* best-effort; the next poll reconciles truth */ }
+            // On a non-2xx, reconcile immediately so an optimistic glyph flip that
+            // didn't actually take doesn't linger until the next scheduled poll.
+            if (!resp.ok) { pollNowPlaying(); return; }
+        } catch (_) { pollNowPlaying(); return; }  // network fail → reconcile now
         // Re-poll shortly after so state (track change / real play state) catches up.
         setTimeout(pollNowPlaying, 350);
     }
