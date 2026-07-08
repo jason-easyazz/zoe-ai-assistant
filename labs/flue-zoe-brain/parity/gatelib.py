@@ -240,18 +240,20 @@ def purge_artifacts(nonce: str) -> dict[str, str]:
     per-table status map for the report.
     """
     like_nonce = f"%{nonce}%"
-    marker_clause = " OR ".join(f"text ~* '{m}'" for m in GATE_WRITE_MARKERS)
+    markers = list(GATE_WRITE_MARKERS)
     out: dict[str, str] = {}
-    # list_items: no user_id column — key via the owning list; catch the family
-    # surface too. Nonce OR marker.
-    out["list_items"] = db_execute(
-        f"DELETE FROM list_items WHERE text ILIKE $1 OR ({marker_clause})", like_nonce
-    )
-    for table, col in (("notes", "content"), ("journal_entries", "content"),
-                       ("people", "name"), ("events", "title"), ("reminders", "title")):
-        mc = marker_clause.replace("text ~*", f"{col} ~*")
+    # (table, column) pairs — all hardcoded literals in this file, never external
+    # input. The nonce and the markers are bound as query PARAMETERS ($1 text,
+    # $2 text[]): `col ~* ANY($2)` matches any marker regex, so nothing is
+    # interpolated into the SQL (apostrophe-safe) and every table uses `col`
+    # directly (no text→col string surgery).
+    targets = (("list_items", "text"), ("notes", "content"),
+               ("journal_entries", "content"), ("people", "name"),
+               ("events", "title"), ("reminders", "title"))
+    for table, col in targets:
         out[table] = db_execute(
-            f"DELETE FROM {table} WHERE {col} ILIKE $1 OR ({mc})", like_nonce
+            f"DELETE FROM {table} WHERE {col} ILIKE $1 OR {col} ~* ANY($2::text[])",
+            like_nonce, markers,
         )
     return out
 
