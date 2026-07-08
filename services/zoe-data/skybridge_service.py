@@ -1185,6 +1185,12 @@ def _classify_music(text: str) -> "SkybridgeIntent | None":
         prov = {"youtube music": "ytmusic", "radio": "radiobrowser",
                 "music service": "", "music": ""}.get(svc, svc)
         return SkybridgeIntent(domain="music", action="setup", query=prov)
+    # Speaker switch: "move/switch/send music to the kitchen", "play it in the bedroom".
+    # The verb+"music/it/this"+to/in guard keeps "play jazz in the kitchen" (a play
+    # target, not a transfer) from matching here.
+    m = re.search(r"\b(?:move|switch|send|transfer|cast|play)\s+(?:the\s+|my\s+)?(?:music|song|playback|it|this)\s+(?:over\s+)?(?:to|in|on)\s+(?:the\s+)?(.+?)\s*$", text)
+    if m:
+        return SkybridgeIntent(domain="music", action="transfer", query=m.group(1).strip())
     has_ctx = bool(_MUSIC_CTX.search(text))
     # Transport / volume — only with clear music context so bare "pause"/"next"
     # (which could be timers, reading, etc.) don't get hijacked.

@@ -116,6 +116,13 @@ async def setup_save(payload: dict) -> dict[str, Any]:
         return {"ok": False, "reason": "invalid or already-used setup link"}
     if not isinstance(values, dict):
         return {"ok": False, "reason": "bad values"}
+    # YouTube Music can't log in without Zoe's local PO-token generator running.
+    # Check it here so a stopped helper reads as an accurate, actionable message
+    # rather than a misleading "check your details" credential error.
+    if provider == music_service._YTMUSIC_DOMAIN and not await music_service._potoken_reachable(
+            music_service._ytmusic_potoken_url()):
+        return {"ok": False, "reason": "The YouTube Music helper isn't running yet — "
+                "ask your Zoe admin to start it, then try again."}
     saved = await music_service.save_provider(provider, values)
     if not saved:
         return {"ok": False, "reason": "couldn't connect — check your details"}
