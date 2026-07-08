@@ -164,3 +164,44 @@ the flag is on.
 
 **Lab proof:** `services/zoe-data/tests/test_person_dossier_compose.py` (flag OFF no-op + ON
 assembly + `_group_facts`/`_fmt_score` helpers).
+
+### Ready-to-run flip (verified 2026-07-08)
+
+Run on the host as `zoe`. The restart is **operator-authorized** (the turn classifier blocks it for
+agents). State at verification: dossier code live at `ec41cb2a`, `ZOE_MEMORY_COMPOSE_ENABLED=1`,
+`ZOE_PERSON_DOSSIER_ENABLED` unset — so this is a one-flag flip. Re-check step 0 before flipping in
+case the tree has moved.
+
+```bash
+# 0. Pre-flight — expect all three OK
+git -C /home/zoe/assistant merge-base --is-ancestor ec41cb2a HEAD \
+  && echo "OK: dossier code live" || echo "STOP: deploy main first"
+grep -E 'ZOE_MEMORY_COMPOSE_ENABLED|ZOE_PERSON_DOSSIER_ENABLED' \
+  /home/zoe/assistant/services/zoe-data/.env         # expect COMPOSE=1, no DOSSIER line
+curl -s -o /dev/null -w 'health %{http_code}\n' http://127.0.0.1:8000/health   # expect 200
+
+# 1. (optional, if RAM ≥ ~1.5 GB free) baseline the voice replay — compose is on the recall path
+free -m | awk '/Mem:/{print "avail="$7"MB"}'
+flock /tmp/zoe-voice-harness.lock \
+  python /home/zoe/assistant/scripts/maintenance/voice_regression_probe.py
+
+# 2. Flip + restart
+echo 'ZOE_PERSON_DOSSIER_ENABLED=1' >> /home/zoe/assistant/services/zoe-data/.env
+systemctl --user restart zoe-data.service
+sleep 3 && curl -s -o /dev/null -w 'health %{http_code}\n' http://127.0.0.1:8000/health
+
+# 3. Verify — a RELATIONAL message for a real contact; look in "packet" for a dossier-shaped
+#    [people] line: Name (rel · circle, score N) — likes … · contact
+curl -s 'http://127.0.0.1:8000/api/memories/for-prompt' --get \
+  --data-urlencode 'user_id=<your-user-id>' \
+  --data-urlencode 'message=tell me about my brother' | python3 -m json.tool
+
+# 4. Rollback (instant, lossless — thin line returns)
+sed -i '/^ZOE_PERSON_DOSSIER_ENABLED=/d' /home/zoe/assistant/services/zoe-data/.env
+systemctl --user restart zoe-data.service
+```
+
+Notes: the dossier `[people]` line only renders when the message trips the relational gate (a
+relationship word or "tell me about X") *and* the contact has data. If `/health` returns `000` on the
+host (service "active"), that is the accept-queue-hang signature ([incident-runbook.md](incident-runbook.md)) — a
+restart clears it.
