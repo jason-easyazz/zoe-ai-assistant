@@ -140,6 +140,8 @@ async def test_setup_save_gated_by_token(monkeypatch):
     saved = {"n": 0}
     async def fake_save(prov, vals): saved["n"] += 1; return {"name": prov}
     monkeypatch.setattr(music_service, "save_provider", fake_save)
+    async def _up(url): return True
+    monkeypatch.setattr(music_service, "_potoken_reachable", _up)  # ytmusic helper "up"
     # invalid token → refused, MA never touched
     r = await ms_router.setup_save({"token": "bad", "provider": "ytmusic", "values": {"username": "x"}})
     assert r["ok"] is False and saved["n"] == 0
@@ -182,13 +184,9 @@ async def test_ytmusic_form_hides_potoken_keeps_credentials(monkeypatch):
     assert next(f for f in form["fields"] if f["key"] == "username")["required"] is True
 
 
-async def _reachable(url): return True
-
-
 @pytest.mark.asyncio
 async def test_ytmusic_save_injects_local_potoken(monkeypatch):
     monkeypatch.delenv("ZOE_YTMUSIC_POTOKEN_URL", raising=False)
-    monkeypatch.setattr(music_service, "_potoken_reachable", _reachable)
     captured = {}
     async def fake_ma(command, **args):
         if command == "config/providers/get_entries":
@@ -210,7 +208,6 @@ async def test_ytmusic_save_injects_local_potoken(monkeypatch):
 @pytest.mark.asyncio
 async def test_ytmusic_save_potoken_url_env_override(monkeypatch):
     monkeypatch.setenv("ZOE_YTMUSIC_POTOKEN_URL", "http://10.0.0.5:4416/")
-    monkeypatch.setattr(music_service, "_potoken_reachable", _reachable)
     captured = {}
     async def fake_ma(command, **args):
         if command == "config/providers/get_entries":
@@ -225,20 +222,31 @@ async def test_ytmusic_save_potoken_url_env_override(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ytmusic_save_refuses_when_generator_down(monkeypatch):
+async def test_ytmusic_setup_save_refuses_with_accurate_msg_when_generator_down(monkeypatch):
+    from routers import music_setup as ms_router
     async def down(url): return False
     monkeypatch.setattr(music_service, "_potoken_reachable", down)
     saved = {"n": 0}
-    async def fake_ma(command, **args):
-        if command == "config/providers/get_entries":
-            return list(_YTM_ENTRIES)
-        if command == "config/providers/save":
-            saved["n"] += 1; return {"name": "YouTube Music"}
-        return None
-    monkeypatch.setattr(music_service, "_ma", fake_ma)
-    # Generator unreachable → refuse to persist a dead URL (never call MA save).
-    r = await music_service.save_provider("ytmusic", {"username": "j", "cookie": "c"})
-    assert r is None and saved["n"] == 0
+    async def fake_save(prov, vals): saved["n"] += 1; return {"name": prov}
+    monkeypatch.setattr(music_service, "save_provider", fake_save)
+    tok = music_setup.mint("ytmusic")["token"]
+    r = await ms_router.setup_save({"token": tok, "provider": "ytmusic",
+                                    "values": {"username": "j", "cookie": "c"}})
+    # Generator down → refused with an actionable message, MA never saved.
+    assert r["ok"] is False and "helper isn't running" in r["reason"] and saved["n"] == 0
+
+
+@pytest.mark.asyncio
+async def test_ytmusic_setup_save_ok_when_generator_up(monkeypatch):
+    from routers import music_setup as ms_router
+    async def up(url): return True
+    monkeypatch.setattr(music_service, "_potoken_reachable", up)
+    async def fake_save(prov, vals): return {"name": prov}
+    monkeypatch.setattr(music_service, "save_provider", fake_save)
+    tok = music_setup.mint("ytmusic")["token"]
+    r = await ms_router.setup_save({"token": tok, "provider": "ytmusic",
+                                    "values": {"username": "j", "cookie": "c"}})
+    assert r["ok"] is True
 
 
 @pytest.mark.asyncio
