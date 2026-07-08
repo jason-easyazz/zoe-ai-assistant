@@ -185,3 +185,21 @@ body:not(.sky-empty) .sky-card.dashboard-card.sky-premium-card { display: flex !
 .dashboard-card .dash-ctrl-profile .dash-ctrl-glyph { width: 40px; height: 40px; border-radius: 50%; }
 .dashboard-card .dash-ctrl-profile .dash-ctrl-label { font-size: 17px; }
 .dashboard-card .dash-ctrl-profile .dash-ctrl-sub { font-size: 12.5px; }
+
+/* ── Music: now-playing card (Music Assistant bridge) ─────────────────────── */
+.now-playing-card .np-scene { display: flex; gap: var(--sky-space-6, 24px); align-items: center; padding: var(--sky-space-4, 16px) var(--sky-space-2, 8px); }
+.now-playing-card .np-art { width: 128px; height: 128px; flex: 0 0 auto; border-radius: var(--sky-radius-lg, 18px); object-fit: cover; box-shadow: 0 12px 30px -8px rgba(0,0,0,.5); }
+.now-playing-card .np-art-empty { display: grid; place-items: center; background: linear-gradient(150deg, color-mix(in srgb, var(--sky-accent-violet, #9b8cff) 30%, transparent), color-mix(in srgb, var(--sky-accent-blue, #6aa6ff) 12%, transparent)); color: #fff; }
+.now-playing-card .np-meta { display: flex; flex-direction: column; gap: var(--sky-space-1, 4px); min-width: 0; }
+.now-playing-card .np-state { font-size: var(--sky-text-caption, 13px); font-weight: 650; text-transform: uppercase; letter-spacing: .08em; color: color-mix(in srgb, var(--sky-accent-mint, #5be3b0) 85%, #fff); }
+.now-playing-card .np-title { font-size: var(--sky-text-title, 24px); font-weight: 680; color: var(--sky-ink-0, #fff); letter-spacing: -.01em; overflow-wrap: anywhere; }
+.now-playing-card .np-artist { font-size: var(--sky-text-body, 17px); color: var(--sky-ink-1, rgba(255,255,255,.85)); }
+.now-playing-card .np-album { font-size: var(--sky-text-caption, 14px); color: var(--sky-ink-3, rgba(255,255,255,.5)); }
+/* Big round transport buttons — the sky-actions row cardFrame already renders. */
+.now-playing-card .sky-actions { gap: var(--sky-space-3, 12px); margin-top: var(--sky-space-4, 16px); }
+.now-playing-card .sky-actions button { min-width: 60px; min-height: 60px; border-radius: 50%; font-size: 22px; padding: 0; }
+.now-playing-card .np-transport { display: flex; gap: var(--sky-space-3, 12px); align-items: center; margin-top: var(--sky-space-6, 24px); padding-left: var(--sky-space-2, 8px); }
+.now-playing-card .np-btn { display: grid; place-items: center; width: 60px; height: 60px; border-radius: 50%; border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.07); color: var(--sky-ink-1, rgba(255,255,255,.9)); cursor: pointer; transition: background var(--sky-dur-fast,160ms) ease, transform var(--sky-dur-fast,160ms) ease; }
+.now-playing-card .np-btn:active { transform: scale(.94); background: rgba(255,255,255,.14); }
+.now-playing-card .np-btn.np-primary { width: 72px; height: 72px; background: color-mix(in srgb, var(--sky-accent-mint, #5be3b0) 26%, transparent); border-color: color-mix(in srgb, var(--sky-accent-mint, #5be3b0) 55%, transparent); color: #fff; }
+.now-playing-card .np-chips { margin-top: var(--sky-space-5, 20px); }

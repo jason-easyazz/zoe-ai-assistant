@@ -994,3 +994,33 @@ process.stdout.write(JSON.stringify({
                           check=True, capture_output=True, text=True)
     checks = _json.loads(proc.stdout)
     assert all(checks.values()), f"dashboard auth chip failed: {checks}"
+
+
+def test_now_playing_card_renders_transport_and_escapes(tmp_path):
+    """Music now-playing card: SVG transport with data-sky-action, escaped meta."""
+    harness = tmp_path / "np.cjs"
+    harness.write_text(
+        """
+const fs=require('fs'),vm=require('vm');const s={window:{}};vm.createContext(s);
+vm.runInContext(fs.readFileSync(process.argv[2],'utf8'),s);
+vm.runInContext(fs.readFileSync(process.argv[3],'utf8'),s);
+const R=s.window.SkybridgeRenderer;
+const html=R.render({card_type:'now_playing',schema_version:'1.0.0',card_id:'np',
+  content:{source:'music_now_playing',title:'Song <b>x</b>',artist:'Artist',state:'playing',player_name:'Kitchen',transport:true}});
+process.stdout.write(JSON.stringify({
+  card: html.includes('now-playing-card'),
+  transport: html.includes('np-transport') && html.includes('np-btn'),
+  pause_when_playing: html.includes('data-query="pause music"'),
+  actions_wired: html.includes('data-sky-action="query"') && html.includes('data-query="next song"'),
+  escaped: html.includes('&lt;b&gt;') && !html.includes('<b>x</b>'),
+  no_dup_header: (html.match(/np-title/g)||[]).length===1
+}));
+""", encoding="utf-8")
+    node = shutil.which("node") or shutil.which("nodejs")
+    if not node:
+        pytest.skip("Node.js not installed")
+    proc = subprocess.run([node, str(harness), str(UI / "js" / "zoe-compose.js"),
+                           str(UI / "js" / "skybridge-renderer.js")], check=True, capture_output=True, text=True)
+    import json as _j
+    checks = _j.loads(proc.stdout)
+    assert all(checks.values()), f"now-playing render failed: {checks}"
