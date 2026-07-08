@@ -163,7 +163,10 @@
         if (els.nowPlaying) {
             // Mini-player: transport/volume + tap-the-track-to-expand + output picker.
             els.nowPlaying.addEventListener('click', event => {
-                event.stopPropagation();   // don't let the resting-panel wake-tap swallow it
+                // Note: no stopPropagation here — the document-level handlers below
+                // must still see the click (outside-tap picker-close; the wake-tap
+                // handler already excludes .sky-nowplaying), otherwise an open picker
+                // couldn't be dismissed by tapping the mini-player's own inert areas.
                 const playerBtn = event.target.closest('[data-music-player]');
                 if (playerBtn && event.target.closest('[data-music-picker]')) {
                     selectMusicPlayer(playerBtn.dataset.musicPlayer);
@@ -185,7 +188,7 @@
         // dashboard — the ambient clock should be a door, not a dead end.
         document.addEventListener('click', event => {
             if (!document.body.classList.contains('sky-empty')) return;
-            if (event.target.closest('button, a, input, textarea, label, [data-sky-action], .sky-command, .sky-orb-button')) return;
+            if (event.target.closest('button, a, input, textarea, label, [data-sky-action], .sky-command, .sky-orb-button, .sky-nowplaying')) return;
             wakeToDashboard();
         });
         ['pointerdown', 'keydown', 'touchstart'].forEach(type => {

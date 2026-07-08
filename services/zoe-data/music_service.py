@@ -300,6 +300,25 @@ def _result(spoken: str, card: dict[str, Any], action: str) -> dict[str, Any]:
     }
 
 
+def _match_player_by_name(players: list[dict[str, Any]], name: str) -> Optional[dict[str, Any]]:
+    """Find the speaker whose display name best matches a spoken room name
+    ("kitchen", "living room"). Exact → prefix → substring, case-insensitive."""
+    q = (name or "").strip().lower()
+    if not players or not q:
+        return None
+    cand = [(p, str(p.get("display_name") or p.get("name") or "").strip().lower()) for p in players]
+    for p, n in cand:
+        if n and n == q:
+            return p
+    for p, n in cand:
+        if n and (n.startswith(q) or q.startswith(n)):
+            return p
+    for p, n in cand:
+        if n and (q in n or n in q):
+            return p
+    return None
+
+
 async def resolve_music(intent: Any) -> dict[str, Any]:
     """The Skybridge music domain resolver. `intent` has .action and .query."""
     action = getattr(intent, "action", "status")
@@ -307,6 +326,25 @@ async def resolve_music(intent: Any) -> dict[str, Any]:
 
     if action == "setup":
         return await resolve_music_setup(query)
+
+    if action == "transfer" and query:
+        # Voice path for speaker switching: "move/switch music to the kitchen".
+        players = await get_players()
+        target = _match_player_by_name(players, query)
+        if target is None:
+            names = ", ".join(
+                str(p.get("display_name") or p.get("name")) for p in players
+                if (p.get("display_name") or p.get("name")))
+            return _result(
+                f"I couldn't find a speaker called “{query}”." + (f" You have: {names}." if names else ""),
+                _browse_card(), "transfer")
+        np0 = await now_playing()
+        tname = target.get("display_name") or target.get("name") or "there"
+        if not await transfer(target.get("player_id", "")):
+            return _result(f"I couldn't move the music to {tname}.",
+                           now_playing_card(np0 or {}), "transfer")
+        np = await now_playing(target.get("player_id", "")) or np0 or {}
+        return _result(f"Moved the music to {tname}.", now_playing_card(np), "transfer")
 
     if action == "play" and query:
         hit = await search_and_play(query)

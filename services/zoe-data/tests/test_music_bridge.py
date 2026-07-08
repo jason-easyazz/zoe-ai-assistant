@@ -19,10 +19,23 @@ from skybridge_service import classify_skybridge_intent, skybridge_intent_requir
     ("skip this song", "music", "next"),
     ("turn the music up", "music", "volume_up"),
     ("turn the music down", "music", "volume_down"),
+    ("move music to the kitchen", "music", "transfer"),
+    ("switch music to the living room", "music", "transfer"),
+    ("send the music to bedroom", "music", "transfer"),
 ])
 def test_music_intents(q, domain, action):
     i = classify_skybridge_intent(q, None)
     assert i is not None and (i.domain, i.action) == (domain, action), q
+
+
+@pytest.mark.parametrize("q,room", [
+    ("move music to the kitchen", "kitchen"),
+    ("switch music to the living room", "living room"),
+    ("cast it to office", "office"),
+])
+def test_music_transfer_extracts_room(q, room):
+    i = classify_skybridge_intent(q, None)
+    assert i is not None and i.action == "transfer" and i.query == room, q
 
 
 @pytest.mark.parametrize("q", [
@@ -129,6 +142,39 @@ async def test_transfer_guards(monkeypatch):
 
     assert await music_service.transfer("") is False           # no target
     assert await music_service.transfer("kitchen") is False     # source == target (no-op)
+
+
+@pytest.mark.asyncio
+async def test_resolve_transfer_matches_room_by_name(monkeypatch):
+    async def players():
+        return [
+            {"player_id": "p_kit", "display_name": "Kitchen"},
+            {"player_id": "p_liv", "display_name": "Living Room"},
+        ]
+    moved = {}
+    async def fake_transfer(target, source=""):
+        moved["target"] = target; return True
+    async def fake_np(player_id=""):
+        return {"state": "playing", "title": "Song", "player_name": "Living Room"}
+    monkeypatch.setattr(music_service, "get_players", players)
+    monkeypatch.setattr(music_service, "transfer", fake_transfer)
+    monkeypatch.setattr(music_service, "now_playing", fake_np)
+
+    res = await music_service.resolve_music(_Intent("transfer", "living room"))
+    assert moved["target"] == "p_liv"                 # fuzzy name → the right player
+    assert "Living Room" in res["spoken_summary"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_transfer_unknown_speaker(monkeypatch):
+    async def players():
+        return [{"player_id": "p_kit", "display_name": "Kitchen"}]
+    async def boom(*a, **k):
+        raise AssertionError("must not transfer to an unknown speaker")
+    monkeypatch.setattr(music_service, "get_players", players)
+    monkeypatch.setattr(music_service, "transfer", boom)
+    res = await music_service.resolve_music(_Intent("transfer", "garage"))
+    assert "couldn't find" in res["spoken_summary"].lower()
 
 
 # ── Add-source (QR→phone setup) — token + resolver + guards ──────────────────
