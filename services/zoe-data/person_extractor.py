@@ -40,6 +40,20 @@ def temporal_relationships_enabled() -> bool:
         in _TEMPORAL_TRUTHY
     )
 
+
+def birthday_capture_enabled() -> bool:
+    """Cheap per-call read of the birthday-capture flag (default OFF).
+
+    When ON, a birthday mentioned for a person who is not yet a contact creates a
+    bare is_partial=1 stub so the date can land on a real row, instead of being
+    dropped. Byte-for-byte no-op while OFF. Phase 3 of
+    docs/adr/ADR-contacts-from-known-people.md; replay-gated at enable time.
+    """
+    return (
+        os.environ.get("ZOE_PERSON_BIRTHDAY_CAPTURE_ENABLED", "").strip().lower()
+        in _TEMPORAL_TRUTHY
+    )
+
 # ── Regex patterns ────────────────────────────────────────────────────────────
 
 _NAME = r"([A-Z][a-z]{1,30}(?:\s[A-Z][a-z]{1,20})?)"
@@ -211,6 +225,34 @@ async def _resolve_person_uuid(name: str, user_id: str, db) -> Optional[str]:
         return row[0] if row else None
     except Exception as exc:
         logger.debug("_resolve_person_uuid failed for %r: %s", name, exc)
+        return None
+
+
+async def _create_partial_person(name: str, user_id: str, db) -> Optional[str]:
+    """Insert a bare is_partial=1 person stub; return its UUID (None on error).
+
+    Used only by the flag-gated birthday-capture path so a mentioned birthday for
+    a not-yet-contact has a row to land on. Private by default (visibility
+    'personal'); is_partial=1 keeps it out of the recall dossier until promoted.
+    """
+    pid = str(uuid.uuid4())
+    try:
+        try:
+            await db.execute(
+                "INSERT INTO people (id, user_id, name, context, visibility, is_partial) "
+                "VALUES ($1,$2,$3,'birthday_mention','personal',1)",
+                pid, user_id, name,
+            )
+        except Exception:
+            await db.execute(
+                "INSERT INTO people (id, user_id, name, context, visibility, is_partial) "
+                "VALUES (?,?,?,'birthday_mention','personal',1)",
+                (pid, user_id, name),
+            )
+        await db.commit()
+        return pid
+    except Exception as exc:
+        logger.debug("_create_partial_person failed for %r: %s", name, exc)
         return None
 
 
@@ -800,6 +842,21 @@ async def process_text(
         # Process each task
         for name, fact_text, pattern_type in tasks:
             person_uuid = uuid_cache.get(name)
+
+            # Birthday capture (Phase 3, flag-gated dark): a birthday mentioned for
+            # someone who isn't yet a contact has nowhere to land — the structured
+            # write below needs a row. When enabled, mint a stub so the date sticks.
+            # Byte-for-byte no-op while ZOE_PERSON_BIRTHDAY_CAPTURE_ENABLED is OFF.
+            if (
+                person_uuid is None
+                and pattern_type == "birthday"
+                and birthday_capture_enabled()
+                and _looks_like_person_name(name)
+            ):
+                person_uuid = await _create_partial_person(name, user_id, _db)
+                if person_uuid:
+                    uuid_cache[name] = person_uuid
+
             entity_id = person_uuid or None  # None → person_extractor will use slug in ingest
 
             # MemPalace write first (get mem_id)

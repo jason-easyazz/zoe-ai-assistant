@@ -249,11 +249,40 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str) -> dict:
             raise ValueError("invalid_person_name")
         # Dedup: never mint a second row for a name the user already has.
         existing = await conn.fetchrow(
-            "SELECT id FROM people WHERE user_id=$1 AND lower(name)=lower($2) AND deleted=0 LIMIT 1",
+            "SELECT id, is_partial, relationship FROM people"
+            " WHERE user_id=$1 AND lower(name)=lower($2) AND deleted=0 LIMIT 1",
             user_id,
             name,
         )
         if existing:
+            # Promote-on-confirm (Phase 3): a matching row that is still a bare
+            # is_partial=1 stub (minted by the relationship extractor) becomes a
+            # full, recall-visible + editable contact on confirmation — enrich in
+            # place, don't mint a duplicate. A full (is_partial=0) contact is left
+            # untouched, exactly as before.
+            if existing["is_partial"]:
+                slot_rel = (slots.get("relationship") or "").strip() or None
+                # Only fill relationship when the slot supplies one and the stub
+                # lacks it — never overwrite a relationship already on the row.
+                fill_rel = slot_rel if (slot_rel and not existing["relationship"]) else None
+                if fill_rel is not None:
+                    await conn.execute(
+                        "UPDATE people SET is_partial=0, relationship=$1 WHERE id=$2",
+                        fill_rel,
+                        existing["id"],
+                    )
+                else:
+                    await conn.execute(
+                        "UPDATE people SET is_partial=0 WHERE id=$1",
+                        existing["id"],
+                    )
+                return {
+                    "person_id": existing["id"],
+                    "name": name,
+                    "created": False,
+                    "promoted": True,
+                    "relationship": fill_rel or existing["relationship"],
+                }
             return {"person_id": existing["id"], "name": name, "created": False}
         pid = str(uuid.uuid4())
         relationship = (slots.get("relationship") or "").strip() or None
