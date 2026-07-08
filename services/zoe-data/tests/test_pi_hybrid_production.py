@@ -249,8 +249,16 @@ async def test_try_pi_hybrid_fast_accept_records_audit_disagreement(tmp_path, mo
             "ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH": str(evidence_path),
         },
     )
-    assert pi_hybrid_production._PI_AUDIT_TASKS
-    await asyncio.sleep(0.01)
+    # Deterministically drain the fire-and-forget audit task(s). The old
+    # `assert _PI_AUDIT_TASKS` raced the task's own completion: the audit write
+    # is fast, and `task.add_done_callback(_PI_AUDIT_TASKS.discard)` removes it
+    # on finish, so under load the set could already be empty here → `assert
+    # set()` (CI red, 2026-07-07). The evidence-file assertions below are the
+    # real contract; gather makes them race-free (snapshot before awaiting so a
+    # self-discarding task can't mutate the set mid-iteration).
+    pending = list(pi_hybrid_production._PI_AUDIT_TASKS)
+    if pending:
+        await asyncio.gather(*pending)
 
     assert decision["accepted"] is True
     records = [json.loads(line) for line in evidence_path.read_text(encoding="utf-8").splitlines()]

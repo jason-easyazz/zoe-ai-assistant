@@ -6,7 +6,6 @@ import logging
 import os
 from fastapi import Request, APIRouter, Depends
 
-import ambient_briefing
 from auth import get_current_user
 from database import get_db
 from skybridge_service import active_timers_for, cancel_timer_by_id, resolve_skybridge_request
@@ -123,19 +122,6 @@ async def resolve_skybridge_command(
     if not isinstance(context, dict):
         context = None
     return await resolve_skybridge_request(message, user.get("user_id", "voice-guest"), context=context, db=db)
-
-
-@router.get("/briefing")
-async def get_skybridge_briefing(user: dict = Depends(get_current_user)):
-    """Ambient composed briefing for the idle panel — cached, never LLM-blocking.
-
-    Returns ``{"card": <compose card|None>}``. ``None`` simply means "nothing
-    yet" (first hit warms the cache in the background); the panel keeps showing
-    the plain clock. Guests get guest-visible facts only — the resolvers
-    enforce that, and auth-required results are never used as briefing facts.
-    """
-    card = await ambient_briefing.get_briefing_card(user.get("user_id", "voice-guest"))
-    return {"card": card}
 
 
 @router.get("/timers")
