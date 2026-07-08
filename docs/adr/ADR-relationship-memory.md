@@ -82,11 +82,22 @@ is four bounded increments on top of what's live (none require a graph DB):
    exposed as a `relationship_query` capability ("who are Tom's siblings", "everyone in my
    work circle"). Real graph queries, still no graph DB; keep it explicit-query/async, off
    the chat hot path (per the bake-off guidance).
-4. **Precision + identity** — route relationship writes through the existing admission gate
-   (`zoe_memory_admission.py`) with a confidence threshold so low-confidence edges become
-   *pending/confirmable* rather than silent facts (4B LLM extraction is noisy); and add a
-   **person-merge / entity-resolution** path for `is_partial` stubs (name collisions, stub
-   → real-contact promotion).
+4. **Precision + identity** — two halves:
+   - **person-merge / entity-resolution** for `is_partial` stubs (name collisions, stub →
+     real-contact promotion) — ✅ **shipped** (#1036).
+   - **admission-gating relationship writes** through `zoe_memory_admission.py` with a
+     confidence threshold so low-confidence edges become *pending/confirmable* rather than
+     silent facts — ⚠️ **RE-SCOPED / deferred 2026-07-08.** The original premise was "4B LLM
+     extraction is noisy". On verification, **edges have no LLM source**: the only two writers
+     are the deterministic regex in `person_extractor.process_text` and explicit user creation
+     via `POST /people/{id}/relationships` — both high-confidence, neither carries a confidence
+     score to threshold. Wiring the `MemoryEvent`/trace-shaped admission gate around
+     score-less regex tuples would add hot-path risk to gate a noise source that does not exist
+     yet. **Revisit when an LLM edge-extraction path lands** (that path is the confidence
+     source the gate needs). The *live* precision problem today is narrower — the name regex
+     over-captures pronouns/sentence-openers ("She is Tom's sister" → junk `She` node + edge) —
+     fixed directly by `_looks_like_person_name` (this ADR's PR), which satisfies the
+     "no silent wrong edges" criterion for the writers that actually exist.
 
 ### Delivery status (2026-07-05) — merged but dark
 
