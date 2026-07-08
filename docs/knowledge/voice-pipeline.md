@@ -39,6 +39,11 @@ said-vs-did mapping must not regress — "can't do it" on a sample is a bug, not
   wrap `services/zoe-data/tests/replay_samples.py`.
 - **Always run under `flock /tmp/zoe-voice-harness.lock`** — two Kokoro loads (~2.3 GB each) will OOM
   the memory-tight box.
+- Session hygiene: each harness run uses a **fresh brain session id** (`replay-<epoch>`; samples
+  within a run share it). A fixed id once grew the flue sidecar's durable session past the model
+  context (8288 > 8192 tokens → HTTP 500 every turn, 2026-07-07). The flue client's
+  brain-unreachable fallback text now classifies as **ERROR**, never OK — a dead brain lane can't
+  silently pass the gate.
 
 ## Regression + speed gate — `voice_regression_probe.py` (fleet tool, evolving)
 
