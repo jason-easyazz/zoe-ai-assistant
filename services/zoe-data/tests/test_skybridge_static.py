@@ -502,6 +502,48 @@ def test_skybridge_list_renderer_has_switcher_columns_and_new_list_action():
     assert "lst-keepout" in css
     assert "grid-auto-flow: column" in css
 
+    # a11y: only real tabs live in the tablist; "+ New" is an action sibling.
+    assert 'role="tablist"' in renderer
+    assert "lst-tablist" in renderer
+    assert "lst-tablist" in css and "display: contents" in css
+    # Short lists use adaptive rows (no fixed ~604px reservation).
+    assert "--lst-rows:" in renderer
+
+
+def test_skybridge_list_short_list_is_compact_no_keepout(tmp_path):
+    """A short list sets an adaptive --lst-rows and omits the orb keep-out (it is
+    too short to reach the orb); a long list keeps the 9-row wrap + keep-out."""
+    node = shutil.which("node") or shutil.which("nodejs")
+    if not node:
+        pytest.skip("Node.js is not installed on this host")
+    harness = tmp_path / "lst_rows.cjs"
+    harness.write_text(
+        """
+const fs = require('fs'); const vm = require('vm');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const sandbox = { window: {} }; vm.createContext(sandbox); vm.runInContext(src, sandbox);
+const R = sandbox.window.SkybridgeRenderer;
+function mk(n){ const items=[]; for(let i=0;i<n;i++) items.push({id:'i'+i,text:'Item '+i,done:false});
+  return R.render({card_type:'generic',schema_version:'1.0.0',card_id:'l',content:{
+    source:'list_show', list_type:'shopping', name:'Shopping',
+    lists:[{id:'shopping',name:'Shopping',type:'shopping'}], selected:'shopping', items:items}}); }
+const short = mk(3), long = mk(20);
+process.stdout.write(JSON.stringify({
+  short_rows: /--lst-rows:\\s*\\d/.test(short),
+  short_no_keepout: !short.includes('lst-keepout'),
+  long_keepout: long.includes('lst-keepout')
+}));
+""",
+        encoding="utf-8",
+    )
+    proc = subprocess.run([node, str(harness), str(UI / "js" / "skybridge-renderer.js")],
+                          check=True, capture_output=True, text=True)
+    import json
+    c = json.loads(proc.stdout)
+    assert c["short_rows"], "short list should set adaptive --lst-rows"
+    assert c["short_no_keepout"], "short list should omit the orb keep-out"
+    assert c["long_keepout"], "long list should keep the orb keep-out"
+
 
 
 def test_skybridge_calendar_renderer_handles_datetime_dates_and_ordering(tmp_path):

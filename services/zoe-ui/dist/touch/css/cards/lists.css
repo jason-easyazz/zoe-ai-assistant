@@ -160,6 +160,9 @@ html body:not(.sky-empty) .sky-card.zoe-list-card .lst-scene {
   min-height: 50px;   /* align the tab row with the Home pill height */
   align-content: center;
 }
+/* The tablist wraps only the real tabs (a11y); display:contents lets its tab
+   children flex within .lst-switcher alongside the sibling "+ New" action. */
+.zoe-list-card .lst-tablist { display: contents; }
 .zoe-list-card .lst-tab {
   appearance: none;
   cursor: pointer;

@@ -706,7 +706,11 @@
             const countTag = count != null ? '<i class="lst-tab-count" aria-hidden="true">' + escapeHtml(count) + '</i>' : '';
             return '<button type="button" class="lst-tab lst-a-' + escapeHtml(accent) + selected + '" role="tab" aria-selected="' + (selected ? 'true' : 'false') + '" data-sky-action="query" data-query="' + escapeHtml(listQuery(list)) + '"><span class="lst-tab-dot" aria-hidden="true"></span><span class="lst-tab-name">' + escapeHtml(listLabel(list)) + '</span>' + countTag + '</button>';
         }).join('');
-        return '<div class="lst-switcher" role="tablist">' + tabs + '<button type="button" class="lst-tab lst-tab-new" data-sky-action="query" data-query="new list"><span class="lst-tab-name">+ New</span></button></div>';
+        // Only real list tabs live in the tablist; "+ New" is an action, not a tab,
+        // so it sits outside the tablist (a11y). .lst-tablist is display:contents so
+        // the tabs still flex within .lst-switcher.
+        return '<div class="lst-switcher"><div class="lst-tablist" role="tablist">' + tabs + '</div>' +
+            '<button type="button" class="lst-tab lst-tab-new" data-sky-action="query" data-query="new list"><span class="lst-tab-name">+ New</span></button></div>';
     }
 
     // The tap query for a row. Open item → tick off; done item → restore. Direction
@@ -871,14 +875,25 @@
 
         let itemsClass;
         let itemsInner;
+        let itemsStyle = '';
         if (isOverview) {
             itemsClass = 'lst-items is-overview';
             itemsInner = overviewCols;
         } else if (rows) {
             // Multi-column grid (newspaper flow) so a long list fills the width
-            // instead of one tall skinny column, wrapping around the orb.
+            // instead of one tall skinny column, wrapping around the orb. A short
+            // list uses only as many rows as it needs (no fixed ~604px reservation)
+            // and skips the orb keep-out — it's too short to reach the bottom-left
+            // orb zone, so it never overlaps.
+            const cells = visibleItems.length + 1; // items + add-row
+            const compact = cells <= 6;
             itemsClass = 'lst-items is-grid';
-            itemsInner = keepOut + addRow + rows;
+            if (compact) {
+                itemsStyle = ' style="--lst-rows:' + Math.max(3, cells) + '"';
+                itemsInner = addRow + rows;               // no keep-out needed
+            } else {
+                itemsInner = keepOut + addRow + rows;      // 9-row wrap around the orb
+            }
         } else {
             // Add-row pinned to the top (clear of the bottom-left orb); the empty
             // message fills the remaining space, centered.
@@ -892,7 +907,7 @@
             lists.length ? renderListSwitcher(lists, selectedId) : fallbackTitle,
             meta,
             '</div>',
-            '<div class="' + itemsClass + '">' + itemsInner + '</div>',
+            '<div class="' + itemsClass + '"' + itemsStyle + '>' + itemsInner + '</div>',
             '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'Lists', icon: 'L' }, props), body, { wide: true, tone: 'zoe-list-card ' + accent, hideHeader: true, hideStatus: true, hideActions: true });
