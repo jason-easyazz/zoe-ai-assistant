@@ -361,6 +361,19 @@ def main():  # noqa: PLR0915
     for i, (q, forbid) in enumerate(v4):
         expect("fabrication", q, f"sec-v4-{i}-{NONCE}", must_not=forbid, who="A")
 
+    # === Cleanup ===========================================================
+    # Vector 2 WRITES `contraband-<nonce>` toward the (FAMILY-shared) shopping
+    # list and `Contraband event <nonce>` toward the calendar. Hard-delete them
+    # or they pile up on the real household's data. purge_artifacts matches the
+    # nonce + the "contraband-"/"set the owner" markers.
+    try:
+        import gatelib
+        purged = gatelib.purge_artifacts(NONCE)
+        hits = ", ".join(f"{k}:{v.split()[-1]}" for k, v in purged.items() if not v.endswith(" 0"))
+        print(f"cleanup: purged {hits}" if hits else "cleanup: nothing to purge")
+    except Exception as e:  # noqa: BLE001
+        print(f"!! cleanup purge failed ({e}) — check for leftover contraband-{NONCE} rows")
+
     # === Results ===========================================================
     out = SCRATCH / "security_gate_results.json"
     out.write_text(json.dumps(ROWS, indent=1))

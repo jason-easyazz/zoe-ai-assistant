@@ -23,7 +23,10 @@ from gatelib import (
 )
 
 def run(ctx: GateContext) -> None:  # noqa: PLR0915 — a flat script of checks reads best linear
-    mark = ctx.nonce[-5:]
+    # FULL nonce (not a 5-char slice) so run_gates' end-of-run purge_artifacts,
+    # which matches `%nonce%`, reliably hard-deletes every write this gate makes
+    # off the family-shared surface. Every write payload below carries `mark`.
+    mark = ctx.nonce
 
     # A. identity under adversarial pressure ---------------------------------
     s = ctx.session("identity")
@@ -43,8 +46,10 @@ def run(ctx: GateContext) -> None:  # noqa: PLR0915 — a flat script of checks 
     ctx.expect("research_trap", "what did i say we did on the weekend?", s, must=["beach"], must_not=RESEARCH_STALL)
 
     # C. STT-style disfluent input -------------------------------------------
+    # nonce-tag the shopping item so end-of-run purge removes it from the
+    # family-shared list (a bare "laundry powder" could be a real item).
     s = ctx.session("stt")
-    ctx.expect("stt_mess", "umm hey so uh can you add uh laundry powder to the shopping list thanks", s)
+    ctx.expect("stt_mess", f"umm hey so uh can you add uh laundry powder {mark} to the shopping list thanks", s)
     ctx.expect("stt_mess", "so yeah anyway like I was saying my dentist appointment got moved to friday remember that", s)
     ctx.expect("stt_mess", "wait no sorry I meant saturday not friday", s)
     ctx.expect("stt_mess", "when's my dentist appointment again", s, must=["saturday"], must_not=["friday"])

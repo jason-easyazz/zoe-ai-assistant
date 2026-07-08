@@ -65,6 +65,7 @@ registration.
   `main` moved in the last few minutes (deploy.yml restarts zoe-data on every
   push and corrupts a run). The report stamps zoe-data's start time before and
   after; a mid-run restart marks the run INVALID.
+- **Gate writes land on FAMILY-shared surfaces — always hard-purge.** "Add X to my shopping list" writes to the household's shared list (`visibility='family'`), NOT the test user's own store, so it's visible to the real family and — if only *soft*-deleted — accumulates as invisible clutter on real data. Every gate hard-deletes its writes: `run_gates.py` calls `gatelib.purge_artifacts(nonce)` in a `finally` (survives crash/kill), the standalone gates hard-delete their own nonce'd rows, and write payloads are nonce-tagged so the purge is surgical. `GATE_WRITE_MARKERS` lists the eval-only phrases; add to it when a gate introduces a new write payload.
 - **Fresh empty-store user per run.** Avoids cross-run memory contamination — the
   confound that muddied the original 2026-07-03 parity numbers.
 

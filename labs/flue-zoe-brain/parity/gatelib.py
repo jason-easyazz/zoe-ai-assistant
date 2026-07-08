@@ -187,6 +187,75 @@ def list_item_present(text: str, *, active_only: bool = False) -> tuple[bool, st
     return bool([r for r in rows if not r["deleted"]]), str(rows)[:150]
 
 
+def db_execute(sql: str, *params) -> str:
+    """Run a write statement against the live Postgres; return the status tag."""
+    import asyncio
+    import os
+
+    if str(SERVICE_DIR) not in sys.path:
+        sys.path.insert(0, str(SERVICE_DIR))
+    from runtime_env import bootstrap_runtime_env  # type: ignore[import]
+
+    bootstrap_runtime_env()
+    import asyncpg  # type: ignore[import]
+
+    async def _q():
+        conn = await asyncpg.connect(os.environ["POSTGRES_URL"])
+        try:
+            return await conn.execute(sql, *params)
+        finally:
+            await conn.close()
+
+    return asyncio.run(_q())
+
+
+# Regex fragments matching payloads the gates WRITE. Load-bearing safety net:
+# a gate write like "add X to my shopping list" lands on the FAMILY-shared list
+# (visibility='family', owned by the household admin) — NOT the test user's own
+# store — so it is visible to the real household and accumulates as clutter on
+# real data. Every gate must self-purge its writes at end of run; this list is
+# how purge_artifacts finds them regardless of which list they landed on. Add a
+# fragment here whenever a gate introduces a new write payload.
+# Eval-ONLY phrases: distinctive enough that no real user item/fact/reminder
+# matches, so they are safe to hard-delete on sight even without the run nonce.
+# Anything that could be a real item (e.g. "laundry powder", "vet visit",
+# "water the plants") is NOT listed here — instead the gate nonce-tags those
+# writes so the `%nonce%` match below catches them. No apostrophes (they would
+# break the interpolated SQL string literal).
+GATE_WRITE_MARKERS = (
+    r"unobtainium-", r"smoketest-", r"contraband-", r"set the owner",
+    r"zephyrina", r"grateful for the rain today",
+    r"to my contacts as my colleague", r"wifi password is hunter2",
+    r"name is biscuit",
+)
+
+
+def purge_artifacts(nonce: str) -> dict[str, str]:
+    """HARD-delete every DB row a gate run wrote — matched by the run nonce OR a
+    known gate write marker — across the user-scoped tables (incl. the
+    family-shared list surface). Idempotent; safe to call in a finally block.
+
+    Scoped by construction to gate-authored content: the nonce is per-run unique
+    and the markers are eval-only strings no real user would produce. Returns a
+    per-table status map for the report.
+    """
+    like_nonce = f"%{nonce}%"
+    marker_clause = " OR ".join(f"text ~* '{m}'" for m in GATE_WRITE_MARKERS)
+    out: dict[str, str] = {}
+    # list_items: no user_id column — key via the owning list; catch the family
+    # surface too. Nonce OR marker.
+    out["list_items"] = db_execute(
+        f"DELETE FROM list_items WHERE text ILIKE $1 OR ({marker_clause})", like_nonce
+    )
+    for table, col in (("notes", "content"), ("journal_entries", "content"),
+                       ("people", "name"), ("events", "title"), ("reminders", "title")):
+        mc = marker_clause.replace("text ~*", f"{col} ~*")
+        out[table] = db_execute(
+            f"DELETE FROM {table} WHERE {col} ILIKE $1 OR ({mc})", like_nonce
+        )
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # Verdict recording
 # --------------------------------------------------------------------------- #
