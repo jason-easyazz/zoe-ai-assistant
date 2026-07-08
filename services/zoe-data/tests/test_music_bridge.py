@@ -95,3 +95,57 @@ async def test_control_never_raises_when_ma_down(monkeypatch):
     monkeypatch.setattr(music_service, "get_players", no_players)
     assert await music_service.control("pause") is False
     assert await music_service.now_playing() is None
+
+
+# ── Add-source (QR→phone setup) — token + resolver + guards ──────────────────
+
+import music_setup
+
+
+def test_setup_token_roundtrip_single_use_and_tamper():
+    t = music_setup.mint("ytmusic", "jason")["token"]
+    p = music_setup.verify(t)
+    assert p and p["p"] == "ytmusic" and p["u"] == "jason"
+    assert music_setup.verify(t[:-4] + "aaaa") is None       # tampered sig rejected
+    assert music_setup.consume(t) is not None                # spend once
+    assert music_setup.consume(t) is None                    # not twice
+    assert music_setup.verify(t) is None                     # consumed → invalid
+
+
+def test_setup_token_expiry(monkeypatch):
+    import time
+    t = music_setup.mint("spotify")["token"]
+    monkeypatch.setattr(time, "time", lambda: time.gmtime and 9999999999)  # far future
+    assert music_setup.verify(t) is None
+
+
+@pytest.mark.asyncio
+async def test_setup_classify_and_resolver(monkeypatch):
+    from skybridge_service import classify_skybridge_intent
+    assert classify_skybridge_intent("connect spotify", None).action == "setup"
+    assert classify_skybridge_intent("add youtube music", None).query == "ytmusic"
+    # resolver: unknown/blank → catalogue; a provider → QR card
+    async def fake_cat(): return [{"domain": "spotify", "name": "Spotify", "auth": "oauth", "connected": False}]
+    monkeypatch.setattr(music_service, "provider_catalogue", fake_cat)
+    r = await music_service.resolve_music_setup("")
+    assert r["cards"][0]["content"]["mode"] == "catalogue"
+    r2 = await music_service.resolve_music_setup("spotify")
+    c = r2["cards"][0]["content"]
+    assert c["mode"] == "qr" and c["provider"] == "spotify" and "/api/music/setup/qr" in c["qr_path"]
+
+
+@pytest.mark.asyncio
+async def test_setup_save_gated_by_token(monkeypatch):
+    from routers import music_setup as ms_router
+    saved = {"n": 0}
+    async def fake_save(prov, vals): saved["n"] += 1; return {"name": prov}
+    monkeypatch.setattr(music_service, "save_provider", fake_save)
+    # invalid token → refused, MA never touched
+    r = await ms_router.setup_save({"token": "bad", "provider": "ytmusic", "values": {"username": "x"}})
+    assert r["ok"] is False and saved["n"] == 0
+    # valid token → saved once, then token spent
+    tok = music_setup.mint("ytmusic")["token"]
+    r2 = await ms_router.setup_save({"token": tok, "provider": "ytmusic", "values": {"username": "x", "cookie": "y"}})
+    assert r2["ok"] is True and saved["n"] == 1
+    r3 = await ms_router.setup_save({"token": tok, "provider": "ytmusic", "values": {"username": "x"}})
+    assert r3["ok"] is False and saved["n"] == 1  # single-use

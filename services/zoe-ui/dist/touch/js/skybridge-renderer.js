@@ -1169,6 +1169,30 @@
     // this card_type yet (panel_show_media uses the executor overlay); items
     // render as ListRows, upgraded to a MediaTile when a same-origin artwork
     // src exists (foreign URLs stay text-only — same policy as zoe-compose).
+    function renderMusicSetup(props) {
+        // Two modes: 'catalogue' (chips of services to add) or 'qr' (scan-to-connect).
+        var body;
+        if (props.mode === 'qr' && props.qr_path) {
+            var src = String(props.qr_path);
+            var safe = src.charAt(0) === '/' && src.charAt(1) !== '/';
+            body = '<div class="ms-qr">' +
+                (safe ? '<img class="ms-qr-img" src="' + escapeHtml(src) + '" alt="Setup QR code">' : '') +
+                '<div class="ms-qr-steps"><span class="ms-step">1 · Point your phone camera at the code</span>' +
+                '<span class="ms-step">2 · Open the Zoe link that appears</span>' +
+                '<span class="ms-step">3 · Sign in — Zoe does the rest</span></div></div>';
+        } else {
+            var chips = (props.actions || []).map(function (a) {
+                return '<button type="button" class="ms-chip" data-sky-action="query" data-query="' +
+                    escapeHtml(a.query || '') + '">' + escapeHtml(a.label || '') + '</button>';
+            }).join('');
+            body = '<div class="ms-catalogue">' + (chips || '<span class="np-artist">No services to add.</span>') + '</div>';
+        }
+        var head = '<div class="ms-head"><span class="np-title">' + escapeHtml(props.title || 'Add music') + '</span>' +
+            (props.subtitle ? '<span class="ms-sub">' + escapeHtml(props.subtitle) + '</span>' : '') + '</div>';
+        return cardFrame(Object.assign({ status: 'Music' }, props), head + body,
+            { wide: true, tone: 'now-playing-card music-setup-card', hideHeader: true, hideStatus: true, hideActions: true });
+    }
+
     // Inline media-control glyphs (fill inherits currentColor).
     function npIcon(name) {
         var paths = {
@@ -1446,6 +1470,7 @@
         auth_challenge: renderAuthChallenge,
         timer: renderTimer,
         now_playing: renderNowPlaying,
+        music_setup: renderMusicSetup,
         compose: renderCompose,
         stream_text: renderStatus,
         unsupported_contract: renderUnsupportedContract

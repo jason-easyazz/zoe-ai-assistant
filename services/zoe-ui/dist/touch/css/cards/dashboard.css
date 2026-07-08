@@ -203,3 +203,16 @@ body:not(.sky-empty) .sky-card.dashboard-card.sky-premium-card { display: flex !
 .now-playing-card .np-btn:active { transform: scale(.94); background: rgba(255,255,255,.14); }
 .now-playing-card .np-btn.np-primary { width: 72px; height: 72px; background: color-mix(in srgb, var(--sky-accent-mint, #5be3b0) 26%, transparent); border-color: color-mix(in srgb, var(--sky-accent-mint, #5be3b0) 55%, transparent); color: #fff; }
 .now-playing-card .np-chips { margin-top: var(--sky-space-5, 20px); }
+
+/* ── Music: add-source setup cards (catalogue + QR) ───────────────────────── */
+.music-setup-card .ms-head { display:flex; flex-direction:column; gap:6px; margin-bottom:var(--sky-space-5,20px); }
+.music-setup-card .ms-sub { font-size:var(--sky-text-body,16px); color:var(--sky-ink-2,rgba(255,255,255,.62)); max-width:640px; }
+.music-setup-card .ms-catalogue { display:flex; flex-wrap:wrap; gap:var(--sky-space-3,12px); }
+.music-setup-card .ms-chip { font:inherit; font-size:var(--sky-text-body,17px); font-weight:600; color:var(--sky-ink-0,#fff);
+  background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.14); border-radius:var(--sky-radius-pill,999px);
+  padding:14px 24px; min-height:52px; cursor:pointer; transition:background var(--sky-dur-fast,160ms) ease; }
+.music-setup-card .ms-chip:active { background:rgba(255,255,255,.16); transform:scale(.97); }
+.music-setup-card .ms-qr { display:flex; gap:var(--sky-space-8,32px); align-items:center; }
+.music-setup-card .ms-qr-img { width:230px; height:230px; flex:0 0 auto; border-radius:var(--sky-radius-lg,18px); background:#fff; padding:12px; }
+.music-setup-card .ms-qr-steps { display:flex; flex-direction:column; gap:var(--sky-space-4,16px); }
+.music-setup-card .ms-step { font-size:var(--sky-text-title,20px); color:var(--sky-ink-1,rgba(255,255,255,.88)); }

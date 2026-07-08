@@ -1178,6 +1178,13 @@ def _classify_music(text: str) -> "SkybridgeIntent | None":
     lowercased message padded with surrounding spaces."""
     if _MUSIC_STOPWORDS.search(text):
         return None
+    # Setup: "add music" / "add/connect <service>" / "music setup".
+    m = re.search(r"\b(?:add|connect|set ?up|link)\s+(?:my\s+|a\s+|the\s+)?(spotify|youtube music|ytmusic|tidal|qobuz|deezer|radio|music service|music)\b", text)
+    if m:
+        svc = m.group(1).strip()
+        prov = {"youtube music": "ytmusic", "radio": "radiobrowser",
+                "music service": "", "music": ""}.get(svc, svc)
+        return SkybridgeIntent(domain="music", action="setup", query=prov)
     has_ctx = bool(_MUSIC_CTX.search(text))
     # Transport / volume — only with clear music context so bare "pause"/"next"
     # (which could be timers, reading, etc.) don't get hijacked.
