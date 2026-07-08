@@ -4,12 +4,25 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from datetime import date, datetime, timezone
 
 from db_pool import get_db_ctx, get_pool
 
 logger = logging.getLogger(__name__)
+
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def person_suggestions_enabled() -> bool:
+    """Contact suggestions (`person_create` action) — default OFF.
+
+    Gates both the executor branch below and the Phase-2 emitters, so the whole
+    contacts-from-known-people bridge is dark until turned on. See
+    docs/adr/ADR-contacts-from-known-people.md.
+    """
+    return os.environ.get("ZOE_PERSON_SUGGEST_ENABLED", "").strip().lower() in _TRUTHY
 
 
 async def store_suggestions(
@@ -224,6 +237,45 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str) -> dict:
             "personal",
         )
         return {"note_id": nid, "title": title}
+
+    if action == "person_create":
+        # Turn a known-but-not-a-contact person into a full, editable contact row.
+        # Fails closed when the feature is off, and rejects pronoun/junk names.
+        if not person_suggestions_enabled():
+            raise ValueError("unsupported_action:person_create")
+        name = (slots.get("name") or "").strip()
+        from person_extractor import _looks_like_person_name  # tiny pure guard; lazy import
+        if not name or not _looks_like_person_name(name):
+            raise ValueError("invalid_person_name")
+        # Dedup: never mint a second row for a name the user already has.
+        existing = await conn.fetchrow(
+            "SELECT id FROM people WHERE user_id=$1 AND lower(name)=lower($2) AND deleted=0 LIMIT 1",
+            user_id,
+            name,
+        )
+        if existing:
+            return {"person_id": existing["id"], "name": name, "created": False}
+        pid = str(uuid.uuid4())
+        relationship = (slots.get("relationship") or "").strip() or None
+        # circle: NULL unless a real category is supplied (never the column-name
+        # literal, which would land the contact in an undefined UI bucket).
+        circle = (slots.get("circle") or "").strip() or None
+        # visibility: default PRIVATE — a contact Zoe proposes from conversation
+        # may be personal (a therapist, a work colleague); don't auto-share it
+        # with the whole family. Owner still sees it (people query is OR user_id).
+        visibility = (slots.get("visibility") or "").strip() or "personal"
+        await conn.execute(
+            "INSERT INTO people (id, user_id, name, relationship, circle, context, visibility, is_partial)"
+            " VALUES ($1,$2,$3,$4,$5,$6,$7,0)",
+            pid,
+            user_id,
+            name,
+            relationship,
+            circle,
+            "suggested",
+            visibility,
+        )
+        return {"person_id": pid, "name": name, "relationship": relationship, "created": True}
 
     raise ValueError(f"unsupported_action:{action}")
 
