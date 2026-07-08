@@ -931,7 +931,8 @@ TOOLS = [
             "Search ambient memory transcripts captured by the always-on microphone. "
             "Use to answer questions like 'What did I talk to Brad about?' or "
             "'What was mentioned in the kitchen yesterday?'. "
-            "Searches full-text across all stored ambient transcripts."
+            "Searches full-text across the calling user's own stored ambient "
+            "transcripts (results are always scoped to the acting user)."
         ),
         "inputSchema": {
             "type": "object",
@@ -2957,7 +2958,11 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         # Use explicit $N params for PostgreSQL tsvector FTS.
         pg_params: list = [query]  # $1 = tsquery text
         param_idx = 2  # next placeholder index
-        conditions = []
+        # Mandatory user scoping (P-F4): ambient transcripts are only readable
+        # by their owning user — always filter on the caller's resolved user.
+        conditions = [f"m.user_id = ${param_idx}"]
+        pg_params.append(user_id)
+        param_idx += 1
         if room:
             conditions.append(f"m.room = ${param_idx}")
             pg_params.append(room)

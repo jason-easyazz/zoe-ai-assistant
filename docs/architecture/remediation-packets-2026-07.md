@@ -41,7 +41,11 @@ tests; the dead duplicate was then retired-by-removal (this PR). Do not re-execu
   validate.yml. **Replay gate mandatory.**
 - **Software:** none new. **STOP:** do not touch the happy path or the barge-in logic.
 
-## P-F4 — `ambient_memory` user scoping (migration 0016)
+## P-F4 — `ambient_memory` user scoping (migration 0016) — DONE (PR #1145)
+
+> Landed as migration **0017** (`0016_ui_layouts` took the number after this packet was
+> written; content unchanged). Live `ambient_memory` verified **0 rows** 2026-07-07
+> before writing the downgrade — the STOP condition did not fire.
 
 - **Fix approach:** new alembic `0016_ambient_memory_user_scope.py`: add
   `user_id TEXT` (nullable — table is ~empty, capture flag-OFF; enforce NOT NULL at the
@@ -73,6 +77,31 @@ tests; the dead duplicate was then retired-by-removal (this PR). Do not re-execu
   `pytest.mark.skip(reason=...)` with a dated reason and file the follow-up in the
   issue register. **STOP:** if a red test implies a real auth bug, stop and report —
   that outranks this packet.
+
+## P-F6 — Voice-turn identity + silent FK swallow (the W0 root cause; voice path — replay gate)
+
+- **Diagnosis (live, 2026-07-07):** panel turn reaches `/api/voice/wake` +
+  `/turn_stream` (200s); `ui_panel_sessions` binds `zoe-touch-pi → jason`; yet the turn
+  resolves `effective_user = "voice-guest"`, and `_schedule_voice_chat_save`
+  (`voice_tts.py` ~:2240) skips only `("guest","voice-daemon","")` → the write proceeds
+  and Postgres rejects on FK `users` ("voice-guest not present"), error swallowed →
+  **zero voice conversations ever persisted**.
+- **Fix approach:** (1) in the voice-turn identity resolution (the `_require_voice_auth`
+  / effective-user path feeding those call sites), fall back to the panel's bound user
+  from `ui_panel_sessions` (the lookup ALREADY EXISTS at `voice_tts.py` ~:770/:879 —
+  reuse it) before settling on a guest sentinel; (2) add `voice-guest` to the
+  `_schedule_voice_chat_save` skip set (skybridge_service.py treats it as
+  guest-equivalent, e.g. :1149); (3) the save's failure path logs a WARNING with the
+  user id instead of `except: pass`. Keep PIN/sensitive-scope gating untouched — this
+  only affects conversation persistence attribution, same trust level the panel binding
+  already grants.
+- **Tests:** `test_voice_identity_persistence.py`: bound panel → save called with
+  jason; unbound → skipped (no write attempt, no FK error); FK failure → warning
+  logged. `ci_safe` + validate.yml. **Replay gate mandatory.**
+- **DoD:** re-run P-W0: spoken panel turn → `voice-panel-*` row with
+  `metadata.user_id='jason'` → `MEMORY_IDLE_CONSOLIDATE` sweep names jason.
+- **STOP:** if identity resolution here is shared with tool *authorization* (not just
+  persistence), stop and report — widening authz is out of scope.
 
 ## P-H batch (one PR each unless noted)
 

@@ -42,10 +42,6 @@
     const CARD_IDLE_MS = Number.isFinite(configuredIdleMs) ? Math.max(15000, configuredIdleMs) : 180000;
     // Ambient composed briefing: refresh at most every 5 min while resting on
     // the clock (piggybacks on the existing clock ticker — no extra interval).
-    const BRIEFING_REFRESH_MS = 300000;
-    const BRIEFING_FETCH_TIMEOUT_MS = 10000;
-    let lastBriefingFetchTs = 0;
-    let briefingFetchInFlight = false;
 
     const colors = {
         ambient: ['#5fc6ff', '#66d19e'],
@@ -119,7 +115,6 @@
         els.voiceDetail = document.getElementById('skyVoiceDetail');
         els.voiceAction = document.getElementById('skyVoiceAction');
         els.ambientClock = document.getElementById('skyAmbientClock');
-        els.ambientBriefing = document.getElementById('skyAmbientBriefing');
         els.ambientClockHour = document.getElementById('skyAmbientClockHour');
         els.ambientClockMinute = document.getElementById('skyAmbientClockMinute');
         els.ambientClockMeridiem = document.getElementById('skyAmbientClockMeridiem');
@@ -482,7 +477,6 @@
         clearCards();
         setVoiceLayerText('Listening. Ask Zoe for anything.');
         updateAllClocks();
-        if (!showCards) maybeFetchAmbientBriefing();
         updateVoiceHint('Touch the orb to speak', getMicGuidance(), 'Start mic');
         requestAnimationFrame(resizeOrb);
     }
@@ -580,6 +574,7 @@
         document.body.classList.add('sky-empty');
         document.body.classList.add('sky-ambient-clock');
         document.body.classList.remove('sky-on-dashboard');
+        document.body.classList.remove('sky-has-cards');
         requestAnimationFrame(resizeOrb);
     }
 
@@ -844,11 +839,9 @@
 
     function startClockTicker() {
         updateAllClocks();
-        // One shared ticker: the briefing refresh rides along (self-throttled to
-        // BRIEFING_REFRESH_MS and idle-only) — never a second always-on interval.
+        // One shared 1s ticker for the live clock numerals.
         clockTicker = setInterval(function () {
             updateAllClocks();
-            maybeFetchAmbientBriefing();
         }, 1000);
     }
 
@@ -861,29 +854,6 @@
     function isRestingOnAmbientClock() {
         return document.body.classList.contains('sky-empty')
             && document.body.classList.contains('sky-ambient-clock');
-    }
-
-    function maybeFetchAmbientBriefing() {
-        if (!els.ambientBriefing || !window.SkybridgeRenderer) return;
-        if (!isRestingOnAmbientClock()) return;
-        if (briefingFetchInFlight) return;
-        if (Date.now() - lastBriefingFetchTs < BRIEFING_REFRESH_MS) return;
-        briefingFetchInFlight = true;
-        lastBriefingFetchTs = Date.now();
-        const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-        const timeoutId = controller ? setTimeout(() => controller.abort(), BRIEFING_FETCH_TIMEOUT_MS) : null;
-        fetch('/api/skybridge/briefing', {
-            headers: { 'Accept': 'application/json' },
-            signal: controller ? controller.signal : undefined
-        }).then(resp => (resp.ok ? resp.json() : null)).then(data => {
-            const card = data && data.card;
-            if (!card || !isRestingOnAmbientClock()) return;
-            els.ambientBriefing.innerHTML = window.SkybridgeRenderer.render(card);
-        }).catch(() => { /* briefing is best-effort — the clock alone is fine */ })
-          .finally(() => {
-            briefingFetchInFlight = false;
-            if (timeoutId) clearTimeout(timeoutId);
-        });
     }
 
     function clockParts(timezone) {

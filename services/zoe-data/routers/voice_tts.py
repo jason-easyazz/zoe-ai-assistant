@@ -2236,6 +2236,15 @@ async def _handle_introduce_intent(
     return person_id
 
 
+# Identity sentinels that are not real user accounts. Chat persistence must
+# never attribute a turn to one of them: "voice-guest" has no `users` row, so
+# the chat_messages save dies on the FK — and that failure used to be swallowed
+# silently, which is why NO panel voice conversation ever persisted (P-F6,
+# live-diagnosed 2026-07-07). A panel actually bound to a real user in
+# ui_panel_sessions always takes precedence over these sentinels.
+_GUEST_SENTINEL_USERS = frozenset({"", "guest", "voice-guest", "voice-daemon"})
+
+
 async def _schedule_voice_chat_save(
     session_id: str, user_text: str, reply: str, user_id: str
 ) -> None:
@@ -2246,7 +2255,7 @@ async def _schedule_voice_chat_save(
     and _load_voice_history both read from chat_messages, so this is the single
     fix that unblocks multi-turn context, transcript search, and nightly extraction.
     """
-    if not session_id or user_id in ("guest", "voice-daemon", ""):
+    if not session_id or user_id in _GUEST_SENTINEL_USERS:
         return
     try:
         from chat import _save_chat_message as _svc  # lazy — avoids circular import
@@ -2254,8 +2263,11 @@ async def _schedule_voice_chat_save(
             _spawn_bg(_svc(session_id, "user", user_text, user_id=user_id))
         if reply:
             _spawn_bg(_svc(session_id, "assistant", reply, user_id=user_id))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning(
+            "voice chat save scheduling failed for user %s (session %s): %s",
+            user_id, session_id, exc,
+        )
 
 
 async def _run_voice_memory_passes(
@@ -2437,6 +2449,21 @@ async def voice_command(
     )
     if effective_user == "voice-daemon":
         effective_user = _panel_default_user or "guest"
+    if effective_user in _GUEST_SENTINEL_USERS:
+        # P-F6: a guest-sentinel identity (e.g. a client-supplied
+        # identified_user_id="voice-guest") must not out-rank a panel that is
+        # actually bound to a real user in ui_panel_sessions — the turn would
+        # be mis-attributed and its chat_messages save would die on the users
+        # FK. Reuse the panel lookups already resolved above. Persistence
+        # attribution only: the PIN/sensitive-scope gate reads
+        # _scope_identity_user/_has_scope_identity (set above) and is untouched.
+        _panel_bound_user = _panel_recent_user or _panel_default_user
+        if _panel_bound_user and _panel_bound_user not in _GUEST_SENTINEL_USERS:
+            logger.info(
+                "voice/command guest-sentinel identity %r replaced by panel-bound user %s (panel=%s)",
+                effective_user, _panel_bound_user, panel_id,
+            )
+            effective_user = _panel_bound_user
 
     logger.info(
         "voice/command panel=%s session=%s user=%s len=%d "
@@ -2448,12 +2475,15 @@ async def voice_command(
 
     # Persist user turn to chat_messages immediately so all downstream paths
     # (nightly digest, _load_voice_history, multi-turn context) have the transcript.
-    if text and effective_user not in ("guest", "voice-daemon", ""):
+    if text and effective_user not in _GUEST_SENTINEL_USERS:
         try:
             from chat import _save_chat_message as _svc_user_turn
             _spawn_bg(_svc_user_turn(session_id, "user", text, user_id=effective_user))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "voice user-turn save scheduling failed for user %s (session %s): %s",
+                effective_user, session_id, exc,
+            )
 
     # ── Active action-form panel: route voice to field-filling ─────────────
     # When the touch panel has an action form open (calendar_event or shopping_list),
@@ -4679,22 +4709,36 @@ async def voice_ambient(payload: dict, caller: dict = Depends(_require_voice_aut
     if not transcript:
         return {"ok": True, "panel_id": panel_id, "transcript": ""}
 
-    # Store in ambient_memory table.
+    # Store in ambient_memory table — always scoped to the panel's resolved
+    # user. If no user is resolvable for the panel, SKIP the insert entirely:
+    # ownerless ambient audio must never be stored (P-F4).
+    stored = False
     try:
         from db_compat import get_compat_db as _get_compat_db
-        
+
         async with _get_compat_db() as db:
-            await db.execute(
-                """INSERT INTO ambient_memory (panel_id, room, transcript, duration_seconds, source)
-                   VALUES (?, ?, ?, ?, 'ambient')""",
-                (panel_id, room, transcript, duration_s),
-            )
-            await db.commit()
-        logger.debug("ambient_memory: panel=%s chars=%d", panel_id, len(transcript))
+            ambient_user_id = await _resolve_panel_default_user(panel_id, db)
+            if not ambient_user_id:
+                logger.warning(
+                    "ambient_memory: no user resolvable for panel=%s — transcript NOT stored",
+                    panel_id,
+                )
+            else:
+                await db.execute(
+                    """INSERT INTO ambient_memory (panel_id, room, transcript, duration_seconds, source, user_id)
+                       VALUES (?, ?, ?, ?, 'ambient', ?)""",
+                    (panel_id, room, transcript, duration_s, ambient_user_id),
+                )
+                await db.commit()
+                stored = True
+                logger.debug(
+                    "ambient_memory: panel=%s user=%s chars=%d",
+                    panel_id, ambient_user_id, len(transcript),
+                )
     except Exception as exc:
         logger.warning("ambient_memory insert failed: %s", exc)
 
-    return {"ok": True, "panel_id": panel_id, "transcript": transcript}
+    return {"ok": True, "panel_id": panel_id, "transcript": transcript, "stored": stored}
 
 
 # ── Speaker identification ─────────────────────────────────────────────────
