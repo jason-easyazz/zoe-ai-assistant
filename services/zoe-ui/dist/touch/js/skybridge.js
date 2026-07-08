@@ -58,6 +58,7 @@
         renderHome();
         restoreTimers();   // a reload resumes any still-running countdown
         loadBackendStatus();
+        startNowPlayingWatch();
         setMode(mode);
         syncVoiceFallbackState();
         if (typeof TouchMenu !== 'undefined') TouchMenu.init({ page: 'skybridge' });
@@ -121,6 +122,10 @@
         els.ambientClockDate = document.getElementById('skyAmbientClockDate');
         els.canvas = document.getElementById('skyOrb');
         els.ctx = els.canvas.getContext('2d');
+        els.nowPlaying = document.getElementById('skyNowPlaying');
+        els.npArt = document.getElementById('skyNpArt');
+        els.npTitle = document.getElementById('skyNpTitle');
+        els.npArtist = document.getElementById('skyNpArtist');
     }
 
     function bindEvents() {
@@ -153,6 +158,15 @@
         if (els.navHome) {
             // Always-visible Home while a card is up → back to the dashboard hub.
             els.navHome.addEventListener('click', () => wakeToDashboard());
+        }
+        if (els.nowPlaying) {
+            // Mini-player: transport/volume + tap-the-track-to-expand.
+            els.nowPlaying.addEventListener('click', event => {
+                const btn = event.target.closest('[data-np-action]');
+                if (!btn) return;
+                event.stopPropagation();   // don't let the resting-panel wake-tap swallow it
+                npControl(btn.dataset.npAction);
+            });
         }
         // Touch the resting panel anywhere (not a control) to wake it to the
         // dashboard — the ambient clock should be a door, not a dead end.
@@ -837,6 +851,94 @@
         if (orbState !== 'ambient') setState('ambient');
     }
 
+    // ── Persistent now-playing mini-player ──────────────────────────────────
+    // Polls MA's now-playing snapshot and keeps the floating mini-player in sync.
+    // Shown only while something is playing/paused; its controls hit the same
+    // /api/music/control endpoint the cards use. Every failure path is silent and
+    // just hides the player — it must never disrupt voice or the resting clock.
+    const NP_POLL_MS = 5000;
+    let npPollHandle = null;
+    let npInFlight = false;
+    let npPlayerId = '';          // stick to the active player for control calls
+    let npLastArt = '';           // avoid reloading identical album art each poll
+
+    function startNowPlayingWatch() {
+        if (!els.nowPlaying) return;
+        pollNowPlaying();
+        npPollHandle = setInterval(pollNowPlaying, NP_POLL_MS);
+    }
+
+    async function pollNowPlaying() {
+        if (npInFlight || !els.nowPlaying) return;
+        npInFlight = true;
+        try {
+            const resp = await fetch('/api/music/now-playing', { headers: { 'Accept': 'application/json' } });
+            if (!resp.ok) { hideNowPlaying(); return; }
+            const data = await resp.json();
+            const np = data && data.available ? (data.now_playing || {}) : null;
+            const state = np && String(np.state || '').toLowerCase();
+            if (np && (state === 'playing' || state === 'paused')) {
+                applyNowPlaying(np, state === 'playing');
+            } else {
+                hideNowPlaying();
+            }
+        } catch (_) {
+            hideNowPlaying();   // MA unreachable → no mini-player, no noise
+        } finally {
+            npInFlight = false;
+        }
+    }
+
+    function applyNowPlaying(np, isPlaying) {
+        npPlayerId = np.player_id || '';
+        els.npTitle.textContent = np.title || np.player_name || 'Now playing';
+        els.npArtist.textContent = np.artist || '';
+        // Same-origin / absolute http(s) art only, mirroring the card's guard.
+        const art = typeof np.image === 'string' && /^(https?:\/\/|\/)[^"'()\\<>\s]+$/.test(np.image) ? np.image : '';
+        if (art !== npLastArt) {
+            npLastArt = art;
+            const glyph = els.npArt.querySelector('svg');
+            const oldImg = els.npArt.querySelector('img');
+            if (oldImg) oldImg.remove();
+            if (art) {
+                const img = document.createElement('img');
+                img.alt = '';
+                img.src = art;
+                img.onerror = () => { img.remove(); els.npArt.classList.remove('has-art'); if (glyph) glyph.style.display = ''; };
+                els.npArt.appendChild(img);
+                els.npArt.classList.add('has-art');
+            } else {
+                els.npArt.classList.remove('has-art');
+            }
+        }
+        els.nowPlaying.classList.toggle('is-playing', !!isPlaying);
+        els.nowPlaying.hidden = false;
+    }
+
+    function hideNowPlaying() {
+        if (els.nowPlaying && !els.nowPlaying.hidden) {
+            els.nowPlaying.hidden = true;
+            els.nowPlaying.classList.remove('is-playing');
+        }
+    }
+
+    async function npControl(action) {
+        if (action === 'expand') { submitCommand("what's playing"); return; }
+        // Optimistic: flip the play/pause glyph immediately, then confirm by poll.
+        if (action === 'play_pause' && els.nowPlaying) {
+            els.nowPlaying.classList.toggle('is-playing');
+        }
+        try {
+            await fetch('/api/music/control', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action, player_id: npPlayerId })
+            });
+        } catch (_) { /* best-effort; the next poll reconciles truth */ }
+        // Re-poll shortly after so state (track change / real play state) catches up.
+        setTimeout(pollNowPlaying, 350);
+    }
+
     function startClockTicker() {
         updateAllClocks();
         // One shared 1s ticker for the live clock numerals.
@@ -1350,6 +1452,7 @@
     window.addEventListener('beforeunload', () => {
         if (animationFrame) cancelAnimationFrame(animationFrame);
         if (clockTicker) clearInterval(clockTicker);
+        if (npPollHandle) clearInterval(npPollHandle);
         clearIdleTimer();
         if (voice) voice.stop();
     });
