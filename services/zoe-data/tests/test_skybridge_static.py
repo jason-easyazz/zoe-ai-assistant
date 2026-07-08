@@ -492,6 +492,58 @@ def test_skybridge_list_renderer_has_switcher_columns_and_new_list_action():
     assert "lst-tab" in css
     assert "lst-row" in css
 
+    # Redesign contract: the switcher is the TOP tab row (active tab == title, so
+    # there is no separate big heading), items flow into a multi-column grid, and
+    # a keep-out cell reserves the bottom-left corner so items wrap around the orb.
+    assert "lst-header" not in renderer  # the old vertical-space-wasting title block is gone
+    assert "is-grid" in renderer
+    assert "lst-keepout" in renderer
+    assert "is-grid" in css
+    assert "lst-keepout" in css
+    assert "grid-auto-flow: column" in css
+
+    # a11y: only real tabs live in the tablist; "+ New" is an action sibling.
+    assert 'role="tablist"' in renderer
+    assert "lst-tablist" in renderer
+    assert "lst-tablist" in css and "display: contents" in css
+    # Short lists use adaptive rows (no fixed ~604px reservation).
+    assert "--lst-rows:" in renderer
+
+
+def test_skybridge_list_short_list_is_compact_no_keepout(tmp_path):
+    """A short list sets an adaptive --lst-rows and omits the orb keep-out (it is
+    too short to reach the orb); a long list keeps the 9-row wrap + keep-out."""
+    node = shutil.which("node") or shutil.which("nodejs")
+    if not node:
+        pytest.skip("Node.js is not installed on this host")
+    harness = tmp_path / "lst_rows.cjs"
+    harness.write_text(
+        """
+const fs = require('fs'); const vm = require('vm');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const sandbox = { window: {} }; vm.createContext(sandbox); vm.runInContext(src, sandbox);
+const R = sandbox.window.SkybridgeRenderer;
+function mk(n){ const items=[]; for(let i=0;i<n;i++) items.push({id:'i'+i,text:'Item '+i,done:false});
+  return R.render({card_type:'generic',schema_version:'1.0.0',card_id:'l',content:{
+    source:'list_show', list_type:'shopping', name:'Shopping',
+    lists:[{id:'shopping',name:'Shopping',type:'shopping'}], selected:'shopping', items:items}}); }
+const short = mk(3), long = mk(20);
+process.stdout.write(JSON.stringify({
+  short_rows: /--lst-rows:\\s*\\d/.test(short),
+  short_no_keepout: !short.includes('lst-keepout'),
+  long_keepout: long.includes('lst-keepout')
+}));
+""",
+        encoding="utf-8",
+    )
+    proc = subprocess.run([node, str(harness), str(UI / "js" / "skybridge-renderer.js")],
+                          check=True, capture_output=True, text=True)
+    import json
+    c = json.loads(proc.stdout)
+    assert c["short_rows"], "short list should set adaptive --lst-rows"
+    assert c["short_no_keepout"], "short list should omit the orb keep-out"
+    assert c["long_keepout"], "long list should keep the orb keep-out"
+
 
 
 def test_skybridge_calendar_renderer_handles_datetime_dates_and_ordering(tmp_path):
@@ -541,6 +593,60 @@ process.stdout.write(JSON.stringify({ earliest_first: html.indexOf('EarlyEvent')
     import json
     checks = json.loads(proc.stdout)
     assert checks["earliest_first"], "calendar events must render earliest-first"
+
+
+def test_skybridge_calendar_ribbon_and_now_line(tmp_path):
+    """Behavioral coverage for the ribbon helpers (calMinutes/calDuration/
+    calHourLabel/calGutter/calendarRibbon): a busy 'today' renders the ribbon with
+    hour ticks + event blocks, and the live now-line stays inside the rail even
+    when the current time lands exactly on an hour boundary (was clipped at 100%)."""
+    node = shutil.which("node") or shutil.which("nodejs")
+    if not node:
+        pytest.skip("Node.js is not installed on this host")
+    harness = tmp_path / "cal_ribbon.cjs"
+    harness.write_text(
+        """
+const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+// Freeze "now" to an EXACT hour boundary (23:00) on the card's date so the
+// now-line's window end is driven by nowMin — the case that used to clip.
+const FIXED = new Date('2026-06-23T23:00:00').getTime();
+class FakeDate extends Date {
+  constructor(...a){ if (a.length === 0) super(FIXED); else super(...a); }
+  static now(){ return FIXED; }
+}
+const sandbox = { window: {}, Date: FakeDate };
+vm.createContext(sandbox);
+vm.runInContext(src, sandbox);
+const R = sandbox.window.SkybridgeRenderer;
+const html = R.render({ card_type: 'generic', schema_version: '1.0.0', card_id: 'c', content: {
+  source: 'calendar_show', qualifier: 'today', date: '2026-06-23',
+  events: [
+    { id: 'a', title: 'Standup', start_time: '08:00', end_time: '08:30', start_date: '2026-06-23' },
+    { id: 'b', title: 'Lunch', start_time: '12:00', end_time: '13:00', start_date: '2026-06-23' }
+  ]
+} });
+const m = html.match(/cal-ribbon-now[^>]*left:([0-9.]+)%/);
+process.stdout.write(JSON.stringify({
+  ribbon: html.includes('cal-ribbon'),
+  ticks: html.includes('cal-tick'),
+  blocks: html.includes('cal-block'),
+  now_line: !!m,
+  now_left: m ? parseFloat(m[1]) : -1
+}));
+""",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [node, str(harness), str(UI / "js" / "skybridge-renderer.js")],
+        check=True, capture_output=True, text=True,
+    )
+    import json
+    c = json.loads(proc.stdout)
+    assert c["ribbon"] and c["ticks"] and c["blocks"], f"ribbon markup missing: {c}"
+    assert c["now_line"], "live now-line should render on today"
+    assert 0 <= c["now_left"] < 99.5, f"now-line clipped at boundary: left={c['now_left']}"
 
 
 def test_skybridge_is_registered_in_touch_menu():
@@ -1007,13 +1113,29 @@ vm.runInContext(fs.readFileSync(process.argv[3],'utf8'),s);
 const R=s.window.SkybridgeRenderer;
 const html=R.render({card_type:'now_playing',schema_version:'1.0.0',card_id:'np',
   content:{source:'music_now_playing',title:'Song <b>x</b>',artist:'Artist',state:'playing',player_name:'Kitchen',transport:true}});
+// Same-origin album art → blurred backdrop + <img>; cross-origin-ish paths are dropped.
+const artHtml=R.render({card_type:'now_playing',schema_version:'1.0.0',card_id:'np2',
+  content:{source:'music_now_playing',title:'T',artist:'A',album:'Alb',state:'playing',player_name:'Den',image:'/media/cover.png',transport:true,elapsed:60,duration:180}});
+const badHtml=R.render({card_type:'now_playing',schema_version:'1.0.0',card_id:'np3',
+  content:{source:'music_now_playing',title:'T',state:'playing',image:'//evil.example/x.png"onerror=alert(1)',transport:true}});
+const absHtml=R.render({card_type:'now_playing',schema_version:'1.0.0',card_id:'np4',
+  content:{source:'music_now_playing',title:'T',state:'playing',image:'https://cdn.example.com/a/cover.png',transport:true}});
+const angleHtml=R.render({card_type:'now_playing',schema_version:'1.0.0',card_id:'np5',
+  content:{source:'music_now_playing',title:'T',state:'playing',image:'/media/c<over>.png',transport:true}});
 process.stdout.write(JSON.stringify({
   card: html.includes('now-playing-card'),
   transport: html.includes('np-transport') && html.includes('np-btn'),
   pause_when_playing: html.includes('data-query="pause music"'),
   actions_wired: html.includes('data-sky-action="query"') && html.includes('data-query="next song"'),
   escaped: html.includes('&lt;b&gt;') && !html.includes('<b>x</b>'),
-  no_dup_header: (html.match(/np-title/g)||[]).length===1
+  no_dup_header: (html.match(/np-title/g)||[]).length===1,
+  ambient: html.includes('np-ambient'),
+  placeholder_when_no_art: html.includes('np-art-empty'),
+  art_backdrop_same_origin: artHtml.includes('np-art-bg') && artHtml.includes('src="/media/cover.png"'),
+  art_backdrop_absolute: absHtml.includes('np-art-bg') && absHtml.includes('src="https://cdn.example.com/a/cover.png"'),
+  progress_when_elapsed: artHtml.includes('np-progress') && artHtml.includes('1:00'),
+  reject_protocol_relative: !badHtml.includes('np-art-bg') && badHtml.includes('np-art-empty') && !badHtml.includes('onerror'),
+  reject_angle_brackets: !angleHtml.includes('np-art-bg') && angleHtml.includes('np-art-empty')
 }));
 """, encoding="utf-8")
     node = shutil.which("node") or shutil.which("nodejs")
@@ -1024,3 +1146,22 @@ process.stdout.write(JSON.stringify({
     import json as _j
     checks = _j.loads(proc.stdout)
     assert all(checks.values()), f"now-playing render failed: {checks}"
+
+
+def test_nowplaying_miniplayer_present_and_wired():
+    """The persistent now-playing mini-player: markup in the shell + poll/control
+    wiring in skybridge.js. It's floating chrome shown only while music plays."""
+    html = read(UI / "skybridge.html")
+    # DOM: the container + the five transport/volume actions + tap-to-expand.
+    assert 'id="skyNowPlaying"' in html
+    for action in ("expand", "previous", "play_pause", "next", "volume_down", "volume_up"):
+        assert f'data-np-action="{action}"' in html, f"missing mini-player action: {action}"
+    # CSS: centered floating pill by default; repositioned under the clock at rest.
+    assert ".sky-nowplaying" in html
+    assert "body.sky-empty .sky-nowplaying" in html
+    js = read(UI / "js" / "skybridge.js")
+    # Behaviour: polls now-playing, drives control, expands to the full card.
+    assert "/api/music/now-playing" in js
+    assert "/api/music/control" in js
+    assert "startNowPlayingWatch" in js
+    assert "what's playing" in js  # tap-to-expand opens the full music card
