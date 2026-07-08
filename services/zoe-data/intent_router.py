@@ -2089,9 +2089,14 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
                 # Retry idempotency (same guard as the skybridge add): a voice
                 # re-POST replays the identical add seconds later — treat it as
                 # already done instead of inserting a duplicate.
+                # created_at is a TEXT column, so it must be cast before the
+                # timestamp comparison — a bare `created_at > now() - interval`
+                # throws `operator does not exist: text > timestamp` on Postgres,
+                # which silently drops the whole direct add to the mcporter
+                # fallback (live 2026-07-08: 69 such errors under eval traffic).
                 dup_cursor = await db.execute(
                     "SELECT id FROM list_items WHERE list_id=? AND lower(text)=lower(?)"
-                    " AND deleted=0 AND created_at > now() - interval '10 seconds' LIMIT 1",
+                    " AND deleted=0 AND created_at::timestamptz > now() - interval '10 seconds' LIMIT 1",
                     (list_id, item),
                 )
                 dup_row = await dup_cursor.fetchone()
