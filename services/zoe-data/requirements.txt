@@ -53,3 +53,4 @@ PyYAML>=6.0
 # Install with: pip install cloakbrowser
 # The binary auto-downloads (~200MB) to ~/.cloakbrowser/ on first launch.
 # cloakbrowser>=0.3.25
+segno

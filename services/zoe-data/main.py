@@ -1810,6 +1810,8 @@ app.include_router(panel_auth_router)
 app.include_router(panel_provision_router)
 app.include_router(capability_matrix_router)
 app.include_router(music_router)
+from routers.music_setup import router as music_setup_router
+app.include_router(music_setup_router)
 app.include_router(skybridge_router)
 app.include_router(autoresearch_router)
 app.include_router(pi_intent_lab_router)
