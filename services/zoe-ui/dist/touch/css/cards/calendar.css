@@ -590,6 +590,9 @@ body:not(.sky-empty) .sky-card.calendar-card::after {
   .calendar-card .cal-row:hover,
   .calendar-card .cal-row:focus-visible,
   .calendar-card .cal-row:active,
+  .calendar-card .cal-row.cal-hero:hover,
+  .calendar-card .cal-row.cal-hero:focus-visible,
+  .calendar-card .cal-row.cal-hero:active,
   .calendar-card .cal-chip:hover,
   .calendar-card .cal-chip:focus-visible,
   .calendar-card .cal-chip:active {

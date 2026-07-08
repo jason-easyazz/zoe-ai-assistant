@@ -350,7 +350,10 @@
             const d = new Date(nowMs);
             nowMin = d.getHours() * 60 + d.getMinutes();
             winStart = Math.min(winStart, Math.floor(nowMin / 60) * 60);
-            winEnd = Math.max(winEnd, Math.ceil(nowMin / 60) * 60);
+            // Round UP to the next hour (exclusive) so the now-line always has room
+            // to its right — on an exact hour boundary Math.ceil returns nowMin
+            // unchanged, leaving the marker at the far edge (100%) where it clips.
+            winEnd = Math.max(winEnd, (Math.floor(nowMin / 60) + 1) * 60);
         }
         winStart = Math.max(0, winStart);
         winEnd = Math.min(24 * 60, Math.max(winEnd, winStart + 60));
