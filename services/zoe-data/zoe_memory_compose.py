@@ -301,6 +301,51 @@ def _shorten_fact(desc: str, name: str) -> str:
     return desc
 
 
+# Preference verbs the extractor emits (see person_extractor._PREF_RE). Same-verb
+# facts are merged into one segment so "likes chocolate · likes fruit loops"
+# reads "likes chocolate, fruit loops".
+_PREF_VERBS = frozenset({
+    "love", "loves", "like", "likes", "hate", "hates",
+    "prefer", "prefers", "enjoy", "enjoys", "dislike", "dislikes",
+})
+
+
+def _group_facts(facts: list[str]) -> list[str]:
+    """Merge same-verb preference facts into one segment, order-preserving.
+
+    ``["likes chocolate", "likes fruit loops", "enjoys travel"]`` →
+    ``["likes chocolate, fruit loops", "enjoys travel"]``. A fact whose first
+    word isn't a known preference verb (or which has no object) is kept verbatim
+    in place. Verbs group case-insensitively but render with their first-seen
+    casing; "likes" and "loves" stay distinct segments.
+
+    Grouping wins over strict order: a later same-verb fact is folded into its
+    verb's first-seen position even across an intervening non-preference fact
+    (``["likes tea", "born in Perth", "likes jazz"]`` → ``["likes tea, jazz",
+    "born in Perth"]``). Facts arrive ordered by recency, not narrative, so
+    keeping each verb's likes together reads better than strict positional order.
+    """
+    segments: list[tuple[str, str]] = []   # ("verb", verb_key) once per verb, or ("raw", fact)
+    verb_objs: dict[str, list[str]] = {}
+    verb_display: dict[str, str] = {}      # verb_key → first-seen verb token, original casing
+    for fact in facts:
+        head, _, rest = fact.partition(" ")
+        verb = head.lower()                # match case-insensitively …
+        rest = rest.strip()
+        if rest and verb in _PREF_VERBS:
+            if verb not in verb_objs:
+                verb_objs[verb] = []
+                verb_display[verb] = head  # … but render the verb as originally stored
+                segments.append(("verb", verb))
+            verb_objs[verb].append(rest)
+        else:
+            segments.append(("raw", fact))
+    out: list[str] = []
+    for kind, val in segments:
+        out.append(f"{verb_display[val]} {', '.join(verb_objs[val])}" if kind == "verb" else val)
+    return out
+
+
 def _dossier_line(p: dict[str, Any], facts: list[str]) -> str:
     """Compact one-line dossier: ``Name (rel · circle, score N) — likes … · notes · contact``.
 
@@ -319,7 +364,7 @@ def _dossier_line(p: dict[str, Any], facts: list[str]) -> str:
 
     # Body segments, joined by " · ".
     segs: list[str] = []
-    likes = [_shorten_fact(f, name) for f in (facts or []) if f]
+    likes = _group_facts([_shorten_fact(f, name) for f in (facts or []) if f])
     if likes:
         segs.append(" · ".join(likes))
     notes = (p.get("notes") or "").strip()
