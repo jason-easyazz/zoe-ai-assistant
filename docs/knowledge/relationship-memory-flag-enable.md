@@ -172,23 +172,35 @@ agents). State at verification: dossier code live at `ec41cb2a`, `ZOE_MEMORY_COM
 `ZOE_PERSON_DOSSIER_ENABLED` unset — so this is a one-flag flip. Re-check step 0 before flipping in
 case the tree has moved.
 
+The whole block is safe to paste and safe to re-run: the flip is **guarded** on the dossier code
+being live (won't flip a tree that lacks it) and the `.env` write is **idempotent**.
+
 ```bash
+ENV=/home/zoe/assistant/services/zoe-data/.env
+health() { for _ in 1 2 3 4 5 6 7 8; do
+  code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/health)
+  [ "$code" = 200 ] && { echo "health 200"; return 0; }; sleep 2
+done; echo "health $code (not up after ~16s)"; return 1; }
+
 # 0. Pre-flight — expect all three OK
 git -C /home/zoe/assistant merge-base --is-ancestor ec41cb2a HEAD \
   && echo "OK: dossier code live" || echo "STOP: deploy main first"
-grep -E 'ZOE_MEMORY_COMPOSE_ENABLED|ZOE_PERSON_DOSSIER_ENABLED' \
-  /home/zoe/assistant/services/zoe-data/.env         # expect COMPOSE=1, no DOSSIER line
-curl -s -o /dev/null -w 'health %{http_code}\n' http://127.0.0.1:8000/health   # expect 200
+grep -E 'ZOE_MEMORY_COMPOSE_ENABLED|ZOE_PERSON_DOSSIER_ENABLED' "$ENV"  # expect COMPOSE=1, no DOSSIER
+health
 
 # 1. (optional, if RAM ≥ ~1.5 GB free) baseline the voice replay — compose is on the recall path
 free -m | awk '/Mem:/{print "avail="$7"MB"}'
 flock /tmp/zoe-voice-harness.lock \
   python /home/zoe/assistant/scripts/maintenance/voice_regression_probe.py
 
-# 2. Flip + restart
-echo 'ZOE_PERSON_DOSSIER_ENABLED=1' >> /home/zoe/assistant/services/zoe-data/.env
-systemctl --user restart zoe-data.service
-sleep 3 && curl -s -o /dev/null -w 'health %{http_code}\n' http://127.0.0.1:8000/health
+# 2. Flip + restart — GUARDED on the code being live, IDEMPOTENT write (safe to re-run)
+if git -C /home/zoe/assistant merge-base --is-ancestor ec41cb2a HEAD; then
+  grep -qxF 'ZOE_PERSON_DOSSIER_ENABLED=1' "$ENV" || echo 'ZOE_PERSON_DOSSIER_ENABLED=1' >> "$ENV"
+  systemctl --user restart zoe-data.service
+  health
+else
+  echo "STOP: dossier code not live in the checkout — deploy main first; did NOT flip"
+fi
 
 # 3. Verify — a RELATIONAL message for a real contact; look in "packet" for a dossier-shaped
 #    [people] line: Name (rel · circle, score N) — likes … · contact
@@ -197,8 +209,8 @@ curl -s 'http://127.0.0.1:8000/api/memories/for-prompt' --get \
   --data-urlencode 'message=tell me about my brother' | python3 -m json.tool
 
 # 4. Rollback (instant, lossless — thin line returns)
-sed -i '/^ZOE_PERSON_DOSSIER_ENABLED=/d' /home/zoe/assistant/services/zoe-data/.env
-systemctl --user restart zoe-data.service
+sed -i '/^ZOE_PERSON_DOSSIER_ENABLED=/d' "$ENV"
+systemctl --user restart zoe-data.service && health
 ```
 
 Notes: the dossier `[people]` line only renders when the message trips the relational gate (a
