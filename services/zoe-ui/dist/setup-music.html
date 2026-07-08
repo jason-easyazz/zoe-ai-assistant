@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Add music · Zoe</title>
+<style>
+  :root {
+    --bg0:#0a0e1a; --bg1:#121a2e; --ink0:#fff; --ink1:rgba(255,255,255,.86);
+    --ink2:rgba(255,255,255,.58); --line:rgba(255,255,255,.12);
+    --accent:#5be3b0; --accent2:#6aa6ff; --warn:#ff6b6b;
+    --radius:18px; --font:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  }
+  * { box-sizing:border-box; }
+  html,body { margin:0; min-height:100%; }
+  body {
+    font-family:var(--font); color:var(--ink1);
+    background:radial-gradient(120% 80% at 50% 0%, var(--bg1), var(--bg0) 70%);
+    min-height:100dvh; display:flex; justify-content:center;
+    padding:max(24px,env(safe-area-inset-top)) 20px calc(24px + env(safe-area-inset-bottom));
+  }
+  .wrap { width:100%; max-width:440px; }
+  .brand { display:flex; align-items:center; gap:10px; margin-bottom:28px; }
+  .orb { width:34px; height:34px; border-radius:50%;
+    background:linear-gradient(135deg,var(--accent2),var(--accent)); }
+  .brand b { color:var(--ink0); font-size:17px; font-weight:650; }
+  h1 { color:var(--ink0); font-size:26px; font-weight:700; letter-spacing:-.01em; margin:0 0 6px; }
+  .sub { color:var(--ink2); font-size:15px; line-height:1.5; margin:0 0 26px; }
+  .field { margin-bottom:18px; }
+  .field label { display:block; color:var(--ink0); font-size:15px; font-weight:600; margin-bottom:6px; }
+  .field .hint { color:var(--ink2); font-size:13px; line-height:1.45; margin:0 0 9px; }
+  .field input[type=text], .field input[type=password] {
+    width:100%; font:inherit; font-size:16px; color:var(--ink0);
+    background:rgba(255,255,255,.06); border:1px solid var(--line);
+    border-radius:14px; padding:14px 15px; outline:none;
+  }
+  .field input:focus { border-color:color-mix(in srgb,var(--accent2) 60%,transparent); background:rgba(255,255,255,.09); }
+  .switch { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  button.primary {
+    width:100%; font:inherit; font-size:17px; font-weight:650; color:#06231a;
+    background:linear-gradient(135deg,var(--accent2),var(--accent));
+    border:0; border-radius:999px; padding:16px; margin-top:10px;
+    min-height:54px; cursor:pointer; -webkit-tap-highlight-color:transparent;
+  }
+  button.primary:disabled { opacity:.5; }
+  .note { color:var(--ink2); font-size:13px; text-align:center; margin-top:16px; line-height:1.5; }
+  .state { text-align:center; padding:40px 0; }
+  .state .big { font-size:44px; margin-bottom:14px; }
+  .state h2 { color:var(--ink0); font-size:22px; margin:0 0 8px; }
+  .err { color:var(--warn); }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand"><span class="orb"></span><b>Zoe</b></div>
+
+  <div id="loading" class="state"><div class="big">🎵</div><h2>Loading…</h2></div>
+
+  <form id="form" class="hidden" autocomplete="off">
+    <h1 id="title">Add music</h1>
+    <p class="sub" id="subtitle"></p>
+    <div id="fields"></div>
+    <button type="submit" class="primary" id="submit">Connect</button>
+    <p class="note">This connects the account to your Zoe. Your details are sent only to your own Zoe on your network.</p>
+  </form>
+
+  <div id="done" class="state hidden"><div class="big">✅</div><h2 id="doneTitle">Connected!</h2>
+    <p class="sub" style="text-align:center" id="doneMsg">You can close this page and ask Zoe to play something.</p></div>
+
+  <div id="fail" class="state hidden"><div class="big">⚠️</div><h2 class="err" id="failTitle">Setup link expired</h2>
+    <p class="sub" style="text-align:center" id="failMsg">Head back to your Zoe panel and start again.</p></div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var params = new URLSearchParams((location.hash || '').replace(/^#/, ''));
+  var provider = params.get('provider') || '';
+  var token = params.get('t') || '';
+  var $ = function (id) { return document.getElementById(id); };
+  function show(id) { ['loading','form','done','fail'].forEach(function(x){ $(x).classList.toggle('hidden', x!==id); }); }
+  function fail(msg) { if (msg) $('failMsg').textContent = msg; show('fail'); }
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+
+  if (!provider || !token) { fail('This link is missing its setup code.'); return; }
+
+  fetch('/api/music/setup/form?provider=' + encodeURIComponent(provider) + '&token=' + encodeURIComponent(token))
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      if (!data.ok) { fail(data.reason || 'This setup link is no longer valid.'); return; }
+      var form = data.form;
+      $('title').textContent = 'Connect ' + form.name;
+      $('subtitle').textContent = form.fields.length
+        ? 'Enter your ' + form.name + ' details below.'
+        : 'Ready to connect ' + form.name + '.';
+      // OAuth providers (Spotify etc.): one button → sign in on the provider →
+      // Zoe saves the token. No fields to type.
+      if (form.auth === 'oauth') {
+        $('subtitle').textContent = 'Tap below to sign in to ' + form.name + '. A new tab opens — sign in, then come back here.';
+        $('fields').innerHTML = '';
+        $('submit').textContent = 'Sign in with ' + form.name;
+        $('form').setAttribute('data-oauth', '1');
+        show('form');
+        return;
+      }
+      var html = '';
+      form.fields.forEach(function (f) {
+        if (f.type === 'action') return; // OAuth actions handled via the oauth branch
+        if (f.type === 'boolean') {
+          html += '<div class="field switch"><label>' + esc(f.label) + '</label>' +
+            '<input type="checkbox" data-key="' + esc(f.key) + '"' + (f.default ? ' checked' : '') + '></div>';
+        } else {
+          var itype = f.type === 'secure_string' ? 'password' : 'text';
+          html += '<div class="field"><label>' + esc(f.label) + (f.required ? '' : ' <span style="color:var(--ink2)">(optional)</span>') + '</label>' +
+            (f.description ? '<p class="hint">' + esc(f.description) + '</p>' : '') +
+            '<input type="' + itype + '" data-key="' + esc(f.key) + '" data-required="' + (f.required ? '1' : '') +
+            '" autocapitalize="off" autocorrect="off" spellcheck="false"></div>';
+        }
+      });
+      $('fields').innerHTML = html;
+      show('form');
+    })
+    .catch(function () { fail('Could not reach your Zoe. Make sure your phone is on the same wifi.'); });
+
+  function runOAuth() {
+    var btn = $('submit'); btn.disabled = true; btn.textContent = 'Opening sign-in…';
+    fetch('/api/music/setup/oauth/start', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: token, provider: provider })
+    }).then(function (r) { return r.json(); }).then(function (res) {
+      if (!res.ok || !res.auth_url) { btn.disabled = false; btn.textContent = 'Try again'; fail(res.reason || 'Could not start sign-in.'); return; }
+      // Open the provider login in a new tab; keep THIS page to poll for success.
+      window.open(res.auth_url, '_blank');
+      btn.textContent = 'Waiting for sign-in…';
+      $('subtitle').textContent = 'Finish signing in on the other tab, then return here.';
+      var tries = 0;
+      var poll = setInterval(function () {
+        tries++;
+        fetch('/api/music/setup/oauth/status?oauth_id=' + encodeURIComponent(res.oauth_id) + '&token=' + encodeURIComponent(token))
+          .then(function (r) { return r.json(); }).then(function (s) {
+            if (s.state === 'connected') { clearInterval(poll); $('doneTitle').textContent = 'Signed in — connected!'; show('done'); }
+            else if (s.state === 'failed' || s.state === 'unknown') { clearInterval(poll); btn.disabled = false; btn.textContent = 'Try again'; fail(s.error || 'Sign-in didn’t complete.'); }
+          }).catch(function () {});
+        if (tries > 60) { clearInterval(poll); btn.disabled = false; btn.textContent = 'Try again'; }
+      }, 2000);
+    }).catch(function () { btn.disabled = false; btn.textContent = 'Try again'; fail('Could not reach your Zoe.'); });
+  }
+
+  $('form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    if ($('form').getAttribute('data-oauth')) { runOAuth(); return; }
+    var values = {}, missing = false;
+    Array.prototype.forEach.call(document.querySelectorAll('[data-key]'), function (el) {
+      var key = el.getAttribute('data-key');
+      if (el.type === 'checkbox') { values[key] = el.checked; return; }
+      var v = el.value.trim();
+      if (el.getAttribute('data-required') && !v) { missing = true; el.style.borderColor = 'var(--warn)'; }
+      if (v) values[key] = v;
+    });
+    if (missing) return;
+    var btn = $('submit'); btn.disabled = true; btn.textContent = 'Connecting…';
+    fetch('/api/music/setup/save', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: token, provider: provider, values: values })
+    }).then(function (r) { return r.json(); }).then(function (res) {
+      if (res.ok) { $('doneTitle').textContent = (res.name || provider) + ' connected!'; show('done'); }
+      else { btn.disabled = false; btn.textContent = 'Connect'; fail(res.reason || 'Could not connect. Check your details.'); }
+    }).catch(function () { btn.disabled = false; btn.textContent = 'Connect'; fail('Could not reach your Zoe.'); });
+  });
+})();
+</script>
+</body>
+</html>
