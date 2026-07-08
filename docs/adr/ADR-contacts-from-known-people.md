@@ -2,7 +2,17 @@
 
 ## Status
 
-Accepted (2026-07-08). Phase 1 in progress.
+Accepted (2026-07-08). **All phases merged (dark)** — the bridge is fully built, every flag OFF:
+
+| Phase | What | PR | Flag |
+|---|---|---|---|
+| 1 | `person_create` suggestion executor (full editable contact, private-by-default) | #1177 | `ZOE_PERSON_SUGGEST_ENABLED` |
+| 2a | Propose-on-mention (`latent_intent_detector` emits it) | #1181 | `ZOE_PERSON_SUGGEST_ENABLED` |
+| 2b | Backfill known people → `person_create` proposals + `POST /api/memories/backfill-contacts` | #1182 | `ZOE_CONTACT_BACKFILL_ENABLED` |
+| 3 | Promote-on-confirm (stub→full) + birthday capture | #1180 | `ZOE_PERSON_SUGGEST_ENABLED` / `ZOE_PERSON_BIRTHDAY_CAPTURE_ENABLED` |
+
+Enabling is an operator step (flags + restart; backfill is an explicit admin call). Every add stays
+user-confirmed.
 
 ## Context
 
