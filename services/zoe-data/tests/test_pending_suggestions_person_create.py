@@ -52,7 +52,7 @@ async def _open():
 
 async def _rows(db):
     async with db.execute(
-        "SELECT name, relationship, is_partial, visibility FROM people WHERE user_id=? AND deleted=0",
+        "SELECT name, relationship, circle, is_partial, visibility FROM people WHERE user_id=? AND deleted=0",
         (USER,),
     ) as c:
         return [dict(r) for r in await c.fetchall()]
@@ -70,6 +70,21 @@ async def test_creates_full_editable_contact(monkeypatch):
         assert len(rows) == 1
         assert rows[0]["relationship"] == "mother"
         assert rows[0]["is_partial"] == 0  # a FULL contact, not a bare stub — editable
+        assert rows[0]["circle"] is None  # not the bogus "circle" literal
+        assert rows[0]["visibility"] == "personal"  # private by default — not auto-shared
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_slots_override_circle_and_visibility(monkeypatch):
+    monkeypatch.setenv("ZOE_PERSON_SUGGEST_ENABLED", "1")
+    db = await _open()
+    try:
+        await ps._execute_action(_Conn(db), "person_create",
+                                 {"name": "Bob", "circle": "work", "visibility": "family"}, USER)
+        row = (await _rows(db))[0]
+        assert row["circle"] == "work" and row["visibility"] == "family"
     finally:
         await db.close()
 

@@ -47,8 +47,11 @@ reused; every phase is **flag-gated + demo-user-lab-proved before prod**; hot-pa
 Add a `person_create` action to `pending_suggestions._execute_action` that inserts a **full**
 `people` row (`is_partial=0`; `name` + optional `relationship`/`circle`), deduped against the user's
 existing non-deleted people, guarded by `_looks_like_person_name`, behind
-`ZOE_PERSON_SUGGEST_ENABLED` (default OFF). Surfaces through the existing UI-component path. No
-schema change. Inert until a source (Phase 2) emits `person_create` suggestions.
+`ZOE_PERSON_SUGGEST_ENABLED` (default OFF). **Private by default** — `visibility='personal'` (the
+owner still sees it; not auto-shared with the whole family, since a proposed contact may be
+personal), and `circle` is left NULL unless a real category is supplied; both overridable via slots.
+Surfaces through the existing UI-component path. No schema change. Inert until a source (Phase 2)
+emits `person_create` suggestions.
 
 ### Phase 2 — two sources feed the executor
 

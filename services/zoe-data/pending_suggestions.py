@@ -257,16 +257,23 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str) -> dict:
             return {"person_id": existing["id"], "name": name, "created": False}
         pid = str(uuid.uuid4())
         relationship = (slots.get("relationship") or "").strip() or None
-        circle = (slots.get("circle") or "circle").strip()
+        # circle: NULL unless a real category is supplied (never the column-name
+        # literal, which would land the contact in an undefined UI bucket).
+        circle = (slots.get("circle") or "").strip() or None
+        # visibility: default PRIVATE — a contact Zoe proposes from conversation
+        # may be personal (a therapist, a work colleague); don't auto-share it
+        # with the whole family. Owner still sees it (people query is OR user_id).
+        visibility = (slots.get("visibility") or "").strip() or "personal"
         await conn.execute(
             "INSERT INTO people (id, user_id, name, relationship, circle, context, visibility, is_partial)"
-            " VALUES ($1,$2,$3,$4,$5,$6,'family',0)",
+            " VALUES ($1,$2,$3,$4,$5,$6,$7,0)",
             pid,
             user_id,
             name,
             relationship,
             circle,
             "suggested",
+            visibility,
         )
         return {"person_id": pid, "name": name, "relationship": relationship, "created": True}
 
