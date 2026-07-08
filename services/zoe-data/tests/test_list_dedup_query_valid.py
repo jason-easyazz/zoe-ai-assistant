@@ -23,12 +23,14 @@ import skybridge_service
 
 def test_both_dedup_queries_cast_created_at():
     # A bare `created_at > now()` comparison on the TEXT column is the bug.
+    import inspect
     for mod, src in (("intent_router", intent_router), ("skybridge_service", skybridge_service)):
-        import inspect
         text = inspect.getsource(src)
-        # every 10-second replay window must cast the text column first
-        for m in re.finditer(r"created_at[^\n]*interval '10 seconds'", text):
-            frag = m.group(0)
+        matches = re.findall(r"created_at[^\n]*interval '10 seconds'", text)
+        # guard against a vacuous pass: the dedup window must still exist here,
+        # so a refactor that drops it (and its cast) fails loudly.
+        assert matches, f"{mod}: 10-second dedup guard not found — did it move or get removed?"
+        for frag in matches:
             assert "created_at::timestamptz" in frag, (
                 f"{mod}: dedup guard must cast the TEXT created_at column "
                 f"(`created_at::timestamptz`), got: {frag!r}"
