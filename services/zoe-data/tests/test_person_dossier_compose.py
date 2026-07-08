@@ -61,6 +61,12 @@ def test_group_facts_merges_same_verb():
     assert zc._group_facts(["likes tea", "born in Perth"]) == ["likes tea", "born in Perth"]
     # a bare verb with no object is not grouped
     assert zc._group_facts(["likes"]) == ["likes"]
+    # verb rendered with its first-seen casing, not silently down-cased
+    assert zc._group_facts(["Likes tea"]) == ["Likes tea"]
+    # documented: grouping wins over strict order — a later same-verb fact is
+    # folded into its verb's first-seen position across a non-pref fact
+    assert zc._group_facts(["likes tea", "born in Perth", "likes jazz"]) == [
+        "likes tea, jazz", "born in Perth"]
 
 
 def test_dossier_line_drops_missing_segments(monkeypatch):

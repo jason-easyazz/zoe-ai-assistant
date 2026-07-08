@@ -316,25 +316,33 @@ def _group_facts(facts: list[str]) -> list[str]:
     ``["likes chocolate", "likes fruit loops", "enjoys travel"]`` →
     ``["likes chocolate, fruit loops", "enjoys travel"]``. A fact whose first
     word isn't a known preference verb (or which has no object) is kept verbatim
-    in place. Verb forms group exactly as stored, so "likes" and "loves" stay
-    distinct; object order and first-seen verb order are preserved.
+    in place. Verbs group case-insensitively but render with their first-seen
+    casing; "likes" and "loves" stay distinct segments.
+
+    Grouping wins over strict order: a later same-verb fact is folded into its
+    verb's first-seen position even across an intervening non-preference fact
+    (``["likes tea", "born in Perth", "likes jazz"]`` → ``["likes tea, jazz",
+    "born in Perth"]``). Facts arrive ordered by recency, not narrative, so
+    keeping each verb's likes together reads better than strict positional order.
     """
-    segments: list[tuple[str, str]] = []   # ("verb", verb) once per verb, or ("raw", fact)
+    segments: list[tuple[str, str]] = []   # ("verb", verb_key) once per verb, or ("raw", fact)
     verb_objs: dict[str, list[str]] = {}
+    verb_display: dict[str, str] = {}      # verb_key → first-seen verb token, original casing
     for fact in facts:
         head, _, rest = fact.partition(" ")
-        verb = head.lower()
+        verb = head.lower()                # match case-insensitively …
         rest = rest.strip()
         if rest and verb in _PREF_VERBS:
             if verb not in verb_objs:
                 verb_objs[verb] = []
+                verb_display[verb] = head  # … but render the verb as originally stored
                 segments.append(("verb", verb))
             verb_objs[verb].append(rest)
         else:
             segments.append(("raw", fact))
     out: list[str] = []
     for kind, val in segments:
-        out.append(f"{val} {', '.join(verb_objs[val])}" if kind == "verb" else val)
+        out.append(f"{verb_display[val]} {', '.join(verb_objs[val])}" if kind == "verb" else val)
     return out
 
 
