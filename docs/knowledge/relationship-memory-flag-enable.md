@@ -244,6 +244,7 @@ path stores the proposal under the **live** session, so it surfaces correctly.
 
 ### Backfill — ⚠️ has a delivery gap (do NOT rely on it live yet)
 `ZOE_CONTACT_BACKFILL_ENABLED=1` + `POST /api/memories/backfill-contacts?user_id=<u>&session_id=<s>`
+(internal endpoint — call from **loopback** or pass the `X-Internal-Token` header, else `403`)
 generates correct `person_create` proposals from known people — **but** suggestion retrieval
 (`list_active` / `load_for_prompt`) filters `WHERE user_id=$1 AND session_id=$2`. A live chat/panel
 uses a **per-conversation** session id, so proposals stored under the default `'backfill'` session
