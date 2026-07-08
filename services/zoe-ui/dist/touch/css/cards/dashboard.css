@@ -186,23 +186,111 @@ body:not(.sky-empty) .sky-card.dashboard-card.sky-premium-card { display: flex !
 .dashboard-card .dash-ctrl-profile .dash-ctrl-label { font-size: 17px; }
 .dashboard-card .dash-ctrl-profile .dash-ctrl-sub { font-size: 12.5px; }
 
-/* ── Music: now-playing card (Music Assistant bridge) ─────────────────────── */
-.now-playing-card .np-scene { display: flex; gap: var(--sky-space-6, 24px); align-items: center; padding: var(--sky-space-4, 16px) var(--sky-space-2, 8px); }
-.now-playing-card .np-art { width: 128px; height: 128px; flex: 0 0 auto; border-radius: var(--sky-radius-lg, 18px); object-fit: cover; box-shadow: 0 12px 30px -8px rgba(0,0,0,.5); }
-.now-playing-card .np-art-empty { display: grid; place-items: center; background: linear-gradient(150deg, color-mix(in srgb, var(--sky-accent-violet, #9b8cff) 30%, transparent), color-mix(in srgb, var(--sky-accent-blue, #6aa6ff) 12%, transparent)); color: #fff; }
-.now-playing-card .np-meta { display: flex; flex-direction: column; gap: var(--sky-space-1, 4px); min-width: 0; }
-.now-playing-card .np-state { font-size: var(--sky-text-caption, 13px); font-weight: 650; text-transform: uppercase; letter-spacing: .08em; color: color-mix(in srgb, var(--sky-accent-mint, #5be3b0) 85%, #fff); }
-.now-playing-card .np-title { font-size: var(--sky-text-title, 24px); font-weight: 680; color: var(--sky-ink-0, #fff); letter-spacing: -.01em; overflow-wrap: anywhere; }
-.now-playing-card .np-artist { font-size: var(--sky-text-body, 17px); color: var(--sky-ink-1, rgba(255,255,255,.85)); }
-.now-playing-card .np-album { font-size: var(--sky-text-caption, 14px); color: var(--sky-ink-3, rgba(255,255,255,.5)); }
-/* Big round transport buttons — the sky-actions row cardFrame already renders. */
-.now-playing-card .sky-actions { gap: var(--sky-space-3, 12px); margin-top: var(--sky-space-4, 16px); }
-.now-playing-card .sky-actions button { min-width: 60px; min-height: 60px; border-radius: 50%; font-size: 22px; padding: 0; }
-.now-playing-card .np-transport { display: flex; gap: var(--sky-space-3, 12px); align-items: center; margin-top: var(--sky-space-6, 24px); padding-left: var(--sky-space-2, 8px); }
-.now-playing-card .np-btn { display: grid; place-items: center; width: 60px; height: 60px; border-radius: 50%; border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.07); color: var(--sky-ink-1, rgba(255,255,255,.9)); cursor: pointer; transition: background var(--sky-dur-fast,160ms) ease, transform var(--sky-dur-fast,160ms) ease; }
-.now-playing-card .np-btn:active { transform: scale(.94); background: rgba(255,255,255,.14); }
-.now-playing-card .np-btn.np-primary { width: 72px; height: 72px; background: color-mix(in srgb, var(--sky-accent-mint, #5be3b0) 26%, transparent); border-color: color-mix(in srgb, var(--sky-accent-mint, #5be3b0) 55%, transparent); color: #fff; }
-.now-playing-card .np-chips { margin-top: var(--sky-space-5, 20px); }
+/* ── Music: now-playing card — album-art-forward, ambient (Apple Music-grade) ─
+   The card paints its own full-bleed ambient wash + (optional) blurred album-art
+   backdrop, then floats a large art + big track meta + premium transport on top.
+   The scene rides inside the stage's chrome-safe padding (Home pill / voice orb),
+   so backdrops go edge-to-edge (absolute, inset:0) while content stays clear. */
+.now-playing-card { display: flex !important; flex-direction: column; }
+/* This card supplies its own layers — silence the generic premium decorations
+   (blue radial ::after + hairline ::after + wash ::before) so they can't bleed. */
+.now-playing-card::before, .now-playing-card::after,
+body:not(.sky-empty) .sky-card.now-playing-card::before,
+body:not(.sky-empty) .sky-card.now-playing-card::after { content: none !important; display: none !important; background: none !important; }
+
+/* Full-bleed backdrop layers (all behind the scene). */
+.now-playing-card .np-ambient,
+.now-playing-card .np-art-bg,
+.now-playing-card .np-scrim {
+  position: absolute !important; inset: 0; z-index: 0 !important;
+  border-radius: inherit; pointer-events: none;
+}
+.now-playing-card .np-art-bg {
+  background-size: cover; background-position: center;
+  filter: blur(48px) saturate(1.5) brightness(.6); transform: scale(1.4); opacity: .92;
+}
+/* Legibility scrim over any art backdrop (art side lighter, meta side darker). */
+.now-playing-card .np-scrim {
+  background: linear-gradient(115deg, rgba(6,8,14,.58) 0%, rgba(6,8,14,.30) 40%, rgba(6,8,14,.66) 100%);
+}
+
+/* Scene: album art left, track meta right; centred in the safe area. */
+.now-playing-card .np-scene {
+  position: relative; z-index: 2 !important; flex: 1 1 auto;
+  display: flex; align-items: center; gap: clamp(28px, 4.5vw, 60px);
+  padding: 0 clamp(16px, 2.6vw, 40px);
+}
+.now-playing-card .np-art-wrap { flex: 0 0 auto; }
+.now-playing-card .np-art {
+  width: clamp(220px, 30vw, 320px); height: clamp(220px, 30vw, 320px);
+  border-radius: var(--sky-radius-lg, 28px); object-fit: cover; display: block;
+  box-shadow: 0 44px 88px -26px rgba(0,0,0,.72), 0 0 0 1px rgba(255,255,255,.08) inset, 0 1px 0 rgba(255,255,255,.16);
+}
+.now-playing-card .np-art-empty {
+  display: grid; place-items: center; color: rgba(255,255,255,.94);
+  background: linear-gradient(150deg, var(--np-c1, #9b8cff), var(--np-c2, #6aa6ff));
+}
+.now-playing-card .np-art-empty svg { width: 42%; height: 42%; opacity: .92; filter: drop-shadow(0 8px 20px rgba(0,0,0,.4)); }
+
+.now-playing-card .np-meta { display: flex; flex-direction: column; min-width: 0; gap: 10px; flex: 1 1 auto; }
+.now-playing-card .np-kicker {
+  display: inline-flex; align-items: center; gap: 10px;
+  font-size: var(--sky-text-label, 14px); font-weight: 700; text-transform: uppercase; letter-spacing: .14em;
+  color: color-mix(in srgb, var(--sky-accent-mint, #5be3b0) 88%, #fff);
+}
+.now-playing-card .np-title {
+  font-size: clamp(38px, 5.2vw, 62px); font-weight: 760; line-height: 1.03; letter-spacing: -.02em;
+  color: var(--sky-ink-0, #fff); overflow-wrap: anywhere; text-shadow: 0 2px 30px rgba(0,0,0,.4);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.now-playing-card .np-artist { font-size: clamp(20px, 2.3vw, 30px); font-weight: 560; color: var(--sky-ink-0, #fff); opacity: .92; overflow-wrap: anywhere; }
+.now-playing-card .np-album { font-size: var(--sky-text-heading, 20px); color: var(--sky-ink-2, rgba(255,255,255,.62)); overflow-wrap: anywhere; }
+
+/* Equalizer bars in the kicker (playing only). */
+.now-playing-card .np-eq { display: inline-flex; align-items: flex-end; gap: 3px; height: 15px; }
+.now-playing-card .np-eq i { width: 3px; height: 100%; border-radius: 2px; background: currentColor; transform-origin: bottom; animation: np-eq 900ms ease-in-out infinite; }
+.now-playing-card .np-eq i:nth-child(2) { animation-delay: .18s; }
+.now-playing-card .np-eq i:nth-child(3) { animation-delay: .36s; }
+.now-playing-card .np-eq i:nth-child(4) { animation-delay: .54s; }
+@keyframes np-eq { 0%, 100% { transform: scaleY(.35); } 50% { transform: scaleY(1); } }
+@media (prefers-reduced-motion: reduce) { .now-playing-card .np-eq i { animation: none; transform: scaleY(.6); } }
+
+/* Optional progress bar (only rendered when elapsed + duration are known). */
+.now-playing-card .np-progress { margin-top: 6px; max-width: 560px; }
+.now-playing-card .np-bar { height: 6px; border-radius: 999px; background: rgba(255,255,255,.16); overflow: hidden; }
+.now-playing-card .np-bar span { display: block; height: 100%; border-radius: 999px; background: color-mix(in srgb, var(--sky-accent-mint, #5be3b0) 90%, #fff); }
+.now-playing-card .np-times { display: flex; justify-content: space-between; margin-top: 7px; font-size: var(--sky-text-caption, 13px); font-variant-numeric: tabular-nums; color: var(--sky-ink-2, rgba(255,255,255,.62)); }
+
+/* Premium transport: big circular glass buttons, mint primary emphasized. */
+.now-playing-card .np-transport { display: flex; align-items: center; gap: clamp(12px, 1.6vw, 20px); margin-top: 24px; }
+.now-playing-card .np-btn {
+  display: grid; place-items: center; width: 66px; height: 66px; border-radius: 50%;
+  border: 1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.09); color: var(--sky-ink-0, #fff); cursor: pointer;
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  box-shadow: 0 10px 24px -12px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.14);
+  transition: background var(--sky-dur-fast,160ms) ease, transform var(--sky-dur-fast,160ms) ease, border-color var(--sky-dur-fast,160ms) ease;
+}
+.now-playing-card .np-btn svg { width: 28px; height: 28px; }
+.now-playing-card .np-btn:hover { background: rgba(255,255,255,.16); border-color: rgba(255,255,255,.26); }
+.now-playing-card .np-btn:active { transform: scale(.93); background: rgba(255,255,255,.22); }
+.now-playing-card .np-btn.np-primary {
+  width: 88px; height: 88px; color: #06231a; border-color: color-mix(in srgb, var(--sky-accent-mint, #5be3b0) 60%, transparent);
+  background: linear-gradient(160deg, color-mix(in srgb, var(--sky-accent-mint, #5be3b0) 94%, #fff), color-mix(in srgb, var(--sky-accent-cyan, #37c0e6) 72%, transparent));
+  box-shadow: 0 16px 38px -12px color-mix(in srgb, var(--sky-accent-mint, #5be3b0) 62%, transparent), inset 0 1px 0 rgba(255,255,255,.42);
+}
+.now-playing-card .np-btn.np-primary svg { width: 34px; height: 34px; }
+
+/* Idle browse chips. */
+.now-playing-card .np-chips { margin-top: 24px; }
+
+/* Narrow fallback (panel is fixed 1280 landscape; this only guards overflow). */
+@media (max-width: 720px) {
+  .now-playing-card .np-scene { flex-direction: column; align-items: flex-start; gap: 22px; }
+  .now-playing-card .np-art { width: clamp(150px, 44vw, 240px); height: clamp(150px, 44vw, 240px); }
+  .now-playing-card .np-title { font-size: clamp(26px, 7vw, 40px); }
+  .now-playing-card .np-btn { width: 58px; height: 58px; }
+  .now-playing-card .np-btn.np-primary { width: 74px; height: 74px; }
+}
 
 /* ── Music: add-source setup cards (catalogue + QR) ───────────────────────── */
 .music-setup-card .ms-head { display:flex; flex-direction:column; gap:6px; margin-bottom:var(--sky-space-5,20px); }
