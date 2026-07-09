@@ -119,3 +119,36 @@ async def test_people_create_works_when_user_already_exists(monkeypatch):
             assert (await c.fetchone())[0] == 1
     finally:
         await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_people_create_is_private_by_default(monkeypatch):
+    """A contact created by voice/chat must NOT be family-shared by default —
+    otherwise every user's contacts leak into every other user's view."""
+    conn = await _open()
+    try:
+        @contextlib.asynccontextmanager
+        async def fake_ctx():
+            yield _Shim(conn)
+        monkeypatch.setattr(database, "get_db_ctx", fake_ctx)
+
+        async def _noop(*a, **k):
+            return None
+        monkeypatch.setattr(intent_router, "_notify_ui_channel", _noop)
+
+        # default: no visibility slot → 'personal', and circle is NULL (not the
+        # bogus "circle" literal).
+        await intent_router._execute_people_create_direct(
+            Intent("people_create", {"name": "Solo", "relationship": "friend"}), "u1")
+        async with conn.execute("SELECT visibility, circle FROM people WHERE user_id='u1'") as c:
+            row = await c.fetchone()
+        assert row["visibility"] == "personal", "default contact must be private, not family-shared"
+        assert row["circle"] is None
+
+        # explicit override still honoured
+        await intent_router._execute_people_create_direct(
+            Intent("people_create", {"name": "Shared", "visibility": "family"}), "u1")
+        async with conn.execute("SELECT visibility FROM people WHERE name='Shared'") as c:
+            assert (await c.fetchone())["visibility"] == "family"
+    finally:
+        await conn.close()
