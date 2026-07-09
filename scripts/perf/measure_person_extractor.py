@@ -37,10 +37,18 @@ import httpx  # noqa: E402
 
 from person_extractor_llm import (  # noqa: E402
     _EXTRACTION_PROMPT,
+    _EXTRACTION_PROMPT_CONF,
     _MODEL,
+    confidence_gate_enabled,
     gemma_base,
     mentions_person,
 )
+
+# Measure whatever prompt production would send: the confidence-gated 4-field
+# prompt when ZOE_PERSON_LLM_CONFIDENCE_GATE is on, else the 3-field prompt. So
+# an operator enabling the dark flag gets latency/format numbers for the actual
+# gated prompt, not a stale baseline.
+_ACTIVE_PROMPT = _EXTRACTION_PROMPT_CONF if confidence_gate_enabled() else _EXTRACTION_PROMPT
 
 # Constructed set: FN-focused (person turns the gate must never lose, incl.
 # sentence-initial names and capitals-that-aren't-people), NOT a real
@@ -84,7 +92,7 @@ async def _llm_extract(text: str) -> tuple[float, int]:
         "model": _MODEL,
         "messages": [
             {"role": "system", "content": "Return ONLY valid JSON arrays."},
-            {"role": "user", "content": _EXTRACTION_PROMPT.format(text=text[:1200])},
+            {"role": "user", "content": _ACTIVE_PROMPT.format(text=text[:1200])},
         ],
         "max_tokens": 300,
         "temperature": 0.1,

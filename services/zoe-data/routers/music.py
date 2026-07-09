@@ -212,6 +212,21 @@ async def music_control(payload: dict) -> dict[str, Any]:
     return {"ok": ok, "action": action}
 
 
+@router.post("/seek")
+async def music_seek(payload: dict) -> dict[str, Any]:
+    """Seek the current track to an absolute position. body: {position_seconds,
+    player_id?}. Drives the floating bar's scrubber via music_service.seek."""
+    import music_service
+    player_id = str((payload or {}).get("player_id") or "")
+    raw = (payload or {}).get("position_seconds")
+    try:
+        pos = int(raw)
+    except (TypeError, ValueError):
+        return {"ok": False, "reason": "invalid position_seconds"}
+    ok = await music_service.seek(pos, player_id=player_id)
+    return {"ok": ok, "position_seconds": pos}
+
+
 @router.post("/transfer")
 async def music_transfer(payload: dict) -> dict[str, Any]:
     """Move current playback to another speaker. body: {target_player_id,

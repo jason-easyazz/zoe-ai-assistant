@@ -72,11 +72,31 @@
     }
 
     function renderAuthChallenge(props) {
-        const title = escapeHtml(props.title || "Who's here?");
-        const sub = escapeHtml(props.body || props.summary || 'Tap your profile to continue.');
+        const title = escapeHtml(props.title || 'Welcome home');
+        const sub = escapeHtml(props.body || props.summary || 'Tap your profile to sign in.');
+        // A calm, glanceable backdrop so the picker never reads as a stranded
+        // dialog: a soft greeting + a LIVE clock. Reusing the shared .sky-live-clock
+        // hooks means skybridge.js's 1s ticker keeps the numerals current for free
+        // (updateAllClocks queries [data-clock-*] under any .sky-live-clock).
+        const parts = clockParts('');
+        const greet = escapeHtml(clockGreeting(''));
+        const clockHtml = [
+            '<div class="sky-authx-clock sky-live-clock" aria-hidden="true">',
+            '<span class="sky-authx-greet">' + greet + '</span>',
+            '<span class="sky-authx-time tnum"><span data-clock-hour>' + escapeHtml(parts.hour) + '</span>',
+            '<i class="sky-authx-colon">:</i><span data-clock-minute>' + escapeHtml(parts.minute) + '</span>',
+            '<b data-clock-meridiem>' + escapeHtml(parts.dayPeriod) + '</b></span>',
+            '<span class="sky-authx-date" data-clock-date>' + escapeHtml(parts.date) + '</span>',
+            '</div>'
+        ].join('');
         const bodyHtml = [
             '<div class="sky-auth-scene sky-auth-people-only">',
+            // Soft ambient aura behind the whole picker — a warm Zoe presence
+            // (decorative only).
+            '<div class="sky-authx-aura" aria-hidden="true"></div>',
+            clockHtml,
             '<div class="sky-authx-head">',
+            '<span class="sky-authx-orb" aria-hidden="true"></span>',
             '<span class="sky-authx-kicker">' + escapeHtml(props.kicker || 'Sign in') + '</span>',
             '<h2 class="sky-authx-title">' + title + '</h2>',
             '<p class="sky-authx-sub">' + sub + '</p>',
@@ -100,24 +120,28 @@
         const id = escapeHtml(props.timer_id || props.id || '');
         const expired = props.status === 'expired' || remaining <= 0;
         const lowClass = (!expired && frac <= 0.15) ? ' is-low' : '';
-        // The fill is the card's border: a rounded-rect stroke whose visible length
-        // tracks the time left (pathLength=100 → offset is just the spent percent).
+        // Progress is a straight horizontal bar spanning the card, NOT a rounded-rect
+        // perimeter (that fragmented under the card's non-uniform scale). It still
+        // keeps pathLength=100 + stroke-dasharray=100 so skybridge.js timerTick can
+        // drive stroke-dashoffset = spent% on .sky-timer-ring-fill UNCHANGED; a
+        // straight line has no corners to distort, so the fill stays smooth.
         const offset = (100 * (1 - frac)).toFixed(2);
-        const ring = [
-            '<svg class="sky-timer-ring" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">',
-            '<rect class="sky-timer-ring-track" x="2" y="2" width="96" height="96" rx="9" ry="9" pathLength="100"></rect>',
-            '<rect class="sky-timer-ring-fill" x="2" y="2" width="96" height="96" rx="9" ry="9" pathLength="100" stroke-dasharray="100" stroke-dashoffset="' + offset + '"></rect>',
+        const bar = [
+            '<svg class="sky-timer-bar" viewBox="0 0 100 14" preserveAspectRatio="none" aria-hidden="true">',
+            '<line class="sky-timer-ring-track" x1="0" y1="7" x2="100" y2="7" pathLength="100"></line>',
+            '<line class="sky-timer-ring-fill" x1="0" y1="7" x2="100" y2="7" pathLength="100" stroke-dasharray="100" stroke-dashoffset="' + offset + '"></line>',
             '</svg>'
         ].join('');
         const body = [
             '<div class="sky-timer' + (expired ? ' is-expired' : '') + lowClass + '" data-timer-id="' + id + '"',
                 ' data-timer-expires="' + expires + '" data-timer-duration="' + dur + '"',
                 ' data-timer-status="' + (expired ? 'expired' : 'running') + '">',
-            ring,
             '<button type="button" class="sky-timer-x" data-timer-cancel="' + id + '" aria-label="' + (expired ? 'Dismiss timer' : 'Cancel timer') + '">✕</button>',
-            '<div class="sky-timer-center">',
+            '<div class="sky-timer-face">',
+            '<span class="sky-timer-label">' + escapeHtml(label) + '</span>',
             '<div class="sky-timer-digits">' + (expired ? "Time's up" : mm + ':' + ss) + '</div>',
-            '<div class="sky-timer-label">' + escapeHtml(label) + '</div>',
+            '<div class="sky-timer-progress">' + bar + '</div>',
+            '<span class="sky-timer-state" aria-hidden="true">' + (expired ? 'Tap anywhere to dismiss' : 'Counting down') + '</span>',
             '</div>',
             '</div>'
         ].join('');
@@ -1488,18 +1512,13 @@
         };
         return '<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true">' + (paths[name] || paths.play) + '</svg>';
     }
-    // Outline glyphs for the output/hub controls (stroke-only; the airplay
-    // triangle is the one filled shape).
+    // Outline glyphs for the canvas's library affordances (stroke-only).
     function npGlyph(name) {
         var paths = {
-            airplay: '<path d="M5 16H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-1"/><path d="M8 20l4-5 4 5z" fill="currentColor" stroke="none"/>',
-            chevron: '<path d="M6 9l6 6 6-6"/>',
-            plus: '<path d="M12 5v14M5 12h14"/>'
+            plus: '<path d="M12 5v14M5 12h14"/>',
+            library: '<path d="M4 5h4v14H4zM11 5h3v14h-3z"/><path d="M17 6l3 12"/>'
         };
         return '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (paths[name] || '') + '</svg>';
-    }
-    function npBtn(icon, query, cls) {
-        return '<button type="button" class="np-btn' + (cls ? ' ' + cls : '') + '" data-sky-action="query" data-query="' + escapeHtml(query) + '" aria-label="' + escapeHtml(query) + '">' + npIcon(icon) + '</button>';
     }
 
     // Stable on-brand ambient wash: hash the track/album to pick a ds1 accent
@@ -1526,9 +1545,11 @@
     }
 
     function renderNowPlaying(props) {
-        // Music Assistant now-playing card — album-art-forward ambient look.
-        // The SVG transport row is built here from state; each button carries
-        // data-sky-action=query so tap + voice share one resolver path.
+        // Music Assistant now-playing CANVAS — album-art-forward, display-only.
+        // Controls (transport, volume, seek, speaker) live on the floating bar
+        // (the single control surface); this card carries no transport. It shows
+        // hero art, track meta, a display-only progress bar, and an "Up next"
+        // queue the panel hydrates client-side from queue_id.
         var img = String(props.image || '');
         var sameOrigin = img && ((img.charAt(0) === '/' && img.charAt(1) !== '/') || /^https?:\/\//i.test(img));
         // Strict URL shape (no quotes/parens/backslash/whitespace/angle brackets,
@@ -1548,9 +1569,15 @@
             + 'radial-gradient(140% 140% at 80% 118%,' + tint[0] + '80 0%,' + tint[0] + '00 55%),'
             + 'linear-gradient(155deg,#0f1220F2 0%,#0a0d16F2 100%)';
 
-        var artInner = safeArt
-            ? '<img class="np-art" src="' + escapeHtml(safeArt) + '" alt="" loading="lazy">'
-            : '<div class="np-art np-art-empty" style="--np-c1:' + tint[0] + ';--np-c2:' + tint[1] + '">' + npIcon('note') + '</div>';
+        // Always paint the gradient placeholder box; overlay the album art when a
+        // safe URL is present. A dead art URL (e.g. a radio logo that 404s) has its
+        // <img> removed on error (wired in skybridge.js, capture-phase) so the
+        // gradient shows through instead of the browser's broken-image glyph.
+        var artInner =
+            '<div class="np-art np-art-empty" style="--np-c1:' + tint[0] + ';--np-c2:' + tint[1] + '">'
+            + npIcon('note')
+            + (safeArt ? '<img class="np-art-img" src="' + escapeHtml(safeArt) + '" alt="" loading="lazy" data-np-art-fallback>' : '')
+            + '</div>';
         // Blurred art backdrop (same-origin guard already applied to safeArt).
         var artBg = safeArt
             ? '<div class="np-art-bg" style="background-image:url(&quot;' + escapeHtml(safeArt) + '&quot;)"></div>'
@@ -1571,36 +1598,32 @@
                 + '<div class="np-times"><span>' + npTime(elapsed) + '</span><span>' + npTime(duration) + '</span></div></div>';
         }
 
-        var transport = hasTrack ? [
-            '<div class="np-transport">',
-            npBtn('voldown', 'turn the music down'),
-            npBtn('prev', 'previous song'),
-            playing ? npBtn('pause', 'pause music', 'np-primary') : npBtn('play', 'resume music', 'np-primary'),
-            npBtn('next', 'next song'),
-            npBtn('volup', 'turn the music up'),
-            '</div>'
-        ].join('') : '';
         // Browse/suggestion chips (idle card) come through props.actions.
         var chips = (!hasTrack && Array.isArray(props.actions) && props.actions.length)
             ? '<div class="sky-actions np-chips">' + props.actions.map(buttonHtml).join('') + '</div>' : '';
 
-        // Music-hub footer: speaker/output picker + a persistent "Add source"
-        // affordance. The output button is client-side (data-music-output → the
-        // panel fetches /api/music/players, persists the pick, transfers); the
-        // add-source button reuses the existing "add music" resolver flow.
-        var outName = props.player_name || 'This speaker';
-        var outputRow = [
-            '<div class="np-output">',
-            '<button type="button" class="np-out-btn" data-music-output data-music-player="' + escapeHtml(props.player_id || '') + '" aria-haspopup="listbox" aria-expanded="false">',
-            npGlyph('airplay'),
-            '<span class="np-out-name">' + escapeHtml(outName) + '</span>',
-            npGlyph('chevron'),
-            '</button>',
-            '<button type="button" class="np-add-src" data-sky-action="query" data-query="add music" aria-label="Add a music source">',
+        // "Up next" queue: an empty container the panel hydrates from queue_id via
+        // GET /api/music/queue/{queue_id} (kept off the server card so the card
+        // payload stays small + cacheable). Rendered only for a live track.
+        var upNext = hasTrack ? [
+            '<div class="np-queue" data-music-queue',
+            ' data-queue-id="' + escapeHtml(props.queue_id || props.player_id || '') + '"',
+            ' data-current-title="' + escapeHtml(props.title || '') + '" hidden>',
+            '</div>'
+        ].join('') : '';
+
+        // Library affordances (canvas owns library actions; the bar owns controls):
+        // "＋ Add source" reuses the "add music" resolver; "Browse" opens the full
+        // music library/player page.
+        var libRow = [
+            '<div class="np-actions">',
+            '<button type="button" class="np-lib-btn" data-sky-action="query" data-query="add music" aria-label="Add a music source">',
             npGlyph('plus'), '<span>Add source</span>',
             '</button>',
-            '</div>',
-            '<div class="np-outputs" data-music-picker hidden role="listbox" aria-label="Choose a speaker"></div>'
+            '<button type="button" class="np-lib-btn" data-sky-action="open" data-route="/touch/music.html" aria-label="Browse the music library">',
+            npGlyph('library'), '<span>Browse</span>',
+            '</button>',
+            '</div>'
         ].join('');
 
         var body = [
@@ -1615,9 +1638,9 @@
             props.artist ? '<span class="np-artist">' + escapeHtml(props.artist) + '</span>' : '',
             props.album ? '<span class="np-album">' + escapeHtml(props.album) + '</span>' : '',
             progress,
-            transport,
+            upNext,
             chips,
-            outputRow,
+            libRow,
             '</div>',
             '</div>'
         ].join('');

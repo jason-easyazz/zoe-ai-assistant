@@ -1143,8 +1143,11 @@ process.stdout.write(JSON.stringify({
     assert all(checks.values()), f"dashboard auth chip failed: {checks}"
 
 
-def test_now_playing_card_renders_transport_and_escapes(tmp_path):
-    """Music now-playing card: SVG transport with data-sky-action, escaped meta."""
+def test_now_playing_card_is_canvas_no_transport(tmp_path):
+    """Music now-playing CANVAS: album-art-forward, display-only (NO transport
+    row / speaker picker — those live on the floating bar). It carries an "Up
+    next" queue container + library affordances, a display progress bar, and
+    escapes meta + guards album art (same-origin only)."""
     harness = tmp_path / "np.cjs"
     harness.write_text(
         """
@@ -1153,27 +1156,31 @@ vm.runInContext(fs.readFileSync(process.argv[2],'utf8'),s);
 vm.runInContext(fs.readFileSync(process.argv[3],'utf8'),s);
 const R=s.window.SkybridgeRenderer;
 const html=R.render({card_type:'now_playing',schema_version:'1.0.0',card_id:'np',
-  content:{source:'music_now_playing',title:'Song <b>x</b>',artist:'Artist',state:'playing',player_name:'Kitchen',transport:true}});
+  content:{source:'music_now_playing',title:'Song <b>x</b>',artist:'Artist',state:'playing',player_name:'Kitchen',queue_id:'p1'}});
 // Same-origin album art → blurred backdrop + <img>; cross-origin-ish paths are dropped.
 const artHtml=R.render({card_type:'now_playing',schema_version:'1.0.0',card_id:'np2',
-  content:{source:'music_now_playing',title:'T',artist:'A',album:'Alb',state:'playing',player_name:'Den',image:'/media/cover.png',transport:true,elapsed:60,duration:180}});
+  content:{source:'music_now_playing',title:'T',artist:'A',album:'Alb',state:'playing',player_name:'Den',image:'/media/cover.png',elapsed:60,duration:180,queue_id:'p1'}});
 const badHtml=R.render({card_type:'now_playing',schema_version:'1.0.0',card_id:'np3',
-  content:{source:'music_now_playing',title:'T',state:'playing',image:'//evil.example/x.png"onerror=alert(1)',transport:true}});
+  content:{source:'music_now_playing',title:'T',state:'playing',image:'//evil.example/x.png"onerror=alert(1)'}});
 const absHtml=R.render({card_type:'now_playing',schema_version:'1.0.0',card_id:'np4',
-  content:{source:'music_now_playing',title:'T',state:'playing',image:'https://cdn.example.com/a/cover.png',transport:true}});
+  content:{source:'music_now_playing',title:'T',state:'playing',image:'https://cdn.example.com/a/cover.png'}});
 const angleHtml=R.render({card_type:'now_playing',schema_version:'1.0.0',card_id:'np5',
-  content:{source:'music_now_playing',title:'T',state:'playing',image:'/media/c<over>.png',transport:true}});
+  content:{source:'music_now_playing',title:'T',state:'playing',image:'/media/c<over>.png'}});
 process.stdout.write(JSON.stringify({
   card: html.includes('now-playing-card'),
-  transport: html.includes('np-transport') && html.includes('np-btn'),
-  pause_when_playing: html.includes('data-query="pause music"'),
-  actions_wired: html.includes('data-sky-action="query"') && html.includes('data-query="next song"'),
+  no_transport: !html.includes('np-transport') && !html.includes('data-query="pause music"') && !html.includes('data-query="next song"'),
+  no_speaker_picker: !html.includes('data-music-output') && !html.includes('data-music-picker'),
+  up_next_container: html.includes('data-music-queue') && html.includes('data-queue-id="p1"'),
+  add_source: html.includes('data-query="add music"'),
+  browse: html.includes('data-route="/touch/music.html"'),
   escaped: html.includes('&lt;b&gt;') && !html.includes('<b>x</b>'),
   no_dup_header: (html.match(/np-title/g)||[]).length===1,
   ambient: html.includes('np-ambient'),
   placeholder_when_no_art: html.includes('np-art-empty'),
   art_backdrop_same_origin: artHtml.includes('np-art-bg') && artHtml.includes('src="/media/cover.png"'),
   art_backdrop_absolute: absHtml.includes('np-art-bg') && absHtml.includes('src="https://cdn.example.com/a/cover.png"'),
+  // Hero art overlays the gradient placeholder + carries the dead-URL fallback hook.
+  art_over_gradient_with_fallback: artHtml.includes('np-art-empty') && artHtml.includes('np-art-img') && artHtml.includes('data-np-art-fallback'),
   progress_when_elapsed: artHtml.includes('np-progress') && artHtml.includes('1:00'),
   reject_protocol_relative: !badHtml.includes('np-art-bg') && badHtml.includes('np-art-empty') && !badHtml.includes('onerror'),
   reject_angle_brackets: !angleHtml.includes('np-art-bg') && angleHtml.includes('np-art-empty')
@@ -1186,45 +1193,52 @@ process.stdout.write(JSON.stringify({
                            str(UI / "js" / "skybridge-renderer.js")], check=True, capture_output=True, text=True)
     import json as _j
     checks = _j.loads(proc.stdout)
-    assert all(checks.values()), f"now-playing render failed: {checks}"
+    assert all(checks.values()), f"now-playing canvas render failed: {checks}"
 
 
-def test_nowplaying_miniplayer_present_and_wired():
-    """The persistent now-playing mini-player: markup in the shell + poll/control
-    wiring in skybridge.js. It's floating chrome shown only while music plays."""
+def test_nowplaying_floating_bar_is_the_control_surface():
+    """The floating bar is the SINGLE control surface: art + meta + transport +
+    volume + speaker picker + a seek scrubber, wired to poll/control/seek."""
     html = read(UI / "skybridge.html")
     # DOM: the container + the five transport/volume actions + tap-to-expand.
     assert 'id="skyNowPlaying"' in html
     for action in ("expand", "previous", "play_pause", "next", "volume_down", "volume_up"):
-        assert f'data-np-action="{action}"' in html, f"missing mini-player action: {action}"
+        assert f'data-np-action="{action}"' in html, f"missing bar action: {action}"
+    # Seek scrubber markup: elapsed · range · duration.
+    assert 'id="skyNpScrubber"' in html
+    assert 'class="snp-seek"' in html and 'type="range"' in html
+    assert 'id="skyNpElapsed"' in html and 'id="skyNpDuration"' in html
+    assert ".snp-scrubber" in html and ".snp-seek" in html
     # CSS: centered floating pill by default; repositioned under the clock at rest.
     assert ".sky-nowplaying" in html
     assert "body.sky-empty .sky-nowplaying" in html
     js = read(UI / "js" / "skybridge.js")
-    # Behaviour: polls now-playing, drives control, expands to the full card.
+    # Behaviour: polls now-playing, drives control + seek, expands to the full card.
     assert "/api/music/now-playing" in js
     assert "/api/music/control" in js
+    assert "/api/music/seek" in js
+    assert "position_seconds: pos" in js
     assert "startNowPlayingWatch" in js
     assert "what's playing" in js  # tap-to-expand opens the full music card
 
 
-def test_music_hub_output_picker_and_add_source_wired():
-    """Music hub: the now-playing card carries a speaker/output picker + a
-    persistent 'Add source' affordance; the mini-player carries a compact output
-    button + popover; skybridge.js persists the pick and threads it everywhere."""
+def test_music_hub_speaker_picker_lives_on_the_bar_and_canvas_has_library():
+    """The speaker/output picker's home is the floating bar (a control); the
+    canvas keeps only library affordances (Add source + Browse), never the
+    picker. skybridge.js persists the pick and threads it into poll/control."""
     html = read(UI / "skybridge.html")
     renderer = read(UI / "js" / "skybridge-renderer.js")
     js = read(UI / "js" / "skybridge.js")
 
-    # Card renderer: output button (client-side picker) + inline picker container
-    # + persistent add-source button reusing the "add music" resolver flow.
-    assert "data-music-output" in renderer
-    assert "data-music-picker" in renderer
-    assert 'class="np-output"' in renderer
-    assert "np-out-name" in renderer
-    assert 'data-sky-action="query" data-query="add music"' in renderer  # add source
+    # Canvas renderer: library affordances only — NO speaker/output picker.
+    assert 'class="np-actions"' in renderer
+    assert "np-lib-btn" in renderer
+    assert 'data-query="add music"' in renderer            # add source
+    assert 'data-route="/touch/music.html"' in renderer    # browse
+    assert "data-music-output" not in renderer             # picker moved to the bar
+    assert "np-out-name" not in renderer
 
-    # Mini-player: compact output button + floating popover container.
+    # The bar owns the speaker picker: compact output button + floating popover.
     assert 'class="snp-btn snp-btn-sm snp-out" data-music-output' in html
     assert 'id="skyNpOutputs"' in html
     assert "data-music-picker" in html
@@ -1241,15 +1255,50 @@ def test_music_hub_output_picker_and_add_source_wired():
     # Poll targets the persisted speaker; control POSTs the persisted speaker.
     assert "'?player_id=' + encodeURIComponent(pid)" in js
     assert "player_id: getMusicPlayerId() || npPlayerId" in js
-    # Selection routes on both the card grid and the mini-player.
+    # Selection routes on the bar; live playback transfers on select.
     assert "data-music-player" in js
     assert "target_player_id: id, source_player_id: prev" in js
 
-    # ds1 tokens for the new picker chrome (no rgba(var()); accents via color-mix).
+    # ds1 tokens for the picker/queue chrome (no rgba(var()); accents via color-mix).
     css = read(UI / "css" / "cards/dashboard.css")
-    assert ".np-output" in css
+    assert ".np-actions" in css
+    assert ".np-queue" in css
     assert ".mp-opt" in css
     assert "rgba(var(" not in css
+
+
+def test_music_up_next_queue_hydrated_from_queue_endpoint():
+    """The canvas "Up next" list is hydrated client-side from the reused queue
+    endpoint; the seek endpoint drives the bar's scrubber."""
+    js = read(UI / "js" / "skybridge.js")
+    router = read(DATA / "routers" / "music.py")
+
+    # Hydrator fetches the queue and fills the canvas container.
+    assert "function hydrateNowPlayingQueue" in js
+    assert "hydrateNowPlayingQueue(node)" in js
+    assert "'/api/music/queue/'" in js
+    assert "data-music-queue" in js
+    assert "Up next" in js
+
+    # Backend: reused queue endpoint + new seek endpoint delegate to the service.
+    assert '@router.get("/queue/{queue_id}")' in router
+    assert '@router.post("/seek")' in router
+    assert "music_service.seek(pos, player_id=player_id)" in router
+
+
+def test_music_dead_art_url_falls_back_to_gradient():
+    """Dead album-art URLs (e.g. a radio logo that 404s) must fall back to the
+    gradient placeholder, not the broken-image glyph — on the card hero art, the
+    up-next thumbs, AND the floating-bar thumb (which already wires onerror)."""
+    js = read(UI / "js" / "skybridge.js")
+
+    # Card hero + up-next thumbs carry the fallback hook; a capture-phase error
+    # listener removes any flagged art <img> that fails to load.
+    assert "data-np-art-fallback" in js
+    assert "hasAttribute('data-np-art-fallback')" in js
+    assert "els.cards.addEventListener('error'" in js
+    # The floating-bar thumb mirrors this (removes the img + reveals the glyph).
+    assert "img.onerror" in js
 
 
 def test_music_transfer_endpoint_shape():

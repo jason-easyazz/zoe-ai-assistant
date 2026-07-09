@@ -1,12 +1,41 @@
-/* Timer card — the running countdown + border-progress ring is defined inline in
-   skybridge.html (shipped in #789). This partial adds the design-system light-mode
-   treatment so the timer adapts with the sun-driven panel theme. The warm progress
-   gradient reads on both themes, so only the surface + ink + track flip. */
+/* Timer card — fill-the-stage redesign.
+   The base timer styling (fonts, the .sky-timer-ring-fill stroke colours, the
+   is-low/is-expired/ringing states) still ships inline in skybridge.html (#789);
+   this sheet loads AFTER it and RE-LAYS-OUT the card so it uses the widescreen
+   panel instead of a small tile pinned to the left. It also relayouts the new
+   markup: a big centred countdown + a smooth horizontal progress bar.
 
-/* FIX: a general legacy card rule forces .sky-card children to position:relative,
-   which out-specified the timer's own `.sky-timer{position:absolute;inset:0}` and
-   collapsed it to 0 height — so the digits clipped at the top of an empty card.
-   Restore the timer's fill/positioning context with a winning selector. */
+   Contract preserved (skybridge.js drives these): the live .sky-timer element
+   (data-timer-id/expires/duration/status), .sky-timer-digits text, the
+   .sky-timer-ring-fill stroke-dashoffset, the is-low class toggle, the
+   .sky-timer-x[data-timer-cancel] button, and .sky-card.timer.sky-timer-ringing. */
+
+/* ── Card footprint: fill the stage ────────────────────────────────────────
+   The inline layer pins every timer to a ~340px tile inside a span-6 column
+   (justify-self:center) — a lonely portrait card stranded in the left half.
+   Stretch each timer to fill its grid column instead, so ONE timer owns the
+   width and TWO+ form a balanced row (eggs + pasta side by side). Higher
+   specificity + !important to win over the inline tile rule. */
+html body:not(.sky-empty) .sky-card-stack > .sky-card.timer {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  aspect-ratio: auto !important;
+  height: auto !important;
+  justify-self: stretch !important;
+  align-self: stretch !important;
+}
+/* A lone timer takes the whole stage (skybridge-stage.css keeps it span-6 for
+   the side-by-side case; :only-child out-specifies that so a single timer is
+   never stranded in half the screen). */
+html body:not(.sky-empty) .sky-card-stack > .sky-card.timer:only-child {
+  grid-column: 1 / -1 !important;
+  min-height: 100% !important;
+}
+
+/* FIX (kept from the original sheet): a legacy card rule forces .sky-card
+   children to position:relative, collapsing the absolutely-filled .sky-timer.
+   Restore its fill context with a winning selector. */
 body:not(.sky-empty) .sky-card.timer .sky-timer {
   position: absolute !important;
   inset: 0 !important;
@@ -14,23 +43,165 @@ body:not(.sky-empty) .sky-card.timer .sky-timer {
   height: 100% !important;
 }
 
-/* Finger target: the legacy inline .sky-timer-x is 30x30px — under the 48px bar.
-   min-* (never fixed height) so it can only grow. !important because
-   touch-adapter.css pins every button's min-height/min-width to 44px important. */
-.sky-card.timer .sky-timer-x {
-  min-width: 48px !important;
-  min-height: 48px !important;
+/* A gentle warm wash so the timer reads friendly, not clinical. */
+body:not(.sky-empty) .sky-card.timer .sky-timer {
+  background:
+    radial-gradient(120% 90% at 50% 8%, color-mix(in srgb, var(--sky-accent-amber, #f5b13c) 12%, transparent), transparent 60%),
+    radial-gradient(120% 120% at 50% 120%, color-mix(in srgb, var(--sky-accent-mint, #5be3b0) 10%, transparent), transparent 62%);
+  border-radius: inherit;
 }
 
-:root[data-theme="light"] .sky-card.timer {
-  background: linear-gradient(157deg, rgba(255,255,255,0.74), rgba(255,255,255,0.52)) !important;
-  box-shadow: 0 22px 50px -20px rgba(40,70,110,0.35), inset 0 1px 0 rgba(255,255,255,0.6) !important;
+/* ── Centred face: label → digits → bar → hint ─────────────────────────────── */
+.sky-card.timer .sky-timer-face {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(14px, 3.2vh, 30px);
+  padding: clamp(24px, 6vh, 64px) clamp(28px, 6vw, 88px);
+  text-align: center;
 }
-:root[data-theme="light"] .sky-timer-digits { color: #16324d; }
-:root[data-theme="light"] .sky-timer-label { color: #3a5e80; }
-:root[data-theme="light"] .sky-timer-ring-track { stroke: rgba(20,50,80,0.14); }
-:root[data-theme="light"] .sky-timer-x {
-  border-color: rgba(20,50,80,0.18);
-  background: rgba(20,50,80,0.05);
-  color: #3a5e80;
+
+/* Label as a calm kicker above the numerals. */
+.sky-card.timer .sky-timer-label {
+  order: -1;
+  position: static;
+  max-width: 92%;
+  margin: 0;
+  font-size: clamp(15px, 1.7vw, 22px);
+  font-weight: var(--sky-weight-semibold, 600);
+  letter-spacing: 2.4px;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--sky-accent-amber, #f5b13c) 82%, var(--sky-ink-0, #fff));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The hero countdown. Scales with the panel; big and legible on the wall. */
+.sky-card.timer .sky-timer-digits {
+  font-size: clamp(72px, 12vw, 150px);
+  line-height: 0.94;
+  font-weight: 700;
+  letter-spacing: 1px;
+  font-variant-numeric: tabular-nums;
+  color: var(--sky-ink-0, #fff);
+  text-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
+}
+html body:not(.sky-empty) .sky-card-stack > .sky-card.timer:only-child .sky-timer-digits {
+  font-size: clamp(96px, 17vw, 208px);
+}
+/* Ringing/expired keeps the digits legible (skybridge.js swaps text to
+   "Time's up"); shrink so the longer word fits, warm red. */
+.sky-card.timer .sky-timer.is-expired .sky-timer-digits {
+  font-size: clamp(48px, 8vw, 104px);
+  color: var(--sky-accent-red, #ff6b6b);
+}
+
+/* ── Smooth progress bar (straight line — no fragmented perimeter) ──────────── */
+.sky-card.timer .sky-timer-progress {
+  width: min(560px, 78%);
+  display: flex;
+}
+html body:not(.sky-empty) .sky-card-stack > .sky-card.timer:only-child .sky-timer-progress {
+  width: min(760px, 72%);
+}
+.sky-card.timer .sky-timer-bar {
+  width: 100%;
+  height: 14px;
+  border-radius: 999px;
+  overflow: hidden;   /* rounds the butt-cap ends of the bar */
+}
+.sky-card.timer .sky-timer-ring-track,
+.sky-card.timer .sky-timer-ring-fill {
+  fill: none;
+  /* stroke-width == viewBox height so the line fills the bar; butt caps + no
+     non-scaling-stroke keep the fill a single SMOOTH segment (non-scaling-stroke
+     makes stroke-dasharray render in px, which fragmented the bar AND broke the
+     pathLength=100 stroke-dashoffset that skybridge.js timerTick drives). */
+  stroke-width: 14px;
+  stroke-linecap: butt;
+  vector-effect: none;
+}
+.sky-card.timer .sky-timer-ring-track {
+  stroke: var(--sky-fill-3, rgba(255, 255, 255, 0.16));
+}
+.sky-card.timer .sky-timer-ring-fill {
+  stroke: var(--sky-accent-mint, #5be3b0);
+  transition: stroke-dashoffset 0.95s linear, stroke 0.4s ease;
+}
+.sky-card.timer .sky-timer.is-low .sky-timer-ring-fill { stroke: var(--sky-accent-amber, #f5b13c); }
+.sky-card.timer .sky-timer.is-expired .sky-timer-ring-fill { stroke: var(--sky-accent-red, #ff6b6b); stroke-dashoffset: 0 !important; }
+
+.sky-card.timer .sky-timer-state {
+  font-size: clamp(13px, 1.4vw, 17px);
+  font-weight: var(--sky-weight-medium, 500);
+  letter-spacing: 0.4px;
+  color: var(--sky-ink-3, rgba(255, 255, 255, 0.5));
+}
+
+/* ── Cancel / dismiss — comfortable finger target (>=44px) ──────────────────── */
+.sky-card.timer .sky-timer-x {
+  position: absolute;
+  top: clamp(16px, 2.4vh, 26px);
+  right: clamp(16px, 2vw, 26px);
+  min-width: 48px !important;
+  min-height: 48px !important;
+  width: 48px;
+  height: 48px;
+  border-radius: 999px;
+  border: 1px solid var(--sky-hairline, rgba(255, 255, 255, 0.16));
+  background: var(--sky-fill-1, rgba(255, 255, 255, 0.06));
+  color: var(--sky-ink-2, rgba(255, 255, 255, 0.62));
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 3;
+  transition: background var(--sky-dur-fast, 180ms) ease, transform var(--sky-dur-fast, 180ms) ease;
+}
+.sky-card.timer .sky-timer-x:hover { background: var(--sky-fill-2, rgba(255, 255, 255, 0.12)); }
+.sky-card.timer .sky-timer-x:active { transform: scale(0.94); }
+
+/* ── Ringing: unmistakable ──────────────────────────────────────────────────
+   skybridge.js adds .sky-timer-ringing to the card when a timer fires. Warm
+   glow pulse + a warm surface so the whole wall says "time's up". */
+body:not(.sky-empty) .sky-card.timer.sky-timer-ringing {
+  animation: skyTimerRing 0.9s ease-in-out infinite;
+  border-color: color-mix(in srgb, var(--sky-accent-red, #ff6b6b) 55%, transparent) !important;
+}
+body:not(.sky-empty) .sky-card.timer.sky-timer-ringing .sky-timer {
+  background:
+    radial-gradient(130% 120% at 50% 40%, color-mix(in srgb, var(--sky-accent-red, #ff6b6b) 26%, transparent), transparent 66%);
+}
+body:not(.sky-empty) .sky-card.timer.sky-timer-ringing .sky-timer-digits {
+  animation: skyTimerFlash 0.9s ease-in-out infinite;
+}
+@keyframes skyTimerRing {
+  0%, 100% { box-shadow: 0 24px 60px -24px rgba(0, 0, 0, 0.6), 0 0 0 0 rgba(255, 107, 107, 0); }
+  50% { box-shadow: 0 24px 60px -24px rgba(0, 0, 0, 0.6), 0 0 56px 10px rgba(255, 107, 107, 0.55); }
+}
+@keyframes skyTimerFlash {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.62; }
+}
+
+/* ── Light mode (sun-driven panel theme) ────────────────────────────────────
+   The DS light theme re-points --text-* but not --sky-ink-*; re-point the ramp
+   locally so ink stays legible on the light glass. */
+:root[data-theme="light"] .sky-card.timer {
+  --sky-ink-0: #16324d; --sky-ink-1: #2a4d6e; --sky-ink-2: #3a5e80; --sky-ink-3: #6a86a2;
+  --sky-fill-1: rgba(20, 50, 80, 0.05); --sky-fill-2: rgba(20, 50, 80, 0.09); --sky-fill-3: rgba(20, 50, 80, 0.14);
+  --sky-hairline: rgba(20, 50, 80, 0.16);
+  background: linear-gradient(157deg, rgba(255, 255, 255, 0.74), rgba(255, 255, 255, 0.52)) !important;
+  box-shadow: 0 22px 50px -20px rgba(40, 70, 110, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.6) !important;
+}
+:root[data-theme="light"] .sky-card.timer .sky-timer-digits { text-shadow: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  body:not(.sky-empty) .sky-card.timer.sky-timer-ringing,
+  body:not(.sky-empty) .sky-card.timer.sky-timer-ringing .sky-timer-digits { animation: none; }
+  .sky-card.timer .sky-timer-ring-fill { transition: none; }
+  .sky-card.timer .sky-timer-x { transition: none; }
 }
