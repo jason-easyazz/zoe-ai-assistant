@@ -28,7 +28,7 @@ class _Ref:
     """Stand-in for MemoryService's MemoryRef (only .text / .metadata used)."""
 
     def __init__(self, text, memory_type="person", entity_type="person",
-                 tags="person", owner=None):
+                 tags="person", owner=None, visibility=None):
         self.text = text
         self.metadata = {
             "memory_type": memory_type,
@@ -37,6 +37,8 @@ class _Ref:
         }
         if owner is not None:
             self.metadata["user_id"] = owner  # memory-owner stamp
+        if visibility is not None:
+            self.metadata["visibility"] = visibility
 
 
 class _Cursor:
@@ -276,6 +278,33 @@ async def test_shared_memory_owned_by_other_user_is_excluded(monkeypatch):
 
         names = {s["pre_filled_slots"]["name"] for s in stored}
         assert names == {"Karen"}   # Bob (Andrew's) never proposed under this user
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_ownerless_shared_row_is_excluded(monkeypatch):
+    # An OWNERLESS but family/shared-visible row can belong to another household
+    # user (load_for_prompt returns family-visible rows). It must not feed
+    # backfill even without an owner stamp; only truly private ownerless rows do.
+    monkeypatch.setenv("ZOE_CONTACT_BACKFILL_ENABLED", "1")
+    db = await _open()
+    try:
+        mems = [
+            _Ref("Bob is Andrew's colleague.", memory_type="relationship",
+                 entity_type="", tags="", visibility="family"),   # ownerless + shared
+            _Ref("Karen loves tea.", memory_type="fact",
+                 entity_type="", tags=""),                        # ownerless + private
+        ]
+        _fake_memory_source(monkeypatch, mems)
+        _use_db(monkeypatch, db)
+        _no_llm(monkeypatch)
+        stored = _capture_store(monkeypatch)
+
+        await cb.backfill_contacts(USER)
+
+        names = {s["pre_filled_slots"]["name"] for s in stored}
+        assert names == {"Karen"}   # shared Bob excluded; private Karen kept
     finally:
         await db.close()
 

@@ -180,14 +180,21 @@ def _is_person_knowledge_memory(ref, user_id: str) -> bool:
     family-SHARED rows owned by OTHER users (``visibility == "family"``), so
     broadening to ``fact`` / ``relationship`` could otherwise leak another
     household member's known people as this user's contact candidates (e.g.
-    "Bob is Andrew's colleague" surfacing under Jason). Only extract from rows
-    this user owns — a row whose metadata ``user_id`` names a DIFFERENT user is
-    rejected. Rows with no owner in metadata are treated as the caller's
-    (back-compat with legacy person rows that predate owner stamping).
+    "Bob is Andrew's colleague" surfacing under Jason). Only the caller's own
+    person-knowledge feeds backfill:
+
+    * a row whose metadata ``user_id`` names a DIFFERENT user → rejected;
+    * an OWNERLESS row that is shared/family-visible → rejected too (an old
+      shared row may lack an owner stamp, and family-visible rows can belong to
+      another household user);
+    * a truly private legacy row (no owner, not shared) → treated as the
+      caller's, for back-compat with person rows that predate owner stamping.
     """
     md = getattr(ref, "metadata", None) or {}
     owner = str(md.get("user_id") or "").strip().lower()
-    if owner and owner != str(user_id or "").strip().lower():
+    visibility = str(md.get("visibility") or "").strip().lower()
+    caller = str(user_id or "").strip().lower()
+    if owner != caller and (owner or visibility in {"family", "shared"}):
         return False
     if str(md.get("memory_type", "")).strip().lower() in _PERSON_KNOWLEDGE_TYPES:
         return True
