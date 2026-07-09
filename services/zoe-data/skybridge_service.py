@@ -1565,9 +1565,11 @@ def _score_event_for_target(event: dict[str, Any], target: str) -> int:
     target_time = _parse_time(remainder)
     if target_time and str(event.get("start_time") or "")[:5] == target_time:
         score += 4
-    # "on"/"from"/"calendar" are the tap-query domain anchors (see calendarEditQuery/
-    # calendarDeleteQuery) — not event words, so keep them out of the token match.
-    target_tokens = {token for token in re.split(r"\W+", remainder.lower()) if token and token not in {"my", "the", "on", "from", "calendar", "appointment", "event"}}
+    # Query-syntax words from the tap templates ("edit/delete X AT <time> ON <date>
+    # FROM/ON MY CALENDAR") — not event words. They must be filtered because the
+    # token test below is a SUBSTRING match, so a stray "at" would match "Bath",
+    # "Saturday", etc. and give a spurious point.
+    target_tokens = {token for token in re.split(r"\W+", remainder.lower()) if token and token not in {"my", "the", "at", "on", "from", "calendar", "appointment", "event"}}
     haystack = " ".join(str(event.get(key) or "") for key in ("title", "category", "location")).lower()
     if not target_tokens:
         return score or 1

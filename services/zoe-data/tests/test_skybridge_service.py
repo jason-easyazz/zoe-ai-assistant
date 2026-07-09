@@ -1677,6 +1677,18 @@ def test_calendar_delete_target_survives_delimiter_in_title():
     assert parse("delete Dentist at 3:00pm from my calendar", None) == "Dentist at 3:00pm"
 
 
+def test_score_event_for_target_query_prepositions_do_not_leak_as_tokens():
+    """The token test is a SUBSTRING match, so the query-syntax word 'at' (from
+    'at 3:00pm') must not score against a title/location that merely contains it
+    ('Bath time'). The tapped 'Dentist' must still win outright."""
+    from skybridge_service import _score_event_for_target
+
+    dentist = {"title": "Dentist", "start_time": "15:00", "start_date": "2026-07-09", "all_day": False}
+    bath = {"title": "Bath time", "start_time": "15:00", "start_date": "2026-07-09", "all_day": False}
+    target = "Dentist at 3:00pm"  # both are 15:00, so time alone ties
+    assert _score_event_for_target(dentist, target) > _score_event_for_target(bath, target)
+
+
 def test_score_event_for_target_iso_date_does_not_leak_as_time():
     """The ISO date is stripped before the clock pass, so a December date's '12'
     can't be misread as noon and unfairly beat the tapped all-day event."""
