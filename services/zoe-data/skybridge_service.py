@@ -1284,13 +1284,14 @@ def _classify_smart_home(text: str) -> "SkybridgeIntent | None":
 
 
 def _clean_device(value: str) -> str:
-    """Strip control grammar so only the device/room words remain for matching."""
+    """Strip control VERBS/grammar so the device words survive for matching. The
+    device-class noun (light/lamp/switch/…) and any "all"/room words are KEPT —
+    the resolver needs them to tell a singular target from an all-class sweep."""
     words = re.split(r"\s+", (value or "").strip().lower())
-    drop = {"turn", "switch", "flip", "put", "set", "dim", "dimmer", "brighten",
-            "on", "off", "the", "a", "an", "my", "our", "to", "all", "please",
-            "show", "me", "see", "control", "manage", "is", "are", "what", "which",
-            "light", "lights", "lamp", "lamps", "plug", "plugs", "outlet", "outlets",
-            "fan", "fans"}
+    drop = {"turn", "flip", "put", "set", "dim", "dimmer", "brighten",
+            "on", "off", "the", "a", "an", "my", "our", "to", "please",
+            "show", "me", "see", "control", "manage", "is", "are", "what",
+            "which", "how", "status"}
     kept = [w for w in words if w and w not in drop]
     return " ".join(kept).strip()
 

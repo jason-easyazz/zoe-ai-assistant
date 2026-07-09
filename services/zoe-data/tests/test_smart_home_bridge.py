@@ -189,6 +189,26 @@ async def test_ambiguous_toggle_asks_instead_of_controlling(bridge):
 
 
 @pytest.mark.asyncio
+async def test_bare_singular_class_disambiguates(bridge):
+    # "turn on the lamp" — a SINGULAR class word with two lamps present must ask,
+    # not silently sweep every light (the classifier strips "lamp" to query="lamp").
+    i = classify_skybridge_intent("turn on the lamp", None)
+    r = await smart_home_service.resolve_smart_home(i)
+    assert bridge.controls == []
+    assert "which" in r["spoken_summary"].lower()
+
+
+@pytest.mark.asyncio
+async def test_bare_plural_class_sweeps(bridge):
+    # "turn off the lights" — a PLURAL class word is an intentional all-lights sweep.
+    i = classify_skybridge_intent("turn off the lights", None)
+    await smart_home_service.resolve_smart_home(i)
+    controlled = {c["entity_id"] for c in bridge.controls}
+    assert controlled == {"light.lamp", "light.bedroom"}
+    assert all(c["action"] == "turn_off" for c in bridge.controls)
+
+
+@pytest.mark.asyncio
 async def test_offline_device_is_not_controlled(bridge):
     r = await smart_home_service.resolve_smart_home(_Intent("turn_on", query="hallway"))
     assert bridge.controls == []  # never POST to an unavailable entity

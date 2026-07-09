@@ -22,16 +22,20 @@ logger = logging.getLogger(__name__)
 
 _TIMEOUT_S = 6.0
 
-# Tokens that are grammar, not device identity — stripped before matching a
-# spoken/tapped target ("turn off the kitchen lamp switch" → {kitchen}).
-_MATCH_STOPWORDS = {
-    "the", "a", "an", "my", "our", "please", "zoe",
-    "turn", "switch", "flip", "set", "dim", "brighten", "put",
-    "on", "off", "to", "up", "down", "is", "are", "all",
-    "light", "lights", "lamp", "lamps", "plug", "plugs",
-    "outlet", "outlets", "fan", "fans", "scene", "scenes",
-    "script", "run", "activate", "start", "trigger", "enable",
-}
+# Pure grammar — stripped before matching. Device-class nouns (light/lamp/…) are
+# DELIBERATELY kept: they carry the domain and singular-vs-plural, which is how we
+# tell "the lamp" (one specific device → disambiguate) from "the lights" (an
+# intentional all-lights sweep). _select_targets consumes them.
+_MATCH_STOPWORDS = {"the", "a", "an", "my", "our", "your", "please", "zoe", "to", "on", "off", "and", "of"}
+
+# Device-class vocabulary. Plurals (and "all"/"everything") mark a sweep of the
+# whole class; a bare singular names one device and disambiguates when several tie.
+_LIGHT_WORDS = {"light", "lamp", "lights", "lamps"}
+_LIGHT_PLURAL = {"lights", "lamps"}
+_SWITCH_WORDS = {"switch", "plug", "outlet", "fan", "switches", "plugs", "outlets", "fans"}
+_SWITCH_PLURAL = {"switches", "plugs", "outlets", "fans"}
+_CLASS_WORDS = _LIGHT_WORDS | _SWITCH_WORDS
+_SWEEP_WORDS = {"all", "every", "everything"}
 
 
 def _ha_url() -> str:
@@ -169,23 +173,58 @@ def _tokens(text: str) -> list[str]:
     return [t for t in re.split(r"[^a-z0-9]+", (text or "").lower()) if t and t not in _MATCH_STOPWORDS]
 
 
-def _match_devices(devices: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
-    """Return devices whose name/entity matches the query tokens. An empty query
-    (generic "the lights") matches every light-domain device."""
+def _select_targets(
+    devices: list[dict[str, Any]], query: str, action: str
+) -> tuple[list[dict[str, Any]], bool]:
+    """Resolve a control query to (targets, ambiguous).
+
+    - ``[], False`` — no target named (caller asks which device).
+    - ``ambiguous=True`` — a SPECIFIC command tied across several devices; the
+      caller asks rather than toggling unintended ones.
+    - a bare PLURAL/all class word ("the lights") sweeps that class (not ambiguous);
+      a bare SINGULAR ("the lamp") names one device and disambiguates when several
+      tie. set_brightness only ever targets dimmable devices.
+    """
     want = _tokens(query)
     if not want:
-        lights = [d for d in devices if d.get("domain") == "light"]
-        return lights or list(devices)
+        return [], False
+    q = set(want)
+    is_plural = bool((q & _LIGHT_PLURAL) or (q & _SWITCH_PLURAL) or (q & _SWEEP_WORDS))
+    if q & _LIGHT_WORDS:
+        domains = {"light"}
+    elif q & _SWITCH_WORDS:
+        domains = {"switch", "fan"}
+    else:
+        domains = set()  # only a name/room was given
+    name_tokens = [t for t in want if t not in _CLASS_WORDS and t not in _SWEEP_WORDS]
+
+    def _dimmable_only(pool: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if action != "set_brightness":
+            return pool
+        return [d for d in pool if d.get("dimmable")] or pool
+
+    if not name_tokens:
+        # Bare class command: "the lamp" / "the lights" / "all lights".
+        pool = [d for d in devices if d.get("domain") in domains] if domains else list(devices)
+        pool = _dimmable_only(pool)
+        if is_plural or len(pool) <= 1:
+            return pool, False
+        return pool, True  # one singular device implied but several match → ask
+
+    # A name/room was given — score by token overlap within the named class.
     scored: list[tuple[int, dict[str, Any]]] = []
     for d in devices:
+        if domains and d.get("domain") not in domains:
+            continue
         hay = f"{d.get('name', '')} {d.get('entity_id', '')}".lower()
-        hits = sum(1 for tok in want if tok in hay)
+        hits = sum(1 for tok in name_tokens if tok in hay)
         if hits:
             scored.append((hits, d))
     if not scored:
-        return []
+        return [], False
     best = max(s for s, _ in scored)
-    return [d for s, d in scored if s == best]
+    pool = _dimmable_only([d for s, d in scored if s == best])
+    return (pool, False) if len(pool) <= 1 else (pool, True)
 
 
 def _match_scene(scenes: list[dict[str, Any]], query: str) -> Optional[dict[str, Any]]:
@@ -319,29 +358,22 @@ async def resolve_smart_home(intent: Any) -> dict[str, Any]:
     if action in ("turn_on", "turn_off", "set_brightness"):
         on = action != "turn_off"
         pct = int(getattr(intent, "duration_seconds", 0) or 0) or None
-        targets = _match_devices(devices, query)
-        # Brightness only makes sense for dimmable (light) devices — narrowing here
-        # also disambiguates "set the bedroom lamp to 80%" (the switch drops out).
-        if action == "set_brightness":
-            dimmable = [d for d in targets if d.get("dimmable")]
-            if dimmable:
-                targets = dimmable
-        if not targets:
-            return _result(
-                f"I couldn't find “{query}” among your devices.",
-                _home_card(devices, scenes, status="Home", summary="No matching device."),
-                action,
-            )
-        # A SPECIFIC (non-empty) query that still ties across several distinct
-        # devices is ambiguous — ask rather than toggle unintended devices. An
-        # empty query ("turn off the lights") is an intentional all-lights sweep.
-        if query and len(targets) > 1:
+        targets, ambiguous = _select_targets(devices, query, action)
+        # A SPECIFIC command tied across several devices — ask rather than toggle
+        # unintended ones. (Bare plural "the lights" sweeps and is not ambiguous.)
+        if ambiguous:
             names = ", ".join(str(d.get("name")) for d in targets)
             return _result(
                 f"I found a few matches: {names}. Which one?",
                 _home_card(devices, scenes, status="Home", summary="Which device?"),
                 action,
             )
+        if not targets:
+            if query:
+                spoken = f"I couldn't find “{query}” among your devices."
+            else:
+                spoken = "Which light or switch would you like me to control?"
+            return _result(spoken, _home_card(devices, scenes, status="Home", summary="Pick a device."), action)
         # Never send control to an offline device — the bridge 200s regardless, so
         # we'd otherwise falsely report success on something that isn't there.
         live = [d for d in targets if d.get("available")]
