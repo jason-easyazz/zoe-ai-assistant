@@ -320,12 +320,39 @@ async def resolve_smart_home(intent: Any) -> dict[str, Any]:
         on = action != "turn_off"
         pct = int(getattr(intent, "duration_seconds", 0) or 0) or None
         targets = _match_devices(devices, query)
+        # Brightness only makes sense for dimmable (light) devices — narrowing here
+        # also disambiguates "set the bedroom lamp to 80%" (the switch drops out).
+        if action == "set_brightness":
+            dimmable = [d for d in targets if d.get("dimmable")]
+            if dimmable:
+                targets = dimmable
         if not targets:
             return _result(
                 f"I couldn't find “{query}” among your devices.",
                 _home_card(devices, scenes, status="Home", summary="No matching device."),
                 action,
             )
+        # A SPECIFIC (non-empty) query that still ties across several distinct
+        # devices is ambiguous — ask rather than toggle unintended devices. An
+        # empty query ("turn off the lights") is an intentional all-lights sweep.
+        if query and len(targets) > 1:
+            names = ", ".join(str(d.get("name")) for d in targets)
+            return _result(
+                f"I found a few matches: {names}. Which one?",
+                _home_card(devices, scenes, status="Home", summary="Which device?"),
+                action,
+            )
+        # Never send control to an offline device — the bridge 200s regardless, so
+        # we'd otherwise falsely report success on something that isn't there.
+        live = [d for d in targets if d.get("available")]
+        if not live:
+            nm = targets[0].get("name") or "that device"
+            return _result(
+                f"{nm} looks offline right now.",
+                _home_card(devices, scenes, status="Home", summary=f"{nm} is offline."),
+                action,
+            )
+        targets = live
         ok_any = False
         for d in targets:
             if await set_device(str(d.get("entity_id")), on, brightness_pct=pct if on else None):

@@ -97,10 +97,14 @@ class _FakeBridge:
             return {"lights": [
                 {"entity_id": "light.lamp", "name": "Living Room Lamp",
                  "state": "on", "brightness": 200},
+                {"entity_id": "light.bedroom", "name": "Bedroom Lamp",
+                 "state": "off", "brightness": 0},
             ]}
         if path == "/switches":
             return {"switches": [
                 {"entity_id": "switch.plug", "name": "Coffee Plug", "state": self._switch_state},
+                {"entity_id": "switch.bedroom", "name": "Bedroom Switch", "state": "off"},
+                {"entity_id": "switch.hall", "name": "Hallway Switch", "state": "unavailable"},
             ]}
         if path == "/scenes":
             return {"scenes": [
@@ -141,7 +145,7 @@ async def test_resolve_status_lists_devices_and_scenes(bridge):
     r = await smart_home_service.resolve_smart_home(_Intent("status"))
     assert r["handled"] is True
     props = r["cards"][0]["props"]
-    assert {d["name"] for d in props["devices"]} == {"Living Room Lamp", "Coffee Plug"}
+    assert {"Living Room Lamp", "Coffee Plug"} <= {d["name"] for d in props["devices"]}
     assert [s["name"] for s in props["scenes"]] == ["Movie Time"]
     lamp = next(d for d in props["devices"] if d["name"] == "Living Room Lamp")
     assert lamp["on"] is True and lamp["dimmable"] is True
@@ -162,9 +166,33 @@ async def test_resolve_turn_off_sends_control(bridge):
 
 @pytest.mark.asyncio
 async def test_resolve_dim_carries_brightness(bridge):
-    await smart_home_service.resolve_smart_home(_Intent("set_brightness", query="lamp", brightness=40))
+    await smart_home_service.resolve_smart_home(_Intent("set_brightness", query="living room lamp", brightness=40))
     assert bridge.controls[-1] == {
         "entity_id": "light.lamp", "action": "turn_on", "data": {"brightness_pct": 40}}
+
+
+@pytest.mark.asyncio
+async def test_set_brightness_prefers_dimmable_over_switch(bridge):
+    # "bedroom" ties Bedroom Lamp (light) + Bedroom Switch — brightness narrows
+    # to the dimmable light, so exactly one device is dimmed.
+    await smart_home_service.resolve_smart_home(_Intent("set_brightness", query="bedroom", brightness=60))
+    assert bridge.controls == [{
+        "entity_id": "light.bedroom", "action": "turn_on", "data": {"brightness_pct": 60}}]
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_toggle_asks_instead_of_controlling(bridge):
+    # "bedroom" matches Bedroom Lamp AND Bedroom Switch for a plain toggle — ask.
+    r = await smart_home_service.resolve_smart_home(_Intent("turn_off", query="bedroom"))
+    assert bridge.controls == []
+    assert "which" in r["spoken_summary"].lower()
+
+
+@pytest.mark.asyncio
+async def test_offline_device_is_not_controlled(bridge):
+    r = await smart_home_service.resolve_smart_home(_Intent("turn_on", query="hallway"))
+    assert bridge.controls == []  # never POST to an unavailable entity
+    assert "offline" in r["spoken_summary"].lower()
 
 
 @pytest.mark.asyncio
