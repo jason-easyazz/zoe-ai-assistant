@@ -2459,6 +2459,17 @@ async def _execute_people_create_direct(intent: Intent, user_id: str) -> Optiona
 
         person_id = str(uuid.uuid4())
         async with get_db_ctx() as db:
+            # Ensure the acting user exists first. The intent-dispatch path the
+            # flue brain's tools use does NOT run _ensure_user_and_chat_session
+            # (the chat path's guard), so an authed identity that only has
+            # MemPalace memories but no `users` row would violate
+            # people_user_id_fkey and silently fall back to the mcporter path
+            # (which persists nothing). Mirror the chat path's upsert so contact
+            # creation works for any acting identity.
+            await db.execute(
+                "INSERT INTO users (id, name, role) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+                (user_id, user_id, "member"),
+            )
             await db.execute(
                 "INSERT INTO people (id, user_id, name, relationship, birthday, phone, email,"
                 " notes, visibility, circle, context) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
