@@ -157,3 +157,56 @@ async def oauth_status(oauth_id: str = "", token: str = "") -> dict[str, Any]:
     if st.get("state") == "connected":
         music_setup.consume(token)  # spent once the account is connected
     return {"ok": True, **st}
+
+
+# ── Browser sign-in (YouTube Music) — phone-driven, one-time-token gated ──────
+# YouTube Music has no password/OAuth: the only link is a browser login cookie.
+# /browser/start spins up ONE phone-drivable stealth-browser rig; the user signs
+# into Google there (their password only touches Google); the backend auto-detects
+# the login, harvests the cookie, saves it to MA, and tears the browser down.
+
+@router.post("/browser/start")
+async def browser_start(payload: dict) -> dict[str, Any]:
+    """Phone: begin the embedded browser sign-in. Returns {session_id, view_url}.
+    Gated by the one-time setup token; only offered for ytmusic."""
+    token = str((payload or {}).get("token") or "")
+    provider = str((payload or {}).get("provider") or "")
+    tok = music_setup.verify(token)
+    if tok is None or tok.get("p") != provider:
+        return {"ok": False, "reason": "invalid or expired setup link"}
+    if provider != music_service._YTMUSIC_DOMAIN:
+        return {"ok": False, "reason": "browser sign-in isn't available for this service"}
+    # The PO-token generator must be up or MA will reject the harvested cookie —
+    # check now so a stopped helper reads as an accurate, actionable message.
+    if not await music_service._potoken_reachable(music_service._ytmusic_potoken_url()):
+        return {"ok": False, "reason": "The YouTube Music helper isn't running yet — "
+                "ask your Zoe admin to start it, then try again."}
+    import ytmusic_signin
+    res = await ytmusic_signin.start_session()
+    if not res.get("ok"):
+        return {"ok": False, "reason": res.get("message") or "couldn't start sign-in"}
+    return {"ok": True, "session_id": res["session_id"], "view_url": res["view_url"],
+            "expires_in": res.get("expires_in")}
+
+
+@router.get("/browser/status")
+async def browser_status(session_id: str = "", token: str = "") -> dict[str, Any]:
+    """Phone: poll the browser sign-in. Consumes the one-time token on success."""
+    if music_setup.verify(token) is None:
+        return {"ok": False, "state": "unknown"}
+    import ytmusic_signin
+    st = ytmusic_signin.session_status(session_id)
+    if st.get("state") == "connected":
+        music_setup.consume(token)  # spent once the account is connected
+    return st
+
+
+@router.post("/browser/cancel")
+async def browser_cancel(payload: dict) -> dict[str, Any]:
+    """Phone: user backed out — tear the sign-in browser down now."""
+    token = str((payload or {}).get("token") or "")
+    session_id = str((payload or {}).get("session_id") or "")
+    if music_setup.verify(token) is None:
+        return {"ok": False, "reason": "invalid or expired setup link"}
+    import ytmusic_signin
+    return await ytmusic_signin.cancel_session(session_id)
