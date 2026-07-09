@@ -85,6 +85,12 @@ async def test_slots_override_circle_and_visibility(monkeypatch):
                                  {"name": "Bob", "circle": "work", "visibility": "family"}, USER)
         row = (await _rows(db))[0]
         assert row["circle"] == "work" and row["visibility"] == "family"
+        # explicit None circle → 'circle' (the `or` coerces None before it can
+        # str()-ify to "None"), never an invalid tier
+        await ps._execute_action(_Conn(db), "person_create",
+                                 {"name": "Cara", "circle": None}, USER)
+        cara = [r for r in await _rows(db) if r["name"] == "Cara"][0]
+        assert cara["circle"] == "circle"
     finally:
         await db.close()
 
