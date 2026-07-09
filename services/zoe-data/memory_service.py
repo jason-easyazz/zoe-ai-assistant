@@ -141,6 +141,91 @@ def _hybrid_retrieval_enabled() -> bool:
     )
 
 
+# --- Increment 2b: graph-adjacency recall boost (flag-gated, default OFF) ----
+#
+# A 7th additive blend signal that lifts facts stored under people who are
+# *graph-adjacent* — in the relationship graph — to the person a recall query is
+# about (e.g. surfacing "my sister's husband's job" when the fact lives on the
+# husband node, two hops out, and vector search alone misses it). Gated behind
+# BOTH ``ZOE_RELATIONSHIP_GRAPH_ENABLED`` (the graph feature flag) AND this
+# ``ZOE_GRAPH_RECALL_BOOST`` sub-flag (default OFF) so the graph endpoint and the
+# recall boost flip independently. OFF is a true no-op: the neighbourhood is
+# never fetched (``depth_by_pid`` stays empty) and the term is neither computed
+# nor added, so ordering is byte-for-byte the pre-2b behaviour. No new model,
+# embedder, or network — one bounded BFS SQL query on person turns, resolved off
+# the hot path in the async ``search`` before ``_run_sync``.
+_GRAPH_RECALL_WEIGHT_DEFAULT = 0.30  # bounded adjacency boost; strong secondary to keyword
+
+# Name candidates pulled from a recall query to seed the graph boost. This is a
+# cheap regex, NOT a new NLU model: it only feeds the *existing*
+# ``person_extractor._resolve_person_uuid`` name→people.id resolver. A trailing
+# possessive ("Alice's" / "Alice’s") is stripped so "what does Alice's husband
+# do" yields ["Alice"]. Two tiers: a precise capitalized pass first (proper-noun
+# chat/typed queries), then a case-insensitive fallback so lowercase voice/STT
+# transcripts ("what is alice's husband's job") still surface a candidate — the
+# resolver returns None for any non-name token, so the extra tokens are harmless.
+_QUERY_NAME_RE = re.compile(r"\b([A-Z][a-zA-Z'’-]+)\b")
+_QUERY_NAME_RE_CI = re.compile(r"\b([a-zA-Z][a-zA-Z'’-]+)\b")
+_MAX_NAME_CANDIDATES = 8  # bound the resolver round-trips on a person turn
+
+# Capitalized sentence-openers / interrogatives the name regex over-captures but
+# which are never a person's name. Lower-cased membership test (cf.
+# person_extractor._NON_NAME_TOKENS); deliberately conservative so real given
+# names are never dropped.
+_QUERY_NAME_STOPWORDS = frozenset({
+    "what", "whats", "who", "whos", "whose", "which", "when", "where", "why",
+    "how", "tell", "does", "did", "do", "is", "are", "was", "were", "the", "a",
+    "an", "my", "me", "i", "you", "your", "he", "she", "they", "we", "it",
+    "him", "her", "them", "us", "this", "that", "these", "those", "and", "or",
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+})
+
+
+def _graph_recall_boost_enabled() -> bool:
+    """Cheap per-call read of the graph-recall sub-flag (default OFF).
+
+    Mirrors the ``_hybrid_retrieval_enabled`` idiom. This is only half the gate;
+    the caller also requires ``relationship_graph.relationship_graph_enabled()``.
+    """
+    return os.environ.get("ZOE_GRAPH_RECALL_BOOST", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def _candidate_person_names(query: str) -> list[str]:
+    """Ordered, de-duped capitalized name candidates from a recall query.
+
+    Not NLU — a regex over capitalized tokens minus a conservative stop-set,
+    used only to feed the existing ``_resolve_person_uuid`` resolver. Returns
+    ``[]`` when nothing plausible is present (⇒ no graph boost, a no-op).
+    """
+    if not query:
+        return []
+
+    def _collect(pattern: re.Pattern[str]) -> list[str]:
+        seen: set[str] = set()
+        out: list[str] = []
+        for tok in pattern.findall(query):
+            # Drop a trailing possessive ("Alice's"→"Alice", "Chris'"→"Chris")
+            # while leaving internal apostrophes ("O'Brien") intact, then trim.
+            name = re.sub(r"['’]s?$", "", tok).strip("'’-")
+            if len(name) < 2 or name.lower() in _QUERY_NAME_STOPWORDS:
+                continue
+            key = name.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(name)
+            if len(out) >= _MAX_NAME_CANDIDATES:
+                break
+        return out
+
+    # Precise capitalized pass first; fall back to any-case only if it finds
+    # nothing (a fully lowercase voice/STT transcript).
+    names = _collect(_QUERY_NAME_RE)
+    return names if names else _collect(_QUERY_NAME_RE_CI)
+
+
 def _hybrid_tokens(text: str) -> set[str]:
     """Cheap normalized token set: lowercase alnum tokens minus stopwords."""
     if not text:
@@ -598,9 +683,16 @@ class MemoryService:
         if not query or not query.strip():
             return []
         t0 = time.monotonic()
+        # Increment 2b: resolve the relationship-graph neighbourhood for the
+        # query's person on the async side (the graph fetch is async + needs the
+        # DB; the blend is sync). Best-effort and gated: OFF ⇒ {} ⇒ no boost,
+        # zero DB work, never crashes or slows a turn.
+        depth_by_pid = await self._graph_depth_by_pid(query, user_id)
         try:
             rows = await asyncio.wait_for(
-                self._run_sync(self._semantic_search, query, user_id, limit),
+                self._run_sync(
+                    self._semantic_search, query, user_id, limit, depth_by_pid
+                ),
                 timeout=timeout_s,
             )
         except asyncio.TimeoutError:
@@ -1076,6 +1168,63 @@ class MemoryService:
         if _METRICS_OK:
             memory_write_count.labels(source=source, status=status).inc()
 
+    async def _graph_depth_by_pid(self, query: str, user_id: str) -> dict[str, int]:
+        """Best-effort relationship-graph neighbourhood for the query's person.
+
+        Returns ``{people.id: depth}`` (start person at depth 0, direct relations
+        at 1, friend-of at 2) for the 7th ``_semantic_search`` blend signal.
+        Gated behind BOTH ``ZOE_RELATIONSHIP_GRAPH_ENABLED`` and
+        ``ZOE_GRAPH_RECALL_BOOST`` (default OFF); either off ⇒ ``{}`` with zero
+        DB work, so the boost stays off the hot path. Any failure ⇒ ``{}`` ⇒ no
+        boost — never crashing or slowing a turn. Reuses the existing
+        ``_resolve_person_uuid`` resolver (no new NLU model).
+        """
+        try:
+            import relationship_graph
+
+            if not (
+                relationship_graph.relationship_graph_enabled()
+                and _graph_recall_boost_enabled()
+            ):
+                return {}
+            names = _candidate_person_names(query)
+            if not names:
+                return {}
+
+            from db_pool import get_db_ctx
+            from person_extractor import _resolve_person_uuid
+
+            async with get_db_ctx() as db:
+                start_pid = None
+                # NOTE: `_resolve_person_uuid` is a substring (LIKE %name%) match
+                # returning the first row, so an ambiguous fragment ("Ali" vs
+                # Alice/Alicia) can pick the wrong start person. Accepted here: the
+                # boost is small, additive, owner-scoped, and only re-ranks facts
+                # semantic search already retrieved — a mis-resolve mildly nudges
+                # ordering, never leaks another user's data or drops results.
+                for name in names:
+                    start_pid = await _resolve_person_uuid(name, user_id, db)
+                    if start_pid:
+                        break
+                if not start_pid:
+                    return {}
+                neighbors = await relationship_graph.neighbors(
+                    db, user_id, start_pid, max_depth=2, limit=32
+                )
+            depth_by_pid: dict[str, int] = {start_pid: 0}
+            for n in neighbors:
+                pid = n.get("person_id")
+                if pid is None:
+                    continue
+                try:
+                    depth_by_pid[pid] = int(n.get("depth", 1))
+                except (TypeError, ValueError):
+                    depth_by_pid[pid] = 1
+            return depth_by_pid
+        except Exception as exc:  # best-effort: never break or slow a turn
+            logger.debug("memory_service: graph recall boost skipped: %s", exc)
+            return {}
+
     @staticmethod
     async def _run_sync(fn, *args):
         loop = asyncio.get_event_loop()
@@ -1173,7 +1322,13 @@ class MemoryService:
         filtered.sort(key=_score, reverse=True)
         return filtered[:limit]
 
-    def _semantic_search(self, query: str, user_id: str, limit: int) -> list[MemoryRef]:
+    def _semantic_search(
+        self,
+        query: str,
+        user_id: str,
+        limit: int,
+        depth_by_pid: dict[str, int] | None = None,
+    ) -> list[MemoryRef]:
         col = self._collection()
         result = col.query(
             query_texts=[query],
@@ -1220,6 +1375,27 @@ class MemoryService:
         _hybrid_on = _hybrid_retrieval_enabled()
         _query_tokens = _hybrid_tokens(query) if _hybrid_on else set()
 
+        # Increment 2b: graph-adjacency boost. ``depth_by_pid`` is populated by
+        # the async ``search`` caller ONLY when both graph flags are on (else it
+        # is empty/None). When empty the 7th term is skipped entirely, so OFF is
+        # byte-for-byte identical to the pre-2b ordering.
+        _graph_on = bool(depth_by_pid)
+        _graph_weight = 0.0
+        if _graph_on:
+            # A malformed weight must disable ONLY the graph term — never raise
+            # out of the blend into search()'s catch-all, which would drop every
+            # semantic result. Fall back to the default on a bad value.
+            try:
+                _graph_weight = float(
+                    os.environ.get("ZOE_GRAPH_RECALL_WEIGHT", _GRAPH_RECALL_WEIGHT_DEFAULT)
+                )
+            except (TypeError, ValueError):
+                logger.warning(
+                    "memory_service: invalid ZOE_GRAPH_RECALL_WEIGHT; using default %.2f",
+                    _GRAPH_RECALL_WEIGHT_DEFAULT,
+                )
+                _graph_weight = _GRAPH_RECALL_WEIGHT_DEFAULT
+
         def _blend(ref: MemoryRef) -> float:
             md = ref.metadata
             dist = ref.score
@@ -1240,8 +1416,18 @@ class MemoryService:
             semantic = (1.0 / (1.0 + dist)) * conf * math.exp(-_LAMBDA * age_days)
             hotness  = _HOTNESS_WEIGHT * math.log1p(access_count)
             base = semantic + hotness
+            # 7th signal: relationship-graph adjacency. depth 0 = the person the
+            # query is about, 1 = a direct relation, 2 = friend-of. This surfaces
+            # facts stored under a *connected* person (the multi-hop win) that
+            # vector distance alone misses. Skipped whole when the graph flags
+            # are off (``_graph_on`` false), keeping OFF byte-identical.
+            graph = 0.0
+            if _graph_on:
+                entity_id = md.get("entity_id")
+                if entity_id in depth_by_pid:
+                    graph = _graph_weight * (1.0 / (1 + depth_by_pid[entity_id]))
             if not _hybrid_on:
-                return base
+                return base + graph if _graph_on else base
             # 1) Keyword/lexical boost — primary fix for 0-hit semantic misses.
             keyword = _HYBRID_KEYWORD_WEIGHT * _hybrid_keyword_overlap(
                 _query_tokens, ref.text
@@ -1262,7 +1448,8 @@ class MemoryService:
                     importance = 0.0
                 pref_signal = max(0.0, min(1.0, importance))
             preference = _HYBRID_PREFERENCE_WEIGHT * pref_signal
-            return base + keyword + recency + preference
+            hybrid = base + keyword + recency + preference
+            return hybrid + graph if _graph_on else hybrid
 
         hits.sort(key=_blend, reverse=True)
         return hits[:limit]
@@ -1442,6 +1629,61 @@ class MemoryService:
             # Metadata-only write (see _tick_access_sync): col.update() skips the
             # embedding recompute that col.upsert() would force on every doc.
             col.update(ids=got_ids, metadatas=new_metas)
+
+    async def relink_entity(
+        self, user_id: str, mem_id: str, entity_type: str, entity_id: str
+    ) -> bool:
+        """Re-key a still-pending person fact's entity link (metadata-only).
+
+        Used by the idle dream-cycle resolver (``memory_digest``) to promote a
+        ``person_pending`` fact to a real ``people.id`` once the contact exists.
+        Runs under the SAME per-user lock as ``tick_access`` and re-reads the
+        row's current metadata inside the lock, so a concurrent access-tick can't
+        clobber the relink (and vice-versa) — only ``entity_type`` / ``entity_id``
+        change, every other field is preserved. Uses ``col.update`` (no
+        ``documents``) so Chroma keeps the existing embedding (no re-embed).
+
+        Returns True only when a row was actually relinked. No-op (False) when the
+        id is unknown, owned by another user, or no longer ``person_pending``
+        (idempotent + race-safe).
+        """
+        if not user_id or not mem_id:
+            return False
+        lock = self._user_locks.setdefault(user_id, asyncio.Lock())
+        try:
+            async with lock:
+                return bool(
+                    await self._run_sync(
+                        self._relink_entity_sync, user_id, mem_id, entity_type, entity_id
+                    )
+                )
+        except Exception as exc:
+            logger.warning("memory_service: relink_entity failed id=%s: %s", mem_id, exc)
+            return False
+
+    def _relink_entity_sync(
+        self, user_id: str, mem_id: str, entity_type: str, entity_id: str
+    ) -> bool:
+        col = self._collection()
+        result = col.get(ids=[mem_id], include=["metadatas"])
+        got_ids = result.get("ids") or []
+        got_metas = result.get("metadatas") or []
+        if not got_ids:
+            return False
+        m = dict(got_metas[0]) if got_metas and got_metas[0] else {}
+        # Never relink another user's row (ownerless legacy rows are treated as
+        # the caller's, matching the rest of this module's back-compat stance).
+        owner = str(m.get("user_id") or "")
+        if owner and owner != user_id:
+            return False
+        # Only a still-pending person fact is eligible — idempotent under a race
+        # (a second relink, or one that lost to a concurrent write, is a no-op).
+        if str(m.get("entity_type") or "") != "person_pending":
+            return False
+        m["entity_type"] = entity_type
+        m["entity_id"] = entity_id
+        col.update(ids=got_ids, metadatas=[m])
+        return True
 
     async def _append_audit(
         self,

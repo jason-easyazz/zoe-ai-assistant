@@ -345,8 +345,10 @@ async def test_people_create_writes_person_and_confirms(monkeypatch):
     assert len(inserts) == 1
     _sql, params = inserts[0]
     assert "Alice" in params and "sister" in params
-    # visibility family, circle/context defaults
-    assert "family" in params and "circle" in params and "personal" in params
+    # Private by default (not family-shared) + context 'personal'; circle NULL
+    # (no bogus "circle" literal). See fix: people_create defaults to private.
+    assert "personal" in params and "family" not in params
+    assert "circle" not in params  # circle is NULL now, not the column-name literal
 
 
 @pytest.mark.asyncio
