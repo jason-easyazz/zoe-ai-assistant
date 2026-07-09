@@ -839,8 +839,8 @@ def test_skybridge_generic_renderers_fill_the_stage(tmp_path):
     void. Behavioral: render each type through the real renderer and assert
     (a) the gx- scene grammar, (b) no legacy sky-card-body/sky-field markup,
     (c) injection stays escaped, (d) every action keeps data-sky-action so tap +
-    voice still work. `smart_home` is NOT rebuilt here — it keeps its zoe-compose
-    body, so it is checked separately."""
+    voice still work. `smart_home` is NOT part of this family — it is a bespoke
+    room-controls surface, checked separately below."""
     node = shutil.which("node") or shutil.which("nodejs")
     if not node:
         pytest.skip("Node.js is not installed on this host")
@@ -902,15 +902,26 @@ out.research_report.kicker = R.render(cards.research_report).includes('gx-sec-ki
   var h = R.render({ component: 'unsupported_contract', props: { schema_version: '9.9.9' } });
   out.unsupported = { scene: h.includes('gx-scene') && h.includes('gx-empty'), no_legacy: !h.includes('sky-card-body') };
 })();
-// smart_home is NOT rebuilt here: it keeps its zoe-compose body.
+// smart_home is a bespoke room-controls surface (not a generic adapter): device
+// tiles toggle on tap, on-state reads via .is-on/.sh-pill-on, scenes ride a chip
+// row, and empty/offline degrade gracefully.
 (function(){
-  var h = R.render({ component: 'smart_home', props: { title: 'Lights', devices: [{ name: 'Lamp ' + INJ, state: 'on' }, { entity_id: 'light.hall', state: 'off' }], actions: [{ label: 'All off', query: 'lights off' }] } });
+  var on = R.render({ component: 'smart_home', props: { title: 'Lights', devices: [
+    { name: 'Lamp ' + INJ, domain: 'switch', on: true, available: true, entity_id: 'switch.lamp' },
+    { name: 'Hall', entity_id: 'light.hall', domain: 'light', on: false, available: true }
+  ], scenes: [{ name: 'Movie Time', scene_id: 'scene.movie_time' }] } });
   var empty = R.render({ component: 'smart_home', props: { title: 'Lights', devices: [] } });
+  var offline = R.render({ component: 'smart_home', props: { title: 'Home', devices: [], offline: true } });
   out.smart_home = {
-    grid_state: h.includes('zx-grid') && h.includes('<em>on</em>'),
-    escaped: !h.includes('<b>x</b>') && h.includes('&lt;b&gt;x&lt;/b&gt;'),
-    action: h.includes('data-sky-action='),
-    empty_container: empty.includes('zx-stack') && empty.includes('No devices available.')
+    tiles: on.includes('sh-grid') && on.includes('sh-tile'),
+    on_state: on.includes('is-on') && on.includes('sh-pill-on'),
+    // Tiles carry the exact @entity id so a tap controls precisely that device.
+    exact_entity: on.includes('@switch.lamp') && on.includes('@scene.movie_time'),
+    escaped: !on.includes('<b>x</b>') && on.includes('&lt;b&gt;x&lt;/b&gt;'),
+    action: on.includes('data-sky-action='),
+    scene: on.includes('sh-scene') && on.includes('Movie Time'),
+    empty: empty.includes('sh-empty') && empty.includes('No lights or switches'),
+    offline: offline.includes('Home hub offline')
   };
 })();
 // The rebuilt renderers no longer depend on zoe-compose: render with NO catalog
@@ -924,8 +935,8 @@ out.no_compose_needed = {
   scene: bareHtml.includes('sky-card') && bareHtml.includes('gx-scene'),
   no_tree: !bareHtml.includes('zx-root')
 };
-// smart_home still renders through zoe-compose; with NO catalog loaded it must
-// degrade to a readable escaped body inside the card shell — never blank.
+// smart_home builds its own bespoke markup (no zoe-compose dependency); with NO
+// catalog loaded it must still render a readable escaped card shell — never blank.
 const bareSmart = bare.window.SkybridgeRenderer.render({ component: 'smart_home', props: { title: 'Lights ' + INJ, devices: [{ name: 'Lamp ' + INJ, state: 'on' }] } });
 out.smart_home_no_compose_fallback = {
   shell: bareSmart.includes('sky-card'),

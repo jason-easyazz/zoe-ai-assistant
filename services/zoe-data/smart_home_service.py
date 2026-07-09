@@ -1,0 +1,439 @@
+"""smart_home_service — Zoe's bridge to the local Home Assistant engine.
+
+Doctrine (see project_zoe_over_ha_ma_doctrine): Home Assistant is an invisible
+organ. Zoe never exposes HA directly; this module is the ONLY place in the
+Skybridge resolver that speaks the HA MCP-bridge REST protocol, and it hands the
+rest of Zoe normalized device shapes + a Skybridge ``smart_home`` card. Local-first,
+plain names, no "Home Assistant" jargon reaches the panel.
+
+Every call is best-effort and never raises to the caller: a dead bridge degrades
+to a friendly "couldn't reach the home hub" card, never a broken turn.
+"""
+from __future__ import annotations
+
+import logging
+import os
+import re
+from typing import Any, Optional
+
+import httpx
+
+logger = logging.getLogger(__name__)
+
+_TIMEOUT_S = 6.0
+
+# Pure grammar — stripped before matching. Device-class nouns (light/lamp/…) are
+# DELIBERATELY kept: they carry the domain and singular-vs-plural, which is how we
+# tell "the lamp" (one specific device → disambiguate) from "the lights" (an
+# intentional all-lights sweep). _select_targets consumes them.
+_MATCH_STOPWORDS = {"the", "a", "an", "my", "our", "your", "please", "zoe", "to", "on", "off", "and", "of"}
+
+# Device-class vocabulary. Plurals (and "all"/"everything") mark a sweep of the
+# whole class; a bare singular names one device and disambiguates when several tie.
+_LIGHT_WORDS = {"light", "lamp", "lights", "lamps"}
+_LIGHT_PLURAL = {"lights", "lamps"}
+_SWITCH_WORDS = {"switch", "plug", "outlet", "fan", "switches", "plugs", "outlets", "fans"}
+_SWITCH_PLURAL = {"switches", "plugs", "outlets", "fans"}
+_CLASS_WORDS = _LIGHT_WORDS | _SWITCH_WORDS
+_SWEEP_WORDS = {"all", "every", "everything"}
+
+
+def _ha_url() -> str:
+    return os.environ.get("ZOE_HA_BRIDGE_URL", "http://127.0.0.1:8007").rstrip("/")
+
+
+async def _ha_get(path: str) -> Any:
+    """GET a bridge path. Returns parsed JSON or None on any failure."""
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT_S) as c:
+            r = await c.get(f"{_ha_url()}{path}")
+            if r.status_code != 200:
+                logger.debug("HA GET %s -> HTTP %s", path, r.status_code)
+                return None
+            return r.json()
+    except Exception as exc:  # noqa: BLE001 — HA is optional; never break Zoe
+        logger.debug("HA GET %s unreachable: %s", path, exc)
+        return None
+
+
+async def _ha_post(path: str, payload: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """POST a bridge command. Returns parsed JSON on success, None on any failure."""
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT_S) as c:
+            r = await c.post(f"{_ha_url()}{path}", json=payload)
+            if r.status_code != 200:
+                logger.debug("HA POST %s -> HTTP %s", path, r.status_code)
+                return None
+            return r.json()
+    except Exception as exc:  # noqa: BLE001 — HA is optional; never break Zoe
+        logger.debug("HA POST %s unreachable: %s", path, exc)
+        return None
+
+
+# ── Read: normalized device / scene / script lists ───────────────────────────
+
+def _norm_state(raw: Any) -> str:
+    return str(raw or "").strip().lower()
+
+
+def _device_from_light(row: dict[str, Any]) -> dict[str, Any]:
+    state = _norm_state(row.get("state"))
+    brightness = row.get("brightness")
+    return {
+        "entity_id": row.get("entity_id", ""),
+        "name": _friendly_name(row),
+        "domain": "light",
+        "state": state,
+        "on": state == "on",
+        "available": state not in ("", "unavailable", "unknown"),
+        "dimmable": True,  # light-domain entities support brightness
+        "brightness": int(brightness) if isinstance(brightness, (int, float)) else None,
+    }
+
+
+def _device_from_switch(row: dict[str, Any]) -> dict[str, Any]:
+    state = _norm_state(row.get("state"))
+    return {
+        "entity_id": row.get("entity_id", ""),
+        "name": _friendly_name(row),
+        "domain": "switch",
+        "state": state,
+        "on": state == "on",
+        "available": state not in ("", "unavailable", "unknown"),
+        "dimmable": False,
+        "brightness": None,
+    }
+
+
+def _friendly_name(row: dict[str, Any]) -> str:
+    name = str(row.get("name") or row.get("friendly_name") or "").strip()
+    if name:
+        return name
+    # Fall back to a humanized entity id ("switch.living_room" → "Living Room").
+    ent = str(row.get("entity_id") or "device")
+    tail = ent.split(".", 1)[-1]
+    return tail.replace("_", " ").title() or "Device"
+
+
+async def list_devices() -> Optional[list[dict[str, Any]]]:
+    """Combined lights + switches as normalized device dicts. None = bridge down."""
+    lights = await _ha_get("/lights")
+    switches = await _ha_get("/switches")
+    if lights is None and switches is None:
+        return None  # bridge unreachable — caller renders the offline card
+    devices: list[dict[str, Any]] = []
+    for row in (lights or {}).get("lights", []) if isinstance(lights, dict) else []:
+        devices.append(_device_from_light(row))
+    for row in (switches or {}).get("switches", []) if isinstance(switches, dict) else []:
+        devices.append(_device_from_switch(row))
+    return devices
+
+
+async def list_scenes() -> list[dict[str, Any]]:
+    data = await _ha_get("/scenes")
+    rows = (data or {}).get("scenes", []) if isinstance(data, dict) else []
+    return [{"scene_id": r.get("entity_id", ""), "name": _friendly_name(r)} for r in rows]
+
+
+# ── Write: control primitives (never raise) ──────────────────────────────────
+
+async def set_device(entity_id: str, on: bool, *, brightness_pct: int | None = None) -> bool:
+    """Turn a light/switch on or off (optionally with brightness). True on success."""
+    data: dict[str, Any] = {}
+    if on and brightness_pct is not None:
+        data["brightness_pct"] = max(1, min(100, int(brightness_pct)))
+    payload: dict[str, Any] = {
+        "entity_id": entity_id,
+        "action": "turn_on" if on else "turn_off",
+    }
+    if data:
+        payload["data"] = data
+    result = await _ha_post("/devices/control", payload)
+    return _control_ok(result, entity_id)
+
+
+async def activate_scene(scene_id: str) -> bool:
+    result = await _ha_post("/scenes/activate", {"scene_id": scene_id})
+    return isinstance(result, dict)
+
+
+def _control_ok(result: Any, entity_id: str) -> bool:
+    # The bridge returns HTTP 200 with a "Successfully executed …" message even
+    # for unknown entities, so we only send control to entities we listed first;
+    # here we just confirm the bridge accepted and acknowledged the call.
+    if not isinstance(result, dict):
+        return False
+    message = str(result.get("message") or "")
+    return "success" in message.lower() or "result" in result
+
+
+# ── Target matching ──────────────────────────────────────────────────────────
+
+def _tokens(text: str) -> list[str]:
+    return [t for t in re.split(r"[^a-z0-9]+", (text or "").lower()) if t and t not in _MATCH_STOPWORDS]
+
+
+def _select_targets(
+    devices: list[dict[str, Any]], query: str, action: str
+) -> tuple[list[dict[str, Any]], bool]:
+    """Resolve a control query to (targets, ambiguous).
+
+    - ``[], False`` — no target named (caller asks which device).
+    - ``ambiguous=True`` — a SPECIFIC command tied across several devices; the
+      caller asks rather than toggling unintended ones.
+    - a bare PLURAL/all class word ("the lights") sweeps that class (not ambiguous);
+      a bare SINGULAR ("the lamp") names one device and disambiguates when several
+      tie. set_brightness only ever targets dimmable devices.
+    """
+    want = _tokens(query)
+    if not want:
+        return [], False
+    q = set(want)
+    is_plural = bool((q & _LIGHT_PLURAL) or (q & _SWITCH_PLURAL) or (q & _SWEEP_WORDS))
+    if q & _LIGHT_WORDS:
+        domains = {"light"}
+    elif q & _SWITCH_WORDS:
+        domains = {"switch", "fan"}
+    else:
+        domains = set()  # only a name/room was given
+    name_tokens = [t for t in want if t not in _CLASS_WORDS and t not in _SWEEP_WORDS]
+
+    def _dimmable_only(pool: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if action != "set_brightness":
+            return pool
+        return [d for d in pool if d.get("dimmable")] or pool
+
+    if not name_tokens:
+        # A device literally NAMED with only class words ("Light Switch", "Fan
+        # Light"): a MULTI-word class-only phrase is a specific name, not a generic
+        # class term, so pin the device it uniquely identifies (keeps a tapped tile
+        # exact even for class-only names). If several collide — e.g. a light AND a
+        # switch both named "Light Switch" — ASK rather than guess the wrong one. A
+        # single bare class word ("lights"/"lamp") falls through to the class logic.
+        if len(want) >= 2:
+            exact = _dimmable_only([
+                d for d in devices
+                if all(t in f"{d.get('name', '')} {d.get('entity_id', '')}".lower() for t in want)
+            ])
+            if len(exact) == 1:
+                return exact, False
+            if len(exact) > 1:
+                return exact, True
+        # Bare class command: "the lamp" / "the lights" / "all lights".
+        pool = [d for d in devices if d.get("domain") in domains] if domains else list(devices)
+        pool = _dimmable_only(pool)
+        if is_plural or len(pool) <= 1:
+            return pool, False
+        return pool, True  # one singular device implied but several match → ask
+
+    # A name/room was given — score by token overlap within the named class.
+    scored: list[tuple[int, dict[str, Any]]] = []
+    for d in devices:
+        if domains and d.get("domain") not in domains:
+            continue
+        hay = f"{d.get('name', '')} {d.get('entity_id', '')}".lower()
+        hits = sum(1 for tok in name_tokens if tok in hay)
+        if hits:
+            scored.append((hits, d))
+    if not scored:
+        return [], False
+    best = max(s for s, _ in scored)
+    pool = _dimmable_only([d for s, d in scored if s == best])
+    return (pool, False) if len(pool) <= 1 else (pool, True)
+
+
+def _match_scene(scenes: list[dict[str, Any]], query: str) -> Optional[dict[str, Any]]:
+    want = _tokens(query)
+    if not want:
+        return None
+    best_scene, best_hits = None, 0
+    for s in scenes:
+        hay = f"{s.get('name', '')} {s.get('scene_id', '')}".lower()
+        hits = sum(1 for tok in want if tok in hay)
+        if hits > best_hits:
+            best_scene, best_hits = s, hits
+    return best_scene
+
+
+# ── Card + result shaping ─────────────────────────────────────────────────────
+
+def _device_query(device: dict[str, Any]) -> str:
+    """The re-entrant resolver query a device tile taps to toggle. We append the
+    EXACT HA entity id as an "@entity" marker so a tap controls precisely that
+    device (never a fuzzy name match); the readable prefix is for the transcript."""
+    verb = "turn off" if device.get("on") else "turn on"
+    name = device.get("name", "device")
+    ent = device.get("entity_id", "")
+    return f"{verb} {name} @{ent}" if ent else f"{verb} the {name} {'light' if device.get('domain') == 'light' else 'switch'}"
+
+
+def _scene_query(scene: dict[str, Any]) -> str:
+    ent = scene.get("scene_id", "")
+    name = scene.get("name", "scene")
+    return f"activate {name} @{ent}" if ent else f"activate the {name} scene"
+
+
+def _home_card(
+    devices: list[dict[str, Any]],
+    scenes: list[dict[str, Any]],
+    *,
+    title: str = "Home",
+    status: str = "Home",
+    summary: str = "",
+) -> dict[str, Any]:
+    tiles = [
+        {
+            "name": d.get("name"),
+            "entity_id": d.get("entity_id"),
+            "domain": d.get("domain"),
+            "state": d.get("state"),
+            "on": bool(d.get("on")),
+            "available": bool(d.get("available")),
+            "dimmable": bool(d.get("dimmable")),
+            "brightness": d.get("brightness"),
+            "query": _device_query(d),
+        }
+        for d in devices
+    ]
+    scene_tiles = [
+        {"name": s.get("name"), "scene_id": s.get("scene_id"), "query": _scene_query(s)}
+        for s in scenes
+    ]
+    return {
+        "component": "smart_home",
+        "props": {
+            "title": title,
+            "status": status,
+            "summary": summary,
+            "devices": tiles,
+            "scenes": scene_tiles,
+        },
+    }
+
+
+def _offline_card() -> dict[str, Any]:
+    return {
+        "component": "smart_home",
+        "props": {
+            "title": "Home",
+            "status": "Offline",
+            "summary": "I couldn't reach the home hub.",
+            "devices": [],
+            "scenes": [],
+            "offline": True,
+        },
+    }
+
+
+def _result(spoken: str, card: dict[str, Any], action: str) -> dict[str, Any]:
+    return {
+        "handled": True,
+        "intent": {"domain": "smart_home", "action": action},
+        "spoken_summary": spoken,
+        "cards": [card],
+        "actions": [],
+    }
+
+
+def _summarize(devices: list[dict[str, Any]]) -> str:
+    on = [d for d in devices if d.get("on")]
+    if not devices:
+        return "No devices are set up yet."
+    if not on:
+        return "Everything is off."
+    names = ", ".join(str(d.get("name")) for d in on[:3])
+    return f"{len(on)} on: {names}." if len(on) > 1 else f"{names} is on."
+
+
+# ── Skybridge resolver ────────────────────────────────────────────────────────
+
+async def resolve_smart_home(intent: Any) -> dict[str, Any]:
+    """The Skybridge smart_home domain resolver. `intent` has .action, .query,
+    and (for brightness) .duration_seconds carrying the target percent."""
+    action = getattr(intent, "action", "status")
+    query = (getattr(intent, "query", "") or "").strip()
+    entity_id = (getattr(intent, "entity_id", "") or "").strip()
+
+    devices = await list_devices()
+    if devices is None:
+        return _result("I couldn't reach the home hub.", _offline_card(), action)
+    scenes = await list_scenes()
+
+    if action == "activate_scene":
+        # A scene chip tap carries the exact scene id — activate that one directly.
+        if entity_id:
+            scene = next((s for s in scenes if s.get("scene_id") == entity_id), None) or {
+                "scene_id": entity_id, "name": entity_id.split(".", 1)[-1].replace("_", " ").title()}
+        else:
+            scene = _match_scene(scenes, query)
+        if scene is None:
+            names = ", ".join(str(s.get("name")) for s in scenes) or "none"
+            return _result(
+                f"I couldn't find a scene called “{query}”. You have: {names}.",
+                _home_card(devices, scenes, status="Home", summary="Pick a scene."),
+                "activate_scene",
+            )
+        ok = await activate_scene(str(scene.get("scene_id")))
+        name = scene.get("name") or "that scene"
+        spoken = f"Activated {name}." if ok else f"I couldn't activate {name}."
+        refreshed = await list_devices() or devices
+        return _result(spoken, _home_card(refreshed, scenes, status="Scene", summary=spoken), "activate_scene")
+
+    if action in ("turn_on", "turn_off", "set_brightness"):
+        on = action != "turn_off"
+        pct = int(getattr(intent, "duration_seconds", 0) or 0) or None
+        # A TILE tap carries the exact HA entity id → control precisely that device,
+        # never a fuzzy name match. Voice (no id) falls back to name selection.
+        if entity_id:
+            dev = next((d for d in devices if d.get("entity_id") == entity_id), None)
+            if dev is None:
+                return _result(
+                    "That device isn't available right now.",
+                    _home_card(devices, scenes, status="Home", summary="Device unavailable."),
+                    action,
+                )
+            targets, ambiguous = [dev], False
+        else:
+            targets, ambiguous = _select_targets(devices, query, action)
+        # A SPECIFIC command tied across several devices — ask rather than toggle
+        # unintended ones. (Bare plural "the lights" sweeps and is not ambiguous.)
+        if ambiguous:
+            names = ", ".join(str(d.get("name")) for d in targets)
+            return _result(
+                f"I found a few matches: {names}. Which one?",
+                _home_card(devices, scenes, status="Home", summary="Which device?"),
+                action,
+            )
+        if not targets:
+            if query:
+                spoken = f"I couldn't find “{query}” among your devices."
+            else:
+                spoken = "Which light or switch would you like me to control?"
+            return _result(spoken, _home_card(devices, scenes, status="Home", summary="Pick a device."), action)
+        # Never send control to an offline device — the bridge 200s regardless, so
+        # we'd otherwise falsely report success on something that isn't there.
+        live = [d for d in targets if d.get("available")]
+        if not live:
+            nm = targets[0].get("name") or "that device"
+            return _result(
+                f"{nm} looks offline right now.",
+                _home_card(devices, scenes, status="Home", summary=f"{nm} is offline."),
+                action,
+            )
+        targets = live
+        ok_any = False
+        for d in targets:
+            if await set_device(str(d.get("entity_id")), on, brightness_pct=pct if on else None):
+                ok_any = True
+        refreshed = await list_devices() or devices
+        label = "dimmed" if action == "set_brightness" else ("on" if on else "off")
+        if len(targets) == 1:
+            nm = targets[0].get("name") or "that"
+            spoken = f"Turned {nm} {label}." if ok_any else f"I couldn't reach {nm}."
+        else:
+            spoken = f"Turned {len(targets)} devices {label}." if ok_any else "I couldn't reach those devices."
+        return _result(spoken, _home_card(refreshed, scenes, status="Home", summary=spoken), action)
+
+    # status / "show me the lights" / "smart home"
+    summary = _summarize(devices)
+    return _result(summary, _home_card(devices, scenes, status="Home", summary=summary), "status")
