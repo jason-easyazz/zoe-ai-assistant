@@ -322,9 +322,48 @@
 
     // Build a tap-to-edit query for an event row (opens the calendar editor card
     // via /api/skybridge/resolve). Including the time disambiguates same-title events.
+    // The backend event-matcher (_parse_time) IGNORES a bare 24h morning time
+    // ("08:00") — it only trusts an hour that carries am/pm (or is ≥ 12). So the
+    // tap-to-edit/delete queries emit an am/pm clock ("8:00am") to keep the time a
+    // real disambiguator for same-title events at ANY hour.
+    function calClockAmPm(value) {
+        const m = /^(\d{1,2}):(\d{2})/.exec(String(value || ''));
+        if (!m) return '';
+        let h = parseInt(m[1], 10);
+        if (!(h >= 0 && h <= 23)) return '';
+        const ap = h < 12 ? 'am' : 'pm';
+        let h12 = h % 12;
+        if (h12 === 0) h12 = 12;
+        return h12 + ':' + m[2] + ap;
+    }
+
+    // The disambiguator an edit/delete target carries so same-title events resolve:
+    // a timed event uses its start time ("at 8:00am" — am/pm so morning hours count,
+    // see calClockAmPm); an ALL-DAY event has no time, so it uses "all day" + its ISO
+    // date ("all day on 2026-07-09"). The date separates same-title events across
+    // days; the "all day" shape lets the tapped all-day row win a same-DATE tie
+    // against a same-title timed row (the backend scorer prefers an all-day event
+    // when the target says "all day").
+    function calTargetSuffix(item) {
+        if (item.all_day) {
+            const day = String(item.start_date || item.date || '').slice(0, 10);
+            return /^\d{4}-\d{2}-\d{2}$/.test(day) ? ' all day on ' + day : ' all day';
+        }
+        const t = calClockAmPm(item.start_time);
+        return t ? ' at ' + t : '';
+    }
+
+    // Both tap queries carry an explicit calendar anchor ("on/from my calendar") so
+    // the resolver routes them to the calendar domain REGARDLESS of the saved
+    // Skybridge context — the bare "edit X"/"delete X" short forms only resolve as
+    // calendar while the context is still calendar, which breaks after the card is
+    // rehydrated or another card updates the context.
     function calendarEditQuery(item, title) {
-        const startTime = String(item.start_time || '').slice(0, 5);
-        return 'edit ' + title + (startTime ? ' at ' + startTime : '');
+        return 'edit ' + title + calTargetSuffix(item) + ' on my calendar';
+    }
+
+    function calendarDeleteQuery(item, title) {
+        return 'delete ' + title + calTargetSuffix(item) + ' from my calendar';
     }
 
     // The calendar scene takes a living time-of-day gradient (like the clock card),
@@ -337,29 +376,6 @@
         return 'night';
     }
 
-    // Minutes-since-midnight for an "HH:MM[:SS]" clock string, or NaN.
-    function calMinutes(t) {
-        const m = /^(\d{1,2}):(\d{2})/.exec(String(t || ''));
-        if (!m) return NaN;
-        return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
-    }
-
-    // Event length in minutes (end − start), defaulting to 60 when the end is
-    // missing/invalid so a point event still paints a legible ribbon block.
-    function calDuration(item) {
-        const s = calMinutes(item.start_time);
-        const e = calMinutes(item.end_time);
-        return (Number.isFinite(s) && Number.isFinite(e) && e > s) ? (e - s) : 60;
-    }
-
-    // Compact hour label for the ribbon axis: 6 → "6a", 12 → "12p", 18 → "6p".
-    function calHourLabel(h) {
-        h = ((h % 24) + 24) % 24;
-        let hr = h % 12;
-        if (hr === 0) hr = 12;
-        return hr + (h < 12 ? 'a' : 'p');
-    }
-
     // The time gutter for an agenda row: a big start + small end (or "All / day").
     function calGutter(item) {
         if (item.all_day) return { start: 'All', end: 'day' };
@@ -369,64 +385,71 @@
         return { start: s, end: (e && e !== s) ? e : '' };
     }
 
-    // The day RIBBON (Fantastical "DayTicker" / Apple day-timeline idea): a
-    // full-width rail spanning the day's active window with each timed event
-    // plotted as a category-coloured block, hour ticks for orientation, and a live
-    // "now" marker. It makes the day's SHAPE glanceable and uses the wide panel.
-    function calendarRibbon(timed, isToday, nowMs) {
-        if (!timed.length) return '';
-        let winStart = 6 * 60, winEnd = 22 * 60;
-        timed.forEach(function (e) {
-            const s = calMinutes(e.start_time);
-            if (!Number.isFinite(s)) return;
-            winStart = Math.min(winStart, Math.floor(s / 60) * 60);
-            winEnd = Math.max(winEnd, Math.ceil((s + calDuration(e)) / 60) * 60);
-        });
-        // Keep the live "now" marker inside the window on today's view.
-        let nowMin = NaN;
-        if (isToday) {
-            const d = new Date(nowMs);
-            nowMin = d.getHours() * 60 + d.getMinutes();
-            winStart = Math.min(winStart, Math.floor(nowMin / 60) * 60);
-            // Round UP to the next hour (exclusive) so the now-line always has room
-            // to its right — on an exact hour boundary Math.ceil returns nowMin
-            // unchanged, leaving the marker at the far edge (100%) where it clips.
-            winEnd = Math.max(winEnd, (Math.floor(nowMin / 60) + 1) * 60);
+    // A compact "start – end · date" line for the expanded event detail. Falls back
+    // to just the start (or "All day") when there is no clean end/date, and shows a
+    // date RANGE for multi-day events so a spanning event isn't misrepresented as
+    // one day.
+    function calDetailWhen(item) {
+        const parts = [];
+        if (item.all_day) {
+            parts.push('All day');
+        } else {
+            const s = String(item.start_time || '').slice(0, 5);
+            const e = String(item.end_time || '').slice(0, 5);
+            if (s) parts.push((e && e !== s) ? (s + ' – ' + e) : s);
         }
-        winStart = Math.max(0, winStart);
-        winEnd = Math.min(24 * 60, Math.max(winEnd, winStart + 60));
-        const span = winEnd - winStart;
-        const pct = function (min) { return ((min - winStart) / span) * 100; };
-
-        // ~7 evenly-spaced hour labels across the window.
-        const stepH = Math.max(1, Math.round((span / 60) / 7));
-        let ticks = '';
-        for (let h = Math.ceil(winStart / 60); h * 60 <= winEnd; h += stepH) {
-            ticks += '<span class="cal-tick" style="left:' + pct(h * 60).toFixed(2) + '%">' +
-                escapeHtml(calHourLabel(h)) + '</span>';
+        const day = String(item.start_date || item.date || '').slice(0, 10);
+        const endDay = String(item.end_date || '').slice(0, 10);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+            const dm = formatCalendarDate(day);
+            if (/^\d{4}-\d{2}-\d{2}$/.test(endDay) && endDay !== day) {
+                parts.push(dm.monthDay + ' – ' + formatCalendarDate(endDay).monthDay);
+            } else {
+                parts.push(dm.weekday + ', ' + dm.monthDay);
+            }
         }
+        return parts.join(' · ');
+    }
 
-        const blocks = timed.map(function (e) {
-            const s = calMinutes(e.start_time);
-            if (!Number.isFinite(s)) return '';
-            const left = Math.max(0, pct(s));
-            const width = Math.max(2.4, Math.min(100 - left, (calDuration(e) / span) * 100));
-            const cat = calendarCategoryClass(e.category);
-            const label = (e.title || e.name || 'Event') + ' · ' + String(e.start_time || '').slice(0, 5);
-            return '<span class="cal-block sky-accent-' + escapeHtml(cat) + '" ' +
-                'style="left:' + left.toFixed(2) + '%;width:' + width.toFixed(2) + '%" ' +
-                'title="' + escapeHtml(label) + '"></span>';
+    // Build the expanded event-detail body: a small key/value stack (when, where,
+    // notes, repeats) plus Edit + Delete actions. Tapping a row reveals THIS inline
+    // (native <details>), replacing the old "re-query a generic editor card" tap.
+    function calendarDetailRows(item, title) {
+        const rows = [];
+        const when = calDetailWhen(item);
+        if (when) rows.push(['When', when]);
+        const where = String(item.location || '').trim();
+        if (where) rows.push(['Where', where]);
+        const notes = String(item.description || item.notes || '').trim();
+        if (notes) rows.push(['Notes', notes]);
+        let repeats = '';
+        if (item.recurring) {
+            // Only a PLAIN frequency word gets a friendly label; anything richer
+            // (e.g. an RRULE like "FREQ=WEEKLY;INTERVAL=2") would be misrepresented
+            // by naive capitalisation, so fall back to a neutral "Repeats".
+            const r = String(item.recurring).trim().toLowerCase();
+            repeats = /^(daily|weekly|monthly|yearly)$/.test(r)
+                ? (r.charAt(0).toUpperCase() + r.slice(1))
+                : 'Repeats';
+        }
+        if (repeats) rows.push(['Repeats', repeats]);
+
+        const grid = rows.map(function (kv) {
+            return '<div class="cal-detail-row">' +
+                '<span class="cal-detail-k">' + escapeHtml(kv[0]) + '</span>' +
+                '<span class="cal-detail-v">' + escapeHtml(kv[1]) + '</span>' +
+                '</div>';
         }).join('');
 
-        let nowLine = '';
-        if (Number.isFinite(nowMin) && nowMin >= winStart && nowMin <= winEnd) {
-            nowLine = '<span class="cal-ribbon-now" style="left:' + pct(nowMin).toFixed(2) + '%"></span>';
-        }
-
         return [
-            '<div class="cal-ribbon" aria-hidden="true">',
-            '<div class="cal-ribbon-rail">', blocks, nowLine, '</div>',
-            '<div class="cal-ribbon-axis">', ticks, '</div>',
+            '<div class="cal-detail">',
+            '<div class="cal-detail-grid">', grid, '</div>',
+            '<div class="cal-detail-actions">',
+            '<button type="button" class="cal-act cal-act-edit" data-sky-action="query" data-query="' +
+                escapeHtml(calendarEditQuery(item, title)) + '">Edit</button>',
+            '<button type="button" class="cal-act cal-act-del" data-sky-action="query" data-query="' +
+                escapeHtml(calendarDeleteQuery(item, title)) + '">Delete</button>',
+            '</div>',
             '</div>'
         ].join('');
     }
@@ -459,8 +482,8 @@
         const countLabel = events.length + ' ' + (events.length === 1 ? 'event' : 'events');
         const nowMs = Date.now();
 
-        // Local (not UTC) "today", so the ribbon's now-line + live chip only appear
-        // when the shown day really is today.
+        // Local (not UTC) "today", so the live "now" chip only appears when the
+        // shown day really is today.
         const nowDate = new Date(nowMs);
         const pad = n => String(n).padStart(2, '0');
         const todayStr = nowDate.getFullYear() + '-' + pad(nowDate.getMonth() + 1) + '-' + pad(nowDate.getDate());
@@ -493,8 +516,6 @@
         // being shown twice AND from hijacking the next-up highlight (it sorts 00:00).
         const allDay = sorted.filter(e => e.all_day);
         const agendaEvents = sorted.filter(e => !e.all_day);
-        const timed = singleDay ? agendaEvents.filter(e => Number.isFinite(calMinutes(e.start_time))) : [];
-        const ribbon = calendarRibbon(timed, isToday, nowMs);
 
         // next-up = soonest UPCOMING event; fall back to the first agenda event when
         // all are already past, so the highlight never lands on nothing.
@@ -504,17 +525,29 @@
         });
         if (heroIndex < 0) heroIndex = 0;
 
+        // All-day events are pinned chips, but each is a <details> too so tapping it
+        // reveals the SAME inline detail (when/where/notes + Edit/Delete) as a timed
+        // row — an open chip takes a full row so a multi-day span reads correctly and
+        // never falls back to the old generic editor card.
         const alldayBand = allDay.length ? (
             '<div class="cal-allday">' + allDay.map(function (e) {
                 const cat = calendarCategoryClass(e.category);
                 const label = e.title || e.name || 'All-day';
-                return '<button type="button" class="cal-chip sky-accent-' + escapeHtml(cat) + '" data-sky-action="query" data-query="' + escapeHtml(calendarEditQuery(e, label)) + '">' +
-                    '<span class="cal-chip-dot" aria-hidden="true"></span>' + escapeHtml(label) + '</button>';
+                return '<details class="cal-event cal-allday-item sky-accent-' + escapeHtml(cat) + '">' +
+                    '<summary class="cal-chip cal-summary">' +
+                        '<span class="cal-chip-dot" aria-hidden="true"></span>' +
+                        '<span class="cal-chip-label">' + escapeHtml(label) + '</span>' +
+                        '<span class="cal-caret" aria-hidden="true"></span>' +
+                    '</summary>' +
+                    calendarDetailRows(e, label) +
+                '</details>';
             }).join('') + '</div>'
         ) : '';
 
-        // Agenda: every timed event as a tap-to-edit row, next-up emphasised as
-        // .cal-hero. Grouped by day when the range spans more than one date.
+        // Agenda: every event is a native <details> row. The <summary> is the
+        // ≥44px tap target (next-up emphasised as .cal-hero); tapping it reveals an
+        // inline detail panel — when/where/notes + Edit/Delete — instead of routing
+        // to a generic editor card. Grouped by day when the range spans dates.
         let lastDate = null;
         const rows = agendaEvents.map(function (item, i) {
             const isHero = i === heroIndex;
@@ -538,9 +571,13 @@
                 }
             }
 
-            const cls = 'cal-row' + (isHero ? ' cal-hero is-next' : '') + (isPast ? ' is-past' : '') + ' sky-accent-' + cat;
-            const btn = [
-                '<button type="button" class="' + cls + '" data-sky-action="query" data-query="' + escapeHtml(calendarEditQuery(item, title)) + '">',
+            // sky-accent-* rides BOTH the <details> (so the detail panel inherits the
+            // category accent) and the .cal-hero <summary> (so the scene wash's
+            // :has(.cal-hero.sky-accent-*) still resolves the up-next colour).
+            const summaryCls = 'cal-row cal-summary' + (isHero ? ' cal-hero is-next' : '') + ' sky-accent-' + cat;
+            const eventCls = 'cal-event' + (isPast ? ' is-past' : '') + ' sky-accent-' + cat;
+            const summary = [
+                '<summary class="' + summaryCls + '">',
                 (isHero ? '<span class="cal-kicker">' + escapeHtml(isPast ? 'Earlier' : 'Up next') + '</span>' : ''),
                 '<span class="cal-time tnum"><b>' + escapeHtml(gutter.start) + '</b>' +
                     (gutter.end ? '<i>' + escapeHtml(gutter.end) + '</i>' : '') + '</span>',
@@ -548,9 +585,12 @@
                 '<span class="cal-body"><strong>' + escapeHtml(title) + '</strong>' +
                     (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</span>',
                 (isHero && when ? '<span class="cal-when">' + escapeHtml(when) + '</span>' : ''),
-                '</button>'
+                '<span class="cal-caret" aria-hidden="true"></span>',
+                '</summary>'
             ].join('');
-            return dayHead + btn;
+            const ev = '<details class="' + eventCls + '">' + summary +
+                calendarDetailRows(item, title) + '</details>';
+            return dayHead + ev;
         }).join('');
 
         // Flow the agenda into two columns on the wide panel once the day is busy,
@@ -565,10 +605,14 @@
         const body = [
             '<div class="cal-scene" data-daypart="' + calendarDaypart(nowMs) + '">',
             calendarHead(dateMeta, countLabel, isToday, nowMs),
-            ribbon,
+            // All-day band + agenda share ONE scroll region so an opened all-day
+            // detail (which expands full-width above the agenda) scrolls into reach
+            // instead of clipping past the fixed-height card.
+            '<div class="cal-scroll">',
             alldayBand,
             '<div class="cal-agenda" data-cols="' + cols + '">' + rows + '</div>',
             freeNote,
+            '</div>',
             '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'Calendar', icon: 'C' }, props), body, { wide: true, tone: 'calendar-card', hideHeader: true, hideStatus: true });
