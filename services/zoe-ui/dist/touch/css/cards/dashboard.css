@@ -261,31 +261,33 @@ body:not(.sky-empty) .sky-card.now-playing-card::after { content: none !importan
 .now-playing-card .np-bar span { display: block; height: 100%; border-radius: 999px; background: color-mix(in srgb, var(--sky-accent-mint, #5be3b0) 90%, #fff); }
 .now-playing-card .np-times { display: flex; justify-content: space-between; margin-top: 7px; font-size: var(--sky-text-caption, 13px); font-variant-numeric: tabular-nums; color: var(--sky-ink-2, rgba(255,255,255,.62)); }
 
-/* Premium transport: big circular glass buttons, mint primary emphasized. */
-.now-playing-card .np-transport { display: flex; align-items: center; gap: clamp(12px, 1.6vw, 20px); margin-top: 24px; }
-.now-playing-card .np-btn {
-  display: grid; place-items: center; width: 66px; height: 66px; border-radius: 50%;
-  border: 1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.09); color: var(--sky-ink-0, #fff); cursor: pointer;
-  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
-  box-shadow: 0 10px 24px -12px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.14);
-  transition: background var(--sky-dur-fast,160ms) ease, transform var(--sky-dur-fast,160ms) ease, border-color var(--sky-dur-fast,160ms) ease;
+/* ── "Up next" queue (canvas display; hydrated client-side from queue_id) ── */
+.now-playing-card .np-queue { margin-top: 22px; display: flex; flex-direction: column; gap: 8px; max-width: 560px; }
+.now-playing-card .np-queue[hidden] { display: none; }
+.now-playing-card .np-queue-head {
+  font-size: var(--sky-text-label, 14px); font-weight: 700; text-transform: uppercase; letter-spacing: .14em;
+  color: var(--sky-ink-2, rgba(255,255,255,.62)); margin-bottom: 2px;
 }
-.now-playing-card .np-btn svg { width: 28px; height: 28px; }
-.now-playing-card .np-btn:hover { background: rgba(255,255,255,.16); border-color: rgba(255,255,255,.26); }
-.now-playing-card .np-btn:active { transform: scale(.93); background: rgba(255,255,255,.22); }
-.now-playing-card .np-btn.np-primary {
-  width: 88px; height: 88px; color: #06231a; border-color: color-mix(in srgb, var(--sky-accent-mint, #5be3b0) 60%, transparent);
-  background: linear-gradient(160deg, color-mix(in srgb, var(--sky-accent-mint, #5be3b0) 94%, #fff), color-mix(in srgb, var(--sky-accent-cyan, #37c0e6) 72%, transparent));
-  box-shadow: 0 16px 38px -12px color-mix(in srgb, var(--sky-accent-mint, #5be3b0) 62%, transparent), inset 0 1px 0 rgba(255,255,255,.42);
+.now-playing-card .np-qrow { display: flex; align-items: center; gap: 12px; min-height: 44px; }
+.now-playing-card .np-qart {
+  flex: 0 0 auto; width: 40px; height: 40px; border-radius: 9px; overflow: hidden;
+  display: grid; place-items: center; object-fit: cover;
+  background: linear-gradient(135deg, var(--sky-accent-violet, #9b8cff), var(--sky-accent-blue, #6aa6ff));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.16);
 }
-.now-playing-card .np-btn.np-primary svg { width: 34px; height: 34px; }
+.now-playing-card .np-qart svg { width: 20px; height: 20px; fill: rgba(255,255,255,.9); }
+.now-playing-card .np-qmeta { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.now-playing-card .np-qtitle { font-size: var(--sky-text-body, 17px); font-weight: 600; color: var(--sky-ink-0, #fff); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.now-playing-card .np-qsub { font-size: var(--sky-text-caption, 13px); color: var(--sky-ink-2, rgba(255,255,255,.62)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.now-playing-card .np-qsub:empty { display: none; }
+.now-playing-card .np-qtime { margin-left: auto; flex: 0 0 auto; font-size: var(--sky-text-caption, 13px); font-variant-numeric: tabular-nums; color: var(--sky-ink-2, rgba(255,255,255,.62)); }
 
 /* Idle browse chips. */
 .now-playing-card .np-chips { margin-top: 24px; }
 
-/* ── Music hub: output/speaker picker + persistent "Add source" ──────────── */
-.now-playing-card .np-output { display: flex; align-items: center; gap: 12px; margin-top: 24px; flex-wrap: wrap; }
-.now-playing-card .np-out-btn, .now-playing-card .np-add-src {
+/* ── Library affordances: "＋ Add source" + "Browse" (canvas, not controls) ── */
+.now-playing-card .np-actions { display: flex; align-items: center; gap: 12px; margin-top: 24px; flex-wrap: wrap; }
+.now-playing-card .np-lib-btn {
   display: inline-flex; align-items: center; gap: 9px; min-height: 48px; padding: 0 18px;
   border-radius: var(--sky-radius-pill, 999px); border: 1px solid rgba(255,255,255,.18);
   background: rgba(255,255,255,.09); color: var(--sky-ink-0, #fff); cursor: pointer;
@@ -293,21 +295,11 @@ body:not(.sky-empty) .sky-card.now-playing-card::after { content: none !importan
   -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
   transition: background var(--sky-dur-fast, 160ms) ease, border-color var(--sky-dur-fast, 160ms) ease, transform var(--sky-dur-fast, 160ms) ease;
 }
-.now-playing-card .np-out-btn svg, .now-playing-card .np-add-src svg { flex: 0 0 auto; }
-.now-playing-card .np-out-name { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.now-playing-card .np-out-btn:hover, .now-playing-card .np-add-src:hover { background: rgba(255,255,255,.16); border-color: rgba(255,255,255,.26); }
-.now-playing-card .np-out-btn:active, .now-playing-card .np-add-src:active { transform: scale(.97); }
-.now-playing-card .np-out-btn[aria-expanded="true"] { border-color: color-mix(in srgb, var(--sky-accent-mint, #5be3b0) 55%, transparent); }
+.now-playing-card .np-lib-btn svg { flex: 0 0 auto; }
+.now-playing-card .np-lib-btn:hover { background: rgba(255,255,255,.16); border-color: rgba(255,255,255,.26); }
+.now-playing-card .np-lib-btn:active { transform: scale(.97); }
 
-.now-playing-card .np-outputs {
-  margin-top: 14px; display: flex; flex-direction: column; gap: 6px;
-  max-width: 520px; max-height: 260px; overflow: auto; padding: 8px;
-  border-radius: var(--sky-radius-md, 14px); border: 1px solid rgba(255,255,255,.14);
-  background: rgba(10,13,22,.6); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
-}
-.now-playing-card .np-outputs[hidden] { display: none; }
-
-/* Shared picker options (card list + mini-player popover). */
+/* Shared picker options (mini-player speaker popover). */
 .mp-opt {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   width: 100%; min-height: 44px; padding: 0 14px; border: 0; border-radius: 10px;
@@ -325,8 +317,7 @@ body:not(.sky-empty) .sky-card.now-playing-card::after { content: none !importan
   .now-playing-card .np-scene { flex-direction: column; align-items: flex-start; gap: 22px; }
   .now-playing-card .np-art { width: clamp(150px, 44vw, 240px); height: clamp(150px, 44vw, 240px); }
   .now-playing-card .np-title { font-size: clamp(26px, 7vw, 40px); }
-  .now-playing-card .np-btn { width: 58px; height: 58px; }
-  .now-playing-card .np-btn.np-primary { width: 74px; height: 74px; }
+  .now-playing-card .np-queue, .now-playing-card .np-progress { max-width: 100%; }
 }
 
 /* ── Music: add-source setup cards (catalogue + QR) ───────────────────────── */

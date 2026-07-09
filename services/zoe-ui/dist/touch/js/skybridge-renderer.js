@@ -1386,18 +1386,13 @@
         };
         return '<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true">' + (paths[name] || paths.play) + '</svg>';
     }
-    // Outline glyphs for the output/hub controls (stroke-only; the airplay
-    // triangle is the one filled shape).
+    // Outline glyphs for the canvas's library affordances (stroke-only).
     function npGlyph(name) {
         var paths = {
-            airplay: '<path d="M5 16H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-1"/><path d="M8 20l4-5 4 5z" fill="currentColor" stroke="none"/>',
-            chevron: '<path d="M6 9l6 6 6-6"/>',
-            plus: '<path d="M12 5v14M5 12h14"/>'
+            plus: '<path d="M12 5v14M5 12h14"/>',
+            library: '<path d="M4 5h4v14H4zM11 5h3v14h-3z"/><path d="M17 6l3 12"/>'
         };
         return '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (paths[name] || '') + '</svg>';
-    }
-    function npBtn(icon, query, cls) {
-        return '<button type="button" class="np-btn' + (cls ? ' ' + cls : '') + '" data-sky-action="query" data-query="' + escapeHtml(query) + '" aria-label="' + escapeHtml(query) + '">' + npIcon(icon) + '</button>';
     }
 
     // Stable on-brand ambient wash: hash the track/album to pick a ds1 accent
@@ -1424,9 +1419,11 @@
     }
 
     function renderNowPlaying(props) {
-        // Music Assistant now-playing card — album-art-forward ambient look.
-        // The SVG transport row is built here from state; each button carries
-        // data-sky-action=query so tap + voice share one resolver path.
+        // Music Assistant now-playing CANVAS — album-art-forward, display-only.
+        // Controls (transport, volume, seek, speaker) live on the floating bar
+        // (the single control surface); this card carries no transport. It shows
+        // hero art, track meta, a display-only progress bar, and an "Up next"
+        // queue the panel hydrates client-side from queue_id.
         var img = String(props.image || '');
         var sameOrigin = img && ((img.charAt(0) === '/' && img.charAt(1) !== '/') || /^https?:\/\//i.test(img));
         // Strict URL shape (no quotes/parens/backslash/whitespace/angle brackets,
@@ -1469,36 +1466,32 @@
                 + '<div class="np-times"><span>' + npTime(elapsed) + '</span><span>' + npTime(duration) + '</span></div></div>';
         }
 
-        var transport = hasTrack ? [
-            '<div class="np-transport">',
-            npBtn('voldown', 'turn the music down'),
-            npBtn('prev', 'previous song'),
-            playing ? npBtn('pause', 'pause music', 'np-primary') : npBtn('play', 'resume music', 'np-primary'),
-            npBtn('next', 'next song'),
-            npBtn('volup', 'turn the music up'),
-            '</div>'
-        ].join('') : '';
         // Browse/suggestion chips (idle card) come through props.actions.
         var chips = (!hasTrack && Array.isArray(props.actions) && props.actions.length)
             ? '<div class="sky-actions np-chips">' + props.actions.map(buttonHtml).join('') + '</div>' : '';
 
-        // Music-hub footer: speaker/output picker + a persistent "Add source"
-        // affordance. The output button is client-side (data-music-output → the
-        // panel fetches /api/music/players, persists the pick, transfers); the
-        // add-source button reuses the existing "add music" resolver flow.
-        var outName = props.player_name || 'This speaker';
-        var outputRow = [
-            '<div class="np-output">',
-            '<button type="button" class="np-out-btn" data-music-output data-music-player="' + escapeHtml(props.player_id || '') + '" aria-haspopup="listbox" aria-expanded="false">',
-            npGlyph('airplay'),
-            '<span class="np-out-name">' + escapeHtml(outName) + '</span>',
-            npGlyph('chevron'),
-            '</button>',
-            '<button type="button" class="np-add-src" data-sky-action="query" data-query="add music" aria-label="Add a music source">',
+        // "Up next" queue: an empty container the panel hydrates from queue_id via
+        // GET /api/music/queue/{queue_id} (kept off the server card so the card
+        // payload stays small + cacheable). Rendered only for a live track.
+        var upNext = hasTrack ? [
+            '<div class="np-queue" data-music-queue',
+            ' data-queue-id="' + escapeHtml(props.queue_id || props.player_id || '') + '"',
+            ' data-current-title="' + escapeHtml(props.title || '') + '" hidden>',
+            '</div>'
+        ].join('') : '';
+
+        // Library affordances (canvas owns library actions; the bar owns controls):
+        // "＋ Add source" reuses the "add music" resolver; "Browse" opens the full
+        // music library/player page.
+        var libRow = [
+            '<div class="np-actions">',
+            '<button type="button" class="np-lib-btn" data-sky-action="query" data-query="add music" aria-label="Add a music source">',
             npGlyph('plus'), '<span>Add source</span>',
             '</button>',
-            '</div>',
-            '<div class="np-outputs" data-music-picker hidden role="listbox" aria-label="Choose a speaker"></div>'
+            '<button type="button" class="np-lib-btn" data-sky-action="open" data-route="/touch/music.html" aria-label="Browse the music library">',
+            npGlyph('library'), '<span>Browse</span>',
+            '</button>',
+            '</div>'
         ].join('');
 
         var body = [
@@ -1513,9 +1506,9 @@
             props.artist ? '<span class="np-artist">' + escapeHtml(props.artist) + '</span>' : '',
             props.album ? '<span class="np-album">' + escapeHtml(props.album) + '</span>' : '',
             progress,
-            transport,
+            upNext,
             chips,
-            outputRow,
+            libRow,
             '</div>',
             '</div>'
         ].join('');

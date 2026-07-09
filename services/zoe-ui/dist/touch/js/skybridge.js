@@ -127,6 +127,10 @@
         els.npTitle = document.getElementById('skyNpTitle');
         els.npArtist = document.getElementById('skyNpArtist');
         els.npOutputs = document.getElementById('skyNpOutputs');
+        els.npScrubber = document.getElementById('skyNpScrubber');
+        els.npSeek = document.getElementById('skyNpSeek');
+        els.npElapsed = document.getElementById('skyNpElapsed');
+        els.npDuration = document.getElementById('skyNpDuration');
     }
 
     function bindEvents() {
@@ -179,6 +183,20 @@
                 npControl(btn.dataset.npAction);
             });
         }
+        if (els.npSeek) {
+            // Scrubbing: pause the client-side ticker while the user drags (so it
+            // doesn't fight the thumb), reflect the fill live, and commit the seek
+            // on release. 'change' fires on pointer-up / keyboard commit.
+            els.npSeek.addEventListener('pointerdown', () => { npSeeking = true; });
+            els.npSeek.addEventListener('input', () => {
+                npSeeking = true;
+                npRenderScrub(Number(els.npSeek.value) || 0, npDurationS);
+            });
+            els.npSeek.addEventListener('change', () => {
+                npSeeking = false;
+                npSeek(Number(els.npSeek.value) || 0);
+            });
+        }
         // Any outside tap closes an open speaker picker (card or mini-player).
         document.addEventListener('click', event => {
             if (event.target.closest('[data-music-picker], [data-music-output]')) return;
@@ -203,18 +221,6 @@
             const cancelBtn = event.target.closest('[data-timer-cancel]');
             if (cancelBtn) {
                 cancelTimerLocal(cancelBtn.dataset.timerCancel);
-                return;
-            }
-            // Music hub: speaker picker on the now-playing card (client-side, not
-            // a resolver query). Select a speaker → persist + transfer + refresh.
-            const playerBtn = event.target.closest('[data-music-player]');
-            if (playerBtn && event.target.closest('[data-music-picker]')) {
-                selectMusicPlayer(playerBtn.dataset.musicPlayer);
-                return;
-            }
-            const outBtn = event.target.closest('[data-music-output]');
-            if (outBtn) {
-                toggleMusicPicker(outBtn, outBtn.closest('.sky-card').querySelector('[data-music-picker]'));
                 return;
             }
             const btn = event.target.closest('button[data-sky-action]');
@@ -640,6 +646,7 @@
             els.cards.appendChild(node);
         }
         hydrateAuthCard(node, card);
+        hydrateNowPlayingQueue(node);
         registerTimerCard(node, card);
         updateAllClocks();
         scheduleIdleReturn();
@@ -890,6 +897,11 @@
     let npPlayerId = '';          // stick to the active player for control calls
     let npLastArt = '';           // avoid reloading identical album art each poll
     let npActive = false;         // true while something is actually playing/paused
+    let npDurationS = 0;          // current track length (s), 0 when unknown (radio)
+    let npElapsedS = 0;           // last-known elapsed (s); advanced by the ticker
+    let npIsPlaying = false;      // drives whether the ticker advances elapsed
+    let npSeeking = false;        // true while the user drags the scrubber thumb
+    let npScrubTicker = null;     // 1s interval that advances the scrubber between polls
     const MUSIC_PLAYER_KEY = 'zoe_music_player_id';  // persisted preferred speaker
 
     // The chosen output speaker persists so the whole panel (poll, control, and
@@ -957,14 +969,85 @@
         els.nowPlaying.classList.toggle('is-playing', !!isPlaying);
         els.nowPlaying.hidden = false;
         npActive = true;
+        // Scrubber: reflect server progress (unless the user is mid-drag), show it
+        // only when the source has a known duration, and (re)arm the smooth ticker.
+        npIsPlaying = !!isPlaying;
+        const dur = Number(np.duration);
+        const el = Number(np.elapsed);
+        npDurationS = isFinite(dur) && dur > 0 ? Math.floor(dur) : 0;
+        if (!npSeeking) {
+            npElapsedS = isFinite(el) && el >= 0 ? Math.min(Math.floor(el), npDurationS || Infinity) : 0;
+            npSyncScrubber();
+        }
+        npEnsureTicker();
+    }
+
+    // Show/position the scrubber for the current known progress.
+    function npSyncScrubber() {
+        if (!els.npScrubber || !els.npSeek) return;
+        if (npDurationS > 0) {
+            els.npScrubber.hidden = false;
+            els.npSeek.max = String(npDurationS);
+            if (!npSeeking) els.npSeek.value = String(npElapsedS);
+            if (els.npDuration) els.npDuration.textContent = npFormatTime(npDurationS);
+            npRenderScrub(npElapsedS, npDurationS);
+        } else {
+            els.npScrubber.hidden = true;   // radio / durationless → no scrubber
+        }
+    }
+
+    // Paint the elapsed label + track-fill percentage (no server call).
+    function npRenderScrub(elapsed, duration) {
+        if (els.npElapsed) els.npElapsed.textContent = npFormatTime(elapsed);
+        if (els.npSeek && duration > 0) {
+            const pct = Math.max(0, Math.min(100, (elapsed / duration) * 100));
+            els.npSeek.style.setProperty('--snp-seek-pct', pct.toFixed(2) + '%');
+        }
+    }
+
+    function npFormatTime(secs) {
+        secs = Math.max(0, Math.floor(Number(secs) || 0));
+        const m = Math.floor(secs / 60), s = secs % 60;
+        return m + ':' + (s < 10 ? '0' : '') + s;
+    }
+
+    // One shared 1s ticker advances the displayed elapsed while playing so the
+    // thumb glides between the 5s polls; polls remain the source of truth.
+    function npEnsureTicker() {
+        if (npScrubTicker) return;
+        npScrubTicker = setInterval(() => {
+            if (!npActive || !npIsPlaying || npSeeking || npDurationS <= 0) return;
+            if (npElapsedS >= npDurationS) return;
+            npElapsedS += 1;
+            if (els.npSeek) els.npSeek.value = String(npElapsedS);
+            npRenderScrub(npElapsedS, npDurationS);
+        }, 1000);
+    }
+
+    async function npSeek(positionSeconds) {
+        const pos = Math.max(0, Math.floor(Number(positionSeconds) || 0));
+        npElapsedS = pos;
+        npRenderScrub(pos, npDurationS);
+        try {
+            const resp = await fetch('/api/music/seek', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ position_seconds: pos, player_id: getMusicPlayerId() || npPlayerId })
+            });
+            if (!resp.ok) { pollNowPlaying(); return; }
+        } catch (_) { pollNowPlaying(); return; }
+        setTimeout(pollNowPlaying, 400);
     }
 
     function hideNowPlaying() {
         npActive = false;
+        npIsPlaying = false;
+        if (npScrubTicker) { clearInterval(npScrubTicker); npScrubTicker = null; }
         if (els.nowPlaying && !els.nowPlaying.hidden) {
             els.nowPlaying.hidden = true;
             els.nowPlaying.classList.remove('is-playing');
         }
+        if (els.npScrubber) els.npScrubber.hidden = true;
     }
 
     async function npControl(action) {
@@ -972,6 +1055,7 @@
         // Optimistic: flip the play/pause glyph immediately, then confirm by poll.
         if (action === 'play_pause' && els.nowPlaying) {
             els.nowPlaying.classList.toggle('is-playing');
+            npIsPlaying = els.nowPlaying.classList.contains('is-playing');
         }
         try {
             const resp = await fetch('/api/music/control', {
@@ -1065,6 +1149,69 @@
             document.querySelectorAll('.np-out-name').forEach(el => { el.textContent = name; });
         }
         setTimeout(pollNowPlaying, 300);
+    }
+
+    // ── "Up next" queue on the now-playing canvas ────────────────────────────
+    // The card ships an empty [data-music-queue] container (queue payload kept
+    // off the server card); we fetch the queue and render the upcoming items.
+    function npQueueItemArt(item) {
+        const mi = (item && item.media_item) || item || {};
+        let src = mi.image;
+        if (src && typeof src === 'object') src = src.path || src.url || '';
+        const imgs = (mi.metadata && mi.metadata.images) || [];
+        if (!src && Array.isArray(imgs) && imgs[0]) src = imgs[0].path || imgs[0].url || '';
+        return (typeof src === 'string' && /^(https?:\/\/|\/)[^"'()\\<>\s]+$/.test(src)) ? src : '';
+    }
+    function npQueueItemArtist(item) {
+        const mi = (item && item.media_item) || item || {};
+        const artists = mi.artists || [];
+        if (Array.isArray(artists) && artists.length) {
+            return artists.map(a => (a && (a.name || a)) || '').filter(Boolean).join(', ');
+        }
+        return mi.artist || '';
+    }
+    async function hydrateNowPlayingQueue(node) {
+        const box = node && node.querySelector('[data-music-queue]');
+        if (!box) return;
+        const queueId = box.dataset.queueId || '';
+        if (!queueId) return;
+        let items = [];
+        try {
+            const resp = await fetch('/api/music/queue/' + encodeURIComponent(queueId), { headers: { 'Accept': 'application/json' } });
+            if (!resp.ok) return;
+            const data = await resp.json();
+            items = (data && Array.isArray(data.items)) ? data.items : [];
+        } catch (_) { return; }
+        if (!box.isConnected) return;
+        const esc = window.SkybridgeRenderer.escapeHtml;
+        // Drop everything up to and including the current track, so we show only
+        // what's genuinely "up next" (MA returns the whole queue from the start).
+        const current = (box.dataset.currentTitle || '').trim();
+        let start = 0;
+        if (current) {
+            const idx = items.findIndex(it => String((it && it.name) || '').trim() === current);
+            if (idx >= 0) start = idx + 1;
+        }
+        const upcoming = items.slice(start, start + 6);
+        if (!upcoming.length) { box.hidden = true; return; }
+        const noteSvg = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 17V5l10-2v12" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="6" cy="17" r="3"/><circle cx="16" cy="15" r="3"/></svg>';
+        const rows = upcoming.map(it => {
+            const title = esc((it && it.name) || 'Track');
+            const artist = esc(npQueueItemArtist(it));
+            const art = npQueueItemArt(it);
+            const dur = Number((it && it.duration) || 0);
+            const time = dur > 0 ? npFormatTime(dur) : '';
+            const artHtml = art
+                ? '<img class="np-qart" src="' + esc(art) + '" alt="" loading="lazy">'
+                : '<span class="np-qart">' + noteSvg + '</span>';
+            return '<div class="np-qrow">' + artHtml
+                + '<span class="np-qmeta"><span class="np-qtitle">' + title + '</span>'
+                + '<span class="np-qsub">' + artist + '</span></span>'
+                + (time ? '<span class="np-qtime">' + time + '</span>' : '')
+                + '</div>';
+        }).join('');
+        box.innerHTML = '<div class="np-queue-head">Up next</div>' + rows;
+        box.hidden = false;
     }
 
     function startClockTicker() {

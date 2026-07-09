@@ -63,13 +63,18 @@ class _Intent:
 async def test_status_when_playing(monkeypatch):
     async def fake_np(pid=""):
         return {"player_id": "p1", "player_name": "Kitchen", "state": "playing",
-                "title": "So What", "artist": "Miles Davis", "album": "Kind of Blue", "image": ""}
+                "title": "So What", "artist": "Miles Davis", "album": "Kind of Blue",
+                "image": "", "queue_id": "p1", "elapsed": 42.0, "duration": 545.0}
     monkeypatch.setattr(music_service, "now_playing", fake_np)
     r = await music_service.resolve_music(_Intent("status"))
     assert r["handled"] and "So What" in r["spoken_summary"]
     card = r["cards"][0]
     assert card["card_type"] == "now_playing" and card["content"]["state"] == "playing"
-    assert card["content"]["transport"] is True
+    # Canvas card carries NO transport flag (controls live on the floating bar);
+    # it does carry the queue_id (for "Up next" hydration) + display progress.
+    assert "transport" not in card["content"]
+    assert card["content"]["queue_id"] == "p1"
+    assert card["content"]["elapsed"] == 42.0 and card["content"]["duration"] == 545.0
 
 
 @pytest.mark.asyncio
@@ -108,6 +113,81 @@ async def test_control_never_raises_when_ma_down(monkeypatch):
     monkeypatch.setattr(music_service, "get_players", no_players)
     assert await music_service.control("pause") is False
     assert await music_service.now_playing() is None
+
+
+# ── now_playing progress + hi-res art ────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_now_playing_reports_progress_and_hires_art(monkeypatch):
+    async def players():
+        return [{"player_id": "p1", "display_name": "Kitchen", "playback_state": "playing",
+                 "available": True, "powered": True, "volume_level": 30}]
+    async def fake_ma(command, **args):
+        if command == "player_queues/all":
+            return [{"queue_id": "p1", "elapsed_time": 61.4, "shuffle_enabled": False,
+                     "current_item": {"duration": 180, "media_item": {
+                        "name": "So What", "artists": [{"name": "Miles"}],
+                        "image": {"path": "https://lh3.googleusercontent.com/abc=w60-h60-l90-rj"}}}}]
+        return None
+    monkeypatch.setattr(music_service, "get_players", players)
+    monkeypatch.setattr(music_service, "_ma", fake_ma)
+    np = await music_service.now_playing()
+    assert np["title"] == "So What" and np["state"] == "playing"
+    assert np["elapsed"] == 61.4 and np["duration"] == 180.0 and np["queue_id"] == "p1"
+    # Google-hosted art bumped to a large square for the hero/thumb.
+    assert np["image"] == "https://lh3.googleusercontent.com/abc=w544-h544"
+
+
+def test_hi_res_art_leaves_other_hosts_untouched():
+    assert music_service._hi_res_art("/media/cover.png") == "/media/cover.png"
+    assert music_service._hi_res_art("https://cdn.example.com/a/cover.png") == "https://cdn.example.com/a/cover.png"
+    assert music_service._hi_res_art("") == ""
+
+
+# ── Seek (floating-bar scrubber) ─────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_seek_dispatches_queue_command(monkeypatch):
+    async def players():
+        return [{"player_id": "p1", "playback_state": "playing", "available": True, "powered": True}]
+    calls = []
+    async def fake_ma(command, **args):
+        calls.append((command, args)); return {}
+    monkeypatch.setattr(music_service, "get_players", players)
+    monkeypatch.setattr(music_service, "_ma", fake_ma)
+    assert await music_service.seek(42) is True
+    assert calls == [("player_queues/seek", {"queue_id": "p1", "position": 42})]
+
+
+@pytest.mark.asyncio
+async def test_seek_guards(monkeypatch):
+    async def players():
+        return [{"player_id": "p1", "playback_state": "playing", "available": True, "powered": True}]
+    async def boom(command, **args):
+        raise AssertionError("MA must not be called on a bad seek")
+    monkeypatch.setattr(music_service, "get_players", players)
+    monkeypatch.setattr(music_service, "_ma", boom)
+    assert await music_service.seek("abc") is False      # non-numeric position no-ops
+    async def none_players(): return []
+    monkeypatch.setattr(music_service, "get_players", none_players)
+    assert await music_service.seek(10) is False          # no players → no-op
+
+
+@pytest.mark.asyncio
+async def test_seek_endpoint_delegates(monkeypatch):
+    from routers import music as music_router
+    seen = {}
+    async def fake_seek(pos, player_id=""):
+        seen["pos"] = pos; seen["pid"] = player_id; return True
+    monkeypatch.setattr(music_service, "seek", fake_seek)
+    r = await music_router.music_seek({"position_seconds": 33, "player_id": "p1"})
+    assert r == {"ok": True, "position_seconds": 33} and seen == {"pos": 33, "pid": "p1"}
+    # invalid position → refused, service never called
+    called = {"n": 0}
+    async def guard(pos, player_id=""): called["n"] += 1; return True
+    monkeypatch.setattr(music_service, "seek", guard)
+    r2 = await music_router.music_seek({"position_seconds": "nope"})
+    assert r2["ok"] is False and called["n"] == 0
 
 
 # ── Speaker transfer (music hub) ─────────────────────────────────────────────
