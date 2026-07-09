@@ -212,6 +212,16 @@
         ['pointerdown', 'keydown', 'touchstart'].forEach(type => {
             document.addEventListener(type, noteUserActivity, { passive: true });
         });
+        // Dead album-art URLs (e.g. a radio logo that 404s) must fall back to the
+        // gradient placeholder, not the browser's broken-image glyph. `error` does
+        // not bubble, so listen in the capture phase; any flagged art <img> that
+        // fails to load is removed, revealing the gradient painted beneath it.
+        els.cards.addEventListener('error', event => {
+            const t = event.target;
+            if (t && t.tagName === 'IMG' && t.hasAttribute('data-np-art-fallback')) {
+                t.remove();
+            }
+        }, true);
         els.cards.addEventListener('click', event => {
             // Tapping anywhere on a ringing timer silences + dismisses it.
             if (event.target.closest('.sky-card.sky-timer-ringing') && acknowledgeRingingTimers()) {
@@ -1207,9 +1217,9 @@
             const art = npQueueItemArt(it);
             const dur = Number((it && it.duration) || 0);
             const time = dur > 0 ? npFormatTime(dur) : '';
-            const artHtml = art
-                ? '<img class="np-qart" src="' + esc(art) + '" alt="" loading="lazy">'
-                : '<span class="np-qart">' + noteSvg + '</span>';
+            const artHtml = '<span class="np-qart">' + noteSvg
+                + (art ? '<img src="' + esc(art) + '" alt="" loading="lazy" data-np-art-fallback>' : '')
+                + '</span>';
             return '<div class="np-qrow">' + artHtml
                 + '<span class="np-qmeta"><span class="np-qtitle">' + title + '</span>'
                 + '<span class="np-qsub">' + artist + '</span></span>'

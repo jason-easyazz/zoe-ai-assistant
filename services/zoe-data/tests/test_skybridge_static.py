@@ -1138,6 +1138,8 @@ process.stdout.write(JSON.stringify({
   placeholder_when_no_art: html.includes('np-art-empty'),
   art_backdrop_same_origin: artHtml.includes('np-art-bg') && artHtml.includes('src="/media/cover.png"'),
   art_backdrop_absolute: absHtml.includes('np-art-bg') && absHtml.includes('src="https://cdn.example.com/a/cover.png"'),
+  // Hero art overlays the gradient placeholder + carries the dead-URL fallback hook.
+  art_over_gradient_with_fallback: artHtml.includes('np-art-empty') && artHtml.includes('np-art-img') && artHtml.includes('data-np-art-fallback'),
   progress_when_elapsed: artHtml.includes('np-progress') && artHtml.includes('1:00'),
   reject_protocol_relative: !badHtml.includes('np-art-bg') && badHtml.includes('np-art-empty') && !badHtml.includes('onerror'),
   reject_angle_brackets: !angleHtml.includes('np-art-bg') && angleHtml.includes('np-art-empty')
@@ -1241,6 +1243,21 @@ def test_music_up_next_queue_hydrated_from_queue_endpoint():
     assert '@router.get("/queue/{queue_id}")' in router
     assert '@router.post("/seek")' in router
     assert "music_service.seek(pos, player_id=player_id)" in router
+
+
+def test_music_dead_art_url_falls_back_to_gradient():
+    """Dead album-art URLs (e.g. a radio logo that 404s) must fall back to the
+    gradient placeholder, not the broken-image glyph — on the card hero art, the
+    up-next thumbs, AND the floating-bar thumb (which already wires onerror)."""
+    js = read(UI / "js" / "skybridge.js")
+
+    # Card hero + up-next thumbs carry the fallback hook; a capture-phase error
+    # listener removes any flagged art <img> that fails to load.
+    assert "data-np-art-fallback" in js
+    assert "hasAttribute('data-np-art-fallback')" in js
+    assert "els.cards.addEventListener('error'" in js
+    # The floating-bar thumb mirrors this (removes the img + reveals the glyph).
+    assert "img.onerror" in js
 
 
 def test_music_transfer_endpoint_shape():

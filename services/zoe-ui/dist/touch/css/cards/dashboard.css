@@ -222,15 +222,19 @@ body:not(.sky-empty) .sky-card.now-playing-card::after { content: none !importan
 }
 .now-playing-card .np-art-wrap { flex: 0 0 auto; }
 .now-playing-card .np-art {
+  position: relative; overflow: hidden;
   width: clamp(220px, 30vw, 320px); height: clamp(220px, 30vw, 320px);
-  border-radius: var(--sky-radius-lg, 28px); object-fit: cover; display: block;
+  border-radius: var(--sky-radius-lg, 28px); display: block;
   box-shadow: 0 44px 88px -26px rgba(0,0,0,.72), 0 0 0 1px rgba(255,255,255,.08) inset, 0 1px 0 rgba(255,255,255,.16);
 }
+/* Gradient placeholder sits under the art; a dead art <img> is removed on error,
+   revealing this instead of a broken-image glyph. */
 .now-playing-card .np-art-empty {
   display: grid; place-items: center; color: rgba(255,255,255,.94);
   background: linear-gradient(150deg, var(--np-c1, #9b8cff), var(--np-c2, #6aa6ff));
 }
 .now-playing-card .np-art-empty svg { width: 42%; height: 42%; opacity: .92; filter: drop-shadow(0 8px 20px rgba(0,0,0,.4)); }
+.now-playing-card .np-art-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
 
 .now-playing-card .np-meta { display: flex; flex-direction: column; min-width: 0; gap: 10px; flex: 1 1 auto; }
 .now-playing-card .np-kicker {
@@ -270,12 +274,13 @@ body:not(.sky-empty) .sky-card.now-playing-card::after { content: none !importan
 }
 .now-playing-card .np-qrow { display: flex; align-items: center; gap: 12px; min-height: 44px; }
 .now-playing-card .np-qart {
-  flex: 0 0 auto; width: 40px; height: 40px; border-radius: 9px; overflow: hidden;
-  display: grid; place-items: center; object-fit: cover;
+  position: relative; flex: 0 0 auto; width: 40px; height: 40px; border-radius: 9px; overflow: hidden;
+  display: grid; place-items: center;
   background: linear-gradient(135deg, var(--sky-accent-violet, #9b8cff), var(--sky-accent-blue, #6aa6ff));
   box-shadow: inset 0 1px 0 rgba(255,255,255,.16);
 }
 .now-playing-card .np-qart svg { width: 20px; height: 20px; fill: rgba(255,255,255,.9); }
+.now-playing-card .np-qart img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
 .now-playing-card .np-qmeta { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
 .now-playing-card .np-qtitle { font-size: var(--sky-text-body, 17px); font-weight: 600; color: var(--sky-ink-0, #fff); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .now-playing-card .np-qsub { font-size: var(--sky-text-caption, 13px); color: var(--sky-ink-2, rgba(255,255,255,.62)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

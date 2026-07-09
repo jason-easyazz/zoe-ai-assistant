@@ -1443,9 +1443,15 @@
             + 'radial-gradient(140% 140% at 80% 118%,' + tint[0] + '80 0%,' + tint[0] + '00 55%),'
             + 'linear-gradient(155deg,#0f1220F2 0%,#0a0d16F2 100%)';
 
-        var artInner = safeArt
-            ? '<img class="np-art" src="' + escapeHtml(safeArt) + '" alt="" loading="lazy">'
-            : '<div class="np-art np-art-empty" style="--np-c1:' + tint[0] + ';--np-c2:' + tint[1] + '">' + npIcon('note') + '</div>';
+        // Always paint the gradient placeholder box; overlay the album art when a
+        // safe URL is present. A dead art URL (e.g. a radio logo that 404s) has its
+        // <img> removed on error (wired in skybridge.js, capture-phase) so the
+        // gradient shows through instead of the browser's broken-image glyph.
+        var artInner =
+            '<div class="np-art np-art-empty" style="--np-c1:' + tint[0] + ';--np-c2:' + tint[1] + '">'
+            + npIcon('note')
+            + (safeArt ? '<img class="np-art-img" src="' + escapeHtml(safeArt) + '" alt="" loading="lazy" data-np-art-fallback>' : '')
+            + '</div>';
         // Blurred art backdrop (same-origin guard already applied to safeArt).
         var artBg = safeArt
             ? '<div class="np-art-bg" style="background-image:url(&quot;' + escapeHtml(safeArt) + '&quot;)"></div>'
