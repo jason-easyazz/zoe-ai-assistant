@@ -378,6 +378,84 @@ def _pronoun_fact_candidates(
     ]
 
 
+def _slug_body(name: str) -> str:
+    """Name → the slug body person_extractor uses (``lower``, spaces → ``_``)."""
+    return (name or "").strip().lower().replace(" ", "_")
+
+
+async def _resolve_unique_person_uuid(name: str, user_id: str, db) -> Optional[str]:
+    """``people.id`` for ``name`` ONLY when the match is unambiguous, else None.
+
+    ``person_extractor._resolve_person_uuid`` does a substring ``LIKE`` and returns
+    the FIRST row, so a short extracted name ("Sam") can silently hard-link to a
+    longer contact ("Samantha"). For a HARD ``person`` link we require certainty:
+
+    * a unique exact (case-insensitive) name match → link it;
+    * a single non-exact substring hit → link ONLY when the extracted name is a
+      whole NAME TOKEN of that contact (first-name "Katie" → "Katie Brown"),
+      never a mere sub-token ("Al" ⊂ "Alice"), which would attach the fact to
+      the wrong person;
+    * anything else (zero matches, a genuinely ambiguous set, or a sub-token
+      match) → None, so the caller keeps the fact ``person_pending`` rather than
+      guess.
+
+    Uses the same dual placeholder idiom as ``_resolve_person_uuid``.
+    """
+    name = (name or "").strip()
+    if not name or not user_id or db is None:
+        return None
+    try:
+        try:
+            cur = await db.execute(
+                "SELECT id, name FROM people WHERE user_id=$1 AND deleted=0 "
+                "AND lower(name) LIKE lower($2)",
+                user_id, f"%{name}%",
+            )
+        except Exception:
+            cur = await db.execute(
+                "SELECT id, name FROM people WHERE user_id=? AND deleted=0 "
+                "AND lower(name) LIKE lower(?)",
+                (user_id, f"%{name}%"),
+            )
+        rows = await cur.fetchall()
+    except Exception as exc:
+        logger.debug("memory_extractor: unique person resolve failed for %r: %s", name, exc)
+        return None
+    if not rows:
+        return None
+    target = name.lower()
+    exact = [r for r in rows if str(r[1] or "").strip().lower() == target]
+    if len(exact) == 1:
+        return str(exact[0][0])
+    if len(exact) > 1:
+        return None  # multiple contacts with the same exact name — don't guess
+    if len(rows) == 1:
+        # Single substring hit, no exact match. Accept it ONLY when the extracted
+        # name is a whole token of the contact's name ("Katie" → "Katie Brown"),
+        # never a sub-token ("Al" ⊂ "Alice") — a sub-token would hard-link the
+        # fact to the wrong person.
+        if target in str(rows[0][1] or "").lower().split():
+            return str(rows[0][0])
+        return None
+    return None  # ambiguous substring set (e.g. "Sam" ⊂ {"Sam","Samantha"})
+
+
+async def _resolve_person_link(name: str, user_id: str, db) -> tuple[str, str]:
+    """Map a person name to ``(entity_type, entity_id)`` — person_extractor's rule.
+
+    Resolved to a real ``people`` row → ``("person", <people.id>)``; otherwise the
+    honest pending marker ``("person_pending", "slug:<name>")``. This exists so a
+    person-fact is NEVER stored as ``entity_type="person"`` with a bare name slug,
+    which mislabels an unlinked fact as if it were keyed to the people table (the
+    graph-linkage bug this producer had). Mirrors
+    ``person_extractor._ingest_to_mempalace``'s convention exactly.
+    """
+    person_uuid = await _resolve_unique_person_uuid(name, user_id, db)
+    if person_uuid:
+        return "person", str(person_uuid)
+    return "person_pending", f"slug:{_slug_body(name)}"
+
+
 def _mine_templates(text: str, source_excerpt: str, seen: set[str]) -> list[MemoryCandidate]:
     """Run the template patterns over ``text`` (behavior-identical extraction loop)."""
     out: list[MemoryCandidate] = []
@@ -505,6 +583,30 @@ async def extract_and_ingest(
     base_turn_id = hashlib.sha1(user_message.encode("utf-8", "ignore")).hexdigest()[:16]
     status = "approved" if auto_approve else "pending"
 
+    # ── fact→person linkage hygiene ─────────────────────────────────────────
+    # The person-fact candidates carry a bare name slug as ``entity_id`` with
+    # ``entity_type="person"`` — which mislabels an unresolved fact as if it were
+    # keyed to the people table. Resolve the name to a real ``people.id`` first
+    # (person_extractor's convention): resolved → ``person`` + UUID; unresolved →
+    # ``person_pending`` + ``slug:``. Only opens a DB when a person-fact is
+    # present, so ordinary turns keep their existing (no-DB) fast path.
+    person_idx = [i for i, c in enumerate(candidates) if (c.entity_type or "") == "person"]
+    resolved_links: dict[int, tuple[str, str]] = {}
+    if person_idx:
+        from person_extractor import _ensure_db
+        _db, _opened = await _ensure_db(None)
+        try:
+            for i in person_idx:
+                c = candidates[i]
+                name = (c.title or "").strip() or (c.entity_id or "").replace("_", " ")
+                resolved_links[i] = await _resolve_person_link(name, user_id, _db)
+        finally:
+            if _opened and _db is not None:
+                try:
+                    await _db.close()
+                except Exception:
+                    pass
+
     try:
         from memory_quality import is_storable_fact
     except Exception:
@@ -520,6 +622,7 @@ async def extract_and_ingest(
             _record_quality_reject(source, reason, c.text)
             continue
         user_turn_id = f"{base_turn_id}-{idx}"
+        entity_type, entity_id = resolved_links.get(idx, (c.entity_type, c.entity_id))
         ref = await svc.ingest(
             c.text,
             user_id=user_id,
@@ -530,8 +633,8 @@ async def extract_and_ingest(
             confidence=c.confidence,
             status=status,
             tags=["conversation", "auto_extract"],
-            entity_type=c.entity_type,
-            entity_id=c.entity_id,
+            entity_type=entity_type,
+            entity_id=entity_id,
         )
         if ref is not None:
             saved += 1
