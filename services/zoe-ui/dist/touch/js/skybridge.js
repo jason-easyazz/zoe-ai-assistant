@@ -223,14 +223,16 @@
             }
         }, true);
         els.cards.addEventListener('click', event => {
-            // Tapping anywhere on a ringing timer silences + dismisses it.
-            if (event.target.closest('.sky-card.sky-timer-ringing') && acknowledgeRingingTimers()) {
-                return;
-            }
-            // Per-timer Cancel button → cancel just that one (others keep running).
+            // Per-timer Cancel (✕) button → cancel just that one (others keep
+            // running). Checked BEFORE the ringing-card tap so the ✕ always closes
+            // exactly its own timer, even on a card that's currently ringing.
             const cancelBtn = event.target.closest('[data-timer-cancel]');
             if (cancelBtn) {
                 cancelTimerLocal(cancelBtn.dataset.timerCancel);
+                return;
+            }
+            // Tapping elsewhere on a ringing timer silences + dismisses it.
+            if (event.target.closest('.sky-card.sky-timer-ringing') && acknowledgeRingingTimers()) {
                 return;
             }
             const btn = event.target.closest('button[data-sky-action]');
@@ -702,6 +704,31 @@
         const safe = (window.CSS && CSS.escape) ? CSS.escape(id) : id;
         return '.sky-timer[data-timer-id="' + safe + '"]';
     }
+    // Every on-screen .sky-timer for this id. A full-deck re-render (a second
+    // timer returns the whole running set) layered over cards already on screen
+    // can briefly leave two nodes for one timer; ticking/removing must touch ALL
+    // of them, or the stale copy freezes and can't be closed.
+    function _timerEls(id) {
+        return [].slice.call(els.cards.querySelectorAll(_timerSel(id)));
+    }
+    // Collapse duplicate timer cards (keep the newest node per id) and drop orphan
+    // cards whose timer is no longer active. A full-deck re-render layered over
+    // cards already on screen can leave a stale twin that freezes and captures the
+    // single-node lookups; removing it also restores timer.css's `:only-child`
+    // full-width rule for a lone timer (a phantom twin would strand it half-width).
+    function syncTimerCards() {
+        const seen = new Set();
+        // Walk newest → oldest so the freshest node survives.
+        [].slice.call(els.cards.querySelectorAll('.sky-timer')).reverse().forEach(el => {
+            const id = el.dataset.timerId;
+            const card = el.closest('.sky-card');
+            if (!id || !activeTimers.has(id) || seen.has(id)) {
+                if (card) card.remove();
+                return;
+            }
+            seen.add(id);
+        });
+    }
     function _fmtClock(secs) {
         secs = Math.max(0, secs);
         return String(Math.floor(secs / 60)).padStart(2, '0') + ':' + String(secs % 60).padStart(2, '0');
@@ -733,6 +760,9 @@
         const id = (el && el.dataset.timerId) || props.timer_id || props.id;
         const expires = (el && +el.dataset.timerExpires) || +props.expires_at_ms;
         if (id && expires) registerTimer(id, props.label || props.title, expires, props.duration_seconds);
+        // Collapse any duplicate/orphan timer cards so a newly-added timer never
+        // freezes a stale twin (or strands a lone timer at half width).
+        syncTimerCards();
     }
     function removeTimer(id) {
         if (!id || !activeTimers.has(id)) return;
@@ -740,9 +770,11 @@
         activeTimers.delete(id);
         persistTimers();
         if (t && t.ringing) stopAlarm();
-        const el = els.cards.querySelector(_timerSel(id));
-        const card = el && el.closest('.sky-card');
-        if (card) card.remove();
+        // Remove EVERY card for this id (a stale duplicate must not linger, unclosable).
+        _timerEls(id).forEach(el => {
+            const card = el.closest('.sky-card');
+            if (card) card.remove();
+        });
         if (!activeTimers.size && timerTickHandle != null) { clearInterval(timerTickHandle); timerTickHandle = null; }
         if (!els.cards.children.length) clearCards();
     }
@@ -750,8 +782,10 @@
         const now = Date.now();
         activeTimers.forEach(t => {
             const remaining = Math.max(0, Math.ceil((t.expires - now) / 1000));
-            const el = els.cards.querySelector(_timerSel(t.id));
-            if (el) {
+            const els_ = _timerEls(t.id);
+            // Update EVERY node for this timer so each card ticks independently and
+            // no stale duplicate is left frozen on screen.
+            els_.forEach(el => {
                 const digits = el.querySelector('.sky-timer-digits');
                 const fill = el.querySelector('.sky-timer-ring-fill');
                 if (digits && !t.ringing) digits.textContent = _fmtClock(remaining);
@@ -760,28 +794,29 @@
                     fill.setAttribute('stroke-dashoffset', (100 * (1 - frac)).toFixed(2));
                     el.classList.toggle('is-low', frac <= 0.15);
                 }
-            }
-            if (remaining <= 0 && !t.ringing) fireTimer(t, el);
+            });
+            if (remaining <= 0 && !t.ringing) fireTimer(t);
         });
         if (!activeTimers.size && timerTickHandle != null) { clearInterval(timerTickHandle); timerTickHandle = null; }
     }
-    function fireTimer(t, el) {
+    function fireTimer(t) {
         t.ringing = true;
         persistTimers();
-        let card = el && el.closest('.sky-card');
-        if (!card) {   // rang while its card wasn't on screen — surface a ringing one
+        if (!_timerEls(t.id).length) {
+            // Rang while its card wasn't on screen — surface a fresh ringing one.
             addCard({ component: 'timer', props: { timer_id: t.id, label: t.label, title: t.label,
                 duration_seconds: t.duration, expires_at_ms: t.expires, status: 'expired' } }, true);
-            const found = els.cards.querySelector(_timerSel(t.id));
-            card = found && found.closest('.sky-card');
         }
-        if (card) {
-            card.classList.add('sky-timer-ringing');
-            const inner = card.querySelector('.sky-timer');
-            if (inner) inner.dataset.timerStatus = 'expired';
-            const digits = card.querySelector('.sky-timer-digits');
+        // Ring EVERY node for this id: if a stale duplicate slipped through, both
+        // must flip to the ringing/expired state so neither is left as a dead
+        // 00:00 card that ignores tap-to-dismiss.
+        _timerEls(t.id).forEach(inner => {
+            const card = inner.closest('.sky-card');
+            if (card) card.classList.add('sky-timer-ringing');
+            inner.dataset.timerStatus = 'expired';
+            const digits = inner.querySelector('.sky-timer-digits');
             if (digits) digits.textContent = "Time's up";
-        }
+        });
         const named = (t.label && t.label.toLowerCase() !== 'timer') ? t.label + ' timer' : 'Timer';
         setVoiceLayerText(named + " — time's up!");
         startAlarm();
