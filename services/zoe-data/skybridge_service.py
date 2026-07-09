@@ -42,6 +42,7 @@ class SkybridgeIntent:
     target_text: str = ""
     person_name: str = ""
     fact_text: str = ""
+    relationship: str = ""  # people/create: "add {name} as my {relationship}"
     birthday: str = ""
     duration_seconds: int = 0
     completed: bool | None = None
@@ -978,10 +979,28 @@ _IDENTITY_QUERY_RE = re.compile(
 # Surface the pending "add this known person as a contact" offers as tappable
 # person_confirm cards (as opposed to a people SEARCH). Deliberately narrow so a
 # plain "show my contacts" still falls through to the directory branch below.
+# The trailing (?!\s+to\b) keeps "...to add TO my family" (a directory op, adding
+# someone to a group) from being stolen as an offer-surface request.
 _PENDING_OFFERS_RE = re.compile(
     r"\b(?:contact suggestions|suggested contacts|pending contacts"
-    r"|contacts?\s+to\s+add|people\s+to\s+add|anyone\s+to\s+add"
-    r"|who\s+(?:can|should)\s+i\s+add|new\s+contacts?\s+to\s+add)\b",
+    r"|(?:new\s+)?contacts?\s+to\s+add|people\s+to\s+add|anyone\s+to\s+add"
+    r"|who\s+(?:can|should)\s+i\s+add)\b(?!\s+to\b)",
+    re.IGNORECASE,
+)
+
+# People CREATE from a spoken/tapped command — the person_confirm card's Add button
+# emits exactly these forms, so skybridge handles the create deterministically
+# (rather than depending on the brain fallback). Matched against the ORIGINAL-case
+# message so the contact name keeps its capitalisation.
+_PEOPLE_CREATE_AS_RE = re.compile(
+    r"^\s*(?:add|save|create)\s+(?P<name>[A-Za-z][\w.'-]*(?:\s+[A-Za-z][\w.'-]*){0,2}?)"
+    r"\s+as\s+my\s+(?P<rel>[A-Za-z][A-Za-z -]{1,24}?)\s*$",
+    re.IGNORECASE,
+)
+_PEOPLE_CREATE_TO_RE = re.compile(
+    r"^\s*(?:add|save|create)\s+(?P<name>[A-Za-z][\w.'-]*(?:\s+[A-Za-z][\w.'-]*){0,2}?)"
+    r"(?:\s+as\s+my\s+(?P<rel>[A-Za-z][A-Za-z -]{1,24}?))?"
+    r"\s+to\s+(?:my\s+)?contacts\s*$",
     re.IGNORECASE,
 )
 
@@ -1115,6 +1134,14 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
         # directory ask ("what's my name in contacts") yields to the people
         # branch below rather than being stolen by the leading identity phrase.
         return SkybridgeIntent(domain="people", action="identity")
+    _create_match = _PEOPLE_CREATE_AS_RE.match(raw_message) or _PEOPLE_CREATE_TO_RE.match(raw_message)
+    if _create_match:
+        # "add Daniel as my brother" / "add Sarah to my contacts" — the
+        # person_confirm card's Add button lands here, so the create is handled
+        # deterministically server-side (not left to the brain fallback).
+        _cname = " ".join(_create_match.group("name").split()).strip()
+        _crel = (_create_match.groupdict().get("rel") or "").strip()
+        return SkybridgeIntent(domain="people", action="create", person_name=_cname, relationship=_crel)
     if _PENDING_OFFERS_RE.search(text):
         # "any contacts to add?" / "show contact suggestions" — surface the
         # pending person_create offers as tappable Add cards, not a directory.
@@ -1414,6 +1441,8 @@ async def _resolve_with_db(intent: SkybridgeIntent, user_id: str, db: Any, *, co
             return await _resolve_people_remember_fact(intent, user_id, db)
         if intent.action == "pending_offers":
             return await _resolve_people_pending_offers(user_id, db)
+        if intent.action == "create":
+            return await _resolve_people_create(intent, user_id, db)
         return await _resolve_people(intent, user_id, db)
     return {"handled": False, "intent": None, "spoken_summary": "", "cards": []}
 
@@ -1539,6 +1568,50 @@ async def _resolve_people_pending_offers(user_id: str, db: Any) -> dict[str, Any
         "spoken_summary": spoken,
         "cards": cards,
     }
+
+
+async def _resolve_people_create(intent: SkybridgeIntent, user_id: str, db: Any) -> dict[str, Any]:
+    """Create a contact from "add {name} as my {relationship}" — the Add button's
+    command, handled deterministically here rather than via the brain fallback.
+
+    Reuses the shared `_execute_people_create_direct` path (private-by-default,
+    circle='circle', deduped), so a panel tap and a spoken command create the same
+    full, editable contact.
+    """
+    from intent_router import Intent, _execute_people_create_direct
+
+    name = (intent.person_name or "").strip()
+    rel = (intent.relationship or "").strip()
+    intent_dict = {"domain": "people", "action": "create", "query": name}
+    if not name:
+        return {
+            "handled": True,
+            "intent": intent_dict,
+            "spoken_summary": "I didn't catch who to add.",
+            "cards": [_status_card("Who should I add?", "Say e.g. “add Daniel as my brother”.", status="People")],
+        }
+    result = await _execute_people_create_direct(
+        Intent("people_create", {"name": name, "relationship": rel or None}), user_id
+    )
+    if not result:
+        return {
+            "handled": True,
+            "intent": intent_dict,
+            "spoken_summary": f"I couldn't add {name} just now.",
+            "cards": [_status_card("Couldn't add contact", f"Something went wrong adding {name}. Try again in a moment.", status="People")],
+        }
+    spoken = f"Added {name}" + (f" as your {rel}." if rel else " to your contacts.")
+    card = {
+        "component": "status",
+        "props": {
+            "title": f"Added {name}",
+            "body": spoken,
+            "status": "Contacts",
+            "tone": "hero",
+            "wide": True,
+        },
+    }
+    return {"handled": True, "intent": intent_dict, "spoken_summary": spoken, "cards": [card]}
 
 
 def _intent_dict(intent: SkybridgeIntent) -> dict[str, Any]:

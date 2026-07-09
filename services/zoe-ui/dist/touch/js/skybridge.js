@@ -244,11 +244,12 @@
                 return;
             }
             // "Not now" on a confirm card: clear it locally, no server round-trip.
-            // Return to the ambient clock once the card stack is empty.
+            // Restore the ambient clock immediately once the stack is empty (don't
+            // strand the panel in card mode waiting for the idle timer to fire).
             if (btn.dataset.skyAction === 'dismiss') {
                 const card = btn.closest('.sky-card');
                 if (card) card.remove();
-                if (!document.querySelector('#skyCards .sky-card')) scheduleIdleReturn();
+                if (!document.querySelector('#skyCards .sky-card')) returnToAmbientClock();
                 return;
             }
             let route = btn.dataset.route;

@@ -35,6 +35,61 @@ def test_classify_does_not_steal_plain_directory():
     assert intent is not None and intent.domain == "people" and intent.action == "show"
 
 
+def test_classify_offers_regex_does_not_steal_add_to_group():
+    # "contacts to add to my family" is adding someone to a group (a directory op),
+    # NOT a request to surface pending offers — the (?!\s+to\b) guard must hold.
+    intent = sky.classify_skybridge_intent("contacts to add to my family")
+    assert intent is not None and intent.action != "pending_offers"
+
+
+@pytest.mark.parametrize("msg,name,rel", [
+    ("add Daniel as my brother", "Daniel", "brother"),
+    ("add John Smith as my friend", "John Smith", "friend"),
+    ("add Sarah to my contacts", "Sarah", ""),
+    ("save Priya as my colleague", "Priya", "colleague"),
+])
+def test_classify_people_create(msg, name, rel):
+    intent = sky.classify_skybridge_intent(msg)
+    assert intent is not None, msg
+    assert intent.domain == "people" and intent.action == "create", msg
+    assert intent.person_name == name and intent.relationship == rel, msg
+
+
+@pytest.mark.asyncio
+async def test_resolve_people_create_success(monkeypatch):
+    calls = {}
+
+    async def fake_create(intent, user_id):
+        calls["name"] = intent.slots.get("name")
+        calls["rel"] = intent.slots.get("relationship")
+        calls["user"] = user_id
+        return f"Added {intent.slots.get('name')}."
+
+    import intent_router
+    monkeypatch.setattr(intent_router, "_execute_people_create_direct", fake_create)
+
+    intent = sky.SkybridgeIntent(domain="people", action="create", person_name="Daniel", relationship="brother")
+    result = await sky._resolve_people_create(intent, "u1", None)
+    assert result["handled"] is True
+    assert calls == {"name": "Daniel", "rel": "brother", "user": "u1"}
+    assert "Added Daniel" in result["spoken_summary"]
+    assert result["cards"][0]["props"]["title"] == "Added Daniel"
+
+
+@pytest.mark.asyncio
+async def test_resolve_people_create_failure_surfaces_card(monkeypatch):
+    async def fake_create(intent, user_id):
+        return None  # genuine failure
+
+    import intent_router
+    monkeypatch.setattr(intent_router, "_execute_people_create_direct", fake_create)
+
+    intent = sky.SkybridgeIntent(domain="people", action="create", person_name="Daniel", relationship="brother")
+    result = await sky._resolve_people_create(intent, "u1", None)
+    assert result["handled"] is True
+    assert result["cards"][0]["props"]["title"] == "Couldn't add contact"
+
+
 def test_person_confirm_card_with_relationship():
     card = sky._person_confirm_card("Daniel", "brother", suggestion_id="s1")
     assert card["component"] == "person_confirm"
