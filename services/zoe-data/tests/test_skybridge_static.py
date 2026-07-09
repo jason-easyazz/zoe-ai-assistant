@@ -651,7 +651,9 @@ process.stdout.write(JSON.stringify({
   notes_row: html.includes('Notes') && html.includes('Daily sync'),
   edit_query: html.includes('data-query=\"edit Standup at 08:00\"'),
   delete_action: /cal-act-del[^>]*data-sky-action=\"query\"/.test(html),
-  delete_query: html.includes('data-query=\"delete Standup at 08:00\"')
+  // anchored with "from my calendar" so the resolver always routes it to a
+  // calendar delete regardless of the saved Skybridge context (destructive).
+  delete_query: html.includes('data-query=\"delete Standup at 08:00 from my calendar\"')
 }));
 """,
         encoding="utf-8",

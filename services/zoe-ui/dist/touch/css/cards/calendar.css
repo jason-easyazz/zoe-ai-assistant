@@ -264,19 +264,19 @@ body:not(.sky-empty) .sky-card.calendar-card::after {
   padding-bottom: 2px;
   -webkit-overflow-scrolling: touch;
 }
+/* Two columns via GRID (not CSS multicol): an expanding <details> grows only its
+   own grid cell, so opening an event never rebalances/clips the whole column the
+   way multicol did — the detail actions stay in place and reachable. Row-major
+   fill keeps DOM order (earliest-first) intact. */
 .calendar-card .cal-agenda[data-cols="2"] {
-  display: block;
-  columns: 2;
-  column-gap: 20px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: start;
+  gap: 10px 20px;
 }
-.calendar-card .cal-agenda[data-cols="2"] > .cal-event {
-  break-inside: avoid;
-  margin-bottom: 10px;
-}
-/* The day header always breaks the flow full-width; the next-up hero stays in its
-   chronological slot (agenda reads earliest-first) but keeps its emphasis inline. */
+/* The day header always spans both columns. */
 .calendar-card .cal-agenda[data-cols="2"] > .cal-daygroup {
-  column-span: all;
+  grid-column: 1 / -1;
 }
 
 /* ---- Event wrapper (<details>) ------------------------------------- */

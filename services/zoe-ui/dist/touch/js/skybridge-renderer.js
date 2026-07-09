@@ -327,11 +327,14 @@
         return 'edit ' + title + (startTime ? ' at ' + startTime : '');
     }
 
-    // Sibling of calendarEditQuery for the detail's Delete action. Same time
-    // disambiguation so "delete Dentist at 15:00" targets the right instance.
+    // Sibling of calendarEditQuery for the detail's Delete action. Anchored with
+    // "from my calendar" so the resolver ALWAYS routes it to a calendar delete
+    // (the bare "delete X" form only does so when the saved context is still the
+    // calendar domain — too fragile for a destructive action). The "at <time>"
+    // still rides along inside the target so same-title events disambiguate.
     function calendarDeleteQuery(item, title) {
         const startTime = String(item.start_time || '').slice(0, 5);
-        return 'delete ' + title + (startTime ? ' at ' + startTime : '');
+        return 'delete ' + title + (startTime ? ' at ' + startTime : '') + ' from my calendar';
     }
 
     // The calendar scene takes a living time-of-day gradient (like the clock card),
@@ -354,7 +357,9 @@
     }
 
     // A compact "start – end · date" line for the expanded event detail. Falls back
-    // to just the start (or "All day") when there is no clean end/date.
+    // to just the start (or "All day") when there is no clean end/date, and shows a
+    // date RANGE for multi-day events so a spanning event isn't misrepresented as
+    // one day.
     function calDetailWhen(item) {
         const parts = [];
         if (item.all_day) {
@@ -365,9 +370,14 @@
             if (s) parts.push((e && e !== s) ? (s + ' – ' + e) : s);
         }
         const day = String(item.start_date || item.date || '').slice(0, 10);
+        const endDay = String(item.end_date || '').slice(0, 10);
         if (/^\d{4}-\d{2}-\d{2}$/.test(day)) {
             const dm = formatCalendarDate(day);
-            parts.push(dm.weekday + ', ' + dm.monthDay);
+            if (/^\d{4}-\d{2}-\d{2}$/.test(endDay) && endDay !== day) {
+                parts.push(dm.monthDay + ' – ' + formatCalendarDate(endDay).monthDay);
+            } else {
+                parts.push(dm.weekday + ', ' + dm.monthDay);
+            }
         }
         return parts.join(' · ');
     }
@@ -385,8 +395,11 @@
         if (notes) rows.push(['Notes', notes]);
         let repeats = '';
         if (item.recurring) {
+            // Only a PLAIN frequency word gets a friendly label; anything richer
+            // (e.g. an RRULE like "FREQ=WEEKLY;INTERVAL=2") would be misrepresented
+            // by naive capitalisation, so fall back to a neutral "Repeats".
             const r = String(item.recurring).trim().toLowerCase();
-            repeats = /(daily|weekly|monthly|yearly|day|week|month|year)/.test(r)
+            repeats = /^(daily|weekly|monthly|yearly)$/.test(r)
                 ? (r.charAt(0).toUpperCase() + r.slice(1))
                 : 'Repeats';
         }
