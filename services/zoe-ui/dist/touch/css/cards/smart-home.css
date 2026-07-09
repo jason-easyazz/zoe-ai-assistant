@@ -1,0 +1,164 @@
+/* Smart-home (room controls) card — tuned for the Raspberry Pi Touch Display 2
+   (7", 1280x720 landscape, finger touch). Device tiles are the hero: big,
+   finger-sized targets you tap to toggle; on-state reads at a glance via a
+   filled icon + accent glow. Scenes ride a chip row below.
+
+   Doctrine: Home Assistant is a hidden organ — plain names only, no HA jargon.
+   Accents use the CANONICAL ds1 --sky-accent-* HEX tokens via color-mix()
+   (never rgba(var(...))) so translucency stays theme-consistent. */
+
+.sky-card.smart-home-card {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: var(--sky-space-4, 16px);
+  overflow: hidden !important;
+  padding: var(--sky-space-5, 20px) !important;
+  border-radius: var(--sky-radius-xl, 34px) !important;
+  color: var(--sky-ink-0, #fff);
+  background: linear-gradient(157deg, rgba(255,255,255,.11), rgba(255,255,255,.035)) !important;
+  border: 1px solid var(--sky-hairline, rgba(255,255,255,.14)) !important;
+  box-shadow: 0 26px 60px -18px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.22) !important;
+  font-family: var(--sky-font-sans, "Inter", system-ui, -apple-system, "Segoe UI", sans-serif);
+  -webkit-font-smoothing: antialiased;
+  --sh-accent: var(--sky-accent-amber, #f5b13c);
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+.smart-home-card .sh-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.smart-home-card .sh-title {
+  font-size: var(--sky-text-title, 28px);
+  font-weight: var(--sky-weight-semibold, 600);
+  letter-spacing: -0.01em;
+  color: var(--sky-ink-0, #fff);
+}
+.smart-home-card .sh-sub {
+  font-size: var(--sky-text-label, 14px);
+  color: var(--sky-ink-2, rgba(255,255,255,.62));
+}
+
+/* ── Device grid ────────────────────────────────────────────────────────── */
+.smart-home-card .sh-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: var(--sky-space-3, 12px);
+}
+.smart-home-card .sh-tile {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: var(--sky-space-4, 16px);
+  min-height: 96px;
+  padding: var(--sky-space-4, 16px);
+  border-radius: var(--sky-radius-md, 20px);
+  border: 1px solid var(--sky-hairline, rgba(255,255,255,.14));
+  background: rgba(255,255,255,.05);
+  color: var(--sky-ink-1, rgba(255,255,255,.88));
+  text-align: left;
+  cursor: pointer;
+  transition: transform .12s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease;
+}
+.smart-home-card .sh-tile:active { transform: scale(.97); }
+.smart-home-card .sh-tile.is-on {
+  border-color: color-mix(in srgb, var(--sh-accent) 55%, transparent);
+  background: color-mix(in srgb, var(--sh-accent) 18%, rgba(255,255,255,.05));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--sh-accent) 30%, transparent),
+              0 10px 30px -12px color-mix(in srgb, var(--sh-accent) 60%, transparent);
+  color: var(--sky-ink-0, #fff);
+}
+.smart-home-card .sh-tile.is-on .sh-tile-icon { color: var(--sh-accent); }
+.smart-home-card .sh-tile.is-off-network {
+  opacity: .5;
+  cursor: default;
+}
+.smart-home-card .sh-tile-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sky-space-2, 8px);
+}
+.smart-home-card .sh-tile-icon { color: var(--sky-ink-3, rgba(255,255,255,.42)); flex: none; }
+.smart-home-card .sh-tile-name {
+  font-size: var(--sky-text-body, 16px);
+  font-weight: var(--sky-weight-medium, 500);
+  line-height: 1.2;
+}
+
+/* ── State pill ─────────────────────────────────────────────────────────── */
+.smart-home-card .sh-pill {
+  font-size: var(--sky-text-micro, 12px);
+  font-weight: var(--sky-weight-semibold, 600);
+  letter-spacing: .02em;
+  padding: 3px 9px;
+  border-radius: var(--sky-radius-pill, 999px);
+  white-space: nowrap;
+}
+.smart-home-card .sh-pill-on {
+  color: #0b0f1a;
+  background: var(--sh-accent);
+}
+.smart-home-card .sh-pill-off {
+  color: var(--sky-ink-2, rgba(255,255,255,.62));
+  background: rgba(255,255,255,.08);
+}
+
+/* ── Scenes ─────────────────────────────────────────────────────────────── */
+.smart-home-card .sh-scenes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sky-space-2, 8px);
+}
+.smart-home-card .sh-section {
+  font-size: var(--sky-text-micro, 12px);
+  font-weight: var(--sky-weight-semibold, 600);
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--sky-ink-3, rgba(255,255,255,.42));
+}
+.smart-home-card .sh-scene-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sky-space-2, 8px);
+}
+.smart-home-card .sh-scene {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sky-space-2, 8px);
+  min-height: 44px;
+  padding: 0 var(--sky-space-4, 16px);
+  border-radius: var(--sky-radius-pill, 999px);
+  border: 1px solid var(--sky-hairline, rgba(255,255,255,.14));
+  background: rgba(255,255,255,.06);
+  color: var(--sky-ink-1, rgba(255,255,255,.88));
+  font-size: var(--sky-text-label, 14px);
+  font-weight: var(--sky-weight-medium, 500);
+  cursor: pointer;
+  transition: transform .12s ease, background .18s ease;
+}
+.smart-home-card .sh-scene:active { transform: scale(.96); }
+.smart-home-card .sh-scene-dot {
+  width: 8px; height: 8px; flex: none;
+  border-radius: 50%;
+  background: var(--sky-accent-violet, #9b8cff);
+}
+
+/* ── Empty / offline ────────────────────────────────────────────────────── */
+.smart-home-card .sh-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--sky-space-6, 24px) var(--sky-space-4, 16px);
+  text-align: center;
+}
+.smart-home-card .sh-empty-title {
+  font-size: var(--sky-text-heading, 20px);
+  font-weight: var(--sky-weight-semibold, 600);
+  color: var(--sky-ink-1, rgba(255,255,255,.88));
+}
+.smart-home-card .sh-empty-sub {
+  font-size: var(--sky-text-label, 14px);
+  color: var(--sky-ink-2, rgba(255,255,255,.62));
+}
