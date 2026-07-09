@@ -122,17 +122,25 @@ memory unprompted; its understanding of the user evolves.
 - [ ] (carry-over) identity deploy `#768` — FF-deploy when the tooling/classifier outage clears
 
 ## 7. NEXT ACTION (always exactly one)
-→ **Build phase COMPLETE. All four Samantha criteria are met and measured at 100% on the LIVE Flue
-brain** (2026-07-05 full eval: 40/40 usable across fact recall ×5, emotional recall ×2, safety
-recall, + morning brief PASS — §6). 3a/3b/3c done; the acceptance suite is 8/8. The remaining work
-is **monitoring, not building** — and the one thing that would move the needle is **not a code
-task**: jason still has **0 real `emotional_moment` rows**, so the entire emotional path is proven on
-seeded/demo data and does nothing for him until a genuine emotional conversation is captured by the
-live brain. Watch with `scripts/maintenance/check_emotional_thread.py`; when the first real row
-appears, spot-check that recall + the morning brief surface it, then this is truly done for a real
-user. Do NOT resurrect the dead idle-consolidation path (§8) as "the" memory path — the live memory
-is the immediate voice/chat writers + the for-prompt packet + the Flue `recall_memory` tool
-(governed by the live persona doctrines in `labs/flue-zoe-brain/src/agents/zoe.ts`).
+
+⚠️ **CORRECTION 2026-07-09 — "Build phase COMPLETE / 40/40 / just needs a genuine
+conversation" was WRONG.** The 40/40 was recall of *seeded/authenticated* data. The
+reason jason had **0 real `emotional_moment` (or any) rows from voice** was **NOT** "he
+hasn't had an emotional conversation" — it was a **code bug**: `voice_command` runs as a
+detached task (from `voice_turn_stream`'s `ensure_future` and `panel_auth.submit_pin`'s
+`create_task`) and queried a request-scoped DB connection already released back to the
+pool → identity + auth silently resolved to guest → **every panel voice turn was dropped
+before it could be stored.** Diagnosed via the P-W0 positive-control (a live diagnostic,
+after the misdirected F6/P-F7 detours); fixed in #1191 (identity) + #1194 (auth gates +
+the racy-fallback removal). Memory recall is real; **memory *capture from voice* is
+unproven until #1194 is deployed and a spoken turn is verified to persist.**
+
+→ **NEXT ACTION: deploy #1194, speak one authenticated turn to the panel, and confirm a
+`chat_messages` row lands with `metadata.user_id=jason`** (re-run the P-W0 positive
+control). Only then is voice capture — and therefore this pillar — actually delivered.
+Watch `scripts/maintenance/check_emotional_thread.py` for the first real row. Do NOT
+resurrect the dead idle-consolidation path (§8) as "the" memory path — live memory is the
+immediate voice/chat writers + the for-prompt packet + the Flue `recall_memory` tool.
 
 ## 8. Increment 1c — enable runbooks
 

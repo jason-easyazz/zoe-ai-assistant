@@ -78,7 +78,20 @@ tests; the dead duplicate was then retired-by-removal (this PR). Do not re-execu
   issue register. **STOP:** if a red test implies a real auth bug, stop and report —
   that outranks this packet.
 
-## P-F6 — Voice-turn identity + silent FK swallow (the W0 root cause; voice path — replay gate)
+## P-F6 — Voice-turn identity fallback — ⚠️ NOT the real root cause (superseded by #1191/#1194)
+
+> **Record correction 2026-07-09.** This packet's diagnosis ("identity resolves to
+> voice-guest, fix = panel-binding fallback") treated a *symptom*. The real root cause of
+> zero-voice-persistence was found later: `voice_command` runs as a detached task and
+> queried a **request-scoped DB connection released back to the pool** (bug class known
+> since #1106, fixed for skybridge in #1118), so the identity/auth resolvers silently
+> failed → guest. P-F6 shipped (#1160) but **could not work** — its fallback used the same
+> released connection. The actual fix is #1191 (identity on a dedicated connection) +
+> #1194 (auth gates + fallback removal). **Lesson: read the failing code path to ground
+> truth before shipping a fix; the mechanism was in a code comment (`voice_tts.py` "raced
+> since #1106") the whole time.** Kept below for the record only — do not re-execute.
+
+### (original packet, symptom-level — superseded)
 
 - **Diagnosis (live, 2026-07-07):** panel turn reaches `/api/voice/wake` +
   `/turn_stream` (200s); `ui_panel_sessions` binds `zoe-touch-pi → jason`; yet the turn
