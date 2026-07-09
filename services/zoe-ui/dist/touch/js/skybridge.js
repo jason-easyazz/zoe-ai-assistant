@@ -563,6 +563,31 @@
         // weather instead of blanking the tile; a fresh weather payload updates it.
         if (weather) lastDashboardWeather = weather;
         else weather = lastDashboardWeather;
+        // Build the surface BEFORE tearing down the ambient clock. This wake used to
+        // flip the body classes (drop sky-empty / sky-ambient-clock) and only THEN
+        // call the renderer, so any throw — an odd live-weather shape from the async
+        // re-render, a missing glyph — left the clock removed and the stage empty:
+        // the "bare clock on wake". Render to a string first and bail without touching
+        // the surface if it fails, so a failed weather fetch or a renderer error can
+        // never blank the panel.
+        var markup = '';
+        try {
+            var name = panelSignedInName();
+            var sun = null;
+            try { sun = (window.SkybridgeTheme && window.SkybridgeTheme.sunTimes) ? window.SkybridgeTheme.sunTimes() : null; } catch (e) { /* sun is optional */ }
+            markup = window.SkybridgeRenderer.render({
+                component: 'dashboard',
+                props: { guest: !name, user_name: name, sun: sun, weather: weather || null }
+            });
+        } catch (e) {
+            markup = '';
+        }
+        if (!markup) {
+            // Nothing safe to show: if the dashboard is already up (a re-render failed)
+            // keep the existing tiles; otherwise leave the ambient clock in place
+            // rather than committing to a blank stage.
+            return;
+        }
         deckToken++;
         cardSequence = 0;
         document.body.classList.remove('sky-empty');
@@ -571,15 +596,7 @@
         // The dashboard IS home: the floating Home pill hides on this surface
         // (stage css) and returns as soon as any other card takes the stage.
         document.body.classList.add('sky-on-dashboard');
-        els.cards.innerHTML = window.SkybridgeRenderer.render({
-            component: 'dashboard',
-            props: (function () {
-                var name = panelSignedInName();
-                var sun = null;
-                try { sun = window.SkybridgeTheme && window.SkybridgeTheme.sunTimes ? window.SkybridgeTheme.sunTimes() : null; } catch (e) {}
-                return { guest: !name, user_name: name, sun: sun, weather: weather || null };
-            })()
-        });
+        els.cards.innerHTML = markup;
         requestAnimationFrame(resizeOrb);
     }
 

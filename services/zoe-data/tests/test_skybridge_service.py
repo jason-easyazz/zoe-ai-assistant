@@ -295,6 +295,75 @@ async def test_clock_request_returns_public_live_clock_card():
     assert "auth_required" not in result
 
 
+def test_classify_who_am_i_routes_to_identity_not_a_settings_card():
+    # "who am I" and friends must classify to a self-identity people intent so the
+    # panel renders an identity card — not fall through (None) to the brain's fuzzy
+    # "AI Training / Risk" settings match.
+    for phrase in (
+        "who am i",
+        "who am i signed in as",
+        "who's signed in",
+        "who is signed in",
+        "what's my name",
+        "what is my name",
+        "am i signed in",
+        "who do you think i am",
+    ):
+        intent = classify_skybridge_intent(phrase)
+        assert intent is not None, f"{phrase!r} should be a skybridge intent, not fall to the brain"
+        assert intent.domain == "people", phrase
+        assert intent.action == "identity", phrase
+
+    # A people SEARCH ("who is Sarah") must NOT be captured by the identity branch.
+    who_is = classify_skybridge_intent("who is Sarah")
+    assert who_is is None or who_is.action != "identity"
+
+
+def test_identity_intent_is_not_forced_behind_signin():
+    from skybridge_service import SkybridgeIntent, skybridge_intent_requires_identity
+
+    identity = SkybridgeIntent(domain="people", action="identity")
+    assert skybridge_intent_requires_identity(identity) is False
+    # A regular people read still requires a signed-in user.
+    assert skybridge_intent_requires_identity(SkybridgeIntent(domain="people", action="show")) is True
+
+
+class _UsersDb(FakeDb):
+    def __init__(self, *, user_row=None, **kwargs):
+        super().__init__(**kwargs)
+        self._user_row = user_row
+
+    async def fetch(self, *args):
+        if "FROM users" in str(args[0]):
+            return [self._user_row] if self._user_row else []
+        return await super().fetch(*args)
+
+
+@pytest.mark.asyncio
+async def test_who_am_i_returns_identity_card_for_signed_in_user():
+    db = _UsersDb(user_row={"name": "Jason", "role": "admin"})
+    result = await resolve_skybridge_request("who am i", "jason-user-1", db=db)
+
+    assert result["handled"] is True
+    assert result["intent"]["domain"] == "people"
+    assert result["intent"]["action"] == "identity"
+    assert "auth_required" not in result
+    content = result["cards"][0]["content"]
+    assert content["source"] == "person_profile"
+    assert content["person"]["name"] == "Jason"
+
+
+@pytest.mark.asyncio
+async def test_who_am_i_answers_guests_without_signin_wall():
+    result = await resolve_skybridge_request("who am i", "guest", db=GuardedGuestDb())
+
+    assert result["handled"] is True
+    assert "auth_required" not in result
+    content = result["cards"][0]["content"]
+    assert content["source"] == "person_profile"
+    assert content["person"]["name"] == "Guest"
+
+
 def test_classify_skybridge_action_requests():
     calendar_context = {"intent": {"domain": "calendar"}, "cards": []}
 
