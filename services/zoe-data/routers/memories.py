@@ -525,6 +525,17 @@ def _fold_relational_block(
 
 
 _PENDING_CONTACTS_MAX = 3
+_PENDING_FIELD_CAP = 60
+
+
+def _safe_prompt_inline(s: str, cap: int = _PENDING_FIELD_CAP) -> str:
+    """Neutralise extracted text before it enters the prompt: collapse all
+    whitespace (kills newline-based section injection), drop markdown/structure
+    chars a value could use to fake headings/citations, and cap length. Extracted
+    names/relationships are user-derived, so treat them as untrusted."""
+    s = re.sub(r"\s+", " ", (s or "")).strip()
+    s = re.sub(r"[#`*_\[\]\n\r]", "", s)
+    return s[:cap]
 
 
 async def _fold_pending_contact_offers(packet: dict[str, Any], user_id: str) -> dict[str, Any]:
@@ -540,19 +551,23 @@ async def _fold_pending_contact_offers(packet: dict[str, Any], user_id: str) -> 
     read is skipped entirely. Best-effort: never raises out of the endpoint.
     """
     try:
-        from pending_suggestions import list_pending_contacts, person_suggestions_enabled
+        from pending_suggestions import (
+            surface_pending_contacts_for_prompt,
+            person_suggestions_enabled,
+        )
         if not person_suggestions_enabled():
             return packet
-        pend = await list_pending_contacts(user_id, limit=_PENDING_CONTACTS_MAX)
+        # back-off aware: aging + expiry so an un-actioned offer stops nagging.
+        pend = await surface_pending_contacts_for_prompt(user_id, limit=_PENDING_CONTACTS_MAX)
     except Exception:
         logger.exception("memories: pending-contact offer fold failed (user=%s)", user_id)
         return packet
     bullets = []
     for p in pend:
-        name = (p.get("name") or "").strip()
+        name = _safe_prompt_inline(p.get("name") or "")
         if not name:
             continue
-        rel = (p.get("relationship") or "").strip()
+        rel = _safe_prompt_inline(p.get("relationship") or "")
         bullets.append(f"- {name}{f' ({rel})' if rel else ''} [pending-contact]")
     if not bullets:
         return packet

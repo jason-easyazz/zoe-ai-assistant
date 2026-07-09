@@ -64,8 +64,11 @@ What already works, **channel-agnostic** (chat + voice, every brain backend incl
 - **P2 — Confidence-gate LLM person extraction.** Add a verbalized-confidence field to the
   extraction prompt; **≥0.8 → auto**, **<0.4 → discard**, **else → `person_create` proposal**.
   Per-attribute. Flag-gated, replay-gated.
-- **P3 — Back-off / nag contract.** Track surfaced-count so an un-actioned offer stops after N
-  turns; a declined proposal is not re-offered.
+- **P3 — Back-off / nag contract.** ✅ **folded into P1** — `surface_pending_contacts_for_prompt`
+  ages each surfaced offer (`turns_elapsed`) and resolves it past `expire_after_turns` (default 2),
+  so an un-actioned offer stops after ~2 turns. Extracted name/relationship are **sanitised**
+  (`_safe_prompt_inline`: whitespace-collapsed, markdown/structure chars stripped, length-capped)
+  before entering the prompt — a proposal value can't inject its own heading/instructions.
 - **P4 — person_create UI confirm card** for the touch panel (`ui_components_for_suggestions`),
   matching the voice/for-prompt surface.
 
