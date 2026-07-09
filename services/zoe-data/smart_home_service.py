@@ -106,7 +106,10 @@ def _device_from_switch(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _friendly_name(row: dict[str, Any]) -> str:
-    name = str(row.get("name") or row.get("friendly_name") or "").strip()
+    # /entities rows carry the name under attributes.friendly_name; /lights and
+    # /switches rows expose it flat as "name". Accept both shapes.
+    attrs = row.get("attributes") if isinstance(row.get("attributes"), dict) else {}
+    name = str(row.get("name") or row.get("friendly_name") or attrs.get("friendly_name") or "").strip()
     if name:
         return name
     # Fall back to a humanized entity id ("switch.living_room" → "Living Room").
@@ -115,18 +118,176 @@ def _friendly_name(row: dict[str, Any]) -> str:
     return tail.replace("_", " ").title() or "Device"
 
 
+# Simulated devices in a headless Home Assistant are almost always `input_boolean`
+# helpers (the owner's real home is exactly this: Living Room Light, Kitchen Light,
+# Ceiling Fan, TV, …). They never appear under /lights or /switches, which is why
+# the card used to look empty. We pull them from /entities and infer a display
+# class from the friendly name + mdi icon so each tile gets the right glyph. They
+# toggle through the same /devices/control turn_on/turn_off path (the bridge maps
+# the service from the entity's own domain), so control stays exact + safe.
+def _entity_domain(name: str, entity_id: str, icon: str) -> str:
+    hay = f"{name} {entity_id} {icon}".lower()
+    if "fan" in hay:
+        return "fan"
+    if "tv" in hay or "television" in hay or "media" in hay:
+        return "tv"
+    if any(w in hay for w in ("light", "lamp", "bulb", "lantern", "sconce", "chandelier")):
+        return "light"
+    return "switch"
+
+
+def _device_from_entity(row: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a raw /entities row (input_boolean helper, etc.) to a device."""
+    ent = str(row.get("entity_id") or "")
+    attrs = row.get("attributes") if isinstance(row.get("attributes"), dict) else {}
+    name = _friendly_name(row)
+    icon = str(attrs.get("icon") or "")
+    state = _norm_state(row.get("state"))
+    return {
+        "entity_id": ent,
+        "name": name,
+        "domain": _entity_domain(name, ent, icon),
+        "state": state,
+        "on": state == "on",
+        "available": state in ("on", "off"),
+        "dimmable": False,  # input_boolean has no brightness channel
+        "brightness": None,
+    }
+
+
+async def _entities_in(domain: str) -> list[dict[str, Any]]:
+    data = await _ha_get(f"/entities?domain={domain}")
+    return (data or {}).get("entities", []) if isinstance(data, dict) else []
+
+
+def _is_internal(device: dict[str, Any]) -> bool:
+    """Zoe's own voice-satellite exposes internal switches (Mute, Thinking Sound)
+    as `switch.lva_*` named "zoe-touch-pi …". They are plumbing, not household
+    devices — hide them so the card shows the owner's real home, never Zoe's guts.
+    The check is tied to the satellite's auto-generated id/name shape (the `lva_`
+    id token, or the hyphenated "zoe-touch" device slug) so a genuine device is
+    never dropped for merely containing a plain word — `input_boolean.assistance_light`,
+    `switch.satellite_dish`, and a friendly "Zoe Touch Lamp" all survive."""
+    entity_id = str(device.get("entity_id") or "").lower()
+    name = str(device.get("name") or "").lower()
+    return "lva_" in entity_id or "zoe-touch" in name
+
+
 async def list_devices() -> Optional[list[dict[str, Any]]]:
-    """Combined lights + switches as normalized device dicts. None = bridge down."""
+    """Every controllable device as normalized dicts. None = bridge down.
+
+    Sources: real HA lights (/lights, dimmable) + switches (/switches) + helper
+    toggles (input_boolean via /entities), which is how a headless HA models a
+    simulated home. If EVERY source is unreachable the bridge is down; a reachable
+    bridge with no devices returns [] (an inviting empty card, not the offline one).
+    """
     lights = await _ha_get("/lights")
     switches = await _ha_get("/switches")
-    if lights is None and switches is None:
+    helpers = await _ha_get("/entities?domain=input_boolean")
+    if lights is None and switches is None and helpers is None:
         return None  # bridge unreachable — caller renders the offline card
     devices: list[dict[str, Any]] = []
     for row in (lights or {}).get("lights", []) if isinstance(lights, dict) else []:
         devices.append(_device_from_light(row))
     for row in (switches or {}).get("switches", []) if isinstance(switches, dict) else []:
         devices.append(_device_from_switch(row))
-    return devices
+    for row in (helpers or {}).get("entities", []) if isinstance(helpers, dict) else []:
+        devices.append(_device_from_entity(row))
+    # Stable de-dupe by entity id + drop Zoe's own voice-satellite internals.
+    seen: set[str] = set()
+    unique: list[dict[str, Any]] = []
+    for d in devices:
+        ent = str(d.get("entity_id") or "")
+        if ent and ent in seen:
+            continue
+        if _is_internal(d):
+            continue
+        seen.add(ent)
+        unique.append(d)
+    return unique
+
+
+# ── Rooms + climate (presentation enrichment) ────────────────────────────────
+
+# Room words we recognise in a device's friendly name so we can group tiles by
+# space ("Living Room Light" → Living Room). Multi-word rooms are matched first.
+_ROOM_PHRASES = [
+    "living room", "family room", "dining room", "laundry room", "guest room",
+    "media room", "rec room", "games room", "utility room",
+]
+_ROOM_WORDS = [
+    "kitchen", "bedroom", "bathroom", "porch", "hallway", "hall", "office",
+    "garage", "patio", "garden", "lounge", "study", "nursery", "laundry",
+    "entry", "entryway", "den", "basement", "attic", "deck", "yard", "loft",
+    "conservatory", "pantry", "landing", "closet", "balcony", "veranda",
+]
+
+
+def _room_of(name: str) -> Optional[str]:
+    low = f" {name.lower()} "
+    for phrase in _ROOM_PHRASES:
+        if f" {phrase} " in low:
+            return phrase.title()
+    for word in _ROOM_WORDS:
+        if f" {word} " in low:
+            return word.title()
+    return None
+
+
+_AROUND_HOME = "Around the home"
+
+
+def _group_rooms(devices: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Bucket device tiles by inferred room, preserving first-seen order. Devices
+    with no recognisable room fall into a single 'Around the home' group so nothing
+    is stranded. Returns [] when there are no devices (renderer shows empty state)."""
+    order: list[str] = []
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    for d in devices:
+        room = _room_of(str(d.get("name") or "")) or _AROUND_HOME
+        if room not in buckets:
+            buckets[room] = []
+            order.append(room)
+        buckets[room].append(d)
+    # Keep the catch-all group last for a tidy reading order.
+    order.sort(key=lambda r: (r == _AROUND_HOME,))
+    return [{"name": r, "devices": buckets[r]} for r in order]
+
+
+async def get_climate() -> Optional[dict[str, Any]]:
+    """Read-only comfort strip: the current room temperature + the thermostat
+    set-point, if the home exposes them. Adjusting the thermostat is deferred to a
+    later slice — this only surfaces the numbers so the card reads as a real home."""
+    numbers = await _entities_in("input_number")
+    sensors = await _ha_get("/sensors")
+    target = None
+    unit = "°"
+    for row in numbers:
+        attrs = row.get("attributes") if isinstance(row.get("attributes"), dict) else {}
+        hay = f"{attrs.get('friendly_name','')} {row.get('entity_id','')}".lower()
+        if "thermostat" in hay or "temperature" in hay or "temp" in hay:
+            try:
+                target = float(row.get("state"))
+                unit = str(attrs.get("unit_of_measurement") or unit)
+            except (TypeError, ValueError):
+                pass
+            break
+    current = None
+    sensor_rows = (sensors or {}).get("sensors", []) if isinstance(sensors, dict) else []
+    for row in sensor_rows:
+        attrs = row.get("attributes") if isinstance(row.get("attributes"), dict) else {}
+        name = str(row.get("name") or attrs.get("friendly_name") or "").lower()
+        dclass = str(attrs.get("device_class") or "").lower()
+        if dclass == "temperature" or ("current" in name and "temp" in name):
+            try:
+                current = float(row.get("state"))
+                unit = str(attrs.get("unit_of_measurement") or unit)
+            except (TypeError, ValueError):
+                pass
+            break
+    if current is None and target is None:
+        return None
+    return {"current": current, "target": target, "unit": unit}
 
 
 async def list_scenes() -> list[dict[str, Any]]:
@@ -273,6 +434,23 @@ def _scene_query(scene: dict[str, Any]) -> str:
     return f"activate {name} @{ent}" if ent else f"activate the {name} scene"
 
 
+def _tile(d: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": d.get("name"),
+        "entity_id": d.get("entity_id"),
+        "domain": d.get("domain"),
+        "state": d.get("state"),
+        "on": bool(d.get("on")),
+        "available": bool(d.get("available")),
+        "dimmable": bool(d.get("dimmable")),
+        "brightness": d.get("brightness"),
+        # Room caption on the tile itself (Apple-Home style) so a sparse home reads
+        # as composed — tiles flow across the full width instead of a thin column.
+        "room": _room_of(str(d.get("name") or "")) or "",
+        "query": _device_query(d),
+    }
+
+
 def _home_card(
     devices: list[dict[str, Any]],
     scenes: list[dict[str, Any]],
@@ -280,33 +458,54 @@ def _home_card(
     title: str = "Home",
     status: str = "Home",
     summary: str = "",
+    climate: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    tiles = [
-        {
-            "name": d.get("name"),
-            "entity_id": d.get("entity_id"),
-            "domain": d.get("domain"),
-            "state": d.get("state"),
-            "on": bool(d.get("on")),
-            "available": bool(d.get("available")),
-            "dimmable": bool(d.get("dimmable")),
-            "brightness": d.get("brightness"),
-            "query": _device_query(d),
-        }
-        for d in devices
+    tiles = [_tile(d) for d in devices]
+    # Room-grouped view (tiles carry their full contract, so the renderer can use
+    # either `rooms` or the flat `devices` list). Grouping fills the stage even
+    # when the home is sparse — a couple of tiles read as "Living Room" not "a gap".
+    rooms = [
+        {"name": g["name"], "devices": [_tile(d) for d in g["devices"]]}
+        for g in _group_rooms(devices)
     ]
     scene_tiles = [
         {"name": s.get("name"), "scene_id": s.get("scene_id"), "query": _scene_query(s)}
         for s in scenes
     ]
+    props: dict[str, Any] = {
+        "title": title,
+        "status": status,
+        "summary": summary,
+        "devices": tiles,
+        "rooms": rooms,
+        "scenes": scene_tiles,
+        # Every home card offers a way to grow — the owner's #1 ask. The panel tile
+        # re-enters the resolver with this query (tap + voice share one path).
+        "add_query": "add a device",
+        "device_count": len(tiles),
+    }
+    if climate:
+        props["climate"] = climate
+    return {"component": "smart_home", "props": props}
+
+
+def _add_device_card() -> dict[str, Any]:
+    """The '＋ Add a device' surface: a QR the owner scans with their phone to open
+    Zoe's own branded setup guide. Home Assistant is headless and its MCP bridge
+    exposes no config-flow/pairing endpoint, so Zoe can't silently finish pairing —
+    the phone page walks the owner through it honestly (see routers/smart_home_setup)."""
+    import smart_home_setup  # local import: keeps the bridge module import-light
+    minted = smart_home_setup.mint()
+    qr_path = f"/api/home/setup/qr?token={minted['token']}"
     return {
         "component": "smart_home",
         "props": {
-            "title": title,
-            "status": status,
-            "summary": summary,
-            "devices": tiles,
-            "scenes": scene_tiles,
+            "title": "Add a device",
+            "status": "Setup",
+            "mode": "setup",
+            "summary": "Scan with your phone to add a light, plug, or speaker.",
+            "qr_path": qr_path,
+            "back_query": "smart home",
         },
     }
 
@@ -338,7 +537,7 @@ def _result(spoken: str, card: dict[str, Any], action: str) -> dict[str, Any]:
 def _summarize(devices: list[dict[str, Any]]) -> str:
     on = [d for d in devices if d.get("on")]
     if not devices:
-        return "No devices are set up yet."
+        return "Your home is ready — add a device to get started."
     if not on:
         return "Everything is off."
     names = ", ".join(str(d.get("name")) for d in on[:3])
@@ -353,6 +552,14 @@ async def resolve_smart_home(intent: Any) -> dict[str, Any]:
     action = getattr(intent, "action", "status")
     query = (getattr(intent, "query", "") or "").strip()
     entity_id = (getattr(intent, "entity_id", "") or "").strip()
+
+    # "Add a device" is answerable even if the hub is momentarily unreachable — it
+    # just shows a QR for the owner's phone, so resolve it before the hub read.
+    if action == "add_device":
+        return _result(
+            "Scan the code with your phone and I'll walk you through adding a device.",
+            _add_device_card(), "add_device",
+        )
 
     devices = await list_devices()
     if devices is None:
@@ -436,4 +643,5 @@ async def resolve_smart_home(intent: Any) -> dict[str, Any]:
 
     # status / "show me the lights" / "smart home"
     summary = _summarize(devices)
-    return _result(summary, _home_card(devices, scenes, status="Home", summary=summary), "status")
+    climate = await get_climate()
+    return _result(summary, _home_card(devices, scenes, status="Home", summary=summary, climate=climate), "status")

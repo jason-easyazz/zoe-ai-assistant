@@ -1276,6 +1276,18 @@ def _classify_smart_home(text: str) -> "SkybridgeIntent | None":
     """Classify a smart-home command for the Home Assistant bridge. `text` is the
     lowercased message padded with surrounding spaces. Device control is
     household-shared (no identity gate), like clock and music."""
+    # Onboarding — the owner's key ask: a way to GROW the home from the panel.
+    # "add a device", "set up a new light", "connect a plug", "pair a sensor".
+    # Placed first so the "device" keyword here can't be swallowed by the generic
+    # overview rule below. (Smart-home runs AFTER list parsing upstream, so
+    # "add milk to the list" never reaches here.)
+    if re.search(
+        r"\b(?:add|set\s*up|connect|pair|onboard|install)\s+"
+        r"(?:(?:a|an|another|new|my|some|smart)\s+)*"
+        r"(?:device|light|lamp|bulb|plug|switch|outlet|speaker|sensor|gadget|thing)s?\b",
+        text,
+    ):
+        return SkybridgeIntent(domain="smart_home", action="add_device")
     # Tile taps carry the device's EXACT HA entity id as an "@domain.entity" marker
     # so a tap controls exactly its device (never a fuzzy name match). Voice never
     # includes it. This is the authoritative, unambiguous control path.
