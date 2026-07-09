@@ -70,7 +70,7 @@ class _DB:
         return _Cursor(rows)
 
 
-async def _open(existing=()):
+async def _open(existing=(), users=None):
     db = await aiosqlite.connect(":memory:")
     await db.execute(
         """CREATE TABLE people (
@@ -83,6 +83,10 @@ async def _open(existing=()):
             "INSERT INTO people (id, user_id, name, deleted) VALUES (?,?,?,0)",
             (f"p{i}", USER, nm),
         )
+    if users:  # {user_id: canonical_name} → a minimal users table
+        await db.execute("CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT)")
+        for uid, nm in users.items():
+            await db.execute("INSERT INTO users (id, name) VALUES (?,?)", (uid, nm))
     await db.commit()
     return db
 
@@ -366,6 +370,43 @@ def test_self_identity_tokens():
     assert cb._self_identity_tokens("jason") == frozenset({"jason"})
     assert cb._self_identity_tokens("jason_2") == frozenset({"jason"})
     assert cb._self_identity_tokens("jason.smith") == frozenset({"jason", "smith"})
+
+
+@pytest.mark.asyncio
+async def test_self_filter_uses_canonical_name_for_handle_id(monkeypatch):
+    # A handle id ("easyazz") shares no token with the user's real name, so the
+    # canonical `users.name` ("Jason Smith") is folded into the self-filter and
+    # the user's own name from portrait/fact prose is still dropped.
+    monkeypatch.setenv("ZOE_CONTACT_BACKFILL_ENABLED", "1")
+    db = await _open(users={"easyazz": "Jason Smith"})
+    try:
+        _fake_memory_source(monkeypatch, [_Ref("Karen loves tea.")])
+        _use_db(monkeypatch, db)
+
+        async def _llm(_text):
+            return [("Jason", None), ("Karen", "sister")]
+
+        monkeypatch.setattr(cb, "_llm_extract_people", _llm)
+        stored = _capture_store(monkeypatch)
+
+        await cb.backfill_contacts("easyazz")
+
+        names = {s["pre_filled_slots"]["name"] for s in stored}
+        assert "Jason" not in names   # own name recognised via canonical users.name
+        assert "Karen" in names
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_canonical_name_tokens_missing_users_table_is_graceful(monkeypatch):
+    # No users table → best-effort empty set, backfill still runs on id tokens.
+    db = await _open()
+    try:
+        toks = await cb._canonical_name_tokens("easyazz", _DB(db))
+        assert toks == frozenset()
+    finally:
+        await db.close()
 
 
 @pytest.mark.asyncio

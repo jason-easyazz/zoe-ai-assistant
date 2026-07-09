@@ -333,10 +333,38 @@ async def _llm_extract_people(text: str) -> list[tuple[str, str | None]]:
 _SELF_TOKEN_RE = re.compile(r"[^a-z]+")
 
 
+def _name_tokens(raw: str) -> frozenset[str]:
+    """Alphabetic (≥2-char) lowercase tokens of ``raw`` (a name or id)."""
+    return frozenset(t for t in _SELF_TOKEN_RE.split(str(raw or "").lower()) if len(t) >= 2)
+
+
 def _self_identity_tokens(user_id: str) -> frozenset[str]:
     """Comparable identity tokens for the user id (see note above)."""
-    raw = str(user_id or "").strip().lower()
-    return frozenset(t for t in _SELF_TOKEN_RE.split(raw) if len(t) >= 2)
+    return _name_tokens(str(user_id or "").strip())
+
+
+async def _canonical_name_tokens(user_id: str, db) -> frozenset[str]:
+    """Identity tokens from the user's CANONICAL display name (``users.name``).
+
+    The raw id can be a handle ("easyazz") that shares no token with the name
+    the portrait/facts use ("Jason"), which would let the user's own name slip
+    through the self-filter. Fold in their real name so "Jason is …" prose is
+    still recognised as the user. Best effort: '' on any error (no users table,
+    no db) so backfill still runs on the id tokens alone.
+    """
+    if db is None:
+        return frozenset()
+    try:
+        try:
+            cur = await db.execute("SELECT name FROM users WHERE id=$1", user_id)
+        except Exception:
+            cur = await db.execute("SELECT name FROM users WHERE id=?", (user_id,))
+        row = await cur.fetchone()
+        if row and row[0]:
+            return _name_tokens(row[0])
+    except Exception as exc:
+        logger.debug("contact_backfill: canonical-name read failed user=%s: %s", user_id, exc)
+    return frozenset()
 
 
 # ── Backfill entry point ──────────────────────────────────────────────────────
@@ -388,7 +416,7 @@ async def backfill_contacts(
     knowledge_texts = [t for t in knowledge_texts if t]
 
     self_name = str(user_id).strip().lower()
-    self_tokens = _self_identity_tokens(user_id)
+    self_tokens = set(_self_identity_tokens(user_id))  # augmented w/ canonical name below
     people: dict[str, tuple[str, str | None]] = {}
 
     def _record(name: str, rel: str | None) -> None:
@@ -423,6 +451,10 @@ async def backfill_contacts(
     if _db is None:
         return summary
     try:
+        # 2a0) Fold the user's canonical display name into the self-filter, so a
+        # handle id ("easyazz") still recognises "Jason is …" prose as the user.
+        self_tokens |= await _canonical_name_tokens(user_id, _db)
+
         # 2a) Add the synthesized portrait prose as another person-knowledge
         # source (third-person narrative the go-forward extractor never sees).
         portrait = await _load_portrait_text(user_id, _db)
