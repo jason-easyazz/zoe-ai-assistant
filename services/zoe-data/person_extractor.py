@@ -18,6 +18,10 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
+# db_pool is a low-level module (no app-module deps → no import cycle); needed at
+# module scope so _OwnedDb can subclass AsyncpgCompat.
+from db_pool import AsyncpgCompat, _release_safely, get_pool
+
 logger = logging.getLogger(__name__)
 
 # ── Temporal-relationships flag (default OFF) ─────────────────────────────────
@@ -256,14 +260,44 @@ async def _create_partial_person(name: str, user_id: str, db) -> Optional[str]:
         return None
 
 
+class _OwnedDb(AsyncpgCompat):
+    """An ``AsyncpgCompat`` that OWNS its pooled connection until ``.close()``.
+
+    ``AsyncpgCompat.close()`` is a pool-managed no-op, and ``db_pool.get_db()``
+    only releases its connection from the generator's ``finally``. So the old
+    ``_ensure_db`` (``async for _db in get_db(): return _db``) abandoned that
+    generator — the ``finally`` then released the connection back to the pool
+    (on GC), handing callers a DEAD connection ("connection has been released
+    back to the pool"), which silently broke the idle re-linker and the
+    write-path person resolution. This subclass acquires the connection
+    directly and gives ``close()`` a REAL release, so the ``(db, opened)`` +
+    ``await _db.close()`` caller contract keeps working correctly.
+    """
+
+    __slots__ = ("_pool", "_owned_conn")
+
+    def __init__(self, pool, conn) -> None:
+        super().__init__(conn)
+        self._pool = pool
+        self._owned_conn = conn
+
+    async def close(self) -> None:
+        await _release_safely(self._pool, self._owned_conn)
+
+
 async def _ensure_db(db_arg):
-    """Return a DB connection: use db_arg if provided, else open a new one."""
+    """Return ``(db, opened)``: use ``db_arg`` if given, else open a pooled one.
+
+    When opening our own, HOLD the pooled connection (via ``_OwnedDb``) until the
+    caller's ``await _db.close()`` releases it — never hand back a released
+    connection.
+    """
     if db_arg is not None:
         return db_arg, False
     try:
-        from database import get_db
-        async for _db in get_db():
-            return _db, True
+        pool = get_pool()
+        conn = await pool.acquire()
+        return _OwnedDb(pool, conn), True
     except Exception as exc:
         logger.warning("person_extractor: could not open DB: %s", exc)
         return None, False
