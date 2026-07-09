@@ -53,10 +53,15 @@ async def _open():
 async def test_people_create_ensures_user_then_persists(monkeypatch):
     conn = await _open()
     try:
+        used = {"n": 0}
+
         @contextlib.asynccontextmanager
         async def fake_ctx():
+            used["n"] += 1  # spy: proves the injected FK db was used, not the real pool
             yield _Shim(conn)
 
+        # The handler does an in-function `from database import get_db_ctx`, so it
+        # resolves database.get_db_ctx at call time — patching it here IS picked up.
         monkeypatch.setattr(database, "get_db_ctx", fake_ctx)
 
         async def _noop(*a, **k):
@@ -71,6 +76,7 @@ async def test_people_create_ensures_user_then_persists(monkeypatch):
         # Direct handler must SUCCEED (a truthy string) — not return None and
         # fall back to the mcporter path that persists nothing.
         assert res and "Priya Sharma" in res
+        assert used["n"] >= 1, "handler must have used the injected FK db, not the real pool"
 
         async with conn.execute(
             "SELECT name, relationship FROM people WHERE user_id='newbie' AND deleted=0"
