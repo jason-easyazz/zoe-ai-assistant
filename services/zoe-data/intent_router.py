@@ -2452,8 +2452,12 @@ async def _execute_people_create_direct(intent: Intent, user_id: str) -> Optiona
     if not name:
         return None
     relationship = slots.get("relationship") or None
-    circle = str(slots.get("circle") or "circle").strip() or "circle"
+    circle = str(slots.get("circle") or "").strip() or None
     context = str(slots.get("context") or "personal").strip() or "personal"
+    # Private by default — a contact created by voice/chat should not be shared
+    # with the whole family unless asked. Owner still sees it (people reads are
+    # `visibility='family' OR user_id=caller`). Mirrors PR #1177.
+    visibility = str(slots.get("visibility") or "").strip() or "personal"
     try:
         from database import get_db_ctx
 
@@ -2474,7 +2478,7 @@ async def _execute_people_create_direct(intent: Intent, user_id: str) -> Optiona
                 "INSERT INTO people (id, user_id, name, relationship, birthday, phone, email,"
                 " notes, visibility, circle, context) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (person_id, user_id, name, relationship, None, None, None, None,
-                 "family", circle, context),
+                 visibility, circle, context),
             )
             try:
                 from routers.people import _store_person_memory  # type: ignore
