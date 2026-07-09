@@ -605,9 +605,14 @@
         const body = [
             '<div class="cal-scene" data-daypart="' + calendarDaypart(nowMs) + '">',
             calendarHead(dateMeta, countLabel, isToday, nowMs),
+            // All-day band + agenda share ONE scroll region so an opened all-day
+            // detail (which expands full-width above the agenda) scrolls into reach
+            // instead of clipping past the fixed-height card.
+            '<div class="cal-scroll">',
             alldayBand,
             '<div class="cal-agenda" data-cols="' + cols + '">' + rows + '</div>',
             freeNote,
+            '</div>',
             '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'Calendar', icon: 'C' }, props), body, { wide: true, tone: 'calendar-card', hideHeader: true, hideStatus: true });

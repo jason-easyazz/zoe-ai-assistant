@@ -273,22 +273,34 @@ body:not(.sky-empty) .sky-card.calendar-card::after {
 }
 
 /* ====================================================================== */
-/* Agenda — every event is a native <details> (.cal-event). The <summary>   */
-/* (.cal-row) is the tap target; opening it reveals .cal-detail inline.      */
-/* Single column when light; flows into two columns on the wide panel once   */
-/* the day is busy. Scrolls so an opened detail never clips the card.        */
+/* Scroll region — the all-day band + agenda scroll TOGETHER, so an opened   */
+/* all-day detail (full-width, above the agenda) scrolls into reach instead   */
+/* of clipping past the fixed-height card. Header stays pinned above it.      */
 /* ====================================================================== */
-.calendar-card .cal-agenda {
+.calendar-card .cal-scroll {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--sky-space-4, 16px);
   overflow-y: auto;
   overscroll-behavior: contain;
   /* room so the last row's focus ring / open detail isn't flush to the edge */
   padding-bottom: 2px;
   -webkit-overflow-scrolling: touch;
+}
+
+/* ====================================================================== */
+/* Agenda — every event is a native <details> (.cal-event). The <summary>   */
+/* (.cal-row) is the tap target; opening it reveals .cal-detail inline.      */
+/* Single column when light; flows into two columns on the wide panel once   */
+/* the day is busy. Lives inside .cal-scroll, so it sizes to its content.     */
+/* ====================================================================== */
+.calendar-card .cal-agenda {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 /* Two columns via GRID (not CSS multicol): an expanding <details> grows only its
    own grid cell, so opening an event never rebalances/clips the whole column the

@@ -644,6 +644,9 @@ const html = R.render({ card_type: 'generic', schema_version: '1.0.0', card_id: 
 } });
 process.stdout.write(JSON.stringify({
   no_ribbon: !html.includes('cal-ribbon') && !html.includes('cal-block'),
+  // all-day band + agenda share one scroll region so opened details never clip.
+  scroll_wraps: /<div class=\"cal-scroll\"><div class=\"cal-allday\"/.test(html)
+    && html.indexOf('cal-scroll') < html.indexOf('cal-agenda'),
   // 2 timed rows + 1 all-day event, each a <details>.
   is_details: (html.match(/<details class=\"cal-event/g) || []).length === 3,
   has_summary: html.includes('<summary class=\"cal-row'),
