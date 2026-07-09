@@ -1162,6 +1162,12 @@
         if (!src && Array.isArray(imgs) && imgs[0]) src = imgs[0].path || imgs[0].url || '';
         return (typeof src === 'string' && /^(https?:\/\/|\/)[^"'()\\<>\s]+$/.test(src)) ? src : '';
     }
+    function npQueueItemTitle(item) {
+        // Prefer the underlying media item's name (matches how now_playing derives
+        // the current title); fall back to the QueueItem's own name.
+        const mi = (item && item.media_item) || {};
+        return String((mi && mi.name) || (item && item.name) || '').trim();
+    }
     function npQueueItemArtist(item) {
         const mi = (item && item.media_item) || item || {};
         const artists = mi.artists || [];
@@ -1189,14 +1195,14 @@
         const current = (box.dataset.currentTitle || '').trim();
         let start = 0;
         if (current) {
-            const idx = items.findIndex(it => String((it && it.name) || '').trim() === current);
+            const idx = items.findIndex(it => npQueueItemTitle(it) === current);
             if (idx >= 0) start = idx + 1;
         }
         const upcoming = items.slice(start, start + 6);
         if (!upcoming.length) { box.hidden = true; return; }
         const noteSvg = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 17V5l10-2v12" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="6" cy="17" r="3"/><circle cx="16" cy="15" r="3"/></svg>';
         const rows = upcoming.map(it => {
-            const title = esc((it && it.name) || 'Track');
+            const title = esc(npQueueItemTitle(it) || 'Track');
             const artist = esc(npQueueItemArtist(it));
             const art = npQueueItemArt(it);
             const dur = Number((it && it.duration) || 0);
