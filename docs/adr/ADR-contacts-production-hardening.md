@@ -2,10 +2,11 @@
 
 ## Status
 
-Proposed (2026-07-09). Extends [ADR-contacts-from-known-people.md](ADR-contacts-from-known-people.md)
-with an internet-researched, best-practice review and the remaining work to make the
-people-memory system production-grade. Supersedes the earlier assumption that "propose-on-mention
-doesn't fire on flue" (that was a false negative — see §3).
+Accepted (2026-07-09) — P1/P2/P3/P5 delivered and verified live; **P4 in flight**. Extends
+[ADR-contacts-from-known-people.md](ADR-contacts-from-known-people.md) with an internet-researched,
+best-practice review. Supersedes the earlier assumption that "propose-on-mention doesn't fire on
+flue" (that was a false negative — see §3). Operational companion (live flag state, the write-path
+FK bug class, E2E harness traps): [contacts-people-memory](../knowledge/contacts-people-memory.md).
 
 ## Context — what production systems do (researched 2026-07-09)
 
@@ -37,10 +38,18 @@ What already works, **channel-agnostic** (chat + voice, every brain backend incl
 
 | Capability | Where | Status |
 |---|---|---|
-| Explicit contact create (`people_create` tool) | `intent_router._execute_people_create_direct` | ✅ **fixed** (#1200 FK, #1203 private-by-default) |
+| Explicit contact create (`people_create` tool) | `intent_router._execute_people_create_direct` | ✅ **fixed** (#1200 ensure-user FK, #1203 private-by-default, #1216 circle NOT NULL) |
+| Propose-on-mention persistence (`store_suggestions`) | `pending_suggestions.store_suggestions` | ✅ **fixed** (#1215 ensure-user FK + swallowed-except→WARNING; stored 0 rows before) |
 | Passive capture: likes, LLM person-extraction, **propose-on-mention** | `_persist_memory_candidates` (chat.py) + `voice_tts.py:2284` | ✅ fires on flue — but note: voice capture persisted **0 turns** until the detached-task released-connection bug was fixed (#1191/#1194; history in #1195). A live spoken "niece" mention creating a `person_create` proposal is the live proof #1195 was waiting for. |
 | Dossier render of contacts | `zoe_memory_compose` | ✅ live |
 | Backfill known people → proposals + delivery list | `contact_backfill.py`, `/pending-contacts` | ✅ merged |
+
+**Verified live E2E (2026-07-09, demo user):** create+persist+dossier, propose-on-mention (3
+forms: "my brother Daniel", "Fiona, my friend", "Priya Sharma my colleague"), flue for-prompt
+surfacing, and cross-user visibility isolation all **PASS**; the accept→contact path passes at the
+`execute_suggestion` layer (the HTTP accept endpoint needs a real panel session, not the script's
+internal-token override — see the operational companion's harness traps). The FK/visibility/circle
+bugs above were all found *by* this E2E pass, not by unit tests.
 
 ## §3 The real gaps (corrected)
 
