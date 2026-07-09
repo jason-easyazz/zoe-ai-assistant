@@ -36,6 +36,19 @@ async def store_suggestions(
     stored = 0
     try:
         async with get_db_ctx() as db:
+            # Ensure the acting user exists: pending_suggestions.user_id FKs to
+            # users(id), and the voice/tool paths that call this (propose-on-
+            # mention, backfill) do NOT run the chat path's
+            # _ensure_user_and_chat_session — so an identity that only has
+            # memories (no users row) would FK-fail here, silently drop the
+            # proposal, and the offer never appears. Same fix class as
+            # people_create (#1200).
+            await db.execute(
+                "INSERT INTO users (id, name, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+                user_id,
+                user_id,
+                "member",
+            )
             for s in suggestions[:3]:
                 sid = str(uuid.uuid4())
                 slots = s.get("pre_filled_slots") or {}
