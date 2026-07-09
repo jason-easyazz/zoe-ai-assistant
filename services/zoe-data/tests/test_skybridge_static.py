@@ -924,6 +924,14 @@ out.no_compose_needed = {
   scene: bareHtml.includes('sky-card') && bareHtml.includes('gx-scene'),
   no_tree: !bareHtml.includes('zx-root')
 };
+// smart_home still renders through zoe-compose; with NO catalog loaded it must
+// degrade to a readable escaped body inside the card shell — never blank.
+const bareSmart = bare.window.SkybridgeRenderer.render({ component: 'smart_home', props: { title: 'Lights ' + INJ, devices: [{ name: 'Lamp ' + INJ, state: 'on' }] } });
+out.smart_home_no_compose_fallback = {
+  shell: bareSmart.includes('sky-card'),
+  text: bareSmart.includes('Lights sneaky') && bareSmart.includes('&lt;b&gt;x&lt;/b&gt;'),
+  no_raw_injection: !bareSmart.includes('<b>x</b>')
+};
 process.stdout.write(JSON.stringify(out));
 """,
         encoding="utf-8",
