@@ -10,10 +10,12 @@ scope: Zoe memory subsystem vs the 2026 agent-memory field + best-practice gap a
 **Verdict:** Zoe's memory system is *mature and closely aligned with 2026 best
 practices* — it already implements the field's headline technique (multi-signal
 retrieval) and Mem0's ADD/UPDATE/SKIP reconciliation, and it is **local/private
-and governance-gated**, which the hosted leaders (Mem0, Zep) are not. The real
-gaps are **measurement** (no standardized benchmark run), **proactive
-contradiction detection** (an industry-wide weak spot), and **active
-forgetting/consolidation** (the store only decays in ranking, it doesn't prune).
+and governance-gated**, which the hosted leaders (Mem0, Zep) are not. It even
+has the two things a first read mistook for gaps — **proactive contradiction
+detection** and **active consolidation** — already live in the nightly digest
+(see §4 correction). The one genuine gap is **measurement** (no standardized
+benchmark run yet); the rest is operational (keep the nightly cycle healthy;
+close the W0 identity issue).
 
 Grounded in a 2026-07-09 read of the code (26 memory modules) + web research
 (sources at the end). Every Zoe claim carries a `file`/`file:line`.
@@ -88,8 +90,8 @@ conflicting high-confidence memories."**
 | Evidence-gating + governance | ✅ **ahead** — admission gates, Multica review | `zoe_memory_admission.py` |
 | **Local / private** | ✅ **differentiator** (Mem0/Zep default hosted) | rock; `ADR-hindsight-bakeoff` rejects cloud LLM |
 | **Standardized benchmark (LOCOMO / LongMemEval)** | ❌ **gap** — only a bespoke 40/40 eval | — |
-| **Proactive contradiction *detection*** (scan the store) | ⚠️ partial — supersede-on-write + newest-first read, no store-wide scan | `#1124`, `memory_quality` |
-| **Active forgetting / consolidation** (prune, not just decay) | ⚠️ gap — `memory_lint` is report-only; expiry is opt-in | `memory_lint.py:13` |
+| **Proactive contradiction detection** (idle LLM-judge + supersede) | ✅ **live** — the nightly `memory_digest` LLM-judges each new fact vs existing person-facts and supersedes conflicts (`review(decision="edit")`) | `memory_digest.py:219,443`, `zoe-dreaming.timer`, `MEMORY_DIGEST_ENABLED=true` |
+| **Active forgetting / consolidation** (prune stale/low-score) | ✅ **live** — `sweep_soft_archive` (score = conf·decay + log access; age ≥ 30d, score < 0.02) runs inside the digest; reversible soft-archive | `memory_service.py:792`, `memory_digest.py:850`, `ZOE_IDLE_CONSOLIDATION_ENABLED=1` |
 | Post-retrieval reranker (cross-encoder) | ❌ deliberately omitted (RAM budget) | see §4 |
 
 ---
@@ -104,23 +106,31 @@ conflicting high-confidence memories."**
    "we think recall is good" into a number and exposes the weak categories.
    *(A first slice ships with this audit — see §5.)* RAM-safe: read-path + a
    small Q set.
-2. **Proactive contradiction detection (idle).** The industry's named unsolved
-   gap; Zoe already supersedes same-attribute contradictions *at write time* —
-   extend that into a `memory_digest` pass that samples same-subject/predicate
-   fact pairs, LLM-judges conflict (local `MEMORY_DIGEST_MODEL`), and
-   flags/supersedes. Idle ⇒ no turn latency. (Mirrors GBrain / Zep invalidation.)
-3. **Active forgetting / consolidation.** `memory_lint` already *finds* stale /
-   duplicate / superseded rows — promote a flag-gated **executor** that archives
-   them (soft-delete, reversible) so the store consolidates instead of only
-   decaying in ranking. Bounds the vector index and cuts stale-fact recall.
-4. **Staleness guards on high-confidence facts.** The #1 field failure mode:
+   > **Correction (2026-07-09, second pass):** the original audit listed
+   > contradiction detection and active consolidation as gaps. A closer read
+   > found **both are already implemented AND run nightly** — the `memory_digest`
+   > LLM-contradiction-judge + supersede (`memory_digest.py:219,443`) and
+   > `sweep_soft_archive` consolidation (`memory_service.py:792`, wired at
+   > `memory_digest.py:850`), fired by `zoe-dreaming.timer` (last run confirmed
+   > ~19h before this note) under `MEMORY_DIGEST_ENABLED` + `ZOE_IDLE_CONSOLIDATION_ENABLED`.
+   > So the two mid-tier "gaps" are actually **live features**; the scorecard is
+   > corrected above. This strengthens the verdict: on the feature axis Zoe is
+   > effectively complete — the remaining work is *measurement* and *operations*,
+   > not new memory machinery.
+2. **Verify the nightly cycle keeps firing + widen its coverage.** Since
+   contradiction-resolution and consolidation live in the nightly digest, their
+   value depends entirely on `zoe-dreaming.timer` staying scheduled and healthy
+   (it is, as of this audit). Watch it; consider surfacing digest outcomes in
+   `memory_metrics`. Optionally extend the contradiction judge beyond person-facts
+   to high-salience *attribute* facts (employer/city).
+3. **Staleness guards on high-confidence facts.** The #1 field failure mode:
    confident-but-outdated facts (job/location changes). Zoe's temporal edges
    cover *relationships*; extend supersession-on-change to high-salience
    *attribute* facts (employer, city) so a new value demotes the old at read.
-5. **Identity resolution hardening.** The field flags unstable `user_id`; this is
+4. **Identity resolution hardening.** The field flags unstable `user_id`; this is
    Zoe's known W0 issue (voice turns resolving as `voice-guest`, FK-failing).
    Close W0 — memory keyed to the wrong/guest identity is the worst pollution.
-6. **Reranker — keep omitted.** A resident cross-encoder (Cohere/Qwen3-Reranker)
+5. **Reranker — keep omitted.** A resident cross-encoder (Cohere/Qwen3-Reranker)
    would help but **breaks the RAM budget** (the 2026-07-08 swap incident). The
    7-signal additive `_blend` is the RAM-free substitute; revisit only after the
    W0 RAM-reclamation workstream.
