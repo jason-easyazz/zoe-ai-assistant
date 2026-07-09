@@ -233,8 +233,10 @@ _MENTION_REL = (
     "neighbor|cousin|aunt|uncle|niece|nephew|grandmother|grandfather|grandma|grandpa"
 )
 _NM = r"[A-Z][a-z]{1,20}(?:\s[A-Z][a-z]{1,20})?"
-_MY_REL_NAME_RE = re.compile(rf"\b[Mm]y\s+(?P<rel>{_MENTION_REL})\s*,?\s+(?P<name>{_NM})")
-_NAME_MY_REL_RE = re.compile(rf"\b(?P<name>{_NM})\s*,?\s+(?:is\s+)?my\s+(?P<rel>{_MENTION_REL})\b")
+# The relationship is case-insensitive (scoped (?i:) — "Brother"/"brother"); the
+# NAME stays capital-initial so we don't capture lowercase filler as a name.
+_MY_REL_NAME_RE = re.compile(rf"\b[Mm]y\s+(?P<rel>(?i:{_MENTION_REL}))\s*,?\s+(?P<name>{_NM})")
+_NAME_MY_REL_RE = re.compile(rf"\b(?P<name>{_NM})\s*,?\s+(?:is\s+)?[Mm]y\s+(?P<rel>(?i:{_MENTION_REL}))\b")
 
 
 async def _deterministic_person_proposals(text: str, user_id: str) -> list[dict]:
@@ -273,11 +275,11 @@ async def detect_and_store(user_message: str, *, user_id: str, session_id: str) 
     # any name the LLM detector already proposed.
     if _person_enabled():
         llm_names = {
-            (s.get("pre_filled_slots") or {}).get("name", "").lower()
+            ((s.get("pre_filled_slots") or {}).get("name") or "").strip().lower()
             for s in suggestions if s.get("action_type") == "person_create"
         }
         for p in await _deterministic_person_proposals(user_message, user_id):
-            if p["pre_filled_slots"]["name"].lower() not in llm_names:
+            if p["pre_filled_slots"]["name"].strip().lower() not in llm_names:
                 suggestions.append(p)
     if not suggestions:
         return 0

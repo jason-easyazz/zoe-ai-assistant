@@ -25,6 +25,8 @@ async def _props(text):
     ("i had lunch with my friend Sarah today", "Sarah", "friend"),
     ("Daniel, my brother, called earlier", "Daniel", "brother"),
     ("my colleague Priya Sharma is helping", "Priya Sharma", "colleague"),
+    ("My Brother Daniel is visiting", "Daniel", "brother"),        # capitalised rel
+    ("Daniel is my Brother", "Daniel", "brother"),                 # capitalised rel, name-first
 ])
 @pytest.mark.asyncio
 async def test_extracts_common_forms(text, name, rel):
