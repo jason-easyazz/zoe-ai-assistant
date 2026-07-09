@@ -322,8 +322,23 @@
 
     // Build a tap-to-edit query for an event row (opens the calendar editor card
     // via /api/skybridge/resolve). Including the time disambiguates same-title events.
+    // The backend event-matcher (_parse_time) IGNORES a bare 24h morning time
+    // ("08:00") — it only trusts an hour that carries am/pm (or is ≥ 12). So the
+    // tap-to-edit/delete queries emit an am/pm clock ("8:00am") to keep the time a
+    // real disambiguator for same-title events at ANY hour.
+    function calClockAmPm(value) {
+        const m = /^(\d{1,2}):(\d{2})/.exec(String(value || ''));
+        if (!m) return '';
+        let h = parseInt(m[1], 10);
+        if (!(h >= 0 && h <= 23)) return '';
+        const ap = h < 12 ? 'am' : 'pm';
+        let h12 = h % 12;
+        if (h12 === 0) h12 = 12;
+        return h12 + ':' + m[2] + ap;
+    }
+
     function calendarEditQuery(item, title) {
-        const startTime = String(item.start_time || '').slice(0, 5);
+        const startTime = calClockAmPm(item.start_time);
         return 'edit ' + title + (startTime ? ' at ' + startTime : '');
     }
 
@@ -333,7 +348,7 @@
     // calendar domain — too fragile for a destructive action). The "at <time>"
     // still rides along inside the target so same-title events disambiguate.
     function calendarDeleteQuery(item, title) {
-        const startTime = String(item.start_time || '').slice(0, 5);
+        const startTime = calClockAmPm(item.start_time);
         return 'delete ' + title + (startTime ? ' at ' + startTime : '') + ' from my calendar';
     }
 
