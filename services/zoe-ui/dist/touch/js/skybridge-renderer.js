@@ -496,12 +496,22 @@
         });
         if (heroIndex < 0) heroIndex = 0;
 
+        // All-day events are pinned chips, but each is a <details> too so tapping it
+        // reveals the SAME inline detail (when/where/notes + Edit/Delete) as a timed
+        // row — an open chip takes a full row so a multi-day span reads correctly and
+        // never falls back to the old generic editor card.
         const alldayBand = allDay.length ? (
             '<div class="cal-allday">' + allDay.map(function (e) {
                 const cat = calendarCategoryClass(e.category);
                 const label = e.title || e.name || 'All-day';
-                return '<button type="button" class="cal-chip sky-accent-' + escapeHtml(cat) + '" data-sky-action="query" data-query="' + escapeHtml(calendarEditQuery(e, label)) + '">' +
-                    '<span class="cal-chip-dot" aria-hidden="true"></span>' + escapeHtml(label) + '</button>';
+                return '<details class="cal-event cal-allday-item sky-accent-' + escapeHtml(cat) + '">' +
+                    '<summary class="cal-chip cal-summary">' +
+                        '<span class="cal-chip-dot" aria-hidden="true"></span>' +
+                        '<span class="cal-chip-label">' + escapeHtml(label) + '</span>' +
+                        '<span class="cal-caret" aria-hidden="true"></span>' +
+                    '</summary>' +
+                    calendarDetailRows(e, label) +
+                '</details>';
             }).join('') + '</div>'
         ) : '';
 

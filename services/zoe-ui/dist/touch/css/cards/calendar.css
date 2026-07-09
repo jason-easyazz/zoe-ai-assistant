@@ -212,6 +212,32 @@ body:not(.sky-empty) .sky-card.calendar-card::after {
   flex: 0 0 auto;
 }
 
+/* Each all-day event is a <details>: the chip is the summary, and an OPEN one
+   takes a full row so its inline detail (when/where/notes + actions) has room. */
+.calendar-card .cal-allday-item { margin: 0; }
+.calendar-card .cal-allday-item[open] { flex: 1 0 100%; }
+.calendar-card .cal-allday-item[open] > .cal-chip {
+  border-bottom-left-radius: 14px;
+  border-bottom-right-radius: 14px;
+}
+.calendar-card .cal-allday-item[open] > .cal-chip .cal-caret {
+  transform: rotate(-135deg);
+  border-color: rgb(var(--cal-accent));
+}
+.calendar-card .cal-allday-item[open] > .cal-detail {
+  margin-top: 8px;
+  border-top: 1px solid rgba(var(--cal-accent), 0.5);
+  border-radius: 16px;
+}
+/* the chip label takes the middle; caret sits at the end */
+.calendar-card .cal-chip-label { flex: 0 1 auto; }
+.calendar-card .cal-allday-item .cal-chip .cal-caret {
+  width: 10px;
+  height: 10px;
+  margin-left: 4px;
+  margin-right: 0;
+}
+
 .calendar-card .cal-chip {
   --cal-accent: var(--sky-card-accent, var(--sky-accent-general, 99, 102, 241));
   display: inline-flex;
