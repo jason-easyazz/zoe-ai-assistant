@@ -82,8 +82,16 @@ bugs above were all found *by* this E2E pass, not by unit tests.
   so an un-actioned offer stops after ~2 turns. Extracted name/relationship are **sanitised**
   (`_safe_prompt_inline`: whitespace-collapsed, markdown/structure chars stripped, length-capped)
   before entering the prompt — a proposal value can't inject its own heading/instructions.
-- **P4 — person_create UI confirm card** for the touch panel (`ui_components_for_suggestions`),
-  matching the voice/for-prompt surface.
+- **P4 — person_create UI confirm card.** ⚠️ **backend shipped (#1222), panel render is a
+  known gap.** `ui_components_for_suggestions` now emits a proper
+  `{"type":"action_card","title":"Add {name} as your {relationship}?","actions":[Add,Dismiss]}`
+  card. But `chat.html`'s `renderChatComponent` switches on `data.component`, and these cards
+  carry `type:"action_card"` with no `component` field → they fall through to `[Unknown
+  component]` and **don't display** (pre-existing; affects the old generic card too). Closing it
+  is net-new panel work (an `action_card` case wired to `/api/proactive/suggestions/{id}/accept|
+  dismiss`, whose `{label,action,suggestion_id}` shape doesn't match the panel's other
+  `executeCardAction` path) needing live-kiosk verification. Detail:
+  [contacts-people-memory §known-gap](../knowledge/contacts-people-memory.md).
 - **P5 — Deterministic propose-on-mention.** ✅ **shipped.** E2E found the LLM detector is
   unreliable on the 4B model (fired for "my niece Teneeka", missed "my brother Daniel" + casual
   mentions). `detect_and_store` now also runs `_deterministic_person_proposals` — a regex over
