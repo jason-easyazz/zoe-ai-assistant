@@ -638,12 +638,14 @@ const html = R.render({ card_type: 'generic', schema_version: '1.0.0', card_id: 
   events: [
     { id: 'a', title: 'Standup', start_time: '08:00', end_time: '08:30', start_date: '2026-06-23',
       location: 'Room 4', description: 'Daily sync', category: 'work' },
-    { id: 'b', title: 'Lunch', start_time: '12:00', end_time: '13:00', start_date: '2026-06-23' }
+    { id: 'b', title: 'Lunch', start_time: '12:00', end_time: '13:00', start_date: '2026-06-23' },
+    { id: 'c', title: 'Trip', all_day: true, start_date: '2026-06-23', end_date: '2026-06-25', category: 'bucket' }
   ]
 } });
 process.stdout.write(JSON.stringify({
   no_ribbon: !html.includes('cal-ribbon') && !html.includes('cal-block'),
-  is_details: (html.match(/<details class=\"cal-event/g) || []).length === 2,
+  // 2 timed rows + 1 all-day event, each a <details>.
+  is_details: (html.match(/<details class=\"cal-event/g) || []).length === 3,
   has_summary: html.includes('<summary class=\"cal-row'),
   has_detail: html.includes('cal-detail'),
   when_row: html.includes('When') && html.includes('08:00 – 08:30'),
@@ -653,7 +655,10 @@ process.stdout.write(JSON.stringify({
   delete_action: /cal-act-del[^>]*data-sky-action=\"query\"/.test(html),
   // anchored with "from my calendar" so the resolver always routes it to a
   // calendar delete regardless of the saved Skybridge context (destructive).
-  delete_query: html.includes('data-query=\"delete Standup at 8:00am from my calendar\"')
+  delete_query: html.includes('data-query=\"delete Standup at 8:00am from my calendar\"'),
+  // all-day events carry no time, so they disambiguate by ISO date instead.
+  allday_edit_query: html.includes('data-query=\"edit Trip on 2026-06-23 on my calendar\"'),
+  allday_delete_query: html.includes('data-query=\"delete Trip on 2026-06-23 from my calendar\"')
 }));
 """,
         encoding="utf-8",

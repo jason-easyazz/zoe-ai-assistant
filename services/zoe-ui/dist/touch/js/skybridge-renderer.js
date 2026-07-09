@@ -337,20 +337,30 @@
         return h12 + ':' + m[2] + ap;
     }
 
+    // The disambiguator an edit/delete target carries so same-title events resolve:
+    // a timed event uses its start time ("at 8:00am" — am/pm so morning hours count,
+    // see calClockAmPm); an ALL-DAY event has no time, so it uses its ISO date
+    // ("on 2026-07-09"), which the backend scorer matches against start_date.
+    function calTargetSuffix(item) {
+        if (item.all_day) {
+            const day = String(item.start_date || item.date || '').slice(0, 10);
+            return /^\d{4}-\d{2}-\d{2}$/.test(day) ? ' on ' + day : '';
+        }
+        const t = calClockAmPm(item.start_time);
+        return t ? ' at ' + t : '';
+    }
+
     // Both tap queries carry an explicit calendar anchor ("on/from my calendar") so
     // the resolver routes them to the calendar domain REGARDLESS of the saved
     // Skybridge context — the bare "edit X"/"delete X" short forms only resolve as
     // calendar while the context is still calendar, which breaks after the card is
-    // rehydrated or another card updates the context. The "at <time>" rides along so
-    // same-title events disambiguate (am/pm so morning times count — see calClockAmPm).
+    // rehydrated or another card updates the context.
     function calendarEditQuery(item, title) {
-        const startTime = calClockAmPm(item.start_time);
-        return 'edit ' + title + (startTime ? ' at ' + startTime : '') + ' on my calendar';
+        return 'edit ' + title + calTargetSuffix(item) + ' on my calendar';
     }
 
     function calendarDeleteQuery(item, title) {
-        const startTime = calClockAmPm(item.start_time);
-        return 'delete ' + title + (startTime ? ' at ' + startTime : '') + ' from my calendar';
+        return 'delete ' + title + calTargetSuffix(item) + ' from my calendar';
     }
 
     // The calendar scene takes a living time-of-day gradient (like the clock card),

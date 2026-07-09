@@ -1599,6 +1599,52 @@ async def test_calendar_delete_event_removes_and_refreshes():
     assert result["cards"][0]["content"]["events"] == []
 
 
+@pytest.mark.asyncio
+async def test_calendar_delete_all_day_disambiguates_by_date():
+    """All-day events carry no time, so the tap query disambiguates by ISO date
+    ('delete Trip on 2026-... from my calendar'). The scorer matches that date
+    against start_date, so the correct same-title all-day event is deleted even
+    when another all-day event shares the title on a different day."""
+    wed = {
+        "id": "trip-wed", "user_id": "family-admin", "title": "Trip",
+        "start_date": "2026-06-24", "start_time": None, "all_day": True,
+        "category": "bucket", "visibility": "family", "deleted": False,
+    }
+    fri = {
+        "id": "trip-fri", "user_id": "family-admin", "title": "Trip",
+        "start_date": "2026-06-26", "start_time": None, "all_day": True,
+        "category": "bucket", "visibility": "family", "deleted": False,
+    }
+    db = FakeDb(events=[wed, fri])
+    # A multi-day calendar card holds BOTH same-title all-day events in context.
+    context = {
+        "intent": {"domain": "calendar", "action": "show"},
+        "cards": [{"content": {"source": "calendar_show", "start_date": "2026-06-24",
+                               "events": [wed, fri]}}],
+    }
+
+    result = await resolve_skybridge_request(
+        "delete Trip on 2026-06-26 from my calendar", "family-admin", context=context, db=db
+    )
+
+    assert result["handled"] is True
+    assert result["intent"]["action"] == "delete_event"
+    # The Friday instance was deleted, not the ambiguous Wednesday one.
+    assert result["intent"]["event_id"] == "trip-fri"
+
+
+def test_score_event_for_target_iso_date_does_not_leak_as_time():
+    """The ISO date is stripped before the clock pass, so a December date's '12'
+    can't be misread as noon and unfairly beat the tapped all-day event."""
+    from skybridge_service import _score_event_for_target
+
+    all_day = {"title": "Trip", "start_date": "2026-12-09", "start_time": None, "all_day": True}
+    noon = {"title": "Trip", "start_date": "2026-12-09", "start_time": "12:00", "all_day": False}
+    target = "Trip on 2026-12-09"
+    # No spurious +4 for the noon event: both score identically (date + title only).
+    assert _score_event_for_target(all_day, target) == _score_event_for_target(noon, target)
+
+
 def test_convergence_gate_is_nonfatal_and_nonmutating():
     """Increment 2: the validation gate logs divergence but never raises, drops, or
     mutates a card (so it can't break the live panel)."""

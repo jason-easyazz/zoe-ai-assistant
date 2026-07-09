@@ -1527,10 +1527,22 @@ async def _resolve_calendar_create(intent: SkybridgeIntent, user_id: str, db: An
 
 def _score_event_for_target(event: dict[str, Any], target: str) -> int:
     score = 0
-    target_time = _parse_time(target)
+    # Explicit ISO date match — the disambiguator for ALL-DAY events, which carry no
+    # time. It is parsed and then STRIPPED before the clock/token passes so its
+    # digits can't be misread as a time (e.g. "2026-12-09" → a spurious 12:00) or
+    # leak in as title tokens.
+    remainder = target
+    date_match = re.search(r"\b\d{4}-\d{2}-\d{2}\b", target)
+    if date_match:
+        if str(event.get("start_date") or "")[:10] == date_match.group(0):
+            score += 4
+        remainder = target[:date_match.start()] + " " + target[date_match.end():]
+    target_time = _parse_time(remainder)
     if target_time and str(event.get("start_time") or "")[:5] == target_time:
         score += 4
-    target_tokens = {token for token in re.split(r"\W+", target.lower()) if token and token not in {"my", "the", "appointment", "event"}}
+    # "on"/"from"/"calendar" are the tap-query domain anchors (see calendarEditQuery/
+    # calendarDeleteQuery) — not event words, so keep them out of the token match.
+    target_tokens = {token for token in re.split(r"\W+", remainder.lower()) if token and token not in {"my", "the", "on", "from", "calendar", "appointment", "event"}}
     haystack = " ".join(str(event.get(key) or "") for key in ("title", "category", "location")).lower()
     if not target_tokens:
         return score or 1
