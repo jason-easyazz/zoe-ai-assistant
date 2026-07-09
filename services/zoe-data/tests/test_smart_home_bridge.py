@@ -477,11 +477,15 @@ async def test_internal_filter_does_not_hide_real_lookalike_devices(monkeypatch)
             return {"entities": [
                 {"entity_id": "input_boolean.assistance_light", "state": "off",
                  "attributes": {"friendly_name": "Assistance Light", "icon": "mdi:ceiling-light"}},
+                # A real, spaced "Zoe Touch Lamp" must survive (only the hyphenated
+                # "zoe-touch" satellite slug / lva_ id token are internal).
+                {"entity_id": "input_boolean.zoe_touch_lamp", "state": "off",
+                 "attributes": {"friendly_name": "Zoe Touch Lamp", "icon": "mdi:lamp"}},
             ]}
         return None
     monkeypatch.setattr(smart_home_service, "_ha_get", _get)
     names = {d["name"] for d in await smart_home_service.list_devices()}
-    assert names == {"Satellite Dish", "Assistance Light"}
+    assert names == {"Satellite Dish", "Assistance Light", "Zoe Touch Lamp"}
 
 
 @pytest.mark.parametrize("q", [

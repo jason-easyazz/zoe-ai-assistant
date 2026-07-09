@@ -160,18 +160,17 @@ async def _entities_in(domain: str) -> list[dict[str, Any]]:
     return (data or {}).get("entities", []) if isinstance(data, dict) else []
 
 
-# Zoe's own voice-satellite exposes internal switches (Mute, Thinking Sound) under
-# the switch domain. They are plumbing, not household devices — hide them so the
-# card shows the owner's real home, never Zoe's own guts. Markers are deliberately
-# specific to the satellite's auto-generated ids/name (`switch.lva_*`, "zoe-touch")
-# so we never hide a genuine device that merely contains a word like "assistant" or
-# "satellite" (e.g. `input_boolean.assistance_light`, `switch.satellite_dish`).
-_INTERNAL_MARKERS = ("lva_", "zoe-touch", "zoe touch")
-
-
 def _is_internal(device: dict[str, Any]) -> bool:
-    hay = f"{device.get('entity_id','')} {device.get('name','')}".lower()
-    return any(m in hay for m in _INTERNAL_MARKERS)
+    """Zoe's own voice-satellite exposes internal switches (Mute, Thinking Sound)
+    as `switch.lva_*` named "zoe-touch-pi …". They are plumbing, not household
+    devices — hide them so the card shows the owner's real home, never Zoe's guts.
+    The check is tied to the satellite's auto-generated id/name shape (the `lva_`
+    id token, or the hyphenated "zoe-touch" device slug) so a genuine device is
+    never dropped for merely containing a plain word — `input_boolean.assistance_light`,
+    `switch.satellite_dish`, and a friendly "Zoe Touch Lamp" all survive."""
+    entity_id = str(device.get("entity_id") or "").lower()
+    name = str(device.get("name") or "").lower()
+    return "lva_" in entity_id or "zoe-touch" in name
 
 
 async def list_devices() -> Optional[list[dict[str, Any]]]:
