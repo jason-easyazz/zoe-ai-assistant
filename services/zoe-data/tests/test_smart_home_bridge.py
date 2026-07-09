@@ -312,3 +312,167 @@ async def test_resolve_offline_bridge_degrades(bridge):
     assert r["handled"] is True
     assert r["cards"][0]["props"].get("offline") is True
     assert "home hub" in r["spoken_summary"].lower()
+
+
+# ── Enriched card: input_boolean helpers, rooms, climate, add-device ──────────
+
+class _HelperBridge:
+    """A headless HA that models its home with input_boolean helpers + a
+    thermostat (input_number) + a temperature sensor — the owner's real setup.
+    None of these appear under /lights or /switches."""
+
+    def __init__(self):
+        self.controls: list[dict] = []
+
+    async def get(self, path):
+        if path == "/lights":
+            return {"lights": [], "count": 0}
+        if path == "/switches":
+            return {"switches": [], "count": 0}
+        if path == "/entities?domain=input_boolean":
+            return {"entities": [
+                {"entity_id": "input_boolean.living_room_light", "state": "on",
+                 "attributes": {"icon": "mdi:ceiling-light", "friendly_name": "Living Room Light"}},
+                {"entity_id": "input_boolean.kitchen_light", "state": "off",
+                 "attributes": {"icon": "mdi:ceiling-light", "friendly_name": "Kitchen Light"}},
+                {"entity_id": "input_boolean.fan", "state": "off",
+                 "attributes": {"icon": "mdi:fan", "friendly_name": "Ceiling Fan"}},
+                {"entity_id": "input_boolean.tv", "state": "off",
+                 "attributes": {"icon": "mdi:television", "friendly_name": "TV"}},
+            ]}
+        if path == "/entities?domain=input_number":
+            return {"entities": [
+                {"entity_id": "input_number.thermostat_temperature", "state": "22.0",
+                 "attributes": {"unit_of_measurement": "°C", "friendly_name": "Thermostat"}},
+            ]}
+        if path == "/sensors":
+            return {"sensors": [
+                {"entity_id": "sensor.current_temperature", "state": "21.0",
+                 "attributes": {"device_class": "temperature", "unit_of_measurement": "°C",
+                                "friendly_name": "Current Temperature"}},
+            ]}
+        if path == "/scenes":
+            return {"scenes": [{"entity_id": "scene.good_night", "name": "Good Night"}]}
+        return None
+
+    async def post(self, path, payload):
+        if path == "/devices/control":
+            self.controls.append(payload)
+            return {"message": f"Successfully executed {payload['action']} on {payload['entity_id']}", "result": []}
+        return None
+
+
+@pytest.fixture
+def helper_bridge(monkeypatch):
+    fake = _HelperBridge()
+    monkeypatch.setattr(smart_home_service, "_ha_get", lambda path: fake.get(path))
+    monkeypatch.setattr(smart_home_service, "_ha_post", lambda path, payload: fake.post(path, payload))
+    return fake
+
+
+@pytest.mark.asyncio
+async def test_input_boolean_helpers_surface_as_devices(helper_bridge):
+    # The real owner-visible fix: a home modelled with input_boolean helpers must
+    # NOT read as empty — the helpers become controllable device tiles.
+    devices = await smart_home_service.list_devices()
+    by_name = {d["name"]: d for d in devices}
+    assert {"Living Room Light", "Kitchen Light", "Ceiling Fan", "TV"} <= set(by_name)
+    assert by_name["Living Room Light"]["domain"] == "light"
+    assert by_name["Ceiling Fan"]["domain"] == "fan"
+    assert by_name["TV"]["domain"] == "tv"
+    assert by_name["Living Room Light"]["on"] is True
+    # input_boolean has no brightness channel.
+    assert by_name["Living Room Light"]["dimmable"] is False
+
+
+@pytest.mark.asyncio
+async def test_status_card_groups_rooms_and_reads_climate(helper_bridge):
+    r = await smart_home_service.resolve_smart_home(_Intent("status"))
+    props = r["cards"][0]["props"]
+    # Grouped by inferred room; the fan/TV (no room word) fall into the catch-all.
+    room_names = [g["name"] for g in props["rooms"]]
+    assert "Living Room" in room_names and "Kitchen" in room_names
+    assert room_names[-1] == "Around the home"  # catch-all sorts last
+    around = next(g for g in props["rooms"] if g["name"] == "Around the home")
+    assert {"Ceiling Fan", "TV"} == {d["name"] for d in around["devices"]}
+    # Read-only comfort strip surfaces current temp + set-point.
+    assert props["climate"] == {"current": 21.0, "target": 22.0, "unit": "°C"}
+    # The grow affordance the owner asked for is always present.
+    assert props["add_query"] == "add a device"
+
+
+@pytest.mark.asyncio
+async def test_input_boolean_tile_controls_exact_entity(helper_bridge):
+    # A helper tile round-trips through the classifier and toggles THAT entity.
+    i = classify_skybridge_intent("turn on Kitchen Light @input_boolean.kitchen_light", None)
+    assert i is not None and i.entity_id == "input_boolean.kitchen_light"
+    await smart_home_service.resolve_smart_home(i)
+    assert helper_bridge.controls == [{"entity_id": "input_boolean.kitchen_light", "action": "turn_on"}]
+
+
+@pytest.mark.asyncio
+async def test_add_device_returns_setup_card_with_qr():
+    # "Add a device" resolves without touching the hub — it shows a QR the owner
+    # scans with their phone. No fake success: the card is a guided setup surface.
+    r = await smart_home_service.resolve_smart_home(_Intent("add_device"))
+    props = r["cards"][0]["props"]
+    assert props["mode"] == "setup"
+    assert props["qr_path"].startswith("/api/home/setup/qr?token=")
+    assert props["back_query"] == "smart home"
+    assert r["handled"] is True
+
+
+@pytest.mark.asyncio
+async def test_empty_home_is_inviting_not_offline(monkeypatch):
+    # A reachable hub with zero devices is an inviting empty card (add-a-device),
+    # NOT the offline error card.
+    async def _get(path):
+        if path in ("/lights",):
+            return {"lights": []}
+        if path == "/switches":
+            return {"switches": []}
+        if path == "/entities?domain=input_boolean":
+            return {"entities": []}
+        return None
+    monkeypatch.setattr(smart_home_service, "_ha_get", _get)
+    r = await smart_home_service.resolve_smart_home(_Intent("status"))
+    props = r["cards"][0]["props"]
+    assert props.get("offline") is not True
+    assert props["devices"] == [] and props["rooms"] == []
+    assert props["add_query"] == "add a device"
+
+
+@pytest.mark.asyncio
+async def test_voice_satellite_internals_are_hidden(monkeypatch):
+    # Zoe's own satellite exposes switch.lva_*_mute / _thinking_sound — plumbing
+    # that must never appear as a household device on the card.
+    async def _get(path):
+        if path == "/lights":
+            return {"lights": []}
+        if path == "/switches":
+            return {"switches": [
+                {"entity_id": "switch.lva_abc_mute", "name": "zoe-touch-pi Mute", "state": "unavailable"},
+                {"entity_id": "switch.lva_abc_thinking_sound", "name": "zoe-touch-pi Thinking Sound", "state": "unavailable"},
+                {"entity_id": "switch.coffee", "name": "Coffee Plug", "state": "on"},
+            ]}
+        if path == "/entities?domain=input_boolean":
+            return {"entities": []}
+        return None
+    monkeypatch.setattr(smart_home_service, "_ha_get", _get)
+    devices = await smart_home_service.list_devices()
+    names = {d["name"] for d in devices}
+    assert names == {"Coffee Plug"}  # both lva_ internals filtered out
+
+
+@pytest.mark.parametrize("q", [
+    "add a device",
+    "set up a device",
+    "add a new light",
+    "connect a plug",
+    "pair a sensor",
+    "add a smart switch",
+    "set up a speaker",
+])
+def test_add_device_classifier(q):
+    i = classify_skybridge_intent(q, None)
+    assert i is not None and i.domain == "smart_home" and i.action == "add_device", q
