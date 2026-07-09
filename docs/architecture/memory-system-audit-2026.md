@@ -12,9 +12,9 @@ practices* — it already implements the field's headline technique (multi-signa
 retrieval) and Mem0's ADD/UPDATE/SKIP reconciliation, and it is **local/private
 and governance-gated**, which the hosted leaders (Mem0, Zep) are not. It even
 has the two things a first read mistook for gaps — **proactive contradiction
-detection** and **active consolidation** — already live in the nightly digest
-(see §4 correction). The one genuine gap is **measurement** (no standardized
-benchmark run yet); the rest is operational (keep the nightly cycle healthy;
+detection** and **active consolidation** — already live in the nightly + weekly
+dream passes (see §4 correction). The one genuine gap is **measurement** (no
+standardized benchmark run yet); the rest is operational (keep the dream cycle healthy;
 close the W0 identity issue).
 
 Grounded in a 2026-07-09 read of the code (26 memory modules) + web research
@@ -90,8 +90,8 @@ conflicting high-confidence memories."**
 | Evidence-gating + governance | ✅ **ahead** — admission gates, Multica review | `zoe_memory_admission.py` |
 | **Local / private** | ✅ **differentiator** (Mem0/Zep default hosted) | rock; `ADR-hindsight-bakeoff` rejects cloud LLM |
 | **Standardized benchmark (LOCOMO / LongMemEval)** | ❌ **gap** — only a bespoke 40/40 eval | — |
-| **Proactive contradiction detection** (idle LLM-judge + supersede) | ✅ **live** — the nightly `memory_digest` LLM-judges each new fact vs existing person-facts and supersedes conflicts (`review(decision="edit")`) | `memory_digest.py:219,443`, `zoe-dreaming.timer`, `MEMORY_DIGEST_ENABLED=true` |
-| **Active forgetting / consolidation** (prune stale/low-score) | ✅ **live** — `sweep_soft_archive` (score = conf·decay + log access; age ≥ 30d, score < 0.02) runs inside the digest; reversible soft-archive | `memory_service.py:792`, `memory_digest.py:850`, `ZOE_IDLE_CONSOLIDATION_ENABLED=1` |
+| **Proactive contradiction detection** (idle LLM-judge + supersede) | ✅ **live, split cadence** — **nightly** `run_memory_digest` LLM-judges each *newly-extracted* fact vs existing person-facts **for that day's chat-active users** and supersedes conflicts (`review(decision="edit")`); **store-wide** contradiction resolution across the whole corpus is the **weekly (Sunday)** consolidation pass. Not a nightly full-store scan. | nightly: `memory_digest.py:219,443` (via `run_digest_for_all_active_users:899`); weekly: `_resolve_contradictions` in `run_weekly_consolidation:826` |
+| **Active forgetting / consolidation** (prune stale/low-score) | ✅ **live — weekly (Sunday)** — `sweep_soft_archive` (score = conf·decay + log access; age ≥ 30d, score < 0.02; reversible) runs inside `run_weekly_consolidation`, on the Sunday branch of the consolidation runner (`daily_consolidation.py:56`), **not** a daily/idle flag | `memory_service.py:792`, wired at `run_weekly_consolidation` (`memory_digest.py:850`) |
 | Post-retrieval reranker (cross-encoder) | ❌ deliberately omitted (RAM budget) | see §4 |
 
 ---
@@ -108,21 +108,37 @@ conflicting high-confidence memories."**
    small Q set.
    > **Correction (2026-07-09, second pass):** the original audit listed
    > contradiction detection and active consolidation as gaps. A closer read
-   > found **both are already implemented AND run nightly** — the `memory_digest`
-   > LLM-contradiction-judge + supersede (`memory_digest.py:219,443`) and
-   > `sweep_soft_archive` consolidation (`memory_service.py:792`, wired at
-   > `memory_digest.py:850`), fired by `zoe-dreaming.timer` (last run confirmed
-   > ~19h before this note) under `MEMORY_DIGEST_ENABLED` + `ZOE_IDLE_CONSOLIDATION_ENABLED`.
-   > So the two mid-tier "gaps" are actually **live features**; the scorecard is
-   > corrected above. This strengthens the verdict: on the feature axis Zoe is
-   > effectively complete — the remaining work is *measurement* and *operations*,
-   > not new memory machinery.
-2. **Verify the nightly cycle keeps firing + widen its coverage.** Since
-   contradiction-resolution and consolidation live in the nightly digest, their
-   value depends entirely on `zoe-dreaming.timer` staying scheduled and healthy
-   (it is, as of this audit). Watch it; consider surfacing digest outcomes in
-   `memory_metrics`. Optionally extend the contradiction judge beyond person-facts
-   to high-salience *attribute* facts (employer/city).
+   > found **both are already implemented** — but on **two different cadences**,
+   > which the first correction blurred:
+   > - **Nightly** — `run_memory_digest` (`memory_digest.py:395`) LLM-judges each
+   >   *newly-extracted* fact vs existing person-facts, for that day's chat-active
+   >   users only (`run_digest_for_all_active_users:899`), and supersedes conflicts
+   >   (`memory_digest.py:219,443`). This is new-fact contradiction handling, not a
+   >   whole-store scan.
+   > - **Weekly (Sunday)** — `run_weekly_consolidation` (`memory_digest.py:826`)
+   >   does the store-wide work: `_merge_near_duplicates`, `_resolve_contradictions`,
+   >   and `sweep_soft_archive` (`memory_service.py:792`, wired at `:850`). Triggered
+   >   by the Sunday branch of the consolidation runner (`daily_consolidation.py:56`,
+   >   `weekday()==6`) and the weekly phases of `run_dreaming_cycle`.
+   >
+   > Both run under the nightly dream timers (`zoe-dreaming.timer` / `zoe-training.timer`);
+   > the weekly work is the Sunday branch inside them, **not** a separate weekly timer.
+   > Note: `ZOE_IDLE_CONSOLIDATION_ENABLED` gates a **different** mechanism — the
+   > in-process idle consolidation loop (`main.py:934`, default OFF) — **not** the
+   > weekly `sweep_soft_archive`; the earlier correction miscited it. So the two
+   > mid-tier "gaps" are **live features on a nightly+weekly split**; the scorecard
+   > is corrected above. The verdict holds: on the feature axis Zoe is effectively
+   > complete — the remaining work is *measurement* and *operations*, not new machinery.
+2. **Verify the dream cycle keeps firing + widen its coverage.** Since nightly
+   new-fact contradiction judging **and** the weekly store-wide consolidation
+   (dedup + contradiction resolution + `sweep_soft_archive`) both ride the dream
+   timers, their value depends on `zoe-dreaming.timer` / `zoe-training.timer`
+   staying scheduled and healthy (they are, as of this audit) **and** on the Sunday
+   branch actually executing weekly. Watch both; consider surfacing digest +
+   weekly-consolidation outcomes in `memory_metrics`, and asserting the Sunday pass
+   ran (a missed Sunday silently skips all store-wide dedup/forgetting for the week).
+   Optionally extend the nightly contradiction judge beyond person-facts to
+   high-salience *attribute* facts (employer/city).
 3. **Staleness guards on high-confidence facts.** The #1 field failure mode:
    confident-but-outdated facts (job/location changes). Zoe's temporal edges
    cover *relationships*; extend supersession-on-change to high-salience
