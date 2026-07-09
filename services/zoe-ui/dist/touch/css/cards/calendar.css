@@ -670,7 +670,9 @@ body:not(.sky-empty) .sky-card.calendar-card::after {
 /* full layout; this is the portrait / tiny fallback.                       */
 /* ====================================================================== */
 @media (max-width: 760px) {
-  .calendar-card .cal-agenda[data-cols="2"] { columns: 1; }
+  /* Collapse the grid to a single column on a narrow/portrait panel (the agenda
+     is now a grid, so the old `columns: 1` no-op'd and left it two-up + cramped). */
+  .calendar-card .cal-agenda[data-cols="2"] { grid-template-columns: 1fr; }
   .calendar-card .cal-row.cal-hero {
     grid-template-columns: auto 1fr;
     grid-template-areas:
