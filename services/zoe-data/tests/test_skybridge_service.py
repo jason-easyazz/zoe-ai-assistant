@@ -318,6 +318,12 @@ def test_classify_who_am_i_routes_to_identity_not_a_settings_card():
     who_is = classify_skybridge_intent("who is Sarah")
     assert who_is is None or who_is.action != "identity"
 
+    # An explicit directory ask must yield to the people branch, not be stolen by
+    # the leading self-identity phrase.
+    in_contacts = classify_skybridge_intent("what's my name in contacts")
+    assert in_contacts is not None and in_contacts.domain == "people"
+    assert in_contacts.action != "identity"
+
 
 def test_identity_intent_is_not_forced_behind_signin():
     from skybridge_service import SkybridgeIntent, skybridge_intent_requires_identity

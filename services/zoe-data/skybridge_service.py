@@ -1080,12 +1080,16 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
             label, start, end = parsed_range
             return SkybridgeIntent("calendar", "show", label, start, end)
         return SkybridgeIntent("calendar", "show", "today", today, today)
-    if _IDENTITY_QUERY_RE.search(text):
+    if _IDENTITY_QUERY_RE.search(text) and not any(
+        term in text for term in (" contact", " people", " directory", " profile")
+    ):
         # "who am I" / "who's signed in" / "what's my name" — a self-directed
         # identity ask. Surfaces WHO Zoe thinks is speaking (an identity card),
         # not a fuzzy "AI Training" settings page. A people SEARCH ("who is
-        # Sarah") does NOT match this pattern, and a fact write ("my name is
-        # Sam") is already claimed earlier by _people_fact_from_text.
+        # Sarah") does NOT match this pattern, a fact write ("my name is Sam")
+        # is already claimed earlier by _people_fact_from_text, and an explicit
+        # directory ask ("what's my name in contacts") yields to the people
+        # branch below rather than being stolen by the leading identity phrase.
         return SkybridgeIntent(domain="people", action="identity")
     if any(term in text for term in (" people", " contacts", " contact", " person", " profile", " family", " friends")):
         query, people_ctx, circle = _people_filters_from_text(text)

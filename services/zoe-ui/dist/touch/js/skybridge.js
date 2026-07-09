@@ -583,9 +583,12 @@
             markup = '';
         }
         if (!markup) {
-            // Nothing safe to show: if the dashboard is already up (a re-render failed)
-            // keep the existing tiles; otherwise leave the ambient clock in place
-            // rather than committing to a blank stage.
+            // Nothing safe to show. If the dashboard is already up (a re-render
+            // failed) keep the existing tiles. Otherwise we were waking from the
+            // ambient clock or an existing card (Home pill) — fall back to the
+            // ambient clock so a failed wake never strands a stale card or a blank
+            // stage.
+            if (!document.body.classList.contains('sky-on-dashboard')) clearCards();
             return;
         }
         deckToken++;
