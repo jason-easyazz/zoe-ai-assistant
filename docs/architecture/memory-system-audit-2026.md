@@ -92,7 +92,7 @@ conflicting high-confidence memories."**
 | **Local / private** | ✅ **differentiator** (Mem0/Zep default hosted) | rock; `ADR-hindsight-bakeoff` rejects cloud LLM |
 | **Standardized benchmark (LOCOMO / LongMemEval)** | ❌ **gap** — only a bespoke 40/40 eval | — |
 | **Proactive contradiction detection** (idle LLM-judge + supersede) | ✅ **live, split cadence** — **nightly** `run_memory_digest` LLM-judges each *newly-extracted* fact vs existing person-facts **for that day's chat-active users** and supersedes conflicts (`review(decision="edit")`); **store-wide** contradiction resolution across the whole corpus is the **weekly (Sunday)** consolidation pass. Not a nightly full-store scan. | nightly: `memory_digest.py:219,443` (via `run_digest_for_all_active_users:899`); weekly: `_resolve_contradictions` in `run_weekly_consolidation:826` |
-| **Active forgetting / consolidation** (prune stale/low-score) | ✅ **live — weekly (Sunday)** — `sweep_soft_archive` (score = conf·decay + log access; age ≥ 30d, score < 0.02; reversible) runs inside `run_weekly_consolidation`, on the Sunday branch of the consolidation runner (`daily_consolidation.py:56`), **not** a daily/idle flag | `memory_service.py:792`, wired at `run_weekly_consolidation` (`memory_digest.py:850`) |
+| **Active forgetting / consolidation** (prune stale/low-score) | ✅ **live — weekly (Sunday)** — `sweep_soft_archive` (score = conf·decay + log access; age ≥ 30d, score < 0.02; reversible) runs inside `run_weekly_consolidation`; primary trigger is the default-on in-process loop (`main.py:930`, `MEMORY_CONSOLIDATION_ENABLED=true`, Sun 04:00), with `daily_consolidation.py` cron + admin route as backups | `memory_service.py:792`, wired at `run_weekly_consolidation` (`memory_digest.py:850`); loop at `routers/system.py` |
 | Post-retrieval reranker (cross-encoder) | ❌ deliberately omitted (RAM budget) | see §4 |
 
 ---
@@ -118,41 +118,51 @@ conflicting high-confidence memories."**
    >   whole-store scan.
    > - **Weekly (Sunday)** — `run_weekly_consolidation` (`memory_digest.py:826`)
    >   does the store-wide work: `_merge_near_duplicates`, `_resolve_contradictions`,
-   >   and `sweep_soft_archive` (`memory_service.py:792`, wired at `:850`). It runs
-   >   **only** via `run_weekly_consolidation_for_all` — reached from the Sunday
-   >   branch of `daily_consolidation.py:56` (`weekday()==6`) or the admin route
-   >   `routers/system.py:769`.
+   >   and `sweep_soft_archive` (`memory_service.py:792`, wired at `:850`), all via
+   >   `run_weekly_consolidation_for_all`.
    >
-   > **Two independent runners, don't conflate them:**
-   > - The **nightly dream timers** (`zoe-dreaming.timer` / `zoe-training.timer` →
-   >   `run_dreaming_cycle`) run the *nightly* new-fact digest. `run_dreaming_cycle`'s
-   >   own Sunday phase (`_deep_sleep_pass`, `memory_digest.py:1104`) does
-   >   **pending→approved promotion / stale-pending archive**, which its docstring
-   >   states *"replaces the blunt auto-approve in `run_weekly_consolidation`"* — it
-   >   does **not** call `sweep_soft_archive`, `_resolve_contradictions`, or
-   >   `_merge_near_duplicates`.
-   > - The **store-wide weekly consolidation** (dedup + contradiction resolution +
-   >   soft-archive sweep) rides a **separate cron** — `daily_consolidation.py`
-   >   (installed by `scripts/setup/setup_overnight_training*.sh`, Sunday branch).
+   > **`run_weekly_consolidation_for_all` has three triggers — the primary is default-on:**
+   > 1. **In-process background loop (primary, default ON)** —
+   >    `_memory_consolidation_loop` in `routers/system.py`, started at app startup by
+   >    `main.py:930` (`start_memory_consolidation_background`). It waits until the next
+   >    **Sunday 04:00** and calls `run_weekly_consolidation_for_all`. Gated by
+   >    `MEMORY_CONSOLIDATION_ENABLED` (**default `"true"`**), so this runs unless
+   >    explicitly disabled — it depends on the `zoe-data` process staying up across
+   >    Sunday 04:00.
+   > 2. **Cron (secondary)** — `daily_consolidation.py:56` Sunday branch
+   >    (`weekday()==6`), installed by `scripts/setup/setup_overnight_training*.sh`.
+   > 3. **Admin route** — `POST /memories/consolidate` (`routers/system.py`).
    >
-   > Note: `ZOE_IDLE_CONSOLIDATION_ENABLED` gates a **third** mechanism — the
-   > in-process idle consolidation loop (`main.py:934` → `memory_idle_consolidation.py`,
-   > default OFF) — **not** the weekly `sweep_soft_archive`; the earlier correction
-   > miscited it. So the two mid-tier "gaps" are **live features on a nightly+weekly
+   > **Don't confuse this with the dream cycle.** The nightly dream timers
+   > (`zoe-dreaming.timer` / `zoe-training.timer` → `run_dreaming_cycle`) run the
+   > *nightly new-fact digest*; `run_dreaming_cycle`'s own Sunday phase
+   > (`_deep_sleep_pass`, `memory_digest.py:1104`) only does **pending→approved
+   > promotion / stale-pending archive** — its docstring says it *"replaces the blunt
+   > auto-approve in `run_weekly_consolidation`"* — and does **not** call
+   > `sweep_soft_archive`, `_resolve_contradictions`, or `_merge_near_duplicates`.
+   >
+   > Note: `ZOE_IDLE_CONSOLIDATION_ENABLED` gates yet **another** mechanism — the
+   > in-process *idle* consolidation loop (`main.py:934` → `memory_idle_consolidation.py`,
+   > default OFF), distinct from the weekly loop above — **not** the weekly
+   > `sweep_soft_archive`; the earlier correction miscited it. So the two mid-tier
+   > "gaps" are **live features on a nightly+weekly
    > split**; the scorecard is corrected above. The verdict holds: on the feature
    > axis Zoe is effectively complete — the remaining work is *measurement* and
    > *operations*, not new machinery.
-2. **Verify BOTH runners keep firing — they are separate.** Nightly new-fact
+2. **Verify the runners keep firing — they are separate paths.** Nightly new-fact
    contradiction judging rides the dream timers (`zoe-dreaming.timer` /
-   `zoe-training.timer`); the weekly store-wide consolidation (dedup + contradiction
-   resolution + `sweep_soft_archive`) rides a **different cron** —
-   `daily_consolidation.py`, Sunday branch. An operator who checks only the dream
-   timers can miss a broken consolidation cron while stale/conflicting memories keep
-   accumulating. Watch both; assert the Sunday `run_weekly_consolidation_for_all`
-   actually ran (a missed Sunday silently skips a week of store-wide dedup/forgetting),
-   and consider surfacing digest + weekly-consolidation outcomes in `memory_metrics`.
-   Optionally extend the nightly contradiction judge beyond person-facts to
-   high-salience *attribute* facts (employer/city).
+   `zoe-training.timer`). The weekly store-wide consolidation (dedup + contradiction
+   resolution + `sweep_soft_archive`) has its own triggers — **primary** is the
+   default-on in-process loop (`_memory_consolidation_loop`, `main.py:930`,
+   `MEMORY_CONSOLIDATION_ENABLED=true`, Sunday 04:00), which requires `zoe-data` to
+   stay up across that window; the `daily_consolidation.py` cron and `POST
+   /memories/consolidate` are the backup/manual paths. An operator who watches only
+   the dream timers can miss a stalled weekly loop while stale/conflicting memories
+   accumulate. Assert the Sunday `run_weekly_consolidation_for_all` actually ran (a
+   missed Sunday silently skips a week of store-wide dedup/forgetting), and consider
+   surfacing digest + weekly-consolidation outcomes in `memory_metrics`. Optionally
+   extend the nightly contradiction judge beyond person-facts to high-salience
+   *attribute* facts (employer/city).
 3. **Staleness guards on high-confidence facts.** The #1 field failure mode:
    confident-but-outdated facts (job/location changes). Zoe's temporal edges
    cover *relationships*; extend supersession-on-change to high-salience
