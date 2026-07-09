@@ -38,7 +38,7 @@ What already works, **channel-agnostic** (chat + voice, every brain backend incl
 | Capability | Where | Status |
 |---|---|---|
 | Explicit contact create (`people_create` tool) | `intent_router._execute_people_create_direct` | ✅ **fixed** (#1200 FK, #1203 private-by-default) |
-| Passive capture: likes, LLM person-extraction, **propose-on-mention** | `_persist_memory_candidates` (chat.py) + `voice_tts.py:2284` | ✅ fires on flue (proven: a live "niece" mention created a `person_create` proposal) |
+| Passive capture: likes, LLM person-extraction, **propose-on-mention** | `_persist_memory_candidates` (chat.py) + `voice_tts.py:2284` | ✅ fires on flue — but note: voice capture persisted **0 turns** until the detached-task released-connection bug was fixed (#1191/#1194; history in #1195). A live spoken "niece" mention creating a `person_create` proposal is the live proof #1195 was waiting for. |
 | Dossier render of contacts | `zoe_memory_compose` | ✅ live |
 | Backfill known people → proposals + delivery list | `contact_backfill.py`, `/pending-contacts` | ✅ merged |
 
@@ -74,6 +74,26 @@ What already works, **channel-agnostic** (chat + voice, every brain backend incl
 
 Guardrails (unchanged): every auto-create stays user-confirmed unless high-confidence; flag-gated +
 demo-user-lab-proved; hot-path changes replay-gated; private-by-default visibility.
+
+## Related work (coherence — reviewed 2026-07-09)
+
+This ADR owns the **contacts capture + surface** half of people-memory. A **parallel workstream**
+owns the **recall-quality** half — keep them complementary, not divergent:
+
+- **GBrain recall design** ([#1197](https://github.com/jason-easyazz/zoe-ai-assistant/pull/1197),
+  `docs/architecture/…GBrain…`): wires the relationship graph into semantic recall (a 7th
+  graph-adjacency term in `_semantic_search._blend`). Its stated blocker — *inconsistent
+  fact→`people.id` linkage* — is the same people substrate this ADR writes to; contacts created
+  here must resolve to a real `people.id` so that boost isn't a no-op.
+- **Linkage hygiene** ([#1198](https://github.com/jason-easyazz/zoe-ai-assistant/pull/1198), merged)
+  + **graph-adjacency recall boost** (flag-off, [#1199](https://github.com/jason-easyazz/zoe-ai-assistant/pull/1199), merged).
+- **Memory field audit + benchmark harness** ([#1204](https://github.com/jason-easyazz/zoe-ai-assistant/pull/1204),
+  merged, `docs/architecture/memory-system-audit-2026.md`): the recall benchmark/failure-mode
+  suite — the yardstick this work should be measured against, not a second parallel one.
+
+Division of labour: **this ADR = create/surface people as structured, confirmable contacts**;
+**#1197 et al. = make recall of those people sharper**. Both dark/flag-gated; both feed the same
+`/api/memories/for-prompt` packet, in disjoint sections (contacts fold vs. semantic blend).
 
 ## Acceptance criteria
 
