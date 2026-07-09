@@ -82,24 +82,48 @@ def _ma_headers() -> dict[str, str]:
     return h
 
 
-async def _ma(command: str, **args: Any) -> Any:
-    """POST one MA command. Returns the parsed result or None on any failure."""
+async def _ma_response(command: str, timeout_s: float = _TIMEOUT_S, **args: Any) -> Any:
+    """POST one MA command; return the httpx.Response, or None on a network/
+    transport failure (unreachable, timeout). Never raises. `timeout_s` is a
+    keyword for slow writes (no MA command takes a `timeout_s` arg)."""
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT_S) as c:
+        async with httpx.AsyncClient(timeout=timeout_s) as c:
             # MA's JSON-RPC shim requires args NESTED under "args" — flat args are
             # silently dropped, causing "<x> is required" 500s. Commands with no
             # args work either way, which hid this until real playback was tried.
-            payload = {"command": command}
+            payload: dict[str, Any] = {"command": command}
             if args:
                 payload["args"] = args
-            r = await c.post(f"{_ma_url()}/api", json=payload, headers=_ma_headers())
-            if r.status_code != 200:
-                logger.debug("MA %s -> HTTP %s", command, r.status_code)
-                return None
-            return r.json()
+            return await c.post(f"{_ma_url()}/api", json=payload, headers=_ma_headers())
     except Exception as exc:  # noqa: BLE001 — MA is optional; never break Zoe
         logger.debug("MA %s unreachable: %s", command, exc)
         return None
+
+
+async def _ma(command: str, **args: Any) -> Any:
+    """POST one MA command. Returns the parsed result or None on any failure."""
+    r = await _ma_response(command, **args)
+    if r is None:
+        return None
+    if r.status_code != 200:
+        logger.debug("MA %s -> HTTP %s", command, r.status_code)
+        return None
+    return r.json()
+
+
+async def _ma_ok(command: str, timeout_s: float = _TIMEOUT_S, **args: Any) -> bool:
+    """True only if MA ACCEPTED the command (HTTP 200). For fire-and-forget
+    writes (e.g. play_media) whose success body is `null` — `_ma` can't tell a
+    200-with-null-body from an unreachable/timed-out MA, so callers that must
+    report failure use this instead. (A URI MA accepts but fails on async is
+    inherently undetectable synchronously — this catches down/timeout/reject.)"""
+    r = await _ma_response(command, timeout_s=timeout_s, **args)
+    if r is None:
+        return False
+    if r.status_code != 200:
+        logger.debug("MA %s -> HTTP %s", command, r.status_code)
+        return False
+    return True
 
 
 def _as_list(data: Any) -> list[dict[str, Any]]:
@@ -410,8 +434,13 @@ async def play_media(uri: str, player_id: str = "") -> dict[str, Any]:
     pid = player.get("player_id", "")
     if not pid:
         return {"ok": False, "reason": "no player available"}
-    await _ma("player_queues/play_media", queue_id=pid, media=uri,
-              option="replace", radio_mode=False)
+    # Report failure honestly: MA down/timeout/reject → HTTP != 200 → ok:False,
+    # so the panel shows an error instead of a false "Playing …" toast. play_media
+    # does real work synchronously (resolve the stream, start the speaker) and
+    # returns 200 in ~6s+, so it needs a longer timeout than the read helpers.
+    if not await _ma_ok("player_queues/play_media", timeout_s=20.0, queue_id=pid,
+                        media=uri, option="replace", radio_mode=False):
+        return {"ok": False, "reason": "playback failed"}
     return {
         "ok": True, "uri": uri, "player_id": pid,
         "player_name": player.get("display_name") or player.get("name") or "",

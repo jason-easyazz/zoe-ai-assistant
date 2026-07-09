@@ -195,10 +195,10 @@ async def test_play_media_targets_named_player(monkeypatch):
         return [{"player_id": "kitchen", "display_name": "Kitchen", "available": True, "powered": True},
                 {"player_id": "bedroom", "display_name": "Bedroom", "available": True, "powered": True}]
     calls = []
-    async def fake_ma(command, **args):
-        calls.append((command, args)); return None
+    async def fake_ok(command, timeout_s=None, **args):
+        calls.append((command, args)); return True
     monkeypatch.setattr(music_service, "get_players", players)
-    monkeypatch.setattr(music_service, "_ma", fake_ma)
+    monkeypatch.setattr(music_service, "_ma_ok", fake_ok)
 
     r = await music_service.play_media("ytmusic://track/1", player_id="bedroom")
     assert r["ok"] is True and r["player_id"] == "bedroom" and r["player_name"] == "Bedroom"
@@ -208,13 +208,27 @@ async def test_play_media_targets_named_player(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_play_media_reports_failure_when_ma_rejects(monkeypatch):
+    """play_media success body is null, so a bare _ma return can't tell success
+    from failure. When MA is down/times out/rejects (HTTP != 200 → _ma_ok False)
+    we must report ok:False, not a false 'Playing …'."""
+    async def players():
+        return [{"player_id": "bedroom", "display_name": "Bedroom", "available": True, "powered": True}]
+    async def down(command, timeout_s=None, **args): return False
+    monkeypatch.setattr(music_service, "get_players", players)
+    monkeypatch.setattr(music_service, "_ma_ok", down)
+    r = await music_service.play_media("ytmusic://track/1", player_id="bedroom")
+    assert r["ok"] is False and r["reason"] == "playback failed"
+
+
+@pytest.mark.asyncio
 async def test_play_media_guards(monkeypatch):
     async def players():
         return [{"player_id": "kitchen", "display_name": "Kitchen", "available": True, "powered": True}]
-    async def boom(command, **args):
+    async def boom(command, timeout_s=None, **args):
         raise AssertionError("MA must not be called on a guarded play_media")
     monkeypatch.setattr(music_service, "get_players", players)
-    monkeypatch.setattr(music_service, "_ma", boom)
+    monkeypatch.setattr(music_service, "_ma_ok", boom)
 
     assert (await music_service.play_media("", player_id="kitchen"))["ok"] is False       # no uri
     # A stale/unknown player id fails loudly instead of playing on the wrong speaker.
@@ -228,10 +242,10 @@ async def test_play_media_falls_back_to_active_player(monkeypatch):
         return [{"player_id": "kitchen", "available": True, "powered": True, "playback_state": "playing"},
                 {"player_id": "bedroom", "available": True, "powered": True}]
     calls = []
-    async def fake_ma(command, **args):
-        calls.append(args.get("queue_id")); return None
+    async def fake_ok(command, timeout_s=None, **args):
+        calls.append(args.get("queue_id")); return True
     monkeypatch.setattr(music_service, "get_players", players)
-    monkeypatch.setattr(music_service, "_ma", fake_ma)
+    monkeypatch.setattr(music_service, "_ma_ok", fake_ok)
     # No explicit player → picks the active (playing) player.
     r = await music_service.play_media("ytmusic://track/1")
     assert r["ok"] is True and calls == ["kitchen"]

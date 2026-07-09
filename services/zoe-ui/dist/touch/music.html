@@ -574,10 +574,13 @@
             bar.classList.add('show');
         }
         async function transport(action){
-            await api('/api/music/control', {
+            var r = await api('/api/music/control', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ action: action, player_id: state.player_id })
             });
+            // A stale/unavailable speaker returns ok:false — tell the user instead
+            // of silently swallowing the tap.
+            if (!r || r.ok === false) toast("Couldn't reach " + (state.player_name || 'the speaker'));
             setTimeout(refreshNowPlaying, 600);
         }
 
