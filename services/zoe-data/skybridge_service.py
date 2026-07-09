@@ -1032,6 +1032,12 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
         parsed_range = _calendar_date_from_text(text, _today())
         start = parsed_range[1] if parsed_range else _context_calendar_date(context)
         return SkybridgeIntent(domain="calendar", action="create_event", title=calendar_create_notime, target_time="", all_day=True, range_label=start.isoformat(), start_date=start, end_date=start)
+    # smart_home runs AFTER list/calendar parsing (so "add lights to the shopping
+    # list" stays a list write) but BEFORE the generic clock/weather/people
+    # fallbacks. Household-shared like clock/music — no identity gate.
+    smart_home_intent = _classify_smart_home(text)
+    if smart_home_intent is not None:
+        return smart_home_intent
     if (
         " clock " in text
         or re.search(r"\bwhat(?:'s| is)?\s+the\s+time\b", text)
@@ -1110,6 +1116,10 @@ async def resolve_skybridge_request(
     if intent.domain == "music":
         from music_service import resolve_music
         return _attach_skybridge_context(await resolve_music(intent))
+
+    if intent.domain == "smart_home":
+        from smart_home_service import resolve_smart_home
+        return _attach_skybridge_context(await resolve_smart_home(intent))
 
     if db is not None:
         return _attach_skybridge_context(await _resolve_with_db(intent, user_id, db, context=context))
@@ -1221,6 +1231,68 @@ def _classify_music(text: str) -> "SkybridgeIntent | None":
     if (has_ctx or re.search(r"\bplaying\b", text)) and re.search(r"\b(what|show|see|playing|song|music)\b", text):
         return SkybridgeIntent(domain="music", action="status")
     return None
+
+
+# Smart-home device anchors: a word clearly about a controllable household
+# device. A control verb ("turn on") is only treated as smart_home when paired
+# with one of these, so "turn on charm" / "turn off the news" never steal it.
+_HOME_DEVICE_NOUN = re.compile(r"\b(lights?|lamps?|switch(?:es)?|plugs?|outlets?|fans?)\b")
+
+
+def _classify_smart_home(text: str) -> "SkybridgeIntent | None":
+    """Classify a smart-home command for the Home Assistant bridge. `text` is the
+    lowercased message padded with surrounding spaces. Device control is
+    household-shared (no identity gate), like clock and music."""
+    # Scene / routine activation: "activate the movie time scene", "run good night".
+    m = re.search(r"\b(?:activate|run|start|trigger|enable|set)\s+(?:the\s+)?(.+?)\s+scene\b", text)
+    if m:
+        return SkybridgeIntent(domain="smart_home", action="activate_scene", query=m.group(1).strip())
+    m = re.search(r"\bscene\s+(?:called\s+)?(.+?)\s*$", text)
+    if m:
+        return SkybridgeIntent(domain="smart_home", action="activate_scene", query=m.group(1).strip())
+    has_device = bool(_HOME_DEVICE_NOUN.search(text))
+    # Brightness: "dim the kitchen lamp to 40%", "set the lights to 80 percent".
+    # (No trailing \b after % — a "%" before a space is not a word boundary.)
+    m = re.search(r"\b(?:dim|set|turn|put)\s+(?:the\s+)?(.+?)\s+to\s+(\d{1,3})\s*(?:%|percent)", text)
+    if m and has_device:
+        pct = max(0, min(100, int(m.group(2))))
+        return SkybridgeIntent(domain="smart_home", action="set_brightness", query=_clean_device(m.group(1)), duration_seconds=pct)
+    if has_device and re.search(r"\bdim(?:mer)?\b", text):
+        return SkybridgeIntent(domain="smart_home", action="set_brightness", query=_clean_device(text), duration_seconds=25)
+    if has_device and re.search(r"\bbrighten\b", text):
+        return SkybridgeIntent(domain="smart_home", action="set_brightness", query=_clean_device(text), duration_seconds=100)
+    # Explicit command: "turn on the lamp", "switch off the fan".
+    m = re.search(r"\b(?:turn|switch|flip|put)\s+(on|off)\s+(?:the\s+)?(.*?)\s*$", text)
+    if m and has_device:
+        action = "turn_on" if m.group(1) == "on" else "turn_off"
+        return SkybridgeIntent(domain="smart_home", action=action, query=_clean_device(m.group(2)))
+    # State query BEFORE the bare "X on/off" toggle so "is the light on" / "what
+    # lights are on" read as a question, not a command.
+    if has_device and re.search(r"\b(?:is|are|what|which|how)\b.*\b(?:on|off|status)\b", text):
+        return SkybridgeIntent(domain="smart_home", action="status", query=_clean_device(text))
+    # Bare toggle: "lights on", "fan off".
+    m = re.search(r"\b(.+?)\s+(on|off)\s*$", text)
+    if m and has_device:
+        action = "turn_on" if m.group(2) == "on" else "turn_off"
+        return SkybridgeIntent(domain="smart_home", action=action, query=_clean_device(m.group(1)))
+    # Overview: "smart home", "show me the devices", "control the lights".
+    if re.search(r"\bsmart\s*home\b|\bdevices?\b", text):
+        return SkybridgeIntent(domain="smart_home", action="status")
+    if has_device and re.search(r"\b(show|see|control|manage|list of)\b", text):
+        return SkybridgeIntent(domain="smart_home", action="status", query=_clean_device(text))
+    return None
+
+
+def _clean_device(value: str) -> str:
+    """Strip control grammar so only the device/room words remain for matching."""
+    words = re.split(r"\s+", (value or "").strip().lower())
+    drop = {"turn", "switch", "flip", "put", "set", "dim", "dimmer", "brighten",
+            "on", "off", "the", "a", "an", "my", "our", "to", "all", "please",
+            "show", "me", "see", "control", "manage", "is", "are", "what", "which",
+            "light", "lights", "lamp", "lamps", "plug", "plugs", "outlet", "outlets",
+            "fan", "fans"}
+    kept = [w for w in words if w and w not in drop]
+    return " ".join(kept).strip()
 
 
 async def _resolve_with_db(intent: SkybridgeIntent, user_id: str, db: Any, *, context: dict[str, Any] | None = None) -> dict[str, Any]:

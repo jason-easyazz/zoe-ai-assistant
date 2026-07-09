@@ -827,8 +827,9 @@ def test_skybridge_weather_renderer_accepts_temperature_aliases():
 
 def test_skybridge_generic_renderers_compose_on_catalog(tmp_path):
     """The 7 legacy generic renderers (status/page/setting/page_grid/
-    settings_overview/list/action_form) plus the media/smart_home/
-    research_report adapters now build their card BODY as zoe-compose trees.
+    settings_overview/list/action_form) plus the media/research_report
+    adapters build their card BODY as zoe-compose trees (smart_home is now a
+    bespoke room-controls surface, asserted separately below).
     Behavioral: render each type through the real renderer (zoe-compose.js
     loaded first, like skybridge.html) and assert (a) zx- catalog classes,
     (b) no legacy sky-card-body/sky-field markup, (c) injection is escaped,
@@ -857,7 +858,6 @@ const cards = {
   action_form: { component: 'action_form', props: { title: 'Form ' + INJ, form_id: 'f1', summary: 'Check ' + INJ, fields: [{ label: 'Who ' + INJ, value: 'me ' + INJ }, { label: 'Empty', value: '' }] } },
   form: { component: 'form', props: { title: 'Form2 ' + INJ, form_id: 'f2', fields: [{ name: 'x', value: 'y ' + INJ }] } },
   list_create: { component: 'action_form', props: { source: 'list_create', title: 'New list', summary: 'Name it ' + INJ, fields: [{ label: 'List type', value: 'Personal' }, { label: 'Name', value: '' }], actions: [{ label: 'Create', query: 'create it' }] } },
-  smart_home: { component: 'smart_home', props: { title: 'Lights', devices: [{ name: 'Lamp ' + INJ, state: 'on' }, { entity_id: 'light.hall', state: 'off' }], actions: [{ label: 'All off', query: 'lights off' }] } },
   media: { component: 'media', props: { title: 'Now playing', items: [{ title: 'Song ' + INJ, artist: 'Band', artwork: '/touch/img/art.png' }, { title: 'NoArt', artist: 'X', artwork: 'https://evil.example/a.png' }], actions: [{ label: 'Pause', query: 'pause music' }] } },
   research_report: { component: 'research_report', props: { title: 'Report', sections: [{ title: 'Findings ' + INJ, body: 'Text ' + INJ, items: [{ name: 'Opt ' + INJ, value: '$5' }] }], actions: [{ label: 'Sources', query: 'show sources' }] } }
 };
@@ -879,11 +879,26 @@ out.page_grid.grid = R.render(cards.page_grid).includes('zx-grid zx-cols-2');
 out.settings_overview.risk_in_row = R.render(cards.settings_overview).includes('API sneaky &lt;b&gt;x&lt;/b&gt; · high');
 out.action_form.not_set = R.render(cards.action_form).includes('Not set');
 out.list_create.kicker = R.render(cards.list_create).includes('zx-text-kicker') && R.render(cards.list_create).includes('list-create-card');
-out.smart_home.grid_state = R.render(cards.smart_home).includes('zx-grid') && R.render(cards.smart_home).includes('<em>on</em>');
 out.list.index_cue = R.render(cards.list).includes('01') && R.render(cards.list).includes('02');
-out.smart_home.empty_container = (function(){
-  var h = R.render({ component: 'smart_home', props: { title: 'Lights', devices: [] } });
-  return h.includes('zx-stack') && h.includes('No devices available.');
+// smart_home is now a bespoke room-controls surface (not a composed generic
+// adapter): device tiles toggle on tap, on-state reads via .is-on/.sh-pill-on,
+// scenes ride a chip row, and empty/offline degrade gracefully.
+out.smart_home = (function(){
+  var on = R.render({ component: 'smart_home', props: { title: 'Lights', devices: [
+    { name: 'Lamp ' + INJ, domain: 'switch', on: true, available: true },
+    { name: 'Hall', entity_id: 'light.hall', domain: 'light', on: false, available: true }
+  ], scenes: [{ name: 'Movie Time' }] } });
+  var empty = R.render({ component: 'smart_home', props: { title: 'Lights', devices: [] } });
+  var offline = R.render({ component: 'smart_home', props: { title: 'Home', devices: [], offline: true } });
+  return {
+    tiles: on.includes('sh-grid') && on.includes('sh-tile'),
+    on_state: on.includes('is-on') && on.includes('sh-pill-on'),
+    escaped: !on.includes('<b>x</b>') && on.includes('&lt;b&gt;x&lt;/b&gt;'),
+    action: on.includes('data-sky-action='),
+    scene: on.includes('sh-scene') && on.includes('Movie Time'),
+    empty: empty.includes('sh-empty') && empty.includes('No lights or switches'),
+    offline: offline.includes('Home hub offline')
+  };
 })();
 out.media.tile = R.render(cards.media).includes('zx-mediatile') && R.render(cards.media).includes('/touch/img/art.png');
 out.media.foreign_art_dropped = !R.render(cards.media).includes('evil.example');

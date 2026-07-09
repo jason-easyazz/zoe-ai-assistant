@@ -1328,20 +1328,71 @@
         return cardFrame(Object.assign({ status: props.status || 'List' }, props), composedBody(tree, props.title || ''), { wide: false, tone: 'list-card' });
     }
 
-    // smart_home cards (contract: content {title, devices}). No live producer
-    // emits this card_type yet — panel_show_smart_home uses the executor
-    // overlay — so the shape follows the card-contract registry, tolerating the
-    // overlay's entities/items aliases.
+    // smart_home cards (contract: content {title, devices, scenes}). Rendered as a
+    // room-controls surface: device tiles toggle on tap (data-sky-action="query"
+    // re-enters the resolver so tap + voice share one path), scene chips run a
+    // routine. Tolerates the executor overlay's entities/items aliases.
+    function shDeviceIcon(domain, on) {
+        // Filled when on, outline when off — a clear at-a-glance state cue.
+        var paths = {
+            light: '<path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.6.6 1 1.4 1 2.5h6c0-1.1.4-1.9 1-2.5A6 6 0 0 0 12 3z"/>',
+            fan: '<path d="M12 12a3 3 0 0 0 0-6c-2 0-3 1.5-3 3.5C9 11 10.5 12 12 12zm0 0a3 3 0 0 1 6 0c0 2-1.5 3-3.5 3C13 15 12 13.5 12 12zm0 0a3 3 0 0 0 0 6c2 0 3-1.5 3-3.5C15 13 13.5 12 12 12z"/>',
+            "switch": '<rect x="4" y="7" width="16" height="10" rx="5"/><circle cx="9" cy="12" r="2.6" fill="currentColor" stroke="none"/>'
+        };
+        var d = paths[domain] || paths.switch;
+        return '<svg class="sh-tile-icon" viewBox="0 0 24 24" width="26" height="26" fill="' + (on ? 'currentColor' : 'none') +
+            '" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + '</svg>';
+    }
+    function shStatePill(device) {
+        if (device.available === false) return '<span class="sh-pill sh-pill-off">Offline</span>';
+        var on = !!device.on;
+        var pct = (on && device.dimmable && device.brightness != null)
+            ? Math.round((Number(device.brightness) / 255) * 100) + '%' : (on ? 'On' : 'Off');
+        return '<span class="sh-pill' + (on ? ' sh-pill-on' : ' sh-pill-off') + '">' + escapeHtml(pct) + '</span>';
+    }
+    function shDeviceTile(device) {
+        if (typeof device !== 'object' || !device) return '';
+        var name = device.name || device.entity_id || device.title || 'Device';
+        var on = !!device.on;
+        var domain = (device.domain === 'light' || device.domain === 'fan') ? device.domain : 'switch';
+        var query = device.query || ('turn ' + (on ? 'off' : 'on') + ' the ' + name + ' ' + (domain === 'light' ? 'light' : 'switch'));
+        var disabled = device.available === false;
+        return '<button type="button" class="sh-tile' + (on ? ' is-on' : '') + (disabled ? ' is-off-network' : '') + '"' +
+            (disabled ? ' disabled aria-disabled="true"' : ' data-sky-action="query" data-query="' + escapeHtml(query) + '"') +
+            ' aria-pressed="' + (on ? 'true' : 'false') + '" aria-label="' + escapeHtml(name + ', ' + (on ? 'on' : 'off') + ', tap to toggle') + '">' +
+            '<span class="sh-tile-top">' + shDeviceIcon(domain, on) + shStatePill(device) + '</span>' +
+            '<span class="sh-tile-name">' + escapeHtml(name) + '</span>' +
+            '</button>';
+    }
+    function shSceneChip(scene) {
+        if (typeof scene !== 'object' || !scene) return '';
+        var name = scene.name || scene.title || 'Scene';
+        var query = scene.query || ('activate the ' + name + ' scene');
+        return '<button type="button" class="sh-scene" data-sky-action="query" data-query="' + escapeHtml(query) + '" aria-label="' + escapeHtml('Activate ' + name) + '">' +
+            '<span class="sh-scene-dot" aria-hidden="true"></span><span class="sh-scene-name">' + escapeHtml(name) + '</span></button>';
+    }
     function renderSmartHome(props) {
-        const devices = props.devices || props.entities || props.items || [];
-        const rows = devices.slice(0, 8).map(device => {
-            if (typeof device !== 'object' || !device) return listRowNode(String(device || 'Device'), '');
-            return listRowNode(device.name || device.entity_id || device.title || 'Device', device.state || device.status || '');
-        });
-        const tree = rows.length
-            ? { component: 'Grid', columns: 2, children: rows }
-            : { component: 'Stack', children: [textNode('No devices available.', 'caption')] };
-        return cardFrame(Object.assign({ status: props.status || 'Smart home' }, props), composedBody(tree, props.title || ''), { wide: true, tone: 'smart-home-card' });
+        var devices = props.devices || props.entities || props.items || [];
+        var scenes = props.scenes || [];
+        var head = '<div class="sh-head"><span class="sh-title">' + escapeHtml(props.title || 'Home') + '</span>' +
+            (props.summary ? '<span class="sh-sub">' + escapeHtml(props.summary) + '</span>' : '') + '</div>';
+        var body;
+        if (props.offline) {
+            body = '<div class="sh-empty"><span class="sh-empty-title">Home hub offline</span>' +
+                '<span class="sh-empty-sub">I couldn’t reach the home hub. Check it’s powered on and connected.</span></div>';
+        } else {
+            var tiles = devices.map(shDeviceTile).join('');
+            var deviceBlock = tiles
+                ? '<div class="sh-grid">' + tiles + '</div>'
+                : '<div class="sh-empty"><span class="sh-empty-sub">No lights or switches set up yet.</span></div>';
+            var sceneBlock = scenes.length
+                ? '<div class="sh-scenes"><span class="sh-section">Scenes</span><div class="sh-scene-row">' +
+                    scenes.map(shSceneChip).join('') + '</div></div>'
+                : '';
+            body = deviceBlock + sceneBlock;
+        }
+        return cardFrame(Object.assign({ status: props.status || 'Home' }, props), head + body,
+            { wide: true, tone: 'smart-home-card', hideHeader: true, hideStatus: true, hideActions: true });
     }
 
     // media cards (contract: content {title, items}). No live producer emits
