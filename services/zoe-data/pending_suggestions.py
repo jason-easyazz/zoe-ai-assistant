@@ -72,7 +72,10 @@ async def store_suggestions(
                 )
                 stored += 1
     except Exception as exc:
-        logger.debug("pending_suggestions.store failed: %s", exc)
+        # WARNING, not debug: a swallowed store error (e.g. the users FK) hid the
+        # propose-on-mention failure for a long time. Any orphan users row from a
+        # partial write is benign (a valid user is a prerequisite, no PII).
+        logger.warning("pending_suggestions.store failed (stored=%d): %s", stored, exc)
     return stored
 
 
