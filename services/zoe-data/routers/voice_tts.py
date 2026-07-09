@@ -2429,14 +2429,31 @@ async def voice_command(
 
     # Resolve effective user once so all downstream branches (intent fast path,
     # scope checks, Zoe Agent, and Hermes escalation) share the same identity.
+    #
+    # P-F8: identity lookups MUST use a dedicated connection, not the shared request
+    # `db`. On the streaming panel path (voice_turn_stream) voice_command is launched
+    # via asyncio.ensure_future(..., db=db) and runs CONCURRENTLY with turn_stream's
+    # use of that same pooled asyncpg connection. asyncpg forbids concurrent operations
+    # on one connection, so a resolver query on the shared `db` raises mid-flight and
+    # the resolvers' best-effort `except: pass` swallows it → None → effective_user
+    # ='guest' → every panel voice turn was silently dropped from memory. A private
+    # short-lived connection removes the race (reproduced: solo→jason, concurrent→None).
     _bound_user = (_VOICE_SESSIONS.get(panel_id) or {}).get("bound_user_id")
-    _panel_recent_user = await _resolve_recent_panel_session_user(panel_id, db)
+    try:
+        from db_pool import get_db_ctx as _get_db_ctx
+        async with _get_db_ctx() as _idconn:
+            _panel_recent_user = await _resolve_recent_panel_session_user(panel_id, _idconn)
+            _panel_default_user = await _resolve_panel_default_user(panel_id, _idconn)
+    except Exception:
+        # Never let identity resolution break the turn — fall back to the shared db
+        # (no worse than the pre-fix behaviour if a dedicated connection is unavailable).
+        _panel_recent_user = await _resolve_recent_panel_session_user(panel_id, db)
+        _panel_default_user = await _resolve_panel_default_user(panel_id, db)
     if not _bound_user and _panel_recent_user:
         _ses = _VOICE_SESSIONS.get(panel_id)
         if _ses is not None:
             _ses["bound_user_id"] = _panel_recent_user
         _bound_user = _panel_recent_user
-    _panel_default_user = await _resolve_panel_default_user(panel_id, db)
     _scope_identity_user = identified_user_id or _bound_user or _panel_recent_user
     _has_scope_identity = bool(_scope_identity_user)
     effective_user = (
