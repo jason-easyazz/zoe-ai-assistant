@@ -52,6 +52,10 @@ def _keep_item(item: dict, *, gated: bool, min_conf: float) -> bool:
         conf = float(item.get("confidence", 0.0))
     except (TypeError, ValueError):
         conf = 0.0
+    # Fail closed on malformed / wrong-scale confidence: the prompt contract is
+    # 0.0-1.0, so a value like 5 or 80 is not a real high-confidence signal.
+    if not (0.0 <= conf <= 1.0):
+        return False
     return conf >= min_conf
 
 

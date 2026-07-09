@@ -20,6 +20,8 @@ def test_off_keeps_every_item(monkeypatch):
 @pytest.mark.parametrize("conf,keep", [
     (0.95, True), (0.4, True), (0.39, False), (0.0, False), ("0.8", True),
     (None, False), ("junk", False),
+    # out-of-range / wrong-scale confidence fails CLOSED (not a real high signal)
+    (5, False), (80, False), (1.0001, False), (-0.1, False),
 ])
 def test_on_thresholds(conf, keep):
     item = {} if conf is None else {"confidence": conf}
