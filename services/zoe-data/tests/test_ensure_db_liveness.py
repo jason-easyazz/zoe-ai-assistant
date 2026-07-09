@@ -58,14 +58,15 @@ class _FakePool:
 
 
 async def _exercise():
+    import db_pool  # real module in the services/zoe-data test env
     fp = _FakePool()
-    orig_pool, orig_rel = person_extractor.get_pool, person_extractor._release_safely
-    person_extractor.get_pool = lambda: fp
+    orig_pool, orig_rel = db_pool.get_pool, db_pool._release_safely
+    db_pool.get_pool = lambda: fp
 
     async def _rel(pool, conn):
         await pool.release(conn)
 
-    person_extractor._release_safely = _rel
+    db_pool._release_safely = _rel  # _ensure_db imports db_pool lazily + reads these at call time
     try:
         db, opened = await person_extractor._ensure_db(None)
         assert opened is True
@@ -77,10 +78,10 @@ async def _exercise():
         await db.close()
         assert fp.conn.released is True and fp.released == 1, "close() did not release the pooled connection exactly once"
         # a provided db is never owned/closed by us
-        db2, opened2 = await person_extractor._ensure_db(object())
+        _db2, opened2 = await person_extractor._ensure_db(object())
         assert opened2 is False
     finally:
-        person_extractor.get_pool, person_extractor._release_safely = orig_pool, orig_rel
+        db_pool.get_pool, db_pool._release_safely = orig_pool, orig_rel
 
 
 def test_ensure_db_none_returns_live_owned_connection():
