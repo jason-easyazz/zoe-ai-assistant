@@ -1045,6 +1045,11 @@
                 body: JSON.stringify({ position_seconds: pos, player_id: getMusicPlayerId() || npPlayerId })
             });
             if (!resp.ok) { pollNowPlaying(); return; }
+            // The endpoint returns 200 with { ok:false } when MA rejected the seek
+            // (no active player, durationless item, MA down). Reconcile immediately
+            // so the optimistic thumb snaps back to the real position, don't wait.
+            const data = await resp.json().catch(() => null);
+            if (!data || data.ok === false) { pollNowPlaying(); return; }
         } catch (_) { pollNowPlaying(); return; }
         setTimeout(pollNowPlaying, 400);
     }
