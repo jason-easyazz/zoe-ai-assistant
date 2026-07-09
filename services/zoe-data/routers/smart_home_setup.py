@@ -106,11 +106,16 @@ async def setup_qr(request: Request, token: str = "") -> Response:
 
 
 @router.get("/info")
-async def setup_info(token: str = "") -> dict[str, Any]:
+async def setup_info(response: Response, token: str = "") -> dict[str, Any]:
     """Phone: the branded setup guide. Gated by a one-time token which is SPENT
     here (the guide is the terminal step of this read-only flow, so consuming on
     fetch keeps a photographed/leaked QR from re-opening it). Returns guidance
     content only — never mutates the home."""
+    # The response is token-gated AND the token is single-use, so it must never be
+    # cached by the browser or any intermediary — a cached copy could otherwise be
+    # replayed after the token is spent. Force no-store on every return path.
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
     if smart_home_setup.consume(token) is None:
         return {"ok": False, "reason": "This setup link has expired. Tap “Add a device” on your Zoe screen again."}
     return {

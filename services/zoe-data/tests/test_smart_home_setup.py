@@ -8,6 +8,7 @@ one-time token, and that the token is tamper-proof + single-use.
 from __future__ import annotations
 
 import pytest
+from fastapi import Response
 
 import smart_home_setup
 from routers.smart_home_setup import setup_info
@@ -43,14 +44,14 @@ def test_token_expiry(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_setup_info_requires_valid_token():
-    bad = await setup_info(token="garbage")
+    bad = await setup_info(Response(), token="garbage")
     assert bad["ok"] is False and "expired" in bad["reason"].lower()
 
 
 @pytest.mark.asyncio
 async def test_setup_info_returns_guidance_and_honest_note():
     tok = smart_home_setup.mint()["token"]
-    info = await setup_info(token=tok)
+    info = await setup_info(Response(), token=tok)
     assert info["ok"] is True
     ids = {t["id"] for t in info["device_types"]}
     assert {"light", "plug", "speaker", "sensor"} <= ids
@@ -66,6 +67,18 @@ async def test_setup_info_returns_guidance_and_honest_note():
 async def test_setup_info_is_single_use():
     # The guide fetch SPENDS the token — a re-opened/photographed QR can't re-fetch.
     tok = smart_home_setup.mint()["token"]
-    assert (await setup_info(token=tok))["ok"] is True
-    again = await setup_info(token=tok)
+    assert (await setup_info(Response(), token=tok))["ok"] is True
+    again = await setup_info(Response(), token=tok)
     assert again["ok"] is False and "expired" in again["reason"].lower()
+
+
+@pytest.mark.asyncio
+async def test_setup_info_is_never_cached():
+    # Token-gated + single-use → the guide must carry no-store so a cached copy
+    # can't be replayed after the token is spent.
+    tok = smart_home_setup.mint()["token"]
+    for call_token in (tok, "garbage"):  # both success and expired paths
+        resp = Response()
+        await setup_info(resp, token=call_token)
+        assert "no-store" in resp.headers["Cache-Control"]
+        assert resp.headers["Pragma"] == "no-cache"
