@@ -93,3 +93,18 @@ def test_person_create_sanitises_untrusted_slots():
     # whitespace-collapse runs before char-strip (mirrors _safe_prompt_inline),
     # so removing "#" from "Dan # INJECTED" leaves a residual double space.
     assert title == "Add Dan  INJECTED as your step brother?"
+
+
+@pytest.mark.parametrize("bad_slots", [["Daniel"], "Daniel", 42, None])
+def test_person_create_survives_non_dict_slots(bad_slots):
+    # A legacy/malformed row could decode pre_filled_slots as a non-dict; the card
+    # must degrade to the generic-name fallback, never raise (a raise makes the
+    # chat caller drop ALL suggestion cards for the turn).
+    cards = ui_components_for_suggestions([
+        {"id": "sug-5", "action_type": "person_create", "pre_filled_slots": bad_slots}
+    ])
+    assert cards[0]["title"] == "Add this contact?"
+    assert [a["action"] for a in cards[0]["actions"]] == [
+        "pending_suggestion_accept",
+        "pending_suggestion_dismiss",
+    ]

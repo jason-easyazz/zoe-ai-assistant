@@ -272,7 +272,11 @@ def ui_components_for_suggestions(suggestions: list[dict]) -> list[dict]:
 
 def _person_create_card(s: dict) -> dict:
     """Contact-specific confirm card for a `person_create` proposal."""
-    slots = s.get("pre_filled_slots") or {}
+    raw_slots = s.get("pre_filled_slots") or {}
+    # A legacy/malformed row could decode pre_filled_slots as a JSON array or
+    # string; guard so a non-dict can't raise (the chat caller catches and drops
+    # ALL cards for the turn, hiding the confirm card).
+    slots = raw_slots if isinstance(raw_slots, dict) else {}
     name = _safe_card_inline(slots.get("name") or "")
     relationship = _safe_card_inline(slots.get("relationship") or "")
     label = name or "this contact"
