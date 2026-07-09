@@ -1633,6 +1633,19 @@ async def test_calendar_delete_all_day_disambiguates_by_date():
     assert result["intent"]["event_id"] == "trip-fri"
 
 
+def test_calendar_delete_target_survives_delimiter_in_title():
+    """A title that itself contains the delimiter phrase ('Away from schedule',
+    'Off calendar review') must not be truncated: the greedy target binds to the
+    LAST 'from … calendar/schedule/agenda', keeping the full title + discriminator."""
+    from skybridge_service import _calendar_delete_from_text as parse
+
+    assert parse("delete Away from schedule at 8:00am from my calendar", None) == "Away from schedule at 8:00am"
+    assert parse("delete Work from home on 2026-07-09 from my calendar", None) == "Work from home on 2026-07-09"
+    assert parse("cancel Off calendar review at 9:00am from my calendar", None) == "Off calendar review at 9:00am"
+    # Ordinary single-delimiter case is unchanged.
+    assert parse("delete Dentist at 3:00pm from my calendar", None) == "Dentist at 3:00pm"
+
+
 def test_score_event_for_target_iso_date_does_not_leak_as_time():
     """The ISO date is stripped before the clock pass, so a December date's '12'
     can't be misread as noon and unfairly beat the tapped all-day event."""

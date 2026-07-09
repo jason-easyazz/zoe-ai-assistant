@@ -769,9 +769,16 @@ def _contextual_list_add_from_text(message: str, context: dict[str, Any] | None)
 
 
 def _calendar_delete_from_text(message: str, context: dict[str, Any] | None) -> str | None:
-    """Parse 'delete/remove/cancel <event> from my calendar' (or contextual)."""
+    """Parse 'delete/remove/cancel <event> from my calendar' (or contextual).
+
+    The target is GREEDY (``.+``) so the delimiter binds to the LAST
+    'from/off/out of … calendar/schedule/agenda' — a title that itself contains
+    that phrase (e.g. 'Away from schedule') stays intact instead of being
+    truncated to 'Away'. The tap-generated query always appends the anchor last,
+    so greedy resolves to the whole real target.
+    """
     match = re.search(
-        r"\b(?:delete|remove|cancel)\s+(?P<target>.+?)\s+(?:from|off|out of)\s+(?:the\s+|my\s+)?(?:calendar|schedule|agenda)\b",
+        r"\b(?:delete|remove|cancel)\s+(?P<target>.+)\s+(?:from|off|out of)\s+(?:the\s+|my\s+)?(?:calendar|schedule|agenda)\b",
         message,
         re.IGNORECASE,
     )
