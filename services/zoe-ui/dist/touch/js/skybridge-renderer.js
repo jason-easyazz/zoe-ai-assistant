@@ -1355,7 +1355,10 @@
         var name = device.name || device.entity_id || device.title || 'Device';
         var on = !!device.on;
         var domain = (device.domain === 'light' || device.domain === 'fan') ? device.domain : 'switch';
-        var query = device.query || ('turn ' + (on ? 'off' : 'on') + ' the ' + name + ' ' + (domain === 'light' ? 'light' : 'switch'));
+        // Prefer the server-built query (carries the exact @entity id so a tap
+        // controls precisely this device); fallback also embeds the entity id.
+        var query = device.query || ('turn ' + (on ? 'off' : 'on') + ' ' + name +
+            (device.entity_id ? ' @' + device.entity_id : ' ' + (domain === 'light' ? 'light' : 'switch')));
         var disabled = device.available === false;
         return '<button type="button" class="sh-tile' + (on ? ' is-on' : '') + (disabled ? ' is-off-network' : '') + '"' +
             (disabled ? ' disabled aria-disabled="true"' : ' data-sky-action="query" data-query="' + escapeHtml(query) + '"') +
@@ -1367,7 +1370,7 @@
     function shSceneChip(scene) {
         if (typeof scene !== 'object' || !scene) return '';
         var name = scene.name || scene.title || 'Scene';
-        var query = scene.query || ('activate the ' + name + ' scene');
+        var query = scene.query || ('activate ' + name + (scene.scene_id ? ' @' + scene.scene_id : ' scene'));
         return '<button type="button" class="sh-scene" data-sky-action="query" data-query="' + escapeHtml(query) + '" aria-label="' + escapeHtml('Activate ' + name) + '">' +
             '<span class="sh-scene-dot" aria-hidden="true"></span><span class="sh-scene-name">' + escapeHtml(name) + '</span></button>';
     }

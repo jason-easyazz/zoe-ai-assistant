@@ -45,6 +45,7 @@ class SkybridgeIntent:
     birthday: str = ""
     duration_seconds: int = 0
     completed: bool | None = None
+    entity_id: str = ""  # exact HA entity a smart_home TILE tap targets (never fuzzy)
 
 
 # ── Timers ───────────────────────────────────────────────────────────────────
@@ -1243,6 +1244,24 @@ def _classify_smart_home(text: str) -> "SkybridgeIntent | None":
     """Classify a smart-home command for the Home Assistant bridge. `text` is the
     lowercased message padded with surrounding spaces. Device control is
     household-shared (no identity gate), like clock and music."""
+    # Tile taps carry the device's EXACT HA entity id as an "@domain.entity" marker
+    # so a tap controls exactly its device (never a fuzzy name match). Voice never
+    # includes it. This is the authoritative, unambiguous control path.
+    ent_match = re.search(r"@([a-z_]+\.[a-z0-9_]+)", text)
+    if ent_match:
+        entity_id = ent_match.group(1)
+        rest = (text[: ent_match.start()] + " " + text[ent_match.end():])
+        if entity_id.startswith(("scene.", "script.")):
+            return SkybridgeIntent(domain="smart_home", action="activate_scene", entity_id=entity_id)
+        pct_match = re.search(r"to\s+(\d{1,3})\s*(?:%|percent)", rest)
+        if pct_match:
+            pct = max(0, min(100, int(pct_match.group(1))))
+            return SkybridgeIntent(domain="smart_home", action="set_brightness", entity_id=entity_id, duration_seconds=pct)
+        # Read the LEADING control verb, not any "off" that might sit in the device
+        # name (e.g. "turn on Off Switch @…" is a turn_on).
+        verb = re.search(r"\b(?:turn|switch|flip|put)\s+(on|off)\b", rest)
+        off = (verb.group(1) == "off") if verb else bool(re.search(r"\boff\b", rest))
+        return SkybridgeIntent(domain="smart_home", action="turn_off" if off else "turn_on", entity_id=entity_id)
     # Scene / routine activation: "activate the movie time scene", "run good night".
     m = re.search(r"\b(?:activate|run|start|trigger|enable|set)\s+(?:the\s+)?(.+?)\s+scene\b", text)
     if m:

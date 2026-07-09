@@ -74,11 +74,12 @@ def test_smart_home_is_public_no_identity_gate():
 # ── resolver (mocked HA bridge) ──────────────────────────────────────────────
 
 class _Intent:
-    def __init__(self, action, query="", brightness=0):
+    def __init__(self, action, query="", brightness=0, entity_id=""):
         self.domain = "smart_home"
         self.action = action
         self.query = query
         self.duration_seconds = brightness
+        self.entity_id = entity_id
 
 
 class _FakeBridge:
@@ -213,6 +214,56 @@ async def test_offline_device_is_not_controlled(bridge):
     r = await smart_home_service.resolve_smart_home(_Intent("turn_on", query="hallway"))
     assert bridge.controls == []  # never POST to an unavailable entity
     assert "offline" in r["spoken_summary"].lower()
+
+
+@pytest.mark.asyncio
+async def test_tile_query_targets_exact_entity_id(bridge):
+    # A tile carries the exact entity id via the "@entity" marker — the round-trip
+    # through the real classifier must control THAT entity, not a name match.
+    i = classify_skybridge_intent("turn off Coffee Plug @switch.plug", None)
+    assert i is not None and i.domain == "smart_home" and i.entity_id == "switch.plug"
+    await smart_home_service.resolve_smart_home(i)
+    assert bridge.controls == [{"entity_id": "switch.plug", "action": "turn_off"}]
+
+
+@pytest.mark.asyncio
+async def test_scene_chip_targets_exact_scene_id(bridge):
+    i = classify_skybridge_intent("activate Movie Time @scene.movie_time", None)
+    assert i is not None and i.action == "activate_scene" and i.entity_id == "scene.movie_time"
+    await smart_home_service.resolve_smart_home(i)
+    assert bridge.scenes_activated == ["scene.movie_time"]
+
+
+@pytest.mark.asyncio
+async def test_cross_domain_name_collision_tile_is_exact(monkeypatch):
+    # A light AND a switch both named "Light Switch": tapping the SWITCH tile
+    # (its @entity id) must toggle the switch, never the like-named light.
+    async def _get(path):
+        if path == "/lights":
+            return {"lights": [{"entity_id": "light.ls", "name": "Light Switch", "state": "off"}]}
+        if path == "/switches":
+            return {"switches": [{"entity_id": "switch.ls", "name": "Light Switch", "state": "off"}]}
+        return {"scenes": []}
+
+    calls: list[dict] = []
+
+    async def _post(path, payload):
+        calls.append(payload)
+        return {"message": "Successfully executed", "result": []}
+
+    monkeypatch.setattr(smart_home_service, "_ha_get", _get)
+    monkeypatch.setattr(smart_home_service, "_ha_post", _post)
+    i = classify_skybridge_intent("turn on Light Switch @switch.ls", None)
+    await smart_home_service.resolve_smart_home(i)
+    assert calls == [{"entity_id": "switch.ls", "action": "turn_on"}]
+
+
+@pytest.mark.asyncio
+async def test_stale_tile_entity_gone_is_friendly(bridge):
+    # A tile for an entity no longer present must not blindly POST.
+    r = await smart_home_service.resolve_smart_home(_Intent("turn_on", entity_id="switch.removed"))
+    assert bridge.controls == []
+    assert "available" in r["spoken_summary"].lower()
 
 
 @pytest.mark.asyncio

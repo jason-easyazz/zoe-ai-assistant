@@ -204,12 +204,21 @@ def _select_targets(
         return [d for d in pool if d.get("dimmable")] or pool
 
     if not name_tokens:
-        # A device literally NAMED with only class words ("Light Switch", "Fan"):
-        # if the whole phrase pins exactly one device by name, that's the target.
-        # This keeps a TAPPED tile exact even when the entity has a class-only name.
-        exact = [d for d in devices if all(t in f"{d.get('name', '')} {d.get('entity_id', '')}".lower() for t in want)]
-        if len(exact) == 1:
-            return _dimmable_only(exact), False
+        # A device literally NAMED with only class words ("Light Switch", "Fan
+        # Light"): a MULTI-word class-only phrase is a specific name, not a generic
+        # class term, so pin the device it uniquely identifies (keeps a tapped tile
+        # exact even for class-only names). If several collide — e.g. a light AND a
+        # switch both named "Light Switch" — ASK rather than guess the wrong one. A
+        # single bare class word ("lights"/"lamp") falls through to the class logic.
+        if len(want) >= 2:
+            exact = _dimmable_only([
+                d for d in devices
+                if all(t in f"{d.get('name', '')} {d.get('entity_id', '')}".lower() for t in want)
+            ])
+            if len(exact) == 1:
+                return exact, False
+            if len(exact) > 1:
+                return exact, True
         # Bare class command: "the lamp" / "the lights" / "all lights".
         pool = [d for d in devices if d.get("domain") in domains] if domains else list(devices)
         pool = _dimmable_only(pool)
@@ -250,15 +259,18 @@ def _match_scene(scenes: list[dict[str, Any]], query: str) -> Optional[dict[str,
 
 def _device_query(device: dict[str, Any]) -> str:
     """The re-entrant resolver query a device tile taps to toggle. We append the
-    domain noun ("switch"/"light") so the classifier's device anchor matches on
-    the round-trip even for oddly-named entities."""
+    EXACT HA entity id as an "@entity" marker so a tap controls precisely that
+    device (never a fuzzy name match); the readable prefix is for the transcript."""
     verb = "turn off" if device.get("on") else "turn on"
-    noun = "light" if device.get("domain") == "light" else "switch"
-    return f"{verb} the {device.get('name', 'device')} {noun}"
+    name = device.get("name", "device")
+    ent = device.get("entity_id", "")
+    return f"{verb} {name} @{ent}" if ent else f"{verb} the {name} {'light' if device.get('domain') == 'light' else 'switch'}"
 
 
 def _scene_query(scene: dict[str, Any]) -> str:
-    return f"activate the {scene.get('name', 'scene')} scene"
+    ent = scene.get("scene_id", "")
+    name = scene.get("name", "scene")
+    return f"activate {name} @{ent}" if ent else f"activate the {name} scene"
 
 
 def _home_card(
@@ -340,6 +352,7 @@ async def resolve_smart_home(intent: Any) -> dict[str, Any]:
     and (for brightness) .duration_seconds carrying the target percent."""
     action = getattr(intent, "action", "status")
     query = (getattr(intent, "query", "") or "").strip()
+    entity_id = (getattr(intent, "entity_id", "") or "").strip()
 
     devices = await list_devices()
     if devices is None:
@@ -347,7 +360,12 @@ async def resolve_smart_home(intent: Any) -> dict[str, Any]:
     scenes = await list_scenes()
 
     if action == "activate_scene":
-        scene = _match_scene(scenes, query)
+        # A scene chip tap carries the exact scene id — activate that one directly.
+        if entity_id:
+            scene = next((s for s in scenes if s.get("scene_id") == entity_id), None) or {
+                "scene_id": entity_id, "name": entity_id.split(".", 1)[-1].replace("_", " ").title()}
+        else:
+            scene = _match_scene(scenes, query)
         if scene is None:
             names = ", ".join(str(s.get("name")) for s in scenes) or "none"
             return _result(
@@ -364,7 +382,19 @@ async def resolve_smart_home(intent: Any) -> dict[str, Any]:
     if action in ("turn_on", "turn_off", "set_brightness"):
         on = action != "turn_off"
         pct = int(getattr(intent, "duration_seconds", 0) or 0) or None
-        targets, ambiguous = _select_targets(devices, query, action)
+        # A TILE tap carries the exact HA entity id → control precisely that device,
+        # never a fuzzy name match. Voice (no id) falls back to name selection.
+        if entity_id:
+            dev = next((d for d in devices if d.get("entity_id") == entity_id), None)
+            if dev is None:
+                return _result(
+                    "That device isn't available right now.",
+                    _home_card(devices, scenes, status="Home", summary="Device unavailable."),
+                    action,
+                )
+            targets, ambiguous = [dev], False
+        else:
+            targets, ambiguous = _select_targets(devices, query, action)
         # A SPECIFIC command tied across several devices — ask rather than toggle
         # unintended ones. (Bare plural "the lights" sweeps and is not ambiguous.)
         if ambiguous:
