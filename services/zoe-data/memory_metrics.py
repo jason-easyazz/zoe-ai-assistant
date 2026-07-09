@@ -14,6 +14,8 @@ event.
 
 from __future__ import annotations
 
+import time
+
 from prometheus_client import Counter, Gauge, Histogram, CollectorRegistry
 
 
@@ -125,6 +127,176 @@ digest_facts_extracted = Counter(
 )
 
 
+# ── Memory-maintenance loop observability ────────────────────────────────────
+# The two in-process loops (nightly digest, weekly consolidation) failed
+# silently in production for weeks because nothing recorded whether they ran.
+# These gauges expose a last-run timestamp + aggregate effect counts so a
+# missed nightly/Sunday pass is detectable (Prometheus: alert on
+# `time() - zoe_memory_*_last_run_timestamp_seconds` exceeding the cadence).
+memory_digest_last_run_timestamp = Gauge(
+    "zoe_memory_digest_last_run_timestamp_seconds",
+    "Unix seconds of the last completed nightly memory digest loop run.",
+    registry=REGISTRY,
+)
+memory_digest_last_run_users = Gauge(
+    "zoe_memory_digest_last_run_users",
+    "Users processed by the last completed nightly memory digest run.",
+    registry=REGISTRY,
+)
+memory_digest_last_run_effects = Gauge(
+    "zoe_memory_digest_last_run_effects",
+    "Summed per-effect counts from the last nightly memory digest run.",
+    ["effect"],
+    registry=REGISTRY,
+)
+memory_consolidation_last_run_timestamp = Gauge(
+    "zoe_memory_consolidation_last_run_timestamp_seconds",
+    "Unix seconds of the last completed weekly memory consolidation loop run.",
+    registry=REGISTRY,
+)
+memory_consolidation_last_run_users = Gauge(
+    "zoe_memory_consolidation_last_run_users",
+    "Users processed by the last completed weekly memory consolidation run.",
+    registry=REGISTRY,
+)
+memory_consolidation_last_run_effects = Gauge(
+    "zoe_memory_consolidation_last_run_effects",
+    "Summed per-effect counts from the last weekly memory consolidation run.",
+    ["effect"],
+    registry=REGISTRY,
+)
+
+# Effect keys summed per loop (see memory_digest.run_memory_digest /
+# run_weekly_consolidation). Unknown/missing keys are simply skipped.
+_DIGEST_EFFECT_KEYS = ("extracted", "new", "superseded", "skipped_duplicates")
+_CONSOLIDATION_EFFECT_KEYS = ("merged", "resolved_contradictions", "archived")
+
+# Expected cadence + grace. Digest is nightly (~03:00); consolidation is
+# weekly (Sunday 04:00). A run older than this — or one that never happened —
+# reads as stale so a silently-broken loop surfaces.
+_DIGEST_MAX_AGE_S = 26 * 3600
+_CONSOLIDATION_MAX_AGE_S = 8 * 86400
+
+# In-process last-run state for the human-queryable health endpoint. Gauges
+# cover Prometheus; this covers the "what's the age of the last run" question
+# without external time math.
+_LAST_RUN: dict[str, dict] = {}
+
+
+def _sum_effects(results, keys) -> dict[str, int]:
+    """Sum integer effect counts across per-user result dicts.
+
+    Booleans are ignored (a stray ``True`` must not read as 1); only real
+    numeric counts contribute. Non-dict rows are skipped defensively so a
+    malformed result never breaks recording.
+    """
+    totals = {k: 0 for k in keys}
+    for row in results or []:
+        if not isinstance(row, dict):
+            continue
+        for k in keys:
+            v = row.get(k)
+            if isinstance(v, bool):
+                continue
+            if isinstance(v, (int, float)):
+                totals[k] += int(v)
+    return totals
+
+
+def _record_loop_run(
+    loop: str,
+    results,
+    *,
+    keys,
+    ts_gauge: Gauge,
+    users_gauge: Gauge,
+    effects_gauge: Gauge,
+    now: float | None = None,
+) -> dict:
+    """Persist last-run timestamp + aggregate counts for a memory loop.
+
+    Sets the Prometheus gauges and updates the in-process ``_LAST_RUN`` state.
+    Returns a summary dict (``timestamp``, ``users``, ``effects``) so callers
+    can log a single enriched run-complete line.
+    """
+    now_ts = time.time() if now is None else now
+    users = len(results) if results is not None else 0
+    effects = _sum_effects(results, keys)
+
+    ts_gauge.set(now_ts)
+    users_gauge.set(users)
+    for effect, value in effects.items():
+        effects_gauge.labels(effect=effect).set(value)
+
+    summary = {"timestamp": now_ts, "users": users, "effects": effects}
+    _LAST_RUN[loop] = summary
+    return summary
+
+
+def record_digest_run(results, *, now: float | None = None) -> dict:
+    """Record a completed nightly digest run (timestamp + summed effects)."""
+    return _record_loop_run(
+        "digest",
+        results,
+        keys=_DIGEST_EFFECT_KEYS,
+        ts_gauge=memory_digest_last_run_timestamp,
+        users_gauge=memory_digest_last_run_users,
+        effects_gauge=memory_digest_last_run_effects,
+        now=now,
+    )
+
+
+def record_consolidation_run(results, *, now: float | None = None) -> dict:
+    """Record a completed weekly consolidation run (timestamp + summed effects)."""
+    return _record_loop_run(
+        "consolidation",
+        results,
+        keys=_CONSOLIDATION_EFFECT_KEYS,
+        ts_gauge=memory_consolidation_last_run_timestamp,
+        users_gauge=memory_consolidation_last_run_users,
+        effects_gauge=memory_consolidation_last_run_effects,
+        now=now,
+    )
+
+
+def memory_loop_status(now: float | None = None) -> dict:
+    """Queryable last-run + staleness for both memory-maintenance loops.
+
+    A loop that never ran this process (or ran longer ago than its cadence
+    grace) reports ``stale: True`` — that's the signal a nightly/Sunday pass
+    was missed. ``age_seconds`` is the age of the last successful run.
+    """
+    now_ts = time.time() if now is None else now
+    out: dict[str, dict] = {}
+    for loop, max_age in (
+        ("digest", _DIGEST_MAX_AGE_S),
+        ("consolidation", _CONSOLIDATION_MAX_AGE_S),
+    ):
+        info = _LAST_RUN.get(loop)
+        if not info:
+            out[loop] = {
+                "ever_ran": False,
+                "last_run_ts": None,
+                "age_seconds": None,
+                "stale": True,
+                "max_age_seconds": max_age,
+                "users": None,
+                "effects": None,
+            }
+            continue
+        age = max(0.0, now_ts - info["timestamp"])
+        out[loop] = {
+            "ever_ran": True,
+            "last_run_ts": info["timestamp"],
+            "age_seconds": age,
+            "stale": age > max_age,
+            "max_age_seconds": max_age,
+            "users": info["users"],
+            "effects": info["effects"],
+        }
+    return out
+
+
 async def snapshot_collection_sizes(timeout_s: float = 2.0) -> None:
     """Best-effort refresh of per-user MemPalace size gauge.
 
@@ -169,5 +341,14 @@ __all__ = [
     "routing_decision_count",
     "digest_messages_processed",
     "digest_facts_extracted",
+    "memory_digest_last_run_timestamp",
+    "memory_digest_last_run_users",
+    "memory_digest_last_run_effects",
+    "memory_consolidation_last_run_timestamp",
+    "memory_consolidation_last_run_users",
+    "memory_consolidation_last_run_effects",
+    "record_digest_run",
+    "record_consolidation_run",
+    "memory_loop_status",
     "snapshot_collection_sizes",
 ]

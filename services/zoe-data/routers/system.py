@@ -698,9 +698,57 @@ def start_openclaw_background_tasks():
 
 # ── Nightly memory digest background loop ────────────────────────────────────
 
+def _attach_memory_loop_log_handler() -> None:
+    """Attach a durable rotating file handler to this module's logger.
+
+    The zoe-data systemd unit does not reliably capture app stdout, so the
+    memory-loop run-status lines (next-run, run-complete, errors) emitted here
+    would otherwise be invisible after the fact — which is exactly how the
+    nightly digest broke silently for weeks. Mirror the multica poll-loop
+    pattern in main.py: handler-scoped level (never mutate the shared logger
+    level), idempotent via a marker attr, and never let logging setup break
+    the loop.
+    """
+    try:
+        from logging.handlers import RotatingFileHandler
+
+        if any(getattr(h, "_zoe_memory_loop_log", False) for h in logger.handlers):
+            return
+        path = os.path.expanduser(
+            os.environ.get("ZOE_MEMORY_LOOP_LOG_PATH", "~/.zoe/zoe-data-memory-loops.log")
+        )
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fh = RotatingFileHandler(path, maxBytes=2_000_000, backupCount=3)
+        fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+        fh.setLevel(logging.INFO)  # handler-scoped; do NOT mutate the shared logger level
+        fh._zoe_memory_loop_log = True  # type: ignore[attr-defined]
+        logger.addHandler(fh)
+        logger.info("memory_loops: diagnostics logging to %s", path)
+    except Exception as _log_exc:  # pragma: no cover - logging setup must never break the loop
+        logger.warning("memory_loops: could not attach file log: %s", _log_exc)
+
+
+def _record_memory_loop(loop: str, results) -> dict:
+    """Record a completed loop run for observability, never raising.
+
+    Persists last-run timestamp + aggregate effect counts (Prometheus gauges +
+    the queryable ``memory_loop_status`` state). A metrics failure must never
+    break the maintenance loop, so it degrades to a plain user count.
+    """
+    try:
+        from memory_metrics import record_consolidation_run, record_digest_run
+
+        recorder = record_digest_run if loop == "digest" else record_consolidation_run
+        return recorder(results)
+    except Exception as _rec_exc:  # pragma: no cover - metrics must never break the loop
+        logger.warning("memory_%s: metrics record failed (non-fatal): %s", loop, _rec_exc)
+        return {"users": len(results) if results is not None else 0, "effects": {}}
+
+
 async def _memory_digest_loop():
     """Wait until 3am, then run LLM digest for all active users daily."""
     import datetime
+    _attach_memory_loop_log_handler()
     # Initial delay: sleep until next 3am
     while True:
         now = datetime.datetime.now()
@@ -713,7 +761,11 @@ async def _memory_digest_loop():
         try:
             from memory_digest import run_digest_for_all_active_users  # type: ignore[import]
             results = await run_digest_for_all_active_users()
-            logger.info("memory_digest: nightly run complete — %d users processed", len(results))
+            summary = _record_memory_loop("digest", results)
+            logger.info(
+                "memory_digest: nightly run complete — %d users processed, effects=%s",
+                summary["users"], summary["effects"],
+            )
         except Exception as exc:
             logger.error("memory_digest: nightly loop error: %s", exc, exc_info=True)
         # Phase 6: Evolution NOTICE pass
@@ -750,6 +802,7 @@ async def _memory_consolidation_loop():
     full algorithm.
     """
     import datetime
+    _attach_memory_loop_log_handler()
     while True:
         now = datetime.datetime.now()
         # weekday(): Monday=0 … Sunday=6
@@ -768,9 +821,10 @@ async def _memory_consolidation_loop():
         try:
             from memory_digest import run_weekly_consolidation_for_all  # type: ignore[import]
             results = await run_weekly_consolidation_for_all()
+            summary = _record_memory_loop("consolidation", results)
             logger.info(
-                "memory_consolidation: weekly run complete — %d users processed",
-                len(results),
+                "memory_consolidation: weekly run complete — %d users processed, effects=%s",
+                summary["users"], summary["effects"],
             )
         except Exception as exc:
             logger.error("memory_consolidation: loop error: %s", exc, exc_info=True)
@@ -783,6 +837,19 @@ def start_memory_consolidation_background():
     return asyncio.create_task(
         _memory_consolidation_loop(), name="memory_consolidation_weekly"
     )
+
+
+@router.get("/memory-loops/status")
+async def get_memory_loops_status(user: dict = Depends(require_admin)):
+    """Last-run + staleness for the nightly digest and weekly consolidation loops.
+
+    ``stale: true`` (including a loop that never ran this process) is the signal
+    a nightly/Sunday pass was missed — the gap that let the digest break
+    silently for weeks. ``age_seconds`` is the age of the last successful run.
+    """
+    from memory_metrics import memory_loop_status
+
+    return {"loops": memory_loop_status()}
 
 
 @router.post("/memories/consolidate")
