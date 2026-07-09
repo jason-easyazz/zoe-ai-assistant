@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import uuid
 from datetime import date, datetime, timezone
 
@@ -232,10 +233,31 @@ async def surface_pending_contacts_for_prompt(user_id: str, *, limit: int = 3) -
     return out
 
 
+_CARD_FIELD_CAP = 60
+
+
+def _safe_card_inline(s: str, cap: int = _CARD_FIELD_CAP) -> str:
+    """Neutralise user-derived text before it enters a card title: collapse all
+    whitespace, drop markdown/structure chars, and cap length. Names and
+    relationships come from passive extraction, so treat them as untrusted
+    (mirrors routers/memories._safe_prompt_inline)."""
+    s = re.sub(r"\s+", " ", (s or "")).strip()
+    s = re.sub(r"[#`*_\[\]\n\r]", "", s)
+    return s[:cap]
+
+
 def ui_components_for_suggestions(suggestions: list[dict]) -> list[dict]:
-    """Build AG-UI confirm cards for active suggestions."""
+    """Build AG-UI confirm cards for active suggestions.
+
+    `person_create` gets a contact-specific card ("Add {name}?" / "Add {name} as
+    your {relationship}?") with explicit Add + Dismiss actions (P4). Every other
+    action type keeps the generic single-action Save card.
+    """
     comps = []
     for s in suggestions:
+        if s.get("action_type") == "person_create":
+            comps.append(_person_create_card(s))
+            continue
         comps.append({
             "type": "action_card",
             "title": s.get("offer_phrase") or "Save this?",
@@ -246,6 +268,38 @@ def ui_components_for_suggestions(suggestions: list[dict]) -> list[dict]:
             }],
         })
     return comps
+
+
+def _person_create_card(s: dict) -> dict:
+    """Contact-specific confirm card for a `person_create` proposal."""
+    raw_slots = s.get("pre_filled_slots") or {}
+    # A legacy/malformed row could decode pre_filled_slots as a JSON array or
+    # string; guard so a non-dict can't raise (the chat caller catches and drops
+    # ALL cards for the turn, hiding the confirm card).
+    slots = raw_slots if isinstance(raw_slots, dict) else {}
+    name = _safe_card_inline(slots.get("name") or "")
+    relationship = _safe_card_inline(slots.get("relationship") or "")
+    label = name or "this contact"
+    if name and relationship:
+        title = f"Add {label} as your {relationship}?"
+    else:
+        title = f"Add {label}?"
+    return {
+        "type": "action_card",
+        "title": title,
+        "actions": [
+            {
+                "label": "Add",
+                "action": "pending_suggestion_accept",
+                "suggestion_id": s["id"],
+            },
+            {
+                "label": "Dismiss",
+                "action": "pending_suggestion_dismiss",
+                "suggestion_id": s["id"],
+            },
+        ],
+    }
 
 
 async def mark_resolved(suggestion_id: str, user_id: str) -> bool:
