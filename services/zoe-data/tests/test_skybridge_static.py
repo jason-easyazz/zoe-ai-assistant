@@ -368,8 +368,9 @@ process.stdout.write(JSON.stringify(out));
 def test_skybridge_renderer_rows_carry_tap_action_and_escape(tmp_path):
     """Render a list + calendar card through the real renderer in Node and confirm
     each row is a data-sky-action target and that '<' injection is HTML-escaped.
-    ds1 mechanics: list rows toggle via a check-off query; the (single/first)
-    calendar event renders as the cal-hero button carrying an edit query."""
+    ds1 mechanics: list rows toggle via a check-off query; a calendar event is a
+    native <details> whose expanded Edit action carries the edit query (the tap now
+    reveals inline detail instead of routing to a generic editor card)."""
     node = shutil.which("node") or shutil.which("nodejs")
     if not node:
         pytest.skip("Node.js is not installed on this host")
@@ -399,7 +400,10 @@ const checks = {
     list_row_action: /lst-row[^>]*data-sky-action=\"query\"/.test(listHtml),
     list_check_query: listHtml.includes('data-query=\"check off bread &lt;b&gt;x&lt;/b&gt; on the shopping list\"'),
     list_escaped: !listHtml.includes('<b>x</b>') && listHtml.includes('&lt;b&gt;x&lt;/b&gt;'),
-    cal_row_action: /cal-hero[^>]*data-sky-action=\"query\"/.test(calHtml),
+    // The tap target is the <summary> (native disclosure); the edit contract now
+    // lives on the revealed Edit action, which still carries data-sky-action=query.
+    cal_summary_tap: /<summary[^>]*cal-hero/.test(calHtml),
+    cal_edit_action: /cal-act-edit[^>]*data-sky-action=\"query\"/.test(calHtml),
     cal_edit_query: calHtml.includes('data-query=\"edit Dentist &lt;x&gt; at 15:00\"'),
     cal_escaped: !calHtml.includes('Dentist <x>') && calHtml.includes('Dentist &lt;x&gt;')
 };
@@ -600,45 +604,54 @@ process.stdout.write(JSON.stringify({ earliest_first: html.indexOf('EarlyEvent')
     assert checks["earliest_first"], "calendar events must render earliest-first"
 
 
-def test_skybridge_calendar_ribbon_and_now_line(tmp_path):
-    """Behavioral coverage for the ribbon helpers (calMinutes/calDuration/
-    calHourLabel/calGutter/calendarRibbon): a busy 'today' renders the ribbon with
-    hour ticks + event blocks, and the live now-line stays inside the rail even
-    when the current time lands exactly on an hour boundary (was clipped at 100%)."""
+def test_skybridge_calendar_event_detail_expansion(tmp_path):
+    """Redesign contract: the space-wasting day-ribbon is gone, and tapping an
+    event reveals an INLINE detail panel (native <details>) — when/where/notes plus
+    Edit + Delete actions — rather than routing to a generic editor card. Every
+    event is a <details>; the detail carries the edit AND delete query contracts."""
     node = shutil.which("node") or shutil.which("nodejs")
     if not node:
         pytest.skip("Node.js is not installed on this host")
-    harness = tmp_path / "cal_ribbon.cjs"
+
+    # The ribbon helpers/markup are fully retired (removed, not archived).
+    renderer = read(UI / "js" / "skybridge-renderer.js")
+    assert "calendarRibbon" not in renderer
+    assert "cal-ribbon" not in renderer
+    css = read(UI / "css" / "cards/calendar.css")
+    assert "cal-ribbon" not in css and "cal-block" not in css and "cal-tick" not in css
+    # New event-detail surface ships in the sheet.
+    assert "cal-detail" in css and "cal-act-edit" in css and "cal-act-del" in css
+    assert "function calendarDeleteQuery" in renderer
+
+    harness = tmp_path / "cal_detail.cjs"
     harness.write_text(
         """
 const fs = require('fs');
 const vm = require('vm');
 const src = fs.readFileSync(process.argv[2], 'utf8');
-// Freeze "now" to an EXACT hour boundary (23:00) on the card's date so the
-// now-line's window end is driven by nowMin — the case that used to clip.
-const FIXED = new Date('2026-06-23T23:00:00').getTime();
-class FakeDate extends Date {
-  constructor(...a){ if (a.length === 0) super(FIXED); else super(...a); }
-  static now(){ return FIXED; }
-}
-const sandbox = { window: {}, Date: FakeDate };
+const sandbox = { window: {} };
 vm.createContext(sandbox);
 vm.runInContext(src, sandbox);
 const R = sandbox.window.SkybridgeRenderer;
 const html = R.render({ card_type: 'generic', schema_version: '1.0.0', card_id: 'c', content: {
   source: 'calendar_show', qualifier: 'today', date: '2026-06-23',
   events: [
-    { id: 'a', title: 'Standup', start_time: '08:00', end_time: '08:30', start_date: '2026-06-23' },
+    { id: 'a', title: 'Standup', start_time: '08:00', end_time: '08:30', start_date: '2026-06-23',
+      location: 'Room 4', description: 'Daily sync', category: 'work' },
     { id: 'b', title: 'Lunch', start_time: '12:00', end_time: '13:00', start_date: '2026-06-23' }
   ]
 } });
-const m = html.match(/cal-ribbon-now[^>]*left:([0-9.]+)%/);
 process.stdout.write(JSON.stringify({
-  ribbon: html.includes('cal-ribbon'),
-  ticks: html.includes('cal-tick'),
-  blocks: html.includes('cal-block'),
-  now_line: !!m,
-  now_left: m ? parseFloat(m[1]) : -1
+  no_ribbon: !html.includes('cal-ribbon') && !html.includes('cal-block'),
+  is_details: (html.match(/<details class=\"cal-event/g) || []).length === 2,
+  has_summary: html.includes('<summary class=\"cal-row'),
+  has_detail: html.includes('cal-detail'),
+  when_row: html.includes('When') && html.includes('08:00 – 08:30'),
+  where_row: html.includes('Where') && html.includes('Room 4'),
+  notes_row: html.includes('Notes') && html.includes('Daily sync'),
+  edit_query: html.includes('data-query=\"edit Standup at 08:00\"'),
+  delete_action: /cal-act-del[^>]*data-sky-action=\"query\"/.test(html),
+  delete_query: html.includes('data-query=\"delete Standup at 08:00\"')
 }));
 """,
         encoding="utf-8",
@@ -649,9 +662,7 @@ process.stdout.write(JSON.stringify({
     )
     import json
     c = json.loads(proc.stdout)
-    assert c["ribbon"] and c["ticks"] and c["blocks"], f"ribbon markup missing: {c}"
-    assert c["now_line"], "live now-line should render on today"
-    assert 0 <= c["now_left"] < 99.5, f"now-line clipped at boundary: left={c['now_left']}"
+    assert all(c.values()), f"event-detail expansion contract failed: {c}"
 
 
 def test_skybridge_is_registered_in_touch_menu():
