@@ -662,6 +662,32 @@ async def backfill_contacts_endpoint(
     return await backfill_contacts(user_id, session_id=session_id, db=db)
 
 
+@router.get("/pending-contacts")
+async def pending_contacts_endpoint(
+    user_id: str = Query(..., min_length=1),
+    _: None = Depends(require_internal_token),
+):
+    """User-scoped review path for pending `person_create` proposals.
+
+    Backfill (Phase 2b) stores proposals under a static `'backfill'` session, so
+    the session-scoped `list_active`/`load_for_prompt` paths never surface them in
+    a live chat. This session-agnostic endpoint lists every un-resolved contact
+    proposal for the user so the UI can offer them regardless of the active session
+    (accept is already keyed by id+user_id, so it works cross-session).
+
+    Internal/service endpoint (loopback or `X-Internal-Token`), matching
+    `/backfill-contacts`. Flag-gated behind `ZOE_CONTACT_BACKFILL_ENABLED`; fails
+    closed with an empty list when the flag is off.
+    """
+    from contact_backfill import contact_backfill_enabled
+    from pending_suggestions import list_pending_contacts
+
+    if not contact_backfill_enabled():
+        return {"pending": [], "count": 0}
+    pending = await list_pending_contacts(user_id)
+    return {"pending": pending, "count": len(pending)}
+
+
 @router.get("/people")
 async def people_with_memories(
     limit: int = Query(100, ge=1, le=500),

@@ -131,6 +131,46 @@ async def list_active(user_id: str, session_id: str) -> list[dict]:
         return []
 
 
+async def list_pending_contacts(user_id: str, *, limit: int = 50) -> list[dict]:
+    """User-scoped, session-agnostic list of pending `person_create` proposals.
+
+    Backfill (Phase 2b) stores proposals under a static `'backfill'` session, but
+    `list_active`/`load_for_prompt` filter by `session_id`, so a live chat/panel
+    (which uses a per-conversation session) never surfaces them. This parallel,
+    additive review path selects across ALL sessions for the user — leaving the
+    live session-scoped paths untouched. See docs/adr/ADR-contacts-from-known-people.md.
+    """
+    if user_id in ("guest", ""):
+        return []
+    try:
+        async with get_db_ctx() as db:
+            rows = await db.fetch(
+                """SELECT id, offer_phrase, pre_filled_slots
+                   FROM pending_suggestions
+                   WHERE user_id = $1 AND action_type = 'person_create' AND resolved = 0
+                   ORDER BY created_at ASC LIMIT $2""",
+                user_id,
+                limit,
+            )
+        out = []
+        for r in rows:
+            slots = {}
+            try:
+                slots = json.loads(r["pre_filled_slots"] or "{}")
+            except json.JSONDecodeError:
+                pass
+            out.append({
+                "id": r["id"],
+                "name": slots.get("name"),
+                "relationship": slots.get("relationship"),
+                "offer_phrase": r["offer_phrase"],
+            })
+        return out
+    except Exception as exc:
+        logger.debug("pending_suggestions.list_pending_contacts failed: %s", exc)
+        return []
+
+
 def ui_components_for_suggestions(suggestions: list[dict]) -> list[dict]:
     """Build AG-UI confirm cards for active suggestions."""
     comps = []
