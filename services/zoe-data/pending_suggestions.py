@@ -389,7 +389,10 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str) -> dict:
         relationship = (slots.get("relationship") or "").strip() or None
         # circle: NULL unless a real category is supplied (never the column-name
         # literal, which would land the contact in an undefined UI bucket).
-        circle = (slots.get("circle") or "").strip() or None
+        # 'circle' is the valid middle tier (inner|circle|public), NOT a bogus
+        # column-name literal — and people.circle is NOT NULL, so it must have a
+        # value. (#1177 mislabelled it; NULL there broke the accept INSERT.)
+        circle = (slots.get("circle") or "").strip() or "circle"
         # visibility: default PRIVATE — a contact Zoe proposes from conversation
         # may be personal (a therapist, a work colleague); don't auto-share it
         # with the whole family. Owner still sees it (people query is OR user_id).

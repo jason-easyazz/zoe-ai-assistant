@@ -42,7 +42,7 @@ async def _open():
         "CREATE TABLE people (id TEXT PRIMARY KEY,"
         " user_id TEXT NOT NULL REFERENCES users(id),"  # people_user_id_fkey
         " name TEXT, relationship TEXT, birthday TEXT, phone TEXT, email TEXT,"
-        " notes TEXT, visibility TEXT, circle TEXT, context TEXT,"
+        " notes TEXT, visibility TEXT, circle TEXT NOT NULL DEFAULT 'acquaintance', context TEXT,"
         " deleted INTEGER DEFAULT 0, is_partial INTEGER DEFAULT 0)"
     )
     await conn.commit()
@@ -136,14 +136,14 @@ async def test_people_create_is_private_by_default(monkeypatch):
             return None
         monkeypatch.setattr(intent_router, "_notify_ui_channel", _noop)
 
-        # default: no visibility slot → 'personal', and circle is NULL (not the
-        # bogus "circle" literal).
+        # default: no visibility slot → 'personal'; circle → 'circle' (the valid
+        # middle tier), which the NOT NULL column requires.
         await intent_router._execute_people_create_direct(
             Intent("people_create", {"name": "Solo", "relationship": "friend"}), "u1")
         async with conn.execute("SELECT visibility, circle FROM people WHERE user_id='u1'") as c:
             row = await c.fetchone()
         assert row["visibility"] == "personal", "default contact must be private, not family-shared"
-        assert row["circle"] is None
+        assert row["circle"] == "circle"
 
         # explicit override still honoured
         await intent_router._execute_people_create_direct(
