@@ -12,10 +12,10 @@ practices* — it already implements the field's headline technique (multi-signa
 retrieval) and Mem0's ADD/UPDATE/SKIP reconciliation, and it is **local/private
 and governance-gated**, which the hosted leaders (Mem0, Zep) are not. It even
 has the two things a first read mistook for gaps — **proactive contradiction
-detection** and **active consolidation** — already live in the nightly dream
-digest + a separate weekly consolidation cron (see §4 correction). The one genuine
-gap is **measurement** (no standardized benchmark run yet); the rest is operational
-(keep both runners healthy;
+detection** and **active consolidation** — already live as default-on in-process
+`zoe-data` loops (nightly digest + weekly consolidation; see §4 correction). The one
+genuine gap is **measurement** (no standardized benchmark run yet); the rest is
+operational (keep `zoe-data` and both loops healthy;
 close the W0 identity issue).
 
 Grounded in a 2026-07-09 read of the code (26 memory modules) + web research
@@ -111,11 +111,16 @@ conflicting high-confidence memories."**
    > contradiction detection and active consolidation as gaps. A closer read
    > found **both are already implemented** — but on **two different cadences**,
    > which the first correction blurred:
-   > - **Nightly** — `run_memory_digest` (`memory_digest.py:395`) LLM-judges each
-   >   *newly-extracted* fact vs existing person-facts, for that day's chat-active
-   >   users only (`run_digest_for_all_active_users:899`), and supersedes conflicts
-   >   (`memory_digest.py:219,443`). This is new-fact contradiction handling, not a
-   >   whole-store scan.
+   > - **Nightly** — `run_digest_for_all_active_users` (`memory_digest.py:899`) →
+   >   `run_memory_digest` (`:395`) LLM-judges each *newly-extracted* fact vs existing
+   >   person-facts, for that day's chat-active users only, and supersedes conflicts
+   >   (`memory_digest.py:219,443`). New-fact contradiction handling, not a whole-store
+   >   scan. **Primary runner: the in-process `zoe-data` loop** `_memory_digest_loop`
+   >   (`routers/system.py:701`, started by `main.py:929` via
+   >   `start_memory_digest_background`, gated `MEMORY_DIGEST_ENABLED` **default
+   >   `"true"`**) — **not** the systemd dream timers, which run `run_dreaming_cycle`
+   >   (+ a single-user `jason` digest in `zoe-nightly-dreaming.py`), not
+   >   `run_digest_for_all_active_users`.
    > - **Weekly (Sunday)** — `run_weekly_consolidation` (`memory_digest.py:826`)
    >   does the store-wide work: `_merge_near_duplicates`, `_resolve_contradictions`,
    >   and `sweep_soft_archive` (`memory_service.py:792`, wired at `:850`), all via
@@ -149,20 +154,22 @@ conflicting high-confidence memories."**
    > split**; the scorecard is corrected above. The verdict holds: on the feature
    > axis Zoe is effectively complete — the remaining work is *measurement* and
    > *operations*, not new machinery.
-2. **Verify the runners keep firing — they are separate paths.** Nightly new-fact
-   contradiction judging rides the dream timers (`zoe-dreaming.timer` /
-   `zoe-training.timer`). The weekly store-wide consolidation (dedup + contradiction
-   resolution + `sweep_soft_archive`) has its own triggers — **primary** is the
-   default-on in-process loop (`_memory_consolidation_loop`, `main.py:930`,
-   `MEMORY_CONSOLIDATION_ENABLED=true`, Sunday 04:00), which requires `zoe-data` to
-   stay up across that window; the `daily_consolidation.py` cron and `POST
-   /memories/consolidate` are the backup/manual paths. An operator who watches only
-   the dream timers can miss a stalled weekly loop while stale/conflicting memories
-   accumulate. Assert the Sunday `run_weekly_consolidation_for_all` actually ran (a
-   missed Sunday silently skips a week of store-wide dedup/forgetting), and consider
-   surfacing digest + weekly-consolidation outcomes in `memory_metrics`. Optionally
-   extend the nightly contradiction judge beyond person-facts to high-salience
-   *attribute* facts (employer/city).
+2. **Keep `zoe-data` alive — both maintenance runners live inside it.** The nightly
+   new-fact contradiction digest and the weekly store-wide consolidation are **both
+   default-on in-process `zoe-data` background loops**, started at app startup by
+   `main.py:929-930`: `_memory_digest_loop` (`MEMORY_DIGEST_ENABLED=true`, nightly)
+   and `_memory_consolidation_loop` (`MEMORY_CONSOLIDATION_ENABLED=true`, Sunday
+   04:00), both in `routers/system.py`. They require the `zoe-data` process to stay
+   up across their windows; the `daily_consolidation.py` cron and the `POST
+   /memories/digest` + `/memories/consolidate` admin routes are backup/manual paths.
+   The systemd dream timers (`zoe-dreaming.timer` / `zoe-training.timer`) run a
+   *different* pipeline (`run_dreaming_cycle`: REM reinforce, deep-sleep
+   pending-promotion, synthesis, portrait) — watching them does **not** confirm the
+   digest/consolidation loops are alive. Assert both loops actually fired (a missed
+   Sunday silently skips a week of store-wide dedup/forgetting), and consider
+   surfacing their outcomes in `memory_metrics`. Optionally extend the nightly
+   contradiction judge beyond person-facts to high-salience *attribute* facts
+   (employer/city).
 3. **Staleness guards on high-confidence facts.** The #1 field failure mode:
    confident-but-outdated facts (job/location changes). Zoe's temporal edges
    cover *relationships*; extend supersession-on-change to high-salience
