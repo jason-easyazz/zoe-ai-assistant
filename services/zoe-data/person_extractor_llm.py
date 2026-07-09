@@ -23,6 +23,38 @@ def prefilter_enabled() -> bool:
     return os.environ.get("ZOE_PERSON_LLM_PREFILTER", "").strip().lower() in _TRUTHY
 
 
+def confidence_gate_enabled() -> bool:
+    """Dark flag: only apply LLM-extracted facts whose self-reported confidence
+    clears a threshold. Default OFF — byte-for-byte no-op (every item applied, as
+    today). Research-backed precision filter (verbalized-confidence gating; the
+    '<threshold discard' coarse first-pass filter) — see
+    docs/adr/ADR-contacts-production-hardening.md P2. Replay-gated at enable time
+    (this pass runs on the live voice/chat write-path)."""
+    return os.environ.get("ZOE_PERSON_LLM_CONFIDENCE_GATE", "").strip().lower() in _TRUTHY
+
+
+def _confidence_min() -> float:
+    """Discard threshold for the confidence gate (default 0.4, matching the
+    researched coarse first-pass filter). Env-tunable, clamped to [0, 1]."""
+    try:
+        return max(0.0, min(1.0, float(os.environ.get("ZOE_PERSON_LLM_CONFIDENCE_MIN", "0.4"))))
+    except (TypeError, ValueError):
+        return 0.4
+
+
+def _keep_item(item: dict, *, gated: bool, min_conf: float) -> bool:
+    """When the gate is off, keep every item (today's behaviour). When on, drop
+    items whose self-reported ``confidence`` is below ``min_conf`` (missing /
+    unparseable confidence counts as 0.0 → dropped)."""
+    if not gated:
+        return True
+    try:
+        conf = float(item.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        conf = 0.0
+    return conf >= min_conf
+
+
 # ── Person-mention prefilter ────────────────────────────────────────────────
 # This LLM pass fires on EVERY non-guest turn (chat + voice, background) and
 # costs ~0.6–1.3 s of Gemma time per call on the SAME llama-server the live
@@ -63,6 +95,19 @@ Text:
 {text}
 """
 
+# Confidence-gated variant (P2): each item carries a self-reported confidence the
+# gate thresholds on. Kept separate so the un-gated path is byte-for-byte today's.
+_EXTRACTION_PROMPT_CONF = """\
+Extract person-related facts from the text. Return ONLY a JSON array.
+Each item: {{"name": "First Last", "fact_type": "preference|birthday|work|meeting|gift_idea|gift_given|bucket_list", "value": "concise fact", "confidence": 0.0-1.0}}
+"confidence" = how sure you are this fact is EXPLICITLY stated about a named person
+(1.0 = stated verbatim, 0.5 = implied, below 0.4 = a guess). Only include facts
+explicitly stated about named people. If none, return [].
+
+Text:
+{text}
+"""
+
 
 async def process_text_llm(
     text: str,
@@ -81,11 +126,14 @@ async def process_text_llm(
         # entirely (flag-gated; see prefilter rationale above).
         return 0
 
+    gated = confidence_gate_enabled()
+    min_conf = _confidence_min() if gated else 0.0
+    prompt = _EXTRACTION_PROMPT_CONF if gated else _EXTRACTION_PROMPT
     payload = {
         "model": _MODEL,
         "messages": [
             {"role": "system", "content": "Return ONLY valid JSON arrays."},
-            {"role": "user", "content": _EXTRACTION_PROMPT.format(text=text[:1200])},
+            {"role": "user", "content": prompt.format(text=text[:1200])},
         ],
         "max_tokens": 300,
         "temperature": 0.1,
@@ -121,6 +169,9 @@ async def process_text_llm(
         fact_type = (item.get("fact_type") or "preference").strip()
         value = (item.get("value") or "").strip()
         if not name or not value:
+            continue
+        if not _keep_item(item, gated=gated, min_conf=min_conf):
+            logger.debug("person_extractor_llm: dropped low-confidence %r/%r", name, fact_type)
             continue
         ok = await apply_person_fact(
             name,
