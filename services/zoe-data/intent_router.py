@@ -2452,7 +2452,10 @@ async def _execute_people_create_direct(intent: Intent, user_id: str) -> Optiona
     if not name:
         return None
     relationship = slots.get("relationship") or None
-    circle = str(slots.get("circle") or "").strip() or None
+    # 'circle' = valid middle tier (inner|circle|public); people.circle is NOT
+    # NULL so it needs a value (a NULL default made this direct INSERT fail →
+    # silent mcporter fallback that persists nothing).
+    circle = str(slots.get("circle") or "").strip() or "circle"
     context = str(slots.get("context") or "personal").strip() or "personal"
     # Private by default — a contact created by voice/chat should not be shared
     # with the whole family unless asked. Owner still sees it (people reads are
