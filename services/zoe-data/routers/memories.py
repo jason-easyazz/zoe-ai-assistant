@@ -524,6 +524,49 @@ def _fold_relational_block(
     return packet
 
 
+_PENDING_CONTACTS_MAX = 3
+
+
+async def _fold_pending_contact_offers(packet: dict[str, Any], user_id: str) -> dict[str, Any]:
+    """Surface pending `person_create` proposals into the for-prompt packet so the
+    brain (incl. flue) can OFFER them — the "Observe & Suggest" rung of the
+    human-in-the-loop ladder (ADR-contacts-production-hardening P1).
+
+    Closes the live gap: `detect_and_store` creates a proposal on a passive
+    mention, but the flue brain reads this packet and never saw it (offers were
+    injected only via the legacy zoe_agent path). User-scoped
+    (`list_pending_contacts`) so it surfaces regardless of the active session.
+    Flag-gated (`ZOE_PERSON_SUGGEST_ENABLED`); OFF is a byte-for-byte no-op — the
+    read is skipped entirely. Best-effort: never raises out of the endpoint.
+    """
+    try:
+        from pending_suggestions import list_pending_contacts, person_suggestions_enabled
+        if not person_suggestions_enabled():
+            return packet
+        pend = await list_pending_contacts(user_id, limit=_PENDING_CONTACTS_MAX)
+    except Exception:
+        logger.exception("memories: pending-contact offer fold failed (user=%s)", user_id)
+        return packet
+    bullets = []
+    for p in pend:
+        name = (p.get("name") or "").strip()
+        if not name:
+            continue
+        rel = (p.get("relationship") or "").strip()
+        bullets.append(f"- {name}{f' ({rel})' if rel else ''} [pending-contact]")
+    if not bullets:
+        return packet
+    section = (
+        "## People mentioned recently (not contacts yet)\n"
+        "If it fits the conversation, you may offer to add them; on a yes, use the "
+        "people_create tool. Don't push if the user isn't interested.\n"
+        + "\n".join(bullets)
+    )
+    existing = packet.get("packet") or ""
+    packet["packet"] = f"{existing}\n\n{section}" if existing else section
+    return packet
+
+
 # Keyword gate for the per-turn semantic search. Single source of truth lives in
 # memory_gate (shared with zoe_agent) so the two paths can't silently diverge. The
 # ONNX+Chroma semantic search only fires when the message looks like a recall query
@@ -632,6 +675,10 @@ async def memory_for_prompt(
     block = await compose_packet(user_id, message)
     if block:
         result = _fold_relational_block(result, block)
+
+    # P1 (ADR-contacts-production-hardening): surface pending "add contact?"
+    # offers so the flue brain can proactively confirm them. Flag-gated no-op.
+    result = await _fold_pending_contact_offers(result, user_id)
     return result
 
 
