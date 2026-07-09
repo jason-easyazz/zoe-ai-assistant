@@ -378,6 +378,33 @@ def _pronoun_fact_candidates(
     ]
 
 
+def _slug_body(name: str) -> str:
+    """Name → the slug body person_extractor uses (``lower``, spaces → ``_``)."""
+    return (name or "").strip().lower().replace(" ", "_")
+
+
+async def _resolve_person_link(name: str, user_id: str, db) -> tuple[str, str]:
+    """Map a person name to ``(entity_type, entity_id)`` — person_extractor's rule.
+
+    Resolved to a real ``people`` row → ``("person", <people.id>)``; otherwise the
+    honest pending marker ``("person_pending", "slug:<name>")``. This exists so a
+    person-fact is NEVER stored as ``entity_type="person"`` with a bare name slug,
+    which mislabels an unlinked fact as if it were keyed to the people table (the
+    graph-linkage bug this producer had). Mirrors
+    ``person_extractor._ingest_to_mempalace``'s convention exactly.
+    """
+    person_uuid = None
+    if name and user_id and db is not None:
+        try:
+            from person_extractor import _resolve_person_uuid
+            person_uuid = await _resolve_person_uuid(name, user_id, db)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("memory_extractor: person resolve failed for %r: %s", name, exc)
+    if person_uuid:
+        return "person", str(person_uuid)
+    return "person_pending", f"slug:{_slug_body(name)}"
+
+
 def _mine_templates(text: str, source_excerpt: str, seen: set[str]) -> list[MemoryCandidate]:
     """Run the template patterns over ``text`` (behavior-identical extraction loop)."""
     out: list[MemoryCandidate] = []
@@ -505,6 +532,30 @@ async def extract_and_ingest(
     base_turn_id = hashlib.sha1(user_message.encode("utf-8", "ignore")).hexdigest()[:16]
     status = "approved" if auto_approve else "pending"
 
+    # ── fact→person linkage hygiene ─────────────────────────────────────────
+    # The person-fact candidates carry a bare name slug as ``entity_id`` with
+    # ``entity_type="person"`` — which mislabels an unresolved fact as if it were
+    # keyed to the people table. Resolve the name to a real ``people.id`` first
+    # (person_extractor's convention): resolved → ``person`` + UUID; unresolved →
+    # ``person_pending`` + ``slug:``. Only opens a DB when a person-fact is
+    # present, so ordinary turns keep their existing (no-DB) fast path.
+    person_idx = [i for i, c in enumerate(candidates) if (c.entity_type or "") == "person"]
+    resolved_links: dict[int, tuple[str, str]] = {}
+    if person_idx:
+        from person_extractor import _ensure_db
+        _db, _opened = await _ensure_db(None)
+        try:
+            for i in person_idx:
+                c = candidates[i]
+                name = (c.title or "").strip() or (c.entity_id or "").replace("_", " ")
+                resolved_links[i] = await _resolve_person_link(name, user_id, _db)
+        finally:
+            if _opened and _db is not None:
+                try:
+                    await _db.close()
+                except Exception:
+                    pass
+
     try:
         from memory_quality import is_storable_fact
     except Exception:
@@ -520,6 +571,7 @@ async def extract_and_ingest(
             _record_quality_reject(source, reason, c.text)
             continue
         user_turn_id = f"{base_turn_id}-{idx}"
+        entity_type, entity_id = resolved_links.get(idx, (c.entity_type, c.entity_id))
         ref = await svc.ingest(
             c.text,
             user_id=user_id,
@@ -530,8 +582,8 @@ async def extract_and_ingest(
             confidence=c.confidence,
             status=status,
             tags=["conversation", "auto_extract"],
-            entity_type=c.entity_type,
-            entity_id=c.entity_id,
+            entity_type=entity_type,
+            entity_id=entity_id,
         )
         if ref is not None:
             saved += 1

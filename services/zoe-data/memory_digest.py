@@ -44,6 +44,109 @@ _GEMMA_URL = _normalize_gemma_base(os.environ.get("GEMMA_SERVER_URL", "http://12
 _ZOE_TIMEZONE = os.environ.get("ZOE_TIMEZONE", "Australia/Perth")
 _GUEST_USERS = ("guest", "anonymous", "voice-guest", "voice-daemon", "")
 
+_LINK_RESOLVER_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def memory_link_resolver_enabled() -> bool:
+    """Cheap per-call read of the idle person-link resolver flag (default OFF).
+
+    When ON, the dream cycle re-links ``person_pending`` facts to a real
+    ``people.id`` once the contact exists (see ``_resolve_pending_person_links``).
+    A true no-op while OFF — the resolver returns before any store/DB access.
+    """
+    return (
+        os.environ.get("ZOE_MEMORY_LINK_RESOLVER_ENABLED", "").strip().lower()
+        in _LINK_RESOLVER_TRUTHY
+    )
+
+
+def _name_from_pending_slug(entity_id: str) -> str:
+    """Human name from a ``slug:<body>`` entity_id (person_extractor convention).
+
+    ``"slug:mary_jane"`` → ``"mary jane"``. A bare value (no ``slug:`` prefix) is
+    de-underscored as-is so a legacy pending id still resolves.
+    """
+    s = (entity_id or "").strip()
+    if s.startswith("slug:"):
+        s = s[len("slug:"):]
+    return s.replace("_", " ").strip()
+
+
+async def _resolve_pending_person_links(user_id: str, db=None) -> dict:
+    """Idle pass: re-link ``person_pending`` facts to a real ``people.id``.
+
+    Scans this user's ``person_pending`` memories, resolves the slug'd name via
+    ``person_extractor._resolve_person_uuid``, and — when a contact now exists —
+    rewrites ``entity_id`` → the ``people.id`` and flips ``entity_type``
+    ``person_pending`` → ``person``. The rewrite is a **metadata-only**
+    ``col.update`` (no document → Chroma does NOT re-embed), the same path
+    ``tick_access`` uses.
+
+    Default-OFF: a true no-op (no DB open, no store scan) unless
+    ``ZOE_MEMORY_LINK_RESOLVER_ENABLED`` is set. Runs only in the idle dream
+    cycle, so it never touches the turn path.
+    """
+    result = {"user_id": user_id, "scanned": 0, "relinked": 0}
+    if not memory_link_resolver_enabled():
+        return result
+
+    from person_extractor import _ensure_db, _resolve_person_uuid
+    from memory_service import get_memory_service, is_guest_memory_user
+
+    if not user_id or is_guest_memory_user(user_id):
+        return result
+
+    _db, opened = await _ensure_db(db)
+    if _db is None:
+        return result
+    try:
+        svc = get_memory_service()
+        col = svc._collection()
+        results = col.get(
+            where={"$and": [
+                {"user_id": {"$eq": user_id}},
+                {"entity_type": {"$eq": "person_pending"}},
+            ]},
+            include=["metadatas"],
+        )
+        ids = results.get("ids") or []
+        metas = results.get("metadatas") or []
+        for mem_id, meta in zip(ids, metas):
+            meta = dict(meta) if meta else {}
+            result["scanned"] += 1
+            name = _name_from_pending_slug(str(meta.get("entity_id") or ""))
+            if not name:
+                continue
+            try:
+                person_uuid = await _resolve_person_uuid(name, user_id, _db)
+            except Exception as exc:
+                logger.debug("link_resolver: resolve failed for %r: %s", name, exc)
+                continue
+            if not person_uuid:
+                continue
+            meta["entity_type"] = "person"
+            meta["entity_id"] = str(person_uuid)
+            try:
+                # Metadata-only write: no `documents` arg ⇒ Chroma keeps the
+                # existing embedding (see MemoryService._tick_access_sync).
+                col.update(ids=[mem_id], metadatas=[meta])
+                result["relinked"] += 1
+                logger.info(
+                    "link_resolver: relinked %s -> person %s user=%s",
+                    mem_id, person_uuid, user_id,
+                )
+            except Exception as exc:
+                logger.warning("link_resolver: update failed id=%s: %s", mem_id, exc)
+    except Exception as exc:
+        logger.warning("link_resolver: scan failed user=%s: %s", user_id, exc)
+    finally:
+        if opened and _db is not None:
+            try:
+                await _db.close()
+            except Exception:
+                pass
+    return result
+
 
 def _passes_quality_gate(text: str) -> bool:
     """Quality gate for the digest/synthesis LLM passes, which occasionally emit
@@ -1262,6 +1365,16 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
 
     rem = await _rem_reinforce_pass(user_id)
     result["rem"] = rem
+
+    # Idle person-link resolver (default OFF via ZOE_MEMORY_LINK_RESOLVER_ENABLED):
+    # re-link person_pending facts to a real people.id once the contact exists.
+    # A true no-op while the flag is off — no store scan, no DB open.
+    try:
+        link_result = await _resolve_pending_person_links(user_id, db=db)
+        if link_result.get("scanned") or link_result.get("relinked"):
+            result["link_resolver"] = link_result
+    except Exception as exc:
+        logger.warning("dreaming: link resolver failed user=%s: %s", user_id, exc)
 
     # Phase 1.5: Open loops extraction — runs nightly so loops are detected the same
     # day they're mentioned, not deferred until Sunday.
