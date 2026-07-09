@@ -156,12 +156,17 @@ def _hybrid_retrieval_enabled() -> bool:
 # the hot path in the async ``search`` before ``_run_sync``.
 _GRAPH_RECALL_WEIGHT_DEFAULT = 0.30  # bounded adjacency boost; strong secondary to keyword
 
-# Capitalized-token name candidates pulled from a recall query to seed the graph
-# boost. This is a cheap regex, NOT a new NLU model: it only feeds the *existing*
+# Name candidates pulled from a recall query to seed the graph boost. This is a
+# cheap regex, NOT a new NLU model: it only feeds the *existing*
 # ``person_extractor._resolve_person_uuid`` name→people.id resolver. A trailing
-# possessive ("Alice's" / "Alice’s") is stripped by the token class so
-# "what does Alice's husband do" yields ["Alice"].
+# possessive ("Alice's" / "Alice’s") is stripped so "what does Alice's husband
+# do" yields ["Alice"]. Two tiers: a precise capitalized pass first (proper-noun
+# chat/typed queries), then a case-insensitive fallback so lowercase voice/STT
+# transcripts ("what is alice's husband's job") still surface a candidate — the
+# resolver returns None for any non-name token, so the extra tokens are harmless.
 _QUERY_NAME_RE = re.compile(r"\b([A-Z][a-zA-Z'’-]+)\b")
+_QUERY_NAME_RE_CI = re.compile(r"\b([a-zA-Z][a-zA-Z'’-]+)\b")
+_MAX_NAME_CANDIDATES = 8  # bound the resolver round-trips on a person turn
 
 # Capitalized sentence-openers / interrogatives the name regex over-captures but
 # which are never a person's name. Lower-cased membership test (cf.
@@ -196,20 +201,29 @@ def _candidate_person_names(query: str) -> list[str]:
     """
     if not query:
         return []
-    seen: set[str] = set()
-    out: list[str] = []
-    for tok in _QUERY_NAME_RE.findall(query):
-        # Drop a trailing possessive ("Alice's"→"Alice", "Chris'"→"Chris") while
-        # leaving internal apostrophes ("O'Brien") intact, then trim stray marks.
-        name = re.sub(r"['’]s?$", "", tok).strip("'’-")
-        if len(name) < 2 or name.lower() in _QUERY_NAME_STOPWORDS:
-            continue
-        key = name.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(name)
-    return out
+
+    def _collect(pattern: re.Pattern[str]) -> list[str]:
+        seen: set[str] = set()
+        out: list[str] = []
+        for tok in pattern.findall(query):
+            # Drop a trailing possessive ("Alice's"→"Alice", "Chris'"→"Chris")
+            # while leaving internal apostrophes ("O'Brien") intact, then trim.
+            name = re.sub(r"['’]s?$", "", tok).strip("'’-")
+            if len(name) < 2 or name.lower() in _QUERY_NAME_STOPWORDS:
+                continue
+            key = name.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(name)
+            if len(out) >= _MAX_NAME_CANDIDATES:
+                break
+        return out
+
+    # Precise capitalized pass first; fall back to any-case only if it finds
+    # nothing (a fully lowercase voice/STT transcript).
+    names = _collect(_QUERY_NAME_RE)
+    return names if names else _collect(_QUERY_NAME_RE_CI)
 
 
 def _hybrid_tokens(text: str) -> set[str]:
@@ -1182,6 +1196,12 @@ class MemoryService:
 
             async with get_db_ctx() as db:
                 start_pid = None
+                # NOTE: `_resolve_person_uuid` is a substring (LIKE %name%) match
+                # returning the first row, so an ambiguous fragment ("Ali" vs
+                # Alice/Alicia) can pick the wrong start person. Accepted here: the
+                # boost is small, additive, owner-scoped, and only re-ranks facts
+                # semantic search already retrieved — a mis-resolve mildly nudges
+                # ordering, never leaks another user's data or drops results.
                 for name in names:
                     start_pid = await _resolve_person_uuid(name, user_id, db)
                     if start_pid:
@@ -1360,10 +1380,21 @@ class MemoryService:
         # is empty/None). When empty the 7th term is skipped entirely, so OFF is
         # byte-for-byte identical to the pre-2b ordering.
         _graph_on = bool(depth_by_pid)
-        _graph_weight = (
-            float(os.environ.get("ZOE_GRAPH_RECALL_WEIGHT", _GRAPH_RECALL_WEIGHT_DEFAULT))
-            if _graph_on else 0.0
-        )
+        _graph_weight = 0.0
+        if _graph_on:
+            # A malformed weight must disable ONLY the graph term — never raise
+            # out of the blend into search()'s catch-all, which would drop every
+            # semantic result. Fall back to the default on a bad value.
+            try:
+                _graph_weight = float(
+                    os.environ.get("ZOE_GRAPH_RECALL_WEIGHT", _GRAPH_RECALL_WEIGHT_DEFAULT)
+                )
+            except (TypeError, ValueError):
+                logger.warning(
+                    "memory_service: invalid ZOE_GRAPH_RECALL_WEIGHT; using default %.2f",
+                    _GRAPH_RECALL_WEIGHT_DEFAULT,
+                )
+                _graph_weight = _GRAPH_RECALL_WEIGHT_DEFAULT
 
         def _blend(ref: MemoryRef) -> float:
             md = ref.metadata

@@ -271,6 +271,21 @@ def test_off_ordering_is_byte_identical_noop():
         assert nonmatch_order == baseline
 
 
+# ── 3b. A malformed weight disables only the graph term, never the search ─────
+
+def test_invalid_weight_does_not_drop_results(monkeypatch):
+    """``ZOE_GRAPH_RECALL_WEIGHT=abc`` must not raise out of the blend (which
+    search() would catch and turn into an empty result list). It falls back to
+    the default weight and still returns the full ranked candidate set."""
+    monkeypatch.setenv("ZOE_GRAPH_RECALL_WEIGHT", "not-a-number")
+    service = _make_service()
+    rows = service._semantic_search(Q1, USER, limit=10, depth_by_pid=DEPTH_BY_PID)
+    # All candidates survive (no exception ⇒ no empty-list fallback) and the
+    # boost still applied (default weight), so the target is present.
+    assert {r.id for r in rows} == {r[0] for r in Q1_ROWS}
+    assert Q1_TARGET in {r.id for r in rows[:5]}
+
+
 # ── 4. Async wiring + the default-OFF gate (search → _graph_depth_by_pid) ──────
 
 @pytest.mark.asyncio
@@ -353,9 +368,23 @@ async def test_graph_depth_by_pid_best_effort_swallows_failures(monkeypatch):
 # ── 5. The query-name extractor (feeds the existing resolver, not new NLU) ─────
 
 def test_candidate_person_names_extraction():
+    # Precise capitalized pass: only the proper noun survives (relationship /
+    # question words are lowercase and never captured).
     assert memory_service._candidate_person_names("What is Alice's husband's job?") == ["Alice"]
     assert memory_service._candidate_person_names("Who does Alice's husband work for?") == ["Alice"]
     # Sentence-opener / interrogative capitals are rejected; real names kept.
     assert memory_service._candidate_person_names("Tell me about Bob and Carol") == ["Bob", "Carol"]
-    # No plausible name ⇒ empty ⇒ no boost.
-    assert memory_service._candidate_person_names("what is the weather today") == []
+    # No capitalized name ⇒ empty (the fallback below also yields no *resolvable*
+    # name, but here every token is a stopword or common word).
+    assert memory_service._candidate_person_names("what is the weather") == ["weather"]
+
+
+def test_candidate_person_names_lowercase_voice_fallback():
+    """A fully lowercase voice/STT transcript still surfaces the name first, so
+    the graph boost isn't silently dead on the voice path (Greptile P1)."""
+    names = memory_service._candidate_person_names("what is alice's husband's job?")
+    # Capitalized pass finds nothing → case-insensitive fallback kicks in.
+    assert "alice" in names
+    assert names[0] == "alice"  # appears before the non-name tokens
+    # The resolver returns None for non-name tokens, so their presence is inert;
+    # what matters is the real name is present and tried first.
