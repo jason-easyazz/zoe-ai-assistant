@@ -339,12 +339,15 @@
 
     // The disambiguator an edit/delete target carries so same-title events resolve:
     // a timed event uses its start time ("at 8:00am" — am/pm so morning hours count,
-    // see calClockAmPm); an ALL-DAY event has no time, so it uses its ISO date
-    // ("on 2026-07-09"), which the backend scorer matches against start_date.
+    // see calClockAmPm); an ALL-DAY event has no time, so it uses "all day" + its ISO
+    // date ("all day on 2026-07-09"). The date separates same-title events across
+    // days; the "all day" shape lets the tapped all-day row win a same-DATE tie
+    // against a same-title timed row (the backend scorer prefers an all-day event
+    // when the target says "all day").
     function calTargetSuffix(item) {
         if (item.all_day) {
             const day = String(item.start_date || item.date || '').slice(0, 10);
-            return /^\d{4}-\d{2}-\d{2}$/.test(day) ? ' on ' + day : '';
+            return /^\d{4}-\d{2}-\d{2}$/.test(day) ? ' all day on ' + day : ' all day';
         }
         const t = calClockAmPm(item.start_time);
         return t ? ' at ' + t : '';

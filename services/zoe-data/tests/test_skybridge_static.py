@@ -656,9 +656,10 @@ process.stdout.write(JSON.stringify({
   // anchored with "from my calendar" so the resolver always routes it to a
   // calendar delete regardless of the saved Skybridge context (destructive).
   delete_query: html.includes('data-query=\"delete Standup at 8:00am from my calendar\"'),
-  // all-day events carry no time, so they disambiguate by ISO date instead.
-  allday_edit_query: html.includes('data-query=\"edit Trip on 2026-06-23 on my calendar\"'),
-  allday_delete_query: html.includes('data-query=\"delete Trip on 2026-06-23 from my calendar\"')
+  // all-day events carry no time, so they disambiguate by "all day" + ISO date
+  // (the date separates days; "all day" wins a same-date tie vs a timed row).
+  allday_edit_query: html.includes('data-query=\"edit Trip all day on 2026-06-23 on my calendar\"'),
+  allday_delete_query: html.includes('data-query=\"delete Trip all day on 2026-06-23 from my calendar\"')
 }));
 """,
         encoding="utf-8",

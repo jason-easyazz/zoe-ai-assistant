@@ -1556,6 +1556,12 @@ def _score_event_for_target(event: dict[str, Any], target: str) -> int:
         if str(event.get("start_date") or "")[:10] == date_match.group(0):
             score += 4
         remainder = target[:date_match.start()] + " " + target[date_match.end():]
+    # "all day" shape — lets a tapped all-day row win a same-DATE tie against a
+    # same-title timed row. Stripped so it can't leak in as title tokens.
+    if re.search(r"\ball[ -]?day\b", remainder, re.IGNORECASE):
+        remainder = re.sub(r"\ball[ -]?day\b", " ", remainder, flags=re.IGNORECASE)
+        if event.get("all_day"):
+            score += 2
     target_time = _parse_time(remainder)
     if target_time and str(event.get("start_time") or "")[:5] == target_time:
         score += 4

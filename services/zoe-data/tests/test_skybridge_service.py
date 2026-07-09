@@ -1624,13 +1624,44 @@ async def test_calendar_delete_all_day_disambiguates_by_date():
     }
 
     result = await resolve_skybridge_request(
-        "delete Trip on 2026-06-26 from my calendar", "family-admin", context=context, db=db
+        "delete Trip all day on 2026-06-26 from my calendar", "family-admin", context=context, db=db
     )
 
     assert result["handled"] is True
     assert result["intent"]["action"] == "delete_event"
     # The Friday instance was deleted, not the ambiguous Wednesday one.
     assert result["intent"]["event_id"] == "trip-fri"
+
+
+@pytest.mark.asyncio
+async def test_calendar_delete_all_day_beats_same_title_timed_same_day():
+    """The hardest tie: a same-title all-day AND timed event on the SAME day. The
+    all-day tap query carries 'all day', so the scorer prefers the all-day row and
+    deletes the one the user actually tapped (not the ambiguous-event flow)."""
+    all_day = {
+        "id": "trip-allday", "user_id": "family-admin", "title": "Trip",
+        "start_date": "2026-06-24", "start_time": None, "all_day": True,
+        "category": "bucket", "visibility": "family", "deleted": False,
+    }
+    timed = {
+        "id": "trip-timed", "user_id": "family-admin", "title": "Trip",
+        "start_date": "2026-06-24", "start_time": "09:00", "all_day": False,
+        "category": "bucket", "visibility": "family", "deleted": False,
+    }
+    db = FakeDb(events=[all_day, timed])
+    context = {
+        "intent": {"domain": "calendar", "action": "show"},
+        "cards": [{"content": {"source": "calendar_show", "start_date": "2026-06-24",
+                               "events": [all_day, timed]}}],
+    }
+
+    result = await resolve_skybridge_request(
+        "delete Trip all day on 2026-06-24 from my calendar", "family-admin", context=context, db=db
+    )
+
+    assert result["handled"] is True
+    assert result["intent"]["action"] == "delete_event"
+    assert result["intent"]["event_id"] == "trip-allday"
 
 
 def test_calendar_delete_target_survives_delimiter_in_title():
