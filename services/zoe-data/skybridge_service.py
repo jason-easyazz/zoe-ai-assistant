@@ -955,6 +955,20 @@ def _people_filters_from_text(text: str) -> tuple[str, str, str]:
     return query, context, circle
 
 
+# Self-identity questions the panel should answer with an identity card rather
+# than let fall through to the brain's fuzzy settings match. Kept deliberately
+# tight (self-directed only): "who is <name>" and other people SEARCHES must not
+# match here.
+_IDENTITY_QUERY_RE = re.compile(
+    r"\bwho\s+am\s+i\b"
+    r"|\bwho(?:'s|\s+is)\s+(?:currently\s+)?(?:signed|logged)\s+in\b"
+    r"|\bwhat(?:'s|\s+is)\s+my\s+name\b"
+    r"|\bam\s+i\s+(?:signed|logged)\s+in\b"
+    r"|\bwho\s+do\s+you\s+think\s+i\s+am\b"
+    r"|\bwho\s+are\s+you\s+talking\s+to\b"
+)
+
+
 def classify_skybridge_intent(message: str, context: dict[str, Any] | None = None) -> SkybridgeIntent | None:
     """Classify only domains that Skybridge can resolve to real data cards."""
     raw_message = message or ""
@@ -1073,6 +1087,17 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
             label, start, end = parsed_range
             return SkybridgeIntent("calendar", "show", label, start, end)
         return SkybridgeIntent("calendar", "show", "today", today, today)
+    if _IDENTITY_QUERY_RE.search(text) and not any(
+        term in text for term in (" contact", " people", " directory", " profile")
+    ):
+        # "who am I" / "who's signed in" / "what's my name" — a self-directed
+        # identity ask. Surfaces WHO Zoe thinks is speaking (an identity card),
+        # not a fuzzy "AI Training" settings page. A people SEARCH ("who is
+        # Sarah") does NOT match this pattern, a fact write ("my name is Sam")
+        # is already claimed earlier by _people_fact_from_text, and an explicit
+        # directory ask ("what's my name in contacts") yields to the people
+        # branch below rather than being stolen by the leading identity phrase.
+        return SkybridgeIntent(domain="people", action="identity")
     if any(term in text for term in (" people", " contacts", " contact", " person", " profile", " family", " friends")):
         query, people_ctx, circle = _people_filters_from_text(text)
         if " family " in text and not query:
@@ -1174,7 +1199,14 @@ def _is_guest_user(user_id: str | None) -> bool:
 
 def skybridge_intent_requires_identity(intent: SkybridgeIntent | None) -> bool:
     """Return whether a Skybridge intent reads or mutates personal user data."""
-    return bool(intent and intent.domain in {"calendar", "lists", "people"})
+    if intent is None:
+        return False
+    # A self-identity ask ("who am I") answers for guests too — it reports the
+    # session's own identity, not another person's private data — so it must not
+    # be forced behind the sign-in wall.
+    if intent.domain == "people" and intent.action == "identity":
+        return False
+    return intent.domain in {"calendar", "lists", "people"}
 
 
 # Music context anchors: a word clearly about audio playback. "play <x>" is only
@@ -1343,6 +1375,8 @@ async def _resolve_with_db(intent: SkybridgeIntent, user_id: str, db: Any, *, co
             return await _resolve_list_create(intent, user_id, db)
         return await _resolve_lists(intent, user_id, db)
     if intent.domain == "people":
+        if intent.action == "identity":
+            return await _resolve_self_identity(user_id, db)
         if intent.action == "remember_fact":
             return await _resolve_people_remember_fact(intent, user_id, db)
         return await _resolve_people(intent, user_id, db)
@@ -2480,6 +2514,82 @@ async def _resolve_list_edit_item(intent: SkybridgeIntent, user_id: str, db: Any
         "spoken_summary": f"Editing {item_text}. You can remove it or go back to the list.",
         "cards": [card_service.convert_emit(card, target_major=1)],
         "actions": [],
+    }
+
+
+def _humanize_user_id(user_id: str | None) -> str:
+    """Best-effort display name from a bare user id when the users table has none."""
+    raw = str(user_id or "").strip()
+    if not raw or raw in {"guest", "voice-guest"}:
+        return "Guest"
+    cleaned = re.sub(r"[._-]+", " ", raw).strip()
+    # A UUID/opaque id is not a name — fall back to a neutral second-person label.
+    if re.fullmatch(r"[0-9a-f]{8,}", cleaned.replace(" ", "")):
+        return "You"
+    return cleaned.title() if cleaned.islower() else cleaned
+
+
+_IDENTITY_ROLE_LABELS = {
+    "admin": "Administrator",
+    "family-admin": "Administrator",
+    "member": "Member",
+    "user": "Member",
+}
+
+
+async def _resolve_self_identity(user_id: str, db: Any) -> dict[str, Any]:
+    """Answer a self-identity ask ("who am I") with the panel's identity card.
+
+    Reuses the person-profile card so "who am I" surfaces WHO Zoe thinks is
+    speaking — name + role — instead of falling through to a generic settings
+    page. A guest gets an informative "not signed in" card rather than the
+    sign-in wall, so the question is always answered.
+    """
+    if _is_guest_user(user_id):
+        person = {
+            "name": "Guest",
+            "circle": "self",
+            "relationship": "Not signed in",
+            "notes": "You're using Zoe as a guest. Sign in to get your calendar, lists and people.",
+            "health_score": 100,
+        }
+        summary = "You're signed in as a guest."
+        card = card_service.build_person_profile_card({"person": person, "summary": summary})
+        return {
+            "handled": True,
+            "intent": {"domain": "people", "action": "identity"},
+            "spoken_summary": summary,
+            "cards": [card_service.convert_emit(card, target_major=1)],
+        }
+
+    name = ""
+    role = ""
+    try:
+        rows = await db.fetch("SELECT name, role FROM users WHERE id = $1 LIMIT 1", user_id)
+        if rows:
+            name = str(rows[0]["name"] or "").strip()
+            role = str(rows[0]["role"] or "").strip()
+    except Exception:
+        # Users table unavailable / schema mismatch — still answer with the id we have.
+        pass
+
+    display = name or _humanize_user_id(user_id)
+    role_label = _IDENTITY_ROLE_LABELS.get(role.lower(), role.title() if role else "Signed in")
+    person = {
+        "name": display,
+        "circle": "self",
+        "relationship": "You",
+        "context": role_label,
+        "notes": f"You're signed in on this panel as {display}.",
+        "health_score": 100,
+    }
+    summary = f"You're signed in as {display}."
+    card = card_service.build_person_profile_card({"person": person, "summary": summary})
+    return {
+        "handled": True,
+        "intent": {"domain": "people", "action": "identity"},
+        "spoken_summary": summary,
+        "cards": [card_service.convert_emit(card, target_major=1)],
     }
 
 
