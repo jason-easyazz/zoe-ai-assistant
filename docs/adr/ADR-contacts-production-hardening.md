@@ -75,6 +75,13 @@ What already works, **channel-agnostic** (chat + voice, every brain backend incl
   before entering the prompt — a proposal value can't inject its own heading/instructions.
 - **P4 — person_create UI confirm card** for the touch panel (`ui_components_for_suggestions`),
   matching the voice/for-prompt surface.
+- **P5 — Deterministic propose-on-mention.** ✅ **shipped.** E2E found the LLM detector is
+  unreliable on the 4B model (fired for "my niece Teneeka", missed "my brother Daniel" + casual
+  mentions). `detect_and_store` now also runs `_deterministic_person_proposals` — a regex over
+  "my &lt;rel&gt; &lt;Name&gt;" / "&lt;Name&gt;, my &lt;rel&gt;" — so the everyday case reliably
+  produces a `person_create` proposal, deduped against the LLM's + existing contacts. Gated by the
+  same SUGGEST flag (no-op when off). Reliable regex + best-effort LLM = the belt-and-suspenders
+  pattern from the research.
 
 Guardrails (unchanged): every auto-create stays user-confirmed unless high-confidence; flag-gated +
 demo-user-lab-proved; hot-path changes replay-gated; private-by-default visibility.

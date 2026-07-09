@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 
 import httpx
 
@@ -220,10 +221,66 @@ async def detect(
     return cleaned
 
 
+# ── Deterministic propose-on-mention ────────────────────────────────────────
+# The LLM detector is inconsistent on a 4B model — it fired for "my niece
+# Teneeka" but missed "my brother Daniel" / casual mentions in E2E testing. A
+# regex over the common "my <rel> <Name>" / "<Name>, my <rel>" forms gives a
+# RELIABLE proposal for the everyday case (research: pair a passive extractor
+# with the agent path). Names are capitalised; relationships lower-case.
+_MENTION_REL = (
+    "mother|father|mum|mom|dad|sister|brother|son|daughter|wife|husband|partner|"
+    "girlfriend|boyfriend|friend|mate|boss|colleague|coworker|co-worker|neighbour|"
+    "neighbor|cousin|aunt|uncle|niece|nephew|grandmother|grandfather|grandma|grandpa"
+)
+_NM = r"[A-Z][a-z]{1,20}(?:\s[A-Z][a-z]{1,20})?"
+# The relationship is case-insensitive (scoped (?i:) — "Brother"/"brother"); the
+# NAME stays capital-initial so we don't capture lowercase filler as a name.
+_MY_REL_NAME_RE = re.compile(rf"\b[Mm]y\s+(?P<rel>(?i:{_MENTION_REL}))\s*,?\s+(?P<name>{_NM})")
+_NAME_MY_REL_RE = re.compile(rf"\b(?P<name>{_NM})\s*,?\s+(?:is\s+)?[Mm]y\s+(?P<rel>(?i:{_MENTION_REL}))\b")
+
+
+async def _deterministic_person_proposals(text: str, user_id: str) -> list[dict]:
+    """Regex-extract 'my <rel> <Name>' style mentions of a not-yet-contact person
+    → person_create proposals. Pronoun-guarded, deduped within the turn and
+    against existing contacts. Flag-gated by the caller."""
+    try:
+        from person_extractor import _looks_like_person_name
+    except Exception:
+        return []
+    found: dict[str, tuple[str, str]] = {}
+    for rx in (_MY_REL_NAME_RE, _NAME_MY_REL_RE):
+        for m in rx.finditer(text or ""):
+            name = m.group("name").strip()
+            key = name.lower()
+            if key in found or not _looks_like_person_name(name):
+                continue
+            found[key] = (name, m.group("rel").lower())
+    proposals: list[dict] = []
+    for name, rel in found.values():
+        if await _already_a_contact(name, user_id):
+            continue
+        proposals.append({
+            "action_type": "person_create",
+            "pre_filled_slots": {"name": name, "relationship": rel},
+            "offer_phrase": f"Add {name} to your contacts?",
+        })
+    return proposals
+
+
 async def detect_and_store(user_message: str, *, user_id: str, session_id: str) -> int:
     from pending_suggestions import store_suggestions
 
     suggestions = await detect(user_message, user_id=user_id, session_id=session_id)
+    # Merge the reliable deterministic person proposals (flag-gated), deduping
+    # any name the LLM detector already proposed.
+    if _person_enabled():
+        llm_names = {
+            ((s.get("pre_filled_slots") or {}).get("name") or "").strip().lower()
+            for s in suggestions if s.get("action_type") == "person_create"
+        }
+        for p in await _deterministic_person_proposals(user_message, user_id):
+            if p["pre_filled_slots"]["name"].strip().lower() not in llm_names:
+                suggestions.append(p)
     if not suggestions:
         return 0
     return await store_suggestions(user_id, session_id, suggestions)
