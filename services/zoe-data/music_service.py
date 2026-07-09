@@ -296,6 +296,128 @@ async def search_and_play(query: str, player_id: str = "") -> Optional[dict[str,
     return {"name": hit.get("name", query), "artist": (hit.get("artists") or [{}])[0].get("name", "") if hit.get("artists") else ""}
 
 
+# ── Browse: structured search + play-by-URI (the "use your music" surface) ────
+# The now-playing card + voice path give you *what's playing* and one-shot
+# "play <thing>". These two power the touch music page: see connected sources,
+# search them, and tap a specific result onto a chosen speaker.
+
+_SEARCH_MEDIA_TYPES = ("track", "album", "artist", "playlist", "radio")
+# MA groups search hits under a plural key per media type.
+_SEARCH_RESULT_KEY = {
+    "track": "tracks", "album": "albums", "artist": "artists",
+    "playlist": "playlists", "radio": "radio",
+}
+
+
+def _search_image(item: dict[str, Any]) -> str:
+    """Best square art for a search hit — the item's own image, else its album's.
+    Google-hosted (YT Music) art is bumped to a crisp square; other hosts pass
+    through untouched. Non-http(s)/relative paths are dropped (never trusted)."""
+    for src in (item, item.get("album") if isinstance(item.get("album"), dict) else None):
+        if not isinstance(src, dict):
+            continue
+        images = (src.get("metadata") or {}).get("images") or []
+        for img in images if isinstance(images, list) else []:
+            path = img.get("path") if isinstance(img, dict) else None
+            if isinstance(path, str) and path.startswith(("http://", "https://")):
+                return _hi_res_art(path)
+    return ""
+
+
+def _normalize_hit(item: Any, media_type: str) -> Optional[dict[str, Any]]:
+    """One search hit → the flat shape the touch page renders + can play back.
+    Drops items with no playable URI (can't act on them)."""
+    if not isinstance(item, dict):
+        return None
+    uri = item.get("uri")
+    if not isinstance(uri, str) or not uri:
+        return None
+    artists = item.get("artists") or []
+    artist = ", ".join(a.get("name", "") for a in artists if isinstance(a, dict)) if artists \
+        else (item.get("artist") if isinstance(item.get("artist"), str) else "")
+    album = item.get("album")
+    album_name = album.get("name") if isinstance(album, dict) else (album if isinstance(album, str) else "")
+    return {
+        "name": item.get("name") or "",
+        "uri": uri,
+        "media_type": item.get("media_type") or media_type,
+        "artist": artist,
+        "album": album_name,
+        "image": _search_image(item),
+    }
+
+
+async def search(query: str, media_types: Optional[list[str]] = None,
+                 limit: int = 8) -> dict[str, Any]:
+    """Search the connected providers and return hits grouped by media type.
+
+    MA/YouTube-Music returns far better coverage when each media type is queried
+    on its own — a combined query silently drops tracks/albums — so we fan out
+    one request per requested type and merge. Best-effort: returns
+    available=False with empty buckets if MA is unreachable. Never raises."""
+    import asyncio as _asyncio
+
+    query = (query or "").strip()
+    requested = [m for m in (media_types or _SEARCH_MEDIA_TYPES) if m in _SEARCH_RESULT_KEY]
+    if not requested:
+        requested = list(_SEARCH_MEDIA_TYPES)
+    results: dict[str, list] = {_SEARCH_RESULT_KEY[m]: [] for m in _SEARCH_MEDIA_TYPES}
+    if not query:
+        return {"available": False, "query": query, "results": results}
+    try:
+        limit = max(1, min(int(limit), 25))
+    except (TypeError, ValueError):
+        limit = 8
+
+    async def _one(mt: str) -> tuple[str, list[dict[str, Any]]]:
+        res = await _ma("music/search", search_query=query, media_types=[mt], limit=limit)
+        hits: list[dict[str, Any]] = []
+        if isinstance(res, dict):
+            for raw in (res.get(_SEARCH_RESULT_KEY[mt]) or []):
+                norm = _normalize_hit(raw, mt)
+                if norm:
+                    hits.append(norm)
+        return mt, hits
+
+    gathered = await _asyncio.gather(*[_one(mt) for mt in requested])
+    any_hit = False
+    for mt, hits in gathered:
+        results[_SEARCH_RESULT_KEY[mt]] = hits
+        if hits:
+            any_hit = True
+    return {"available": any_hit, "query": query, "results": results}
+
+
+async def play_media(uri: str, player_id: str = "") -> dict[str, Any]:
+    """Play a specific media URI (from `search`) on a chosen speaker.
+
+    In MA the queue id *is* the player id. An explicit player_id must match a
+    real player (so a stale id fails loudly instead of playing on the wrong
+    speaker); with no id we fall back to the active/first powered player.
+    Best-effort — never raises."""
+    uri = (uri or "").strip()
+    if not uri:
+        return {"ok": False, "reason": "empty uri"}
+    players = await get_players()
+    if player_id:
+        player = next((p for p in players if p.get("player_id") == player_id), None)
+        if player is None:
+            return {"ok": False, "reason": "unknown player"}
+    else:
+        player = _pick_player(players)
+    if player is None:
+        return {"ok": False, "reason": "no player available"}
+    pid = player.get("player_id", "")
+    if not pid:
+        return {"ok": False, "reason": "no player available"}
+    await _ma("player_queues/play_media", queue_id=pid, media=uri,
+              option="replace", radio_mode=False)
+    return {
+        "ok": True, "uri": uri, "player_id": pid,
+        "player_name": player.get("display_name") or player.get("name") or "",
+    }
+
+
 # ── Skybridge card + resolver ────────────────────────────────────────────────
 
 def now_playing_card(np: dict[str, Any]) -> dict[str, Any]:

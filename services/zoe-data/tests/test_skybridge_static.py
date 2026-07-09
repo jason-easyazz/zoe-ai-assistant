@@ -1326,3 +1326,62 @@ def test_music_transfer_endpoint_shape():
     assert "async def transfer(target_player_id: str, source_player_id: str = \"\")" in service
     assert '"player_queues/transfer"' in service
     assert "source_queue_id=source_id, target_queue_id=target_player_id" in service
+
+
+def test_music_search_and_play_media_endpoints_exist():
+    """The touch music page needs a structured search + a play-by-URI endpoint,
+    both delegating to music_service (the single place that speaks MA)."""
+    router = read(DATA / "routers" / "music.py")
+    service = read(DATA / "music_service.py")
+
+    assert '@router.get("/search")' in router
+    assert '@router.post("/play_media")' in router
+    assert "music_service.search(q, media_types=media_types, limit=n)" in router
+    assert "music_service.play_media(uri, player_id=player_id)" in router
+
+    assert "async def search(query: str" in service
+    assert "async def play_media(uri: str, player_id: str = \"\")" in service
+    # Per-type fan-out (MA/YT drops tracks/albums on a combined query).
+    assert '"music/search", search_query=query, media_types=[mt]' in service
+    assert '"player_queues/play_media", queue_id=pid, media=uri' in service
+
+
+def test_touch_music_page_is_ds1_browse_surface():
+    """/touch/music.html is the rebuilt 'use your connected music' surface: it
+    shows connected sources, searches the bridge, and plays a picked result on a
+    chosen speaker. It must stay on-brand (ds1 tokens, no rgba(var(...))) and
+    touch-friendly (≥44px targets), and it is the target of the card's Browse."""
+    html = read(UI / "music.html")
+
+    # Wired to the new + existing music endpoints (search/play/sources/speakers).
+    assert "/api/music/search?q=" in html
+    assert "/api/music/play_media" in html
+    assert "/api/music/available-providers" in html
+    assert "/api/music/players" in html
+    assert "/api/music/now-playing" in html
+
+    # Connected-source display (so the user can SEE YouTube Music is connected).
+    assert "Connected music sources" in html or "src on" in html
+    assert "loadSources" in html
+
+    # Search → grouped results → tap to play by touch, on a chosen speaker.
+    assert "Search songs, artists, albums" in html
+    assert "function play(uri, name)" in html
+    assert "Play on…" in html  # speaker picker sheet
+
+    # ds1 discipline: hex accent tokens + color-mix, never rgba(var(...)).
+    assert "--accent-mint" in html and "color-mix(" in html
+    assert "rgba(var(" not in html
+
+    # The now-playing card's Browse button routes here (no stale gridstack page).
+    assert "cdn.jsdelivr.net/npm/gridstack" not in html
+
+    renderer = read(UI / "js" / "skybridge-renderer.js")
+    assert 'data-route="/touch/music.html"' in renderer
+
+
+def test_touch_music_page_uses_large_touch_targets():
+    """Primary controls on the music page meet the ≥44px touch-target rule."""
+    html = read(UI / "music.html")
+    for token in ["min-height: 48px", "min-height: 44px", "min-width: 44px"]:
+        assert token in html, token
