@@ -82,17 +82,19 @@ bugs above were all found *by* this E2E pass, not by unit tests.
   so an un-actioned offer stops after ~2 turns. Extracted name/relationship are **sanitised**
   (`_safe_prompt_inline`: whitespace-collapsed, markdown/structure chars stripped, length-capped)
   before entering the prompt — a proposal value can't inject its own heading/instructions.
-- **P4 — person_create UI confirm card.** ⚠️ **chat surface shipped (#1222); the Skybridge
-  panel card is a known gap.** #1222 made `ui_components_for_suggestions` emit a proper
-  "Add {name} as your {relationship}?" `action_card` — but that is the *chat.html* surface. The
-  kiosk home is **Skybridge**, whose card system is entirely separate (`card_contract.py`
-  schema-versioned `CardType` + `content.actions` → `card_service.py` builders → the
-  `ui_action` push lane → `skybridge-renderer.js`). A real panel confirm card needs a new
-  `person_confirm` card_type + builder + push from `skybridge_service.py` (which surfaces no
-  pending offers today) + renderer/action wiring, and must avoid the `normalizeCard`
-  confirm-→action-less-status downgrade (`skybridge-renderer.js:1835`). It's a multi-file
-  Skybridge feature needing live-kiosk verification. Detail:
-  [contacts-people-memory §known-gap](../knowledge/contacts-people-memory.md).
+- **P4 — person_create confirm card.** ✅ **chat surface (#1222) + Skybridge panel v1 (#1227).**
+  #1222 emits the card on the *chat.html* surface. #1227 built it on the real kiosk home,
+  **Skybridge**: a narrow classify trigger ("any contacts to add?" / "show contact suggestions")
+  → `people/pending_offers` → `_resolve_people_pending_offers` reads `list_pending_contacts` →
+  `_person_confirm_card` (`{component:"person_confirm"}`) → `skybridge-renderer.js
+  renderPersonConfirm`. The **Add** button re-issues a natural-language `people_create` command
+  (`query` → `/api/skybridge/resolve`), so the write is server-side under the panel user — never
+  trusted from the client; **Not now** is a client-only dismiss. Surfacing is via the resolve path
+  (no voice-path change → no replay gate). **Remaining follow-up:** the *proactive mid-turn
+  auto-surface* (push the card the instant Zoe hears "my brother Daniel") is inherently a
+  voice-path change (replay-gated) — on voice, P1 already makes the brain *speak* the offer.
+  Live-kiosk render verification (@192.168.1.61) is the operator step. Detail:
+  [contacts-people-memory §skybridge-card](../knowledge/contacts-people-memory.md).
 - **P5 — Deterministic propose-on-mention.** ✅ **shipped.** E2E found the LLM detector is
   unreliable on the 4B model (fired for "my niece Teneeka", missed "my brother Daniel" + casual
   mentions). `detect_and_store` now also runs `_deterministic_person_proposals` — a regex over
