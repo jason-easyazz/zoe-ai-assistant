@@ -404,7 +404,7 @@ const checks = {
     // lives on the revealed Edit action, which still carries data-sky-action=query.
     cal_summary_tap: /<summary[^>]*cal-hero/.test(calHtml),
     cal_edit_action: /cal-act-edit[^>]*data-sky-action=\"query\"/.test(calHtml),
-    cal_edit_query: calHtml.includes('data-query=\"edit Dentist &lt;x&gt; at 3:00pm\"'),
+    cal_edit_query: calHtml.includes('data-query=\"edit Dentist &lt;x&gt; at 3:00pm on my calendar\"'),
     cal_escaped: !calHtml.includes('Dentist <x>') && calHtml.includes('Dentist &lt;x&gt;')
 };
 process.stdout.write(JSON.stringify(checks));
@@ -649,7 +649,7 @@ process.stdout.write(JSON.stringify({
   when_row: html.includes('When') && html.includes('08:00 – 08:30'),
   where_row: html.includes('Where') && html.includes('Room 4'),
   notes_row: html.includes('Notes') && html.includes('Daily sync'),
-  edit_query: html.includes('data-query=\"edit Standup at 8:00am\"'),
+  edit_query: html.includes('data-query=\"edit Standup at 8:00am on my calendar\"'),
   delete_action: /cal-act-del[^>]*data-sky-action=\"query\"/.test(html),
   // anchored with "from my calendar" so the resolver always routes it to a
   // calendar delete regardless of the saved Skybridge context (destructive).

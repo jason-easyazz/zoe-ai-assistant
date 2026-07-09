@@ -337,16 +337,17 @@
         return h12 + ':' + m[2] + ap;
     }
 
+    // Both tap queries carry an explicit calendar anchor ("on/from my calendar") so
+    // the resolver routes them to the calendar domain REGARDLESS of the saved
+    // Skybridge context — the bare "edit X"/"delete X" short forms only resolve as
+    // calendar while the context is still calendar, which breaks after the card is
+    // rehydrated or another card updates the context. The "at <time>" rides along so
+    // same-title events disambiguate (am/pm so morning times count — see calClockAmPm).
     function calendarEditQuery(item, title) {
         const startTime = calClockAmPm(item.start_time);
-        return 'edit ' + title + (startTime ? ' at ' + startTime : '');
+        return 'edit ' + title + (startTime ? ' at ' + startTime : '') + ' on my calendar';
     }
 
-    // Sibling of calendarEditQuery for the detail's Delete action. Anchored with
-    // "from my calendar" so the resolver ALWAYS routes it to a calendar delete
-    // (the bare "delete X" form only does so when the saved context is still the
-    // calendar domain — too fragile for a destructive action). The "at <time>"
-    // still rides along inside the target so same-title events disambiguate.
     function calendarDeleteQuery(item, title) {
         const startTime = calClockAmPm(item.start_time);
         return 'delete ' + title + (startTime ? ' at ' + startTime : '') + ' from my calendar';
