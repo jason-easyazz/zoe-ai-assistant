@@ -437,7 +437,7 @@ async def resolve_music(intent: Any) -> dict[str, Any]:
 # ones go through the QR→phone flow.
 _SETUP_CATALOGUE = [
     {"domain": "spotify", "name": "Spotify", "auth": "oauth", "accent": "mint"},
-    {"domain": "ytmusic", "name": "YouTube Music", "auth": "form", "accent": "red"},
+    {"domain": "ytmusic", "name": "YouTube Music", "auth": "browser", "accent": "red"},
     {"domain": "tidal", "name": "Tidal", "auth": "oauth", "accent": "cool"},
     {"domain": "qobuz", "name": "Qobuz", "auth": "form", "accent": "violet"},
     {"domain": "deezer", "name": "Deezer", "auth": "oauth", "accent": "warm"},
@@ -495,8 +495,23 @@ async def provider_setup_form(provider: str) -> Optional[dict[str, Any]]:
     return {**meta, "fields": fields}
 
 
-async def save_provider(provider: str, values: dict[str, Any]) -> Optional[dict[str, Any]]:
-    """Persist a new provider instance in MA. Returns the saved config or None."""
+async def provider_instance_id(provider: str) -> Optional[str]:
+    """The instance_id of the currently configured instance for a provider domain,
+    or None if the provider isn't configured. Used to UPDATE an existing instance
+    in-place (re-connect / cookie refresh) instead of creating a duplicate."""
+    for p in (await _ma("config/providers") or []):
+        if isinstance(p, dict) and p.get("domain") == provider:
+            return p.get("instance_id") or p.get("id")
+    return None
+
+
+async def save_provider(provider: str, values: dict[str, Any],
+                        instance_id: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """Persist a provider instance in MA. Returns the saved config or None.
+
+    Pass ``instance_id`` to UPDATE that existing instance in place (MA otherwise
+    mints a new instance on every save — which duplicates the provider on a
+    re-connect or a cookie refresh)."""
     # Merge the caller's values over MA's defaults so unspecified fields are valid.
     entries = await _ma("config/providers/get_entries", provider_domain=provider) or []
     merged = {e["key"]: e.get("default_value") for e in entries
@@ -507,7 +522,10 @@ async def save_provider(provider: str, values: dict[str, Any]) -> Optional[dict[
         # the phone sent (the field is hidden from that form). Reachability is
         # checked by the phone save endpoint so the user gets an accurate message.
         merged[_YTMUSIC_POTOKEN_KEY] = _ytmusic_potoken_url()
-    saved = await _ma("config/providers/save", provider_domain=provider, values=merged)
+    args: dict[str, Any] = {"provider_domain": provider, "values": merged}
+    if instance_id:
+        args["instance_id"] = instance_id
+    saved = await _ma("config/providers/save", **args)
     return saved if isinstance(saved, dict) else None
 
 

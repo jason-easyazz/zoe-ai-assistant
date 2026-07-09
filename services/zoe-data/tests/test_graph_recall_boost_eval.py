@@ -315,7 +315,7 @@ async def test_graph_depth_by_pid_builds_neighbourhood_when_flags_on(monkeypatch
     import contextlib
 
     import db_pool
-    import person_extractor
+    import memory_extractor
     import relationship_graph
 
     monkeypatch.setenv("ZOE_RELATIONSHIP_GRAPH_ENABLED", "1")
@@ -337,7 +337,8 @@ async def test_graph_depth_by_pid_builds_neighbourhood_when_flags_on(monkeypatch
         ]
 
     monkeypatch.setattr(db_pool, "get_db_ctx", _fake_db_ctx)
-    monkeypatch.setattr(person_extractor, "_resolve_person_uuid", _fake_resolve)
+    # boost now resolves via the ambiguity-safe resolver (fix 2026-07-09)
+    monkeypatch.setattr(memory_extractor, "_resolve_unique_person_uuid", _fake_resolve)
     monkeypatch.setattr(relationship_graph, "neighbors", _fake_neighbors)
 
     service = _make_service()
