@@ -1,0 +1,10 @@
+# Belt-and-suspenders: the rig's secret/profile artifacts default to
+# ~/.zoe-ytmusic (outside the repo). If an operator ever points
+# ZOE_YTMUSIC_SECRET_DIR inside this folder, never commit any of it.
+profile/
+*.header
+cookie*
+*.instance_id
+anti_bot_probe.png
+__pycache__/
+*.pyc

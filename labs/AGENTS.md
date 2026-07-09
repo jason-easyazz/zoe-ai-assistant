@@ -89,3 +89,14 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
   request can't impersonate; `auth.resolve_acting_user`). Unlinked senders are told
   their id and refused (never reach the brain as a real user). Ships the opt-in unit
   template above. Hand-started, demo-only; README is a record, not a contract.
+- `ytmusic-signin/` — friendlier YouTube Music sign-in spike: a phone-drivable
+  remote browser (Xvfb + x11vnc localhost + noVNC/websockify LAN, reusing
+  **CloakBrowser** headful persistent-profile Chromium with an open CDP port) the
+  human signs into themselves, then auto-harvest of the auth cookie (asserts
+  `__Secure-3PAPISID`, secret kept 0600 under `~/.zoe-ytmusic/`, never in repo) and
+  a reversible save into Music Assistant's `ytmusic` provider via a **read-only**
+  import of `services/zoe-data/music_service.py` (po_token URL auto-injected;
+  `ytmusic-potoken` :4416). No password is ever handled. Hand-started, not wired to
+  prod. Includes an anti-bot probe (observed: REACHED Google login, no block) and a
+  cookie auto-refresh design off the persistent profile. `README.md` is a record,
+  its own `AGENTS.md` states the Forbidden list.

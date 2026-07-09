@@ -1,0 +1,10 @@
+# Already installed on the Zoe host — pinned here for reproducibility.
+# CloakBrowser bundles its own stealth Chromium (146.x); no `playwright install` needed.
+cloakbrowser==0.3.28
+playwright==1.59.0
+
+# System packages (apt), NOT pip — the remote-view stack:
+#   sudo apt-get install -y xvfb x11vnc websockify novnc
+#
+# Additive container (already defined in docker-compose.modules.yml):
+#   docker compose -f docker-compose.modules.yml up -d ytmusic-potoken   # :4416
