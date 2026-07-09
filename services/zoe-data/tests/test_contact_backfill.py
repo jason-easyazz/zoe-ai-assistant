@@ -27,13 +27,16 @@ USER = "demo_backfill_user"  # a DEMO user — never a real person
 class _Ref:
     """Stand-in for MemoryService's MemoryRef (only .text / .metadata used)."""
 
-    def __init__(self, text, memory_type="person", entity_type="person", tags="person"):
+    def __init__(self, text, memory_type="person", entity_type="person",
+                 tags="person", owner=None):
         self.text = text
         self.metadata = {
             "memory_type": memory_type,
             "entity_type": entity_type,
             "tags": tags,
         }
+        if owner is not None:
+            self.metadata["user_id"] = owner  # memory-owner stamp
 
 
 class _Cursor:
@@ -244,6 +247,61 @@ async def test_fact_memories_are_now_a_source(monkeypatch):
         names = {s["pre_filled_slots"]["name"] for s in stored}
         assert names == {"Karen"}
         assert res["candidates"] == 1 and res["proposed"] == 1
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_shared_memory_owned_by_other_user_is_excluded(monkeypatch):
+    # Security: load_for_prompt also returns family-SHARED rows owned by other
+    # users. Broadening to fact/relationship must NOT leak another household
+    # member's known people as this user's contact candidates.
+    monkeypatch.setenv("ZOE_CONTACT_BACKFILL_ENABLED", "1")
+    db = await _open()
+    try:
+        mems = [
+            # Owned by another user, shared into this user's context → excluded.
+            _Ref("Bob is Andrew's colleague.", memory_type="relationship",
+                 entity_type="", tags="", owner="andrew"),
+            # This user's own fact → still proposed.
+            _Ref("Karen loves tea.", memory_type="fact",
+                 entity_type="", tags="", owner=USER),
+        ]
+        _fake_memory_source(monkeypatch, mems)
+        _use_db(monkeypatch, db)
+        _no_llm(monkeypatch)
+        stored = _capture_store(monkeypatch)
+
+        await cb.backfill_contacts(USER)
+
+        names = {s["pre_filled_slots"]["name"] for s in stored}
+        assert names == {"Karen"}   # Bob (Andrew's) never proposed under this user
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_full_name_of_self_is_filtered(monkeypatch):
+    # The self-filter also drops a full name whose first token is the user id
+    # ("jason" → "Jason Smith"), while keeping an unrelated prefix ("Jan").
+    monkeypatch.setenv("ZOE_CONTACT_BACKFILL_ENABLED", "1")
+    db = await _open()
+    try:
+        mems = [_Ref("Jan loves tea."), _Ref("Karen loves tea.")]
+        _fake_memory_source(monkeypatch, mems)
+        _use_db(monkeypatch, db)
+
+        async def _llm(_text):
+            return [("Jason Smith", None), ("Karen", "sister")]
+
+        monkeypatch.setattr(cb, "_llm_extract_people", _llm)
+        stored = _capture_store(monkeypatch)
+
+        await cb.backfill_contacts("jason")
+
+        names = {s["pre_filled_slots"]["name"] for s in stored}
+        assert "Jason Smith" not in names   # user's own full name → filtered
+        assert {"Jan", "Karen"} <= names    # unrelated people kept
     finally:
         await db.close()
 

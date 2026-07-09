@@ -170,13 +170,25 @@ def _extract_people(text: str) -> list[tuple[str, str | None]]:
 _PERSON_KNOWLEDGE_TYPES = frozenset({"person", "fact", "relationship"})
 
 
-def _is_person_knowledge_memory(ref) -> bool:
+def _is_person_knowledge_memory(ref, user_id: str) -> bool:
     """True for MemPalace rows whose text may name a person the user knows.
 
     Accepts ``person`` / ``fact`` / ``relationship`` memory types plus any row
     carrying an explicit person entity-type or ``person`` tag.
+
+    Ownership gate (Phase 2b.2 security): ``load_for_prompt`` also returns
+    family-SHARED rows owned by OTHER users (``visibility == "family"``), so
+    broadening to ``fact`` / ``relationship`` could otherwise leak another
+    household member's known people as this user's contact candidates (e.g.
+    "Bob is Andrew's colleague" surfacing under Jason). Only extract from rows
+    this user owns — a row whose metadata ``user_id`` names a DIFFERENT user is
+    rejected. Rows with no owner in metadata are treated as the caller's
+    (back-compat with legacy person rows that predate owner stamping).
     """
     md = getattr(ref, "metadata", None) or {}
+    owner = str(md.get("user_id") or "").strip().lower()
+    if owner and owner != str(user_id or "").strip().lower():
+        return False
     if str(md.get("memory_type", "")).strip().lower() in _PERSON_KNOWLEDGE_TYPES:
         return True
     if str(md.get("entity_type", "")).strip().lower() in ("person", "person_pending"):
@@ -349,7 +361,7 @@ async def backfill_contacts(
     knowledge_texts = [
         (getattr(ref, "text", "") or "").strip()
         for ref in refs
-        if _is_person_knowledge_memory(ref)
+        if _is_person_knowledge_memory(ref, user_id)
     ]
     knowledge_texts = [t for t in knowledge_texts if t]
 
@@ -368,7 +380,12 @@ async def backfill_contacts(
         if not name or not _looks_like_person_name(name):
             return
         key = name.lower()
-        if key == self_name:
+        # Skip the user themselves: an exact full-name match OR the extracted
+        # name's FIRST token equal to the user id — so user "jason" also drops a
+        # "Jason Smith" pulled from portrait/fact prose, not just a bare "Jason".
+        # A mere prefix ("Jan") is still kept (its first token "jan" != "jason").
+        first = key.split()[0] if key.split() else key
+        if key == self_name or first == self_name:
             return
         existing = people.get(key)
         if existing is None:
