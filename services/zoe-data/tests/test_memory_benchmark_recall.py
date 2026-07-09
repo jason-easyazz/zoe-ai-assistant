@@ -19,7 +19,8 @@ Query classes (the LongMemEval/LOCOMO taxonomy):
   - single-hop     — the directly-relevant fact tops the list.
   - temporal       — most-recent-wins when a fact is updated/superseded.
   - multi-hop      — the answer lives 1-2 graph hops from the named person.
-  - isolation      — cross-user rows never leak into a caller's recall.
+  - preference     — a preference-typed fact outranks a slightly-nearer plain one.
+  - isolation      — cross-user rows never leak; the shared-``wing`` lane still recalls.
   - dedup          — the canonical fact beats a near-duplicate/stale variant.
 
 Each class asserts a floor (a ranker regression trips it) and the scorecard test
@@ -58,6 +59,7 @@ class Row:
     confidence: float = 0.9
     access_count: int = 0
     expires_at: str | None = None
+    wing: str | None = None  # shared-lane owner; recall lane distinct from user_id
 
     def metadata(self) -> dict:
         md = {
@@ -74,6 +76,8 @@ class Row:
             md["entity_id"] = self.entity_id
         if self.expires_at is not None:
             md["expires_at"] = self.expires_at
+        if self.wing is not None:
+            md["wing"] = self.wing
         return md
 
 
@@ -95,11 +99,11 @@ class _FakeCollection:
         if clauses:
             def _match(r: Row) -> bool:
                 for c in clauses:
-                    if c.get("user_id") == r.user_id:
+                    if "user_id" in c and c["user_id"] == r.user_id:
                         return True
-                    if c.get("wing") == r.user_id:
+                    if "wing" in c and c["wing"] == r.wing:
                         return True
-                    if c.get("visibility") and c["visibility"] == r.visibility:
+                    if "visibility" in c and c["visibility"] == r.visibility:
                         return True
                 return False
 
@@ -220,6 +224,23 @@ CASES: list[Case] = [
         {"m2_ans"}, depth_by_pid={"pid_me": 0, "pid_priya": 1},
     ),
 
+    # ── preference: a preference-typed fact outranks a slightly-nearer plain ──
+    # The preference fact is FARTHER in vector space than the plain distractor,
+    # so only the preference/importance blend signal can lift it to the top. Query
+    # text shares no content tokens with either candidate → keyword arm neutral.
+    Case(
+        "preference", "what are my seating preferences",
+        [Row("p1_ans", "I prefer window seats", 0.40, memory_type="preference"),
+         Row("p1_plain", "Window cleaning is on Tuesday", 0.38)],
+        {"p1_ans"}, note="preference lift beats a nearer plain fact",
+    ),
+    Case(
+        "preference", "which beverage do I enjoy",
+        [Row("p2_ans", "I like my tea with no sugar", 0.40, memory_type="preference"),
+         Row("p2_plain", "The kettle was descaled recently", 0.38)],
+        {"p2_ans"}, note="preference-typed row wins over a nearer plain one",
+    ),
+
     # ── isolation: another user's rows must NEVER surface for the caller ──────
     Case(
         "isolation", "what is the launch code",
@@ -233,6 +254,16 @@ CASES: list[Case] = [
         [Row("i2_ans", "My bank pin is 8842", 0.30),
          Row("i2_leak", "My bank pin is 0000", 0.10, user_id=OTHER)],
         {"i2_ans"}, note="a far-nearer intruder row must not win",
+    ),
+    # wing lane: a row owned by another user but SHARED into the caller's wing is
+    # a legitimate recall (wing == caller), while a plain other-user row is not.
+    # Proves the wing visibility path is exercised, not just user_id.
+    Case(
+        "isolation", "what is the shared vault code",
+        [Row("i3_wing", "The shared vault code is FAMILY-7", 0.25,
+             user_id=OTHER, wing=USER),
+         Row("i3_leak", "The shared vault code is PRIVATE-9", 0.15, user_id=OTHER)],
+        {"i3_wing"}, note="wing-shared row recalls; a plain intruder row does not",
     ),
 
     # ── dedup: the canonical fact beats a near-duplicate / stale variant ──────
@@ -289,11 +320,21 @@ def test_isolation_no_cross_user_leak():
     for c in [x for x in CASES if x.cls == "isolation"]:
         rows = _run(c)
         ids = [r.id for r in rows]
+        # A row is a leak only if it is visible via NONE of the supported lanes
+        # (own user_id, shared wing, or family visibility) — mirrors
+        # _memory_visible_to_user, so a wing-shared row is not counted as a leak.
         leaked = [r.id for r in rows
-                  if str(r.metadata.get("user_id")) not in (USER,)
+                  if str(r.metadata.get("user_id")) != USER
+                  and str(r.metadata.get("wing")) != USER
                   and str(r.metadata.get("visibility")) != "family"]
         assert not leaked, f"{c.query!r}: cross-user leak {leaked}"
         assert set(ids) & c.relevant == c.relevant, f"{c.query!r}: caller row missing {ids}"
+
+
+def test_preference_lift():
+    for c in [x for x in CASES if x.cls == "preference"]:
+        rows = _run(c)
+        assert rows and rows[0].id in c.relevant, f"{c.query!r}: {[r.id for r in rows]}"
 
 
 def test_dedup_canonical_beats_near_duplicate():
@@ -306,7 +347,7 @@ def test_dedup_canonical_beats_near_duplicate():
 
 # ── the scorecard: per-class P@5 / R@5 / Hit@1 + overall (the growable number) ─
 def test_benchmark_scorecard(capsys):
-    classes = ["single-hop", "temporal", "multi-hop", "isolation", "dedup"]
+    classes = ["single-hop", "temporal", "multi-hop", "preference", "isolation", "dedup"]
     per_class: dict[str, list[tuple[float, float, int]]] = {c: [] for c in classes}
 
     for c in CASES:
