@@ -32,10 +32,10 @@ each GBrain idea against Zoe's actual code:
 | Hybrid search (vector + BM25 + fusion) | `memory_service._semantic_search._blend` fuses **6 additive signals** — semantic distance, keyword overlap, salience, confidence, decay, recency — flag `ZOE_HYBRID_RETRIEVAL_ENABLED=1` (`memory_service.py:1223-1265`) | ✅ live |
 | Salience scoring | `hotness = 0.05·log1p(access_count)`; access ticked on every recall (`memory_service.py:1241`, `:1402 tick_access`) | ✅ live |
 | Time-decay / freshness | 70-day half-life `exp(-λ·age)` (`memory_service.py:1214,1240`) | ✅ live |
-| "Dream cycle" idle enrichment | `MEMORY_DIGEST_ENABLED` + `memory_digest.py` | ✅ live (partial — see §7) |
+| "Dream cycle" idle enrichment | `MEMORY_DIGEST_ENABLED` + `memory_digest.py` | ✅ live (partial — see §6) |
 | Recall injection into the prompt | `ZOE_SEAM_RECALL_INJECT=true` (`zoe_flue_client._recall_context_block`) | ✅ live |
 | Local-first / private | Whole stack local; GBrain **defaults to hosted embeddings (ZeroEntropy)** | ✅ Zoe ahead (a rock) |
-| **Knowledge-graph adjacency in retrieval** | Graph exists (`relationship_graph.neighbors`, `GET /people/{id}/graph`, ADR #1022) but **`_semantic_search` never calls it** | ❌ **the gap** |
+| **Knowledge-graph adjacency in retrieval** | Graph exists (`relationship_graph.neighbors`, `GET /people/{id}/graph`, [`ADR-relationship-memory`](../adr/ADR-relationship-memory.md)) but **`_semantic_search` never calls it** | ❌ **the gap** |
 
 GBrain's headline benchmark is **+31.4 P@5 from its graph over vector-only RAG**
 — which is precisely the one signal Zoe has built and does not use. That number
