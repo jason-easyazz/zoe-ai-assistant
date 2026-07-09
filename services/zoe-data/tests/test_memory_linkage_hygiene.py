@@ -280,6 +280,34 @@ async def test_exact_match_wins_over_longer_substring(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_first_name_links_to_full_name_contact(monkeypatch):
+    # First-name "Katie" → contact "Katie Brown": the extracted name is a whole
+    # token of the contact's name, so this legitimate link is kept.
+    import memory_extractor as me
+
+    db = await _open(people=[("katie-uuid", "Katie Brown")])
+    try:
+        et, eid = await me._resolve_person_link("Katie", USER, _DB(db))
+        assert et == "person" and eid == "katie-uuid"
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_sub_token_substring_stays_pending(monkeypatch):
+    # "Al" is a sub-token of "Alice" (not a whole name token) — hard-linking it
+    # would attach the fact to the wrong person, so it stays pending.
+    import memory_extractor as me
+
+    db = await _open(people=[("alice-uuid", "Alice")])
+    try:
+        et, eid = await me._resolve_person_link("Al", USER, _DB(db))
+        assert et == "person_pending" and eid == "slug:al"
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
 async def test_non_person_fact_linkage_untouched(monkeypatch):
     # A plain user fact carries no entity link and must not open a DB / resolve.
     import memory_extractor as me

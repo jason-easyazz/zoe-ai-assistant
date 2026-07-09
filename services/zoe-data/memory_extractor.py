@@ -389,11 +389,17 @@ async def _resolve_unique_person_uuid(name: str, user_id: str, db) -> Optional[s
     ``person_extractor._resolve_person_uuid`` does a substring ``LIKE`` and returns
     the FIRST row, so a short extracted name ("Sam") can silently hard-link to a
     longer contact ("Samantha"). For a HARD ``person`` link we require certainty:
-    prefer a unique exact (case-insensitive) name match; otherwise fall back to
-    the substring match only when it is the single candidate. Zero matches, or a
-    genuinely ambiguous set (>1 substring hit with no unique exact), returns None
-    so the caller keeps the fact ``person_pending`` rather than guess. Uses the
-    same dual placeholder idiom as ``_resolve_person_uuid``.
+
+    * a unique exact (case-insensitive) name match → link it;
+    * a single non-exact substring hit → link ONLY when the extracted name is a
+      whole NAME TOKEN of that contact (first-name "Katie" → "Katie Brown"),
+      never a mere sub-token ("Al" ⊂ "Alice"), which would attach the fact to
+      the wrong person;
+    * anything else (zero matches, a genuinely ambiguous set, or a sub-token
+      match) → None, so the caller keeps the fact ``person_pending`` rather than
+      guess.
+
+    Uses the same dual placeholder idiom as ``_resolve_person_uuid``.
     """
     name = (name or "").strip()
     if not name or not user_id or db is None:
@@ -424,7 +430,13 @@ async def _resolve_unique_person_uuid(name: str, user_id: str, db) -> Optional[s
     if len(exact) > 1:
         return None  # multiple contacts with the same exact name — don't guess
     if len(rows) == 1:
-        return str(rows[0][0])
+        # Single substring hit, no exact match. Accept it ONLY when the extracted
+        # name is a whole token of the contact's name ("Katie" → "Katie Brown"),
+        # never a sub-token ("Al" ⊂ "Alice") — a sub-token would hard-link the
+        # fact to the wrong person.
+        if target in str(rows[0][1] or "").lower().split():
+            return str(rows[0][0])
+        return None
     return None  # ambiguous substring set (e.g. "Sam" ⊂ {"Sam","Samantha"})
 
 
