@@ -1215,11 +1215,26 @@ def test_nowplaying_floating_bar_is_the_control_surface():
     assert 'id="skyNowPlaying"' in html
     for action in ("expand", "previous", "play_pause", "next", "volume_down", "volume_up"):
         assert f'data-np-action="{action}"' in html, f"missing bar action: {action}"
+    # Layout contract (owner retune): a centered transport groups prev · PLAY · next
+    # with play/pause as the mint HERO; the scrubber + volume + cast sit in the
+    # right-end cluster so the scrub reads toward the end and cast is dead-last.
+    assert 'class="snp-transport"' in html
+    assert 'class="snp-end"' in html
+    assert 'class="snp-btn snp-play" data-np-action="play_pause"' in html
+    # Hero play/pause is the largest control (~62px) and mint-accented.
+    assert ".snp-play {" in html and "width: 62px; height: 62px;" in html
+    assert "var(--sky-accent-mint, #5be3b0)" in html
     # Seek scrubber markup: elapsed · range · duration.
     assert 'id="skyNpScrubber"' in html
     assert 'class="snp-seek"' in html and 'type="range"' in html
     assert 'id="skyNpElapsed"' in html and 'id="skyNpDuration"' in html
     assert ".snp-scrubber" in html and ".snp-seek" in html
+    # The scrubber and cast/speaker button both live in the right-end cluster; the
+    # cast button is the LAST child of .snp-end (far-right, opens the picker).
+    end_block = html[html.index('class="snp-end"'):html.index('id="skyNpOutputs"')]
+    assert 'id="skyNpScrubber"' in end_block
+    assert 'data-music-output' in end_block
+    assert end_block.rindex('data-music-output') > end_block.rindex('class="snp-vol"')
     # CSS: centered floating pill by default; repositioned under the clock at rest.
     assert ".sky-nowplaying" in html
     assert "body.sky-empty .sky-nowplaying" in html
