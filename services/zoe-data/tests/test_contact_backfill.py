@@ -27,13 +27,18 @@ USER = "demo_backfill_user"  # a DEMO user — never a real person
 class _Ref:
     """Stand-in for MemoryService's MemoryRef (only .text / .metadata used)."""
 
-    def __init__(self, text, memory_type="person", entity_type="person", tags="person"):
+    def __init__(self, text, memory_type="person", entity_type="person",
+                 tags="person", owner=None, visibility=None):
         self.text = text
         self.metadata = {
             "memory_type": memory_type,
             "entity_type": entity_type,
             "tags": tags,
         }
+        if owner is not None:
+            self.metadata["user_id"] = owner  # memory-owner stamp
+        if visibility is not None:
+            self.metadata["visibility"] = visibility
 
 
 class _Cursor:
@@ -65,7 +70,7 @@ class _DB:
         return _Cursor(rows)
 
 
-async def _open(existing=()):
+async def _open(existing=(), users=None):
     db = await aiosqlite.connect(":memory:")
     await db.execute(
         """CREATE TABLE people (
@@ -78,6 +83,10 @@ async def _open(existing=()):
             "INSERT INTO people (id, user_id, name, deleted) VALUES (?,?,?,0)",
             (f"p{i}", USER, nm),
         )
+    if users:  # {user_id: canonical_name} → a minimal users table
+        await db.execute("CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT)")
+        for uid, nm in users.items():
+            await db.execute("INSERT INTO users (id, name) VALUES (?,?)", (uid, nm))
     await db.commit()
     return db
 
@@ -124,6 +133,17 @@ def _use_db(monkeypatch, db):
     monkeypatch.setattr(person_extractor, "_ensure_db", _ensure)
 
 
+def _no_llm(monkeypatch):
+    """Stub the LLM extraction pass to a no-op so these regex-only tests never
+    touch the network. (LLM-driven behaviour is covered in
+    test_contact_backfill_llm.py.)"""
+
+    async def _empty(_text):
+        return []
+
+    monkeypatch.setattr(cb, "_llm_extract_people", _empty)
+
+
 _MEMS = [
     _Ref("Janice is Jason's mother."),
     _Ref("Niel (father)"),
@@ -148,6 +168,7 @@ async def test_flag_on_emits_person_create_for_new_names(monkeypatch):
     try:
         _fake_memory_source(monkeypatch, _MEMS)
         _use_db(monkeypatch, db)
+        _no_llm(monkeypatch)
         stored = _capture_store(monkeypatch)
 
         res = await cb.backfill_contacts(USER)
@@ -178,6 +199,7 @@ async def test_existing_contacts_are_skipped(monkeypatch):
     try:
         _fake_memory_source(monkeypatch, _MEMS)
         _use_db(monkeypatch, db)
+        _no_llm(monkeypatch)
         stored = _capture_store(monkeypatch)
 
         res = await cb.backfill_contacts(USER)
@@ -202,6 +224,7 @@ async def test_self_name_filter_is_exact_not_prefix(monkeypatch):
         mems = [_Ref("Jan loves tea."), _Ref("Jason works at Acme.")]
         _fake_memory_source(monkeypatch, mems)
         _use_db(monkeypatch, db)
+        _no_llm(monkeypatch)
         stored = _capture_store(monkeypatch)
 
         await cb.backfill_contacts("jason")  # user_id "jason"
@@ -214,14 +237,189 @@ async def test_self_name_filter_is_exact_not_prefix(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_non_person_memories_ignored(monkeypatch):
+async def test_fact_memories_are_now_a_source(monkeypatch):
+    # Phase 2b.2 broadened the net: `fact` (and `relationship`) memories feed
+    # backfill, because family most often lives there — not just `person` rows.
     monkeypatch.setenv("ZOE_CONTACT_BACKFILL_ENABLED", "1")
     db = await _open()
     try:
-        # A fact-type memory naming someone should not feed the person backfill.
         mems = [_Ref("Karen loves tea.", memory_type="fact", entity_type="", tags="")]
         _fake_memory_source(monkeypatch, mems)
         _use_db(monkeypatch, db)
+        _no_llm(monkeypatch)
+        stored = _capture_store(monkeypatch)
+
+        res = await cb.backfill_contacts(USER)
+        names = {s["pre_filled_slots"]["name"] for s in stored}
+        assert names == {"Karen"}
+        assert res["candidates"] == 1 and res["proposed"] == 1
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_shared_memory_owned_by_other_user_is_excluded(monkeypatch):
+    # Security: load_for_prompt also returns family-SHARED rows owned by other
+    # users. Broadening to fact/relationship must NOT leak another household
+    # member's known people as this user's contact candidates.
+    monkeypatch.setenv("ZOE_CONTACT_BACKFILL_ENABLED", "1")
+    db = await _open()
+    try:
+        mems = [
+            # Owned by another user, shared into this user's context → excluded.
+            _Ref("Bob is Andrew's colleague.", memory_type="relationship",
+                 entity_type="", tags="", owner="andrew"),
+            # This user's own fact → still proposed.
+            _Ref("Karen loves tea.", memory_type="fact",
+                 entity_type="", tags="", owner=USER),
+        ]
+        _fake_memory_source(monkeypatch, mems)
+        _use_db(monkeypatch, db)
+        _no_llm(monkeypatch)
+        stored = _capture_store(monkeypatch)
+
+        await cb.backfill_contacts(USER)
+
+        names = {s["pre_filled_slots"]["name"] for s in stored}
+        assert names == {"Karen"}   # Bob (Andrew's) never proposed under this user
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_ownerless_shared_row_is_excluded(monkeypatch):
+    # An OWNERLESS but family/shared-visible row can belong to another household
+    # user (load_for_prompt returns family-visible rows). It must not feed
+    # backfill even without an owner stamp; only truly private ownerless rows do.
+    monkeypatch.setenv("ZOE_CONTACT_BACKFILL_ENABLED", "1")
+    db = await _open()
+    try:
+        mems = [
+            _Ref("Bob is Andrew's colleague.", memory_type="relationship",
+                 entity_type="", tags="", visibility="family"),   # ownerless + shared
+            _Ref("Karen loves tea.", memory_type="fact",
+                 entity_type="", tags=""),                        # ownerless + private
+        ]
+        _fake_memory_source(monkeypatch, mems)
+        _use_db(monkeypatch, db)
+        _no_llm(monkeypatch)
+        stored = _capture_store(monkeypatch)
+
+        await cb.backfill_contacts(USER)
+
+        names = {s["pre_filled_slots"]["name"] for s in stored}
+        assert names == {"Karen"}   # shared Bob excluded; private Karen kept
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_full_name_of_self_is_filtered(monkeypatch):
+    # The self-filter also drops a full name whose first token is the user id
+    # ("jason" → "Jason Smith"), while keeping an unrelated prefix ("Jan").
+    monkeypatch.setenv("ZOE_CONTACT_BACKFILL_ENABLED", "1")
+    db = await _open()
+    try:
+        mems = [_Ref("Jan loves tea."), _Ref("Karen loves tea.")]
+        _fake_memory_source(monkeypatch, mems)
+        _use_db(monkeypatch, db)
+
+        async def _llm(_text):
+            return [("Jason Smith", None), ("Karen", "sister")]
+
+        monkeypatch.setattr(cb, "_llm_extract_people", _llm)
+        stored = _capture_store(monkeypatch)
+
+        await cb.backfill_contacts("jason")
+
+        names = {s["pre_filled_slots"]["name"] for s in stored}
+        assert "Jason Smith" not in names   # user's own full name → filtered
+        assert {"Jan", "Karen"} <= names    # unrelated people kept
+    finally:
+        await db.close()
+
+
+@pytest.mark.parametrize("uid", ["jason", "jason_2", "jason.smith"])
+@pytest.mark.asyncio
+async def test_self_filter_handles_slug_and_suffixed_ids(monkeypatch, uid):
+    # Username-derived / suffixed ids still filter the user's own name from
+    # portrait/fact prose ("jason_2" / "jason.smith" → drop "Jason Smith"),
+    # while keeping unrelated people.
+    monkeypatch.setenv("ZOE_CONTACT_BACKFILL_ENABLED", "1")
+    db = await _open()
+    try:
+        _fake_memory_source(monkeypatch, [_Ref("Karen loves tea.")])
+        _use_db(monkeypatch, db)
+
+        async def _llm(_text):
+            return [("Jason Smith", None), ("Jason", None), ("Karen", "sister")]
+
+        monkeypatch.setattr(cb, "_llm_extract_people", _llm)
+        stored = _capture_store(monkeypatch)
+
+        await cb.backfill_contacts(uid)
+
+        names = {s["pre_filled_slots"]["name"] for s in stored}
+        assert "Jason Smith" not in names and "Jason" not in names
+        assert "Karen" in names
+    finally:
+        await db.close()
+
+
+def test_self_identity_tokens():
+    assert cb._self_identity_tokens("jason") == frozenset({"jason"})
+    assert cb._self_identity_tokens("jason_2") == frozenset({"jason"})
+    assert cb._self_identity_tokens("jason.smith") == frozenset({"jason", "smith"})
+
+
+@pytest.mark.asyncio
+async def test_self_filter_uses_canonical_name_for_handle_id(monkeypatch):
+    # A handle id ("easyazz") shares no token with the user's real name, so the
+    # canonical `users.name` ("Jason Smith") is folded into the self-filter and
+    # the user's own name from portrait/fact prose is still dropped.
+    monkeypatch.setenv("ZOE_CONTACT_BACKFILL_ENABLED", "1")
+    db = await _open(users={"easyazz": "Jason Smith"})
+    try:
+        _fake_memory_source(monkeypatch, [_Ref("Karen loves tea.")])
+        _use_db(monkeypatch, db)
+
+        async def _llm(_text):
+            return [("Jason", None), ("Karen", "sister")]
+
+        monkeypatch.setattr(cb, "_llm_extract_people", _llm)
+        stored = _capture_store(monkeypatch)
+
+        await cb.backfill_contacts("easyazz")
+
+        names = {s["pre_filled_slots"]["name"] for s in stored}
+        assert "Jason" not in names   # own name recognised via canonical users.name
+        assert "Karen" in names
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_canonical_name_tokens_missing_users_table_is_graceful(monkeypatch):
+    # No users table → best-effort empty set, backfill still runs on id tokens.
+    db = await _open()
+    try:
+        toks = await cb._canonical_name_tokens("easyazz", _DB(db))
+        assert toks == frozenset()
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_unrelated_memory_type_ignored(monkeypatch):
+    # A memory whose type isn't person/fact/relationship and carries no person
+    # entity/tag signal must NOT feed backfill (e.g. an `insight` row).
+    monkeypatch.setenv("ZOE_CONTACT_BACKFILL_ENABLED", "1")
+    db = await _open()
+    try:
+        mems = [_Ref("Karen loves tea.", memory_type="insight", entity_type="", tags="")]
+        _fake_memory_source(monkeypatch, mems)
+        _use_db(monkeypatch, db)
+        _no_llm(monkeypatch)
         stored = _capture_store(monkeypatch)
 
         res = await cb.backfill_contacts(USER)
