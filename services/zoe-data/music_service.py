@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any, Optional
 
 import httpx
@@ -20,6 +21,27 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _TIMEOUT_S = 5.0
+
+# Google-hosted album art (YouTube Music / googleusercontent) carries an inline
+# `=w<W>-h<H>-...` size directive. MA hands us a small thumbnail; the panel's
+# hero art + bar thumb want the crispest square, so bump the directive. Other
+# hosts (MA's image proxy, radio-station logos) have no such param → untouched.
+_ART_SIZE_RE = re.compile(r"=w\d+-h\d+(?:-[a-z0-9-]+)*$", re.I)
+
+
+def _hi_res_art(url: str) -> str:
+    if not isinstance(url, str) or "googleusercontent.com" not in url:
+        return url
+    return _ART_SIZE_RE.sub("=w544-h544", url) if _ART_SIZE_RE.search(url) else url
+
+
+def _as_seconds(value: Any) -> Optional[float]:
+    """Coerce an MA progress/length field to a non-negative float, else None."""
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return None
+    return n if n >= 0 else None
 
 # YouTube Music needs a companion PO-token generator (the bgutil provider) that
 # MA pings at `po_token_server_url` (MA's own default is http://127.0.0.1:4416).
@@ -138,6 +160,14 @@ async def now_playing(player_id: str = "") -> Optional[dict[str, Any]]:
             break
     artists = media.get("artists") or []
     artist = ", ".join(a.get("name", "") for a in artists if isinstance(a, dict)) if artists else (media.get("artist") or "")
+    safe_image = image if isinstance(image, str) and image.startswith(("http://", "https://", "/")) else ""
+    # Progress lives on the queue (elapsed_time); track length on the current item
+    # (QueueItem.duration, else the media item's own duration). The bar/card seek
+    # + scrubber render only when both are known (radio has neither → no scrubber).
+    elapsed = _as_seconds((queue or {}).get("elapsed_time"))
+    duration = _as_seconds(cur.get("duration") if isinstance(cur, dict) else None)
+    if duration is None:
+        duration = _as_seconds(media.get("duration"))
     return {
         "player_id": pid,
         "player_name": player.get("display_name") or player.get("name") or "Speaker",
@@ -145,10 +175,12 @@ async def now_playing(player_id: str = "") -> Optional[dict[str, Any]]:
         "title": media.get("name") or "",
         "artist": artist,
         "album": (media.get("album") or {}).get("name", "") if isinstance(media.get("album"), dict) else (media.get("album") or ""),
-        "image": image if isinstance(image, str) and image.startswith(("http://", "https://", "/")) else "",
+        "image": _hi_res_art(safe_image),
         "volume": player.get("volume_level"),
         "queue_id": pid,
         "shuffle": bool((queue or {}).get("shuffle_enabled")),
+        "elapsed": elapsed,
+        "duration": duration,
     }
 
 
@@ -193,6 +225,26 @@ async def control(action: str, player_id: str = "", value: Any = None) -> bool:
         await _ma(_PLAYER_CMDS[action], player_id=pid)
         return True
     return False
+
+
+async def seek(position_seconds: Any, player_id: str = "") -> bool:
+    """Seek the target player's current track to an absolute position (seconds).
+    Best-effort — a bad position or a dead MA just no-ops; never raises. MA's
+    `player_queues/seek` takes {queue_id, position}; queue_id == player_id for a
+    solo player (see `now_playing`)."""
+    try:
+        pos = max(0, int(position_seconds))
+    except (TypeError, ValueError):
+        return False
+    players = await get_players()
+    player = _pick_player(players, player_id)
+    if player is None:
+        return False
+    pid = player.get("player_id", "")
+    if not pid:
+        return False
+    await _ma("player_queues/seek", queue_id=pid, position=pos)
+    return True
 
 
 async def transfer(target_player_id: str, source_player_id: str = "") -> bool:
@@ -247,9 +299,11 @@ async def search_and_play(query: str, player_id: str = "") -> Optional[dict[str,
 # ── Skybridge card + resolver ────────────────────────────────────────────────
 
 def now_playing_card(np: dict[str, Any]) -> dict[str, Any]:
-    """A Skybridge now-playing card. The renderer builds the SVG transport row
-    from `state` (its buttons re-enter the resolver via data-sky-action=query,
-    so tap and voice share one path) — transport is UI, not server data."""
+    """A Skybridge now-playing *canvas* card: album-art-forward display only.
+    Transport + volume + seek + the speaker picker all live on the floating
+    control bar (the single control surface); this card carries no controls,
+    just the hero art, track meta, a display-only progress bar, and an "Up next"
+    queue the panel hydrates from `queue_id`."""
     return {
         "card_type": "now_playing",
         "schema_version": "1.0.0",
@@ -263,7 +317,9 @@ def now_playing_card(np: dict[str, Any]) -> dict[str, Any]:
             "player_name": np.get("player_name") or "",
             "state": np.get("state") or "idle",
             "volume": np.get("volume"),
-            "transport": True,
+            "elapsed": np.get("elapsed"),
+            "duration": np.get("duration"),
+            "queue_id": np.get("queue_id") or np.get("player_id") or "",
         },
     }
 

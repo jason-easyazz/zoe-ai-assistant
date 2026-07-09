@@ -72,11 +72,31 @@
     }
 
     function renderAuthChallenge(props) {
-        const title = escapeHtml(props.title || "Who's here?");
-        const sub = escapeHtml(props.body || props.summary || 'Tap your profile to continue.');
+        const title = escapeHtml(props.title || 'Welcome home');
+        const sub = escapeHtml(props.body || props.summary || 'Tap your profile to sign in.');
+        // A calm, glanceable backdrop so the picker never reads as a stranded
+        // dialog: a soft greeting + a LIVE clock. Reusing the shared .sky-live-clock
+        // hooks means skybridge.js's 1s ticker keeps the numerals current for free
+        // (updateAllClocks queries [data-clock-*] under any .sky-live-clock).
+        const parts = clockParts('');
+        const greet = escapeHtml(clockGreeting(''));
+        const clockHtml = [
+            '<div class="sky-authx-clock sky-live-clock" aria-hidden="true">',
+            '<span class="sky-authx-greet">' + greet + '</span>',
+            '<span class="sky-authx-time tnum"><span data-clock-hour>' + escapeHtml(parts.hour) + '</span>',
+            '<i class="sky-authx-colon">:</i><span data-clock-minute>' + escapeHtml(parts.minute) + '</span>',
+            '<b data-clock-meridiem>' + escapeHtml(parts.dayPeriod) + '</b></span>',
+            '<span class="sky-authx-date" data-clock-date>' + escapeHtml(parts.date) + '</span>',
+            '</div>'
+        ].join('');
         const bodyHtml = [
             '<div class="sky-auth-scene sky-auth-people-only">',
+            // Soft ambient aura behind the whole picker — a warm Zoe presence
+            // (decorative only).
+            '<div class="sky-authx-aura" aria-hidden="true"></div>',
+            clockHtml,
             '<div class="sky-authx-head">',
+            '<span class="sky-authx-orb" aria-hidden="true"></span>',
             '<span class="sky-authx-kicker">' + escapeHtml(props.kicker || 'Sign in') + '</span>',
             '<h2 class="sky-authx-title">' + title + '</h2>',
             '<p class="sky-authx-sub">' + sub + '</p>',
@@ -100,24 +120,28 @@
         const id = escapeHtml(props.timer_id || props.id || '');
         const expired = props.status === 'expired' || remaining <= 0;
         const lowClass = (!expired && frac <= 0.15) ? ' is-low' : '';
-        // The fill is the card's border: a rounded-rect stroke whose visible length
-        // tracks the time left (pathLength=100 → offset is just the spent percent).
+        // Progress is a straight horizontal bar spanning the card, NOT a rounded-rect
+        // perimeter (that fragmented under the card's non-uniform scale). It still
+        // keeps pathLength=100 + stroke-dasharray=100 so skybridge.js timerTick can
+        // drive stroke-dashoffset = spent% on .sky-timer-ring-fill UNCHANGED; a
+        // straight line has no corners to distort, so the fill stays smooth.
         const offset = (100 * (1 - frac)).toFixed(2);
-        const ring = [
-            '<svg class="sky-timer-ring" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">',
-            '<rect class="sky-timer-ring-track" x="2" y="2" width="96" height="96" rx="9" ry="9" pathLength="100"></rect>',
-            '<rect class="sky-timer-ring-fill" x="2" y="2" width="96" height="96" rx="9" ry="9" pathLength="100" stroke-dasharray="100" stroke-dashoffset="' + offset + '"></rect>',
+        const bar = [
+            '<svg class="sky-timer-bar" viewBox="0 0 100 14" preserveAspectRatio="none" aria-hidden="true">',
+            '<line class="sky-timer-ring-track" x1="0" y1="7" x2="100" y2="7" pathLength="100"></line>',
+            '<line class="sky-timer-ring-fill" x1="0" y1="7" x2="100" y2="7" pathLength="100" stroke-dasharray="100" stroke-dashoffset="' + offset + '"></line>',
             '</svg>'
         ].join('');
         const body = [
             '<div class="sky-timer' + (expired ? ' is-expired' : '') + lowClass + '" data-timer-id="' + id + '"',
                 ' data-timer-expires="' + expires + '" data-timer-duration="' + dur + '"',
                 ' data-timer-status="' + (expired ? 'expired' : 'running') + '">',
-            ring,
             '<button type="button" class="sky-timer-x" data-timer-cancel="' + id + '" aria-label="' + (expired ? 'Dismiss timer' : 'Cancel timer') + '">✕</button>',
-            '<div class="sky-timer-center">',
+            '<div class="sky-timer-face">',
+            '<span class="sky-timer-label">' + escapeHtml(label) + '</span>',
             '<div class="sky-timer-digits">' + (expired ? "Time's up" : mm + ':' + ss) + '</div>',
-            '<div class="sky-timer-label">' + escapeHtml(label) + '</div>',
+            '<div class="sky-timer-progress">' + bar + '</div>',
+            '<span class="sky-timer-state" aria-hidden="true">' + (expired ? 'Tap anywhere to dismiss' : 'Counting down') + '</span>',
             '</div>',
             '</div>'
         ].join('');
@@ -154,14 +178,28 @@
         if (props.source === 'people_directory') return renderPeopleDirectory(props);
         if (props.source === 'person_profile') return renderPersonProfile(props);
         if (props.source === 'clock_show') return renderClock(props);
-        // Generic tail: kicker/title/status render on the cardFrame header as
-        // before; the body becomes a composed tree (optional metric Stat + text).
+        // Generic answer card (status/info/generic/stream_text): a spoken or typed
+        // reply Zoe could not route to a dedicated scene. ds1 fill-the-stage: an
+        // eyebrow + title, an optional hero metric, then the reply as generous
+        // prose — never a few words stranded in a black void.
         const message = props.body || props.message || '';
-        const children = [];
-        if (props.metric) children.push({ component: 'Stat', value: props.metric, label: props.metric_label || '' });
-        children.push(textNode(message, 'body'));
-        const tree = { component: 'Stack', gap: 'md', children: children };
-        return cardFrame(props, composedBody(tree, message), { wide: !!props.wide, tone: props.tone || '' });
+        const accent = gxAccent(props.tone, 'general');
+        const metric = props.metric != null && String(props.metric) !== '' ? String(props.metric) : '';
+        const metricLabel = props.metric_label || '';
+        const eyebrow = props.kicker || props.status || 'Zoe';
+        const figure = metric
+            ? '<div class="gx-figure"><span class="gx-figure-value tnum">' + escapeHtml(metric) + '</span>'
+                + (metricLabel ? '<span class="gx-figure-label">' + escapeHtml(metricLabel) + '</span>' : '')
+                + '</div>'
+            : '';
+        const prose = message
+            ? '<div class="gx-prose">' + gxProse(message) + '</div>'
+            : gxEmpty(glyphFor(props), 'All set', 'Ask Zoe anything and it will show up here.');
+        const inner = gxHead(eyebrow, props.title || 'Zoe', '')
+            + '<div class="gx-body gx-body--status">' + figure + prose + '</div>'
+            + gxActions(props.actions);
+        return cardFrame(Object.assign({}, props), gxScene(accent, 'gx-status-card', inner),
+            { wide: true, tone: 'gx-card gx-status', hideHeader: true, hideStatus: true, hideActions: true });
     }
 
     function formatCalendarDate(value) {
@@ -1265,67 +1303,155 @@
     }
 
 
+    // ── ds1 generic-scene helpers (fill-the-stage re-skin) ──────────────────
+    // The legacy generic renderers (status/page/setting/list/form/media/research/
+    // map) share one scene grammar so a plain text answer or a settings card fills
+    // the 1280×800 stage like the weather/calendar cards do — a header band
+    // (eyebrow + title + optional lede) over a body region that grows, plus an
+    // action footer built from the SAME buttonHtml so every tap + voice contract
+    // (data-sky-action / data-query / data-route) is unchanged. Producers are
+    // untouched; only the BODY markup changes. Styled by css/cards/generic.css.
+    function gxAccent(value, fallback) {
+        return accentClass(value, fallback || 'general');
+    }
+    function gxProse(text) {
+        const parts = String(text == null ? '' : text).split(/\n{2,}/).map(s => s.trim()).filter(Boolean);
+        if (!parts.length) return '';
+        return parts.map(p => '<p>' + escapeHtml(p).replace(/\n/g, '<br>') + '</p>').join('');
+    }
+    function gxHead(eyebrow, title, lede) {
+        return [
+            '<header class="gx-head">',
+            eyebrow ? '<span class="gx-eyebrow">' + escapeHtml(eyebrow) + '</span>' : '',
+            '<h2 class="gx-title">' + escapeHtml(title || 'Zoe') + '</h2>',
+            lede ? '<p class="gx-lede">' + escapeHtml(lede) + '</p>' : '',
+            '</header>'
+        ].join('');
+    }
+    function gxActions(actions) {
+        const list = Array.isArray(actions) ? actions.filter(Boolean) : [];
+        if (!list.length) return '';
+        return '<div class="sky-actions gx-actions">' + list.map(buttonHtml).join('') + '</div>';
+    }
+    function gxFacts(pairs) {
+        const cells = (pairs || [])
+            .filter(pair => pair && pair[1] != null && String(pair[1]) !== '')
+            .map(pair => '<div class="gx-fact"><span class="gx-fact-k">' + escapeHtml(pair[0])
+                + '</span><strong class="gx-fact-v">' + escapeHtml(pair[1]) + '</strong></div>')
+            .join('');
+        return cells ? '<div class="gx-facts">' + cells + '</div>' : '';
+    }
+    function gxScene(accent, extraClass, inner) {
+        return '<div class="gx-scene gx-accent-' + escapeHtml(gxAccent(accent))
+            + (extraClass ? ' ' + extraClass : '') + '">' + inner + '</div>';
+    }
+    function gxEmpty(glyphChar, title, sub) {
+        return [
+            '<div class="gx-empty">',
+            '<span class="gx-empty-mark" aria-hidden="true">' + escapeHtml(glyphChar || 'Z') + '</span>',
+            '<strong>' + escapeHtml(title || 'Nothing here yet') + '</strong>',
+            sub ? '<span>' + escapeHtml(sub) + '</span>' : '',
+            '</div>'
+        ].join('');
+    }
+
     function renderPage(props) {
-        const fields = [
-            ['Surface', props.title || 'Page'],
+        // A page/surface reference card — "here is a screen you can open".
+        const facts = [
             ['Best for', props.summary || 'Zoe context'],
             ['Mode', 'Open, summarize, or keep as context']
-        ].map(pair => listRowNode(pair[0], pair[1]));
+        ];
         var cardActions = [
             { label: 'Open page', route: props.route, type: 'open' },
-            { label: 'Show related settings', query: props.title + ' settings' }
+            { label: 'Show related settings', query: (props.title || 'this page') + ' settings' }
         ];
-        const tree = { component: 'Stack', gap: 'md', children: [
-            textNode(props.summary || '', 'body'),
-            { component: 'Stack', gap: 'sm', children: fields }
-        ] };
-        return cardFrame(Object.assign({}, props, { actions: cardActions, status: props.status || 'Surface' }), composedBody(tree, props.summary || ''), { wide: false, tone: 'page-card' });
+        const inner = gxHead('Surface', props.title || 'Page', props.summary || '')
+            + '<div class="gx-body">' + gxFacts(facts) + '</div>'
+            + gxActions(cardActions);
+        return cardFrame(Object.assign({}, props), gxScene('personal', 'gx-page-card', inner),
+            { wide: true, tone: 'gx-card gx-page', hideHeader: true, hideStatus: true, hideActions: true });
     }
 
     function renderSetting(props) {
         const risk = props.risk || 'low';
-        const changeLabel = risk === 'critical' ? 'Prepare change' : 'Change setting';
-        const fields = [
+        const critical = risk === 'critical';
+        const changeLabel = critical ? 'Prepare change' : 'Change setting';
+        const facts = [
             ['Risk', risk],
             ['Control area', props.domain || 'settings']
-        ].map(pair => listRowNode(pair[0], pair[1]));
+        ];
         var settingActions = [
             { label: 'Open settings', route: props.route, type: 'open' },
-            { label: changeLabel, query: 'change ' + props.title, kind: risk === 'critical' ? 'warn' : 'normal' }
+            { label: changeLabel, query: 'change ' + (props.title || 'this setting'), kind: critical ? 'warn' : 'normal' }
         ];
-        const tree = { component: 'Stack', gap: 'md', children: [
-            textNode(props.summary || '', 'body'),
-            { component: 'Stack', gap: 'sm', children: fields }
-        ] };
-        return cardFrame(Object.assign({ status: risk }, props, { actions: settingActions }), composedBody(tree, props.summary || ''), { wide: false, tone: 'setting-card' });
+        const note = critical
+            ? '<p class="gx-note gx-note--warn">Sensitive setting — Zoe confirms before anything changes.</p>'
+            : '';
+        const inner = gxHead('Setting', props.title || 'Setting', props.summary || '')
+            + '<div class="gx-body">' + gxFacts(facts) + note + '</div>'
+            + gxActions(settingActions);
+        return cardFrame(Object.assign({}, props),
+            gxScene(critical ? 'medical' : (props.domain || 'general'), 'gx-setting-card' + (critical ? ' is-critical' : ''), inner),
+            { wide: true, tone: 'gx-card gx-setting' + (critical ? ' gx-critical' : ''), hideHeader: true, hideStatus: true, hideActions: true });
     }
 
     function renderPageGrid(props) {
-        const rows = (props.items || []).slice(0, 4).map(item => listRowNode(item.title, item.summary));
-        const tree = { component: 'Grid', columns: 2, children: rows };
-        return cardFrame(Object.assign({ status: 'Map' }, props), composedBody(tree, props.summary || props.title || ''), { wide: true, tone: 'map-card' });
+        const items = (props.items || []).slice(0, 8);
+        const tiles = items.map(item => {
+            const it = item || {};
+            return '<div class="gx-tile">'
+                + '<strong class="gx-tile-title">' + escapeHtml(it.title || 'Item') + '</strong>'
+                + (it.summary ? '<span class="gx-tile-sub">' + escapeHtml(it.summary) + '</span>' : '')
+                + '</div>';
+        }).join('');
+        const grid = tiles ? '<div class="gx-tiles">' + tiles + '</div>' : gxEmpty('M', 'Nothing to map', 'No surfaces to show yet.');
+        const inner = gxHead('Map', props.title || 'Places', props.summary || '')
+            + '<div class="gx-body">' + grid + '</div>'
+            + gxActions(props.actions);
+        return cardFrame(Object.assign({}, props), gxScene('personal', 'gx-map-card', inner),
+            { wide: true, tone: 'gx-card gx-map', hideHeader: true, hideStatus: true, hideActions: true });
     }
 
     function renderSettingsOverview(props) {
-        const rows = (props.items || []).slice(0, 4).map(item => {
-            const label = item.risk ? item.title + ' · ' + item.risk : item.title;
-            return listRowNode(label, item.summary);
-        });
-        const tree = { component: 'Grid', columns: 2, children: rows };
-        return cardFrame(Object.assign({ status: 'Settings' }, props), composedBody(tree, props.summary || props.title || ''), { wide: true, tone: 'map-card' });
+        const items = (props.items || []).slice(0, 8);
+        const tiles = items.map(item => {
+            const it = item || {};
+            const riskTag = it.risk
+                ? '<span class="gx-tile-risk gx-risk-' + escapeHtml(safeClassTokens(String(it.risk)) || 'low') + '">' + escapeHtml(it.risk) + '</span>'
+                : '';
+            return '<div class="gx-tile">'
+                + '<span class="gx-tile-head"><strong class="gx-tile-title">' + escapeHtml(it.title || 'Setting') + '</strong>' + riskTag + '</span>'
+                + (it.summary ? '<span class="gx-tile-sub">' + escapeHtml(it.summary) + '</span>' : '')
+                + '</div>';
+        }).join('');
+        const grid = tiles ? '<div class="gx-tiles">' + tiles + '</div>' : gxEmpty('S', 'No settings', 'Nothing to configure here yet.');
+        const inner = gxHead('Settings', props.title || 'Settings', props.summary || '')
+            + '<div class="gx-body">' + grid + '</div>'
+            + gxActions(props.actions);
+        return cardFrame(Object.assign({}, props), gxScene('work', 'gx-settings-card', inner),
+            { wide: true, tone: 'gx-card gx-settings-overview', hideHeader: true, hideStatus: true, hideActions: true });
     }
 
     function renderList(props) {
-        const rows = (props.items || []).slice(0, 6).map((item, index) => {
-            const title = typeof item === 'string' ? item : item.title || item.text || item.label || JSON.stringify(item);
+        const items = (props.items || []).slice(0, 12);
+        const rows = items.map((item, index) => {
+            const title = typeof item === 'string' ? item : (item.title || item.text || item.label || JSON.stringify(item));
             const detail = typeof item === 'object' && item ? (item.summary || item.description || item.value || '') : '';
-            // Preserve the legacy zero-padded position cue (01, 02, ...) — generic
-            // lists are often ordered (results, rankings); it rides the detail slot.
+            // Preserve the legacy zero-padded position cue (01, 02, …) — generic
+            // lists are often ordered (results, rankings).
             const cue = String(index + 1).padStart(2, '0');
-            return listRowNode(title, detail ? cue + ' · ' + detail : cue);
-        });
-        const tree = { component: 'Stack', gap: 'sm', children: rows };
-        return cardFrame(Object.assign({ status: props.status || 'List' }, props), composedBody(tree, props.title || ''), { wide: false, tone: 'list-card' });
+            return '<div class="gx-row">'
+                + '<span class="gx-row-num tnum" aria-hidden="true">' + escapeHtml(cue) + '</span>'
+                + '<span class="gx-row-main"><strong>' + escapeHtml(title) + '</strong>'
+                + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</span>'
+                + '</div>';
+        }).join('');
+        const listBody = rows ? '<div class="gx-rows">' + rows + '</div>' : gxEmpty('L', 'Nothing here', 'This list is empty.');
+        const inner = gxHead(props.status || 'List', props.title || 'List', '')
+            + '<div class="gx-body">' + listBody + '</div>'
+            + gxActions(props.actions);
+        return cardFrame(Object.assign({}, props), gxScene('personal', 'gx-genlist-card', inner),
+            { wide: true, tone: 'gx-card gx-genlist', hideHeader: true, hideStatus: true, hideActions: true });
     }
 
     // smart_home cards (contract: content {title, devices}). No live producer
@@ -1386,18 +1512,13 @@
         };
         return '<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true">' + (paths[name] || paths.play) + '</svg>';
     }
-    // Outline glyphs for the output/hub controls (stroke-only; the airplay
-    // triangle is the one filled shape).
+    // Outline glyphs for the canvas's library affordances (stroke-only).
     function npGlyph(name) {
         var paths = {
-            airplay: '<path d="M5 16H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-1"/><path d="M8 20l4-5 4 5z" fill="currentColor" stroke="none"/>',
-            chevron: '<path d="M6 9l6 6 6-6"/>',
-            plus: '<path d="M12 5v14M5 12h14"/>'
+            plus: '<path d="M12 5v14M5 12h14"/>',
+            library: '<path d="M4 5h4v14H4zM11 5h3v14h-3z"/><path d="M17 6l3 12"/>'
         };
         return '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (paths[name] || '') + '</svg>';
-    }
-    function npBtn(icon, query, cls) {
-        return '<button type="button" class="np-btn' + (cls ? ' ' + cls : '') + '" data-sky-action="query" data-query="' + escapeHtml(query) + '" aria-label="' + escapeHtml(query) + '">' + npIcon(icon) + '</button>';
     }
 
     // Stable on-brand ambient wash: hash the track/album to pick a ds1 accent
@@ -1424,9 +1545,11 @@
     }
 
     function renderNowPlaying(props) {
-        // Music Assistant now-playing card — album-art-forward ambient look.
-        // The SVG transport row is built here from state; each button carries
-        // data-sky-action=query so tap + voice share one resolver path.
+        // Music Assistant now-playing CANVAS — album-art-forward, display-only.
+        // Controls (transport, volume, seek, speaker) live on the floating bar
+        // (the single control surface); this card carries no transport. It shows
+        // hero art, track meta, a display-only progress bar, and an "Up next"
+        // queue the panel hydrates client-side from queue_id.
         var img = String(props.image || '');
         var sameOrigin = img && ((img.charAt(0) === '/' && img.charAt(1) !== '/') || /^https?:\/\//i.test(img));
         // Strict URL shape (no quotes/parens/backslash/whitespace/angle brackets,
@@ -1446,9 +1569,15 @@
             + 'radial-gradient(140% 140% at 80% 118%,' + tint[0] + '80 0%,' + tint[0] + '00 55%),'
             + 'linear-gradient(155deg,#0f1220F2 0%,#0a0d16F2 100%)';
 
-        var artInner = safeArt
-            ? '<img class="np-art" src="' + escapeHtml(safeArt) + '" alt="" loading="lazy">'
-            : '<div class="np-art np-art-empty" style="--np-c1:' + tint[0] + ';--np-c2:' + tint[1] + '">' + npIcon('note') + '</div>';
+        // Always paint the gradient placeholder box; overlay the album art when a
+        // safe URL is present. A dead art URL (e.g. a radio logo that 404s) has its
+        // <img> removed on error (wired in skybridge.js, capture-phase) so the
+        // gradient shows through instead of the browser's broken-image glyph.
+        var artInner =
+            '<div class="np-art np-art-empty" style="--np-c1:' + tint[0] + ';--np-c2:' + tint[1] + '">'
+            + npIcon('note')
+            + (safeArt ? '<img class="np-art-img" src="' + escapeHtml(safeArt) + '" alt="" loading="lazy" data-np-art-fallback>' : '')
+            + '</div>';
         // Blurred art backdrop (same-origin guard already applied to safeArt).
         var artBg = safeArt
             ? '<div class="np-art-bg" style="background-image:url(&quot;' + escapeHtml(safeArt) + '&quot;)"></div>'
@@ -1469,36 +1598,32 @@
                 + '<div class="np-times"><span>' + npTime(elapsed) + '</span><span>' + npTime(duration) + '</span></div></div>';
         }
 
-        var transport = hasTrack ? [
-            '<div class="np-transport">',
-            npBtn('voldown', 'turn the music down'),
-            npBtn('prev', 'previous song'),
-            playing ? npBtn('pause', 'pause music', 'np-primary') : npBtn('play', 'resume music', 'np-primary'),
-            npBtn('next', 'next song'),
-            npBtn('volup', 'turn the music up'),
-            '</div>'
-        ].join('') : '';
         // Browse/suggestion chips (idle card) come through props.actions.
         var chips = (!hasTrack && Array.isArray(props.actions) && props.actions.length)
             ? '<div class="sky-actions np-chips">' + props.actions.map(buttonHtml).join('') + '</div>' : '';
 
-        // Music-hub footer: speaker/output picker + a persistent "Add source"
-        // affordance. The output button is client-side (data-music-output → the
-        // panel fetches /api/music/players, persists the pick, transfers); the
-        // add-source button reuses the existing "add music" resolver flow.
-        var outName = props.player_name || 'This speaker';
-        var outputRow = [
-            '<div class="np-output">',
-            '<button type="button" class="np-out-btn" data-music-output data-music-player="' + escapeHtml(props.player_id || '') + '" aria-haspopup="listbox" aria-expanded="false">',
-            npGlyph('airplay'),
-            '<span class="np-out-name">' + escapeHtml(outName) + '</span>',
-            npGlyph('chevron'),
-            '</button>',
-            '<button type="button" class="np-add-src" data-sky-action="query" data-query="add music" aria-label="Add a music source">',
+        // "Up next" queue: an empty container the panel hydrates from queue_id via
+        // GET /api/music/queue/{queue_id} (kept off the server card so the card
+        // payload stays small + cacheable). Rendered only for a live track.
+        var upNext = hasTrack ? [
+            '<div class="np-queue" data-music-queue',
+            ' data-queue-id="' + escapeHtml(props.queue_id || props.player_id || '') + '"',
+            ' data-current-title="' + escapeHtml(props.title || '') + '" hidden>',
+            '</div>'
+        ].join('') : '';
+
+        // Library affordances (canvas owns library actions; the bar owns controls):
+        // "＋ Add source" reuses the "add music" resolver; "Browse" opens the full
+        // music library/player page.
+        var libRow = [
+            '<div class="np-actions">',
+            '<button type="button" class="np-lib-btn" data-sky-action="query" data-query="add music" aria-label="Add a music source">',
             npGlyph('plus'), '<span>Add source</span>',
             '</button>',
-            '</div>',
-            '<div class="np-outputs" data-music-picker hidden role="listbox" aria-label="Choose a speaker"></div>'
+            '<button type="button" class="np-lib-btn" data-sky-action="open" data-route="/touch/music.html" aria-label="Browse the music library">',
+            npGlyph('library'), '<span>Browse</span>',
+            '</button>',
+            '</div>'
         ].join('');
 
         var body = [
@@ -1513,9 +1638,9 @@
             props.artist ? '<span class="np-artist">' + escapeHtml(props.artist) + '</span>' : '',
             props.album ? '<span class="np-album">' + escapeHtml(props.album) + '</span>' : '',
             progress,
-            transport,
+            upNext,
             chips,
-            outputRow,
+            libRow,
             '</div>',
             '</div>'
         ].join('');
@@ -1523,87 +1648,102 @@
             { wide: true, tone: 'now-playing-card', hideHeader: true, hideStatus: true, hideActions: true });
     }
 
+    // Card-local filled music-note placeholder for artwork-less media tiles
+    // (filled/dimensional, never a thin line icon — design-system §5).
+    const GX_MEDIA_NOTE = '<svg viewBox="0 0 24 24" width="38" height="38" fill="currentColor" aria-hidden="true"><path d="M9 17V5l10-2v12"/><circle cx="6" cy="17" r="3"/><circle cx="16" cy="15" r="3"/></svg>';
+
     function renderMedia(props) {
-        const items = props.items || [];
-        const children = items.slice(0, 6).map(item => {
-            if (typeof item !== 'object' || !item) return listRowNode(String(item || 'Media'), '');
-            const title = item.title || item.name || item.track || 'Media';
-            const subtitle = item.subtitle || item.artist || item.album || '';
-            const src = String(item.artwork || item.album_art || item.image || item.art || '');
-            if (src.charAt(0) === '/' && src.charAt(1) !== '/') {
-                return { component: 'MediaTile', src: src, title: title, subtitle: subtitle };
-            }
-            return listRowNode(title, subtitle);
-        });
-        const tree = { component: 'Stack', gap: 'sm', children: children };
-        return cardFrame(Object.assign({ status: props.status || 'Media' }, props), composedBody(tree, props.title || ''), { wide: false, tone: 'media-card' });
+        const items = (props.items || []).slice(0, 8);
+        const tiles = items.map(item => {
+            const it = (typeof item === 'object' && item) ? item : {};
+            const title = it.title || it.name || it.track || (typeof item === 'string' ? item : 'Media');
+            const subtitle = it.subtitle || it.artist || it.album || '';
+            const src = String(it.artwork || it.album_art || it.image || it.art || '');
+            // Same-origin artwork only (a root-relative /path). Foreign URLs stay
+            // text-only behind a crafted placeholder — same policy as zoe-compose.
+            const sameOrigin = src.charAt(0) === '/' && src.charAt(1) !== '/';
+            const art = sameOrigin
+                ? '<span class="gx-media-art"><img src="' + escapeHtml(src) + '" alt="" loading="lazy"></span>'
+                : '<span class="gx-media-art gx-media-art--empty" aria-hidden="true">' + GX_MEDIA_NOTE + '</span>';
+            return '<figure class="gx-media-tile">' + art
+                + '<figcaption><strong>' + escapeHtml(title) + '</strong>'
+                + (subtitle ? '<span>' + escapeHtml(subtitle) + '</span>' : '') + '</figcaption></figure>';
+        }).join('');
+        const grid = tiles ? '<div class="gx-media-grid">' + tiles + '</div>' : gxEmpty('M', 'Nothing playing', 'No media to show yet.');
+        const inner = gxHead('Media', props.title || 'Media', '')
+            + '<div class="gx-body">' + grid + '</div>'
+            + gxActions(props.actions);
+        return cardFrame(Object.assign({}, props), gxScene('social', 'gx-media-card', inner),
+            { wide: true, tone: 'gx-card gx-media', hideHeader: true, hideStatus: true, hideActions: true });
     }
 
     // research_report cards (contract: content {title, sections}). No live
     // producer emits this card_type yet (panel_show_research_report uses the
     // executor overlay); sections render as kicker + body text + ListRows.
     function renderResearchReport(props) {
-        const sections = props.sections || [];
-        const children = [];
-        sections.slice(0, 4).forEach(section => {
+        const sections = (props.sections || []).slice(0, 5);
+        const blocks = sections.map(section => {
             if (typeof section !== 'object' || !section) {
-                if (section) children.push(textNode(String(section), 'body'));
-                return;
+                return section ? '<section class="gx-sec"><div class="gx-prose"><p>' + escapeHtml(String(section)) + '</p></div></section>' : '';
             }
             const heading = section.title || section.heading || '';
-            if (heading) children.push(textNode(heading, 'kicker'));
             const bodyText = section.body || section.text || section.summary || '';
-            if (bodyText) children.push(textNode(bodyText, 'body'));
-            const items = section.items || section.results || section.sources || [];
-            items.slice(0, 5).forEach(item => {
+            const items = (section.items || section.results || section.sources || []).slice(0, 6);
+            const rows = items.map(item => {
                 if (typeof item !== 'object' || !item) {
-                    children.push(listRowNode(String(item || 'Result'), ''));
-                    return;
+                    return '<div class="gx-row"><span class="gx-row-main"><strong>' + escapeHtml(String(item || 'Result')) + '</strong></span></div>';
                 }
-                children.push(listRowNode(item.title || item.name || 'Result', item.value || item.summary || item.location || ''));
-            });
-        });
-        const tree = { component: 'Stack', gap: 'md', children: children.length ? children : [textNode('No report sections available.', 'caption')] };
-        return cardFrame(Object.assign({ status: props.status || 'Research' }, props), composedBody(tree, props.title || ''), { wide: true, tone: 'research-card' });
+                const t = item.title || item.name || 'Result';
+                const d = item.value || item.summary || item.location || '';
+                return '<div class="gx-row"><span class="gx-row-main"><strong>' + escapeHtml(t) + '</strong>'
+                    + (d ? '<em>' + escapeHtml(d) + '</em>' : '') + '</span></div>';
+            }).join('');
+            return '<section class="gx-sec">'
+                + (heading ? '<span class="gx-sec-kicker">' + escapeHtml(heading) + '</span>' : '')
+                + (bodyText ? '<div class="gx-prose">' + gxProse(bodyText) + '</div>' : '')
+                + (rows ? '<div class="gx-rows">' + rows + '</div>' : '')
+                + '</section>';
+        }).join('');
+        const reportBody = blocks || gxEmpty('R', 'No report yet', 'No sections to show.');
+        const inner = gxHead('Research', props.title || 'Report', '')
+            + '<div class="gx-body gx-body--report">' + reportBody + '</div>'
+            + gxActions(props.actions);
+        return cardFrame(Object.assign({}, props), gxScene('work', 'gx-research-card', inner),
+            { wide: true, tone: 'gx-card gx-research', hideHeader: true, hideStatus: true, hideActions: true });
     }
 
     function renderActionForm(props) {
-        if (props.source === 'list_create') {
-            const fieldRows = (props.fields || []).slice(0, 2).map(field => {
-                const value = field.value == null || field.value === '' ? 'Not set' : String(field.value);
-                return listRowNode(field.label || field.name || 'Field', value);
-            });
-            const actions = props.actions || [];
-            const tree = { component: 'Stack', gap: 'md', children: [
-                textNode('New list', 'kicker'),
-                textNode('Name this list', 'title'),
-                textNode(props.summary || 'What should I name it?', 'body'),
-                { component: 'Grid', columns: 2, children: fieldRows }
-            ] };
-            return cardFrame(Object.assign({}, props, { actions }), composedBody(tree, props.summary || 'What should I name it?'), { wide: true, tone: 'zoe-list-card list-create-card personal', hideHeader: true, hideStatus: true });
-        }
-        const fieldRows = (props.fields || []).slice(0, 6).map(field => {
+        const isCreate = props.source === 'list_create';
+        const fields = (props.fields || []).slice(0, isCreate ? 2 : 6).map(field => {
             const value = field.value == null || field.value === '' ? 'Not set' : String(field.value);
-            return listRowNode(field.label || field.name || 'Field', value);
+            return [field.label || field.name || 'Field', value];
         });
-        const actions = props.actions || [
+        const actions = props.actions || (isCreate ? [] : [
             { label: 'Review', query: 'review ' + (props.title || 'form') },
             { label: 'Confirm', query: 'confirm ' + (props.form_id || props.title || 'form') }
-        ];
-        const tree = { component: 'Stack', gap: 'md', children: [
-            textNode(props.summary || 'Review the fields before Zoe takes action.', 'body'),
-            { component: 'Grid', columns: 2, children: fieldRows }
-        ] };
-        return cardFrame(Object.assign({ status: 'Form' }, props, { actions }), composedBody(tree, props.summary || ''), { wide: true, tone: 'form-card' });
+        ]);
+        const eyebrow = isCreate ? 'New list' : 'Confirm';
+        const title = isCreate ? (props.title || 'Name this list') : (props.title || 'Review');
+        const lede = isCreate
+            ? (props.summary || 'What should I name it?')
+            : (props.summary || 'Review the fields before Zoe takes action.');
+        const inner = gxHead(eyebrow, title, lede)
+            + '<div class="gx-body">' + gxFacts(fields) + '</div>'
+            + gxActions(actions);
+        return cardFrame(Object.assign({}, props),
+            gxScene(isCreate ? 'personal' : 'work', 'gx-form-card' + (isCreate ? ' gx-list-create' : ''), inner),
+            { wide: true, tone: 'gx-card gx-form' + (isCreate ? ' gx-list-create-card' : ''), hideHeader: true, hideStatus: true, hideActions: true });
     }
 
     function renderUnsupportedContract(props) {
-        return cardFrame({
-            title: 'Card needs an update',
-            kicker: 'Unsupported schema',
-            body: 'This Skybridge renderer supports card schema 1.x.',
-            status: props.schema_version || 'Unknown'
-        }, '<div class="sky-card-body">This card was not rendered because its schema version is newer than the current Skybridge renderer.</div>', { wide: true, tone: 'warn' });
+        const inner = gxHead('Unsupported schema', 'Card needs an update', '')
+            + '<div class="gx-body">'
+            + gxEmpty('!', 'This card can’t be shown here',
+                'Zoe’s panel renders card schema 1.x. This card is newer — update the panel to see it.')
+            + '</div>';
+        return cardFrame({ title: 'Card needs an update', status: props.schema_version || 'Unknown' },
+            gxScene('general', 'gx-unsupported-card', inner),
+            { wide: true, tone: 'gx-card gx-unsupported', hideHeader: true, hideStatus: true, hideActions: true });
     }
 
     function renderCompose(props) {
