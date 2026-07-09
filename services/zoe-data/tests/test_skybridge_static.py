@@ -927,9 +927,17 @@ out.research_report.kicker = R.render(cards.research_report).includes('gx-sec-ki
   var on = R.render({ component: 'smart_home', props: { title: 'Lights', devices: [
     { name: 'Lamp ' + INJ, domain: 'switch', on: true, available: true, entity_id: 'switch.lamp' },
     { name: 'Hall', entity_id: 'light.hall', domain: 'light', on: false, available: true }
-  ], scenes: [{ name: 'Movie Time', scene_id: 'scene.movie_time' }] } });
+  ], scenes: [{ name: 'Movie Time', scene_id: 'scene.movie_time' }], add_query: 'add a device' } });
   var empty = R.render({ component: 'smart_home', props: { title: 'Lights', devices: [] } });
   var offline = R.render({ component: 'smart_home', props: { title: 'Home', devices: [], offline: true } });
+  // Room-grouped view + read-only climate strip (the enriched card).
+  var rooms = R.render({ component: 'smart_home', props: { title: 'Home', rooms: [
+    { name: 'Living Room', devices: [{ name: 'Living Room Light', entity_id: 'input_boolean.living_room_light', domain: 'light', on: true, available: true }] },
+    { name: 'Around the home', devices: [{ name: 'Ceiling Fan', entity_id: 'input_boolean.fan', domain: 'fan', on: false, available: true }] }
+  ], climate: { current: 21, target: 22, unit: '\\u00b0C' }, add_query: 'add a device' } });
+  // Add-device QR setup mode.
+  var setup = R.render({ component: 'smart_home', props: { title: 'Add a device', mode: 'setup',
+    qr_path: '/api/home/setup/qr?token=abc', back_query: 'smart home' } });
   out.smart_home = {
     tiles: on.includes('sh-grid') && on.includes('sh-tile'),
     on_state: on.includes('is-on') && on.includes('sh-pill-on'),
@@ -938,8 +946,18 @@ out.research_report.kicker = R.render(cards.research_report).includes('gx-sec-ki
     escaped: !on.includes('<b>x</b>') && on.includes('&lt;b&gt;x&lt;/b&gt;'),
     action: on.includes('data-sky-action='),
     scene: on.includes('sh-scene') && on.includes('Movie Time'),
-    empty: empty.includes('sh-empty') && empty.includes('No lights or switches'),
-    offline: offline.includes('Home hub offline')
+    // The grow affordance is always offered on a populated card.
+    add_tile: on.includes('sh-add') && on.includes('add a device'),
+    // Warm, inviting empty state (not a cold "nothing here") with its own Add CTA.
+    empty: empty.includes('sh-empty-welcome') && empty.includes('ready to grow') && empty.includes('sh-add'),
+    offline: offline.includes('Home hub offline'),
+    // Rooms flatten into one grid with a per-tile room caption; climate reads temp.
+    rooms: rooms.includes('sh-tile-room') && rooms.includes('Living Room') && rooms.includes('sh-grid'),
+    climate: rooms.includes('sh-climate') && rooms.includes('21') && rooms.includes('Set to 22'),
+    // Setup mode: the QR image + a back-to-home control (re-enters the resolver).
+    setup: setup.includes('sh-qr-img') && setup.includes('/api/home/setup/qr?token=abc') &&
+           setup.includes('data-query="smart home"'),
+    setup_safe: !setup.includes('javascript:')
   };
 })();
 // The rebuilt renderers no longer depend on zoe-compose: render with NO catalog

@@ -1499,6 +1499,7 @@
         var paths = {
             light: '<path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.6.6 1 1.4 1 2.5h6c0-1.1.4-1.9 1-2.5A6 6 0 0 0 12 3z"/>',
             fan: '<path d="M12 12a3 3 0 0 0 0-6c-2 0-3 1.5-3 3.5C9 11 10.5 12 12 12zm0 0a3 3 0 0 1 6 0c0 2-1.5 3-3.5 3C13 15 12 13.5 12 12zm0 0a3 3 0 0 0 0 6c2 0 3-1.5 3-3.5C15 13 13.5 12 12 12z"/>',
+            tv: '<rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8"/>',
             "switch": '<rect x="4" y="7" width="16" height="10" rx="5"/><circle cx="9" cy="12" r="2.6" fill="currentColor" stroke="none"/>'
         };
         var d = paths[domain] || paths.switch;
@@ -1516,16 +1517,17 @@
         if (typeof device !== 'object' || !device) return '';
         var name = device.name || device.entity_id || device.title || 'Device';
         var on = !!device.on;
-        var domain = (device.domain === 'light' || device.domain === 'fan') ? device.domain : 'switch';
+        var domain = (device.domain === 'light' || device.domain === 'fan' || device.domain === 'tv') ? device.domain : 'switch';
         // Prefer the server-built query (carries the exact @entity id so a tap
         // controls precisely this device); fallback also embeds the entity id.
         var query = device.query || ('turn ' + (on ? 'off' : 'on') + ' ' + name +
             (device.entity_id ? ' @' + device.entity_id : ' ' + (domain === 'light' ? 'light' : 'switch')));
         var disabled = device.available === false;
+        var room = device.room ? '<span class="sh-tile-room">' + escapeHtml(device.room) + '</span>' : '';
         return '<button type="button" class="sh-tile' + (on ? ' is-on' : '') + (disabled ? ' is-off-network' : '') + '"' +
             (disabled ? ' disabled aria-disabled="true"' : ' data-sky-action="query" data-query="' + escapeHtml(query) + '"') +
-            ' aria-pressed="' + (on ? 'true' : 'false') + '" aria-label="' + escapeHtml(name + ', ' + (on ? 'on' : 'off') + ', tap to toggle') + '">' +
-            '<span class="sh-tile-top">' + shDeviceIcon(domain, on) + shStatePill(device) + '</span>' +
+            ' aria-pressed="' + (on ? 'true' : 'false') + '" aria-label="' + escapeHtml(name + (device.room ? ', ' + device.room : '') + ', ' + (on ? 'on' : 'off') + ', tap to toggle') + '">' +
+            '<span class="sh-tile-head">' + room + '<span class="sh-tile-top">' + shDeviceIcon(domain, on) + shStatePill(device) + '</span></span>' +
             '<span class="sh-tile-name">' + escapeHtml(name) + '</span>' +
             '</button>';
     }
@@ -1536,20 +1538,84 @@
         return '<button type="button" class="sh-scene" data-sky-action="query" data-query="' + escapeHtml(query) + '" aria-label="' + escapeHtml('Activate ' + name) + '">' +
             '<span class="sh-scene-dot" aria-hidden="true"></span><span class="sh-scene-name">' + escapeHtml(name) + '</span></button>';
     }
+    // "＋ Add a device" — the owner's key ask, always offered. Re-enters the
+    // resolver (tap + voice share one path) to the QR setup. `variant`:
+    //   'tile' → a dashed grid cell that sits beside the device tiles;
+    //   'big'  → the hero CTA under the welcome empty state.
+    function shAddTile(query, variant) {
+        var q = query || 'add a device';
+        var plus = '<svg class="sh-add-glyph" viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" ' +
+            'stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
+        var cls = variant === 'tile' ? 'sh-add sh-add-tile' : (variant === 'big' ? 'sh-add sh-add-big' : 'sh-add');
+        return '<button type="button" class="' + cls + '" data-sky-action="query" data-query="' +
+            escapeHtml(q) + '" aria-label="Add a device to your home">' + plus +
+            '<span class="sh-add-label">Add a device</span></button>';
+    }
+    // Read-only comfort strip: current room temperature + thermostat set-point.
+    function shClimate(climate) {
+        if (!climate || typeof climate !== 'object') return '';
+        var unit = climate.unit || '°';
+        var thermo = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" ' +
+            'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 14.76V5a2 2 0 1 0-4 0v9.76a4 4 0 1 0 4 0z"/></svg>';
+        var big = (climate.current != null) ? climate.current : climate.target;
+        if (big == null) return '';
+        var sub = (climate.current != null && climate.target != null)
+            ? 'Set to ' + escapeHtml(String(climate.target)) + escapeHtml(unit)
+            : (climate.current != null ? 'Now' : 'Set point');
+        return '<div class="sh-climate"><span class="sh-climate-ico">' + thermo + '</span>' +
+            '<span class="sh-climate-now">' + escapeHtml(String(big)) + escapeHtml(unit) + '</span>' +
+            '<span class="sh-climate-sub">' + sub + '</span></div>';
+    }
     function renderSmartHome(props) {
         var devices = props.devices || props.entities || props.items || [];
+        var rooms = props.rooms || [];
         var scenes = props.scenes || [];
-        var head = '<div class="sh-head"><span class="sh-title">' + escapeHtml(props.title || 'Home') + '</span>' +
-            (props.summary ? '<span class="sh-sub">' + escapeHtml(props.summary) + '</span>' : '') + '</div>';
+        var addQuery = props.add_query || 'add a device';
+        // One full-width grid of tiles, each captioned with its room. If only a
+        // grouped `rooms` list is supplied, flatten it (tagging each tile's room)
+        // so a sparse home still fills the width instead of stranding a thin column.
+        var tiles = devices.slice();
+        if (!tiles.length && rooms.length) {
+            rooms.forEach(function (r) {
+                (r.devices || []).forEach(function (d) {
+                    tiles.push(Object.assign({ room: (d && d.room) || r.name }, d));
+                });
+            });
+        }
+        var head = '<div class="sh-head"><div class="sh-head-text"><span class="sh-title">' + escapeHtml(props.title || 'Home') + '</span>' +
+            (props.summary ? '<span class="sh-sub">' + escapeHtml(props.summary) + '</span>' : '') + '</div>' +
+            (props.mode === 'setup' ? '' : shClimate(props.climate)) + '</div>';
         var body;
-        if (props.offline) {
+        if (props.mode === 'setup') {
+            // QR → phone: the owner scans it to open Zoe's branded "add a device" guide.
+            var src = String(props.qr_path || '');
+            var safe = src.charAt(0) === '/' && src.charAt(1) !== '/';
+            body = '<div class="sh-setup">' +
+                '<div class="sh-qr">' + (safe ? '<img class="sh-qr-img" src="' + escapeHtml(src) + '" alt="Setup QR code">' : '') + '</div>' +
+                '<div class="sh-setup-steps">' +
+                '<span class="sh-step">1 · Point your phone camera at the code</span>' +
+                '<span class="sh-step">2 · Open the Zoe link that appears</span>' +
+                '<span class="sh-step">3 · Zoe walks you through adding it</span></div>' +
+                '<button type="button" class="sh-back" data-sky-action="query" data-query="' +
+                escapeHtml(props.back_query || 'smart home') + '">Back to my home</button></div>';
+        } else if (props.offline) {
             body = '<div class="sh-empty"><span class="sh-empty-title">Home hub offline</span>' +
                 '<span class="sh-empty-sub">I couldn’t reach the home hub. Check it’s powered on and connected.</span></div>';
         } else {
-            var tiles = devices.map(shDeviceTile).join('');
-            var deviceBlock = tiles
-                ? '<div class="sh-grid">' + tiles + '</div>'
-                : '<div class="sh-empty"><span class="sh-empty-sub">No lights or switches set up yet.</span></div>';
+            var deviceBlock;
+            if (tiles.length) {
+                // Devices flow across the full width; the "＋ Add a device" tile rides
+                // along as the final cell so growing the home is always one tap away.
+                deviceBlock = '<div class="sh-grid">' + tiles.map(shDeviceTile).join('') +
+                    shAddTile(addQuery, 'tile') + '</div>';
+            } else {
+                // Warm, inviting near-blank state — "your home, ready to grow".
+                deviceBlock = '<div class="sh-empty sh-empty-welcome">' +
+                    '<span class="sh-empty-badge" aria-hidden="true">🏡</span>' +
+                    '<span class="sh-empty-title">Your home, ready to grow</span>' +
+                    '<span class="sh-empty-sub">Add your first light, plug, or speaker and I’ll take it from there — by voice or right here.</span>' +
+                    shAddTile(addQuery, 'big') + '</div>';
+            }
             var sceneBlock = scenes.length
                 ? '<div class="sh-scenes"><span class="sh-section">Scenes</span><div class="sh-scene-row">' +
                     scenes.map(shSceneChip).join('') + '</div></div>'
