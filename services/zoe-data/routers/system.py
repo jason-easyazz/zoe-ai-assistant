@@ -717,7 +717,9 @@ def _attach_memory_loop_log_handler() -> None:
         path = os.path.expanduser(
             os.environ.get("ZOE_MEMORY_LOOP_LOG_PATH", "~/.zoe/zoe-data-memory-loops.log")
         )
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        log_dir = os.path.dirname(path)
+        if log_dir:  # a bare filename → dirname "" → os.makedirs("") would raise
+            os.makedirs(log_dir, exist_ok=True)
         fh = RotatingFileHandler(path, maxBytes=2_000_000, backupCount=3)
         fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
         fh.setLevel(logging.INFO)  # handler-scoped; do NOT mutate the shared logger level

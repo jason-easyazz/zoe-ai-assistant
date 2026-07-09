@@ -157,3 +157,25 @@ def test_attach_memory_loop_log_handler_is_idempotent(mm, tmp_path, monkeypatch)
             system.logger.removeHandler(h)
             if isinstance(h, logging.Handler):
                 h.close()
+
+
+def test_attach_memory_loop_log_handler_accepts_bare_filename(mm, tmp_path, monkeypatch):
+    """A bare filename → dirname "" must not make os.makedirs("") raise and skip
+    the handler (the durable log this change guarantees would silently go missing).
+    """
+    import logging
+
+    import routers.system as system
+
+    monkeypatch.chdir(tmp_path)  # bare filename lands in an isolated cwd
+    monkeypatch.setenv("ZOE_MEMORY_LOOP_LOG_PATH", "mem-loops.log")
+
+    system._attach_memory_loop_log_handler()
+    added = [h for h in system.logger.handlers if getattr(h, "_zoe_memory_loop_log", False)]
+    try:
+        assert len(added) == 1  # handler attached despite the bare path
+    finally:
+        for h in added:
+            system.logger.removeHandler(h)
+            if isinstance(h, logging.Handler):
+                h.close()
