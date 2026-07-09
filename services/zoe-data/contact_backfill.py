@@ -2,12 +2,16 @@
 
 Phase 2b of the contacts-from-known-people bridge
 (``docs/adr/ADR-contacts-from-known-people.md``). Zoe knows people from natural
-conversation only in the narrative layer — MemPalace ``person``-type memories +
-the synthesized portrait — but they were never turned into structured ``people``
-rows. This one-shot admin pass reads that person knowledge, extracts distinct
-``name`` (+ ``relationship`` if present) with the same deterministic regexes and
-precision guard the go-forward path uses, dedups against the user's existing
-contacts, and emits a batch of ``person_create`` **pending suggestions**.
+conversation only in the narrative layer — MemPalace ``person`` / ``fact`` /
+``relationship`` memories AND the synthesized third-person ``user_portraits``
+prose (e.g. *"his parents, Janice and Niel, and his sisters, Karen and
+Julie"*) — but they were never turned into structured ``people`` rows. This
+one-shot admin pass reads that person knowledge from BOTH sources, extracts
+distinct ``name`` (+ ``relationship`` if present) with two complementary passes
+— the deterministic regexes + precision guard the go-forward path uses, PLUS an
+LLM extraction over the combined text for the narrative prose the regexes can't
+parse — dedups against the user's existing contacts, and emits a batch of
+``person_create`` **pending suggestions**.
 
 It creates PROPOSALS the user accepts through the existing suggestions UI — never
 a silent direct contact write. Flag-gated behind ``ZOE_CONTACT_BACKFILL_ENABLED``
@@ -16,11 +20,22 @@ a silent direct contact write. Flag-gated behind ``ZOE_CONTACT_BACKFILL_ENABLED`
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
 
+import httpx
+
+from gemma_endpoint import gemma_base
+
 logger = logging.getLogger(__name__)
+
+# LLM extraction reuses the same local llama-server (Gemma) client idiom as
+# ``user_portrait._call_llm_for_portrait`` / ``latent_intent_detector._complete``:
+# one bare ``gemma_base()`` base + ``/v1/chat/completions``, non-streaming, low
+# temperature, JSON-only system prompt. Same model default as the memory digest.
+_EXTRACT_MODEL = os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf")
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
@@ -147,15 +162,209 @@ def _extract_people(text: str) -> list[tuple[str, str | None]]:
     return list(out.values())
 
 
-def _is_person_memory(ref) -> bool:
-    """True for MemPalace rows that are about a person (type/entity/tag signal)."""
+# Memory types whose text can name a person the user relates to. Broadened
+# beyond ``person`` (Phase 2b.2): family/friends most often live in ``fact`` and
+# ``relationship`` memories (e.g. "Karen loves tea", "Niel is Jason's father"),
+# so those feed backfill too. The precision guard + LLM/regex extraction below
+# still decide what counts as a proposable person, so the wider net is safe.
+_PERSON_KNOWLEDGE_TYPES = frozenset({"person", "fact", "relationship"})
+
+
+def _is_person_knowledge_memory(ref, user_id: str) -> bool:
+    """True for MemPalace rows whose text may name a person the user knows.
+
+    Accepts ``person`` / ``fact`` / ``relationship`` memory types plus any row
+    carrying an explicit person entity-type or ``person`` tag.
+
+    Ownership gate (Phase 2b.2 security): ``load_for_prompt`` also returns
+    family-SHARED rows owned by OTHER users (``visibility == "family"``), so
+    broadening to ``fact`` / ``relationship`` could otherwise leak another
+    household member's known people as this user's contact candidates (e.g.
+    "Bob is Andrew's colleague" surfacing under Jason). Only the caller's own
+    person-knowledge feeds backfill:
+
+    * a row whose metadata ``user_id`` names a DIFFERENT user → rejected;
+    * an OWNERLESS row that is shared/family-visible → rejected too (an old
+      shared row may lack an owner stamp, and family-visible rows can belong to
+      another household user);
+    * a truly private legacy row (no owner, not shared) → treated as the
+      caller's, for back-compat with person rows that predate owner stamping.
+    """
     md = getattr(ref, "metadata", None) or {}
-    if str(md.get("memory_type", "")).strip().lower() == "person":
+    owner = str(md.get("user_id") or "").strip().lower()
+    visibility = str(md.get("visibility") or "").strip().lower()
+    caller = str(user_id or "").strip().lower()
+    if owner != caller and (owner or visibility in {"family", "shared"}):
+        return False
+    if str(md.get("memory_type", "")).strip().lower() in _PERSON_KNOWLEDGE_TYPES:
         return True
     if str(md.get("entity_type", "")).strip().lower() in ("person", "person_pending"):
         return True
     tags = str(md.get("tags", "") or "").lower()
     return "person" in tags.split(",")
+
+
+# ── Portrait source ───────────────────────────────────────────────────────────
+
+
+async def _load_portrait_text(user_id: str, db) -> str:
+    """Return the user's FULL synthesized portrait prose, or '' if none.
+
+    A direct ``user_portraits`` read (see ``user_portrait.load_portrait`` for the
+    same table/column). Unlike ``load_portrait``, this does NOT truncate to the
+    per-turn inject budget — backfill wants every name the prose mentions. Best
+    effort: any error (missing table, no db) yields '' so backfill still runs on
+    the memory sources alone. Isolated so tests can monkeypatch it.
+    """
+    if db is None:
+        return ""
+    try:
+        # Dual placeholder style, mirroring person_extractor._resolve_person_uuid:
+        # asyncpg ($1) first, aiosqlite (?) on fallback.
+        try:
+            cur = await db.execute(
+                "SELECT portrait_text FROM user_portraits WHERE user_id=$1", user_id
+            )
+        except Exception:
+            cur = await db.execute(
+                "SELECT portrait_text FROM user_portraits WHERE user_id=?", (user_id,)
+            )
+        row = await cur.fetchone()
+        if row and row[0]:
+            return str(row[0]).strip()
+    except Exception as exc:
+        logger.debug("contact_backfill: portrait read failed user=%s: %s", user_id, exc)
+    return ""
+
+
+# ── LLM extraction pass ───────────────────────────────────────────────────────
+
+_LLM_EXTRACT_SYSTEM = "You extract people from text. Return ONLY a valid JSON array."
+
+_LLM_EXTRACT_PROMPT = """\
+From the text below, list every real person the user has a PERSONAL relationship \
+with — family, partners, friends, colleagues they know personally.
+
+Rules:
+- Only people the user personally knows. Skip public figures, fictional \
+characters, brands, and the user themselves.
+- Use the person's given name only, no titles.
+- Give a short relationship label from the user's point of view (e.g. "mother", \
+"sister", "wife", "son", "friend", "colleague"). Use "" if the text doesn't say.
+
+Return a JSON array of objects like [{{"name": "Janice", "relationship": "mother"}}]. \
+Return [] if there are no such people.
+
+TEXT:
+{text}
+"""
+
+
+def _parse_llm_people(raw: str) -> list[tuple[str, str | None]]:
+    """Parse the LLM's JSON array into ``(name, relationship_or_None)`` pairs.
+
+    Tolerant of prose around the array and of malformed items — anything that
+    isn't a clean ``{"name", "relationship"}`` object is skipped, and a
+    non-JSON / non-list body yields ``[]`` (caller falls back to regex).
+    """
+    if not raw:
+        return []
+    try:
+        start, end = raw.find("["), raw.rfind("]") + 1
+        if start == -1 or end <= start:
+            return []
+        items = json.loads(raw[start:end])
+    except (json.JSONDecodeError, ValueError):
+        return []
+    if not isinstance(items, list):
+        return []
+    out: list[tuple[str, str | None]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        rel = str(item.get("relationship") or "").strip().lower()
+        # Keep the label short; drop obviously non-label sentences.
+        if not rel or len(rel) > 40:
+            rel = ""
+        out.append((name, rel or None))
+    return out
+
+
+async def _llm_extract_people(text: str) -> list[tuple[str, str | None]]:
+    """LLM pass: extract ``(name, relationship)`` people from combined prose.
+
+    Reuses the local Gemma client idiom (see ``_EXTRACT_MODEL`` note above).
+    Returns ``[]`` on any transport/decode failure so backfill degrades to the
+    deterministic regex results instead of crashing.
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+    payload = {
+        "model": _EXTRACT_MODEL,
+        "messages": [
+            {"role": "system", "content": _LLM_EXTRACT_SYSTEM},
+            {"role": "user", "content": _LLM_EXTRACT_PROMPT.format(text=text[:6000])},
+        ],
+        "max_tokens": 400,
+        "temperature": 0.1,
+        "stream": False,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            resp = await client.post(f"{gemma_base()}/v1/chat/completions", json=payload)
+            resp.raise_for_status()
+            raw = resp.json()["choices"][0]["message"]["content"].strip()
+    except Exception as exc:
+        logger.debug("contact_backfill: LLM extraction failed: %s", exc)
+        return []
+    return _parse_llm_people(raw)
+
+
+# ── Self-identity guard ───────────────────────────────────────────────────────
+
+# Alphabetic tokens (≥2 chars) of a user id, used to recognise the user's own
+# name in extracted prose. Split on any non-letter so username-derived slugs and
+# suffixed ids compare against name tokens: "jason" → {jason}; "jason_2" →
+# {jason}; "jason.smith" → {jason, smith}. A pure-numeric suffix drops out.
+_SELF_TOKEN_RE = re.compile(r"[^a-z]+")
+
+
+def _name_tokens(raw: str) -> frozenset[str]:
+    """Alphabetic (≥2-char) lowercase tokens of ``raw`` (a name or id)."""
+    return frozenset(t for t in _SELF_TOKEN_RE.split(str(raw or "").lower()) if len(t) >= 2)
+
+
+def _self_identity_tokens(user_id: str) -> frozenset[str]:
+    """Comparable identity tokens for the user id (see note above)."""
+    return _name_tokens(str(user_id or "").strip())
+
+
+async def _canonical_name_tokens(user_id: str, db) -> frozenset[str]:
+    """Identity tokens from the user's CANONICAL display name (``users.name``).
+
+    The raw id can be a handle ("easyazz") that shares no token with the name
+    the portrait/facts use ("Jason"), which would let the user's own name slip
+    through the self-filter. Fold in their real name so "Jason is …" prose is
+    still recognised as the user. Best effort: '' on any error (no users table,
+    no db) so backfill still runs on the id tokens alone.
+    """
+    if db is None:
+        return frozenset()
+    try:
+        try:
+            cur = await db.execute("SELECT name FROM users WHERE id=$1", user_id)
+        except Exception:
+            cur = await db.execute("SELECT name FROM users WHERE id=?", (user_id,))
+        row = await cur.fetchone()
+        if row and row[0]:
+            return _name_tokens(row[0])
+    except Exception as exc:
+        logger.debug("contact_backfill: canonical-name read failed user=%s: %s", user_id, exc)
+    return frozenset()
 
 
 # ── Backfill entry point ──────────────────────────────────────────────────────
@@ -197,37 +406,82 @@ async def backfill_contacts(
         logger.warning("contact_backfill: memory read failed user=%s: %s", user_id, exc)
         return summary
 
-    # 2) Extract distinct people from person-related memories.
-    people: dict[str, tuple[str, str | None]] = {}
+    # Person-knowledge memory texts: person / fact / relationship rows (Phase
+    # 2b.2 broadened the net beyond `person` — family most often lives in facts).
+    knowledge_texts = [
+        (getattr(ref, "text", "") or "").strip()
+        for ref in refs
+        if _is_person_knowledge_memory(ref, user_id)
+    ]
+    knowledge_texts = [t for t in knowledge_texts if t]
+
     self_name = str(user_id).strip().lower()
-    for ref in refs:
-        if not _is_person_memory(ref):
-            continue
-        for name, rel in _extract_people(getattr(ref, "text", "") or ""):
-            key = name.lower()
-            # Never propose the user themselves as their own contact. Exact
-            # match only — a substring/prefix test would drop legitimate
-            # contacts whose name is a prefix of the user_id (e.g. user "jason"
-            # must not swallow a contact "Jan").
-            if key == self_name:
-                continue
-            existing = people.get(key)
-            if existing is None:
-                people[key] = (name, rel)
-            elif rel and not existing[1]:
-                people[key] = (existing[0], rel)
+    self_tokens = set(_self_identity_tokens(user_id))  # augmented w/ canonical name below
+    people: dict[str, tuple[str, str | None]] = {}
 
-    summary["candidates"] = len(people)
-    if not people:
-        return summary
+    def _record(name: str, rel: str | None) -> None:
+        """Merge one (name, rel) into `people`, keyed case-insensitively.
 
-    # 3) Dedup against the user's existing non-deleted contacts.
+        Skips the user themselves and non-person junk. A relationship-bearing
+        hit upgrades an earlier bare-name hit; it never downgrades one that
+        already has a rel.
+        """
+        name = (name or "").strip()
+        if not name or not _looks_like_person_name(name):
+            return
+        key = name.lower()
+        # Skip the user themselves: an exact full-name match OR the extracted
+        # name's FIRST token matching one of the user id's identity tokens — so
+        # user "jason" / "jason_2" / "jason.smith" all drop a "Jason" or "Jason
+        # Smith" pulled from portrait/fact prose. A mere prefix ("Jan") is kept
+        # (its token "jan" isn't an identity token of "jason").
+        first = key.split()[0] if key.split() else key
+        if key == self_name or first in self_tokens:
+            return
+        existing = people.get(key)
+        if existing is None:
+            people[key] = (name, rel or None)
+        elif rel and not existing[1]:
+            people[key] = (existing[0], rel)
+
+    # 2) Open the DB early — needed for the portrait read AND the dedup below.
     from person_extractor import _ensure_db, _resolve_person_uuid
 
     _db, opened = await _ensure_db(db)
     if _db is None:
         return summary
     try:
+        # 2a0) Fold the user's canonical display name into the self-filter, so a
+        # handle id ("easyazz") still recognises "Jason is …" prose as the user.
+        self_tokens |= await _canonical_name_tokens(user_id, _db)
+
+        # 2a) Add the synthesized portrait prose as another person-knowledge
+        # source (third-person narrative the go-forward extractor never sees).
+        portrait = await _load_portrait_text(user_id, _db)
+        if portrait:
+            knowledge_texts.append(portrait)
+
+        # 2b) Deterministic regex pass over every knowledge text.
+        for text in knowledge_texts:
+            for name, rel in _extract_people(text):
+                _record(name, rel)
+
+        # 2c) LLM pass over the combined text — catches narrative prose the
+        # regexes can't parse. Failure (transport/decode) falls back to the
+        # regex results already recorded above; it never crashes backfill.
+        try:
+            llm_people = await _llm_extract_people("\n\n".join(knowledge_texts))
+        except Exception as exc:
+            logger.debug("contact_backfill: LLM pass errored, regex-only: %s", exc)
+            llm_people = []
+        for name, rel in llm_people:
+            _record(name, rel)
+
+        summary["candidates"] = len(people)
+        if not people:
+            return summary
+
+        # 3) Dedup against the user's existing non-deleted contacts.
         suggestions: list[dict] = []
         for name, rel in people.values():
             existing_uuid = await _resolve_person_uuid(name, user_id, _db)
