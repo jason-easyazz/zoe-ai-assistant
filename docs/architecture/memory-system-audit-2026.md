@@ -162,5 +162,5 @@ establishes the harness + categories.
 Internal: [ADR-zoe-memory-layer](../adr/ADR-zoe-memory-layer.md),
 [ADR-hindsight-bakeoff](../adr/ADR-hindsight-bakeoff.md),
 [ADR-graphiti-bakeoff](../adr/ADR-graphiti-bakeoff.md),
-[ADR-relationship-memory](../adr/ADR-relationship-memory.md),
-[gbrain-memory-graph-recall](gbrain-memory-graph-recall.md).
+[ADR-relationship-memory](../adr/ADR-relationship-memory.md). (The GBrain
+graph-into-recall design that this audit builds on lands with PR #1197.)
