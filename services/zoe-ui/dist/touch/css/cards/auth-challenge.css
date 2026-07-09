@@ -1,31 +1,115 @@
-/* Auth challenge card — the in-panel "who's here?" profile picker, brought onto
-   the design system to match the redesigned cards (glass, Inter, canonical
-   accents, finger targets, light/dark). The profile tiles are built by
-   skybridge.js renderAuthProfiles() as .sky-auth-profile / .sky-auth-avatar /
-   .sky-auth-person; we restyle them here with high specificity (+!important
-   where the legacy skybridge.html inline rules use it) so the modern look wins.
+/* Auth challenge card — the in-panel "who's here?" profile picker.
+
+   Redesign: a warm, welcoming full-stage composition instead of a small avatar
+   stranded in the top third. A soft ambient aura + breathing Zoe orb, a calm
+   live greeting/clock backdrop, a friendly headline, and the profile tiles laid
+   out large and centred (a tidy row/grid for a household).
+
+   The profile tiles are built by skybridge.js renderAuthProfiles() as
+   .sky-auth-profile / .sky-auth-avatar / .sky-auth-person carrying the auth
+   action contract (data-sky-action="auth" + data-*). We only STYLE them here —
+   the markup + action attributes are owned by skybridge.js and untouched.
 
    Scoped under .sky-card.auth-challenge.sky-authx so nothing else is affected. */
 
-/* ── Card frame ─────────────────────────────────────────────────────────── */
+/* ── Card frame: fill the stage, centred ────────────────────────────────────── */
 body:not(.sky-empty) .sky-card.auth-challenge.sky-authx {
+  position: relative !important;
   display: flex !important;
   flex-direction: column !important;
   align-items: stretch !important;
-  width: min(940px, calc(100vw - 80px)) !important;
-  padding: var(--sky-space-8, 34px) var(--sky-space-9, 38px) var(--sky-space-8, 34px) !important;
-  border-radius: var(--sky-radius-xl, 36px) !important;
-  background: linear-gradient(157deg, rgba(255,255,255,.12), rgba(255,255,255,.04)) !important;
-  border: 1px solid var(--sky-hairline, rgba(255,255,255,.14)) !important;
-  box-shadow: 0 30px 70px -22px rgba(0,0,0,.62), inset 0 1px 0 rgba(255,255,255,.22) !important;
+  justify-content: center !important;
+  margin-inline: auto !important;
+  width: min(1120px, calc(100vw - 48px)) !important;
+  overflow: hidden !important;
+  padding: clamp(28px, 5vh, 56px) clamp(30px, 5vw, 64px) !important;
+  border-radius: var(--sky-radius-xl, 38px) !important;
+  background:
+    radial-gradient(140% 90% at 50% -10%, color-mix(in srgb, var(--sky-accent-cyan, #37c0e6) 12%, transparent), transparent 62%),
+    radial-gradient(120% 100% at 92% 118%, color-mix(in srgb, var(--sky-accent-violet, #9b8cff) 14%, transparent), transparent 60%),
+    linear-gradient(157deg, rgba(255, 255, 255, .12), rgba(255, 255, 255, .04)) !important;
+  border: 1px solid var(--sky-hairline, rgba(255, 255, 255, .14)) !important;
+  box-shadow: 0 30px 70px -22px rgba(0, 0, 0, .62), inset 0 1px 0 rgba(255, 255, 255, .22) !important;
   color: var(--sky-ink-0, #fff);
   font-family: var(--sky-font, "Inter", system-ui, -apple-system, "Segoe UI", sans-serif);
   -webkit-font-smoothing: antialiased;
 }
-.sky-authx .sky-auth-scene { display: flex; flex-direction: column; gap: var(--sky-space-6, 24px); width: 100%; }
+.sky-authx .sky-auth-scene {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: clamp(18px, 3.4vh, 34px);
+  width: 100%;
+}
 
-/* ── Header ─────────────────────────────────────────────────────────────── */
-.sky-authx .sky-authx-head { display: flex; flex-direction: column; gap: 6px; text-align: center; }
+/* ── Ambient aura — a soft warm presence behind the whole picker ─────────────── */
+.sky-authx .sky-authx-aura {
+  position: absolute;
+  inset: -20% -10% auto -10%;
+  height: 70%;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(50% 60% at 50% 30%, color-mix(in srgb, var(--sky-accent-cyan, #37c0e6) 22%, transparent), transparent 70%);
+  filter: blur(18px);
+  opacity: 0.8;
+}
+
+/* ── Live greeting / clock backdrop ─────────────────────────────────────────── */
+.sky-authx .sky-authx-clock {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  color: var(--sky-ink-2, rgba(255, 255, 255, .62));
+}
+.sky-authx .sky-authx-greet {
+  font-size: clamp(16px, 1.9vw, 22px);
+  font-weight: var(--sky-weight-medium, 500);
+  letter-spacing: 0.2px;
+  color: var(--sky-ink-1, rgba(255, 255, 255, .82));
+}
+.sky-authx .sky-authx-time {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: clamp(15px, 1.6vw, 19px);
+  font-weight: var(--sky-weight-semibold, 600);
+  font-variant-numeric: tabular-nums;
+  color: var(--sky-ink-2, rgba(255, 255, 255, .6));
+}
+.sky-authx .sky-authx-time b { font-weight: var(--sky-weight-medium, 500); font-size: 0.7em; margin-left: 2px; }
+.sky-authx .sky-authx-colon { font-style: normal; opacity: 0.7; }
+.sky-authx .sky-authx-date {
+  font-size: clamp(12px, 1.3vw, 15px);
+  color: var(--sky-ink-3, rgba(255, 255, 255, .44));
+  letter-spacing: 0.3px;
+}
+
+/* ── Header: Zoe orb + kicker + headline + sub ──────────────────────────────── */
+.sky-authx .sky-authx-head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+}
+.sky-authx .sky-authx-orb {
+  width: clamp(56px, 6vw, 78px);
+  height: clamp(56px, 6vw, 78px);
+  border-radius: 50%;
+  margin-bottom: 6px;
+  background:
+    radial-gradient(circle at 34% 28%, #ffffff 0%, #7ef0ee 26%, #9b8cff 68%, #6aa6ff 100%);
+  box-shadow:
+    0 0 46px color-mix(in srgb, var(--sky-accent-cyan, #37c0e6) 45%, transparent),
+    inset 0 2px 12px rgba(255, 255, 255, 0.5);
+  animation: sky-authx-breathe 4.6s ease-in-out infinite;
+}
 .sky-authx .sky-authx-kicker {
   font-size: var(--sky-text-micro, 12px);
   font-weight: 600;
@@ -35,26 +119,27 @@ body:not(.sky-empty) .sky-card.auth-challenge.sky-authx {
 }
 .sky-authx .sky-authx-title {
   margin: 0;
-  font-size: var(--sky-text-title, 30px);
+  font-size: clamp(30px, 3.6vw, 44px);
   font-weight: 600;
-  letter-spacing: -0.4px;
+  letter-spacing: -0.5px;
   color: var(--sky-ink-0, #fff);
 }
 .sky-authx .sky-authx-sub {
   margin: 0;
-  font-size: var(--sky-text-label, 16px);
+  font-size: clamp(15px, 1.6vw, 18px);
   font-weight: 400;
-  color: var(--sky-ink-2, rgba(255,255,255,.62));
+  color: var(--sky-ink-2, rgba(255, 255, 255, .62));
 }
 
-/* ── Profile grid + tiles (override legacy, incl. inline !important) ─────── */
+/* ── Profile grid + tiles (override legacy, incl. inline !important) ─────────── */
 body:not(.sky-empty) .sky-authx .sky-auth-profile-grid {
   display: grid !important;
-  /* Fixed-width tiles, centred — so a single bound profile doesn't stretch to a
-     full-width slab, and any count stays a tidy, evenly-sized grid. */
-  grid-template-columns: repeat(auto-fit, min(196px, 100%)) !important;
+  /* Fixed-width tiles, centred — a single bound profile stays a tidy tile (not a
+     full-width slab) and any household count reads as an even grid. */
+  grid-template-columns: repeat(auto-fit, min(224px, 100%)) !important;
   justify-content: center !important;
-  gap: var(--sky-space-4, 16px) !important;
+  gap: clamp(16px, 2vw, 28px) !important;
+  width: 100%;
   min-height: 0 !important;
   align-content: center !important;
 }
@@ -65,45 +150,44 @@ body:not(.sky-empty) .sky-authx .sky-auth-profile {
   flex-direction: column !important;
   align-items: center !important;
   justify-content: center !important;
-  gap: 14px !important;
-  min-height: 150px !important;
-  padding: var(--sky-space-5, 20px) var(--sky-space-4, 16px) !important;
-  border-radius: var(--sky-radius-lg, 24px) !important;
-  border: 1px solid var(--sky-hairline, rgba(255,255,255,.12)) !important;
-  background: var(--sky-fill-1, rgba(255,255,255,.05)) !important;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.1) !important;
+  gap: 16px !important;
+  min-height: 186px !important;
+  padding: clamp(20px, 2.2vw, 30px) var(--sky-space-4, 16px) !important;
+  border-radius: var(--sky-radius-lg, 28px) !important;
+  border: 1px solid var(--sky-hairline, rgba(255, 255, 255, .12)) !important;
+  background: var(--sky-fill-1, rgba(255, 255, 255, .05)) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .1) !important;
   color: var(--sky-ink-0, #fff);
   text-align: center;
   transition: transform var(--sky-dur-fast, 180ms) var(--sky-ease-spring, ease), background var(--sky-dur-fast, 180ms) ease, border-color var(--sky-dur-fast, 180ms) ease, box-shadow var(--sky-dur-fast, 180ms) ease;
 }
 body:not(.sky-empty) .sky-authx .sky-auth-profile:hover,
 body:not(.sky-empty) .sky-authx .sky-auth-profile:focus-visible {
-  transform: translateY(-3px);
-  background: var(--sky-fill-2, rgba(255,255,255,.09)) !important;
-  border-color: var(--sky-hairline-strong, rgba(255,255,255,.22)) !important;
-  box-shadow: 0 18px 44px -16px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.18) !important;
+  transform: translateY(-4px);
+  background: var(--sky-fill-2, rgba(255, 255, 255, .09)) !important;
+  border-color: var(--sky-hairline-strong, rgba(255, 255, 255, .22)) !important;
+  box-shadow: 0 20px 48px -16px rgba(0, 0, 0, .5), inset 0 1px 0 rgba(255, 255, 255, .18) !important;
 }
 body:not(.sky-empty) .sky-authx .sky-auth-profile:active { transform: scale(.98); }
 body:not(.sky-empty) .sky-authx .sky-auth-profile.is-default {
-  /* ds1 accents are hex — rgba(var(--sky-accent-*-rgb)) leaned on an undefined
-     *-rgb token and only worked via its fallback triple. color-mix keeps the
-     exact same rendered colour while actually reading the canonical token. */
+  /* ds1 accents are hex — color-mix keeps the exact colour while reading the
+     canonical token (rgba(var(--sky-accent-*)) leaned on an undefined *-rgb). */
   border-color: color-mix(in srgb, var(--sky-accent-cyan, #37c0e6) 55%, transparent) !important;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--sky-accent-cyan, #37c0e6) 35%, transparent) inset, 0 16px 40px -18px rgba(0,0,0,.5) !important;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--sky-accent-cyan, #37c0e6) 35%, transparent) inset, 0 16px 40px -18px rgba(0, 0, 0, .5) !important;
 }
 
-/* ── Avatar disc — gradient, canonical accents cycled by position ───────── */
+/* ── Avatar disc — gradient, canonical accents cycled by position ───────────── */
 body:not(.sky-empty) .sky-authx .sky-auth-avatar {
-  width: 72px !important;
-  height: 72px !important;
+  width: 92px !important;
+  height: 92px !important;
   border-radius: 50% !important;
   display: grid !important;
   place-items: center !important;
-  font-size: 30px !important;
+  font-size: 38px !important;
   font-weight: 600 !important;
   color: #fff !important;
   background: linear-gradient(150deg, #37c0e6, #9b8cff) !important;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.4), 0 12px 26px -8px rgba(0,0,0,.45) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .4), 0 14px 30px -8px rgba(0, 0, 0, .45) !important;
 }
 /* distinct, on-palette discs so people are easy to tell apart at a glance */
 body:not(.sky-empty) .sky-authx .sky-auth-profile:nth-child(6n+2) .sky-auth-avatar { background: linear-gradient(150deg, #5be3b0, #37c0e6) !important; }
@@ -112,10 +196,10 @@ body:not(.sky-empty) .sky-authx .sky-auth-profile:nth-child(6n+4) .sky-auth-avat
 body:not(.sky-empty) .sky-authx .sky-auth-profile:nth-child(6n+5) .sky-auth-avatar { background: linear-gradient(150deg, #ff6b8a, #d4537e) !important; }
 body:not(.sky-empty) .sky-authx .sky-auth-profile:nth-child(6n+0) .sky-auth-avatar { background: linear-gradient(150deg, #6aa6ff, #37c0e6) !important; }
 
-/* ── Name ───────────────────────────────────────────────────────────────── */
+/* ── Name ───────────────────────────────────────────────────────────────────── */
 body:not(.sky-empty) .sky-authx .sky-auth-person { min-width: 0; display: flex; flex-direction: column; gap: 2px; align-items: center; }
 body:not(.sky-empty) .sky-authx .sky-auth-person strong {
-  font-size: 20px !important;
+  font-size: 22px !important;
   font-weight: 500 !important;
   letter-spacing: -0.1px;
   color: var(--sky-ink-0, #fff) !important;
@@ -124,37 +208,48 @@ body:not(.sky-empty) .sky-authx .sky-auth-person strong {
 /* the legacy "Enter →" pill isn't needed in the tile layout */
 body:not(.sky-empty) .sky-authx .sky-auth-enter { display: none !important; }
 
-/* ── Loading + empty states ─────────────────────────────────────────────── */
+/* ── Loading + empty states ─────────────────────────────────────────────────── */
 body:not(.sky-empty) .sky-authx .sky-auth-loading,
 body:not(.sky-empty) .sky-authx .sky-auth-empty {
   grid-column: 1 / -1;
-  min-height: 150px !important;
+  min-height: 186px !important;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--sky-space-3, 12px);
-  color: var(--sky-ink-2, rgba(255,255,255,.6));
+  color: var(--sky-ink-2, rgba(255, 255, 255, .6));
   font-size: 15px;
 }
 body:not(.sky-empty) .sky-authx .sky-auth-loading i {
   width: 30px; height: 30px; border-radius: 50%;
-  border: 3px solid var(--sky-fill-3, rgba(255,255,255,.16));
+  border: 3px solid var(--sky-fill-3, rgba(255, 255, 255, .16));
   border-top-color: var(--sky-accent-cyan, #37c0e6);
   animation: sky-authx-spin 900ms linear infinite;
 }
 @keyframes sky-authx-spin { to { transform: rotate(360deg); } }
+@keyframes sky-authx-breathe {
+  0%, 100% { transform: scale(1); filter: brightness(1); }
+  50% { transform: scale(1.06); filter: brightness(1.1); }
+}
 
 /* ── Light mode (re-point the ink scale; the global light theme only flips
       --text-*, not --sky-ink-*, so var(--sky-ink-N) text would go white-on-white) */
-[data-theme="light"] .sky-card.auth-challenge.sky-authx {
+/* Must out-specify the dark base rule (body:not(.sky-empty) .sky-card…, 0,4,1),
+   so the light selector carries html + body:not(.sky-empty) too (0,5,2). */
+html[data-theme="light"] body:not(.sky-empty) .sky-card.auth-challenge.sky-authx {
   --sky-ink-0: #16324d; --sky-ink-1: #2a4d6e; --sky-ink-2: #3a5e80; --sky-ink-3: #6a86a2;
-  --sky-fill-1: rgba(255,255,255,.62); --sky-fill-2: rgba(255,255,255,.86); --sky-fill-3: rgba(20,50,80,.12);
-  --sky-hairline: rgba(20,50,80,.12); --sky-hairline-strong: rgba(20,50,80,.2);
-  background: linear-gradient(157deg, rgba(255,255,255,.74), rgba(255,255,255,.52)) !important;
-  border-color: rgba(20,50,80,.14) !important;
-  box-shadow: 0 30px 70px -22px rgba(20,50,80,.3), inset 0 1px 0 rgba(255,255,255,.7) !important;
+  --sky-fill-1: rgba(255, 255, 255, .62); --sky-fill-2: rgba(255, 255, 255, .86); --sky-fill-3: rgba(20, 50, 80, .12);
+  --sky-hairline: rgba(20, 50, 80, .12); --sky-hairline-strong: rgba(20, 50, 80, .2);
+  background:
+    radial-gradient(140% 90% at 50% -10%, color-mix(in srgb, var(--sky-accent-cyan, #37c0e6) 16%, transparent), transparent 62%),
+    radial-gradient(120% 100% at 92% 118%, color-mix(in srgb, var(--sky-accent-violet, #9b8cff) 16%, transparent), transparent 60%),
+    linear-gradient(157deg, rgba(255, 255, 255, .74), rgba(255, 255, 255, .52)) !important;
+  border-color: rgba(20, 50, 80, .14) !important;
+  box-shadow: 0 30px 70px -22px rgba(20, 50, 80, .3), inset 0 1px 0 rgba(255, 255, 255, .7) !important;
 }
 [data-theme="light"] .sky-authx .sky-authx-title { color: #16324d; }
 [data-theme="light"] .sky-authx .sky-authx-sub { color: #3a5e80; }
+[data-theme="light"] .sky-authx .sky-authx-aura { opacity: 0.6; }
 
 @media (prefers-reduced-motion: reduce) {
   body:not(.sky-empty) .sky-authx .sky-auth-profile { transition: none; }
   body:not(.sky-empty) .sky-authx .sky-auth-loading i { animation: none; }
+  .sky-authx .sky-authx-orb { animation: none; }
 }

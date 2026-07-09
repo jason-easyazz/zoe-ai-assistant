@@ -72,11 +72,31 @@
     }
 
     function renderAuthChallenge(props) {
-        const title = escapeHtml(props.title || "Who's here?");
-        const sub = escapeHtml(props.body || props.summary || 'Tap your profile to continue.');
+        const title = escapeHtml(props.title || 'Welcome home');
+        const sub = escapeHtml(props.body || props.summary || 'Tap your profile to sign in.');
+        // A calm, glanceable backdrop so the picker never reads as a stranded
+        // dialog: a soft greeting + a LIVE clock. Reusing the shared .sky-live-clock
+        // hooks means skybridge.js's 1s ticker keeps the numerals current for free
+        // (updateAllClocks queries [data-clock-*] under any .sky-live-clock).
+        const parts = clockParts('');
+        const greet = escapeHtml(clockGreeting(''));
+        const clockHtml = [
+            '<div class="sky-authx-clock sky-live-clock" aria-hidden="true">',
+            '<span class="sky-authx-greet">' + greet + '</span>',
+            '<span class="sky-authx-time tnum"><span data-clock-hour>' + escapeHtml(parts.hour) + '</span>',
+            '<i class="sky-authx-colon">:</i><span data-clock-minute>' + escapeHtml(parts.minute) + '</span>',
+            '<b data-clock-meridiem>' + escapeHtml(parts.dayPeriod) + '</b></span>',
+            '<span class="sky-authx-date" data-clock-date>' + escapeHtml(parts.date) + '</span>',
+            '</div>'
+        ].join('');
         const bodyHtml = [
             '<div class="sky-auth-scene sky-auth-people-only">',
+            // Soft ambient aura behind the whole picker — a warm Zoe presence
+            // (decorative only).
+            '<div class="sky-authx-aura" aria-hidden="true"></div>',
+            clockHtml,
             '<div class="sky-authx-head">',
+            '<span class="sky-authx-orb" aria-hidden="true"></span>',
             '<span class="sky-authx-kicker">' + escapeHtml(props.kicker || 'Sign in') + '</span>',
             '<h2 class="sky-authx-title">' + title + '</h2>',
             '<p class="sky-authx-sub">' + sub + '</p>',
@@ -100,24 +120,28 @@
         const id = escapeHtml(props.timer_id || props.id || '');
         const expired = props.status === 'expired' || remaining <= 0;
         const lowClass = (!expired && frac <= 0.15) ? ' is-low' : '';
-        // The fill is the card's border: a rounded-rect stroke whose visible length
-        // tracks the time left (pathLength=100 → offset is just the spent percent).
+        // Progress is a straight horizontal bar spanning the card, NOT a rounded-rect
+        // perimeter (that fragmented under the card's non-uniform scale). It still
+        // keeps pathLength=100 + stroke-dasharray=100 so skybridge.js timerTick can
+        // drive stroke-dashoffset = spent% on .sky-timer-ring-fill UNCHANGED; a
+        // straight line has no corners to distort, so the fill stays smooth.
         const offset = (100 * (1 - frac)).toFixed(2);
-        const ring = [
-            '<svg class="sky-timer-ring" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">',
-            '<rect class="sky-timer-ring-track" x="2" y="2" width="96" height="96" rx="9" ry="9" pathLength="100"></rect>',
-            '<rect class="sky-timer-ring-fill" x="2" y="2" width="96" height="96" rx="9" ry="9" pathLength="100" stroke-dasharray="100" stroke-dashoffset="' + offset + '"></rect>',
+        const bar = [
+            '<svg class="sky-timer-bar" viewBox="0 0 100 14" preserveAspectRatio="none" aria-hidden="true">',
+            '<line class="sky-timer-ring-track" x1="0" y1="7" x2="100" y2="7" pathLength="100"></line>',
+            '<line class="sky-timer-ring-fill" x1="0" y1="7" x2="100" y2="7" pathLength="100" stroke-dasharray="100" stroke-dashoffset="' + offset + '"></line>',
             '</svg>'
         ].join('');
         const body = [
             '<div class="sky-timer' + (expired ? ' is-expired' : '') + lowClass + '" data-timer-id="' + id + '"',
                 ' data-timer-expires="' + expires + '" data-timer-duration="' + dur + '"',
                 ' data-timer-status="' + (expired ? 'expired' : 'running') + '">',
-            ring,
             '<button type="button" class="sky-timer-x" data-timer-cancel="' + id + '" aria-label="' + (expired ? 'Dismiss timer' : 'Cancel timer') + '">✕</button>',
-            '<div class="sky-timer-center">',
+            '<div class="sky-timer-face">',
+            '<span class="sky-timer-label">' + escapeHtml(label) + '</span>',
             '<div class="sky-timer-digits">' + (expired ? "Time's up" : mm + ':' + ss) + '</div>',
-            '<div class="sky-timer-label">' + escapeHtml(label) + '</div>',
+            '<div class="sky-timer-progress">' + bar + '</div>',
+            '<span class="sky-timer-state" aria-hidden="true">' + (expired ? 'Tap anywhere to dismiss' : 'Counting down') + '</span>',
             '</div>',
             '</div>'
         ].join('');
