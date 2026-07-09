@@ -19,9 +19,9 @@ re-break it* companion.
 mention "my brother Daniel"
   → detect_and_store: _deterministic_person_proposals (regex) ∪ person_extractor_llm
   → person_create pending suggestion (deduped, user-scoped)
-  → surfaces two ways:
+  → surfaces:
        • flue brain: /api/memories/for-prompt folds the offer in (P1) ✅ live
-       • touch panel: ui_components_for_suggestions → action_card ⚠️ emitted, not yet rendered (see gap below)
+       • touch panel (Skybridge): NOT wired yet — see the panel gap below
   → user says "yes" / taps Add
   → execute_suggestion → intent_router._execute_people_create_direct
   → full private contact (is_partial=0, visibility=personal, circle=circle)
@@ -96,23 +96,40 @@ atomicity.
   zoe-data.service` (operator-run; the classifier blocks agents from the restart). The
   driver's checkout-sync does not reliably restart.
 
-## ⚠️ Known gap: the touch panel doesn't render `action_card` yet
+## ⚠️ Known gap: the touch panel (Skybridge) has no person_create confirm card
 
-`ui_components_for_suggestions` emits a proper `person_create` confirm card (#1222:
-`{"type":"action_card","title":"Add {name} as your {relationship}?","actions":[Add,Dismiss]}`),
-but the panel **does not display it**. `chat.html`'s `renderChatComponent` switches on
-`data.component`; these cards carry `type:"action_card"` with **no `component` field**, so
-they fall through to `[Unknown component: undefined]`. This is **pre-existing** — it drops
-the old generic Save card too, not just person_create.
+**The panel's kiosk home is Skybridge, not `chat.html`.** (`chat.html`'s
+`renderChatComponent`/`action_card` path is a *secondary* chat surface — the P4 backend card
+`ui_components_for_suggestions` emits, #1222, targets that path and is fine for chat, but it is
+**not** how the panel proactively surfaces things.) The Skybridge card system is:
 
-Complicating a fix: the panel has a *second*, working action-card path
-(`renderActionCards`/`renderCardActions`, triggered by the plural `action_cards` event) whose
-action shape is `{type, label, data}` → `executeCardAction`, which **does not match** the
-suggestion card's `{label, action, suggestion_id}` shape. So closing the gap is net-new panel
-work (add an `action_card` case that renders the actions and POSTs to
-`/api/proactive/suggestions/{id}/accept|dismiss`), not a one-line switch case — and it needs
-live-panel verification (kiosk @192.168.1.61), not just a headless test. The confirm card is
-functional on the **flue/voice** surface today; the **panel** surface is this gap.
+- **`card_contract.py`** — schema-versioned card contract: `schema_version` (semver) +
+  `card_type` (a `CardType` enum) + `content` (required fields per type; `content.actions`
+  carries buttons).
+- **`card_service.py`** — `SkybridgeCardService.build_card(card_type, content)` + per-domain
+  `build_*_content` builders (already has `people_directory`, `person_profile`).
+- **Push lane** — `ui_orchestrator.enqueue_ui_action` + `broadcaster.broadcast("all",
+  "ui_action", …)` (see `routers/chat.py:274-347`, e.g. the PIN prompt); the panel polls
+  `GET /api/ui/actions/pending` and `POST /api/ui/actions/{id}/ack`.
+- **Client** — `skybridge-renderer.js` `normalizeCard()` renders `card_type`+`content`+
+  `schema_version` (gated by `renderer_accepts`) or `props.source`; action buttons carry
+  `data-sky-action`, and `skybridge.js` routes them (`auth`→`/api/skybridge/resolve` with an
+  identity-bound challenge; `query`→re-issue a voice command).
+
+**What's missing for a proper "Add {name} as your {relationship}?" panel card:**
+1. `skybridge_service.py` does not surface pending `person_create` offers to the panel at all
+   (no pending/suggest/offer path there).
+2. There is no `person_confirm`/`contact_offer` `CardType` + `build_*_content` builder + push.
+3. Trap: `normalizeCard` **downgrades `card.type === 'confirmation'|'confirm'` to an
+   action-less status card** (`skybridge-renderer.js:1835`) — a naive confirm card loses its
+   buttons. Use a dedicated `card_type` with `content.actions`, not the generic confirm type.
+4. The confirm/dismiss action must be wired through `data-sky-action` to a server call
+   (the auth-challenge pattern is the closest model) that runs `execute_suggestion`.
+
+So this is a **multi-file Skybridge feature** (contract + service builder + push + renderer +
+action wiring), needing **live-kiosk verification** (@192.168.1.61) — not a chat.html tweak.
+The confirm card works on the **flue/voice** surface today; the **Skybridge panel** surface is
+this gap.
 
 ## Cleanup
 
@@ -132,4 +149,4 @@ synthetic test identities, never a real user.
 | #1214 | P5 — deterministic regex propose-on-mention (belt-and-suspenders) |
 | #1215 | store_suggestions ensure-user FK fix + swallowed-except → WARNING |
 | #1216 | circle NOT NULL regression fix (`'circle'` is a valid tier) |
-| #1222 | P4 — person_create confirm card (`ui_components_for_suggestions`); backend only, panel render is the known gap above |
+| #1222 | P4 — person_create confirm card on the *chat.html* surface (`ui_components_for_suggestions`); the **Skybridge panel** card is still the known gap above |
