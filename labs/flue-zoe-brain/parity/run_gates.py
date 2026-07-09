@@ -169,15 +169,26 @@ def main() -> None:
 
     svc_before = gatelib.service_started_at()
     all_rows: list[dict] = []
-    for name in wanted:
-        gate = available[name]
-        print(f"\n=== GATE {name}: {gate.description}")
-        ctx.recorder = gatelib.Recorder(gate=name)
+    try:
+        for name in wanted:
+            gate = available[name]
+            print(f"\n=== GATE {name}: {gate.description}")
+            ctx.recorder = gatelib.Recorder(gate=name)
+            try:
+                gate.run(ctx)
+            except Exception as e:  # noqa: BLE001 — one gate crashing must not lose the others
+                ctx.recorder.add(name, "(gate crashed)", str(e), 0, "ERROR", "gate raised")
+            all_rows.extend(ctx.recorder.rows)
+    finally:
+        # ALWAYS hard-purge this run's writes — even on crash/Ctrl-C. Gate writes
+        # ("add X to my shopping list") land on the FAMILY-shared surface, so
+        # leaving them pollutes the real household's list. Runs regardless of
+        # exit path so a killed run can't leave cruft on live data.
         try:
-            gate.run(ctx)
-        except Exception as e:  # noqa: BLE001 — one gate crashing must not lose the others
-            ctx.recorder.add(name, "(gate crashed)", str(e), 0, "ERROR", "gate raised")
-        all_rows.extend(ctx.recorder.rows)
+            purged = gatelib.purge_artifacts(nonce)
+            print(f"cleanup: purged gate writes { {k: v for k, v in purged.items() if not v.endswith(' 0')}}")
+        except Exception as e:  # noqa: BLE001 — cleanup failure must not mask the run
+            print(f"!! cleanup purge failed ({e}) — check for leftover gate writes on real lists")
     svc_after = gatelib.service_started_at()
 
     meta = {"user": user, "nonce": nonce, "gates": wanted,

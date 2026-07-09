@@ -26,7 +26,7 @@ So the read tool's said-vs-did is anchored to a DB fact, not to itself.
 
 Tools with no DB side-effect (weather) are verified by response sanity only.
 
-Cleanup: every nonce'd test row this gate writes is soft-deleted from Postgres
+Cleanup: every nonce'd test row this gate writes is HARD-deleted from Postgres
 at the end (best-effort). Nonce markers make the rows unambiguously ours.
 
 Run ON the Zoe host, quiet window (no merge-train deploy restart mid-run):
@@ -151,19 +151,24 @@ def db_present(table: str, col: str, needle: str, active: bool = True):
 
 
 def db_soft_delete(table: str, col: str, needle: str) -> int:
-    """Best-effort cleanup: soft-delete nonce'd test rows. Returns row count."""
+    """Best-effort cleanup: HARD-delete nonce'd test rows. Returns row count.
+
+    Hard, not soft: `deleted = 1` leaves the row in the DB, and gate writes land
+    on the FAMILY-shared surface (e.g. the household shopping list), so
+    soft-deleted rows pile up as invisible clutter on real users' data. The
+    nonce'd needle keeps this scoped to THIS run's own writes.
+    """
     _check_ident(table, col)
     asyncpg, url = _pg()
 
     async def q():
         conn = await asyncpg.connect(url)
         try:
-            # `deleted` is an integer flag (0/1) in these tables, not boolean.
             res = await conn.execute(
-                f"UPDATE {table} SET deleted = 1 WHERE {col} ILIKE $1", f"%{needle}%")
+                f"DELETE FROM {table} WHERE {col} ILIKE $1", f"%{needle}%")
         finally:
             await conn.close()
-        # asyncpg returns e.g. "UPDATE 3"
+        # asyncpg returns e.g. "DELETE 3"
         try:
             return int(res.split()[-1])
         except Exception:  # noqa: BLE001
@@ -374,7 +379,7 @@ def main():
     for table, col, needle in CLEANUP + [("list_items", "text", MARK)]:
         try:
             n = db_soft_delete(table, col, needle)
-            print(f"  soft-deleted {n} row(s) from {table} matching {needle!r}")
+            print(f"  purged {n} row(s) from {table} matching {needle!r}")
         except Exception as e:  # noqa: BLE001
             print(f"  cleanup FAILED for {table}/{needle!r}: {e}")
 
