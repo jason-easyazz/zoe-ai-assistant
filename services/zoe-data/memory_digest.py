@@ -90,7 +90,8 @@ async def _resolve_pending_person_links(user_id: str, db=None) -> dict:
     if not memory_link_resolver_enabled():
         return result
 
-    from person_extractor import _ensure_db, _resolve_person_uuid
+    from person_extractor import _ensure_db
+    from memory_extractor import _resolve_unique_person_uuid
     from memory_service import get_memory_service, is_guest_memory_user
 
     if not user_id or is_guest_memory_user(user_id):
@@ -102,6 +103,7 @@ async def _resolve_pending_person_links(user_id: str, db=None) -> dict:
     try:
         svc = get_memory_service()
         col = svc._collection()
+        # Owner + status scoped scan: only THIS user's still-pending person facts.
         results = col.get(
             where={"$and": [
                 {"user_id": {"$eq": user_id}},
@@ -117,26 +119,19 @@ async def _resolve_pending_person_links(user_id: str, db=None) -> dict:
             name = _name_from_pending_slug(str(meta.get("entity_id") or ""))
             if not name:
                 continue
-            try:
-                person_uuid = await _resolve_person_uuid(name, user_id, _db)
-            except Exception as exc:
-                logger.debug("link_resolver: resolve failed for %r: %s", name, exc)
-                continue
+            # Unambiguous match only — never guess "Sam" onto "Samantha" and
+            # permanently rewrite the fact to the wrong person.
+            person_uuid = await _resolve_unique_person_uuid(name, user_id, _db)
             if not person_uuid:
                 continue
-            meta["entity_type"] = "person"
-            meta["entity_id"] = str(person_uuid)
-            try:
-                # Metadata-only write: no `documents` arg ⇒ Chroma keeps the
-                # existing embedding (see MemoryService._tick_access_sync).
-                col.update(ids=[mem_id], metadatas=[meta])
+            # Relink through the memory service so the metadata-only rewrite runs
+            # under the SAME per-user lock as tick_access (no lost-update race).
+            if await svc.relink_entity(user_id, mem_id, "person", str(person_uuid)):
                 result["relinked"] += 1
                 logger.info(
                     "link_resolver: relinked %s -> person %s user=%s",
                     mem_id, person_uuid, user_id,
                 )
-            except Exception as exc:
-                logger.warning("link_resolver: update failed id=%s: %s", mem_id, exc)
     except Exception as exc:
         logger.warning("link_resolver: scan failed user=%s: %s", user_id, exc)
     finally:

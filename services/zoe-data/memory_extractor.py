@@ -383,6 +383,51 @@ def _slug_body(name: str) -> str:
     return (name or "").strip().lower().replace(" ", "_")
 
 
+async def _resolve_unique_person_uuid(name: str, user_id: str, db) -> Optional[str]:
+    """``people.id`` for ``name`` ONLY when the match is unambiguous, else None.
+
+    ``person_extractor._resolve_person_uuid`` does a substring ``LIKE`` and returns
+    the FIRST row, so a short extracted name ("Sam") can silently hard-link to a
+    longer contact ("Samantha"). For a HARD ``person`` link we require certainty:
+    prefer a unique exact (case-insensitive) name match; otherwise fall back to
+    the substring match only when it is the single candidate. Zero matches, or a
+    genuinely ambiguous set (>1 substring hit with no unique exact), returns None
+    so the caller keeps the fact ``person_pending`` rather than guess. Uses the
+    same dual placeholder idiom as ``_resolve_person_uuid``.
+    """
+    name = (name or "").strip()
+    if not name or not user_id or db is None:
+        return None
+    try:
+        try:
+            cur = await db.execute(
+                "SELECT id, name FROM people WHERE user_id=$1 AND deleted=0 "
+                "AND lower(name) LIKE lower($2)",
+                user_id, f"%{name}%",
+            )
+        except Exception:
+            cur = await db.execute(
+                "SELECT id, name FROM people WHERE user_id=? AND deleted=0 "
+                "AND lower(name) LIKE lower(?)",
+                (user_id, f"%{name}%"),
+            )
+        rows = await cur.fetchall()
+    except Exception as exc:
+        logger.debug("memory_extractor: unique person resolve failed for %r: %s", name, exc)
+        return None
+    if not rows:
+        return None
+    target = name.lower()
+    exact = [r for r in rows if str(r[1] or "").strip().lower() == target]
+    if len(exact) == 1:
+        return str(exact[0][0])
+    if len(exact) > 1:
+        return None  # multiple contacts with the same exact name — don't guess
+    if len(rows) == 1:
+        return str(rows[0][0])
+    return None  # ambiguous substring set (e.g. "Sam" ⊂ {"Sam","Samantha"})
+
+
 async def _resolve_person_link(name: str, user_id: str, db) -> tuple[str, str]:
     """Map a person name to ``(entity_type, entity_id)`` — person_extractor's rule.
 
@@ -393,13 +438,7 @@ async def _resolve_person_link(name: str, user_id: str, db) -> tuple[str, str]:
     graph-linkage bug this producer had). Mirrors
     ``person_extractor._ingest_to_mempalace``'s convention exactly.
     """
-    person_uuid = None
-    if name and user_id and db is not None:
-        try:
-            from person_extractor import _resolve_person_uuid
-            person_uuid = await _resolve_person_uuid(name, user_id, db)
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.debug("memory_extractor: person resolve failed for %r: %s", name, exc)
+    person_uuid = await _resolve_unique_person_uuid(name, user_id, db)
     if person_uuid:
         return "person", str(person_uuid)
     return "person_pending", f"slug:{_slug_body(name)}"

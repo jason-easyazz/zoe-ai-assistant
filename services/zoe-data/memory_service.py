@@ -1443,6 +1443,61 @@ class MemoryService:
             # embedding recompute that col.upsert() would force on every doc.
             col.update(ids=got_ids, metadatas=new_metas)
 
+    async def relink_entity(
+        self, user_id: str, mem_id: str, entity_type: str, entity_id: str
+    ) -> bool:
+        """Re-key a still-pending person fact's entity link (metadata-only).
+
+        Used by the idle dream-cycle resolver (``memory_digest``) to promote a
+        ``person_pending`` fact to a real ``people.id`` once the contact exists.
+        Runs under the SAME per-user lock as ``tick_access`` and re-reads the
+        row's current metadata inside the lock, so a concurrent access-tick can't
+        clobber the relink (and vice-versa) — only ``entity_type`` / ``entity_id``
+        change, every other field is preserved. Uses ``col.update`` (no
+        ``documents``) so Chroma keeps the existing embedding (no re-embed).
+
+        Returns True only when a row was actually relinked. No-op (False) when the
+        id is unknown, owned by another user, or no longer ``person_pending``
+        (idempotent + race-safe).
+        """
+        if not user_id or not mem_id:
+            return False
+        lock = self._user_locks.setdefault(user_id, asyncio.Lock())
+        try:
+            async with lock:
+                return bool(
+                    await self._run_sync(
+                        self._relink_entity_sync, user_id, mem_id, entity_type, entity_id
+                    )
+                )
+        except Exception as exc:
+            logger.warning("memory_service: relink_entity failed id=%s: %s", mem_id, exc)
+            return False
+
+    def _relink_entity_sync(
+        self, user_id: str, mem_id: str, entity_type: str, entity_id: str
+    ) -> bool:
+        col = self._collection()
+        result = col.get(ids=[mem_id], include=["metadatas"])
+        got_ids = result.get("ids") or []
+        got_metas = result.get("metadatas") or []
+        if not got_ids:
+            return False
+        m = dict(got_metas[0]) if got_metas and got_metas[0] else {}
+        # Never relink another user's row (ownerless legacy rows are treated as
+        # the caller's, matching the rest of this module's back-compat stance).
+        owner = str(m.get("user_id") or "")
+        if owner and owner != user_id:
+            return False
+        # Only a still-pending person fact is eligible — idempotent under a race
+        # (a second relink, or one that lost to a concurrent write, is a no-op).
+        if str(m.get("entity_type") or "") != "person_pending":
+            return False
+        m["entity_type"] = entity_type
+        m["entity_id"] = entity_id
+        col.update(ids=got_ids, metadatas=[m])
+        return True
+
     async def _append_audit(
         self,
         *,
