@@ -132,6 +132,19 @@ def _wire_voice_command_fakes(monkeypatch, *, panel_user: str | None):
         ),
     )
 
+    # Identity + auth checks now resolve on a dedicated get_db_ctx() connection
+    # (detached-task safety), so the harness must provide one or those paths fail.
+    class _FakeIdConnCtx:
+        async def __aenter__(self):
+            return "IDCONN"
+        async def __aexit__(self, *_a):
+            return False
+
+    monkeypatch.setitem(
+        sys.modules, "db_pool",
+        types.SimpleNamespace(get_db_ctx=lambda: _FakeIdConnCtx()),
+    )
+
     monkeypatch.setattr(voice_tts, "_spawn_bg", fake_spawn_bg)
     monkeypatch.setattr(voice_tts, "synthesize", fake_synthesize)
     monkeypatch.setattr(voice_tts, "_broadcast_skybridge_ui", fake_broadcast_skybridge_ui)

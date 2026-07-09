@@ -2439,16 +2439,27 @@ async def voice_command(
     # ='guest' → every panel voice turn was silently dropped from memory. A private
     # short-lived connection removes the race (reproduced: solo→jason, concurrent→None).
     _bound_user = (_VOICE_SESSIONS.get(panel_id) or {}).get("bound_user_id")
+    _panel_recent_user = None
+    _panel_default_user = None
     try:
         from db_pool import get_db_ctx as _get_db_ctx
         async with _get_db_ctx() as _idconn:
             _panel_recent_user = await _resolve_recent_panel_session_user(panel_id, _idconn)
             _panel_default_user = await _resolve_panel_default_user(panel_id, _idconn)
     except Exception:
-        # Never let identity resolution break the turn — fall back to the shared db
-        # (no worse than the pre-fix behaviour if a dedicated connection is unavailable).
-        _panel_recent_user = await _resolve_recent_panel_session_user(panel_id, db)
-        _panel_default_user = await _resolve_panel_default_user(panel_id, db)
+        # Dedicated connection unavailable (e.g. pool momentarily exhausted). Fall back
+        # to the request `db`: on the awaited /turn path it is still valid → correct
+        # identity even under pool pressure; on the detached streaming/PIN-replay path it
+        # is released/racy so this query just fails → we keep None. Either way, never a
+        # WRONG attribution (the dedicated conn is always TRIED first, so the detached
+        # path uses it in the normal case — this fallback only runs on acquire failure).
+        logger.warning("voice identity: dedicated conn unavailable for panel=%s; trying request db", panel_id)
+        try:
+            _panel_recent_user = await _resolve_recent_panel_session_user(panel_id, db)
+            _panel_default_user = await _resolve_panel_default_user(panel_id, db)
+        except Exception:
+            _panel_recent_user = None
+            _panel_default_user = None
     if not _bound_user and _panel_recent_user:
         _ses = _VOICE_SESSIONS.get(panel_id)
         if _ses is not None:
@@ -3275,7 +3286,21 @@ async def voice_command(
         from intent_router import detect_intent as _detect_pub, execute_intent as _exec_pub
         _pub_intent = _detect_pub(text, log_miss=False)
         if _pub_intent and _pub_intent.name in _PUBLIC_VOICE_INTENTS:
-            if not await _can_use_voice_intent(db, _voice_policy_user, _pub_intent.name):
+            # Detached-task safety (see identity block above): run the auth check on a
+            # dedicated connection, never the released request `db`. Fail closed.
+            try:
+                from db_pool import get_db_ctx as _get_db_ctx
+                async with _get_db_ctx() as _authconn:
+                    _pub_allowed = await _can_use_voice_intent(_authconn, _voice_policy_user, _pub_intent.name)
+            except Exception:
+                # Dedicated conn unavailable: on the awaited path the request db is valid;
+                # on the detached path it fails → fail closed (deny).
+                try:
+                    _pub_allowed = await _can_use_voice_intent(db, _voice_policy_user, _pub_intent.name)
+                except Exception:
+                    logger.warning("voice auth (public) failed on both conns intent=%s", _pub_intent.name)
+                    _pub_allowed = False
+            if not _pub_allowed:
                 _record_guest_policy(
                     "blocked",
                     surface="voice",
@@ -3384,6 +3409,9 @@ async def voice_command(
         # caught the household-safe reads, so Tier-0 here mainly backstops them.
         # Reuse the router decision from the shadow log and keep the dispatch ctx
         # identical via extra_ctx (db/panel_id).
+        # NOTE: extra_ctx["db"] is inert — fast_tiers.dispatch never reads it and the
+        # downstream execute_intent/store_fact open their own connections (audited
+        # 2026-07-09). Left as-is (harmless dead-pass); do NOT rely on it for queries.
         _xresult = await _fp.resolve(
             text, effective_user, session_id,
             channel="voice",
@@ -3437,7 +3465,19 @@ async def voice_command(
             _scope_action = _scope.intent_name or "text"
             _scope_allowed = True
             if _scope.intent_name:
-                _scope_allowed = await _can_use_voice_intent(db, _voice_policy_user, _scope.intent_name)
+                # Detached-task safety: dedicated connection, not the released request db.
+                try:
+                    from db_pool import get_db_ctx as _get_db_ctx
+                    async with _get_db_ctx() as _scopeconn:
+                        _scope_allowed = await _can_use_voice_intent(_scopeconn, _voice_policy_user, _scope.intent_name)
+                except Exception:
+                    # Dedicated conn unavailable: request db (valid on the awaited path);
+                    # else fail closed.
+                    try:
+                        _scope_allowed = await _can_use_voice_intent(db, _voice_policy_user, _scope.intent_name)
+                    except Exception:
+                        logger.warning("voice auth (scope) failed on both conns intent=%s", _scope.intent_name)
+                        _scope_allowed = False
             logger.info(
                 "voice/scope panel=%s scope=%s intent=%s allowed=%s ident=%s policy_role=%s",
                 panel_id, _scope.scope, _scope.intent_name, _scope_allowed,
