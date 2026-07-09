@@ -253,3 +253,67 @@ async def test_schedule_save_failure_logs_warning_with_user(monkeypatch, caplog)
     joined = " ".join(r.getMessage() for r in warnings)
     assert BOUND_USER in joined
     assert SESSION_ID in joined
+
+
+@pytest.mark.asyncio
+async def test_identity_resolves_via_dedicated_conn_under_shared_db_race(monkeypatch) -> None:
+    """P-F8: on the streaming panel path voice_command runs via ensure_future sharing
+    turn_stream's pooled asyncpg connection, which is used concurrently. asyncpg forbids
+    concurrent ops on one connection, so a resolver query on the shared `db` raised and
+    the resolvers' `except: pass` swallowed it → None → effective_user='guest' → every
+    panel voice turn was silently dropped. The fix resolves identity on a DEDICATED
+    connection (get_db_ctx), so it must succeed even when the shared `db` is unusable.
+
+    Reproduce: a shared `db` whose .execute raises (concurrent-use failure) + a working
+    dedicated connection from get_db_ctx that yields the bound user. The turn must persist
+    under the bound user, not guest.
+    """
+    chat_calls, spawned = _wire_voice_command_fakes(monkeypatch, panel_user=None)
+
+    class _RacyDB:
+        """Mimics the shared pooled connection mid-concurrent-use: every query raises."""
+        async def execute(self, *_a, **_k):
+            raise RuntimeError("another operation is in progress on this connection")
+
+    class _GoodConnCtx:
+        async def __aenter__(self):
+            return "DEDICATED_CONN"
+        async def __aexit__(self, *_a):
+            return False
+
+    def _fake_get_db_ctx():
+        return _GoodConnCtx()
+
+    # Resolver succeeds ONLY on the dedicated connection; on the racy shared db it
+    # yields None — the NET effect of asyncpg raising under concurrent use and the
+    # resolver's own `except: pass` swallowing it (the exact live failure → guest).
+    async def _conn_aware_default(_panel_id, conn):
+        if conn != "DEDICATED_CONN":
+            return None
+        return BOUND_USER
+
+    async def _conn_aware_recent(_panel_id, conn):
+        return None  # matches live (recent lookup returns None); default carries identity
+
+    monkeypatch.setitem(sys.modules, "db_pool", types.SimpleNamespace(get_db_ctx=_fake_get_db_ctx))
+    monkeypatch.setattr(voice_tts, "_resolve_panel_default_user", _conn_aware_default)
+    monkeypatch.setattr(voice_tts, "_resolve_recent_panel_session_user", _conn_aware_recent)
+
+    response = await voice_command(
+        {"text": UTTERANCE, "panel_id": PANEL_ID, "session_id": SESSION_ID},
+        caller={"source": "device", "user_id": "voice-daemon", "panel_id": PANEL_ID},
+        stream=False,
+        db=_RacyDB(),
+    )
+    if spawned:
+        await asyncio.gather(*spawned)
+
+    assert response["ok"] is True
+    saved_users = {call[3] for call in chat_calls}
+    assert "guest" not in saved_users and "voice-daemon" not in saved_users, (
+        "identity fell back to guest — the shared-db race was not avoided: %r" % (chat_calls,)
+    )
+    assert BOUND_USER in saved_users, (
+        "turn was not persisted under the panel-bound user via the dedicated connection "
+        "(the P-W0 root cause): %r" % (chat_calls,)
+    )
