@@ -60,3 +60,12 @@ async def test_setup_info_returns_guidance_and_honest_note():
     # mentions "Home Assistant" jargon.
     assert "can't finish pairing" in info["note"].lower()
     assert "home assistant" not in info["note"].lower()
+
+
+@pytest.mark.asyncio
+async def test_setup_info_is_single_use():
+    # The guide fetch SPENDS the token — a re-opened/photographed QR can't re-fetch.
+    tok = smart_home_setup.mint()["token"]
+    assert (await setup_info(token=tok))["ok"] is True
+    again = await setup_info(token=tok)
+    assert again["ok"] is False and "expired" in again["reason"].lower()

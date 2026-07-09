@@ -162,8 +162,11 @@ async def _entities_in(domain: str) -> list[dict[str, Any]]:
 
 # Zoe's own voice-satellite exposes internal switches (Mute, Thinking Sound) under
 # the switch domain. They are plumbing, not household devices — hide them so the
-# card shows the owner's real home, never Zoe's own guts.
-_INTERNAL_MARKERS = ("lva_", "zoe-touch", "zoe touch", "assist", "satellite", "thinking sound")
+# card shows the owner's real home, never Zoe's own guts. Markers are deliberately
+# specific to the satellite's auto-generated ids/name (`switch.lva_*`, "zoe-touch")
+# so we never hide a genuine device that merely contains a word like "assistant" or
+# "satellite" (e.g. `input_boolean.assistance_light`, `switch.satellite_dish`).
+_INTERNAL_MARKERS = ("lva_", "zoe-touch", "zoe touch")
 
 
 def _is_internal(device: dict[str, Any]) -> bool:

@@ -464,6 +464,26 @@ async def test_voice_satellite_internals_are_hidden(monkeypatch):
     assert names == {"Coffee Plug"}  # both lva_ internals filtered out
 
 
+@pytest.mark.asyncio
+async def test_internal_filter_does_not_hide_real_lookalike_devices(monkeypatch):
+    # The satellite filter is precise (lva_/zoe-touch) — a genuine device whose
+    # name merely contains "assistant"/"satellite" must NOT be dropped.
+    async def _get(path):
+        if path == "/switches":
+            return {"switches": [{"entity_id": "switch.satellite_dish", "name": "Satellite Dish", "state": "off"}]}
+        if path == "/lights":
+            return {"lights": []}
+        if path == "/entities?domain=input_boolean":
+            return {"entities": [
+                {"entity_id": "input_boolean.assistance_light", "state": "off",
+                 "attributes": {"friendly_name": "Assistance Light", "icon": "mdi:ceiling-light"}},
+            ]}
+        return None
+    monkeypatch.setattr(smart_home_service, "_ha_get", _get)
+    names = {d["name"] for d in await smart_home_service.list_devices()}
+    assert names == {"Satellite Dish", "Assistance Light"}
+
+
 @pytest.mark.parametrize("q", [
     "add a device",
     "set up a device",

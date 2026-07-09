@@ -107,9 +107,11 @@ async def setup_qr(request: Request, token: str = "") -> Response:
 
 @router.get("/info")
 async def setup_info(token: str = "") -> dict[str, Any]:
-    """Phone: the branded setup guide. Gated by a valid one-time token. Read-only —
-    returns guidance content, never mutates the home."""
-    if smart_home_setup.verify(token) is None:
+    """Phone: the branded setup guide. Gated by a one-time token which is SPENT
+    here (the guide is the terminal step of this read-only flow, so consuming on
+    fetch keeps a photographed/leaked QR from re-opening it). Returns guidance
+    content only — never mutates the home."""
+    if smart_home_setup.consume(token) is None:
         return {"ok": False, "reason": "This setup link has expired. Tap “Add a device” on your Zoe screen again."}
     return {
         "ok": True,
