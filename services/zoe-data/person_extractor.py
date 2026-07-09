@@ -256,14 +256,58 @@ async def _create_partial_person(name: str, user_id: str, db) -> Optional[str]:
         return None
 
 
+_OWNED_DB_CLS = None
+
+
+def _owned_db(db_pool, pool, conn):
+    """Wrap a pooled connection so it is OWNED until ``.close()`` releases it.
+
+    ``AsyncpgCompat.close()`` is a pool-managed no-op, and ``db_pool.get_db()``
+    only releases from the generator's ``finally``. The old ``_ensure_db``
+    (``async for _db in get_db(): return _db``) abandoned that generator — the
+    ``finally`` then released the connection back to the pool (on GC), handing
+    callers a DEAD connection ("connection has been released back to the pool"),
+    which silently broke the idle re-linker and the write-path person
+    resolution. This returns an ``AsyncpgCompat`` subclass that holds the
+    connection and gives ``close()`` a REAL release, preserving the
+    ``(db, opened)`` + ``await _db.close()`` contract with zero caller changes.
+
+    The subclass is defined lazily (cached) so ``db_pool`` is imported only when
+    a connection is actually opened — never at module load, which the CI unit
+    env (a ``db_pool`` stub) cannot satisfy.
+    """
+    global _OWNED_DB_CLS
+    if _OWNED_DB_CLS is None:
+        class _OwnedDb(db_pool.AsyncpgCompat):
+            __slots__ = ("_pool", "_owned_conn")
+
+            def __init__(self, pool, conn):
+                super().__init__(conn)
+                self._pool = pool
+                self._owned_conn = conn
+
+            async def close(self):
+                await db_pool._release_safely(self._pool, self._owned_conn)
+
+        _OWNED_DB_CLS = _OwnedDb
+    return _OWNED_DB_CLS(pool, conn)
+
+
 async def _ensure_db(db_arg):
-    """Return a DB connection: use db_arg if provided, else open a new one."""
+    """Return ``(db, opened)``: use ``db_arg`` if given, else open a pooled one.
+
+    When opening our own, HOLD the pooled connection (via ``_owned_db``) until
+    the caller's ``await _db.close()`` releases it — never hand back a released
+    connection. ``db_pool`` is imported lazily (matching the module's other
+    lazy DB imports) so importing ``person_extractor`` never needs it.
+    """
     if db_arg is not None:
         return db_arg, False
     try:
-        from database import get_db
-        async for _db in get_db():
-            return _db, True
+        import db_pool
+        pool = db_pool.get_pool()
+        conn = await pool.acquire()
+        return _owned_db(db_pool, pool, conn), True
     except Exception as exc:
         logger.warning("person_extractor: could not open DB: %s", exc)
         return None, False

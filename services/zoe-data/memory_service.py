@@ -1176,8 +1176,10 @@ class MemoryService:
         Gated behind BOTH ``ZOE_RELATIONSHIP_GRAPH_ENABLED`` and
         ``ZOE_GRAPH_RECALL_BOOST`` (default OFF); either off ⇒ ``{}`` with zero
         DB work, so the boost stays off the hot path. Any failure ⇒ ``{}`` ⇒ no
-        boost — never crashing or slowing a turn. Reuses the existing
-        ``_resolve_person_uuid`` resolver (no new NLU model).
+        boost — never crashing or slowing a turn. Reuses the ambiguity-safe
+        ``_resolve_unique_person_uuid`` resolver (no new NLU model) so an
+        ambiguous query fragment skips the boost rather than boosting the wrong
+        person.
         """
         try:
             import relationship_graph
@@ -1192,18 +1194,18 @@ class MemoryService:
                 return {}
 
             from db_pool import get_db_ctx
-            from person_extractor import _resolve_person_uuid
+            from memory_extractor import _resolve_unique_person_uuid
 
             async with get_db_ctx() as db:
                 start_pid = None
-                # NOTE: `_resolve_person_uuid` is a substring (LIKE %name%) match
-                # returning the first row, so an ambiguous fragment ("Ali" vs
-                # Alice/Alicia) can pick the wrong start person. Accepted here: the
-                # boost is small, additive, owner-scoped, and only re-ranks facts
-                # semantic search already retrieved — a mis-resolve mildly nudges
-                # ordering, never leaks another user's data or drops results.
+                # Ambiguity-safe resolution: `_resolve_unique_person_uuid` links
+                # ONLY on an unambiguous match (unique exact name, or a single
+                # whole-token substring hit), else None. The loose
+                # `_resolve_person_uuid` (substring LIKE, first row) would boost
+                # the WRONG person's neighbourhood on an ambiguous fragment
+                # ("Ali" vs {Alice, Alison}); don't guess — skip the boost.
                 for name in names:
-                    start_pid = await _resolve_person_uuid(name, user_id, db)
+                    start_pid = await _resolve_unique_person_uuid(name, user_id, db)
                     if start_pid:
                         break
                 if not start_pid:
