@@ -61,9 +61,13 @@ What already works, **channel-agnostic** (chat + voice, every brain backend incl
   can offer to add them — closing the loop with the **existing** `people_create` tool on "yes".
   OFF = byte-for-byte no-op. *Observe & Suggest* level: the brain is given the info and offers
   naturally, not forced every turn.
-- **P2 — Confidence-gate LLM person extraction.** Add a verbalized-confidence field to the
-  extraction prompt; **≥0.8 → auto**, **<0.4 → discard**, **else → `person_create` proposal**.
-  Per-attribute. Flag-gated, replay-gated.
+- **P2 — Confidence-gate LLM person extraction.** ✅ **shipped (dark).** The `person_extractor_llm`
+  prompt now (when gated) asks for a self-reported `confidence` per item; items below the threshold
+  are discarded (the researched coarse first-pass filter). Flags `ZOE_PERSON_LLM_CONFIDENCE_GATE`
+  (default OFF → byte-for-byte no-op, every item applied as today) + `ZOE_PERSON_LLM_CONFIDENCE_MIN`
+  (default **0.4**, clamped [0,1]). Replay-gated at enable time (live voice/chat write-path).
+  *Follow-up:* route the medium band (0.4–0.8) to a `person_create` proposal rather than
+  apply/discard — needs a fact-proposal path that doesn't exist yet.
 - **P3 — Back-off / nag contract.** ✅ **folded into P1** — `surface_pending_contacts_for_prompt`
   ages each surfaced offer (`turns_elapsed`) and resolves it past `expire_after_turns` (default 2),
   so an un-actioned offer stops after ~2 turns. Extracted name/relationship are **sanitised**
