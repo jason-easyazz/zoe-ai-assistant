@@ -1043,6 +1043,29 @@ async def lifespan(app: FastAPI):
         except Exception as _mas_exc:
             logger.warning("Multica autopilot sync skipped (non-fatal): %s", _mas_exc)
 
+    # YouTube Music cookie auto-refresh — the anti-expiry path. Opens the
+    # persistent profile HEADLESS on a cadence, re-harvests the login cookie, and
+    # re-saves it to MA so the connection never silently expires. Must run after
+    # start_proactive_engine() so the APScheduler is already live. Gated OFF by
+    # default (ZOE_YTMUSIC_REFRESH_ENABLED) — additive, operator-enabled.
+    if os.environ.get("ZOE_YTMUSIC_REFRESH_ENABLED", "false").lower() == "true":
+        try:
+            import ytmusic_signin  # noqa: F401 — ensure importable before scheduling
+            from proactive.scheduler import get_scheduler as _get_aps
+            _ytm_hours = float(os.environ.get("ZOE_YTMUSIC_REFRESH_HOURS", "12"))
+            _get_aps().add_job(
+                ytmusic_signin.refresh_now,
+                trigger="interval",
+                hours=_ytm_hours,
+                id="ytmusic_cookie_refresh",
+                replace_existing=True,
+                coalesce=True,
+                max_instances=1,
+            )
+            logger.info("YouTube Music cookie auto-refresh scheduled (every %sh)", _ytm_hours)
+        except Exception as _ytm_exc:
+            logger.warning("YouTube Music auto-refresh not scheduled (non-fatal): %s", _ytm_exc)
+
     # Skills filesystem watcher (live cache invalidation for peer agent cards)
     try:
         from skills_watcher import start_skills_watcher  # type: ignore[import]
