@@ -260,9 +260,9 @@
             display: flex;
             align-items: center;
             gap: var(--sky-space-3, 12px);
-            max-width: min(760px, calc(100vw - 140px));
+            max-width: min(900px, calc(100vw - 96px));
             width: max-content;
-            padding: 10px 14px 10px 10px;
+            padding: 12px 18px 12px 12px;
             border-radius: var(--sky-radius-pill, 999px);
             background: color-mix(in srgb, var(--sky-base-1, #141a2b) 84%, transparent);
             border: 1px solid var(--sky-highlight-top, rgba(255,255,255,0.10));
@@ -277,32 +277,34 @@
             from { opacity: 0; transform: translate(-50%, 14px); }
             to   { opacity: 1; transform: translate(-50%, 0); }
         }
+        /* Left region: grows so the transport (prev·PLAY·next) sits truly centered
+           between it and the equally-weighted right cluster (.snp-end). */
         .snp-face {
-            display: flex; align-items: center; gap: 11px;
-            min-width: 0; flex: 0 1 auto;
-            background: none; border: 0; padding: 2px; margin: 0;
+            display: flex; align-items: center; gap: 12px;
+            min-width: 0; flex: 1 1 0; justify-content: flex-start;
+            background: none; border: 0; padding: 4px; margin: 0;
             color: inherit; font: inherit; text-align: left; cursor: pointer;
             border-radius: var(--sky-radius-md, 14px);
             -webkit-tap-highlight-color: transparent;
         }
         .snp-art {
-            flex: 0 0 auto; width: 54px; height: 54px;
-            border-radius: 12px; overflow: hidden;
+            flex: 0 0 auto; width: 60px; height: 60px;
+            border-radius: 13px; overflow: hidden;
             display: grid; place-items: center;
             background: linear-gradient(135deg, var(--sky-accent-violet, #9b8cff), var(--sky-accent-blue, #6aa6ff));
             box-shadow: inset 0 1px 0 rgba(255,255,255,0.18);
         }
-        .snp-art svg { width: 24px; height: 24px; fill: rgba(255,255,255,0.92); }
+        .snp-art svg { width: 28px; height: 28px; fill: rgba(255,255,255,0.92); }
         .snp-art img { width: 100%; height: 100%; object-fit: cover; }
         .snp-art.has-art svg { display: none; }
-        .snp-meta { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+        .snp-meta { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
         .snp-title {
-            font-size: 15px; font-weight: var(--sky-weight-semibold, 620);
+            font-size: 16px; font-weight: var(--sky-weight-semibold, 620);
             color: var(--sky-ink-0, #f6f8fb); letter-spacing: -0.01em;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
         .snp-artist {
-            font-size: 12.5px; color: var(--sky-ink-2, rgba(246,248,251,0.62));
+            font-size: 13px; color: var(--sky-ink-2, rgba(246,248,251,0.62));
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
         .snp-artist:empty { display: none; }
@@ -310,8 +312,8 @@
            control surface reads as substantial. Hidden for durationless sources
            (radio). ds1 tokens only; accent via color-mix. */
         .snp-scrubber {
-            display: flex; align-items: center; gap: 9px;
-            flex: 1 1 auto; min-width: 140px; max-width: 340px; margin: 0 4px;
+            display: flex; align-items: center; gap: 10px;
+            flex: 1 1 auto; min-width: 130px; max-width: 360px; margin: 0;
         }
         .snp-scrubber[hidden] { display: none; }
         .snp-time {
@@ -345,29 +347,39 @@
         }
         .snp-seek:focus-visible { outline: none; }
         .snp-seek:focus-visible::-webkit-slider-thumb { box-shadow: 0 2px 6px rgba(0,0,0,0.4), 0 0 0 4px color-mix(in srgb, var(--sky-accent-mint, #5be3b0) 62%, transparent); }
-        .snp-controls { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+        /* Center transport: prev · PLAY (hero) · next. Fixed width so it stays
+           centered between the two equally-grown flanks (.snp-face / .snp-end). */
+        .snp-transport { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+        /* Right cluster: scrubber + volume, then the cast/speaker button at the far
+           end. Grows to mirror .snp-face so the transport reads dead-center. */
+        .snp-end {
+            display: flex; align-items: center; justify-content: flex-end;
+            gap: 10px; flex: 1 1 0; min-width: 0;
+        }
         .snp-btn {
             display: grid; place-items: center;
-            width: 44px; height: 44px; padding: 0; margin: 0;
+            width: 48px; height: 48px; padding: 0; margin: 0;
             border: 0; border-radius: 50%; cursor: pointer;
             background: transparent; color: var(--sky-ink-1, rgba(246,248,251,0.86));
             transition: background var(--sky-dur-fast, .14s) var(--sky-ease-standard, ease),
                         transform var(--sky-dur-fast, .14s) var(--sky-ease-standard, ease);
             -webkit-tap-highlight-color: transparent;
         }
-        .snp-btn svg { width: 24px; height: 24px; fill: currentColor; }
+        .snp-btn svg { width: 26px; height: 26px; fill: currentColor; }
         .snp-btn:hover { background: color-mix(in srgb, var(--sky-ink-0, #fff) 12%, transparent); }
         .snp-btn:active { transform: scale(0.9); }
-        .snp-btn-sm { width: 38px; height: 38px; color: var(--sky-ink-2, rgba(246,248,251,0.62)); }
-        .snp-btn-sm svg { width: 20px; height: 20px; }
+        .snp-btn-sm { width: 44px; height: 44px; color: var(--sky-ink-2, rgba(246,248,251,0.62)); }
+        .snp-btn-sm svg { width: 22px; height: 22px; }
+        /* Hero play/pause: the largest control, mint accent, unmistakably primary. */
         .snp-play {
-            width: 50px; height: 50px;
+            width: 62px; height: 62px;
             background: linear-gradient(135deg, var(--sky-accent-mint, #5be3b0), color-mix(in srgb, var(--sky-accent-mint, #5be3b0) 65%, var(--sky-accent-blue, #6aa6ff)));
             color: #06231a;
-            box-shadow: 0 6px 18px color-mix(in srgb, var(--sky-accent-mint, #5be3b0) 40%, transparent);
+            box-shadow: 0 8px 22px color-mix(in srgb, var(--sky-accent-mint, #5be3b0) 46%, transparent);
         }
+        .snp-play svg { width: 30px; height: 30px; }
         .snp-play:hover { background: linear-gradient(135deg, var(--sky-accent-mint, #5be3b0), var(--sky-accent-mint, #5be3b0)); }
-        .snp-vol { display: flex; align-items: center; gap: 0; margin-left: 2px; }
+        .snp-vol { display: flex; align-items: center; gap: 2px; margin-left: 2px; }
         /* Output/speaker button: outline airplay glyph (only the triangle fills). */
         .snp-out svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
         .snp-out svg .snp-out-fill { fill: currentColor; stroke: none; }
@@ -5532,15 +5544,8 @@
                 <span class="snp-artist" id="skyNpArtist"></span>
             </span>
         </button>
-        <div class="snp-scrubber" id="skyNpScrubber" hidden>
-            <span class="snp-time" id="skyNpElapsed">0:00</span>
-            <input type="range" class="snp-seek" id="skyNpSeek" min="0" max="0" value="0" step="1" aria-label="Seek within track">
-            <span class="snp-time" id="skyNpDuration">0:00</span>
-        </div>
-        <div class="snp-controls">
-            <button type="button" class="snp-btn snp-btn-sm snp-out" data-music-output aria-label="Choose speaker" aria-haspopup="listbox" aria-expanded="false">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 16H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-1"/><path class="snp-out-fill" d="M8 20l4-5 4 5z"/></svg>
-            </button>
+        <!-- Center: prev · PLAY/PAUSE (hero) · next -->
+        <div class="snp-transport">
             <button type="button" class="snp-btn" data-np-action="previous" aria-label="Previous track">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 6h2v12H7zm3.5 6 8.5 6V6z"/></svg>
             </button>
@@ -5551,6 +5556,14 @@
             <button type="button" class="snp-btn" data-np-action="next" aria-label="Next track">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6h2v12h-2zM5 18l8.5-6L5 6z"/></svg>
             </button>
+        </div>
+        <!-- Toward the end: seek scrubber + volume, then the cast/speaker button. -->
+        <div class="snp-end">
+            <div class="snp-scrubber" id="skyNpScrubber" hidden>
+                <span class="snp-time" id="skyNpElapsed">0:00</span>
+                <input type="range" class="snp-seek" id="skyNpSeek" min="0" max="0" value="0" step="1" aria-label="Seek within track">
+                <span class="snp-time" id="skyNpDuration">0:00</span>
+            </div>
             <span class="snp-vol">
                 <button type="button" class="snp-btn snp-btn-sm" data-np-action="volume_down" aria-label="Volume down">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9zm14.5 3h-4v-1.6h4z"/></svg>
@@ -5559,6 +5572,10 @@
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9zm11.5 3a3 3 0 0 0-1.5-2.6v5.2A3 3 0 0 0 14.5 12zM17 12a5.5 5.5 0 0 0-2.5-4.6v9.2A5.5 5.5 0 0 0 17 12z"/></svg>
                 </button>
             </span>
+            <!-- Far right: cast/airplay → opens the MA speaker picker. -->
+            <button type="button" class="snp-btn snp-btn-sm snp-out" data-music-output aria-label="Choose speaker" aria-haspopup="listbox" aria-expanded="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 16H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-1"/><path class="snp-out-fill" d="M8 20l4-5 4 5z"/></svg>
+            </button>
         </div>
         <div id="skyNpOutputs" class="snp-outputs" data-music-picker hidden role="listbox" aria-label="Choose a speaker"></div>
     </div>

@@ -181,9 +181,17 @@ def _message_owner_users_sql(*, today_only: bool) -> str:
     owner_expr = _message_owner_expr()
     date_clause = ""
     if today_only:
+        # Casts are load-bearing. Through the asyncpg positional-compat layer, an
+        # uncast timezone placeholder binds as "unknown" and the timestamp operand
+        # collapses to text, so overload resolution fails ("function
+        # pg_catalog.timezone(unknown, text) does not exist") and the whole
+        # discovery query errors — silently zeroing out active-user detection.
+        # The ::text zone cast + now()::timestamptz pin the timezone(text,
+        # timestamptz) overload. (Keep this SQL free of literal question marks,
+        # including in comments — the compat layer counts them as placeholders.)
         date_clause = """
-          AND (cm.created_at::timestamptz AT TIME ZONE ?)::date =
-              (now() AT TIME ZONE ?)::date
+          AND (cm.created_at::timestamptz AT TIME ZONE ?::text)::date =
+              (now()::timestamptz AT TIME ZONE ?::text)::date
         """
     return f"""
         SELECT DISTINCT owner.user_id
@@ -590,8 +598,13 @@ async def _load_todays_messages(user_id: str, db=None) -> str:
             JOIN chat_sessions cs ON cm.session_id = cs.id
             WHERE """ + owner_expr + """ = ?
               AND cm.role = 'user'
-              AND (cm.created_at::timestamptz AT TIME ZONE ?)::date =
-                  (now() AT TIME ZONE ?)::date
+              -- The ::text / ::timestamptz casts are required so the asyncpg
+              -- positional-compat layer resolves timezone(text, timestamptz);
+              -- without them the query errors and silently drops every message.
+              -- (No literal question marks in this SQL — the compat layer would
+              -- miscount them as bind placeholders.)
+              AND (cm.created_at::timestamptz AT TIME ZONE ?::text)::date =
+                  (now()::timestamptz AT TIME ZONE ?::text)::date
             ORDER BY cm.created_at ASC
             LIMIT 200
             """

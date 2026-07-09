@@ -1233,11 +1233,32 @@ def test_nowplaying_floating_bar_is_the_control_surface():
     assert 'id="skyNowPlaying"' in html
     for action in ("expand", "previous", "play_pause", "next", "volume_down", "volume_up"):
         assert f'data-np-action="{action}"' in html, f"missing bar action: {action}"
+    # Layout contract (owner retune): a centered transport groups prev · PLAY · next
+    # with play/pause as the mint HERO; the scrubber + volume + cast sit in the
+    # right-end cluster so the scrub reads toward the end and cast is dead-last.
+    assert 'class="snp-transport"' in html
+    assert 'class="snp-end"' in html
+    assert 'class="snp-btn snp-play" data-np-action="play_pause"' in html
+    # Hero play/pause is the largest control (~62px) and mint-accented. Scope the
+    # mint assertion to the `.snp-play` rule's own body — a file-wide mint check
+    # would pass off the scrubber/output styles even if the hero lost its accent.
+    assert ".snp-play {" in html
+    snp_play_rule = html[html.index(".snp-play {") + len(".snp-play {"):]
+    snp_play_rule = snp_play_rule[:snp_play_rule.index("}")]
+    assert "width: 62px; height: 62px;" in snp_play_rule
+    assert "background: linear-gradient(" in snp_play_rule
+    assert "var(--sky-accent-mint, #5be3b0)" in snp_play_rule
     # Seek scrubber markup: elapsed · range · duration.
     assert 'id="skyNpScrubber"' in html
     assert 'class="snp-seek"' in html and 'type="range"' in html
     assert 'id="skyNpElapsed"' in html and 'id="skyNpDuration"' in html
     assert ".snp-scrubber" in html and ".snp-seek" in html
+    # The scrubber and cast/speaker button both live in the right-end cluster; the
+    # cast button is the LAST child of .snp-end (far-right, opens the picker).
+    end_block = html[html.index('class="snp-end"'):html.index('id="skyNpOutputs"')]
+    assert 'id="skyNpScrubber"' in end_block
+    assert 'data-music-output' in end_block
+    assert end_block.rindex('data-music-output') > end_block.rindex('class="snp-vol"')
     # CSS: centered floating pill by default; repositioned under the clock at rest.
     assert ".sky-nowplaying" in html
     assert "body.sky-empty .sky-nowplaying" in html
@@ -1344,3 +1365,84 @@ def test_music_transfer_endpoint_shape():
     assert "async def transfer(target_player_id: str, source_player_id: str = \"\")" in service
     assert '"player_queues/transfer"' in service
     assert "source_queue_id=source_id, target_queue_id=target_player_id" in service
+
+
+def test_skybridge_renderer_handles_concurrent_timers(tmp_path):
+    """Two+ timers must each render as an independent card: its own timer id,
+    its own countdown digits, its own cancel (✕) hook, and its own progress ring.
+    Guards the regression where a second timer froze / mis-positioned / killed the
+    first and couldn't be closed."""
+    node = shutil.which("node") or shutil.which("nodejs")
+    if not node:
+        pytest.skip("Node.js is not installed on this host")
+    renderer_path = UI / "js" / "skybridge-renderer.js"
+    harness = tmp_path / "timer_harness.cjs"
+    harness.write_text(
+        """
+const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const sandbox = { window: {}, Date: Date };
+vm.createContext(sandbox);
+vm.runInContext(src, sandbox);
+const R = sandbox.window.SkybridgeRenderer;
+const now = Date.now();
+const mk = (id, label, dur, rem) => R.render({ component: 'timer', props: {
+    id: id, timer_id: id, title: label, label: label, source: 'timer',
+    status: 'running', duration_seconds: dur, expires_at_ms: now + rem * 1000 } });
+const a = mk('aaa1', 'Pasta', 600, 372);   // 06:12
+const b = mk('bbb2', 'Eggs', 300, 118);    // 01:58
+const idOf = h => (h.match(/data-timer-id=\"([^\"]+)\"/) || [])[1];
+const cancelOf = h => (h.match(/data-timer-cancel=\"([^\"]+)\"/) || [])[1];
+const digitsOf = h => (h.match(/sky-timer-digits\">([^<]+)</) || [])[1];
+const checks = {
+    a_id: idOf(a) === 'aaa1',
+    b_id: idOf(b) === 'bbb2',
+    ids_distinct: idOf(a) !== idOf(b),
+    a_cancel_hook: cancelOf(a) === 'aaa1',
+    b_cancel_hook: cancelOf(b) === 'bbb2',
+    a_digits: digitsOf(a) === '06:12',
+    b_digits: digitsOf(b) === '01:58',
+    digits_distinct: digitsOf(a) !== digitsOf(b),
+    a_has_ring: a.includes('sky-timer-ring-fill'),
+    b_has_ring: b.includes('sky-timer-ring-fill'),
+    a_has_x_button: a.includes('class=\"sky-timer-x\"'),
+    b_has_x_button: b.includes('class=\"sky-timer-x\"'),
+};
+process.stdout.write(JSON.stringify(checks));
+""",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [node, str(harness), str(renderer_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    import json
+
+    checks = json.loads(proc.stdout)
+    assert all(checks.values()), f"concurrent-timer renderer harness failed: {checks}"
+
+
+def test_skybridge_runtime_handles_concurrent_timers():
+    """The timer runtime must be id-per-node robust for concurrent timers:
+    tick/remove EVERY node for an id (never a single querySelector that freezes a
+    stale twin), dedupe duplicate/orphan cards, and route the ✕ cancel before the
+    ringing-card tap so it always closes exactly its own timer."""
+    js = read(UI / "js" / "skybridge.js")
+
+    # All-node lookup helper + dedupe/orphan collapse.
+    assert "function _timerEls(id)" in js
+    assert "querySelectorAll(_timerSel(id))" in js
+    assert "function syncTimerCards()" in js
+    assert "syncTimerCards();" in js  # wired into the add path
+    # No single-node querySelector left on the tick/remove hot paths (that was the
+    # freeze / can't-close regression).
+    assert "els.cards.querySelector(_timerSel(t.id))" not in js
+    assert "els.cards.querySelector(_timerSel(id))" not in js
+    # The ✕ cancel button is handled BEFORE the ringing-card tap so it always
+    # closes exactly its own timer, even on a card that is ringing.
+    cancel_idx = js.index("event.target.closest('[data-timer-cancel]')")
+    ring_idx = js.index("event.target.closest('.sky-card.sky-timer-ringing')")
+    assert cancel_idx < ring_idx

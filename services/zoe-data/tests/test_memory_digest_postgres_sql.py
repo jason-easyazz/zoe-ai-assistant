@@ -89,8 +89,12 @@ async def test_load_todays_messages_uses_postgres_timestamp_cast():
     text = await memory_digest._load_todays_messages("user-1", db=db)
 
     assert text == "I like quiet mornings\nI prefer tea"
-    assert "(cm.created_at::timestamptz AT TIME ZONE ?)::date" in db.sql[0]
-    assert "(now() AT TIME ZONE ?)::date" in db.sql[0]
+    assert "(cm.created_at::timestamptz AT TIME ZONE ?::text)::date" in db.sql[0]
+    assert "(now()::timestamptz AT TIME ZONE ?::text)::date" in db.sql[0]
+    # Placeholder-count guard: the asyncpg positional-compat layer maps every
+    # literal `?` (comments included) to a bind slot, so a stray `?` anywhere in
+    # the SQL silently shifts params ("could not determine data type of $N").
+    assert db.sql[0].count("?") == len(db.params[0]) == 3
     assert "cm.metadata ~ '^\\s*\\{'" in db.sql[0]
     assert "substring(cm.metadata from" in db.sql[0]
     assert "::jsonb" not in db.sql[0]
@@ -113,8 +117,12 @@ async def test_run_digest_for_all_active_users_uses_postgres_timestamp_cast(monk
 
     assert [item["user_id"] for item in results] == ["user-1", "user-2"]
     assert seen == ["user-1", "user-2"]
-    assert "(cm.created_at::timestamptz AT TIME ZONE ?)::date" in db.sql[0]
-    assert "(now() AT TIME ZONE ?)::date" in db.sql[0]
+    assert "(cm.created_at::timestamptz AT TIME ZONE ?::text)::date" in db.sql[0]
+    assert "(now()::timestamptz AT TIME ZONE ?::text)::date" in db.sql[0]
+    # Placeholder-count guard (see _load_todays_messages test): discovery's
+    # today-only clause binds exactly the two timezone params; a stray `?`
+    # (e.g. in a comment) would shift them and break active-user detection.
+    assert db.sql[0].count("?") == len(db.params[0]) == 2
     assert "cm.metadata ~ '^\\s*\\{'" in db.sql[0]
     assert "substring(cm.metadata from" in db.sql[0]
     assert "::jsonb" not in db.sql[0]

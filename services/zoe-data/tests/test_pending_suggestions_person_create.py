@@ -43,7 +43,7 @@ async def _open():
     await db.execute(
         """CREATE TABLE people (
             id TEXT PRIMARY KEY, user_id TEXT, name TEXT, relationship TEXT,
-            circle TEXT, context TEXT, visibility TEXT,
+            circle TEXT NOT NULL DEFAULT 'acquaintance', context TEXT, visibility TEXT,
             is_partial INTEGER DEFAULT 0, deleted INTEGER DEFAULT 0)"""
     )
     await db.commit()
@@ -70,7 +70,7 @@ async def test_creates_full_editable_contact(monkeypatch):
         assert len(rows) == 1
         assert rows[0]["relationship"] == "mother"
         assert rows[0]["is_partial"] == 0  # a FULL contact, not a bare stub — editable
-        assert rows[0]["circle"] is None  # not the bogus "circle" literal
+        assert rows[0]["circle"] == "circle"  # valid middle tier; column is NOT NULL
         assert rows[0]["visibility"] == "personal"  # private by default — not auto-shared
     finally:
         await db.close()
@@ -85,6 +85,12 @@ async def test_slots_override_circle_and_visibility(monkeypatch):
                                  {"name": "Bob", "circle": "work", "visibility": "family"}, USER)
         row = (await _rows(db))[0]
         assert row["circle"] == "work" and row["visibility"] == "family"
+        # explicit None circle → 'circle' (the `or` coerces None before it can
+        # str()-ify to "None"), never an invalid tier
+        await ps._execute_action(_Conn(db), "person_create",
+                                 {"name": "Cara", "circle": None}, USER)
+        cara = [r for r in await _rows(db) if r["name"] == "Cara"][0]
+        assert cara["circle"] == "circle"
     finally:
         await db.close()
 
