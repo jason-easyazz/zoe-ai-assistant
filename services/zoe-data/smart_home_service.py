@@ -204,6 +204,12 @@ def _select_targets(
         return [d for d in pool if d.get("dimmable")] or pool
 
     if not name_tokens:
+        # A device literally NAMED with only class words ("Light Switch", "Fan"):
+        # if the whole phrase pins exactly one device by name, that's the target.
+        # This keeps a TAPPED tile exact even when the entity has a class-only name.
+        exact = [d for d in devices if all(t in f"{d.get('name', '')} {d.get('entity_id', '')}".lower() for t in want)]
+        if len(exact) == 1:
+            return _dimmable_only(exact), False
         # Bare class command: "the lamp" / "the lights" / "all lights".
         pool = [d for d in devices if d.get("domain") in domains] if domains else list(devices)
         pool = _dimmable_only(pool)

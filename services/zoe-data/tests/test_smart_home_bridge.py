@@ -216,6 +216,31 @@ async def test_offline_device_is_not_controlled(bridge):
 
 
 @pytest.mark.asyncio
+async def test_class_only_named_device_tile_stays_exact(monkeypatch):
+    # A switch literally named "Light Switch": its tile query cleans to the
+    # class-only phrase "light switch", which must still pin THAT entity (not be
+    # treated as a generic light-class sweep that misses the switch).
+    async def _get(path):
+        if path == "/switches":
+            return {"switches": [{"entity_id": "switch.light", "name": "Light Switch", "state": "off"}]}
+        if path == "/lights":
+            return {"lights": [{"entity_id": "light.lamp", "name": "Living Room Lamp", "state": "off"}]}
+        return {"scenes": []}
+
+    calls: list[dict] = []
+
+    async def _post(path, payload):
+        calls.append(payload)
+        return {"message": "Successfully executed", "result": []}
+
+    monkeypatch.setattr(smart_home_service, "_ha_get", _get)
+    monkeypatch.setattr(smart_home_service, "_ha_post", _post)
+    r = await smart_home_service.resolve_smart_home(_Intent("turn_on", query="light switch"))
+    assert calls == [{"entity_id": "switch.light", "action": "turn_on"}]
+    assert "on" in r["spoken_summary"].lower()
+
+
+@pytest.mark.asyncio
 async def test_resolve_scene_activates(bridge):
     r = await smart_home_service.resolve_smart_home(_Intent("activate_scene", query="movie time"))
     assert bridge.scenes_activated == ["scene.movie_time"]
