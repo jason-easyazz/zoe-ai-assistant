@@ -168,6 +168,37 @@ async def test_cancel_tears_down(monkeypatch):
     assert ctx.closed is True and all(p.terminated for p in procs)
 
 
+async def test_cancel_requires_exact_session_id(monkeypatch):
+    # An empty / wrong id must NEVER tear down the active session (a token holder
+    # who doesn't know the id can't kill someone else's sign-in).
+    ctx, procs = _stub_rig(monkeypatch, BAD_COOKIES)
+    monkeypatch.setattr(ys, "SESSION_TIMEOUT_S", 30)
+    res = await ys.start_session()
+    await ys.cancel_session("")             # empty → no-op
+    assert ctx.closed is False and not any(p.terminated for p in procs)
+    await ys.cancel_session("ytm-wrongid")  # wrong id → no-op
+    assert ctx.closed is False
+    await ys.cancel_session(res["session_id"])  # exact id → tears down
+    assert ctx.closed is True and all(p.terminated for p in procs)
+
+
+async def test_router_cancel_rejects_empty_session_id(monkeypatch):
+    canceled = {"n": 0}
+
+    async def fake_cancel(sid):
+        canceled["n"] += 1
+        return {"ok": True, "state": "x"}
+
+    monkeypatch.setattr(ys, "cancel_session", fake_cancel)
+    tok = music_setup.mint("ytmusic")["token"]
+    # valid token but no session id → refused, cancel_session never called
+    r = await ms_router.browser_cancel({"token": tok, "session_id": ""})
+    assert r["ok"] is False and canceled["n"] == 0
+    # valid token + id → forwarded
+    r2 = await ms_router.browser_cancel({"token": tok, "session_id": "ytm-abc"})
+    assert canceled["n"] == 1 and r2["ok"] is True
+
+
 # ── refresh_now (anti-expiry, headless) ──────────────────────────────────────
 
 async def test_refresh_opens_headless_harvests_saves_and_closes(monkeypatch, tmp_path):

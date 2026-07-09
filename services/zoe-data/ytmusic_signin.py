@@ -252,7 +252,12 @@ async def _bring_up_rig(session: dict[str, Any]) -> None:
     if missing:
         raise RuntimeError(f"missing sign-in binaries: {', '.join(missing)}")
     bind = _lan_ip()
-    session["procs"] = _start_display_stack(bind)
+    # _start_display_stack does blocking work (subprocess.Popen forks, time.sleep,
+    # blocking port waits). Run it OFF the event loop so a sign-in bring-up never
+    # stalls the uvicorn worker (health checks, chat, websockets). subprocess.Popen
+    # inside a thread executor is the safe fork pattern here — not a loop-thread
+    # asyncio.create_subprocess_exec (see services/zoe-data/AGENTS.md).
+    session["procs"] = await asyncio.to_thread(_start_display_stack, bind)
     session["context"] = await _launch_browser(headless=False)
     session["view_url"] = f"http://{bind}:{_NOVNC_PORT}/vnc.html?autoconnect=1&resize=scale"
 
@@ -411,11 +416,15 @@ def session_status(session_id: str) -> dict[str, Any]:
     }
 
 
-async def cancel_session(session_id: str = "") -> dict[str, Any]:
+async def cancel_session(session_id: str) -> dict[str, Any]:
     """Explicit teardown (user backed out). Cancels the watcher, which tears the
-    rig down in its finally. Idempotent."""
+    rig down in its finally. Idempotent.
+
+    Requires the EXACT session id — an empty or mismatched id never tears down
+    the active session (otherwise any holder of a valid setup token could kill an
+    in-progress sign-in without knowing its id)."""
     session = _SESSION
-    if session is None or (session_id and session.get("id") != session_id):
+    if session is None or not session_id or session.get("id") != session_id:
         return {"ok": True, "state": "unknown"}
     watcher = session.get("watcher")
     if watcher is not None and not watcher.done():

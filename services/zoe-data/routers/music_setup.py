@@ -208,5 +208,9 @@ async def browser_cancel(payload: dict) -> dict[str, Any]:
     session_id = str((payload or {}).get("session_id") or "")
     if music_setup.verify(token) is None:
         return {"ok": False, "reason": "invalid or expired setup link"}
+    if not session_id:
+        # An empty id must never tear down the active session — a token holder
+        # who doesn't know the session id can't cancel someone else's sign-in.
+        return {"ok": False, "reason": "missing session id"}
     import ytmusic_signin
     return await ytmusic_signin.cancel_session(session_id)

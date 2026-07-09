@@ -87,6 +87,7 @@
     <div class="signin-frame"><iframe id="signinFrame" title="Sign in to YouTube Music" referrerpolicy="no-referrer"
       sandbox="allow-forms allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"></iframe></div>
     <a class="linkbtn" id="bOpen" href="#" target="_blank" rel="noopener">Trouble seeing it? Open the sign-in in a new tab ↗</a>
+    <a class="linkbtn" id="bManual" href="#" style="display:block;margin-top:8px">Prefer to paste a cookie? Enter it manually</a>
     <p class="note">One sign-in at a time. This private view closes as soon as you're connected — and after a few minutes if you step away.</p>
   </div>
 
@@ -133,35 +134,81 @@
         show('form');
         return;
       }
-      var html = '';
-      form.fields.forEach(function (f) {
-        if (f.type === 'action') return; // OAuth actions handled via the oauth branch
-        if (f.type === 'boolean') {
-          html += '<div class="field switch"><label>' + esc(f.label) + '</label>' +
-            '<input type="checkbox" data-key="' + esc(f.key) + '"' + (f.default ? ' checked' : '') + '></div>';
-        } else {
-          var itype = f.type === 'secure_string' ? 'password' : 'text';
-          html += '<div class="field"><label>' + esc(f.label) + (f.required ? '' : ' <span style="color:var(--ink2)">(optional)</span>') + '</label>' +
-            (f.description ? '<p class="hint">' + esc(f.description) + '</p>' : '') +
-            '<input type="' + itype + '" data-key="' + esc(f.key) + '" data-required="' + (f.required ? '1' : '') +
-            '" autocapitalize="off" autocorrect="off" spellcheck="false"></div>';
-        }
-      });
-      $('fields').innerHTML = html;
+      renderFields(form, '');
       show('form');
     })
     .catch(function () { fail('Could not reach your Zoe. Make sure your phone is on the same wifi.'); });
+
+  // Build the credential form fields for a provider (username/cookie for
+  // ytmusic; whatever MA exposes for others). `guide` is optional HTML prepended
+  // above the fields. Shared by the normal form path and the ytmusic manual
+  // fallback below.
+  function renderFields(form, guide) {
+    var html = '';
+    form.fields.forEach(function (f) {
+      if (f.type === 'action') return; // OAuth actions handled via the oauth branch
+      if (f.type === 'boolean') {
+        html += '<div class="field switch"><label>' + esc(f.label) + '</label>' +
+          '<input type="checkbox" data-key="' + esc(f.key) + '"' + (f.default ? ' checked' : '') + '></div>';
+      } else {
+        var itype = f.type === 'secure_string' ? 'password' : 'text';
+        html += '<div class="field"><label>' + esc(f.label) + (f.required ? '' : ' <span style="color:var(--ink2)">(optional)</span>') + '</label>' +
+          (f.description ? '<p class="hint">' + esc(f.description) + '</p>' : '') +
+          '<input type="' + itype + '" data-key="' + esc(f.key) + '" data-required="' + (f.required ? '1' : '') +
+          '" autocapitalize="off" autocorrect="off" spellcheck="false"></div>';
+      }
+    });
+    $('form').removeAttribute('data-oauth');
+    $('submit').textContent = 'Connect';
+    $('submit').disabled = false;
+    $('fields').innerHTML = (guide || '') + html;
+  }
+
+  // Manual cookie fallback for YouTube Music — reachable if the browser sign-in
+  // can't run (host missing Xvfb/x11vnc/websockify, or the noVNC view is
+  // unusable). The classic "copy your cookie from a signed-in computer" path,
+  // saved through the same /save endpoint. The user is never left stuck.
+  var YTM_GUIDE =
+    '<div class="guide">' +
+      '<h3>Paste your YouTube Music cookie</h3>' +
+      '<p>Do this once on a <b>computer</b> where you are signed in to YouTube Music.</p>' +
+      '<ol>' +
+        '<li>Open <code>music.youtube.com</code> and make sure you are signed in.</li>' +
+        '<li>Press <code>F12</code> (or right-click → Inspect) and open the <b>Network</b> tab.</li>' +
+        '<li>Reload the page, then click the top <code>music.youtube.com</code> request.</li>' +
+        '<li>Under <b>Request Headers</b>, find <code>cookie:</code> and copy its whole value.</li>' +
+        '<li>Paste it into the Cookie box below. Your username is your Google account email.</li>' +
+      '</ol>' +
+    '</div>';
+
+  function runManualCookie(form, note) {
+    $('title').textContent = 'Connect ' + form.name;
+    $('subtitle').textContent = note || 'Enter your ' + form.name + ' details below.';
+    renderFields(form, form.domain === 'ytmusic' ? YTM_GUIDE : '');
+    show('form');
+  }
 
   // ── YouTube Music: embedded browser sign-in ────────────────────────────────
   function runBrowser(form) {
     $('bTitle').textContent = 'Sign in to ' + form.name;
     $('bStatus').textContent = 'Starting a private sign-in…';
+    // Always offer the manual-cookie path as an escape hatch (the browser rig
+    // needs Xvfb/x11vnc/websockify + a usable noVNC view; if any of that is
+    // unavailable the user can still paste a cookie instead).
+    $('bManual').onclick = function (e) { e.preventDefault();
+      runManualCookie(form, 'Prefer to paste a cookie? Enter it below.'); };
     show('browser');
     fetch('/api/music/setup/browser/start', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: token, provider: provider })
     }).then(function (r) { return r.json(); }).then(function (res) {
-      if (!res.ok || !res.view_url) { fail(res.reason || 'Could not start the sign-in.'); return; }
+      if (!res.ok || !res.view_url) {
+        // Rig couldn't start (missing binaries, etc.) — fall back to the manual
+        // cookie form rather than dead-ending the user.
+        runManualCookie(form, (res.reason ? res.reason + ' ' : '') +
+          'You can connect by pasting your cookie instead.');
+        return;
+      }
       // Embed the private LAN sign-in view; give a new-tab fallback (some phones
       // block cross-origin iframes / an https page can't frame an http view).
       $('signinFrame').src = res.view_url;
