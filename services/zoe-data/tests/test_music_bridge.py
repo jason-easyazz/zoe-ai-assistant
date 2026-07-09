@@ -115,6 +115,166 @@ async def test_control_never_raises_when_ma_down(monkeypatch):
     assert await music_service.now_playing() is None
 
 
+# ── Browse: structured search + play-by-URI (touch music page) ───────────────
+
+# One MA search hit per type, shaped like the real music/search payload.
+def _ma_search_payload(mt):
+    if mt == "track":
+        return {"tracks": [{
+            "name": "Yellow", "uri": "ytmusic://track/1", "media_type": "track",
+            "artists": [{"name": "Coldplay"}],
+            "album": {"name": "Parachutes",
+                      "metadata": {"images": [{"path": "https://lh3.googleusercontent.com/x=w60-h60-l90-rj"}]}},
+        }]}
+    if mt == "album":
+        return {"albums": [{"name": "Parachutes", "uri": "ytmusic://album/1", "media_type": "album",
+                            "artists": [{"name": "Coldplay"}],
+                            "metadata": {"images": [{"path": "https://img/a.png"}]}}]}
+    if mt == "artist":
+        return {"artists": [{"name": "Coldplay", "uri": "ytmusic://artist/1", "media_type": "artist",
+                             "metadata": {"images": [{"path": "https://img/ar.png"}]}}]}
+    if mt == "playlist":
+        return {"playlists": [{"name": "Chill", "uri": "ytmusic://playlist/1", "media_type": "playlist"}]}
+    if mt == "radio":
+        return {"radio": [{"name": "Coldplay Radio", "uri": "ytmusic://radio/1", "media_type": "radio"},
+                          {"name": "No URI station"}]}  # 2nd hit has no uri → dropped
+    return {}
+
+
+@pytest.mark.asyncio
+async def test_search_groups_and_normalizes(monkeypatch):
+    async def fake_ma(command, **args):
+        assert command == "music/search"
+        # search() fans out one call per media type (better MA coverage).
+        return _ma_search_payload(args["media_types"][0])
+    monkeypatch.setattr(music_service, "_ma", fake_ma)
+
+    r = await music_service.search("coldplay", limit=5)
+    assert r["available"] is True and r["query"] == "coldplay"
+    res = r["results"]
+    assert [t["name"] for t in res["tracks"]] == ["Yellow"]
+    track = res["tracks"][0]
+    assert track["uri"] == "ytmusic://track/1"
+    assert track["artist"] == "Coldplay" and track["album"] == "Parachutes"
+    # Track art falls back to its album image, and Google art is bumped to a square.
+    assert track["image"] == "https://lh3.googleusercontent.com/x=w544-h544"
+    assert res["artists"][0]["name"] == "Coldplay"
+    # A hit with no playable URI is dropped (can't act on it).
+    assert [s["name"] for s in res["radio"]] == ["Coldplay Radio"]
+
+
+@pytest.mark.asyncio
+async def test_search_empty_query_and_narrowed_types(monkeypatch):
+    async def boom(command, **args):
+        raise AssertionError("MA must not be hit for an empty query")
+    monkeypatch.setattr(music_service, "_ma", boom)
+    r = await music_service.search("   ")
+    assert r["available"] is False and all(v == [] for v in r["results"].values())
+
+    seen = []
+    async def fake_ma(command, **args):
+        seen.append(args["media_types"][0]); return _ma_search_payload(args["media_types"][0])
+    monkeypatch.setattr(music_service, "_ma", fake_ma)
+    r2 = await music_service.search("coldplay", media_types=["track"], limit=3)
+    assert seen == ["track"]                         # only the requested bucket queried
+    assert r2["results"]["tracks"] and r2["results"]["albums"] == []
+
+
+@pytest.mark.asyncio
+async def test_search_unavailable_when_ma_down(monkeypatch):
+    async def dead(command, **args): return None
+    monkeypatch.setattr(music_service, "_ma", dead)
+    r = await music_service.search("anything")
+    assert r["available"] is False
+    assert all(v == [] for v in r["results"].values())
+
+
+@pytest.mark.asyncio
+async def test_play_media_targets_named_player(monkeypatch):
+    async def players():
+        return [{"player_id": "kitchen", "display_name": "Kitchen", "available": True, "powered": True},
+                {"player_id": "bedroom", "display_name": "Bedroom", "available": True, "powered": True}]
+    calls = []
+    async def fake_ok(command, timeout_s=None, **args):
+        calls.append((command, args)); return True
+    monkeypatch.setattr(music_service, "get_players", players)
+    monkeypatch.setattr(music_service, "_ma_ok", fake_ok)
+
+    r = await music_service.play_media("ytmusic://track/1", player_id="bedroom")
+    assert r["ok"] is True and r["player_id"] == "bedroom" and r["player_name"] == "Bedroom"
+    assert calls == [("player_queues/play_media",
+                      {"queue_id": "bedroom", "media": "ytmusic://track/1",
+                       "option": "replace", "radio_mode": False})]
+
+
+@pytest.mark.asyncio
+async def test_play_media_reports_failure_when_ma_rejects(monkeypatch):
+    """play_media success body is null, so a bare _ma return can't tell success
+    from failure. When MA is down/times out/rejects (HTTP != 200 → _ma_ok False)
+    we must report ok:False, not a false 'Playing …'."""
+    async def players():
+        return [{"player_id": "bedroom", "display_name": "Bedroom", "available": True, "powered": True}]
+    async def down(command, timeout_s=None, **args): return False
+    monkeypatch.setattr(music_service, "get_players", players)
+    monkeypatch.setattr(music_service, "_ma_ok", down)
+    r = await music_service.play_media("ytmusic://track/1", player_id="bedroom")
+    assert r["ok"] is False and r["reason"] == "playback failed"
+
+
+@pytest.mark.asyncio
+async def test_play_media_guards(monkeypatch):
+    async def players():
+        return [{"player_id": "kitchen", "display_name": "Kitchen", "available": True, "powered": True}]
+    async def boom(command, timeout_s=None, **args):
+        raise AssertionError("MA must not be called on a guarded play_media")
+    monkeypatch.setattr(music_service, "get_players", players)
+    monkeypatch.setattr(music_service, "_ma_ok", boom)
+
+    assert (await music_service.play_media("", player_id="kitchen"))["ok"] is False       # no uri
+    # A stale/unknown player id fails loudly instead of playing on the wrong speaker.
+    r = await music_service.play_media("ytmusic://track/1", player_id="garage")
+    assert r["ok"] is False and r["reason"] == "unknown player"
+
+
+@pytest.mark.asyncio
+async def test_play_media_falls_back_to_active_player(monkeypatch):
+    async def players():
+        return [{"player_id": "kitchen", "available": True, "powered": True, "playback_state": "playing"},
+                {"player_id": "bedroom", "available": True, "powered": True}]
+    calls = []
+    async def fake_ok(command, timeout_s=None, **args):
+        calls.append(args.get("queue_id")); return True
+    monkeypatch.setattr(music_service, "get_players", players)
+    monkeypatch.setattr(music_service, "_ma_ok", fake_ok)
+    # No explicit player → picks the active (playing) player.
+    r = await music_service.play_media("ytmusic://track/1")
+    assert r["ok"] is True and calls == ["kitchen"]
+
+
+@pytest.mark.asyncio
+async def test_search_and_play_media_endpoints_delegate(monkeypatch):
+    from routers import music as music_router
+    async def fake_search(q, media_types=None, limit=8):
+        return {"available": True, "query": q, "results": {"tracks": [{"name": q}]},
+                "_types": media_types, "_limit": limit}
+    monkeypatch.setattr(music_service, "search", fake_search)
+    r = await music_router.music_search(q="jazz", types="track,album", limit=5)
+    assert r["query"] == "jazz" and r["_types"] == ["track", "album"] and r["_limit"] == 5
+
+    played = {}
+    async def fake_play(uri, player_id=""):
+        played["uri"] = uri; played["pid"] = player_id; return {"ok": True, "player_id": player_id}
+    monkeypatch.setattr(music_service, "play_media", fake_play)
+    ok = await music_router.music_play_media({"uri": "ytmusic://track/1", "player_id": "bedroom"})
+    assert ok["ok"] is True and played == {"uri": "ytmusic://track/1", "pid": "bedroom"}
+    # missing uri → refused, service never called
+    called = {"n": 0}
+    async def guard(uri, player_id=""): called["n"] += 1; return {"ok": True}
+    monkeypatch.setattr(music_service, "play_media", guard)
+    bad = await music_router.music_play_media({"player_id": "bedroom"})
+    assert bad["ok"] is False and called["n"] == 0
+
+
 # ── now_playing progress + hi-res art ────────────────────────────────────────
 
 @pytest.mark.asyncio

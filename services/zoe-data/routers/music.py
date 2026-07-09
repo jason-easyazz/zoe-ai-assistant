@@ -250,3 +250,36 @@ async def music_play(payload: dict) -> dict[str, Any]:
         return {"ok": False, "reason": "empty query"}
     hit = await music_service.search_and_play(query, player_id=player_id)
     return {"ok": hit is not None, "playing": hit}
+
+
+# ── Browse: structured search + play-by-URI (the touch music page) ────────────
+
+@router.get("/search")
+async def music_search(q: str = "", types: str = "", limit: int = 8) -> dict[str, Any]:
+    """Search the connected providers, grouped by media type.
+
+    ?q=<query>&types=track,album,artist,playlist,radio&limit=8 . `types` is an
+    optional comma list to narrow the buckets; omitted → all. Powers the music
+    page's live search so the user can pick a specific result to play by touch."""
+    import music_service
+    media_types = [t.strip() for t in (types or "").split(",") if t.strip()] or None
+    try:
+        n = int(limit)
+    except (TypeError, ValueError):
+        n = 8
+    return await music_service.search(q, media_types=media_types, limit=n)
+
+
+@router.post("/play_media")
+async def music_play_media(payload: dict) -> dict[str, Any]:
+    """Play a specific search result on a chosen speaker.
+
+    body: {uri, player_id?}. `uri` comes from /api/music/search; `player_id`
+    (optional) targets a speaker from /api/music/players — omitted → active/
+    first powered player."""
+    import music_service
+    uri = str((payload or {}).get("uri") or "").strip()
+    player_id = str((payload or {}).get("player_id") or "")
+    if not uri:
+        return {"ok": False, "reason": "missing uri"}
+    return await music_service.play_media(uri, player_id=player_id)
