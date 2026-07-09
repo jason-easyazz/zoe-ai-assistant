@@ -335,6 +335,39 @@ async def test_full_name_of_self_is_filtered(monkeypatch):
         await db.close()
 
 
+@pytest.mark.parametrize("uid", ["jason", "jason_2", "jason.smith"])
+@pytest.mark.asyncio
+async def test_self_filter_handles_slug_and_suffixed_ids(monkeypatch, uid):
+    # Username-derived / suffixed ids still filter the user's own name from
+    # portrait/fact prose ("jason_2" / "jason.smith" → drop "Jason Smith"),
+    # while keeping unrelated people.
+    monkeypatch.setenv("ZOE_CONTACT_BACKFILL_ENABLED", "1")
+    db = await _open()
+    try:
+        _fake_memory_source(monkeypatch, [_Ref("Karen loves tea.")])
+        _use_db(monkeypatch, db)
+
+        async def _llm(_text):
+            return [("Jason Smith", None), ("Jason", None), ("Karen", "sister")]
+
+        monkeypatch.setattr(cb, "_llm_extract_people", _llm)
+        stored = _capture_store(monkeypatch)
+
+        await cb.backfill_contacts(uid)
+
+        names = {s["pre_filled_slots"]["name"] for s in stored}
+        assert "Jason Smith" not in names and "Jason" not in names
+        assert "Karen" in names
+    finally:
+        await db.close()
+
+
+def test_self_identity_tokens():
+    assert cb._self_identity_tokens("jason") == frozenset({"jason"})
+    assert cb._self_identity_tokens("jason_2") == frozenset({"jason"})
+    assert cb._self_identity_tokens("jason.smith") == frozenset({"jason", "smith"})
+
+
 @pytest.mark.asyncio
 async def test_unrelated_memory_type_ignored(monkeypatch):
     # A memory whose type isn't person/fact/relationship and carries no person

@@ -324,6 +324,21 @@ async def _llm_extract_people(text: str) -> list[tuple[str, str | None]]:
     return _parse_llm_people(raw)
 
 
+# ── Self-identity guard ───────────────────────────────────────────────────────
+
+# Alphabetic tokens (≥2 chars) of a user id, used to recognise the user's own
+# name in extracted prose. Split on any non-letter so username-derived slugs and
+# suffixed ids compare against name tokens: "jason" → {jason}; "jason_2" →
+# {jason}; "jason.smith" → {jason, smith}. A pure-numeric suffix drops out.
+_SELF_TOKEN_RE = re.compile(r"[^a-z]+")
+
+
+def _self_identity_tokens(user_id: str) -> frozenset[str]:
+    """Comparable identity tokens for the user id (see note above)."""
+    raw = str(user_id or "").strip().lower()
+    return frozenset(t for t in _SELF_TOKEN_RE.split(raw) if len(t) >= 2)
+
+
 # ── Backfill entry point ──────────────────────────────────────────────────────
 
 
@@ -373,26 +388,27 @@ async def backfill_contacts(
     knowledge_texts = [t for t in knowledge_texts if t]
 
     self_name = str(user_id).strip().lower()
+    self_tokens = _self_identity_tokens(user_id)
     people: dict[str, tuple[str, str | None]] = {}
 
     def _record(name: str, rel: str | None) -> None:
         """Merge one (name, rel) into `people`, keyed case-insensitively.
 
-        Skips the user themselves (exact match only — a prefix test would drop a
-        legit contact whose name prefixes the user_id, e.g. user "jason" vs a
-        contact "Jan") and non-person junk. A relationship-bearing hit upgrades
-        an earlier bare-name hit; it never downgrades one that already has a rel.
+        Skips the user themselves and non-person junk. A relationship-bearing
+        hit upgrades an earlier bare-name hit; it never downgrades one that
+        already has a rel.
         """
         name = (name or "").strip()
         if not name or not _looks_like_person_name(name):
             return
         key = name.lower()
         # Skip the user themselves: an exact full-name match OR the extracted
-        # name's FIRST token equal to the user id — so user "jason" also drops a
-        # "Jason Smith" pulled from portrait/fact prose, not just a bare "Jason".
-        # A mere prefix ("Jan") is still kept (its first token "jan" != "jason").
+        # name's FIRST token matching one of the user id's identity tokens — so
+        # user "jason" / "jason_2" / "jason.smith" all drop a "Jason" or "Jason
+        # Smith" pulled from portrait/fact prose. A mere prefix ("Jan") is kept
+        # (its token "jan" isn't an identity token of "jason").
         first = key.split()[0] if key.split() else key
-        if key == self_name or first == self_name:
+        if key == self_name or first in self_tokens:
             return
         existing = people.get(key)
         if existing is None:
