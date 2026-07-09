@@ -1221,9 +1221,15 @@ def test_nowplaying_floating_bar_is_the_control_surface():
     assert 'class="snp-transport"' in html
     assert 'class="snp-end"' in html
     assert 'class="snp-btn snp-play" data-np-action="play_pause"' in html
-    # Hero play/pause is the largest control (~62px) and mint-accented.
-    assert ".snp-play {" in html and "width: 62px; height: 62px;" in html
-    assert "var(--sky-accent-mint, #5be3b0)" in html
+    # Hero play/pause is the largest control (~62px) and mint-accented. Scope the
+    # mint assertion to the `.snp-play` rule's own body — a file-wide mint check
+    # would pass off the scrubber/output styles even if the hero lost its accent.
+    assert ".snp-play {" in html
+    snp_play_rule = html[html.index(".snp-play {") + len(".snp-play {"):]
+    snp_play_rule = snp_play_rule[:snp_play_rule.index("}")]
+    assert "width: 62px; height: 62px;" in snp_play_rule
+    assert "background: linear-gradient(" in snp_play_rule
+    assert "var(--sky-accent-mint, #5be3b0)" in snp_play_rule
     # Seek scrubber markup: elapsed · range · duration.
     assert 'id="skyNpScrubber"' in html
     assert 'class="snp-seek"' in html and 'type="range"' in html
