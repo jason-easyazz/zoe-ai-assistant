@@ -171,6 +171,51 @@ async def list_pending_contacts(user_id: str, *, limit: int = 50) -> list[dict]:
         return []
 
 
+async def surface_pending_contacts_for_prompt(user_id: str, *, limit: int = 3) -> list[dict]:
+    """User-scoped pending `person_create` offers for the recall packet, WITH
+    turn back-off — so the flue brain doesn't nag the same un-actioned offer
+    forever. Each surfaced offer's ``turns_elapsed`` increments; an offer past
+    ``expire_after_turns`` is resolved and dropped. Mirrors ``load_for_prompt``'s
+    aging but is user-scoped + action-filtered (the for-prompt packet has no
+    session). Returns ``[{name, relationship}]`` for the still-active offers.
+    """
+    if user_id in ("guest", ""):
+        return []
+    out: list[dict] = []
+    try:
+        async with get_db_ctx() as db:
+            rows = await db.fetch(
+                """SELECT id, pre_filled_slots, turns_elapsed, expire_after_turns
+                   FROM pending_suggestions
+                   WHERE user_id = $1 AND action_type = 'person_create' AND resolved = 0
+                   ORDER BY created_at ASC LIMIT $2""",
+                user_id,
+                limit,
+            )
+            for row in rows:
+                turns = int(row["turns_elapsed"] or 0) + 1
+                expire = int(row["expire_after_turns"] or 2)
+                if turns > expire:
+                    await db.execute(
+                        "UPDATE pending_suggestions SET resolved = 1 WHERE id = $1", row["id"]
+                    )
+                    continue
+                await db.execute(
+                    "UPDATE pending_suggestions SET turns_elapsed = $1 WHERE id = $2",
+                    turns,
+                    row["id"],
+                )
+                slots = {}
+                try:
+                    slots = json.loads(row["pre_filled_slots"] or "{}")
+                except json.JSONDecodeError:
+                    pass
+                out.append({"name": slots.get("name"), "relationship": slots.get("relationship")})
+    except Exception as exc:
+        logger.debug("pending_suggestions.surface_pending_contacts_for_prompt failed: %s", exc)
+    return out
+
+
 def ui_components_for_suggestions(suggestions: list[dict]) -> list[dict]:
     """Build AG-UI confirm cards for active suggestions."""
     comps = []
