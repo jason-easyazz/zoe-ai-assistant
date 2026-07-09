@@ -207,7 +207,12 @@ def test_skybridge_renderer_keeps_button_actions_functional():
     assert "cardActions" in renderer
     assert "Open page" in renderer
     assert "Show related settings" in renderer
-    assert "Object.assign({ status: risk }, props, { actions: settingActions })" in renderer
+    # Setting card keeps its two-action contract (open route + risk-gated change);
+    # the change action goes `warn` when the setting is critical.
+    assert "settingActions" in renderer
+    assert "Open settings" in renderer
+    assert "Change setting" in renderer
+    assert "Prepare change" in renderer
     assert "function safeClassTokens" in renderer
     assert "/^[a-z0-9-]+$/i.test(token)" in renderer
     assert "function rendererAccepts" in renderer
@@ -825,25 +830,28 @@ def test_skybridge_weather_renderer_accepts_temperature_aliases():
     assert "['temp', 'temperature', 'temperature_c', 'temp_c', 'high']" in renderer
 
 
-def test_skybridge_generic_renderers_compose_on_catalog(tmp_path):
-    """The 7 legacy generic renderers (status/page/setting/page_grid/
-    settings_overview/list/action_form) plus the media/smart_home/
-    research_report adapters now build their card BODY as zoe-compose trees.
-    Behavioral: render each type through the real renderer (zoe-compose.js
-    loaded first, like skybridge.html) and assert (a) zx- catalog classes,
-    (b) no legacy sky-card-body/sky-field markup, (c) injection is escaped,
-    (d) card actions still carry data-sky-action."""
+def test_skybridge_generic_renderers_fill_the_stage(tmp_path):
+    """The legacy generic renderers (status/info/generic/stream_text, page,
+    setting, page_grid, settings_overview, the generic list fallback,
+    action_form/form, media, research_report and the unsupported-schema card) are
+    rebuilt to the ds1 "fill-the-stage" standard: a `.gx-scene` with a header band
+    (`.gx-head`) over a growing body (`.gx-body`) — no content stranded in a dark
+    void. Behavioral: render each type through the real renderer and assert
+    (a) the gx- scene grammar, (b) no legacy sky-card-body/sky-field markup,
+    (c) injection stays escaped, (d) every action keeps data-sky-action so tap +
+    voice still work. `smart_home` is NOT rebuilt here — it keeps its zoe-compose
+    body, so it is checked separately."""
     node = shutil.which("node") or shutil.which("nodejs")
     if not node:
         pytest.skip("Node.js is not installed on this host")
-    harness = tmp_path / "compose_rebuild_harness.cjs"
+    harness = tmp_path / "generic_stage_harness.cjs"
     harness.write_text(
         """
 const fs = require('fs');
 const vm = require('vm');
 const sandbox = { window: {} };
 vm.createContext(sandbox);
-vm.runInContext(fs.readFileSync(process.argv[2], 'utf8'), sandbox); // zoe-compose first
+vm.runInContext(fs.readFileSync(process.argv[2], 'utf8'), sandbox); // zoe-compose first (like the panel)
 vm.runInContext(fs.readFileSync(process.argv[3], 'utf8'), sandbox); // then renderer
 const R = sandbox.window.SkybridgeRenderer;
 const INJ = 'sneaky <b>x</b>';
@@ -857,7 +865,6 @@ const cards = {
   action_form: { component: 'action_form', props: { title: 'Form ' + INJ, form_id: 'f1', summary: 'Check ' + INJ, fields: [{ label: 'Who ' + INJ, value: 'me ' + INJ }, { label: 'Empty', value: '' }] } },
   form: { component: 'form', props: { title: 'Form2 ' + INJ, form_id: 'f2', fields: [{ name: 'x', value: 'y ' + INJ }] } },
   list_create: { component: 'action_form', props: { source: 'list_create', title: 'New list', summary: 'Name it ' + INJ, fields: [{ label: 'List type', value: 'Personal' }, { label: 'Name', value: '' }], actions: [{ label: 'Create', query: 'create it' }] } },
-  smart_home: { component: 'smart_home', props: { title: 'Lights', devices: [{ name: 'Lamp ' + INJ, state: 'on' }, { entity_id: 'light.hall', state: 'off' }], actions: [{ label: 'All off', query: 'lights off' }] } },
   media: { component: 'media', props: { title: 'Now playing', items: [{ title: 'Song ' + INJ, artist: 'Band', artwork: '/touch/img/art.png' }, { title: 'NoArt', artist: 'X', artwork: 'https://evil.example/a.png' }], actions: [{ label: 'Pause', query: 'pause music' }] } },
   research_report: { component: 'research_report', props: { title: 'Report', sections: [{ title: 'Findings ' + INJ, body: 'Text ' + INJ, items: [{ name: 'Opt ' + INJ, value: '$5' }] }], actions: [{ label: 'Sources', query: 'show sources' }] } }
 };
@@ -865,37 +872,56 @@ const out = {};
 for (const [name, card] of Object.entries(cards)) {
   const html = R.render(card);
   out[name] = {
-    zx: html.includes('zx-root') && (html.includes('zx-listrow') || html.includes('zx-text') || html.includes('zx-stat')),
-    no_legacy: !html.includes('sky-card-body') && !html.includes('sky-field') && !html.includes('sky-card-grid') && !html.includes('sky-widget-strip'),
+    scene: html.includes('sky-card') && html.includes('gx-card') && html.includes('gx-scene'),
+    fills: html.includes('gx-head') && html.includes('gx-body'),
+    no_legacy: !html.includes('sky-card-body') && !html.includes('sky-field') && !html.includes('sky-card-grid') && !html.includes('zx-root'),
     escaped: !html.includes('<b>x</b>') && html.includes('&lt;b&gt;x&lt;/b&gt;'),
     action: html.includes('data-sky-action=')
   };
 }
 // Type-specific structure checks.
-out.status.metric = R.render(cards.status).includes('zx-stat');
+out.status.metric = R.render(cards.status).includes('gx-figure-value') && R.render(cards.status).includes('42');
 out.page.open_route = /data-sky-action=\\"open\\"[^>]*data-route=\\"\\/touch\\/calendar.html\\"/.test(R.render(cards.page));
-out.setting.warn_change = R.render(cards.setting).includes('warn');
-out.page_grid.grid = R.render(cards.page_grid).includes('zx-grid zx-cols-2');
-out.settings_overview.risk_in_row = R.render(cards.settings_overview).includes('API sneaky &lt;b&gt;x&lt;/b&gt; · high');
-out.action_form.not_set = R.render(cards.action_form).includes('Not set');
-out.list_create.kicker = R.render(cards.list_create).includes('zx-text-kicker') && R.render(cards.list_create).includes('list-create-card');
-out.smart_home.grid_state = R.render(cards.smart_home).includes('zx-grid') && R.render(cards.smart_home).includes('<em>on</em>');
-out.list.index_cue = R.render(cards.list).includes('01') && R.render(cards.list).includes('02');
-out.smart_home.empty_container = (function(){
-  var h = R.render({ component: 'smart_home', props: { title: 'Lights', devices: [] } });
-  return h.includes('zx-stack') && h.includes('No devices available.');
+out.setting.warn_change = R.render(cards.setting).includes('warn') && R.render(cards.setting).includes('gx-critical');
+out.page_grid.grid = R.render(cards.page_grid).includes('gx-tiles');
+(function(){
+  var h = R.render(cards.settings_overview);
+  out.settings_overview.risk = h.includes('gx-tile-risk') && h.includes('API sneaky &lt;b&gt;x&lt;/b&gt;') && h.includes('high');
 })();
-out.media.tile = R.render(cards.media).includes('zx-mediatile') && R.render(cards.media).includes('/touch/img/art.png');
-out.media.foreign_art_dropped = !R.render(cards.media).includes('evil.example');
-out.research_report.kicker = R.render(cards.research_report).includes('zx-text-kicker');
-// Guard: without zoe-compose the renderer still emits a readable escaped body.
+out.action_form.not_set = R.render(cards.action_form).includes('Not set');
+out.list_create.identity = R.render(cards.list_create).includes('gx-list-create') && R.render(cards.list_create).includes('New list');
+out.list.index_cue = R.render(cards.list).includes('01') && R.render(cards.list).includes('02');
+(function(){
+  var h = R.render(cards.media);
+  out.media.tile = h.includes('gx-media-art') && h.includes('/touch/img/art.png');
+  out.media.foreign_art_dropped = !h.includes('evil.example');
+})();
+out.research_report.kicker = R.render(cards.research_report).includes('gx-sec-kicker');
+// Unsupported-schema card also fills the stage as a calm empty state.
+(function(){
+  var h = R.render({ component: 'unsupported_contract', props: { schema_version: '9.9.9' } });
+  out.unsupported = { scene: h.includes('gx-scene') && h.includes('gx-empty'), no_legacy: !h.includes('sky-card-body') };
+})();
+// smart_home is NOT rebuilt here: it keeps its zoe-compose body.
+(function(){
+  var h = R.render({ component: 'smart_home', props: { title: 'Lights', devices: [{ name: 'Lamp ' + INJ, state: 'on' }, { entity_id: 'light.hall', state: 'off' }], actions: [{ label: 'All off', query: 'lights off' }] } });
+  var empty = R.render({ component: 'smart_home', props: { title: 'Lights', devices: [] } });
+  out.smart_home = {
+    grid_state: h.includes('zx-grid') && h.includes('<em>on</em>'),
+    escaped: !h.includes('<b>x</b>') && h.includes('&lt;b&gt;x&lt;/b&gt;'),
+    action: h.includes('data-sky-action='),
+    empty_container: empty.includes('zx-stack') && empty.includes('No devices available.')
+  };
+})();
+// The rebuilt renderers no longer depend on zoe-compose: render with NO catalog
+// loaded and confirm the generic answer card still fills the stage, escaped.
 const bare = { window: {} };
 vm.createContext(bare);
 vm.runInContext(fs.readFileSync(process.argv[3], 'utf8'), bare);
 const bareHtml = bare.window.SkybridgeRenderer.render(cards.status);
-out.no_compose_fallback = {
+out.no_compose_needed = {
   text: bareHtml.includes('Body sneaky') && bareHtml.includes('&lt;b&gt;x&lt;/b&gt;'),
-  shell: bareHtml.includes('sky-card'),
+  scene: bareHtml.includes('sky-card') && bareHtml.includes('gx-scene'),
   no_tree: !bareHtml.includes('zx-root')
 };
 process.stdout.write(JSON.stringify(out));
@@ -914,7 +940,14 @@ process.stdout.write(JSON.stringify(out));
         for check, ok in checks.items()
         if not ok
     }
-    assert not failures, f"composed generic renderers failed: {failures}"
+    assert not failures, f"generic renderers failed the fill-the-stage contract: {failures}"
+
+    # The ds1 fill-the-stage scene CSS ships in a linked card sheet.
+    html = read(UI / "skybridge.html")
+    assert "cards/generic.css" in html
+    generic_css = read(UI / "css" / "cards" / "generic.css")
+    for hook in ("gx-scene", "gx-head", "gx-body", "gx-facts", "gx-empty"):
+        assert hook in generic_css, f"{hook} missing from cards/generic.css"
 
     # The legacy list_create CSS died with the legacy markup.
     css = read(UI / "css" / "skybridge-data-widgets.css")

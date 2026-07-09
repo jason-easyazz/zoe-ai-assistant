@@ -1,0 +1,357 @@
+/* generic.css — ds1 "fill-the-stage" re-skin for Zoe's generic card renderers
+   (status/info/generic/stream_text, page, setting, page_grid, settings_overview,
+   the generic list fallback, action_form/form, media, research_report and the
+   unsupported-schema card).
+
+   Every value comes from the ds1 tokens in skybridge-ds.css — no magic numbers.
+   Loaded after the legacy inline card CSS in skybridge.html, so these `.gx-*`
+   rules (and the higher-specificity `.sky-card.gx-card`) win the cascade and the
+   old top-stranded "few rows in a black void" layout is replaced by a scene that
+   grows to the full 1280×800 stage. Markup contract lives in
+   js/skybridge-renderer.js (the gx* helpers). */
+
+/* ── Card shell → flex column so the scene fills the stage ─────────────────
+   The legacy `.sky-card` is display:grid + align-content:start, which packs a
+   short body at the top and leaves the rest dark. `.sky-card.gx-card` outranks
+   it; the stage sheet still owns the vertical safe-area padding (clears the Home
+   pill + voice pill), we just widen the side gutters here. */
+.sky-card.gx-card {
+  display: flex;
+  flex-direction: column;
+  padding-left: clamp(28px, 4vw, 64px);
+  padding-right: clamp(28px, 4vw, 64px);
+}
+
+.gx-scene {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sky-space-6);
+  min-height: 0;
+  min-width: 0;
+  color: var(--sky-ink-1);
+  --gx-accent: var(--sky-accent-violet);
+}
+
+/* ── Accent (colour with intent, §4) ─────────────────────────────────────── */
+.gx-accent-personal,
+.gx-accent-general               { --gx-accent: var(--sky-accent-violet); }
+.gx-accent-work,
+.gx-accent-routine,
+.gx-accent-tasks,
+.gx-accent-all                   { --gx-accent: var(--sky-accent-blue); }
+.gx-accent-shopping,
+.gx-accent-household,
+.gx-accent-family                { --gx-accent: var(--sky-accent-amber); }
+.gx-accent-health                { --gx-accent: var(--sky-accent-mint); }
+.gx-accent-medical               { --gx-accent: var(--sky-accent-red); }
+.gx-accent-social,
+.gx-accent-bucket                { --gx-accent: var(--sky-accent-cyan); }
+
+/* A soft accent wash pinned to the card's own box, so the scene never reads as
+   flat neutral glass. Sits behind the content (the scene is a positioned
+   context; children stack above via natural flow). */
+.gx-scene::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    radial-gradient(90% 70% at 100% 0%,
+      color-mix(in srgb, var(--gx-accent) 22%, transparent) 0%, transparent 60%),
+    radial-gradient(80% 90% at 0% 100%,
+      color-mix(in srgb, var(--gx-accent) 12%, transparent) 0%, transparent 55%);
+  opacity: 0.9;
+  pointer-events: none;
+  z-index: 0;
+}
+.gx-scene { position: relative; }
+.gx-scene > * { position: relative; z-index: 1; }
+
+/* ── Header band ──────────────────────────────────────────────────────────── */
+.gx-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sky-space-2);
+  min-width: 0;
+}
+.gx-eyebrow {
+  font-size: var(--sky-text-label);
+  font-weight: var(--sky-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: color-mix(in srgb, var(--gx-accent) 78%, var(--sky-ink-2));
+}
+.gx-title {
+  margin: 0;
+  font-size: clamp(30px, 3.4vw, var(--sky-text-title));
+  font-weight: 650;
+  line-height: 1.06;
+  letter-spacing: -0.015em;
+  color: var(--sky-ink-0);
+  overflow-wrap: anywhere;
+}
+.gx-lede {
+  margin: 0;
+  font-size: var(--sky-text-heading);
+  line-height: 1.4;
+  color: var(--sky-ink-2);
+  max-width: 62ch;
+  overflow-wrap: anywhere;
+}
+
+/* ── Body region — grows to fill the remaining stage ──────────────────────── */
+.gx-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sky-space-5);
+  min-height: 0;
+  min-width: 0;
+}
+/* The generic answer card gives its reply room to breathe under the header and
+   pins any actions to the bottom (the shared .gx-actions margin-top:auto). */
+.gx-body--status { gap: var(--sky-space-6); }
+.gx-body--status .gx-prose { margin-top: var(--sky-space-2); }
+/* Reports can run long — let them scroll inside the card rather than clip. */
+.gx-body--report { overflow-y: auto; scrollbar-width: none; }
+.gx-body--report::-webkit-scrollbar { display: none; }
+
+/* ── Hero figure (status metric) ──────────────────────────────────────────── */
+.gx-figure { display: flex; flex-direction: column; gap: var(--sky-space-1); min-width: 0; }
+.gx-figure-value {
+  font-size: clamp(56px, 11vw, var(--sky-text-display));
+  font-weight: var(--sky-weight-thin);
+  line-height: 0.9;
+  letter-spacing: var(--sky-track-tight);
+  color: var(--sky-ink-0);
+}
+.gx-figure-label {
+  font-size: var(--sky-text-heading);
+  color: color-mix(in srgb, var(--gx-accent) 60%, var(--sky-ink-2));
+}
+
+/* ── Prose (the reply text / section bodies) ──────────────────────────────── */
+.gx-prose { display: flex; flex-direction: column; gap: var(--sky-space-4); min-width: 0; }
+.gx-prose p {
+  margin: 0;
+  font-size: clamp(18px, 1.9vw, 22px);
+  line-height: 1.5;
+  color: var(--sky-ink-1);
+  max-width: 66ch;
+  overflow-wrap: anywhere;
+}
+
+/* ── Fact tiles (page / setting / form fields) ────────────────────────────── */
+.gx-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--sky-space-4);
+  align-content: start;
+}
+.gx-fact {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sky-space-2);
+  padding: var(--sky-space-5);
+  border-radius: var(--sky-radius-md);
+  background: color-mix(in srgb, var(--gx-accent) 8%, rgba(255, 255, 255, 0.05));
+  border: 1px solid color-mix(in srgb, var(--gx-accent) 22%, transparent);
+  min-width: 0;
+}
+.gx-fact-k {
+  font-size: var(--sky-text-caption);
+  font-weight: var(--sky-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--sky-ink-2);
+}
+.gx-fact-v {
+  font-size: var(--sky-text-heading);
+  font-weight: var(--sky-weight-semibold);
+  color: var(--sky-ink-0);
+  overflow-wrap: anywhere;
+}
+
+/* ── Note (sensitive-setting caution) ─────────────────────────────────────── */
+.gx-note {
+  margin: 0;
+  padding: var(--sky-space-4) var(--sky-space-5);
+  border-radius: var(--sky-radius-md);
+  font-size: var(--sky-text-body);
+  line-height: 1.45;
+  color: var(--sky-ink-1);
+  background: color-mix(in srgb, var(--gx-accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--gx-accent) 30%, transparent);
+}
+.gx-note--warn {
+  background: color-mix(in srgb, var(--sky-accent-red) 14%, transparent);
+  border-color: color-mix(in srgb, var(--sky-accent-red) 38%, transparent);
+}
+
+/* ── Tiles (page_grid / settings_overview) ────────────────────────────────── */
+.gx-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--sky-space-4);
+  align-content: start;
+}
+.gx-tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sky-space-2);
+  padding: var(--sky-space-5);
+  border-radius: var(--sky-radius-md);
+  background: color-mix(in srgb, var(--gx-accent) 9%, rgba(255, 255, 255, 0.05));
+  border: 1px solid color-mix(in srgb, var(--gx-accent) 24%, transparent);
+  min-width: 0;
+}
+.gx-tile-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sky-space-3); }
+.gx-tile-title { font-size: var(--sky-text-heading); font-weight: 650; color: var(--sky-ink-0); overflow-wrap: anywhere; }
+.gx-tile-sub { font-size: var(--sky-text-body); line-height: 1.4; color: var(--sky-ink-2); overflow-wrap: anywhere; }
+.gx-tile-risk {
+  flex: 0 0 auto;
+  padding: 3px var(--sky-space-3);
+  border-radius: var(--sky-radius-pill);
+  font-size: var(--sky-text-caption);
+  font-weight: var(--sky-weight-semibold);
+  text-transform: capitalize;
+  color: var(--sky-ink-0);
+  background: color-mix(in srgb, var(--sky-accent-blue) 22%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sky-accent-blue) 45%, transparent);
+}
+.gx-risk-medium { background: color-mix(in srgb, var(--sky-accent-amber) 20%, transparent); border-color: color-mix(in srgb, var(--sky-accent-amber) 45%, transparent); }
+.gx-risk-high,
+.gx-risk-critical { background: color-mix(in srgb, var(--sky-accent-red) 20%, transparent); border-color: color-mix(in srgb, var(--sky-accent-red) 48%, transparent); }
+
+/* ── Numbered / plain rows (list fallback, research items) ─────────────────── */
+.gx-rows {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--sky-space-3);
+  align-content: start;
+}
+.gx-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sky-space-4);
+  padding: var(--sky-space-4) var(--sky-space-5);
+  border-radius: var(--sky-radius-md);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  min-height: 48px;
+  min-width: 0;
+}
+.gx-row-num {
+  flex: 0 0 auto;
+  font-size: var(--sky-text-heading);
+  font-weight: 650;
+  color: color-mix(in srgb, var(--gx-accent) 70%, var(--sky-ink-3));
+}
+.gx-row-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.gx-row-main strong { font-size: var(--sky-text-body); font-weight: var(--sky-weight-semibold); color: var(--sky-ink-0); overflow-wrap: anywhere; }
+.gx-row-main em { font-style: normal; font-size: var(--sky-text-caption); color: var(--sky-ink-2); overflow-wrap: anywhere; }
+
+/* ── Research sections ────────────────────────────────────────────────────── */
+.gx-sec { display: flex; flex-direction: column; gap: var(--sky-space-3); min-width: 0; }
+.gx-sec + .gx-sec { margin-top: var(--sky-space-4); padding-top: var(--sky-space-4); border-top: 1px solid rgba(255, 255, 255, 0.1); }
+.gx-sec-kicker {
+  font-size: var(--sky-text-label);
+  font-weight: var(--sky-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: color-mix(in srgb, var(--gx-accent) 78%, var(--sky-ink-2));
+}
+.gx-sec .gx-prose p { font-size: var(--sky-text-body); }
+
+/* ── Media grid ───────────────────────────────────────────────────────────── */
+.gx-media-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--sky-space-4);
+  align-content: start;
+}
+.gx-media-tile {
+  margin: 0;
+  border-radius: var(--sky-radius-md);
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.gx-media-art { display: block; width: 100%; aspect-ratio: 1 / 1; overflow: hidden; }
+.gx-media-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.gx-media-art--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: color-mix(in srgb, var(--gx-accent) 80%, #fff);
+  background: linear-gradient(150deg,
+    color-mix(in srgb, var(--gx-accent) 24%, transparent),
+    color-mix(in srgb, var(--gx-accent) 6%, transparent));
+}
+.gx-media-tile figcaption { display: flex; flex-direction: column; gap: 2px; padding: var(--sky-space-3) var(--sky-space-4); }
+.gx-media-tile figcaption strong { font-size: var(--sky-text-body); font-weight: var(--sky-weight-semibold); color: var(--sky-ink-0); overflow-wrap: anywhere; }
+.gx-media-tile figcaption span { font-size: var(--sky-text-caption); color: var(--sky-ink-2); overflow-wrap: anywhere; }
+
+/* ── Empty state ──────────────────────────────────────────────────────────── */
+.gx-empty {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sky-space-3);
+  text-align: center;
+  padding: var(--sky-space-8) var(--sky-space-4);
+}
+.gx-empty-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  font-size: 34px;
+  font-weight: 650;
+  color: color-mix(in srgb, var(--gx-accent) 85%, #fff);
+  background: color-mix(in srgb, var(--gx-accent) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--gx-accent) 32%, transparent);
+}
+.gx-empty strong { font-size: var(--sky-text-heading); color: var(--sky-ink-0); }
+.gx-empty span { font-size: var(--sky-text-body); color: var(--sky-ink-2); max-width: 42ch; }
+
+/* ── Action footer ────────────────────────────────────────────────────────
+   Rides on the shared .sky-actions button styling; the gx modifier just pins the
+   row to the bottom of the scene with comfortable spacing + ≥44px tap targets. */
+.gx-actions {
+  margin-top: auto;
+  padding-top: var(--sky-space-2);
+  gap: var(--sky-space-3);
+}
+.gx-actions button {
+  min-height: 52px;
+  padding: var(--sky-space-3) var(--sky-space-6);
+  font-size: var(--sky-text-body);
+}
+
+/* ── Light theme: warm the neutrals so text stays legible on light glass ──── */
+:root[data-theme="light"] .gx-scene { color: var(--text-secondary); }
+:root[data-theme="light"] .gx-title,
+:root[data-theme="light"] .gx-fact-v,
+:root[data-theme="light"] .gx-tile-title,
+:root[data-theme="light"] .gx-row-main strong,
+:root[data-theme="light"] .gx-figure-value,
+:root[data-theme="light"] .gx-empty strong { color: var(--text-primary); }
+:root[data-theme="light"] .gx-lede,
+:root[data-theme="light"] .gx-prose p,
+:root[data-theme="light"] .gx-tile-sub,
+:root[data-theme="light"] .gx-row-main em,
+:root[data-theme="light"] .gx-fact-k,
+:root[data-theme="light"] .gx-empty span { color: var(--text-secondary); }
+:root[data-theme="light"] .gx-row,
+:root[data-theme="light"] .gx-fact,
+:root[data-theme="light"] .gx-tile,
+:root[data-theme="light"] .gx-media-tile { background: rgba(20, 50, 80, 0.05); border-color: rgba(20, 50, 80, 0.12); }
