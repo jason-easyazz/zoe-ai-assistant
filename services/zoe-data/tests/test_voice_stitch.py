@@ -44,12 +44,19 @@ def test_weather_segments_valid():
         ["It's fourteen degrees", "Clear", "in Geraldton"]
 
 
-def test_weather_segments_unknown_condition_falls_back():
-    assert vs.weather_segments(14, "raining frogs", "Geraldton") is None
+def test_weather_segments_unknown_condition_still_stitches():
+    # A provider description outside the seed list is passed through (synth-once,
+    # then cached) rather than forcing a fallback.
+    assert vs.weather_segments(14, "raining frogs", "Geraldton") == \
+        ["It's fourteen degrees", "Raining frogs", "in Geraldton"]
+
+
+def test_weather_segments_empty_condition_omitted():
+    assert vs.weather_segments(14, "", "Geraldton") == ["It's fourteen degrees", "in Geraldton"]
 
 
 def test_weather_segments_out_of_range_temp():
-    assert vs.weather_segments(140, "clear", "Geraldton") is None
+    assert vs.weather_segments(140, "clear", "Geraldton") is None  # temp beyond 0–100 vocab
 
 
 # ── time_segments ────────────────────────────────────────────────────────────
@@ -98,7 +105,15 @@ def test_concat_preserves_format():
 
 def test_concat_rejects_format_mismatch():
     a = _wav(100, framerate=24000)
-    b = _wav(100, framerate=16000)  # different rate → refuse
+    b = _wav(100, framerate=16000)  # differs from canonical → refuse
+    assert vs.concat_wavs([a, b]) is None
+
+
+def test_concat_rejects_uniformly_wrong_format():
+    # Both consistent with each other but NOT the canonical 24kHz → still refuse
+    # (would otherwise concat cleanly and play at the wrong speed).
+    a = _wav(100, framerate=16000)
+    b = _wav(100, framerate=16000)
     assert vs.concat_wavs([a, b]) is None
 
 

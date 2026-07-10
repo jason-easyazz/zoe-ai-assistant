@@ -49,7 +49,13 @@ WEATHER_CONDITIONS = [
     "mist", "windy", "humid", "hot", "cold",
 ]
 
-_CITY = os.environ.get("ZOE_WEATHER_CITY", "Geraldton")
+# Same var the weather router + MCP use for the home city, so the stitched
+# "in {city}" segment matches the spoken reply's city and shares its cache entry.
+_CITY = os.environ.get("ZOE_LOCATION_CITY", "Geraldton")
+
+# Canonical Kokoro WAV format. Segments must match this (not just each other) or
+# concat refuses — a consistently-wrong rate would otherwise play at wrong speed.
+_WAV_CHANNELS, _WAV_SAMPWIDTH, _WAV_RATE = 1, 2, 24000
 
 
 def enabled() -> bool:
@@ -82,7 +88,7 @@ def concat_wavs(wavs: list[bytes], *, gap_ms: int = _GAP_MS) -> Optional[bytes]:
     """
     if not wavs:
         return None
-    params = None
+    expected = (_WAV_CHANNELS, _WAV_SAMPWIDTH, _WAV_RATE)
     pcm_parts: list[bytes] = []
     for blob in wavs:
         try:
@@ -92,13 +98,13 @@ def concat_wavs(wavs: list[bytes], *, gap_ms: int = _GAP_MS) -> Optional[bytes]:
         except Exception as exc:
             logger.debug("voice_stitch: unreadable WAV segment (%s)", exc)
             return None
-        if params is None:
-            params = p
-        elif p != params:
-            logger.debug("voice_stitch: segment format %s != %s, refusing to stitch", p, params)
+        # Must match the CANONICAL format, not merely be self-consistent — a
+        # uniformly-wrong rate would still concat cleanly but play at wrong speed.
+        if p != expected:
+            logger.debug("voice_stitch: segment format %s != canonical %s, refusing", p, expected)
             return None
         pcm_parts.append(frames)
-    channels, sampwidth, framerate = params
+    channels, sampwidth, framerate = expected
     gap = _silence_pcm(framerate, sampwidth, channels, gap_ms) if gap_ms > 0 else b""
     body = gap.join(pcm_parts)
     out = io.BytesIO()
@@ -113,13 +119,26 @@ def concat_wavs(wavs: list[bytes], *, gap_ms: int = _GAP_MS) -> Optional[bytes]:
 # ── Segment templates (text only — pure, testable) ────────────────────────────
 
 def weather_segments(temp_c: int, condition: str, city: Optional[str] = None) -> Optional[list[str]]:
-    """Ordered phrase segments for a weather reply, or None if any slot is out of vocab."""
-    tw = number_to_words(int(round(temp_c))) if temp_c is not None else None
-    cond = (condition or "").strip().lower()
-    if tw is None or cond not in WEATHER_CONDITIONS:
+    """Ordered phrase segments for a weather reply, or None if the temp is out of range.
+
+    Temperature (0–100) and city are the guaranteed-finite, pre-warmed segments. The
+    description is provider-driven free text (WMO-mapped, ~28 values in practice), so
+    it is passed through as its own segment rather than gated against a fixed list —
+    a novel description just synthesises once and is cached thereafter (`WEATHER_CONDITIONS`
+    seeds the pre-warm for the common ones). An empty description is simply omitted.
+    """
+    if temp_c is None:
+        return None
+    tw = number_to_words(int(round(temp_c)))
+    if tw is None:  # outside the 0–100 vocab
         return None
     city = city or _CITY
-    return [f"It's {tw} degrees", cond.capitalize(), f"in {city}"]
+    segs = [f"It's {tw} degrees"]
+    cond = (condition or "").strip()
+    if cond:
+        segs.append(cond[:1].upper() + cond[1:])
+    segs.append(f"in {city}")
+    return segs
 
 
 def time_segments(hour_24: int, minute: int) -> Optional[list[str]]:
