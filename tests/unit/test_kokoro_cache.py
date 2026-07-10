@@ -72,6 +72,20 @@ def test_read_manifest_failopen_on_missing_or_garbage(kok, tmp_path):
     assert kok._read_manifest(tmp_path) == {}  # corrupt
 
 
+def test_read_manifest_skips_malformed_entry_values(kok, tmp_path):
+    # A dict `entries` map with one bad (non-dict) value must not poison the rest
+    # or AttributeError inside flush/reload — the bad row is dropped, good kept.
+    import json as _json
+    (tmp_path / kok._MANIFEST_NAME).write_text(
+        _json.dumps({"entries": {"ok": {"hits": 2}, "bad": "not-a-dict"}}), "utf-8"
+    )
+    entries = kok._read_manifest(tmp_path)
+    assert set(entries) == {"ok"}
+    # And reload over the same corrupt manifest is fail-open (no raise).
+    reloaded, meta = kok._reload_from_disk(tmp_path, max_entries=10)
+    assert "bad" not in meta
+
+
 # ─── flush → reload (restart survival) ─────────────────────────────────────────
 
 def test_flush_then_reload_restores_hot_set(kok, tmp_path):
@@ -182,6 +196,23 @@ def test_flush_failopen_on_unwritable_dir(kok):
 def test_reload_failopen_on_empty_dir(kok, tmp_path):
     reloaded, meta = kok._reload_from_disk(tmp_path, max_entries=10)
     assert reloaded == {} and meta == {}
+
+
+def test_env_int_rejects_nonpositive_and_garbage(kok, monkeypatch):
+    monkeypatch.setenv("ZOE_TEST_INT", "0")
+    assert kok._env_int("ZOE_TEST_INT", 1000) == 1000   # 0 → default
+    monkeypatch.setenv("ZOE_TEST_INT", "-5")
+    assert kok._env_int("ZOE_TEST_INT", 1000) == 1000   # negative → default
+    monkeypatch.setenv("ZOE_TEST_INT", "abc")
+    assert kok._env_int("ZOE_TEST_INT", 1000) == 1000   # garbage → default
+    monkeypatch.setenv("ZOE_TEST_INT", "42")
+    assert kok._env_int("ZOE_TEST_INT", 1000) == 42     # valid positive kept
+
+
+def test_flush_returns_true_on_success_false_on_disk_error(kok, tmp_path):
+    assert kok._flush_to_disk(tmp_path, {"a": b"x"}, {"a": {"hits": 1}}, 10, 10_000) is True
+    bad = pathlib.Path("/proc/nonexistent_kokoro_dir/sub")
+    assert kok._flush_to_disk(bad, {"a": b"x"}, {"a": {"hits": 1}}, 10, 10_000) is False
 
 
 def test_reload_skips_entry_with_missing_wav(kok, tmp_path):

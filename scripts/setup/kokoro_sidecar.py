@@ -155,11 +155,19 @@ _CACHE_MAX_TEXT_LEN = 240
 
 
 def _env_int(name: str, default: int) -> int:
-    """Parse an int env var, falling back to default on missing/garbage (never crash import)."""
+    """Parse a positive int env var, falling back to default on missing/garbage/≤0.
+
+    All callers (disk-entry / byte budgets, flush interval) require a positive
+    value; a 0 or negative override would either busy-loop the flusher or make
+    _select_within_budget evict almost the whole restart cache, so we treat
+    non-positive as garbage and use the documented default.  To disable
+    persistence entirely, use ZOE_KOKORO_CACHE_PERSIST=0.
+    """
     try:
-        return int(str(os.environ.get(name, default)).strip())
+        value = int(str(os.environ.get(name, default)).strip())
     except (TypeError, ValueError):
         return default
+    return value if value > 0 else default
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -248,10 +256,15 @@ def _read_manifest(cache_dir: Path) -> dict:
     """Load the manifest's entry map; returns {} on any error (fail-open)."""
     try:
         raw = json.loads(_manifest_path(cache_dir).read_text("utf-8"))
-        entries = raw.get("entries", {})
-        return entries if isinstance(entries, dict) else {}
     except (OSError, ValueError):
         return {}
+    entries = raw.get("entries", {})
+    if not isinstance(entries, dict):
+        return {}
+    # Skip malformed entries (non-dict values) so one bad row can't AttributeError
+    # its way through _flush_to_disk / _reload_from_disk and abort the whole
+    # persistent-cache path.
+    return {k: v for k, v in entries.items() if isinstance(v, dict)}
 
 
 def _write_manifest(cache_dir: Path, entries: dict) -> None:
@@ -293,12 +306,14 @@ def _flush_to_disk(
     meta: dict,
     max_disk: int,
     max_bytes: int,
-) -> None:
+) -> bool:
     """Persist the hot set to ``cache_dir`` and enforce the disk budget.
 
     Runs OFF the synth hot path (periodic task / shutdown), never inside a
     /synthesize request.  Fail-open: any error is logged and swallowed so a
-    broken disk can never break synthesis.
+    broken disk can never break synthesis.  Returns True on a completed flush,
+    False if the manifest could not be written (so the caller can re-arm the
+    dirty flag and retry next cycle instead of dropping learned phrases).
     """
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -336,8 +351,10 @@ def _flush_to_disk(
             except OSError:
                 pass
         _write_manifest(cache_dir, {k: combined[k] for k in keep})
+        return True
     except OSError as exc:
         logger.warning("Kokoro cache flush skipped (disk error): %s", exc)
+        return False
 
 
 def _reload_from_disk(cache_dir: Path, max_entries: int) -> tuple[dict, dict]:
@@ -419,10 +436,13 @@ async def _flush_cache_async(loop) -> None:
     global _cache_dirty
     if not (_CACHE_PERSIST and _cache_dirty):
         return
+    # Clear BEFORE the flush so concurrent hits during it re-arm the flag for the
+    # next cycle; if the flush itself fails, re-arm so we retry rather than drop
+    # the learned phrases.
     _cache_dirty = False
     snapshot = dict(_phrase_cache)
     meta = {k: dict(v) for k, v in _cache_meta.items()}
-    await loop.run_in_executor(
+    ok = await loop.run_in_executor(
         None,
         _flush_to_disk,
         _CACHE_DIR,
@@ -431,6 +451,8 @@ async def _flush_cache_async(loop) -> None:
         _CACHE_MAX_DISK,
         _CACHE_MAX_DISK_BYTES,
     )
+    if not ok:
+        _cache_dirty = True
 
 
 @asynccontextmanager
