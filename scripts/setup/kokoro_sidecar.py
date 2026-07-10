@@ -500,6 +500,7 @@ async def lifespan(app: FastAPI):
     global _pipeline
     loop = asyncio.get_event_loop()
     flush_task: asyncio.Task | None = None
+    precache_task: asyncio.Task | None = None
     stop_flush = asyncio.Event()
     try:
         _pipeline = await loop.run_in_executor(None, _load_pipeline)
@@ -544,8 +545,12 @@ async def lifespan(app: FastAPI):
                 "Phrase cache warmed in background: %d synthesised, %d already hot, %d total.",
                 cached, skipped, len(_WARM_PHRASES),
             )
-            await _flush_cache_async(loop)
-        asyncio.create_task(_bg_precache())
+            # NB: precache does NOT flush to disk itself — _cache_store already
+            # marked the cache dirty, so the periodic flusher (and the shutdown
+            # flush) persist these.  Keeping the only flush submitters to the
+            # periodic loop + shutdown guarantees shutdown is the last writer,
+            # with no untracked worker able to os.replace() a stale snapshot after.
+        precache_task = asyncio.create_task(_bg_precache())
 
         # Periodic off-hot-path flush: persist the hot set as it evolves so a
         # crash/restart loses at most one interval of learning.  The loop wakes on
@@ -573,11 +578,16 @@ async def lifespan(app: FastAPI):
     yield
     logger.info("Kokoro sidecar shutting down.")
     stop_flush.set()
-    if flush_task is not None:
-        # Await (do NOT cancel) so any in-flight _flush_to_disk worker finishes —
-        # cancelling would abandon the await while the detached thread kept writing,
-        # letting a late os.replace() roll the manifest back to a stale snapshot.
-        await asyncio.gather(flush_task, return_exceptions=True)
+    # Stop the background precache (it does no disk I/O, so cancel is safe) and
+    # DRAIN the periodic flush (await, never cancel) so any in-flight
+    # _flush_to_disk worker finishes — cancelling it would abandon the await while
+    # the detached thread kept writing, letting a late os.replace() roll the
+    # manifest back to a stale snapshot.
+    if precache_task is not None:
+        precache_task.cancel()
+    drain = [t for t in (flush_task, precache_task) if t is not None]
+    if drain:
+        await asyncio.gather(*drain, return_exceptions=True)
     # Final flush so the latest learning survives the restart.  force=True in case
     # the periodic loop already cleared the dirty flag; it runs strictly after the
     # drained periodic flush and holds _flush_disk_lock, so it is the last writer.
