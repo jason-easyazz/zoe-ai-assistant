@@ -101,6 +101,18 @@ def test_read_manifest_coerces_garbage_scalars(kok, tmp_path):
     assert keep == ["x"]
 
 
+def test_read_manifest_coerces_infinity_without_overflow(kok, tmp_path):
+    # JSON `Infinity` parses to float('inf'); int(inf) raises OverflowError, which
+    # _coerce_num must also swallow so a malformed scalar can't abort the flush.
+    (tmp_path / kok._MANIFEST_NAME).write_text(
+        '{"entries": {"y": {"hits": Infinity, "last_used": 1.0, "bytes": Infinity}}}', "utf-8"
+    )
+    entries = kok._read_manifest(tmp_path)
+    assert entries["y"]["hits"] == 0 and entries["y"]["bytes"] == 0
+    # And a full flush over it must not raise.
+    assert kok._flush_to_disk(tmp_path, {}, entries, 10, 10_000) is True
+
+
 # ─── flush → reload (restart survival) ─────────────────────────────────────────
 
 def test_flush_then_reload_restores_hot_set(kok, tmp_path):

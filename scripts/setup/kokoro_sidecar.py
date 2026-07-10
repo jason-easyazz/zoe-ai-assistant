@@ -260,10 +260,14 @@ def _manifest_path(cache_dir: Path) -> Path:
 
 
 def _coerce_num(value, cast, default):
-    """Safely coerce a manifest scalar; garbage (e.g. "many") falls back to default."""
+    """Safely coerce a manifest scalar; garbage falls back to default.
+
+    Catches OverflowError too: JSON parses ``Infinity`` to a float, and
+    ``int(inf)`` raises OverflowError rather than ValueError.
+    """
     try:
         return cast(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
