@@ -61,19 +61,19 @@ def test_weather_segments_out_of_range_temp():
 
 # ── time_segments ────────────────────────────────────────────────────────────
 def test_time_segments_oclock():
-    assert vs.time_segments(7, 0) == ["The time is seven o'clock", "AM"]
+    assert vs.time_segments(7, 0) == ["It's seven o'clock", "AM"]
 
 
 def test_time_segments_single_digit_minute_says_oh():
-    assert vs.time_segments(19, 5) == ["The time is seven", "oh five", "PM"]
+    assert vs.time_segments(19, 5) == ["It's seven", "oh five", "PM"]
 
 
 def test_time_segments_pm_and_minute():
-    assert vs.time_segments(19, 42) == ["The time is seven", "forty two", "PM"]
+    assert vs.time_segments(19, 42) == ["It's seven", "forty two", "PM"]
 
 
 def test_time_segments_midnight_and_noon():
-    assert vs.time_segments(0, 15)[0] == "The time is twelve"   # 12 AM
+    assert vs.time_segments(0, 15)[0] == "It's twelve"   # 12 AM
     assert vs.time_segments(0, 15)[-1] == "AM"
     assert vs.time_segments(12, 15)[-1] == "PM"                  # 12 PM
 
@@ -149,6 +149,57 @@ def test_vocabulary_is_bounded_and_covers_slots():
     assert "It's fourteen degrees" in vocab
     assert "Clear" in vocab
     assert "in Geraldton" in vocab
-    assert "The time is seven" in vocab
+    assert "It's seven" in vocab
     assert "forty two" in vocab
     assert "AM" in vocab and "PM" in vocab
+
+
+# ── stitch_reply: reply-text → stitched audio (the live hook) ─────────────────
+async def _synth_from(seg_to_wav):
+    async def _fn(text):
+        return seg_to_wav.get(text)
+    return _fn
+
+
+@pytest.mark.asyncio
+async def test_stitch_reply_disabled_returns_none(monkeypatch):
+    monkeypatch.setenv("ZOE_VOICE_STITCH_ENABLED", "0")
+    async def _n(t): return None
+    assert await vs.stitch_reply("It's 14 degrees and clear in Geraldton", _n) is None
+
+
+@pytest.mark.asyncio
+async def test_stitch_reply_weather(monkeypatch):
+    monkeypatch.setenv("ZOE_VOICE_STITCH_ENABLED", "1")
+    synth = await _synth_from({"It's fourteen degrees": _wav(1000), "Clear": _wav(500), "in Geraldton": _wav(700)})
+    out = await vs.stitch_reply("It's 14 degrees and clear in Geraldton", synth)  # digits → word segments
+    assert out is not None and _nframes(out) > 2000
+
+
+@pytest.mark.asyncio
+async def test_stitch_reply_time(monkeypatch):
+    monkeypatch.setenv("ZOE_VOICE_STITCH_ENABLED", "1")
+    synth = await _synth_from({"It's seven": _wav(800), "forty two": _wav(600), "PM": _wav(300)})
+    out = await vs.stitch_reply("It's 7:42 PM.", synth)  # 7 PM → 19:42
+    assert out is not None and _nframes(out) > 1400
+
+
+@pytest.mark.asyncio
+async def test_stitch_reply_feels_like_falls_back(monkeypatch):
+    monkeypatch.setenv("ZOE_VOICE_STITCH_ENABLED", "1")
+    async def _n(t): return None
+    assert await vs.stitch_reply("It's 14 degrees and clear, and it feels like 10 degrees in Geraldton", _n) is None
+
+
+@pytest.mark.asyncio
+async def test_stitch_reply_non_template_falls_back(monkeypatch):
+    monkeypatch.setenv("ZOE_VOICE_STITCH_ENABLED", "1")
+    async def _n(t): return None
+    assert await vs.stitch_reply("Your locker code is beef42.", _n) is None
+
+
+@pytest.mark.asyncio
+async def test_stitch_reply_out_of_vocab_temp_falls_back(monkeypatch):
+    monkeypatch.setenv("ZOE_VOICE_STITCH_ENABLED", "1")
+    async def _n(t): return None
+    assert await vs.stitch_reply("It's 140 degrees and clear in Geraldton", _n) is None
