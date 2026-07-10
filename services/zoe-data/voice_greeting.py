@@ -1,15 +1,16 @@
 """First-turn-of-day spoken greeting for the voice lane.
 
-When enabled (``ZOE_VOICE_GREETING_ENABLED``), the first voice turn a user takes
-on a given local day gets a short time-of-day greeting ("Good morning." /
-"Good afternoon." / "Good evening.") prepended as its own sentence, so the
-sentence-streamed TTS renders it as a separate — and pre-warmed, therefore
-instant — clip ahead of the real answer.
+When enabled (``ZOE_VOICE_GREETING_ENABLED``), the first voice turn on a given
+local day yields a short time-of-day greeting phrase ("Good morning" /
+"Good afternoon" / "Good evening") via :func:`greeting_prefix`. The turn_stream
+handler emits it as its own leading, pre-warmed (therefore ~instant) audio chunk
+ahead of the real answer, keyed by panel/speaker so it fires once per local day.
 
-State (last-greeted local date per user) is persisted to a small JSON file so a
-``zoe-data`` restart mid-day does not re-greet. The store is intentionally tiny
-and best-effort: any read/write failure degrades to "no greeting", never an error
-on the turn path.
+Last-greeted local date per key is persisted to a small JSON file so a
+``zoe-data`` restart mid-day does not re-greet, backed by an in-memory mirror so
+an unwritable store degrades to "at most one extra greeting per restart" rather
+than re-greeting every turn. All state I/O is best-effort: any error degrades to
+"no greeting", never an exception on the turn path.
 """
 from __future__ import annotations
 
@@ -24,6 +25,11 @@ logger = logging.getLogger(__name__)
 
 _ZOE_TIMEZONE = os.environ.get("ZOE_TIMEZONE", "Australia/Perth")
 _STATE_LOCK = threading.Lock()
+# In-memory mirror of "already greeted <key> today". Guards the case where the
+# on-disk store is unwritable (read-only/full path): without it a failed persist
+# would re-greet on every turn. Process-scoped, so at worst one extra greeting
+# per restart when the disk write is broken.
+_GREETED_MEM: dict[str, str] = {}
 
 
 def _enabled() -> bool:
@@ -92,30 +98,20 @@ def greeting_prefix(user_id: str, *, now: Optional[datetime.datetime] = None) ->
     today = local.date().isoformat()
     try:
         with _STATE_LOCK:
+            # In-memory guard first — survives an unwritable on-disk store so a
+            # persist failure can't re-greet every turn.
+            if _GREETED_MEM.get(user_id) == today:
+                return ""
             state = _load_state()
             if state.get(user_id) == today:
+                _GREETED_MEM[user_id] = today
                 return ""  # already greeted today
+            _GREETED_MEM[user_id] = today
             state[user_id] = today
             _save_state(state)
     except Exception as exc:
         logger.debug("voice_greeting: prefix check failed (%s)", exc)
         return ""
     phrase = greeting_for_hour(local.hour)
-    logger.info("voice_greeting: greeting %s for user=%s (%s)", phrase, user_id, today)
+    logger.info("voice_greeting: greeting %s for key=%s (%s)", phrase, user_id, today)
     return phrase
-
-
-def apply_greeting(reply: str, user_id: str, *, now: Optional[datetime.datetime] = None) -> str:
-    """Prepend the first-turn-of-day greeting to ``reply`` as its own sentence.
-
-    Kept as a separate leading sentence so the sentence-streamed TTS renders the
-    (pre-warmed, cached) greeting clip instantly ahead of the answer. No-op when
-    disabled or not the first turn of the day.
-    """
-    reply = (reply or "").strip()
-    if not reply:
-        return reply
-    phrase = greeting_prefix(user_id, now=now)
-    if not phrase:
-        return reply
-    return f"{phrase}. {reply}"

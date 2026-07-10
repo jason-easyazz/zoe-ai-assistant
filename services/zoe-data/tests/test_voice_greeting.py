@@ -1,9 +1,10 @@
 """Tests for the first-turn-of-day voice greeting (voice_greeting.py)."""
 import datetime
 import importlib
-import os
 
 import pytest
+
+pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m ci_safe` lane
 
 
 @pytest.fixture
@@ -49,18 +50,13 @@ def test_disabled_flag_no_greeting(vg, monkeypatch):
     assert vg.greeting_prefix("jason", now=_at(7)) == ""
 
 
-def test_apply_greeting_prepends_as_own_sentence(vg):
-    out = vg.apply_greeting("It's 14 degrees and clear in Geraldton", "jason", now=_at(7))
-    assert out == "Good morning. It's 14 degrees and clear in Geraldton"
-    # second turn same day: answer only, no greeting
-    out2 = vg.apply_greeting("The time is 9:15 AM", "jason", now=_at(9))
-    assert out2 == "The time is 9:15 AM"
-
-
-def test_apply_greeting_empty_reply_untouched(vg):
-    assert vg.apply_greeting("", "jason", now=_at(7)) == ""
-    # an empty reply must not consume the day's greeting slot
-    assert vg.greeting_prefix("jason", now=_at(8)) == "Good morning"
+def test_in_memory_guard_blocks_regreet_when_disk_unwritable(vg, monkeypatch):
+    # Simulate an unwritable store: the persist silently fails, but the in-memory
+    # mirror must still prevent a re-greet on the next turn (not greet every turn).
+    monkeypatch.setattr(vg, "_save_state", lambda state: None)  # write is a no-op
+    monkeypatch.setattr(vg, "_load_state", lambda: {})          # disk always empty
+    assert vg.greeting_prefix("jason", now=_at(7)) == "Good morning"
+    assert vg.greeting_prefix("jason", now=_at(8)) == ""  # in-memory guard holds
 
 
 def test_missing_user_no_greeting(vg):

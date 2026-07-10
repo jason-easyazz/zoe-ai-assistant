@@ -212,14 +212,6 @@ async def dispatch(domain: str, text: str, ctx: dict[str, Any], *, write_ok: boo
     if not reply:
         logger.info("EXPERT_EMPTY domain=%s intent=%s → brain", domain, intent_name)
         return None
-    # First-turn-of-day greeting (flag-gated, default off). Prepended as its own
-    # leading sentence so the sentence-streamed TTS renders the pre-warmed
-    # greeting clip instantly ahead of the answer. Best-effort — never raises.
-    try:
-        from voice_greeting import apply_greeting
-        reply = apply_greeting(reply, user_id)
-    except Exception as exc:
-        logger.debug("expert_dispatch greeting skipped: %s", exc)
     logger.warning("EXPERT_ACTIVE domain=%s score=%.2f intent=%s %.0fms reply=%r",
                    domain, score, intent_name, (time.monotonic() - t0) * 1000.0, reply[:80])
     return DispatchResult(domain=domain, reply=reply, intent=intent_name, ui=_ui_for(domain))
