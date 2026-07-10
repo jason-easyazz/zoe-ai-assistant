@@ -244,12 +244,13 @@
                 return;
             }
             // "Not now" on a confirm card: clear it locally, no server round-trip.
-            // Restore the ambient clock immediately once the stack is empty (don't
-            // strand the panel in card mode waiting for the idle timer to fire).
+            // If it was the last card, clearCards() forces the ambient/empty state
+            // directly (sets sky-empty regardless of orb state) so the panel never
+            // sits blank in card mode waiting for the orb-gated idle return.
             if (btn.dataset.skyAction === 'dismiss') {
                 const card = btn.closest('.sky-card');
                 if (card) card.remove();
-                if (!document.querySelector('#skyCards .sky-card')) returnToAmbientClock();
+                if (!els.cards.querySelector('.sky-card')) clearCards();
                 return;
             }
             let route = btn.dataset.route;

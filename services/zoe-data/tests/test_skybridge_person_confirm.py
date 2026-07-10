@@ -47,6 +47,9 @@ def test_classify_offers_regex_does_not_steal_add_to_group():
     ("add John Smith as my friend", "John Smith", "friend"),
     ("add Jean-Claude van Damme as my friend", "Jean-Claude van Damme", "friend"),
     ("add Mary Jane Watson to my contacts", "Mary Jane Watson", ""),
+    ("add José as my brother", "José", "brother"),           # accented name
+    ("add Sarah as my mom's friend", "Sarah", "mom's friend"),  # apostrophe in relationship
+    ("add O'Brien to my contacts", "O'Brien", ""),           # apostrophe in name
     ("add Sarah to my contacts", "Sarah", ""),
     ("save Priya as my colleague", "Priya", "colleague"),
 ])

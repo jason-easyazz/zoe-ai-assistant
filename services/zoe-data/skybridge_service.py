@@ -991,15 +991,15 @@ _PENDING_OFFERS_RE = re.compile(
 # People CREATE from a spoken/tapped command — the person_confirm card's Add button
 # emits exactly these forms, so skybridge handles the create deterministically
 # (rather than depending on the brain fallback). Matched against the ORIGINAL-case
-# message so the contact name keeps its capitalisation.
+# message so the contact name keeps its capitalisation. Name/relationship are
+# captured up to the "as my" / "to contacts" delimiter (not a letter whitelist) so
+# accented names ("José"), apostrophes ("mom's friend"), etc. all match.
 _PEOPLE_CREATE_AS_RE = re.compile(
-    r"^\s*(?:add|save|create)\s+(?P<name>[A-Za-z][\w.'-]*(?:\s+[A-Za-z][\w.'-]*)*)"
-    r"\s+as\s+my\s+(?P<rel>[A-Za-z][A-Za-z -]{1,24}?)\s*$",
+    r"^\s*(?:add|save|create)\s+(?P<name>.+?)\s+as\s+my\s+(?P<rel>.+?)\s*$",
     re.IGNORECASE,
 )
 _PEOPLE_CREATE_TO_RE = re.compile(
-    r"^\s*(?:add|save|create)\s+(?P<name>[A-Za-z][\w.'-]*(?:\s+[A-Za-z][\w.'-]*)*?)"
-    r"(?:\s+as\s+my\s+(?P<rel>[A-Za-z][A-Za-z -]{1,24}?))?"
+    r"^\s*(?:add|save|create)\s+(?P<name>.+?)(?:\s+as\s+my\s+(?P<rel>.+?))?"
     r"\s+to\s+(?:my\s+)?contacts\s*$",
     re.IGNORECASE,
 )
