@@ -122,6 +122,36 @@ async def test_people_create_works_when_user_already_exists(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_people_create_dedupes_case_insensitive(monkeypatch):
+    """A double-tap Add / retry must not create a second contact for the same name
+    (the Skybridge person_confirm Add button can be tapped twice before the offer
+    is marked resolved)."""
+    conn = await _open()
+    try:
+        @contextlib.asynccontextmanager
+        async def fake_ctx():
+            yield _Shim(conn)
+        monkeypatch.setattr(database, "get_db_ctx", fake_ctx)
+
+        async def _noop(*a, **k):
+            return None
+        monkeypatch.setattr(intent_router, "_notify_ui_channel", _noop)
+
+        first = await intent_router._execute_people_create_direct(
+            Intent("people_create", {"name": "Daniel", "relationship": "brother"}), "u1")
+        assert first and "Daniel" in first
+        # second create for the same name (different case) is idempotent
+        second = await intent_router._execute_people_create_direct(
+            Intent("people_create", {"name": "daniel", "relationship": "brother"}), "u1")
+        assert second and "already have" in second.lower()
+
+        async with conn.execute("SELECT COUNT(*) FROM people WHERE user_id='u1' AND deleted=0") as c:
+            assert (await c.fetchone())[0] == 1, "must not create a duplicate contact"
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_people_create_is_private_by_default(monkeypatch):
     """A contact created by voice/chat must NOT be family-shared by default —
     otherwise every user's contacts leak into every other user's view."""

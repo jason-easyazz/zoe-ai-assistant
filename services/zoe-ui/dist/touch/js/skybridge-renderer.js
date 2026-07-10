@@ -2028,8 +2028,22 @@
         return cardFrame(Object.assign({ status: 'Home' }, props), body, { wide: true, tone: 'dashboard-card', hideHeader: true, hideStatus: true, hideActions: true });
     }
 
+    // "Add {name} as your {relationship}?" — a proactive confirm card. Actions
+    // (Add=query, Not now=dismiss) render through cardFrame's .sky-actions, so the
+    // existing skybridge.js click handler wires them with no extra plumbing.
+    function renderPersonConfirm(props) {
+        const name = props.name || props.title || 'this person';
+        const rel = props.relationship || '';
+        const sub = rel
+            ? (escapeHtml(name) + ' keeps coming up as your ' + escapeHtml(rel) + '. Save them as a contact?')
+            : (escapeHtml(name) + ' keeps coming up. Save them as a contact?');
+        const body = '<p class="sky-person-confirm-sub">' + sub + '</p>';
+        return cardFrame(props, body, { compact: true, tone: 'person-confirm' });
+    }
+
     const renderers = {
         dashboard: renderDashboard,
+        person_confirm: renderPersonConfirm,
         status: renderStatus,
         info: renderStatus,
         generic: renderStatus,
