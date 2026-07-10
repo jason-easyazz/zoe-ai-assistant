@@ -24,7 +24,11 @@ with its own README/RUNBOOK and is self-contained.
   seam is production-reachable and **this deployment flipped it live on 2026-07-03**
   — so `flue-zoe-brain/` is lab-hosted yet production-reachable, not "never live";
   `flue-zoe-telegram/` → `scripts/setup/systemd/flue-zoe-telegram.service` (the
-  long-poll Telegram bot; the operator installs it with their own bot token).
+  long-poll Telegram bot; the operator installs it with their own bot token) plus
+  its supervisor `scripts/setup/systemd/flue-zoe-telegram-watchdog.{service,timer}`
+  (polls the bot's `GET /health` once a minute and restarts it when the poll loop
+  has died but the process is still alive — the recovery the app's 503 health
+  signal was designed for; also operator opt-in, never auto-enabled).
   No other lab may ship a unit without amending this contract.)
 - Do **not** let lab **harness/agent** work point at the local voice brain on
   `:11434` (Gemma-4-E4B) for *its own* engineering work — harnesses must use a
