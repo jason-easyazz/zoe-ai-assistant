@@ -2,10 +2,11 @@
 
 ## Status
 
-Proposed (2026-07-09). Extends [ADR-contacts-from-known-people.md](ADR-contacts-from-known-people.md)
-with an internet-researched, best-practice review and the remaining work to make the
-people-memory system production-grade. Supersedes the earlier assumption that "propose-on-mention
-doesn't fire on flue" (that was a false negative — see §3).
+Accepted (2026-07-09) — P1/P2/P3/P5 delivered and verified live; **P4 in flight**. Extends
+[ADR-contacts-from-known-people.md](ADR-contacts-from-known-people.md) with an internet-researched,
+best-practice review. Supersedes the earlier assumption that "propose-on-mention doesn't fire on
+flue" (that was a false negative — see §3). Operational companion (live flag state, the write-path
+FK bug class, E2E harness traps): [contacts-people-memory](../knowledge/contacts-people-memory.md).
 
 ## Context — what production systems do (researched 2026-07-09)
 
@@ -37,10 +38,18 @@ What already works, **channel-agnostic** (chat + voice, every brain backend incl
 
 | Capability | Where | Status |
 |---|---|---|
-| Explicit contact create (`people_create` tool) | `intent_router._execute_people_create_direct` | ✅ **fixed** (#1200 FK, #1203 private-by-default) |
+| Explicit contact create (`people_create` tool) | `intent_router._execute_people_create_direct` | ✅ **fixed** (#1200 ensure-user FK, #1203 private-by-default, #1216 circle NOT NULL) |
+| Propose-on-mention persistence (`store_suggestions`) | `pending_suggestions.store_suggestions` | ✅ **fixed** (#1215 ensure-user FK + swallowed-except→WARNING; stored 0 rows before) |
 | Passive capture: likes, LLM person-extraction, **propose-on-mention** | `_persist_memory_candidates` (chat.py) + `voice_tts.py:2284` | ✅ fires on flue — but note: voice capture persisted **0 turns** until the detached-task released-connection bug was fixed (#1191/#1194; history in #1195). A live spoken "niece" mention creating a `person_create` proposal is the live proof #1195 was waiting for. |
 | Dossier render of contacts | `zoe_memory_compose` | ✅ live |
 | Backfill known people → proposals + delivery list | `contact_backfill.py`, `/pending-contacts` | ✅ merged |
+
+**Verified live E2E (2026-07-09, demo user):** create+persist+dossier, propose-on-mention (3
+forms: "my brother Daniel", "Fiona, my friend", "Priya Sharma my colleague"), flue for-prompt
+surfacing, and cross-user visibility isolation all **PASS**; the accept→contact path passes at the
+`execute_suggestion` layer (the HTTP accept endpoint needs a real panel session, not the script's
+internal-token override — see the operational companion's harness traps). The FK/visibility/circle
+bugs above were all found *by* this E2E pass, not by unit tests.
 
 ## §3 The real gaps (corrected)
 
@@ -73,8 +82,19 @@ What already works, **channel-agnostic** (chat + voice, every brain backend incl
   so an un-actioned offer stops after ~2 turns. Extracted name/relationship are **sanitised**
   (`_safe_prompt_inline`: whitespace-collapsed, markdown/structure chars stripped, length-capped)
   before entering the prompt — a proposal value can't inject its own heading/instructions.
-- **P4 — person_create UI confirm card** for the touch panel (`ui_components_for_suggestions`),
-  matching the voice/for-prompt surface.
+- **P4 — person_create confirm card.** ✅ **chat surface (#1222) + Skybridge panel v1 (#1227).**
+  #1222 emits the card on the *chat.html* surface. #1227 built it on the real kiosk home,
+  **Skybridge**: a narrow classify trigger ("any contacts to add?" / "show contact suggestions")
+  → `people/pending_offers` → `_resolve_people_pending_offers` reads `list_pending_contacts` →
+  `_person_confirm_card` (`{component:"person_confirm"}`) → `skybridge-renderer.js
+  renderPersonConfirm`. The **Add** button re-issues a natural-language `people_create` command
+  (`query` → `/api/skybridge/resolve`), so the write is server-side under the panel user — never
+  trusted from the client; **Not now** is a client-only dismiss. Surfacing is via the resolve path
+  (no voice-path change → no replay gate). **Remaining follow-up:** the *proactive mid-turn
+  auto-surface* (push the card the instant Zoe hears "my brother Daniel") is inherently a
+  voice-path change (replay-gated) — on voice, P1 already makes the brain *speak* the offer.
+  Live-kiosk render verification (@192.168.1.61) is the operator step. Detail:
+  [contacts-people-memory §skybridge-card](../knowledge/contacts-people-memory.md).
 - **P5 — Deterministic propose-on-mention.** ✅ **shipped.** E2E found the LLM detector is
   unreliable on the 4B model (fired for "my niece Teneeka", missed "my brother Daniel" + casual
   mentions). `detect_and_store` now also runs `_deterministic_person_proposals` — a regex over
