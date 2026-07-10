@@ -2477,6 +2477,18 @@ async def _execute_people_create_direct(intent: Intent, user_id: str) -> Optiona
                 "INSERT INTO users (id, name, role) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
                 (user_id, user_id, "member"),
             )
+            # Dedupe by name (case-insensitive) — a double-tap Add / retry (or a
+            # re-issued voice command) must not create a second row. Mirrors the
+            # pending-suggestion accept flow's dedup. Idempotent: returns a truthy
+            # confirmation so the caller treats it as success (no mcporter fallback).
+            dup_cursor = await db.execute(
+                "SELECT id FROM people WHERE user_id = ? AND lower(name) = lower(?)"
+                " AND (deleted = 0 OR deleted IS NULL) LIMIT 1",
+                (user_id, name),
+            )
+            if await dup_cursor.fetchone():
+                rel_phrase = f" as your {relationship}" if relationship else ""
+                return f"You already have {name}{rel_phrase} in your contacts."
             await db.execute(
                 "INSERT INTO people (id, user_id, name, relationship, birthday, phone, email,"
                 " notes, visibility, circle, context) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
