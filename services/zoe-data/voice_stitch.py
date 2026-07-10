@@ -7,7 +7,7 @@ concatenating a small set of **cached, finite-vocabulary phrase segments** inste
 of synthesizing the whole novel sentence:
 
     weather → ["It's fourteen degrees", "Clear", "in Geraldton"]
-    time    → ["The time is seven", "forty two", "PM"]
+    time    → ["It's seven", "forty two", "PM"]
 
 Each segment is a natural phrase (good prosody within a segment) drawn from a
 bounded vocabulary (0–100, weather conditions, hours, minutes, am/pm), so after a
@@ -24,6 +24,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import re
 import wave
 from typing import Awaitable, Callable, Optional
 
@@ -149,12 +150,12 @@ def time_segments(hour_24: int, minute: int) -> Optional[list[str]]:
     h12 = hour_24 % 12 or 12
     hw = number_to_words(h12)
     if minute == 0:
-        return [f"The time is {hw} o'clock", ampm]
+        return [f"It's {hw} o'clock", ampm]
     mw = number_to_words(minute)
     # "oh five" reads more naturally than "five" for single-digit minutes.
     if minute < 10:
         mw = f"oh {number_to_words(minute)}"
-    return [f"The time is {hw}", mw, ampm]
+    return [f"It's {hw}", mw, ampm]
 
 
 def vocabulary(city: Optional[str] = None) -> list[str]:
@@ -166,8 +167,8 @@ def vocabulary(city: Optional[str] = None) -> list[str]:
     segs += [c.capitalize() for c in WEATHER_CONDITIONS]
     segs.append(f"in {city}")
     for h in range(1, 13):
-        segs.append(f"The time is {number_to_words(h)}")
-        segs.append(f"The time is {number_to_words(h)} o'clock")
+        segs.append(f"It's {number_to_words(h)}")
+        segs.append(f"It's {number_to_words(h)} o'clock")
     for m in range(1, 60):
         segs.append(f"oh {number_to_words(m)}" if m < 10 else number_to_words(m))
     segs += ["AM", "PM"]
@@ -231,3 +232,45 @@ async def prewarm_vocabulary(
             await asyncio.sleep(pause_s)
     logger.info("voice_stitch: prewarmed %d/%d vocabulary segments", warmed, len(vocabulary(city)))
     return warmed
+
+
+# ── Reply-text → stitched audio (the live hook) ───────────────────────────────
+# Strict, anchored patterns for the exact intent replies we own (both use digits):
+#   time    → "It's 7:42 AM."                     (intent_router time_query)
+#   weather → "It's 14 degrees and clear in Geraldton"   (intent_router weather)
+# Anything else — a decimal temp, a "feels like" clause, a rephrase — simply does
+# not match, so stitch_reply returns None and the caller uses normal TTS. It never
+# guesses: a mis-parse can only FAIL to match, never emit wrong audio.
+_TIME_RE = re.compile(r"^It's (\d{1,2}):(\d{2}) (AM|PM)\.?$")
+_WEATHER_RE = re.compile(r"^It's (\d{1,3}) degrees(?: and ([^,]+?))? in (.+?)\.?$")
+
+
+async def stitch_reply(
+    text: str,
+    synth: Callable[[str], Awaitable[Optional[bytes]]],
+) -> Optional[bytes]:
+    """If ``text`` is a known weather/time reply, return stitched audio, else None.
+
+    Fully fallback-safe: disabled flag, no pattern match, an out-of-vocab value, or
+    any synth miss → None → caller synthesizes the sentence normally.
+    """
+    if not enabled():
+        return None
+    t = (text or "").strip()
+
+    m = _TIME_RE.match(t)
+    if m:
+        h12, minute, ampm = int(m.group(1)), int(m.group(2)), m.group(3)
+        if not (1 <= h12 <= 12 and 0 <= minute <= 59):
+            return None
+        hour_24 = (h12 % 12) + (12 if ampm == "PM" else 0)
+        segs = time_segments(hour_24, minute)
+        return await stitch(segs, synth) if segs else None
+
+    m = _WEATHER_RE.match(t)
+    if m:
+        temp, desc, city = int(m.group(1)), (m.group(2) or "").strip(), m.group(3).strip()
+        segs = weather_segments(temp, desc, city)
+        return await stitch(segs, synth) if segs else None
+
+    return None

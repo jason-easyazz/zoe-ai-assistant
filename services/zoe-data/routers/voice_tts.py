@@ -4530,11 +4530,26 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
                 "reply": reply_text[:200],
             }) + "\n").encode()
         elif reply_text:
+            # Instant segment-stitch for known TEMPLATED replies (weather/time):
+            # assemble the audio from cached, finite-vocabulary phrase segments
+            # (~7ms) instead of a ~1-2.5s full synth. Flag-gated + fully fallback-
+            # safe — a non-match / out-of-vocab / synth miss returns None and we
+            # drop straight into the normal per-sentence synth below unchanged.
+            _stitched = None
+            try:
+                from voice_stitch import stitch_reply
+                _stitched = await stitch_reply(reply_text, _synthesize_kokoro_sidecar)
+            except Exception as _st_exc:
+                logger.debug("voice/turn_stream stitch skipped: %s", _st_exc)
+                _stitched = None
+            if _stitched:
+                yield (_json.dumps({"chunk": 0, "text": reply_text[:80], "provider": "stitch"}) + "\n").encode()
+                yield base64.b64encode(_stitched) + b"\n"
             # Skybridge fast-path returned text only (stream mode) — synthesize it
             # sentence-by-sentence so the panel starts speaking in ~0.6s instead of
-            # waiting for the whole reply to synthesize.
+            # waiting for the whole reply to synthesize. (Skipped when stitched.)
             _chunk = 0
-            for _sentence in _split_sentences(reply_text):
+            for _sentence in (_split_sentences(reply_text) if not _stitched else []):
                 _sentence = _sentence.strip()
                 if not _sentence:
                     continue
