@@ -45,6 +45,8 @@ def test_classify_offers_regex_does_not_steal_add_to_group():
 @pytest.mark.parametrize("msg,name,rel", [
     ("add Daniel as my brother", "Daniel", "brother"),
     ("add John Smith as my friend", "John Smith", "friend"),
+    ("add Jean-Claude van Damme as my friend", "Jean-Claude van Damme", "friend"),
+    ("add Mary Jane Watson to my contacts", "Mary Jane Watson", ""),
     ("add Sarah to my contacts", "Sarah", ""),
     ("save Priya as my colleague", "Priya", "colleague"),
 ])

@@ -993,12 +993,12 @@ _PENDING_OFFERS_RE = re.compile(
 # (rather than depending on the brain fallback). Matched against the ORIGINAL-case
 # message so the contact name keeps its capitalisation.
 _PEOPLE_CREATE_AS_RE = re.compile(
-    r"^\s*(?:add|save|create)\s+(?P<name>[A-Za-z][\w.'-]*(?:\s+[A-Za-z][\w.'-]*){0,2}?)"
+    r"^\s*(?:add|save|create)\s+(?P<name>[A-Za-z][\w.'-]*(?:\s+[A-Za-z][\w.'-]*)*)"
     r"\s+as\s+my\s+(?P<rel>[A-Za-z][A-Za-z -]{1,24}?)\s*$",
     re.IGNORECASE,
 )
 _PEOPLE_CREATE_TO_RE = re.compile(
-    r"^\s*(?:add|save|create)\s+(?P<name>[A-Za-z][\w.'-]*(?:\s+[A-Za-z][\w.'-]*){0,2}?)"
+    r"^\s*(?:add|save|create)\s+(?P<name>[A-Za-z][\w.'-]*(?:\s+[A-Za-z][\w.'-]*)*?)"
     r"(?:\s+as\s+my\s+(?P<rel>[A-Za-z][A-Za-z -]{1,24}?))?"
     r"\s+to\s+(?:my\s+)?contacts\s*$",
     re.IGNORECASE,
