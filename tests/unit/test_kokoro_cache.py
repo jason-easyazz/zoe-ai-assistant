@@ -230,6 +230,46 @@ def test_flush_returns_true_on_success_false_on_disk_error(kok, tmp_path):
     assert kok._flush_to_disk(bad, {"a": b"x"}, {"a": {"hits": 1}}, 10, 10_000) is False
 
 
+def test_concurrent_flushes_are_serialized(kok, tmp_path):
+    # Two flush workers must never interleave their disk writes — _flush_disk_lock
+    # guarantees whoever holds it completes fully before the next starts, so the
+    # last writer wins cleanly (no stale-snapshot rollback / no torn manifest).
+    import threading
+    overlap = {"seen": False}
+    depth = {"n": 0}
+    guard = threading.Lock()
+    real_write = kok._write_manifest
+
+    def instrumented(cache_dir, entries):
+        with guard:
+            depth["n"] += 1
+            if depth["n"] > 1:
+                overlap["seen"] = True
+        import time as _t
+        _t.sleep(0.02)  # widen the window an interleave would need
+        with guard:
+            depth["n"] -= 1
+        return real_write(cache_dir, entries)
+
+    kok._write_manifest = instrumented
+    try:
+        threads = [
+            threading.Thread(
+                target=kok._flush_to_disk,
+                args=(tmp_path, {f"k{i}": b"W"}, {f"k{i}": {"hits": 1}}, 100, 10_000_000),
+            )
+            for i in range(4)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+    finally:
+        kok._write_manifest = real_write
+    assert overlap["seen"] is False
+    assert (tmp_path / kok._MANIFEST_NAME).exists()  # a consistent manifest remains
+
+
 def test_flush_async_force_persists_even_when_not_dirty(kok, tmp_path, monkeypatch):
     # The shutdown path forces a flush even if a cancelled in-flight flush already
     # cleared the dirty flag — so current state is never dropped (P1 race).

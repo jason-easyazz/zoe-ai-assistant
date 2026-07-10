@@ -35,6 +35,7 @@ import json
 import logging
 import os
 import struct
+import threading
 import time
 import wave
 from contextlib import asynccontextmanager
@@ -208,6 +209,12 @@ _cache_meta: dict[str, dict] = {}
 # when dirty, so an idle sidecar does zero disk I/O.
 _cache_dirty = False
 
+# Serialises the actual disk write across worker threads so two flushes can never
+# interleave their file writes / manifest os.replace().  Combined with the
+# no-cancel shutdown drain below, this guarantees the final shutdown flush is the
+# last writer (no stale-snapshot rollback from a lingering periodic worker).
+_flush_disk_lock = threading.Lock()
+
 
 def _note_hit(key: str, wav_len: int | None = None) -> None:
     """Record a request for ``key`` (frequency + recency); marks the cache dirty."""
@@ -337,47 +344,52 @@ def _flush_to_disk(
     broken disk can never break synthesis.  Returns True on a completed flush,
     False if the manifest could not be written (so the caller can re-arm the
     dirty flag and retry next cycle instead of dropping learned phrases).
+
+    The whole write sequence is serialised on ``_flush_disk_lock`` so two flush
+    workers can never interleave file writes / manifest replace — whoever holds
+    the lock completes fully before the next starts.
     """
-    try:
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        existing = _read_manifest(cache_dir)
-        # Merge: start from what's already on disk, overlay fresh stats, and
-        # (re)write WAV bytes for anything currently in memory.
-        combined: dict[str, dict] = {}
-        for key, m in existing.items():
-            fn = _key_filename(key)
-            if (cache_dir / fn).exists():
-                combined[key] = {
-                    "hits": int(m.get("hits", 0)),
-                    "last_used": float(m.get("last_used", 0.0)),
-                    "bytes": int(m.get("bytes", 0)),
-                }
-        for key, m in meta.items():
-            entry = combined.setdefault(key, {"hits": 0, "last_used": 0.0, "bytes": 0})
-            entry["hits"] = int(m.get("hits", entry["hits"]))
-            entry["last_used"] = float(m.get("last_used", entry["last_used"]))
-        for key, wav in phrase_cache.items():
-            try:
-                (cache_dir / _key_filename(key)).write_bytes(wav)
-            except OSError as exc:
-                logger.warning("Kokoro cache: failed to write %r: %s", key, exc)
-                continue
-            entry = combined.setdefault(key, {"hits": 0, "last_used": 0.0, "bytes": 0})
-            entry["bytes"] = len(wav)
-        # Drop manifest entries whose WAV never made it to disk.
-        combined = {k: v for k, v in combined.items() if (cache_dir / _key_filename(k)).exists()}
-        keep, evict = _select_within_budget(combined, max_disk, max_bytes)
-        for key in evict:
-            combined.pop(key, None)
-            try:
-                (cache_dir / _key_filename(key)).unlink()
-            except OSError:
-                pass
-        _write_manifest(cache_dir, {k: combined[k] for k in keep})
-        return True
-    except OSError as exc:
-        logger.warning("Kokoro cache flush skipped (disk error): %s", exc)
-        return False
+    with _flush_disk_lock:
+        try:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            existing = _read_manifest(cache_dir)
+            # Merge: start from what's already on disk, overlay fresh stats, and
+            # (re)write WAV bytes for anything currently in memory.
+            combined: dict[str, dict] = {}
+            for key, m in existing.items():
+                fn = _key_filename(key)
+                if (cache_dir / fn).exists():
+                    combined[key] = {
+                        "hits": int(m.get("hits", 0)),
+                        "last_used": float(m.get("last_used", 0.0)),
+                        "bytes": int(m.get("bytes", 0)),
+                    }
+            for key, m in meta.items():
+                entry = combined.setdefault(key, {"hits": 0, "last_used": 0.0, "bytes": 0})
+                entry["hits"] = int(m.get("hits", entry["hits"]))
+                entry["last_used"] = float(m.get("last_used", entry["last_used"]))
+            for key, wav in phrase_cache.items():
+                try:
+                    (cache_dir / _key_filename(key)).write_bytes(wav)
+                except OSError as exc:
+                    logger.warning("Kokoro cache: failed to write %r: %s", key, exc)
+                    continue
+                entry = combined.setdefault(key, {"hits": 0, "last_used": 0.0, "bytes": 0})
+                entry["bytes"] = len(wav)
+            # Drop manifest entries whose WAV never made it to disk.
+            combined = {k: v for k, v in combined.items() if (cache_dir / _key_filename(k)).exists()}
+            keep, evict = _select_within_budget(combined, max_disk, max_bytes)
+            for key in evict:
+                combined.pop(key, None)
+                try:
+                    (cache_dir / _key_filename(key)).unlink()
+                except OSError:
+                    pass
+            _write_manifest(cache_dir, {k: combined[k] for k in keep})
+            return True
+        except OSError as exc:
+            logger.warning("Kokoro cache flush skipped (disk error): %s", exc)
+            return False
 
 
 def _reload_from_disk(cache_dir: Path, max_entries: int) -> tuple[dict, dict]:
@@ -488,6 +500,7 @@ async def lifespan(app: FastAPI):
     global _pipeline
     loop = asyncio.get_event_loop()
     flush_task: asyncio.Task | None = None
+    stop_flush = asyncio.Event()
     try:
         _pipeline = await loop.run_in_executor(None, _load_pipeline)
         # One warmup synthesis primes the engine so the first real request is fast.
@@ -535,10 +548,17 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_bg_precache())
 
         # Periodic off-hot-path flush: persist the hot set as it evolves so a
-        # crash/restart loses at most one interval of learning.
+        # crash/restart loses at most one interval of learning.  The loop wakes on
+        # either the interval OR the shutdown event, and is stopped by SETTING the
+        # event and AWAITING the task (never cancel) so any in-flight flush runs to
+        # completion before the final shutdown flush — guaranteeing shutdown is the
+        # last writer.
         async def _periodic_flush():
-            while True:
-                await asyncio.sleep(_CACHE_FLUSH_INTERVAL_S)
+            while not stop_flush.is_set():
+                try:
+                    await asyncio.wait_for(stop_flush.wait(), timeout=_CACHE_FLUSH_INTERVAL_S)
+                except asyncio.TimeoutError:
+                    pass
                 try:
                     await _flush_cache_async(loop)
                 except Exception as _flush_exc:
@@ -552,14 +572,15 @@ async def lifespan(app: FastAPI):
         raise
     yield
     logger.info("Kokoro sidecar shutting down.")
+    stop_flush.set()
     if flush_task is not None:
-        flush_task.cancel()
-        # Let the cancelled periodic flush settle before the final one, so we
-        # don't race a half-done in-flight flush.
+        # Await (do NOT cancel) so any in-flight _flush_to_disk worker finishes —
+        # cancelling would abandon the await while the detached thread kept writing,
+        # letting a late os.replace() roll the manifest back to a stale snapshot.
         await asyncio.gather(flush_task, return_exceptions=True)
-    # Final flush on shutdown so the latest learning survives the restart.
-    # force=True: a cancelled in-flight flush may have already cleared the dirty
-    # flag, so flush unconditionally to guarantee the current state is persisted.
+    # Final flush so the latest learning survives the restart.  force=True in case
+    # the periodic loop already cleared the dirty flag; it runs strictly after the
+    # drained periodic flush and holds _flush_disk_lock, so it is the last writer.
     try:
         await _flush_cache_async(loop, force=True)
     except Exception as _final_exc:
