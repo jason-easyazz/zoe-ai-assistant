@@ -90,10 +90,12 @@ bugs above were all found *by* this E2E pass, not by unit tests.
   renderPersonConfirm`. The **Add** button re-issues a natural-language `people_create` command
   (`query` → `/api/skybridge/resolve`), so the write is server-side under the panel user — never
   trusted from the client; **Not now** is a client-only dismiss. Surfacing is via the resolve path
-  (no voice-path change → no replay gate). **Remaining follow-up:** the *proactive mid-turn
-  auto-surface* (push the card the instant Zoe hears "my brother Daniel") is inherently a
-  voice-path change (replay-gated) — on voice, P1 already makes the brain *speak* the offer.
-  Live-kiosk render verification (@192.168.1.61) is the operator step. Detail:
+  (no voice-path change → no replay gate). **Proactive auto-surface: built flag-dark (#1228,
+  `ZOE_CONTACT_OFFER_PANEL_PUSH`, default OFF)** — `detect_and_store` enqueues a `person_confirm`
+  `show_card` to the foreground panel (via the `enqueue_ui_action` ledger, since `/ws/voice/` can't
+  push out-of-band); skybridge's `pollContactOffers` renders it only while idle on the ambient clock.
+  Emit is post-turn memory pipeline → no replay gate; **enabling still needs live-kiosk render
+  verification (@192.168.1.61).** Detail:
   [contacts-people-memory §skybridge-card](../knowledge/contacts-people-memory.md).
 - **P5 — Deterministic propose-on-mention.** ✅ **shipped.** E2E found the LLM detector is
   unreliable on the 4B model (fired for "my niece Teneeka", missed "my brother Daniel" + casual

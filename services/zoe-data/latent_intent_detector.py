@@ -267,6 +267,48 @@ async def _deterministic_person_proposals(text: str, user_id: str) -> list[dict]
     return proposals
 
 
+def _contact_offer_push_enabled() -> bool:
+    """Proactively push the person_confirm card to the panel when a new contact
+    offer is stored (so it appears without the user asking). OFF by default — it
+    surfaces a card on the live kiosk, so it needs live-panel verification before
+    enable (the emit is post-turn memory-pipeline, NOT the STT/brain/TTS hot path)."""
+    return os.getenv("ZOE_CONTACT_OFFER_PANEL_PUSH", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+async def _maybe_push_contact_offer_cards(user_id: str, suggestions: list[dict]) -> None:
+    """Flag-gated: enqueue a person_confirm 'Add {name}?' card to the user's
+    foreground panel for each newly-stored person_create offer. Reuses the proven
+    enqueue_ui_action show_card ledger (the panel polls + renders it); the Add
+    button still creates the contact server-side. Best-effort — never raises into
+    the caller (a failed nicety must not break suggestion storage)."""
+    if not _contact_offer_push_enabled():
+        return
+    people = [s for s in suggestions if s.get("action_type") == "person_create"]
+    if not people:
+        return
+    try:
+        from database import get_db_ctx
+        from skybridge_service import _person_confirm_card
+        from ui_orchestrator import enqueue_ui_action
+
+        async with get_db_ctx() as db:
+            for s in people:
+                slots = s.get("pre_filled_slots") or {}
+                name = str(slots.get("name") or "").strip()
+                if not name:
+                    continue
+                card = _person_confirm_card(name, slots.get("relationship"))
+                await enqueue_ui_action(
+                    db,
+                    user_id=user_id,
+                    action_type="show_card",
+                    payload={"source": "contact_offer", "name": name, "card": card, "cards": [card]},
+                    idempotency_key=f"contact_offer_{user_id}_{name.lower()}",
+                )
+    except Exception as exc:  # noqa: BLE001 — proactive nicety, never fatal
+        logger.debug("contact-offer panel push skipped: %s", exc)
+
+
 async def detect_and_store(user_message: str, *, user_id: str, session_id: str) -> int:
     from pending_suggestions import store_suggestions
 
@@ -283,4 +325,7 @@ async def detect_and_store(user_message: str, *, user_id: str, session_id: str) 
                 suggestions.append(p)
     if not suggestions:
         return 0
-    return await store_suggestions(user_id, session_id, suggestions)
+    stored = await store_suggestions(user_id, session_id, suggestions)
+    if stored:
+        await _maybe_push_contact_offer_cards(user_id, suggestions)
+    return stored

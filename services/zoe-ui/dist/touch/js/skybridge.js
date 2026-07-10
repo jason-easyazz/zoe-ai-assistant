@@ -59,6 +59,7 @@
         restoreTimers();   // a reload resumes any still-running countdown
         loadBackendStatus();
         startNowPlayingWatch();
+        startContactOfferWatch();
         setMode(mode);
         syncVoiceFallbackState();
         if (typeof TouchMenu !== 'undefined') TouchMenu.init({ page: 'skybridge' });
@@ -969,6 +970,7 @@
     const NP_POLL_MS = 5000;
     let npPollHandle = null;
     let npInFlight = false;
+    let contactOfferPollHandle = null;
     let npPlayerId = '';          // stick to the active player for control calls
     let npLastArt = '';           // avoid reloading identical album art each poll
     let npActive = false;         // true while something is actually playing/paused
@@ -994,6 +996,45 @@
         if (!els.nowPlaying || !els.npTitle || !els.npArtist || !els.npArt) return;
         pollNowPlaying();
         npPollHandle = setInterval(pollNowPlaying, NP_POLL_MS);
+    }
+
+    // Proactive contact offers: the server (flag-gated) enqueues a person_confirm
+    // "Add {name}?" show_card to this panel when it hears a new person mentioned.
+    // We poll the ledger and surface it — but ONLY while resting on the ambient
+    // clock, so a proactive card never interrupts an active card, turn, or reply.
+    // Flag OFF ⇒ the server enqueues nothing ⇒ this is a cheap no-op GET.
+    const CONTACT_OFFER_POLL_MS = 20000;
+
+    function startContactOfferWatch() {
+        if (contactOfferPollHandle != null) return;
+        contactOfferPollHandle = setInterval(pollContactOffers, CONTACT_OFFER_POLL_MS);
+    }
+
+    async function pollContactOffers() {
+        if (!document.body.classList.contains('sky-empty')) return;  // only when idle
+        const panelId = new URLSearchParams(location.search).get('panel_id')
+            || localStorage.getItem('zoe_panel_id') || localStorage.getItem('zoe_touch_panel_id');
+        if (!panelId) return;
+        try {
+            const resp = await fetch('/api/ui/actions/pending?panel_id=' + encodeURIComponent(panelId) + '&limit=10',
+                { headers: { 'Accept': 'application/json' } });
+            if (!resp.ok) return;
+            const payload = await resp.json();
+            const actions = Array.isArray(payload.actions) ? payload.actions : [];
+            for (const action of actions) {
+                if (!action || action.action_type !== 'show_card') continue;
+                const p = action.payload || {};
+                if (p.source !== 'contact_offer' || !p.card) continue;
+                addCard(p.card, true);
+                scheduleIdleReturn();
+                fetch('/api/ui/actions/' + encodeURIComponent(action.id) + '/ack', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: 'success', panel_id: panelId, ui_context: { source: 'contact-offer-poll' } }),
+                    keepalive: true
+                });
+                break;  // one offer at a time — the rest wait for the next idle poll
+            }
+        } catch (_) { /* non-fatal */ }
     }
 
     async function pollNowPlaying() {

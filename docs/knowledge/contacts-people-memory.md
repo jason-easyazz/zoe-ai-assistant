@@ -115,12 +115,16 @@ The **Add** action re-issues a natural-language `people_create` command re-valid
 is a client-only `dismiss`. Surfacing is **user-initiated via the resolve path** (no voice-path
 change → no replay gate).
 
-**Remaining follow-up (not done):** the *proactive mid-turn auto-surface* — pushing the card the
-instant Zoe hears "my brother Daniel" — is inherently a **voice-path change** (replay-gated), because
-`/ws/voice/` is a per-session request/response loop that only paints cards *during* a turn (it does
-not subscribe to the `push.py` broadcaster, and skybridge has no ledger-poll render loop). On voice,
-P1 already makes the brain *speak* the offer. Live-kiosk render verification (@192.168.1.61) is the
-operator step.
+**Proactive auto-surface — built flag-dark (#1228, `ZOE_CONTACT_OFFER_PANEL_PUSH`, default OFF).**
+`/ws/voice/` is a per-session request/response loop that only paints cards *during* a turn and doesn't
+subscribe to the `push.py` broadcaster — so proactive surfacing goes through the **`enqueue_ui_action`
+ledger** instead: when `detect_and_store` stores a new person_create offer,
+`_maybe_push_contact_offer_cards` enqueues a `show_card` (a `person_confirm` card) to the user's
+foreground panel; skybridge's `pollContactOffers` loop renders it via `addCard` **only while resting
+on the ambient clock** (never interrupts an active turn/card), then acks it. The emit is post-turn
+memory pipeline (**not** the STT/brain/TTS hot path) → no replay gate. **Enable step (not done):**
+flip `ZOE_CONTACT_OFFER_PANEL_PUSH` and verify the card renders on the live kiosk (@192.168.1.61) —
+a headless test can't confirm panel rendering. On voice, P1 already makes the brain *speak* the offer.
 
 ### Mechanism reference (why chat.html was the wrong file)
 
