@@ -282,7 +282,7 @@ def _read_manifest(cache_dir: Path) -> dict:
     """
     try:
         raw = json.loads(_manifest_path(cache_dir).read_text("utf-8"))
-    except (OSError, ValueError):
+    except Exception:  # fully fail-open: a broken manifest must never break synth
         return {}
     entries = raw.get("entries", {})
     if not isinstance(entries, dict):
@@ -391,8 +391,11 @@ def _flush_to_disk(
                     pass
             _write_manifest(cache_dir, {k: combined[k] for k in keep})
             return True
-        except OSError as exc:
-            logger.warning("Kokoro cache flush skipped (disk error): %s", exc)
+        except Exception as exc:
+            # Return False (never propagate) so the caller re-arms the dirty flag
+            # and retries next cycle, instead of the exception escaping the
+            # executor and leaving _cache_dirty cleared with nothing persisted.
+            logger.warning("Kokoro cache flush skipped (%s): %s", type(exc).__name__, exc)
             return False
 
 

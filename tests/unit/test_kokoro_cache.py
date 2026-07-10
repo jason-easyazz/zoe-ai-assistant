@@ -242,6 +242,15 @@ def test_flush_returns_true_on_success_false_on_disk_error(kok, tmp_path):
     assert kok._flush_to_disk(bad, {"a": b"x"}, {"a": {"hits": 1}}, 10, 10_000) is False
 
 
+def test_flush_returns_false_on_unexpected_error_not_just_oserror(kok, tmp_path, monkeypatch):
+    # Any exception (not just OSError) must be swallowed → False, so the caller
+    # re-arms the dirty flag rather than the error escaping the executor.
+    def boom(*_a, **_k):
+        raise RecursionError("deeply nested manifest")
+    monkeypatch.setattr(kok, "_write_manifest", boom)
+    assert kok._flush_to_disk(tmp_path, {"a": b"x"}, {"a": {"hits": 1}}, 10, 10_000) is False
+
+
 def test_concurrent_flushes_are_serialized(kok, tmp_path):
     # Two flush workers must never interleave their disk writes — _flush_disk_lock
     # guarantees whoever holds it completes fully before the next starts, so the
