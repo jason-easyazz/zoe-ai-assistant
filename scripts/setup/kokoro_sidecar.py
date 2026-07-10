@@ -450,14 +450,19 @@ def _load_pipeline():
 
 # ─── Lifespan: load + CUDA graph warmup ───────────────────────────────────────
 
-async def _flush_cache_async(loop) -> None:
+async def _flush_cache_async(loop, force: bool = False) -> None:
     """Snapshot the in-memory cache and flush it to disk in a worker thread.
 
     Never called on the /synthesize path.  Clears the dirty flag first so
-    concurrent hits during the flush re-arm it for the next cycle.
+    concurrent hits during the flush re-arm it for the next cycle.  ``force``
+    flushes even when the dirty flag is clear — used by the shutdown path so an
+    in-flight periodic flush that was cancelled (dirty already cleared) can't make
+    the final flush return early and drop recently learned phrases.
     """
     global _cache_dirty
-    if not (_CACHE_PERSIST and _cache_dirty):
+    if not _CACHE_PERSIST:
+        return
+    if not (_cache_dirty or force):
         return
     # Clear BEFORE the flush so concurrent hits during it re-arm the flag for the
     # next cycle; if the flush itself fails, re-arm so we retry rather than drop
@@ -549,9 +554,14 @@ async def lifespan(app: FastAPI):
     logger.info("Kokoro sidecar shutting down.")
     if flush_task is not None:
         flush_task.cancel()
+        # Let the cancelled periodic flush settle before the final one, so we
+        # don't race a half-done in-flight flush.
+        await asyncio.gather(flush_task, return_exceptions=True)
     # Final flush on shutdown so the latest learning survives the restart.
+    # force=True: a cancelled in-flight flush may have already cleared the dirty
+    # flag, so flush unconditionally to guarantee the current state is persisted.
     try:
-        await _flush_cache_async(loop)
+        await _flush_cache_async(loop, force=True)
     except Exception as _final_exc:
         logger.warning("Kokoro cache final flush error: %s", _final_exc)
 

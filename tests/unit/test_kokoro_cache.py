@@ -230,6 +230,25 @@ def test_flush_returns_true_on_success_false_on_disk_error(kok, tmp_path):
     assert kok._flush_to_disk(bad, {"a": b"x"}, {"a": {"hits": 1}}, 10, 10_000) is False
 
 
+def test_flush_async_force_persists_even_when_not_dirty(kok, tmp_path, monkeypatch):
+    # The shutdown path forces a flush even if a cancelled in-flight flush already
+    # cleared the dirty flag — so current state is never dropped (P1 race).
+    import asyncio
+    monkeypatch.setattr(kok, "_CACHE_DIR", tmp_path)
+    monkeypatch.setattr(kok, "_CACHE_PERSIST", True)
+    kok._phrase_cache["hi"] = b"WAV"
+    kok._cache_meta["hi"] = {"hits": 1, "last_used": 1.0, "bytes": 3}
+    kok._cache_dirty = False  # simulate an in-flight flush having cleared it
+
+    async def _run():
+        loop = asyncio.get_event_loop()
+        await kok._flush_cache_async(loop, force=False)  # no-op: not dirty
+        assert not (tmp_path / kok._MANIFEST_NAME).exists()
+        await kok._flush_cache_async(loop, force=True)   # forced: persists
+    asyncio.run(_run())
+    assert "hi" in kok._read_manifest(tmp_path)
+
+
 def test_reload_skips_entry_with_missing_wav(kok, tmp_path):
     # Manifest references a key whose WAV file is absent.
     kok._write_manifest(tmp_path, {"ghost": {"hits": 5, "last_used": 1.0, "bytes": 10}})
