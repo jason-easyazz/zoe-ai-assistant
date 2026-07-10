@@ -935,6 +935,18 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(start_idle_consolidation_loop(), name="memory_idle_consolidation")
     except Exception as _exc:
         logger.warning("idle consolidation loop not started: %s", _exc)
+    # Segment-stitch vocabulary prewarm (flag-gated, default OFF): synth the finite
+    # weather/time phrase vocabulary once so stitched replies are cache-hit-instant.
+    # Paced + best-effort; a no-op when the flag is off.
+    if os.environ.get("ZOE_VOICE_STITCH_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on"):
+        try:
+            from voice_stitch import prewarm_vocabulary
+            from tts_waterfall import _synthesize_kokoro_sidecar
+            asyncio.create_task(
+                prewarm_vocabulary(_synthesize_kokoro_sidecar), name="voice_stitch_prewarm"
+            )
+        except Exception as _exc:
+            logger.warning("voice_stitch prewarm not started: %s", _exc)
     _zoe_update_bg_task = start_zoe_update_background_tasks()
 
     try:

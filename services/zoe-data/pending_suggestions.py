@@ -316,6 +316,42 @@ async def mark_resolved(suggestion_id: str, user_id: str) -> bool:
         return False
 
 
+async def resolve_person_offers_by_name(user_id: str, name: str) -> int:
+    """Mark pending person_create offers for `name` resolved (case-insensitive).
+
+    The Skybridge person_confirm Add button creates the contact via a plain NL
+    query that can't carry the suggestion id, so after a successful create we clear
+    any matching offer here — otherwise the same "Add {name}?" card re-surfaces even
+    though the contact now exists. Returns the number of offers resolved.
+    """
+    # Collapse internal whitespace (not just trim) so this matches the create
+    # classifier's normalisation — otherwise a stored "Daniel  Smith" (double space)
+    # would miss the "Daniel Smith" that was created, and the offer would re-surface.
+    name_norm = " ".join(str(name or "").split()).lower()
+    if user_id in ("guest", "") or not name_norm:
+        return 0
+    try:
+        async with get_db_ctx() as db:
+            rows = await db.fetch(
+                """SELECT id, pre_filled_slots FROM pending_suggestions
+                   WHERE user_id = $1 AND action_type = 'person_create' AND resolved = 0""",
+                user_id,
+            )
+            resolved = 0
+            for r in rows:
+                try:
+                    slots = json.loads(r["pre_filled_slots"] or "{}")
+                except json.JSONDecodeError:
+                    slots = {}
+                if " ".join(str(slots.get("name") or "").split()).lower() == name_norm:
+                    await db.execute("UPDATE pending_suggestions SET resolved = 1 WHERE id = $1", r["id"])
+                    resolved += 1
+            return resolved
+    except Exception as exc:
+        logger.debug("pending_suggestions.resolve_person_offers_by_name failed: %s", exc)
+        return 0
+
+
 async def _execute_action(conn, action: str, slots: dict, user_id: str) -> dict:
     if action == "list_add":
         lt = slots.get("list_type", "shopping")

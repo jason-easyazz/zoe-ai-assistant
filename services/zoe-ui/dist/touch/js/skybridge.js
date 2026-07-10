@@ -243,6 +243,16 @@
                 composeInInput(btn.dataset.compose || '', parseInt(btn.dataset.composeCaret, 10) || 0);
                 return;
             }
+            // "Not now" on a confirm card: clear it locally, no server round-trip.
+            // If it was the last card, clearCards() forces the ambient/empty state
+            // directly (sets sky-empty regardless of orb state) so the panel never
+            // sits blank in card mode waiting for the orb-gated idle return.
+            if (btn.dataset.skyAction === 'dismiss') {
+                const card = btn.closest('.sky-card');
+                if (card) card.remove();
+                if (!els.cards.querySelector('.sky-card')) clearCards();
+                return;
+            }
             let route = btn.dataset.route;
             const query = btn.dataset.query;
             if (btn.dataset.skyAction === 'auth') {
