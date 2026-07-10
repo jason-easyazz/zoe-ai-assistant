@@ -86,6 +86,21 @@ def test_read_manifest_skips_malformed_entry_values(kok, tmp_path):
     assert "bad" not in meta
 
 
+def test_read_manifest_coerces_garbage_scalars(kok, tmp_path):
+    # Non-numeric scalar fields must be coerced to safe defaults so downstream
+    # int()/float() in flush/reload/budget can't raise ValueError (P1).
+    import json as _json
+    (tmp_path / kok._MANIFEST_NAME).write_text(
+        _json.dumps({"entries": {"x": {"hits": "many", "last_used": None, "bytes": "big"}}}),
+        "utf-8",
+    )
+    entries = kok._read_manifest(tmp_path)
+    assert entries["x"] == {"hits": 0, "last_used": 0.0, "bytes": 0}
+    # Flush + budget over the coerced entries must not raise.
+    keep, evict = kok._select_within_budget(entries, max_disk=10, max_bytes=10_000)
+    assert keep == ["x"]
+
+
 # ─── flush → reload (restart survival) ─────────────────────────────────────────
 
 def test_flush_then_reload_restores_hot_set(kok, tmp_path):

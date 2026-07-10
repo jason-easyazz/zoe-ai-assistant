@@ -252,8 +252,23 @@ def _manifest_path(cache_dir: Path) -> Path:
     return cache_dir / _MANIFEST_NAME
 
 
+def _coerce_num(value, cast, default):
+    """Safely coerce a manifest scalar; garbage (e.g. "many") falls back to default."""
+    try:
+        return cast(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _read_manifest(cache_dir: Path) -> dict:
-    """Load the manifest's entry map; returns {} on any error (fail-open)."""
+    """Load the manifest's entry map; returns {} on any error (fail-open).
+
+    Every returned entry is normalised to ``{"hits": int, "last_used": float,
+    "bytes": int}`` with garbage scalars coerced to safe defaults, so no
+    downstream int()/float() on manifest data can raise and slip past the flush
+    path's OSError-only guard (which would leave _cache_dirty cleared but the
+    flush never completed).
+    """
     try:
         raw = json.loads(_manifest_path(cache_dir).read_text("utf-8"))
     except (OSError, ValueError):
@@ -262,9 +277,17 @@ def _read_manifest(cache_dir: Path) -> dict:
     if not isinstance(entries, dict):
         return {}
     # Skip malformed entries (non-dict values) so one bad row can't AttributeError
-    # its way through _flush_to_disk / _reload_from_disk and abort the whole
-    # persistent-cache path.
-    return {k: v for k, v in entries.items() if isinstance(v, dict)}
+    # its way through _flush_to_disk / _reload_from_disk, and normalise scalars so
+    # a value like {"hits": "many"} can't ValueError there either.
+    return {
+        k: {
+            "hits": _coerce_num(v.get("hits", 0), int, 0),
+            "last_used": _coerce_num(v.get("last_used", 0.0), float, 0.0),
+            "bytes": _coerce_num(v.get("bytes", 0), int, 0),
+        }
+        for k, v in entries.items()
+        if isinstance(v, dict)
+    }
 
 
 def _write_manifest(cache_dir: Path, entries: dict) -> None:
