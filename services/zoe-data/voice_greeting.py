@@ -74,7 +74,15 @@ def _load_state() -> dict:
         return {}
 
 
-def _save_state(state: dict) -> None:
+def _save_state(state: dict) -> bool:
+    """Persist state atomically. Returns True on durable write, False otherwise.
+
+    A False here means the once-per-day state is NOT durable — the in-memory guard
+    still prevents re-greeting within this process, but a restart will re-greet
+    once. That degradation is inherent to an unwritable path, so we log it LOUDLY
+    (WARNING) rather than swallowing it, so a misconfigured
+    ``ZOE_VOICE_GREETING_STATE_PATH`` gets noticed and fixed.
+    """
     path = _state_path()
     try:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -82,8 +90,13 @@ def _save_state(state: dict) -> None:
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(state, fh)
         os.replace(tmp, path)  # atomic
+        return True
     except Exception as exc:
-        logger.debug("voice_greeting: state write failed (%s), continuing", exc)
+        logger.warning(
+            "voice_greeting: could not persist state to %s (%s) — greeting will "
+            "not survive a restart until this path is writable", path, exc,
+        )
+        return False
 
 
 def greeting_prefix(user_id: str, *, now: Optional[datetime.datetime] = None) -> str:
