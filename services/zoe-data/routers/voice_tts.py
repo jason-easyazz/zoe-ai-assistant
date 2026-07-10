@@ -4378,6 +4378,23 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
         # Lead with the transcript so the panel can show/log what was heard
         # before the first audio chunk arrives.
         yield (_json.dumps({"transcript": transcript}) + "\n").encode()
+        # ── First-turn-of-day greeting (flag-gated, default off) ─────────────
+        # Emit the time-of-day greeting as its OWN leading spoken chunk so it fires
+        # once per local day, ahead of the answer and decoupled from the reply text
+        # (no UI-card pollution). The phrase is pre-warmed in the Kokoro sidecar, so
+        # this is ~instant. Keyed by `panel_id` ONLY — a single stable namespace:
+        # "first turn of the day at this panel". Mixing in a per-turn speaker id
+        # would double-greet the same person across the two key spaces.
+        try:
+            from voice_greeting import greeting_prefix
+            _greet = greeting_prefix(panel_id)
+            if _greet:
+                _greet_audio = await _synthesize_kokoro_sidecar(f"{_greet}.")
+                if _greet_audio:
+                    yield (_json.dumps({"chunk": -2, "text": f"{_greet}.", "provider": "greeting"}) + "\n").encode()
+                    yield base64.b64encode(_greet_audio) + b"\n"
+        except Exception as _greet_exc:
+            logger.debug("voice/turn_stream greeting skipped: %s", _greet_exc)
         # ── Thinking filler: if the first REAL audio isn't ready within
         # ZOE_VOICE_FILLER_AFTER_S (1.6s), speak a short ack NOW. The wait has
         # two lazy boundaries: voice_command returning (some tiers do all their
