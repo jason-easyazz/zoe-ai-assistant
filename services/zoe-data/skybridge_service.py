@@ -1600,6 +1600,13 @@ async def _resolve_people_create(intent: SkybridgeIntent, user_id: str, db: Any)
             "spoken_summary": f"I couldn't add {name} just now.",
             "cards": [_status_card("Couldn't add contact", f"Something went wrong adding {name}. Try again in a moment.", status="People")],
         }
+    # Clear any pending offer(s) for this person so the Add card doesn't re-surface
+    # for a contact that now exists (the NL query can't carry the suggestion id).
+    try:
+        from pending_suggestions import resolve_person_offers_by_name
+        await resolve_person_offers_by_name(user_id, name)
+    except Exception as exc:  # non-fatal — the contact was still created
+        logger.debug("skybridge people/create: offer-resolve failed: %s", exc)
     spoken = f"Added {name}" + (f" as your {rel}." if rel else " to your contacts.")
     card = {
         "component": "status",

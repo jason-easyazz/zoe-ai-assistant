@@ -73,10 +73,22 @@ async def test_resolve_people_create_success(monkeypatch):
     import intent_router
     monkeypatch.setattr(intent_router, "_execute_people_create_direct", fake_create)
 
+    # the matching pending offer must be resolved so the card doesn't re-surface
+    resolved = {}
+
+    async def fake_resolve(user_id, name):
+        resolved["user"] = user_id
+        resolved["name"] = name
+        return 1
+
+    import pending_suggestions
+    monkeypatch.setattr(pending_suggestions, "resolve_person_offers_by_name", fake_resolve)
+
     intent = sky.SkybridgeIntent(domain="people", action="create", person_name="Daniel", relationship="brother")
     result = await sky._resolve_people_create(intent, "u1", None)
     assert result["handled"] is True
     assert calls == {"name": "Daniel", "rel": "brother", "user": "u1"}
+    assert resolved == {"user": "u1", "name": "Daniel"}  # offer resolved after create
     assert "Added Daniel" in result["spoken_summary"]
     assert result["cards"][0]["props"]["title"] == "Added Daniel"
 
