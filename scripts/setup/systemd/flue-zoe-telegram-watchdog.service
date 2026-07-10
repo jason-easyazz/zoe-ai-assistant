@@ -10,7 +10,8 @@
 # supervisor: it polls /health and restarts the unit when it is unhealthy.
 #
 # OPTIONAL and NOT enabled by default — operator opt-in, same as the bot itself.
-# Enable both together:
+# Enable (linger FIRST so it survives logout / starts at boot — see the .timer):
+#   loginctl enable-linger "$USER"
 #   systemctl --user enable --now flue-zoe-telegram-watchdog.timer
 #
 # The /health port is read from the bot's own .env (PORT=), defaulting to 3582,

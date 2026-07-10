@@ -1,10 +1,10 @@
 # Runs the flue-zoe-telegram health watchdog once a minute (see the .service).
-# OPTIONAL / operator opt-in. Enable with:
+# OPTIONAL / operator opt-in. Enable — linger FIRST, else the user manager (and
+# this timer, and the bot itself) stop at logout / never start at boot, and the
+# bot can sit alive-but-deaf with nothing to restart it:
+#   loginctl enable-linger "$USER"
 #   systemctl --user enable --now flue-zoe-telegram-watchdog.timer
-#
-# REQUIRES lingering (like the whole Zoe --user stack) so the timer keeps running
-# when no session is logged in — otherwise the user manager (and the bot itself)
-# stop at logout: `loginctl enable-linger $USER` (already enabled on Zoe hosts).
+# (Linger is already enabled on Zoe hosts — required by the whole --user stack.)
 
 [Unit]
 Description=Periodic health watchdog for flue-zoe-telegram
