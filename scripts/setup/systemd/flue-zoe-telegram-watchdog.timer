@@ -1,0 +1,17 @@
+# Runs the flue-zoe-telegram health watchdog once a minute (see the .service).
+# OPTIONAL / operator opt-in. Enable with:
+#   systemctl --user enable --now flue-zoe-telegram-watchdog.timer
+
+[Unit]
+Description=Periodic health watchdog for flue-zoe-telegram
+
+[Timer]
+# First check shortly after boot (give the bot time to take the token over),
+# then every minute. Persistent=false: a missed check while asleep is fine —
+# the next tick catches an unhealthy bot within ~60s.
+OnBootSec=2min
+OnUnitActiveSec=60s
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target

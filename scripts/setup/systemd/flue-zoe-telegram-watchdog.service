@@ -1,0 +1,29 @@
+# Watchdog for flue-zoe-telegram (lab) — restarts the bot when its long-poll loop
+# has died but the process is still alive.
+#
+# WHY THIS EXISTS: the bot's poll loop (grammY bot.start()) can stop on a
+# transient TLS/network error or a 409 Conflict (a second getUpdates consumer —
+# e.g. a stray Hermes poller or a manual probe) WITHOUT the node process exiting.
+# app.ts intentionally does NOT retry — it flips an internal flag and makes
+# GET /health return 503 "so a supervisor restarts us". systemd Restart=always
+# only reacts to process exit, so it never notices this state. This timer IS that
+# supervisor: it polls /health and restarts the unit when it is unhealthy.
+#
+# OPTIONAL and NOT enabled by default — operator opt-in, same as the bot itself.
+# Enable both together:
+#   systemctl --user enable --now flue-zoe-telegram-watchdog.timer
+#
+# The /health port is read from the bot's own .env (PORT=), defaulting to 3582,
+# so this stays correct if the operator changes the port.
+
+[Unit]
+Description=Watchdog for flue-zoe-telegram long-poll health
+After=flue-zoe-telegram.service
+
+[Service]
+Type=oneshot
+# One token, single-quoted for systemd; ONLY double-quotes inside so systemd's
+# ExecStart parser doesn't choke. Port is read from the bot's .env (digits only),
+# defaulting to 3582. curl -sf fails on 503 (dead loop) OR connection refused
+# (process down) — both trigger a restart.
+ExecStart=/bin/bash -c 'PORT=$(sed -n "s/^PORT=//p" %h/assistant/labs/flue-zoe-telegram/.env 2>/dev/null | tr -dc "0-9"); curl -sf --max-time 8 "http://127.0.0.1:${PORT:-3582}/health" >/dev/null || { echo "flue-zoe-telegram /health unhealthy — restarting"; systemctl --user restart flue-zoe-telegram.service; }'
