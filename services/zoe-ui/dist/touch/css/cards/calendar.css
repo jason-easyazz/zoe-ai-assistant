@@ -96,10 +96,12 @@ body:not(.sky-empty) .sky-card.calendar-card::after {
   display: flex;
   flex-direction: column;
   width: 100%;
+  height: 100%;
   box-sizing: border-box;
-  /* tighter than desktop — give the events the pixels, not the chrome */
-  padding: 30px 34px;
-  gap: var(--sky-space-5, 20px);
+  /* tight chrome — the agenda is the content, not the header. Owner feedback:
+     the old header band + day-ribbon wasted the top; both are gone/shrunk. */
+  padding: 20px 30px 24px;
+  gap: var(--sky-space-4, 16px);
 }
 
 /* Propagate the hero event's accent up to the scene so the card wash + glyph band
@@ -134,7 +136,8 @@ body:not(.sky-empty) .sky-card.calendar-card::after {
   align-items: baseline;
   justify-content: space-between;
   gap: 18px;
-  padding-bottom: var(--sky-space-4, 16px);
+  flex: 0 0 auto;
+  padding-bottom: var(--sky-space-3, 12px);
   border-bottom: 1px solid var(--cal-hairline);
 }
 
@@ -146,15 +149,15 @@ body:not(.sky-empty) .sky-card.calendar-card::after {
 }
 
 .calendar-card .cal-head-weekday {
-  font-size: 34px;
+  font-size: 27px;
   font-weight: 600;
-  letter-spacing: -0.6px;
+  letter-spacing: -0.5px;
   line-height: 1;
   color: var(--cal-ink-0);
 }
 
 .calendar-card .cal-head-date {
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 300;
   letter-spacing: -0.2px;
   color: var(--cal-ink-2);
@@ -200,75 +203,6 @@ body:not(.sky-empty) .sky-card.calendar-card::after {
 }
 
 /* ====================================================================== */
-/* Day RIBBON — a full-width day-timeline (Fantastical DayTicker / Apple    */
-/* day view): each timed event plotted by clock position, a live "now"      */
-/* line, and hour ticks. Makes the day's shape glanceable and fills width.  */
-/* ====================================================================== */
-.calendar-card .cal-ribbon {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  flex: 0 0 auto;
-}
-
-.calendar-card .cal-ribbon-rail {
-  position: relative;
-  height: 46px;
-  border-radius: 15px;
-  background: var(--cal-row-bg);
-  box-shadow: inset 0 0 0 1px var(--cal-hairline);
-  overflow: hidden;
-}
-
-.calendar-card .cal-block {
-  --cal-accent: var(--sky-card-accent, var(--sky-accent-general, 99, 102, 241));
-  position: absolute;
-  top: 7px;
-  bottom: 7px;
-  min-width: 5px;
-  border-radius: 8px;
-  background: linear-gradient(180deg, rgba(var(--cal-accent), 0.98), rgba(var(--cal-accent), 0.66));
-  box-shadow: 0 3px 12px -3px rgba(var(--cal-accent), 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.3);
-}
-
-.calendar-card .cal-ribbon-now {
-  position: absolute;
-  top: -1px;
-  bottom: -1px;
-  width: 2px;
-  background: var(--cal-ink-0);
-  box-shadow: 0 0 10px 1px rgba(255, 255, 255, 0.6);
-  z-index: 2;
-}
-.calendar-card .cal-ribbon-now::before {
-  content: "";
-  position: absolute;
-  top: -3px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--cal-ink-0);
-  box-shadow: 0 0 8px rgba(255, 255, 255, 0.7);
-}
-
-.calendar-card .cal-ribbon-axis {
-  position: relative;
-  height: 15px;
-}
-
-.calendar-card .cal-tick {
-  position: absolute;
-  transform: translateX(-50%);
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.4px;
-  color: var(--cal-ink-3);
-  font-variant-numeric: tabular-nums;
-}
-
-/* ====================================================================== */
 /* All-day band — pinned chips above the timed agenda.                     */
 /* ====================================================================== */
 .calendar-card .cal-allday {
@@ -276,6 +210,32 @@ body:not(.sky-empty) .sky-card.calendar-card::after {
   flex-wrap: wrap;
   gap: 8px;
   flex: 0 0 auto;
+}
+
+/* Each all-day event is a <details>: the chip is the summary, and an OPEN one
+   takes a full row so its inline detail (when/where/notes + actions) has room. */
+.calendar-card .cal-allday-item { margin: 0; }
+.calendar-card .cal-allday-item[open] { flex: 1 0 100%; }
+.calendar-card .cal-allday-item[open] > .cal-chip {
+  border-bottom-left-radius: 14px;
+  border-bottom-right-radius: 14px;
+}
+.calendar-card .cal-allday-item[open] > .cal-chip .cal-caret {
+  transform: rotate(-135deg);
+  border-color: rgb(var(--cal-accent));
+}
+.calendar-card .cal-allday-item[open] > .cal-detail {
+  margin-top: 8px;
+  border-top: 1px solid rgba(var(--cal-accent), 0.5);
+  border-radius: 16px;
+}
+/* the chip label takes the middle; caret sits at the end */
+.calendar-card .cal-chip-label { flex: 0 1 auto; }
+.calendar-card .cal-allday-item .cal-chip .cal-caret {
+  width: 10px;
+  height: 10px;
+  margin-left: 4px;
+  margin-right: 0;
 }
 
 .calendar-card .cal-chip {
@@ -313,31 +273,61 @@ body:not(.sky-empty) .sky-card.calendar-card::after {
 }
 
 /* ====================================================================== */
-/* Agenda — every event as a tap-to-edit row. Single column when light;    */
-/* flows into two columns on the wide panel once the day is busy, so a long */
-/* list fills the width instead of overflowing off the bottom.             */
+/* Scroll region — the all-day band + agenda scroll TOGETHER, so an opened   */
+/* all-day detail (full-width, above the agenda) scrolls into reach instead   */
+/* of clipping past the fixed-height card. Header stays pinned above it.      */
 /* ====================================================================== */
-.calendar-card .cal-agenda {
+.calendar-card .cal-scroll {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  gap: var(--sky-space-4, 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* room so the last row's focus ring / open detail isn't flush to the edge */
+  padding-bottom: 2px;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ====================================================================== */
+/* Agenda — every event is a native <details> (.cal-event). The <summary>   */
+/* (.cal-row) is the tap target; opening it reveals .cal-detail inline.      */
+/* Single column when light; flows into two columns on the wide panel once   */
+/* the day is busy. Lives inside .cal-scroll, so it sizes to its content.     */
+/* ====================================================================== */
+.calendar-card .cal-agenda {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
 }
+/* Two columns via GRID (not CSS multicol): an expanding <details> grows only its
+   own grid cell, so opening an event never rebalances/clips the whole column the
+   way multicol did — the detail actions stay in place and reachable. Row-major
+   fill keeps DOM order (earliest-first) intact. */
 .calendar-card .cal-agenda[data-cols="2"] {
-  display: block;
-  columns: 2;
-  column-gap: 20px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: start;
+  gap: 10px 20px;
 }
-.calendar-card .cal-agenda[data-cols="2"] > .cal-row {
-  break-inside: avoid;
-  margin-bottom: 10px;
-}
-/* The day header always breaks the flow full-width; the next-up hero stays in its
-   chronological slot (agenda reads earliest-first) but keeps its emphasis inline. */
+/* The day header always spans both columns. */
 .calendar-card .cal-agenda[data-cols="2"] > .cal-daygroup {
-  column-span: all;
+  grid-column: 1 / -1;
 }
+
+/* ---- Event wrapper (<details>) ------------------------------------- */
+.calendar-card .cal-event {
+  --cal-accent: var(--sky-card-accent, var(--sky-accent-general, 99, 102, 241));
+  margin: 0;
+}
+.calendar-card .cal-event.is-past { opacity: 0.55; }
+.calendar-card .cal-event.is-past[open] { opacity: 1; }
+/* Reset the native disclosure triangle — the row IS the summary. */
+.calendar-card .cal-summary { list-style: none; }
+.calendar-card .cal-summary::-webkit-details-marker { display: none; }
+.calendar-card .cal-summary::marker { content: ""; }
 
 .calendar-card .cal-daygroup {
   font-size: 13px;
@@ -348,11 +338,11 @@ body:not(.sky-empty) .sky-card.calendar-card::after {
   padding: 12px 4px 2px;
 }
 
-/* ---- Standard row -------------------------------------------------- */
+/* ---- Standard row (the <summary>) --------------------------------- */
 .calendar-card .cal-row {
   --cal-accent: var(--sky-card-accent, var(--sky-accent-general, 99, 102, 241));
   display: grid;
-  grid-template-columns: 62px 10px 1fr;
+  grid-template-columns: 62px 10px 1fr auto;
   align-items: center;
   gap: 16px;
   width: 100%;
@@ -382,7 +372,31 @@ body:not(.sky-empty) .sky-card.calendar-card::after {
   background: var(--cal-row-bg-hover);
   transform: translateX(0) scale(0.994);
 }
-.calendar-card .cal-row.is-past { opacity: 0.55; }
+/* Open event: seat the summary to the detail below (shared accent border, no
+   rounded gap between them) so the two read as one expanded card. */
+.calendar-card .cal-event[open] > .cal-row {
+  background: var(--cal-row-bg-hover);
+  border-color: rgba(var(--cal-accent), 0.5);
+  border-bottom-color: transparent;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+/* disclosure caret — a calm chevron that flips when the row is open */
+.calendar-card .cal-caret {
+  width: 12px;
+  height: 12px;
+  border-right: 2px solid var(--cal-ink-3);
+  border-bottom: 2px solid var(--cal-ink-3);
+  transform: rotate(45deg);
+  justify-self: end;
+  margin-right: 2px;
+  transition: transform var(--sky-dur-fast, 180ms) ease, border-color var(--sky-dur-fast, 180ms) ease;
+}
+.calendar-card .cal-event[open] > .cal-row .cal-caret {
+  transform: rotate(-135deg);
+  border-color: rgb(var(--cal-accent));
+}
 
 /* time gutter — big start, small end below */
 .calendar-card .cal-time {
@@ -464,6 +478,8 @@ body:not(.sky-empty) .sky-card.calendar-card::after {
 .calendar-card .cal-row.cal-hero:active { transform: translateY(0) scale(0.996); }
 
 .calendar-card .cal-hero .cal-node { display: none; }
+/* the hero's "when" pill is its own affordance — no caret needed */
+.calendar-card .cal-hero .cal-caret { display: none; }
 .calendar-card .cal-hero .cal-kicker {
   grid-area: kick;
   font-size: 12px;
@@ -505,6 +521,103 @@ body:not(.sky-empty) .sky-card.calendar-card::after {
   color: rgb(var(--cal-accent));
   box-shadow: inset 0 0 0 1px rgba(var(--cal-accent), 0.42);
   white-space: nowrap;
+}
+
+/* ====================================================================== */
+/* Event DETAIL — the inline panel a tap reveals. Replaces the old "tap    */
+/* re-queries a generic editor card" flow: when/where/notes read at a       */
+/* glance, with Edit + Delete actions right there. Seats under its summary.  */
+/* ====================================================================== */
+.calendar-card .cal-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 18px 16px;
+  border: 1px solid rgba(var(--cal-accent), 0.5);
+  border-top: none;
+  border-bottom-left-radius: 16px;
+  border-bottom-right-radius: 16px;
+  background: linear-gradient(180deg, rgba(var(--cal-accent), 0.10), rgba(var(--cal-accent), 0.03));
+}
+
+.calendar-card .cal-detail-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.calendar-card .cal-detail-row {
+  display: grid;
+  grid-template-columns: 62px 1fr;
+  align-items: baseline;
+  gap: 14px;
+}
+
+.calendar-card .cal-detail-k {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--cal-ink-3);
+  padding-top: 2px;
+}
+
+.calendar-card .cal-detail-v {
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--cal-ink-0);
+}
+
+.calendar-card .cal-detail-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.calendar-card .cal-act {
+  flex: 1 1 auto;
+  min-height: 48px;
+  padding: 12px 20px;
+  border-radius: 14px;
+  font-size: 16px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background var(--sky-dur-fast, 180ms) ease, transform var(--sky-dur-fast, 180ms) ease;
+}
+.calendar-card .cal-act:active { transform: scale(0.985); }
+
+/* Edit = the primary action (filled accent). */
+.calendar-card .cal-act-edit {
+  border: 1px solid rgba(var(--cal-accent), 0.55);
+  background: rgba(var(--cal-accent), 0.22);
+  color: var(--cal-ink-0);
+}
+.calendar-card .cal-act-edit:hover,
+.calendar-card .cal-act-edit:focus-visible {
+  background: rgba(var(--cal-accent), 0.32);
+  outline: none;
+}
+
+/* Delete = a quieter, destructive-tinted secondary. */
+.calendar-card .cal-act-del {
+  flex: 0 0 auto;
+  border: 1px solid var(--cal-hairline);
+  background: var(--cal-row-bg);
+  color: var(--cal-ink-1);
+}
+.calendar-card .cal-act-del:hover,
+.calendar-card .cal-act-del:focus-visible {
+  border-color: rgba(244, 96, 96, 0.6);
+  color: #ff8f8f;
+  background: rgba(244, 96, 96, 0.12);
+  outline: none;
+}
+:root[data-theme="light"] .calendar-card .cal-act-del:hover,
+:root[data-theme="light"] .calendar-card .cal-act-del:focus-visible {
+  color: #c62f2f;
+  background: rgba(244, 96, 96, 0.10);
 }
 
 /* ====================================================================== */
@@ -569,7 +682,9 @@ body:not(.sky-empty) .sky-card.calendar-card::after {
 /* full layout; this is the portrait / tiny fallback.                       */
 /* ====================================================================== */
 @media (max-width: 760px) {
-  .calendar-card .cal-agenda[data-cols="2"] { columns: 1; }
+  /* Collapse the grid to a single column on a narrow/portrait panel (the agenda
+     is now a grid, so the old `columns: 1` no-op'd and left it two-up + cramped). */
+  .calendar-card .cal-agenda[data-cols="2"] { grid-template-columns: 1fr; }
   .calendar-card .cal-row.cal-hero {
     grid-template-columns: auto 1fr;
     grid-template-areas:

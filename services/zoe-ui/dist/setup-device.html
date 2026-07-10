@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Add a device · Zoe</title>
+<style>
+  :root {
+    --bg0:#0a0e1a; --bg1:#141b2e; --ink0:#fff; --ink1:rgba(255,255,255,.86);
+    --ink2:rgba(255,255,255,.58); --line:rgba(255,255,255,.12);
+    --accent:#f5b13c; --accent2:#6aa6ff; --warn:#ff6b6b;
+    --radius:18px; --font:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  }
+  * { box-sizing:border-box; }
+  html,body { margin:0; min-height:100%; }
+  body {
+    font-family:var(--font); color:var(--ink1);
+    background:radial-gradient(120% 80% at 50% 0%, var(--bg1), var(--bg0) 70%);
+    min-height:100dvh; display:flex; justify-content:center;
+    padding:max(24px,env(safe-area-inset-top)) 20px calc(24px + env(safe-area-inset-bottom));
+  }
+  .wrap { width:100%; max-width:460px; }
+  .brand { display:flex; align-items:center; gap:10px; margin-bottom:26px; }
+  .orb { width:34px; height:34px; border-radius:50%;
+    background:linear-gradient(135deg,var(--accent2),var(--accent)); }
+  .brand b { color:var(--ink0); font-size:17px; font-weight:650; }
+  h1 { color:var(--ink0); font-size:26px; font-weight:700; letter-spacing:-.01em; margin:0 0 8px; }
+  .sub { color:var(--ink2); font-size:15px; line-height:1.5; margin:0 0 22px; }
+  .types { display:flex; flex-direction:column; gap:12px; }
+  .type {
+    border:1px solid var(--line); border-radius:16px; overflow:hidden;
+    background:rgba(255,255,255,.04);
+  }
+  .type > button {
+    width:100%; display:flex; align-items:center; gap:14px; text-align:left;
+    font:inherit; color:var(--ink0); background:transparent; border:0;
+    padding:16px 18px; min-height:60px; cursor:pointer; -webkit-tap-highlight-color:transparent;
+  }
+  .type .emoji { font-size:26px; line-height:1; flex:0 0 auto; }
+  .type .label { font-size:16px; font-weight:600; flex:1; }
+  .type .chev { color:var(--ink2); font-size:20px; transition:transform .2s ease; }
+  .type.open .chev { transform:rotate(90deg); }
+  .type .steps { max-height:0; overflow:hidden; transition:max-height .28s ease; }
+  .type.open .steps { max-height:420px; }
+  .type ol { margin:0; padding:2px 22px 20px 44px; color:var(--ink1); font-size:14.5px; line-height:1.7; }
+  .type li { margin-bottom:6px; }
+  .note {
+    margin-top:22px; padding:14px 16px; border-radius:14px;
+    background:color-mix(in srgb, var(--accent) 12%, rgba(255,255,255,.03));
+    border:1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+    color:var(--ink1); font-size:13.5px; line-height:1.55;
+  }
+  .foot { color:var(--ink2); font-size:13px; text-align:center; margin-top:18px; line-height:1.5; }
+  .state { text-align:center; padding:48px 0; }
+  .state .big { font-size:44px; margin-bottom:14px; }
+  .state h2 { color:var(--ink0); font-size:22px; margin:0 0 8px; }
+  .err { color:var(--warn); }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand"><span class="orb"></span><b>Zoe</b></div>
+
+  <div id="loading" class="state"><div class="big">🏡</div><h2>Loading…</h2></div>
+
+  <div id="guide" class="hidden">
+    <h1 id="title">Add a device to your home</h1>
+    <p class="sub" id="intro"></p>
+    <div class="types" id="types"></div>
+    <div class="note" id="note"></div>
+    <p class="foot">Nothing to type here — this page just shows you how. When it's linked, say <b>“Zoe, show my home.”</b></p>
+  </div>
+
+  <div id="fail" class="state hidden"><div class="big">⚠️</div><h2 class="err">Setup link expired</h2>
+    <p class="sub" style="text-align:center" id="failMsg">Head back to your Zoe screen and tap “Add a device” again.</p></div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var params = new URLSearchParams((location.hash || '').replace(/^#/, ''));
+  var token = params.get('t') || '';
+  var $ = function (id) { return document.getElementById(id); };
+  function show(id) { ['loading','guide','fail'].forEach(function(x){ $(x).classList.toggle('hidden', x!==id); }); }
+  function fail(msg) { if (msg) $('failMsg').textContent = msg; show('fail'); }
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+
+  if (!token) { fail('This link is missing its setup code.'); return; }
+
+  fetch('/api/home/setup/info?token=' + encodeURIComponent(token))
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      if (!data.ok) { fail(data.reason || 'This setup link is no longer valid.'); return; }
+      $('title').textContent = data.title || 'Add a device to your home';
+      $('intro').textContent = data.intro || '';
+      $('note').textContent = data.note || '';
+      var html = (data.device_types || []).map(function (t, i) {
+        var steps = (t.steps || []).map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('');
+        return '<div class="type" data-i="' + i + '">' +
+          '<button type="button" aria-expanded="false"><span class="emoji">' + esc(t.emoji || '•') + '</span>' +
+          '<span class="label">' + esc(t.label || 'Device') + '</span><span class="chev">›</span></button>' +
+          '<div class="steps"><ol>' + steps + '</ol></div></div>';
+      }).join('');
+      $('types').innerHTML = html;
+      Array.prototype.forEach.call(document.querySelectorAll('.type > button'), function (btn) {
+        btn.addEventListener('click', function () {
+          var card = btn.parentNode;
+          var opening = !card.classList.contains('open');
+          // Accordion: one open at a time keeps the page calm.
+          Array.prototype.forEach.call(document.querySelectorAll('.type'), function (c) {
+            c.classList.remove('open'); c.querySelector('button').setAttribute('aria-expanded', 'false');
+          });
+          if (opening) { card.classList.add('open'); btn.setAttribute('aria-expanded', 'true'); }
+        });
+      });
+      show('guide');
+    })
+    .catch(function () { fail('Could not reach your Zoe. Make sure your phone is on the same wifi as the screen.'); });
+})();
+</script>
+</body>
+</html>

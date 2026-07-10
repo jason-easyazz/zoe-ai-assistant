@@ -26,8 +26,15 @@
 /* ── Header ─────────────────────────────────────────────────────────────── */
 .smart-home-card .sh-head {
   display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sky-space-4, 16px);
+}
+.smart-home-card .sh-head-text {
+  display: flex;
   flex-direction: column;
   gap: 2px;
+  min-width: 0;
 }
 .smart-home-card .sh-title {
   font-size: var(--sky-text-title, 28px);
@@ -40,19 +47,47 @@
   color: var(--sky-ink-2, rgba(255,255,255,.62));
 }
 
+/* ── Climate strip (read-only comfort readout) ──────────────────────────── */
+.smart-home-card .sh-climate {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sky-space-2, 8px);
+  flex: none;
+  padding: 10px var(--sky-space-4, 16px);
+  border-radius: var(--sky-radius-md, 20px);
+  border: 1px solid var(--sky-hairline, rgba(255,255,255,.14));
+  background: color-mix(in srgb, var(--sh-accent) 10%, rgba(255,255,255,.05));
+}
+.smart-home-card .sh-climate-ico {
+  align-self: center;
+  color: var(--sh-accent);
+  display: inline-flex;
+}
+.smart-home-card .sh-climate-now {
+  font-size: var(--sky-text-heading, 20px);
+  font-weight: var(--sky-weight-semibold, 600);
+  color: var(--sky-ink-0, #fff);
+}
+.smart-home-card .sh-climate-sub {
+  font-size: var(--sky-text-micro, 12px);
+  color: var(--sky-ink-2, rgba(255,255,255,.62));
+}
+
 /* ── Device grid ────────────────────────────────────────────────────────── */
+/* One full-width grid of generous tiles that flow across the stage — a sparse
+   home reads as composed (tiles wrap left-to-right) instead of a thin column. */
 .smart-home-card .sh-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
   gap: var(--sky-space-3, 12px);
 }
 .smart-home-card .sh-tile {
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  gap: var(--sky-space-4, 16px);
-  min-height: 96px;
-  padding: var(--sky-space-4, 16px);
+  gap: var(--sky-space-5, 20px);
+  min-height: 132px;
+  padding: var(--sky-space-4, 16px) var(--sky-space-5, 20px);
   border-radius: var(--sky-radius-md, 20px);
   border: 1px solid var(--sky-hairline, rgba(255,255,255,.14));
   background: rgba(255,255,255,.05);
@@ -61,6 +96,19 @@
   cursor: pointer;
   transition: transform .12s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease;
 }
+.smart-home-card .sh-tile-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sky-space-2, 8px);
+}
+.smart-home-card .sh-tile-room {
+  font-size: var(--sky-text-micro, 12px);
+  font-weight: var(--sky-weight-semibold, 600);
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--sky-ink-3, rgba(255,255,255,.42));
+}
+.smart-home-card .sh-tile.is-on .sh-tile-room { color: color-mix(in srgb, var(--sh-accent) 70%, var(--sky-ink-2)); }
 .smart-home-card .sh-tile:active { transform: scale(.97); }
 .smart-home-card .sh-tile.is-on {
   border-color: color-mix(in srgb, var(--sh-accent) 55%, transparent);
@@ -82,9 +130,10 @@
 }
 .smart-home-card .sh-tile-icon { color: var(--sky-ink-3, rgba(255,255,255,.42)); flex: none; }
 .smart-home-card .sh-tile-name {
-  font-size: var(--sky-text-body, 16px);
-  font-weight: var(--sky-weight-medium, 500);
-  line-height: 1.2;
+  font-size: var(--sky-text-heading, 20px);
+  font-weight: var(--sky-weight-semibold, 600);
+  letter-spacing: -0.01em;
+  line-height: 1.15;
 }
 
 /* ── State pill ─────────────────────────────────────────────────────────── */
@@ -161,4 +210,99 @@
 .smart-home-card .sh-empty-sub {
   font-size: var(--sky-text-label, 14px);
   color: var(--sky-ink-2, rgba(255,255,255,.62));
+  max-width: 40ch;
 }
+
+/* Warm welcome (near-blank home) — an inviting hero, not a cold void. */
+.smart-home-card .sh-empty-welcome {
+  gap: var(--sky-space-3, 12px);
+  align-items: center;
+  padding: var(--sky-space-7, 32px) var(--sky-space-4, 16px);
+  border-radius: var(--sky-radius-lg, 26px);
+  border: 1px solid var(--sky-hairline, rgba(255,255,255,.14));
+  background:
+    radial-gradient(120% 100% at 50% 0%,
+      color-mix(in srgb, var(--sh-accent) 16%, transparent), transparent 70%),
+    rgba(255,255,255,.03);
+}
+.smart-home-card .sh-empty-badge {
+  font-size: 44px;
+  line-height: 1;
+}
+
+/* ── Add-device affordance ──────────────────────────────────────────────── */
+.smart-home-card .sh-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sky-space-2, 8px);
+  min-height: 52px;
+  padding: 0 var(--sky-space-5, 20px);
+  border-radius: var(--sky-radius-md, 20px);
+  border: 1.5px dashed color-mix(in srgb, var(--sh-accent) 55%, var(--sky-hairline, rgba(255,255,255,.18)));
+  background: color-mix(in srgb, var(--sh-accent) 8%, rgba(255,255,255,.03));
+  color: var(--sky-ink-0, #fff);
+  font-family: inherit;
+  font-size: var(--sky-text-body, 16px);
+  font-weight: var(--sky-weight-semibold, 600);
+  cursor: pointer;
+  transition: transform .12s ease, background .18s ease, border-color .18s ease;
+}
+.smart-home-card .sh-add:active { transform: scale(.97); }
+.smart-home-card .sh-add:hover {
+  background: color-mix(in srgb, var(--sh-accent) 16%, rgba(255,255,255,.04));
+  border-color: color-mix(in srgb, var(--sh-accent) 75%, transparent);
+}
+/* Grid-cell variant: rides along as the last tile so growing the home is one tap
+   away, matching the device-tile footprint. */
+.smart-home-card .sh-add-tile {
+  flex-direction: column;
+  min-height: 132px;
+  padding: var(--sky-space-4, 16px);
+}
+.smart-home-card .sh-add-big {
+  min-height: 56px;
+  margin-top: var(--sky-space-2, 8px);
+}
+.smart-home-card .sh-add-glyph { color: var(--sh-accent); flex: none; }
+
+/* ── Add-device QR setup ────────────────────────────────────────────────── */
+.smart-home-card .sh-setup {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sky-space-4, 16px);
+  padding: var(--sky-space-4, 16px) 0;
+}
+.smart-home-card .sh-qr {
+  width: 208px;
+  height: 208px;
+  padding: 12px;
+  border-radius: var(--sky-radius-md, 20px);
+  background: #fff;
+  box-shadow: 0 12px 30px -12px rgba(0,0,0,.6);
+}
+.smart-home-card .sh-qr-img { width: 100%; height: 100%; display: block; }
+.smart-home-card .sh-setup-steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sky-space-2, 8px);
+  text-align: center;
+}
+.smart-home-card .sh-step {
+  font-size: var(--sky-text-label, 14px);
+  color: var(--sky-ink-1, rgba(255,255,255,.88));
+}
+.smart-home-card .sh-back {
+  min-height: 44px;
+  padding: 0 var(--sky-space-5, 20px);
+  border-radius: var(--sky-radius-pill, 999px);
+  border: 1px solid var(--sky-hairline, rgba(255,255,255,.14));
+  background: rgba(255,255,255,.06);
+  color: var(--sky-ink-1, rgba(255,255,255,.88));
+  font-family: inherit;
+  font-size: var(--sky-text-label, 14px);
+  font-weight: var(--sky-weight-medium, 500);
+  cursor: pointer;
+}
+.smart-home-card .sh-back:active { transform: scale(.97); }

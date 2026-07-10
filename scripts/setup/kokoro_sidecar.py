@@ -98,6 +98,12 @@ _WARM_PHRASES = [
     "I don't have access to that right now.",
     "Good morning!",
     "Good evening!",
+    # Period forms — the first-turn-of-day greeting (voice_greeting.apply_greeting)
+    # prepends these as their own leading sentence ("Good morning. It's 14 …"), so
+    # the sentence-streamed TTS renders "Good morning." with a period, not "!".
+    "Good morning.",
+    "Good afternoon.",
+    "Good evening.",
     "What can I help you with?",
     "On it.",
     "All done.",

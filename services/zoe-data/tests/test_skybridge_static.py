@@ -368,8 +368,9 @@ process.stdout.write(JSON.stringify(out));
 def test_skybridge_renderer_rows_carry_tap_action_and_escape(tmp_path):
     """Render a list + calendar card through the real renderer in Node and confirm
     each row is a data-sky-action target and that '<' injection is HTML-escaped.
-    ds1 mechanics: list rows toggle via a check-off query; the (single/first)
-    calendar event renders as the cal-hero button carrying an edit query."""
+    ds1 mechanics: list rows toggle via a check-off query; a calendar event is a
+    native <details> whose expanded Edit action carries the edit query (the tap now
+    reveals inline detail instead of routing to a generic editor card)."""
     node = shutil.which("node") or shutil.which("nodejs")
     if not node:
         pytest.skip("Node.js is not installed on this host")
@@ -399,8 +400,11 @@ const checks = {
     list_row_action: /lst-row[^>]*data-sky-action=\"query\"/.test(listHtml),
     list_check_query: listHtml.includes('data-query=\"check off bread &lt;b&gt;x&lt;/b&gt; on the shopping list\"'),
     list_escaped: !listHtml.includes('<b>x</b>') && listHtml.includes('&lt;b&gt;x&lt;/b&gt;'),
-    cal_row_action: /cal-hero[^>]*data-sky-action=\"query\"/.test(calHtml),
-    cal_edit_query: calHtml.includes('data-query=\"edit Dentist &lt;x&gt; at 15:00\"'),
+    // The tap target is the <summary> (native disclosure); the edit contract now
+    // lives on the revealed Edit action, which still carries data-sky-action=query.
+    cal_summary_tap: /<summary[^>]*cal-hero/.test(calHtml),
+    cal_edit_action: /cal-act-edit[^>]*data-sky-action=\"query\"/.test(calHtml),
+    cal_edit_query: calHtml.includes('data-query=\"edit Dentist &lt;x&gt; at 3:00pm on my calendar\"'),
     cal_escaped: !calHtml.includes('Dentist <x>') && calHtml.includes('Dentist &lt;x&gt;')
 };
 process.stdout.write(JSON.stringify(checks));
@@ -600,45 +604,65 @@ process.stdout.write(JSON.stringify({ earliest_first: html.indexOf('EarlyEvent')
     assert checks["earliest_first"], "calendar events must render earliest-first"
 
 
-def test_skybridge_calendar_ribbon_and_now_line(tmp_path):
-    """Behavioral coverage for the ribbon helpers (calMinutes/calDuration/
-    calHourLabel/calGutter/calendarRibbon): a busy 'today' renders the ribbon with
-    hour ticks + event blocks, and the live now-line stays inside the rail even
-    when the current time lands exactly on an hour boundary (was clipped at 100%)."""
+def test_skybridge_calendar_event_detail_expansion(tmp_path):
+    """Redesign contract: the space-wasting day-ribbon is gone, and tapping an
+    event reveals an INLINE detail panel (native <details>) — when/where/notes plus
+    Edit + Delete actions — rather than routing to a generic editor card. Every
+    event is a <details>; the detail carries the edit AND delete query contracts."""
     node = shutil.which("node") or shutil.which("nodejs")
     if not node:
         pytest.skip("Node.js is not installed on this host")
-    harness = tmp_path / "cal_ribbon.cjs"
+
+    # The ribbon helpers/markup are fully retired (removed, not archived).
+    renderer = read(UI / "js" / "skybridge-renderer.js")
+    assert "calendarRibbon" not in renderer
+    assert "cal-ribbon" not in renderer
+    css = read(UI / "css" / "cards/calendar.css")
+    assert "cal-ribbon" not in css and "cal-block" not in css and "cal-tick" not in css
+    # New event-detail surface ships in the sheet.
+    assert "cal-detail" in css and "cal-act-edit" in css and "cal-act-del" in css
+    assert "function calendarDeleteQuery" in renderer
+
+    harness = tmp_path / "cal_detail.cjs"
     harness.write_text(
         """
 const fs = require('fs');
 const vm = require('vm');
 const src = fs.readFileSync(process.argv[2], 'utf8');
-// Freeze "now" to an EXACT hour boundary (23:00) on the card's date so the
-// now-line's window end is driven by nowMin — the case that used to clip.
-const FIXED = new Date('2026-06-23T23:00:00').getTime();
-class FakeDate extends Date {
-  constructor(...a){ if (a.length === 0) super(FIXED); else super(...a); }
-  static now(){ return FIXED; }
-}
-const sandbox = { window: {}, Date: FakeDate };
+const sandbox = { window: {} };
 vm.createContext(sandbox);
 vm.runInContext(src, sandbox);
 const R = sandbox.window.SkybridgeRenderer;
 const html = R.render({ card_type: 'generic', schema_version: '1.0.0', card_id: 'c', content: {
   source: 'calendar_show', qualifier: 'today', date: '2026-06-23',
   events: [
-    { id: 'a', title: 'Standup', start_time: '08:00', end_time: '08:30', start_date: '2026-06-23' },
-    { id: 'b', title: 'Lunch', start_time: '12:00', end_time: '13:00', start_date: '2026-06-23' }
+    { id: 'a', title: 'Standup', start_time: '08:00', end_time: '08:30', start_date: '2026-06-23',
+      location: 'Room 4', description: 'Daily sync', category: 'work' },
+    { id: 'b', title: 'Lunch', start_time: '12:00', end_time: '13:00', start_date: '2026-06-23' },
+    { id: 'c', title: 'Trip', all_day: true, start_date: '2026-06-23', end_date: '2026-06-25', category: 'bucket' }
   ]
 } });
-const m = html.match(/cal-ribbon-now[^>]*left:([0-9.]+)%/);
 process.stdout.write(JSON.stringify({
-  ribbon: html.includes('cal-ribbon'),
-  ticks: html.includes('cal-tick'),
-  blocks: html.includes('cal-block'),
-  now_line: !!m,
-  now_left: m ? parseFloat(m[1]) : -1
+  no_ribbon: !html.includes('cal-ribbon') && !html.includes('cal-block'),
+  // all-day band + agenda share one scroll region so opened details never clip.
+  scroll_wraps: /<div class=\"cal-scroll\"><div class=\"cal-allday\"/.test(html)
+    && html.indexOf('cal-scroll') < html.indexOf('cal-agenda'),
+  // 2 timed rows + 1 all-day event, each a <details>.
+  is_details: (html.match(/<details class=\"cal-event/g) || []).length === 3,
+  has_summary: html.includes('<summary class=\"cal-row'),
+  has_detail: html.includes('cal-detail'),
+  when_row: html.includes('When') && html.includes('08:00 – 08:30'),
+  where_row: html.includes('Where') && html.includes('Room 4'),
+  notes_row: html.includes('Notes') && html.includes('Daily sync'),
+  edit_query: html.includes('data-query=\"edit Standup at 8:00am on my calendar\"'),
+  delete_action: /cal-act-del[^>]*data-sky-action=\"query\"/.test(html),
+  // anchored with "from my calendar" so the resolver always routes it to a
+  // calendar delete regardless of the saved Skybridge context (destructive).
+  delete_query: html.includes('data-query=\"delete Standup at 8:00am from my calendar\"'),
+  // all-day events carry no time, so they disambiguate by "all day" + ISO date
+  // (the date separates days; "all day" wins a same-date tie vs a timed row).
+  allday_edit_query: html.includes('data-query=\"edit Trip all day on 2026-06-23 on my calendar\"'),
+  allday_delete_query: html.includes('data-query=\"delete Trip all day on 2026-06-23 from my calendar\"')
 }));
 """,
         encoding="utf-8",
@@ -649,9 +673,7 @@ process.stdout.write(JSON.stringify({
     )
     import json
     c = json.loads(proc.stdout)
-    assert c["ribbon"] and c["ticks"] and c["blocks"], f"ribbon markup missing: {c}"
-    assert c["now_line"], "live now-line should render on today"
-    assert 0 <= c["now_left"] < 99.5, f"now-line clipped at boundary: left={c['now_left']}"
+    assert all(c.values()), f"event-detail expansion contract failed: {c}"
 
 
 def test_skybridge_is_registered_in_touch_menu():
@@ -909,9 +931,17 @@ out.research_report.kicker = R.render(cards.research_report).includes('gx-sec-ki
   var on = R.render({ component: 'smart_home', props: { title: 'Lights', devices: [
     { name: 'Lamp ' + INJ, domain: 'switch', on: true, available: true, entity_id: 'switch.lamp' },
     { name: 'Hall', entity_id: 'light.hall', domain: 'light', on: false, available: true }
-  ], scenes: [{ name: 'Movie Time', scene_id: 'scene.movie_time' }] } });
+  ], scenes: [{ name: 'Movie Time', scene_id: 'scene.movie_time' }], add_query: 'add a device' } });
   var empty = R.render({ component: 'smart_home', props: { title: 'Lights', devices: [] } });
   var offline = R.render({ component: 'smart_home', props: { title: 'Home', devices: [], offline: true } });
+  // Room-grouped view + read-only climate strip (the enriched card).
+  var rooms = R.render({ component: 'smart_home', props: { title: 'Home', rooms: [
+    { name: 'Living Room', devices: [{ name: 'Living Room Light', entity_id: 'input_boolean.living_room_light', domain: 'light', on: true, available: true }] },
+    { name: 'Around the home', devices: [{ name: 'Ceiling Fan', entity_id: 'input_boolean.fan', domain: 'fan', on: false, available: true }] }
+  ], climate: { current: 21, target: 22, unit: '\\u00b0C' }, add_query: 'add a device' } });
+  // Add-device QR setup mode.
+  var setup = R.render({ component: 'smart_home', props: { title: 'Add a device', mode: 'setup',
+    qr_path: '/api/home/setup/qr?token=abc', back_query: 'smart home' } });
   out.smart_home = {
     tiles: on.includes('sh-grid') && on.includes('sh-tile'),
     on_state: on.includes('is-on') && on.includes('sh-pill-on'),
@@ -920,8 +950,18 @@ out.research_report.kicker = R.render(cards.research_report).includes('gx-sec-ki
     escaped: !on.includes('<b>x</b>') && on.includes('&lt;b&gt;x&lt;/b&gt;'),
     action: on.includes('data-sky-action='),
     scene: on.includes('sh-scene') && on.includes('Movie Time'),
-    empty: empty.includes('sh-empty') && empty.includes('No lights or switches'),
-    offline: offline.includes('Home hub offline')
+    // The grow affordance is always offered on a populated card.
+    add_tile: on.includes('sh-add') && on.includes('add a device'),
+    // Warm, inviting empty state (not a cold "nothing here") with its own Add CTA.
+    empty: empty.includes('sh-empty-welcome') && empty.includes('ready to grow') && empty.includes('sh-add'),
+    offline: offline.includes('Home hub offline'),
+    // Rooms flatten into one grid with a per-tile room caption; climate reads temp.
+    rooms: rooms.includes('sh-tile-room') && rooms.includes('Living Room') && rooms.includes('sh-grid'),
+    climate: rooms.includes('sh-climate') && rooms.includes('21') && rooms.includes('Set to 22'),
+    // Setup mode: the QR image + a back-to-home control (re-enters the resolver).
+    setup: setup.includes('sh-qr-img') && setup.includes('/api/home/setup/qr?token=abc') &&
+           setup.includes('data-query="smart home"'),
+    setup_safe: !setup.includes('javascript:')
   };
 })();
 // The rebuilt renderers no longer depend on zoe-compose: render with NO catalog
@@ -1347,3 +1387,143 @@ def test_music_transfer_endpoint_shape():
     assert "async def transfer(target_player_id: str, source_player_id: str = \"\")" in service
     assert '"player_queues/transfer"' in service
     assert "source_queue_id=source_id, target_queue_id=target_player_id" in service
+
+
+def test_music_search_and_play_media_endpoints_exist():
+    """The touch music page needs a structured search + a play-by-URI endpoint,
+    both delegating to music_service (the single place that speaks MA)."""
+    router = read(DATA / "routers" / "music.py")
+    service = read(DATA / "music_service.py")
+
+    assert '@router.get("/search")' in router
+    assert '@router.post("/play_media")' in router
+    assert "music_service.search(q, media_types=media_types, limit=n)" in router
+    assert "music_service.play_media(uri, player_id=player_id)" in router
+
+    assert "async def search(query: str" in service
+    assert "async def play_media(uri: str, player_id: str = \"\")" in service
+    # Per-type fan-out (MA/YT drops tracks/albums on a combined query).
+    assert '"music/search", search_query=query, media_types=[mt]' in service
+    assert '"player_queues/play_media", queue_id=pid, media=uri' in service
+
+
+def test_touch_music_page_is_ds1_browse_surface():
+    """/touch/music.html is the rebuilt 'use your connected music' surface: it
+    shows connected sources, searches the bridge, and plays a picked result on a
+    chosen speaker. It must stay on-brand (ds1 tokens, no rgba(var(...))) and
+    touch-friendly (≥44px targets), and it is the target of the card's Browse."""
+    html = read(UI / "music.html")
+
+    # Wired to the new + existing music endpoints (search/play/sources/speakers).
+    assert "/api/music/search?q=" in html
+    assert "/api/music/play_media" in html
+    assert "/api/music/available-providers" in html
+    assert "/api/music/players" in html
+    assert "/api/music/now-playing" in html
+
+    # Connected-source display (so the user can SEE YouTube Music is connected).
+    assert "Connected music sources" in html or "src on" in html
+    assert "loadSources" in html
+
+    # Search → grouped results → tap to play by touch, on a chosen speaker.
+    assert "Search songs, artists, albums" in html
+    assert "function play(uri, name)" in html
+    assert "Play on…" in html  # speaker picker sheet
+
+    # ds1 discipline: hex accent tokens + color-mix, never rgba(var(...)).
+    assert "--accent-mint" in html and "color-mix(" in html
+    assert "rgba(var(" not in html
+
+    # The now-playing card's Browse button routes here (no stale gridstack page).
+    assert "cdn.jsdelivr.net/npm/gridstack" not in html
+
+    renderer = read(UI / "js" / "skybridge-renderer.js")
+    assert 'data-route="/touch/music.html"' in renderer
+
+
+def test_touch_music_page_uses_large_touch_targets():
+    """Primary controls on the music page meet the ≥44px touch-target rule."""
+    html = read(UI / "music.html")
+    for token in ["min-height: 48px", "min-height: 44px", "min-width: 44px"]:
+        assert token in html, token
+
+
+def test_skybridge_renderer_handles_concurrent_timers(tmp_path):
+    """Two+ timers must each render as an independent card: its own timer id,
+    its own countdown digits, its own cancel (✕) hook, and its own progress ring.
+    Guards the regression where a second timer froze / mis-positioned / killed the
+    first and couldn't be closed."""
+    node = shutil.which("node") or shutil.which("nodejs")
+    if not node:
+        pytest.skip("Node.js is not installed on this host")
+    renderer_path = UI / "js" / "skybridge-renderer.js"
+    harness = tmp_path / "timer_harness.cjs"
+    harness.write_text(
+        """
+const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const sandbox = { window: {}, Date: Date };
+vm.createContext(sandbox);
+vm.runInContext(src, sandbox);
+const R = sandbox.window.SkybridgeRenderer;
+const now = Date.now();
+const mk = (id, label, dur, rem) => R.render({ component: 'timer', props: {
+    id: id, timer_id: id, title: label, label: label, source: 'timer',
+    status: 'running', duration_seconds: dur, expires_at_ms: now + rem * 1000 } });
+const a = mk('aaa1', 'Pasta', 600, 372);   // 06:12
+const b = mk('bbb2', 'Eggs', 300, 118);    // 01:58
+const idOf = h => (h.match(/data-timer-id=\"([^\"]+)\"/) || [])[1];
+const cancelOf = h => (h.match(/data-timer-cancel=\"([^\"]+)\"/) || [])[1];
+const digitsOf = h => (h.match(/sky-timer-digits\">([^<]+)</) || [])[1];
+const checks = {
+    a_id: idOf(a) === 'aaa1',
+    b_id: idOf(b) === 'bbb2',
+    ids_distinct: idOf(a) !== idOf(b),
+    a_cancel_hook: cancelOf(a) === 'aaa1',
+    b_cancel_hook: cancelOf(b) === 'bbb2',
+    a_digits: digitsOf(a) === '06:12',
+    b_digits: digitsOf(b) === '01:58',
+    digits_distinct: digitsOf(a) !== digitsOf(b),
+    a_has_ring: a.includes('sky-timer-ring-fill'),
+    b_has_ring: b.includes('sky-timer-ring-fill'),
+    a_has_x_button: a.includes('class=\"sky-timer-x\"'),
+    b_has_x_button: b.includes('class=\"sky-timer-x\"'),
+};
+process.stdout.write(JSON.stringify(checks));
+""",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [node, str(harness), str(renderer_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    import json
+
+    checks = json.loads(proc.stdout)
+    assert all(checks.values()), f"concurrent-timer renderer harness failed: {checks}"
+
+
+def test_skybridge_runtime_handles_concurrent_timers():
+    """The timer runtime must be id-per-node robust for concurrent timers:
+    tick/remove EVERY node for an id (never a single querySelector that freezes a
+    stale twin), dedupe duplicate/orphan cards, and route the ✕ cancel before the
+    ringing-card tap so it always closes exactly its own timer."""
+    js = read(UI / "js" / "skybridge.js")
+
+    # All-node lookup helper + dedupe/orphan collapse.
+    assert "function _timerEls(id)" in js
+    assert "querySelectorAll(_timerSel(id))" in js
+    assert "function syncTimerCards()" in js
+    assert "syncTimerCards();" in js  # wired into the add path
+    # No single-node querySelector left on the tick/remove hot paths (that was the
+    # freeze / can't-close regression).
+    assert "els.cards.querySelector(_timerSel(t.id))" not in js
+    assert "els.cards.querySelector(_timerSel(id))" not in js
+    # The ✕ cancel button is handled BEFORE the ringing-card tap so it always
+    # closes exactly its own timer, even on a card that is ringing.
+    cancel_idx = js.index("event.target.closest('[data-timer-cancel]')")
+    ring_idx = js.index("event.target.closest('.sky-card.sky-timer-ringing')")
+    assert cancel_idx < ring_idx

@@ -1599,6 +1599,108 @@ async def test_calendar_delete_event_removes_and_refreshes():
     assert result["cards"][0]["content"]["events"] == []
 
 
+@pytest.mark.asyncio
+async def test_calendar_delete_all_day_disambiguates_by_date():
+    """All-day events carry no time, so the tap query disambiguates by ISO date
+    ('delete Trip on 2026-... from my calendar'). The scorer matches that date
+    against start_date, so the correct same-title all-day event is deleted even
+    when another all-day event shares the title on a different day."""
+    wed = {
+        "id": "trip-wed", "user_id": "family-admin", "title": "Trip",
+        "start_date": "2026-06-24", "start_time": None, "all_day": True,
+        "category": "bucket", "visibility": "family", "deleted": False,
+    }
+    fri = {
+        "id": "trip-fri", "user_id": "family-admin", "title": "Trip",
+        "start_date": "2026-06-26", "start_time": None, "all_day": True,
+        "category": "bucket", "visibility": "family", "deleted": False,
+    }
+    db = FakeDb(events=[wed, fri])
+    # A multi-day calendar card holds BOTH same-title all-day events in context.
+    context = {
+        "intent": {"domain": "calendar", "action": "show"},
+        "cards": [{"content": {"source": "calendar_show", "start_date": "2026-06-24",
+                               "events": [wed, fri]}}],
+    }
+
+    result = await resolve_skybridge_request(
+        "delete Trip all day on 2026-06-26 from my calendar", "family-admin", context=context, db=db
+    )
+
+    assert result["handled"] is True
+    assert result["intent"]["action"] == "delete_event"
+    # The Friday instance was deleted, not the ambiguous Wednesday one.
+    assert result["intent"]["event_id"] == "trip-fri"
+
+
+@pytest.mark.asyncio
+async def test_calendar_delete_all_day_beats_same_title_timed_same_day():
+    """The hardest tie: a same-title all-day AND timed event on the SAME day. The
+    all-day tap query carries 'all day', so the scorer prefers the all-day row and
+    deletes the one the user actually tapped (not the ambiguous-event flow)."""
+    all_day = {
+        "id": "trip-allday", "user_id": "family-admin", "title": "Trip",
+        "start_date": "2026-06-24", "start_time": None, "all_day": True,
+        "category": "bucket", "visibility": "family", "deleted": False,
+    }
+    timed = {
+        "id": "trip-timed", "user_id": "family-admin", "title": "Trip",
+        "start_date": "2026-06-24", "start_time": "09:00", "all_day": False,
+        "category": "bucket", "visibility": "family", "deleted": False,
+    }
+    db = FakeDb(events=[all_day, timed])
+    context = {
+        "intent": {"domain": "calendar", "action": "show"},
+        "cards": [{"content": {"source": "calendar_show", "start_date": "2026-06-24",
+                               "events": [all_day, timed]}}],
+    }
+
+    result = await resolve_skybridge_request(
+        "delete Trip all day on 2026-06-24 from my calendar", "family-admin", context=context, db=db
+    )
+
+    assert result["handled"] is True
+    assert result["intent"]["action"] == "delete_event"
+    assert result["intent"]["event_id"] == "trip-allday"
+
+
+def test_calendar_delete_target_survives_delimiter_in_title():
+    """A title that itself contains the delimiter phrase ('Away from schedule',
+    'Off calendar review') must not be truncated: the greedy target binds to the
+    LAST 'from … calendar/schedule/agenda', keeping the full title + discriminator."""
+    from skybridge_service import _calendar_delete_from_text as parse
+
+    assert parse("delete Away from schedule at 8:00am from my calendar", None) == "Away from schedule at 8:00am"
+    assert parse("delete Work from home on 2026-07-09 from my calendar", None) == "Work from home on 2026-07-09"
+    assert parse("cancel Off calendar review at 9:00am from my calendar", None) == "Off calendar review at 9:00am"
+    # Ordinary single-delimiter case is unchanged.
+    assert parse("delete Dentist at 3:00pm from my calendar", None) == "Dentist at 3:00pm"
+
+
+def test_score_event_for_target_query_prepositions_do_not_leak_as_tokens():
+    """The token test is a SUBSTRING match, so the query-syntax word 'at' (from
+    'at 3:00pm') must not score against a title/location that merely contains it
+    ('Bath time'). The tapped 'Dentist' must still win outright."""
+    from skybridge_service import _score_event_for_target
+
+    dentist = {"title": "Dentist", "start_time": "15:00", "start_date": "2026-07-09", "all_day": False}
+    bath = {"title": "Bath time", "start_time": "15:00", "start_date": "2026-07-09", "all_day": False}
+    target = "Dentist at 3:00pm"  # both are 15:00, so time alone ties
+    assert _score_event_for_target(dentist, target) > _score_event_for_target(bath, target)
+
+
+def test_score_event_for_target_iso_date_does_not_leak_as_time():
+    """The ISO date is stripped before the clock pass, so a December date's '12'
+    can't be misread as noon and unfairly beat the tapped all-day event."""
+    from skybridge_service import _score_event_for_target
+
+    all_day = {"title": "Trip", "start_date": "2026-12-09", "start_time": None, "all_day": True}
+    noon = {"title": "Trip", "start_date": "2026-12-09", "start_time": "12:00", "all_day": False}
+    target = "Trip on 2026-12-09"
+    # No spurious +4 for the noon event: both score identically (date + title only).
+    assert _score_event_for_target(all_day, target) == _score_event_for_target(noon, target)
+
+
 def test_convergence_gate_is_nonfatal_and_nonmutating():
     """Increment 2: the validation gate logs divergence but never raises, drops, or
     mutates a card (so it can't break the live panel)."""

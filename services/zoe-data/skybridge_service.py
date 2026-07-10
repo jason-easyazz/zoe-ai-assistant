@@ -769,9 +769,16 @@ def _contextual_list_add_from_text(message: str, context: dict[str, Any] | None)
 
 
 def _calendar_delete_from_text(message: str, context: dict[str, Any] | None) -> str | None:
-    """Parse 'delete/remove/cancel <event> from my calendar' (or contextual)."""
+    """Parse 'delete/remove/cancel <event> from my calendar' (or contextual).
+
+    The target is GREEDY (``.+``) so the delimiter binds to the LAST
+    'from/off/out of … calendar/schedule/agenda' — a title that itself contains
+    that phrase (e.g. 'Away from schedule') stays intact instead of being
+    truncated to 'Away'. The tap-generated query always appends the anchor last,
+    so greedy resolves to the whole real target.
+    """
     match = re.search(
-        r"\b(?:delete|remove|cancel)\s+(?P<target>.+?)\s+(?:from|off|out of)\s+(?:the\s+|my\s+)?(?:calendar|schedule|agenda)\b",
+        r"\b(?:delete|remove|cancel)\s+(?P<target>.+)\s+(?:from|off|out of)\s+(?:the\s+|my\s+)?(?:calendar|schedule|agenda)\b",
         message,
         re.IGNORECASE,
     )
@@ -1276,6 +1283,18 @@ def _classify_smart_home(text: str) -> "SkybridgeIntent | None":
     """Classify a smart-home command for the Home Assistant bridge. `text` is the
     lowercased message padded with surrounding spaces. Device control is
     household-shared (no identity gate), like clock and music."""
+    # Onboarding — the owner's key ask: a way to GROW the home from the panel.
+    # "add a device", "set up a new light", "connect a plug", "pair a sensor".
+    # Placed first so the "device" keyword here can't be swallowed by the generic
+    # overview rule below. (Smart-home runs AFTER list parsing upstream, so
+    # "add milk to the list" never reaches here.)
+    if re.search(
+        r"\b(?:add|set\s*up|connect|pair|onboard|install)\s+"
+        r"(?:(?:a|an|another|new|my|some|smart)\s+)*"
+        r"(?:device|light|lamp|bulb|plug|switch|outlet|speaker|sensor|gadget|thing)s?\b",
+        text,
+    ):
+        return SkybridgeIntent(domain="smart_home", action="add_device")
     # Tile taps carry the device's EXACT HA entity id as an "@domain.entity" marker
     # so a tap controls exactly its device (never a fuzzy name match). Voice never
     # includes it. This is the authoritative, unambiguous control path.
@@ -1527,10 +1546,30 @@ async def _resolve_calendar_create(intent: SkybridgeIntent, user_id: str, db: An
 
 def _score_event_for_target(event: dict[str, Any], target: str) -> int:
     score = 0
-    target_time = _parse_time(target)
+    # Explicit ISO date match — the disambiguator for ALL-DAY events, which carry no
+    # time. It is parsed and then STRIPPED before the clock/token passes so its
+    # digits can't be misread as a time (e.g. "2026-12-09" → a spurious 12:00) or
+    # leak in as title tokens.
+    remainder = target
+    date_match = re.search(r"\b\d{4}-\d{2}-\d{2}\b", target)
+    if date_match:
+        if str(event.get("start_date") or "")[:10] == date_match.group(0):
+            score += 4
+        remainder = target[:date_match.start()] + " " + target[date_match.end():]
+    # "all day" shape — lets a tapped all-day row win a same-DATE tie against a
+    # same-title timed row. Stripped so it can't leak in as title tokens.
+    if re.search(r"\ball[ -]?day\b", remainder, re.IGNORECASE):
+        remainder = re.sub(r"\ball[ -]?day\b", " ", remainder, flags=re.IGNORECASE)
+        if event.get("all_day"):
+            score += 2
+    target_time = _parse_time(remainder)
     if target_time and str(event.get("start_time") or "")[:5] == target_time:
         score += 4
-    target_tokens = {token for token in re.split(r"\W+", target.lower()) if token and token not in {"my", "the", "appointment", "event"}}
+    # Query-syntax words from the tap templates ("edit/delete X AT <time> ON <date>
+    # FROM/ON MY CALENDAR") — not event words. They must be filtered because the
+    # token test below is a SUBSTRING match, so a stray "at" would match "Bath",
+    # "Saturday", etc. and give a spurious point.
+    target_tokens = {token for token in re.split(r"\W+", remainder.lower()) if token and token not in {"my", "the", "at", "on", "from", "calendar", "appointment", "event"}}
     haystack = " ".join(str(event.get(key) or "") for key in ("title", "category", "location")).lower()
     if not target_tokens:
         return score or 1
