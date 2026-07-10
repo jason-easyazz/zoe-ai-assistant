@@ -94,6 +94,31 @@ async def test_resolve_people_create_success(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_resolve_person_offers_collapses_whitespace(monkeypatch):
+    # A stored offer name with a double space must still match the collapsed name
+    # that was created, so the offer is resolved (doesn't re-surface).
+    import contextlib
+    import pending_suggestions as ps
+
+    executed = []
+
+    class _DB:
+        async def fetch(self, sql, *args):
+            return [{"id": "s1", "pre_filled_slots": '{"name": "Daniel  Smith"}'}]  # 2 spaces
+
+        async def execute(self, sql, *args):
+            executed.append(args)
+
+    @contextlib.asynccontextmanager
+    async def fake_ctx():
+        yield _DB()
+
+    monkeypatch.setattr(ps, "get_db_ctx", fake_ctx)
+    n = await ps.resolve_person_offers_by_name("u1", "Daniel Smith")  # single space
+    assert n == 1 and executed, "offer must match despite the whitespace difference"
+
+
+@pytest.mark.asyncio
 async def test_resolve_people_create_failure_surfaces_card(monkeypatch):
     async def fake_create(intent, user_id):
         return None  # genuine failure

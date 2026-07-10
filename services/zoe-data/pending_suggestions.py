@@ -324,7 +324,10 @@ async def resolve_person_offers_by_name(user_id: str, name: str) -> int:
     any matching offer here — otherwise the same "Add {name}?" card re-surfaces even
     though the contact now exists. Returns the number of offers resolved.
     """
-    name_norm = str(name or "").strip().lower()
+    # Collapse internal whitespace (not just trim) so this matches the create
+    # classifier's normalisation — otherwise a stored "Daniel  Smith" (double space)
+    # would miss the "Daniel Smith" that was created, and the offer would re-surface.
+    name_norm = " ".join(str(name or "").split()).lower()
     if user_id in ("guest", "") or not name_norm:
         return 0
     try:
@@ -340,7 +343,7 @@ async def resolve_person_offers_by_name(user_id: str, name: str) -> int:
                     slots = json.loads(r["pre_filled_slots"] or "{}")
                 except json.JSONDecodeError:
                     slots = {}
-                if str(slots.get("name") or "").strip().lower() == name_norm:
+                if " ".join(str(slots.get("name") or "").split()).lower() == name_norm:
                     await db.execute("UPDATE pending_suggestions SET resolved = 1 WHERE id = $1", r["id"])
                     resolved += 1
             return resolved
