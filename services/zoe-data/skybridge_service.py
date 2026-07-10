@@ -977,14 +977,17 @@ _IDENTITY_QUERY_RE = re.compile(
 )
 
 # Surface the pending "add this known person as a contact" offers as tappable
-# person_confirm cards (as opposed to a people SEARCH). Deliberately narrow so a
-# plain "show my contacts" still falls through to the directory branch below.
-# The trailing (?!\s+to\b) keeps "...to add TO my family" (a directory op, adding
-# someone to a group) from being stolen as an offer-surface request.
+# person_confirm cards (as opposed to a people SEARCH). Two shapes:
+#   • noun phrases ("contact suggestions") — a distinctive ask, matched anywhere.
+#   • verb phrases ("contacts to add") — ambiguous prefixes of directory queries
+#     ("show contacts to add as friends" / "…to add to my family"), so they must
+#     END the utterance to count. `text` is space-padded, hence \s*[?.!]*\s*$.
+# This keeps a plain "show my contacts" (and qualified directory asks) on the
+# directory branch below.
 _PENDING_OFFERS_RE = re.compile(
-    r"\b(?:contact suggestions|suggested contacts|pending contacts"
-    r"|(?:new\s+)?contacts?\s+to\s+add|people\s+to\s+add|anyone\s+to\s+add"
-    r"|who\s+(?:can|should)\s+i\s+add)\b(?!\s+to\b)",
+    r"\b(?:contact suggestions|suggested contacts|pending contacts)\b"
+    r"|\b(?:(?:new\s+)?contacts?\s+to\s+add|people\s+to\s+add|anyone\s+to\s+add"
+    r"|who\s+(?:can|should)\s+i\s+add)\s*[?.!]*\s*$",
     re.IGNORECASE,
 )
 

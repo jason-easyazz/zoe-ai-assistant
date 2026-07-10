@@ -35,11 +35,16 @@ def test_classify_does_not_steal_plain_directory():
     assert intent is not None and intent.domain == "people" and intent.action == "show"
 
 
-def test_classify_offers_regex_does_not_steal_add_to_group():
-    # "contacts to add to my family" is adding someone to a group (a directory op),
-    # NOT a request to surface pending offers — the (?!\s+to\b) guard must hold.
-    intent = sky.classify_skybridge_intent("contacts to add to my family")
-    assert intent is not None and intent.action != "pending_offers"
+@pytest.mark.parametrize("msg", [
+    "contacts to add to my family",       # adding someone to a group
+    "show contacts to add as friends",    # qualifier after "to add"
+    "which contacts to add to the trip",  # another trailing qualifier
+])
+def test_classify_offers_regex_does_not_steal_directory(msg):
+    # Verb-phrase offer forms must END the utterance; a trailing qualifier means
+    # it's a directory op, so these must NOT reach pending_offers.
+    intent = sky.classify_skybridge_intent(msg)
+    assert intent is None or intent.action != "pending_offers", msg
 
 
 @pytest.mark.parametrize("msg,name,rel", [
