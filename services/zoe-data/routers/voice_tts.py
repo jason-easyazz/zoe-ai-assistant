@@ -4379,14 +4379,15 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
         # before the first audio chunk arrives.
         yield (_json.dumps({"transcript": transcript}) + "\n").encode()
         # ── First-turn-of-day greeting (flag-gated, default off) ─────────────
-        # Emit the time-of-day greeting as its OWN leading spoken chunk, keyed by
-        # panel (or identified speaker) so it fires once per local day, ahead of
-        # the answer and decoupled from the reply text (no UI-card pollution).
-        # The phrase is pre-warmed in the Kokoro sidecar, so this is ~instant.
+        # Emit the time-of-day greeting as its OWN leading spoken chunk so it fires
+        # once per local day, ahead of the answer and decoupled from the reply text
+        # (no UI-card pollution). The phrase is pre-warmed in the Kokoro sidecar, so
+        # this is ~instant. Keyed by `panel_id` ONLY — a single stable namespace:
+        # "first turn of the day at this panel". Mixing in a per-turn speaker id
+        # would double-greet the same person across the two key spaces.
         try:
             from voice_greeting import greeting_prefix
-            _greet_key = (payload or {}).get("identified_user_id") or panel_id
-            _greet = greeting_prefix(_greet_key)
+            _greet = greeting_prefix(panel_id)
             if _greet:
                 _greet_audio = await _synthesize_kokoro_sidecar(f"{_greet}.")
                 if _greet_audio:
