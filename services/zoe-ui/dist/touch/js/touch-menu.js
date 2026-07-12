@@ -14,14 +14,14 @@ const TouchMenu = (() => {
     const NAV_H = 64;
 
     const PRIMARY = [
-        { id: 'skybridge', path: '/touch/skybridge.html',  label: 'Home'     },
+        { id: 'home', path: '/touch/home.html',  label: 'Home'     },
         { id: 'calendar',  path: '/touch/calendar.html',   label: 'Calendar' },
         { id: 'lists',     path: '/touch/lists.html',      label: 'Lists'    },
         { id: 'chat',      path: '/touch/chat.html',       label: 'Chat'     },
     ];
 
     const ALL_PAGES = [
-        { id: 'skybridge',  path: '/touch/skybridge.html',  icon: '◇',  label: 'Home'       },
+        { id: 'home',  path: '/touch/home.html',  icon: '◇',  label: 'Home'       },
         { id: 'dashboard',  path: '/touch/dashboard.html',  icon: '🏠', label: 'Dashboard'  },
         { id: 'calendar',   path: '/touch/calendar.html',   icon: '📅', label: 'Calendar'   },
         { id: 'lists',      path: '/touch/lists.html',      icon: '☰',  label: 'Lists'      },
@@ -537,11 +537,11 @@ html.dark-mode .ztm-ctx-item { color: rgba(255,255,255,0.88); border-bottom-colo
         try {
             const u = new URL(String(input || ''), window.location.origin);
             // External targets are never allowed from touch nav.
-            if (u.origin !== window.location.origin) return '/touch/skybridge.html';
+            if (u.origin !== window.location.origin) return '/touch/home.html';
             const p = u.pathname || '/';
             const base = p.split('/').pop() || '';
             const allowed = new Set([
-                'dashboard.html', 'skybridge.html', 'calendar.html', 'lists.html', 'chat.html', 'notes.html',
+                'dashboard.html', 'home.html', 'skybridge.html', 'calendar.html', 'lists.html', 'chat.html', 'notes.html',
                 'journal.html', 'people.html', 'music.html', 'smart-home.html', 'weather.html',
                 'settings.html', 'memories.html', 'cooking.html', 'timers.html', 'updates.html',
                 'index.html'
@@ -555,9 +555,9 @@ html.dark-mode .ztm-ctx-item { color: rgba(255,255,255,0.88); border-bottom-colo
             if (allowed.has(base)) return '/touch/' + base + (u.search || '') + (u.hash || '');
 
             // Default hard guard.
-            return '/touch/skybridge.html';
+            return '/touch/home.html';
         } catch (_) {
-            return '/touch/skybridge.html';
+            return '/touch/home.html';
         }
     }
 
