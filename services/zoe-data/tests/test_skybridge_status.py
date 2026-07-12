@@ -26,7 +26,7 @@ def test_skybridge_status_endpoint_returns_runtime_contract():
     assert data["ok"] is True
     assert data["surface"] == "skybridge"
     assert data["status"] == "ready"
-    assert data["entrypoint"] == "/touch/skybridge.html"
+    assert data["entrypoint"] == "/touch/home.html"
     assert data["card_contract"]["status"] == "wired_for_calendar_weather_lists_people_clock_actions_v1"
     assert data["card_contract"]["supported_major"] == 1
     assert data["card_contract"]["data_domains"] == ["calendar", "weather", "lists", "people", "clock"]

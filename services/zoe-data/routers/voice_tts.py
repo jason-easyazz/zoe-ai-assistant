@@ -919,13 +919,19 @@ async def _broadcast_skybridge_ui(
     if not skybridge_result or not skybridge_result.get("handled"):
         return
     delivery_key = turn_key or str(time.monotonic_ns())
-    query = quote_plus(str(utterance or skybridge_result.get("spoken_summary") or ""))
-    url = "/touch/skybridge.html" + (f"?q={query}" if query else "")
+    # Voice lands on the ESTATE home with display-only params (heard/say/domain):
+    # the estate shows the transcript + summary and opens the matching screen.
+    # It must NOT re-execute the command (?q= would double-run mutations).
+    query = quote_plus(str(utterance or "")[:200])
+    say = quote_plus(str(skybridge_result.get("spoken_summary") or "")[:300])
+    domain = quote_plus(str((skybridge_result.get("intent") or {}).get("domain") or ""))
+    params = "&".join(p for p in (f"heard={query}" if query else "", f"say={say}" if say else "", f"domain={domain}" if domain else "") if p)
+    url = "/touch/home.html" + (f"?{params}" if params else "")
     cards = skybridge_result.get("cards") if isinstance(skybridge_result.get("cards"), list) else []
     summary = str(skybridge_result.get("spoken_summary") or "Showing this in Skybridge.")
     nav_payload = {
         "url": url,
-        "label": "Opening Skybridge",
+        "label": "Showing on the panel",
         "panel_id": panel_id,
         "source": "voice:skybridge",
     }

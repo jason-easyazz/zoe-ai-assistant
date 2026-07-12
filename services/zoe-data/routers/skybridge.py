@@ -87,7 +87,7 @@ async def get_skybridge_status(
             "guest": role == "guest" or not display_user_id,
             "source": identity_source,
         },
-        "entrypoint": "/touch/skybridge.html",
+        "entrypoint": "/touch/home.html",
         "version": 1,
         "card_contract": {
             "status": "wired_for_calendar_weather_lists_people_clock_actions_v1",
