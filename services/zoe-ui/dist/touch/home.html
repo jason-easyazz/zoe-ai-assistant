@@ -694,7 +694,8 @@
     fetch('/api/skybridge/resolve',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({message:q,context:{panel_id:(localStorage.getItem('zoe_panel_id')||localStorage.getItem('zoe_touch_panel_id')||'')}})})
       .then(function(r){if(!r.ok)throw new Error('http '+r.status);return r.json();})
       .then(function(d){orb.classList.remove('busy');_sending=false;
-        if(!d||d.handled===false||d.auth_required){dockHeard(q);toast((d&&(d.spoken_summary||d.message))||'Sorry — I didn’t catch that. Try again?');return;}
+        if(!d||d.handled===false){askZoe(q);return;}   // questions fall through to the brain
+        if(d.auth_required){dockHeard(q);toast(d.spoken_summary||d.message||'Please sign in on the panel first.');return;}
         var dest=DOMAIN_SCREEN[(d&&d.intent&&d.intent.domain)||''];
         _ha.loaded=false;              // the command may have changed device state
         if(dest)show(dest);
@@ -702,6 +703,26 @@
         dockHeard(q);toast(d.spoken_summary||'Done.');
       }).catch(function(){orb.classList.remove('busy');_sending=false;dockHeard(q);toast('Sorry — I couldn’t reach Zoe just then.');});
   }
+  // Free-form questions → the brain (/api/chat/ AG-UI stream) → the Ask screen.
+  function askZoe(q){
+    FULL.ask.html='<div class="askf"><div class="aa" id="askOut">…</div></div>';
+    show('ask');dockHeard(q);orb.classList.add('busy');
+    fetch('/api/chat/',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({message:q})})
+      .then(function(r){if(!r.ok||!r.body)throw new Error('http '+r.status);
+        var rd=r.body.getReader(),dec=new TextDecoder(),buf='',txt='';
+        function pump(){return rd.read().then(function(x){
+          if(x.done){orb.classList.remove('busy');if(!txt){var o=document.getElementById('askOut');if(o)o.textContent='Sorry — no answer came back.';}return;}
+          buf+=dec.decode(x.value,{stream:true});
+          var lines=buf.split('\n');buf=lines.pop();
+          lines.forEach(function(ln){if(ln.lastIndexOf('data: ',0)!==0)return;
+            try{var ev=JSON.parse(ln.slice(6));
+              if((ev.type==='TEXT_MESSAGE_CHUNK'||ev.type==='TEXT_MESSAGE_CONTENT')&&ev.delta){txt+=ev.delta;var o=document.getElementById('askOut');if(o&&_cur==='ask')o.textContent=txt;}
+            }catch(e){}});
+          return pump();});}
+        return pump();
+      }).catch(function(){orb.classList.remove('busy');var o=document.getElementById('askOut');if(o)o.textContent='Sorry — I couldn’t reach Zoe just then.';});
+  }
+
   orb.addEventListener('click',function(){
     var on=cmdbar.classList.toggle('on');
     if(on){setTimeout(function(){cmdin.focus();},50);}
