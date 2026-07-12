@@ -119,6 +119,28 @@ def test_plain_teaches_not_flagged_as_corrections(text):
     assert looks_like_correction(text) is False, text
 
 
+def test_lowercase_negation_detected_and_subject_capitalized():
+    # Greptile P1: voice/lazy typing produces lowercase subjects.
+    assert looks_like_correction("no caitlin is allergic to shellfish") is True
+    assert ambiguous_negation_subject("no caitlin is allergic to shellfish") == "Caitlin"
+    # idiomatic "no X" subjects are NOT negation-corrections
+    for s in ("no one is coming", "no way is that true", "no problem was found"):
+        assert ambiguous_negation_subject(s) is None, s
+
+
+def test_non_name_attribute_fallback_is_not_rendered_is_named():
+    # Greptile P1: "her birthday is March 25, not March 15" must never store
+    # "…birthday is named March 25".
+    out = extract_candidates(
+        "Actually her birthday is March 25, not March 15",
+        prev_user_message="my friend Jessica and her twin were born on March 15",
+    )
+    assert len(out) == 1
+    text = out[0].text
+    assert "is named" not in text
+    assert text == "Jessica's birthday is March 25"
+
+
 def test_ambiguous_negation_subject_extracted():
     assert ambiguous_negation_subject(
         "No Caitlin is allergic to shellfish, I don't believe Jessica is allergic to anything"

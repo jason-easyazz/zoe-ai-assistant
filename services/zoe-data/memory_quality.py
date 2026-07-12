@@ -232,10 +232,16 @@ _CORRECTIONISH_RES = (
     # "no, …" / "no that's wrong…" — a leading negation of the prior exchange.
     re.compile(r"^\s*no\s*[,!.:;-]", re.IGNORECASE),
     # "no <Name> is/does/has/isn't…" — the ambiguous negation-correction shape.
+    # Case-insensitive on the subject too: voice/lazy typing produces
+    # "no caitlin is allergic…" (Greptile P1). Idiom subjects that make "no X"
+    # ordinary English ("no one is…", "no way…") are excluded below.
     re.compile(
-        r"^\s*[Nn][Oo]\s+[A-Z][\w'-]*\s+"
+        r"^\s*no\s+(?!(?:one|body|way|thanks|worries|problem|matter|doubt|"
+        r"idea|need|more|longer|kidding|wonder|rush|offense|offence)\b)"
+        r"(?:my\s+)?[A-Za-z][\w'-]*\s+"
         r"(?:is|are|was|were|does|do|did|has|have|had|"
         r"isn'?t|aren'?t|wasn'?t|doesn'?t|don'?t|hasn'?t|can'?t|won'?t)\b",
+        re.IGNORECASE,
     ),
     # "that's wrong / not right / incorrect / not true"
     re.compile(
@@ -251,8 +257,11 @@ _CORRECTIONISH_RES = (
 # The specifically AMBIGUOUS "No <Name> is …" negation shape — safest to store
 # nothing and ask, since both readings contradict a verbatim store.
 _AMBIGUOUS_NEGATION_RE = re.compile(
-    r"^\s*[Nn][Oo]\s+(?P<name>[A-Z][\w'-]*)\s+"
+    r"^\s*no\s+(?!(?:one|body|way|thanks|worries|problem|matter|doubt|"
+    r"idea|need|more|longer|kidding|wonder|rush|offense|offence|my)\b)"
+    r"(?P<name>[A-Za-z][\w'-]*)\s+"
     r"(?:is|are|was|were|does|do|did|has|have|had)\b",
+    re.IGNORECASE,
 )
 
 
@@ -276,7 +285,12 @@ def ambiguous_negation_subject(text: str) -> Optional[str]:
     allergic" and "No Caitlin is allergic" — no deterministic writer should
     guess. Callers use the name to ask for clarification instead of storing."""
     m = _AMBIGUOUS_NEGATION_RE.match((text or "").strip())
-    return m.group("name") if m else None
+    if not m:
+        return None
+    name = m.group("name")
+    # Voice/lazy typing yields "no caitlin is…" — present the name properly,
+    # but never mangle an already-cased one (McKenna).
+    return name if name[:1].isupper() else name.capitalize()
 
 
 # ---------------------------------------------------------------------------

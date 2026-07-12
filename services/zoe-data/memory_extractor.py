@@ -334,7 +334,7 @@ _JAMMED_COPULA_RE = re.compile(
 _CLAUSAL_NEW_RE = re.compile(
     r"^(?P<pron>their|her|his|its|the|my)\s+"
     r"(?P<attr>[a-z][\w' -]{1,30}?)"
-    r"(?:'s\s+name\s+is|\s+is\s+(?:named\s+|called\s+)?)\s*"
+    r"(?P<conn>'s\s+name\s+is|\s+is\s+named\s+|\s+is\s+called\s+|\s+is\s+)\s*"
     r"(?P<val>[\w' /:.-]{1,60})$",
     re.IGNORECASE,
 )
@@ -371,16 +371,21 @@ def _anchored_clause_candidates(
     if not attr or not val:
         return []
     pron = m.group("pron").lower()
+    # Preserve the clause's own connector shape: "…'s name is X" stays a NAME
+    # fact; a plain "… is X" attribute (birthday, job) must NOT be rendered
+    # "is named" — "Emma's birthday is named March 25" is garble too.
+    named = "name" in (m.group("conn") or "").lower()
     if pron == "my":
         # First-person clause is already self-contained — safe to store as-is.
-        text = f"Correction: my {attr} is {val}" if "'s name is" not in new_val.lower() \
-            else f"Correction: my {attr}'s name is {val}"
+        text = (f"Correction: my {attr}'s name is {val}" if named
+                else f"Correction: my {attr} is {val}")
         name = None
     else:
         name, _rel = _person_intro_from(prev)
         if not name:
             return []
-        text = f"{name}'s {attr} is named {val}"
+        text = (f"{name}'s {attr}'s name is {val}" if named
+                else f"{name}'s {attr} is {val}")
     key = text.lower()
     if key in seen:
         return []
