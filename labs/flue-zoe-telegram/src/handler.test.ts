@@ -182,3 +182,29 @@ test('askZoeAs: forwards the acting user via X-Zoe-User-Id on the trusted path',
   assert.equal(seenBody.channel, 'telegram');
   assert.equal(seenBody.session_id, 'telegram-42');
 });
+
+// ─── session epochs (/new) ────────────────────────────────────────────────────
+
+test('bumpSession rotates sessionFor and persists across module reload', async (t) => {
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const prevPath = process.env.SESSION_EPOCHS_PATH;
+  process.env.SESSION_EPOCHS_PATH = join(mkdtempSync(join(tmpdir(), 'tg-epochs-')), 'epochs.json');
+  // epochsPath() reads the env at CALL time, so restore it afterwards to keep
+  // this test hermetic (no leak into other tests / the real ./data file).
+  t.after(() => {
+    if (prevPath === undefined) delete process.env.SESSION_EPOCHS_PATH;
+    else process.env.SESSION_EPOCHS_PATH = prevPath;
+  });
+
+  const { sessionFor, bumpSession } = await import('./brain.ts');
+
+  assert.equal(sessionFor(42), 'telegram-42'); // legacy id until first /new
+  bumpSession(42);
+  assert.equal(sessionFor(42), 'telegram-42-e1');
+  bumpSession(42);
+  assert.equal(sessionFor(42), 'telegram-42-e2');
+  // other chats unaffected
+  assert.equal(sessionFor(7), 'telegram-7');
+});

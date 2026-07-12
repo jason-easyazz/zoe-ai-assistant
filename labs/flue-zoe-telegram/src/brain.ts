@@ -34,9 +34,66 @@ function internalHeaders(): Record<string, string> {
   return h;
 }
 
-/** Stable zoe-data session id per Telegram chat, so memory/context carries over. */
+// ─── Session epochs (/new) ───────────────────────────────────────────────────
+// A long-lived per-chat session can get poisoned: once Zoe wrongly denies
+// knowing something, the denial sits in the session context and the model
+// echoes it on every retry, outvoting the (correct) memory packet — observed
+// live 2026-07-12 ("I don't have any information about a Caitlin" ×3 while the
+// facts sat in the store). `/new` bumps a persisted epoch so the chat gets a
+// FRESH zoe-data + sidecar session; stored memories and old chat rows are
+// untouched. File-backed JSON (tiny, one entry per chat) so it survives restarts.
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
+
+// Read at CALL time (not module load) so tests can point it at a temp file.
+function epochsPath(): string {
+  return process.env.SESSION_EPOCHS_PATH ?? './data/session_epochs.json';
+}
+
+// Last-known-good epoch map (keyed by path so tests with different paths don't
+// bleed). A transient read failure (truncated/locked/corrupt file) must NOT
+// silently revert everyone to their legacy — possibly poisoned — session id;
+// fall back to what this process last successfully read or wrote instead.
+const _epochCache = new Map<string, Record<string, number>>();
+
+function readEpochs(): Record<string, number> {
+  const path = epochsPath();
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+    const epochs = parsed && typeof parsed === 'object' ? (parsed as Record<string, number>) : {};
+    _epochCache.set(path, epochs);
+    return epochs;
+  } catch (err: unknown) {
+    const missing = (err as NodeJS.ErrnoException)?.code === 'ENOENT';
+    const cached = _epochCache.get(path);
+    if (cached) {
+      if (!missing) console.error('readEpochs: read failed, using last-known-good:', err);
+      return cached;
+    }
+    if (!missing) console.error('readEpochs: epoch file unreadable and no cache — treating as epoch 0:', err);
+    return {}; // genuinely missing (fresh install) → epoch 0 for everyone
+  }
+}
+
+/** Start a fresh conversation session for this chat (memories untouched). */
+export function bumpSession(chatId: number): void {
+  const path = epochsPath();
+  const epochs = { ...readEpochs() };
+  epochs[String(chatId)] = (epochs[String(chatId)] ?? 0) + 1;
+  mkdirSync(dirname(path), { recursive: true });
+  // Atomic: write a temp file then rename, so a kill mid-write can't leave a
+  // truncated file (which would otherwise read as corrupt → legacy sessions).
+  const tmp = `${path}.tmp.${process.pid}`;
+  writeFileSync(tmp, JSON.stringify(epochs));
+  renameSync(tmp, path);
+  _epochCache.set(path, epochs);
+}
+
+/** Stable zoe-data session id per Telegram chat, so memory/context carries over.
+ *  Epoch 0 keeps the legacy id (existing chats keep their context until they /new). */
 export function sessionFor(chatId: number): string {
-  return `telegram-${chatId}`;
+  const epoch = readEpochs()[String(chatId)] ?? 0;
+  return epoch === 0 ? `telegram-${chatId}` : `telegram-${chatId}-e${epoch}`;
 }
 
 /**
