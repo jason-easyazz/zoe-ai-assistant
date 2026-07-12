@@ -54,7 +54,7 @@
     const GENERATED_ALIAS_CACHE_KEY = 'zoe_touch_panel_alias_generated';
 
     const AUTO_HOME_TIMEOUT_S = Number(window.ZOE_AUTO_HOME_TIMEOUT_S || 20);
-    const HOME_PATH = '/touch/skybridge.html';
+    const HOME_PATH = '/touch/home.html';
 
     function isHomePath(path) {
         try {
@@ -854,7 +854,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             'settings':   _page('settings.html'),
             'smart home': _page('smart-home.html'),
             'smarthome':  _page('smart-home.html'),
-            'home':       _page('skybridge.html'),
+            'home':       _page('home.html'),
             'dashboard':  _page('dashboard.html'),
             'people':     _page('people.html'),
             'memories':   _page('memories.html'),

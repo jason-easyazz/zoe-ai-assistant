@@ -384,7 +384,7 @@
                             showNotification('Please sign in with an allowed profile for this page.', 'error');
                         }
                     } catch (_) {}
-                    window.location.href = '/touch/skybridge.html';
+                    window.location.href = '/touch/home.html';
                     return;
                 }
             }
