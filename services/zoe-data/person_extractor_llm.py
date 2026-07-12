@@ -135,7 +135,8 @@ _ROLE_WORDS = (
     "|son|daughter|kid|kids|child|children|girl|girls|boy|boys|baby"
     "|friend|mate|buddy|bestie"
     "|brother|sister|mum|mom|mother|dad|father|grandma|grandmother|grandpa"
-    "|grandfather|aunt|uncle|niece|nephew|cousin|colleague|coworker|boss|neighbou?r"
+    "|grandfather|aunt|uncle|niece|nephew|cousin|parent|sibling|grandparent"
+    "|colleague|coworker|boss|neighbou?r"
 )
 # Bare = optional article/adjectives + a role word as the HEAD NOUN, with no
 # anchor — a trailing qualifier doesn't rescue it ("male friend from work" is

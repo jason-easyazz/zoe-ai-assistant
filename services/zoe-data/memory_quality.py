@@ -439,7 +439,7 @@ _ROLE_WORD_RE = re.compile(
     r"|son|daughter|kid|children|child|girl|boy|baby"
     r"|friend|mate|buddy|bestie"
     r"|brother|sister|mum|mom|mother|dad|father|grandma|grandmother|grandpa"
-    r"|grandfather|aunt|uncle|niece|nephew|cousin"
+    r"|grandfather|aunt|uncle|niece|nephew|cousin|parent|sibling|grandparent"
     r"|colleague|coworker|boss|neighbour|neighbor)s?\b",
     re.IGNORECASE,
 )

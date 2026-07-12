@@ -243,3 +243,10 @@ def test_compound_roles_require_full_support():
     must drop — one supported role can't carry an unsupported one (Greptile r8)."""
     assert _unsupported("Emily: user's wife and daughter", "my daughter Emily is here") is True
     assert _unsupported("Emily: user's wife and daughter", "my wife and my daughter Emily") is False
+
+
+def test_parent_sibling_grandparent_roles_validated():
+    """parent/sibling/grandparent were missing from the role vocab (Greptile r11)."""
+    assert _unsupported("user's parent", "her parents visited today") is True
+    assert _unsupported("User's parents live nearby", "my parents live nearby") is False
+    assert pel._is_unanchored_role("sibling") is True
