@@ -431,7 +431,7 @@ def _merge_decision(
 # turn text; unsupported claims are dropped, never stored.
 
 _USER_ANCHORED_ROLE_RE = re.compile(
-    r"(?:\buser'?s?\b|\bspeaker'?s?\b|\bof\s+(?:the\s+)?(?:user|speaker|mine|me|myself)\b)",
+    r"(?:\buser'?s?\b|\bspeaker'?s?\b|\bmy\b|\bof\s+(?:the\s+)?(?:user|speaker|mine|me|myself)\b)",
     re.IGNORECASE,
 )
 _ROLE_WORD_RE = re.compile(
@@ -496,6 +496,8 @@ def user_relationship_claim_unsupported(fact_text: str, source_text: str) -> boo
         for variant in _role_variants(role):
             if re.search(rf"\bmy\s+(?:\w+\s+){{0,2}}{re.escape(variant)}s?\b", src):
                 return False  # the source supports this user anchor
+            if re.search(rf"\b{re.escape(variant)}s?\s+of\s+mine\b", src):
+                return False  # "a friend of mine" phrasing supports it too
     return True
 
 

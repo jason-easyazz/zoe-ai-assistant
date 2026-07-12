@@ -225,3 +225,14 @@ def test_of_mine_is_a_user_anchor():
     assert _unsupported("Bob is a friend of mine", "he introduced his friend Bob") is True
     assert _unsupported("Bob is a friend of mine", "my friend Bob came over") is False
     assert _unsupported("Emily Cannon is the wife of Lindsay", "Emily is Lindsay's wife") is False
+
+
+def test_my_in_fact_and_of_mine_in_source(  # Greptile r7 mirror cases
+):
+    # fact-side: "my friend" in a STORED fact is a user anchor → validated
+    assert _unsupported("Bob: my friend", "he introduced his friend Bob") is True
+    assert _unsupported("Bob: my friend", "my friend Bob came over") is False
+    # source-side: "a friend of mine" phrasing supports a user's-friend fact
+    assert _unsupported("user's friend", "a friend of mine, Bob, came over") is False
+    # genuine self-stated facts keep passing
+    assert _unsupported("My dad's name is Neil", "my dad is Neil, born 1945") is False
