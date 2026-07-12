@@ -11,7 +11,10 @@
      through so the panel keeps its binding after signing in. */
   /* Kiosk bootstrap (was on skybridge.html): persist the kiosk flag so a fresh
      or cleared browser profile keeps kiosk behavior across navigations. */
-  (function(){try{var p=new URLSearchParams(location.search);if(p.get('kiosk')==='1')localStorage.setItem('zoe_kiosk','1');}catch(e){}})();
+  (function(){try{var p=new URLSearchParams(location.search);if(p.get('kiosk')==='1')localStorage.setItem('zoe_kiosk','1');
+    // Persist the panel_id from the kiosk URL so command context (skybridge/resolve)
+    // has it on a fresh profile — otherwise typed commands go out with an empty panel id.
+    var pid=p.get('panel_id');if(pid)localStorage.setItem('zoe_panel_id',pid);}catch(e){}})();
   (function(){var ok=false,kiosk=false;try{var s=JSON.parse(localStorage.getItem('zoe_session')||'null');ok=!!(s&&s.session_id);}catch(e){ok=false;}
     try{kiosk=(new URLSearchParams(location.search)).get('kiosk')==='1'||localStorage.getItem('zoe_kiosk')==='1';}catch(e){}
     window.__kiosk=kiosk;
