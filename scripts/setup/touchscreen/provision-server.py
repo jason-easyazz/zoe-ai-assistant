@@ -401,7 +401,7 @@ class ProvisionHandler(BaseHTTPRequestHandler):
             server_url = cfg.get("server_url", "")
             pid = panel_id or cfg.get("panel_id", "zoe-panel")
             if server_url:
-                cfg["url"] = f"{server_url}/touch/skybridge.html?panel_id={pid}&kiosk=1"
+                cfg["url"] = f"{server_url}/touch/home.html?panel_id={pid}&kiosk=1"
             CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
             PROVISIONED.touch()
             log.info("Token saved. .provisioned touched. Panel: %s", pid)
