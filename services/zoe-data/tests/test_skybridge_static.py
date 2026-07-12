@@ -783,7 +783,8 @@ def test_service_worker_does_not_cache_skybridge_runtime():
     # Intent: the live voice/data surface must never be served from SW cache.
     # (No version-string pin here — SW_VERSION churns every release; the ROUTE
     # guard below is the actual contract.)
-    assert "Skybridge is a live voice/data surface" in sw
+    assert "live voice/data surfaces" in sw
+    assert "url.pathname === '/touch/home.html'" in sw   # the estate home too
     assert "url.pathname === '/touch/skybridge.html'" in sw
     assert "url.pathname === '/js/auth.js'" in sw
     assert "url.pathname.startsWith('/touch/js/skybridge')" in sw
