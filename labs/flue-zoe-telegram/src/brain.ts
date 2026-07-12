@@ -34,9 +34,44 @@ function internalHeaders(): Record<string, string> {
   return h;
 }
 
-/** Stable zoe-data session id per Telegram chat, so memory/context carries over. */
+// ─── Session epochs (/new) ───────────────────────────────────────────────────
+// A long-lived per-chat session can get poisoned: once Zoe wrongly denies
+// knowing something, the denial sits in the session context and the model
+// echoes it on every retry, outvoting the (correct) memory packet — observed
+// live 2026-07-12 ("I don't have any information about a Caitlin" ×3 while the
+// facts sat in the store). `/new` bumps a persisted epoch so the chat gets a
+// FRESH zoe-data + sidecar session; stored memories and old chat rows are
+// untouched. File-backed JSON (tiny, one entry per chat) so it survives restarts.
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
+
+// Read at CALL time (not module load) so tests can point it at a temp file.
+function epochsPath(): string {
+  return process.env.SESSION_EPOCHS_PATH ?? './data/session_epochs.json';
+}
+
+function readEpochs(): Record<string, number> {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(epochsPath(), 'utf8'));
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, number>) : {};
+  } catch {
+    return {}; // missing/corrupt file → epoch 0 for everyone
+  }
+}
+
+/** Start a fresh conversation session for this chat (memories untouched). */
+export function bumpSession(chatId: number): void {
+  const epochs = readEpochs();
+  epochs[String(chatId)] = (epochs[String(chatId)] ?? 0) + 1;
+  mkdirSync(dirname(epochsPath()), { recursive: true });
+  writeFileSync(epochsPath(), JSON.stringify(epochs));
+}
+
+/** Stable zoe-data session id per Telegram chat, so memory/context carries over.
+ *  Epoch 0 keeps the legacy id (existing chats keep their context until they /new). */
 export function sessionFor(chatId: number): string {
-  return `telegram-${chatId}`;
+  const epoch = readEpochs()[String(chatId)] ?? 0;
+  return epoch === 0 ? `telegram-${chatId}` : `telegram-${chatId}-e${epoch}`;
 }
 
 /**
