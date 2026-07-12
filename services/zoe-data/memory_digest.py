@@ -378,6 +378,18 @@ async def run_turn_digest(
                 result["skipped_low_quality"] += 1
                 logger.debug("run_turn_digest: dropped non-fact: %r", fact[:60])
                 continue
+            # Anchor validation: this single-turn LLM guesses "the user" as the
+            # relationship anchor when the text doesn't say ("Emily is the wife"
+            # → "Emily is the user's wife", live 2026-07-12). Only accept a
+            # user-anchored relationship the turn supports ("my <role>").
+            try:
+                from memory_quality import user_relationship_claim_unsupported
+                if user_relationship_claim_unsupported(fact, user_message):
+                    result["skipped_low_quality"] += 1
+                    logger.info("run_turn_digest: dropped unsupported user-anchored relationship: %r", fact[:70])
+                    continue
+            except Exception:
+                pass
             try:
                 ref = await svc.ingest(
                     fact,
@@ -455,6 +467,19 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                 logger.debug("memory_digest: dedup skip (%.0f%% overlap): %s", overlap_score * 100, fact[:60])
                 result["skipped_duplicates"] += 1
                 continue
+
+            # Anchor validation BEFORE the contradiction check: that branch can
+            # WRITE via review(decision="edit") and would bypass a later gate. A
+            # day-level transcript has no turn provenance, so drop EVERY
+            # user-anchored relationship fact here — the per-turn digest (which
+            # validates against the actual source turn) owns those.
+            try:
+                from memory_quality import user_relationship_claim_unsupported
+                if user_relationship_claim_unsupported(fact, ""):
+                    logger.info("memory_digest: dropped user-anchored relationship (no turn provenance in nightly batch): %r", fact[:70])
+                    continue
+            except Exception:
+                pass
 
             # ── Contradiction check ──────────────────────────────────────
             # Pull the top-3 semantically similar existing facts and ask
@@ -581,6 +606,17 @@ async def _emotional_memory_pass(user_id: str, chat_text: str, svc) -> int:
         significance = int(item.get("significance", 1))
         if not moment or significance < 2:
             continue
+        # Same no-turn-provenance rule as the nightly fact loop: a day-level
+        # moment like "User's wife was excited about the trip" can misattribute
+        # a relationship the transcript never anchored — drop user-anchored
+        # relationship phrasings here too.
+        try:
+            from memory_quality import user_relationship_claim_unsupported
+            if user_relationship_claim_unsupported(moment, ""):
+                logger.info("memory_digest: dropped user-anchored relationship in emotional moment: %r", moment[:70])
+                continue
+        except Exception:
+            pass
         try:
             ref = await svc.ingest(
                 moment,

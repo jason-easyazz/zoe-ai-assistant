@@ -422,4 +422,110 @@ def _merge_decision(
     return "skip", existing_id
 
 
-__all__ = ["is_storable_fact", "classify_against_existing"]
+# ── User-anchored relationship validation ────────────────────────────────────
+# A 4B extractor, asked to say WHOSE relative a person is, defaults to "the
+# user" when the text doesn't say ("Emily is the wife" — describing a FRIEND's
+# family — became "Emily is the user's wife", live 2026-07-12). Rule: a fact may
+# anchor a relationship role to the user ONLY if the source turn literally says
+# "my <role>" (adjectives allowed: "my male friend"). Producers pass the source
+# turn text; unsupported claims are dropped, never stored.
+
+_USER_ANCHORED_ROLE_RE = re.compile(
+    r"(?:\buser'?s?\b|\bspeaker'?s?\b|\bmy\b|\bof\s+(?:the\s+)?(?:user|speaker|mine|me|myself)\b)",
+    re.IGNORECASE,
+)
+_ROLE_WORD_RE = re.compile(
+    r"\b(wife|husband|partner|girlfriend|boyfriend|fianc[eé]e?|spouse"
+    r"|son|daughter|kid|children|child|girl|boy|baby"
+    r"|friend|mate|buddy|bestie"
+    r"|brother|sister|mum|mom|mother|dad|father|grandma|grandmother|grandpa"
+    r"|grandfather|aunt|uncle|niece|nephew|cousin|parent|sibling|grandparent"
+    r"|colleague|coworker|boss|neighbour|neighbor)s?\b",
+    re.IGNORECASE,
+)
+
+
+_ROLE_SYNONYMS: tuple[frozenset[str], ...] = (
+    frozenset({"mum", "mom", "mother"}),
+    frozenset({"dad", "father"}),
+    frozenset({"grandma", "grandmother"}),
+    frozenset({"grandpa", "grandfather"}),
+    frozenset({"kid", "child", "children"}),
+    frozenset({"neighbour", "neighbor"}),
+    frozenset({"colleague", "coworker"}),
+    frozenset({"girl", "daughter"}),
+    frozenset({"boy", "son"}),
+    frozenset({"wife", "spouse"}),
+    frozenset({"husband", "spouse"}),
+    frozenset({"partner", "spouse"}),
+    frozenset({"friend", "mate", "buddy", "bestie"}),
+)
+
+
+# DIRECTIONAL hyponyms: a GENERIC role in a fact is supported by any of its
+# specific forms in the source ("my mum" supports "user's parent"), but never
+# the reverse ("my dad" must NOT support "user's mother" — that stays confined
+# to the symmetric synonym groups above).
+_ROLE_HYPONYMS: dict[str, frozenset[str]] = {
+    "parent": frozenset({"mum", "mom", "mother", "dad", "father"}),
+    "sibling": frozenset({"brother", "sister"}),
+    "grandparent": frozenset({"grandma", "grandmother", "grandpa", "grandfather"}),
+    "kid": frozenset({"son", "daughter", "girl", "boy"}),
+    "child": frozenset({"son", "daughter", "girl", "boy"}),
+    "children": frozenset({"son", "daughter", "girl", "boy"}),
+}
+
+
+def _role_variants(role: str) -> frozenset[str]:
+    """The role plus its everyday synonyms (mum/mother, kid/child, ...) and —
+    for generic roles — its specific hyponyms (parent ← mum/dad)."""
+    out = {role}
+    for group in _ROLE_SYNONYMS:
+        if role in group:
+            out |= group
+    out |= _ROLE_HYPONYMS.get(role, frozenset())
+    return frozenset(out)
+
+
+def user_relationship_claim_unsupported(fact_text: str, source_text: str) -> bool:
+    """True when ``fact_text`` anchors a relationship role to the USER but the
+    source turn never says "my <role>" — i.e. the extractor guessed the anchor.
+
+    Non-relationship facts, third-party-anchored facts ("wife of Lindsay"), and
+    user anchors the source supports ("my male friend" → "user's friend") pass.
+    """
+    fact = (fact_text or "").strip()
+    if not fact or not _USER_ANCHORED_ROLE_RE.search(fact):
+        return False
+    # group(1) is already the canonical singular — the plural `s?` sits OUTSIDE
+    # the capture group ("kids" → "kid"; "children" is an explicit alternative).
+    # Never rstrip("s"): it strips ALL trailing s's ("boss" → "bo") and would
+    # break the "my boss" support check.
+    roles = {m.group(1).lower() for m in _ROLE_WORD_RE.finditer(fact)}
+    if not roles:
+        return False  # user-anchored but no relationship role → not our concern
+    src = (source_text or "").lower()
+    # EVERY detected role must be supported — a compound fact ("user's wife and
+    # daughter") must not ride one supported role past an unsupported one.
+    for role in roles:
+        supported = False
+        # "my <role>" with up to two adjectives between ("my male friend",
+        # "my best mate"); plural tolerated ("my girls"). Synonyms count: the
+        # source saying "my mum" supports a fact phrased "user's mother", and
+        # "a friend of mine" phrasing supports a user's-friend fact.
+        for variant in _role_variants(role):
+            if re.search(rf"\bmy\s+(?:\w+\s+){{0,2}}{re.escape(variant)}s?\b", src) or re.search(
+                rf"\b{re.escape(variant)}s?\s+of\s+mine\b", src
+            ):
+                supported = True
+                break
+        if not supported:
+            return True  # at least one user-anchored role the source never stated
+    return False
+
+
+__all__ = [
+    "is_storable_fact",
+    "classify_against_existing",
+    "user_relationship_claim_unsupported",
+]

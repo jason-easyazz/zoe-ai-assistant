@@ -94,6 +94,11 @@ _EXTRACTION_PROMPT = """\
 Extract person-related facts from the text. Return ONLY a JSON array.
 Each item: {{"name": "First Last", "fact_type": "preference|birthday|work|meeting|gift_idea|gift_given|bucket_list", "value": "concise fact"}}
 Only include facts explicitly stated about named people. If none, return [].
+For RELATIONSHIP facts (wife, husband, partner, boyfriend, girlfriend, son,
+daughter, kids, girls, boys, friend, brother, sister, mum, dad, etc.) the value
+MUST say whose relative they are — e.g. "wife of Lindsay Cannon" or "user's
+friend" — NEVER a bare role like "wife" or "girl" (a bare role is ambiguous and
+will be discarded).
 
 Text:
 {text}
@@ -107,10 +112,63 @@ Each item: {{"name": "First Last", "fact_type": "preference|birthday|work|meetin
 "confidence" = how sure you are this fact is EXPLICITLY stated about a named person
 (1.0 = stated verbatim, 0.5 = implied, below 0.4 = a guess). Only include facts
 explicitly stated about named people. If none, return [].
+For RELATIONSHIP facts (wife, husband, partner, boyfriend, girlfriend, son,
+daughter, kids, girls, boys, friend, brother, sister, mum, dad, etc.) the value
+MUST say whose relative they are — e.g. "wife of Lindsay Cannon" or "user's
+friend" — NEVER a bare role like "wife" or "girl" (a bare role is ambiguous and
+will be discarded).
 
 Text:
 {text}
 """
+
+
+# ── Bare-role backstop ────────────────────────────────────────────────────────
+# The prompt asks the LLM to qualify relationship values ("wife of Lindsay
+# Cannon", "user's friend"), but a 4B model won't always comply. An UNANCHORED
+# role is poison: "Emily: wife" stored from "Emily is the wife" (describing a
+# FRIEND's family) ranked #1 for "Who is my wife?" (live 2026-07-12). Better to
+# drop the fact than store a wrong-attachment relationship — user-relative
+# shapes ("my friend X") are still captured by the deterministic regex paths.
+_ROLE_WORDS = (
+    "wife|husband|partner|girlfriend|boyfriend|fianc[eé]e?|spouse"
+    "|son|daughter|kid|kids|child|children|girl|girls|boy|boys|baby"
+    "|friend|mate|buddy|bestie"
+    "|brother|sister|mum|mom|mother|dad|father|grandma|grandmother|grandpa"
+    "|grandfather|aunt|uncle|niece|nephew|cousin|parent|sibling|grandparent"
+    "|colleague|coworker|boss|neighbou?r"
+)
+# Bare = optional article/adjectives + a role word as the HEAD NOUN, with no
+# anchor — a trailing qualifier doesn't rescue it ("male friend from work" is
+# still ambiguous about WHOSE friend). Anchored forms contain "of <name>", a
+# possessive ("Lindsay's", "user's"), or a pronoun possessive ("his", "her",
+# "their") — those pass through. Head-noun (not role-anywhere) so trait facts
+# like "great with kids" — where the role sits inside a prepositional phrase —
+# are not flagged as relationship claims.
+_BARE_ROLE_RE = re.compile(
+    rf"^(?:(?:a|an|the)\s+)?(?:[a-z]+\s+){{0,2}}(?:{_ROLE_WORDS})s?\b", re.IGNORECASE
+)
+_ANCHOR_RE = re.compile(r"\bof\s+\S|['’]s\b|\b(?:his|her|their|my|user)\b", re.IGNORECASE)
+# Words that mark the role as part of a descriptive phrase, not the head noun.
+_NON_HEAD_LEADIN_RE = re.compile(
+    r"^(?:\w+\s+)*?(?:with|for|to|about|around|at|on|from|like|loves?|has|have|had"
+    r"|is|was|works?|great|good)\s+(?:\w+\s+)*?(?:%s)s?\b" % _ROLE_WORDS,
+    re.IGNORECASE,
+)
+
+
+def _is_unanchored_role(value: str) -> bool:
+    """True when the fact value is a relationship-role HEAD with no 'whose' anchor."""
+    v = (value or "").strip().rstrip(".")
+    if _ANCHOR_RE.search(v):
+        return False
+    if not _BARE_ROLE_RE.match(v):
+        return False
+    # role reached through a preposition/verb ("great with kids") → trait, not
+    # a relationship claim; only a role in head-noun position is flagged.
+    if _NON_HEAD_LEADIN_RE.match(v):
+        return False
+    return True
 
 
 async def process_text_llm(
@@ -177,6 +235,42 @@ async def process_text_llm(
         if not _keep_item(item, gated=gated, min_conf=min_conf):
             logger.debug("person_extractor_llm: dropped low-confidence %r/%r", name, fact_type)
             continue
+        if _is_unanchored_role(value):
+            # Rescue before dropping: if the TURN itself supports a user anchor
+            # ("my male friend" → value "male friend"), qualify deterministically
+            # instead of losing a valid fact. The validator's synonym-aware check
+            # is the arbiter: supported → prefix "user's"; unsupported → drop.
+            try:
+                from memory_quality import user_relationship_claim_unsupported
+                if not user_relationship_claim_unsupported(f"user's {value}", text):
+                    value = f"user's {value}"
+                else:
+                    logger.info(
+                        "person_extractor_llm: dropped unanchored relationship %r for %r — "
+                        "value must say whose relative (e.g. \"wife of X\", \"user's friend\")",
+                        value, name,
+                    )
+                    continue
+            except Exception:
+                logger.info(
+                    "person_extractor_llm: dropped unanchored relationship %r for %r",
+                    value, name,
+                )
+                continue
+        # Told to qualify, the 4B model GUESSES "user" when the text doesn't say
+        # ("Emily is the wife" → "wife of user"). Only accept a user anchor the
+        # source turn supports ("my <role>"); otherwise drop — a wrong-attachment
+        # relationship is worse than no fact.
+        try:
+            from memory_quality import user_relationship_claim_unsupported
+            if user_relationship_claim_unsupported(f"{name}: {value}", text):
+                logger.info(
+                    "person_extractor_llm: dropped unsupported user-anchored "
+                    "relationship %r for %r (source never says \"my …\")", value, name,
+                )
+                continue
+        except Exception:
+            pass  # validator unavailable → keep legacy behavior
         ok = await apply_person_fact(
             name,
             fact_type,
