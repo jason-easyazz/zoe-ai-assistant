@@ -103,9 +103,10 @@ if (workbox) {
 
     // ===== CACHING STRATEGIES =====
 
-    // Skybridge is a live voice/data surface. Never serve stale HTML, auth, or runtime JS.
+    // The estate home + skybridge are live voice/data surfaces. Never serve
+    // stale HTML, auth, or runtime JS for them.
     workbox.routing.registerRoute(
-        ({ url }) => url.pathname === '/touch/skybridge.html' || url.pathname === '/js/auth.js' || url.pathname.startsWith('/touch/js/skybridge'),
+        ({ url }) => url.pathname === '/touch/home.html' || url.pathname === '/touch/skybridge.html' || url.pathname === '/js/auth.js' || url.pathname.startsWith('/touch/js/skybridge'),
         new workbox.strategies.NetworkOnly()
     );
 
