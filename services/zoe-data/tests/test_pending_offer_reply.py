@@ -71,10 +71,10 @@ def test_affirm_opener_with_negation_is_dismiss():
 async def test_match_requires_flag(monkeypatch):
     monkeypatch.delenv("ZOE_PERSON_SUGGEST_ENABLED", raising=False)
 
-    async def _boom(user_id):  # pragma: no cover — must not be reached
+    async def _boom(user_id, *, limit=5):  # pragma: no cover — must not be reached
         raise AssertionError("offer lookup must be skipped when the flag is off")
 
-    monkeypatch.setattr(pending_suggestions, "latest_surfaced_person_offer", _boom)
+    monkeypatch.setattr(pending_suggestions, "surfaced_person_offers", _boom)
     assert await _match_pending_offer_reply("yes", USER) is None
 
 
@@ -82,10 +82,10 @@ async def test_match_requires_flag(monkeypatch):
 async def test_match_requires_surfaced_offer(monkeypatch):
     monkeypatch.setenv("ZOE_PERSON_SUGGEST_ENABLED", "1")
 
-    async def _none(user_id):
-        return None
+    async def _none(user_id, *, limit=5):
+        return []
 
-    monkeypatch.setattr(pending_suggestions, "latest_surfaced_person_offer", _none)
+    monkeypatch.setattr(pending_suggestions, "surfaced_person_offers", _none)
     assert await _match_pending_offer_reply("yes", USER) is None
 
 
@@ -93,10 +93,10 @@ async def test_match_requires_surfaced_offer(monkeypatch):
 async def test_match_binds_offer(monkeypatch):
     monkeypatch.setenv("ZOE_PERSON_SUGGEST_ENABLED", "1")
 
-    async def _offer(user_id):
-        return dict(_OFFER)
+    async def _offers(user_id, *, limit=5):
+        return [dict(_OFFER)]
 
-    monkeypatch.setattr(pending_suggestions, "latest_surfaced_person_offer", _offer)
+    monkeypatch.setattr(pending_suggestions, "surfaced_person_offers", _offers)
 
     accept = await _match_pending_offer_reply("yes add her", USER)
     assert accept is not None and accept.name == "pending_offer_accept"
@@ -108,6 +108,35 @@ async def test_match_binds_offer(monkeypatch):
 
     # Even with a live offer, unrelated content must not be hijacked.
     assert await _match_pending_offer_reply("yes let's plan the trip", USER) is None
+
+
+@pytest.mark.asyncio
+async def test_match_multiple_offers_binding(monkeypatch):
+    """With several surfaced offers: a bare 'yes' binds to the OLDEST offer
+    (the question the fold asked FIRST, never the newest); a reply naming a
+    person binds to that offer; a name matching several offers falls through."""
+    monkeypatch.setenv("ZOE_PERSON_SUGGEST_ENABLED", "1")
+    offers = [
+        {"id": "sugg-old", "name": "Marcus", "relationship": "brother",
+         "offer_phrase": "Add Marcus to your contacts?"},
+        {"id": "sugg-new", "name": "Caitlin", "relationship": "friend",
+         "offer_phrase": "Add Caitlin to your contacts?"},
+    ]
+
+    async def _offers(user_id, *, limit=5):
+        return [dict(o) for o in offers]
+
+    monkeypatch.setattr(pending_suggestions, "surfaced_person_offers", _offers)
+
+    bare = await _match_pending_offer_reply("yes", USER)
+    assert bare is not None and bare.slots["suggestion_id"] == "sugg-old"
+
+    named = await _match_pending_offer_reply("yes add Caitlin", USER)
+    assert named is not None and named.slots["suggestion_id"] == "sugg-new"
+
+    # The named token matching MULTIPLE offers is ambiguous — fall through.
+    offers[0]["name"] = "Caitlin Rose"
+    assert await _match_pending_offer_reply("yes add Caitlin", USER) is None
 
 
 # ── execute_intent handlers ───────────────────────────────────────────────────

@@ -320,41 +320,43 @@ async def age_person_offers_on_user_turn(user_id: str) -> int:
         return 0
 
 
-async def latest_surfaced_person_offer(user_id: str) -> dict | None:
-    """The most recent un-resolved `person_create` offer that has been surfaced
-    in a prompt (``turns_elapsed >= 1``) — i.e. the offer a bare "yes"/"no"
-    reply plausibly answers. Returns ``{id, name, relationship, offer_phrase}``
-    or None. Used by the intent router's off-panel accept path (QA review F5:
-    on Telegram, "yes add her" previously did nothing).
+async def surfaced_person_offers(user_id: str, *, limit: int = 5) -> list[dict]:
+    """Un-resolved `person_create` offers that have been surfaced in a prompt
+    (``turns_elapsed >= 1``), OLDEST FIRST — the same order the for-prompt fold
+    lists its ask-this questions, so index 0 is the offer the brain asked about.
+    Returns ``[{id, name, relationship, offer_phrase}]``. Used by the intent
+    router's off-panel accept path (QA review F5: on Telegram, "yes add her"
+    previously did nothing).
     """
     if user_id in ("guest", ""):
-        return None
+        return []
+    out: list[dict] = []
     try:
         async with get_db_ctx() as db:
-            row = await db.fetchrow(
+            rows = await db.fetch(
                 """SELECT id, pre_filled_slots, offer_phrase
                    FROM pending_suggestions
                    WHERE user_id = $1 AND action_type = 'person_create'
                      AND resolved = 0 AND turns_elapsed >= 1
-                   ORDER BY created_at DESC LIMIT 1""",
+                   ORDER BY created_at ASC LIMIT $2""",
                 user_id,
+                limit,
             )
-        if not row:
-            return None
-        slots = {}
-        try:
-            slots = json.loads(row["pre_filled_slots"] or "{}")
-        except json.JSONDecodeError:
-            pass
-        return {
-            "id": row["id"],
-            "name": slots.get("name"),
-            "relationship": slots.get("relationship"),
-            "offer_phrase": row["offer_phrase"],
-        }
+        for row in rows:
+            slots = {}
+            try:
+                slots = json.loads(row["pre_filled_slots"] or "{}")
+            except json.JSONDecodeError:
+                pass
+            out.append({
+                "id": row["id"],
+                "name": slots.get("name"),
+                "relationship": slots.get("relationship"),
+                "offer_phrase": row["offer_phrase"],
+            })
     except Exception as exc:
-        logger.debug("pending_suggestions.latest_surfaced_person_offer failed: %s", exc)
-        return None
+        logger.debug("pending_suggestions.surfaced_person_offers failed: %s", exc)
+    return out
 
 
 _CARD_FIELD_CAP = 60
@@ -427,14 +429,18 @@ def _person_create_card(s: dict) -> dict:
 
 
 async def mark_resolved(suggestion_id: str, user_id: str) -> bool:
+    """True only when a row was actually flipped — a missing/foreign suggestion
+    or a DB failure returns False so callers don't report a dismissal that
+    never happened."""
     try:
         async with get_db_ctx() as db:
-            await db.execute(
-                "UPDATE pending_suggestions SET resolved = 1 WHERE id = $1 AND user_id = $2",
+            rows = await db.fetch(
+                "UPDATE pending_suggestions SET resolved = 1"
+                " WHERE id = $1 AND user_id = $2 AND resolved = 0 RETURNING id",
                 suggestion_id,
                 user_id,
             )
-        return True
+        return bool(rows)
     except Exception as exc:
         logger.debug("pending_suggestions.mark_resolved failed: %s", exc)
         return False

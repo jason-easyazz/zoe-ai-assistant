@@ -486,14 +486,18 @@ async def backfill_contacts(
         # same first name exists in this batch — "Lindsay" + "Lindsay Cannon"
         # previously produced two duplicate proposals (QA review F5d). The
         # full-name entry inherits the bare entry's relationship if it has none.
-        full_by_first: dict[str, str] = {
-            k.split()[0]: k for k in people if len(k.split()) > 1
-        }
+        full_by_first: dict[str, list[str]] = {}
+        for k in people:
+            if len(k.split()) > 1:
+                full_by_first.setdefault(k.split()[0], []).append(k)
         for bare_key in [k for k in people if len(k.split()) == 1 and k in full_by_first]:
-            full_key = full_by_first[bare_key]
+            matches = full_by_first[bare_key]
+            # Donate the bare hit's relationship ONLY when exactly one full-name
+            # candidate shares the first token — with "Lindsay Cannon" AND
+            # "Lindsay Smith" in the batch we can't know whose it is.
             bare_rel = people[bare_key][1]
-            if bare_rel and not people[full_key][1]:
-                people[full_key] = (people[full_key][0], bare_rel)
+            if bare_rel and len(matches) == 1 and not people[matches[0]][1]:
+                people[matches[0]] = (people[matches[0]][0], bare_rel)
             del people[bare_key]
 
         summary["candidates"] = len(people)

@@ -10,7 +10,8 @@ New contract proved here, over an in-memory SQLite shim (no pool, no Chroma):
   repeated surfacing never advances the counter;
 - age_person_offers_on_user_turn advances ONLY surfaced offers, one per call,
   and resolves an offer past its expire_after_turns;
-- latest_surfaced_person_offer returns the newest surfaced, un-resolved offer.
+- surfaced_person_offers lists surfaced un-resolved offers oldest-first;
+  mark_resolved reports honestly whether a row actually flipped.
 """
 import re
 from contextlib import asynccontextmanager
@@ -162,24 +163,28 @@ async def test_ages_only_surfaced_offers_and_expires_past_limit(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_latest_surfaced_person_offer(monkeypatch):
+async def test_surfaced_person_offers(monkeypatch):
     db = await _open()
     try:
         _wire(monkeypatch, db)
         await ps.store_suggestions(USER, SESSION, [_person("Caitlin", "friend")])
 
         # Not surfaced yet → a bare "yes" has nothing to bind to.
-        assert await ps.latest_surfaced_person_offer(USER) is None
+        assert await ps.surfaced_person_offers(USER) == []
 
         await ps.surface_pending_contacts_for_prompt(USER)
-        offer = await ps.latest_surfaced_person_offer(USER)
-        assert offer is not None
-        assert offer["name"] == "Caitlin"
-        assert offer["relationship"] == "friend"
-        assert offer["id"]
+        offers = await ps.surfaced_person_offers(USER)
+        assert len(offers) == 1
+        assert offers[0]["name"] == "Caitlin"
+        assert offers[0]["relationship"] == "friend"
+        assert offers[0]["id"]
 
-        await ps.mark_resolved(offer["id"], USER)
-        assert await ps.latest_surfaced_person_offer(USER) is None
+        # mark_resolved is honest: True on the real flip, False on a repeat
+        # (already resolved) or a foreign/missing id.
+        assert await ps.mark_resolved(offers[0]["id"], USER) is True
+        assert await ps.mark_resolved(offers[0]["id"], USER) is False
+        assert await ps.mark_resolved("no-such-id", USER) is False
+        assert await ps.surfaced_person_offers(USER) == []
     finally:
         await db.close()
 

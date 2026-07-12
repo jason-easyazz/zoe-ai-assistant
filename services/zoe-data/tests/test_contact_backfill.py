@@ -488,3 +488,31 @@ async def test_bare_name_deduped_against_full_name_in_batch(monkeypatch):
         assert stored[0]["pre_filled_slots"].get("relationship") == "friend"
     finally:
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_bare_name_relationship_not_donated_when_ambiguous(monkeypatch):
+    # Greptile round 1: with "Lindsay" (friend) plus BOTH "Lindsay Cannon" and
+    # "Lindsay Smith" in the batch, we can't know whose relationship it is —
+    # the bare dup still drops, but the label must not attach to either.
+    monkeypatch.setenv("ZOE_CONTACT_BACKFILL_ENABLED", "1")
+    db = await _open()
+    try:
+        mems = [
+            _Ref("Lindsay is Jason's friend."),
+            _Ref("Lindsay Cannon loves fishing."),
+            _Ref("Lindsay Smith works at Telstra."),
+        ]
+        _fake_memory_source(monkeypatch, mems)
+        _use_db(monkeypatch, db)
+        _no_llm(monkeypatch)
+        stored = _capture_store(monkeypatch)
+
+        await cb.backfill_contacts(USER)
+        by_name = {s["pre_filled_slots"]["name"]: s["pre_filled_slots"].get("relationship")
+                   for s in stored}
+        assert set(by_name) == {"Lindsay Cannon", "Lindsay Smith"}
+        assert by_name["Lindsay Cannon"] is None
+        assert by_name["Lindsay Smith"] is None
+    finally:
+        await db.close()

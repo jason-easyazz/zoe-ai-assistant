@@ -1728,7 +1728,14 @@ def _offer_reply_kind(text: str, offer_name: str) -> Optional[str]:
 
 
 async def _match_pending_offer_reply(text: str, user_id: str) -> Optional["Intent"]:
-    """Map a short yes/no turn onto the most recent SURFACED contact offer."""
+    """Map a short yes/no turn onto the SURFACED contact offer it answers.
+
+    Binding rule: when the reply names a person ("yes add Caitlin"), it binds to
+    the unique surfaced offer whose name matches; a bare reply ("yes") binds to
+    the OLDEST surfaced offer — the one the for-prompt fold told the brain to
+    ask FIRST — never the newest. A name matching zero or multiple offers falls
+    through to normal routing instead of guessing.
+    """
     # Cheap shape pre-check (opener word only) before any flag/DB work.
     tokens = _offer_reply_tokens(text)
     if not tokens or tokens[0] not in (_OFFER_AFFIRM_FIRST | _OFFER_DECLINE_FIRST):
@@ -1736,16 +1743,26 @@ async def _match_pending_offer_reply(text: str, user_id: str) -> Optional["Inten
     try:
         from pending_suggestions import (
             person_suggestions_enabled,
-            latest_surfaced_person_offer,
+            surfaced_person_offers,
         )
         if not person_suggestions_enabled():
             return None
-        offer = await latest_surfaced_person_offer(user_id)
+        offers = await surfaced_person_offers(user_id)
     except Exception as exc:
         logger.debug("_match_pending_offer_reply: lookup failed: %s", exc)
         return None
-    if not offer or not offer.get("id"):
+    offers = [o for o in offers if o.get("id")]
+    if not offers:
         return None
+    # A reply that carries a name token binds to that offer, if unambiguous.
+    token_set = set(tokens[1:])
+    named = [
+        o for o in offers
+        if token_set & {t for t in str(o.get("name") or "").lower().split() if t}
+    ]
+    if len(named) > 1:
+        return None  # ambiguous — let the brain sort it out
+    offer = named[0] if named else offers[0]
     kind = _offer_reply_kind(text, offer.get("name") or "")
     if kind is None:
         return None
@@ -2795,8 +2812,15 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
     if intent.name == "pending_offer_dismiss":
         from pending_suggestions import mark_resolved
         _name = intent.slots.get("name") or "them"
-        await mark_resolved(intent.slots.get("suggestion_id", ""), user_id)
-        return f"No problem — I won't save {_name} as a contact."
+        if await mark_resolved(intent.slots.get("suggestion_id", ""), user_id):
+            return f"No problem — I won't save {_name} as a contact."
+        # The update didn't land (DB failure / offer already gone) — be honest
+        # so the user isn't told it's dismissed while it can keep resurfacing.
+        logger.info("pending_offer_dismiss failed user=%s", user_id)
+        return (
+            f"I tried to drop that offer for {_name} but couldn't update it just now — "
+            "if I ask again, another no will clear it."
+        )
 
     # "forget that" / "never mind what I said" — retract the last MemPalace write.
     # Scoped to the caller's user_id and to writes within the last 10 minutes so
