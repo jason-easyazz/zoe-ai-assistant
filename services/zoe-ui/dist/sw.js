@@ -8,7 +8,7 @@
 importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.63.25'; // estate: reminders show blank instead of 'Invalid Date' for undated reminders
+const SW_VERSION = '4.63.25'; // estate: reminders format date+time robustly (no 'Invalid Date', no blanked times)
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded

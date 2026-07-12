@@ -837,10 +837,21 @@
     _wxTick=setInterval(function(){if(_cur==='sleep')loadHA(paint);},30000);
   }
 
-  // Format a reminder's due time; '' for missing/unparseable dates (new Date(bad)
-  // .toLocaleString() returns the string "Invalid Date" rather than throwing).
-  function fmtRemWhen(v){if(!v)return '';var dt=new Date(v);if(isNaN(dt.getTime()))return '';
-    try{return dt.toLocaleString(undefined,{weekday:'short',hour:'numeric',minute:'2-digit'});}catch(e){return '';}}
+  // Format a reminder's "when" from its separate due_date (YYYY-MM-DD) and
+  // due_time (bare "HH:MM") fields. Handles date+time, date-only, time-only,
+  // a full ISO datetime in due_time, and returns '' for missing/unparseable
+  // values (guard needed because new Date("09:00")/new Date(bad) yield an
+  // Invalid Date that .toLocaleString() renders as the literal "Invalid Date").
+  function fmtRemWhen(r){
+    var d=r&&r.due_date,t=r&&r.due_time;
+    var m=String(t||'').trim().match(/^(\d{1,2}):(\d{2})/);
+    var tt=m?(('0'+m[1]).slice(-2)+':'+m[2]):'';
+    if(d){var dt=new Date(String(d)+'T'+(tt||'00:00'));
+      if(!isNaN(dt.getTime()))return dt.toLocaleString(undefined,tt?{weekday:'short',hour:'numeric',minute:'2-digit'}:{weekday:'short',month:'short',day:'numeric'});}
+    if(tt){var d2=new Date('1970-01-01T'+tt);if(!isNaN(d2.getTime()))return d2.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'});}
+    if(t){var d3=new Date(t);if(!isNaN(d3.getTime()))return d3.toLocaleString(undefined,{weekday:'short',hour:'numeric',minute:'2-digit'});}
+    return '';
+  }
 
   // ---- Reminders card (real reminders) ----
   function wireReminder(){
@@ -849,7 +860,7 @@
       var rs=(d&&d.reminders)||[];
       if(!rs.length){if(ttl)ttl.textContent='No reminders set';if(host)host.innerHTML='';return;}
       if(ttl)ttl.textContent=rs.length+' reminder'+(rs.length===1?'':'s');
-      if(host)host.innerHTML=rs.slice(0,5).map(function(r){var when=fmtRemWhen(r.due_time);
+      if(host)host.innerHTML=rs.slice(0,5).map(function(r){var when=fmtRemWhen(r);
         return '<div style="display:flex;gap:14px;align-items:baseline;padding:10px 0;border-top:1px solid rgba(255,255,255,.08)"><span style="font-size:18px;color:var(--ink-faint);min-width:120px">'+esc(when)+'</span><span style="font-size:21px;font-weight:500">'+esc(r.title||r.message||'Reminder')+'</span></div>';}).join('');
     }).catch(function(){if(ttl)ttl.textContent='Couldn’t load reminders';});
   }
@@ -1088,7 +1099,7 @@
     apiGet('/api/reminders/').then(function(d2){if(_cur!=='day'||!rems)return;
       var rs=(d2&&d2.reminders)||[];
       if(!rs.length){rems.innerHTML='<div class="drem" style="opacity:.6"><span class="rt"></span><span>Nothing set</span></div>';return;}
-      rems.innerHTML=rs.slice(0,5).map(function(r){var when=fmtRemWhen(r.due_time);
+      rems.innerHTML=rs.slice(0,5).map(function(r){var when=fmtRemWhen(r);
         return '<div class="drem"><span class="rt">'+esc(when)+'</span><span>'+esc(r.title||'Reminder')+'</span></div>';}).join('');
     }).catch(function(){rems.innerHTML='<div class="drem" style="opacity:.6"><span class="rt"></span><span>Couldn’t load</span></div>';});
     // Messages/email section stays hidden until a comms backend exists (no fake data).
