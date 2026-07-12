@@ -502,7 +502,10 @@
 <script>
 (function(){
   var stage=document.getElementById('stage');
-  function fit(){var s=Math.min(innerWidth/1280,innerHeight/800);stage.style.transform='scale('+s+')';}
+  // Fill the whole panel — scale each axis independently so an off-1.6:1 screen
+  // (e.g. 1280×720 / 1920×1080) doesn't letterbox into black bars. On a true
+  // 1.6:1 panel sx===sy so there's no distortion.
+  function fit(){stage.style.transform='scale('+(innerWidth/1280)+','+(innerHeight/800)+')';}
   addEventListener('resize',fit);fit();
 
   var CHK='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l5 5L20 6"/></svg>';
