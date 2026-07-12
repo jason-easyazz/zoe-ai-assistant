@@ -930,19 +930,29 @@ async def lifespan(app: FastAPI):
     # idle, worse under load) — so the first recall after every restart (incl.
     # every auto-deploy) silently returned an empty packet and Zoe denied knowing
     # stored facts ("I don't have any information about Caitlin", 2026-07-12).
-    # One generous-timeout warmup search at startup closes that window.
-    async def _warm_memory_search() -> None:
-        try:
-            from memory_service import get_memory_service
-            import time as _t
-            _t0 = _t.monotonic()
-            await get_memory_service().search(
-                "startup warmup", user_id="_warmup", limit=1, timeout_s=30.0
+    # Warm by embedding ONLY: a raw collection query scoped to a user that owns no
+    # rows loads the embedder without touching real memories (no rows returned, no
+    # access-count ticks that would skew salience ranking — Greptile P1). AWAITED
+    # (bounded) rather than backgrounded so traffic served right after startup
+    # cannot race a still-cold embedder; fail-open on timeout/error.
+    try:
+        from memory_service import get_memory_service
+        import time as _t
+
+        _svc_warm = get_memory_service()
+
+        def _embed_only_warmup() -> None:
+            _svc_warm._collection().query(
+                query_texts=["startup warmup"],
+                n_results=1,
+                where={"user_id": {"$eq": "_warmup_no_such_user"}},
             )
-            logger.info("memory search warmed in %.1fs", _t.monotonic() - _t0)
-        except Exception as _exc:
-            logger.warning("memory search warmup failed (non-fatal): %s", _exc)
-    asyncio.create_task(_warm_memory_search(), name="memory_search_warmup")
+
+        _t0 = _t.monotonic()
+        await asyncio.wait_for(_svc_warm._run_sync(_embed_only_warmup), timeout=20.0)
+        logger.info("memory embedder warmed in %.1fs", _t.monotonic() - _t0)
+    except Exception as _exc:
+        logger.warning("memory embedder warmup failed (non-fatal): %s", _exc)
     _openclaw_bg_task = start_openclaw_background_tasks()
     _digest_bg_task = start_memory_digest_background()
     _consolidation_bg_task = start_memory_consolidation_background()
