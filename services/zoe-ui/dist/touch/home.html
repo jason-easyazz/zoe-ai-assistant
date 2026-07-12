@@ -682,14 +682,19 @@
   var DOMAIN_SCREEN={smart_home:'rooms',calendar:'day',lists:'list',weather:'weather',music:'music',reminders:'reminder'};
   var cmdbar=document.getElementById('cmdbar'),cmdin=document.getElementById('cmdin'),orb=document.getElementById('orb'),toastEl=document.getElementById('saytoast'),_toastT=null;
   function toast(t){if(!t)return;toastEl.textContent=t;toastEl.classList.add('on');if(_toastT)clearTimeout(_toastT);_toastT=setTimeout(function(){toastEl.classList.remove('on');},6000);}
-  function dockHeard(q){dock.classList.remove('hide');dbody.innerHTML='<div class="dheard">Heard: <b>'+esc(q)+'</b></div>';}
+  var _heardT=null,_sending=false;
+  function dockHeard(q){dock.classList.remove('hide');dbody.innerHTML='<div class="dheard">Heard: <b>'+esc(q)+'</b></div>';
+    // heard is transient — bring the pinned controls back after a few seconds
+    if(_heardT)clearTimeout(_heardT);
+    _heardT=setTimeout(function(){if(dbody.querySelector('.dheard')&&_cur!=='sleep')renderDock();},8000);}
   function sendCmd(q){
-    q=(q||'').trim();if(!q)return;
+    q=(q||'').trim();if(!q||_sending)return;   // in-flight guard: button+Enter can't double-send
+    _sending=true;setTimeout(function(){_sending=false;},1200);
     cmdbar.classList.remove('on');cmdin.value='';orb.classList.add('busy');
     fetch('/api/skybridge/resolve',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({message:q,context:{panel_id:(localStorage.getItem('zoe_panel_id')||localStorage.getItem('zoe_touch_panel_id')||'')}})})
       .then(function(r){if(!r.ok)throw new Error('http '+r.status);return r.json();})
       .then(function(d){orb.classList.remove('busy');
-        if(!d||d.handled===false){dockHeard(q);toast((d&&d.spoken_summary)||'Sorry — I didn’t catch that. Try again?');return;}
+        if(!d||d.handled===false||d.auth_required){dockHeard(q);toast((d&&(d.spoken_summary||d.message))||'Sorry — I didn’t catch that. Try again?');return;}
         var dest=DOMAIN_SCREEN[(d&&d.intent&&d.intent.domain)||''];
         _ha.loaded=false;              // the command may have changed device state
         if(dest)show(dest);
