@@ -634,3 +634,24 @@ async def test_lowercase_namesake_also_refused(monkeypatch):
         assert svc.reviews == []
     finally:
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_titleless_candidate_cannot_supersede_named_persons_row(monkeypatch):
+    """Greptile P1 (#1260 follow-up): a titleless candidate must not supersede a
+    row about a named person it never mentions."""
+    import memory_extractor as me
+
+    db = await _open(people=[])
+    try:
+        svc = _FakeReconcileSvc(existing=[("karen-1", "Karen's birthday is March 15")])
+        _patch_memory_service(monkeypatch, svc)
+        _always_storable(monkeypatch)
+        _use_db(monkeypatch, db)
+        await me.extract_and_ingest(
+            "My birthday is March 25",
+            user_id=USER, session_id="s-tl", source="test", prev_user_message="",
+        )
+        assert svc.reviews == []  # Karen's row untouched
+    finally:
+        await db.close()
