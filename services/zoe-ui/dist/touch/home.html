@@ -108,8 +108,13 @@
   .laddbar button{width:52px;height:52px;border-radius:14px;border:0;background:var(--accent);color:#fff;font-size:22px;cursor:pointer}
   .laddbar select{height:52px;border-radius:14px;background:rgba(255,255,255,.06);color:var(--ink);border:1px solid rgba(255,255,255,.14);font:inherit;padding:0 10px}
   /* Contacts — full-screen tile grid + detail */
-  .ctf{position:absolute;inset:0;padding:100px 64px 150px;display:flex;flex-direction:column}
-  .ctgrid{flex:1;display:grid;grid-template-columns:repeat(4,1fr);gap:18px;align-content:start;overflow-y:auto;margin-top:18px}
+  .ctf{position:absolute;inset:0;padding:92px 40px 150px;display:flex;flex-direction:column}
+  .ctwrap{flex:1;display:flex;gap:10px;min-height:0}
+  .ctgrid{flex:1;display:grid;grid-template-columns:repeat(5,1fr);gap:16px;align-content:start;overflow-y:auto;scroll-behavior:smooth}
+  .ctaz{width:34px;flex:none;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:1px}
+  .ctaz span{font-size:13px;color:var(--ink-faint);padding:1px 8px;cursor:pointer;border-radius:8px}
+  .ctaz span.has{color:var(--ink-soft);font-weight:600}
+  .ctaz span:active{background:rgba(123,150,255,.3);color:#fff}
   .cttile{display:flex;flex-direction:column;align-items:center;gap:10px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);border-radius:20px;padding:22px 12px;cursor:pointer;transition:background .15s,transform .1s}
   .cttile:active{transform:scale(.96)}
   .cttile .pav{width:64px;height:64px;border-radius:50%;display:grid;place-items:center;font-size:26px;font-weight:600;color:#0a0d14}
@@ -135,17 +140,18 @@
   .calbody{flex:1;overflow-y:auto}
   .calmonth{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
   .calmonth .cmh{font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);text-align:center;padding:4px 0}
-  .cmd{min-height:74px;border-radius:12px;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.06);padding:6px 8px;font-size:15px}
-  .cmd.dim{opacity:.35}
-  .cmd.today{border-color:rgba(123,150,255,.6);background:rgba(123,150,255,.12)}
+  .cmd{min-height:76px;border-radius:14px;background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.07);padding:7px 9px;font-size:15px;box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
+  .cmd.dim{opacity:.3}
+  .cmd.today{border-color:rgba(123,150,255,.65);background:linear-gradient(180deg,rgba(123,150,255,.18),rgba(123,150,255,.08));box-shadow:0 0 22px rgba(123,150,255,.18),inset 0 1px 0 rgba(255,255,255,.1)}
+  .cmd.today .dn{color:#fff;font-weight:600}
   .cmd .dn{font-size:14px;color:var(--ink-soft)}
-  .cmd .cev{font-size:12px;color:var(--ink);background:rgba(123,150,255,.28);border-radius:6px;padding:1px 6px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cmd .cev{font-size:12px;color:var(--ink);border-left:3px solid var(--c,var(--accent));background:color-mix(in srgb,var(--c,var(--accent)) 20%,transparent);border-radius:5px;padding:2px 7px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .calweek{display:grid;grid-template-columns:repeat(7,1fr);gap:10px}
-  .cwc{background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.07);border-radius:14px;padding:10px;min-height:300px}
+  .cwc{background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.07);border-radius:16px;padding:12px 10px;min-height:300px;box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
   .cwc h5{font-size:14px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;text-align:center}
-  .cwc.today{border-color:rgba(123,150,255,.5)}
-  .cwe{font-size:14px;background:rgba(123,150,255,.22);border-radius:8px;padding:4px 8px;margin-bottom:6px}
-  .cwe small{display:block;color:var(--ink-faint)}
+  .cwc.today{border-color:rgba(123,150,255,.6);background:linear-gradient(180deg,rgba(123,150,255,.15),rgba(123,150,255,.05));box-shadow:0 0 22px rgba(123,150,255,.15)}
+  .cwe{font-size:14px;border-left:3px solid var(--c,var(--accent));background:color-mix(in srgb,var(--c,var(--accent)) 18%,transparent);border-radius:7px;padding:5px 9px;margin-bottom:6px}
+  .cwe small{display:block;color:var(--ink-soft);opacity:.8;margin-top:1px;font-variant-numeric:tabular-nums}
   .caldaylist .dev{display:flex;align-items:center;gap:16px;padding:15px 0;border-top:1px solid rgba(255,255,255,.08)}
   /* Settings — expanding sections */
   .setf{position:absolute;inset:0;padding:100px 200px 150px;display:flex;flex-direction:column}
@@ -505,7 +511,7 @@
         +'<div class="today"><div class="thk">Your Day</div><div id="hToday"></div></div>'
         +'</div>'},
     ask:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="askf"><div class="aa" id="askOut" style="opacity:.55">Tap the orb, or just speak — I’ll answer here.</div></div>'},
+      html:'<div class="askf"><div class="aa" id="askOut" style="opacity:.55">Just ask — I’ll answer here.</div></div>'},
     weather:{home:true, bg:DUSK, canvas:true,
       html:'<div class="fcog">'+GEAR+'</div><div class="wloc" id="wxLoc"></div><div class="wbig"><div class="t" id="wxTemp">—°</div><div class="c" id="wxCond"></div></div><div class="whours" id="wxHours"></div>'},
     music:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,
@@ -513,11 +519,11 @@
     timer:{home:true, bg:'radial-gradient(120% 100% at 50% 44%,#122447,#080b12 62%)', canvas:false, glow:'radial-gradient(closest-side at 50% 44%,rgba(123,150,255,.35),transparent 70%)',
       html:'<div class="fcog">'+GEAR+'</div><div class="tfull"><div class="tkick">Timers</div><div class="tring"><svg width="420" height="420" viewBox="0 0 420 420"><circle cx="210" cy="210" r="188" fill="none" stroke="rgba(255,255,255,.12)" stroke-width="14"/><circle id="tmArc" cx="210" cy="210" r="188" fill="none" stroke="#8ea6ff" stroke-width="14" stroke-linecap="round" stroke-dasharray="1181" stroke-dashoffset="1181" style="filter:drop-shadow(0 0 14px rgba(123,150,255,.7))"/></svg><div class="ttime" id="tmTime">--:--</div></div><div class="tsub" id="tmLabel"></div><div class="tctrls" id="tmCtl"></div></div><div class="tmore" id="tmMore"></div>'},
     list:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="lstf2"><div class="ltabs" id="lstTabs"></div><div class="lmeta" id="lstMeta"></div><div class="lcols" id="lstItems"></div><div class="laddbar" id="lstAdd" style="display:none"><input type="text" placeholder="Add an item…"><button>＋</button></div><div class="laddbar" id="lstNew" style="display:none"><input type="text" placeholder="New list name…"><select><option value="shopping">Shopping</option><option value="personal_todos">To-dos</option><option value="work_todos">Work</option><option value="tasks">Tasks</option><option value="bucket">Bucket</option></select><button>＋</button></div></div>'},
+      html:'<div class="fcog">'+GEAR+'</div><div class="lstf2"><div class="ltabs" id="lstTabs"></div><div class="lmeta" id="lstMeta"></div><div class="lcols" id="lstItems"></div></div>'},
     calendar:{home:true, bg:GROUND, canvas:false,
       html:'<div class="fcog">'+GEAR+'</div><div class="calf"><div class="calhead"><h1 id="calTtl"></h1><div class="calviews" id="calViews"><button data-v="day">Day</button><button data-v="week" class="on">Week</button><button data-v="month">Month</button></div></div><div class="calbody" id="calBody"></div></div>'},
     person:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="ctf"><div class="dk">Contacts</div><h1 id="ctTtl" style="font-size:40px;font-weight:600;margin-top:6px">Contacts</h1><div class="ctgrid" id="ctGrid"></div></div><div class="ctdetail" id="ctDetail"></div>'},
+      html:'<div class="fcog">'+GEAR+'</div><div class="ctf"><div class="ctwrap"><div class="ctgrid" id="ctGrid"></div><div class="ctaz" id="ctAZ"></div></div></div><div class="ctdetail" id="ctDetail"></div>'},
     settings:{home:true, bg:GROUND, canvas:false,
       html:'<div class="fcog">'+GEAR+'</div><div class="setf"><div class="dk" style="margin-bottom:14px">Settings</div><div id="setSecs"></div></div>'},
     day:{home:true, bg:GROUND, canvas:false,
@@ -671,8 +677,7 @@
   apps.onclick=function(e){e.stopPropagation();stage.classList.contains('lopen')?lclose():lopen();};
   launch.onclick=function(e){if(e.target===launch)lclose();};
   lgrid.addEventListener('click',function(e){var t=e.target.closest('.ltile');if(!t)return;lclose();var u=t.getAttribute('data-u');if(u){location.href=u;return;}
-    show(t.dataset.id);
-    if(t.dataset.id==='ask'){cmdbar.classList.add('on');setTimeout(function(){cmdin.focus();},60);}});
+    show(t.dataset.id);});
   addEventListener('keydown',function(e){if(e.key==='Escape')lclose();});
 
   // ---- live home data: real clock + weather + today's agenda (no placeholder data) ----
@@ -838,37 +843,27 @@
   }
   function paintListTabs(){
     var tabs=document.getElementById('lstTabs');if(!tabs)return;
-    tabs.innerHTML=_lst.lists.map(function(l){return '<span class="ltab'+(l.id===_lst.sel?' on':'')+'" data-id="'+esc(l.id)+'">'+esc(l.name)+'</span>';}).join('')
-      +'<span class="ltab" data-new="1">＋ New</span>';
+    // Adding items / creating lists is voice-only ("add milk to the shopping list").
+    tabs.innerHTML=_lst.lists.map(function(l){return '<span class="ltab'+(l.id===_lst.sel?' on':'')+'" data-id="'+esc(l.id)+'">'+esc(l.name)+'</span>';}).join('');
     tabs.onclick=function(e){var t=e.target.closest('.ltab');if(!t)return;
-      var nw=document.getElementById('lstNew'),ad=document.getElementById('lstAdd'),items=document.getElementById('lstItems'),meta=document.getElementById('lstMeta');
-      if(t.getAttribute('data-new')){nw.style.display='flex';ad.style.display='none';items.innerHTML='';meta.textContent='Create a new list';_lst.sel=null;paintListTabs();return;}
-      _lst.sel=t.getAttribute('data-id');nw.style.display='none';paintListTabs();paintListBody();};
+      _lst.sel=t.getAttribute('data-id');paintListTabs();paintListBody();};
   }
   function paintListBody(){
     var sel=_lst.lists.filter(function(l){return l.id===_lst.sel;})[0];
-    var items=document.getElementById('lstItems'),meta=document.getElementById('lstMeta'),ad=document.getElementById('lstAdd'),nw=document.getElementById('lstNew');
+    var items=document.getElementById('lstItems'),meta=document.getElementById('lstMeta');
     if(!sel||!items)return;
-    nw.style.display='none';ad.style.display='flex';
     apiJson('GET','/api/lists/'+sel.list_type+'/'+sel.id+'/items').then(function(d){if(_cur!=='list'||_lst.sel!==sel.id)return;
       var its=d.items||[],done=its.filter(function(i){return i.completed;}).length;
       if(meta)meta.textContent=its.length+' item'+(its.length===1?'':'s')+(done?' · '+done+' done':'');
       items.innerHTML=its.map(function(i){return '<div class="lrow2'+(i.completed?' done':'')+'" data-item="'+esc(i.id)+'" data-done="'+(i.completed?1:0)+'"><span class="bx">'+(i.completed?CHK:'')+'</span><span class="tx2">'+esc(i.text)+'</span></div>';}).join('')
-        ||'<div style="color:var(--ink-faint);font-size:19px">List is empty — add something below.</div>';
+        ||'<div style="color:var(--ink-faint);font-size:19px">List is empty — just ask Zoe to add something.</div>';
       items.onclick=function(e){var row=e.target.closest('.lrow2');if(!row)return;
         var now=row.getAttribute('data-done')!=='1';
         row.classList.toggle('done',now);row.setAttribute('data-done',now?1:0);row.querySelector('.bx').innerHTML=now?CHK:'';
         apiJson('PUT','/api/lists/'+sel.list_type+'/'+sel.id+'/items/'+row.getAttribute('data-item'),{completed:now?1:0})
           .catch(function(e2){row.classList.toggle('done');row.setAttribute('data-done',now?0:1);row.querySelector('.bx').innerHTML=now?'':CHK;if(String(e2&&e2.message)==='auth')toast('Sign in to change lists');});};
-      ad.querySelector('button').onclick=function(){var inp=ad.querySelector('input'),v=(inp.value||'').trim();if(!v)return;inp.value='';
-        apiJson('POST','/api/lists/'+sel.list_type+'/'+sel.id+'/items',{text:v}).then(paintListBody).catch(function(){toast('Couldn’t add that');});};
     }).catch(function(){items.innerHTML='<div style="color:var(--ink-faint)">Couldn’t load this list.</div>';});
   }
-  (function(){document.addEventListener('click',function(e){
-    var nw=document.getElementById('lstNew');if(!nw||nw.style.display==='none')return;
-    if(e.target.closest('#lstNew button')){var inp=nw.querySelector('input'),ty=nw.querySelector('select').value,v=(inp.value||'').trim();if(!v)return;inp.value='';
-      apiJson('POST','/api/lists/'+ty,{name:v}).then(function(){_lst.sel=null;wireListsFull();}).catch(function(){toast('Couldn’t create the list');});}
-  });})();
 
   // ---- Timers: live countdowns + cancel (server-authoritative) ----
   function fmtT(s){s=Math.max(0,Math.round(s));var m=Math.floor(s/60);return m+':'+two(s%60);}
@@ -897,13 +892,15 @@
   // ---- Contacts: full-screen tile grid → tap for detail ----
   var PAVC=['#7b96ff','#66d6a3','#f5b13c','#ff7a90','#5ec8f0','#9aa6bd'];
   function wireContacts(){
-    var ttl=document.getElementById('ctTtl'),grid=document.getElementById('ctGrid'),det=document.getElementById('ctDetail');
+    var grid=document.getElementById('ctGrid'),det=document.getElementById('ctDetail'),az=document.getElementById('ctAZ');
     apiJson('GET','/api/people/').then(function(d){if(_cur!=='person')return;
-      var ps=(d.people||[]);
-      if(ttl)ttl.textContent=ps.length?('Contacts · '+ps.length):'No contacts yet';
-      if(grid)grid.innerHTML=ps.map(function(pn,i){var nm=pn.name||'?';
-        return '<div class="cttile" data-i="'+i+'"><div class="pav" style="background:'+PAVC[i%PAVC.length]+'">'+esc(nm.charAt(0).toUpperCase())+'</div><div class="pn2">'+esc(nm)+'</div>'+(pn.relationship?'<div class="pr2">'+esc(pn.relationship)+'</div>':'')+'</div>';}).join('')
+      var ps=(d.people||[]).slice().sort(function(a,b){return String(a.name||'').localeCompare(String(b.name||''));});
+      var have={};
+      if(grid)grid.innerHTML=ps.map(function(pn,i){var nm=pn.name||'?',L=nm.charAt(0).toUpperCase();var first=!have[L];have[L]=1;
+        return '<div class="cttile" data-i="'+i+'"'+(first?' data-letter="'+esc(L)+'"':'')+'><div class="pav" style="background:'+PAVC[i%PAVC.length]+'">'+esc(L)+'</div><div class="pn2">'+esc(nm)+'</div>'+(pn.relationship?'<div class="pr2">'+esc(pn.relationship)+'</div>':'')+'</div>';}).join('')
         ||'<div style="color:var(--ink-faint);font-size:20px">Nobody here yet — tell Zoe about the people in your life.</div>';
+      if(az){az.innerHTML='ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map(function(L){return '<span'+(have[L]?' class="has"':'')+' data-l="'+L+'">'+L+'</span>';}).join('');
+        az.onclick=function(e){var t=e.target.closest('span[data-l]');if(!t)return;var el=grid.querySelector('.cttile[data-letter="'+t.getAttribute('data-l')+'"]');if(el)el.scrollIntoView({behavior:'smooth',block:'start'});};}
       grid.onclick=function(e){var t=e.target.closest('.cttile');if(!t)return;var pn=ps[+t.getAttribute('data-i')];if(!pn)return;
         var rows=[['Relationship',pn.relationship],['Phone',pn.phone],['Email',pn.email],['Birthday',pn.birthday],['Notes',pn.notes]]
           .filter(function(r){return r[1];})
@@ -912,7 +909,7 @@
         det.innerHTML='<div class="ctcard"><div class="cthead"><div class="pav" style="background:'+PAVC[(+t.getAttribute('data-i'))%PAVC.length]+'">'+esc((pn.name||'?').charAt(0).toUpperCase())+'</div><div><h2>'+esc(pn.name||'')+'</h2>'+(pn.relationship?'<div class="ctrel">'+esc(pn.relationship)+'</div>':'')+'</div></div>'+rows+'<button class="ctclose">Close</button></div>';
         det.classList.add('on');
         det.onclick=function(ev){if(ev.target===det||ev.target.closest('.ctclose'))det.classList.remove('on');};};
-    }).catch(function(){if(ttl)ttl.textContent='Sign in to see your contacts';if(grid)grid.innerHTML='';});
+    }).catch(function(){if(grid)grid.innerHTML='<div style="color:var(--ink-faint);font-size:20px">Sign in to see your contacts.</div>';});
   }
 
   // ---- Settings: full-screen expanding sections ----
@@ -967,12 +964,12 @@
         var html='<div class="calmonth">'+['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(function(h){return '<div class="cmh">'+h+'</div>';}).join('');
         for(var i=0;i<lead;i++)html+='<div class="cmd dim"></div>';
         for(var dnum=1;dnum<=days;dnum++){var dd=new Date(now.getFullYear(),now.getMonth(),dnum),k=isoD(dd),es=byDay[k]||[];
-          html+='<div class="cmd'+(k===isoD(now)?' today':'')+'"><div class="dn">'+dnum+'</div>'+es.slice(0,2).map(function(e){return '<div class="cev">'+esc(e.title||'')+'</div>';}).join('')+(es.length>2?'<div class="cev" style="opacity:.6">+'+(es.length-2)+' more</div>':'')+'</div>';}
+          html+='<div class="cmd'+(k===isoD(now)?' today':'')+'"><div class="dn">'+dnum+'</div>'+es.slice(0,2).map(function(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="cev" style="--c:'+c+'">'+esc(e.title||'')+'</div>';}).join('')+(es.length>2?'<div class="cev" style="opacity:.6">+'+(es.length-2)+' more</div>':'')+'</div>';}
         body.innerHTML=html+'</div>';
       } else if(_cal.view==='week'){
         var html2='<div class="calweek">';
         for(var i2=0;i2<7;i2++){var d2=new Date(start);d2.setDate(start.getDate()+i2);var k2=isoD(d2),es2=byDay[k2]||[];
-          html2+='<div class="cwc'+(k2===isoD(now)?' today':'')+'"><h5>'+d2.toLocaleDateString(undefined,{weekday:'short'})+' '+d2.getDate()+'</h5>'+(es2.map(function(e){return '<div class="cwe">'+esc(e.title||'')+'<small>'+(e.all_day?'All day':esc(fmt12(e.start_time)))+'</small></div>';}).join('')||'<div style="color:var(--ink-faint);font-size:13px;text-align:center;padding-top:12px">—</div>')+'</div>';}
+          html2+='<div class="cwc'+(k2===isoD(now)?' today':'')+'"><h5>'+d2.toLocaleDateString(undefined,{weekday:'short'})+' '+d2.getDate()+'</h5>'+(es2.map(function(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="cwe" style="--c:'+c+'">'+esc(e.title||'')+'<small>'+(e.all_day?'All day':esc(fmt12(e.start_time)))+'</small></div>';}).join('')||'<div style="color:var(--ink-faint);font-size:13px;text-align:center;padding-top:12px">—</div>')+'</div>';}
         body.innerHTML=html2+'</div>';
       } else {
         var es3=byDay[isoD(now)]||[];
