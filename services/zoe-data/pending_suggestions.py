@@ -15,6 +15,20 @@ logger = logging.getLogger(__name__)
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
+# Default user-turn lifetime of an offer once SURFACED (QA review F5: the old
+# default of 2, aged on every packet build, killed offers before a human could
+# ever see them — two background folds and the offer was gone).
+_DEFAULT_EXPIRE_TURNS = 6
+
+# Names that must never become a contact proposal: the literal "User" and the
+# assistant herself (QA review F5 backfill quality — both were proposed live).
+_JUNK_CONTACT_NAMES = frozenset({"user", "zoe"})
+
+
+def is_junk_contact_name(name: str) -> bool:
+    """True when `name` must never be proposed/saved as a contact."""
+    return (name or "").strip().lower() in _JUNK_CONTACT_NAMES
+
 
 def person_suggestions_enabled() -> bool:
     """Contact suggestions (`person_create` action) — default OFF.
@@ -53,12 +67,19 @@ async def store_suggestions(
             for s in suggestions[:3]:
                 sid = str(uuid.uuid4())
                 slots = s.get("pre_filled_slots") or {}
+                # Choke point for junk contact proposals: never store an offer
+                # for the literal "User"/"Zoe" regardless of which emitter
+                # (LLM detector, deterministic regex, backfill) produced it.
+                if s.get("action_type") == "person_create" and is_junk_contact_name(
+                    (slots.get("name") or "")
+                ):
+                    continue
                 await db.execute(
                     """INSERT INTO pending_suggestions
                        (id, user_id, session_id, action_type, description, list_type,
                         when_hint, amount_hint, offer_phrase, pre_filled_slots,
                         created_at, turns_elapsed, expire_after_turns, resolved)
-                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0, 2, 0)""",
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0, $12, 0)""",
                     sid,
                     user_id,
                     session_id,
@@ -70,6 +91,7 @@ async def store_suggestions(
                     s.get("offer_phrase", "")[:300],
                     json.dumps(slots),
                     now,
+                    _DEFAULT_EXPIRE_TURNS,
                 )
                 stored += 1
     except Exception as exc:
@@ -87,7 +109,7 @@ async def load_for_prompt(user_id: str, session_id: str, *, limit: int = 3) -> s
     try:
         async with get_db_ctx() as db:
             rows = await db.fetch(
-                """SELECT id, offer_phrase, turns_elapsed, expire_after_turns
+                """SELECT id, action_type, offer_phrase, turns_elapsed, expire_after_turns
                    FROM pending_suggestions
                    WHERE user_id = $1 AND session_id = $2 AND resolved = 0
                    ORDER BY created_at ASC LIMIT $3""",
@@ -96,8 +118,14 @@ async def load_for_prompt(user_id: str, session_id: str, *, limit: int = 3) -> s
                 limit,
             )
             for row in rows:
+                # person_create offers are aged per USER TURN by
+                # age_person_offers_on_user_turn (QA review F5) — never age them
+                # here too, or a turn that builds both packets double-ages them.
+                if row["action_type"] == "person_create":
+                    lines.append(f"- {row['offer_phrase']}")
+                    continue
                 turns = int(row["turns_elapsed"] or 0) + 1
-                expire = int(row["expire_after_turns"] or 2)
+                expire = int(row["expire_after_turns"] or _DEFAULT_EXPIRE_TURNS)
                 if turns > expire:
                     await db.execute(
                         "UPDATE pending_suggestions SET resolved = 1 WHERE id = $1",
@@ -189,12 +217,15 @@ async def list_pending_contacts(user_id: str, *, limit: int = 50) -> list[dict]:
 
 
 async def surface_pending_contacts_for_prompt(user_id: str, *, limit: int = 3) -> list[dict]:
-    """User-scoped pending `person_create` offers for the recall packet, WITH
-    turn back-off — so the flue brain doesn't nag the same un-actioned offer
-    forever. Each surfaced offer's ``turns_elapsed`` increments; an offer past
-    ``expire_after_turns`` is resolved and dropped. Mirrors ``load_for_prompt``'s
-    aging but is user-scoped + action-filtered (the for-prompt packet has no
-    session). Returns ``[{name, relationship}]`` for the still-active offers.
+    """User-scoped pending `person_create` offers for the recall packet.
+
+    QA review F5: this used to increment ``turns_elapsed`` on EVERY packet
+    build, so two folds (including background/system builds the user never saw)
+    silently expired an offer before a human could act. Now the read is
+    non-destructive: it only MARKS an offer as surfaced (``turns_elapsed`` goes
+    0 → 1 the first time it enters a prompt). Aging happens once per real user
+    turn in ``age_person_offers_on_user_turn`` — a packet build can never burn
+    an offer. Returns ``[{id, name, relationship, offer_phrase}]``.
     """
     if user_id in ("guest", ""):
         return []
@@ -202,7 +233,7 @@ async def surface_pending_contacts_for_prompt(user_id: str, *, limit: int = 3) -
     try:
         async with get_db_ctx() as db:
             rows = await db.fetch(
-                """SELECT id, pre_filled_slots, turns_elapsed, expire_after_turns
+                """SELECT id, pre_filled_slots, offer_phrase, turns_elapsed, expire_after_turns
                    FROM pending_suggestions
                    WHERE user_id = $1 AND action_type = 'person_create' AND resolved = 0
                    ORDER BY created_at ASC LIMIT $2""",
@@ -210,27 +241,98 @@ async def surface_pending_contacts_for_prompt(user_id: str, *, limit: int = 3) -
                 limit,
             )
             for row in rows:
-                turns = int(row["turns_elapsed"] or 0) + 1
-                expire = int(row["expire_after_turns"] or 2)
-                if turns > expire:
+                turns = int(row["turns_elapsed"] or 0)
+                if turns == 0:
+                    # First surfacing: mark it so (a) the per-turn ager starts
+                    # counting and (b) an affirmative reply can be matched to it.
                     await db.execute(
-                        "UPDATE pending_suggestions SET resolved = 1 WHERE id = $1", row["id"]
+                        "UPDATE pending_suggestions SET turns_elapsed = 1 WHERE id = $1",
+                        row["id"],
                     )
-                    continue
-                await db.execute(
-                    "UPDATE pending_suggestions SET turns_elapsed = $1 WHERE id = $2",
-                    turns,
-                    row["id"],
-                )
                 slots = {}
                 try:
                     slots = json.loads(row["pre_filled_slots"] or "{}")
                 except json.JSONDecodeError:
                     pass
-                out.append({"name": slots.get("name"), "relationship": slots.get("relationship")})
+                out.append({
+                    "id": row["id"],
+                    "name": slots.get("name"),
+                    "relationship": slots.get("relationship"),
+                    "offer_phrase": row["offer_phrase"],
+                })
     except Exception as exc:
         logger.debug("pending_suggestions.surface_pending_contacts_for_prompt failed: %s", exc)
     return out
+
+
+async def age_person_offers_on_user_turn(user_id: str) -> int:
+    """Age SURFACED `person_create` offers by one USER TURN; expire stale ones.
+
+    Called once per real user chat/voice turn (from
+    ``latent_intent_detector.detect_and_store``) — never from a packet build.
+    Only offers that have actually been surfaced (``turns_elapsed >= 1``) age;
+    an offer the brain has never seen keeps waiting. Offers whose age exceeds
+    ``expire_after_turns`` are resolved. Returns the number of offers expired.
+    """
+    if user_id in ("guest", ""):
+        return 0
+    try:
+        async with get_db_ctx() as db:
+            await db.execute(
+                """UPDATE pending_suggestions
+                   SET turns_elapsed = turns_elapsed + 1
+                   WHERE user_id = $1 AND action_type = 'person_create'
+                     AND resolved = 0 AND turns_elapsed >= 1""",
+                user_id,
+            )
+            expired = await db.fetch(
+                """UPDATE pending_suggestions SET resolved = 1
+                   WHERE user_id = $1 AND action_type = 'person_create'
+                     AND resolved = 0 AND turns_elapsed > expire_after_turns
+                   RETURNING id""",
+                user_id,
+            )
+            return len(expired)
+    except Exception as exc:
+        logger.debug("pending_suggestions.age_person_offers_on_user_turn failed: %s", exc)
+        return 0
+
+
+async def latest_surfaced_person_offer(user_id: str) -> dict | None:
+    """The most recent un-resolved `person_create` offer that has been surfaced
+    in a prompt (``turns_elapsed >= 1``) — i.e. the offer a bare "yes"/"no"
+    reply plausibly answers. Returns ``{id, name, relationship, offer_phrase}``
+    or None. Used by the intent router's off-panel accept path (QA review F5:
+    on Telegram, "yes add her" previously did nothing).
+    """
+    if user_id in ("guest", ""):
+        return None
+    try:
+        async with get_db_ctx() as db:
+            row = await db.fetchrow(
+                """SELECT id, pre_filled_slots, offer_phrase
+                   FROM pending_suggestions
+                   WHERE user_id = $1 AND action_type = 'person_create'
+                     AND resolved = 0 AND turns_elapsed >= 1
+                   ORDER BY created_at DESC LIMIT 1""",
+                user_id,
+            )
+        if not row:
+            return None
+        slots = {}
+        try:
+            slots = json.loads(row["pre_filled_slots"] or "{}")
+        except json.JSONDecodeError:
+            pass
+        return {
+            "id": row["id"],
+            "name": slots.get("name"),
+            "relationship": slots.get("relationship"),
+            "offer_phrase": row["offer_phrase"],
+        }
+    except Exception as exc:
+        logger.debug("pending_suggestions.latest_surfaced_person_offer failed: %s", exc)
+        return None
 
 
 _CARD_FIELD_CAP = 60

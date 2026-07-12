@@ -437,3 +437,54 @@ def test_extract_people_parses_relationships():
     # Pronoun rejected by the shared _looks_like_person_name guard — "She" is
     # never emitted as a person (Tom is only the anchor, not a subject here).
     assert all(n != "She" for n, _ in cb._extract_people("She is Tom's sister."))
+
+
+@pytest.mark.asyncio
+async def test_junk_literal_names_never_proposed(monkeypatch):
+    # QA review F5d: live backfill proposed "User" and "Zoe" (the assistant) as
+    # contacts. The literal junk names must be dropped at extraction time.
+    monkeypatch.setenv("ZOE_CONTACT_BACKFILL_ENABLED", "1")
+    db = await _open()
+    try:
+        mems = [
+            _Ref("User loves gardening."),
+            _Ref("Zoe is Jason's assistant."),
+            _Ref("Karen loves tea."),
+        ]
+        _fake_memory_source(monkeypatch, mems)
+        _use_db(monkeypatch, db)
+        _no_llm(monkeypatch)
+        stored = _capture_store(monkeypatch)
+
+        await cb.backfill_contacts(USER)
+        names = {s["pre_filled_slots"]["name"] for s in stored}
+        assert names == {"Karen"}
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_bare_name_deduped_against_full_name_in_batch(monkeypatch):
+    # QA review F5d: "Lindsay" + "Lindsay Cannon" produced two duplicate
+    # proposals. The bare-name candidate must fold into the full-name one,
+    # donating its relationship when the full-name hit has none.
+    monkeypatch.setenv("ZOE_CONTACT_BACKFILL_ENABLED", "1")
+    db = await _open()
+    try:
+        mems = [
+            _Ref("Lindsay is Jason's friend."),
+            _Ref("Lindsay Cannon loves fishing."),
+        ]
+        _fake_memory_source(monkeypatch, mems)
+        _use_db(monkeypatch, db)
+        _no_llm(monkeypatch)
+        stored = _capture_store(monkeypatch)
+
+        res = await cb.backfill_contacts(USER)
+        names = {s["pre_filled_slots"]["name"] for s in stored}
+        assert names == {"Lindsay Cannon"}
+        assert res["candidates"] == 1
+        # The bare-name hit's relationship carried over to the full-name row.
+        assert stored[0]["pre_filled_slots"].get("relationship") == "friend"
+    finally:
+        await db.close()

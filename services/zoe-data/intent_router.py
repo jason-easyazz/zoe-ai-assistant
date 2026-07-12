@@ -1662,6 +1662,103 @@ def _extract_simple_reminder_slots(text: str) -> Optional[dict]:
     return slots
 
 
+# ── Off-panel pending-contact offer replies (QA review F5) ────────────────────
+#
+# After Zoe voices "Would you like me to add Caitlin as a contact?", a Telegram
+# (or any off-panel) user answers in plain text — there is no confirm card. A
+# short affirmative next turn must resolve the surfaced offer via the sanctioned
+# pending_suggestions.execute_suggestion path; a short refusal must dismiss it.
+# Guarded three ways: the feature flag, the message SHAPE (short reply built
+# only from yes/no words + fillers + the offered name), and the existence of an
+# offer that has actually been surfaced in a prompt (turns_elapsed >= 1) — a
+# bare "yes" with no live offer falls through to normal routing untouched.
+
+_OFFER_AFFIRM_FIRST = frozenset({
+    "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "alright", "absolutely",
+    "definitely", "please", "go", "do", "add", "save",
+})
+_OFFER_DECLINE_FIRST = frozenset({"no", "nah", "nope", "dont", "don't", "not"})
+_OFFER_REPLY_FILLER = frozenset({
+    "yes", "yeah", "yep", "sure", "ok", "okay", "please", "add", "save", "her",
+    "him", "them", "it", "that", "do", "go", "ahead", "as", "a", "my", "the",
+    "contact", "contacts", "to", "thanks", "thank", "you", "zoe", "course",
+    "of", "definitely", "absolutely", "no", "nah", "nope", "dont", "don't",
+    "not", "need", "worry", "now", "right", "maybe", "later", "for",
+})
+_OFFER_REPLY_MAX_TOKENS = 8
+_OFFER_REPLY_PUNCT_RE = re.compile(r"^[.,!?]+|[.,!?'’]+$")
+
+
+def _offer_reply_tokens(text: str) -> list[str]:
+    """Lowercase, punctuation-stripped tokens of a candidate offer reply, or []
+    when the message is too long / empty to be one."""
+    raw = (text or "").strip().lower().split()
+    if not raw or len(raw) > _OFFER_REPLY_MAX_TOKENS:
+        return []
+    tokens = [_OFFER_REPLY_PUNCT_RE.sub("", t) for t in raw]
+    return [t for t in tokens if t]
+
+
+def _offer_reply_kind(text: str, offer_name: str) -> Optional[str]:
+    """'accept' / 'dismiss' / None purely from the message shape.
+
+    A reply qualifies only when it is short, opens with a yes/no word, and every
+    remaining token is a known filler or a token of the offered person's name —
+    so "yes let's book the flight" never hijacks an offer.
+    """
+    tokens = _offer_reply_tokens(text)
+    if not tokens:
+        return None
+    name_tokens = {t for t in (offer_name or "").lower().split() if t}
+    first = tokens[0]
+    if first in _OFFER_DECLINE_FIRST:
+        kind = "dismiss"
+    elif first in _OFFER_AFFIRM_FIRST:
+        kind = "accept"
+    else:
+        return None
+    for t in tokens[1:]:
+        if t not in _OFFER_REPLY_FILLER and t not in name_tokens:
+            return None
+    # An affirm opener followed by a negation token ("ok don't", "yes not now")
+    # is a refusal, not an accept.
+    if kind == "accept" and any(t in ("dont", "don't", "not", "no") for t in tokens[1:]):
+        return "dismiss"
+    return kind
+
+
+async def _match_pending_offer_reply(text: str, user_id: str) -> Optional["Intent"]:
+    """Map a short yes/no turn onto the most recent SURFACED contact offer."""
+    # Cheap shape pre-check (opener word only) before any flag/DB work.
+    tokens = _offer_reply_tokens(text)
+    if not tokens or tokens[0] not in (_OFFER_AFFIRM_FIRST | _OFFER_DECLINE_FIRST):
+        return None
+    try:
+        from pending_suggestions import (
+            person_suggestions_enabled,
+            latest_surfaced_person_offer,
+        )
+        if not person_suggestions_enabled():
+            return None
+        offer = await latest_surfaced_person_offer(user_id)
+    except Exception as exc:
+        logger.debug("_match_pending_offer_reply: lookup failed: %s", exc)
+        return None
+    if not offer or not offer.get("id"):
+        return None
+    kind = _offer_reply_kind(text, offer.get("name") or "")
+    if kind is None:
+        return None
+    return Intent(
+        "pending_offer_accept" if kind == "accept" else "pending_offer_dismiss",
+        {
+            "suggestion_id": offer["id"],
+            "name": offer.get("name") or "",
+            "relationship": offer.get("relationship") or "",
+        },
+    )
+
+
 async def detect_and_extract_intent(
     text: str,
     user_id: str = "guest",  # fail-open to least-privilege, not admin (#1021/#1032 posture)
@@ -1759,6 +1856,19 @@ async def detect_and_extract_intent(
         except Exception as exc:
             logger.debug("detect_and_extract_intent: Pi/Gemma governor failed: %s", exc)
         return None, pi_classified
+
+    # Off-panel contact-offer replies FIRST: a bare "yes"/"sure"/"no thanks"
+    # after a surfaced "add X as a contact?" offer must resolve that offer, and
+    # would otherwise be swallowed by the acknowledgement/greeting intents below.
+    # Triple-guarded (flag + shape + a surfaced offer existing); returns None for
+    # everything else so normal routing is untouched.
+    try:
+        _offer_reply = await _match_pending_offer_reply(text, user_id)
+    except Exception as _offer_exc:  # never let the offer path break routing
+        logger.debug("detect_and_extract_intent: offer-reply match failed: %s", _offer_exc)
+        _offer_reply = None
+    if _offer_reply is not None:
+        return _offer_reply
 
     started = time.perf_counter()
     intent = detect_intent(text, context=context, user_id=user_id)
@@ -2664,6 +2774,29 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         # the full device-code OAuth flow inline in the SSE stream.  Return None
         # here so execute_intent does not produce a static text reply.
         return None
+
+    # Contact-offer replies (QA review F5): a surfaced "add X as a contact?"
+    # offer answered off-panel with a plain yes/no. Accept goes through the
+    # sanctioned pending_suggestions.execute_suggestion path (same as the panel
+    # card's accept route); refusal dismisses so the offer stops re-surfacing.
+    if intent.name == "pending_offer_accept":
+        from pending_suggestions import execute_suggestion
+        _name = intent.slots.get("name") or "them"
+        res = await execute_suggestion(intent.slots.get("suggestion_id", ""), user_id)
+        if res.get("ok"):
+            logger.info("pending_offer_accept: contact saved user=%s", user_id)
+            return f"Done — I've added {_name} to your contacts."
+        logger.info("pending_offer_accept failed user=%s err=%s", user_id, res.get("error"))
+        return (
+            f"I couldn't save {_name} as a contact just now — "
+            "you can add them from the People panel."
+        )
+
+    if intent.name == "pending_offer_dismiss":
+        from pending_suggestions import mark_resolved
+        _name = intent.slots.get("name") or "them"
+        await mark_resolved(intent.slots.get("suggestion_id", ""), user_id)
+        return f"No problem — I won't save {_name} as a contact."
 
     # "forget that" / "never mind what I said" — retract the last MemPalace write.
     # Scoped to the caller's user_id and to writes within the last 10 minutes so
