@@ -23,6 +23,65 @@ logger = logging.getLogger(__name__)
 _pool: asyncpg.Pool | None = None
 _pool_loop: asyncio.AbstractEventLoop | None = None
 
+# Bounded acquire: a leaked connection must fail fast with a diagnosable error,
+# not wedge every request forever (live outage 2026-07-12: person_extractor leak
+# drained the 10-slot pool and /api/chat hung while /health stayed 200).
+_DEFAULT_ACQUIRE_TIMEOUT_S = 10.0
+
+
+class PoolExhaustedError(RuntimeError):
+    """Raised when a pooled connection cannot be acquired within the timeout."""
+
+
+def _acquire_timeout_s() -> float:
+    """Acquire timeout, env-tunable via ZOE_DB_ACQUIRE_TIMEOUT_S (read per call)."""
+    raw = os.environ.get("ZOE_DB_ACQUIRE_TIMEOUT_S", "")
+    try:
+        value = float(raw)
+        if value > 0:
+            return value
+    except ValueError:
+        pass
+    return _DEFAULT_ACQUIRE_TIMEOUT_S
+
+
+async def _acquire(pool, timeout_s: float | None = None):
+    """Acquire a pooled connection with a bounded wait.
+
+    Uses asyncio.wait_for (not asyncpg's acquire(timeout=)) so it also bounds
+    test fakes and any pool-like object. On timeout raises PoolExhaustedError
+    with a clear, log-greppable message. Updates the pool gauges best-effort.
+    """
+    if timeout_s is None:
+        timeout_s = _acquire_timeout_s()
+    try:
+        conn = await asyncio.wait_for(pool.acquire(), timeout=timeout_s)
+    except (asyncio.TimeoutError, TimeoutError):
+        _update_pool_gauges(pool)
+        msg = (
+            f"db pool exhausted — possible connection leak "
+            f"(acquire timed out after {timeout_s:.1f}s)"
+        )
+        logger.error("db_pool: %s", msg)
+        raise PoolExhaustedError(msg) from None
+    _update_pool_gauges(pool)
+    return conn
+
+
+def _update_pool_gauges(pool) -> None:
+    """Best-effort refresh of the zoe_db_pool_* Prometheus gauges. Never raises."""
+    try:
+        from memory_metrics import db_pool_size, db_pool_in_use, db_pool_free
+
+        size = pool.get_size()
+        idle = pool.get_idle_size()
+        db_pool_size.set(size)
+        db_pool_free.set(idle)
+        db_pool_in_use.set(size - idle)
+    except Exception:
+        pass  # metrics must never affect DB access
+
+
 _SQLITE_DATETIME_OFFSET_RE = re.compile(
     r"datetime\s*\(\s*'now'\s*,\s*'([+-]?)(\d+)\s+(\w+)'\s*\)",
     re.IGNORECASE,
@@ -55,6 +114,8 @@ async def _release_safely(pool: "asyncpg.Pool", conn: "asyncpg.Connection") -> N
         # real pool-health signal — surface it loudly rather than hiding it, but
         # still don't let it break the dependency teardown.
         logger.warning("db_pool: unexpected error releasing connection", exc_info=True)
+    finally:
+        _update_pool_gauges(pool)
 
 
 def _bound_loop(pool: "asyncpg.Pool") -> asyncio.AbstractEventLoop | None:
@@ -303,7 +364,7 @@ async def get_db() -> AsyncpgCompat:
     Supports both aiosqlite cursor API (legacy code) and asyncpg native API.
     """
     pool = get_pool()
-    conn = await pool.acquire()
+    conn = await _acquire(pool)
     try:
         yield AsyncpgCompat(conn)
     except Exception:
@@ -321,6 +382,35 @@ async def get_db() -> AsyncpgCompat:
         await _release_safely(pool, conn)
 
 
+async def check_pool_health(timeout_s: float = 2.0) -> tuple[bool, str]:
+    """Verify a pooled connection can be acquired + used within `timeout_s`.
+
+    Returns (healthy, detail). CONSERVATIVE by design — /health consumers
+    (watchdogs, deploy checks) restart the service on 503, so only a genuine
+    acquire timeout (pool exhausted) reports unhealthy. Any other condition
+    (pool not initialised yet, transient query error) fails OPEN with a detail
+    string. Acquire → SELECT 1 → release; never holds a connection.
+    """
+    global _pool
+    if _pool is None:
+        return True, "pool not initialised (startup)"
+    try:
+        conn = await _acquire(_pool, timeout_s=timeout_s)
+    except PoolExhaustedError as exc:
+        return False, str(exc)
+    except Exception as exc:  # acquisition error other than exhaustion → fail open
+        return True, f"pool check inconclusive: {exc}"
+    try:
+        await asyncio.wait_for(conn.fetchval("SELECT 1"), timeout=timeout_s)
+        return True, "ok"
+    except Exception as exc:
+        # Connection acquired fine — the pool is not exhausted. A query hiccup
+        # is not the outage signature this check exists for; fail open.
+        return True, f"pool check query failed (non-fatal): {exc}"
+    finally:
+        await _release_safely(_pool, conn)
+
+
 @asynccontextmanager
 async def get_db_ctx():
     """Async context manager version of get_db() for use in non-route code.
@@ -330,7 +420,7 @@ async def get_db_ctx():
             rows = await db.fetch("SELECT * FROM users")
     """
     pool = get_pool()
-    conn = await pool.acquire()
+    conn = await _acquire(pool)
     try:
         yield AsyncpgCompat(conn)
     finally:

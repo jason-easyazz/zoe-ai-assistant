@@ -1907,14 +1907,42 @@ async def a2a_well_known():
     return _build_agent_card()
 
 
+# /health pool-check cache: watchdogs poll /health frequently, so the pooled
+# acquire+SELECT 1 probe runs at most once per TTL and the verdict is reused.
+# Keeps the fast path allocation-free while still catching exhaustion within ~5s.
+_POOL_HEALTH_TTL_S = 5.0
+_pool_health_cache = {"checked_at": 0.0, "healthy": True, "detail": "not checked yet"}
+
+
 @app.get("/health")
 async def root_health():
-    return {
-        "status": "ok",
+    # Honest health: verify a pooled DB connection is actually acquirable.
+    # The 2026-07-12 outage drained the pool while /health stayed 200 — every
+    # chat request hung, invisible to monitoring. Conservative by design:
+    # only a genuine acquire timeout reports 503 (check_pool_health fails open
+    # on every other condition), because a false 503 triggers watchdog restarts.
+    now = time.monotonic()
+    if now - _pool_health_cache["checked_at"] > _POOL_HEALTH_TTL_S:
+        try:
+            from db_pool import check_pool_health
+            healthy, detail = await check_pool_health(timeout_s=2.0)
+        except Exception as exc:  # health must never crash on a probe error
+            healthy, detail = True, f"pool check unavailable: {exc}"
+        _pool_health_cache.update(checked_at=now, healthy=healthy, detail=detail)
+
+    body = {
+        "status": "ok" if _pool_health_cache["healthy"] else "unhealthy",
         "service": "zoe-data",
         "version": "1.0.0",
         "memory_capture": _memory_capture_health,
+        "db_pool": {
+            "healthy": _pool_health_cache["healthy"],
+            "detail": _pool_health_cache["detail"],
+        },
     }
+    if not _pool_health_cache["healthy"]:
+        return JSONResponse(body, status_code=503)
+    return body
 
 
 @app.get("/readyz")
