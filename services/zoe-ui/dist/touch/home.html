@@ -51,6 +51,13 @@
   .whours .hh .lab{font-size:19px;color:rgba(255,255,255,.78)}
   .whours .hh .ic svg{width:36px;height:36px;display:block;filter:drop-shadow(0 2px 8px rgba(0,0,0,.35))}
   .whours .hh .d{font-size:25px;font-weight:500;font-variant-numeric:tabular-nums}
+  /* sunny/day sky → dark, legible text (icons keep their own colour) */
+  #stage.wxlight .wloc{color:rgba(20,30,50,.72);text-shadow:none}
+  #stage.wxlight .wbig .t{color:#1b2740}
+  #stage.wxlight .wbig .c{color:rgba(27,39,64,.92)}
+  #stage.wxlight .wbig .c small{color:rgba(27,39,64,.6)}
+  #stage.wxlight .whours .hh .lab{color:rgba(27,39,64,.72)}
+  #stage.wxlight .whours .hh .d{color:#1b2740}
 
   /* music full */
   .mfull .mart{position:absolute;left:90px;top:150px;width:300px;height:300px;border-radius:28px;display:grid;place-items:center;font-size:120px;background:linear-gradient(140deg,#8ea6ff,#b49bff);box-shadow:0 34px 80px rgba(0,0,0,.5)}
@@ -330,7 +337,7 @@
     ask:{home:true, bg:GROUND, canvas:false,
       html:'<div class="askf"><div class="aa">There’s no single answer — most people find it in <em>the people they love, work that feels worth doing, and small moments of wonder.</em> Yours is the one you keep choosing.</div></div>'},
     weather:{home:true, bg:DUSK, canvas:true,
-      html:'<div class="fcog">'+GEAR+'</div><div class="wloc">Geraldton</div><div class="wbig"><div class="t">16°</div><div class="c">Clear · dusk &nbsp;<small>feels like 15°</small></div></div><div class="whours">'+hrs([['6 pm','sun','15°'],['8 pm','moon','13°'],['10 pm','cloud','12°'],['12 am','rain','11°'],['2 am','cloud','10°']])+'</div>'},
+      html:'<div class="fcog">'+GEAR+'</div><div class="wloc" id="wxLoc"></div><div class="wbig"><div class="t" id="wxTemp">—°</div><div class="c" id="wxCond"></div></div><div class="whours" id="wxHours"></div>'},
     music:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,
       html:'<button class="spk">'+SPKR+' Living Room <span class="cx">▾</span></button><div class="mfull"><div class="mart">🎵</div><div class="minfo"><div class="mkick">Now Playing</div><div class="mtitle">Golden Hour</div><div class="martist">Kacey Musgraves</div></div><div class="mscrub"><div class="mtrack"><div class="mfill"></div><div class="mknob"></div></div><div class="mtimes"><span>1:24</span><span>3:47</span></div></div><div class="mtransport"><button>⏮</button><button class="pp">❚❚</button><button>⏭</button></div></div>'},
     timer:{home:true, bg:'radial-gradient(120% 100% at 50% 44%,#122447,#080b12 62%)', canvas:false, glow:'radial-gradient(closest-side at 50% 44%,rgba(123,150,255,.35),transparent 70%)',
@@ -370,6 +377,8 @@
 
   function show(id){
     var f=FULL[id], c=CARD[id];
+    _cur=id; clearScreenTimers();
+    stage.classList.remove('wxlight');
     [].forEach.call(pick.querySelectorAll('button'),function(b){b.classList.toggle('sel',b.dataset.id===id);});
     if(f){
       cardwrap.classList.remove('on'); full.classList.add('on');
@@ -378,6 +387,7 @@
       home.classList.toggle('hide',f.home===false);
       full.innerHTML=f.html;
       if(id==='home')initHome();
+      if(id==='weather')wireWeather();
       full.querySelectorAll('.sc[data-t], .rlt[data-l], .hdock .hpc.light').forEach(function(el){el.onclick=function(){el.classList.toggle('on');var rs=el.querySelector('.rs');if(rs)rs.textContent=el.classList.contains('on')?'On':'Off';};});
       full.querySelectorAll('.rchip').forEach(function(c){c.onclick=function(){full.querySelectorAll('.rchip').forEach(function(x){x.classList.remove('on')});c.classList.add('on');};});
       var pp=full.querySelector('.pp');if(pp)pp.onclick=function(){pp.textContent=pp.textContent==='❚❚'?'▶':'❚❚';};
@@ -426,7 +436,7 @@
   // placeholder data on the live panel. (u = navigate to page; id = in-estate.)
   var DESTS=[
     {id:'home',n:'Home',ic:'home',c:'linear-gradient(150deg,#8aa0ff,#5b74ff)'},
-    {u:'/touch/weather.html',n:'Weather',ic:'weather',c:'linear-gradient(150deg,#5ec8f0,#3f9bd8)'},
+    {id:'weather',n:'Weather',ic:'weather',c:'linear-gradient(150deg,#5ec8f0,#3f9bd8)'},
     {u:'/touch/calendar.html',n:'Day',ic:'day',c:'linear-gradient(150deg,#6aa6ff,#4a7de0)'},
     {u:'/touch/lists.html',n:'Lists',ic:'lists',c:'linear-gradient(150deg,#66d6a3,#3fb98a)'},
     {u:'/touch/music.html',n:'Music',ic:'music',c:'linear-gradient(150deg,#c77bff,#8a53e8)'},
@@ -447,7 +457,8 @@
 
   // ---- live home data: real clock + weather + today's agenda (no placeholder data) ----
   var CAT={social:'var(--cat-personal)',health:'var(--cat-health)',work:'var(--cat-work)',family:'var(--cat-family)',personal:'var(--cat-personal)'};
-  var _homeTick=null;
+  var _cur=null,_homeTick=null,_wxTick=null;
+  function clearScreenTimers(){if(_homeTick){clearInterval(_homeTick);_homeTick=null;}if(_wxTick){clearInterval(_wxTick);_wxTick=null;}}
   function two(n){return (n<10?'0':'')+n;}
   function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
   function fmt12(hhmm){var m=/^(\d{1,2}):(\d{2})/.exec(hhmm||'');if(!m)return esc(hhmm||'');var h=+m[1],ap=h<12?'am':'pm',hr=h%12;if(hr===0)hr=12;return hr+':'+m[2]+' '+ap;}
@@ -460,14 +471,37 @@
     if(r.status===401||r.status===403){if(!_authBounced){_authBounced=true;try{localStorage.removeItem('zoe_session');}catch(e){}location.replace('/touch/index.html'+location.search);}throw new Error('auth');}
     if(!r.ok)throw new Error('http '+r.status);return r.json();});}
   function tickClock(){var c=document.getElementById('hClock');if(!c)return;var d=new Date(),h=d.getHours()%12;if(h===0)h=12;c.textContent=h+':'+two(d.getMinutes());var dt=document.getElementById('hDate');if(dt)dt.textContent=d.toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long'});}
-  function loadWeather(){apiGet('/api/weather/current').then(function(w){var el=document.getElementById('hTemp');if(!el||!w)return;var t=(w.temp!=null?w.temp:w.temperature);el.querySelector('.n').textContent=(t!=null?Math.round(t):'—')+'°';var c=(w.description||w.condition||'');el.querySelector('.c').textContent=c?c.charAt(0).toUpperCase()+c.slice(1):'';}).catch(function(){});}
+  function loadWeather(){apiGet('/api/weather/current').then(function(w){if(_cur!=='home')return;var el=document.getElementById('hTemp');if(!el||!w)return;var t=(w.temp!=null?w.temp:w.temperature);el.querySelector('.n').textContent=(t!=null?Math.round(t):'—')+'°';var c=(w.description||w.condition||'');el.querySelector('.c').textContent=c?c.charAt(0).toUpperCase()+c.slice(1):'';}).catch(function(){});}
   function loadToday(){var host=document.getElementById('hToday');if(!host)return;var d=new Date(),ds=d.getFullYear()+'-'+two(d.getMonth()+1)+'-'+two(d.getDate());
     apiGet('/api/calendar/events?start_date='+ds+'&end_date='+ds).then(function(data){
+      if(_cur!=='home')return;
       var evs=((data&&data.events)||[]).filter(function(e){return !e.deleted;}).sort(function(a,b){return (a.start_time||'').localeCompare(b.start_time||'');});
       if(!evs.length){host.innerHTML='<div class="tr" style="opacity:.55"><span class="dot" style="--c:var(--accent)"></span><span class="tt"></span><span class="tn">Nothing scheduled today</span></div>';return;}
       host.innerHTML=evs.slice(0,4).map(function(e){var cat=CAT[(e.category||'').toLowerCase()]||'var(--accent)';var when=e.all_day?'All day':fmt12(e.start_time);return '<div class="tr"><span class="dot" style="--c:'+cat+'"></span><span class="tt">'+esc(when)+'</span><span class="tn">'+esc(e.title||'Event')+'</span></div>';}).join('');
     }).catch(function(){host.innerHTML='<div class="tr" style="opacity:.55"><span class="dot" style="--c:var(--cat-health)"></span><span class="tt"></span><span class="tn">Couldn’t load your day</span></div>';});}
-  function initHome(){tickClock();if(_homeTick)clearInterval(_homeTick);_homeTick=setInterval(tickClock,15000);loadWeather();loadToday();}
+  function initHome(){tickClock();_homeTick=setInterval(tickClock,15000);loadWeather();loadToday();
+    _wxTick=setInterval(function(){if(_cur==='home'){loadWeather();loadToday();}},600000);}
+
+  // ---- weather screen (real current + hourly forecast, condition-adaptive) ----
+  var OWM_ICON={'01':'sun','02':'cloud','03':'cloud','04':'cloud','09':'rain','10':'rain','11':'rain','13':'cloud','50':'cloud'};
+  var WXBG={day:'linear-gradient(180deg,#3f7bd8,#6ea6ec 42%,#a9cef4 80%,#d8ebfb)',night:'linear-gradient(180deg,#05060f,#0b1030 45%,#141a44)',cloud:'linear-gradient(180deg,#2a3138,#39434c 45%,#4b555e)',rain:'linear-gradient(180deg,#242c3a,#333d52 45%,#414d63)',dusk:DUSK};
+  function owmIcon(code){var base=(code||'').slice(0,2),m=OWM_ICON[base]||'cloud';return (m==='sun'&&/n$/.test(code||''))?'moon':m;}
+  function wxScene(code){var base=(code||'').slice(0,2);if(base==='01')return /n$/.test(code||'')?'night':'day';if(base==='09'||base==='10'||base==='11'||base==='13')return 'rain';if(base==='02'||base==='03'||base==='04'||base==='50')return 'cloud';return 'dusk';}
+  function fmtHour(iso){var m=/T(\d{2}):/.exec(iso||'');if(!m)return '';var h=+m[1],ap=h<12?'am':'pm',hr=h%12;if(hr===0)hr=12;return hr+' '+ap;}
+  function loadWxScreen(){
+    apiGet('/api/weather/current').then(function(w){if(_cur!=='weather'||!w)return;  // ignore if the user navigated away
+      var loc=document.getElementById('wxLoc');if(loc)loc.textContent=w.city||'';
+      var t=document.getElementById('wxTemp');if(t&&w.temp!=null)t.textContent=Math.round(w.temp)+'°';
+      var cond=(w.description||'');cond=cond?cond.charAt(0).toUpperCase()+cond.slice(1):'';
+      var cd=document.getElementById('wxCond');if(cd)cd.innerHTML=esc(cond)+(w.feels_like!=null?' &nbsp;<small>feels like '+Math.round(w.feels_like)+'°</small>':'');
+      var scene=wxScene(w.icon);stage.style.background=WXBG[scene]||DUSK;stage.classList.toggle('wxlight',scene==='day');
+    }).catch(function(){});
+    apiGet('/api/weather/forecast').then(function(f){if(_cur!=='weather'||!f||!f.hourly)return;
+      var host=document.getElementById('wxHours');if(!host)return;
+      host.innerHTML=hrs(f.hourly.slice(0,5).map(function(h){return [fmtHour(h.time),owmIcon(h.icon),Math.round(h.temp)+'°'];}));
+    }).catch(function(){});
+  }
+  function wireWeather(){loadWxScreen();_wxTick=setInterval(function(){if(_cur==='weather')loadWxScreen();},600000);}
 
   var ORDER=[['home','Home'],['rooms','Rooms'],['sleep','Sleep'],['ask','Ask Zoe'],['weather','Weather'],['music','Music'],['timer','Timer'],['SEP'],['day','Day'],['list','List'],['reminder','Reminder'],['person','Person'],['confirm','Confirm'],['settings','Settings'],['pair','Pair']];
   ORDER.forEach(function(o){ if(o[0]==='SEP'){var s=document.createElement('div');s.className='sep';pick.appendChild(s);return;} var b=document.createElement('button');b.dataset.id=o[0];b.textContent=o[1];b.onclick=function(){show(o[0]);};pick.appendChild(b);});
