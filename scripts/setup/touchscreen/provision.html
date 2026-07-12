@@ -299,7 +299,7 @@ function startPolling(code) {
         // Save token and redirect
         await fetchLocal('/save-token', 'POST', { token: data.token, panel_id: data.panel_id });
         const cfg = await fetchLocal('/config');
-        const redirectUrl = (cfg.server_url || serverUrl) + '/touch/dashboard.html?panel_id=' + encodeURIComponent(data.panel_id || 'zoe-panel') + '&kiosk=1';
+        const redirectUrl = (cfg.server_url || serverUrl) + '/touch/home.html?panel_id=' + encodeURIComponent(data.panel_id || 'zoe-panel') + '&kiosk=1';
         window.location.replace(redirectUrl);
       } else if (data.status === 'expired') {
         clearInterval(pollTimer);
