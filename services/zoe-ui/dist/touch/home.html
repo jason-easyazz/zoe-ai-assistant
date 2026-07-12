@@ -968,7 +968,14 @@
         var html='<div class="calmonth">'+['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(function(h){return '<div class="cmh">'+h+'</div>';}).join('');
         for(var i=0;i<lead;i++)html+='<div class="cmd dim"></div>';
         for(var dnum=1;dnum<=days;dnum++){var dd=new Date(now.getFullYear(),now.getMonth(),dnum),k=isoD(dd),es=byDay[k]||[];
-          html+='<div class="cmd'+(k===isoD(now)?' today':'')+'"><div class="dn">'+dnum+'</div>'+es.slice(0,maxChips).map(function(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="cev" style="--c:'+c+'">'+esc(e.title||'')+'</div>';}).join('')+(es.length>maxChips?'<div class="cev" style="opacity:.6">+'+(es.length-maxChips)+' more</div>':'')+'</div>';}
+          html+='<div class="cmd'+(k===isoD(now)?' today':'')+'"><div class="dn">'+dnum+'</div>'+(function(){
+            // Rows never exceed maxChips: when overflowing, the counter TAKES the
+            // last slot instead of adding a row (so nothing can clip).
+            if(es.length<=maxChips)return es.map(function(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="cev" style="--c:'+c+'">'+esc(e.title||'')+'</div>';}).join('');
+            var showN=maxChips-1;
+            return es.slice(0,showN).map(function(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="cev" style="--c:'+c+'">'+esc(e.title||'')+'</div>';}).join('')
+              +'<div class="cev" style="opacity:.6">'+(showN?('+'+(es.length-showN)+' more'):(es.length+' events'))+'</div>';
+          })()+'</div>';}
         body.innerHTML=html+'</div>';
       } else if(_cal.view==='week'){
         var html2='<div class="calweek">';
