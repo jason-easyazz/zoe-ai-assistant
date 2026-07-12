@@ -435,7 +435,7 @@
   var CARD={
     day:{heard:'“What’s my day look like?”', wash:'var(--cat-work)', html:'<div class="card agenda"><div class="wash"></div>'+COG+'<div class="kick">Today</div><div class="ttl" id="dayTtl">Today</div><div class="events" id="dayEvents"></div></div>'},
     reminder:{heard:'“What are my reminders?”', wash:'var(--amber)', html:'<div class="card rem"><div class="wash"></div>'+COG+'<div class="bell">'+IC.bell+'</div><div class="kick">Reminders</div><div class="ttl2" id="remTtl">Loading…</div><div id="remList" style="margin-top:18px"></div></div>'},
-    person:{heard:'“Who do we know?”', wash:'var(--cat-health)', html:'<div class="card person"><div class="wash"></div>'+COG+'<div class="kick">People</div><div class="ttl" id="pplTtl">Loading…</div><div class="pgrid" id="pplGrid"></div></div>'},
+    person:{heard:'“Who do we know?”', wash:'var(--cat-health)', html:'<div class="card person"><div class="wash"></div>'+COG+'<div class="kick">Contacts</div><div class="ttl" id="pplTtl">Loading…</div><div class="pgrid" id="pplGrid"></div></div>'},
     confirm:{heard:'“Add olive oil to the shopping list”', wash:'var(--accent)', html:'<div class="card confirm"><div class="wash"></div><div class="kick">Confirm</div><div class="q">Add to your Shopping list?</div><div class="rows"><div class="r"><span class="l">Item</span><span>Olive oil</span></div><div class="r"><span class="l">List</span><span>Shopping · 6 items</span></div></div><div class="acts"><button class="no">Not now</button><button class="yes">Add it</button></div></div>'},
     settings:{heard:'', wash:'var(--accent)', html:'<div class="card settings"><div class="wash"></div><div class="kick">Settings</div><div class="ttl" id="setUser">Guest</div><div class="sgrid" id="setRows"></div><button class="sout" id="setOut">Sign out</button></div>'},
     pair:{heard:'', wash:'var(--accent)', html:'<div class="card pair"><div class="wash"></div><div class="kick">Link a device</div><div class="digits"><div class="d">4</div><div class="d">8</div><div class="d">2</div><div class="d">1</div></div><div class="note2">Enter this code in the Zoe app on your phone to connect it to this home.</div></div>'}
@@ -561,7 +561,7 @@
     {id:'rooms',n:'Rooms',ic:'rooms',c:'linear-gradient(150deg,#63b8ff,#3f7bd8)'},
     {id:'reminder',n:'Reminders',ic:'reminders',c:'linear-gradient(150deg,#ff9e6a,#f0742e)'},
     {id:'sleep',n:'Sleep',ic:'sleep',c:'linear-gradient(150deg,#5b6bb0,#3a4788)'},
-    {id:'person',n:'People',ic:'people',c:'linear-gradient(150deg,#ff7a90,#e85a78)'},
+    {id:'person',n:'Contacts',ic:'people',c:'linear-gradient(150deg,#ff7a90,#e85a78)'},
     {id:'timer',n:'Timers',ic:'timer',c:'linear-gradient(150deg,#ffbf5e,#f0961e)'},
     {u:'/touch/chat.html',n:'Chat',ic:'ask',c:'linear-gradient(150deg,#9a8cff,#6a53e8)'},
     {id:'settings',n:'Settings',ic:'settings',c:'linear-gradient(150deg,#9aa6bd,#6f7c96)'}
@@ -784,10 +784,10 @@
     var ttl=document.getElementById('pplTtl'),grid=document.getElementById('pplGrid');
     apiJson('GET','/api/people/').then(function(d){if(_cur!=='person')return;
       var ps=(d.people||[]);
-      if(ttl)ttl.textContent=ps.length?(ps.length+' people'):'No people yet';
+      if(ttl)ttl.textContent=ps.length?(ps.length+' contact'+(ps.length===1?'':'s')):'No contacts yet';
       if(grid)grid.innerHTML=ps.slice(0,12).map(function(pn,i){var nm=pn.name||'?';
-        return '<div class="pcard"><div class="pav" style="background:'+PAVC[i%PAVC.length]+'">'+esc(nm.charAt(0).toUpperCase())+'</div><div><div class="pn2">'+esc(nm)+'</div>'+(pn.relationship?'<div class="pr2">'+esc(pn.relationship)+'</div>':'')+'</div></div>';}).join('');
-    }).catch(function(){if(ttl)ttl.textContent='Sign in to see your people';if(grid)grid.innerHTML='';});
+        return '<div class="pcard"><div class="pav" style="background:'+PAVC[i%PAVC.length]+'">'+esc(nm.charAt(0).toUpperCase())+'</div><div><div class="pn2">'+esc(nm)+'</div>'+((pn.relationship||pn.phone||pn.email)?'<div class="pr2">'+esc([pn.relationship,pn.phone||pn.email].filter(Boolean).join(' · '))+'</div>':'')+'</div></div>';}).join('');
+    }).catch(function(){if(ttl)ttl.textContent='Sign in to see your contacts';if(grid)grid.innerHTML='';});
   }
 
   // ---- Settings card (real session + links) ----
