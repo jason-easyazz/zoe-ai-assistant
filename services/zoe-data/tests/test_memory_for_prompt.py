@@ -123,6 +123,10 @@ def test_packet_no_conflicts_locks_current_order():
     out = _build_memory_prompt_packet(facts, hits)
     assert out["packet"] == (
         "## What I know about you\n"
+        "(These stored memories are authoritative and current. If anything "
+        "said earlier in this conversation conflicts with them — including "
+        "your own earlier replies that information was unknown or not on "
+        "file — trust these memories and answer from them.)\n"
         "- My dad's name is Neil [mem:h1]\n"
         "- Jason prefers concise answers [mem:f1]\n"
         "- Lives in Geraldton [mem:f2]"
@@ -223,3 +227,19 @@ def test_endpoint_happy_path(monkeypatch):
     assert body["user_scoped"] is True
     assert body["count"] == 1
     assert "[mem:abc12345]" in body["packet"]
+
+
+def test_packet_carries_denial_echo_authority_rule():
+    """The authority rule must travel WITH the facts: in a long-lived session the
+    model's own earlier denials outvote the packet on retries (live 2026-07-12)
+    unless the packet explicitly outranks prior conversation. Header stays the
+    first line (consumers pin startswith)."""
+    out = _build_memory_prompt_packet([_ref("m1", "My dad's name is Neil")], [])
+    packet = out["packet"]
+    assert packet.startswith("## What I know about you\n")
+    assert "authoritative and current" in packet
+    assert "trust these memories" in packet
+    assert "Neil" in packet  # facts still present after the rule line
+    # No facts → no packet, and therefore no free-floating authority rule.
+    empty = _build_memory_prompt_packet([], [])
+    assert empty["packet"] == ""

@@ -20,7 +20,13 @@
     window.__needAuth=!ok&&!kiosk;
     // Fresh kiosk profile: provision the guest session the old surface created
     // (fire-and-forget — first loads run loopback-guest, later calls carry it).
-    if(kiosk&&!ok){try{fetch('/api/auth/guest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device_info:{source:'estate-kiosk-bootstrap'}})}).then(function(r){return r.ok?r.json():null;}).then(function(d){if(d&&d.session_id){try{localStorage.setItem('zoe_session',JSON.stringify(d));localStorage.setItem('zoe_guest_mode','active');}catch(e){}}}).catch(function(){});}catch(e){}}
+    window.__guestBootSettled=!(kiosk&&!ok);   // suppress the kiosk auth card until guest provisioning settles
+    if(kiosk&&!ok){try{fetch('/api/auth/guest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device_info:{source:'estate-kiosk-bootstrap'}})}).then(function(r){return r.ok?r.json():null;}).then(function(d){
+      window.__guestBootSettled=true;
+      if(d&&d.session_id){try{localStorage.setItem('zoe_session',JSON.stringify(d));localStorage.setItem('zoe_guest_mode','active');
+        // one-time reload so the first-paint loads that raced the bootstrap rerun WITH the session
+        if(!sessionStorage.getItem('zoe_gb')){sessionStorage.setItem('zoe_gb','1');location.reload();}}catch(e){}}
+    }).catch(function(){window.__guestBootSettled=true;});}catch(e){window.__guestBootSettled=true;}}
   })();
 </script>
 <style>
@@ -592,7 +598,7 @@
     // 401/403s here — clear it and return to login (the presence guard alone
     // can't detect server-side expiry).
     if(r.status===401||r.status===403){
-      if(window.__kiosk){try{localStorage.removeItem('zoe_session');}catch(e){}if(window.__showAuthCard)window.__showAuthCard();}
+      if(window.__kiosk){if(window.__guestBootSettled){try{localStorage.removeItem('zoe_session');}catch(e){}if(window.__showAuthCard)window.__showAuthCard();}}
       else if(!_authBounced&&!window.__needAuth){_authBounced=true;try{localStorage.removeItem('zoe_session');}catch(e){}location.replace('/touch/index.html'+location.search);}
       throw new Error('auth');}
     if(!r.ok)throw new Error('http '+r.status);return r.json();});}
