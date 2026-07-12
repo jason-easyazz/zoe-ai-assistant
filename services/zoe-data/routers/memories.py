@@ -495,7 +495,26 @@ def _build_memory_prompt_packet(
     # presented first so the brain's newest-wins doctrine sees the correction
     # before the stale sibling. No conflicts ⇒ byte-for-byte unchanged.
     lines, refs = _present_conflicts_newest_first(lines, refs, kept_tokens, kept_ts)
-    return {"packet": "## What I know about you\n" + "\n".join(lines), "refs": refs, "count": len(refs)}
+    # Denial-echo guard: this packet is injected every turn, but in a long-lived
+    # session the model's OWN earlier "I don't have any information about X"
+    # replies sit in the conversation context and can outvote the packet on
+    # retries (observed live 2026-07-12: the facts ranked #1-2 in this packet,
+    # yet three prior denials kept winning). Travel an explicit authority rule
+    # WITH the facts so recalled memory beats stale conversational denials.
+    # The header line stays first — consumers pin
+    # `startswith("## What I know about you")`.
+    return {
+        "packet": (
+            "## What I know about you\n"
+            "(These stored memories are authoritative and current. If anything "
+            "said earlier in this conversation conflicts with them — including "
+            "your own earlier replies that information was unknown or not on "
+            "file — trust these memories and answer from them.)\n"
+            + "\n".join(lines)
+        ),
+        "refs": refs,
+        "count": len(refs),
+    }
 
 
 def _fold_relational_block(
