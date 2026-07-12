@@ -387,8 +387,12 @@ html.dark-mode .ztm-ctx-item { color: rgba(255,255,255,0.88); border-bottom-colo
         const pages = getAvailablePages();
         pages.forEach((p, i) => {
             const item = document.createElement('a');
-            item.className = 'ztm-pg-item' + (p.id === pageId ? ' active' : '');
+            const isCurrent = p.id === pageId;
+            item.className = 'ztm-pg-item' + (isCurrent ? ' active' : '');
             item.href = p.path;
+            // Tapping the current page just closes the launcher — don't reload the
+            // page (which would discard scroll/open-panel/unsaved state).
+            if (isCurrent) item.addEventListener('click', (e) => { e.preventDefault(); closeAll(); });
             item.style.setProperty('--i', i);
             item.innerHTML = `${pgIconHTML(p)}<span class="ztm-pg-label">${p.label}</span>`;
             grid.appendChild(item);
@@ -727,6 +731,15 @@ html.dark-mode .ztm-ctx-item { color: rgba(255,255,255,0.88); border-bottom-colo
 
             backdrop.addEventListener('click', closeAll);
             document.getElementById('ztm-more-btn')?.addEventListener('click', openPicker);
+
+            // Escape closes the launcher / context menu (keyboard + remote users).
+            // Bound once — run() can re-init on some pages, so guard against stacking.
+            if (!window.__ztmEscBound) {
+                window.__ztmEscBound = true;
+                document.addEventListener('keydown', (e) => {
+                    if (e.key === 'Escape') closeAll();
+                });
+            }
 
             const editBtn = document.getElementById('ztm-edit');
             if (editBtn) {
