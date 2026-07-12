@@ -688,19 +688,19 @@
     if(_heardT)clearTimeout(_heardT);
     _heardT=setTimeout(function(){if(dbody.querySelector('.dheard')&&_cur!=='sleep')renderDock();},8000);}
   function sendCmd(q){
-    q=(q||'').trim();if(!q||_sending)return;   // in-flight guard: button+Enter can't double-send
-    _sending=true;setTimeout(function(){_sending=false;},1200);
+    q=(q||'').trim();if(!q||_sending)return;   // in-flight guard: cleared when the resolve completes
+    _sending=true;
     cmdbar.classList.remove('on');cmdin.value='';orb.classList.add('busy');
     fetch('/api/skybridge/resolve',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({message:q,context:{panel_id:(localStorage.getItem('zoe_panel_id')||localStorage.getItem('zoe_touch_panel_id')||'')}})})
       .then(function(r){if(!r.ok)throw new Error('http '+r.status);return r.json();})
-      .then(function(d){orb.classList.remove('busy');
+      .then(function(d){orb.classList.remove('busy');_sending=false;
         if(!d||d.handled===false||d.auth_required){dockHeard(q);toast((d&&(d.spoken_summary||d.message))||'Sorry — I didn’t catch that. Try again?');return;}
         var dest=DOMAIN_SCREEN[(d&&d.intent&&d.intent.domain)||''];
         _ha.loaded=false;              // the command may have changed device state
         if(dest)show(dest);
         setTimeout(refreshHA,800);     // re-pull so dock pills reflect the change
         dockHeard(q);toast(d.spoken_summary||'Done.');
-      }).catch(function(){orb.classList.remove('busy');dockHeard(q);toast('Sorry — I couldn’t reach Zoe just then.');});
+      }).catch(function(){orb.classList.remove('busy');_sending=false;dockHeard(q);toast('Sorry — I couldn’t reach Zoe just then.');});
   }
   orb.addEventListener('click',function(){
     var on=cmdbar.classList.toggle('on');
