@@ -183,7 +183,7 @@
   #dbody{display:flex;align-items:center;gap:10px;height:54px}
   #dock .pc{height:54px;border-radius:15px;display:flex;align-items:center;gap:11px;padding:0 22px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.16);color:rgba(255,255,255,.82);cursor:pointer;transition:.25s}
   #dock .pc svg{width:25px;height:25px}
-  #dock .pc .nm{font-size:20px;font-weight:500}
+  #dock .pc .nm{font-size:20px;font-weight:500;white-space:nowrap}
   #dock .pc.on{background:radial-gradient(circle at 30% 30%,rgba(255,214,140,.9),rgba(255,180,90,.28));color:#3a2a10;border-color:rgba(255,205,125,.5);box-shadow:0 0 26px rgba(255,190,100,.45)}
   #dock .pc.temp{position:relative;flex-direction:column;justify-content:center;gap:2px;padding:0 20px}
   #dock .pc.temp .tv{font-size:19px;font-weight:600;line-height:1;font-variant-numeric:tabular-nums}
@@ -343,21 +343,19 @@
     timer:{home:true, bg:'radial-gradient(120% 100% at 50% 44%,#122447,#080b12 62%)', canvas:false, glow:'radial-gradient(closest-side at 50% 44%,rgba(123,150,255,.35),transparent 70%)',
       html:'<div class="fcog">'+GEAR+'</div><div class="tfull"><div class="tkick">Timer</div><div class="tring"><svg width="420" height="420" viewBox="0 0 420 420"><circle cx="210" cy="210" r="188" fill="none" stroke="rgba(255,255,255,.12)" stroke-width="14"/><circle cx="210" cy="210" r="188" fill="none" stroke="#8ea6ff" stroke-width="14" stroke-linecap="round" stroke-dasharray="1181" stroke-dashoffset="430" style="filter:drop-shadow(0 0 14px rgba(123,150,255,.7))"/></svg><div class="ttime">12:34</div></div><div class="tsub">Pasta</div><div class="tctrls"><button>❚❚</button><button class="stop">■</button></div></div>'},
     sleep:{home:false, bg:'radial-gradient(120% 90% at 50% 46%,#0a0e18,#02030a 72%)', canvas:false,
-      html:'<div class="slp"><div class="sclock"><span>10</span><span>13</span></div><div class="sdate">Thursday · 10 July</div>'
-        +'<div class="sdock"><div class="sc on" data-t>'+BULB+'<div class="nm">Bedside</div></div><div class="sc" data-t>'+BULB+'<div class="nm">Hallway</div></div><div class="sc" data-t>'+BULB+'<div class="nm">Bathroom</div></div><div class="sc"><div class="bt">21°</div><div class="nm">Temp</div></div></div></div>'},
+      html:'<div class="slp"><div class="sclock" id="slClock"><span>--</span><span>--</span></div><div class="sdate" id="slDate"></div>'
+        +'<div class="sdock" id="slDock"></div></div>'},
     rooms:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="rm"><div class="rchips"><span class="rchip on">Living Room</span><span class="rchip">Kitchen</span><span class="rchip">Bedroom</span><span class="rchip">Office</span></div>'
-        +'<div class="rhero"><div class="cover"></div><div class="rhead"><div class="rart">🎵</div><div><div class="rk">Now Playing</div><div class="rt">Golden Hour</div><div class="ra">Kacey Musgraves</div></div></div><div class="rscrub"><div class="f"></div></div><div class="rtp"><button>⏮</button><button class="pp">❚❚</button><button>⏭</button></div></div>'
-        +'<div class="rlights"><div class="rlt on" data-l><div class="ri">'+BULB+'</div><div><div class="rn">Ceiling</div><div class="rs">On</div></div></div><div class="rlt on" data-l><div class="ri">'+BULB+'</div><div><div class="rn">Lamp</div><div class="rs">On</div></div></div><div class="rlt" data-l><div class="ri">'+BULB+'</div><div><div class="rn">Reading</div><div class="rs">Off</div></div></div><div class="rlt" data-l><div class="ri">'+BULB+'</div><div><div class="rn">Accent</div><div class="rs">Off</div></div></div></div>'
-        +'<div class="rvol"><div class="rvt"><div class="rvf"></div><div class="rvk"></div></div><div class="rvi">'+SPKR+'</div></div>'
-        +'<div class="renv"><div class="rec" style="--h:#c9a6ff"><div class="ei">✨</div><div class="ev">Scenes</div></div><div class="rec on" style="--h:#ff8a5a"><div class="ei">🌡️</div><div class="ev">21°</div></div><div class="rec on" style="--h:#7fd0ff"><div class="ei">🪟</div><div class="ev">80%</div></div></div></div>'}
+      html:'<div class="rm"><div class="rchips" id="rmScenes"></div>'
+        +'<div class="rhero" id="rmHero" style="display:none"><div class="cover"></div><div class="rhead"><div class="rart" id="rmArt">🎵</div><div><div class="rk">Now Playing</div><div class="rt" id="rmT"></div><div class="ra" id="rmA"></div></div></div><div class="rscrub"><div class="f" id="rmF" style="width:0%"></div></div><div class="rtp"><button data-a="previous">⏮</button><button class="pp" id="rmPP" data-a="playpause">❚❚</button><button data-a="next">⏭</button></div></div>'
+        +'<div class="rlights" id="rmLights"></div></div>'}
   };
 
   // card answers
   var CARD={
     day:{heard:'“What’s my day look like?”', wash:'var(--cat-work)', html:'<div class="card agenda"><div class="wash"></div>'+COG+'<div class="kick">Today</div><div class="ttl" id="dayTtl">Today</div><div class="events" id="dayEvents"></div></div>'},
     list:{heard:'“What’s on my shopping list?”', wash:'var(--cat-personal)', html:'<div class="card listc"><div class="wash"></div>'+COG+'<div class="kick">Shopping list</div><div class="ttl" id="listTtl">Loading…</div><div class="items" id="listItems"></div></div>'},
-    reminder:{heard:'“Remind me to take my meds at 8”', wash:'var(--amber)', html:'<div class="card rem"><div class="wash"></div>'+COG+'<div class="bell">'+IC.bell+'</div><div class="kick">Reminder set</div><div class="ttl2">Take evening medication</div><div class="sub">Today at 8:00 pm · repeats every day</div></div>'},
+    reminder:{heard:'“What are my reminders?”', wash:'var(--amber)', html:'<div class="card rem"><div class="wash"></div>'+COG+'<div class="bell">'+IC.bell+'</div><div class="kick">Reminders</div><div class="ttl2" id="remTtl">Loading…</div><div id="remList" style="margin-top:18px"></div></div>'},
     person:{heard:'“Who’s Amina?”', wash:'var(--cat-health)', html:'<div class="card person"><div class="wash"></div>'+COG+'<div class="top"><div class="av">AO</div><div><div class="pn">Dr. Amina Okafor</div><div class="pr"><span class="dot" style="--c:var(--cat-health)"></span>GP · Health</div></div></div><div class="facts"><div class="f"><span class="fi">'+IC.cal+'</span>Check-up tomorrow · 10:30</div><div class="f"><span class="fi">'+IC.clock+'</span>Last visit 3 weeks ago</div><div class="f"><span class="fi">'+IC.phone+'</span>08 9921 0000</div></div></div>'},
     confirm:{heard:'“Add olive oil to the shopping list”', wash:'var(--accent)', html:'<div class="card confirm"><div class="wash"></div><div class="kick">Confirm</div><div class="q">Add to your Shopping list?</div><div class="rows"><div class="r"><span class="l">Item</span><span>Olive oil</span></div><div class="r"><span class="l">List</span><span>Shopping · 6 items</span></div></div><div class="acts"><button class="no">Not now</button><button class="yes">Add it</button></div></div>'},
     settings:{heard:'', wash:'var(--accent)', html:'<div class="card settings"><div class="wash"></div><div class="kick">Settings</div><div class="ttl">Your home</div><div class="rows"><div class="sr"><span class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.4 12 4l9 7.4"/><path d="M5.6 9.8V20h12.8V9.8"/></svg></span><span class="grow">Rooms &amp; devices</span><span class="chev">›</span></div><div class="sr"><span class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/></svg></span><span class="grow">Dashboard layout</span><span class="chev">›</span></div><div class="sr"><span class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4"/></svg></span><span class="grow">Voice &amp; wake word</span><span class="chev">›</span></div><div class="sr"><span class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg></span><span class="grow">Do not disturb</span><span class="toggle"></span></div></div></div>'},
@@ -389,6 +387,8 @@
       if(id==='home')initHome();
       if(id==='weather')wireWeather();
       if(id==='music')wireMusic();
+      if(id==='rooms')wireRooms();
+      if(id==='sleep')wireSleep();
       full.querySelectorAll('.sc[data-t], .rlt[data-l], .hdock .hpc.light').forEach(function(el){el.onclick=function(){el.classList.toggle('on');var rs=el.querySelector('.rs');if(rs)rs.textContent=el.classList.contains('on')?'On':'Off';};});
       full.querySelectorAll('.rchip').forEach(function(c){c.onclick=function(){full.querySelectorAll('.rchip').forEach(function(x){x.classList.remove('on')});c.classList.add('on');};});
       var pp=full.querySelector('.pp');if(pp)pp.onclick=function(){pp.textContent=pp.textContent==='❚❚'?'▶':'❚❚';};
@@ -399,6 +399,7 @@
       host.innerHTML=c.html; var card=host.querySelector('.card'); if(card&&c.wash)card.style.setProperty('--wash',c.wash);
       if(id==='day')wireDay();
       if(id==='list')wireList();
+      if(id==='reminder')wireReminder();
     }
     // persistent dock: hidden on sleep; shows what was heard for a direct answer, else your pinned controls
     if(id==='sleep'){ dock.classList.add('hide'); }
@@ -406,17 +407,48 @@
       dock.classList.remove('hide');
       var hd=c?c.heard:(id==='ask'?'“What is the meaning of life?”':'');
       if(hd){ dbody.innerHTML='<div class="dheard">Heard: <b>'+hd+'</b></div>'; }
-      else {
-        dbody.innerHTML='<div class="pc light on">'+BULB+'<span class="nm">Lamp</span></div><div class="pc light">'+BULB+'<span class="nm">Ceiling</span></div><div class="pc temp"><div class="tv">21°</div><div class="tl">Temp</div><div class="tpop"><div class="tpv">21°</div><div class="tsl"><div class="tff"></div><div class="tkn"></div></div><div class="tpl">Thermostat</div></div></div>';
-        dbody.querySelectorAll('.pc.light').forEach(function(el){el.onclick=function(){el.classList.toggle('on');};});
-        (function(){var tb=dbody.querySelector('.pc.temp');if(!tb)return;var tsl=tb.querySelector('.tsl'),tff=tb.querySelector('.tff'),tkn=tb.querySelector('.tkn'),tpv=tb.querySelector('.tpv'),tvn=tb.querySelector('.tv'),tv=21;function pt(){var p=(tv-15)/13*100;tff.style.height=p+'%';tkn.style.bottom=p+'%';tpv.textContent=tv+'°';tvn.textContent=tv+'°';}pt();
-          tb.onclick=function(e){if(e.target.closest('.tpop'))return;tb.classList.toggle('open');};
-          var d=false;function at(y){var r=tsl.getBoundingClientRect();tv=Math.round(15+Math.max(0,Math.min(1,1-(y-r.top)/r.height))*13);pt();}
-          tsl.addEventListener('pointerdown',function(e){d=true;tsl.setPointerCapture(e.pointerId);at(e.clientY);});
-          tsl.addEventListener('pointermove',function(e){if(d)at(e.clientY);});
-          tsl.addEventListener('pointerup',function(){d=false;});})();
-      }
+      else { renderDock(); }
     }
+  }
+
+  // ---- dock: real Home Assistant pinned controls (lights + thermostat) ----
+  var _ha={loaded:false,ok:false,lights:[],climate:null,scenes:[]};
+  function haControl(body){return fetch('/api/ha/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify(body)});}
+  function loadHA(cb){apiGet('/api/ha/entities').then(function(s){
+      var arr=Array.isArray(s)?s:((s&&s.entities)||(s&&s.states)||[]);
+      function dom(e){return String(e.entity_id||'').split('.')[0];}
+      // Toggleable pins: real lights first, else the house's input_boolean
+      // virtual switches (Living Room Light, Ceiling Fan, TV, …).
+      _ha.lights=arr.filter(function(e){return dom(e)==='light';}).concat(arr.filter(function(e){return dom(e)==='input_boolean';}));
+      _ha.climate=arr.filter(function(e){return dom(e)==='climate';})[0]||null;
+      _ha.scenes=arr.filter(function(e){return dom(e)==='scene';});
+      // Healthy only when the response is the documented shape (array, or the
+      // ha_control envelope carrying its count field) — a malformed 200 from a
+      // sick bridge must not read as "the house has no devices".
+      _ha.loaded=true;_ha.ok=Array.isArray(s)||(!!s&&typeof s.count==='number');cb&&cb();
+    }).catch(function(){_ha.loaded=true;_ha.ok=false;cb&&cb();});}
+  // Re-pull HA state and refresh the dock — recovers from a failed first load and
+  // keeps light/temp state fresh. Skips while heard/hidden/mid-interaction.
+  function refreshHA(){loadHA(function(){if(!dbody||dbody.querySelector('.dheard')||dock.classList.contains('hide')||dbody.querySelector('.pc.temp.open'))return;renderDock();});}
+  function renderDock(){
+    if(!_ha.loaded){dbody.innerHTML='<div class="pc light">'+BULB+'<span class="nm">…</span></div>';loadHA(function(){if(dbody.querySelector('.dheard'))return;renderDock();});return;}
+    var cl=_ha.climate,lights=_ha.lights.slice(0,cl?2:3),html='';
+    html+=lights.map(function(e){var on=String(e.state).toLowerCase()==='on';var nm=(e.attributes&&e.attributes.friendly_name)||e.entity_id;nm=nm.replace(/\s+light$/i,'');return '<div class="pc light'+(on?' on':'')+'" data-eid="'+esc(e.entity_id)+'">'+BULB+'<span class="nm">'+esc(nm)+'</span></div>';}).join('');
+    // "No lights" only after a SUCCESSFUL fetch with zero entities; a failed
+    // fetch renders no pills (quiet) and the 30s refresh keeps retrying.
+    if(!lights.length&&_ha.ok)html+='<div class="pc light"><span class="nm" style="opacity:.6">No lights</span></div>';
+    if(cl){var a=cl.attributes||{};var cur=(a.current_temperature!=null?a.current_temperature:a.temperature);var tgt=(a.temperature!=null?a.temperature:cur);if(tgt==null)tgt=21;
+      html+='<div class="pc temp" data-eid="'+esc(cl.entity_id)+'" data-tgt="'+esc(String(Math.round(tgt)))+'"><div class="tv">'+(cur!=null?Math.round(cur):'—')+'°</div><div class="tl">Temp</div><div class="tpop"><div class="tpv">'+Math.round(tgt)+'°</div><div class="tsl"><div class="tff"></div><div class="tkn"></div></div><div class="tpl">Thermostat</div></div></div>';}
+    dbody.innerHTML=html;
+    dbody.querySelectorAll('.pc.light[data-eid]').forEach(function(el){el.onclick=function(){var on=el.classList.toggle('on');haControl({entity_id:el.getAttribute('data-eid'),action:on?'turn_on':'turn_off'}).then(function(r){if(!r.ok)throw new Error('http '+r.status);}).catch(function(){el.classList.toggle('on');});};});
+    (function(){var tb=dbody.querySelector('.pc.temp');if(!tb)return;var eid=tb.getAttribute('data-eid'),tsl=tb.querySelector('.tsl'),tff=tb.querySelector('.tff'),tkn=tb.querySelector('.tkn'),tpv=tb.querySelector('.tpv'),tv=parseInt(tb.getAttribute('data-tgt'),10)||21;
+      function pt(){var p=Math.max(0,Math.min(100,(tv-15)/13*100));tff.style.height=p+'%';tkn.style.bottom=p+'%';tpv.textContent=tv+'°';}pt();
+      tb.onclick=function(e){if(e.target.closest('.tpop'))return;tb.classList.toggle('open');};
+      var d=false;function at(y){var r=tsl.getBoundingClientRect();tv=Math.round(15+Math.max(0,Math.min(1,1-(y-r.top)/r.height))*13);pt();}
+      tsl.addEventListener('pointerdown',function(e){d=true;tsl.setPointerCapture(e.pointerId);at(e.clientY);});
+      tsl.addEventListener('pointermove',function(e){if(d)at(e.clientY);});
+      tsl.addEventListener('pointerup',function(){d=false;haControl({entity_id:eid,action:'set_temperature',params:{temperature:tv}}).then(function(r){if(!r.ok)refreshHA();}).catch(function(){refreshHA();});});
+    })();
   }
 
   // ---- launcher overlay (opened from the dock grid button) ----
@@ -443,7 +475,9 @@
     {id:'day',n:'Day',ic:'day',c:'linear-gradient(150deg,#6aa6ff,#4a7de0)'},
     {id:'list',n:'Lists',ic:'lists',c:'linear-gradient(150deg,#66d6a3,#3fb98a)'},
     {id:'music',n:'Music',ic:'music',c:'linear-gradient(150deg,#c77bff,#8a53e8)'},
-    {u:'/touch/smart-home.html',n:'Rooms',ic:'rooms',c:'linear-gradient(150deg,#63b8ff,#3f7bd8)'},
+    {id:'rooms',n:'Rooms',ic:'rooms',c:'linear-gradient(150deg,#63b8ff,#3f7bd8)'},
+    {id:'reminder',n:'Reminders',ic:'reminders',c:'linear-gradient(150deg,#ff9e6a,#f0742e)'},
+    {id:'sleep',n:'Sleep',ic:'sleep',c:'linear-gradient(150deg,#5b6bb0,#3a4788)'},
     {u:'/touch/people.html',n:'People',ic:'people',c:'linear-gradient(150deg,#ff7a90,#e85a78)'},
     {u:'/touch/timers.html',n:'Timers',ic:'timer',c:'linear-gradient(150deg,#ffbf5e,#f0961e)'},
     {u:'/touch/chat.html',n:'Chat',ic:'ask',c:'linear-gradient(150deg,#9a8cff,#6a53e8)'},
@@ -532,6 +566,69 @@
     var t=document.getElementById('mTransport');if(t)t.addEventListener('click',function(e){var btn=e.target.closest('button');if(!btn)return;var a=btn.getAttribute('data-a');musicControl(a==='playpause'?(document.getElementById('mPP').textContent==='❚❚'?'pause':'play'):a);});
   }
 
+  // ---- Rooms screen (real HA devices + scenes, now-playing hero) ----
+  function friendly(e){return ((e.attributes&&e.attributes.friendly_name)||e.entity_id).replace(/\s+light$/i,'');}
+  function isOn(e){return String(e.state).toLowerCase()==='on';}
+  function wireRooms(){
+    function paint(){
+      if(_cur!=='rooms')return;
+      var host=document.getElementById('rmLights'),sc=document.getElementById('rmScenes');
+      if(!host)return;
+      var toggles=_ha.lights.slice(0,6);
+      host.innerHTML=toggles.map(function(e){return '<div class="rlt'+(isOn(e)?' on':'')+'" data-eid="'+esc(e.entity_id)+'"><div class="ri">'+BULB+'</div><div><div class="rn">'+esc(friendly(e))+'</div><div class="rs">'+(isOn(e)?'On':'Off')+'</div></div></div>';}).join('')
+        ||('<div style="color:var(--ink-faint);font-size:20px;padding:20px">'+(_ha.ok?'No devices yet':'Couldn’t reach Home Assistant')+'</div>');
+      host.querySelectorAll('.rlt[data-eid]').forEach(function(el){el.onclick=function(){
+        var on=el.classList.toggle('on');var rs=el.querySelector('.rs');if(rs)rs.textContent=on?'On':'Off';
+        haControl({entity_id:el.getAttribute('data-eid'),action:on?'turn_on':'turn_off'}).then(function(r){if(!r.ok)throw 0;}).catch(function(){el.classList.toggle('on');if(rs)rs.textContent=el.classList.contains('on')?'On':'Off';});};});
+      if(sc){sc.innerHTML=(_ha.scenes||[]).slice(0,4).map(function(e){return '<span class="rchip" data-eid="'+esc(e.entity_id)+'">'+esc(friendly(e))+'</span>';}).join('');
+        sc.querySelectorAll('.rchip[data-eid]').forEach(function(ch){ch.onclick=function(){ch.classList.add('on');haControl({entity_id:ch.getAttribute('data-eid'),action:'turn_on'}).catch(function(){}).then(function(){setTimeout(function(){ch.classList.remove('on');},900);});};});}
+    }
+    if(_ha.loaded)paint();else loadHA(paint);
+    // now-playing hero (same source as the Music screen)
+    apiGet('/api/music/now-playing').then(function(d){if(_cur!=='rooms')return;
+      var np=d&&d.now_playing,hero=document.getElementById('rmHero');if(!hero)return;
+      if(!d||!d.available||!np){hero.style.display='none';return;}
+      hero.style.display='';_music.player_id=np.player_id;
+      var t=document.getElementById('rmT'),a=document.getElementById('rmA'),f=document.getElementById('rmF'),pp=document.getElementById('rmPP');
+      if(t)t.textContent=np.title||'';if(a)a.textContent=np.artist||'';
+      if(f)f.style.width=(np.duration?Math.min(100,(np.elapsed||0)/np.duration*100):0)+'%';
+      if(pp)pp.textContent=(np.state==='playing')?'❚❚':'▶';
+      hero.querySelector('.rtp').onclick=function(e){var btn=e.target.closest('button');if(!btn)return;var act=btn.getAttribute('data-a');musicControl(act==='playpause'?(pp.textContent==='❚❚'?'pause':'play'):act);};
+    }).catch(function(){});
+    _wxTick=setInterval(function(){if(_cur==='rooms')loadHA(paint);},30000);
+  }
+
+  // ---- Sleep screen (real night clock + big easy toggles) ----
+  function wireSleep(){
+    function tick(){var c=document.getElementById('slClock');if(!c)return;var d=new Date(),h=d.getHours()%12;if(h===0)h=12;
+      c.innerHTML='<span>'+h+'</span><span>'+two(d.getMinutes())+'</span>';
+      var dt=document.getElementById('slDate');if(dt)dt.textContent=d.toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long'}).replace(/,/,' ·');}
+    tick();_homeTick=setInterval(tick,15000);
+    // Wake: home + dock are hidden on the night clock, so tapping anywhere that
+    // isn't a light control returns to home.
+    var slp=full.querySelector('.slp');
+    if(slp)slp.addEventListener('click',function(e){if(!e.target.closest('.sc'))show('home');});
+    function paint(){if(_cur!=='sleep')return;var host=document.getElementById('slDock');if(!host)return;
+      host.innerHTML=_ha.lights.slice(0,4).map(function(e){return '<div class="sc'+(isOn(e)?' on':'')+'" data-eid="'+esc(e.entity_id)+'">'+BULB+'<div class="nm">'+esc(friendly(e))+'</div></div>';}).join('');
+      host.querySelectorAll('.sc[data-eid]').forEach(function(el){el.onclick=function(){var on=el.classList.toggle('on');haControl({entity_id:el.getAttribute('data-eid'),action:on?'turn_on':'turn_off'}).then(function(r){if(!r.ok)throw 0;}).catch(function(){el.classList.toggle('on');});};});}
+    if(_ha.loaded)paint();else loadHA(paint);
+    // Overnight automations change lights — keep the wake toggles truthful.
+    _wxTick=setInterval(function(){if(_cur==='sleep')loadHA(paint);},30000);
+  }
+
+  // ---- Reminders card (real reminders) ----
+  function wireReminder(){
+    var ttl=document.getElementById('remTtl'),host=document.getElementById('remList');
+    apiGet('/api/reminders/').then(function(d){if(_cur!=='reminder')return;
+      var rs=(d&&d.reminders)||[];
+      if(!rs.length){if(ttl)ttl.textContent='No reminders set';if(host)host.innerHTML='';return;}
+      if(ttl)ttl.textContent=rs.length+' reminder'+(rs.length===1?'':'s');
+      if(host)host.innerHTML=rs.slice(0,5).map(function(r){var when='';
+        if(r.due_time){try{when=new Date(r.due_time).toLocaleString(undefined,{weekday:'short',hour:'numeric',minute:'2-digit'});}catch(e){when=String(r.due_time);}}
+        return '<div style="display:flex;gap:14px;align-items:baseline;padding:10px 0;border-top:1px solid rgba(255,255,255,.08)"><span style="font-size:18px;color:var(--ink-faint);min-width:120px">'+esc(when)+'</span><span style="font-size:21px;font-weight:500">'+esc(r.title||r.message||'Reminder')+'</span></div>';}).join('');
+    }).catch(function(){if(ttl)ttl.textContent='Couldn’t load reminders';});
+  }
+
   // ---- Day card (today's real calendar) ----
   function wireDay(){
     var ttl=document.getElementById('dayTtl'),host=document.getElementById('dayEvents');
@@ -563,6 +660,7 @@
   var ORDER=[['home','Home'],['rooms','Rooms'],['sleep','Sleep'],['ask','Ask Zoe'],['weather','Weather'],['music','Music'],['timer','Timer'],['SEP'],['day','Day'],['list','List'],['reminder','Reminder'],['person','Person'],['confirm','Confirm'],['settings','Settings'],['pair','Pair']];
   ORDER.forEach(function(o){ if(o[0]==='SEP'){var s=document.createElement('div');s.className='sep';pick.appendChild(s);return;} var b=document.createElement('button');b.dataset.id=o[0];b.textContent=o[1];b.onclick=function(){show(o[0]);};pick.appendChild(b);});
   home.onclick=function(){lclose();show('home');};
+  setInterval(refreshHA,30000);   // keep dock HA state fresh + recover from a failed load
   show('home');
 })();
 </script>
