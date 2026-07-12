@@ -212,6 +212,88 @@ def is_storable_fact(text: str) -> tuple[bool, str]:
 
 
 # ---------------------------------------------------------------------------
+# looks_like_correction — correction/negation turn-shape detector (QA F8)
+# ---------------------------------------------------------------------------
+#
+# "No Caitlin is allergic to shellfish, I don't believe Jessica is allergic to
+# anything" was stored VERBATIM as a taught "fact" by expert_dispatch.store_fact
+# ("Got it — I'll remember No Caitlin is allergic to shellfish, you don't
+# believe Jessica…", live prod 2026-07). Turns shaped like a correction or a
+# negation of something previously said belong to the correction path
+# (memory_extractor, which runs first per #1242's ordering) — when that path
+# produces nothing, the safe behavior is to store NOTHING, never the raw text.
+#
+# NOTE the deliberate ambiguity of "No <Name> is allergic to Y": it reads both
+# as "No, <Name> IS allergic" (a correction) and "No <Name> is allergic" (a
+# negation). Both readings mean the raw string is junk as a stored fact —
+# detection is what matters, not disambiguation.
+
+_CORRECTIONISH_RES = (
+    # "no, …" / "no that's wrong…" — a leading negation of the prior exchange.
+    re.compile(r"^\s*no\s*[,!.:;-]", re.IGNORECASE),
+    # "no <Name> is/does/has/isn't…" — the ambiguous negation-correction shape.
+    # Case-insensitive on the subject too: voice/lazy typing produces
+    # "no caitlin is allergic…" (Greptile P1). Idiom subjects that make "no X"
+    # ordinary English ("no one is…", "no way…") are excluded below.
+    re.compile(
+        r"^\s*no\s+(?!(?:one|body|way|thanks|worries|problem|matter|doubt|"
+        r"idea|need|more|longer|kidding|wonder|rush|offense|offence)\b)"
+        r"(?:my\s+)?[A-Za-z][\w'-]*\s+"
+        r"(?:is|are|was|were|does|do|did|has|have|had|"
+        r"isn'?t|aren'?t|wasn'?t|doesn'?t|don'?t|hasn'?t|can'?t|won'?t)\b",
+        re.IGNORECASE,
+    ),
+    # "that's wrong / not right / incorrect / not true"
+    re.compile(
+        r"^\s*that'?s\s+(?:wrong|incorrect|not\s+(?:right|true|correct))\b",
+        re.IGNORECASE,
+    ),
+    # "actually …" / "wait no …" / "i meant …" — correction openers.
+    re.compile(r"^\s*actually\b", re.IGNORECASE),
+    re.compile(r"^\s*wait\s*[,!]?\s*no\b", re.IGNORECASE),
+    re.compile(r"^\s*(?:sorry\s*[,!]?\s*)?i\s+meant\b", re.IGNORECASE),
+)
+
+# The specifically AMBIGUOUS "No <Name> is …" negation shape — safest to store
+# nothing and ask, since both readings contradict a verbatim store.
+_AMBIGUOUS_NEGATION_RE = re.compile(
+    r"^\s*no\s+(?!(?:one|body|way|thanks|worries|problem|matter|doubt|"
+    r"idea|need|more|longer|kidding|wonder|rush|offense|offence|my)\b)"
+    r"(?P<name>[A-Za-z][\w'-]*)\s+"
+    r"(?:is|are|was|were|does|do|did|has|have|had)\b",
+    re.IGNORECASE,
+)
+
+
+def looks_like_correction(text: str) -> bool:
+    """True when the turn is SHAPED like a correction/negation of prior context
+    ("no, …", "no <Name> is …", "that's wrong…", "actually …", "i meant …").
+
+    Such a turn must never be stored verbatim as a taught fact: the correction
+    path (memory_extractor) owns it, and when that path yields nothing the
+    caller should drop it rather than store junk (QA review F8)."""
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    return any(rx.match(raw) for rx in _CORRECTIONISH_RES)
+
+
+def ambiguous_negation_subject(text: str) -> Optional[str]:
+    """The <Name> of an ambiguous "No <Name> is/does/has …" negation, else None.
+
+    "No Caitlin is allergic to shellfish" reads BOTH as "No, Caitlin IS
+    allergic" and "No Caitlin is allergic" — no deterministic writer should
+    guess. Callers use the name to ask for clarification instead of storing."""
+    m = _AMBIGUOUS_NEGATION_RE.match((text or "").strip())
+    if not m:
+        return None
+    name = m.group("name")
+    # Voice/lazy typing yields "no caitlin is…" — present the name properly,
+    # but never mangle an already-cased one (McKenna).
+    return name if name[:1].isupper() else name.capitalize()
+
+
+# ---------------------------------------------------------------------------
 # Near-dedup / supersession (mem0 ADD vs UPDATE idea)
 # ---------------------------------------------------------------------------
 
@@ -544,6 +626,8 @@ def user_relationship_claim_unsupported(fact_text: str, source_text: str) -> boo
 
 __all__ = [
     "is_storable_fact",
+    "looks_like_correction",
+    "ambiguous_negation_subject",
     "classify_against_existing",
     "user_relationship_claim_unsupported",
 ]
