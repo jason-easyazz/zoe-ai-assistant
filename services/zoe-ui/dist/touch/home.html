@@ -18,6 +18,9 @@
     // Kiosk boots as GUEST into the ambient home (like skybridge did); the
     // who+PIN card is summoned on demand when something personal needs auth.
     window.__needAuth=!ok&&!kiosk;
+    // Fresh kiosk profile: provision the guest session the old surface created
+    // (fire-and-forget — first loads run loopback-guest, later calls carry it).
+    if(kiosk&&!ok){try{fetch('/api/auth/guest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device_info:{source:'estate-kiosk-bootstrap'}})}).then(function(r){return r.ok?r.json():null;}).then(function(d){if(d&&d.session_id){try{localStorage.setItem('zoe_session',JSON.stringify(d));localStorage.setItem('zoe_guest_mode','active');}catch(e){}}}).catch(function(){});}catch(e){}}
   })();
 </script>
 <style>
