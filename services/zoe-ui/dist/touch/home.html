@@ -229,7 +229,7 @@
   .agenda .events{margin-top:26px;display:flex;flex-direction:column}
   .agenda .ev{display:flex;align-items:center;gap:18px;padding:16px 0;border-top:1px solid rgba(255,255,255,.07)}
   .agenda .ev:first-child{border-top:0}
-  .agenda .ev .t{font-size:22px;color:var(--ink-soft);width:66px;font-variant-numeric:tabular-nums}
+  .agenda .ev .t{font-size:22px;color:var(--ink-soft);width:92px;flex:none;white-space:nowrap;font-variant-numeric:tabular-nums}
   .agenda .ev .en{font-size:23px;font-weight:500}
   .agenda .ev .es{font-size:17px;color:var(--ink-faint);margin-top:1px}
 
@@ -355,8 +355,8 @@
 
   // card answers
   var CARD={
-    day:{heard:'“What’s my day look like?”', wash:'var(--cat-work)', html:'<div class="card agenda"><div class="wash"></div>'+COG+'<div class="kick">Today</div><div class="ttl">Thursday 10 July</div><div class="events"><div class="ev"><div class="t">09:00</div><span class="dot" style="--c:var(--cat-work)"></span><div><div class="en">Team standup</div><div class="es">Video call</div></div></div><div class="ev"><div class="t">10:30</div><span class="dot" style="--c:var(--cat-health)"></span><div><div class="en">Dr. Amina — check-up</div><div class="es">Geraldton Medical</div></div></div><div class="ev"><div class="t">13:00</div><span class="dot" style="--c:var(--cat-personal)"></span><div><div class="en">Lunch with Sam</div><div class="es">The Provincial</div></div></div><div class="ev"><div class="t">18:30</div><span class="dot" style="--c:var(--cat-family)"></span><div><div class="en">Mum’s birthday dinner</div><div class="es">Home</div></div></div></div></div>'},
-    list:{heard:'“What’s on my shopping list?”', wash:'var(--cat-personal)', html:'<div class="card listc"><div class="wash"></div>'+COG+'<div class="kick">Shopping list</div><div class="ttl">6 items · 2 done</div><div class="items"><div class="li done"><span class="box">'+CHK+'</span><span class="tx">Eggs</span></div><div class="li"><span class="box"></span><span class="tx">Milk</span></div><div class="li"><span class="box"></span><span class="tx">Sourdough bread</span></div><div class="li done"><span class="box">'+CHK+'</span><span class="tx">Coffee beans</span></div><div class="li"><span class="box"></span><span class="tx">Baby spinach</span></div><div class="li"><span class="box"></span><span class="tx">Olive oil</span></div></div></div>'},
+    day:{heard:'“What’s my day look like?”', wash:'var(--cat-work)', html:'<div class="card agenda"><div class="wash"></div>'+COG+'<div class="kick">Today</div><div class="ttl" id="dayTtl">Today</div><div class="events" id="dayEvents"></div></div>'},
+    list:{heard:'“What’s on my shopping list?”', wash:'var(--cat-personal)', html:'<div class="card listc"><div class="wash"></div>'+COG+'<div class="kick">Shopping list</div><div class="ttl" id="listTtl">Loading…</div><div class="items" id="listItems"></div></div>'},
     reminder:{heard:'“Remind me to take my meds at 8”', wash:'var(--amber)', html:'<div class="card rem"><div class="wash"></div>'+COG+'<div class="bell">'+IC.bell+'</div><div class="kick">Reminder set</div><div class="ttl2">Take evening medication</div><div class="sub">Today at 8:00 pm · repeats every day</div></div>'},
     person:{heard:'“Who’s Amina?”', wash:'var(--cat-health)', html:'<div class="card person"><div class="wash"></div>'+COG+'<div class="top"><div class="av">AO</div><div><div class="pn">Dr. Amina Okafor</div><div class="pr"><span class="dot" style="--c:var(--cat-health)"></span>GP · Health</div></div></div><div class="facts"><div class="f"><span class="fi">'+IC.cal+'</span>Check-up tomorrow · 10:30</div><div class="f"><span class="fi">'+IC.clock+'</span>Last visit 3 weeks ago</div><div class="f"><span class="fi">'+IC.phone+'</span>08 9921 0000</div></div></div>'},
     confirm:{heard:'“Add olive oil to the shopping list”', wash:'var(--accent)', html:'<div class="card confirm"><div class="wash"></div><div class="kick">Confirm</div><div class="q">Add to your Shopping list?</div><div class="rows"><div class="r"><span class="l">Item</span><span>Olive oil</span></div><div class="r"><span class="l">List</span><span>Shopping · 6 items</span></div></div><div class="acts"><button class="no">Not now</button><button class="yes">Add it</button></div></div>'},
@@ -396,6 +396,8 @@
       stage.style.background=GROUND; home.classList.remove('hide');
       cardwrap.classList.add('on');
       host.innerHTML=c.html; var card=host.querySelector('.card'); if(card&&c.wash)card.style.setProperty('--wash',c.wash);
+      if(id==='day')wireDay();
+      if(id==='list')wireList();
     }
     // persistent dock: hidden on sleep; shows what was heard for a direct answer, else your pinned controls
     if(id==='sleep'){ dock.classList.add('hide'); }
@@ -437,8 +439,8 @@
   var DESTS=[
     {id:'home',n:'Home',ic:'home',c:'linear-gradient(150deg,#8aa0ff,#5b74ff)'},
     {id:'weather',n:'Weather',ic:'weather',c:'linear-gradient(150deg,#5ec8f0,#3f9bd8)'},
-    {u:'/touch/calendar.html',n:'Day',ic:'day',c:'linear-gradient(150deg,#6aa6ff,#4a7de0)'},
-    {u:'/touch/lists.html',n:'Lists',ic:'lists',c:'linear-gradient(150deg,#66d6a3,#3fb98a)'},
+    {id:'day',n:'Day',ic:'day',c:'linear-gradient(150deg,#6aa6ff,#4a7de0)'},
+    {id:'list',n:'Lists',ic:'lists',c:'linear-gradient(150deg,#66d6a3,#3fb98a)'},
     {u:'/touch/music.html',n:'Music',ic:'music',c:'linear-gradient(150deg,#c77bff,#8a53e8)'},
     {u:'/touch/smart-home.html',n:'Rooms',ic:'rooms',c:'linear-gradient(150deg,#63b8ff,#3f7bd8)'},
     {u:'/touch/people.html',n:'People',ic:'people',c:'linear-gradient(150deg,#ff7a90,#e85a78)'},
@@ -502,6 +504,34 @@
     }).catch(function(){});
   }
   function wireWeather(){loadWxScreen();_wxTick=setInterval(function(){if(_cur==='weather')loadWxScreen();},600000);}
+
+  // ---- Day card (today's real calendar) ----
+  function wireDay(){
+    var ttl=document.getElementById('dayTtl'),host=document.getElementById('dayEvents');
+    if(ttl)ttl.textContent=new Date().toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long'});
+    if(!host)return;
+    var d=new Date(),ds=d.getFullYear()+'-'+two(d.getMonth()+1)+'-'+two(d.getDate());
+    apiGet('/api/calendar/events?start_date='+ds+'&end_date='+ds).then(function(data){if(_cur!=='day')return;
+      var evs=((data&&data.events)||[]).filter(function(e){return !e.deleted;}).sort(function(a,b){return (a.start_time||'').localeCompare(b.start_time||'');});
+      if(!evs.length){host.innerHTML='<div class="ev" style="opacity:.6"><div class="t"></div><span class="dot" style="--c:var(--accent)"></span><div><div class="en">Nothing scheduled today</div></div></div>';return;}
+      host.innerHTML=evs.map(function(e){var cat=CAT[(e.category||'').toLowerCase()]||'var(--accent)';var when=e.all_day?'All day':fmt12(e.start_time);return '<div class="ev"><div class="t">'+esc(when)+'</div><span class="dot" style="--c:'+cat+'"></span><div><div class="en">'+esc(e.title||'Event')+'</div>'+(e.location?'<div class="es">'+esc(e.location)+'</div>':'')+'</div></div>';}).join('');
+    }).catch(function(){host.innerHTML='<div class="ev" style="opacity:.6"><div class="t"></div><span class="dot" style="--c:var(--cat-health)"></span><div><div class="en">Couldn’t load your day</div></div></div>';});
+  }
+
+  // ---- Lists card (real shopping list + items) ----
+  function wireList(){
+    var ttl=document.getElementById('listTtl'),host=document.getElementById('listItems');
+    if(!host)return;
+    apiGet('/api/lists/shopping').then(function(d){if(_cur!=='list')return;
+      var lists=(d&&d.lists)||[];
+      if(!lists.length){if(ttl)ttl.textContent='No list';host.innerHTML='<div class="li"><span class="tx" style="opacity:.6">No shopping list yet</span></div>';return;}
+      return apiGet('/api/lists/shopping/'+lists[0].id+'/items').then(function(r){if(_cur!=='list')return;
+        var items=(r&&r.items)||[],done=items.filter(function(i){return i.completed;}).length;
+        if(ttl)ttl.textContent=items.length+' item'+(items.length===1?'':'s')+(done?' · '+done+' done':'');
+        host.innerHTML=items.map(function(i){var c=!!i.completed;return '<div class="li'+(c?' done':'')+'"><span class="box">'+(c?CHK:'')+'</span><span class="tx">'+esc(i.text)+'</span></div>';}).join('')||'<div class="li"><span class="tx" style="opacity:.6">List is empty</span></div>';
+      });
+    }).catch(function(){if(host)host.innerHTML='<div class="li"><span class="tx" style="opacity:.6">Couldn’t load your list</span></div>';});
+  }
 
   var ORDER=[['home','Home'],['rooms','Rooms'],['sleep','Sleep'],['ask','Ask Zoe'],['weather','Weather'],['music','Music'],['timer','Timer'],['SEP'],['day','Day'],['list','List'],['reminder','Reminder'],['person','Person'],['confirm','Confirm'],['settings','Settings'],['pair','Pair']];
   ORDER.forEach(function(o){ if(o[0]==='SEP'){var s=document.createElement('div');s.className='sep';pick.appendChild(s);return;} var b=document.createElement('button');b.dataset.id=o[0];b.textContent=o[1];b.onclick=function(){show(o[0]);};pick.appendChild(b);});
