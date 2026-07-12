@@ -423,6 +423,10 @@ def _correction_candidates(
     if not match:
         return []
     new_val = _clean(match.group("new"))
+    # A leading bare copula is regex spill, not part of the value ("actually is
+    # peanuts not shellfish" → new must be "peanuts") — strip it so a plain
+    # value correction isn't mistaken for a clausal one by the sanity gate.
+    new_val = re.sub(r"^(?:is|are|was|were)\s+", "", new_val, flags=re.IGNORECASE)
     old_val = _clean(match.group("old"))
     if not new_val or not old_val or new_val.lower() == old_val.lower():
         return []

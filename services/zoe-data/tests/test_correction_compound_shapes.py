@@ -187,9 +187,34 @@ def test_store_fact_correction_resolved_by_extractor_stores_clean_fact(patched):
 def test_store_fact_unresolved_correction_defers_to_brain(patched):
     svc = patched
     out = _run(expert_dispatch.store_fact(
+        "memory", "actually no, that's not it", "demo-user"))
+    assert svc.ingested == [], "junk correction must not be stored raw"
+    # reply-only: deferred to the brain (None) or handled as recall — never a
+    # "Got it — I'll remember…" teach of the raw text.
+    assert out in (None, "RECALLED")
+
+
+def test_store_fact_correction_opener_over_plain_fact_stores_remainder(patched):
+    # Greptile P1: "actually <self-contained fact>" must not lose the fact —
+    # the opener is stripped and the remainder stored (never the raw text).
+    svc = patched
+    out = _run(expert_dispatch.store_fact(
         "memory", "actually my meeting got moved around a bit", "demo-user"))
-    assert svc.ingested == [], "unresolved correction must not be stored raw"
-    assert out is None  # defer to the brain, reply-only
+    assert [t for t, _ in svc.ingested] == ["my meeting got moved around a bit"]
+    assert out and out.startswith("Got it")
+
+
+def test_correction_with_leading_copula_in_new_value_still_resolves():
+    # Greptile P2: "actually is peanuts not shellfish" — the spilled copula in
+    # the new value must not trip the clausal gate and drop the correction.
+    out = extract_candidates(
+        "actually is peanuts not shellfish",
+        prev_user_message="my friend Caitlin is allergic to shellfish",
+    )
+    assert len(out) == 1
+    text = out[0].text.lower()
+    assert "peanuts" in text and "shellfish" not in text
+    assert not memory_extractor._JAMMED_COPULA_RE.search(out[0].text)
 
 
 def test_store_fact_plain_teach_still_stores(patched):
