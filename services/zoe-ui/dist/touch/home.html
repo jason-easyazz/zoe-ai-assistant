@@ -731,14 +731,17 @@
       }).catch(function(){orb.classList.remove('busy');_sending=false;dockHeard(q);toast('Sorry — I couldn’t reach Zoe just then.');});
   }
   // Free-form questions → the brain (/api/chat/ AG-UI stream) → the Ask screen.
+  var _askGen=0;
   function askZoe(q){
+    var gen=++_askGen;_sending=true;   // stays true until THIS stream finishes
     FULL.ask.html='<div class="askf"><div class="aa" id="askOut">…</div></div>';
     show('ask');dockHeard(q);orb.classList.add('busy');
     fetch('/api/chat/',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({message:q})})
       .then(function(r){if(!r.ok||!r.body)throw new Error('http '+r.status);
         var rd=r.body.getReader(),dec=new TextDecoder(),buf='',txt='';
         function pump(){return rd.read().then(function(x){
-          if(x.done){orb.classList.remove('busy');if(!txt){var o=document.getElementById('askOut');if(o)o.textContent='Sorry — no answer came back.';}return;}
+          if(x.done){if(gen===_askGen){orb.classList.remove('busy');_sending=false;if(!txt){var o=document.getElementById('askOut');if(o)o.textContent='Sorry — no answer came back.';}}return;}
+          if(gen!==_askGen)return;   // a newer ask superseded this stream
           buf+=dec.decode(x.value,{stream:true});
           var lines=buf.split('\n');buf=lines.pop();
           lines.forEach(function(ln){if(ln.lastIndexOf('data: ',0)!==0)return;
@@ -747,7 +750,7 @@
             }catch(e){}});
           return pump();});}
         return pump();
-      }).catch(function(){orb.classList.remove('busy');var o=document.getElementById('askOut');if(o)o.textContent='Sorry — I couldn’t reach Zoe just then.';});
+      }).catch(function(){if(gen!==_askGen)return;orb.classList.remove('busy');_sending=false;var o=document.getElementById('askOut');if(o)o.textContent='Sorry — I couldn’t reach Zoe just then.';});
   }
 
   orb.addEventListener('click',function(){
