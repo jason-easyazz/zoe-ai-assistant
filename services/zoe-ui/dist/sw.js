@@ -8,7 +8,7 @@
 importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.63.21'; // estate: edit/delete CRUD for contacts, events, list items
+const SW_VERSION = '4.63.22'; // estate: full-bleed fit (no letterbox on off-1.6:1 panels)
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
