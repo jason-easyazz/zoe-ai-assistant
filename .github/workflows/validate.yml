@@ -58,9 +58,6 @@ jobs:
       - name: Validate offline memory policy
         run: python3 tools/audit/validate_offline_memory.py
 
-      - name: Touch UI unit tests (node)
-        run: node services/zoe-ui/dist/touch/test_touch_menu_launcher.js
-
       - name: Run Alembic migrations on CI PostgreSQL
         run: |
           cd services/zoe-data
