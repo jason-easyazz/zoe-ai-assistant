@@ -137,21 +137,37 @@ _ROLE_WORDS = (
     "|brother|sister|mum|mom|mother|dad|father|grandma|grandmother|grandpa"
     "|grandfather|aunt|uncle|niece|nephew|cousin|colleague|coworker|boss|neighbou?r"
 )
-# Bare = optional adjectives + a role word, with no anchor. Anchored forms
-# contain "of <name>", a possessive ("Lindsay's", "user's"), or a pronoun
-# possessive ("his", "her", "their") — those pass through.
+# Bare = optional article/adjectives + a role word as the HEAD NOUN, with no
+# anchor — a trailing qualifier doesn't rescue it ("male friend from work" is
+# still ambiguous about WHOSE friend). Anchored forms contain "of <name>", a
+# possessive ("Lindsay's", "user's"), or a pronoun possessive ("his", "her",
+# "their") — those pass through. Head-noun (not role-anywhere) so trait facts
+# like "great with kids" — where the role sits inside a prepositional phrase —
+# are not flagged as relationship claims.
 _BARE_ROLE_RE = re.compile(
-    rf"^(?:(?:a|an|the)\s+)?(?:[a-z]+\s+){{0,2}}(?:{_ROLE_WORDS})s?$", re.IGNORECASE
+    rf"^(?:(?:a|an|the)\s+)?(?:[a-z]+\s+){{0,2}}(?:{_ROLE_WORDS})s?\b", re.IGNORECASE
 )
 _ANCHOR_RE = re.compile(r"\bof\s+\S|['’]s\b|\b(?:his|her|their|my|user)\b", re.IGNORECASE)
+# Words that mark the role as part of a descriptive phrase, not the head noun.
+_NON_HEAD_LEADIN_RE = re.compile(
+    r"^(?:\w+\s+)*?(?:with|for|to|about|around|at|on|from|like|loves?|has|have|had"
+    r"|is|was|works?|great|good)\s+(?:\w+\s+)*?(?:%s)s?\b" % _ROLE_WORDS,
+    re.IGNORECASE,
+)
 
 
 def _is_unanchored_role(value: str) -> bool:
-    """True when the fact value is a relationship role with no 'whose' anchor."""
+    """True when the fact value is a relationship-role HEAD with no 'whose' anchor."""
     v = (value or "").strip().rstrip(".")
     if _ANCHOR_RE.search(v):
         return False
-    return bool(_BARE_ROLE_RE.match(v))
+    if not _BARE_ROLE_RE.match(v):
+        return False
+    # role reached through a preposition/verb ("great with kids") → trait, not
+    # a relationship claim; only a role in head-noun position is flagged.
+    if _NON_HEAD_LEADIN_RE.match(v):
+        return False
+    return True
 
 
 async def process_text_llm(

@@ -201,3 +201,19 @@ def test_boss_role_normalization():
     assert _unsupported("user's boss", "his boss is Sarah, a director") is True
     # plural-with-s roles still normalize via the regex itself
     assert _unsupported("User's kids are Aria and Olivia", "my kids are Aria and Olivia") is False
+
+
+# ── head-noun bare gate + coworker synonym (Greptile r5) ─────────────────────
+
+@pytest.mark.parametrize("value", ["male friend from work", "friend from school", "a colleague from the office"])
+def test_role_head_with_tail_is_still_bare(value):
+    assert pel._is_unanchored_role(value) is True
+
+
+@pytest.mark.parametrize("value", ["great with kids", "loves her kids", "works with kids"])
+def test_trait_phrases_are_not_relationship_claims(value):
+    assert pel._is_unanchored_role(value) is False
+
+
+def test_coworker_supports_colleague_fact():
+    assert _unsupported("user's colleague", "my coworker Bob is fun") is False

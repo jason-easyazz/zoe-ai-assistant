@@ -452,6 +452,7 @@ _ROLE_SYNONYMS: tuple[frozenset[str], ...] = (
     frozenset({"grandpa", "grandfather"}),
     frozenset({"kid", "child", "children"}),
     frozenset({"neighbour", "neighbor"}),
+    frozenset({"colleague", "coworker"}),
     frozenset({"girl", "daughter"}),
     frozenset({"boy", "son"}),
     frozenset({"wife", "spouse"}),
