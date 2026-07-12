@@ -737,51 +737,63 @@ async def apply_person_fact(
     if _db is None:
         return False
 
-    pattern_type = fact_type.strip().lower()
-    if pattern_type == "bucket_list":
-        pattern_type = "bucket"
-
-    fact_text = value if name.lower() in value.lower() else f"{name}: {value}"
-    person_uuid = await _resolve_person_uuid(name, user_id, _db)
-    entity_id = person_uuid
-
-    mem_id = await _ingest_to_mempalace(
-        fact_text[:300],
-        user_id,
-        name,
-        entity_id,
-        memory_type="person",
-        source=source,
-        session_id=session_id,
-    )
-
-    if not person_uuid:
-        return bool(mem_id)
-
+    # POOL-LEAK guard: when _ensure_db OPENED this connection (db was None), it
+    # is an owned pooled connection that MUST be released. This function runs
+    # per extracted fact on every chat turn; leaking one connection per call
+    # drained the 10-slot pool in ~8 memory-bearing turns and wedged ALL of
+    # /api/chat while /health stayed green (live outage, 2026-07-12).
     try:
-        if pattern_type == "preference":
-            await _write_activity(person_uuid, user_id, "fact", fact_text, source, _db, mem_id, session_id=session_id)
-        elif pattern_type == "birthday":
-            month, day, year = _parse_birthday(value)
-            await _write_date(person_uuid, user_id, f"{name}'s birthday", month, day, year, _db, mem_id)
-            await _write_activity(person_uuid, user_id, "birthday_recorded", fact_text, source, _db, mem_id, session_id=session_id)
-        elif pattern_type == "work":
-            await _write_activity(person_uuid, user_id, "fact", fact_text, source, _db, mem_id, session_id=session_id)
-        elif pattern_type == "meeting":
-            await _write_activity(person_uuid, user_id, "meeting", fact_text, source, _db, mem_id, session_id=session_id)
-        elif pattern_type == "gift_idea":
-            await _write_gift(person_uuid, user_id, value[:200], "idea", source, _db, mem_id)
-        elif pattern_type == "gift_given":
-            await _write_gift(person_uuid, user_id, value[:200], "given", source, _db, mem_id)
-        elif pattern_type == "bucket":
-            await _write_bucket(person_uuid, user_id, fact_text[:300], _db, mem_id)
-        else:
-            await _write_activity(person_uuid, user_id, "fact", fact_text, source, _db, mem_id, session_id=session_id)
-        await _post_write_hooks(person_uuid, user_id, _db)
-        return True
-    except Exception as exc:
-        logger.debug("apply_person_fact failed for %r: %s", name, exc)
-        return False
+        pattern_type = fact_type.strip().lower()
+        if pattern_type == "bucket_list":
+            pattern_type = "bucket"
+
+        fact_text = value if name.lower() in value.lower() else f"{name}: {value}"
+        person_uuid = await _resolve_person_uuid(name, user_id, _db)
+        entity_id = person_uuid
+
+        mem_id = await _ingest_to_mempalace(
+            fact_text[:300],
+            user_id,
+            name,
+            entity_id,
+            memory_type="person",
+            source=source,
+            session_id=session_id,
+        )
+
+        if not person_uuid:
+            return bool(mem_id)
+
+        try:
+            if pattern_type == "preference":
+                await _write_activity(person_uuid, user_id, "fact", fact_text, source, _db, mem_id, session_id=session_id)
+            elif pattern_type == "birthday":
+                month, day, year = _parse_birthday(value)
+                await _write_date(person_uuid, user_id, f"{name}'s birthday", month, day, year, _db, mem_id)
+                await _write_activity(person_uuid, user_id, "birthday_recorded", fact_text, source, _db, mem_id, session_id=session_id)
+            elif pattern_type == "work":
+                await _write_activity(person_uuid, user_id, "fact", fact_text, source, _db, mem_id, session_id=session_id)
+            elif pattern_type == "meeting":
+                await _write_activity(person_uuid, user_id, "meeting", fact_text, source, _db, mem_id, session_id=session_id)
+            elif pattern_type == "gift_idea":
+                await _write_gift(person_uuid, user_id, value[:200], "idea", source, _db, mem_id)
+            elif pattern_type == "gift_given":
+                await _write_gift(person_uuid, user_id, value[:200], "given", source, _db, mem_id)
+            elif pattern_type == "bucket":
+                await _write_bucket(person_uuid, user_id, fact_text[:300], _db, mem_id)
+            else:
+                await _write_activity(person_uuid, user_id, "fact", fact_text, source, _db, mem_id, session_id=session_id)
+            await _post_write_hooks(person_uuid, user_id, _db)
+            return True
+        except Exception as exc:
+            logger.debug("apply_person_fact failed for %r: %s", name, exc)
+            return False
+    finally:
+        if should_close and _db is not None:
+            try:
+                await _db.close()
+            except Exception:
+                pass
 
 
 async def process_text(
@@ -947,6 +959,16 @@ async def process_text(
     except Exception as exc:
         logger.warning("person_extractor.process_text failed for user %s: %s", user_id, exc)
         return written
+    finally:
+        # POOL-LEAK guard: release the owned pooled connection _ensure_db opened
+        # (db=None call sites — the per-turn chat memory pass). Leaking one per
+        # turn drained the 10-slot pool and wedged /api/chat while /health stayed
+        # green (live outage, 2026-07-12). Same guard as apply_person_fact.
+        if _opened and _db is not None:
+            try:
+                await _db.close()
+            except Exception:
+                pass
 
     return written
 
