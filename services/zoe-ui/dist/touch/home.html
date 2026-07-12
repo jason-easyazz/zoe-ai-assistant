@@ -725,8 +725,13 @@
   }
 
   // ---- Lists: full multi-column board (all lists, toggle, add, create) ----
-  var LIST_TYPES=['shopping','work_todos','personal_todos','bucket'];
-  function apiJson(method,url,body){return fetch(url,{method:method,headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:body?JSON.stringify(body):undefined}).then(function(r){if(!r.ok)throw new Error('http '+r.status);return r.json();});}
+  var LIST_TYPES=['shopping','work_todos','personal_todos','bucket','tasks'];
+  function apiJson(method,url,body){return fetch(url,{method:method,headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:body?JSON.stringify(body):undefined}).then(function(r){
+    if(r.status===401||r.status===403){
+      if(window.__kiosk){if(window.__guestBootSettled){try{localStorage.removeItem('zoe_session');}catch(e){}if(window.__showAuthCard)window.__showAuthCard();}}
+      else if(!_authBounced&&!window.__needAuth){_authBounced=true;try{localStorage.removeItem('zoe_session');}catch(e){}location.replace('/touch/index.html'+location.search);}
+      throw new Error('auth');}
+    if(!r.ok)throw new Error('http '+r.status);return r.json();});}
   function lcolHTML(lst,items){
     var done=items.filter(function(i){return i.completed;}).length;
     return '<div class="lcol" data-type="'+esc(lst.list_type)+'" data-id="'+esc(lst.id)+'"><h3>'+esc(lst.name)+'</h3><div class="lct">'+items.length+' item'+(items.length===1?'':'s')+(done?' · '+done+' done':'')+'</div>'
@@ -737,7 +742,7 @@
     var host=document.getElementById('lstCols');if(!host)return;
     host.innerHTML='<div class="lcol"><h3>Loading…</h3></div>';
     Promise.all(LIST_TYPES.map(function(t){return apiJson('GET','/api/lists/'+t).then(function(d){return (d.lists||[]).map(function(l){l.list_type=l.list_type||t;return l;});}).catch(function(){return [];});}))
-      .then(function(groups){var lists=[].concat.apply([],groups).slice(0,5);
+      .then(function(groups){var lists=[].concat.apply([],groups).slice(0,12);   // columns h-scroll, so show them all (sane cap)
         return Promise.all(lists.map(function(l){return apiJson('GET','/api/lists/'+l.list_type+'/'+l.id+'/items').then(function(d){return {l:l,items:d.items||[]};}).catch(function(){return {l:l,items:[]};});}));})
       .then(function(cols){if(_cur!=='list')return;
         host.innerHTML=cols.map(function(c){return lcolHTML(c.l,c.items);}).join('')
@@ -752,7 +757,7 @@
       if(row){var t=col.getAttribute('data-type'),id=col.getAttribute('data-id'),it=row.getAttribute('data-item');
         var now=row.getAttribute('data-done')!=='1';
         row.classList.toggle('done',now);row.setAttribute('data-done',now?1:0);row.querySelector('.bx').innerHTML=now?CHK:'';
-        apiJson('PUT','/api/lists/'+t+'/'+id+'/items/'+it,{completed:now?1:0}).catch(function(){row.classList.toggle('done');});
+        apiJson('PUT','/api/lists/'+t+'/'+id+'/items/'+it,{completed:now?1:0}).catch(function(e){row.classList.toggle('done');row.setAttribute('data-done',now?0:1);row.querySelector('.bx').innerHTML=now?'':CHK;if(String(e&&e.message)==='auth')toast('Sign in to change lists');});
         return;}
       var btn=e.target.closest('.ladd button');
       if(btn){var inp=col.querySelector('.ladd input'),v=(inp.value||'').trim();if(!v)return;inp.value='';
@@ -771,7 +776,7 @@
       var ts=(d.timers||[]);
       var timeEl=document.getElementById('tmTime'),lab=document.getElementById('tmLabel'),ctl=document.getElementById('tmCtl'),more=document.getElementById('tmMore'),arc=document.getElementById('tmArc');
       if(!ts.length){if(timeEl)timeEl.textContent='0:00';if(lab)lab.textContent='No timers — ask Zoe to set one';if(ctl)ctl.innerHTML='';if(more)more.innerHTML='';if(arc)arc.style.strokeDashoffset=1181;return;}
-      function remainOf(t){if(t.ends_at){return (new Date(t.ends_at).getTime()-Date.now())/1000;}if(t.remaining_seconds!=null)return t.remaining_seconds;return t.duration_seconds||0;}
+      function remainOf(t){if(t.expires_at_ms!=null)return (t.expires_at_ms-Date.now())/1000;if(t.ends_at)return (new Date(t.ends_at).getTime()-Date.now())/1000;if(t.remaining_seconds!=null)return t.remaining_seconds;return t.duration_seconds||0;}
       var first=ts[0];
       function tick(){if(_cur!=='timer')return;var rem=remainOf(first),dur=first.duration_seconds||Math.max(rem,1);
         if(timeEl)timeEl.textContent=fmtT(rem);
@@ -807,7 +812,12 @@
     if(rows){rows.innerHTML=[['All settings','/touch/settings.html'],['Updates','/touch/updates.html'],['Link a device','__pair']].map(function(r){return '<div class="srow2" data-go="'+r[1]+'"><span>'+r[0]+'</span><span class="chev2">›</span></div>';}).join('');
       rows.onclick=function(e){var r=e.target.closest('.srow2');if(!r)return;var go=r.getAttribute('data-go');if(go==='__pair')show('pair');else location.href=go;};}
     var out=document.getElementById('setOut');
-    if(out)out.onclick=function(){try{localStorage.removeItem('zoe_session');}catch(e){}location.reload();};
+    if(out)out.onclick=function(){
+      // Revoke server-side FIRST (clearing only localStorage leaves the session alive).
+      fetch('/api/auth/logout',{method:'POST',headers:{'X-Session-ID':sid()},credentials:'include'}).catch(function(){}).then(function(){
+        try{localStorage.removeItem('zoe_session');localStorage.removeItem('zoe_guest_mode');}catch(e){}
+        try{sessionStorage.removeItem('zoe_gb');}catch(e){}
+        location.reload();});};
   }
 
   // ---- Day card (today's real calendar) ----
