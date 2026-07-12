@@ -808,6 +808,21 @@ async def extract_and_ingest(
             # Jessica correction) — superseding it would overwrite the wrong
             # person's memory. When the candidate is about a named person, only
             # rows that mention that person's first name are eligible.
+            _CAL_WORDS = {
+                "january","february","march","april","may","june","july","august",
+                "september","october","november","december","monday","tuesday",
+                "wednesday","thursday","friday","saturday","sunday","my","the","user",
+            }
+
+            def _name_tokens(t: str) -> set[str]:
+                # Name signals: capitalized tokens AND lowercase possessives
+                # ("karen's birthday…" — users type lowercase), minus calendar/
+                # stop words. Possessive detection keeps a lowercase-typed
+                # person's row protected from titleless supersedes (Greptile P1).
+                caps = {w.lower() for w in re.findall(r"\b[A-Z][a-z]+\b", t)}
+                poss = {w.lower() for w in re.findall(r"\b([a-z]+)['\u2019]s\b", t)}
+                return {w for w in (caps | poss) if w not in _CAL_WORDS}
+
             if getattr(c, "title", None):
                 _toks = c.title.split()
                 if len(_toks) > 1:
@@ -831,6 +846,16 @@ async def extract_and_ingest(
                         if _first in t.lower()
                         and not re.search(rf"\b(?i:{re.escape(_first)})\s+(?:[A-Z][a-z]|[a-z]+['\u2019]s\b)", t)
                     ]
+            else:
+                # Titleless candidates (templates/corrections without a person
+                # anchor) must not supersede a row about a named third person the
+                # candidate never mentions (Greptile P1). Conservative: any
+                # name token in the existing row must appear in the candidate.
+                _cand_names = _name_tokens(c.text)
+                existing = [
+                    (i, t) for i, t in existing
+                    if not (_name_tokens(t) - _cand_names)
+                ]
             op, target_id = classify_against_existing(c.text, existing)
         except Exception as exc:
             logger.debug("reconciliation unavailable (%s) — plain ingest", exc)
