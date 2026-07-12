@@ -564,3 +564,27 @@ async def test_sparser_echo_skipped_not_duplicated(monkeypatch):
         assert not any(i["text"] == "My dad's name is Neil" for i in svc.ingests)
     finally:
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_correction_never_supersedes_another_persons_row(monkeypatch):
+    """Greptile P1 (security): a Jessica correction must not supersede Karen's
+    same-attribute row even when semantic search returns it."""
+    import memory_extractor as me
+
+    db = await _open(people=[])
+    try:
+        svc = _FakeReconcileSvc(existing=[("karen-1", "Karen's birthday is March 15")])
+        _patch_memory_service(monkeypatch, svc)
+        _always_storable(monkeypatch)
+        _use_db(monkeypatch, db)
+
+        await me.extract_and_ingest(
+            "her birthday is actually March 25",
+            user_id=USER, session_id="s-x", source="test",
+            prev_user_message="My friend Jessica's birthday is March 15",
+        )
+        assert svc.reviews == []  # Karen's row untouched
+        assert any("March 25" in i["text"] for i in svc.ingests)  # stored as ADD
+    finally:
+        await db.close()

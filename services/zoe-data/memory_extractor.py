@@ -799,9 +799,16 @@ async def extract_and_ingest(
         try:
             from memory_quality import classify_against_existing
             hits = await svc.search(c.text, user_id=user_id, limit=3)
-            op, target_id = classify_against_existing(
-                c.text, [(h.id, h.text or "") for h in hits if h.text]
-            )
+            existing = [(h.id, h.text or "") for h in hits if h.text]
+            # Entity guard (Greptile P1/security): semantic search can return a
+            # DIFFERENT person's same-attribute fact ("Karen's birthday is…" for a
+            # Jessica correction) — superseding it would overwrite the wrong
+            # person's memory. When the candidate is about a named person, only
+            # rows that mention that person's first name are eligible.
+            if getattr(c, "title", None):
+                _first = c.title.split()[0].lower()
+                existing = [(i, t) for i, t in existing if _first in t.lower()]
+            op, target_id = classify_against_existing(c.text, existing)
         except Exception as exc:
             logger.debug("reconciliation unavailable (%s) — plain ingest", exc)
             op, target_id = "add", None

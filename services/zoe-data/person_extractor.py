@@ -158,18 +158,30 @@ _NON_NAME_TOKENS = frozenset({
 })
 
 
+_NAME_LEADIN_ROLES = frozenset({
+    "friend", "mate", "buddy", "bestie", "wife", "husband", "partner", "girlfriend",
+    "boyfriend", "son", "daughter", "kid", "kids", "child", "children", "girl", "boy",
+    "brother", "sister", "mum", "mom", "mother", "dad", "father", "grandma", "grandpa",
+    "grandmother", "grandfather", "aunt", "uncle", "niece", "nephew", "cousin",
+    "colleague", "coworker", "boss", "neighbour", "neighbor", "parent", "sibling",
+    "birthday", "name",
+})
+
+
 def _looks_like_person_name(name: str) -> bool:
     """False for the pronouns / sentence-openers the name regex over-captures.
 
-    Multi-word captures ("Mary Jane") pass; a LOWERCASE first token does not —
-    the IGNORECASE pattern branches captured lead-ins like "friend Jessica" and
-    minted them as persons (QA review F4). A real name capture starts uppercase.
+    Multi-word captures ("Mary Jane") pass. The IGNORECASE pattern branches
+    captured lead-ins like "friend Jessica" and minted them as persons (QA
+    review F4) — but users also legitimately type lowercase names ("my friend
+    jessica"), so rejection is by a KNOWN lead-in vocabulary (roles, pronouns,
+    stop tokens) on the first token, not by capitalization.
     """
     name = (name or "").strip()
     if not name or name.lower() in _NON_NAME_TOKENS:
         return False
-    first = name.split()[0]
-    if first[:1].islower():
+    first = name.split()[0].lower().rstrip("'s") if name.split()[0].lower().endswith("'s") else name.split()[0].lower()
+    if first in _NON_NAME_TOKENS or first in _NAME_LEADIN_ROLES:
         return False  # "friend Jessica", "her birthday" — lead-in, not a name
     return True
 
