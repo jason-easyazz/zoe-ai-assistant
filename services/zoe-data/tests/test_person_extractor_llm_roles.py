@@ -1,0 +1,134 @@
+"""Bare-role backstop for the per-turn LLM person extraction.
+
+An UNANCHORED relationship value is poison: "Emily: wife" stored from a message
+describing a FRIEND's family ranked #1 for "Who is my wife?" (live 2026-07-12).
+These tests lock in: the prompt carries the qualification rule, the
+_is_unanchored_role predicate, and the drop path (bare role never reaches
+apply_person_fact; qualified values do).
+"""
+import json
+
+import pytest
+
+pytestmark = pytest.mark.ci_safe  # pure regex + monkeypatched HTTP/apply
+
+import person_extractor_llm as pel
+
+
+# ── predicate ────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("value", [
+    "wife", "the wife", "girl", "girls", "daughter", "male friend",
+    "best friend", "a colleague", "kids",
+])
+def test_bare_roles_are_unanchored(value):
+    assert pel._is_unanchored_role(value) is True
+
+
+@pytest.mark.parametrize("value", [
+    "wife of Lindsay Cannon", "user's friend", "Lindsay's wife", "his wife",
+    "their daughter", "my friend",           # anchored relationships pass
+    "software engineer", "born 26/10/1982", "likes hiking", "from Brazil",
+    "allergic to nuts",                       # non-relationship facts pass
+])
+def test_anchored_or_non_role_values_pass(value):
+    assert pel._is_unanchored_role(value) is False
+
+
+# ── prompt carries the rule ──────────────────────────────────────────────────
+
+def test_both_prompts_require_qualified_relationships():
+    for prompt in (pel._EXTRACTION_PROMPT, pel._EXTRACTION_PROMPT_CONF):
+        assert "whose relative" in prompt
+        assert "wife of Lindsay Cannon" in prompt
+
+
+# ── drop path: bare role never reaches apply_person_fact ────────────────────
+
+class _Resp:
+    status_code = 200
+    def __init__(self, payload): self._p = payload
+    def raise_for_status(self): pass
+    def json(self):
+        return {"choices": [{"message": {"content": json.dumps(self._p)}}]}
+
+
+class _Client:
+    def __init__(self, payload): self._p = payload
+    async def __aenter__(self): return self
+    async def __aexit__(self, *exc): return False
+    async def post(self, *a, **k): return _Resp(self._p)
+
+
+@pytest.mark.asyncio
+async def test_bare_role_dropped_qualified_applied(monkeypatch):
+    llm_items = [
+        {"name": "Emily Cannon", "fact_type": "preference", "value": "wife"},                      # bare → drop
+        {"name": "Emily Cannon", "fact_type": "preference", "value": "wife of Lindsay Cannon"},    # anchored → apply
+        {"name": "Aria Cannon", "fact_type": "preference", "value": "girl"},                       # bare → drop
+        {"name": "Lindsay Cannon", "fact_type": "birthday", "value": "26/10/1982"},                # non-role → apply
+    ]
+    monkeypatch.setattr(pel.httpx, "AsyncClient", lambda **k: _Client(llm_items))
+    applied = []
+
+    async def fake_apply(name, fact_type, value, **kw):
+        applied.append((name, value))
+        return True
+    import person_extractor
+    monkeypatch.setattr(person_extractor, "apply_person_fact", fake_apply)
+
+    written = await pel.process_text_llm(
+        "Here are the details of my friends family and their names",
+        user_id="demo-roles",
+    )
+    assert written == 2
+    assert ("Emily Cannon", "wife of Lindsay Cannon") in applied
+    assert ("Lindsay Cannon", "26/10/1982") in applied
+    assert ("Emily Cannon", "wife") not in applied
+    assert ("Aria Cannon", "girl") not in applied
+
+
+# ── user-anchor validation (memory_quality.user_relationship_claim_unsupported) ──
+
+from memory_quality import user_relationship_claim_unsupported as _unsupported
+
+_SRC = "No Lindsay is my male friend, Emily is the wife and Aria and Olivia are the girls"
+
+
+@pytest.mark.parametrize("fact", [
+    "Emily is the user's wife.", "Emily: wife of user",
+    "Lindsay Cannon: husband of the speaker", "Aria is a girl in the user's life.",
+])
+def test_guessed_user_anchor_is_unsupported(fact):
+    assert _unsupported(fact, _SRC) is True
+
+
+@pytest.mark.parametrize("fact,src", [
+    ("Lindsay is the user's male friend.", _SRC),          # source says "my male friend"
+    ("Lindsay: male friend of user", _SRC),
+    ("Emily Cannon is Lindsay Cannon's wife", _SRC),       # third-party anchor
+    ("The user is allergic to nuts.", "I am allergic to nuts"),  # not a relationship
+    ("User's wife is Emma", "I love my wife Emma dearly"), # supported user anchor
+])
+def test_supported_or_non_relationship_pass(fact, src):
+    assert _unsupported(fact, src) is False
+
+
+@pytest.mark.asyncio
+async def test_guessed_user_anchor_dropped_in_llm_loop(monkeypatch):
+    llm_items = [
+        {"name": "Emily Cannon", "fact_type": "preference", "value": "wife of user"},   # guessed → drop
+        {"name": "Lindsay Cannon", "fact_type": "preference", "value": "user's male friend"},  # supported → apply
+    ]
+    monkeypatch.setattr(pel.httpx, "AsyncClient", lambda **k: _Client(llm_items))
+    applied = []
+
+    async def fake_apply(name, fact_type, value, **kw):
+        applied.append((name, value))
+        return True
+    import person_extractor
+    monkeypatch.setattr(person_extractor, "apply_person_fact", fake_apply)
+
+    written = await pel.process_text_llm(_SRC, user_id="demo-roles")
+    assert written == 1
+    assert applied == [("Lindsay Cannon", "user's male friend")]

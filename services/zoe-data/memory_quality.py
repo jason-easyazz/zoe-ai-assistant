@@ -422,4 +422,52 @@ def _merge_decision(
     return "skip", existing_id
 
 
-__all__ = ["is_storable_fact", "classify_against_existing"]
+# ── User-anchored relationship validation ────────────────────────────────────
+# A 4B extractor, asked to say WHOSE relative a person is, defaults to "the
+# user" when the text doesn't say ("Emily is the wife" — describing a FRIEND's
+# family — became "Emily is the user's wife", live 2026-07-12). Rule: a fact may
+# anchor a relationship role to the user ONLY if the source turn literally says
+# "my <role>" (adjectives allowed: "my male friend"). Producers pass the source
+# turn text; unsupported claims are dropped, never stored.
+
+_USER_ANCHORED_ROLE_RE = re.compile(
+    r"(?:\buser'?s?\b|\bspeaker'?s?\b|\bof\s+(?:the\s+)?(?:user|speaker)\b)",
+    re.IGNORECASE,
+)
+_ROLE_WORD_RE = re.compile(
+    r"\b(wife|husband|partner|girlfriend|boyfriend|fianc[eé]e?|spouse"
+    r"|son|daughter|kid|child|girl|boy|baby"
+    r"|friend|mate|buddy|bestie"
+    r"|brother|sister|mum|mom|mother|dad|father|grandma|grandmother|grandpa"
+    r"|grandfather|aunt|uncle|niece|nephew|cousin)s?\b",
+    re.IGNORECASE,
+)
+
+
+def user_relationship_claim_unsupported(fact_text: str, source_text: str) -> bool:
+    """True when ``fact_text`` anchors a relationship role to the USER but the
+    source turn never says "my <role>" — i.e. the extractor guessed the anchor.
+
+    Non-relationship facts, third-party-anchored facts ("wife of Lindsay"), and
+    user anchors the source supports ("my male friend" → "user's friend") pass.
+    """
+    fact = (fact_text or "").strip()
+    if not fact or not _USER_ANCHORED_ROLE_RE.search(fact):
+        return False
+    roles = {m.group(1).lower().rstrip("s") for m in _ROLE_WORD_RE.finditer(fact)}
+    if not roles:
+        return False  # user-anchored but no relationship role → not our concern
+    src = (source_text or "").lower()
+    for role in roles:
+        # "my <role>" with up to two adjectives between ("my male friend",
+        # "my best mate"); plural tolerated ("my girls").
+        if re.search(rf"\bmy\s+(?:\w+\s+){{0,2}}{re.escape(role)}s?\b", src):
+            return False  # the source supports this user anchor
+    return True
+
+
+__all__ = [
+    "is_storable_fact",
+    "classify_against_existing",
+    "user_relationship_claim_unsupported",
+]

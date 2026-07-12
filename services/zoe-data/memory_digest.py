@@ -378,6 +378,18 @@ async def run_turn_digest(
                 result["skipped_low_quality"] += 1
                 logger.debug("run_turn_digest: dropped non-fact: %r", fact[:60])
                 continue
+            # Anchor validation: this single-turn LLM guesses "the user" as the
+            # relationship anchor when the text doesn't say ("Emily is the wife"
+            # → "Emily is the user's wife", live 2026-07-12). Only accept a
+            # user-anchored relationship the turn supports ("my <role>").
+            try:
+                from memory_quality import user_relationship_claim_unsupported
+                if user_relationship_claim_unsupported(fact, user_message):
+                    result["skipped_low_quality"] += 1
+                    logger.info("run_turn_digest: dropped unsupported user-anchored relationship: %r", fact[:70])
+                    continue
+            except Exception:
+                pass
             try:
                 ref = await svc.ingest(
                     fact,
@@ -503,6 +515,15 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
             tags = ["digest", item.get("type", "unknown")]
             if not _passes_quality_gate(fact):
                 continue
+            # Anchor validation (same rule as run_turn_digest): only accept a
+            # user-anchored relationship the day's chat actually supports.
+            try:
+                from memory_quality import user_relationship_claim_unsupported
+                if user_relationship_claim_unsupported(fact, chat_text):
+                    logger.info("memory_digest: dropped unsupported user-anchored relationship: %r", fact[:70])
+                    continue
+            except Exception:
+                pass
             try:
                 ref = await svc.ingest(
                     fact,
