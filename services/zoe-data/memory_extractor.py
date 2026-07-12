@@ -572,14 +572,24 @@ async def _load_recent_user_messages(
     Best-effort — returns [] on any error/miss.
     """
     from db_pool import get_db_ctx  # type: ignore[import]
+    # Owner-scope the lookback: a shared panel session carries messages from
+    # MULTIPLE users (per-message ownership in cm.metadata, else the session
+    # owner). Without this, user B's pronoun could anchor to user A's intro and
+    # the fact would be written in the wrong user's store. Reuses the digest's
+    # canonical owner expression (no literal '?' — the compat layer counts them).
+    from memory_digest import _message_owner_expr  # type: ignore[import]
 
+    owner_expr = _message_owner_expr()
     cur = (current_message or "").strip()
     async with get_db_ctx() as db:
         rows = await (
             await db.execute(
-                "SELECT content FROM chat_messages WHERE session_id = ? AND role = 'user' "
-                "ORDER BY created_at::timestamptz DESC LIMIT ?",
-                (session_id, limit),
+                "SELECT cm.content FROM chat_messages cm "
+                "JOIN chat_sessions cs ON cm.session_id = cs.id "
+                "WHERE cm.session_id = ? AND cm.role = 'user' "
+                f"AND {owner_expr} = ? "
+                "ORDER BY cm.created_at::timestamptz DESC LIMIT ?",
+                (session_id, user_id, limit),
             )
         ).fetchall()
     out: list[str] = []
