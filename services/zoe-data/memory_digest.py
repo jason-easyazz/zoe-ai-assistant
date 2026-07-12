@@ -515,12 +515,17 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
             tags = ["digest", item.get("type", "unknown")]
             if not _passes_quality_gate(fact):
                 continue
-            # Anchor validation (same rule as run_turn_digest): only accept a
-            # user-anchored relationship the day's chat actually supports.
+            # Anchor validation — STRICTER than run_turn_digest: this batch runs
+            # over the whole day's concatenated messages, so "my wife" said in
+            # one turn would falsely legitimize a guessed "Emily is the user's
+            # wife" extracted from a different turn (no turn-level provenance
+            # here). Drop ALL user-anchored relationship facts in the nightly
+            # pass — the per-turn digest, which validates against the actual
+            # source turn, is the sanctioned capturer of those.
             try:
                 from memory_quality import user_relationship_claim_unsupported
-                if user_relationship_claim_unsupported(fact, chat_text):
-                    logger.info("memory_digest: dropped unsupported user-anchored relationship: %r", fact[:70])
+                if user_relationship_claim_unsupported(fact, ""):
+                    logger.info("memory_digest: dropped user-anchored relationship (no turn provenance in nightly batch): %r", fact[:70])
                     continue
             except Exception:
                 pass

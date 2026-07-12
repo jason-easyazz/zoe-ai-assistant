@@ -182,3 +182,13 @@ def test_colleague_class_roles_are_validated():
     assert _unsupported("user's colleague", "he introduced his colleague Bob") is True
     assert _unsupported("user's colleague", "I had lunch with my colleague Bob") is False
     assert _unsupported("user's neighbor", "my neighbour plays loud music") is False  # synonym pair
+
+
+def test_nightly_batch_source_empty_drops_all_user_anchored_roles():
+    """The nightly digest has no turn provenance (whole-day transcript), so it
+    passes source_text=\"\" — EVERY user-anchored relationship fact must drop
+    there, even ones a day-level grep would falsely support (Greptile r3)."""
+    assert _unsupported("Emily is the user's wife.", "") is True
+    assert _unsupported("User's mother is Janice", "") is True
+    # non-relationship facts still pass with empty source
+    assert _unsupported("The user is allergic to nuts.", "") is False
