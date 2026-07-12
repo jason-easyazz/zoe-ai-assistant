@@ -10,7 +10,7 @@
      to login. A malformed session counts as no session; carry the panel_id query
      through so the panel keeps its binding after signing in. */
   (function(){var ok=false;try{var s=JSON.parse(localStorage.getItem('zoe_session')||'null');ok=!!(s&&s.session_id);}catch(e){ok=false;}
-    if(!ok){var q=location.search||'';sessionStorage.setItem('zoe_redirect_after_login','/touch/home.html'+q);location.replace('/touch/index.html'+q);}
+    window.__needAuth=!ok;   // no session → estate-native who+PIN card (no redirect)
   })();
 </script>
 <style>
@@ -46,6 +46,32 @@
   #cmdbar button:active{transform:scale(.94)}
   #saytoast{position:absolute;left:50%;top:54px;transform:translateX(-50%);max-width:820px;background:rgba(14,16,26,.72);border:1px solid rgba(255,255,255,.14);border-radius:16px;backdrop-filter:blur(16px);padding:14px 26px;font-size:22px;z-index:56;opacity:0;pointer-events:none;transition:opacity .3s}
   #saytoast.on{opacity:1}
+  /* who + PIN unlock card (estate-native login) */
+  #authov{position:absolute;inset:0;z-index:80;display:none;align-items:center;justify-content:center;background:rgba(7,10,22,.66);backdrop-filter:blur(18px)}
+  #authov.on{display:flex}
+  .acard{width:880px;background:linear-gradient(180deg,rgba(255,255,255,.085),rgba(255,255,255,.03));border:1px solid rgba(255,255,255,.14);border-radius:34px;padding:38px 46px;display:flex;gap:44px;box-shadow:0 30px 90px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.14)}
+  .acard .colL{width:330px;flex:none;align-self:center}
+  .acard .colR{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding-left:44px;border-left:1px solid rgba(255,255,255,.08)}
+  .acard h2{font-size:25px;font-weight:600;margin-bottom:5px}
+  .acard .sub{font-size:15px;color:var(--ink-faint);margin-bottom:22px}
+  .au{display:flex;align-items:center;gap:16px;cursor:pointer;padding:9px 12px;border-radius:18px;border:1px solid transparent}
+  .au .av{width:56px;height:56px;border-radius:50%;display:grid;place-items:center;font-size:23px;font-weight:600;color:#0a0d14;flex:none}
+  .au .nm2{font-size:22px;font-weight:500;color:var(--ink-soft)}
+  .au.sel{background:rgba(123,150,255,.16);border-color:rgba(123,150,255,.5)}
+  .au.sel .nm2{color:var(--ink);font-weight:600}
+  .alead{font-size:28px;font-weight:600;text-align:center}
+  .alead .n{color:var(--accent)}
+  .adots{display:flex;gap:22px;height:22px;margin:24px 0}
+  .adot{width:18px;height:18px;border-radius:50%;border:2px solid rgba(255,255,255,.34)}
+  .adot.f{background:var(--accent);border-color:var(--accent);box-shadow:0 0 14px rgba(123,150,255,.6)}
+  .apin{opacity:.3;pointer-events:none;transition:opacity .3s;display:flex;flex-direction:column;align-items:center}
+  .apin.on{opacity:1;pointer-events:auto}
+  .apin.err .adots{animation:ashake .4s}.apin.err .adot{border-color:#ff7a90}
+  @keyframes ashake{0%,100%{transform:none}25%{transform:translateX(-9px)}55%{transform:translateX(8px)}80%{transform:translateX(-5px)}}
+  .apad{display:grid;grid-template-columns:repeat(3,86px);gap:14px}
+  .akey{height:72px;border-radius:19px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.055);color:var(--ink);font:inherit;font-size:29px;font-weight:500;cursor:pointer}
+  .akey:active{transform:scale(.93);background:rgba(123,150,255,.3)}
+  .akey.ghost{background:transparent;border-color:transparent;cursor:default}
   @keyframes breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.05)}}
 
   /* ===== FULL-SCREEN (feel it) ===== */
@@ -306,6 +332,7 @@
   <div id="full"></div>
   <div id="cardwrap"><div id="host"></div></div>
   <div class="launch" id="launch"><div class="lt">Where to?</div><div class="lgrid" id="lgrid"></div></div>
+  <div id="authov"><div class="acard"><div class="colL"><h2>Who’s here?</h2><div class="sub">Tap your name to sign in</div><div id="auList"></div></div><div class="colR"><div class="alead" id="auLead">Pick your name</div><div class="apin" id="auPin"><div class="adots" id="auDots"><span class="adot"></span><span class="adot"></span><span class="adot"></span><span class="adot"></span></div><div class="apad" id="auPad"></div></div></div></div></div>
   <div id="cmdbar"><input id="cmdin" type="text" placeholder="Ask Zoe…" autocomplete="off"><button id="cmdgo" title="Send" aria-label="Send">➤</button></div>
   <div id="saytoast"></div>
   <div id="dock"><div class="pc apps" id="apps" title="All screens"><span class="g"><i></i><i></i><i></i><i></i></span></div><div class="ddiv"></div><div id="dbody"></div></div>
@@ -519,7 +546,7 @@
     // Server is authoritative on session validity: an expired/invalid session
     // 401/403s here — clear it and return to login (the presence guard alone
     // can't detect server-side expiry).
-    if(r.status===401||r.status===403){if(!_authBounced){_authBounced=true;try{localStorage.removeItem('zoe_session');}catch(e){}location.replace('/touch/index.html'+location.search);}throw new Error('auth');}
+    if(r.status===401||r.status===403){if(!_authBounced&&!window.__needAuth){_authBounced=true;try{localStorage.removeItem('zoe_session');}catch(e){}location.replace('/touch/index.html'+location.search);}throw new Error('auth');}
     if(!r.ok)throw new Error('http '+r.status);return r.json();});}
   function tickClock(){var c=document.getElementById('hClock');if(!c)return;var d=new Date(),h=d.getHours()%12;if(h===0)h=12;c.textContent=h+':'+two(d.getMinutes());var dt=document.getElementById('hDate');if(dt)dt.textContent=d.toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long'});}
   function loadWeather(){apiGet('/api/weather/current').then(function(w){if(_cur!=='home')return;var el=document.getElementById('hTemp');if(!el||!w)return;var t=(w.temp!=null?w.temp:w.temperature);el.querySelector('.n').textContent=(t!=null?Math.round(t):'—')+'°';var c=(w.description||w.condition||'');el.querySelector('.c').textContent=c?c.charAt(0).toUpperCase()+c.slice(1):'';}).catch(function(){});}
@@ -729,6 +756,38 @@
   });
   cmdin.addEventListener('keydown',function(e){if(e.key==='Enter')sendCmd(cmdin.value);if(e.key==='Escape')cmdbar.classList.remove('on');});
   document.getElementById('cmdgo').addEventListener('click',function(){sendCmd(cmdin.value);});
+
+  // ---- estate-native who + PIN unlock (replaces the old login page) ----
+  if(window.__needAuth)(function(){
+    var ov=document.getElementById('authov'),list=document.getElementById('auList'),lead=document.getElementById('auLead'),pin=document.getElementById('auPin'),dots=document.getElementById('auDots').children,pad=document.getElementById('auPad');
+    var AVC=['#7b96ff','#66d6a3','#f5b13c','#ff7a90','#9aa6bd','#5ec8f0'];
+    var sel=null,code='';ov.classList.add('on');
+    function rdots(){for(var i=0;i<4;i++)dots[i].classList.toggle('f',i<code.length);}
+    pad.innerHTML=['1','2','3','4','5','6','7','8','9','','0','⌫'].map(function(k){return k===''?'<button class="akey ghost"></button>':'<button class="akey" data-k="'+k+'">'+k+'</button>';}).join('');
+    fetch('/api/auth/profiles').then(function(r){return r.json();}).then(function(ps){
+      list.innerHTML=(ps||[]).slice(0,6).map(function(p,i){return '<div class="au" data-u="'+esc(p.user_id)+'" data-n="'+esc(p.username)+'"><div class="av" style="background:'+AVC[i%AVC.length]+'">'+esc((p.avatar||p.username||'?').charAt(0).toUpperCase())+'</div><div class="nm2">'+esc(p.username)+'</div></div>';}).join('');
+      list.addEventListener('click',function(e){var u=e.target.closest('.au');if(!u)return;
+        [].forEach.call(list.children,function(x){x.classList.toggle('sel',x===u);});
+        sel={user_id:u.getAttribute('data-u'),username:u.getAttribute('data-n')};
+        lead.innerHTML='Hi <span class="n">'+esc(sel.username)+'</span>';code='';rdots();pin.classList.add('on');});
+    }).catch(function(){lead.textContent='Sign-in unavailable';});
+    pad.addEventListener('click',function(e){var b=e.target.closest('.akey');if(!b||!sel||b.classList.contains('ghost'))return;
+      var k=b.getAttribute('data-k');
+      if(k==='⌫'){code=code.slice(0,-1);rdots();return;}
+      if(code.length>=4)return;
+      code+=k;rdots();
+      if(code.length===4){var pc=code;
+        fetch('/api/auth/login/passcode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:sel.username,user_id:sel.user_id,passcode:pc})})
+          .then(function(r){return r.json().catch(function(){return {};}).then(function(d){return {ok:r.ok,d:d};});})
+          .then(function(x){
+            if(x.ok&&x.d&&x.d.success&&x.d.session_id){
+              try{localStorage.setItem('zoe_session',JSON.stringify({session_id:x.d.session_id,user_id:x.d.user_id||sel.user_id,username:sel.username,role:x.d.role||'user'}));}catch(e){}
+              location.reload();return;
+            }
+            pin.classList.add('err');setTimeout(function(){pin.classList.remove('err');code='';rdots();},450);
+          }).catch(function(){pin.classList.add('err');setTimeout(function(){pin.classList.remove('err');code='';rdots();},450);});
+      }});
+  })();
 
   show('home');
 })();
