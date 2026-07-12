@@ -455,6 +455,24 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
     )
     if is_question and not imperative_store:
         return await _run_expert(domain, text, user_id, session_id)
+    # Correction/negation shapes ("no <Name> is …", "no, …", "that's wrong…",
+    # "actually …", "i meant …") must NEVER be verbatim-taught: "No Caitlin is
+    # allergic to shellfish, …" was stored literally as a fact in prod (QA
+    # review F8). The correction path (memory_extractor, run below per #1242's
+    # ordering) owns these turns; when it yields nothing we drop with an honest
+    # reply instead of storing junk.
+    try:
+        from memory_quality import ambiguous_negation_subject, looks_like_correction
+        correctionish = looks_like_correction(text) and not imperative_store
+    except Exception:
+        # Gate unavailable must NOT reopen F8 (verbatim-storing a negation):
+        # degrade to a minimal inline shape check that still catches the
+        # correction openers, and drop rather than store when it fires.
+        correctionish = (not imperative_store) and bool(re.match(
+            r"^\s*(?:no\b|actually\b|that'?s\s+(?:wrong|not|incorrect)|"
+            r"(?:sorry\s+)?i\s+meant\b|wait\s*,?\s*no\b)", low))
+        ambiguous_negation_subject = lambda _t: None  # noqa: E731 — gate unavailable
+        looks_like_correction = lambda _t: False  # noqa: E731
     # Write-quality gate (mem0-style): even past the store-vs-recall split, drop
     # candidates that aren't shaped like a storable personal fact (interrogative
     # leftovers, LLM meta-rambling, empty/too-short). Conservative — leans ACCEPT.
@@ -494,8 +512,46 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
         logger.debug("store_fact person-link path skipped (%s)", exc)
         linked = 0
     if linked and linked > 0:
+        if correctionish:
+            # A correction the extractor resolved — never echo the raw
+            # negation ("I'll remember No Caitlin is…") back as a teach.
+            return "Got it — I've updated that."
         echo = _echo_fact(text)
         return f"Got it — I'll remember {echo}." if echo else "Got it — I'll remember that."
+    if correctionish:
+        # Correction shape but the correction path produced nothing: NEVER
+        # fall through to the verbatim ingest of the RAW text (QA F8). The
+        # ambiguous "No <Name> is …" shape gets an honest clarification.
+        name = ambiguous_negation_subject(text)
+        if name:
+            _record_quality_reject("voice_fact", "correction_shape_unresolved", text)
+            return (
+                f"I want to get that right about {name} and I'm not sure "
+                f"which way you mean it — I haven't saved anything. "
+                f"Could you say it once more, plainly?"
+            )
+        # A correction OPENER over a self-contained fact ("actually my dentist
+        # is on Tuesday") still carries a storable remainder — strip the opener
+        # and store THAT (never the raw negation-shaped text). Only when the
+        # remainder is itself junk/correction-shaped do we drop to the brain.
+        stripped = re.sub(
+            r"^\s*(?:no\s*[,!.:;-]\s*|actually\s*,?\s*|wait\s*,?\s*(?:no\s*,?\s*)?|"
+            r"(?:sorry\s*,?\s*)?i\s+meant\s+|that'?s\s+(?:wrong|incorrect|not\s+"
+            r"(?:right|true|correct))\s*[,!.:;-]?\s*)+",
+            "", text, flags=re.IGNORECASE).strip()
+        remainder_ok = False
+        if stripped and stripped.lower() != low:
+            try:
+                remainder_ok = (
+                    is_storable_fact(stripped)[0]
+                    and not looks_like_correction(stripped)
+                )
+            except Exception:
+                remainder_ok = False
+        if not remainder_ok:
+            _record_quality_reject("voice_fact", "correction_shape_unresolved", text)
+            return None  # defer to the brain, reply-only, nothing stored
+        text = stripped
     try:
         from memory_service import get_memory_service
         svc = get_memory_service()
