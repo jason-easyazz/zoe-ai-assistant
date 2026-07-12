@@ -480,7 +480,11 @@ def user_relationship_claim_unsupported(fact_text: str, source_text: str) -> boo
     fact = (fact_text or "").strip()
     if not fact or not _USER_ANCHORED_ROLE_RE.search(fact):
         return False
-    roles = {m.group(1).lower().rstrip("s") for m in _ROLE_WORD_RE.finditer(fact)}
+    # group(1) is already the canonical singular — the plural `s?` sits OUTSIDE
+    # the capture group ("kids" → "kid"; "children" is an explicit alternative).
+    # Never rstrip("s"): it strips ALL trailing s's ("boss" → "bo") and would
+    # break the "my boss" support check.
+    roles = {m.group(1).lower() for m in _ROLE_WORD_RE.finditer(fact)}
     if not roles:
         return False  # user-anchored but no relationship role → not our concern
     src = (source_text or "").lower()

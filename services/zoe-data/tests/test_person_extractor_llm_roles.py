@@ -192,3 +192,12 @@ def test_nightly_batch_source_empty_drops_all_user_anchored_roles():
     assert _unsupported("User's mother is Janice", "") is True
     # non-relationship facts still pass with empty source
     assert _unsupported("The user is allergic to nuts.", "") is False
+
+
+def test_boss_role_normalization():
+    """rstrip('s') stripped ALL trailing s's ('boss' → 'bo'), breaking supported
+    boss claims (Greptile r4). group(1) is already canonical — no strip needed."""
+    assert _unsupported("user's boss", "my boss is Sarah and she is great") is False
+    assert _unsupported("user's boss", "his boss is Sarah, a director") is True
+    # plural-with-s roles still normalize via the regex itself
+    assert _unsupported("User's kids are Aria and Olivia", "my kids are Aria and Olivia") is False
