@@ -682,7 +682,7 @@
 
   // ---- live home data: real clock + weather + today's agenda (no placeholder data) ----
   var CAT={social:'var(--cat-personal)',health:'var(--cat-health)',work:'var(--cat-work)',family:'var(--cat-family)',personal:'var(--cat-personal)',
-    medical:'var(--cat-health)',sport:'#5ec8f0',shopping:'#ff9e6a',routine:'#9aa6bd',household:'#9aa6bd',bucket:'#66d6a3',birthday:'var(--cat-family)',appointment:'var(--cat-health)',education:'#c77bff',travel:'#5ec8f0'};
+    general:'var(--accent)',medical:'var(--cat-health)',sport:'#5ec8f0',shopping:'#ff9e6a',routine:'#9aa6bd',household:'#9aa6bd',bucket:'#66d6a3',birthday:'var(--cat-family)',appointment:'var(--cat-health)',education:'#c77bff',travel:'#5ec8f0'};
   var _cur=null,_homeTick=null,_wxTick=null;
   function clearScreenTimers(){if(_homeTick){clearInterval(_homeTick);_homeTick=null;}if(_wxTick){clearInterval(_wxTick);_wxTick=null;}}
   function two(n){return (n<10?'0':'')+n;}
