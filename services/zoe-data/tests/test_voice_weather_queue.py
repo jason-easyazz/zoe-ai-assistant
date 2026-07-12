@@ -355,7 +355,11 @@ async def test_broadcast_skybridge_ui_opens_skybridge_with_card_payload(monkeypa
     await _broadcast_skybridge_ui("panel-1", result, utterance="show weather", turn_key="turn-1")
 
     assert [call["action_type"] for call in enqueue_calls] == ["panel_navigate", "show_card"]
-    assert enqueue_calls[0]["payload"]["url"] == "/touch/skybridge.html?q=show+weather"
+    # Voice lands on the ESTATE home with display-only params — the estate
+    # shows heard/summary and opens the domain screen without re-executing.
+    assert enqueue_calls[0]["payload"]["url"] == (
+        "/touch/home.html?heard=show+weather&say=Here+is+the+weather.&domain=weather"
+    )
     assert enqueue_calls[0]["broadcast"] is False
     assert {call["user_id"] for call in enqueue_calls} == {"panel-user"}
     cleanup_selects = [

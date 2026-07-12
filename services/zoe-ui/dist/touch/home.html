@@ -792,7 +792,21 @@
       }});
   })();
 
-  show('home');
+  // Voice-pushed arrival: display-only params from the voice pipeline
+  // (?heard=&say=&domain=) — show the transcript + summary and open the
+  // matching screen WITHOUT re-executing the command.
+  (function(){
+    var sp=new URLSearchParams(location.search);
+    var heard=sp.get('heard'),say=sp.get('say'),dom=sp.get('domain');
+    if(!heard&&!say)return;
+    show(DOMAIN_SCREEN[dom||'']||'home');
+    if(heard)dockHeard(heard);
+    if(say)toast(say);
+    try{history.replaceState(null,'',location.pathname+(sp.get('panel_id')?('?panel_id='+encodeURIComponent(sp.get('panel_id'))):'' ));}catch(e){}
+    window.__voiceArrived=true;
+  })();
+
+  if(!window.__voiceArrived)show('home');
 })();
 </script>
 <script src="/js/touch-ui-executor.js?v=estate-1"></script>
