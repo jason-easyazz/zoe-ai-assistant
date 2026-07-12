@@ -189,9 +189,15 @@ test('bumpSession rotates sessionFor and persists across module reload', async (
   const { mkdtempSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
+  const prevPath = process.env.SESSION_EPOCHS_PATH;
   process.env.SESSION_EPOCHS_PATH = join(mkdtempSync(join(tmpdir(), 'tg-epochs-')), 'epochs.json');
+  // epochsPath() reads the env at CALL time, so restore it afterwards to keep
+  // this test hermetic (no leak into other tests / the real ./data file).
+  t.after(() => {
+    if (prevPath === undefined) delete process.env.SESSION_EPOCHS_PATH;
+    else process.env.SESSION_EPOCHS_PATH = prevPath;
+  });
 
-  // dynamic import AFTER env is set so brain.ts reads the temp path
   const { sessionFor, bumpSession } = await import('./brain.ts');
 
   assert.equal(sessionFor(42), 'telegram-42'); // legacy id until first /new
