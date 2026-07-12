@@ -86,6 +86,25 @@ mempalace_collection_size = Gauge(
     registry=REGISTRY,
 )
 
+# DB connection pool (asyncpg) — updated by db_pool on each acquire/release so
+# ops can see exhaustion building (the 2026-07-12 outage was invisible: pool
+# drained to 0 free while /health stayed 200). Alert on zoe_db_pool_free == 0.
+db_pool_size = Gauge(
+    "zoe_db_pool_size",
+    "Current number of connections held by the asyncpg pool (open, in-use + idle).",
+    registry=REGISTRY,
+)
+db_pool_in_use = Gauge(
+    "zoe_db_pool_in_use",
+    "Pooled connections currently checked out (acquired, not yet released).",
+    registry=REGISTRY,
+)
+db_pool_free = Gauge(
+    "zoe_db_pool_free",
+    "Pooled connections currently idle and available for acquire.",
+    registry=REGISTRY,
+)
+
 # Self-learning / feedback
 chat_feedback_count = Counter(
     "zoe_chat_feedback_count",
@@ -335,6 +354,9 @@ __all__ = [
     "memory_supersede_count",
     "agent_prompt_fact_count",
     "mempalace_collection_size",
+    "db_pool_size",
+    "db_pool_in_use",
+    "db_pool_free",
     "chat_feedback_count",
     "training_last_success_timestamp",
     "training_last_eval_accuracy",

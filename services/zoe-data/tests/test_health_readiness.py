@@ -36,6 +36,7 @@ def test_health_stays_200_liveness_on_cold_box(monkeypatch):
         raise AssertionError("/health must not run readiness probes")
 
     monkeypatch.setattr(main, "_build_readiness_report", fail_if_called)
+    monkeypatch.setitem(main._pool_health_cache, "checked_at", 0.0)
 
     payload = asyncio.run(main.root_health())
 
@@ -44,7 +45,13 @@ def test_health_stays_200_liveness_on_cold_box(monkeypatch):
         "service": "zoe-data",
         "version": "1.0.0",
         "memory_capture": main._memory_capture_health,
+        "db_pool": {
+            "healthy": True,
+            # uninitialised pool (cold box) fails OPEN — liveness stays 200
+            "detail": payload["db_pool"]["detail"],
+        },
     }
+    assert payload["db_pool"]["healthy"] is True
 
 
 def test_readyz_reports_not_ready_then_ready(monkeypatch):
