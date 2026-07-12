@@ -562,12 +562,14 @@ def extract_candidates(
     return out
 
 
-async def _load_prev_user_message(user_id: str, session_id: str, current_message: str) -> str:
-    """Most recent USER message in this session other than the current one.
+async def _load_recent_user_messages(
+    user_id: str, session_id: str, current_message: str, limit: int = 6
+) -> list[str]:
+    """Recent USER messages in this session (newest first), excluding the current.
 
-    Durable fallback for the in-process prev-turn LRU: the prior turn may have been
-    handled by a path that never called ``note_user_turn``, so the pronoun anchor
-    would otherwise be lost. Best-effort — returns "" on any error/miss.
+    Durable fallback for the in-process prev-turn LRU: prior turns handled by paths
+    that never called ``note_user_turn`` would otherwise lose the pronoun anchor.
+    Best-effort — returns [] on any error/miss.
     """
     from db_pool import get_db_ctx  # type: ignore[import]
 
@@ -576,15 +578,22 @@ async def _load_prev_user_message(user_id: str, session_id: str, current_message
         rows = await (
             await db.execute(
                 "SELECT content FROM chat_messages WHERE session_id = ? AND role = 'user' "
-                "ORDER BY created_at::timestamptz DESC LIMIT 5",
-                (session_id,),
+                "ORDER BY created_at::timestamptz DESC LIMIT ?",
+                (session_id, limit),
             )
         ).fetchall()
+    out: list[str] = []
     for r in rows:
         content = ((r[0] if not isinstance(r, dict) else r.get("content")) or "").strip()
         if content and content != cur:
-            return content
-    return ""
+            out.append(content)
+    return out
+
+
+async def _load_prev_user_message(user_id: str, session_id: str, current_message: str) -> str:
+    """Most recent USER message in this session other than the current one."""
+    recent = await _load_recent_user_messages(user_id, session_id, current_message, limit=5)
+    return recent[0] if recent else ""
 
 
 async def extract_and_ingest(
@@ -628,6 +637,28 @@ async def extract_and_ingest(
         # A retried/duplicated turn must not anchor to itself.
         if prev_user_message.strip() == cur:
             prev_user_message = ""
+        # Pronoun CHAIN anchoring: "I have a friend Caitlin" / "she is allergic to
+        # nuts" / "she's ALSO allergic to shellfish" — the third turn's literal
+        # prev is the second (no person intro), so the anchor would break after one
+        # hop. When the message is pronoun-shaped and the literal prev introduces
+        # no person, walk recent session history (newest first, bounded) for the
+        # most recent turn that DOES introduce one, and anchor there. Corrections
+        # are untouched — they only fire on their own "no/actually" shapes and this
+        # swap happens only for a pronoun-fact-shaped message with an intro-less prev.
+        if (
+            session_id
+            and _PRONOUN_FACT_RE.match(_clean(user_message))
+            and not _person_intro_from(_clean(prev_user_message))[0]
+        ):
+            try:
+                for older in await _load_recent_user_messages(
+                    user_id, session_id, user_message
+                ):
+                    if _person_intro_from(_clean(older))[0]:
+                        prev_user_message = older
+                        break
+            except Exception as exc:
+                logger.debug("pronoun chain-anchor lookback failed: %s", exc)
     try:
         candidates = extract_candidates(
             user_message, assistant_response, prev_user_message=prev_user_message
