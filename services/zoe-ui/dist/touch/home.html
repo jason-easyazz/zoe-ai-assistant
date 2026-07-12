@@ -12,8 +12,12 @@
   /* Kiosk bootstrap (was on skybridge.html): persist the kiosk flag so a fresh
      or cleared browser profile keeps kiosk behavior across navigations. */
   (function(){try{var p=new URLSearchParams(location.search);if(p.get('kiosk')==='1')localStorage.setItem('zoe_kiosk','1');}catch(e){}})();
-  (function(){var ok=false;try{var s=JSON.parse(localStorage.getItem('zoe_session')||'null');ok=!!(s&&s.session_id);}catch(e){ok=false;}
-    window.__needAuth=!ok;   // no session → estate-native who+PIN card (no redirect)
+  (function(){var ok=false,kiosk=false;try{var s=JSON.parse(localStorage.getItem('zoe_session')||'null');ok=!!(s&&s.session_id);}catch(e){ok=false;}
+    try{kiosk=(new URLSearchParams(location.search)).get('kiosk')==='1'||localStorage.getItem('zoe_kiosk')==='1';}catch(e){}
+    window.__kiosk=kiosk;
+    // Kiosk boots as GUEST into the ambient home (like skybridge did); the
+    // who+PIN card is summoned on demand when something personal needs auth.
+    window.__needAuth=!ok&&!kiosk;
   })();
 </script>
 <style>
@@ -549,7 +553,10 @@
     // Server is authoritative on session validity: an expired/invalid session
     // 401/403s here — clear it and return to login (the presence guard alone
     // can't detect server-side expiry).
-    if(r.status===401||r.status===403){if(!_authBounced&&!window.__needAuth){_authBounced=true;try{localStorage.removeItem('zoe_session');}catch(e){}location.replace('/touch/index.html'+location.search);}throw new Error('auth');}
+    if(r.status===401||r.status===403){
+      if(window.__kiosk){try{localStorage.removeItem('zoe_session');}catch(e){}if(window.__showAuthCard)window.__showAuthCard();}
+      else if(!_authBounced&&!window.__needAuth){_authBounced=true;try{localStorage.removeItem('zoe_session');}catch(e){}location.replace('/touch/index.html'+location.search);}
+      throw new Error('auth');}
     if(!r.ok)throw new Error('http '+r.status);return r.json();});}
   function tickClock(){var c=document.getElementById('hClock');if(!c)return;var d=new Date(),h=d.getHours()%12;if(h===0)h=12;c.textContent=h+':'+two(d.getMinutes());var dt=document.getElementById('hDate');if(dt)dt.textContent=d.toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long'});}
   function loadWeather(){apiGet('/api/weather/current').then(function(w){if(_cur!=='home')return;var el=document.getElementById('hTemp');if(!el||!w)return;var t=(w.temp!=null?w.temp:w.temperature);el.querySelector('.n').textContent=(t!=null?Math.round(t):'—')+'°';var c=(w.description||w.condition||'');el.querySelector('.c').textContent=c?c.charAt(0).toUpperCase()+c.slice(1):'';}).catch(function(){});}
@@ -764,7 +771,8 @@
   document.getElementById('cmdgo').addEventListener('click',function(){sendCmd(cmdin.value);});
 
   // ---- estate-native who + PIN unlock (replaces the old login page) ----
-  if(window.__needAuth)(function(){
+  window.__showAuthCard=function(){var ov=document.getElementById("authov");if(ov&&!ov.classList.contains("on"))initAuthCard();};
+  function initAuthCard(){(function(){
     var ov=document.getElementById('authov'),list=document.getElementById('auList'),lead=document.getElementById('auLead'),pin=document.getElementById('auPin'),dots=document.getElementById('auDots').children,pad=document.getElementById('auPad');
     var AVC=['#7b96ff','#66d6a3','#f5b13c','#ff7a90','#9aa6bd','#5ec8f0'];
     var sel=null,code='';ov.classList.add('on');
@@ -793,7 +801,8 @@
             pin.classList.add('err');setTimeout(function(){pin.classList.remove('err');code='';rdots();},450);
           }).catch(function(){pin.classList.add('err');setTimeout(function(){pin.classList.remove('err');code='';rdots();},450);});
       }});
-  })();
+  })();}
+  if(window.__needAuth)initAuthCard();
 
   // Voice-pushed arrival: display-only params from the voice pipeline
   // (?heard=&say=&domain=) — show the transcript + summary and open the
