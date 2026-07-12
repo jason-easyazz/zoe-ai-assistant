@@ -431,7 +431,7 @@ def _merge_decision(
 # turn text; unsupported claims are dropped, never stored.
 
 _USER_ANCHORED_ROLE_RE = re.compile(
-    r"(?:\buser'?s?\b|\bspeaker'?s?\b|\bof\s+(?:the\s+)?(?:user|speaker)\b)",
+    r"(?:\buser'?s?\b|\bspeaker'?s?\b|\bof\s+(?:the\s+)?(?:user|speaker|mine|me|myself)\b)",
     re.IGNORECASE,
 )
 _ROLE_WORD_RE = re.compile(

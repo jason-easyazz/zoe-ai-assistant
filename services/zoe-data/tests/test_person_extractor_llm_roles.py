@@ -217,3 +217,11 @@ def test_trait_phrases_are_not_relationship_claims(value):
 
 def test_coworker_supports_colleague_fact():
     assert _unsupported("user's colleague", "my coworker Bob is fun") is False
+
+
+def test_of_mine_is_a_user_anchor():
+    """'friend of mine' is a USER anchor and must be validated like \"user's
+    friend\" — not treated as third-party-qualified (Greptile r6)."""
+    assert _unsupported("Bob is a friend of mine", "he introduced his friend Bob") is True
+    assert _unsupported("Bob is a friend of mine", "my friend Bob came over") is False
+    assert _unsupported("Emily Cannon is the wife of Lindsay", "Emily is Lindsay's wife") is False
