@@ -477,6 +477,25 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
         import hashlib
         norm = re.sub(r"\s+", " ", text.lower()).strip()
         user_turn_id = "fact-" + hashlib.sha1(f"{user_id}|{norm}".encode()).hexdigest()[:16]
+    # Person-fact linkage FIRST: if this fact is about a person — a named contact
+    # ("Caitlin is allergic to nuts") or a pronoun subject resolved to the person
+    # the prior turn introduced ("she is allergic to nuts" after "I have a friend
+    # Caitlin Farrell") — route it through the coreference-aware extractor so it is
+    # stored LINKED to that contact's people.id (and therefore recallable by their
+    # name), not as a raw unlinked self-fact. Without this, "she is allergic to
+    # nuts" was stored verbatim and "tell me about Caitlin" found nothing.
+    try:
+        from memory_extractor import extract_and_ingest as _mx_extract
+        linked = await _mx_extract(
+            text, user_id=user_id, session_id=session_id or None,
+            source="voice_fact", auto_approve=True,
+        )
+    except Exception as exc:
+        logger.debug("store_fact person-link path skipped (%s)", exc)
+        linked = 0
+    if linked and linked > 0:
+        echo = _echo_fact(text)
+        return f"Got it — I'll remember {echo}." if echo else "Got it — I'll remember that."
     try:
         from memory_service import get_memory_service
         svc = get_memory_service()

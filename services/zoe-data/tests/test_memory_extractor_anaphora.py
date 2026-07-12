@@ -124,6 +124,43 @@ def test_pronoun_anchor_survives_sentence_initial_capital():
     assert out[0].text == "Emma (user's wife) is a nurse"
 
 
+def test_friend_intro_anchors_allergy_fact():
+    # The reported bug: "I have a friend Caitlin Farrell" then "she is allergic to
+    # nuts" must anchor the allergy to Caitlin (the "I have a friend X" intro form
+    # + a non-"a/an" predicate both previously slipped through → stored raw).
+    out = extract_candidates(
+        "She is allergic to nuts", prev_user_message="I have a friend Caitlin Farrell"
+    )
+    assert len(out) == 1
+    assert out[0].text == "Caitlin Farrell (user's friend) is allergic to nuts"
+    assert out[0].entity_type == "person"
+
+
+def test_my_friend_intro_and_also_filler():
+    out = extract_candidates(
+        "She's also allergic to shellfish", prev_user_message="my friend Caitlin"
+    )
+    assert len(out) == 1
+    assert out[0].text == "Caitlin (user's friend) is allergic to shellfish"  # "also" stripped
+
+
+def test_ephemeral_gerund_predicate_not_stored():
+    # "she is going to the store" is transient, not a durable person-fact.
+    out = extract_candidates(
+        "She is going to the store", prev_user_message="I have a friend Caitlin Farrell"
+    )
+    assert out == []
+
+
+def test_bare_intro_requires_capitalized_name():
+    # "my son loves soccer" must NOT introduce a person named "loves".
+    assert memory_extractor._person_intro_from("my son loves soccer") == ("", None)
+    assert memory_extractor._person_intro_from("I have a friend Caitlin Farrell") == (
+        "Caitlin Farrell",
+        "friend",
+    )
+
+
 def test_pronoun_fact_without_person_intro_stores_nothing():
     # Prior turn introduced no person → nothing to anchor to.
     assert extract_candidates(EMMA_FIX) == []
