@@ -923,6 +923,36 @@ async def lifespan(app: FastAPI):
             await load_device_tokens(_db_conn)
     except Exception as _exc:
         logger.warning("Could not pre-load device tokens: %s", _exc)
+    # Warm the memory-recall path FIRST — before the capture startup probe below,
+    # which itself runs a real MemoryService.search() and would otherwise be the
+    # cold first search (ticking real rows' access metadata while cold — Greptile).
+    # Background: search() fails OPEN to [] on its 2s timeout, and the process's
+    # FIRST search cold-loads the embedder (~1.7s idle, worse under load) — so the
+    # first recall after every restart (incl. every auto-deploy) silently returned
+    # an empty packet and Zoe denied knowing stored facts ("I don't have any
+    # information about Caitlin", 2026-07-12). Warm by embedding ONLY: a raw
+    # collection query scoped to a user that owns no rows loads the embedder with
+    # zero rows returned and zero access-count ticks. AWAITED (bounded) rather than
+    # backgrounded so traffic served right after startup cannot race a still-cold
+    # embedder; fail-open on timeout/error.
+    try:
+        from memory_service import get_memory_service
+        import time as _t
+
+        _svc_warm = get_memory_service()
+
+        def _embed_only_warmup() -> None:
+            _svc_warm._collection().query(
+                query_texts=["startup warmup"],
+                n_results=1,
+                where={"user_id": {"$eq": "_warmup_no_such_user"}},
+            )
+
+        _t0 = _t.monotonic()
+        await asyncio.wait_for(_svc_warm._run_sync(_embed_only_warmup), timeout=20.0)
+        logger.info("memory embedder warmed in %.1fs", _t.monotonic() - _t0)
+    except Exception as _exc:
+        logger.warning("memory embedder warmup failed (non-fatal): %s", _exc)
     await _run_memory_capture_startup_probe()
     asyncio.create_task(_memory_capture_retry_task(), name="memory_capture_retry")
     _openclaw_bg_task = start_openclaw_background_tasks()
