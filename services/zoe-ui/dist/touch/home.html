@@ -165,6 +165,28 @@
   .setsec .srow2{display:flex;align-items:center;gap:14px;padding:13px 2px;border-top:1px solid rgba(255,255,255,.07);font-size:19px;cursor:pointer}
   .setsec .srow2 .chev2{margin-left:auto;color:var(--ink-faint)}
   .setsec .sout{margin-top:14px;width:100%;height:50px;border-radius:13px;border:1px solid rgba(255,122,144,.4);background:rgba(255,122,144,.12);color:#ff9db0;font:inherit;font-size:18px;cursor:pointer}
+  /* CRUD affordances */
+  .lrow2{position:relative}
+  .lact{margin-left:auto;display:flex;gap:6px;opacity:0;transition:opacity .15s}
+  .lrow2:hover .lact,.lact.show{opacity:1}
+  .lact button{width:34px;height:34px;border-radius:9px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:var(--ink-soft);font-size:15px;cursor:pointer}
+  .lact button.del{color:#ff9db0}
+  .lrow2 input.edit{flex:1;height:36px;border-radius:9px;border:1px solid rgba(123,150,255,.5);background:rgba(255,255,255,.08);color:var(--ink);font:inherit;font-size:19px;padding:0 10px;outline:none}
+  .estmodal{position:absolute;inset:0;z-index:70;display:none;align-items:center;justify-content:center;background:rgba(7,10,22,.62);backdrop-filter:blur(14px)}
+  .estmodal.on{display:flex}
+  .estmc{width:520px;background:linear-gradient(180deg,rgba(255,255,255,.09),rgba(255,255,255,.035));border:1px solid rgba(255,255,255,.14);border-radius:26px;padding:30px 34px;box-shadow:0 30px 80px rgba(0,0,0,.5)}
+  .estmc h3{font-size:26px;font-weight:600;margin-bottom:18px}
+  .estmc label{display:block;font-size:14px;color:var(--ink-faint);margin:12px 0 5px;letter-spacing:.04em}
+  .estmc input,.estmc select{width:100%;height:50px;border-radius:13px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.06);color:var(--ink);font:inherit;font-size:19px;padding:0 14px;outline:none}
+  .estmc .erow{display:flex;gap:12px}
+  .estmc .btns{display:flex;gap:12px;margin-top:24px}
+  .estmc .btns button{flex:1;height:54px;border-radius:14px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:var(--ink);font:inherit;font-size:19px;cursor:pointer}
+  .estmc .btns .save{background:var(--accent);border-color:transparent;color:#fff;font-weight:600}
+  .estmc .btns .del{background:rgba(255,122,144,.14);border-color:rgba(255,122,144,.4);color:#ff9db0}
+  .ctcard .ctacts{display:flex;gap:12px;margin-top:20px}
+  .ctcard .ctacts button{flex:1;height:50px;border-radius:13px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:var(--ink);font:inherit;font-size:18px;cursor:pointer}
+  .ctcard .ctacts .del{background:rgba(255,122,144,.14);border-color:rgba(255,122,144,.4);color:#ff9db0}
+  .cev{cursor:pointer}.cwe{cursor:pointer}.caldaylist .dev{cursor:pointer}
   /* Timers */
   .tmore{position:absolute;left:50%;bottom:150px;transform:translateX(-50%);display:flex;gap:14px}
   .tmr{display:flex;align-items:center;gap:14px;background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:12px 18px;font-size:20px}
@@ -471,6 +493,7 @@
   <div id="authov"><div class="acard"><div class="colL"><h2>Who’s here?</h2><div class="sub">Tap your name to sign in</div><div id="auList"></div></div><div class="colR"><div class="alead" id="auLead">Pick your name</div><div class="apin" id="auPin"><div class="adots" id="auDots"><span class="adot"></span><span class="adot"></span><span class="adot"></span><span class="adot"></span></div><div class="apad" id="auPad"></div></div></div></div></div>
   <div id="cmdbar"><input id="cmdin" type="text" placeholder="Ask Zoe…" autocomplete="off"><button id="cmdgo" title="Send" aria-label="Send">➤</button></div>
   <div id="saytoast"></div>
+  <div class="estmodal" id="estModal"></div>
   <div id="dock"><div class="pc apps" id="apps" title="All screens"><span class="g"><i></i><i></i><i></i><i></i></span></div><div class="ddiv"></div><div id="dbody"></div></div>
 </div>
 
@@ -823,6 +846,13 @@
 
   // ---- Lists: full multi-column board (all lists, toggle, add, create) ----
   var LIST_TYPES=['shopping','work_todos','personal_todos','bucket','tasks'];
+  // ---- shared modal + confirm ----
+  function estClose(){var m=document.getElementById('estModal');if(m){m.classList.remove('on');m.innerHTML='';}}
+  function estOpen(html){var m=document.getElementById('estModal');if(!m)return;m.innerHTML='<div class="estmc">'+html+'</div>';m.classList.add('on');
+    m.onclick=function(e){if(e.target===m)estClose();};}
+  function estConfirm(msg,onYes){estOpen('<h3>'+esc(msg)+'</h3><div class="btns"><button data-x="no">Cancel</button><button class="del" data-x="yes">Delete</button></div>');
+    document.querySelector('#estModal').querySelector('[data-x="no"]').onclick=estClose;
+    document.querySelector('#estModal').querySelector('[data-x="yes"]').onclick=function(){estClose();onYes();};}
   function apiJson(method,url,body){return fetch(url,{method:method,headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:body?JSON.stringify(body):undefined}).then(function(r){
     if(r.status===401||r.status===403){
       if(window.__kiosk){if(window.__guestBootSettled){try{localStorage.removeItem('zoe_session');}catch(e){}if(window.__showAuthCard)window.__showAuthCard();}}
@@ -856,12 +886,22 @@
     apiJson('GET','/api/lists/'+sel.list_type+'/'+sel.id+'/items').then(function(d){if(_cur!=='list'||_lst.sel!==sel.id)return;
       var its=d.items||[],done=its.filter(function(i){return i.completed;}).length;
       if(meta)meta.textContent=its.length+' item'+(its.length===1?'':'s')+(done?' · '+done+' done':'');
-      items.innerHTML=its.map(function(i){return '<div class="lrow2'+(i.completed?' done':'')+'" data-item="'+esc(i.id)+'" data-done="'+(i.completed?1:0)+'"><span class="bx">'+(i.completed?CHK:'')+'</span><span class="tx2">'+esc(i.text)+'</span></div>';}).join('')
+      items.innerHTML=its.map(function(i){return '<div class="lrow2'+(i.completed?' done':'')+'" data-item="'+esc(i.id)+'" data-done="'+(i.completed?1:0)+'"><span class="bx">'+(i.completed?CHK:'')+'</span><span class="tx2">'+esc(i.text)+'</span><span class="lact"><button data-act="edit" title="Edit">✎</button><button class="del" data-act="del" title="Delete">✕</button></span></div>';}).join('')
         ||'<div style="color:var(--ink-faint);font-size:19px">List is empty — just ask Zoe to add something.</div>';
-      items.onclick=function(e){var row=e.target.closest('.lrow2');if(!row)return;
+      var base='/api/lists/'+sel.list_type+'/'+sel.id+'/items/';
+      items.onclick=function(e){var row=e.target.closest('.lrow2');if(!row)return;var iid=row.getAttribute('data-item');
+        var act=e.target.closest('[data-act]');
+        if(act){var a=act.getAttribute('data-act');
+          if(a==='del'){estConfirm('Delete “'+(row.querySelector('.tx2')?row.querySelector('.tx2').textContent:'this item')+'”?',function(){
+            apiJson('DELETE',base+iid).then(paintListBody).catch(function(){toast('Couldn’t delete');});});return;}
+          if(a==='edit'){var span=row.querySelector('.tx2'),cur=span.textContent;
+            var inp=document.createElement('input');inp.className='edit';inp.value=cur;span.replaceWith(inp);inp.focus();inp.select();
+            var done=false;function commit(){if(done)return;done=true;var v=(inp.value||'').trim();if(!v||v===cur){paintListBody();return;}apiJson('PUT',base+iid,{text:v}).then(paintListBody).catch(function(){toast('Couldn’t save');paintListBody();});}
+            inp.onkeydown=function(ev){if(ev.key==='Enter')commit();if(ev.key==='Escape')paintListBody();};inp.onblur=commit;return;}}
+        // otherwise: toggle completion
         var now=row.getAttribute('data-done')!=='1';
         row.classList.toggle('done',now);row.setAttribute('data-done',now?1:0);row.querySelector('.bx').innerHTML=now?CHK:'';
-        apiJson('PUT','/api/lists/'+sel.list_type+'/'+sel.id+'/items/'+row.getAttribute('data-item'),{completed:now?1:0})
+        apiJson('PUT',base+iid,{completed:now?1:0})
           .catch(function(e2){row.classList.toggle('done');row.setAttribute('data-done',now?0:1);row.querySelector('.bx').innerHTML=now?'':CHK;if(String(e2&&e2.message)==='auth')toast('Sign in to change lists');});};
     }).catch(function(){items.innerHTML='<div style="color:var(--ink-faint)">Couldn’t load this list.</div>';});
   }
@@ -908,9 +948,12 @@
           .filter(function(r){return r[1];})
           .map(function(r){return '<div class="ctrow"><span class="cl">'+r[0]+'</span><span>'+esc(String(r[1]))+'</span></div>';}).join('')
           ||'<div class="ctrow"><span class="cl"></span><span style="color:var(--ink-faint)">No details yet — just a name.</span></div>';
-        det.innerHTML='<div class="ctcard"><div class="cthead"><div class="pav" style="background:'+PAVC[(+t.getAttribute('data-i'))%PAVC.length]+'">'+esc((pn.name||'?').charAt(0).toUpperCase())+'</div><div><h2>'+esc(pn.name||'')+'</h2>'+(pn.relationship?'<div class="ctrel">'+esc(pn.relationship)+'</div>':'')+'</div></div>'+rows+'<button class="ctclose">Close</button></div>';
+        det.innerHTML='<div class="ctcard"><div class="cthead"><div class="pav" style="background:'+PAVC[(+t.getAttribute('data-i'))%PAVC.length]+'">'+esc((pn.name||'?').charAt(0).toUpperCase())+'</div><div><h2>'+esc(pn.name||'')+'</h2>'+(pn.relationship?'<div class="ctrel">'+esc(pn.relationship)+'</div>':'')+'</div></div>'+rows+'<div class="ctacts"><button data-x="edit">Edit</button><button class="del" data-x="del">Delete</button><button data-x="close">Close</button></div></div>';
         det.classList.add('on');
-        det.onclick=function(ev){if(ev.target===det||ev.target.closest('.ctclose'))det.classList.remove('on');};};
+        det.onclick=function(ev){if(ev.target===det||ev.target.closest('[data-x="close"]'))det.classList.remove('on');
+          if(ev.target.closest('[data-x="del"]')){det.classList.remove('on');estConfirm('Delete '+(pn.name||'this contact')+'?',function(){
+            apiJson('DELETE','/api/people/'+encodeURIComponent(pn.id)).then(function(){wireContacts();}).catch(function(){toast('Couldn’t delete');});});}
+          if(ev.target.closest('[data-x="edit"]')){editContact(pn);}};};
     }).catch(function(){if(grid)grid.innerHTML='<div style="color:var(--ink-faint);font-size:20px">Sign in to see your contacts.</div>';});
   }
 
@@ -940,13 +983,25 @@
     };
   }
 
+  function editContact(pn){
+    function f(k,lab,val){return '<label>'+lab+'</label><input data-f="'+k+'" value="'+esc(val||'')+'">';}
+    estOpen('<h3>Edit contact</h3>'+f('name','Name',pn.name)+f('relationship','Relationship',pn.relationship)+f('phone','Phone',pn.phone)+f('email','Email',pn.email)
+      +'<div class="btns"><button data-x="cancel">Cancel</button><button class="save" data-x="save">Save</button></div>');
+    var m=document.getElementById('estModal');
+    m.querySelector('[data-x="cancel"]').onclick=estClose;
+    m.querySelector('[data-x="save"]').onclick=function(){var body={};m.querySelectorAll('input[data-f]').forEach(function(i){body[i.getAttribute('data-f')]=i.value.trim();});
+      apiJson('PUT','/api/people/'+encodeURIComponent(pn.id),body).then(function(){estClose();wireContacts();}).catch(function(){toast('Couldn’t save contact');});};
+  }
+
   // ---- Calendar: day / week / month on real events ----
-  var _cal={view:'week',gen:0};
+  var _cal={view:'week',gen:0};var _calEvents={};
   function isoD(d){return d.getFullYear()+'-'+two(d.getMonth()+1)+'-'+two(d.getDate());}
   function wireCalendar(){
     var vs=document.getElementById('calViews');
     if(vs)vs.onclick=function(e){var b=e.target.closest('button');if(!b)return;_cal.view=b.getAttribute('data-v');
       vs.querySelectorAll('button').forEach(function(x){x.classList.toggle('on',x===b);});paintCal();};
+    var body=document.getElementById('calBody');
+    if(body)body.onclick=function(e){var chip=e.target.closest('[data-eid]');if(!chip)return;var ev=_calEvents[chip.getAttribute('data-eid')];if(ev)editEvent(ev);};
     paintCal();
   }
   function paintCal(){
@@ -959,6 +1014,7 @@
     if(ttl)ttl.textContent=_cal.view==='month'?now.toLocaleDateString(undefined,{month:'long',year:'numeric'}):(_cal.view==='week'?'This week':now.toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long'}));
     apiGet('/api/calendar/events?start_date='+isoD(start)+'&end_date='+isoD(end)).then(function(d){if(_cur!=='calendar'||gen!==_cal.gen)return;
       var evs=((d&&d.events)||[]).filter(function(e){return !e.deleted;});
+      _calEvents={};evs.forEach(function(e){if(e.id!=null)_calEvents[e.id]=e;});
       var byDay={};evs.forEach(function(e){var k=e.start_date;(byDay[k]=byDay[k]||[]).push(e);});
       Object.keys(byDay).forEach(function(k){byDay[k].sort(function(a,b){return (a.start_time||'').localeCompare(b.start_time||'');});});
       if(_cal.view==='month'){
@@ -971,22 +1027,38 @@
           html+='<div class="cmd'+(k===isoD(now)?' today':'')+'"><div class="dn">'+dnum+'</div>'+(function(){
             // Rows never exceed maxChips: when overflowing, the counter TAKES the
             // last slot instead of adding a row (so nothing can clip).
-            if(es.length<=maxChips)return es.map(function(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="cev" style="--c:'+c+'">'+esc(e.title||'')+'</div>';}).join('');
+            if(es.length<=maxChips)return es.map(function(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="cev" data-eid="'+esc(String(e.id))+'" style="--c:'+c+'">'+esc(e.title||'')+'</div>';}).join('');
             var showN=maxChips-1;
-            return es.slice(0,showN).map(function(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="cev" style="--c:'+c+'">'+esc(e.title||'')+'</div>';}).join('')
+            return es.slice(0,showN).map(function(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="cev" data-eid="'+esc(String(e.id))+'" style="--c:'+c+'">'+esc(e.title||'')+'</div>';}).join('')
               +'<div class="cev" style="opacity:.6">'+(showN?('+'+(es.length-showN)+' more'):(es.length+' events'))+'</div>';
           })()+'</div>';}
         body.innerHTML=html+'</div>';
       } else if(_cal.view==='week'){
         var html2='<div class="calweek">';
         for(var i2=0;i2<7;i2++){var d2=new Date(start);d2.setDate(start.getDate()+i2);var k2=isoD(d2),es2=byDay[k2]||[];
-          html2+='<div class="cwc'+(k2===isoD(now)?' today':'')+'"><h5>'+d2.toLocaleDateString(undefined,{weekday:'short'})+' '+d2.getDate()+'</h5>'+(es2.map(function(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="cwe" style="--c:'+c+'">'+esc(e.title||'')+'<small>'+(e.all_day?'All day':esc(fmt12(e.start_time)))+'</small></div>';}).join('')||'<div style="color:var(--ink-faint);font-size:13px;text-align:center;padding-top:12px">—</div>')+'</div>';}
+          html2+='<div class="cwc'+(k2===isoD(now)?' today':'')+'"><h5>'+d2.toLocaleDateString(undefined,{weekday:'short'})+' '+d2.getDate()+'</h5>'+(es2.map(function(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="cwe" data-eid="'+esc(String(e.id))+'" style="--c:'+c+'">'+esc(e.title||'')+'<small>'+(e.all_day?'All day':esc(fmt12(e.start_time)))+'</small></div>';}).join('')||'<div style="color:var(--ink-faint);font-size:13px;text-align:center;padding-top:12px">—</div>')+'</div>';}
         body.innerHTML=html2+'</div>';
       } else {
         var es3=byDay[isoD(now)]||[];
-        body.innerHTML='<div class="caldaylist">'+(es3.map(function(e){var cat=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="dev"><div class="t" style="width:96px;flex:none;font-size:21px;color:var(--ink-soft)">'+esc(e.all_day?'All day':fmt12(e.start_time))+'</div><span class="dot" style="--c:'+cat+';width:12px;height:12px;border-radius:50%;background:var(--c);box-shadow:0 0 10px var(--c);flex:none"></span><div><div class="en" style="font-size:23px;font-weight:500">'+esc(e.title||'Event')+'</div>'+(e.location?'<div class="es" style="font-size:16px;color:var(--ink-faint)">'+esc(e.location)+'</div>':'')+'</div></div>';}).join('')||'<div style="color:var(--ink-faint);font-size:20px;padding-top:20px">Nothing scheduled today.</div>')+'</div>';
+        body.innerHTML='<div class="caldaylist">'+(es3.map(function(e){var cat=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="dev" data-eid="'+esc(String(e.id))+'"><div class="t" style="width:96px;flex:none;font-size:21px;color:var(--ink-soft)">'+esc(e.all_day?'All day':fmt12(e.start_time))+'</div><span class="dot" style="--c:'+cat+';width:12px;height:12px;border-radius:50%;background:var(--c);box-shadow:0 0 10px var(--c);flex:none"></span><div><div class="en" style="font-size:23px;font-weight:500">'+esc(e.title||'Event')+'</div>'+(e.location?'<div class="es" style="font-size:16px;color:var(--ink-faint)">'+esc(e.location)+'</div>':'')+'</div></div>';}).join('')||'<div style="color:var(--ink-faint);font-size:20px;padding-top:20px">Nothing scheduled today.</div>')+'</div>';
       }
     }).catch(function(){if(_cur!=='calendar'||gen!==_cal.gen)return;body.innerHTML='<div style="color:var(--ink-faint);font-size:20px">Couldn’t load the calendar.</div>';});
+  }
+
+  function editEvent(ev){
+    var cats=['general','work','personal','family','health','social','appointment','birthday'];
+    estOpen('<h3>Edit event</h3>'
+      +'<label>Title</label><input data-f="title" value="'+esc(ev.title||'')+'">'
+      +'<div class="erow" style="margin-top:0"><div style="flex:1"><label>Date</label><input data-f="start_date" type="date" value="'+esc(ev.start_date||'')+'"></div><div style="width:130px"><label>Time</label><input data-f="start_time" value="'+esc(ev.start_time||'')+'" placeholder="HH:MM"></div></div>'
+      +'<label>Category</label><select data-f="category">'+cats.map(function(c){return '<option value="'+c+'"'+((ev.category||'general').toLowerCase()===c?' selected':'')+'>'+c.charAt(0).toUpperCase()+c.slice(1)+'</option>';}).join('')+'</select>'
+      +'<label>Location</label><input data-f="location" value="'+esc(ev.location||'')+'">'
+      +'<div class="btns"><button class="del" data-x="del">Delete</button><button data-x="cancel">Cancel</button><button class="save" data-x="save">Save</button></div>');
+    var m=document.getElementById('estModal');
+    m.querySelector('[data-x="cancel"]').onclick=estClose;
+    m.querySelector('[data-x="del"]').onclick=function(){estConfirm('Delete “'+(ev.title||'this event')+'”?',function(){
+      apiJson('DELETE','/api/calendar/events/'+encodeURIComponent(ev.id)).then(function(){estClose();paintCal();}).catch(function(){toast('Couldn’t delete');});});};
+    m.querySelector('[data-x="save"]').onclick=function(){var body={};m.querySelectorAll('[data-f]').forEach(function(i){body[i.getAttribute('data-f')]=i.value.trim();});
+      apiJson('PUT','/api/calendar/events/'+encodeURIComponent(ev.id),body).then(function(){estClose();paintCal();}).catch(function(){toast('Couldn’t save event');});};
   }
 
   // ---- Day: full-screen — today's events + reminders (+ comms when a source exists) ----
