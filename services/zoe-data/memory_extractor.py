@@ -146,6 +146,11 @@ def _person_name_from_fragment(fragment: str) -> str:
             break
         if not re.fullmatch(r"[A-Za-z][A-Za-z'_-]*", tok):
             break
+        # A possessive ends the name: "my friend Jessica's birthday is…" must
+        # anchor "Jessica", never mint a person called "Jessica's birthday" (QA F2).
+        if low.endswith("'s") or low.endswith("\u2019s"):
+            out.append(tok[:-2])
+            break
         out.append(tok)
         if len(out) >= 2:
             break
@@ -221,6 +226,18 @@ _CORRECTION_RES = (
         r"(?P<new>.{1,60}?)\s*,?\s+not\s+(?P<old>.{1,60}?)[.!?]*$",
         re.IGNORECASE,
     ),
+)
+
+# Possessive-pronoun fact after a person introduction: "her birthday is
+# actually March 25" / "her daughter is named Poppy" following "my friend
+# Jessica…". The QA review (F2/F3) showed these were stored RAW (minting a
+# person literally named "her") or dropped entirely while the reply claimed
+# "I'm keeping track of that". Anchored the same way as _PRONOUN_FACT_RE.
+_POSSESSIVE_FACT_RE = re.compile(
+    r"^(?:and\s+|oh[,\s]+|btw[,\s]+|by\s+the\s+way[,\s]+)?(?P<pron>her|his)\s+"
+    r"(?P<attr>[a-z][\w' -]{1,30}?)\s+is\s+"
+    r"(?:actually\s+|named\s+|called\s+)?(?P<val>[\w' /:.-]{1,60}?)[.!?]*$",
+    re.IGNORECASE,
 )
 
 # Pronoun-subject fact right after a person introduction: "she's a doctor"
@@ -399,6 +416,53 @@ def _pronoun_fact_candidates(
     ]
 
 
+def _possessive_fact_candidates(
+    user_message: str, prev_user_message: str, seen: set[str]
+) -> list[MemoryCandidate]:
+    """Anchor a possessive-pronoun fact ("her birthday is actually March 25",
+    "her daughter is named Poppy") to the person the prior message introduced.
+
+    QA review F2/F3: these were previously stored raw (minting a person named
+    "her") or silently dropped while the reply claimed the fact was kept.
+    """
+    m = _POSSESSIVE_FACT_RE.match(_clean(user_message))
+    if not m:
+        return []
+    name, relation = _person_intro_from(_clean(prev_user_message))
+    if not name:
+        return []
+    pron = m.group("pron").lower()
+    if relation in _FEMALE_RELATIONS and pron == "his":
+        return []
+    if relation in _MALE_RELATIONS and pron == "her":
+        return []
+    attr = _clean(m.group("attr"))
+    val = _clean(m.group("val"))
+    if not attr or not val:
+        return []
+    # Ephemeral states ("her flight is boarding now") are not durable person-facts.
+    if attr.split(maxsplit=1)[0].lower().endswith("ing"):
+        return []
+    if val.split(maxsplit=1)[0].lower().endswith("ing"):
+        return []
+    text = f"{name}'s {attr} is {val}"
+    key = text.lower()
+    if key in seen:
+        return []
+    seen.add(key)
+    return [
+        MemoryCandidate(
+            text=text,
+            memory_type="person",
+            title=name,
+            entity_type="person",
+            entity_id=name.lower().replace(" ", "_"),
+            confidence=0.75,
+            source_excerpt=_clean(user_message)[:220],
+        )
+    ]
+
+
 def _slug_body(name: str) -> str:
     """Name → the slug body person_extractor uses (``lower``, spaces → ``_``)."""
     return (name or "").strip().lower().replace(" ", "_")
@@ -558,6 +622,7 @@ def extract_candidates(
     if prev:
         out.extend(_correction_candidates(user_message, prev, seen))
         out.extend(_pronoun_fact_candidates(user_message, prev, seen))
+        out.extend(_possessive_fact_candidates(user_message, prev, seen))
 
     return out
 
@@ -725,6 +790,41 @@ async def extract_and_ingest(
             continue
         user_turn_id = f"{base_turn_id}-{idx}"
         entity_type, entity_id = resolved_links.get(idx, (c.entity_type, c.entity_id))
+        # Reconciliation (mem0 ADD/UPDATE/SKIP) — QA review F2: value corrections
+        # ("her birthday is actually March 25") were stored as NEW rows and the
+        # stale value kept outranking the fix. classify_against_existing existed
+        # but was never invoked on this write path. UPDATE → supersede the stale
+        # row via review(edit) (links old→new); SKIP → drop the sparser echo;
+        # ADD → plain ingest below. Best-effort: any error falls through to ADD.
+        try:
+            from memory_quality import classify_against_existing
+            hits = await svc.search(c.text, user_id=user_id, limit=3)
+            op, target_id = classify_against_existing(
+                c.text, [(h.id, h.text or "") for h in hits if h.text]
+            )
+        except Exception as exc:
+            logger.debug("reconciliation unavailable (%s) — plain ingest", exc)
+            op, target_id = "add", None
+        if op == "skip":
+            continue
+        if op == "update" and target_id:
+            try:
+                new_ref = await svc.review(
+                    target_id,
+                    decision="edit",
+                    edits=c.text,
+                    actor=source,
+                    note="conversational correction supersede (QA F2)",
+                )
+                if new_ref is not None:
+                    saved += 1
+                    logger.info(
+                        "memory_extractor: superseded %s with correction %r",
+                        target_id, c.text[:60],
+                    )
+                    continue
+            except Exception as exc:
+                logger.warning("correction supersede failed (%s) — plain ingest", exc)
         ref = await svc.ingest(
             c.text,
             user_id=user_id,

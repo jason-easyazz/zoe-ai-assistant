@@ -1253,7 +1253,7 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
         from person_extractor_llm import process_text_llm as _person_extract_llm
         from latent_intent_detector import detect_and_store as _detect_suggestions
 
-        await asyncio.gather(
+        _mx_results = await asyncio.gather(
             extract_and_ingest(
                 user_message,
                 assistant_response,
@@ -1290,6 +1290,19 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
             ),
             return_exceptions=True,
         )
+        # QA review F3 (silent fact loss): with return_exceptions=True and the
+        # results discarded, a dying extractor vanished without a trace — whole
+        # turns' facts were lost while the reply claimed "I'll remember that".
+        # Name-and-shame each failed pass at WARNING so loss is visible in ops.
+        for _mx_name, _mx_res in zip(
+            ("extract_and_ingest", "run_turn_digest", "person_extract", "person_extract_llm"),
+            _mx_results,
+        ):
+            if isinstance(_mx_res, BaseException):
+                logger.warning(
+                    "memory pass %s FAILED for user=%s (fact loss possible): %s",
+                    _mx_name, user_id, _mx_res,
+                )
         asyncio.ensure_future(_detect_suggestions(
             user_message,
             user_id=user_id,

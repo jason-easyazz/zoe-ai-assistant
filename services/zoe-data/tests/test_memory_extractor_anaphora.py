@@ -291,3 +291,42 @@ def test_lru_is_bounded(monkeypatch):
     for i in range(memory_extractor._PREV_TURN_MAX + 50):
         memory_extractor.note_user_turn(f"user-{i}", "s", "hello there")
     assert len(memory_extractor._prev_user_turns) <= memory_extractor._PREV_TURN_MAX
+
+
+# ── QA review F2/F3: possessive-pronoun anchoring + correction supersede ──────
+
+def test_possessive_birthday_correction_anchors():
+    """'her birthday is actually March 25' after 'My friend Jessica's birthday is
+    March 15' must anchor to Jessica — previously stored raw + minted a person
+    literally named 'her' (QA F2)."""
+    out = extract_candidates(
+        "her birthday is actually March 25",
+        prev_user_message="My friend Jessica's birthday is March 15",
+    )
+    poss = [c for c in out if c.text == "Jessica's birthday is March 25"]
+    assert len(poss) == 1
+    assert poss[0].entity_type == "person"
+    assert poss[0].title == "Jessica"
+
+
+def test_possessive_daughter_named_poppy():
+    """'her daughter is named Poppy' → anchored fact, not silent loss (QA F3)."""
+    out = extract_candidates(
+        "her daughter is named Poppy", prev_user_message="I have a friend Delia Smith"
+    )
+    assert any(c.text == "Delia Smith's daughter is Poppy" for c in out)
+
+
+def test_possessive_ephemeral_state_not_stored():
+    out = extract_candidates(
+        "her flight is boarding now", prev_user_message="I have a friend Delia Smith"
+    )
+    assert not any("flight" in c.text for c in out)
+
+
+def test_intro_with_possessive_yields_clean_name():
+    """'My friend Jessica's birthday…' must introduce 'Jessica', never a person
+    called \"Jessica's birthday\" (the possessive ends the name)."""
+    assert memory_extractor._person_intro_from(
+        "My friend Jessica's birthday is March 15"
+    )[0] == "Jessica"

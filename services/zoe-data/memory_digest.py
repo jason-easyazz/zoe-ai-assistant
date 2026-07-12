@@ -309,7 +309,9 @@ async def run_turn_digest(
     # USER ("The user is allergic to nuts"). The deterministic coreference path
     # (memory_extractor._pronoun_fact_candidates + session-history anchoring) owns
     # these turns; skip the context-free LLM digest rather than let it guess.
-    if re.match(r"^(?:and\s+|oh[,\s]+|btw[,\s]+)?(?:she|he|they)\b", msg_lower):
+    # Possessive starts included ("her birthday is actually…" produced a guessed
+    # "User's birthday is March 25." — QA review F2 evidence).
+    if re.match(r"^(?:and\s+|oh[,\s]+|btw[,\s]+)?(?:she|he|they|her|his|their)\b", msg_lower):
         result["skipped_reason"] = "pronoun_subject_no_context"
         return result
 
