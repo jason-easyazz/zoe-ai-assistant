@@ -833,11 +833,14 @@
       rows.onclick=function(e){var r=e.target.closest('.srow2');if(!r)return;var go=r.getAttribute('data-go');if(go==='__pair')show('pair');else location.href=go;};}
     var out=document.getElementById('setOut');
     if(out)out.onclick=function(){
-      // Revoke server-side FIRST (clearing only localStorage leaves the session alive).
-      fetch('/api/auth/logout',{method:'POST',headers:{'X-Session-ID':sid()},credentials:'include'}).catch(function(){}).then(function(){
-        try{localStorage.removeItem('zoe_session');localStorage.removeItem('zoe_guest_mode');}catch(e){}
-        try{sessionStorage.removeItem('zoe_gb');}catch(e){}
-        location.reload();});};
+      // Revoke server-side FIRST and VERIFY it; local-only clearing leaves the
+      // session alive. If revocation can't be confirmed, still remove local
+      // access but say so honestly before reloading.
+      out.disabled=true;
+      function clearLocal(){try{localStorage.removeItem('zoe_session');localStorage.removeItem('zoe_guest_mode');}catch(e){}try{sessionStorage.removeItem('zoe_gb');}catch(e){}}
+      fetch('/api/auth/logout',{method:'POST',headers:{'X-Session-ID':sid()},credentials:'include'})
+        .then(function(r){if(!r.ok)throw new Error('http '+r.status);clearLocal();location.reload();})
+        .catch(function(){clearLocal();toast('Signed out on this panel — the server couldn’t be reached, so the session will expire on its own.');setTimeout(function(){location.reload();},2600);});};
   }
 
   // ---- Day: full-screen — today's events + reminders (+ comms when a source exists) ----
