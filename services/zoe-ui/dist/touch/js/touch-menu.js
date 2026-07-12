@@ -541,14 +541,14 @@ html.dark-mode .ztm-ctx-item { color: rgba(255,255,255,0.88); border-bottom-colo
             const p = u.pathname || '/';
             const base = p.split('/').pop() || '';
             const allowed = new Set([
-                'dashboard.html', 'home.html', 'skybridge.html', 'calendar.html', 'lists.html', 'chat.html', 'notes.html',
+                'dashboard.html', 'home.html', 'calendar.html', 'lists.html', 'chat.html', 'notes.html',
                 'journal.html', 'people.html', 'music.html', 'smart-home.html', 'weather.html',
                 'settings.html', 'memories.html', 'cooking.html', 'timers.html', 'updates.html',
                 'index.html'
             ]);
             // Already in touch namespace — allow only known touch pages.
             if (p.startsWith('/touch/')) {
-                return allowed.has(base) ? (p + (u.search || '') + (u.hash || '')) : '/touch/skybridge.html';
+                return allowed.has(base) ? (p + (u.search || '') + (u.hash || '')) : '/touch/home.html';
             }
 
             // Map desktop routes to touch equivalents by basename.

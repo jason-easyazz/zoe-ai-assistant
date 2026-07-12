@@ -692,7 +692,8 @@ def test_skybridge_is_registered_in_touch_menu():
     assert "'skybridge-calendar'" not in menu
     assert "'skybridge-calendar-test'" not in menu
     assert "'dashboard', 'skybridge'," not in menu
-    assert "'skybridge.html'" in menu
+    # Fully retired: skybridge appears nowhere in the touch chrome.
+    assert "skybridge.html" not in menu
     assert "'dashboard', 'skybridge', 'calendar'" not in menu
 
 
