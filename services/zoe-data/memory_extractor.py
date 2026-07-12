@@ -722,7 +722,10 @@ async def extract_and_ingest(
         # swap happens only for a pronoun-fact-shaped message with an intro-less prev.
         if (
             session_id
-            and _PRONOUN_FACT_RE.match(_clean(user_message))
+            and (
+                _PRONOUN_FACT_RE.match(_clean(user_message))
+                or _POSSESSIVE_FACT_RE.match(_clean(user_message))
+            )
             and not _person_intro_from(_clean(prev_user_message))[0]
         ):
             try:
@@ -816,7 +819,7 @@ async def extract_and_ingest(
                         (i, t) for i, t in existing
                         if _needle in t.lower()
                         or (_first in t.lower()
-                            and not re.search(rf"\b(?i:{re.escape(_first)})\s+[A-Z][a-z]", t))
+                            and not re.search(rf"\b(?i:{re.escape(_first)})\s+(?:[A-Z][a-z]|[a-z]+['\u2019]s\b)", t))
                     ]
                 else:
                     # Bare-name candidate ("Jessica") → refuse rows where that
@@ -826,7 +829,7 @@ async def extract_and_ingest(
                     existing = [
                         (i, t) for i, t in existing
                         if _first in t.lower()
-                        and not re.search(rf"\b(?i:{re.escape(_first)})\s+[A-Z][a-z]", t)
+                        and not re.search(rf"\b(?i:{re.escape(_first)})\s+(?:[A-Z][a-z]|[a-z]+['\u2019]s\b)", t)
                     ]
             op, target_id = classify_against_existing(c.text, existing)
         except Exception as exc:

@@ -330,3 +330,36 @@ def test_intro_with_possessive_yields_clean_name():
     assert memory_extractor._person_intro_from(
         "My friend Jessica's birthday is March 15"
     )[0] == "Jessica"
+
+
+def test_possessive_uses_history_lookback(monkeypatch):
+    """Greptile r4: 'her daughter is named Poppy' two turns after the intro
+    ('she's a great cook' between) must still anchor via the history lookback."""
+    import asyncio
+    import memory_extractor as me
+
+    async def _run():
+        monkeypatch.setattr(me, "recall_prev_user_turn", lambda u, s: "she's a great cook")
+        async def _hist(u, s, cur, limit=6):
+            return ["she's a great cook", "I have a friend Delia Smith"]
+        monkeypatch.setattr(me, "_load_recent_user_messages", _hist)
+        captured = []
+        async def _fake_ingest(text, **kw):
+            captured.append(text)
+            class R: id = "m"
+            return R()
+        class _Svc:
+            ingest = staticmethod(_fake_ingest)
+            async def search(self, *a, **k): return []
+        import memory_service
+        monkeypatch.setattr(memory_service, "get_memory_service", lambda: _Svc())
+        import memory_quality
+        monkeypatch.setattr(memory_quality, "is_storable_fact", lambda t: (True, ""))
+        import person_extractor
+        async def _e(_a): return None, False
+        monkeypatch.setattr(person_extractor, "_ensure_db", _e)
+        await me.extract_and_ingest(
+            "her daughter is named Poppy", user_id="u1", session_id="s1", source="test",
+        )
+        assert any("Delia Smith's daughter is Poppy" in t for t in captured), captured
+    asyncio.run(_run())
