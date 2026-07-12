@@ -8,7 +8,7 @@
 importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.63.22'; // estate: full-bleed fit (no letterbox on off-1.6:1 panels)
+const SW_VERSION = '4.63.23'; // estate: retarget canvas to 1280x720 (Pi Touch Display 2) — full-bleed, no distortion
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded

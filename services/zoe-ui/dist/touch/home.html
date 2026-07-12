@@ -39,7 +39,7 @@
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{height:100%}
   body{font-family:var(--font);color:var(--ink);background:#05070d;overflow:hidden;display:grid;place-items:center;-webkit-font-smoothing:antialiased}
-  #stage{position:relative;width:1280px;height:800px;overflow:hidden;transform-origin:center;transition:background 1s ease}
+  #stage{position:relative;width:1280px;height:720px;overflow:hidden;transform-origin:center;transition:background 1s ease}
   #pick{display:none!important}
   #cv{position:absolute;inset:0;width:100%;height:100%;opacity:0;transition:opacity .6s}
   #cv.on{opacity:1}
@@ -505,7 +505,7 @@
   // Fill the whole panel — scale each axis independently so an off-1.6:1 screen
   // (e.g. 1280×720 / 1920×1080) doesn't letterbox into black bars. On a true
   // 1.6:1 panel sx===sy so there's no distortion.
-  function fit(){stage.style.transform='scale('+(innerWidth/1280)+','+(innerHeight/800)+')';}
+  function fit(){stage.style.transform='scale('+(innerWidth/1280)+','+(innerHeight/720)+')';}
   addEventListener('resize',fit);fit();
 
   var CHK='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l5 5L20 6"/></svg>';
@@ -570,7 +570,7 @@
     pair:{heard:'', wash:'var(--accent)', html:'<div class="card pair"><div class="wash"></div><div class="kick">Link a device</div><div class="digits"><div class="d">4</div><div class="d">8</div><div class="d">2</div><div class="d">1</div></div><div class="note2">Enter this code in the Zoe app on your phone to connect it to this home.</div></div>'}
   };
 
-  var cv=document.getElementById('cv'),ctx=cv.getContext('2d'),W=1280,H=800;cv.width=W;cv.height=H;
+  var cv=document.getElementById('cv'),ctx=cv.getContext('2d'),W=1280,H=720;cv.width=W;cv.height=H;
   var stars=[],drops=[],wxOn=false;
   (function seed(){for(var i=0;i<26;i++)stars.push({x:Math.random()*W,y:Math.random()*H*.6,r:Math.random()*1.6+.3,tw:Math.random()*6.28});})();
   function frame(t){ if(wxOn){ctx.clearRect(0,0,W,H);
