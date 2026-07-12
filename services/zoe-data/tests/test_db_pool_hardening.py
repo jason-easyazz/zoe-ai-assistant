@@ -231,12 +231,35 @@ def test_health_endpoint_returns_503_on_exhaustion(monkeypatch):
     assert body["status"] == "unhealthy"
     assert "db pool exhausted" in body["db_pool"]["detail"]
 
-    # ...and back to 200 when the pool is healthy again (cache invalidated).
+    # ...and back to 200 the MOMENT the pool recovers: an unhealthy verdict is
+    # never cached (no stale 503 for the TTL window → no needless watchdog
+    # restart). Note: cache deliberately NOT reset here.
     async def _ok(timeout_s=2.0):
         return True, "ok"
 
     monkeypatch.setattr(db_pool, "check_pool_health", _ok)
-    monkeypatch.setitem(main._pool_health_cache, "checked_at", 0.0)
     resp = client.get("/health")
     assert resp.status_code == 200
     assert resp.json()["db_pool"]["healthy"] is True
+
+
+def test_pool_exhausted_maps_to_503_not_500():
+    """PoolExhaustedError raised inside any endpoint (e.g. Depends(get_db))
+    must surface as a diagnosable 503, not FastAPI's generic 500."""
+    main = pytest.importorskip("main")
+    from fastapi.testclient import TestClient
+
+    route_path = "/__test_pool_exhausted__"
+    if not any(getattr(r, "path", None) == route_path for r in main.app.routes):
+        @main.app.get(route_path)
+        async def _boom():
+            raise db_pool.PoolExhaustedError(
+                "db pool exhausted — possible connection leak (acquire timed out after 10.0s)"
+            )
+
+    client = TestClient(main.app, raise_server_exceptions=False)
+    resp = client.get(route_path)
+    assert resp.status_code == 503
+    body = resp.json()
+    assert body["error"] == "db_pool_exhausted"
+    assert "db pool exhausted" in body["detail"]

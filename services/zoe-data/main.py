@@ -1907,9 +1907,25 @@ async def a2a_well_known():
     return _build_agent_card()
 
 
+from db_pool import PoolExhaustedError as _PoolExhaustedError
+
+
+@app.exception_handler(_PoolExhaustedError)
+async def _pool_exhausted_handler(request: Request, exc: _PoolExhaustedError):
+    """Map pool exhaustion to a diagnosable 503 instead of a generic 500.
+
+    Any endpoint using Depends(get_db) raises PoolExhaustedError before its
+    handler body runs when the pool is drained; without this mapping clients
+    would see FastAPI's opaque 500 and lose the outage signature."""
+    return JSONResponse(
+        {"detail": str(exc), "error": "db_pool_exhausted"}, status_code=503
+    )
+
+
 # /health pool-check cache: watchdogs poll /health frequently, so the pooled
 # acquire+SELECT 1 probe runs at most once per TTL and the verdict is reused.
 # Keeps the fast path allocation-free while still catching exhaustion within ~5s.
+# Only a HEALTHY verdict is cached — see below.
 _POOL_HEALTH_TTL_S = 5.0
 _pool_health_cache = {"checked_at": 0.0, "healthy": True, "detail": "not checked yet"}
 
@@ -1921,8 +1937,13 @@ async def root_health():
     # chat request hung, invisible to monitoring. Conservative by design:
     # only a genuine acquire timeout reports 503 (check_pool_health fails open
     # on every other condition), because a false 503 triggers watchdog restarts.
+    # Only a healthy verdict is cached: while unhealthy we re-probe every call
+    # (bounded at 2s) so a recovered pool flips back to 200 immediately instead
+    # of holding a stale 503 for the TTL and triggering a needless watchdog restart.
     now = time.monotonic()
-    if now - _pool_health_cache["checked_at"] > _POOL_HEALTH_TTL_S:
+    if (not _pool_health_cache["healthy"]) or (
+        now - _pool_health_cache["checked_at"] > _POOL_HEALTH_TTL_S
+    ):
         try:
             from db_pool import check_pool_health
             healthy, detail = await check_pool_health(timeout_s=2.0)
