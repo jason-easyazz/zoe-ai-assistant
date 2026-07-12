@@ -422,7 +422,10 @@
       _ha.lights=arr.filter(function(e){return dom(e)==='light';}).concat(arr.filter(function(e){return dom(e)==='input_boolean';}));
       _ha.climate=arr.filter(function(e){return dom(e)==='climate';})[0]||null;
       _ha.scenes=arr.filter(function(e){return dom(e)==='scene';});
-      _ha.loaded=true;_ha.ok=true;cb&&cb();
+      // Healthy only when the response is the documented shape (array, or the
+      // ha_control envelope carrying its count field) — a malformed 200 from a
+      // sick bridge must not read as "the house has no devices".
+      _ha.loaded=true;_ha.ok=Array.isArray(s)||(!!s&&typeof s.count==='number');cb&&cb();
     }).catch(function(){_ha.loaded=true;_ha.ok=false;cb&&cb();});}
   // Re-pull HA state and refresh the dock — recovers from a failed first load and
   // keeps light/temp state fresh. Skips while heard/hidden/mid-interaction.
@@ -609,6 +612,8 @@
       host.innerHTML=_ha.lights.slice(0,4).map(function(e){return '<div class="sc'+(isOn(e)?' on':'')+'" data-eid="'+esc(e.entity_id)+'">'+BULB+'<div class="nm">'+esc(friendly(e))+'</div></div>';}).join('');
       host.querySelectorAll('.sc[data-eid]').forEach(function(el){el.onclick=function(){var on=el.classList.toggle('on');haControl({entity_id:el.getAttribute('data-eid'),action:on?'turn_on':'turn_off'}).then(function(r){if(!r.ok)throw 0;}).catch(function(){el.classList.toggle('on');});};});}
     if(_ha.loaded)paint();else loadHA(paint);
+    // Overnight automations change lights — keep the wake toggles truthful.
+    _wxTick=setInterval(function(){if(_cur==='sleep')loadHA(paint);},30000);
   }
 
   // ---- Reminders card (real reminders) ----
