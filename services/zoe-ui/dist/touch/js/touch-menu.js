@@ -654,7 +654,7 @@ html.dark-mode .ztm-ctx-item { color: rgba(255,255,255,0.88); border-bottom-colo
         const pageId = opts.page || _detectPage();
         // skybridge is retired: a bookmarked/deep-linked load redirects to the
         // estate home instead of rendering chrome with no active entry.
-        if (pageId === 'skybridge') { window.location.replace('/touch/home.html'); return; }
+        if (pageId === 'skybridge') { window.location.replace('/touch/home.html' + window.location.search + window.location.hash); return; }
         _pageId = pageId;
 
         applyAutoTheme();

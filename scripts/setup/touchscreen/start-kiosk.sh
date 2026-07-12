@@ -11,7 +11,7 @@ KIOSK_HOME="${HOME:-/home/pi}"
 # Fallback matches the tracked config.json template: the local LAN Skybridge
 # surface. Never fall back to zoe.the411.life (Cloudflare-blocked from the
 # panel) or the retired dashboard.html.
-DEFAULT_URL="https://192.168.1.218/touch/skybridge.html?panel_id=zoe-touch-pi&kiosk=1"
+DEFAULT_URL="https://192.168.1.218/touch/home.html?panel_id=zoe-touch-pi&kiosk=1"
 
 # Resolve the Chromium binary — image-dependent name. Fail loudly so systemd
 # journal shows why the panel is black instead of silently looping.
