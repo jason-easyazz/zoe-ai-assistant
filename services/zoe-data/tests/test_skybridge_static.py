@@ -679,9 +679,10 @@ process.stdout.write(JSON.stringify({
 def test_skybridge_is_registered_in_touch_menu():
     menu = read(UI / "js" / "touch-menu.js")
 
-    assert "{ id: 'skybridge'" in menu
-    assert "/touch/skybridge.html" in menu
-    assert "{ id: 'skybridge', path: '/touch/skybridge.html',  label: 'Home'" in menu
+    # The estate (/touch/home.html) is Home everywhere; skybridge is retired
+    # from the chrome (file removal is the follow-up migration).
+    assert "{ id: 'home', path: '/touch/home.html',  label: 'Home'" in menu
+    assert "{ id: 'skybridge'" not in menu
     assert "{ id: 'dashboard', path: '/touch/dashboard.html',  label: 'Home'" not in menu
     assert "q=show%20my%20calendar" not in menu
     assert "Skybridge Calendar" not in menu
@@ -691,7 +692,8 @@ def test_skybridge_is_registered_in_touch_menu():
     assert "'skybridge-calendar'" not in menu
     assert "'skybridge-calendar-test'" not in menu
     assert "'dashboard', 'skybridge'," not in menu
-    assert "'skybridge.html'" in menu
+    # Fully retired: skybridge appears nowhere in the touch chrome.
+    assert "skybridge.html" not in menu
     assert "'dashboard', 'skybridge', 'calendar'" not in menu
 
 
@@ -709,7 +711,8 @@ def test_touch_defaults_to_estate_home():
     assert "let dest = '/touch/home.html';" in touch_index
     assert "window.location.href = '/touch/home.html';" in touch_index
     assert "window.location.href = '/touch/home.html';" in auth
-    assert "return '/touch/skybridge.html';" in menu
+    assert "return '/touch/home.html';" in menu
+    assert "return '/touch/skybridge.html';" not in menu
 
 
 def test_touch_executor_renders_skybridge_card_contracts():
