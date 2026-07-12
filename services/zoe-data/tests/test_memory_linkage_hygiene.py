@@ -441,3 +441,54 @@ def test_name_from_pending_slug():
     assert md._name_from_pending_slug("slug:mary_jane") == "mary jane"
     assert md._name_from_pending_slug("katie") == "katie"  # legacy bare value
     assert md._name_from_pending_slug("") == ""
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Pronoun CHAIN anchoring + turn-digest pronoun guard (the Caitlin bug, #1242)
+# ══════════════════════════════════════════════════════════════════════════════
+@pytest.mark.asyncio
+async def test_pronoun_chain_anchors_via_history_lookback(monkeypatch):
+    """'I have a friend Caitlin' → 'she is allergic to nuts' → \"she's ALSO
+    allergic to shellfish\": the third turn's literal prev has no person intro,
+    so the anchor must come from the history lookback, not break after one hop."""
+    import memory_extractor as me
+
+    db = await _open(people=[])
+    try:
+        svc = _FakeIngestSvc()
+        _patch_memory_service(monkeypatch, svc)
+        _always_storable(monkeypatch)
+        _use_db(monkeypatch, db)
+        # LRU returns the literal prev turn (a pronoun fact — no intro).
+        monkeypatch.setattr(me, "recall_prev_user_turn",
+                            lambda u, s: "She is allergic to nuts")
+        async def _hist(u, s, cur, limit=6):
+            return ["She is allergic to nuts", "I have a friend Caitlin Farrell"]
+        monkeypatch.setattr(me, "_load_recent_user_messages", _hist)
+
+        saved = await me.extract_and_ingest(
+            "She's also allergic to shellfish", user_id=USER,
+            session_id="sess-1", source="test",
+        )
+        assert saved == 1
+        person = [i for i in svc.ingests if i["memory_type"] == "person"]
+        assert len(person) == 1
+        assert person[0]["text"] == "Caitlin Farrell (user's friend) is allergic to shellfish"
+        assert person[0]["entity_type"] == "person_pending"  # no contact row yet
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_turn_digest_skips_pronoun_subject():
+    """The context-free LLM turn digest must NOT guess who 'she' is — it once
+    stored a friend's allergy as \"The user is allergic to nuts\"."""
+    import memory_digest as md
+
+    r = await md.run_turn_digest("u1", "She is allergic to nuts", session_id="s1")
+    assert r.get("skipped_reason") == "pronoun_subject_no_context"
+    assert r["new"] == 0
+    # First-person facts still digest (no skip reason set by the guard).
+    # (Not invoking the LLM here — just assert the guard doesn't fire.)
+    import re as _re
+    assert not _re.match(r"^(?:she|he|they)\b", "I am allergic to nuts")

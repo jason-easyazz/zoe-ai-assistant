@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import uuid
 
 import httpx
@@ -301,6 +302,15 @@ async def run_turn_digest(
                     "set timer", "remind me to", "add to my", "what's")
     msg_lower = user_message.lower().strip()
     if any(msg_lower.startswith(s) for s in _skip_starts):
+        return result
+    # Third-person pronoun subject ("she is allergic to nuts", "he's a doctor"):
+    # this single-turn prompt has no antecedent context, so the LLM can only guess
+    # who the fact is about — observed misattributing a friend's allergy to THE
+    # USER ("The user is allergic to nuts"). The deterministic coreference path
+    # (memory_extractor._pronoun_fact_candidates + session-history anchoring) owns
+    # these turns; skip the context-free LLM digest rather than let it guess.
+    if re.match(r"^(?:and\s+|oh[,\s]+|btw[,\s]+)?(?:she|he|they)\b", msg_lower):
+        result["skipped_reason"] = "pronoun_subject_no_context"
         return result
 
     try:
