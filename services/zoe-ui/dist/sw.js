@@ -8,7 +8,7 @@
 importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.63.17'; // privacy: default-deny /api cache + IPv4-literal/IPv6 loopback passthrough
+const SW_VERSION = '4.63.18'; // touch-menu launcher: full-screen grid picker (fresh touch-menu.js on panels)
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
