@@ -6,10 +6,12 @@
 <title>Zoe</title>
 <meta name="theme-color" content="#05070d">
 <script>
-  /* Auth guard — the estate is the panel home; require a session or bounce to login. */
-  (function(){try{var s=JSON.parse(localStorage.getItem('zoe_session')||'null');
-    if(!s||!s.session_id){sessionStorage.setItem('zoe_redirect_after_login','/touch/home.html');location.replace('/touch/index.html');}
-  }catch(e){}})();
+  /* Auth guard — the estate is the panel home; require a valid session or bounce
+     to login. A malformed session counts as no session; carry the panel_id query
+     through so the panel keeps its binding after signing in. */
+  (function(){var ok=false;try{var s=JSON.parse(localStorage.getItem('zoe_session')||'null');ok=!!(s&&s.session_id);}catch(e){ok=false;}
+    if(!ok){var q=location.search||'';sessionStorage.setItem('zoe_redirect_after_login','/touch/home.html'+q);location.replace('/touch/index.html'+q);}
+  })();
 </script>
 <style>
   :root{
@@ -450,7 +452,7 @@
   function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
   function fmt12(hhmm){var m=/^(\d{1,2}):(\d{2})/.exec(hhmm||'');if(!m)return esc(hhmm||'');var h=+m[1],ap=h<12?'am':'pm',hr=h%12;if(hr===0)hr=12;return hr+':'+m[2]+' '+ap;}
   function sid(){try{return (JSON.parse(localStorage.getItem('zoe_session')||'{}').session_id)||'';}catch(_){return '';}}
-  function apiGet(url){return fetch(url,{headers:{'X-Session-ID':sid()},credentials:'include'}).then(function(r){return r.ok?r.json():null;});}
+  function apiGet(url){return fetch(url,{headers:{'X-Session-ID':sid()},credentials:'include'}).then(function(r){if(!r.ok)throw new Error('http '+r.status);return r.json();});}
   function tickClock(){var c=document.getElementById('hClock');if(!c)return;var d=new Date(),h=d.getHours()%12;if(h===0)h=12;c.textContent=h+':'+two(d.getMinutes());var dt=document.getElementById('hDate');if(dt)dt.textContent=d.toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long'});}
   function loadWeather(){apiGet('/api/weather/current').then(function(w){var el=document.getElementById('hTemp');if(!el||!w)return;var t=(w.temp!=null?w.temp:w.temperature);el.querySelector('.n').textContent=(t!=null?Math.round(t):'—')+'°';var c=(w.description||w.condition||'');el.querySelector('.c').textContent=c?c.charAt(0).toUpperCase()+c.slice(1):'';}).catch(function(){});}
   function loadToday(){var host=document.getElementById('hToday');if(!host)return;var d=new Date(),ds=d.getFullYear()+'-'+two(d.getMonth()+1)+'-'+two(d.getDate());
@@ -458,7 +460,7 @@
       var evs=((data&&data.events)||[]).filter(function(e){return !e.deleted;}).sort(function(a,b){return (a.start_time||'').localeCompare(b.start_time||'');});
       if(!evs.length){host.innerHTML='<div class="tr" style="opacity:.55"><span class="dot" style="--c:var(--accent)"></span><span class="tt"></span><span class="tn">Nothing scheduled today</span></div>';return;}
       host.innerHTML=evs.slice(0,4).map(function(e){var cat=CAT[(e.category||'').toLowerCase()]||'var(--accent)';var when=e.all_day?'All day':fmt12(e.start_time);return '<div class="tr"><span class="dot" style="--c:'+cat+'"></span><span class="tt">'+esc(when)+'</span><span class="tn">'+esc(e.title||'Event')+'</span></div>';}).join('');
-    }).catch(function(){host.innerHTML='';});}
+    }).catch(function(){host.innerHTML='<div class="tr" style="opacity:.55"><span class="dot" style="--c:var(--cat-health)"></span><span class="tt"></span><span class="tn">Couldn’t load your day</span></div>';});}
   function initHome(){tickClock();if(_homeTick)clearInterval(_homeTick);_homeTick=setInterval(tickClock,15000);loadWeather();loadToday();}
 
   var ORDER=[['home','Home'],['rooms','Rooms'],['sleep','Sleep'],['ask','Ask Zoe'],['weather','Weather'],['music','Music'],['timer','Timer'],['SEP'],['day','Day'],['list','List'],['reminder','Reminder'],['person','Person'],['confirm','Confirm'],['settings','Settings'],['pair','Pair']];
