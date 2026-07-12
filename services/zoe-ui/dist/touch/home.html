@@ -830,6 +830,8 @@
     Promise.all(LIST_TYPES.map(function(t){return apiJson('GET','/api/lists/'+t).then(function(d){return (d.lists||[]).map(function(l){l.list_type=l.list_type||t;return l;});}).catch(function(){return [];});}))
       .then(function(groups){if(_cur!=='list')return;
         _lst.lists=[].concat.apply([],groups);
+        // a previously-selected list may have been deleted elsewhere — revalidate
+        if(_lst.sel&&!_lst.lists.some(function(l){return l.id===_lst.sel;}))_lst.sel=null;
         if(!_lst.sel&&_lst.lists.length)_lst.sel=_lst.lists[0].id;
         paintListTabs();paintListBody();
       }).catch(function(){if(_cur==='list')tabs.innerHTML='<span class="ltab">Couldn’t load lists</span>';});
@@ -940,7 +942,7 @@
   }
 
   // ---- Calendar: day / week / month on real events ----
-  var _cal={view:'week'};
+  var _cal={view:'week',gen:0};
   function isoD(d){return d.getFullYear()+'-'+two(d.getMonth()+1)+'-'+two(d.getDate());}
   function wireCalendar(){
     var vs=document.getElementById('calViews');
@@ -950,12 +952,13 @@
   }
   function paintCal(){
     var body=document.getElementById('calBody'),ttl=document.getElementById('calTtl');if(!body)return;
+    var gen=++_cal.gen;   // rapid view switches: only the newest request may paint
     var now=new Date(),start,end;
     if(_cal.view==='day'){start=new Date(now);end=new Date(now);}
     else if(_cal.view==='week'){start=new Date(now);start.setDate(now.getDate()-((now.getDay()+6)%7));end=new Date(start);end.setDate(start.getDate()+6);}
     else{start=new Date(now.getFullYear(),now.getMonth(),1);end=new Date(now.getFullYear(),now.getMonth()+1,0);}
     if(ttl)ttl.textContent=_cal.view==='month'?now.toLocaleDateString(undefined,{month:'long',year:'numeric'}):(_cal.view==='week'?'This week':now.toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long'}));
-    apiGet('/api/calendar/events?start_date='+isoD(start)+'&end_date='+isoD(end)).then(function(d){if(_cur!=='calendar')return;
+    apiGet('/api/calendar/events?start_date='+isoD(start)+'&end_date='+isoD(end)).then(function(d){if(_cur!=='calendar'||gen!==_cal.gen)return;
       var evs=((d&&d.events)||[]).filter(function(e){return !e.deleted;});
       var byDay={};evs.forEach(function(e){var k=e.start_date;(byDay[k]=byDay[k]||[]).push(e);});
       Object.keys(byDay).forEach(function(k){byDay[k].sort(function(a,b){return (a.start_time||'').localeCompare(b.start_time||'');});});
@@ -975,7 +978,7 @@
         var es3=byDay[isoD(now)]||[];
         body.innerHTML='<div class="caldaylist">'+(es3.map(function(e){var cat=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="dev"><div class="t" style="width:96px;flex:none;font-size:21px;color:var(--ink-soft)">'+esc(e.all_day?'All day':fmt12(e.start_time))+'</div><span class="dot" style="--c:'+cat+';width:12px;height:12px;border-radius:50%;background:var(--c);box-shadow:0 0 10px var(--c);flex:none"></span><div><div class="en" style="font-size:23px;font-weight:500">'+esc(e.title||'Event')+'</div>'+(e.location?'<div class="es" style="font-size:16px;color:var(--ink-faint)">'+esc(e.location)+'</div>':'')+'</div></div>';}).join('')||'<div style="color:var(--ink-faint);font-size:20px;padding-top:20px">Nothing scheduled today.</div>')+'</div>';
       }
-    }).catch(function(){body.innerHTML='<div style="color:var(--ink-faint);font-size:20px">Couldn’t load the calendar.</div>';});
+    }).catch(function(){if(_cur!=='calendar'||gen!==_cal.gen)return;body.innerHTML='<div style="color:var(--ink-faint);font-size:20px">Couldn’t load the calendar.</div>';});
   }
 
   // ---- Day: full-screen — today's events + reminders (+ comms when a source exists) ----
