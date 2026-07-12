@@ -320,6 +320,91 @@ def _person_intro_from(prev_user_message: str) -> tuple[str, Optional[str]]:
     return "", None
 
 
+# Two copulas jammed into ONE comma-free clause is the signature of a garbled
+# substitution ("Their kids are their daughter's name is Ruby-Rose and Max",
+# QA review F6) — splicing a clausal correction into a compound prior sentence
+# never reads as a sane fact. Conservative: a rejected sentence stores the
+# anchored clean pair or NOTHING, never the garble.
+_JAMMED_COPULA_RE = re.compile(
+    r"\b(?:is|are|was|were)\b[^,.;!?]*\b(?:is|are|was|were)\b", re.IGNORECASE
+)
+# A CLAUSAL correction value — the "new" side is itself a full "X('s name) is Y"
+# clause rather than a bare value ("their daughter's name is Ruby-Rose, not
+# Ruby"). Substituting a clause for a word garbles; anchor the clause instead.
+_CLAUSAL_NEW_RE = re.compile(
+    r"^(?P<pron>their|her|his|its|the|my)\s+"
+    r"(?P<attr>[a-z][\w' -]{1,30}?)"
+    r"(?:'s\s+name\s+is|\s+is\s+(?:named\s+|called\s+)?)\s*"
+    r"(?P<val>[\w' /:.-]{1,60})$",
+    re.IGNORECASE,
+)
+_MAX_CORRECTED_LEN = 220
+
+
+def _substitution_sane(corrected: str, new_val: str) -> bool:
+    """False when the old→new splice produced structural garbage (QA F6)."""
+    if len(corrected) > _MAX_CORRECTED_LEN:
+        return False
+    if _JAMMED_COPULA_RE.search(corrected):
+        return False
+    # The new value carrying its own copula means a clause was spliced in as if
+    # it were a word — even a single-clause result is then a mis-statement.
+    if re.search(r"\b(?:is|are|was|were)\b", new_val, re.IGNORECASE):
+        return False
+    return True
+
+
+def _anchored_clause_candidates(
+    new_val: str, prev: str, source_excerpt: str, seen: set[str]
+) -> list[MemoryCandidate]:
+    """Fallback when substitution would garble: store ONLY the clean correction
+    pair, anchored to the person the prior message introduced — or nothing.
+
+    "Actually their daughter's name is Ruby-Rose, not Ruby" after a Lindsay
+    intro → "Lindsay's daughter's name is Ruby-Rose". No anchor → store nothing
+    (never the garble, never a pronoun-subject orphan)."""
+    m = _CLAUSAL_NEW_RE.match(new_val)
+    if not m:
+        return []
+    attr = _clean(m.group("attr"))
+    val = _clean(m.group("val"))
+    if not attr or not val:
+        return []
+    pron = m.group("pron").lower()
+    if pron == "my":
+        # First-person clause is already self-contained — safe to store as-is.
+        text = f"Correction: my {attr} is {val}" if "'s name is" not in new_val.lower() \
+            else f"Correction: my {attr}'s name is {val}"
+        name = None
+    else:
+        name, _rel = _person_intro_from(prev)
+        if not name:
+            return []
+        text = f"{name}'s {attr} is named {val}"
+    key = text.lower()
+    if key in seen:
+        return []
+    seen.add(key)
+    if name:
+        return [
+            MemoryCandidate(
+                text=text,
+                memory_type="person",
+                title=name,
+                entity_type="person",
+                entity_id=_slug_body(name),
+                confidence=0.75,
+                source_excerpt=source_excerpt,
+            )
+        ]
+    return [
+        MemoryCandidate(
+            text=text, memory_type="fact", confidence=0.75,
+            source_excerpt=source_excerpt,
+        )
+    ]
+
+
 def _correction_candidates(
     user_message: str, prev_user_message: str, seen: set[str]
 ) -> list[MemoryCandidate]:
@@ -351,6 +436,12 @@ def _correction_candidates(
     # (\1, \g<...>) inside user-supplied new_val as template references.
     corrected = _clean(old_rx.sub(lambda _m: new_val, prev, count=1))
     source_excerpt = _clean(user_message)[:220]
+    # QA review F6: with a multi-clause prior sentence, word-for-clause
+    # substitution produces garbage that then gets STORED ("Their kids are
+    # their daughter's name is Ruby-Rose and Max"). Sanity-gate the splice;
+    # on failure store only the anchored clean pair — or nothing.
+    if not _substitution_sane(corrected, new_val):
+        return _anchored_clause_candidates(new_val, prev, source_excerpt, seen)
     # Prefer re-mining the corrected sentence through the normal templates so a
     # correctable templated fact ("my wife's name is Emma" → "…Anna") lands in
     # its canonical shape; otherwise store the corrected sentence itself.

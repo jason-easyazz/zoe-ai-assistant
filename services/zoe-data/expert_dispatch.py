@@ -455,6 +455,18 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
     )
     if is_question and not imperative_store:
         return await _run_expert(domain, text, user_id, session_id)
+    # Correction/negation shapes ("no <Name> is …", "no, …", "that's wrong…",
+    # "actually …", "i meant …") must NEVER be verbatim-taught: "No Caitlin is
+    # allergic to shellfish, …" was stored literally as a fact in prod (QA
+    # review F8). The correction path (memory_extractor, run below per #1242's
+    # ordering) owns these turns; when it yields nothing we drop with an honest
+    # reply instead of storing junk.
+    try:
+        from memory_quality import ambiguous_negation_subject, looks_like_correction
+        correctionish = looks_like_correction(text) and not imperative_store
+    except Exception:
+        correctionish = False
+        ambiguous_negation_subject = lambda _t: None  # noqa: E731 — gate unavailable
     # Write-quality gate (mem0-style): even past the store-vs-recall split, drop
     # candidates that aren't shaped like a storable personal fact (interrogative
     # leftovers, LLM meta-rambling, empty/too-short). Conservative — leans ACCEPT.
@@ -494,8 +506,26 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
         logger.debug("store_fact person-link path skipped (%s)", exc)
         linked = 0
     if linked and linked > 0:
+        if correctionish:
+            # A correction the extractor resolved — never echo the raw
+            # negation ("I'll remember No Caitlin is…") back as a teach.
+            return "Got it — I've updated that."
         echo = _echo_fact(text)
         return f"Got it — I'll remember {echo}." if echo else "Got it — I'll remember that."
+    if correctionish:
+        # Correction shape but the correction path produced nothing: NEVER
+        # fall through to the verbatim ingest below (QA F8). The ambiguous
+        # "No <Name> is …" shape gets an honest clarification; other
+        # correction shapes defer to the brain (reply-only, no store).
+        _record_quality_reject("voice_fact", "correction_shape_unresolved", text)
+        name = ambiguous_negation_subject(text)
+        if name:
+            return (
+                f"I want to get that right about {name} and I'm not sure "
+                f"which way you mean it — I haven't saved anything. "
+                f"Could you say it once more, plainly?"
+            )
+        return None
     try:
         from memory_service import get_memory_service
         svc = get_memory_service()
