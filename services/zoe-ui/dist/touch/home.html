@@ -9,6 +9,9 @@
   /* Auth guard — the estate is the panel home; require a valid session or bounce
      to login. A malformed session counts as no session; carry the panel_id query
      through so the panel keeps its binding after signing in. */
+  /* Kiosk bootstrap (was on skybridge.html): persist the kiosk flag so a fresh
+     or cleared browser profile keeps kiosk behavior across navigations. */
+  (function(){try{var p=new URLSearchParams(location.search);if(p.get('kiosk')==='1')localStorage.setItem('zoe_kiosk','1');}catch(e){}})();
   (function(){var ok=false;try{var s=JSON.parse(localStorage.getItem('zoe_session')||'null');ok=!!(s&&s.session_id);}catch(e){ok=false;}
     window.__needAuth=!ok;   // no session → estate-native who+PIN card (no redirect)
   })();
@@ -802,7 +805,8 @@
     show(DOMAIN_SCREEN[dom||'']||'home');
     if(heard)dockHeard(heard);
     if(say)toast(say);
-    try{history.replaceState(null,'',location.pathname+(sp.get('panel_id')?('?panel_id='+encodeURIComponent(sp.get('panel_id'))):'' ));}catch(e){}
+    try{var keep=[];if(sp.get('panel_id'))keep.push('panel_id='+encodeURIComponent(sp.get('panel_id')));if(sp.get('kiosk'))keep.push('kiosk='+encodeURIComponent(sp.get('kiosk')));
+      history.replaceState(null,'',location.pathname+(keep.length?('?'+keep.join('&')):''));}catch(e){}
     window.__voiceArrived=true;
   })();
 
