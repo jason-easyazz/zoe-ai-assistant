@@ -1059,8 +1059,9 @@
     m.querySelector('[data-x="del"]').onclick=function(){estConfirm('Delete “'+(ev.title||'this event')+'”?',function(){
       apiJson('DELETE','/api/calendar/events/'+encodeURIComponent(ev.id)).then(function(){estClose();paintCal();}).catch(function(){toast('Couldn’t delete');});});};
     m.querySelector('[data-x="save"]').onclick=function(){var body={};m.querySelectorAll('[data-f]').forEach(function(i){body[i.getAttribute('data-f')]=i.value.trim();});
-      // A cleared time means an all-day event — otherwise it renders as a blank time in week/day views.
-      if(!body.start_time){body.all_day=true;delete body.start_time;}else{body.all_day=false;}
+      // A cleared time means an all-day event — send start_time:null so the stored
+      // time is actually cleared (a partial update would leave the old value behind).
+      if(!body.start_time){body.all_day=true;body.start_time=null;}else{body.all_day=false;}
       apiJson('PUT','/api/calendar/events/'+encodeURIComponent(ev.id),body).then(function(){estClose();paintCal();}).catch(function(){toast('Couldn’t save event');});};
   }
 
