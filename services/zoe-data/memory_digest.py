@@ -606,6 +606,17 @@ async def _emotional_memory_pass(user_id: str, chat_text: str, svc) -> int:
         significance = int(item.get("significance", 1))
         if not moment or significance < 2:
             continue
+        # Same no-turn-provenance rule as the nightly fact loop: a day-level
+        # moment like "User's wife was excited about the trip" can misattribute
+        # a relationship the transcript never anchored — drop user-anchored
+        # relationship phrasings here too.
+        try:
+            from memory_quality import user_relationship_claim_unsupported
+            if user_relationship_claim_unsupported(moment, ""):
+                logger.info("memory_digest: dropped user-anchored relationship in emotional moment: %r", moment[:70])
+                continue
+        except Exception:
+            pass
         try:
             ref = await svc.ingest(
                 moment,
