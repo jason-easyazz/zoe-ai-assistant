@@ -131,23 +131,23 @@
   .ctcard .ctrow .cl{width:120px;color:var(--ink-faint);font-size:16px;flex:none;padding-top:2px}
   .ctcard .ctclose{margin-top:22px;width:100%;height:52px;border-radius:14px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:var(--ink);font:inherit;font-size:18px;cursor:pointer}
   /* Calendar — day / week / month */
-  .calf{position:absolute;inset:0;padding:100px 64px 150px;display:flex;flex-direction:column}
-  .calhead{display:flex;align-items:center;gap:16px;margin-bottom:18px}
-  .calhead h1{font-size:34px;font-weight:600;flex:1}
+  .calf{position:absolute;inset:0;padding:104px 36px 140px;display:flex;flex-direction:column}
+  .calhead{position:absolute;top:38px;left:110px;right:110px;height:48px;display:flex;align-items:center;gap:16px}
+  .calhead h1{font-size:28px;font-weight:600;flex:1;letter-spacing:-.01em}
   .calviews{display:flex;gap:6px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:5px}
   .calviews button{font:inherit;font-size:16px;color:var(--ink-soft);background:transparent;border:0;border-radius:999px;padding:8px 18px;cursor:pointer}
   .calviews button.on{background:#fff;color:#0a0d14;font-weight:600}
   .calbody{flex:1;overflow-y:auto}
-  .calmonth{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+  .calmonth{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;width:100%}
   .calmonth .cmh{font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);text-align:center;padding:4px 0}
-  .cmd{min-height:76px;border-radius:14px;background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.07);padding:7px 9px;font-size:15px;box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
+  .cmd{min-width:0;min-height:82px;border-radius:14px;background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.07);padding:7px 9px;font-size:15px;box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
   .cmd.dim{opacity:.3}
   .cmd.today{border-color:rgba(123,150,255,.65);background:linear-gradient(180deg,rgba(123,150,255,.18),rgba(123,150,255,.08));box-shadow:0 0 22px rgba(123,150,255,.18),inset 0 1px 0 rgba(255,255,255,.1)}
   .cmd.today .dn{color:#fff;font-weight:600}
   .cmd .dn{font-size:14px;color:var(--ink-soft)}
   .cmd .cev{font-size:12px;color:var(--ink);border-left:3px solid var(--c,var(--accent));background:color-mix(in srgb,var(--c,var(--accent)) 20%,transparent);border-radius:5px;padding:2px 7px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .calweek{display:grid;grid-template-columns:repeat(7,1fr);gap:10px}
-  .cwc{background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.07);border-radius:16px;padding:12px 10px;min-height:300px;box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
+  .calweek{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:10px;width:100%}
+  .cwc{min-width:0;background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.07);border-radius:16px;padding:12px 10px;min-height:300px;box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
   .cwc h5{font-size:14px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;text-align:center}
   .cwc.today{border-color:rgba(123,150,255,.6);background:linear-gradient(180deg,rgba(123,150,255,.15),rgba(123,150,255,.05));box-shadow:0 0 22px rgba(123,150,255,.15)}
   .cwe{font-size:14px;border-left:3px solid var(--c,var(--accent));background:color-mix(in srgb,var(--c,var(--accent)) 18%,transparent);border-radius:7px;padding:5px 9px;margin-bottom:6px}
