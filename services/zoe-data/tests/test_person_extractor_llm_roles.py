@@ -236,3 +236,10 @@ def test_my_in_fact_and_of_mine_in_source(  # Greptile r7 mirror cases
     assert _unsupported("user's friend", "a friend of mine, Bob, came over") is False
     # genuine self-stated facts keep passing
     assert _unsupported("My dad's name is Neil", "my dad is Neil, born 1945") is False
+
+
+def test_compound_roles_require_full_support():
+    """'user's wife and daughter' from a turn saying only 'my daughter Emily'
+    must drop — one supported role can't carry an unsupported one (Greptile r8)."""
+    assert _unsupported("Emily: user's wife and daughter", "my daughter Emily is here") is True
+    assert _unsupported("Emily: user's wife and daughter", "my wife and my daughter Emily") is False

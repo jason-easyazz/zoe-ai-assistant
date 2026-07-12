@@ -489,16 +489,23 @@ def user_relationship_claim_unsupported(fact_text: str, source_text: str) -> boo
     if not roles:
         return False  # user-anchored but no relationship role → not our concern
     src = (source_text or "").lower()
+    # EVERY detected role must be supported — a compound fact ("user's wife and
+    # daughter") must not ride one supported role past an unsupported one.
     for role in roles:
+        supported = False
         # "my <role>" with up to two adjectives between ("my male friend",
         # "my best mate"); plural tolerated ("my girls"). Synonyms count: the
-        # source saying "my mum" supports a fact phrased "user's mother".
+        # source saying "my mum" supports a fact phrased "user's mother", and
+        # "a friend of mine" phrasing supports a user's-friend fact.
         for variant in _role_variants(role):
-            if re.search(rf"\bmy\s+(?:\w+\s+){{0,2}}{re.escape(variant)}s?\b", src):
-                return False  # the source supports this user anchor
-            if re.search(rf"\b{re.escape(variant)}s?\s+of\s+mine\b", src):
-                return False  # "a friend of mine" phrasing supports it too
-    return True
+            if re.search(rf"\bmy\s+(?:\w+\s+){{0,2}}{re.escape(variant)}s?\b", src) or re.search(
+                rf"\b{re.escape(variant)}s?\s+of\s+mine\b", src
+            ):
+                supported = True
+                break
+        if not supported:
+            return True  # at least one user-anchored role the source never stated
+    return False
 
 
 __all__ = [
