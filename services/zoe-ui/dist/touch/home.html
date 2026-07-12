@@ -76,6 +76,22 @@
   .lcol .ladd button{width:44px;height:44px;border-radius:12px;border:0;background:var(--accent);color:#fff;font-size:20px;cursor:pointer}
   .lcol.newl{background:transparent;border-style:dashed}
   .lcol.newl select{width:100%;height:44px;margin-top:8px;border-radius:12px;background:rgba(255,255,255,.06);color:var(--ink);border:1px solid rgba(255,255,255,.14);font:inherit;padding:0 8px}
+  /* Day — full-screen: timeline + reminders (+ comms when a source exists) */
+  .dayf{position:absolute;inset:0;padding:106px 70px 150px;display:flex;gap:48px}
+  .dayf .dc1{flex:1.35;min-width:0}
+  .dayf .dk{font-size:15px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-faint)}
+  .dayf h1{font-size:46px;font-weight:600;letter-spacing:-.02em;margin:6px 0 18px}
+  .dayf .dev{display:flex;align-items:center;gap:16px;padding:15px 0;border-top:1px solid rgba(255,255,255,.08)}
+  .dayf .dev .t{width:96px;flex:none;font-size:21px;color:var(--ink-soft);white-space:nowrap;font-variant-numeric:tabular-nums}
+  .dayf .dev .dot{width:12px;height:12px;border-radius:50%;background:var(--c);box-shadow:0 0 10px var(--c);flex:none}
+  .dayf .dev .en{font-size:23px;font-weight:500}
+  .dayf .dev .es{font-size:16px;color:var(--ink-faint);margin-top:1px}
+  .dayf .dc2{width:380px;flex:none;display:flex;flex-direction:column;gap:26px}
+  .dayf .dsec{background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.09);border-radius:22px;padding:20px 22px}
+  .dayf .dsec h4{font-size:14px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:10px}
+  .dayf .drem{display:flex;gap:12px;align-items:baseline;padding:9px 0;border-top:1px solid rgba(255,255,255,.07);font-size:19px}
+  .dayf .drem:first-of-type{border-top:0}
+  .dayf .drem .rt{color:var(--ink-faint);font-size:16px;min-width:96px}
   /* Timers */
   .tmore{position:absolute;left:50%;bottom:150px;transform:translateX(-50%);display:flex;gap:14px}
   .tmr{display:flex;align-items:center;gap:14px;background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:12px 18px;font-size:20px}
@@ -422,7 +438,7 @@
         +'<div class="today"><div class="thk">Your Day</div><div id="hToday"></div></div>'
         +'</div>'},
     ask:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="askf"><div class="aa">There’s no single answer — most people find it in <em>the people they love, work that feels worth doing, and small moments of wonder.</em> Yours is the one you keep choosing.</div></div>'},
+      html:'<div class="askf"><div class="aa" id="askOut" style="opacity:.55">Tap the orb, or just speak — I’ll answer here.</div></div>'},
     weather:{home:true, bg:DUSK, canvas:true,
       html:'<div class="fcog">'+GEAR+'</div><div class="wloc" id="wxLoc"></div><div class="wbig"><div class="t" id="wxTemp">—°</div><div class="c" id="wxCond"></div></div><div class="whours" id="wxHours"></div>'},
     music:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,
@@ -431,6 +447,8 @@
       html:'<div class="fcog">'+GEAR+'</div><div class="tfull"><div class="tkick">Timers</div><div class="tring"><svg width="420" height="420" viewBox="0 0 420 420"><circle cx="210" cy="210" r="188" fill="none" stroke="rgba(255,255,255,.12)" stroke-width="14"/><circle id="tmArc" cx="210" cy="210" r="188" fill="none" stroke="#8ea6ff" stroke-width="14" stroke-linecap="round" stroke-dasharray="1181" stroke-dashoffset="1181" style="filter:drop-shadow(0 0 14px rgba(123,150,255,.7))"/></svg><div class="ttime" id="tmTime">--:--</div></div><div class="tsub" id="tmLabel"></div><div class="tctrls" id="tmCtl"></div></div><div class="tmore" id="tmMore"></div>'},
     list:{home:true, bg:GROUND, canvas:false,
       html:'<div class="fcog">'+GEAR+'</div><div class="lstf" id="lstCols"></div>'},
+    day:{home:true, bg:GROUND, canvas:false,
+      html:'<div class="fcog">'+GEAR+'</div><div class="dayf"><div class="dc1"><div class="dk">Your Day</div><h1 id="dayTtl"></h1><div id="dayEvents"></div></div><div class="dc2"><div class="dsec"><h4>Reminders</h4><div id="dayRems"></div></div><div class="dsec" id="dayComms" style="display:none"><h4>Messages</h4><div id="dayCommsList"></div></div></div></div>'},
     sleep:{home:false, bg:'radial-gradient(120% 90% at 50% 46%,#0a0e18,#02030a 72%)', canvas:false,
       html:'<div class="slp"><div class="sclock" id="slClock"><span>--</span><span>--</span></div><div class="sdate" id="slDate"></div>'
         +'<div class="sdock" id="slDock"></div></div>'},
@@ -442,7 +460,6 @@
 
   // card answers
   var CARD={
-    day:{heard:'“What’s my day look like?”', wash:'var(--cat-work)', html:'<div class="card agenda"><div class="wash"></div>'+COG+'<div class="kick">Today</div><div class="ttl" id="dayTtl">Today</div><div class="events" id="dayEvents"></div></div>'},
     reminder:{heard:'“What are my reminders?”', wash:'var(--amber)', html:'<div class="card rem"><div class="wash"></div>'+COG+'<div class="bell">'+IC.bell+'</div><div class="kick">Reminders</div><div class="ttl2" id="remTtl">Loading…</div><div id="remList" style="margin-top:18px"></div></div>'},
     person:{heard:'“Who do we know?”', wash:'var(--cat-health)', html:'<div class="card person"><div class="wash"></div>'+COG+'<div class="kick">Contacts</div><div class="ttl" id="pplTtl">Loading…</div><div class="pgrid" id="pplGrid"></div></div>'},
     confirm:{heard:'“Add olive oil to the shopping list”', wash:'var(--accent)', html:'<div class="card confirm"><div class="wash"></div><div class="kick">Confirm</div><div class="q">Add to your Shopping list?</div><div class="rows"><div class="r"><span class="l">Item</span><span>Olive oil</span></div><div class="r"><span class="l">List</span><span>Shopping · 6 items</span></div></div><div class="acts"><button class="no">Not now</button><button class="yes">Add it</button></div></div>'},
@@ -480,6 +497,7 @@
       if(id==='sleep')wireSleep();
       if(id==='list')wireListsFull();
       if(id==='timer')wireTimer();
+      if(id==='day')wireDay();
       full.querySelectorAll('.sc[data-t], .rlt[data-l], .hdock .hpc.light').forEach(function(el){el.onclick=function(){el.classList.toggle('on');var rs=el.querySelector('.rs');if(rs)rs.textContent=el.classList.contains('on')?'On':'Off';};});
       full.querySelectorAll('.rchip').forEach(function(c){c.onclick=function(){full.querySelectorAll('.rchip').forEach(function(x){x.classList.remove('on')});c.classList.add('on');};});
       var pp=full.querySelector('.pp');if(pp)pp.onclick=function(){pp.textContent=pp.textContent==='❚❚'?'▶':'❚❚';};
@@ -488,7 +506,6 @@
       stage.style.background=GROUND; home.classList.remove('hide');
       cardwrap.classList.add('on');
       host.innerHTML=c.html; var card=host.querySelector('.card'); if(card&&c.wash)card.style.setProperty('--wash',c.wash);
-      if(id==='day')wireDay();
       if(id==='reminder')wireReminder();
       if(id==='person')wirePeople();
       if(id==='settings')wireSettings();
@@ -562,17 +579,17 @@
   // existing real pages until each is ported into the estate — so nothing shows
   // placeholder data on the live panel. (u = navigate to page; id = in-estate.)
   var DESTS=[
-    {id:'home',n:'Home',ic:'home',c:'linear-gradient(150deg,#8aa0ff,#5b74ff)'},
-    {id:'weather',n:'Weather',ic:'weather',c:'linear-gradient(150deg,#5ec8f0,#3f9bd8)'},
     {id:'day',n:'Day',ic:'day',c:'linear-gradient(150deg,#6aa6ff,#4a7de0)'},
+    {u:'/touch/calendar.html',n:'Calendar',ic:'day',c:'linear-gradient(150deg,#8aa0ff,#5b74ff)'},
     {id:'list',n:'Lists',ic:'lists',c:'linear-gradient(150deg,#66d6a3,#3fb98a)'},
+    {id:'weather',n:'Weather',ic:'weather',c:'linear-gradient(150deg,#5ec8f0,#3f9bd8)'},
     {id:'music',n:'Music',ic:'music',c:'linear-gradient(150deg,#c77bff,#8a53e8)'},
     {id:'rooms',n:'Rooms',ic:'rooms',c:'linear-gradient(150deg,#63b8ff,#3f7bd8)'},
     {id:'reminder',n:'Reminders',ic:'reminders',c:'linear-gradient(150deg,#ff9e6a,#f0742e)'},
-    {id:'sleep',n:'Sleep',ic:'sleep',c:'linear-gradient(150deg,#5b6bb0,#3a4788)'},
     {id:'person',n:'Contacts',ic:'people',c:'linear-gradient(150deg,#ff7a90,#e85a78)'},
     {id:'timer',n:'Timers',ic:'timer',c:'linear-gradient(150deg,#ffbf5e,#f0961e)'},
-    {u:'/touch/chat.html',n:'Chat',ic:'ask',c:'linear-gradient(150deg,#9a8cff,#6a53e8)'},
+    {id:'sleep',n:'Sleep',ic:'sleep',c:'linear-gradient(150deg,#5b6bb0,#3a4788)'},
+    {id:'ask',n:'Ask Zoe',ic:'ask',c:'linear-gradient(150deg,#9a8cff,#6a53e8)'},
     {id:'settings',n:'Settings',ic:'settings',c:'linear-gradient(150deg,#9aa6bd,#6f7c96)'}
   ];
   var lgrid=document.getElementById('lgrid'),apps=document.getElementById('apps'),launch=document.getElementById('launch');
@@ -581,7 +598,9 @@
   function lopen(){stage.classList.add('lopen');apps.classList.add('active');}
   apps.onclick=function(e){e.stopPropagation();stage.classList.contains('lopen')?lclose():lopen();};
   launch.onclick=function(e){if(e.target===launch)lclose();};
-  lgrid.addEventListener('click',function(e){var t=e.target.closest('.ltile');if(!t)return;lclose();var u=t.getAttribute('data-u');if(u){location.href=u;}else{show(t.dataset.id);}});
+  lgrid.addEventListener('click',function(e){var t=e.target.closest('.ltile');if(!t)return;lclose();var u=t.getAttribute('data-u');if(u){location.href=u;return;}
+    show(t.dataset.id);
+    if(t.dataset.id==='ask'){cmdbar.classList.add('on');setTimeout(function(){cmdin.focus();},60);}});
   addEventListener('keydown',function(e){if(e.key==='Escape')lclose();});
 
   // ---- live home data: real clock + weather + today's agenda (no placeholder data) ----
@@ -742,7 +761,7 @@
     var host=document.getElementById('lstCols');if(!host)return;
     host.innerHTML='<div class="lcol"><h3>Loading…</h3></div>';
     Promise.all(LIST_TYPES.map(function(t){return apiJson('GET','/api/lists/'+t).then(function(d){return (d.lists||[]).map(function(l){l.list_type=l.list_type||t;return l;});}).catch(function(){return [];});}))
-      .then(function(groups){var lists=[].concat.apply([],groups).slice(0,12);   // columns h-scroll, so show them all (sane cap)
+      .then(function(groups){var lists=[].concat.apply([],groups);   // every list gets a column; the board h-scrolls
         return Promise.all(lists.map(function(l){return apiJson('GET','/api/lists/'+l.list_type+'/'+l.id+'/items').then(function(d){return {l:l,items:d.items||[]};}).catch(function(){return {l:l,items:[]};});}));})
       .then(function(cols){if(_cur!=='list')return;
         host.innerHTML=cols.map(function(c){return lcolHTML(c.l,c.items);}).join('')
@@ -782,6 +801,7 @@
         if(timeEl)timeEl.textContent=fmtT(rem);
         if(arc)arc.style.strokeDashoffset=(1181*(1-Math.max(0,Math.min(1,rem/dur)))).toFixed(0);
         if(rem<=0)paint();}
+      if(_homeTick){clearInterval(_homeTick);_homeTick=null;}   // repaints must not stack tickers
       tick();_homeTick=setInterval(tick,1000);
       if(lab)lab.textContent=first.label||first.title||'Timer';
       if(ctl)ctl.innerHTML='<button class="stop" data-tid="'+esc(first.timer_id||first.id)+'">■</button>';
@@ -820,17 +840,23 @@
         location.reload();});};
   }
 
-  // ---- Day card (today's real calendar) ----
+  // ---- Day: full-screen — today's events + reminders (+ comms when a source exists) ----
   function wireDay(){
-    var ttl=document.getElementById('dayTtl'),host=document.getElementById('dayEvents');
+    var ttl=document.getElementById('dayTtl'),host=document.getElementById('dayEvents'),rems=document.getElementById('dayRems');
     if(ttl)ttl.textContent=new Date().toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long'});
-    if(!host)return;
     var d=new Date(),ds=d.getFullYear()+'-'+two(d.getMonth()+1)+'-'+two(d.getDate());
-    apiGet('/api/calendar/events?start_date='+ds+'&end_date='+ds).then(function(data){if(_cur!=='day')return;
+    apiGet('/api/calendar/events?start_date='+ds+'&end_date='+ds).then(function(data){if(_cur!=='day'||!host)return;
       var evs=((data&&data.events)||[]).filter(function(e){return !e.deleted;}).sort(function(a,b){return (a.start_time||'').localeCompare(b.start_time||'');});
-      if(!evs.length){host.innerHTML='<div class="ev" style="opacity:.6"><div class="t"></div><span class="dot" style="--c:var(--accent)"></span><div><div class="en">Nothing scheduled today</div></div></div>';return;}
-      host.innerHTML=evs.map(function(e){var cat=CAT[(e.category||'').toLowerCase()]||'var(--accent)';var when=e.all_day?'All day':fmt12(e.start_time);return '<div class="ev"><div class="t">'+esc(when)+'</div><span class="dot" style="--c:'+cat+'"></span><div><div class="en">'+esc(e.title||'Event')+'</div>'+(e.location?'<div class="es">'+esc(e.location)+'</div>':'')+'</div></div>';}).join('');
-    }).catch(function(){host.innerHTML='<div class="ev" style="opacity:.6"><div class="t"></div><span class="dot" style="--c:var(--cat-health)"></span><div><div class="en">Couldn’t load your day</div></div></div>';});
+      if(!evs.length){host.innerHTML='<div class="dev" style="opacity:.6"><div class="t"></div><span class="dot" style="--c:var(--accent)"></span><div><div class="en">Nothing scheduled today</div></div></div>';return;}
+      host.innerHTML=evs.map(function(e){var cat=CAT[(e.category||'').toLowerCase()]||'var(--accent)';var when=e.all_day?'All day':fmt12(e.start_time);return '<div class="dev"><div class="t">'+esc(when)+'</div><span class="dot" style="--c:'+cat+'"></span><div><div class="en">'+esc(e.title||'Event')+'</div>'+(e.location?'<div class="es">'+esc(e.location)+'</div>':'')+'</div></div>';}).join('');
+    }).catch(function(){if(host)host.innerHTML='<div class="dev" style="opacity:.6"><div class="t"></div><span class="dot" style="--c:var(--cat-health)"></span><div><div class="en">Couldn’t load your day</div></div></div>';});
+    apiGet('/api/reminders/').then(function(d2){if(_cur!=='day'||!rems)return;
+      var rs=(d2&&d2.reminders)||[];
+      if(!rs.length){rems.innerHTML='<div class="drem" style="opacity:.6"><span class="rt"></span><span>Nothing set</span></div>';return;}
+      rems.innerHTML=rs.slice(0,5).map(function(r){var when='';if(r.due_time){try{when=new Date(r.due_time).toLocaleString(undefined,{weekday:'short',hour:'numeric',minute:'2-digit'});}catch(e){when=String(r.due_time);}}
+        return '<div class="drem"><span class="rt">'+esc(when)+'</span><span>'+esc(r.title||'Reminder')+'</span></div>';}).join('');
+    }).catch(function(){rems.innerHTML='<div class="drem" style="opacity:.6"><span class="rt"></span><span>Couldn’t load</span></div>';});
+    // Messages/email section stays hidden until a comms backend exists (no fake data).
   }
 
   var ORDER=[['home','Home'],['rooms','Rooms'],['sleep','Sleep'],['ask','Ask Zoe'],['weather','Weather'],['music','Music'],['timer','Timer'],['SEP'],['day','Day'],['list','List'],['reminder','Reminder'],['person','Person'],['confirm','Confirm'],['settings','Settings'],['pair','Pair']];
