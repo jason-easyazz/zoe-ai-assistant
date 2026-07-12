@@ -576,7 +576,8 @@ async def _fold_pending_contact_offers(packet: dict[str, Any], user_id: str) -> 
         )
         if not person_suggestions_enabled():
             return packet
-        # back-off aware: aging + expiry so an un-actioned offer stops nagging.
+        # Non-destructive read: surfacing marks the offer as seen; aging happens
+        # once per real user turn (age_person_offers_on_user_turn), never here.
         pend = await surface_pending_contacts_for_prompt(user_id, limit=_PENDING_CONTACTS_MAX)
     except Exception:
         logger.exception("memories: pending-contact offer fold failed (user=%s)", user_id)
@@ -587,13 +588,19 @@ async def _fold_pending_contact_offers(packet: dict[str, Any], user_id: str) -> 
         if not name:
             continue
         rel = _safe_prompt_inline(p.get("relationship") or "")
-        bullets.append(f"- {name}{f' ({rel})' if rel else ''} [pending-contact]")
+        # Give the 4B model the exact question to voice — the earlier soft
+        # "you may offer to add them" phrasing was never voiced in live review
+        # (QA review F5b). One explicit ask-this line per offer.
+        question = f"Would you like me to add {name}{f' (your {rel})' if rel else ''} as a contact?"
+        bullets.append(f'- Ask the user: "{question}" [pending-contact]')
     if not bullets:
         return packet
     section = (
         "## People mentioned recently (not contacts yet)\n"
-        "If it fits the conversation, you may offer to add them; on a yes, use the "
-        "people_create tool. Don't push if the user isn't interested.\n"
+        "IMPORTANT: In this reply, after answering the user, ask the FIRST question "
+        "below word-for-word. If the user answers yes, the contact is saved for them "
+        "automatically (you may also use the people_create tool); if they say no, "
+        "drop it and don't ask again.\n"
         + "\n".join(bullets)
     )
     existing = packet.get("packet") or ""

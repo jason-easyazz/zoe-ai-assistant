@@ -37,9 +37,12 @@ async def test_on_folds_offers(monkeypatch):
     out = await mem._fold_pending_contact_offers(_base(), "u1")
     pkt = out["packet"]
     assert "## People mentioned recently (not contacts yet)" in pkt
-    assert "- Tanika (niece) [pending-contact]" in pkt
-    assert "- Bob [pending-contact]" in pkt          # no "(None)" when relationship missing
-    assert "people_create tool" in pkt               # tells the brain how to act on yes
+    # F5b: the fold is now an explicit ask-this directive with the exact question,
+    # not a soft "you may offer" hint the 4B model never acted on.
+    assert '- Ask the user: "Would you like me to add Tanika (your niece) as a contact?" [pending-contact]' in pkt
+    assert '- Ask the user: "Would you like me to add Bob as a contact?" [pending-contact]' in pkt  # no "(None)"
+    assert "word-for-word" in pkt                     # directive strength for the 4B brain
+    assert "people_create tool" in pkt                # tells the brain how to act on yes
     assert "## What I know about you" in pkt          # original packet preserved
 
 

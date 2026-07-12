@@ -429,6 +429,11 @@ async def backfill_contacts(
         name = (name or "").strip()
         if not name or not _looks_like_person_name(name):
             return
+        # Never propose the literal "User" or the assistant herself — both were
+        # proposed from portrait/fact prose in live review (QA review F5d).
+        from pending_suggestions import is_junk_contact_name
+        if is_junk_contact_name(name):
+            return
         key = name.lower()
         # Skip the user themselves: an exact full-name match OR the extracted
         # name's FIRST token matching one of the user id's identity tokens — so
@@ -476,6 +481,24 @@ async def backfill_contacts(
             llm_people = []
         for name, rel in llm_people:
             _record(name, rel)
+
+        # Drop a bare-first-name candidate when a full-name candidate with the
+        # same first name exists in this batch — "Lindsay" + "Lindsay Cannon"
+        # previously produced two duplicate proposals (QA review F5d). The
+        # full-name entry inherits the bare entry's relationship if it has none.
+        full_by_first: dict[str, list[str]] = {}
+        for k in people:
+            if len(k.split()) > 1:
+                full_by_first.setdefault(k.split()[0], []).append(k)
+        for bare_key in [k for k in people if len(k.split()) == 1 and k in full_by_first]:
+            matches = full_by_first[bare_key]
+            # Donate the bare hit's relationship ONLY when exactly one full-name
+            # candidate shares the first token — with "Lindsay Cannon" AND
+            # "Lindsay Smith" in the batch we can't know whose it is.
+            bare_rel = people[bare_key][1]
+            if bare_rel and len(matches) == 1 and not people[matches[0]][1]:
+                people[matches[0]] = (people[matches[0]][0], bare_rel)
+            del people[bare_key]
 
         summary["candidates"] = len(people)
         if not people:

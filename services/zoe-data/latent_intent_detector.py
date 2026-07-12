@@ -270,6 +270,17 @@ async def _deterministic_person_proposals(text: str, user_id: str) -> list[dict]
 async def detect_and_store(user_message: str, *, user_id: str, session_id: str) -> int:
     from pending_suggestions import store_suggestions
 
+    # Age surfaced contact offers by ONE user turn. This hook runs exactly once
+    # per real user chat/voice turn, which makes it the sanctioned aging tick —
+    # packet builds no longer age offers (QA review F5a: per-fold aging killed
+    # offers before a human ever saw them). Best-effort, never blocks detection.
+    if _person_enabled():
+        try:
+            from pending_suggestions import age_person_offers_on_user_turn
+            await age_person_offers_on_user_turn(user_id)
+        except Exception as exc:
+            logger.debug("latent_intent_detector: offer aging failed: %s", exc)
+
     suggestions = await detect(user_message, user_id=user_id, session_id=session_id)
     # Merge the reliable deterministic person proposals (flag-gated), deduping
     # any name the LLM detector already proposed.
