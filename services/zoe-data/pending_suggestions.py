@@ -67,13 +67,35 @@ async def store_suggestions(
             for s in suggestions[:3]:
                 sid = str(uuid.uuid4())
                 slots = s.get("pre_filled_slots") or {}
-                # Choke point for junk contact proposals: never store an offer
-                # for the literal "User"/"Zoe" regardless of which emitter
-                # (LLM detector, deterministic regex, backfill) produced it.
-                if s.get("action_type") == "person_create" and is_junk_contact_name(
-                    (slots.get("name") or "")
-                ):
-                    continue
+                # Choke points for junk/duplicate contact proposals, regardless
+                # of which emitter (LLM detector, deterministic regex, backfill)
+                # produced them: never store the literal "User"/"Zoe", and never
+                # store a second live offer for a name that already has an
+                # un-resolved person_create offer (observed live: the detector
+                # re-proposed Caitlin on a later turn, minting a duplicate).
+                if s.get("action_type") == "person_create":
+                    _pname = (slots.get("name") or "").strip()
+                    if is_junk_contact_name(_pname):
+                        continue
+                    existing = await db.fetch(
+                        """SELECT pre_filled_slots FROM pending_suggestions
+                           WHERE user_id = $1 AND action_type = 'person_create'
+                             AND resolved = 0""",
+                        user_id,
+                    )
+                    _pkey = " ".join(_pname.split()).lower()
+                    dup = False
+                    for _er in existing:
+                        try:
+                            _eslots = json.loads(_er["pre_filled_slots"] or "{}")
+                        except json.JSONDecodeError:
+                            continue
+                        _ename = " ".join(str(_eslots.get("name") or "").split()).lower()
+                        if _ename and _ename == _pkey:
+                            dup = True
+                            break
+                    if dup:
+                        continue
                 await db.execute(
                     """INSERT INTO pending_suggestions
                        (id, user_id, session_id, action_type, description, list_type,

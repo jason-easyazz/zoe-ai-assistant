@@ -182,3 +182,25 @@ async def test_latest_surfaced_person_offer(monkeypatch):
         assert await ps.latest_surfaced_person_offer(USER) is None
     finally:
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_no_duplicate_offer_for_same_name(monkeypatch):
+    # Observed live: the LLM detector re-proposed the same person on a later
+    # turn, minting a second un-resolved offer. The store choke point must
+    # drop a person_create proposal whose name already has a live offer.
+    db = await _open()
+    try:
+        _wire(monkeypatch, db)
+        assert await ps.store_suggestions(USER, SESSION, [_person("Caitlin", "friend")]) == 1
+        assert await ps.store_suggestions(
+            USER, "other-session", [_person("caitlin", phrase="Should I add Caitlin?")]
+        ) == 0
+        rows = await _offer_rows(db)
+        assert len(rows) == 1
+        # A RESOLVED offer no longer blocks a fresh proposal.
+        await db.execute("UPDATE pending_suggestions SET resolved=1")
+        await db.commit()
+        assert await ps.store_suggestions(USER, SESSION, [_person("Caitlin", "friend")]) == 1
+    finally:
+        await db.close()
