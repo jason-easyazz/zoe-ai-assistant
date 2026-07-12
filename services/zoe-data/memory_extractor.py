@@ -228,7 +228,10 @@ _CORRECTION_RES = (
 # introduced a person; gender-incompatible relations refuse the anchor.
 _PRONOUN_FACT_RE = re.compile(
     r"^(?:and\s+|oh[,\s]+|btw[,\s]+|by\s+the\s+way[,\s]+)?(?P<pron>she|he)\s*(?:'s|\s+is)\s+"
-    r"(?P<pred>(?:a|an)\s+[A-Za-z][\w\s'-]{1,60}?)[.!?]*$",
+    # Any predicate, not just "a/an <noun>": "allergic to nuts", "a doctor",
+    # "from Boston", "tall". The `also` filler ("she's also allergic…") is stripped
+    # in _pronoun_fact_candidates, and ephemeral "-ing" states are skipped there.
+    r"(?P<pred>[A-Za-z][\w\s'-]{1,60}?)[.!?]*$",
     re.IGNORECASE,
 )
 
@@ -251,6 +254,17 @@ _PERSON_INTRO_RES = (
         rf"my\s+(?P<rel>{_RELATION_WORDS})\s+is\s+"
         r"(?P<name>[A-Z][A-Za-z]{1,40})\b(?!\s+(?:a|an|the|very|really|so|going|trying))",
         re.IGNORECASE,
+    ),
+    # "I have a friend Caitlin Farrell" / "my friend Caitlin" / "my coworker named
+    # Sam" — the bare "my {rel} {Name}" / "I have a {rel} {Name}" introductions (no
+    # copula) that the patterns above miss, so a follow-up "she is allergic to nuts"
+    # can anchor to the friend. Only the PREFIX is case-insensitive; the NAME is
+    # case-sensitive (must start uppercase) so "my son loves soccer" doesn't anchor
+    # a person named "loves". _person_name_from_fragment trims trailing non-name
+    # tokens ("my friend Caitlin is a teacher" → "Caitlin").
+    re.compile(
+        rf"(?i:(?:i\s+have\s+(?:a|an)\s+|my\s+)(?P<rel>{_RELATION_WORDS})\s+(?:named\s+|called\s+)?)"
+        r"(?P<name>[A-Z][A-Za-z' -]{1,60})",
     ),
 )
 
@@ -357,7 +371,14 @@ def _pronoun_fact_candidates(
     if relation in _MALE_RELATIONS and pron == "she":
         return []
     pred = _clean(m.group("pred"))
+    # "she's ALSO allergic to shellfish" → drop the filler so the fact reads clean.
+    pred = re.sub(r"^also\s+", "", pred, flags=re.IGNORECASE).strip()
     if not pred:
+        return []
+    # Skip ephemeral present-continuous states ("she is going to the store"): a
+    # durable person-fact never leads with a gerund, but allergies / roles /
+    # traits / origins ("allergic to nuts", "a doctor", "tall", "from Boston") don't.
+    if pred.split(maxsplit=1)[0].lower().endswith("ing"):
         return []
     anchor = f"{name} (user's {relation})" if relation else name
     text = f"{anchor} is {pred}"
@@ -541,6 +562,31 @@ def extract_candidates(
     return out
 
 
+async def _load_prev_user_message(user_id: str, session_id: str, current_message: str) -> str:
+    """Most recent USER message in this session other than the current one.
+
+    Durable fallback for the in-process prev-turn LRU: the prior turn may have been
+    handled by a path that never called ``note_user_turn``, so the pronoun anchor
+    would otherwise be lost. Best-effort — returns "" on any error/miss.
+    """
+    from db_pool import get_db_ctx  # type: ignore[import]
+
+    cur = (current_message or "").strip()
+    async with get_db_ctx() as db:
+        rows = await (
+            await db.execute(
+                "SELECT content FROM chat_messages WHERE session_id = ? AND role = 'user' "
+                "ORDER BY created_at::timestamptz DESC LIMIT 5",
+                (session_id,),
+            )
+        ).fetchall()
+    for r in rows:
+        content = ((r[0] if not isinstance(r, dict) else r.get("content")) or "").strip()
+        if content and content != cur:
+            return content
+    return ""
+
+
 async def extract_and_ingest(
     user_message: str,
     assistant_response: str = "",
@@ -563,9 +609,24 @@ async def extract_and_ingest(
     from memory_service import get_memory_service
 
     if prev_user_message is None:
+        cur = (user_message or "").strip()
         prev_user_message = recall_prev_user_turn(user_id, session_id)
+        # Fall back to the durable session history (chat_messages) when the
+        # in-process LRU is EITHER empty (the prior turn was handled by a
+        # contact/notes/expert path that never called note_user_turn) OR poisoned
+        # with the CURRENT message (a second extract_and_ingest for this same turn
+        # noted it first, so recall_prev returns the current text). Both cases lost
+        # the pronoun anchor — the reason "she is allergic to nuts" didn't link.
+        if (not prev_user_message.strip() or prev_user_message.strip() == cur) and session_id:
+            try:
+                prev_user_message = await _load_prev_user_message(
+                    user_id, session_id, user_message
+                )
+            except Exception as exc:  # never let history lookup break extraction
+                logger.debug("prev-user-message DB fallback failed: %s", exc)
+                prev_user_message = ""
         # A retried/duplicated turn must not anchor to itself.
-        if prev_user_message.strip() == (user_message or "").strip():
+        if prev_user_message.strip() == cur:
             prev_user_message = ""
     try:
         candidates = extract_candidates(
