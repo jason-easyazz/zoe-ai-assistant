@@ -1,6 +1,6 @@
 {
   "name": "Zoe Touch Panel",
-  "url": "https://192.168.1.218/touch/skybridge.html?panel_id=zoe-touch-pi&kiosk=1",
+  "url": "https://192.168.1.218/touch/home.html?panel_id=zoe-touch-pi&kiosk=1",
   "rotation": 0,
   "fullscreen": true,
   "hide_cursor": true,
