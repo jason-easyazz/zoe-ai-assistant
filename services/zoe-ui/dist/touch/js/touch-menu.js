@@ -196,55 +196,53 @@ html.dark-mode .ztm-btn { color: rgba(255,255,255,0.50); }
 #ztm-backdrop.open { display: block; }
 html.dark-mode #ztm-backdrop { background: rgba(0,0,0,0.45); }
 
+/* All-pages launcher — full-screen gradient-tile grid over a dark scrim
+   (Launchpad-style; always dark so captions stay legible over any page). */
 #ztm-picker {
     display: none; position: fixed;
-    top: ${NAV_H}px; left: 0; right: 0;
-    background: rgba(255,255,255,0.95);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    border-bottom: 1px solid rgba(0,0,0,0.07);
-    z-index: 2002; padding: 16px 16px 22px;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.08);
-}
-html.dark-mode #ztm-picker {
-    background: rgba(15,15,28,0.98);
-    box-shadow: 0 8px 32px rgba(0,0,0,0.50);
+    top: ${NAV_H}px; left: 0; right: 0; bottom: 0;
+    background: rgba(8,11,20,0.72);
+    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    z-index: 2002; padding: 40px 48px; overflow-y: auto;
 }
 #ztm-picker.open {
-    display: block;
-    animation: ztm-drop 0.22s cubic-bezier(0.34,1.2,0.64,1);
+    display: flex; flex-direction: column; align-items: center;
+    animation: ztm-fade 0.24s cubic-bezier(0.2,0,0,1);
 }
-@keyframes ztm-drop {
-    from { opacity:0; transform: translateY(-10px); }
-    to   { opacity:1; transform: translateY(0); }
-}
+@keyframes ztm-fade { from { opacity: 0; } to { opacity: 1; } }
 #ztm-picker-label {
-    font-size: 12px; font-weight: 700; letter-spacing: 0.8px;
-    text-transform: uppercase; color: #999; padding: 0 4px 14px;
+    font-size: 12px; font-weight: 700; letter-spacing: 2.5px;
+    text-transform: uppercase; color: rgba(255,255,255,0.5);
+    padding: 4px 0 30px; text-align: center;
 }
 #ztm-picker-grid {
-    display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px;
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 22px 30px; width: 100%; max-width: 860px;
 }
 .ztm-pg-item {
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 8px; padding: 16px 8px; border-radius: 16px; text-decoration: none;
-    color: #444; font-size: 13px; font-weight: 600;
-    cursor: pointer;
-    background: rgba(0,0,0,0.03);
-    border: 1px solid rgba(0,0,0,0.07);
-    transition: background 0.15s; -webkit-tap-highlight-color: transparent; text-align: center;
+    display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+    gap: 12px; text-decoration: none; background: none; border: 0; padding: 0;
+    color: #fff; font-size: 18px; font-weight: 500;
+    cursor: pointer; -webkit-tap-highlight-color: transparent; text-align: center;
+    opacity: 0; transform: translateY(14px) scale(0.95);
+    animation: ztm-tile-in 0.32s cubic-bezier(0.34,1.56,0.64,1) forwards;
+    animation-delay: calc(var(--i, 0) * 22ms);
 }
-html.dark-mode .ztm-pg-item {
-    background: rgba(255,255,255,0.06);
-    border-color: rgba(255,255,255,0.10);
-    color: rgba(255,255,255,0.80);
+@keyframes ztm-tile-in { to { opacity: 1; transform: none; } }
+.ztm-pg-icon {
+    width: 88px; height: 88px; border-radius: 24px;
+    display: flex; align-items: center; justify-content: center; color: #fff;
+    box-shadow: 0 16px 34px rgba(0,0,0,0.42), inset 0 1px 0 rgba(255,255,255,0.28);
+    transition: transform 0.16s cubic-bezier(0.2,0,0,1);
 }
-.ztm-pg-item:active, .ztm-pg-item.active {
-    background: rgba(123,97,255,0.12); color: #7B61FF;
-    border-color: rgba(123,97,255,0.28);
+.ztm-pg-item:active .ztm-pg-icon { transform: scale(0.93); }
+.ztm-pg-icon svg { width: 44px; height: 44px; }
+.ztm-pg-item.active .ztm-pg-icon { outline: 2px solid #fff; outline-offset: 3px; }
+.ztm-pg-label { line-height: 1.2; color: #fff; }
+@media (prefers-reduced-motion: reduce) {
+    #ztm-picker.open, .ztm-pg-item { animation: none; }
+    .ztm-pg-item { opacity: 1; transform: none; }
 }
-.ztm-pg-icon { font-size: 28px; line-height: 1; }
-.ztm-pg-label { line-height: 1.2; }
 
 /* ── Orb context menu ─────────────────────────────── */
 #ztm-ctx-menu {
@@ -341,28 +339,69 @@ html.dark-mode .ztm-ctx-item { color: rgba(255,255,255,0.88); border-bottom-colo
         return nav;
     }
 
+    // Line-glyph + accent per page id for the launcher tiles. Falls back to the
+    // page's emoji if an id has no mapped glyph, so the grid never renders blank.
+    const PG_ACCENT = {
+        skybridge: '#6aa6ff', dashboard: '#6aa6ff', calendar: '#6aa6ff', chat: '#6aa6ff', timers: '#6aa6ff',
+        lists: '#5be3b0', updates: '#5be3b0', notes: '#37c0e6', weather: '#37c0e6',
+        journal: '#9b8cff', music: '#9b8cff', memories: '#9b8cff',
+        smarthome: '#f5b13c', cooking: '#f5b13c', people: '#ff6b6b', settings: '#ff6b6b'
+    };
+    const PG_GLYPH = {
+        skybridge: '<path d="M3 11.4 12 4l9 7.4"/><path d="M5.6 9.8V20h12.8V9.8"/>',
+        dashboard: '<rect x="3" y="3" width="8" height="8" rx="1.6"/><rect x="13" y="3" width="8" height="8" rx="1.6"/><rect x="3" y="13" width="8" height="8" rx="1.6"/><rect x="13" y="13" width="8" height="8" rx="1.6"/>',
+        calendar: '<rect x="3" y="4.5" width="18" height="16" rx="2.2"/><path d="M3 9h18M8 2.5v4M16 2.5v4"/>',
+        lists: '<path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 5.6l1.2 1.2L7.4 4.4M4 11.6l1.2 1.2L7.4 10.4M4 17.6l1.2 1.2L7.4 16.4"/>',
+        notes: '<path d="M6 3h9l4 4v14H6z"/><path d="M14.5 3v4.5H19M9 12h7M9 16h5"/>',
+        journal: '<path d="M5 4h11a2 2 0 0 1 2 2v15H7a2 2 0 0 1-2-2z"/><path d="M9 4v15M12 9h3"/>',
+        chat: '<path d="M4 5.5h16a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5H9l-4 3.5V16.5H4A1.5 1.5 0 0 1 2.5 15V7A1.5 1.5 0 0 1 4 5.5z"/><circle cx="8.5" cy="11" r="1"/><circle cx="12" cy="11" r="1"/><circle cx="15.5" cy="11" r="1"/>',
+        music: '<circle cx="7" cy="18" r="2.6"/><circle cx="18" cy="16" r="2.6"/><path d="M9.6 18V6l10.8-2.2V16"/>',
+        smarthome: '<path d="M9.2 20h5.6"/><path d="M10 22.5h4"/><path d="M12 2.5a6.5 6.5 0 0 0-4.2 11.4c.8.7 1.2 1.4 1.2 2.6h6c0-1.2.4-1.9 1.2-2.6A6.5 6.5 0 0 0 12 2.5z"/>',
+        people: '<circle cx="12" cy="8" r="3.6"/><path d="M5 20c0-3.6 3.1-6 7-6s7 2.4 7 6"/>',
+        memories: '<path d="M12 3l1.7 4.6L18.5 9l-4.8 1.4L12 15l-1.7-4.6L5.5 9l4.8-1.4z"/><path d="M18 15l.8 2.2L21 18l-2.2.8L18 21l-.8-2.2L15 18l2.2-.8z"/>',
+        cooking: '<path d="M4 10h16v3.5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z"/><path d="M2.5 10h19M8.5 6.5c0-1.2 1-1.2 1-2.4M12 6.5c0-1.2 1-1.2 1-2.4"/>',
+        timers: '<circle cx="12" cy="13" r="8"/><path d="M12 13V8.5M9.5 2.5h5"/>',
+        weather: '<circle cx="9" cy="9" r="3.4"/><path d="M9 2.6v1.6M9 13.8v1.6M2.6 9h1.6M13.8 9h1.6M4.4 4.4l1.1 1.1M12.5 12.5l1.1 1.1M4.4 13.6l1.1-1.1M12.5 5.5l1.1-1.1"/><path d="M11 19h7a3 3 0 0 0 .3-6A4 4 0 0 0 11 12.6"/>',
+        updates: '<path d="M20 11a8 8 0 0 0-14-4.5L3 9"/><path d="M4 13a8 8 0 0 0 14 4.5L21 15"/><path d="M3 5v4h4M21 19v-4h-4"/>',
+        settings: '<circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v2.6M12 18.9v2.6M4.9 4.9l1.9 1.9M17.2 17.2l1.9 1.9M2.5 12h2.6M18.9 12h2.6M4.9 19.1l1.9-1.9M17.2 6.8l1.9-1.9"/>'
+    };
+    function pgIconHTML(p) {
+        const glyph = PG_GLYPH[p.id];
+        const accent = PG_ACCENT[p.id] || '#6aa6ff';
+        if (!glyph) return `<span class="ztm-pg-icon" style="font-size:40px">${p.icon}</span>`;
+        return `<span class="ztm-pg-icon" style="background:linear-gradient(150deg,${accent},${accent} 60%,rgba(0,0,0,0.25))">`
+             + `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${glyph}</svg></span>`;
+    }
+
     function buildPicker(pageId) {
         const backdrop = document.createElement('div');
         backdrop.id = 'ztm-backdrop';
 
         const picker = document.createElement('div');
         picker.id = 'ztm-picker';
-        picker.innerHTML = '<div id="ztm-picker-label">All Pages</div><div id="ztm-picker-grid"></div>';
+        picker.innerHTML = '<div id="ztm-picker-label">Where to?</div><div id="ztm-picker-grid"></div>';
 
-        const primaryIds = new Set(PRIMARY.map(p => p.id));
+        // The launcher is the complete map: every page the user may open (the
+        // capability matrix still gates guests), primaries included.
         const grid = picker.querySelector('#ztm-picker-grid');
-        const morePages = getAvailablePages().filter(p => !primaryIds.has(p.id));
-        morePages.forEach(p => {
+        const pages = getAvailablePages();
+        pages.forEach((p, i) => {
             const item = document.createElement('a');
             item.className = 'ztm-pg-item' + (p.id === pageId ? ' active' : '');
             item.href = p.path;
-            item.innerHTML = `<span class="ztm-pg-icon">${p.icon}</span><span class="ztm-pg-label">${p.label}</span>`;
+            item.style.setProperty('--i', i);
+            item.innerHTML = `${pgIconHTML(p)}<span class="ztm-pg-label">${p.label}</span>`;
             grid.appendChild(item);
         });
 
-        if (morePages.length === 0) {
-            grid.innerHTML = '<div style="grid-column:1/-1; padding: 10px 6px; color:#999; font-size:13px; text-align:center;">No additional pages</div>';
+        if (pages.length === 0) {
+            grid.innerHTML = '<div style="grid-column:1/-1; padding: 10px 6px; color:rgba(255,255,255,0.6); font-size:14px; text-align:center;">No pages available</div>';
         }
+
+        // Tapping the scrim (outside a tile) closes the launcher.
+        picker.addEventListener('click', (e) => {
+            if (!e.target.closest('.ztm-pg-item')) closeAll();
+        });
 
         return { backdrop, picker };
     }
