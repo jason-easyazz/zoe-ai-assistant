@@ -419,6 +419,9 @@
       _ha.climate=arr.filter(function(e){return String(e.entity_id||'').lastIndexOf('climate.',0)===0;})[0]||null;
       _ha.loaded=true;cb&&cb();
     }).catch(function(){_ha.loaded=true;cb&&cb();});}
+  // Re-pull HA state and refresh the dock — recovers from a failed first load and
+  // keeps light/temp state fresh. Skips while heard/hidden/mid-interaction.
+  function refreshHA(){loadHA(function(){if(!dbody||dbody.querySelector('.dheard')||dock.classList.contains('hide')||dbody.querySelector('.pc.temp.open'))return;renderDock();});}
   function renderDock(){
     if(!_ha.loaded){dbody.innerHTML='<div class="pc light">'+BULB+'<span class="nm">…</span></div>';loadHA(function(){if(dbody.querySelector('.dheard'))return;renderDock();});return;}
     var lights=_ha.lights.slice(0,2),cl=_ha.climate,html='';
@@ -427,14 +430,14 @@
     if(cl){var a=cl.attributes||{};var cur=(a.current_temperature!=null?a.current_temperature:a.temperature);var tgt=(a.temperature!=null?a.temperature:cur);if(tgt==null)tgt=21;
       html+='<div class="pc temp" data-eid="'+esc(cl.entity_id)+'" data-tgt="'+esc(String(Math.round(tgt)))+'"><div class="tv">'+(cur!=null?Math.round(cur):'—')+'°</div><div class="tl">Temp</div><div class="tpop"><div class="tpv">'+Math.round(tgt)+'°</div><div class="tsl"><div class="tff"></div><div class="tkn"></div></div><div class="tpl">Thermostat</div></div></div>';}
     dbody.innerHTML=html;
-    dbody.querySelectorAll('.pc.light[data-eid]').forEach(function(el){el.onclick=function(){var on=el.classList.toggle('on');haControl({entity_id:el.getAttribute('data-eid'),action:on?'turn_on':'turn_off'}).catch(function(){el.classList.toggle('on');});};});
+    dbody.querySelectorAll('.pc.light[data-eid]').forEach(function(el){el.onclick=function(){var on=el.classList.toggle('on');haControl({entity_id:el.getAttribute('data-eid'),action:on?'turn_on':'turn_off'}).then(function(r){if(!r.ok)throw new Error('http '+r.status);}).catch(function(){el.classList.toggle('on');});};});
     (function(){var tb=dbody.querySelector('.pc.temp');if(!tb)return;var eid=tb.getAttribute('data-eid'),tsl=tb.querySelector('.tsl'),tff=tb.querySelector('.tff'),tkn=tb.querySelector('.tkn'),tpv=tb.querySelector('.tpv'),tv=parseInt(tb.getAttribute('data-tgt'),10)||21;
       function pt(){var p=Math.max(0,Math.min(100,(tv-15)/13*100));tff.style.height=p+'%';tkn.style.bottom=p+'%';tpv.textContent=tv+'°';}pt();
       tb.onclick=function(e){if(e.target.closest('.tpop'))return;tb.classList.toggle('open');};
       var d=false;function at(y){var r=tsl.getBoundingClientRect();tv=Math.round(15+Math.max(0,Math.min(1,1-(y-r.top)/r.height))*13);pt();}
       tsl.addEventListener('pointerdown',function(e){d=true;tsl.setPointerCapture(e.pointerId);at(e.clientY);});
       tsl.addEventListener('pointermove',function(e){if(d)at(e.clientY);});
-      tsl.addEventListener('pointerup',function(){d=false;haControl({entity_id:eid,action:'set_temperature',value:{temperature:tv}}).catch(function(){});});
+      tsl.addEventListener('pointerup',function(){d=false;haControl({entity_id:eid,action:'set_temperature',value:{temperature:tv}}).then(function(r){if(!r.ok)refreshHA();}).catch(function(){refreshHA();});});
     })();
   }
 
@@ -582,6 +585,7 @@
   var ORDER=[['home','Home'],['rooms','Rooms'],['sleep','Sleep'],['ask','Ask Zoe'],['weather','Weather'],['music','Music'],['timer','Timer'],['SEP'],['day','Day'],['list','List'],['reminder','Reminder'],['person','Person'],['confirm','Confirm'],['settings','Settings'],['pair','Pair']];
   ORDER.forEach(function(o){ if(o[0]==='SEP'){var s=document.createElement('div');s.className='sep';pick.appendChild(s);return;} var b=document.createElement('button');b.dataset.id=o[0];b.textContent=o[1];b.onclick=function(){show(o[0]);};pick.appendChild(b);});
   home.onclick=function(){lclose();show('home');};
+  setInterval(refreshHA,30000);   // keep dock HA state fresh + recover from a failed load
   show('home');
 })();
 </script>
