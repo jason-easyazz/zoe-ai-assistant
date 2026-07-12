@@ -8,7 +8,7 @@
 importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.63.19'; // estate: ask-zoe streaming + who+PIN unlock (fresh home.html on panels)
+const SW_VERSION = '4.63.21'; // estate: edit/delete CRUD for contacts, events, list items
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
