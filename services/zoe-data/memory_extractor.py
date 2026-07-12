@@ -815,11 +815,13 @@ async def extract_and_ingest(
             }
 
             def _name_tokens(t: str) -> set[str]:
-                # capitalized tokens that look like names (skip months/days/etc.)
-                return {
-                    w.lower() for w in re.findall(r"\b[A-Z][a-z]+\b", t)
-                    if w.lower() not in _CAL_WORDS
-                }
+                # Name signals: capitalized tokens AND lowercase possessives
+                # ("karen's birthday…" — users type lowercase), minus calendar/
+                # stop words. Possessive detection keeps a lowercase-typed
+                # person's row protected from titleless supersedes (Greptile P1).
+                caps = {w.lower() for w in re.findall(r"\b[A-Z][a-z]+\b", t)}
+                poss = {w.lower() for w in re.findall(r"\b([a-z]+)['\u2019]s\b", t)}
+                return {w for w in (caps | poss) if w not in _CAL_WORDS}
 
             if getattr(c, "title", None):
                 _toks = c.title.split()
