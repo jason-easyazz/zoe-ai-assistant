@@ -151,20 +151,39 @@ _ROLE_TO_TYPE: dict[str, tuple[str, str]] = {
 # (April, May, June, Grace, Will) are intentionally NOT listed, so recall is kept.
 _NON_NAME_TOKENS = frozenset({
     "he", "she", "they", "we", "it", "you", "i", "him", "her", "them", "us", "me",
+    "his", "hers", "its", "their", "theirs", "my", "mine", "your", "yours", "our", "ours",
     "there", "here", "this", "that", "these", "those", "then", "now", "who", "what",
     "the", "a", "an", "yes", "no", "well", "so", "but", "and", "or",
     "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
 })
 
 
+_NAME_LEADIN_ROLES = frozenset({
+    "friend", "mate", "buddy", "bestie", "wife", "husband", "partner", "girlfriend",
+    "boyfriend", "son", "daughter", "kid", "kids", "child", "children", "girl", "boy",
+    "brother", "sister", "mum", "mom", "mother", "dad", "father", "grandma", "grandpa",
+    "grandmother", "grandfather", "aunt", "uncle", "niece", "nephew", "cousin",
+    "colleague", "coworker", "boss", "neighbour", "neighbor", "parent", "sibling",
+    "birthday", "name",
+})
+
+
 def _looks_like_person_name(name: str) -> bool:
     """False for the pronouns / sentence-openers the name regex over-captures.
 
-    Multi-word captures ("Mary Jane") and any token outside the conservative
-    stop-set pass through; the regex already requires an initial capital, so a
-    case-insensitive membership test is enough to reject "She"/"He"/"There".
+    Multi-word captures ("Mary Jane") pass. The IGNORECASE pattern branches
+    captured lead-ins like "friend Jessica" and minted them as persons (QA
+    review F4) — but users also legitimately type lowercase names ("my friend
+    jessica"), so rejection is by a KNOWN lead-in vocabulary (roles, pronouns,
+    stop tokens) on the first token, not by capitalization.
     """
-    return name.strip().lower() not in _NON_NAME_TOKENS
+    name = (name or "").strip()
+    if not name or name.lower() in _NON_NAME_TOKENS:
+        return False
+    first = name.split()[0].lower().rstrip("'s") if name.split()[0].lower().endswith("'s") else name.split()[0].lower()
+    if first in _NON_NAME_TOKENS or first in _NAME_LEADIN_ROLES:
+        return False  # "friend Jessica", "her birthday" — lead-in, not a name
+    return True
 
 
 # ── Month name → int ──────────────────────────────────────────────────────────
@@ -897,6 +916,14 @@ async def process_text(
 
         # Process each task
         for name, fact_text, pattern_type in tasks:
+            # QA review F2/F4: the pattern branches capture raw regex groups, and
+            # with IGNORECASE that minted junk person entities — literally "her"
+            # (from "her birthday is actually…") and "friend Jessica". One guard
+            # at the consumption point covers every branch; the pronoun/possessive
+            # shapes are handled by memory_extractor's coreference path instead.
+            if not _looks_like_person_name(name):
+                logger.debug("person_extractor: skipping non-name %r (%s)", name, pattern_type)
+                continue
             person_uuid = uuid_cache.get(name)
 
             # Birthday capture (Phase 3, flag-gated dark): a birthday mentioned for

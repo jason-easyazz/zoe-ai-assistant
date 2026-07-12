@@ -343,6 +343,23 @@ def _similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, _normalize(a), _normalize(b)).ratio()
 
 
+def _attrs_match(a: str, b: str) -> bool:
+    """Same attribute despite phrasing: exact key match OR one key's tokens are a
+    subset of the other's ("birthday" ⊆ "friend jessica birthday"). QA review F2:
+    the correction "Jessica's birthday is March 25" keyed 'birthday' while the
+    stale "My friend Jessica's birthday is March 15" keyed 'friend jessica
+    birthday' — exact-key equality never fired, so the correction ADDed instead
+    of superseding. The similarity gate (_SUPERSEDE_RATIO) still guards against
+    unrelated facts that share a generic token.
+    """
+    if a == b:
+        return True
+    ta, tb = set(a.split()), set(b.split())
+    if not ta or not tb:
+        return False
+    return ta <= tb or tb <= ta
+
+
 def classify_against_existing(
     text: str,
     existing: list[tuple[str, str]],
@@ -382,7 +399,8 @@ def classify_against_existing(
         sim = _similarity(text, mem_text)
         if sim > best_dup[0]:
             best_dup = (sim, mem_id, mem_text)
-        if cand_attr and _attribute_key(mem_text) == cand_attr and sim > best_attr[0]:
+        mem_attr = _attribute_key(mem_text)
+        if cand_attr and mem_attr and sim > best_attr[0] and _attrs_match(cand_attr, mem_attr):
             best_attr = (sim, mem_id, mem_text)
 
     # 1) Near-exact text duplicate. Two near-identical strings can still differ

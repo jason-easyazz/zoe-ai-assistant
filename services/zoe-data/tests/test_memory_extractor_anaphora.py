@@ -291,3 +291,75 @@ def test_lru_is_bounded(monkeypatch):
     for i in range(memory_extractor._PREV_TURN_MAX + 50):
         memory_extractor.note_user_turn(f"user-{i}", "s", "hello there")
     assert len(memory_extractor._prev_user_turns) <= memory_extractor._PREV_TURN_MAX
+
+
+# ── QA review F2/F3: possessive-pronoun anchoring + correction supersede ──────
+
+def test_possessive_birthday_correction_anchors():
+    """'her birthday is actually March 25' after 'My friend Jessica's birthday is
+    March 15' must anchor to Jessica — previously stored raw + minted a person
+    literally named 'her' (QA F2)."""
+    out = extract_candidates(
+        "her birthday is actually March 25",
+        prev_user_message="My friend Jessica's birthday is March 15",
+    )
+    poss = [c for c in out if c.text == "Jessica's birthday is March 25"]
+    assert len(poss) == 1
+    assert poss[0].entity_type == "person"
+    assert poss[0].title == "Jessica"
+
+
+def test_possessive_daughter_named_poppy():
+    """'her daughter is named Poppy' → anchored fact, not silent loss (QA F3)."""
+    out = extract_candidates(
+        "her daughter is named Poppy", prev_user_message="I have a friend Delia Smith"
+    )
+    assert any(c.text == "Delia Smith's daughter is Poppy" for c in out)
+
+
+def test_possessive_ephemeral_state_not_stored():
+    out = extract_candidates(
+        "her flight is boarding now", prev_user_message="I have a friend Delia Smith"
+    )
+    assert not any("flight" in c.text for c in out)
+
+
+def test_intro_with_possessive_yields_clean_name():
+    """'My friend Jessica's birthday…' must introduce 'Jessica', never a person
+    called \"Jessica's birthday\" (the possessive ends the name)."""
+    assert memory_extractor._person_intro_from(
+        "My friend Jessica's birthday is March 15"
+    )[0] == "Jessica"
+
+
+def test_possessive_uses_history_lookback(monkeypatch):
+    """Greptile r4: 'her daughter is named Poppy' two turns after the intro
+    ('she's a great cook' between) must still anchor via the history lookback."""
+    import asyncio
+    import memory_extractor as me
+
+    async def _run():
+        monkeypatch.setattr(me, "recall_prev_user_turn", lambda u, s: "she's a great cook")
+        async def _hist(u, s, cur, limit=6):
+            return ["she's a great cook", "I have a friend Delia Smith"]
+        monkeypatch.setattr(me, "_load_recent_user_messages", _hist)
+        captured = []
+        async def _fake_ingest(text, **kw):
+            captured.append(text)
+            class R: id = "m"
+            return R()
+        class _Svc:
+            ingest = staticmethod(_fake_ingest)
+            async def search(self, *a, **k): return []
+        import memory_service
+        monkeypatch.setattr(memory_service, "get_memory_service", lambda: _Svc())
+        import memory_quality
+        monkeypatch.setattr(memory_quality, "is_storable_fact", lambda t: (True, ""))
+        import person_extractor
+        async def _e(_a): return None, False
+        monkeypatch.setattr(person_extractor, "_ensure_db", _e)
+        await me.extract_and_ingest(
+            "her daughter is named Poppy", user_id="u1", session_id="s1", source="test",
+        )
+        assert any("Delia Smith's daughter is Poppy" in t for t in captured), captured
+    asyncio.run(_run())

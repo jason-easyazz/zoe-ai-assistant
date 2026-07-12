@@ -492,3 +492,145 @@ async def test_turn_digest_skips_pronoun_subject():
     # (Not invoking the LLM here — just assert the guard doesn't fire.)
     import re as _re
     assert not _re.match(r"^(?:she|he|they)\b", "I am allergic to nuts")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# QA review F2: reconciliation on ingest — corrections SUPERSEDE, echoes SKIP
+# ══════════════════════════════════════════════════════════════════════════════
+class _FakeReconcileSvc(_FakeIngestSvc):
+    """FakeIngestSvc + the search/review surface the reconciliation path uses."""
+
+    def __init__(self, existing):
+        super().__init__()
+        self._existing = existing          # list[(id, text)]
+        self.reviews = []                  # list[(mem_id, edits)]
+
+    class _Hit:
+        def __init__(self, mem_id, text):
+            self.id, self.text = mem_id, text
+
+    async def search(self, query, *, user_id, limit=10, timeout_s=2.0):
+        return [self._Hit(i, t) for i, t in self._existing][:limit]
+
+    async def review(self, mem_id, *, decision, edits=None, actor="", note=""):
+        assert decision == "edit"
+        self.reviews.append((mem_id, edits))
+        return _Ref(f"new-{mem_id}")
+
+
+@pytest.mark.asyncio
+async def test_birthday_correction_supersedes_stale_value(monkeypatch):
+    """QA F2 repro: 'her birthday is actually March 25' after Jessica's March-15
+    intro must SUPERSEDE the stale row via review(edit), not stack a new one."""
+    import memory_extractor as me
+
+    db = await _open(people=[])
+    try:
+        svc = _FakeReconcileSvc(existing=[("stale-1", "Jessica's birthday is March 15")])
+        _patch_memory_service(monkeypatch, svc)
+        _always_storable(monkeypatch)
+        _use_db(monkeypatch, db)
+
+        saved = await me.extract_and_ingest(
+            "her birthday is actually March 25",
+            user_id=USER, session_id="s-corr", source="test",
+            prev_user_message="My friend Jessica's birthday is March 15",
+        )
+        assert saved >= 1
+        # stale row superseded (review edit), correction NOT stacked as a new ingest
+        assert ("stale-1", "Jessica's birthday is March 25") in svc.reviews
+        assert not any("March 25" in i["text"] for i in svc.ingests)
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_sparser_echo_skipped_not_duplicated(monkeypatch):
+    """A sparser restatement of an existing richer fact must SKIP (mem0 rule)."""
+    import memory_extractor as me
+
+    db = await _open(people=[])
+    try:
+        svc = _FakeReconcileSvc(existing=[("rich-1", "My dad's name is Neil, spelled N-E-I-L, born 1945")])
+        _patch_memory_service(monkeypatch, svc)
+        _always_storable(monkeypatch)
+        _use_db(monkeypatch, db)
+
+        await me.extract_and_ingest(
+            "My dad's name is Neil",
+            user_id=USER, session_id="s-echo", source="test", prev_user_message="",
+        )
+        assert svc.reviews == []                       # nothing superseded
+        assert not any(i["text"] == "My dad's name is Neil" for i in svc.ingests)
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_correction_never_supersedes_another_persons_row(monkeypatch):
+    """Greptile P1 (security): a Jessica correction must not supersede Karen's
+    same-attribute row even when semantic search returns it."""
+    import memory_extractor as me
+
+    db = await _open(people=[])
+    try:
+        svc = _FakeReconcileSvc(existing=[("karen-1", "Karen's birthday is March 15")])
+        _patch_memory_service(monkeypatch, svc)
+        _always_storable(monkeypatch)
+        _use_db(monkeypatch, db)
+
+        await me.extract_and_ingest(
+            "her birthday is actually March 25",
+            user_id=USER, session_id="s-x", source="test",
+            prev_user_message="My friend Jessica's birthday is March 15",
+        )
+        assert svc.reviews == []  # Karen's row untouched
+        assert any("March 25" in i["text"] for i in svc.ingests)  # stored as ADD
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_bare_name_correction_skips_full_name_namesake(monkeypatch):
+    """Greptile P1 r3: 'Jessica' (bare) must not supersede 'Jessica Smith's' row —
+    two people can share a first name. Ambiguity → ADD, never overwrite."""
+    import memory_extractor as me
+
+    db = await _open(people=[])
+    try:
+        svc = _FakeReconcileSvc(existing=[("smith-1", "Jessica Smith's birthday is March 15")])
+        _patch_memory_service(monkeypatch, svc)
+        _always_storable(monkeypatch)
+        _use_db(monkeypatch, db)
+
+        await me.extract_and_ingest(
+            "her birthday is actually March 25",
+            user_id=USER, session_id="s-ns", source="test",
+            prev_user_message="My friend Jessica's birthday is March 15",
+        )
+        assert svc.reviews == []                                   # namesake untouched
+        assert any("March 25" in i["text"] for i in svc.ingests)   # stored as ADD
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_lowercase_namesake_also_refused(monkeypatch):
+    """Greptile r4: 'jessica smith's birthday…' (all lowercase) must also be
+    refused as a namesake — the possessive 's marks the surname."""
+    import memory_extractor as me
+
+    db = await _open(people=[])
+    try:
+        svc = _FakeReconcileSvc(existing=[("smith-1", "jessica smith's birthday is March 15")])
+        _patch_memory_service(monkeypatch, svc)
+        _always_storable(monkeypatch)
+        _use_db(monkeypatch, db)
+        await me.extract_and_ingest(
+            "her birthday is actually March 25",
+            user_id=USER, session_id="s-lc", source="test",
+            prev_user_message="My friend Jessica's birthday is March 15",
+        )
+        assert svc.reviews == []
+    finally:
+        await db.close()
