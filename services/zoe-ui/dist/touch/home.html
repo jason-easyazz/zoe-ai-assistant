@@ -681,7 +681,8 @@
   addEventListener('keydown',function(e){if(e.key==='Escape')lclose();});
 
   // ---- live home data: real clock + weather + today's agenda (no placeholder data) ----
-  var CAT={social:'var(--cat-personal)',health:'var(--cat-health)',work:'var(--cat-work)',family:'var(--cat-family)',personal:'var(--cat-personal)'};
+  var CAT={social:'var(--cat-personal)',health:'var(--cat-health)',work:'var(--cat-work)',family:'var(--cat-family)',personal:'var(--cat-personal)',
+    medical:'var(--cat-health)',sport:'#5ec8f0',shopping:'#ff9e6a',routine:'#9aa6bd',household:'#9aa6bd',bucket:'#66d6a3',birthday:'var(--cat-family)',appointment:'var(--cat-health)',education:'#c77bff',travel:'#5ec8f0'};
   var _cur=null,_homeTick=null,_wxTick=null;
   function clearScreenTimers(){if(_homeTick){clearInterval(_homeTick);_homeTick=null;}if(_wxTick){clearInterval(_wxTick);_wxTick=null;}}
   function two(n){return (n<10?'0':'')+n;}
@@ -896,10 +897,11 @@
     apiJson('GET','/api/people/').then(function(d){if(_cur!=='person')return;
       var ps=(d.people||[]).slice().sort(function(a,b){return String(a.name||'').localeCompare(String(b.name||''));});
       var have={};
-      if(grid)grid.innerHTML=ps.map(function(pn,i){var nm=pn.name||'?',L=nm.charAt(0).toUpperCase();var first=!have[L];have[L]=1;
-        return '<div class="cttile" data-i="'+i+'"'+(first?' data-letter="'+esc(L)+'"':'')+'><div class="pav" style="background:'+PAVC[i%PAVC.length]+'">'+esc(L)+'</div><div class="pn2">'+esc(nm)+'</div>'+(pn.relationship?'<div class="pr2">'+esc(pn.relationship)+'</div>':'')+'</div>';}).join('')
+      function railKey(nm){var ch=String(nm||'').charAt(0);try{ch=ch.normalize('NFD').replace(/[\u0300-\u036f]/g,'');}catch(e){}ch=ch.toUpperCase();return /^[A-Z]$/.test(ch)?ch:'#';}
+      if(grid)grid.innerHTML=ps.map(function(pn,i){var nm=pn.name||'?',L=railKey(nm);var first=!have[L];have[L]=1;
+        return '<div class="cttile" data-i="'+i+'"'+(first?' data-letter="'+esc(L)+'"':'')+'><div class="pav" style="background:'+PAVC[i%PAVC.length]+'">'+esc(nm.charAt(0).toUpperCase())+'</div><div class="pn2">'+esc(nm)+'</div>'+(pn.relationship?'<div class="pr2">'+esc(pn.relationship)+'</div>':'')+'</div>';}).join('')
         ||'<div style="color:var(--ink-faint);font-size:20px">Nobody here yet — tell Zoe about the people in your life.</div>';
-      if(az){az.innerHTML='ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map(function(L){return '<span'+(have[L]?' class="has"':'')+' data-l="'+L+'">'+L+'</span>';}).join('');
+      if(az){az.innerHTML=('#'+'ABCDEFGHIJKLMNOPQRSTUVWXYZ').split('').map(function(L){return '<span'+(have[L]?' class="has"':'')+' data-l="'+L+'">'+L+'</span>';}).join('');
         az.onclick=function(e){var t=e.target.closest('span[data-l]');if(!t)return;var el=grid.querySelector('.cttile[data-letter="'+t.getAttribute('data-l')+'"]');if(el)el.scrollIntoView({behavior:'smooth',block:'start'});};}
       grid.onclick=function(e){var t=e.target.closest('.cttile');if(!t)return;var pn=ps[+t.getAttribute('data-i')];if(!pn)return;
         var rows=[['Relationship',pn.relationship],['Phone',pn.phone],['Email',pn.email],['Birthday',pn.birthday],['Notes',pn.notes]]
