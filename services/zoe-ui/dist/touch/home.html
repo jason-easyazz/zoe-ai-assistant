@@ -963,10 +963,12 @@
       Object.keys(byDay).forEach(function(k){byDay[k].sort(function(a,b){return (a.start_time||'').localeCompare(b.start_time||'');});});
       if(_cal.view==='month'){
         var first=new Date(start),lead=(first.getDay()+6)%7,days=end.getDate();
+        // six-week months have shorter cells — show one chip + counter so "+N more" never clips
+        var weeks=Math.ceil((lead+days)/7),maxChips=weeks>5?1:2;
         var html='<div class="calmonth">'+['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(function(h){return '<div class="cmh">'+h+'</div>';}).join('');
         for(var i=0;i<lead;i++)html+='<div class="cmd dim"></div>';
         for(var dnum=1;dnum<=days;dnum++){var dd=new Date(now.getFullYear(),now.getMonth(),dnum),k=isoD(dd),es=byDay[k]||[];
-          html+='<div class="cmd'+(k===isoD(now)?' today':'')+'"><div class="dn">'+dnum+'</div>'+es.slice(0,2).map(function(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="cev" style="--c:'+c+'">'+esc(e.title||'')+'</div>';}).join('')+(es.length>2?'<div class="cev" style="opacity:.6">+'+(es.length-2)+' more</div>':'')+'</div>';}
+          html+='<div class="cmd'+(k===isoD(now)?' today':'')+'"><div class="dn">'+dnum+'</div>'+es.slice(0,maxChips).map(function(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="cev" style="--c:'+c+'">'+esc(e.title||'')+'</div>';}).join('')+(es.length>maxChips?'<div class="cev" style="opacity:.6">+'+(es.length-maxChips)+' more</div>':'')+'</div>';}
         body.innerHTML=html+'</div>';
       } else if(_cal.view==='week'){
         var html2='<div class="calweek">';
