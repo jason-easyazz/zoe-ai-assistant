@@ -219,12 +219,27 @@ async def process_text_llm(
             logger.debug("person_extractor_llm: dropped low-confidence %r/%r", name, fact_type)
             continue
         if _is_unanchored_role(value):
-            logger.info(
-                "person_extractor_llm: dropped unanchored relationship %r for %r — "
-                "value must say whose relative (e.g. \"wife of X\", \"user's friend\")",
-                value, name,
-            )
-            continue
+            # Rescue before dropping: if the TURN itself supports a user anchor
+            # ("my male friend" → value "male friend"), qualify deterministically
+            # instead of losing a valid fact. The validator's synonym-aware check
+            # is the arbiter: supported → prefix "user's"; unsupported → drop.
+            try:
+                from memory_quality import user_relationship_claim_unsupported
+                if not user_relationship_claim_unsupported(f"user's {value}", text):
+                    value = f"user's {value}"
+                else:
+                    logger.info(
+                        "person_extractor_llm: dropped unanchored relationship %r for %r — "
+                        "value must say whose relative (e.g. \"wife of X\", \"user's friend\")",
+                        value, name,
+                    )
+                    continue
+            except Exception:
+                logger.info(
+                    "person_extractor_llm: dropped unanchored relationship %r for %r",
+                    value, name,
+                )
+                continue
         # Told to qualify, the 4B model GUESSES "user" when the text doesn't say
         # ("Emily is the wife" → "wife of user"). Only accept a user anchor the
         # source turn supports ("my <role>"); otherwise drop — a wrong-attachment

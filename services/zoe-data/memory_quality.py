@@ -444,6 +444,30 @@ _ROLE_WORD_RE = re.compile(
 )
 
 
+_ROLE_SYNONYMS: tuple[frozenset[str], ...] = (
+    frozenset({"mum", "mom", "mother"}),
+    frozenset({"dad", "father"}),
+    frozenset({"grandma", "grandmother"}),
+    frozenset({"grandpa", "grandfather"}),
+    frozenset({"kid", "child"}),
+    frozenset({"girl", "daughter"}),
+    frozenset({"boy", "son"}),
+    frozenset({"wife", "spouse"}),
+    frozenset({"husband", "spouse"}),
+    frozenset({"partner", "spouse"}),
+    frozenset({"friend", "mate", "buddy", "bestie"}),
+)
+
+
+def _role_variants(role: str) -> frozenset[str]:
+    """The role plus its everyday synonyms (mum/mother, kid/child, ...)."""
+    out = {role}
+    for group in _ROLE_SYNONYMS:
+        if role in group:
+            out |= group
+    return frozenset(out)
+
+
 def user_relationship_claim_unsupported(fact_text: str, source_text: str) -> bool:
     """True when ``fact_text`` anchors a relationship role to the USER but the
     source turn never says "my <role>" — i.e. the extractor guessed the anchor.
@@ -460,9 +484,11 @@ def user_relationship_claim_unsupported(fact_text: str, source_text: str) -> boo
     src = (source_text or "").lower()
     for role in roles:
         # "my <role>" with up to two adjectives between ("my male friend",
-        # "my best mate"); plural tolerated ("my girls").
-        if re.search(rf"\bmy\s+(?:\w+\s+){{0,2}}{re.escape(role)}s?\b", src):
-            return False  # the source supports this user anchor
+        # "my best mate"); plural tolerated ("my girls"). Synonyms count: the
+        # source saying "my mum" supports a fact phrased "user's mother".
+        for variant in _role_variants(role):
+            if re.search(rf"\bmy\s+(?:\w+\s+){{0,2}}{re.escape(variant)}s?\b", src):
+                return False  # the source supports this user anchor
     return True
 
 

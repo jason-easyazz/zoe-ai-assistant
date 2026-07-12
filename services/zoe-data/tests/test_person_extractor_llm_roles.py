@@ -132,3 +132,38 @@ async def test_guessed_user_anchor_dropped_in_llm_loop(monkeypatch):
     written = await pel.process_text_llm(_SRC, user_id="demo-roles")
     assert written == 1
     assert applied == [("Lindsay Cannon", "user's male friend")]
+
+
+# ── synonym support + bare-role rescue (Greptile r2) ─────────────────────────
+
+def test_role_synonyms_support_user_anchor():
+    # source "my mum" supports a fact phrased "mother"; "my girls" supports "daughter"
+    assert _unsupported("User's mother is Janice", "my mum is Janice, born 1947") is False
+    assert _unsupported("User's daughter is Aria", "I took my girls to school") is False
+    # and a guessed anchor still drops
+    assert _unsupported("Emily is the user's wife.", "Emily is the wife") is True
+
+
+@pytest.mark.asyncio
+async def test_bare_role_rescued_when_turn_supports_it(monkeypatch):
+    """'No Lindsay is my male friend...' + LLM value 'male friend' (bare) must be
+    RESCUED as \"user's male friend\", not dropped (Greptile P2)."""
+    llm_items = [
+        {"name": "Lindsay Cannon", "fact_type": "preference", "value": "male friend"},  # bare, supported → rescue
+        {"name": "Emily Cannon", "fact_type": "preference", "value": "wife"},           # bare, unsupported → drop
+    ]
+    monkeypatch.setattr(pel.httpx, "AsyncClient", lambda **k: _Client(llm_items))
+    applied = []
+
+    async def fake_apply(name, fact_type, value, **kw):
+        applied.append((name, value))
+        return True
+    import person_extractor
+    monkeypatch.setattr(person_extractor, "apply_person_fact", fake_apply)
+
+    written = await pel.process_text_llm(
+        "No Lindsay is my male friend, Emily is the wife and the kids are girls",
+        user_id="demo-roles",
+    )
+    assert written == 1
+    assert applied == [("Lindsay Cannon", "user's male friend")]
