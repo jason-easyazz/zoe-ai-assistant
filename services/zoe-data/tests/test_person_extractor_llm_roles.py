@@ -167,3 +167,18 @@ async def test_bare_role_rescued_when_turn_supports_it(monkeypatch):
     )
     assert written == 1
     assert applied == [("Lindsay Cannon", "user's male friend")]
+
+
+# ── role-list sync + irregular plurals (Greptile r3) ─────────────────────────
+
+def test_children_plural_supports_child_facts():
+    assert _unsupported("User's child is Emily", "my children are Emily and Aria") is False
+    assert _unsupported("User's children are Emily and Aria", "my children are Emily and Aria") is False
+
+
+def test_colleague_class_roles_are_validated():
+    # validator now knows colleague/coworker/boss/neighbour — a guessed anchor drops,
+    # a supported one passes, and the pel rescue path can't sneak one through.
+    assert _unsupported("user's colleague", "he introduced his colleague Bob") is True
+    assert _unsupported("user's colleague", "I had lunch with my colleague Bob") is False
+    assert _unsupported("user's neighbor", "my neighbour plays loud music") is False  # synonym pair

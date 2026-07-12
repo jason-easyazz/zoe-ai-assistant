@@ -436,10 +436,11 @@ _USER_ANCHORED_ROLE_RE = re.compile(
 )
 _ROLE_WORD_RE = re.compile(
     r"\b(wife|husband|partner|girlfriend|boyfriend|fianc[eé]e?|spouse"
-    r"|son|daughter|kid|child|girl|boy|baby"
+    r"|son|daughter|kid|children|child|girl|boy|baby"
     r"|friend|mate|buddy|bestie"
     r"|brother|sister|mum|mom|mother|dad|father|grandma|grandmother|grandpa"
-    r"|grandfather|aunt|uncle|niece|nephew|cousin)s?\b",
+    r"|grandfather|aunt|uncle|niece|nephew|cousin"
+    r"|colleague|coworker|boss|neighbour|neighbor)s?\b",
     re.IGNORECASE,
 )
 
@@ -449,7 +450,8 @@ _ROLE_SYNONYMS: tuple[frozenset[str], ...] = (
     frozenset({"dad", "father"}),
     frozenset({"grandma", "grandmother"}),
     frozenset({"grandpa", "grandfather"}),
-    frozenset({"kid", "child"}),
+    frozenset({"kid", "child", "children"}),
+    frozenset({"neighbour", "neighbor"}),
     frozenset({"girl", "daughter"}),
     frozenset({"boy", "son"}),
     frozenset({"wife", "spouse"}),
