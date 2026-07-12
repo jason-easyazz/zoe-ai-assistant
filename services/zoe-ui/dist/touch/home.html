@@ -405,17 +405,36 @@
       dock.classList.remove('hide');
       var hd=c?c.heard:(id==='ask'?'“What is the meaning of life?”':'');
       if(hd){ dbody.innerHTML='<div class="dheard">Heard: <b>'+hd+'</b></div>'; }
-      else {
-        dbody.innerHTML='<div class="pc light on">'+BULB+'<span class="nm">Lamp</span></div><div class="pc light">'+BULB+'<span class="nm">Ceiling</span></div><div class="pc temp"><div class="tv">21°</div><div class="tl">Temp</div><div class="tpop"><div class="tpv">21°</div><div class="tsl"><div class="tff"></div><div class="tkn"></div></div><div class="tpl">Thermostat</div></div></div>';
-        dbody.querySelectorAll('.pc.light').forEach(function(el){el.onclick=function(){el.classList.toggle('on');};});
-        (function(){var tb=dbody.querySelector('.pc.temp');if(!tb)return;var tsl=tb.querySelector('.tsl'),tff=tb.querySelector('.tff'),tkn=tb.querySelector('.tkn'),tpv=tb.querySelector('.tpv'),tvn=tb.querySelector('.tv'),tv=21;function pt(){var p=(tv-15)/13*100;tff.style.height=p+'%';tkn.style.bottom=p+'%';tpv.textContent=tv+'°';tvn.textContent=tv+'°';}pt();
-          tb.onclick=function(e){if(e.target.closest('.tpop'))return;tb.classList.toggle('open');};
-          var d=false;function at(y){var r=tsl.getBoundingClientRect();tv=Math.round(15+Math.max(0,Math.min(1,1-(y-r.top)/r.height))*13);pt();}
-          tsl.addEventListener('pointerdown',function(e){d=true;tsl.setPointerCapture(e.pointerId);at(e.clientY);});
-          tsl.addEventListener('pointermove',function(e){if(d)at(e.clientY);});
-          tsl.addEventListener('pointerup',function(){d=false;});})();
-      }
+      else { renderDock(); }
     }
+  }
+
+  // ---- dock: real Home Assistant pinned controls (lights + thermostat) ----
+  var _ha={loaded:false,lights:[],climate:null};
+  function haControl(body){return fetch('/api/ha/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify(body)});}
+  function loadHA(cb){apiGet('/api/ha/states').then(function(s){
+      var arr=Array.isArray(s)?s:((s&&s.states)||(s&&s.entities)||[]);
+      _ha.lights=arr.filter(function(e){return String(e.entity_id||'').lastIndexOf('light.',0)===0;});
+      _ha.climate=arr.filter(function(e){return String(e.entity_id||'').lastIndexOf('climate.',0)===0;})[0]||null;
+      _ha.loaded=true;cb&&cb();
+    }).catch(function(){_ha.loaded=true;cb&&cb();});}
+  function renderDock(){
+    if(!_ha.loaded){dbody.innerHTML='<div class="pc light">'+BULB+'<span class="nm">…</span></div>';loadHA(function(){if(dbody.querySelector('.dheard'))return;renderDock();});return;}
+    var lights=_ha.lights.slice(0,2),cl=_ha.climate,html='';
+    html+=lights.map(function(e){var on=String(e.state).toLowerCase()==='on';var nm=(e.attributes&&e.attributes.friendly_name)||e.entity_id;return '<div class="pc light'+(on?' on':'')+'" data-eid="'+esc(e.entity_id)+'">'+BULB+'<span class="nm">'+esc(nm)+'</span></div>';}).join('');
+    if(!lights.length)html+='<div class="pc light"><span class="nm" style="opacity:.6">No lights</span></div>';
+    if(cl){var a=cl.attributes||{};var cur=(a.current_temperature!=null?a.current_temperature:a.temperature);var tgt=(a.temperature!=null?a.temperature:cur);if(tgt==null)tgt=21;
+      html+='<div class="pc temp" data-eid="'+esc(cl.entity_id)+'" data-tgt="'+esc(String(Math.round(tgt)))+'"><div class="tv">'+(cur!=null?Math.round(cur):'—')+'°</div><div class="tl">Temp</div><div class="tpop"><div class="tpv">'+Math.round(tgt)+'°</div><div class="tsl"><div class="tff"></div><div class="tkn"></div></div><div class="tpl">Thermostat</div></div></div>';}
+    dbody.innerHTML=html;
+    dbody.querySelectorAll('.pc.light[data-eid]').forEach(function(el){el.onclick=function(){var on=el.classList.toggle('on');haControl({entity_id:el.getAttribute('data-eid'),action:on?'turn_on':'turn_off'}).catch(function(){el.classList.toggle('on');});};});
+    (function(){var tb=dbody.querySelector('.pc.temp');if(!tb)return;var eid=tb.getAttribute('data-eid'),tsl=tb.querySelector('.tsl'),tff=tb.querySelector('.tff'),tkn=tb.querySelector('.tkn'),tpv=tb.querySelector('.tpv'),tv=parseInt(tb.getAttribute('data-tgt'),10)||21;
+      function pt(){var p=Math.max(0,Math.min(100,(tv-15)/13*100));tff.style.height=p+'%';tkn.style.bottom=p+'%';tpv.textContent=tv+'°';}pt();
+      tb.onclick=function(e){if(e.target.closest('.tpop'))return;tb.classList.toggle('open');};
+      var d=false;function at(y){var r=tsl.getBoundingClientRect();tv=Math.round(15+Math.max(0,Math.min(1,1-(y-r.top)/r.height))*13);pt();}
+      tsl.addEventListener('pointerdown',function(e){d=true;tsl.setPointerCapture(e.pointerId);at(e.clientY);});
+      tsl.addEventListener('pointermove',function(e){if(d)at(e.clientY);});
+      tsl.addEventListener('pointerup',function(){d=false;haControl({entity_id:eid,action:'set_temperature',value:{temperature:tv}}).catch(function(){});});
+    })();
   }
 
   // ---- launcher overlay (opened from the dock grid button) ----
