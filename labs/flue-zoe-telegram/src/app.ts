@@ -17,7 +17,7 @@
 import { GrammyError } from 'grammy';
 import { Hono } from 'hono';
 import { flue } from '@flue/runtime/routing';
-import { askZoeAs, consumeLinkToken, registerBotUsername, resolveTelegramUser, sessionFor } from './brain.ts';
+import { askZoeAs, bumpSession, consumeLinkToken, registerBotUsername, resolveTelegramUser, sessionFor } from './brain.ts';
 import { handleIncoming, startReply } from './handler.ts';
 import { bot } from './telegram.ts';
 
@@ -41,6 +41,30 @@ bot.command('start', async (ctx) => {
   } catch (err) {
     console.error('Telegram link error:', err);
     await ctx.reply('Something went wrong linking your account. Please try again in a moment.');
+  }
+});
+
+// --- /new: fresh conversation session --------------------------------------
+// A long-lived per-chat session can get poisoned (Zoe's own wrong denial echoes
+// on every retry, outvoting the memory packet). /new rotates the session epoch:
+// fresh zoe-data + sidecar context, memories and old chat rows untouched.
+// LINKED senders only — same identity gate as the message handler — so an
+// unlinked stranger can't grow the epoch file or drive session churn.
+// Registered before message:text so it never falls through to the brain.
+bot.command(['new', 'reset'], async (ctx) => {
+  const telegramId = ctx.from?.id;
+  if (telegramId === undefined) return;
+  try {
+    const zoeUser = await resolveTelegramUser(telegramId);
+    if (!zoeUser) {
+      await ctx.reply('Please link your Zoe account first (Zoe settings → Telegram).');
+      return;
+    }
+    bumpSession(ctx.chat.id);
+    await ctx.reply('Okay — fresh conversation. Your memories are untouched; ask me anything.');
+  } catch (err) {
+    console.error('Telegram /new error:', err);
+    await ctx.reply('Something went wrong starting a fresh conversation. Please try again.');
   }
 });
 
