@@ -588,3 +588,27 @@ async def test_correction_never_supersedes_another_persons_row(monkeypatch):
         assert any("March 25" in i["text"] for i in svc.ingests)  # stored as ADD
     finally:
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_bare_name_correction_skips_full_name_namesake(monkeypatch):
+    """Greptile P1 r3: 'Jessica' (bare) must not supersede 'Jessica Smith's' row —
+    two people can share a first name. Ambiguity → ADD, never overwrite."""
+    import memory_extractor as me
+
+    db = await _open(people=[])
+    try:
+        svc = _FakeReconcileSvc(existing=[("smith-1", "Jessica Smith's birthday is March 15")])
+        _patch_memory_service(monkeypatch, svc)
+        _always_storable(monkeypatch)
+        _use_db(monkeypatch, db)
+
+        await me.extract_and_ingest(
+            "her birthday is actually March 25",
+            user_id=USER, session_id="s-ns", source="test",
+            prev_user_message="My friend Jessica's birthday is March 15",
+        )
+        assert svc.reviews == []                                   # namesake untouched
+        assert any("March 25" in i["text"] for i in svc.ingests)   # stored as ADD
+    finally:
+        await db.close()

@@ -806,8 +806,28 @@ async def extract_and_ingest(
             # person's memory. When the candidate is about a named person, only
             # rows that mention that person's first name are eligible.
             if getattr(c, "title", None):
-                _first = c.title.split()[0].lower()
-                existing = [(i, t) for i, t in existing if _first in t.lower()]
+                _toks = c.title.split()
+                if len(_toks) > 1:
+                    # Full-name candidate → the row must mention the FULL name
+                    # (a bare "Jessica" row also passes; same person by intro).
+                    _needle = c.title.lower()
+                    _first = _toks[0].lower()
+                    existing = [
+                        (i, t) for i, t in existing
+                        if _needle in t.lower()
+                        or (_first in t.lower()
+                            and not re.search(rf"\b(?i:{re.escape(_first)})\s+[A-Z][a-z]", t))
+                    ]
+                else:
+                    # Bare-name candidate ("Jessica") → refuse rows where that
+                    # name is part of a LONGER full name ("Jessica Smith") — two
+                    # people can share a first name (Greptile P1); ambiguity → ADD.
+                    _first = _toks[0].lower()
+                    existing = [
+                        (i, t) for i, t in existing
+                        if _first in t.lower()
+                        and not re.search(rf"\b(?i:{re.escape(_first)})\s+[A-Z][a-z]", t)
+                    ]
             op, target_id = classify_against_existing(c.text, existing)
         except Exception as exc:
             logger.debug("reconciliation unavailable (%s) — plain ingest", exc)
