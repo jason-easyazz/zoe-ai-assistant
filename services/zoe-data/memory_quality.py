@@ -462,12 +462,28 @@ _ROLE_SYNONYMS: tuple[frozenset[str], ...] = (
 )
 
 
+# DIRECTIONAL hyponyms: a GENERIC role in a fact is supported by any of its
+# specific forms in the source ("my mum" supports "user's parent"), but never
+# the reverse ("my dad" must NOT support "user's mother" — that stays confined
+# to the symmetric synonym groups above).
+_ROLE_HYPONYMS: dict[str, frozenset[str]] = {
+    "parent": frozenset({"mum", "mom", "mother", "dad", "father"}),
+    "sibling": frozenset({"brother", "sister"}),
+    "grandparent": frozenset({"grandma", "grandmother", "grandpa", "grandfather"}),
+    "kid": frozenset({"son", "daughter", "girl", "boy"}),
+    "child": frozenset({"son", "daughter", "girl", "boy"}),
+    "children": frozenset({"son", "daughter", "girl", "boy"}),
+}
+
+
 def _role_variants(role: str) -> frozenset[str]:
-    """The role plus its everyday synonyms (mum/mother, kid/child, ...)."""
+    """The role plus its everyday synonyms (mum/mother, kid/child, ...) and —
+    for generic roles — its specific hyponyms (parent ← mum/dad)."""
     out = {role}
     for group in _ROLE_SYNONYMS:
         if role in group:
             out |= group
+    out |= _ROLE_HYPONYMS.get(role, frozenset())
     return frozenset(out)
 
 

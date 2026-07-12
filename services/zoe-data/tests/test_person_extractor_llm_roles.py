@@ -250,3 +250,14 @@ def test_parent_sibling_grandparent_roles_validated():
     assert _unsupported("user's parent", "her parents visited today") is True
     assert _unsupported("User's parents live nearby", "my parents live nearby") is False
     assert pel._is_unanchored_role("sibling") is True
+
+
+def test_generic_roles_supported_by_specific_forms():
+    """Directional hyponyms (Greptile r12): 'my mum' supports \"user's parent\",
+    'my sister' supports sibling, 'my son' supports kid — but specifics never
+    cross-support each other ('my dad' must not support \"user's mother\")."""
+    assert _unsupported("User's parent is Janice", "my mum is Janice") is False
+    assert _unsupported("User's sibling is Karen", "my sister Karen visited") is False
+    assert _unsupported("User's kid loves soccer", "my son loves soccer") is False
+    assert _unsupported("User's mother is Janice", "my dad is Neil") is True
+    assert _unsupported("user's parent", "her parents visited") is True
