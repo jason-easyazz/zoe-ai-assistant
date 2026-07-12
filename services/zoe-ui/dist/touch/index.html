@@ -713,7 +713,7 @@
             };
             setTimeout(() => {
                 // Use stored destination if we were redirected here from a touch page
-                let dest = '/touch/skybridge.html';
+                let dest = '/touch/home.html';   // new estate is the panel home
                 try {
                     const stored = sessionStorage.getItem('zoe_redirect_after_login');
                     if (stored && stored.startsWith('/touch/')) {
@@ -866,7 +866,7 @@
                                 localStorage.removeItem('redirect_loop_detected');
                             }, 5000); // Clear flag after 5 seconds
                             
-                            window.location.href = '/touch/skybridge.html';
+                            window.location.href = '/touch/home.html';
                             return;
                         } else {
                             // Session expired

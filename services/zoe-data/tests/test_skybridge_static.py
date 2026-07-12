@@ -695,16 +695,20 @@ def test_skybridge_is_registered_in_touch_menu():
     assert "'dashboard', 'skybridge', 'calendar'" not in menu
 
 
-def test_touch_defaults_to_skybridge_home():
+def test_touch_defaults_to_estate_home():
+    # The panel home is now the estate (/touch/home.html): post-login entry,
+    # the executor's "go home" target, and the auth redirect all point to it.
+    # The legacy touch-menu (old-page chrome) still lists skybridge during the
+    # transition until the old pages are archived.
     auth = (ROOT / "zoe-ui" / "dist" / "js" / "auth.js").read_text(encoding="utf-8")
     touch_index = read(UI / "index.html")
     executor = (ROOT / "zoe-ui" / "dist" / "js" / "touch-ui-executor.js").read_text(encoding="utf-8")
     menu = read(UI / "js" / "touch-menu.js")
 
-    assert "const HOME_PATH = '/touch/skybridge.html';" in executor
-    assert "let dest = '/touch/skybridge.html';" in touch_index
-    assert "window.location.href = '/touch/skybridge.html';" in touch_index
-    assert "window.location.href = '/touch/skybridge.html';" in auth
+    assert "const HOME_PATH = '/touch/home.html';" in executor
+    assert "let dest = '/touch/home.html';" in touch_index
+    assert "window.location.href = '/touch/home.html';" in touch_index
+    assert "window.location.href = '/touch/home.html';" in auth
     assert "return '/touch/skybridge.html';" in menu
 
 
