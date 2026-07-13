@@ -27,7 +27,7 @@ import argparse
 import asyncio
 import os
 import sys
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import urlsplit
 
 import asyncpg
 
@@ -91,17 +91,17 @@ async def main(execute: bool, assume_yes: bool, expect_db: str, expect_host: str
     # skips the interactive prompt, never these checks. --expect-host accepts
     # "host" (default port 5432) or "host:port".
     if execute and assume_yes:
-        # A DSN can override its effective target via query options (host,
-        # hostaddr, port) that urlsplit's hostname/port do not reflect. Rather
-        # than re-implement libpq's precedence rules, refuse non-interactive
-        # execution outright when any such override is present — the operator
-        # can run the interactive path, which shows the parsed target.
-        overrides = {"host", "hostaddr", "port"} & set(parse_qs(parts.query or ""))
-        if overrides:
+        # DSN query options (host, hostaddr, port, dbname, …) can override the
+        # effective connection target in ways the URL authority does not
+        # reflect. Rather than track libpq's option set and precedence rules,
+        # refuse non-interactive execution whenever the DSN carries ANY query
+        # string — the zoe-data service DSN has none, and the interactive path
+        # (which prints the parsed target and asks) remains available.
+        if parts.query:
             print(
-                f"\nRefusing non-interactive --yes: POSTGRES_URL carries query-option "
-                f"target overrides ({', '.join(sorted(overrides))}) that the host/port "
-                "assertion cannot verify. Run interactively instead.",
+                "\nRefusing non-interactive --yes: POSTGRES_URL carries query options, "
+                "which can override the connection target in ways this assertion "
+                "cannot verify. Run interactively instead.",
                 file=sys.stderr,
             )
             return 2
