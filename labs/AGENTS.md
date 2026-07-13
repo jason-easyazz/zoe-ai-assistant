@@ -54,6 +54,14 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
 
 ## Child DOX Index
 
+- `kokoro-voice-blend/` — custom "Zoe" persona voice spike: pure-numpy blends
+  (linear + slerp) of Kokoro style tensors from the stock voices bin, committed
+  candidate tensors (`voices/*.npy`, float16) + reproducible generator
+  (`blend_zoe_voices.py`) + audition WAVs under `/tmp/zoe-voice-blend-samples/`.
+  Audio synthesis runs a one-shot CPU kokoro-onnx (~600MB) and MUST hold
+  `flock /tmp/zoe-voice-harness.lock`; never loads a second full Kokoro. Not
+  wired anywhere; deployment (augmented voices bin + env flip) is a documented
+  operator step gated on the voice replay harness — see its README.
 - `flue-harness-spike/` — Flue autonomous-harness substrate spike (scout → implement
   → verify → openPR slice); README + RUNBOOK + FINDINGS are records, not contracts.
 - `flue-zoe-brain/` — Flue-hosted Pi `Agent` on the local Gemma brain (a third
@@ -82,6 +90,14 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
   discovers `*_gate.py` modules; corpus + adversarial gates today). LAB-only,
   hand-run against the live host, never CI-wired. See
   `flue-zoe-brain/parity/README-GATES.md`.
+- `needle-benchmark/` — LAB benchmark of Cactus Needle (26M single-shot
+  function-calling model, MIT) as a CPU-only tool/intent router in front of the
+  Gemma brain: routing accuracy vs the current Tier-0 regex + Tier-1 embedding
+  routing on a labeled corpus, per-decision CPU latency, pre-brain
+  classifier-chain cost, and tool-prefilter token savings. Hand-run only (venv
+  built OUTSIDE the repo by `setup.sh`; weights from HF at run time, never
+  committed). README.md carries the four measured numbers + the adopt/reject
+  recommendation. Never wired into the voice path, `fast_tiers`, or CI.
 - `digarr-spike/` — evaluation record for digarr (MIT, Bun/PGlite) as a hidden
   music-discovery engine behind Zoe: verified batch-run config against the local
   Gemma llama-server, footprint numbers, listening-source findings, and the

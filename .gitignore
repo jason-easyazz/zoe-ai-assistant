@@ -128,6 +128,7 @@ aider_env/
 !scripts/setup/*.sh
 !scripts/setup/jetson/*.sh
 !scripts/train/*.sh
+!labs/needle-benchmark/setup.sh
 !RESTART_SERVICES.sh
 !start-zoe.sh
 !stop-zoe.sh
@@ -159,6 +160,9 @@ credentials/
 !.greptile/files.json
 !.mcp.json
 !services/zoe-litellm/minimal_config.yaml
+# needle-benchmark lab: committed measurement artifacts (labs/needle-benchmark/README.md)
+!labs/needle-benchmark/zoe_tools.json
+!labs/needle-benchmark/results/*.json
 
 # API Keys and Secrets
 *.env
