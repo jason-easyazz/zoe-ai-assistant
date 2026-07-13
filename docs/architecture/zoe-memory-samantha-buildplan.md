@@ -61,16 +61,12 @@ memory unprompted; its understanding of the user evolves.
   NULL. `memory_idle_consolidation._resolve_owner` resolves the owner from per-turn
   metadata (most-recent non-guest, freq tie-break), falling back to a real
   `chat_sessions.user_id` only. Sessions with no resolvable real user are skipped.
-- **1c ✅ (was NEXT; closed 2026-07 — see §6)** — *lab-prove + gate + prod-enable.* The merged 1a+1b code is gated OFF
-  behind `ZOE_IDLE_CONSOLIDATION_ENABLED`. This increment proves the full loop and
-  preps (does NOT execute) the prod enable. Steps: (1) self-contained CI acceptance
-  test `tests/test_samantha_acceptance_loop.py` exercising live→idle→store→recall
-  against the merged engine (Gemma extractor + DB mocked, real gate + real ingest/recall
-  path); (2) the lab-enable runbook in §8 (flip the flag in a worktree against real
-  Postgres/Chroma/Gemma, replay a morning→afternoon exchange, confirm afternoon
-  cross-session recall, run the zoe-core integration Samantha tests); (3) the prod-enable
-  runbook in §8 — what to flip, what to watch, what still needs the live box. **The prod
-  flag stays OFF; Jason blesses the prod enable.**
+- **1c ✅ (closed 2026-07 — see §6).** All three original steps happened: the CI
+  acceptance loop (`tests/test_samantha_acceptance_loop.py`), the §8 lab proof, and
+  the prod enable (`ZOE_IDLE_CONSOLIDATION_ENABLED=1` live since 2026-06-24, Jason-blessed)
+  — and the §7 positive control has since been shown on organic traffic (real
+  authenticated turns land in `chat_messages` with `metadata.user_id`; recall verified
+  behaviorally, see `memory-qa-review-2026-07.md`). Nothing in 1c is open.
 - **DoD:** a fact told now is consolidated within minutes of idle and recalled in a
   later session, with junk gated out.
 
@@ -145,10 +141,10 @@ is the immediate voice/chat writers + the for-prompt packet + the Flue `recall_m
 > PID-confirmed; set 2026-06-24) and the engine is healthy, so §8.3 below is kept
 > only as reference + the rollback/watch procedure — the enable/restart step is
 > **done**, not pending. §8.2's demo path is likewise proven (55 demo watermark
-> rows). **The actual open 1c item is the §7 positive control:** prove a fresh
-> authenticated turn lands in `chat_messages` *with* `metadata.user_id`, then that a
-> sweep consolidates it. Treat the enable/restart in §8.3 as a no-op unless the flag
-> has been deliberately turned OFF.
+> rows). **The §7 positive control is CLOSED (2026-07):** real authenticated turns
+> land in `chat_messages` *with* `metadata.user_id` on organic traffic (memory QA arc,
+> `memory-qa-review-2026-07.md`). Treat the enable/restart in §8.3 as a no-op unless
+> the flag has been deliberately turned OFF.
 
 ### 8.1 What is already proven (no live box needed)
 - `test_samantha_acceptance_loop.py` drives the merged engine end to end: a short morning
