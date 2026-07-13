@@ -609,6 +609,10 @@
 
   function show(id){
     var f=FULL[id], c=CARD[id];
+    // Any navigation cancels a pending chat-fallback jump to Ask — the user
+    // (or a domain arrival) choosing a screen always wins over the deferred
+    // answer display.
+    if(typeof _askFallT!=='undefined'&&_askFallT){clearTimeout(_askFallT);_askFallT=null;}
     _cur=id; clearScreenTimers();
     var cb=document.getElementById('cmdbar');if(cb)cb.classList.remove('on');
     stage.classList.remove('wxlight');
@@ -1288,7 +1292,7 @@
       // briefly so a navigation that's still in flight wins instead.
       if(window.__voiceArrivedAt&&(Date.now()-window.__voiceArrivedAt)<10000){dockSaid(null,t);return;}
       if(_askFallT)clearTimeout(_askFallT);
-      _askFallT=setTimeout(function(){askShowAnswer(window.__lastHeard||'',t);},1200);},
+      _askFallT=setTimeout(function(){_askFallT=null;askShowAnswer(window.__lastHeard||'',t);},1200);},
     done:function(){orb.classList.remove('listening');orb.classList.remove('busy');if(_lisT)clearTimeout(_lisT);}
   };
 
