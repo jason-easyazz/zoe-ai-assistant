@@ -68,3 +68,30 @@ first-audio ~5 s p50 / ~12 s p90. Two live-only effects the warm harness misses:
 cold STT** (warmup skipped under pressure) and **wake-word bleed** on the first command. Honest
 *measurement* over guessing (`VISION.md` principle 4) — when you change the path, measure live, not
 just the harness.
+
+## Voice selection — "Zoe's voice" (user-facing)
+
+Zoe's speaking voice is a **household setting**, picked from the touch panel's "Zoe's voice"
+settings card (or by voice: "change your voice to ember").
+
+- **Preference:** `app_settings.tts_voice` (migration `0018`), managed by
+  `services/zoe-data/voice_settings.py`. Per-synth resolution: explicit override → persisted pref
+  (5 s in-process TTL cache) → `ZOE_KOKORO_VOICE`/`af_sky`. Fail-open — a broken DB never breaks speech.
+- **Catalogue:** the loaded voices bin (`ZOE_KOKORO_VOICES`, an NPZ) is the single source of truth;
+  `GET /api/voice/voices` lists it, the UI never hardcodes names.
+- **Preview:** `POST /api/voice/preview` synthesizes a **server-fixed** sample sentence
+  (`voice_settings.PREVIEW_TEXT`) in any catalogue voice; the panel plays the returned WAV.
+- **Cache correctness:** the sidecar phrase cache (memory + `~/.zoe/kokoro_cache/`) keys on
+  `<voice>|<text>` — a voice switch never replays stale audio in the old voice.
+
+**Operator step — enabling the custom `zoe_*` blended voices** (they appear in the picker only once
+the augmented bin is installed):
+
+```bash
+cd labs/kokoro-voice-blend
+python3 blend_zoe_voices.py --emit-bin          # writes the augmented voices bin
+# point ZOE_KOKORO_VOICES (zoe-data env AND kokoro-tts.service env) at the new bin, then:
+systemctl --user restart kokoro-tts.service     # sidecar loads the new tensors
+systemctl --user restart zoe-data.service       # picks up the env change
+```
+The catalogue endpoint re-reads the bin by mtime, so zoe-data shows the new names without a code change.
