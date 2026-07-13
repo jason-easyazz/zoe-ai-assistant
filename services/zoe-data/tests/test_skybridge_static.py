@@ -1409,7 +1409,7 @@ def test_music_search_and_play_media_endpoints_exist():
     assert "music_service.play_media(uri, player_id=player_id, option=option)" in router
 
     assert "async def search(query: str" in service
-    assert "async def play_media(uri: str, player_id: str = \"\", option: str = \"replace\")" in service
+    assert 'async def play_media(uri: str, player_id: str = "", option: str = "replace",' in service
     # Per-type fan-out (MA/YT drops tracks/albums on a combined query).
     assert '"music/search", search_query=query, media_types=[mt]' in service
     assert '"player_queues/play_media", queue_id=pid, media=uri' in service

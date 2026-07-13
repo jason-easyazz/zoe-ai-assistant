@@ -99,7 +99,7 @@ async def test_pause_calls_control(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_play_searches_and_plays(monkeypatch):
-    async def fake_sp(query, player_id=""): return {"name": "Blue in Green", "artist": "Miles Davis"}
+    async def fake_sp(query, player_id="", zoe_user_id=""): return {"name": "Blue in Green", "artist": "Miles Davis"}
     async def fake_np(pid=""): return {"state": "playing", "title": "Blue in Green", "artist": "Miles Davis"}
     monkeypatch.setattr(music_service, "search_and_play", fake_sp)
     monkeypatch.setattr(music_service, "now_playing", fake_np)
