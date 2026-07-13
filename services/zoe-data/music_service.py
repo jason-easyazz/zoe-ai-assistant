@@ -526,6 +526,34 @@ def _match_player_by_name(players: list[dict[str, Any]], name: str) -> Optional[
     return None
 
 
+_GENERIC_PLAY = {"", "music", "something", "anything", "a song", "songs", "tunes", "some tunes", "some music"}
+
+
+def split_play_target(query: str, players: list[dict[str, Any]]) -> tuple[str, Optional[dict[str, Any]]]:
+    """Split "jazz in the kitchen" → ("jazz", <Kitchen player>) using the REAL
+    player list; a suffix that matches no player stays in the query ("golden
+    on youtube music" keeps its provider suffix). A generic base ("music",
+    "something", …) returns "" so the caller resumes/prompts instead of
+    searching for the literal word.
+    """
+    q = (query or "").strip()
+    base, target = q, None
+    lowered = f" {q.lower()} "
+    for sep in (" in the ", " on the ", " in ", " on "):
+        idx = lowered.rfind(sep)
+        if idx < 0:
+            continue
+        cand_base = q[: idx].strip() if idx > 0 else ""
+        cand_room = q[idx + len(sep) - 1:].strip()
+        hit = _match_player_by_name(players, cand_room)
+        if hit is not None:
+            base, target = cand_base, hit
+            break
+    if base.lower().strip() in _GENERIC_PLAY:
+        base = ""
+    return base, target
+
+
 async def resolve_music(intent: Any) -> dict[str, Any]:
     """The Skybridge music domain resolver. `intent` has .action and .query."""
     action = getattr(intent, "action", "status")
@@ -553,11 +581,33 @@ async def resolve_music(intent: Any) -> dict[str, Any]:
         np = await now_playing(target.get("player_id", "")) or np0 or {}
         return _result(f"Moved the music to {tname}.", now_playing_card(np), "transfer")
 
-    if action == "play" and query:
-        hit = await search_and_play(query)
+    if action == "play":
+        # Room/speaker targeting: "play jazz in the kitchen" must aim at the
+        # Kitchen player, not search for "jazz in the kitchen" (which used to
+        # match playlists like "Music for Cleaning the Kitchen").
+        players = await get_players()
+        base, target = split_play_target(query, players)
+        player_id = (target or {}).get("player_id", "")
+        tname = (target or {}).get("display_name") or (target or {}).get("name") or ""
+        on_txt = f" on {tname}" if tname else ""
+
+        if not base:
+            # Generic "play some music": resume whatever is queued/paused first.
+            np0 = await now_playing(player_id)
+            if np0 and np0.get("title"):
+                await control("play", player_id=player_id or np0.get("player_id", ""))
+                np = await now_playing(player_id or np0.get("player_id", "")) or np0
+                if np.get("state") == "playing":
+                    return _result(f"Resuming {np.get('title') or 'the music'}{on_txt}.",
+                                   now_playing_card(np), "play")
+            return _result(
+                "What would you like to hear — an artist, a song, or the radio?" + (f" I'll put it on {tname}." if tname else ""),
+                _browse_card(), "play")
+
+        hit = await search_and_play(base, player_id=player_id)
         if hit:
-            np = await now_playing() or {}
-            spoken = f"Playing {hit['name']}." if hit.get("name") else "Playing that now."
+            np = await now_playing(player_id) or {}
+            spoken = (f"Playing {hit['name']}" if hit.get("name") else "Playing that now") + on_txt + "."
             return _result(spoken, now_playing_card(np or {"state": "playing", "title": hit["name"], "artist": hit.get("artist", "")}), "play")
         return _result("I couldn't find that to play.", _browse_card(), "play")
 
