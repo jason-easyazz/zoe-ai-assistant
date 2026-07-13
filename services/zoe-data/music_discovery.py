@@ -237,7 +237,11 @@ async def replace_discovery_playlist(track_uris: list[str]) -> dict[str, Any]:
         existing = await ms._ma("music/playlists/playlist_tracks",
                                 item_id=str(playlist["item_id"]),
                                 provider_instance_id_or_domain="library")
-        positions = [t.get("position") for t in (existing or [])
+        if existing is None:
+            # MA down/timeout mid-replace: adding now would APPEND to the old
+            # playlist. Treat the replace as failed instead.
+            return {"ok": False, "reason": "could not read existing playlist"}
+        positions = [t.get("position") for t in ms._as_list(existing)
                      if isinstance(t, dict) and t.get("position") is not None]
         if positions and not await ms._ma_ok(
                 "music/playlists/remove_playlist_tracks", timeout_s=20.0,

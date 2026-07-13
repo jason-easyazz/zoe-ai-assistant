@@ -299,3 +299,75 @@ def test_media_fields_normalizes_ma_item():
                       "album": "Deadpool 2", "provider": "ytmusic--x",
                       "uri": "yt://track/1", "media_type": "track"}
     assert mh.media_fields({})["track"] == ""
+
+
+# ── Greptile-round hardening (PR #1310) ──────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_replace_playlist_fails_when_track_lookup_fails(monkeypatch):
+    """MA down mid-replace must FAIL the replace, never append (Greptile P1)."""
+    async def fake(command, **args):
+        if command == "music/playlists/library_items":
+            return [{"item_id": 7, "name": "Zoe Discovery", "uri": "library://playlist/7"}]
+        if command == "music/playlists/playlist_tracks":
+            return None  # _ma's unreachable/timeout shape
+        raise AssertionError(command)
+
+    async def fake_ok(command, timeout_s=0, **args):
+        raise AssertionError("must not add tracks after a failed lookup")
+
+    monkeypatch.setattr(ms, "_ma", fake)
+    monkeypatch.setattr(ms, "_ma_ok", fake_ok)
+    res = await md.replace_discovery_playlist(["yt://t/1"])
+    assert not res["ok"]
+
+
+@pytest.mark.asyncio
+async def test_replace_playlist_clears_dict_wrapped_tracks(monkeypatch):
+    """playlist_tracks wrapped as {items: [...]} must still be cleared."""
+    ok_calls = []
+
+    async def fake(command, **args):
+        if command == "music/playlists/library_items":
+            return [{"item_id": 7, "name": "Zoe Discovery", "uri": "library://playlist/7"}]
+        if command == "music/playlists/playlist_tracks":
+            return {"items": [{"position": 0}, {"position": 1}, {"position": 2}]}
+        raise AssertionError(command)
+
+    async def fake_ok(command, timeout_s=0, **args):
+        ok_calls.append((command, args))
+        return True
+
+    monkeypatch.setattr(ms, "_ma", fake)
+    monkeypatch.setattr(ms, "_ma_ok", fake_ok)
+    res = await md.replace_discovery_playlist(["yt://t/9"])
+    assert res["ok"]
+    assert ok_calls[0][1]["positions_to_remove"] == [0, 1, 2]
+
+
+def _load_batch_module():
+    import importlib.util
+    script = Path(__file__).resolve().parents[3] / "scripts" / "maintenance" / "music_discovery_batch.py"
+    spec = importlib.util.spec_from_file_location("music_discovery_batch_t", script)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_batch_brain_url_strips_v1(monkeypatch):
+    mod = _load_batch_module()
+    monkeypatch.setenv("ZOE_BRAIN_URL", "http://127.0.0.1:11434/v1")
+    assert mod._brain_base_url() == "http://127.0.0.1:11434"
+    monkeypatch.setenv("ZOE_BRAIN_URL", "http://127.0.0.1:11434/")
+    assert mod._brain_base_url() == "http://127.0.0.1:11434"
+
+
+def test_batch_container_ai_base_url(monkeypatch):
+    mod = _load_batch_module()
+    monkeypatch.delenv("ZOE_DIGARR_AI_BASE_URL", raising=False)
+    monkeypatch.setattr(mod, "LLAMA_URL", "http://127.0.0.1:11434")
+    assert mod._container_ai_base_url() == "http://host.docker.internal:11434"
+    monkeypatch.setattr(mod, "LLAMA_URL", "http://192.168.1.218:9000")
+    assert mod._container_ai_base_url() == "http://192.168.1.218:9000"
+    monkeypatch.setenv("ZOE_DIGARR_AI_BASE_URL", "http://other:1234/")
+    assert mod._container_ai_base_url() == "http://other:1234"

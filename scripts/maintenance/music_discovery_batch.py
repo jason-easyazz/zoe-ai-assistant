@@ -52,7 +52,33 @@ log = logging.getLogger("music_discovery_batch")
 CONTAINER_NAME = "zoe-digarr-batch"
 DIGARR_PORT = int(os.environ.get("ZOE_DIGARR_PORT", "3199"))
 DIGARR_URL = f"http://127.0.0.1:{DIGARR_PORT}"
-LLAMA_URL = os.environ.get("ZOE_BRAIN_URL", "http://127.0.0.1:11434").rstrip("/")
+def _brain_base_url() -> str:
+    """The llama-server BASE url (no /v1) for probes AND the container.
+
+    Zoe's brain URL convention sometimes carries /v1 (e.g. GEMMA_SERVER_URL);
+    strip it so /health + /slots probe the server root and digarr — which
+    appends /v1/... itself (spike gotcha) — gets a clean base."""
+    url = os.environ.get("ZOE_BRAIN_URL", "http://127.0.0.1:11434").rstrip("/")
+    return url[:-3] if url.endswith("/v1") else url
+
+
+LLAMA_URL = _brain_base_url()
+
+
+def _container_ai_base_url() -> str:
+    """LLAMA_URL as seen from inside the digarr container: loopback/localhost
+    become host.docker.internal (mapped via --add-host host-gateway) with the
+    same port; anything else (a real LAN address) passes through. Override:
+    ZOE_DIGARR_AI_BASE_URL."""
+    override = os.environ.get("ZOE_DIGARR_AI_BASE_URL", "").rstrip("/")
+    if override:
+        return override
+    from urllib.parse import urlparse
+    parsed = urlparse(LLAMA_URL)
+    if parsed.hostname in ("127.0.0.1", "localhost", "0.0.0.0"):  # noqa: S104
+        port = parsed.port or 80
+        return f"{parsed.scheme}://host.docker.internal:{port}"
+    return LLAMA_URL
 DATA_DIR = ZOE_DATA / "data" / "music_discovery"
 AUTH_PATH = DATA_DIR / "digarr_auth.json"
 
@@ -172,7 +198,7 @@ def start_digarr() -> bool:
         "-e", "PORT=3000", "-e", "DB_PATH=/app/data",
         "-e", "AI_PROVIDER=openai-compatible",
         # NOTE: no /v1 — digarr appends /v1/chat/completions itself (spike gotcha)
-        "-e", "AI_BASE_URL=http://host.docker.internal:11434",
+        "-e", f"AI_BASE_URL={_container_ai_base_url()}",
         "-e", "AI_API_KEY=local-noauth",
         "-e", f"AI_MODEL={brain_model_id()}",
         "-e", f"DIGARR_AI_TIMEOUT_SECONDS={os.environ.get('ZOE_DIGARR_AI_TIMEOUT_S', '300')}",
@@ -278,6 +304,11 @@ def main() -> int:
     ap.add_argument("--no-bridge", action="store_true",
                     help="stop after writing recommendations JSON (no MA playlist)")
     args = ap.parse_args()
+
+    # SIGTERM (scheduler timeout, systemd stop) must still run the `finally`
+    # container cleanup — Python's default SIGTERM handling skips it.
+    import signal
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(4))
 
     load_env_defaults()
     if args.mood:

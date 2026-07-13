@@ -1152,8 +1152,22 @@ async def lifespan(app: FastAPI):
                 try:
                     out, _ = await _aio.wait_for(proc.communicate(), timeout=2400)
                 except _aio.TimeoutError:
-                    proc.kill()
-                    logger.error("music discovery batch timed out (killed)")
+                    # SIGTERM first so the script's `finally` can stop+remove
+                    # the digarr container; SIGKILL only if it hangs. Then
+                    # force-remove the container regardless — a leaked 768MB
+                    # container on this memory-tight box is an incident.
+                    proc.terminate()
+                    try:
+                        await _aio.wait_for(proc.communicate(), timeout=60)
+                        logger.error("music discovery batch timed out (terminated; script cleanup ran)")
+                    except _aio.TimeoutError:
+                        proc.kill()
+                        logger.error("music discovery batch timed out (killed)")
+                    _rm = await _aio.create_subprocess_exec(
+                        "docker", "rm", "-f", "zoe-digarr-batch",
+                        stdout=_aio.subprocess.DEVNULL,
+                        stderr=_aio.subprocess.DEVNULL)
+                    await _rm.wait()
                     return
                 tail = (out or b"").decode(errors="replace")[-2000:]
                 if proc.returncode == 0:
