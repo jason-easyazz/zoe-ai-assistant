@@ -444,6 +444,11 @@ def test_guard_allows_supersede_of_name_value_rows():
     # words would keep the row guarded.
     multi = [("old", "my dad's name is Van Morrison")]
     assert guard_existing_by_entity("my dad's name is Kevin", multi, None) == multi
+    # Punctuated values (hyphen/apostrophe) — every letter-run is excluded.
+    for row in ("User's sister is named Mary-Jane", "User's dad is named D'Arcy Smith"):
+        ex = [("old", row)]
+        cand = "my sister's name is Kim" if "sister" in row else "my dad's name is Kevin"
+        assert guard_existing_by_entity(cand, ex, None) == ex, row
 
 
 def test_guard_still_protects_third_person_rows():
