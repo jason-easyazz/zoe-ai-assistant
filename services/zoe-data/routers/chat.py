@@ -1303,6 +1303,12 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
                     "memory pass %s FAILED for user=%s (fact loss possible): %s",
                     _mx_name, user_id, _mx_res,
                 )
+                try:  # QA review F13: make silent fact loss countable in ops
+                    from memory_metrics import memory_async_extract_fail_count
+                    memory_async_extract_fail_count.labels(
+                        lane="chat", pass_name=_mx_name).inc()
+                except Exception:
+                    pass
         asyncio.ensure_future(_detect_suggestions(
             user_message,
             user_id=user_id,

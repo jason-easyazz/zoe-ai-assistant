@@ -90,6 +90,11 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
   discovers `*_gate.py` modules; corpus + adversarial gates today). LAB-only,
   hand-run against the live host, never CI-wired. See
   `flue-zoe-brain/parity/README-GATES.md`.
+- `digarr-spike/` — evaluation record for digarr (MIT, Bun/PGlite) as a hidden
+  music-discovery engine behind Zoe: verified batch-run config against the local
+  Gemma llama-server, footprint numbers, listening-source findings, and the
+  recommendations→Music Assistant playlist bridge design. README is a record,
+  not a contract; nothing runs resident and nothing is prod-wired.
 - `flue-zoe-telegram/` — Flue Telegram channel: long-poll bot bridged to zoe-data's
   `/api/chat` (NOT a Flue LLM agent; `src/agents/zoe.ts` is a build-only placeholder
   and registers no model provider — never points at the voice brain on `:11434`).

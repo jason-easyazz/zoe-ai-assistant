@@ -283,6 +283,7 @@ class _FakeSvc:
     def __init__(self, search_rows=None):
         self.ingested: list[tuple[str, dict]] = []
         self.archived: list[str] = []
+        self.reviewed: list[tuple[str, dict]] = []
         self._search_rows = search_rows or []
 
     async def ingest(self, text, **kw):
@@ -295,7 +296,12 @@ class _FakeSvc:
         return self._search_rows
 
     async def review(self, mem_id, **kw):
+        # Mirror MemoryService.review: record the call and return the new ref
+        # (the supersede path treats a None return as failure and falls back
+        # to a plain ingest).
+        self.reviewed.append((mem_id, kw))
         self.archived.append(mem_id)
+        return _Row("new", kw.get("edits") or "")
 
 
 class _Row:
@@ -330,7 +336,11 @@ def test_store_fact_rejects_meta_rambling(patched):
 def test_store_fact_stores_real_fact(patched):
     svc, recalled = patched
     out = _run(expert_dispatch.store_fact("people", "my dad's name is Neil", "jason"))
-    assert [t for t, _ in svc.ingested] == ["my dad's name is Neil"]
+    # The extractor-first path (#1242/#1264) stores the canonical template form,
+    # not the raw utterance; the payload must survive.
+    stored = [t for t, _ in svc.ingested]
+    assert stored, "fact was not stored"
+    assert any("neil" in t.lower() and "dad" in t.lower() for t in stored), stored
     assert out and out.startswith("Got it")
 
 
@@ -338,12 +348,17 @@ def test_store_fact_supersedes_existing_same_attribute(monkeypatch):
     svc = _FakeSvc(search_rows=[_Row("old", "my dad's name is Neil")])
     monkeypatch.setattr(memory_service, "get_memory_service", lambda: svc)
     out = _run(expert_dispatch.store_fact("people", "my dad's name is spelt N-E-I-L", "jason"))
-    # New value stored with a supersedes link, old row archived (not duplicated).
-    assert len(svc.ingested) == 1
-    text, kw = svc.ingested[0]
-    assert text == "my dad's name is spelt N-E-I-L"
-    assert (kw.get("metadata") or {}).get("supersedes") == "old"
-    assert svc.archived == ["old"]
+    # Supersession since QA F2/F9 (#1260/#1280): the shared reconcile classifies
+    # UPDATE and the stale row is superseded IN PLACE via review(decision="edit")
+    # — no duplicate row is stacked and no metadata.supersedes link is written.
+    assert svc.reviewed, "existing same-attribute row was not superseded"
+    target, kw = svc.reviewed[0]
+    assert target == "old"
+    assert kw.get("decision") == "edit"
+    assert "n-e-i-l" in (kw.get("edits") or "").lower()
+    # The superseding edit replaces the row — a plain ingest of the same fact
+    # must not ALSO run (that would be the pre-F2 duplicate-stacking bug).
+    assert not any("n-e-i-l" in t.lower() for t, _ in svc.ingested), svc.ingested
     assert out and out.startswith("Got it")
 
 
@@ -409,3 +424,55 @@ def test_mempalace_add_stores_real_fact(monkeypatch):
     ok = _run(zoe_agent._mempalace_add("My mum's name is Janice", "jason"))
     assert ok is True
     assert [t for t, _ in svc.ingested] == ["My mum's name is Janice"]
+
+
+def test_guard_allows_supersede_of_name_value_rows():
+    """Residual QA F2: 'Neil' in "my dad's name is Neil" is the attribute VALUE,
+    not a third person the row is about — a titleless correction to the same
+    user-anchored attribute must reach classification (and supersede)."""
+    from memory_quality import guard_existing_by_entity, classify_against_existing
+    existing = [("old", "my dad's name is Neil")]
+    for cand in (
+        "my dad's name is Kevin",
+        "my dad's name is spelt N-E-I-L",
+        "User's dad is named spelt N-E-I-L",
+    ):
+        kept = guard_existing_by_entity(cand, existing, None)
+        assert kept == existing, f"{cand!r} was wrongly guarded away"
+        assert classify_against_existing(cand, kept) == ("update", "old")
+    # Multi-word values: EVERY word of the value is excluded, or the trailing
+    # words would keep the row guarded.
+    multi = [("old", "my dad's name is Van Morrison")]
+    assert guard_existing_by_entity("my dad's name is Kevin", multi, None) == multi
+    # Punctuated values (hyphen/apostrophe) — every letter-run is excluded.
+    for row in ("User's sister is named Mary-Jane", "User's dad is named D'Arcy Smith"):
+        ex = [("old", row)]
+        cand = "my sister's name is Kim" if "sister" in row else "my dad's name is Kevin"
+        assert guard_existing_by_entity(cand, ex, None) == ex, row
+    # Bare kinship-relation facts: the name is the VALUE of a singular
+    # user-anchored relation ("User's wife is Sarah") — a same-relation
+    # correction must reach classification. "friend" is deliberately NOT a
+    # relation value (users have many friends; "friend is Jessica" names WHO
+    # the row is about).
+    wife = [("old", "User's wife is Sarah")]
+    assert guard_existing_by_entity("my wife is Emma", wife, None) == wife
+    assert guard_existing_by_entity(
+        "my friend is Emma", [("f", "User's friend is Jessica")], None) == []
+
+
+def test_guard_still_protects_third_person_rows():
+    """The name-value exclusion must not weaken namesake / third-person
+    protection: rows ABOUT someone (possessive subject or repeated mention)
+    stay guarded from unrelated titleless candidates."""
+    from memory_quality import guard_existing_by_entity
+    assert guard_existing_by_entity(
+        "my friend Jessica's birthday is March 25",
+        [("k", "Karen's birthday is January first")], None) == []
+    assert guard_existing_by_entity(
+        "allergic to shellfish",
+        [("c", "Caitlin Farrell: allergic to nuts")], None) == []
+    # Subject of a name fact is still protected ("Jessica's name is Neil" is
+    # ABOUT Jessica even though Neil is a value).
+    assert guard_existing_by_entity(
+        "my dad's name is Kevin",
+        [("j", "Jessica's name is Neil")], None) == []
