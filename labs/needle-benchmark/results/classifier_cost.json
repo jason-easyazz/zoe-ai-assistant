@@ -1,0 +1,22 @@
+{
+ "tier0_regex_ms": {
+  "p50": 0.18,
+  "p90": 0.3
+ },
+ "tier1_embed_ms": {
+  "p50": 60.49,
+  "p90": 81.99
+ },
+ "tier05_llm_ms": {
+  "p50": 67.21,
+  "p90": 77.43,
+  "n": 8,
+  "non_null": 0,
+  "note": "live llama-server :11434 JSON completion"
+ },
+ "pi_governor_declared": {
+  "timeout_s": 4.0,
+  "max_words": 32,
+  "note": "pi_intent_classifier subprocess governor \u2014 NOT timed live (RAM); values read from code (PI_INTENT_DEFAULT_TIMEOUT_S)"
+ }
+}
