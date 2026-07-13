@@ -2951,6 +2951,15 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             # Fail closed: guests have no memory store and must not be able to
             # trigger archive sweeps.
             return "I don't keep memories in guest sessions, so there's nothing for me to forget."
+        # Tombstone FIRST — before the lookup — so every exit path is covered:
+        # a forget typed before the async extractor has even written the row
+        # ("no matches") is exactly the in-flight race the tombstone exists
+        # for (Greptile P1). Best-effort; an explicit re-teach clears it.
+        try:
+            from memory_tombstones import add as _tombstone_add
+            _tombstone_add(user_id, name)
+        except Exception as exc:
+            logger.warning("memory_forget_entity: tombstone failed (%s)", type(exc).__name__)
         try:
             svc = get_memory_service()
             # Semantic search surfaces the ranked rows; the approved list makes
@@ -3108,6 +3117,14 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             # ingest silently drops on PII reject / dedup / opt-out. Don't claim
             # a durable write the store didn't actually make.
             return "I couldn't save that just now — it may already be stored or contain something I can't keep."
+        # An EXPLICIT teach beats a recent forget — but only clear the shadow
+        # AFTER the store succeeded (its source is tombstone-exempt), or a
+        # failed/rejected store would silently drop the protection (Greptile P1).
+        try:
+            from memory_tombstones import clear_matching as _tomb_clear
+            _tomb_clear(user_id, text)
+        except Exception:
+            pass
         return "Got it — I'll remember that."
 
     # ── A2A Federation Status ──────────────────────────────────────────────────
