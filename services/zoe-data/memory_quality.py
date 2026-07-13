@@ -792,7 +792,12 @@ async def reconcile_for_ingest(
         existing = guard_existing_by_entity(text, existing, title)
         return classify_against_existing(text, existing)
     except Exception as exc:
-        logger.warning("reconcile_for_ingest unavailable (%s) — plain add", exc)
+        # Exception type only — backend errors can embed the query (which is
+        # the raw candidate memory text) in the exception message.
+        logger.warning(
+            "reconcile_for_ingest unavailable (%s) — plain add",
+            type(exc).__name__,
+        )
         return "add", None
 
 
