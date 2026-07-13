@@ -203,3 +203,37 @@ async def test_stitch_reply_out_of_vocab_temp_falls_back(monkeypatch):
     monkeypatch.setenv("ZOE_VOICE_STITCH_ENABLED", "1")
     async def _n(t): return None
     assert await vs.stitch_reply("It's 140 degrees and clear in Geraldton", _n) is None
+
+
+# ── real live reply formats (plan-finish: stitch must fire on genuine turns) ──
+
+@pytest.mark.asyncio
+async def test_stitch_reply_real_weather_with_feels_like(monkeypatch):
+    """The ACTUAL live weather reply shape — with a feels-like tail — must stitch
+    (panel e2e previously fell back: decimals + unknown tail)."""
+    monkeypatch.setenv("ZOE_VOICE_STITCH_ENABLED", "1")
+    synth_calls = []
+    async def synth(t):
+        synth_calls.append(t)
+        return _wav(300)
+    out = await vs.stitch_reply(
+        "It's 17 degrees and clear sky in Geraldton, and it feels like 8 degrees.", synth
+    )
+    assert out is not None
+    assert "and it feels like eight degrees" in synth_calls
+
+
+@pytest.mark.asyncio
+async def test_stitch_reply_time_it_is_variant(monkeypatch):
+    monkeypatch.setenv("ZOE_VOICE_STITCH_ENABLED", "1")
+    async def synth(t): return _wav(300)
+    assert await vs.stitch_reply("It is 11:58 AM.", synth) is not None
+
+
+@pytest.mark.asyncio
+async def test_stitch_reply_out_of_vocab_feels_like_falls_back(monkeypatch):
+    monkeypatch.setenv("ZOE_VOICE_STITCH_ENABLED", "1")
+    async def synth(t): return _wav(300)
+    assert await vs.stitch_reply(
+        "It's 17 degrees and clear in Geraldton, and it feels like 999 degrees.", synth
+    ) is None
