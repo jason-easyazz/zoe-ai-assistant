@@ -110,8 +110,11 @@ refuses to start under 2 GB `MemAvailable`, aborts mid-run under 600 MB.
 ## Eval (held-out 81-case corpus, :11435)
 
 ```
-python3 labs/functiongemma-finetune/run_eval.py --gguf <path> --variant plain   --tag plain-q8-cpu
-python3 labs/functiongemma-finetune/run_eval.py --gguf <path> --variant functok --tag functok-q8-cpu
+# LLAMA_SERVER defaults to this box's llama.cpp build; set it explicitly off-box
+LLAMA_SERVER=<path-to-llama-server> \
+  python3 labs/functiongemma-finetune/run_eval.py --gguf <path> --variant plain   --tag plain-q8-cpu
+LLAMA_SERVER=<path-to-llama-server> \
+  python3 labs/functiongemma-finetune/run_eval.py --gguf <path> --variant functok --tag functok-q8-cpu
 ```
 
 Same discipline as the feasibility harness: 2 GB memory gate, port-free +
