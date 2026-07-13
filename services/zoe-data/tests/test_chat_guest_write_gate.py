@@ -21,6 +21,7 @@ from intent_router import Intent, execute_intent
     ("memory_remember", {"fact": "x"}),
     ("journal_streak", {}),
     ("journal_prompt", {}),
+    ("memory_store", {"fact": "x"}),
 ])
 @pytest.mark.parametrize("guest", ["guest", "", "voice-guest", "guest-abc123"])
 async def test_guest_identities_are_gated(name, slots, guest):
