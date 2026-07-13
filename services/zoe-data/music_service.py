@@ -292,10 +292,16 @@ async def transfer(target_player_id: str, source_player_id: str = "") -> bool:
     return True
 
 
-async def search_and_play(query: str, player_id: str = "") -> Optional[dict[str, Any]]:
+async def search_and_play(query: str, player_id: str = "",
+                          radio_mode: bool = False) -> Optional[dict[str, Any]]:
     """Search MA and play the top hit on the target player. Returns the matched
     item {name, media_type} or None. Local-first: searches all configured
-    providers (builtin/radio/local files work with no account)."""
+    providers (builtin/radio/local files work with no account).
+
+    `radio_mode=True` asks MA to seed an endless station of similar tracks from
+    the hit ("play <artist> radio") instead of just the item itself. Requires a
+    provider with SIMILAR_TRACKS (e.g. ytmusic); default False keeps existing
+    callers' behaviour unchanged."""
     players = await get_players()
     player = _pick_player(players, player_id)
     if player is None:
@@ -316,7 +322,7 @@ async def search_and_play(query: str, player_id: str = "") -> Optional[dict[str,
     uri = hit.get("uri")
     if not uri:
         return None
-    await _ma("player_queues/play_media", queue_id=pid, media=uri, option="replace", radio_mode=False)
+    await _ma("player_queues/play_media", queue_id=pid, media=uri, option="replace", radio_mode=radio_mode)
     return {"name": hit.get("name", query), "artist": (hit.get("artists") or [{}])[0].get("name", "") if hit.get("artists") else ""}
 
 
@@ -412,13 +418,16 @@ async def search(query: str, media_types: Optional[list[str]] = None,
     return {"available": any_hit, "query": query, "results": results}
 
 
-async def play_media(uri: str, player_id: str = "") -> dict[str, Any]:
+async def play_media(uri: str, player_id: str = "",
+                     radio_mode: bool = False) -> dict[str, Any]:
     """Play a specific media URI (from `search`) on a chosen speaker.
 
     In MA the queue id *is* the player id. An explicit player_id must match a
     real player (so a stale id fails loudly instead of playing on the wrong
     speaker); with no id we fall back to the active/first powered player.
-    Best-effort — never raises."""
+    `radio_mode=True` seeds an endless station of similar tracks from the item
+    (default False — no change for existing callers). Best-effort — never
+    raises."""
     uri = (uri or "").strip()
     if not uri:
         return {"ok": False, "reason": "empty uri"}
@@ -439,12 +448,67 @@ async def play_media(uri: str, player_id: str = "") -> dict[str, Any]:
     # does real work synchronously (resolve the stream, start the speaker) and
     # returns 200 in ~6s+, so it needs a longer timeout than the read helpers.
     if not await _ma_ok("player_queues/play_media", timeout_s=20.0, queue_id=pid,
-                        media=uri, option="replace", radio_mode=False):
+                        media=uri, option="replace", radio_mode=radio_mode):
         return {"ok": False, "reason": "playback failed"}
     return {
         "ok": True, "uri": uri, "player_id": pid,
         "player_name": player.get("display_name") or player.get("name") or "",
     }
+
+
+async def set_dont_stop_the_music(enabled: bool, player_id: str = "") -> bool:
+    """Toggle MA's "Don't stop the music" on the target queue: when the queue
+    runs out, MA auto-continues with similar tracks (needs a SIMILAR_TRACKS
+    provider, e.g. ytmusic — MA rejects the enable otherwise → False).
+    Best-effort — never raises."""
+    players = await get_players()
+    player = _pick_player(players, player_id)
+    if player is None:
+        return False
+    pid = player.get("player_id", "")
+    if not pid:
+        return False
+    return await _ma_ok("player_queues/dont_stop_the_music", queue_id=pid,
+                        dont_stop_the_music_enabled=bool(enabled))
+
+
+async def get_recommendations() -> dict[str, Any]:
+    """MA's native recommendation shelves ("Listen again", "Mixed for you", …)
+    from providers with RECOMMENDATIONS, normalized to the flat search-hit shape
+    the touch page already renders. Best-effort — never raises."""
+    folders = await _ma("music/recommendations")
+    out: list[dict[str, Any]] = []
+    for f in folders if isinstance(folders, list) else []:
+        if not isinstance(f, dict):
+            continue
+        items = []
+        for raw in (f.get("items") or []):
+            norm = _normalize_hit(raw, str((raw or {}).get("media_type") or "track") if isinstance(raw, dict) else "track")
+            if norm:
+                items.append(norm)
+        if items:
+            out.append({"name": f.get("name") or "", "items": items})
+    return {"available": bool(out), "folders": out}
+
+
+async def get_recently_played(limit: int = 10,
+                              media_types: Optional[list[str]] = None) -> dict[str, Any]:
+    """The household's recently played items from MA's real play history,
+    normalized to the flat search-hit shape. Best-effort — never raises."""
+    try:
+        limit = max(1, min(int(limit), 50))
+    except (TypeError, ValueError):
+        limit = 10
+    args: dict[str, Any] = {"limit": limit}
+    if media_types:
+        args["media_types"] = media_types
+    raw = await _ma("music/recently_played_items", **args)
+    items = []
+    for it in _as_list(raw):
+        norm = _normalize_hit(it, str(it.get("media_type") or "track"))
+        if norm:
+            items.append(norm)
+    return {"available": bool(items), "items": items}
 
 
 # ── Skybridge card + resolver ────────────────────────────────────────────────
@@ -554,12 +618,26 @@ async def resolve_music(intent: Any) -> dict[str, Any]:
         return _result(f"Moved the music to {tname}.", now_playing_card(np), "transfer")
 
     if action == "play" and query:
-        hit = await search_and_play(query)
+        radio_mode = bool(getattr(intent, "radio_mode", False))
+        hit = await search_and_play(query, radio_mode=radio_mode)
         if hit:
             np = await now_playing() or {}
-            spoken = f"Playing {hit['name']}." if hit.get("name") else "Playing that now."
+            name = hit.get("name")
+            spoken = (f"Playing {name} radio." if name and radio_mode
+                      else f"Playing {name}." if name else "Playing that now.")
             return _result(spoken, now_playing_card(np or {"state": "playing", "title": hit["name"], "artist": hit.get("artist", "")}), "play")
         return _result("I couldn't find that to play.", _browse_card(), "play")
+
+    if action == "dont_stop":
+        # "keep the music going" / "don't stop the music" / "play something like
+        # this" — MA auto-continues the queue with similar tracks when it runs out.
+        np0 = await now_playing()
+        if np0 is None:
+            return _result("There's no music playing right now.", _browse_card(), action)
+        if not await set_dont_stop_the_music(True):
+            return _result("I couldn't turn that on — it needs a music service that can find similar songs.",
+                           now_playing_card(np0), action)
+        return _result("I'll keep the music going with similar songs.", now_playing_card(np0), action)
 
     if action in ("pause", "resume", "play_pause", "next", "previous", "stop", "volume_up", "volume_down"):
         np0 = await now_playing()

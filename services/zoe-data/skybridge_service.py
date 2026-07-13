@@ -47,6 +47,7 @@ class SkybridgeIntent:
     duration_seconds: int = 0
     completed: bool | None = None
     entity_id: str = ""  # exact HA entity a smart_home TILE tap targets (never fuzzy)
+    radio_mode: bool = False  # music/play: "play <x> radio" → MA endless station
 
 
 # ── Timers ───────────────────────────────────────────────────────────────────
@@ -1285,6 +1286,14 @@ def _classify_music(text: str) -> "SkybridgeIntent | None":
     m = re.search(r"\b(?:move|switch|send|transfer|cast|play)\s+(?:the\s+|my\s+)?(?:music|song|playback|it|this)\s+(?:over\s+)?(?:to|in|on)\s+(?:the\s+)?(.+?)\s*$", text)
     if m:
         return SkybridgeIntent(domain="music", action="transfer", query=m.group(1).strip())
+    # "Don't stop the music": MA auto-continues the queue with similar tracks.
+    # Checked BEFORE transport so "don't stop the music" isn't read as a stop.
+    # Only clearly-continuation phrasings — everything else stays untouched.
+    if re.search(r"\b(?:keep\s+(?:the\s+)?music\s+(?:going|playing|on)"
+                 r"|don'?t\s+stop\s+the\s+music"
+                 r"|play\s+(?:something|songs?|more|music)\s+like\s+(?:this|that)"
+                 r"|(?:play\s+)?more\s+(?:songs?|music|tracks?)\s+like\s+(?:this|that))\b", text):
+        return SkybridgeIntent(domain="music", action="dont_stop")
     has_ctx = bool(_MUSIC_CTX.search(text))
     # Transport / volume — only with clear music context so bare "pause"/"next"
     # (which could be timers, reading, etc.) don't get hijacked.
@@ -1303,6 +1312,14 @@ def _classify_music(text: str) -> "SkybridgeIntent | None":
             return SkybridgeIntent(domain="music", action="volume_up")
         if re.search(r"\b(down|quieter|lower|softer|turn it down)\b", text):
             return SkybridgeIntent(domain="music", action="volume_down")
+    # Radio mode: "play <artist/track> radio" / "start <x> radio" → MA seeds an
+    # endless station of similar tracks from the seed. Bare "play radio" /
+    # "play the radio" (no seed) falls through to the normal play/search path.
+    m = re.search(r"\b(?:play|put on|start)\s+(?:some\s+|the\s+|a\s+)?(.+?)\s+radio\s*$", text)
+    if m:
+        seed = m.group(1).strip()
+        if seed and seed not in ("the", "some", "a", "my"):
+            return SkybridgeIntent(domain="music", action="play", query=seed, radio_mode=True)
     # Play X — "play some jazz", "put on the beatles", "play the news".
     m = re.search(r"\b(?:play|put on|start playing|listen to)\s+(?:some\s+|the\s+|a\s+)?(.+?)\s*$", text)
     if m and (has_ctx or re.search(r"\b(play|put on|listen to)\b", text)):

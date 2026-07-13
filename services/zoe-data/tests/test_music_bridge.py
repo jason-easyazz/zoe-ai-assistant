@@ -99,7 +99,7 @@ async def test_pause_calls_control(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_play_searches_and_plays(monkeypatch):
-    async def fake_sp(query, player_id=""): return {"name": "Blue in Green", "artist": "Miles Davis"}
+    async def fake_sp(query, player_id="", radio_mode=False): return {"name": "Blue in Green", "artist": "Miles Davis"}
     async def fake_np(pid=""): return {"state": "playing", "title": "Blue in Green", "artist": "Miles Davis"}
     monkeypatch.setattr(music_service, "search_and_play", fake_sp)
     monkeypatch.setattr(music_service, "now_playing", fake_np)
@@ -262,7 +262,7 @@ async def test_search_and_play_media_endpoints_delegate(monkeypatch):
     assert r["query"] == "jazz" and r["_types"] == ["track", "album"] and r["_limit"] == 5
 
     played = {}
-    async def fake_play(uri, player_id=""):
+    async def fake_play(uri, player_id="", radio_mode=False):
         played["uri"] = uri; played["pid"] = player_id; return {"ok": True, "player_id": player_id}
     monkeypatch.setattr(music_service, "play_media", fake_play)
     ok = await music_router.music_play_media({"uri": "ytmusic://track/1", "player_id": "bedroom"})
@@ -639,3 +639,221 @@ async def test_oauth_start_returns_failed_when_no_url(monkeypatch):
     tok = music_setup.mint("spotify")["token"]
     r = await ms.oauth_start({"token": tok, "provider": "spotify"})
     assert r["ok"] is False and "timed out" in (r.get("reason") or "")
+
+
+# ── Radio mode + Don't stop the music + discovery (MA-native) ────────────────
+
+@pytest.mark.parametrize("q,query", [
+    ("play miles davis radio", "miles davis"),
+    ("play some coldplay radio", "coldplay"),
+    ("start beatles radio", "beatles"),
+])
+def test_radio_mode_classifies_play_with_seed(q, query):
+    i = classify_skybridge_intent(q, None)
+    assert i is not None and (i.domain, i.action) == ("music", "play"), q
+    assert i.query == query and i.radio_mode is True, q
+
+
+def test_bare_play_radio_is_not_radio_mode():
+    # No seed → normal search path ("play the radio" finds a station), not radio_mode.
+    i = classify_skybridge_intent("play the radio", None)
+    assert i is not None and i.domain == "music" and i.radio_mode is False
+
+
+@pytest.mark.parametrize("q", [
+    "keep the music going",
+    "don't stop the music",
+    "play something like this",
+    "play more songs like this",
+])
+def test_dont_stop_phrasings(q):
+    i = classify_skybridge_intent(q, None)
+    assert i is not None and (i.domain, i.action) == ("music", "dont_stop"), q
+
+
+def test_stop_the_music_still_stops():
+    i = classify_skybridge_intent("stop the music", None)
+    assert i is not None and (i.domain, i.action) == ("music", "stop")
+
+
+def test_plain_play_keeps_radio_mode_off():
+    i = classify_skybridge_intent("play some jazz", None)
+    assert i is not None and i.action == "play" and i.radio_mode is False
+
+
+@pytest.mark.asyncio
+async def test_search_and_play_passes_radio_mode(monkeypatch):
+    async def players():
+        return [{"player_id": "p1", "available": True, "powered": True}]
+    calls = []
+    async def fake_ma(command, **args):
+        if command == "music/search":
+            return {"tracks": [{"name": "So What", "uri": "ytmusic://track/1",
+                                "artists": [{"name": "Miles Davis"}]}]}
+        calls.append((command, args)); return {}
+    monkeypatch.setattr(music_service, "get_players", players)
+    monkeypatch.setattr(music_service, "_ma", fake_ma)
+    hit = await music_service.search_and_play("miles davis", radio_mode=True)
+    assert hit is not None
+    assert calls == [("player_queues/play_media",
+                      {"queue_id": "p1", "media": "ytmusic://track/1",
+                       "option": "replace", "radio_mode": True})]
+
+
+@pytest.mark.asyncio
+async def test_resolve_radio_play_speaks_radio(monkeypatch):
+    seen = {}
+    async def fake_sp(query, player_id="", radio_mode=False):
+        seen["radio"] = radio_mode; return {"name": "Miles Davis", "artist": ""}
+    async def fake_np(pid=""): return {"state": "playing", "title": "So What"}
+    monkeypatch.setattr(music_service, "search_and_play", fake_sp)
+    monkeypatch.setattr(music_service, "now_playing", fake_np)
+
+    class _RadioIntent(_Intent):
+        radio_mode = True
+    r = await music_service.resolve_music(_RadioIntent("play", "miles davis"))
+    assert seen["radio"] is True and "radio" in r["spoken_summary"].lower()
+
+
+@pytest.mark.asyncio
+async def test_play_media_passes_radio_mode(monkeypatch):
+    async def players():
+        return [{"player_id": "p1", "available": True, "powered": True}]
+    calls = []
+    async def fake_ok(command, timeout_s=None, **args):
+        calls.append(args.get("radio_mode")); return True
+    monkeypatch.setattr(music_service, "get_players", players)
+    monkeypatch.setattr(music_service, "_ma_ok", fake_ok)
+    r = await music_service.play_media("ytmusic://track/1", radio_mode=True)
+    assert r["ok"] is True and calls == [True]
+
+
+@pytest.mark.asyncio
+async def test_dont_stop_toggle_dispatches(monkeypatch):
+    async def players():
+        return [{"player_id": "p1", "playback_state": "playing", "available": True, "powered": True}]
+    calls = []
+    async def fake_ok(command, timeout_s=None, **args):
+        calls.append((command, args)); return True
+    monkeypatch.setattr(music_service, "get_players", players)
+    monkeypatch.setattr(music_service, "_ma_ok", fake_ok)
+    assert await music_service.set_dont_stop_the_music(True) is True
+    assert calls == [("player_queues/dont_stop_the_music",
+                      {"queue_id": "p1", "dont_stop_the_music_enabled": True})]
+
+
+@pytest.mark.asyncio
+async def test_dont_stop_guards_no_player(monkeypatch):
+    async def no_players(): return []
+    monkeypatch.setattr(music_service, "get_players", no_players)
+    assert await music_service.set_dont_stop_the_music(True) is False
+
+
+@pytest.mark.asyncio
+async def test_resolve_dont_stop(monkeypatch):
+    async def fake_np(pid=""): return {"state": "playing", "title": "X", "player_id": "p1"}
+    monkeypatch.setattr(music_service, "now_playing", fake_np)
+    flips = []
+    async def fake_toggle(enabled, player_id=""):
+        flips.append(enabled); return True
+    monkeypatch.setattr(music_service, "set_dont_stop_the_music", fake_toggle)
+    r = await music_service.resolve_music(_Intent("dont_stop"))
+    assert flips == [True] and "keep the music going" in r["spoken_summary"].lower()
+    # MA rejects (no SIMILAR_TRACKS provider) → honest message, not a fake ok.
+    async def fake_reject(enabled, player_id=""): return False
+    monkeypatch.setattr(music_service, "set_dont_stop_the_music", fake_reject)
+    r2 = await music_service.resolve_music(_Intent("dont_stop"))
+    assert "couldn't" in r2["spoken_summary"].lower()
+
+
+@pytest.mark.asyncio
+async def test_resolve_dont_stop_nothing_playing(monkeypatch):
+    async def none_np(pid=""): return None
+    monkeypatch.setattr(music_service, "now_playing", none_np)
+    async def boom(enabled, player_id=""):
+        raise AssertionError("must not toggle with nothing playing")
+    monkeypatch.setattr(music_service, "set_dont_stop_the_music", boom)
+    r = await music_service.resolve_music(_Intent("dont_stop"))
+    assert "no music playing" in r["spoken_summary"].lower()
+
+
+@pytest.mark.asyncio
+async def test_recommendations_normalized(monkeypatch):
+    async def fake_ma(command, **args):
+        assert command == "music/recommendations"
+        return [
+            {"name": "Listen again", "items": [
+                {"name": "Yellow", "uri": "ytmusic://track/1", "media_type": "track",
+                 "artists": [{"name": "Coldplay"}]},
+                {"name": "No URI"},  # unplayable → dropped
+            ]},
+            {"name": "Empty shelf", "items": []},  # empty folder → dropped
+        ]
+    monkeypatch.setattr(music_service, "_ma", fake_ma)
+    r = await music_service.get_recommendations()
+    assert r["available"] is True and len(r["folders"]) == 1
+    folder = r["folders"][0]
+    assert folder["name"] == "Listen again"
+    assert [i["name"] for i in folder["items"]] == ["Yellow"]
+    assert folder["items"][0]["artist"] == "Coldplay"
+
+
+@pytest.mark.asyncio
+async def test_recommendations_unavailable_when_ma_down(monkeypatch):
+    async def dead(command, **args): return None
+    monkeypatch.setattr(music_service, "_ma", dead)
+    r = await music_service.get_recommendations()
+    assert r == {"available": False, "folders": []}
+
+
+@pytest.mark.asyncio
+async def test_recently_played_normalized_and_clamped(monkeypatch):
+    seen = {}
+    async def fake_ma(command, **args):
+        assert command == "music/recently_played_items"
+        seen.update(args)
+        return [{"name": "So What", "uri": "ytmusic://track/2", "media_type": "track",
+                 "artists": [{"name": "Miles Davis"}]}]
+    monkeypatch.setattr(music_service, "_ma", fake_ma)
+    r = await music_service.get_recently_played(limit=999, media_types=["track"])
+    assert seen == {"limit": 50, "media_types": ["track"]}  # clamped
+    assert r["available"] is True and r["items"][0]["name"] == "So What"
+
+
+@pytest.mark.asyncio
+async def test_discovery_endpoints_delegate(monkeypatch):
+    from routers import music as music_router
+    async def fake_recs():
+        return {"available": True, "folders": [{"name": "Mixed for you", "items": []}]}
+    monkeypatch.setattr(music_service, "get_recommendations", fake_recs)
+    r = await music_router.music_recommendations()
+    assert r["folders"][0]["name"] == "Mixed for you"
+
+    seen = {}
+    async def fake_recent(limit=10, media_types=None):
+        seen["limit"] = limit; seen["types"] = media_types
+        return {"available": True, "items": []}
+    monkeypatch.setattr(music_service, "get_recently_played", fake_recent)
+    r2 = await music_router.music_recently_played(limit=5, types="track,album")
+    assert r2["available"] is True and seen == {"limit": 5, "types": ["track", "album"]}
+
+    toggles = {}
+    async def fake_toggle(enabled, player_id=""):
+        toggles["enabled"] = enabled; toggles["pid"] = player_id; return True
+    monkeypatch.setattr(music_service, "set_dont_stop_the_music", fake_toggle)
+    r3 = await music_router.music_dont_stop({"enabled": True, "player_id": "p1"})
+    assert r3 == {"ok": True, "enabled": True} and toggles == {"enabled": True, "pid": "p1"}
+
+
+@pytest.mark.asyncio
+async def test_play_endpoint_accepts_radio_flag(monkeypatch):
+    from routers import music as music_router
+    seen = {}
+    async def fake_sp(query, player_id="", radio_mode=False):
+        seen["q"] = query; seen["radio"] = radio_mode
+        return {"name": query}
+    monkeypatch.setattr(music_service, "search_and_play", fake_sp)
+    r = await music_router.music_play({"query": "miles davis", "radio": True})
+    assert r["ok"] is True and seen == {"q": "miles davis", "radio": True}
+    await music_router.music_play({"query": "jazz"})
+    assert seen["radio"] is False  # default unchanged
