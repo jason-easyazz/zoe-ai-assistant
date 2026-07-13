@@ -172,7 +172,7 @@ is the immediate voice/chat writers + the for-prompt packet + the Flue `recall_m
 ### 8.3 Prod-enable — ALREADY DONE 2026-06-24 (reference + rollback/watch only)
 - ⚠️ **The enable below already happened — do NOT perform it again as if fresh.** The flag is on
   in `services/zoe-data/.env` and confirmed in the live process env. Re-running the enable/restart
-  does NOT prove the live capture chain; the open item is the §7 positive-control turn. This bullet
+  does NOT prove the live capture chain (the §7 positive control — CLOSED 2026-07). This bullet
   is retained only to document how the flag is wired and how to re-enable *if it is ever turned off*.
 - The flag is read **per-sweep** (`start_idle_consolidation_loop` re-checks `_enabled()` every
   iteration), so enabling needs no code change and no restart of the loop task itself — but the
