@@ -553,7 +553,10 @@ def _safe_prompt_inline(s: str, cap: int = _PENDING_FIELD_CAP) -> str:
     chars a value could use to fake headings/citations, and cap length. Extracted
     names/relationships are user-derived, so treat them as untrusted."""
     s = re.sub(r"\s+", " ", (s or "")).strip()
-    s = re.sub(r"[#`*_\[\]\n\r]", "", s)
+    # Quotes stripped too: values land INSIDE the quoted 'Ask the user: "…"'
+    # directive, so an embedded quote could close it and inject instructions
+    # (same fix as zoe_flue_client._pending_offer_block's sanitizer).
+    s = re.sub(r"[#`*_\[\]\n\r{}\"'\u2018\u2019\u201c\u201d]", "", s)
     return s[:cap]
 
 
