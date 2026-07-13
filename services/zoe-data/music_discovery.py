@@ -168,9 +168,16 @@ def save_discovery_run(profiles: list[dict[str, Any]]) -> Path:
     RECOMMENDATIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {"generated_at": int(time.time()), "profiles": profiles}
     household = next((p for p in profiles if p.get("user_id") is None), None)
-    if household:
+    if household and household.get("recommendations"):
         payload["seed"] = household.get("seed")
         payload["recommendations"] = household.get("recommendations")
+    else:
+        # Household discovery came back empty this run: keep the last good
+        # household picks at the top level instead of clobbering them.
+        previous = load_recommendations()
+        for key in ("seed", "recommendations"):
+            if previous.get(key):
+                payload[key] = previous[key]
     RECOMMENDATIONS_PATH.write_text(json.dumps(payload, indent=2))
     return RECOMMENDATIONS_PATH
 

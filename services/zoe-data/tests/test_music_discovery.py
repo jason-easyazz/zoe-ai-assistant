@@ -475,3 +475,20 @@ def test_save_discovery_run_mirrors_household(tmp_path, monkeypatch):
     saved = md.load_recommendations()
     assert len(saved["profiles"]) == 2
     assert saved["recommendations"] == [{"artistName": "X"}]  # PR-1 shape kept
+
+
+def test_save_discovery_run_keeps_last_good_household(tmp_path, monkeypatch):
+    monkeypatch.setattr(md, "RECOMMENDATIONS_PATH", tmp_path / "recs.json")
+    md.save_discovery_run([{"user_id": None, "playlist": "Zoe Discovery",
+                            "seed": {"artists": ["A"]},
+                            "recommendations": [{"artistName": "X"}]}])
+    # next run: household empty, personal ok -> top level keeps last good picks
+    md.save_discovery_run([
+        {"user_id": None, "playlist": "Zoe Discovery",
+         "seed": {"artists": []}, "recommendations": []},
+        {"user_id": "jason", "playlist": "Zoe Discovery — Jason",
+         "seed": {"artists": ["B"]}, "recommendations": [{"artistName": "Y"}]},
+    ])
+    saved = md.load_recommendations()
+    assert saved["recommendations"] == [{"artistName": "X"}]
+    assert len(saved["profiles"]) == 2
