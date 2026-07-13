@@ -1,0 +1,34 @@
+{
+ "tokenizer": "llama-server /tokenize (Gemma)",
+ "n_tools": 20,
+ "full_block_tokens": 1661,
+ "per_tool_tokens": {
+  "get_time": 54,
+  "recall_memory": 173,
+  "shopping_list_add": 52,
+  "get_weather": 84,
+  "list_reminders": 47,
+  "show_calendar": 54,
+  "show_list": 58,
+  "set_timer": 80,
+  "add_reminder": 67,
+  "add_calendar_event": 87,
+  "create_note": 63,
+  "add_to_list": 87,
+  "list_remove": 70,
+  "note_search": 50,
+  "journal": 85,
+  "people": 87,
+  "media": 152,
+  "home": 79,
+  "remember_fact": 95,
+  "remember_emotional_moment": 155
+ },
+ "shortlist_3_tokens_avg": 252,
+ "shortlist_3_tokens_range": [
+  149,
+  480
+ ],
+ "savings_tokens_avg": 1409,
+ "savings_pct_avg": 84.8
+}

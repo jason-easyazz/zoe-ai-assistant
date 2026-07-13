@@ -82,6 +82,14 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
   discovers `*_gate.py` modules; corpus + adversarial gates today). LAB-only,
   hand-run against the live host, never CI-wired. See
   `flue-zoe-brain/parity/README-GATES.md`.
+- `needle-benchmark/` — LAB benchmark of Cactus Needle (26M single-shot
+  function-calling model, MIT) as a CPU-only tool/intent router in front of the
+  Gemma brain: routing accuracy vs the current Tier-0 regex + Tier-1 embedding
+  routing on a labeled corpus, per-decision CPU latency, pre-brain
+  classifier-chain cost, and tool-prefilter token savings. Hand-run only (venv
+  built OUTSIDE the repo by `setup.sh`; weights from HF at run time, never
+  committed). README.md carries the four measured numbers + the adopt/reject
+  recommendation. Never wired into the voice path, `fast_tiers`, or CI.
 - `digarr-spike/` — evaluation record for digarr (MIT, Bun/PGlite) as a hidden
   music-discovery engine behind Zoe: verified batch-run config against the local
   Gemma llama-server, footprint numbers, listening-source findings, and the
