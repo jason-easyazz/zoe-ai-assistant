@@ -352,7 +352,71 @@ async def _ingest_to_mempalace(
             logger.debug("person_extractor: dropped non-fact (%s): %r", reason, text[:60])
             return None
         from memory_service import get_memory_service
-        ref = await get_memory_service().ingest(
+        svc = get_memory_service()
+        # Cross-writer reconciliation (QA review F9): this path used to blind-ADD,
+        # so a re-stated or corrected person fact accumulated near-duplicate /
+        # contradicting rows next to the memory-expert and digest copies. Route
+        # through the shared ADD/UPDATE/SKIP decision (entity-guarded on the
+        # person's name). reconcile_for_ingest never raises — errors → ADD.
+        try:
+            from memory_quality import reconcile_for_ingest
+            op, target_id = await reconcile_for_ingest(
+                svc, text, user_id, title=person_name)
+        except Exception as exc:
+            logger.debug("person_extractor: reconciliation unavailable (%s) — plain ingest", exc)
+            op, target_id = "add", None
+        if op in ("skip", "update") and target_id:
+            # Linkage guard (Greptile P1): the matched row may have come from
+            # another writer (raw voice_fact / digest) and NOT be keyed to this
+            # person — returning/editing it would hand the activity/date/gift
+            # callers a mem_id that person-scoped recall can't see, and edit
+            # preserves the row's old entity link. Only reconcile onto rows
+            # already keyed to THIS person (resolved uuid or same-name pending
+            # slug); anything else falls back to a plain, correctly-linked ADD.
+            try:
+                target = await svc.get(target_id)
+                meta = getattr(target, "metadata", None) or {}
+                slug = f"slug:{person_name.lower().replace(' ', '_')}"
+                acceptable = (
+                    str(meta.get("entity_type") or "") in ("person", "person_pending")
+                    and str(meta.get("entity_id") or "") in {e for e in (entity_id, slug) if e}
+                )
+            except Exception:
+                acceptable = False
+            if not acceptable:
+                op, target_id = "add", None
+        if op == "skip" and target_id:
+            # Existing row is at least as informative — keep it, write nothing.
+            logger.info("person_extractor: dedup-skip kept=%s cand=%r", target_id, text[:60])
+            return target_id
+        if op == "update" and target_id:
+            try:
+                new_ref = await svc.review(
+                    target_id,
+                    decision="edit",
+                    edits=text,
+                    actor=source,
+                    note="person fact supersede (QA F9)",
+                )
+                if new_ref is not None:
+                    logger.info("person_extractor: superseded %s with %r", target_id, text[:60])
+                    # review(edit) keeps the row's old entity link. If this call
+                    # holds a RESOLVED people.id but the matched row is still a
+                    # same-name pending slug, promote it (Greptile P1) —
+                    # relink_entity is metadata-only, per-user-locked, and a
+                    # no-op unless the row is still person_pending. Best-effort:
+                    # a failed relink leaves the pre-existing pending linkage,
+                    # which the idle link-resolver also repairs.
+                    try:
+                        if entity_id and not entity_id.startswith("slug:"):
+                            await svc.relink_entity(
+                                user_id, new_ref.id, "person", entity_id)
+                    except Exception as exc:
+                        logger.debug("person_extractor: relink after supersede failed: %s", exc)
+                    return new_ref.id
+            except Exception as exc:
+                logger.warning("person_extractor: supersede failed (%s) — plain ingest", exc)
+        ref = await svc.ingest(
             text,
             user_id=user_id,
             source=source,
