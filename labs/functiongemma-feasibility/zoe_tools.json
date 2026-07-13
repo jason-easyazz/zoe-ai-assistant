@@ -1,0 +1,251 @@
+[
+ {
+  "name": "get_time",
+  "description": "Get the current time and date. Use when the user asks what time it is, what today's date or day is, or anything that needs the current wall clock.",
+  "parameters": {
+   "query": {
+    "type": "string"
+   }
+  }
+ },
+ {
+  "name": "recall_memory",
+  "description": "Recall what Zoe knows about the user \u2014 their stored name, facts, preferences, relationships, and context. This is your ONLY source of what's actually stored about the user; you do NOT know it on your own. You MUST call this tool BEFORE you ever say you remember, know, or DON'T remember/know anything about the user. Never answer \"I don't remember\", \"I don't have anything stored\", or \"I don't know that about you\" without calling recall_memory first \u2014 calling it is the only way to find out. Use it whenever the user asks what you know/remember about them, their name, their preferences, or whenever personal context would help.",
+  "parameters": {
+   "query": {
+    "type": "string"
+   }
+  }
+ },
+ {
+  "name": "shopping_list_add",
+  "description": "Add an item to the user's shopping list. Use when the user asks to add, put, or note something on their shopping/grocery list.",
+  "parameters": {
+   "item": {
+    "type": "string"
+   }
+  }
+ },
+ {
+  "name": "get_weather",
+  "description": "Get the current weather or a short forecast. Defaults to the user's home area; pass `location` when they name a specific place (\"what's the weather in Perth\"). Use when they ask about weather, temperature, rain, or whether to bring a jacket/umbrella.",
+  "parameters": {
+   "forecast": {
+    "type": "string"
+   },
+   "location": {
+    "type": "string"
+   }
+  }
+ },
+ {
+  "name": "list_reminders",
+  "description": "List the user's reminders. Use when they ask what their reminders are or what they've asked to be reminded about.",
+  "parameters": {
+   "qualifier": {
+    "type": "string"
+   }
+  }
+ },
+ {
+  "name": "show_calendar",
+  "description": "Show what's on the user's calendar. Use when they ask about their schedule or events for today, tomorrow, this week, this month, or upcoming.",
+  "parameters": {
+   "qualifier": {
+    "type": "string"
+   }
+  }
+ },
+ {
+  "name": "show_list",
+  "description": "Show what's on one of the user's lists (shopping, tasks/to-do, personal, work, bucket). Use when they ask what is on a list.",
+  "parameters": {
+   "list_type": {
+    "type": "string"
+   }
+  }
+ },
+ {
+  "name": "set_timer",
+  "description": "Start a countdown timer for a number of minutes, optionally named (\"set a 10 minute timer\", \"3 minute timer for the eggs\"). For short durations from now \u2014 not clock-time reminders (use add_reminder for those).",
+  "parameters": {
+   "minutes": {
+    "type": "string"
+   },
+   "label": {
+    "type": "string"
+   }
+  }
+ },
+ {
+  "name": "add_reminder",
+  "description": "Create a reminder tied to a time or date (\"remind me to take the bins out at 7pm\"). For a plain countdown use set_timer instead.",
+  "parameters": {
+   "title": {
+    "type": "string"
+   },
+   "date": {
+    "type": "string"
+   },
+   "time": {
+    "type": "string"
+   }
+  }
+ },
+ {
+  "name": "add_calendar_event",
+  "description": "Add an event/appointment/meeting to the user's calendar (\"add dentist tomorrow at 3pm\", \"schedule a meeting Friday at 10am\"). For time-based reminders use add_reminder instead.",
+  "parameters": {
+   "title": {
+    "type": "string"
+   },
+   "date": {
+    "type": "string"
+   },
+   "time": {
+    "type": "string"
+   },
+   "category": {
+    "type": "string"
+   }
+  }
+ },
+ {
+  "name": "create_note",
+  "description": "Save a free-form note (\"make a note: pick up dry cleaning Friday\"). For diary/ reflective entries use the journal; for time-based prompts use add_reminder.",
+  "parameters": {
+   "content": {
+    "type": "string"
+   },
+   "title": {
+    "type": "string"
+   }
+  }
+ },
+ {
+  "name": "add_to_list",
+  "description": "Add an item to one of the user's lists: shopping, tasks/to-do, personal, work, or bucket. Use when they ask to add or put something on a specific list (\"add gym to my tasks list\", \"put Japan on my bucket list\").",
+  "parameters": {
+   "item": {
+    "type": "string"
+   },
+   "list_type": {
+    "type": "string"
+   }
+  }
+ },
+ {
+  "name": "list_remove",
+  "description": "Remove an item from one of the user's lists (shopping, tasks/to-do, personal, work, bucket). Use when they ask to remove, delete, or cross something off a list.",
+  "parameters": {
+   "item": {
+    "type": "string"
+   },
+   "list_type": {
+    "type": "string"
+   }
+  }
+ },
+ {
+  "name": "note_search",
+  "description": "Search the user's saved notes by keyword or topic (\"find my note about the wifi password\"). For saving a new note use create_note.",
+  "parameters": {
+   "query": {
+    "type": "string"
+   }
+  }
+ },
+ {
+  "name": "journal",
+  "description": "The user's journal/diary. action=create writes a journal entry; action=prompt suggests journaling prompts; action=streak reports their journaling streak. Reflective diary entries \u2014 NOT free-form notes (use create_note for those).",
+  "parameters": {
+   "action": {
+    "type": "string"
+   },
+   "content": {
+    "type": "string"
+   },
+   "mood": {
+    "type": "string"
+   }
+  }
+ },
+ {
+  "name": "people",
+  "description": "The user's people/contacts memory. action=create saves a new person (name + relationship); action=search looks someone up ('who is Sarah?'). NOT for messaging, calendar, or reminders.",
+  "parameters": {
+   "action": {
+    "type": "string"
+   },
+   "name": {
+    "type": "string"
+   },
+   "relationship": {
+    "type": "string"
+   },
+   "query": {
+    "type": "string"
+   },
+   "notes": {
+    "type": "string"
+   }
+  }
+ },
+ {
+  "name": "media",
+  "description": "Control music/audio playback on the home media players. action=play (start a track/artist/genre/playlist), control (pause/resume/stop/next/previous/shuffle/mute/unmute/now_playing), set_music_volume (0-100 on the player), system_volume (Zoe's OWN speaking/TTS volume, NOT the player), setup (connect Spotify/etc.). NOT for smart-home lights \u2014 use the home tool for those.",
+  "parameters": {
+   "action": {
+    "type": "string"
+   },
+   "query": {
+    "type": "string"
+   },
+   "command": {
+    "type": "string"
+   },
+   "level": {
+    "type": "string"
+   },
+   "direction": {
+    "type": "string"
+   }
+  }
+ },
+ {
+  "name": "home",
+  "description": "Control smart-home lights via Home Assistant. action=on|off|dim|brighten, optionally scoped to a room (kitchen/bedroom/living room). Lights only. NOT for music/media volume \u2014 use the media tool for that.",
+  "parameters": {
+   "action": {
+    "type": "string"
+   },
+   "room": {
+    "type": "string"
+   }
+  }
+ },
+ {
+  "name": "remember_fact",
+  "description": "Store a durable fact the user explicitly asks you to remember about them, their life, or their preferences (\"remember that my anniversary is June 3rd\", \"remember I'm allergic to penicillin\"). Use ONLY when the user clearly wants something kept for later \u2014 not for passing chit-chat. To RECALL stored facts use recall_memory instead.",
+  "parameters": {
+   "fact": {
+    "type": "string"
+   }
+  }
+ },
+ {
+  "name": "remember_emotional_moment",
+  "description": "Quietly record a genuinely significant, DURABLE emotional thread about the user \u2014 real stress, grief, joy, a milestone, or a worry they keep returning to (\"Jason has been anxious about the house settlement\"). Store the durable FACT in your own words, NOT their transcript line. Use SPARINGLY \u2014 only for genuine, lasting emotional weight, never passing chit-chat or every feeling; most turns should NOT call this. Never announce that you logged it. To store a plain fact use remember_fact; to recall use recall_memory.",
+  "parameters": {
+   "moment": {
+    "type": "string"
+   },
+   "valence": {
+    "type": "string"
+   },
+   "intensity": {
+    "type": "string"
+   }
+  }
+ }
+]

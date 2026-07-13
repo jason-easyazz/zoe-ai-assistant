@@ -35,25 +35,34 @@ EVENT_PRED = "(user_id = 'guest' OR user_id LIKE 'test-sec-b-%')"
 LIST_OWNER_PRED = "(user_id = 'guest' OR user_id LIKE 'test-sec-b-%')"
 
 # Sibling PostgreSQL tooling reads the same service env file.
-_SERVICE_ENV = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "services", "zoe-data", ".env",
-)
+# Candidate .env locations: this checkout's, then the LIVE checkout's. The CI
+# runner executes from its own workdir (actions-runner/_work/…) which carries
+# no .env — the post-suite sweep silently exited 2 there and the test junk
+# survived (operator's 2026-07-13 dentist-spam recurrence).
+_SERVICE_ENVS = [
+    os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "services", "zoe-data", ".env",
+    ),
+    os.path.expanduser("~/assistant/services/zoe-data/.env"),
+]
 
 
 def _resolve_dsn() -> str:
-    """POSTGRES_URL from the environment, else from the zoe-data service .env."""
+    """POSTGRES_URL from the environment, else from the zoe-data service .env
+    (this checkout's, else the live checkout's)."""
     dsn = os.environ.get("POSTGRES_URL", "")
     if dsn:
         return dsn
-    try:
-        with open(_SERVICE_ENV) as fh:
-            for line in fh:
-                line = line.strip()
-                if line.startswith("POSTGRES_URL="):
-                    return line[len("POSTGRES_URL="):].strip().strip('"').strip("'")
-    except OSError:
-        pass
+    for env_path in _SERVICE_ENVS:
+        try:
+            with open(env_path) as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line.startswith("POSTGRES_URL="):
+                        return line[len("POSTGRES_URL="):].strip().strip('"').strip("'")
+        except OSError:
+            continue
     return ""
 
 
@@ -72,7 +81,7 @@ async def main(execute: bool, assume_yes: bool, expect_db: str, expect_host: str
     if not dsn:
         print(
             "POSTGRES_URL is not set and could not be read from the service .env "
-            f"({_SERVICE_ENV}). Run this on the zoe-data host.",
+            f"({_SERVICE_ENVS}). Run this on the zoe-data host.",
             file=sys.stderr,
         )
         return 2
