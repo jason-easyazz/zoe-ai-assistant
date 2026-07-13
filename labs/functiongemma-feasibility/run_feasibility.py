@@ -190,6 +190,16 @@ def main() -> int:
     small_names = {"get_time", "set_timer", "general_chat"}
     small_tools = [t for t in full_tools if t["function"]["name"] in small_names]
 
+    # refuse to start if something already answers on the port — otherwise the
+    # readiness probe (and the whole benchmark) would hit a foreign server
+    try:
+        urllib.request.urlopen(f"http://127.0.0.1:{args.port}/health", timeout=1)
+        print(f"ABORT: something is already listening on :{args.port}",
+              file=sys.stderr)
+        return 2
+    except Exception:
+        pass
+
     cmd = [
         LLAMA_SERVER, "--model", args.gguf, "--host", "127.0.0.1",
         "--port", str(args.port), "--ctx-size", "4096",
@@ -213,6 +223,10 @@ def main() -> int:
                 break
             except Exception:
                 time.sleep(0.2)
+        else:
+            print("server never became healthy within the polling window",
+                  file=sys.stderr)
+            return 1
         out["cold_load_s"] = round(time.perf_counter() - t0, 2)
         out["rss_mb_after_load"] = rss_mb(proc.pid)
 
