@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 from pathlib import Path
 
@@ -177,8 +178,11 @@ def main() -> None:
     print(f"train {len(ds_train)}  val {len(ds_val)}  max_len {max_len}")
 
     device_ok = torch.cuda.is_available() and not args.cpu
+    if not device_ok:
+        # bf16 matmuls are emulated (pathologically slow) on aarch64 CPU
+        torch.set_num_threads(int(os.environ.get("TRAIN_THREADS", "6")))
     model = AutoModelForCausalLM.from_pretrained(
-        args.model_dir, dtype=torch.bfloat16,
+        args.model_dir, dtype=torch.bfloat16 if device_ok else torch.float32,
         attn_implementation="eager")  # gemma3 recommends eager for training
     model.config.use_cache = False
 
@@ -223,7 +227,8 @@ def main() -> None:
         learning_rate=args.lr, lr_scheduler_type="cosine", warmup_ratio=0.03,
         logging_steps=25, eval_strategy="epoch", save_strategy="no",
         bf16=device_ok, use_cpu=not device_ok,
-        gradient_checkpointing=True, optim="adafactor",
+        gradient_checkpointing=device_ok,  # CPU: recompute overhead, RAM is fine
+        optim="adafactor",
         report_to=[], dataloader_num_workers=0, seed=7,
     )
     trainer = Trainer(model=model, args=targs, train_dataset=ds_train,
