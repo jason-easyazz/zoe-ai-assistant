@@ -223,17 +223,50 @@ def main() -> None:
     targs = TrainingArguments(
         output_dir=str(out), num_train_epochs=args.epochs,
         per_device_train_batch_size=args.batch,
+        per_device_eval_batch_size=args.batch,
         gradient_accumulation_steps=args.accum,
         learning_rate=args.lr, lr_scheduler_type="cosine", warmup_ratio=0.03,
         logging_steps=25, eval_strategy="epoch", save_strategy="no",
         bf16=device_ok, use_cpu=not device_ok,
-        gradient_checkpointing=device_ok,  # CPU: recompute overhead, RAM is fine
+        gradient_checkpointing=(device_ok or args.variant == "plain"),
+        # plain's ~2.3k-token sequences need checkpointing even on CPU —
+        # un-checkpointed activations swap-thrashed the live box (avail 164MB)
         optim="adafactor",
         report_to=[], dataloader_num_workers=0, seed=7,
     )
-    trainer = Trainer(model=model, args=targs, train_dataset=ds_train,
-                      eval_dataset=ds_val, data_collator=collate,
-                      callbacks=[MemGuard()])
+    class WindowedLossTrainer(Trainer):
+        """Computes lm_head logits only over the last `window` positions.
+
+        plain's ~2.3k-token sequences make full-sequence logits explode
+        (batch x seq x 262k vocab fp32 ~ 2.5 GB per example) — but every
+        supervised token sits at the END of the sequence, so a small
+        logits_to_keep window loses nothing. Requires right-padding with
+        window >= pad_delta + target_len (asserted per batch)."""
+
+        def __init__(self, *a, window: int = 96, **kw):
+            super().__init__(*a, **kw)
+            self.window = window
+
+        def compute_loss(self, model, inputs, return_outputs=False,
+                         num_items_in_batch=None):
+            import torch.nn.functional as F
+            labels = inputs.pop("labels")
+            k = min(self.window, labels.shape[1])
+            assert (labels[:, :-k] != -100).sum() == 0, (
+                "supervised token outside logits window — raise --loss-window")
+            out = model(**inputs, logits_to_keep=k)
+            # logits[:, j] predicts the token at position L-k+j+1
+            shift_logits = out.logits[:, :-1, :]
+            shift_labels = labels[:, labels.shape[1] - k + 1:]
+            loss = F.cross_entropy(
+                shift_logits.reshape(-1, shift_logits.size(-1)).float(),
+                shift_labels.reshape(-1), ignore_index=-100)
+            return (loss, out) if return_outputs else loss
+
+    trainer_cls = WindowedLossTrainer if args.variant == "plain" else Trainer
+    trainer = trainer_cls(model=model, args=targs, train_dataset=ds_train,
+                          eval_dataset=ds_val, data_collator=collate,
+                          callbacks=[MemGuard()])
     trainer.train()
 
     out.mkdir(parents=True, exist_ok=True)

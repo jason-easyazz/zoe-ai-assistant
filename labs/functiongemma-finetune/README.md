@@ -10,15 +10,28 @@ held-out eval harness.
 LAB-ONLY: nothing wired into the voice path, `fast_tiers`, `zoe-data`,
 systemd, or CI. Eval runs on **:11435**, never the live brain port.
 
-## STATUS: packet-ready (on-box training blocked by the memory gate)
+## STATUS: functok TRAINED + EVALUATED on-box (CPU); plain leg reduced-scope
 
-Everything is built and the dataset is generated + committed, but on-box
-training could not start within this session: the box's steady-state
-`MemAvailable` sat at ~1.2–1.4 GB (live brain 5.2 GB + two resident Serena
-MCP servers ~3.7 GB), below the **hard 2 GB gate** every script here enforces.
-Per the spike's rules we abort rather than pressure the box. The complete
-off-box packet is below; an opportunistic gated retry may still land a
-checkpoint — if `runs/functok/merged` exists, continue at *Eval*.
+The functok variant was trained **on this box, CPU-only** (nice 19,
+OOM-shielded, 2 GB memory gate enforced throughout; 1 epoch, ~2.4 h at
+~50 s/step) and evaluated on the held-out corpus — headline numbers below.
+The plain variant is CPU-hostile (~2.3k-token prompts ≈ 25× the FLOPs per
+example → ~45 h/epoch full-set), so it runs at reduced scope: a stratified
+414-example subsample (18/tool + 54 chat), 1 epoch, with a windowed-loss
+trainer (`logits_to_keep`) because full-sequence logits alone are
+~2.5 GB fp32 *per example* at a 262k vocab. Off-box packet below remains the
+path to the full-strength A/B (3 epochs, full set, both variants).
+
+On-box engineering record (why things are the way they are):
+- **GPU training is not usable on this box**: even with the brain stopped
+  (~5.9 GB free) both bs2 and bs16 runs died in backward with Jetson NvMap
+  ENOMEM → torch `CUDACachingAllocator.cpp:1131` NVML assert (torch 2.8.0
+  aarch64). Not batch-size-dependent; likely Jetson-specific allocator issue.
+- **bf16 on aarch64 CPU is emulated** and pathologically slow (no step in
+  10 min); fp32 + `TRAIN_THREADS=8` runs ~45–55 s/step (functok, bs8).
+- The first plain attempt (no checkpointing, full logits) swap-thrashed the
+  box to 164 MB available and was killed; gradient checkpointing + the
+  windowed loss fixed it (memory stays >4 GB).
 
 ## The A/B being tested (headline deliverable)
 
@@ -110,8 +123,25 @@ no schema in the prompt (empty output ≡ no-call ≡ chat).
 | stock FunctionGemma Q8 CPU, 3-tool shortlist (16-case subset) | 93.8% | 75.0% | 0.0% |
 | **fine-tuned targets** | **≥85%** | — | ≤12.5% (ideally ~0) |
 
-Fine-tuned results: *pending — fill from `results/<tag>.json` after the
-off-box (or opportunistic on-box) run.*
+### Fine-tuned results (measured, Q8_0 GGUF, CPU `-ngl 0`, :11435)
+
+| config | overall | canonical | paraphrase | chat-FP | prompt toks p50 | p50 | p90 |
+|---|---|---|---|---|---|---|---|
+| **functok, no schema in prompt** (1 epoch CPU) | **74.1%** | 91.2% | 53.8% | **0.0%** | **47** | **360 ms** | 483 ms |
+| plain fine-tuned (reduced-scope leg) | *see results/plain-q8-cpu.json* | | | | | | |
+
+functok highlights vs the reference points:
+- **+40.8 pts over stock full-block** (33.3% → 74.1%) with the 2,235-token
+  schema prompt REMOVED (47 prompt tokens): the Octopus-style functional-token
+  trick works at 270M scale.
+- **Beats the 61.7% live baseline** by 12.4 pts with 0% chat false-positives
+  (baseline: 12.5%) at roughly half the stock full-block latency
+  (360 ms vs 768 ms p50 CPU).
+- **Below the 80.2% SetFit head** (and the ≥85% target) after ONE epoch on
+  1 CPU: the gap is paraphrase (53.8%); failures are mostly paraphrase-style
+  confusions and occasional hallucinated tool names (`get_media`,
+  `shopping_list_query`) — classic under-training signals. The off-box
+  3-epoch run is the expected fix, not more data.
 
 ## Recommendation (as of this spike)
 
