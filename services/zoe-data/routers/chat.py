@@ -51,18 +51,24 @@ def _bounded_lru_set(store: "OrderedDict[str, object]", key: str, value: object,
         store.popitem(last=False)
 
 # Intent → touch panel navigation map (page + optional form to open).
+# Panel navigation targets are the ESTATE surfaces (home.html?domain=… opens
+# the matching in-estate screen) — the per-domain legacy pages (calendar.html,
+# lists.html, weather.html, cooking.html, …) are retired panel chrome and kept
+# only for desktop/reference (operator report 2026-07-13: "certain links or
+# buttons take me back to the old interfaces"). notes/journal/recipes have no
+# estate surface yet → no navigation (reply renders as chat/toast).
 _INTENT_PANEL_NAV = {
-    "calendar_create":   ("/touch/calendar.html", "new_event"),
-    "calendar_show":     ("/touch/calendar.html", None),
-    "note_create":       ("/touch/notes.html",    "new_note"),
-    "journal_create":    ("/touch/journal.html",  "new_journal"),
-    "weather":           ("/touch/weather.html",  None),
-    "list_add":          ("/touch/lists.html",    "new_list_item"),
-    "list_show":         ("/touch/lists.html",    None),
-    "timer_create":      ("/touch/cooking.html",  "new_timer"),
-    "recipe_search":     ("/touch/cooking.html",  "recipe_search"),
+    "calendar_create":   ("/touch/home.html?domain=calendar", "new_event"),
+    "calendar_show":     ("/touch/home.html?domain=calendar", None),
+    "note_create":       (None,                   None),
+    "journal_create":    (None,                   None),
+    "weather":           ("/touch/home.html?domain=weather",  None),
+    "list_add":          ("/touch/home.html?domain=lists",    "new_list_item"),
+    "list_show":         ("/touch/home.html?domain=lists",    None),
+    "timer_create":      ("/touch/home.html?domain=timers",   "new_timer"),
+    "recipe_search":     (None,                   None),
     "reminder_create":   (None,                   None),  # handled as toast
-    "lets_talk":         ("/touch/voice.html?conv=1", None),  # open touch phone-call voice mode
+    "lets_talk":         ("/touch/voice.html?conv=1", None),  # phone-call voice mode (still its own surface)
 }
 
 # Intents that show a full-screen interactive action-form overlay on the touch panel
@@ -1246,6 +1252,28 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
     """
     if user_id == "guest":
         return
+    # A memory COMMAND ("forget everything about Delia", "forget that") is an
+    # instruction, not a fact — mining it minted junk rows ("Gift idea for
+    # everything about: Delia", live repro 2026-07-13) that resurrected the
+    # just-forgotten entity into the recall packet. Skip every extractor pass.
+    try:
+        from intent_router import _FORGET_ENTITY_RE, _FORGET_LAST_RE
+        t = (user_message or "").strip()
+        if _FORGET_LAST_RE.match(t) or _FORGET_ENTITY_RE.match(t):
+            return
+    except Exception:
+        pass  # never let the guard break extraction itself
+    # The mirror case: an EXPLICIT "remember/note that …" utterance clears any
+    # forget tombstone whose name it mentions — regardless of which lane
+    # answered the turn (the semantic router sometimes sends a re-teach to the
+    # note/brain lane, whose mined extraction would otherwise be shadow-dropped
+    # and the re-teach silently lost; live repro 2026-07-13).
+    try:
+        from memory_tombstones import clear_matching as _tomb_clear, is_explicit_teach
+        if is_explicit_teach(user_message):
+            _tomb_clear(user_id, user_message)
+    except Exception:
+        pass
     try:
         from memory_extractor import extract_and_ingest
         from memory_digest import run_turn_digest
@@ -1303,6 +1331,12 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
                     "memory pass %s FAILED for user=%s (fact loss possible): %s",
                     _mx_name, user_id, _mx_res,
                 )
+                try:  # QA review F13: make silent fact loss countable in ops
+                    from memory_metrics import memory_async_extract_fail_count
+                    memory_async_extract_fail_count.labels(
+                        lane="chat", pass_name=_mx_name).inc()
+                except Exception:
+                    pass
         asyncio.ensure_future(_detect_suggestions(
             user_message,
             user_id=user_id,

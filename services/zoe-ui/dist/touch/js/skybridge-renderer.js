@@ -2041,8 +2041,44 @@
         return cardFrame(props, body, { compact: true, tone: 'person-confirm' });
     }
 
+    // voice_settings — the "Zoe's voice" picker (contract: props {title, summary,
+    // current, default, sample_text, voices: [{id, label, zoe}]}). Tap a voice →
+    // data-sky-action="query" "set zoe's voice to <id>" so tap + voice share the
+    // skybridge resolver path; Preview → data-voice-preview="<id>", handled by a
+    // dedicated skybridge.js branch that fetches /api/voice/preview and plays the
+    // returned sample on the panel. The catalogue comes from the server (the
+    // loaded voices bin) — the panel never hardcodes voice names.
+    function renderVoiceSettings(props) {
+        const voices = Array.isArray(props.voices) ? props.voices.slice(0, 60) : [];
+        const current = String(props.current || '');
+        const rows = voices.map(voice => {
+            const v = voice || {};
+            const id = String(v.id || '');
+            if (!id) return '';
+            const selected = id === current;
+            const label = v.label || id;
+            return '<div class="vx-row' + (selected ? ' is-current' : '') + (v.zoe ? ' is-zoe' : '') + '">'
+                + '<button type="button" class="vx-pick" data-sky-action="query" data-query="'
+                + escapeHtml("set zoe's voice to " + id) + '" aria-pressed="' + (selected ? 'true' : 'false') + '">'
+                + '<strong class="vx-name">' + escapeHtml(label) + '</strong>'
+                + '<span class="vx-id">' + escapeHtml(id) + (selected ? ' · current voice' : '') + '</span>'
+                + '</button>'
+                + '<button type="button" class="vx-preview" data-voice-preview="' + escapeHtml(id)
+                + '" aria-label="' + escapeHtml('Preview voice ' + label) + '">Preview</button>'
+                + '</div>';
+        }).join('');
+        const body = rows
+            ? '<div class="vx-list">' + rows + '</div>'
+            : gxEmpty('V', 'No voices found', 'The voice catalogue is unavailable right now.');
+        const inner = gxHead('Settings', props.title || "Zoe's voice", props.summary || '')
+            + '<div class="gx-body">' + body + '</div>';
+        return cardFrame(Object.assign({}, props), gxScene('work', 'gx-voice-card', inner),
+            { wide: true, tone: 'gx-card gx-voice-settings', hideHeader: true, hideStatus: true, hideActions: true });
+    }
+
     const renderers = {
         dashboard: renderDashboard,
+        voice_settings: renderVoiceSettings,
         person_confirm: renderPersonConfirm,
         status: renderStatus,
         info: renderStatus,

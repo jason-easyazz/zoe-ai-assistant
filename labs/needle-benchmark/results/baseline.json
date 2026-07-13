@@ -1,0 +1,1163 @@
+{
+ "summary": {
+  "mode": "baseline-tier0+tier1",
+  "n": 81,
+  "acc_overall": 61.7,
+  "acc_canonical": 85.3,
+  "acc_paraphrase": 35.9,
+  "acc_chat": 87.5,
+  "tool_cases_fell_to_brain_pct": 34.2,
+  "lat_p50_ms": 31.66,
+  "lat_p90_ms": 73.25
+ },
+ "results": [
+  {
+   "id": "time-c1",
+   "style": "canonical",
+   "text": "what time is it",
+   "expected": [
+    "get_time"
+   ],
+   "domain": "time",
+   "pred": "get_time",
+   "source": "tier0-regex",
+   "detail": "time_query",
+   "ok": true,
+   "ms": 2.2
+  },
+  {
+   "id": "time-c2",
+   "style": "canonical",
+   "text": "what's the date today",
+   "expected": [
+    "get_time"
+   ],
+   "domain": "time",
+   "pred": "get_time",
+   "source": "tier0-regex",
+   "detail": "date_query",
+   "ok": true,
+   "ms": 0.09
+  },
+  {
+   "id": "time-p1",
+   "style": "paraphrase",
+   "text": "have you got the time on you",
+   "expected": [
+    "get_time"
+   ],
+   "domain": "time",
+   "pred": "domain:time",
+   "source": "tier1-embed",
+   "detail": "score=0.935",
+   "ok": true,
+   "ms": 80.04
+  },
+  {
+   "id": "time-p2",
+   "style": "paraphrase",
+   "text": "um what day are we on again",
+   "expected": [
+    "get_time"
+   ],
+   "domain": "time",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": false,
+   "ms": 35.88
+  },
+  {
+   "id": "weather-c1",
+   "style": "canonical",
+   "text": "what's the weather like in Perth",
+   "expected": [
+    "get_weather"
+   ],
+   "domain": "weather",
+   "pred": "get_weather",
+   "source": "tier0-regex",
+   "detail": "weather",
+   "ok": true,
+   "ms": 0.31
+  },
+  {
+   "id": "weather-c2",
+   "style": "canonical",
+   "text": "what's the forecast for tomorrow",
+   "expected": [
+    "get_weather"
+   ],
+   "domain": "weather",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": false,
+   "ms": 47.58
+  },
+  {
+   "id": "weather-p1",
+   "style": "paraphrase",
+   "text": "do I need a jacket if I go out later",
+   "expected": [
+    "get_weather"
+   ],
+   "domain": "weather",
+   "pred": "get_weather",
+   "source": "tier0-regex",
+   "detail": "weather",
+   "ok": true,
+   "ms": 0.31
+  },
+  {
+   "id": "weather-p2",
+   "style": "paraphrase",
+   "text": "is it going to bucket down this arvo",
+   "expected": [
+    "get_weather"
+   ],
+   "domain": "weather",
+   "pred": "domain:weather",
+   "source": "tier1-embed",
+   "detail": "score=0.751",
+   "ok": true,
+   "ms": 33.62
+  },
+  {
+   "id": "weather-p3",
+   "style": "paraphrase",
+   "text": "reckon it'll be nice enough for the beach on saturday",
+   "expected": [
+    "get_weather"
+   ],
+   "domain": "weather",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": false,
+   "ms": 73.25
+  },
+  {
+   "id": "shoplist-c1",
+   "style": "canonical",
+   "text": "add milk to my shopping list",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list"
+   ],
+   "domain": "lists",
+   "pred": "add_to_list",
+   "source": "tier0-regex",
+   "detail": "list_add",
+   "ok": true,
+   "ms": 1.84
+  },
+  {
+   "id": "shoplist-c2",
+   "style": "canonical",
+   "text": "put bread on the grocery list",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list"
+   ],
+   "domain": "lists",
+   "pred": "add_to_list",
+   "source": "tier0-regex",
+   "detail": "list_add",
+   "ok": true,
+   "ms": 0.26
+  },
+  {
+   "id": "shoplist-p1",
+   "style": "paraphrase",
+   "text": "we're out of laundry powder again",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list"
+   ],
+   "domain": "lists",
+   "pred": "add_to_list",
+   "source": "tier0-regex",
+   "detail": "list_add",
+   "ok": true,
+   "ms": 0.24
+  },
+  {
+   "id": "shoplist-p2",
+   "style": "paraphrase",
+   "text": "chuck dog food on the list when you get a sec",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list"
+   ],
+   "domain": "lists",
+   "pred": "domain:lists",
+   "source": "tier1-embed",
+   "detail": "score=0.783",
+   "ok": true,
+   "ms": 94.12
+  },
+  {
+   "id": "shoplist-p3",
+   "style": "paraphrase",
+   "text": "don't let me leave the shops without coffee",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list",
+    "add_reminder"
+   ],
+   "domain": "lists",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": false,
+   "ms": 47.92
+  },
+  {
+   "id": "listshow-c1",
+   "style": "canonical",
+   "text": "what's on my shopping list",
+   "expected": [
+    "show_list"
+   ],
+   "domain": "lists",
+   "pred": "show_list",
+   "source": "tier0-regex",
+   "detail": "list_show",
+   "ok": true,
+   "ms": 0.35
+  },
+  {
+   "id": "listshow-c2",
+   "style": "canonical",
+   "text": "show me my todo list",
+   "expected": [
+    "show_list"
+   ],
+   "domain": "lists",
+   "pred": "show_list",
+   "source": "tier0-regex",
+   "detail": "list_show",
+   "ok": true,
+   "ms": 0.19
+  },
+  {
+   "id": "listshow-p1",
+   "style": "paraphrase",
+   "text": "what do I still need to grab from the shops",
+   "expected": [
+    "show_list"
+   ],
+   "domain": "lists",
+   "pred": "domain:lists",
+   "source": "tier1-embed",
+   "detail": "score=0.88",
+   "ok": true,
+   "ms": 39.33
+  },
+  {
+   "id": "listshow-p2",
+   "style": "paraphrase",
+   "text": "read us back the groceries",
+   "expected": [
+    "show_list"
+   ],
+   "domain": "lists",
+   "pred": "domain:lists",
+   "source": "tier1-embed",
+   "detail": "score=0.769",
+   "ok": true,
+   "ms": 25.71
+  },
+  {
+   "id": "listrm-c1",
+   "style": "canonical",
+   "text": "remove bananas from my shopping list",
+   "expected": [
+    "list_remove"
+   ],
+   "domain": "lists",
+   "pred": "list_remove",
+   "source": "tier0-regex",
+   "detail": "list_remove",
+   "ok": true,
+   "ms": 0.36
+  },
+  {
+   "id": "listrm-p1",
+   "style": "paraphrase",
+   "text": "actually scratch the bananas, we've got heaps",
+   "expected": [
+    "list_remove"
+   ],
+   "domain": "lists",
+   "pred": "domain:lists",
+   "source": "tier1-embed",
+   "detail": "score=0.621",
+   "ok": true,
+   "ms": 61.74
+  },
+  {
+   "id": "listrm-p2",
+   "style": "paraphrase",
+   "text": "take the eggs off, nan's bringing some",
+   "expected": [
+    "list_remove"
+   ],
+   "domain": "lists",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": false,
+   "ms": 31.89
+  },
+  {
+   "id": "cal-show-c1",
+   "style": "canonical",
+   "text": "what's on my calendar today",
+   "expected": [
+    "show_calendar"
+   ],
+   "domain": "calendar",
+   "pred": "show_calendar",
+   "source": "tier0-regex",
+   "detail": "calendar_show",
+   "ok": true,
+   "ms": 0.19
+  },
+  {
+   "id": "cal-show-c2",
+   "style": "canonical",
+   "text": "do I have anything on this week",
+   "expected": [
+    "show_calendar"
+   ],
+   "domain": "calendar",
+   "pred": "domain:calendar",
+   "source": "tier1-embed",
+   "detail": "score=1.0",
+   "ok": true,
+   "ms": 63.75
+  },
+  {
+   "id": "cal-show-p1",
+   "style": "paraphrase",
+   "text": "am I double booked friday or are we sweet",
+   "expected": [
+    "show_calendar"
+   ],
+   "domain": "calendar",
+   "pred": "domain:calendar",
+   "source": "tier1-embed",
+   "detail": "score=0.767",
+   "ok": true,
+   "ms": 35.97
+  },
+  {
+   "id": "cal-show-p2",
+   "style": "paraphrase",
+   "text": "what have I got on after lunch",
+   "expected": [
+    "show_calendar"
+   ],
+   "domain": "calendar",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": false,
+   "ms": 31.86
+  },
+  {
+   "id": "cal-add-c1",
+   "style": "canonical",
+   "text": "add a dentist appointment next tuesday at 3pm",
+   "expected": [
+    "add_calendar_event"
+   ],
+   "domain": "calendar",
+   "pred": "add_calendar_event",
+   "source": "tier0-regex",
+   "detail": "calendar_create",
+   "ok": true,
+   "ms": 0.22
+  },
+  {
+   "id": "cal-add-c2",
+   "style": "canonical",
+   "text": "schedule a meeting with sarah for friday at 10",
+   "expected": [
+    "add_calendar_event"
+   ],
+   "domain": "calendar",
+   "pred": "add_calendar_event",
+   "source": "tier0-regex",
+   "detail": "calendar_create",
+   "ok": true,
+   "ms": 0.12
+  },
+  {
+   "id": "cal-add-p1",
+   "style": "paraphrase",
+   "text": "the vet can fit biscuit in thursday morning, lock it in",
+   "expected": [
+    "add_calendar_event"
+   ],
+   "domain": "calendar",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": false,
+   "ms": 45.44
+  },
+  {
+   "id": "cal-add-p2",
+   "style": "paraphrase",
+   "text": "mum's flight lands sunday 6pm, stick that in",
+   "expected": [
+    "add_calendar_event"
+   ],
+   "domain": "calendar",
+   "pred": "domain:reminders",
+   "source": "tier1-embed",
+   "detail": "score=0.716",
+   "ok": false,
+   "ms": 30.02
+  },
+  {
+   "id": "rem-add-c1",
+   "style": "canonical",
+   "text": "remind me to water the plants at 7pm tomorrow",
+   "expected": [
+    "add_reminder"
+   ],
+   "domain": "reminders",
+   "pred": "add_reminder",
+   "source": "tier0-regex",
+   "detail": "reminder_create",
+   "ok": true,
+   "ms": 0.26
+  },
+  {
+   "id": "rem-add-c2",
+   "style": "canonical",
+   "text": "set a reminder to take the bins out tonight",
+   "expected": [
+    "add_reminder"
+   ],
+   "domain": "reminders",
+   "pred": "add_reminder",
+   "source": "tier0-regex",
+   "detail": "reminder_create",
+   "ok": true,
+   "ms": 0.17
+  },
+  {
+   "id": "rem-add-p1",
+   "style": "paraphrase",
+   "text": "don't let me forget to pay the rent on the first",
+   "expected": [
+    "add_reminder"
+   ],
+   "domain": "reminders",
+   "pred": "domain:reminders",
+   "source": "tier1-embed",
+   "detail": "score=0.957",
+   "ok": true,
+   "ms": 53.49
+  },
+  {
+   "id": "rem-add-p2",
+   "style": "paraphrase",
+   "text": "give us a nudge about the dentist tomorrow morning",
+   "expected": [
+    "add_reminder"
+   ],
+   "domain": "reminders",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": false,
+   "ms": 23.79
+  },
+  {
+   "id": "rem-add-p3",
+   "style": "paraphrase",
+   "text": "I'll forget the school pickup at 3 unless you say something",
+   "expected": [
+    "add_reminder"
+   ],
+   "domain": "reminders",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": false,
+   "ms": 93.6
+  },
+  {
+   "id": "rem-list-c1",
+   "style": "canonical",
+   "text": "what reminders do I have",
+   "expected": [
+    "list_reminders"
+   ],
+   "domain": "reminders",
+   "pred": "domain:reminders",
+   "source": "tier1-embed",
+   "detail": "score=1.0",
+   "ok": true,
+   "ms": 18.32
+  },
+  {
+   "id": "rem-list-p1",
+   "style": "paraphrase",
+   "text": "anything I'm meant to be doing today",
+   "expected": [
+    "list_reminders",
+    "show_calendar"
+   ],
+   "domain": "reminders",
+   "pred": "domain:calendar",
+   "source": "tier1-embed",
+   "detail": "score=0.826",
+   "ok": false,
+   "ms": 44.91
+  },
+  {
+   "id": "timer-c1",
+   "style": "canonical",
+   "text": "set a timer for 10 minutes",
+   "expected": [
+    "set_timer"
+   ],
+   "domain": "timers",
+   "pred": "set_timer",
+   "source": "tier0-regex",
+   "detail": "timer_create",
+   "ok": true,
+   "ms": 0.36
+  },
+  {
+   "id": "timer-c2",
+   "style": "canonical",
+   "text": "set a 5 minute timer for the pasta",
+   "expected": [
+    "set_timer"
+   ],
+   "domain": "timers",
+   "pred": "set_timer",
+   "source": "tier0-regex",
+   "detail": "timer_create",
+   "ok": true,
+   "ms": 0.23
+  },
+  {
+   "id": "timer-p1",
+   "style": "paraphrase",
+   "text": "give me twenty on the clock for the roast spuds",
+   "expected": [
+    "set_timer"
+   ],
+   "domain": "timers",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": false,
+   "ms": 63.18
+  },
+  {
+   "id": "timer-p2",
+   "style": "paraphrase",
+   "text": "eggs need six minutes, time it",
+   "expected": [
+    "set_timer"
+   ],
+   "domain": "timers",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": false,
+   "ms": 35.37
+  },
+  {
+   "id": "note-add-c1",
+   "style": "canonical",
+   "text": "make a note: the wifi password is hunter2",
+   "expected": [
+    "create_note"
+   ],
+   "domain": "notes",
+   "pred": "create_note",
+   "source": "tier0-regex",
+   "detail": "note_create",
+   "ok": true,
+   "ms": 0.31
+  },
+  {
+   "id": "note-add-c2",
+   "style": "canonical",
+   "text": "take a note that the gate code is 4482",
+   "expected": [
+    "create_note"
+   ],
+   "domain": "notes",
+   "pred": "create_note",
+   "source": "tier0-regex",
+   "detail": "note_create",
+   "ok": true,
+   "ms": 0.18
+  },
+  {
+   "id": "note-add-p1",
+   "style": "paraphrase",
+   "text": "jot this down before I lose it, plumber quoted 300 for the laundry tap",
+   "expected": [
+    "create_note"
+   ],
+   "domain": "notes",
+   "pred": "create_note",
+   "source": "tier0-regex",
+   "detail": "note_create",
+   "ok": true,
+   "ms": 0.2
+  },
+  {
+   "id": "note-add-p2",
+   "style": "paraphrase",
+   "text": "the good pizza place is the one on marine terrace, keep that somewhere",
+   "expected": [
+    "create_note",
+    "remember_fact"
+   ],
+   "domain": "notes",
+   "pred": "domain:memory",
+   "source": "tier1-embed",
+   "detail": "score=0.647",
+   "ok": false,
+   "ms": 71.19
+  },
+  {
+   "id": "note-search-c1",
+   "style": "canonical",
+   "text": "search my notes for the wifi password",
+   "expected": [
+    "note_search"
+   ],
+   "domain": "notes",
+   "pred": "note_search",
+   "source": "tier0-regex",
+   "detail": "note_search",
+   "ok": true,
+   "ms": 0.24
+  },
+  {
+   "id": "note-search-p1",
+   "style": "paraphrase",
+   "text": "what did I say the plumber quoted again",
+   "expected": [
+    "note_search"
+   ],
+   "domain": "notes",
+   "pred": "domain:memory",
+   "source": "tier1-embed",
+   "detail": "score=0.704",
+   "ok": false,
+   "ms": 27.71
+  },
+  {
+   "id": "note-search-p2",
+   "style": "paraphrase",
+   "text": "didn't I write down the gate code somewhere",
+   "expected": [
+    "note_search"
+   ],
+   "domain": "notes",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": false,
+   "ms": 55.73
+  },
+  {
+   "id": "journal-c1",
+   "style": "canonical",
+   "text": "add a journal entry: grateful for the rain today",
+   "expected": [
+    "journal"
+   ],
+   "domain": "journal",
+   "pred": "journal",
+   "source": "tier0-regex",
+   "detail": "journal_create",
+   "ok": true,
+   "ms": 0.35
+  },
+  {
+   "id": "journal-c2",
+   "style": "canonical",
+   "text": "write in my diary that today was a hard one",
+   "expected": [
+    "journal"
+   ],
+   "domain": "journal",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": false,
+   "ms": 49.92
+  },
+  {
+   "id": "journal-p1",
+   "style": "paraphrase",
+   "text": "today honestly knocked me around, can you put that in the journal",
+   "expected": [
+    "journal"
+   ],
+   "domain": "journal",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": false,
+   "ms": 99.6
+  },
+  {
+   "id": "journal-p2",
+   "style": "paraphrase",
+   "text": "what did I journal about last week",
+   "expected": [
+    "journal"
+   ],
+   "domain": "journal",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": false,
+   "ms": 71.96
+  },
+  {
+   "id": "people-c1",
+   "style": "canonical",
+   "text": "add Marcus to my contacts as my colleague",
+   "expected": [
+    "people"
+   ],
+   "domain": "people",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": false,
+   "ms": 31.89
+  },
+  {
+   "id": "people-c2",
+   "style": "canonical",
+   "text": "who is Zephyrina",
+   "expected": [
+    "people",
+    "recall_memory"
+   ],
+   "domain": "people",
+   "pred": "people",
+   "source": "tier0-regex",
+   "detail": "people_search",
+   "ok": true,
+   "ms": 0.24
+  },
+  {
+   "id": "people-p1",
+   "style": "paraphrase",
+   "text": "my sister's name is Kate by the way, keep track of her",
+   "expected": [
+    "people",
+    "remember_fact"
+   ],
+   "domain": "people",
+   "pred": "domain:people",
+   "source": "tier1-embed",
+   "detail": "score=0.78",
+   "ok": true,
+   "ms": 31.66
+  },
+  {
+   "id": "people-p2",
+   "style": "paraphrase",
+   "text": "what do we know about my mate Dave",
+   "expected": [
+    "people",
+    "recall_memory"
+   ],
+   "domain": "people",
+   "pred": "domain:people",
+   "source": "tier1-embed",
+   "detail": "score=0.743",
+   "ok": true,
+   "ms": 31.93
+  },
+  {
+   "id": "media-c1",
+   "style": "canonical",
+   "text": "play some music",
+   "expected": [
+    "media"
+   ],
+   "domain": "music",
+   "pred": "media",
+   "source": "tier0-regex",
+   "detail": "music_play",
+   "ok": true,
+   "ms": 0.38
+  },
+  {
+   "id": "media-c2",
+   "style": "canonical",
+   "text": "turn the volume down",
+   "expected": [
+    "media"
+   ],
+   "domain": "music",
+   "pred": "media",
+   "source": "tier0-regex",
+   "detail": "set_volume",
+   "ok": true,
+   "ms": 0.64
+  },
+  {
+   "id": "media-c3",
+   "style": "canonical",
+   "text": "pause the music",
+   "expected": [
+    "media"
+   ],
+   "domain": "music",
+   "pred": "media",
+   "source": "tier0-regex",
+   "detail": "music_control",
+   "ok": true,
+   "ms": 0.23
+  },
+  {
+   "id": "media-p1",
+   "style": "paraphrase",
+   "text": "chuck on something chill while I cook",
+   "expected": [
+    "media"
+   ],
+   "domain": "music",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": false,
+   "ms": 42.54
+  },
+  {
+   "id": "media-p2",
+   "style": "paraphrase",
+   "text": "that's way too loud, bring it down heaps",
+   "expected": [
+    "media"
+   ],
+   "domain": "music",
+   "pred": "media",
+   "source": "tier0-regex",
+   "detail": "music_control",
+   "ok": true,
+   "ms": 1.1
+  },
+  {
+   "id": "media-p3",
+   "style": "paraphrase",
+   "text": "skip this one, not feeling it",
+   "expected": [
+    "media"
+   ],
+   "domain": "music",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": false,
+   "ms": 78.8
+  },
+  {
+   "id": "home-c1",
+   "style": "canonical",
+   "text": "turn off the kitchen lights",
+   "expected": [
+    "home"
+   ],
+   "domain": "smart_home",
+   "pred": "home",
+   "source": "tier0-regex",
+   "detail": "smart_home",
+   "ok": true,
+   "ms": 1.15
+  },
+  {
+   "id": "home-c2",
+   "style": "canonical",
+   "text": "dim the lounge room lights",
+   "expected": [
+    "home"
+   ],
+   "domain": "smart_home",
+   "pred": "home",
+   "source": "tier0-regex",
+   "detail": "smart_home",
+   "ok": true,
+   "ms": 0.23
+  },
+  {
+   "id": "home-p1",
+   "style": "paraphrase",
+   "text": "it's like a cave in here, sort the lights out",
+   "expected": [
+    "home"
+   ],
+   "domain": "smart_home",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": false,
+   "ms": 30.68
+  },
+  {
+   "id": "home-p2",
+   "style": "paraphrase",
+   "text": "we're heading to bed, kill everything downstairs",
+   "expected": [
+    "home"
+   ],
+   "domain": "smart_home",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": false,
+   "ms": 31.95
+  },
+  {
+   "id": "recall-c1",
+   "style": "canonical",
+   "text": "what do you remember about me",
+   "expected": [
+    "recall_memory"
+   ],
+   "domain": "memory",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": false,
+   "ms": 31.93
+  },
+  {
+   "id": "recall-c2",
+   "style": "canonical",
+   "text": "what's my name",
+   "expected": [
+    "recall_memory"
+   ],
+   "domain": "memory",
+   "pred": "domain:people",
+   "source": "tier1-embed",
+   "detail": "score=0.841",
+   "ok": false,
+   "ms": 31.93
+  },
+  {
+   "id": "recall-p1",
+   "style": "paraphrase",
+   "text": "remind me what I told you about my work situation",
+   "expected": [
+    "recall_memory"
+   ],
+   "domain": "memory",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": false,
+   "ms": 55.91
+  },
+  {
+   "id": "recall-p2",
+   "style": "paraphrase",
+   "text": "you know that thing I said about my knee, what was it",
+   "expected": [
+    "recall_memory"
+   ],
+   "domain": "memory",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": false,
+   "ms": 31.89
+  },
+  {
+   "id": "fact-c1",
+   "style": "canonical",
+   "text": "remember that my favourite colour is green",
+   "expected": [
+    "remember_fact"
+   ],
+   "domain": "memory",
+   "pred": "remember_fact",
+   "source": "tier0-regex",
+   "detail": "memory_remember",
+   "ok": true,
+   "ms": 0.2
+  },
+  {
+   "id": "fact-c2",
+   "style": "canonical",
+   "text": "remember that I'm allergic to peanuts",
+   "expected": [
+    "remember_fact"
+   ],
+   "domain": "memory",
+   "pred": "remember_fact",
+   "source": "tier0-regex",
+   "detail": "memory_remember",
+   "ok": true,
+   "ms": 0.11
+  },
+  {
+   "id": "fact-p1",
+   "style": "paraphrase",
+   "text": "for future reference I knock off work at 2:30 on fridays",
+   "expected": [
+    "remember_fact"
+   ],
+   "domain": "memory",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": false,
+   "ms": 31.45
+  },
+  {
+   "id": "fact-p2",
+   "style": "paraphrase",
+   "text": "the dog's name is Biscuit, don't forget it",
+   "expected": [
+    "remember_fact",
+    "people"
+   ],
+   "domain": "memory",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": false,
+   "ms": 77.35
+  },
+  {
+   "id": "chat-1",
+   "style": "chat",
+   "text": "hey zoe how's it going",
+   "expected": [
+    "general_chat"
+   ],
+   "domain": "chat",
+   "pred": "general_chat",
+   "source": "tier0-regex",
+   "detail": "greeting",
+   "ok": true,
+   "ms": 0.16
+  },
+  {
+   "id": "chat-2",
+   "style": "chat",
+   "text": "tell me something interesting about octopuses",
+   "expected": [
+    "general_chat"
+   ],
+   "domain": "chat",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": true,
+   "ms": 102.49
+  },
+  {
+   "id": "chat-3",
+   "style": "chat",
+   "text": "I had a really rough day at work",
+   "expected": [
+    "general_chat",
+    "journal",
+    "remember_emotional_moment"
+   ],
+   "domain": "chat",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": true,
+   "ms": 46.77
+  },
+  {
+   "id": "chat-4",
+   "style": "chat",
+   "text": "what do you think about while I'm asleep",
+   "expected": [
+    "general_chat"
+   ],
+   "domain": "chat",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": true,
+   "ms": 43.52
+  },
+  {
+   "id": "chat-5",
+   "style": "chat",
+   "text": "why is the sky blue",
+   "expected": [
+    "general_chat"
+   ],
+   "domain": "chat",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": true,
+   "ms": 31.65
+  },
+  {
+   "id": "chat-6",
+   "style": "chat",
+   "text": "thanks heaps, you're a legend",
+   "expected": [
+    "general_chat"
+   ],
+   "domain": "chat",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": true,
+   "ms": 55.79
+  },
+  {
+   "id": "chat-7",
+   "style": "chat",
+   "text": "should I get a haircut or let it grow",
+   "expected": [
+    "general_chat"
+   ],
+   "domain": "chat",
+   "pred": "domain:calendar",
+   "source": "tier1-embed",
+   "detail": "score=0.774",
+   "ok": false,
+   "ms": 84.85
+  },
+  {
+   "id": "chat-8",
+   "style": "chat",
+   "text": "can you explain how compound interest works",
+   "expected": [
+    "general_chat"
+   ],
+   "domain": "chat",
+   "pred": "brain",
+   "source": "brain",
+   "detail": "",
+   "ok": true,
+   "ms": 52.48
+  }
+ ]
+}

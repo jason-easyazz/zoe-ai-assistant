@@ -436,6 +436,22 @@ _FORGET_LAST_RE = re.compile(
     re.IGNORECASE,
 )
 
+# "forget what I told you about X" / "forget everything about X" -- entity-scoped
+# forget (QA review F14). Deterministic, no LLM. The captured entity must pass
+# strict name validation (person_extractor._looks_like_person_name) before the
+# intent fires, so "forget about it/that/her" never nukes anything fuzzy.
+_FORGET_ENTITY_RE = re.compile(
+    r"^(?:please\s+)?"
+    r"(?:forget|delete|remove|erase|scrap)\s+"
+    r"(?:everything|all(?:\s+of\s+it)?|anything"
+    r"|what(?:ever)?\s+i(?:'?ve)?\s+(?:just\s+)?(?:told\s+you|said|mentioned)"
+    r"|what\s+you\s+know|your\s+memories|the\s+memories)?\s*"
+    r"(?:you\s+know\s+)?about\s+"
+    r"(?P<entity>[A-Za-z][A-Za-z'\-]*(?:\s+[A-Za-z][A-Za-z'\-]*){0,2})"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
 # ── Portrait intents ───────────────────────────────────────────────────────────
 # "how well do you know me" / "what do you understand about me" → reveal portrait
 _PORTRAIT_REVEAL_RE = re.compile(
@@ -635,6 +651,31 @@ def detect_intent(
     # Matched very early so it never collides with other verbs.
     if _FORGET_LAST_RE.match(t):
         return Intent("memory_forget_last", {})
+
+    # "forget everything about X" -- entity-scoped forget (QA review F14).
+    # Only fires when the captured entity is name-shaped: "forget about it",
+    # "forget about my day" etc. fall through to normal routing.
+    m = _FORGET_ENTITY_RE.match(t)
+    if m:
+        # Prefer the raw text's capture so the name keeps the user's casing
+        # ("Mary Jane", not "mary jane"); t is lowercased by normalization.
+        _m_raw = _FORGET_ENTITY_RE.match((text or "").strip())
+        _entity = ((_m_raw or m).group("entity") or "").strip().rstrip(".!?")
+        # Quantifiers / deictics / time words the name validator lets through:
+        # "forget about everything|today|it all" must never become a sweep.
+        _FORGET_ENTITY_STOP = {
+            "everything", "anything", "something", "nothing", "all", "stuff",
+            "things", "life", "today", "tomorrow", "yesterday", "now",
+            "earlier", "before", "again", "ourselves", "yourself", "myself",
+        }
+        try:
+            from person_extractor import _looks_like_person_name
+            _namey = (_entity.lower() not in _FORGET_ENTITY_STOP
+                      and _looks_like_person_name(_entity))
+        except Exception:
+            _namey = False  # validator unavailable -> fail closed, never nuke
+        if _namey:
+            return Intent("memory_forget_entity", {"name": _entity})
 
     # Portrait intents — how well Zoe knows the user, and rebuilding understanding.
     if _PORTRAIT_REVEAL_RE.search(t):
@@ -1115,6 +1156,28 @@ def detect_intent(
             item, lst = _sanitize_list_item(m.group(1)), m.group(2).strip()
             list_type = _normalize_list(lst)
             return Intent("list_add", {"item": item, "list_type": list_type})
+
+    # --- LIST ADD (STT-garbled leading "add") ---
+    # Moonshine renders a leading "Add" as near-homophones: "Add council to my
+    # work list" arrives as "I'd go to council to my work list" (said-vs-did
+    # bug: the add regexes miss and the semantic router drifts to calendar).
+    # If the utterance ENDS with "to my <known> list", treat it as an add and
+    # strip the garbled lead-in. Bare navigation ("go to my work list") leaves
+    # no item text, so it still falls through to the LIST SHOW/OPEN patterns.
+    m = re.match(
+        r"^(?:i'?d|id|and|at|it|hey|a)?\s*(?:go to |goto )?(.+?) "
+        r"to (?:the |my )?(shopping|grocery|groceries|todo|to do|to-do|personal|work|bucket|tasks?)"
+        r" list[.!?]?$",
+        t,
+    )
+    if m:
+        item = _sanitize_list_item(m.group(1))
+        if item and item.lower() not in {"go", "me", "take me", "us", "take us"}:
+            lst = m.group(2).strip()
+            return Intent(
+                "list_add",
+                {"item": item, "list_type": _normalize_list("tasks" if lst == "task" else lst)},
+            )
 
     # --- LIST ADD (implicit, no list name) ---
     # Defer to the brain when a competing-capability cue is present without an
@@ -2714,10 +2777,40 @@ async def _execute_people_search_direct(intent: Intent, user_id: str) -> Optiona
         return None
 
 
+# Personal-data intents an anonymous (guest) session may not touch via CHAT.
+# Mirrors the voice path's identity gate (skybridge_intent_requires_identity:
+# calendar/lists/people) — before this, anonymous /api/chat/ calls could write
+# family-visible guest calendar/list rows the panel then displayed (operator
+# ask 2026-07-13: "make chat require sign-in like voice"). Reminders and
+# memory writes are included: both persist personal data under the identity.
+_GUEST_GATED_INTENTS = (
+    "list_add", "list_remove", "list_show",
+    "calendar_create", "calendar_show",
+    "people_", "person_",
+    "reminder_create", "reminder_list",
+    "memory_",   # remember/store/forget/count — all personal memory
+    "note_create", "note_search",
+    "journal_",   # create + streak/prompt reads — a guest's journal doesn't exist
+    "transaction_create", "transaction_summary",
+)
+
+
+def _is_guest_identity(user_id: str | None) -> bool:
+    u = (user_id or "").strip()
+    return u in ("", "guest", "voice-guest") or u.startswith("guest-")
+
+
 async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str]:
     # ^ shared write funnel: fail-open to least-privilege guest, not admin, when a
     #   caller omits identity (#1021/#1032 posture). All live callers pass an explicit
     #   user_id; this default is defense-in-depth for future forgetful callers.
+    if _is_guest_identity(user_id) and intent.name.startswith(_GUEST_GATED_INTENTS):
+        # Same posture as voice (which challenges for who+PIN): personal data
+        # needs a signed-in identity. Chat has no PIN pad, so answer with the
+        # instruction instead of silently writing guest-owned family rows.
+        return ("I need to know who you are before I touch personal things like "
+                "calendars, lists or reminders — tap your name on the touch panel "
+                "or sign in to the app, then ask me again.")
     if intent.name == "lets_talk":
         # Navigation is handled by _broadcast_intent_nav via _INTENT_PANEL_NAV in chat.py.
         # Return a short TTS reply confirming we're opening voice mode.
@@ -2841,6 +2934,106 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             preview = preview[:77] + "…"
         return f"Done — I forgot: \"{preview}\"."
 
+    # "forget everything about X" -- archive (soft-delete, NEVER hard-delete)
+    # every memory of the caller's that is name-anchored on X (QA review F14).
+    # Deterministic: MemoryService search + list, then a strict whole-word
+    # match on the entity name -- no fuzzy nuking, no LLM. Guests fail closed.
+    if intent.name == "memory_forget_entity":
+        name = str(intent.slots.get("name", "")).strip()
+        if not name:
+            return "Who should I forget about? Give me the name and I'll do it."
+        try:
+            from memory_service import get_memory_service, is_guest_memory_user
+        except Exception as exc:
+            logger.info("memory_forget_entity: service unavailable: %s", exc)
+            return "I couldn't reach the memory store right now, so nothing was changed."
+        if is_guest_memory_user(user_id):
+            # Fail closed: guests have no memory store and must not be able to
+            # trigger archive sweeps.
+            return "I don't keep memories in guest sessions, so there's nothing for me to forget."
+        # Tombstone FIRST — before the lookup — so every exit path is covered:
+        # a forget typed before the async extractor has even written the row
+        # ("no matches") is exactly the in-flight race the tombstone exists
+        # for (Greptile P1). Best-effort; an explicit re-teach clears it.
+        try:
+            from memory_tombstones import add as _tombstone_add
+            _tombstone_add(user_id, name)
+        except Exception as exc:
+            logger.warning("memory_forget_entity: tombstone failed (%s)", type(exc).__name__)
+        try:
+            svc = get_memory_service()
+            # Semantic search surfaces the ranked rows; the approved list makes
+            # the sweep complete even when the entity falls outside search's
+            # top-k. Both sides still pass the strict name filter below.
+            rows = list(await svc.search(name, user_id=user_id, limit=25))
+            # Paginate the approved sweep: a single limit=1000 page would let a
+            # privacy request silently miss rows for users with bigger stores.
+            offset = 0
+            while True:
+                page = await svc.list_by_status(
+                    user_id=user_id, status="approved", limit=1000, offset=offset)
+                if not page:
+                    break
+                rows.extend(page)
+                if len(page) < 1000:
+                    break
+                offset += len(page)
+        except Exception as exc:
+            logger.info("memory_forget_entity: lookup failed: %s", exc)
+            return "I couldn't reach the memory store right now, so nothing was changed."
+        # Strict name anchoring: the row's text must contain the entity name as
+        # a whole word/phrase (case-insensitive). No stemming, no similarity.
+        name_re = re.compile(r"\b" + re.escape(name) + r"\b", re.IGNORECASE)
+        seen_ids: set[str] = set()
+        matches = []
+        for r in rows:
+            rid = getattr(r, "id", "") or ""
+            if not rid or rid in seen_ids:
+                continue
+            seen_ids.add(rid)
+            # Ownership guard: search can surface family-visible rows owned by
+            # another user; a forget sweep must only ever archive the CALLER's
+            # own rows.
+            _md = getattr(r, "metadata", {}) or {}
+            if _md.get("user_id") != user_id and _md.get("wing") != user_id:
+                continue
+            if name_re.search(getattr(r, "text", "") or ""):
+                matches.append(r)
+        if not matches:
+            return f"I don't have anything saved about {name}."
+        forgotten = 0
+        for r in matches:
+            try:
+                await svc.review(r.id, decision="archive", actor=user_id,
+                                 note=f"forget_entity:{name}")
+                forgotten += 1
+            except Exception as exc:
+                logger.warning("memory_forget_entity: archive failed id=%s: %s",
+                               r.id, exc)
+        if forgotten == 0:
+            return (f"I found {len(matches)} memories about {name} but couldn't "
+                    "archive them just now -- nothing was changed.")
+        # Forgetting a person also withdraws any pending "add X as a contact?"
+        # offer — otherwise the just-forgotten name keeps resurfacing in every
+        # prompt via the offer seam (live repro 2026-07-13). Best-effort.
+        try:
+            from pending_suggestions import resolve_person_offers_by_name
+            await resolve_person_offers_by_name(user_id, name)
+        except Exception as exc:
+            # Memories ARE forgotten at this point — a failed offer withdrawal
+            # must be visible (the stale offer would keep resurfacing the name)
+            # but must not fail the forget. Self-healing backstop: offers expire
+            # after 6 user turns regardless.
+            logger.warning(
+                "memory_forget_entity: offer withdrawal FAILED for user=%s (%s) — "
+                "a pending contact offer may resurface until it expires",
+                user_id, type(exc).__name__,
+            )
+        things = "thing" if forgotten == 1 else "things"
+        suffix = "" if forgotten == len(matches) else (
+            f" ({len(matches) - forgotten} I couldn't reach just now.)")
+        return f"Okay — I've forgotten {forgotten} {things} about {name}.{suffix}"
+
     # "remember that <fact>" — an EXPLICIT, model-callable memory write. This is
     # the fulfillment for the Flue sidecar's remember_fact + remember_emotional_moment
     # tools (Wave 3 of the cutover cut list, docs/knowledge/flue-cutover-tool-cut-list.md §3,
@@ -2924,6 +3117,14 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             # ingest silently drops on PII reject / dedup / opt-out. Don't claim
             # a durable write the store didn't actually make.
             return "I couldn't save that just now — it may already be stored or contain something I can't keep."
+        # An EXPLICIT teach beats a recent forget — but only clear the shadow
+        # AFTER the store succeeded (its source is tombstone-exempt), or a
+        # failed/rejected store would silently drop the protection (Greptile P1).
+        try:
+            from memory_tombstones import clear_matching as _tomb_clear
+            _tomb_clear(user_id, text)
+        except Exception:
+            pass
         return "Got it — I'll remember that."
 
     # ── A2A Federation Status ──────────────────────────────────────────────────
@@ -3765,11 +3966,21 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False,
                 return f"I couldn't get the weather for {city_name} right now."
             # Speak naturally: "18.3°C (overcast)" → "18 point 3 degrees and overcast".
             desc_part = f" and {desc}" if desc else ""
+            # Whole degrees for speech: "17 degrees", never "17 point 1 degrees"
+            # — more natural spoken, and it makes the reply stitchable by the
+            # voice segment cache (voice_stitch works on the integer vocab).
+            raw_temp = temp
+            try:
+                temp = round(float(temp))
+            except (TypeError, ValueError):
+                pass
             msg = f"It's {_say_num(temp)} degrees{desc_part} in {city_name}"
             if feels is not None:
                 try:
-                    if abs(float(feels) - float(temp)) > 2:
-                        msg += f", and it feels like {_say_num(feels)} degrees"
+                    # Gate on the REAL delta, not the rounded speech value —
+                    # rounding must not change whether feels-like is mentioned.
+                    if abs(float(feels) - float(raw_temp)) > 2:
+                        msg += f", and it feels like {_say_num(round(float(feels)))} degrees"
                 except Exception:
                     pass
             return msg + "."

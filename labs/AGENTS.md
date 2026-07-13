@@ -54,6 +54,14 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
 
 ## Child DOX Index
 
+- `kokoro-voice-blend/` — custom "Zoe" persona voice spike: pure-numpy blends
+  (linear + slerp) of Kokoro style tensors from the stock voices bin, committed
+  candidate tensors (`voices/*.npy`, float16) + reproducible generator
+  (`blend_zoe_voices.py`) + audition WAVs under `/tmp/zoe-voice-blend-samples/`.
+  Audio synthesis runs a one-shot CPU kokoro-onnx (~600MB) and MUST hold
+  `flock /tmp/zoe-voice-harness.lock`; never loads a second full Kokoro. Not
+  wired anywhere; deployment (augmented voices bin + env flip) is a documented
+  operator step gated on the voice replay harness — see its README.
 - `flue-harness-spike/` — Flue autonomous-harness substrate spike (scout → implement
   → verify → openPR slice); README + RUNBOOK + FINDINGS are records, not contracts.
 - `flue-zoe-brain/` — Flue-hosted Pi `Agent` on the local Gemma brain (a third
@@ -82,6 +90,27 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
   discovers `*_gate.py` modules; corpus + adversarial gates today). LAB-only,
   hand-run against the live host, never CI-wired. See
   `flue-zoe-brain/parity/README-GATES.md`.
+- `needle-benchmark/` — LAB benchmark of Cactus Needle (26M single-shot
+  function-calling model, MIT) as a CPU-only tool/intent router in front of the
+  Gemma brain: routing accuracy vs the current Tier-0 regex + Tier-1 embedding
+  routing on a labeled corpus, per-decision CPU latency, pre-brain
+  classifier-chain cost, and tool-prefilter token savings. Hand-run only (venv
+  built OUTSIDE the repo by `setup.sh`; weights from HF at run time, never
+  committed). README.md carries the four measured numbers + the adopt/reject
+  recommendation. Never wired into the voice path, `fast_tiers`, or CI.
+- `digarr-spike/` — evaluation record for digarr (MIT, Bun/PGlite) as a hidden
+  music-discovery engine behind Zoe: verified batch-run config against the local
+  Gemma llama-server, footprint numbers, listening-source findings, and the
+  recommendations→Music Assistant playlist bridge design. README is a record,
+  not a contract; nothing runs resident and nothing is prod-wired.
+- `functiongemma-feasibility/` — feasibility record for FunctionGemma-270M
+  (Q8_0 GGUF via llama.cpp CPU-only on :11435) as a complete-call fast-tier
+  router: RAM/latency/stock-accuracy/cold-load measured on-box; verdict **GO**
+  for the fine-tune follow-up (stock 33% vs the 61.7% routing baseline, but
+  ~0.4–0.8 s latency, 0% chat false-positives, 94% on a 3-tool block). README
+  is a record, not a contract; harness is hand-run, hard-gated on
+  MemAvailable ≥ 2 GB, never resident, never prod-wired. Weights stay at
+  `/home/zoe/models/lab/`.
 - `flue-zoe-telegram/` — Flue Telegram channel: long-poll bot bridged to zoe-data's
   `/api/chat` (NOT a Flue LLM agent; `src/agents/zoe.ts` is a build-only placeholder
   and registers no model provider — never points at the voice brain on `:11434`).
@@ -93,3 +122,10 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
   request can't impersonate; `auth.resolve_acting_user`). Unlinked senders are told
   their id and refused (never reach the brain as a real user). Ships the opt-in unit
   template above. Hand-started, demo-only; README is a record, not a contract.
+- `setfit-router/` — supervised classifier head (logreg/MLP) on the frozen prod
+  bge-small embedding to raise fast-tier routing coverage: 13-domain label set
+  (live ROUTES + missing notes/journal/music/smart_home + chat none-class),
+  1,121-example train set (seeds + local-Gemma paraphrases), heads + eval vs the
+  needle-benchmark 81-case corpus, and a fast_tiers integration PLAN. Verdict:
+  adopt logreg @ conf 0.4 (79.0% raw / 0% chat-FP gated vs 61.7% baseline).
+  Nothing prod-wired; README is a record, not a contract.

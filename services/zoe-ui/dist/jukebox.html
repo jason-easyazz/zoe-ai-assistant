@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Zoe Jukebox</title>
+<style>
+  /* The household jukebox: scan the QR on the panel's music screen, search,
+     and queue songs. Household-shared like the panel's music controls —
+     everything goes through the same /api/music endpoints. */
+  :root{--bg:#0a0d18;--card:rgba(255,255,255,.06);--line:rgba(255,255,255,.1);--ink:#f2f4fa;--soft:rgba(255,255,255,.65);--faint:rgba(255,255,255,.4);--accent:#7b96ff}
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  body{font-family:-apple-system,'Segoe UI',Roboto,sans-serif;background:radial-gradient(120% 90% at 50% -10%,#131a2b,#080b12 62%);color:var(--ink);min-height:100vh;padding:18px 16px 40px}
+  h1{font-size:22px;font-weight:700;display:flex;align-items:center;gap:10px;margin-bottom:4px}
+  h1 .dot{width:14px;height:14px;border-radius:50%;background:radial-gradient(circle at 34% 30%,#a9d4ff,#5b74ff 58%,#7a53ff);box-shadow:0 0 12px rgba(107,138,255,.7)}
+  .sub{font-size:13px;color:var(--faint);margin-bottom:14px}
+  #np{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px 14px;margin-bottom:14px;min-height:56px}
+  #np img{width:40px;height:40px;border-radius:8px;object-fit:cover}
+  #np .t{font-size:15px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #np .a{font-size:12px;color:var(--soft)}
+  #np .badge{margin-left:auto;font-size:11px;color:var(--faint);flex:none}
+  .searchrow{display:flex;gap:8px;margin-bottom:14px}
+  #q{flex:1;height:48px;border-radius:12px;border:1px solid var(--line);background:rgba(255,255,255,.08);color:var(--ink);font-size:16px;padding:0 14px;outline:none}
+  #q:focus{border-color:var(--accent)}
+  #go{height:48px;padding:0 18px;border-radius:12px;border:0;background:var(--accent);color:#0a0d18;font-size:16px;font-weight:600}
+  .grp{margin:14px 0 6px;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
+  .row{display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:8px 10px;margin-bottom:8px}
+  .row img{width:44px;height:44px;border-radius:8px;object-fit:cover;background:rgba(255,255,255,.08);flex:none}
+  .row .m{flex:1;min-width:0}
+  .row .n{font-size:15px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .row .s{font-size:12px;color:var(--soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .row button{height:40px;padding:0 12px;border-radius:10px;border:1px solid var(--line);background:rgba(255,255,255,.08);color:var(--ink);font-size:13px;font-weight:600;flex:none}
+  .row button.play{background:var(--accent);color:#0a0d18;border:0}
+  #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(80px);background:rgba(20,24,40,.95);border:1px solid var(--line);border-radius:12px;padding:10px 18px;font-size:14px;transition:transform .25s;max-width:90vw}
+  #toast.on{transform:translateX(-50%) translateY(0)}
+  .empty{color:var(--faint);font-size:14px;text-align:center;padding:24px 0}
+</style>
+</head>
+<body>
+<h1><span class="dot"></span>Zoe Jukebox</h1>
+<div class="sub">Search and queue music for the house</div>
+<div id="np"><div class="empty" style="padding:0">Nothing playing</div></div>
+<div class="searchrow">
+  <input id="q" type="search" placeholder="Song, artist, album…" autocomplete="off">
+  <button id="go">Search</button>
+</div>
+<div id="out"><div class="empty">Find something to add to the queue.</div></div>
+<div id="toast"></div>
+<script>
+(function(){
+  'use strict';
+  var out=document.getElementById('out'),q=document.getElementById('q'),np=document.getElementById('np');
+  var toastEl=document.getElementById('toast'),toastT=null;
+  function esc(s){var d=document.createElement('div');d.textContent=String(s==null?'':s);return d.innerHTML;}
+  function toast(t){toastEl.textContent=t;toastEl.classList.add('on');clearTimeout(toastT);toastT=setTimeout(function(){toastEl.classList.remove('on');},2400);}
+  function loadNP(){fetch('/api/music/now-playing').then(function(r){return r.json();}).then(function(d){
+    var n=d&&d.now_playing;
+    if(!n||!n.title){np.innerHTML='<div class="empty" style="padding:0">Nothing playing</div>';return;}
+    np.innerHTML=(n.image&&/^https?:/.test(n.image)?'<img alt="" src="'+esc(n.image)+'">':'')
+      +'<div style="min-width:0"><div class="t">'+esc(n.title)+'</div><div class="a">'+esc(n.artist||'')+'</div></div>'
+      +'<span class="badge">'+esc(n.player_name||'')+'</span>';
+  }).catch(function(){});}
+  loadNP();setInterval(loadNP,8000);
+
+  function row(item,kind){
+    var img=item.image&&/^https?:/.test(item.image)?'<img alt="" src="'+esc(item.image)+'">':'<img alt="">';
+    var sub=[kind,item.artist].filter(Boolean).join(' · ');
+    return '<div class="row" data-uri="'+esc(item.uri||'')+'">'+img
+      +'<div class="m"><div class="n">'+esc(item.name||'')+'</div><div class="s">'+esc(sub)+'</div></div>'
+      +'<button data-opt="add">＋ Queue</button><button class="play" data-opt="play">▶</button></div>';
+  }
+  function search(){
+    var term=(q.value||'').trim();if(!term)return;
+    out.innerHTML='<div class="empty">Searching…</div>';
+    fetch('/api/music/search?q='+encodeURIComponent(term)+'&limit=6').then(function(r){return r.json();}).then(function(d){
+      var html='',groups=[['tracks','Songs'],['artists','Artists'],['albums','Albums'],['playlists','Playlists'],['radio','Radio']];
+      groups.forEach(function(g){
+        var items=(d&&d.results&&d.results[g[0]])||(d&&d[g[0]])||[];
+        if(!items.length)return;
+        html+='<div class="grp">'+g[1]+'</div>'+items.map(function(it){return row(it,g[1].replace(/s$/,''));}).join('');
+      });
+      out.innerHTML=html||'<div class="empty">No results for “'+esc(term)+'”.</div>';
+    }).catch(function(){out.innerHTML='<div class="empty">Search failed — is Zoe reachable?</div>';});
+  }
+  document.getElementById('go').onclick=search;
+  q.addEventListener('keydown',function(e){if(e.key==='Enter'){q.blur();search();}});
+
+  out.addEventListener('click',function(e){
+    var btn=e.target.closest('button[data-opt]');if(!btn)return;
+    var r=btn.closest('.row'),uri=r&&r.getAttribute('data-uri');
+    if(!uri)return;
+    var opt=btn.getAttribute('data-opt')==='play'?'replace':'add';
+    btn.disabled=true;
+    fetch('/api/music/play_media',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uri:uri,option:opt})})
+      .then(function(res){return res.json();}).then(function(d){
+        btn.disabled=false;
+        if(d&&d.ok){toast(opt==='add'?'Added to the queue':'Playing now');setTimeout(loadNP,1200);}
+        else toast('Couldn’t do that — '+((d&&d.reason)||'try again'));
+      }).catch(function(){btn.disabled=false;toast('Couldn’t reach Zoe.');});
+  });
+})();
+</script>
+</body>
+</html>

@@ -55,6 +55,7 @@
   #home.hide{opacity:0;pointer-events:none}
   #orb{position:absolute;left:44px;bottom:44px;width:68px;height:68px;border-radius:50%;background:radial-gradient(circle at 34% 30%,#a9d4ff,#5b74ff 58%,#7a53ff 100%);box-shadow:0 0 30px rgba(107,138,255,.5),inset 0 2px 8px rgba(255,255,255,.4);z-index:50;animation:breathe 5s ease-in-out infinite;cursor:pointer}
   #orb.busy{animation:breathe 1.1s ease-in-out infinite;box-shadow:0 0 44px rgba(107,138,255,.85),inset 0 2px 8px rgba(255,255,255,.4)}
+  #orb.listening{animation:breathe .9s ease-in-out infinite;box-shadow:0 0 64px rgba(123,150,255,.95),0 0 120px rgba(123,150,255,.4),inset 0 2px 8px rgba(255,255,255,.5)}
   /* ask-Zoe command bar (orb tap) */
   #cmdbar{position:absolute;left:50%;bottom:126px;transform:translateX(-50%) translateY(12px);width:620px;display:none;z-index:55;opacity:0;transition:.25s}
   #cmdbar.on{display:flex;opacity:1;transform:translateX(-50%)}
@@ -100,8 +101,10 @@
   .ltabs{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px}
   .ltab{font-size:19px;font-weight:500;color:var(--ink-soft);padding:10px 20px;border-radius:999px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);cursor:pointer;white-space:nowrap}
   .ltab.on{background:rgba(123,150,255,.22);border-color:rgba(123,150,255,.55);color:var(--ink);font-weight:600}
-  .lmeta{font-size:15px;color:var(--ink-faint);margin-bottom:14px}
-  .lcols{flex:1;column-count:3;column-gap:28px;overflow-y:auto}
+  .lhead{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+  .lcount{font-size:17px;color:var(--ink-faint);padding-top:12px;flex:none}
+  .lcols{flex:1;overflow-y:auto}
+  .lcols .lin{column-count:3;column-gap:28px}
   .lrow2{display:flex;align-items:center;gap:12px;padding:11px 4px;border-bottom:1px solid rgba(255,255,255,.07);font-size:20px;cursor:pointer;break-inside:avoid}
   .lrow2 .bx{width:24px;height:24px;border-radius:8px;border:2px solid rgba(255,255,255,.3);flex:none;display:grid;place-items:center;color:#08131c}
   .lrow2.done .bx{background:var(--cat-personal);border-color:var(--cat-personal)}
@@ -157,9 +160,23 @@
   .cwe small{display:block;color:var(--ink-soft);opacity:.8;margin-top:1px;font-variant-numeric:tabular-nums}
   .caldaylist .dev{display:flex;align-items:center;gap:16px;padding:15px 0;border-top:1px solid rgba(255,255,255,.08)}
   /* Settings — expanding sections */
-  .setf{position:absolute;inset:0;padding:100px 200px 150px;display:flex;flex-direction:column}
+  .remf{position:absolute;inset:0;padding:110px 150px 158px;display:flex;flex-direction:column}
+  .remf .remlist{overflow-y:auto;flex:1}
+  .remrow{display:flex;gap:16px;align-items:baseline;padding:12px 4px;border-bottom:1px solid rgba(255,255,255,.08)}
+  .remrow .rw{font-size:18px;color:var(--ink-faint);min-width:130px;flex:none;font-variant-numeric:tabular-nums}
+  .remrow .rt2{font-size:21px;font-weight:500;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+  .setf{position:absolute;inset:0;padding:100px 200px 150px;display:flex;flex-direction:column;overflow-y:auto}
   .setsec{background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.09);border-radius:20px;margin-bottom:14px;overflow:hidden}
   .setsec .sh{display:flex;align-items:center;gap:14px;padding:20px 24px;cursor:pointer;font-size:22px;font-weight:500}
+  .srow2 .sw{width:58px;height:34px;border-radius:999px;background:rgba(255,255,255,.16);position:relative;transition:.25s;flex:none;cursor:pointer}
+  .srow2 .sw::after{content:'';position:absolute;top:4px;left:4px;width:26px;height:26px;border-radius:50%;background:#fff;transition:.25s}
+  .srow2 .sw.on{background:var(--accent)}
+  .srow2 .sw.on::after{left:28px}
+  .srow2 input[type=range]{flex:1;max-width:280px;accent-color:var(--accent);height:34px}
+  .srow2 .sv{min-width:56px;text-align:right;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+  .srow2 .stat{width:12px;height:12px;border-radius:50%;flex:none}
+  .srow2 .stat.ok{background:#66d6a3;box-shadow:0 0 10px rgba(102,214,163,.6)}
+  .srow2 .stat.bad{background:var(--cat-health);box-shadow:0 0 10px rgba(255,122,144,.5)}
   .setsec .sh .caret{margin-left:auto;color:var(--ink-faint);transition:transform .25s}
   .setsec.open .sh .caret{transform:rotate(90deg)}
   .setsec .sbody{max-height:0;overflow:hidden;transition:max-height .3s ease}
@@ -183,15 +200,22 @@
   .estmc input,.estmc select{width:100%;height:50px;border-radius:13px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.06);color:var(--ink);font:inherit;font-size:19px;padding:0 14px;outline:none}
   .estmc .erow{display:flex;gap:12px}
   .estmc .btns{display:flex;gap:12px;margin-top:24px}
+  .estmc .spkgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;max-height:380px;overflow-y:auto}
+  .estmc .spkopt{display:block;width:100%;text-align:left;padding:15px 18px;border-radius:14px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:#fff;font:inherit;font-size:20px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .estmc .btns button{flex:1;height:54px;border-radius:14px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:var(--ink);font:inherit;font-size:19px;cursor:pointer}
   .estmc .btns .save{background:var(--accent);border-color:transparent;color:#fff;font-weight:600}
   .estmc .btns .del{background:rgba(255,122,144,.14);border-color:rgba(255,122,144,.4);color:#ff9db0}
-  .ctcard .ctacts{display:flex;gap:12px;margin-top:20px}
+  .ctcard .ctacts{display:flex;gap:12px;margin-top:20px;flex-wrap:wrap}
+  .ctchips{display:flex;flex-wrap:wrap;gap:8px}
+  .ctchip{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;background:rgba(123,150,255,.14);border:1px solid rgba(123,150,255,.3);font-size:17px;cursor:pointer}
+  .ctchip small{color:var(--ink-faint);font-size:13px}
+  .ctchip .x{color:var(--ink-faint);font-weight:600;padding:0 2px;cursor:pointer}
+  .estmc select{width:100%;height:52px;border-radius:12px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:var(--ink);font:inherit;font-size:19px;padding:0 12px;margin-bottom:6px}
   .ctcard .ctacts button{flex:1;height:50px;border-radius:13px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:var(--ink);font:inherit;font-size:18px;cursor:pointer}
   .ctcard .ctacts .del{background:rgba(255,122,144,.14);border-color:rgba(255,122,144,.4);color:#ff9db0}
   .cev{cursor:pointer}.cwe{cursor:pointer}.caldaylist .dev{cursor:pointer}
   /* Timers */
-  .tmore{position:absolute;left:50%;bottom:150px;transform:translateX(-50%);display:flex;gap:14px}
+  .tmore{display:flex;gap:14px;margin-top:16px;justify-content:center}
   .tmr{display:flex;align-items:center;gap:14px;background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:12px 18px;font-size:20px}
   .tmr b{font-variant-numeric:tabular-nums;font-size:24px}
   .tmr .tx3{color:var(--ink-soft)}
@@ -256,38 +280,65 @@
   #stage.wxlight .wbig .c small{color:rgba(27,39,64,.6)}
   #stage.wxlight .whours .hh .lab{color:rgba(27,39,64,.72)}
   #stage.wxlight .whours .hh .d{color:#1b2740}
+  #stage.wxlight .hfull .hclock .ht,#stage.wxlight .hfull .htemp .n{color:#1b2740;text-shadow:none}
+  #stage.wxlight .hfull .hclock .hd,#stage.wxlight .hfull .htemp .c{color:rgba(27,39,64,.8);text-shadow:none}
+  #stage.wxlight .hfull .today .thk{color:rgba(27,39,64,.66)}
+  #stage.wxlight .hfull .today .tr{border-top-color:rgba(27,39,64,.2)}
+  #stage.wxlight .hfull .today .tt{color:rgba(27,39,64,.7)}
+  #stage.wxlight .hfull .today .tn{color:#1b2740}
 
   /* music full */
   .mfull .mart{position:absolute;left:90px;top:150px;width:300px;height:300px;border-radius:28px;display:grid;place-items:center;font-size:120px;background:linear-gradient(140deg,#8ea6ff,#b49bff);box-shadow:0 34px 80px rgba(0,0,0,.5);background-size:cover;background-position:center}
   .mfull .minfo{position:absolute;left:440px;top:214px;right:120px}
   .mfull .mkick{font-size:16px;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.6)}
-  .mfull .mtitle{font-size:66px;font-weight:700;letter-spacing:-.02em;margin-top:14px;line-height:1}
-  .mfull .martist{font-size:30px;color:rgba(255,255,255,.78);margin-top:12px}
-  .mfull .mscrub{position:absolute;left:90px;right:120px;bottom:270px}
+  .mfull .mtitle{font-size:52px;font-weight:700;letter-spacing:-.02em;margin-top:14px;line-height:1.06;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
+  .mfull .martist{font-size:26px;color:rgba(255,255,255,.78);margin-top:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .mfull .mscrub{position:absolute;left:440px;right:120px;bottom:270px}
   .mfull .mtrack{position:relative;height:7px;border-radius:999px;background:rgba(255,255,255,.22)}
   .mfull .mfill{position:absolute;left:0;top:0;bottom:0;width:38%;border-radius:999px;background:#fff}
   .mfull .mknob{position:absolute;top:50%;left:38%;transform:translate(-50%,-50%);width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.4)}
   .mfull .mtimes{display:flex;justify-content:space-between;margin-top:12px;font-size:18px;color:rgba(255,255,255,.6);font-variant-numeric:tabular-nums}
-  .mfull .mtransport{position:absolute;left:0;right:0;bottom:172px;display:flex;justify-content:center;align-items:center;gap:56px}
+  .mfull .mtransport{position:absolute;left:0;right:0;bottom:172px;display:flex;justify-content:center;align-items:center;gap:44px}
+  .mfull .mtransport .sml{opacity:.55;background:none;border:0;color:#fff;cursor:pointer;width:56px;height:56px;border-radius:50%;display:grid;place-items:center}
+  .mfull .mtransport .sml svg{width:26px;height:26px}
+  .mfull .mtransport button svg{width:28px;height:28px}
+  .mfull .mtransport .pp svg{width:32px;height:32px;color:#0a0d18}
+  .mfull .mtransport .sml.on{opacity:1;background:rgba(123,150,255,.25);box-shadow:0 0 16px rgba(123,150,255,.35)}
+  .mqbtn{width:48px;height:48px;flex:none;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.2);color:#fff;cursor:pointer}
+  .mqbtn svg{width:22px;height:22px}
+  .mqueue{position:absolute;top:0;right:-380px;width:360px;height:100%;background:rgba(10,13,24,.92);backdrop-filter:blur(20px);border-left:1px solid rgba(255,255,255,.12);z-index:45;transition:right .32s cubic-bezier(.2,.8,.3,1);padding:96px 26px 150px;overflow-y:auto}
+  .mqueue.open{right:0}
+  .mqueue h3{font-size:16px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:14px}
+  .mqueue .qi{display:flex;gap:12px;align-items:center;padding:12px 8px;border-radius:12px;font-size:19px}
+  .mqueue .qi.cur{background:rgba(123,150,255,.16)}
+  .mqueue .qi .qn{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mqueue .qi .qd{color:var(--ink-faint);font-size:15px;flex:none;font-variant-numeric:tabular-nums}
+  .mqr{position:absolute;right:36px;bottom:44px;display:flex;flex-direction:column;align-items:center;gap:6px;z-index:25}
+  .mqr .qrbox{width:86px;height:86px;background:#fff;border-radius:10px;padding:6px;display:grid;place-items:center}
+  .mqr .qrbox img,.mqr .qrbox canvas{width:100%;height:100%}
+  .mqr .qrlab{font-size:11px;color:var(--ink-faint);text-align:center;line-height:1.25}
   .mfull .mtransport button{width:68px;height:68px;border-radius:50%;border:0;background:rgba(255,255,255,.16);color:#fff;font-size:24px;cursor:pointer}
   .mfull .mtransport .pp{width:84px;height:84px;background:#fff;color:#10131c;font-size:28px}
 
   /* timer full */
-  .tfull{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;padding-bottom:120px}
-  .tfull .tkick{font-size:20px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:34px}
-  .tfull .tring{position:relative;width:420px;height:420px}
+  .tfull{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:0;padding:96px 0 158px}
+  .tfull .trings{display:flex;gap:64px;align-items:flex-start;justify-content:center}
+  .tfull .tunit{display:flex;flex-direction:column;align-items:center}
+  .tfull .tring{position:relative;width:250px;height:250px}
+  .tfull .tring.one{width:300px;height:300px}
   .tfull .tring svg{transform:rotate(-90deg)}
-  .tfull .tring .ttime{position:absolute;inset:0;display:grid;place-items:center;font-size:110px;font-weight:200;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
-  .tfull .tsub{font-size:26px;color:var(--ink-soft);margin-top:12px}
-  .tfull .tctrls{display:flex;gap:20px;margin-top:38px}
-  .tfull .tctrls button{width:74px;height:74px;border-radius:50%;border:0;cursor:pointer;font-size:24px;background:rgba(255,255,255,.12);color:#fff;display:grid;place-items:center}
+  .tfull .tring .ttime{position:absolute;inset:0;display:grid;place-items:center;font-size:62px;font-weight:200;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+  .tfull .tring.one .ttime{font-size:78px}
+  .tfull .tsub{font-size:22px;color:var(--ink-soft);margin-top:8px}
+  .tfull .tctrls{display:flex;gap:20px;margin-top:14px}
+  .tfull .tctrls button{width:66px;height:66px;border-radius:50%;border:0;cursor:pointer;font-size:24px;background:rgba(255,255,255,.12);color:#fff;display:grid;place-items:center}
   .tfull .tctrls .stop{background:var(--cat-health);color:#2a0910}
 
   /* HOME = the living weather ambient with your day on it (no shopping) */
   .hfull .htemp{position:absolute;top:38px;right:60px;text-align:right;text-shadow:0 2px 16px rgba(0,0,0,.4)}
   .hfull .htemp .n{font-size:58px;font-weight:250;letter-spacing:-.02em;line-height:1}
   .hfull .htemp .c{font-size:20px;color:rgba(255,255,255,.8);margin-top:4px}
-  .hfull .hclock{position:absolute;left:74px;top:176px;text-shadow:0 4px 34px rgba(0,0,0,.4)}
+  .hfull .hclock{position:absolute;left:74px;top:44px;text-shadow:0 4px 34px rgba(0,0,0,.4)}
   .hfull .hclock .ht{font-size:170px;font-weight:200;letter-spacing:-.045em;line-height:.88}
   .hfull .hclock .hd{font-size:30px;color:rgba(255,255,255,.84);margin-top:14px}
   .hfull .today{position:absolute;right:70px;bottom:176px;width:434px}
@@ -309,14 +360,14 @@
   .slp .sclock{position:absolute;top:50%;left:50%;transform:translate(-50%,-64%);display:flex;gap:64px;color:rgba(255,255,255,.7);font-weight:200;font-size:230px;letter-spacing:-.04em;line-height:1;font-variant-numeric:tabular-nums;text-shadow:0 0 40px rgba(120,150,220,.15)}
   .slp .sdate{position:absolute;top:50%;left:50%;transform:translate(-50%,120px);color:rgba(255,255,255,.34);font-size:26px;letter-spacing:.04em}
   .slp .sdock{position:absolute;left:50%;bottom:52px;transform:translateX(-50%);display:flex;gap:16px}
-  .slp .sc{display:flex;flex-direction:column;align-items:center;gap:11px;padding:20px 30px;border-radius:22px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);color:rgba(255,255,255,.62);min-width:132px;cursor:pointer;transition:.3s}
-  .slp .sc svg{width:38px;height:38px}
+  .slp .sc{display:flex;flex-direction:row;align-items:center;gap:14px;padding:18px 26px;border-radius:22px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);color:rgba(255,255,255,.62);min-width:132px;cursor:pointer;transition:.3s}
+  .slp .sc svg{width:32px;height:32px;flex:none}
   .slp .sc .nm{font-size:20px;font-weight:500}
   .slp .sc .bt{font-size:32px;font-weight:600;line-height:1}
   .slp .sc.on{background:radial-gradient(circle at 40% 28%,rgba(255,214,140,.8),rgba(255,180,90,.22));color:#3a2a10;border-color:rgba(255,205,125,.4);box-shadow:0 0 34px rgba(255,190,100,.35)}
 
   /* ROOMS — a control panel for everything in a room */
-  .rm .rchips{position:absolute;top:46px;right:56px;display:flex;gap:8px}
+  .rm .rchips{position:absolute;top:46px;right:122px;display:flex;gap:8px}
   .rm .rchip{font-size:22px;font-weight:500;color:rgba(255,255,255,.5);padding:10px 20px;border-radius:999px}
   .rm .rchip.on{background:rgba(255,255,255,.12);color:#fff;font-weight:600}
   .rm .rhero{position:absolute;left:60px;top:150px;width:560px;bottom:150px;border-radius:28px;overflow:hidden;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);padding:38px;display:flex;flex-direction:column;justify-content:center}
@@ -329,6 +380,11 @@
   .rm .rscrub{position:relative;height:6px;border-radius:999px;background:rgba(255,255,255,.2);margin-top:32px}
   .rm .rscrub .f{position:absolute;left:0;top:0;bottom:0;width:38%;border-radius:999px;background:#fff}
   .rm .rtp{position:relative;display:flex;align-items:center;justify-content:center;gap:44px;margin-top:22px}
+  .rm .rtp button svg{width:26px;height:26px}
+  .rm .rtp .pp svg{width:30px;height:30px;color:#0a0d18}
+  .rm .rvol{position:relative;display:flex;align-items:center;justify-content:center;gap:14px;margin-top:18px;color:rgba(255,255,255,.6);font-size:16px}
+  .rm .rvol input[type=range]{flex:1;max-width:300px;accent-color:#fff;height:40px}
+  .rm .rvol .vv{min-width:44px;text-align:left;font-variant-numeric:tabular-nums}
   .rm .rtp button{width:58px;height:58px;border-radius:50%;border:0;background:rgba(255,255,255,.14);color:#fff;font-size:20px;cursor:pointer}
   .rm .rtp .pp{width:66px;height:66px;background:#fff;color:#10131c;font-size:23px}
   .rm .rlights{position:absolute;right:130px;top:150px;width:440px;display:grid;grid-template-columns:1fr 1fr;gap:14px}
@@ -364,12 +420,18 @@
   /* settings cog — per card, and per full-screen */
   .card .cog{position:absolute;top:22px;right:22px;width:44px;height:44px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);color:var(--ink-soft);cursor:pointer;z-index:6}
   .card .cog svg{width:22px;height:22px}
+  .chttl{position:absolute;top:38px;left:110px;height:48px;display:flex;align-items:center;font-size:30px;font-weight:600;letter-spacing:-.01em;z-index:30}
+  .chmeta{position:absolute;top:38px;right:122px;height:48px;display:flex;align-items:center;gap:10px;font-size:20px;color:var(--ink-soft);z-index:30}
+  .chmeta .chbtn{width:48px;height:48px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.2);color:#fff;cursor:pointer}
+  .chmeta .chbtn svg{width:24px;height:24px}
   .fcog{position:absolute;top:38px;right:56px;width:48px;height:48px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.2);color:#fff;cursor:pointer;z-index:30}
   .fcog svg{width:24px;height:24px}
   .hfull .htemp{right:120px} /* clear the home cog */
 
   /* speaker / cast selection on music */
-  .spk{position:absolute;top:40px;right:56px;display:flex;align-items:center;gap:11px;padding:13px 20px;border-radius:999px;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.22);color:#fff;font:inherit;font-size:19px;font-weight:500;cursor:pointer;z-index:30}
+  .mtop{position:absolute;top:40px;right:120px;display:flex;align-items:center;gap:12px;z-index:60}
+  .spk{display:flex;align-items:center;gap:11px;padding:13px 20px;border-radius:999px;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.22);color:#fff;font:inherit;font-size:19px;font-weight:500;cursor:pointer;max-width:340px}
+  .spk .spkname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .spk svg{width:22px;height:22px}
   .spk .cx{color:rgba(255,255,255,.7);font-size:16px}
 
@@ -403,14 +465,13 @@
   #dock .pc.apps.active{background:rgba(123,150,255,.9);border-color:rgba(123,150,255,.6);color:#fff;box-shadow:0 0 24px rgba(123,150,255,.5)}
   #dock .ddiv{width:1px;height:34px;background:rgba(255,255,255,.14);margin:0 2px;flex:none}
   #stage.lopen #full,#stage.lopen #cardwrap,#stage.lopen #cv,#stage.lopen #glow{filter:blur(24px) brightness(.62);opacity:.7 !important}
-  .launch{position:absolute;inset:0;z-index:40;display:flex;flex-direction:column;align-items:center;padding:80px 90px 150px;opacity:0;pointer-events:none;transition:opacity .35s;background:rgba(7,10,22,.42);backdrop-filter:blur(3px)}
+  .launch{position:absolute;inset:0;z-index:40;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:44px 90px 158px;opacity:0;pointer-events:none;transition:opacity .35s;background:rgba(7,10,22,.42);backdrop-filter:blur(3px)}
   #stage.lopen .launch{opacity:1;pointer-events:auto}
-  .launch .lt{font-size:17px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:34px}
-  .lgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:30px 38px;width:100%;max-width:960px}
+    .lgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:22px 38px;width:100%;max-width:960px}
   .ltile{display:flex;flex-direction:column;align-items:center;gap:14px;cursor:pointer;opacity:0;transform:translateY(16px) scale(.94);transition:transform .34s cubic-bezier(.2,.9,.3,1.2),opacity .34s;transition-delay:0ms}
   #stage.lopen .ltile{opacity:1;transform:none;transition-delay:calc(60ms + var(--i)*24ms)}
   .ltile:active{transform:scale(.93)}
-  .lti{width:104px;height:104px;border-radius:28px;display:grid;place-items:center;color:#fff;box-shadow:0 14px 34px rgba(0,0,0,.4),inset 0 1px 0 rgba(255,255,255,.28);transition:transform .16s}
+  .lti{width:96px;height:96px;border-radius:28px;display:grid;place-items:center;color:#fff;box-shadow:0 14px 34px rgba(0,0,0,.4),inset 0 1px 0 rgba(255,255,255,.28);transition:transform .16s}
   .ltile:hover .lti{transform:translateY(-4px)}
   .lti svg{width:50px;height:50px}
   .lcap{font-size:20px;font-weight:500;color:var(--ink)}
@@ -492,7 +553,7 @@
   <div id="orb"></div>
   <div id="full"></div>
   <div id="cardwrap"><div id="host"></div></div>
-  <div class="launch" id="launch"><div class="lt">Where to?</div><div class="lgrid" id="lgrid"></div></div>
+  <div class="launch" id="launch"><div class="lgrid" id="lgrid"></div></div>
   <div id="authov"><div class="acard"><div class="colL"><h2>Who’s here?</h2><div class="sub">Tap your name to sign in</div><div id="auList"></div></div><div class="colR"><div class="alead" id="auLead">Pick your name</div><div class="apin" id="auPin"><div class="adots" id="auDots"><span class="adot"></span><span class="adot"></span><span class="adot"></span><span class="adot"></span></div><div class="apad" id="auPad"></div></div></div></div></div>
   <div id="cmdbar"><input id="cmdin" type="text" placeholder="Ask Zoe…" autocomplete="off"><button id="cmdgo" title="Send" aria-label="Send">➤</button></div>
   <div id="saytoast"></div>
@@ -527,6 +588,14 @@
   var GEAR='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-7M6 7H4M20 17h-2M11 17H4"/><circle cx="9" cy="7" r="2.4"/><circle cx="15" cy="17" r="2.4"/></svg>';
   var SPKR='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2.5" width="14" height="19" rx="3"/><circle cx="12" cy="14" r="3.4"/><circle cx="12" cy="6.5" r="1"/></svg>';
   var COG='<button class="cog" title="Settings">'+GEAR+'</button>';
+  var QICON='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>';
+  var SHUF_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>';
+  var REP_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>';
+  var PREV_I='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h2v14H6zM20 5v14l-10-7z"/></svg>';
+  var NEXT_I='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 5h2v14h-2zM4 5v14l10-7z"/></svg>';
+  var PLAY_I='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
+  var PAUSE_I='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h3.4v14H7zM13.6 5H17v14h-3.4z"/></svg>';
+  var REP1_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/><path d="M11 10h1v4"/></svg>';
   var GROUND='radial-gradient(120% 90% at 50% -10%,#131a2b,#080b12 62%)';
   var DUSK='linear-gradient(180deg,#20264d,#3a3a6b 34%,#8a5a86 60%,#d98a63 82%,#efb27a)';
 
@@ -540,52 +609,65 @@
         +'<div class="today"><div class="thk">Your Day</div><div id="hToday"></div></div>'
         +'</div>'},
     ask:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="askf"><div class="aa" id="askOut" style="opacity:.55">Just ask — I’ll answer here.</div></div>'},
+      html:'<div class="fcog">'+GEAR+'</div><div class="askf"><div class="aa" id="askOut" style="opacity:.55">Just ask — I’ll answer here.</div></div>'},
     weather:{home:true, bg:DUSK, canvas:true,
       html:'<div class="fcog">'+GEAR+'</div><div class="wloc" id="wxLoc"></div><div class="wbig"><div class="t" id="wxTemp">—°</div><div class="c" id="wxCond"></div></div><div class="whours" id="wxHours"></div>'},
     music:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,
-      html:'<button class="spk" id="mSpk">'+SPKR+' <span class="spkname">Speaker</span> <span class="cx">▾</span></button><div class="mfull"><div class="mart" id="mArt">🎵</div><div class="minfo"><div class="mkick">Now Playing</div><div class="mtitle" id="mTitle">—</div><div class="martist" id="mArtist"></div></div><div class="mscrub"><div class="mtrack"><div class="mfill" id="mFill" style="width:0%"></div></div><div class="mtimes"><span id="mElapsed">0:00</span><span id="mDur">0:00</span></div></div><div class="mtransport" id="mTransport"><button data-a="previous">⏮</button><button class="pp" id="mPP" data-a="playpause">❚❚</button><button data-a="next">⏭</button></div></div>'},
+      html:'<div class="fcog">'+GEAR+'</div><div class="mtop"><button class="spk" id="mSpk">'+SPKR+' <span class="spkname">Speaker</span> <span class="cx">▾</span></button><button class="mqbtn" id="mQBtn" title="Queue">'+QICON+'</button></div><div class="mfull"><div class="mart" id="mArt">🎵</div><div class="minfo"><div class="mkick">Now Playing</div><div class="mtitle" id="mTitle">—</div><div class="martist" id="mArtist"></div></div><div class="mscrub"><div class="mtrack"><div class="mfill" id="mFill" style="width:0%"></div></div><div class="mtimes"><span id="mElapsed">0:00</span><span id="mDur">0:00</span></div></div><div class="mtransport" id="mTransport"><button class="sml" id="mShuf" data-a="shuffle" title="Shuffle">'+SHUF_I+'</button><button data-a="previous">'+PREV_I+'</button><button class="pp" id="mPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button><button class="sml" id="mRep" data-a="repeat" title="Repeat">'+REP_I+'</button></div></div><aside class="mqueue" id="mQueue"><h3>Up next</h3><div id="mQList"></div></aside><div class="mqr" id="mQR"><div class="qrbox" id="mQRCode"></div><div class="qrlab">Scan to queue</div></div>'},
     timer:{home:true, bg:'radial-gradient(120% 100% at 50% 44%,#122447,#080b12 62%)', canvas:false, glow:'radial-gradient(closest-side at 50% 44%,rgba(123,150,255,.35),transparent 70%)',
-      html:'<div class="fcog">'+GEAR+'</div><div class="tfull"><div class="tkick">Timers</div><div class="tring"><svg width="420" height="420" viewBox="0 0 420 420"><circle cx="210" cy="210" r="188" fill="none" stroke="rgba(255,255,255,.12)" stroke-width="14"/><circle id="tmArc" cx="210" cy="210" r="188" fill="none" stroke="#8ea6ff" stroke-width="14" stroke-linecap="round" stroke-dasharray="1181" stroke-dashoffset="1181" style="filter:drop-shadow(0 0 14px rgba(123,150,255,.7))"/></svg><div class="ttime" id="tmTime">--:--</div></div><div class="tsub" id="tmLabel"></div><div class="tctrls" id="tmCtl"></div></div><div class="tmore" id="tmMore"></div>'},
+      html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Timers</div><div class="tfull"><div class="trings" id="tmRings"></div><div class="tmore" id="tmMore"></div></div>'},
     list:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="lstf2"><div class="ltabs" id="lstTabs"></div><div class="lmeta" id="lstMeta"></div><div class="lcols" id="lstItems"></div></div>'},
+      html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Lists</div><div class="chmeta" id="lstMeta"></div><div class="lstf2"><div class="lhead"><div class="ltabs" id="lstTabs"></div><div class="lcount" id="lstCount"></div></div><div class="lcols" id="lstItems"></div></div>'},
     calendar:{home:true, bg:GROUND, canvas:false,
       html:'<div class="fcog">'+GEAR+'</div><div class="calf"><div class="calhead"><h1 id="calTtl"></h1><div class="calviews" id="calViews"><button data-v="day">Day</button><button data-v="week" class="on">Week</button><button data-v="month">Month</button></div></div><div class="calbody" id="calBody"></div></div>'},
     person:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="ctf"><div class="ctwrap"><div class="ctgrid" id="ctGrid"></div><div class="ctaz" id="ctAZ"></div></div></div><div class="ctdetail" id="ctDetail"></div>'},
+      html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Contacts</div><div class="chmeta"><button class="chbtn" id="ctSearch" title="Search by voice"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button></div><div class="ctf"><div class="ctwrap"><div class="ctgrid" id="ctGrid"></div><div class="ctaz" id="ctAZ"></div></div></div><div class="ctdetail" id="ctDetail"></div>'},
     settings:{home:true, bg:GROUND, canvas:false,
       html:'<div class="fcog">'+GEAR+'</div><div class="setf"><div class="dk" style="margin-bottom:14px">Settings</div><div id="setSecs"></div></div>'},
     day:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="dayf"><div class="dc1"><div class="dk">Your Day</div><h1 id="dayTtl"></h1><div id="dayEvents"></div></div><div class="dc2"><div class="dsec"><h4>Reminders</h4><div id="dayRems"></div></div><div class="dsec" id="dayComms" style="display:none"><h4>Messages</h4><div id="dayCommsList"></div></div></div></div>'},
+      html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Your Day</div><div class="chmeta" id="dayMeta"></div><div class="dayf"><div class="dc1"><div class="dsec"><h4>Calendar</h4><div id="dayEvents"></div></div></div><div class="dc2"><div class="dsec"><h4>Reminders</h4><div id="dayRems"></div></div><div class="dsec" id="dayComms" style="display:none"><h4>Messages</h4><div id="dayCommsList"></div></div></div></div>'},
     sleep:{home:false, bg:'radial-gradient(120% 90% at 50% 46%,#0a0e18,#02030a 72%)', canvas:false,
       html:'<div class="slp"><div class="sclock" id="slClock"><span>--</span><span>--</span></div><div class="sdate" id="slDate"></div>'
         +'<div class="sdock" id="slDock"></div></div>'},
+    reminder:{home:true, bg:GROUND, canvas:false,
+      html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Reminders</div><div class="chmeta" id="remMeta"></div><div class="remf"><div id="remList" class="remlist"></div></div>'},
     rooms:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="rm"><div class="rchips" id="rmScenes"></div>'
-        +'<div class="rhero" id="rmHero" style="display:none"><div class="cover"></div><div class="rhead"><div class="rart" id="rmArt">🎵</div><div><div class="rk">Now Playing</div><div class="rt" id="rmT"></div><div class="ra" id="rmA"></div></div></div><div class="rscrub"><div class="f" id="rmF" style="width:0%"></div></div><div class="rtp"><button data-a="previous">⏮</button><button class="pp" id="rmPP" data-a="playpause">❚❚</button><button data-a="next">⏭</button></div></div>'
+      html:'<div class="fcog">'+GEAR+'</div><div class="rm"><div class="rchips" id="rmScenes"></div>'
+        +'<div class="rhero" id="rmHero" style="display:none"><div class="cover"></div><div class="rhead"><div class="rart" id="rmArt">🎵</div><div><div class="rk">Now Playing</div><div class="rt" id="rmT"></div><div class="ra" id="rmA"></div></div></div><div class="rscrub"><div class="f" id="rmF" style="width:0%"></div></div><div class="rtp"><button data-a="previous">'+PREV_I+'</button><button class="pp" id="rmPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button></div><div class="rvol"><span class="vlab">Vol</span><input type="range" min="0" max="100" step="2" id="rmVol"><span class="vv" id="rmVolV"></span></div></div>'
         +'<div class="rlights" id="rmLights"></div></div>'}
   };
 
   // card answers
   var CARD={
-    reminder:{heard:'“What are my reminders?”', wash:'var(--amber)', html:'<div class="card rem"><div class="wash"></div>'+COG+'<div class="bell">'+IC.bell+'</div><div class="kick">Reminders</div><div class="ttl2" id="remTtl">Loading…</div><div id="remList" style="margin-top:18px"></div></div>'},
     confirm:{heard:'“Add olive oil to the shopping list”', wash:'var(--accent)', html:'<div class="card confirm"><div class="wash"></div><div class="kick">Confirm</div><div class="q">Add to your Shopping list?</div><div class="rows"><div class="r"><span class="l">Item</span><span>Olive oil</span></div><div class="r"><span class="l">List</span><span>Shopping · 6 items</span></div></div><div class="acts"><button class="no">Not now</button><button class="yes">Add it</button></div></div>'},
     pair:{heard:'', wash:'var(--accent)', html:'<div class="card pair"><div class="wash"></div><div class="kick">Link a device</div><div class="digits"><div class="d">4</div><div class="d">8</div><div class="d">2</div><div class="d">1</div></div><div class="note2">Enter this code in the Zoe app on your phone to connect it to this home.</div></div>'}
   };
 
   var cv=document.getElementById('cv'),ctx=cv.getContext('2d'),W=1280,H=720;cv.width=W;cv.height=H;
-  var stars=[],drops=[],wxOn=false;
+  var stars=[],drops=[],wxOn=false,wxGlow=true; // wxGlow: warm dusk glow, off for clear night
   (function seed(){for(var i=0;i<26;i++)stars.push({x:Math.random()*W,y:Math.random()*H*.6,r:Math.random()*1.6+.3,tw:Math.random()*6.28});})();
   function frame(t){ if(wxOn){ctx.clearRect(0,0,W,H);
-      var s2=ctx.createRadialGradient(220,560,10,220,560,280);s2.addColorStop(0,'rgba(255,210,150,.6)');s2.addColorStop(1,'rgba(255,210,150,0)');ctx.fillStyle=s2;ctx.beginPath();ctx.arc(220,560,280,0,6.29);ctx.fill();
+      if(wxGlow){var s2=ctx.createRadialGradient(220,560,10,220,560,280);s2.addColorStop(0,'rgba(255,210,150,.6)');s2.addColorStop(1,'rgba(255,210,150,0)');ctx.fillStyle=s2;ctx.beginPath();ctx.arc(220,560,280,0,6.29);ctx.fill();}
       ctx.fillStyle='#fff';stars.forEach(function(st){ctx.globalAlpha=(.5+.5*Math.sin(t/700+st.tw))*.9;ctx.beginPath();ctx.arc(st.x,st.y,st.r,0,6.29);ctx.fill();});ctx.globalAlpha=1;
     } requestAnimationFrame(frame); }
   requestAnimationFrame(frame);
 
   var full=document.getElementById('full'),cardwrap=document.getElementById('cardwrap'),host=document.getElementById('host'),dock=document.getElementById('dock'),dbody=document.getElementById('dbody'),home=document.getElementById('home'),glow=document.getElementById('glow'),pick=document.getElementById('pick');
 
+  full.addEventListener('click',function(e){if(e.target.closest('.fcog'))show('settings');});
+  // Queue-drawer outside-tap dismiss — ONE delegated listener (the drawer is
+  // recreated on every music show(), so query it per event, never capture it).
+  full.addEventListener('click',function(e){
+    var qd=document.getElementById('mQueue');
+    if(qd&&qd.classList.contains('open')&&!e.target.closest('.mqueue')&&!e.target.closest('#mQBtn'))qd.classList.remove('open');
+  });
+
   function show(id){
     var f=FULL[id], c=CARD[id];
+    // Any navigation cancels a pending chat-fallback jump to Ask — the user
+    // (or a domain arrival) choosing a screen always wins over the deferred
+    // answer display.
+    if(typeof _askFallT!=='undefined'&&_askFallT){clearTimeout(_askFallT);_askFallT=null;}
     _cur=id; clearScreenTimers();
     var cb=document.getElementById('cmdbar');if(cb)cb.classList.remove('on');
     stage.classList.remove('wxlight');
@@ -607,24 +689,50 @@
       if(id==='calendar')wireCalendar();
       if(id==='person')wireContacts();
       if(id==='settings')wireSettings();
+      if(id==='reminder')wireReminder();
       full.querySelectorAll('.sc[data-t], .rlt[data-l], .hdock .hpc.light').forEach(function(el){el.onclick=function(){el.classList.toggle('on');var rs=el.querySelector('.rs');if(rs)rs.textContent=el.classList.contains('on')?'On':'Off';};});
       full.querySelectorAll('.rchip').forEach(function(c){c.onclick=function(){full.querySelectorAll('.rchip').forEach(function(x){x.classList.remove('on')});c.classList.add('on');};});
-      var pp=full.querySelector('.pp');if(pp)pp.onclick=function(){pp.textContent=pp.textContent==='❚❚'?'▶':'❚❚';};
     } else {
       full.classList.remove('on'); wxOn=false; cv.classList.remove('on'); glow.classList.remove('on');
       stage.style.background=GROUND; home.classList.remove('hide');
       cardwrap.classList.add('on');
       host.innerHTML=c.html; var card=host.querySelector('.card'); if(card&&c.wash)card.style.setProperty('--wash',c.wash);
-      if(id==='reminder')wireReminder();
     }
     // persistent dock: hidden on sleep; shows what was heard for a direct answer, else your pinned controls
     if(id==='sleep'){ dock.classList.add('hide'); }
     else {
       dock.classList.remove('hide');
-      var hd=c?c.heard:(id==='ask'?'“What is the meaning of life?”':'');
+      var hd=c?c.heard:'';
       if(hd){ dbody.innerHTML='<div class="dheard">Heard: <b>'+hd+'</b></div>'; }
       else { renderDock(); }
     }
+  }
+
+  // Dock timer chip — a small live countdown pinned in the dock while any
+  // timer runs; tapping it opens the timer surface. Refreshed by renderDock.
+  var _dockTmr={t:null,gen:0};
+  function paintDockTimer(){
+    var gen=++_dockTmr.gen;   // overlapping renderDock()s: only the newest response paints
+    apiGet('/api/skybridge/timers').then(function(d){
+      if(gen!==_dockTmr.gen)return;
+      var now=Date.now();
+      var exps=((d&&d.timers)||[]).map(function(t){return +t.expires_at_ms||0;}).filter(function(e){return e>now;}).sort(function(a,b){return a-b;}).slice(0,3);
+      if(_dockTmr.t){clearInterval(_dockTmr.t);_dockTmr.t=null;}
+      dbody.querySelectorAll('.pc.tchip').forEach(function(c){c.remove();});
+      if(!exps.length)return;
+      // one chip PER active timer (soonest first), all driven by one interval;
+      // closure-local so a detached set can only ever clear its own interval.
+      var chips=exps.map(function(){var c=document.createElement('div');c.className='pc tchip';c.innerHTML='⏱ <span class="nm">--:--</span>';c.onclick=function(){show('timer');};return c;});
+      for(var i=chips.length-1;i>=0;i--)dbody.insertBefore(chips[i],dbody.firstChild);
+      var myT=null;
+      function tick(){var alive=false;
+        chips.forEach(function(c,i){if(!dbody.contains(c))return;
+          var ms=exps[i]-Date.now();
+          if(ms<=0){c.remove();return;}
+          alive=true;var sc=Math.round(ms/1000);c.querySelector('.nm').textContent=Math.floor(sc/60)+':'+two(sc%60);});
+        if(!alive){clearInterval(myT);if(_dockTmr.t===myT)_dockTmr.t=null;}}
+      tick();myT=setInterval(tick,1000);_dockTmr.t=myT;
+    }).catch(function(){});
   }
 
   // ---- dock: real Home Assistant pinned controls (lights + thermostat) ----
@@ -656,6 +764,7 @@
     if(cl){var a=cl.attributes||{};var cur=(a.current_temperature!=null?a.current_temperature:a.temperature);var tgt=(a.temperature!=null?a.temperature:cur);if(tgt==null)tgt=21;
       html+='<div class="pc temp" data-eid="'+esc(cl.entity_id)+'" data-tgt="'+esc(String(Math.round(tgt)))+'"><div class="tv">'+(cur!=null?Math.round(cur):'—')+'°</div><div class="tl">Temp</div><div class="tpop"><div class="tpv">'+Math.round(tgt)+'°</div><div class="tsl"><div class="tff"></div><div class="tkn"></div></div><div class="tpl">Thermostat</div></div></div>';}
     dbody.innerHTML=html;
+    paintDockTimer();
     dbody.querySelectorAll('.pc.light[data-eid]').forEach(function(el){el.onclick=function(){var on=el.classList.toggle('on');haControl({entity_id:el.getAttribute('data-eid'),action:on?'turn_on':'turn_off'}).then(function(r){if(!r.ok)throw new Error('http '+r.status);}).catch(function(){el.classList.toggle('on');});};});
     (function(){var tb=dbody.querySelector('.pc.temp');if(!tb)return;var eid=tb.getAttribute('data-eid'),tsl=tb.querySelector('.tsl'),tff=tb.querySelector('.tff'),tkn=tb.querySelector('.tkn'),tpv=tb.querySelector('.tpv'),tv=parseInt(tb.getAttribute('data-tgt'),10)||21;
       function pt(){var p=Math.max(0,Math.min(100,(tv-15)/13*100));tff.style.height=p+'%';tkn.style.bottom=p+'%';tpv.textContent=tv+'°';}pt();
@@ -729,7 +838,13 @@
       throw new Error('auth');}
     if(!r.ok)throw new Error('http '+r.status);return r.json();});}
   function tickClock(){var c=document.getElementById('hClock');if(!c)return;var d=new Date(),h=d.getHours()%12;if(h===0)h=12;c.textContent=h+':'+two(d.getMinutes());var dt=document.getElementById('hDate');if(dt)dt.textContent=d.toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long'});}
-  function loadWeather(){apiGet('/api/weather/current').then(function(w){if(_cur!=='home')return;var el=document.getElementById('hTemp');if(!el||!w)return;var t=(w.temp!=null?w.temp:w.temperature);el.querySelector('.n').textContent=(t!=null?Math.round(t):'—')+'°';var c=(w.description||w.condition||'');el.querySelector('.c').textContent=c?c.charAt(0).toUpperCase()+c.slice(1):'';}).catch(function(){});}
+  function loadWeather(){apiGet('/api/weather/current').then(function(w){if(_cur!=='home')return;var el=document.getElementById('hTemp');if(!el||!w)return;var t=(w.temp!=null?w.temp:w.temperature);el.querySelector('.n').textContent=(t!=null?Math.round(t):'—')+'°';var c=(w.description||w.condition||'');el.querySelector('.c').textContent=c?c.charAt(0).toUpperCase()+c.slice(1):'';
+    // The home scene matches the sky (design intent): same scene mapping as
+    // the weather surface — clear day, clear night, cloud, rain — with the
+    // dusk gradient kept for golden-hour codes and as the pre-fetch default.
+    var scene=wxScene(w.icon);
+    if(_cur==='home'){stage.style.background=WXBG[scene]||DUSK;stage.classList.toggle('wxlight',scene==='day');wxOn=(scene!=='day');wxGlow=(scene==='dusk');cv.classList.toggle('on',wxOn);}
+  }).catch(function(){});}
   function loadToday(){var host=document.getElementById('hToday');if(!host)return;var d=new Date(),ds=d.getFullYear()+'-'+two(d.getMonth()+1)+'-'+two(d.getDate());
     apiGet('/api/calendar/events?start_date='+ds+'&end_date='+ds).then(function(data){
       if(_cur!=='home')return;
@@ -752,7 +867,7 @@
       var t=document.getElementById('wxTemp');if(t&&w.temp!=null)t.textContent=Math.round(w.temp)+'°';
       var cond=(w.description||'');cond=cond?cond.charAt(0).toUpperCase()+cond.slice(1):'';
       var cd=document.getElementById('wxCond');if(cd)cd.innerHTML=esc(cond)+(w.feels_like!=null?' &nbsp;<small>feels like '+Math.round(w.feels_like)+'°</small>':'');
-      var scene=wxScene(w.icon);stage.style.background=WXBG[scene]||DUSK;stage.classList.toggle('wxlight',scene==='day');
+      var scene=wxScene(w.icon);stage.style.background=WXBG[scene]||DUSK;stage.classList.toggle('wxlight',scene==='day');wxGlow=(scene==='dusk');
     }).catch(function(){});
     apiGet('/api/weather/forecast').then(function(f){if(_cur!=='weather'||!f||!f.hourly)return;
       var host=document.getElementById('wxHours');if(!host)return;
@@ -768,23 +883,111 @@
     apiGet('/api/music/now-playing').then(function(d){if(_cur!=='music')return;
       var np=d&&d.now_playing;
       var spk=document.getElementById('mSpk'),art=document.getElementById('mArt'),ti=document.getElementById('mTitle'),ar=document.getElementById('mArtist'),fill=document.getElementById('mFill'),te=document.getElementById('mElapsed'),td=document.getElementById('mDur'),pp=document.getElementById('mPP');
-      if(!d||!d.available||!np){_music.player_id=null;if(ti)ti.textContent='Nothing playing';if(ar)ar.textContent='';if(art)art.innerHTML='🎵';if(pp)pp.textContent='▶';if(fill)fill.style.width='0%';return;}
+      var idle=!d||!d.available||!np||!(np.title||np.state==='playing'||np.state==='paused');
+      var scrub=document.querySelector('.mfull .mscrub'),tp=document.getElementById('mTransport');
+      if(idle){
+        // Idle is a real state, not a broken card: say so, keep the speaker
+        // choice (it targets the NEXT play), point at the voice path, and
+        // hide the controls that have nothing to act on.
+        if(np&&np.player_id&&!_music.player_id)_music.player_id=np.player_id;
+        _music.np=null;
+        if(ti)ti.textContent='Nothing playing';
+        var pp0=document.getElementById('mPP');if(pp0){pp0.dataset.playing='0';pp0.innerHTML=PLAY_I;}
+        if(ar)ar.innerHTML='Say <b style="color:var(--ink)">“Hey Zoe, play some music”</b> — or pick a speaker first.';
+        if(art)art.innerHTML='🎵';
+        if(scrub)scrub.style.display='none';if(tp)tp.style.display='none';
+        if(np&&spk){var nm0=spk.querySelector('.spkname');if(nm0&&np.player_name)nm0.textContent=np.player_name;}
+        return;
+      }
+      if(scrub)scrub.style.display='';if(tp)tp.style.display='';
       _music.player_id=np.player_id;
       if(spk){var nm=spk.querySelector('.spkname');if(nm)nm.textContent=np.player_name||'';}
       if(ti)ti.textContent=np.title||'';
       if(ar)ar.textContent=np.artist||'';
       if(art){if(np.image&&/^https?:\/\//i.test(np.image)){art.innerHTML='<img alt="" style="width:100%;height:100%;object-fit:cover;border-radius:28px;display:block" src="'+esc(np.image)+'">';}else{art.innerHTML='🎵';}}
       var el=np.elapsed||0,du=np.duration||0;
+      _music.np={elapsed:el,duration:du,playing:np.state==='playing',active:(np.state==='playing'||np.state==='paused'),at:Date.now()};
       if(fill)fill.style.width=(du?Math.min(100,el/du*100):0)+'%';
       if(te)te.textContent=fmtDur(el);if(td)td.textContent=fmtDur(du);
-      if(pp)pp.textContent=(np.state==='playing')?'❚❚':'▶';
+      if(pp){var playing=(np.state==='playing');pp.dataset.playing=playing?'1':'0';pp.innerHTML=playing?PAUSE_I:PLAY_I;}
+      var sh=document.getElementById('mShuf');if(sh)sh.classList.toggle('on',!!np.shuffle);
+      var rp=document.getElementById('mRep');if(rp){var rm=np.repeat||'off';_music.repeat=rm;
+        rp.classList.toggle('on',rm!=='off');rp.innerHTML=rm==='one'?REP1_I:REP_I;}
+      _music.shuffle=!!np.shuffle;
     }).catch(function(){});
   }
+  // Smooth elapsed between the 5s polls — the scrub advances every second
+  // while something is playing instead of jumping on each poll.
+  function tickMusic(){if(_cur!=='music'||!_music.np||!_music.np.playing)return;
+    var el=_music.np.elapsed+(Date.now()-_music.np.at)/1000,du=_music.np.duration||0;
+    var fill=document.getElementById('mFill'),te=document.getElementById('mElapsed');
+    if(fill&&du)fill.style.width=Math.min(100,el/du*100)+'%';
+    if(te)te.textContent=fmtDur(Math.min(el,du||el));}
+  function musicSet(action,value){if(!_music.player_id)return;
+    fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({action:action,player_id:_music.player_id,value:value})}).then(function(){setTimeout(loadMusic,350);}).catch(function(){});}
+  function fmtQ(sec){sec=Math.max(0,Math.round(sec||0));return Math.floor(sec/60)+':'+two(sec%60);}
+  function loadQueue(){var host=document.getElementById('mQList');if(!host||!_music.player_id)return;
+    host.innerHTML='<div style="color:var(--ink-faint)">Loading…</div>';
+    apiGet('/api/music/queue/'+encodeURIComponent(_music.player_id)).then(function(d){
+      if(_cur!=='music')return;var its=(d&&d.items)||[];
+      var curTitle=(document.getElementById('mTitle')||{}).textContent||'';
+      host.innerHTML=its.slice(0,40).map(function(q){var nm=q.name||'';
+        var cur=curTitle&&nm.indexOf(curTitle)>=0;
+        return '<div class="qi'+(cur?' cur':'')+'"><span class="qn">'+esc(nm)+'</span><span class="qd">'+(q.duration?fmtQ(q.duration):'')+'</span></div>';}).join('')
+        ||'<div style="color:var(--ink-faint)">Queue is empty.</div>';
+    }).catch(function(){host.innerHTML='<div style="color:var(--ink-faint)">Couldn’t load the queue.</div>';});}
   function musicControl(action){if(!_music.player_id)return;
     fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({action:action,player_id:_music.player_id})}).then(function(){setTimeout(loadMusic,350);}).catch(function(){});}
   function wireMusic(){
+    // Revisits: seed the play/pause button from the cached snapshot so the
+    // pre-poll icon (and a fast tap) match the last-known real state.
+    if(_music.np){var pp0=document.getElementById('mPP');
+      if(pp0){pp0.dataset.playing=_music.np.playing?'1':'0';pp0.innerHTML=_music.np.playing?PAUSE_I:PLAY_I;}}
     loadMusic();_wxTick=setInterval(function(){if(_cur==='music')loadMusic();},5000);
-    var t=document.getElementById('mTransport');if(t)t.addEventListener('click',function(e){var btn=e.target.closest('button');if(!btn)return;var a=btn.getAttribute('data-a');musicControl(a==='playpause'?(document.getElementById('mPP').textContent==='❚❚'?'pause':'play'):a);});
+    if(_homeTick){clearInterval(_homeTick);}_homeTick=setInterval(tickMusic,1000);
+    var t=document.getElementById('mTransport');if(t)t.addEventListener('click',function(e){var btn=e.target.closest('button');if(!btn)return;var a=btn.getAttribute('data-a');
+      if(a==='shuffle'){musicSet('shuffle_set',!_music.shuffle);return;}
+      if(a==='repeat'){var nxt={off:'all',all:'one',one:'off'}[_music.repeat||'off'];musicSet('repeat_set',nxt);return;}
+      musicControl(a==='playpause'?(document.getElementById('mPP').dataset.playing==='1'?'pause':'play'):a);});
+    // Queue drawer: slide in from the right with what's up next.
+    var qb=document.getElementById('mQBtn'),qd=document.getElementById('mQueue');
+    if(qb&&qd)qb.onclick=function(e){e.stopPropagation();if(qd.classList.toggle('open'))loadQueue();};
+    // Jukebox QR: phones scan it to search + queue music (jukebox.html).
+    var qr=document.getElementById('mQRCode');
+    if(qr&&!qr.dataset.done){qr.dataset.done='1';
+      var url=location.origin+'/jukebox.html';
+      var sc=document.createElement('script');sc.src='/js/qrcode.min.js';
+      sc.onload=function(){try{new QRCode(qr,{text:url,width:74,height:74,correctLevel:QRCode.CorrectLevel.M});}catch(e){}};
+      document.head.appendChild(sc);}
+    // Speaker picker: list Music Assistant players, tap to move playback there.
+    var spk=document.getElementById('mSpk');
+    if(spk)spk.onclick=function(){
+      apiGet('/api/music/players').then(function(d){
+        var ps=(d&&d.players)||[];
+        if(!ps.length){toast('No speakers found');return;}
+        estOpen('<h3>Play on…</h3><div class="spkgrid">'+ps.map(function(pl){var pid=pl.player_id||pl.id||'';var nm=pl.display_name||pl.name||pid;
+          var cur=(_music.player_id&&pid===_music.player_id)?' style="border-color:var(--accent)"':'';
+          return '<button class="spkopt" data-pid="'+esc(String(pid))+'"'+cur+'>'+esc(String(nm))+'</button>';}).join('')
+          +'</div><div class="btns"><button data-x="cancel">Cancel</button></div>');
+        var m=document.getElementById('estModal');
+        m.querySelector('[data-x="cancel"]').onclick=estClose;
+        m.querySelectorAll('.spkopt').forEach(function(b){b.onclick=function(){
+          var pid=b.getAttribute('data-pid');
+          var active=_music.np&&_music.np.active;   // paused still owns a queue — transfer it
+          if(!active){
+            // Nothing to move — remember this speaker as the default for the
+            // NEXT play (server-side, so voice plays land there too).
+            _music.player_id=pid;estClose();
+            var sn=spk.querySelector('.spkname');if(sn)sn.textContent=b.textContent;
+            apiJson('POST','/api/music/preferred-player',{player_id:pid}).catch(function(){});
+            toast('Music will play on '+b.textContent);
+            return;
+          }
+          apiJson('POST','/api/music/transfer',{target_player_id:pid,source_player_id:_music.player_id||undefined})
+            .then(function(){estClose();var sn=spk.querySelector('.spkname');if(sn)sn.textContent=b.textContent;loadMusic();})
+            .catch(function(){toast('Couldn’t switch speaker');});};});
+      }).catch(function(){toast('Couldn’t load speakers');});
+    };
   }
 
   // ---- Rooms screen (real HA devices + scenes, now-playing hero) ----
@@ -813,8 +1016,14 @@
       var t=document.getElementById('rmT'),a=document.getElementById('rmA'),f=document.getElementById('rmF'),pp=document.getElementById('rmPP');
       if(t)t.textContent=np.title||'';if(a)a.textContent=np.artist||'';
       if(f)f.style.width=(np.duration?Math.min(100,(np.elapsed||0)/np.duration*100):0)+'%';
-      if(pp)pp.textContent=(np.state==='playing')?'❚❚':'▶';
-      hero.querySelector('.rtp').onclick=function(e){var btn=e.target.closest('button');if(!btn)return;var act=btn.getAttribute('data-a');musicControl(act==='playpause'?(pp.textContent==='❚❚'?'pause':'play'):act);};
+      if(pp){var pl=(np.state==='playing');pp.dataset.playing=pl?'1':'0';pp.innerHTML=pl?PAUSE_I:PLAY_I;}
+      hero.querySelector('.rtp').onclick=function(e){var btn=e.target.closest('button');if(!btn)return;var act=btn.getAttribute('data-a');musicControl(act==='playpause'?(pp.dataset.playing==='1'?'pause':'play'):act);};
+      var rv=document.getElementById('rmVol'),rvv=document.getElementById('rmVolV');
+      if(rv&&np.volume!=null&&document.activeElement!==rv){rv.value=Math.round(np.volume);if(rvv)rvv.textContent=Math.round(np.volume)+'%';}
+      if(rv&&!rv.dataset.wired){rv.dataset.wired='1';var _vt=null;
+        rv.oninput=function(){if(rvv)rvv.textContent=rv.value+'%';
+          if(_vt)clearTimeout(_vt);
+          _vt=setTimeout(function(){fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({action:'volume_set',player_id:_music.player_id||'',value:+rv.value})}).catch(function(){});},250);};}
     }).catch(function(){});
     _wxTick=setInterval(function(){if(_cur==='rooms')loadHA(paint);},30000);
   }
@@ -838,16 +1047,47 @@
   }
 
   // ---- Reminders card (real reminders) ----
+  // Format a reminder's "when" from its separate due_date (YYYY-MM-DD) and
+  // due_time (bare "HH:MM"). Handles date+time, date-only, time-only, a full
+  // ISO datetime in due_time, and '' for absent/unparseable values — guarding
+  // against new Date(bad) whose .toLocaleString() renders "Invalid Date".
+  // (Reinstated: the #1263 fix was clobbered by a parallel home.html merge.)
+  function fmtRemWhen(r){
+    var d=r&&r.due_date,t=r&&r.due_time;
+    var m=String(t||'').trim().match(/^(\d{1,2}):(\d{2})/);
+    var tt=m?(('0'+m[1]).slice(-2)+':'+m[2]):'';
+    if(d){var dt=new Date(String(d)+'T'+(tt||'00:00'));
+      if(!isNaN(dt.getTime()))return dt.toLocaleString(undefined,tt?{weekday:'short',hour:'numeric',minute:'2-digit'}:{weekday:'short',month:'short',day:'numeric'});}
+    if(tt){var d2=new Date('1970-01-01T'+tt);if(!isNaN(d2.getTime()))return d2.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'});}
+    if(t){var d3=new Date(t);if(!isNaN(d3.getTime()))return d3.toLocaleString(undefined,{weekday:'short',hour:'numeric',minute:'2-digit'});}
+    return '';
+  }
   function wireReminder(){
-    var ttl=document.getElementById('remTtl'),host=document.getElementById('remList');
+    var ttl=document.getElementById('remMeta'),host=document.getElementById('remList');
     apiGet('/api/reminders/').then(function(d){if(_cur!=='reminder')return;
       var rs=(d&&d.reminders)||[];
-      if(!rs.length){if(ttl)ttl.textContent='No reminders set';if(host)host.innerHTML='';return;}
+      if(!rs.length){if(ttl)ttl.textContent='';if(host)host.innerHTML='<div style="color:var(--ink-faint);font-size:22px;padding-top:8px">No reminders set — ask Zoe to remind you of something.</div>';return;}
       if(ttl)ttl.textContent=rs.length+' reminder'+(rs.length===1?'':'s');
-      if(host)host.innerHTML=rs.slice(0,5).map(function(r){var when='';
-        if(r.due_time){try{when=new Date(r.due_time).toLocaleString(undefined,{weekday:'short',hour:'numeric',minute:'2-digit'});}catch(e){when=String(r.due_time);}}
-        return '<div style="display:flex;gap:14px;align-items:baseline;padding:10px 0;border-top:1px solid rgba(255,255,255,.08)"><span style="font-size:18px;color:var(--ink-faint);min-width:120px">'+esc(when)+'</span><span style="font-size:21px;font-weight:500">'+esc(r.title||r.message||'Reminder')+'</span></div>';}).join('');
+      if(host){host.innerHTML=rs.slice(0,12).map(function(r){var when=fmtRemWhen(r);
+        return '<div class="remrow" data-rid="'+esc(String(r.id))+'"><span class="rw">'+esc(when||'—')+'</span><span class="rt2">'+esc(r.title||r.message||'Reminder')+'</span><span class="lact"><button data-act="edit" title="Edit">✎</button><button class="del" data-act="del" title="Delete">✕</button></span></div>';}).join('');
+        host.onclick=function(e){var row=e.target.closest('.remrow');if(!row)return;
+          var rid=row.getAttribute('data-rid'),rem=rs.filter(function(x){return String(x.id)===rid;})[0];if(!rem)return;
+          var act=e.target.closest('[data-act]');if(!act)return;
+          if(act.getAttribute('data-act')==='del'){estConfirm('Delete “'+(rem.title||'this reminder')+'”?',function(){
+            apiJson('DELETE','/api/reminders/'+encodeURIComponent(rid)).then(function(){wireReminder();}).catch(function(){toast('Couldn’t delete');});});return;}
+          editReminder(rem);};}
     }).catch(function(){if(ttl)ttl.textContent='Couldn’t load reminders';});
+  }
+  function editReminder(rem){
+    estOpen('<h3>Edit reminder</h3>'
+      +'<label>Reminder</label><input data-f="title" value="'+esc(rem.title||'')+'">'
+      +'<div class="erow" style="margin-top:0"><div style="flex:1"><label>Date</label><input data-f="due_date" type="date" value="'+esc(rem.due_date||'')+'"></div><div style="width:130px"><label>Time</label><input data-f="due_time" value="'+esc(rem.due_time||'')+'" placeholder="HH:MM"></div></div>'
+      +'<div class="btns"><button data-x="cancel">Cancel</button><button class="save" data-x="save">Save</button></div>');
+    var m=document.getElementById('estModal');
+    m.querySelector('[data-x="cancel"]').onclick=estClose;
+    m.querySelector('[data-x="save"]').onclick=function(){var body={};m.querySelectorAll('input[data-f]').forEach(function(i){body[i.getAttribute('data-f')]=i.value.trim()||null;});
+      if(!body.title){toast('The reminder needs a name');return;}
+      apiJson('PUT','/api/reminders/'+encodeURIComponent(rem.id),body).then(function(){estClose();wireReminder();}).catch(function(){toast('Couldn’t save reminder');});};
   }
 
   // ---- Lists: full multi-column board (all lists, toggle, add, create) ----
@@ -891,9 +1131,11 @@
     if(!sel||!items)return;
     apiJson('GET','/api/lists/'+sel.list_type+'/'+sel.id+'/items').then(function(d){if(_cur!=='list'||_lst.sel!==sel.id)return;
       var its=d.items||[],done=its.filter(function(i){return i.completed;}).length;
-      if(meta)meta.textContent=its.length+' item'+(its.length===1?'':'s')+(done?' · '+done+' done':'');
-      items.innerHTML=its.map(function(i){return '<div class="lrow2'+(i.completed?' done':'')+'" data-item="'+esc(i.id)+'" data-done="'+(i.completed?1:0)+'"><span class="bx">'+(i.completed?CHK:'')+'</span><span class="tx2">'+esc(i.text)+'</span><span class="lact"><button data-act="edit" title="Edit">✎</button><button class="del" data-act="del" title="Delete">✕</button></span></div>';}).join('')
-        ||'<div style="color:var(--ink-faint);font-size:19px">List is empty — just ask Zoe to add something.</div>';
+      if(meta)meta.textContent=sel.name||sel.list_type;
+      var cnt=document.getElementById('lstCount');
+      if(cnt)cnt.textContent=its.length+' item'+(its.length===1?'':'s')+(done?' · '+done+' done':'');
+      items.innerHTML='<div class="lin">'+(its.map(function(i){return '<div class="lrow2'+(i.completed?' done':'')+'" data-item="'+esc(i.id)+'" data-done="'+(i.completed?1:0)+'"><span class="bx">'+(i.completed?CHK:'')+'</span><span class="tx2">'+esc(i.text)+'</span><span class="lact"><button data-act="edit" title="Edit">✎</button><button class="del" data-act="del" title="Delete">✕</button></span></div>';}).join('')
+        ||'<div style="color:var(--ink-faint);font-size:19px">List is empty — just ask Zoe to add something.</div>')+'</div>';
       var base='/api/lists/'+sel.list_type+'/'+sel.id+'/items/';
       items.onclick=function(e){var row=e.target.closest('.lrow2');if(!row)return;var iid=row.getAttribute('data-item');
         var act=e.target.closest('[data-act]');
@@ -914,24 +1156,32 @@
 
   // ---- Timers: live countdowns + cancel (server-authoritative) ----
   function fmtT(s){s=Math.max(0,Math.round(s));var m=Math.floor(s/60);return m+':'+two(s%60);}
+  function timerRemain(t){if(t.expires_at_ms!=null)return (t.expires_at_ms-Date.now())/1000;if(t.ends_at)return (new Date(t.ends_at).getTime()-Date.now())/1000;if(t.remaining_seconds!=null)return t.remaining_seconds;return t.duration_seconds||0;}
   function wireTimer(){
     function paint(){apiJson('GET','/api/skybridge/timers').then(function(d){if(_cur!=='timer')return;
-      var ts=(d.timers||[]);
-      var timeEl=document.getElementById('tmTime'),lab=document.getElementById('tmLabel'),ctl=document.getElementById('tmCtl'),more=document.getElementById('tmMore'),arc=document.getElementById('tmArc');
-      if(!ts.length){if(timeEl)timeEl.textContent='0:00';if(lab)lab.textContent='No timers — ask Zoe to set one';if(ctl)ctl.innerHTML='';if(more)more.innerHTML='';if(arc)arc.style.strokeDashoffset=1181;return;}
-      function remainOf(t){if(t.expires_at_ms!=null)return (t.expires_at_ms-Date.now())/1000;if(t.ends_at)return (new Date(t.ends_at).getTime()-Date.now())/1000;if(t.remaining_seconds!=null)return t.remaining_seconds;return t.duration_seconds||0;}
-      var first=ts[0];
-      function tick(){if(_cur!=='timer')return;var rem=remainOf(first),dur=first.duration_seconds||Math.max(rem,1);
-        if(timeEl)timeEl.textContent=fmtT(rem);
-        if(arc)arc.style.strokeDashoffset=(1181*(1-Math.max(0,Math.min(1,rem/dur)))).toFixed(0);
-        if(rem<=0)paint();}
+      var ts=(d.timers||[]).filter(function(t){return timerRemain(t)>0;}).sort(function(a,b){return timerRemain(a)-timerRemain(b);});
+      var rings=document.getElementById('tmRings'),more=document.getElementById('tmMore');
+      if(!rings)return;
+      if(!ts.length){rings.innerHTML='<div class="tring one"><svg width="300" height="300" viewBox="0 0 420 420"><circle cx="210" cy="210" r="188" fill="none" stroke="rgba(255,255,255,.12)" stroke-width="14"/></svg><div class="ttime">0:00</div></div><div class="tsub" style="width:100%;text-align:center">No timers — ask Zoe to set one</div>';if(more)more.innerHTML='';return;}
+      // Up to two timers SHARE the main screen as full rings; any further
+      // timers appear as live-ticking chips underneath.
+      var main=ts.slice(0,2),rest=ts.slice(2,6),two=main.length>1,sz=two?250:300;
+      rings.innerHTML=main.map(function(t,i){var id=esc(String(t.timer_id||t.id));
+        return '<div class="tunit"><div class="tring'+(two?'':' one')+'"><svg width="'+sz+'" height="'+sz+'" viewBox="0 0 420 420"><circle cx="210" cy="210" r="188" fill="none" stroke="rgba(255,255,255,.12)" stroke-width="14"/><circle class="tarc" data-i="'+i+'" cx="210" cy="210" r="188" fill="none" stroke="#8ea6ff" stroke-width="14" stroke-linecap="round" stroke-dasharray="1181" stroke-dashoffset="1181" style="filter:drop-shadow(0 0 14px rgba(123,150,255,.7))"/></svg><div class="ttime" data-i="'+i+'">--:--</div></div><div class="tsub">'+esc(t.label||t.title||'Timer')+'</div><div class="tctrls"><button class="stop" data-tid="'+id+'">■</button></div></div>';}).join('');
+      if(more)more.innerHTML=rest.map(function(t,i){return '<div class="tmr"><b class="trem" data-i="'+(i+2)+'">'+fmtT(timerRemain(t))+'</b><span class="tx3">'+esc(t.label||'Timer')+'</span><button data-tid="'+esc(String(t.timer_id||t.id))+'">✕</button></div>';}).join('');
+      function tick(){if(_cur!=='timer')return;var expired=false;
+        ts.forEach(function(t,i){var rem=timerRemain(t);if(rem<=0)expired=true;
+          var te=document.querySelector('.ttime[data-i="'+i+'"]'),ar=document.querySelector('.tarc[data-i="'+i+'"]'),tr=document.querySelector('.trem[data-i="'+i+'"]');
+          var dur=t.duration_seconds||Math.max(rem,1);
+          if(te)te.textContent=fmtT(rem);
+          if(ar)ar.style.strokeDashoffset=(1181*(1-Math.max(0,Math.min(1,rem/dur)))).toFixed(0);
+          if(tr)tr.textContent=fmtT(rem);});
+        if(expired)paint();}
       if(_homeTick){clearInterval(_homeTick);_homeTick=null;}   // repaints must not stack tickers
       tick();_homeTick=setInterval(tick,1000);
-      if(lab)lab.textContent=first.label||first.title||'Timer';
-      if(ctl)ctl.innerHTML='<button class="stop" data-tid="'+esc(first.timer_id||first.id)+'">■</button>';
-      if(more)more.innerHTML=ts.slice(1,4).map(function(t){return '<div class="tmr"><b>'+fmtT(remainOf(t))+'</b><span class="tx3">'+esc(t.label||'Timer')+'</span><button data-tid="'+esc(t.timer_id||t.id)+'">✕</button></div>';}).join('');
-      [ctl,more].forEach(function(el){if(!el)return;el.onclick=function(e){var b=e.target.closest('button[data-tid]');if(!b)return;
-        apiJson('POST','/api/skybridge/timers/cancel',{timer_id:b.getAttribute('data-tid')}).then(function(){clearInterval(_homeTick);paint();}).catch(function(){});};});
+      var host=document.querySelector('.tfull');
+      if(host)host.onclick=function(e){var b=e.target.closest('button[data-tid]');if(!b)return;
+        apiJson('POST','/api/skybridge/timers/cancel',{timer_id:b.getAttribute('data-tid')}).then(function(){if(_homeTick){clearInterval(_homeTick);_homeTick=null;}paint();renderDock();}).catch(function(){});};
     }).catch(function(){});}
     paint();_wxTick=setInterval(function(){if(_cur==='timer')paint();},15000);
   }
@@ -949,38 +1199,139 @@
         ||'<div style="color:var(--ink-faint);font-size:20px">Nobody here yet — tell Zoe about the people in your life.</div>';
       if(az){az.innerHTML=('#'+'ABCDEFGHIJKLMNOPQRSTUVWXYZ').split('').map(function(L){return '<span'+(have[L]?' class="has"':'')+' data-l="'+L+'">'+L+'</span>';}).join('');
         az.onclick=function(e){var t=e.target.closest('span[data-l]');if(!t)return;var el=grid.querySelector('.cttile[data-letter="'+t.getAttribute('data-l')+'"]');if(el)el.scrollIntoView({behavior:'smooth',block:'start'});};}
-      grid.onclick=function(e){var t=e.target.closest('.cttile');if(!t)return;var pn=ps[+t.getAttribute('data-i')];if(!pn)return;
+      var srch=document.getElementById('ctSearch');
+      if(srch)srch.onclick=function(){
+        // Hand the mic to Zoe — she asks who to look for. Same daemon endpoint
+        // the panel's orb uses; falls back to the typed command bar off-panel.
+        fetch('http://localhost:7777/activate',{method:'POST',signal:AbortSignal.timeout(800)})
+          .catch(function(){var cb=document.getElementById('cmdbar');if(cb){cb.classList.add('on');var ci=document.getElementById('cmdin');if(ci){ci.placeholder='Who are you looking for?';setTimeout(function(){ci.focus();},60);}}});
+      };
+      // Detail card is a function so relationship chips can hop between people.
+      function openContact(pn,idx){
         var rows=[['Relationship',pn.relationship],['Phone',pn.phone],['Email',pn.email],['Birthday',pn.birthday],['Notes',pn.notes]]
           .filter(function(r){return r[1];})
           .map(function(r){return '<div class="ctrow"><span class="cl">'+r[0]+'</span><span>'+esc(String(r[1]))+'</span></div>';}).join('')
           ||'<div class="ctrow"><span class="cl"></span><span style="color:var(--ink-faint)">No details yet — just a name.</span></div>';
-        det.innerHTML='<div class="ctcard"><div class="cthead"><div class="pav" style="background:'+PAVC[(+t.getAttribute('data-i'))%PAVC.length]+'">'+esc((pn.name||'?').charAt(0).toUpperCase())+'</div><div><h2>'+esc(pn.name||'')+'</h2>'+(pn.relationship?'<div class="ctrel">'+esc(pn.relationship)+'</div>':'')+'</div></div>'+rows+'<div class="ctacts"><button data-x="edit">Edit</button><button class="del" data-x="del">Delete</button><button data-x="close">Close</button></div></div>';
+        det.innerHTML='<div class="ctcard"><div class="cthead"><div class="pav" style="background:'+PAVC[(idx||0)%PAVC.length]+'">'+esc((pn.name||'?').charAt(0).toUpperCase())+'</div><div><h2>'+esc(pn.name||'')+'</h2>'+(pn.relationship?'<div class="ctrel">'+esc(pn.relationship)+'</div>':'')+'</div></div>'+rows
+          +'<div class="ctfam"><div class="cl" style="margin:14px 0 8px">Family &amp; links</div><div class="ctchips" id="ctRels"><span style="color:var(--ink-faint);font-size:16px">Loading…</span></div></div>'
+          +'<div class="ctacts"><button data-x="link">＋ Link person</button><button data-x="edit">Edit</button><button class="del" data-x="del">Delete</button><button data-x="close">Close</button></div></div>';
         det.classList.add('on');
+        // Linked people: the person_relationships graph (spouse/parent/child/…).
+        // A "sub-contact" (a friend's kid) is a partial contact created by name
+        // and linked here — it's a real person row, so search finds it too.
+        apiJson('GET','/api/people/'+encodeURIComponent(pn.id)+'/relationships').then(function(rd){
+          var host=document.getElementById('ctRels');if(!host)return;
+          // Response is grouped by circle: {love:[…],family:[…],friend:[…],work:[…]}
+          var g=(rd&&rd.relationships)||{},rels=[];
+          Object.keys(g).forEach(function(k){(g[k]||[]).forEach(function(rl){rels.push(rl);});});
+          host.innerHTML=rels.map(function(rl){
+            return '<span class="ctchip" data-oid="'+esc(String(rl.person_id||''))+'" data-rid="'+esc(String(rl.rel_id||''))+'">'+esc(rl.name||'?')+' <small>'+esc(rl.label||rl.rel_type||'')+'</small><b class="x" title="Unlink">×</b></span>';}).join('')
+            ||'<span style="color:var(--ink-faint);font-size:16px">No links yet.</span>';
+          host.onclick=function(ev){
+            var chip=ev.target.closest('.ctchip');if(!chip)return;
+            if(ev.target.closest('.x')){estConfirm('Remove this link?',function(){
+              apiJson('DELETE','/api/people/'+encodeURIComponent(pn.id)+'/relationships/'+encodeURIComponent(chip.getAttribute('data-rid')))
+                .then(function(){openContact(pn,idx);}).catch(function(){toast('Couldn’t unlink');});});return;}
+            var oid=chip.getAttribute('data-oid');var other=ps.filter(function(x){return String(x.id)===oid;})[0];
+            if(other)openContact(other,ps.indexOf(other));
+            else apiJson('GET','/api/people/'+encodeURIComponent(oid)).then(function(pp){openContact(pp.person||pp,0);}).catch(function(){});
+          };
+        }).catch(function(){var host=document.getElementById('ctRels');if(host)host.innerHTML='<span style="color:var(--ink-faint);font-size:16px">Couldn’t load links.</span>';});
         det.onclick=function(ev){if(ev.target===det||ev.target.closest('[data-x="close"]'))det.classList.remove('on');
           if(ev.target.closest('[data-x="del"]')){det.classList.remove('on');estConfirm('Delete '+(pn.name||'this contact')+'?',function(){
             apiJson('DELETE','/api/people/'+encodeURIComponent(pn.id)).then(function(){wireContacts();}).catch(function(){toast('Couldn’t delete');});});}
-          if(ev.target.closest('[data-x="edit"]')){editContact(pn);}};};
+          if(ev.target.closest('[data-x="edit"]')){editContact(pn);}
+          if(ev.target.closest('[data-x="link"]')){linkPerson(pn,function(){openContact(pn,idx);});}};
+      }
+      grid.onclick=function(e){var t=e.target.closest('.cttile');if(!t)return;var i=+t.getAttribute('data-i');var pn=ps[i];if(pn)openContact(pn,i);};
+      // "＋ Link person": link an existing contact OR create a new (sub-)contact
+      // by name — create_partial makes the person row + the typed edge in one call.
+      function linkPerson(pn,done){
+        apiJson('GET','/api/people/relationship-types').then(function(tp){
+          var flat=[];Object.keys((tp&&tp.types)||{}).forEach(function(g){(tp.types[g]||[]).forEach(function(t2){flat.push(t2);});});
+          var opts=flat.map(function(t2){return '<option value="'+esc(t2.key)+'">'+esc(t2.label_b||t2.key)+' of '+esc(pn.name||'them')+'</option>';}).join('');
+          var existing=ps.filter(function(x){return x.id!==pn.id;}).map(function(x){return '<option value="'+esc(String(x.id))+'">'+esc(x.name||'?')+'</option>';}).join('');
+          estOpen('<h3>Link a person to '+esc(pn.name||'')+'</h3>'
+            +'<label>Who</label><select data-f="oid"><option value="">— New person —</option>'+existing+'</select>'
+            +'<label>New person’s name</label><input data-f="nname" placeholder="Only for a new person">'
+            +'<label>They are the…</label><select data-f="rel">'+opts+'</select>'
+            +'<div class="btns"><button data-x="cancel">Cancel</button><button class="save" data-x="save">Link</button></div>');
+          var m=document.getElementById('estModal');
+          m.querySelector('[data-x="cancel"]').onclick=estClose;
+          m.querySelector('[data-x="save"]').onclick=function(){
+            var oid=m.querySelector('[data-f="oid"]').value,nname=m.querySelector('[data-f="nname"]').value.trim(),rel=m.querySelector('[data-f="rel"]').value;
+            var body={rel_type:rel};
+            if(oid)body.other_person_id=oid;
+            else if(nname){body.other_person_name=nname;body.create_partial=true;}
+            else{toast('Pick a person or type a name');return;}
+            apiJson('POST','/api/people/'+encodeURIComponent(pn.id)+'/relationships',body)
+              .then(function(){estClose();wireContacts();if(done)done();})
+              .catch(function(){toast('Couldn’t link');});};
+        }).catch(function(){toast('Couldn’t load relationship types');});
+      }
     }).catch(function(){if(grid)grid.innerHTML='<div style="color:var(--ink-faint);font-size:20px">Sign in to see your contacts.</div>';});
   }
 
   // ---- Settings: full-screen expanding sections ----
+  var _setPrefs=null,_setPrefT=null;
+  function _panelDevId(){return localStorage.getItem('zoe_panel_id')||localStorage.getItem('zoe_touch_panel_id')||'default';}
+  function _savePrefs(patch){
+    _setPrefs=Object.assign(_setPrefs||{},patch);
+    if(_setPrefT)clearTimeout(_setPrefT);
+    _setPrefT=setTimeout(function(){
+      apiJson('PUT','/api/system/display/preferences',{device_id:_panelDevId(),preferences:_setPrefs})
+        .catch(function(){toast('Couldn’t save display settings');});
+    },500);   // debounce slider drags into one write
+  }
   function wireSettings(){
     var host=document.getElementById('setSecs');if(!host)return;
     var u=null;try{u=JSON.parse(localStorage.getItem('zoe_session')||'null');}catch(e){}
     var who=(u&&(u.username||u.user_id))||'Guest';
     host.innerHTML=[
-      {t:'Account',b:'<div class="srow2"><span>Signed in as <b>'+esc(who)+'</b></span></div><button class="sout" id="setOut">Sign out</button>'},
-      {t:'Panel & display',b:'<div class="srow2" data-go="/touch/settings.html"><span>All panel settings</span><span class="chev2">›</span></div><div class="srow2" data-go="/touch/updates.html"><span>Updates</span><span class="chev2">›</span></div>'},
-      {t:'Devices & pairing',b:'<div class="srow2" data-act="pair"><span>Link a device</span><span class="chev2">›</span></div>'},
-      {t:'Household',b:'<div class="srow2" data-act="contacts"><span>Contacts</span><span class="chev2">›</span></div><div class="srow2" data-act="rooms"><span>Rooms & devices</span><span class="chev2">›</span></div>'}
-    ].map(function(sec,i){return '<div class="setsec'+(i===0?' open':'')+'"><div class="sh">'+esc(sec.t)+'<span class="caret">›</span></div><div class="sbody"><div class="inner">'+sec.b+'</div></div></div>';}).join('');
+      {t:'Account',b:'<div class="srow2"><span>Signed in as <b>'+esc(who)+'</b></span></div><div class="srow2" data-act="switch"><span>Switch user</span><span class="chev2">›</span></div><button class="sout" id="setOut">Sign out</button>'},
+      {t:'Display',b:'<div id="setDisp"><div class="srow2"><span style="color:var(--ink-faint)">Loading…</span></div></div>'},
+      {t:'System',b:'<div id="setSys"><div class="srow2"><span style="color:var(--ink-faint)">Checking…</span></div></div>'},
+      {t:'Household',b:'<div class="srow2" data-act="contacts"><span>Contacts</span><span class="chev2">›</span></div><div class="srow2" data-act="rooms"><span>Rooms & devices</span><span class="chev2">›</span></div><div class="srow2" data-act="pair"><span>Link a device</span><span class="chev2">›</span></div>'}
+    ].map(function(sec,i){return '<div class="setsec"><div class="sh">'+esc(sec.t)+'<span class="caret">›</span></div><div class="sbody"><div class="inner">'+sec.b+'</div></div></div>';}).join('');
+
+    // Display: the panel's real brightness/night/idle prefs, live-wired.
+    apiGet('/api/system/display/preferences?device_id='+encodeURIComponent(_panelDevId())).then(function(d){
+      if(_cur!=='settings')return;var pr=(d&&d.preferences)||{};_setPrefs={};
+      var el=document.getElementById('setDisp');if(!el)return;
+      // 0 is a legitimate saved brightness — only fall back when the value is
+      // genuinely absent, or a truthy-|| would render (and later re-save) the default.
+      function nz(v,dflt){var n=+v;return (v==null||isNaN(n))?dflt:n;}
+      var dayB=nz(pr.day_brightness,100),nightB=nz(pr.night_brightness,15);
+      el.innerHTML=
+        '<div class="srow2"><span>Brightness</span><input type="range" min="0" max="100" step="5" data-pref="day_brightness" value="'+dayB+'"><span class="sv">'+dayB+'%</span></div>'
+        +'<div class="srow2"><span>Night mode <small style="color:var(--ink-faint)">'+esc(pr.night_start||'22:00')+'–'+esc(pr.night_end||'06:30')+'</small></span><span class="sw'+(pr.night_enabled?' on':'')+'" data-pref-t="night_enabled"></span></div>'
+        +'<div class="srow2"><span>Night brightness</span><input type="range" min="0" max="60" step="5" data-pref="night_brightness" value="'+nightB+'"><span class="sv">'+nightB+'%</span></div>'
+        +'<div class="srow2"><span>Dim when idle <small style="color:var(--ink-faint)">'+Math.round((+pr.idle_seconds||120)/60)+' min</small></span><span class="sw'+(pr.idle_enabled?' on':'')+'" data-pref-t="idle_enabled"></span></div>';
+      el.querySelectorAll('input[type=range]').forEach(function(r){r.oninput=function(){
+        var sv=r.parentElement.querySelector('.sv');if(sv)sv.textContent=r.value+'%';
+        var patch={};patch[r.getAttribute('data-pref')]=+r.value;_savePrefs(patch);};});
+      el.querySelectorAll('.sw[data-pref-t]').forEach(function(sw){sw.onclick=function(){
+        var on=sw.classList.toggle('on');var patch={};patch[sw.getAttribute('data-pref-t')]=on;_savePrefs(patch);};});
+    }).catch(function(){var el=document.getElementById('setDisp');if(el)el.innerHTML='<div class="srow2"><span style="color:var(--ink-faint)">Display settings unavailable</span></div>';});
+
+    // System: live health of the pieces that matter + software version.
+    apiGet('/api/system/status').then(function(st){
+      if(_cur!=='settings')return;var el=document.getElementById('setSys');if(!el)return;
+      function ok(v){return typeof v==='string'&&v.indexOf('ok')===0||v==='connected'||v==='healthy';}
+      var rows=[['Zoe brain',st.llama_server],['Home Assistant',st.ha_bridge],['Database',st.database]];
+      el.innerHTML=rows.map(function(r){return '<div class="srow2"><span>'+esc(r[0])+'</span><span style="display:flex;align-items:center;gap:10px"><span class="stat '+(ok(r[1])?'ok':'bad')+'"></span><span style="color:var(--ink-soft);font-size:17px">'+esc(String(r[1]||'unreachable'))+'</span></span></div>';}).join('')
+        +'<div class="srow2" id="setVer"><span>Software</span><span class="sv" style="min-width:0">…</span></div>';
+      fetch('/sw.js',{cache:'no-store'}).then(function(r){return r.text();}).then(function(t){
+        var m=/SW_VERSION = '([^']+)'/.exec(t);var v=document.querySelector('#setVer .sv');if(v&&m)v.textContent='v'+m[1];}).catch(function(){});
+    }).catch(function(){var el=document.getElementById('setSys');if(el)el.innerHTML='<div class="srow2"><span style="color:var(--ink-faint)">Status unavailable</span></div>';});
+
     host.onclick=function(e){
       var sh=e.target.closest('.sh');
       if(sh){var sec=sh.parentElement;sec.classList.toggle('open');return;}
       var row=e.target.closest('.srow2[data-go]');
       if(row){location.href=row.getAttribute('data-go');return;}
       var act=e.target.closest('.srow2[data-act]');
-      if(act){var a=act.getAttribute('data-act');if(a==='pair')show('pair');if(a==='contacts')show('person');if(a==='rooms')show('rooms');return;}
+      if(act){var a=act.getAttribute('data-act');if(a==='pair')show('pair');if(a==='contacts')show('person');if(a==='rooms')show('rooms');if(a==='switch'&&window.__showAuthCard)window.__showAuthCard();return;}
       if(e.target.closest('#setOut')){var out=e.target.closest('#setOut');out.disabled=true;
         function clearLocal(){try{localStorage.removeItem('zoe_session');localStorage.removeItem('zoe_guest_mode');}catch(e2){}try{sessionStorage.removeItem('zoe_gb');}catch(e2){}}
         fetch('/api/auth/logout',{method:'POST',headers:{'X-Session-ID':sid()},credentials:'include'})
@@ -1073,7 +1424,7 @@
 
   // ---- Day: full-screen — today's events + reminders (+ comms when a source exists) ----
   function wireDay(){
-    var ttl=document.getElementById('dayTtl'),host=document.getElementById('dayEvents'),rems=document.getElementById('dayRems');
+    var ttl=document.getElementById('dayMeta'),host=document.getElementById('dayEvents'),rems=document.getElementById('dayRems');
     if(ttl)ttl.textContent=new Date().toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long'});
     var d=new Date(),ds=d.getFullYear()+'-'+two(d.getMonth()+1)+'-'+two(d.getDate());
     apiGet('/api/calendar/events?start_date='+ds+'&end_date='+ds).then(function(data){if(_cur!=='day'||!host)return;
@@ -1084,7 +1435,7 @@
     apiGet('/api/reminders/').then(function(d2){if(_cur!=='day'||!rems)return;
       var rs=(d2&&d2.reminders)||[];
       if(!rs.length){rems.innerHTML='<div class="drem" style="opacity:.6"><span class="rt"></span><span>Nothing set</span></div>';return;}
-      rems.innerHTML=rs.slice(0,5).map(function(r){var when='';if(r.due_time){try{when=new Date(r.due_time).toLocaleString(undefined,{weekday:'short',hour:'numeric',minute:'2-digit'});}catch(e){when=String(r.due_time);}}
+      rems.innerHTML=rs.slice(0,5).map(function(r){var when=fmtRemWhen(r);
         return '<div class="drem"><span class="rt">'+esc(when)+'</span><span>'+esc(r.title||'Reminder')+'</span></div>';}).join('');
     }).catch(function(){rems.innerHTML='<div class="drem" style="opacity:.6"><span class="rt"></span><span>Couldn’t load</span></div>';});
     // Messages/email section stays hidden until a comms backend exists (no fake data).
@@ -1098,10 +1449,19 @@
   // ---- ask-Zoe command loop (orb tap → /api/skybridge/resolve → result) ----
   // Same resolver the voice pipeline uses, so typed and spoken commands behave
   // identically; voice-pushed server actions are handled by touch-ui-executor.js.
-  var DOMAIN_SCREEN={smart_home:'rooms',calendar:'day',lists:'list',weather:'weather',music:'music',reminders:'reminder'};
+  var DOMAIN_SCREEN={smart_home:'rooms',calendar:'day',lists:'list',weather:'weather',music:'music',reminders:'reminder',timers:'timer',chat:'ask'};
   var cmdbar=document.getElementById('cmdbar'),cmdin=document.getElementById('cmdin'),orb=document.getElementById('orb'),toastEl=document.getElementById('saytoast'),_toastT=null;
   function toast(t){if(!t)return;toastEl.textContent=t;toastEl.classList.add('on');if(_toastT)clearTimeout(_toastT);_toastT=setTimeout(function(){toastEl.classList.remove('on');},6000);}
   var _heardT=null,_sending=false;
+  function dockSaid(heard,say){
+    dock.classList.remove('hide');
+    if(_heardT)clearTimeout(_heardT);
+    function restore(){_heardT=setTimeout(function(){if(dbody.querySelector('.dheard')&&_cur!=='sleep')renderDock();},5200);}
+    if(heard){dbody.innerHTML='<div class="dheard">Heard: <b>'+esc(heard)+'</b></div>';
+      if(say){_heardT=setTimeout(function(){dbody.innerHTML='<div class="dheard">'+esc(say)+'</div>';restore();},2600);}
+      else restore();
+    } else if(say){dbody.innerHTML='<div class="dheard">'+esc(say)+'</div>';restore();}
+  }
   function dockHeard(q){dock.classList.remove('hide');dbody.innerHTML='<div class="dheard">Heard: <b>'+esc(q)+'</b></div>';
     // heard is transient — bring the pinned controls back after a few seconds
     if(_heardT)clearTimeout(_heardT);
@@ -1144,6 +1504,46 @@
         return pump();
       }).catch(function(){if(gen!==_askGen)return;orb.classList.remove('busy');_sending=false;var o=document.getElementById('askOut');if(o)o.textContent='Sorry — I couldn’t reach Zoe just then.';});
   }
+
+  // Voice answer display on the Ask surface (used by URL-arrival + live voice events)
+  function askShowAnswer(q,a){
+    FULL.ask.html='<div class="askf"><div class="aa" id="askOut"></div></div>';
+    if(_cur!=='ask')show('ask');
+    var o=document.getElementById('askOut');if(o)o.textContent=a||'';
+    if(q)dockHeard(q);
+  }
+  // Live voice state → estate surfaces. touch-ui-executor.js checks for this
+  // object and routes its voice events here INSTEAD of building the legacy
+  // skybridge overlay box (which never auto-dismissed on the estate).
+  var _lisT=null,_askFallT=null;
+  window.ZoeEstateVoice={
+    // Listening is shown on the ORB (fast breathe + bright glow), not by
+    // taking over the dock — the dock keeps its pinned controls until a
+    // transcript arrives. Safety timeout clears the state if no further
+    // voice event lands (e.g. wake false-trigger).
+    listening:function(){orb.classList.add('listening');
+      window.__voiceArrivedAt=0;   // a NEW turn started — the last arrival no longer owns responding events
+      if(_lisT)clearTimeout(_lisT);_lisT=setTimeout(function(){orb.classList.remove('listening');},20000);},
+    transcript:function(t){orb.classList.remove('listening');if(_lisT)clearTimeout(_lisT);
+      window.__voiceArrivedAt=0;   // new turn — see listening()
+      if(t){window.__lastHeard=t;dockHeard(t);}},
+    thinking:function(){orb.classList.remove('listening');orb.classList.add('busy');
+      var o=document.getElementById('askOut');if(o&&_cur==='ask')o.textContent='…';},
+    responding:function(t){orb.classList.remove('listening');orb.classList.add('busy');
+      if(!t)return;
+      if(_cur==='ask'){askShowAnswer(window.__lastHeard||'',t);return;}
+      // Domain commands navigate the panel (?heard&say&domain) — a page that
+      // JUST voice-arrived shows the summary in the dock. A responding event
+      // with NO recent arrival is the brain/chat fallback: those answers
+      // belong on the Ask surface ("she shows her answers in text"). Defer
+      // briefly so a navigation that's still in flight wins instead.
+      if(window.__voiceArrivedAt&&(Date.now()-window.__voiceArrivedAt)<10000){dockSaid(null,t);return;}
+      if(_askFallT)clearTimeout(_askFallT);
+      var heardNow=window.__lastHeard||'';   // capture at schedule time — a newer
+      // transcript arriving during the defer must not pair with this answer
+      _askFallT=setTimeout(function(){_askFallT=null;askShowAnswer(heardNow,t);},1200);},
+    done:function(){orb.classList.remove('listening');orb.classList.remove('busy');if(_lisT)clearTimeout(_lisT);}
+  };
 
   orb.addEventListener('click',function(){
     var on=cmdbar.classList.toggle('on');
@@ -1192,18 +1592,24 @@
   (function(){
     var sp=new URLSearchParams(location.search);
     var heard=sp.get('heard'),say=sp.get('say'),dom=sp.get('domain');
-    if(!heard&&!say)return;
-    show(DOMAIN_SCREEN[dom||'']||'home');
-    if(heard)dockHeard(heard);
-    if(say)toast(say);
+    if(!heard&&!say&&!dom)return;
+    // Domain → screen map first; a literal surface name (?domain=calendar
+    // for the full calendar) also works so server navigations can be precise.
+    var dest=DOMAIN_SCREEN[dom||'']||(FULL[dom]?dom:'home');
+    show(dest);
+    // Chat answers land on the Ask surface; every other domain shows the
+    // transcript then the spoken summary in the DOCK (never the old
+    // top-of-screen toast) before the pinned controls return.
+    if(say&&dest==='ask')askShowAnswer(heard,say);
+    else if(heard||say)dockSaid(heard,say);
     try{var keep=[];if(sp.get('panel_id'))keep.push('panel_id='+encodeURIComponent(sp.get('panel_id')));if(sp.get('kiosk'))keep.push('kiosk='+encodeURIComponent(sp.get('kiosk')));
       history.replaceState(null,'',location.pathname+(keep.length?('?'+keep.join('&')):''));}catch(e){}
-    window.__voiceArrived=true;
+    window.__voiceArrived=true;window.__voiceArrivedAt=Date.now();
   })();
 
   if(!window.__voiceArrived)show('home');
 })();
 </script>
-<script src="/js/touch-ui-executor.js?v=estate-1"></script>
+<script src="/js/touch-ui-executor.js?v=estate-2"></script>
 </body>
 </html>

@@ -355,3 +355,52 @@
 :root[data-theme="light"] .gx-fact,
 :root[data-theme="light"] .gx-tile,
 :root[data-theme="light"] .gx-media-tile { background: rgba(20, 50, 80, 0.05); border-color: rgba(20, 50, 80, 0.12); }
+
+/* ── Zoe's voice picker (voice_settings card) ─────────────────────────────
+   Two-button rows: the big pick button (voice name + id, current highlighted)
+   and a compact Preview button (data-voice-preview → /api/voice/preview). */
+.vx-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--sky-space-3);
+  overflow-y: auto;
+}
+.vx-row {
+  display: flex;
+  align-items: stretch;
+  gap: var(--sky-space-2);
+  min-height: 64px;
+}
+.vx-pick {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  padding: var(--sky-space-3) var(--sky-space-4);
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--gx-accent) 22%, transparent);
+  background: color-mix(in srgb, var(--gx-accent) 8%, transparent);
+  color: var(--sky-ink-1);
+  text-align: left;
+}
+.vx-row.is-current .vx-pick {
+  border-color: color-mix(in srgb, var(--gx-accent) 65%, transparent);
+  background: color-mix(in srgb, var(--gx-accent) 22%, transparent);
+}
+.vx-row.is-zoe .vx-pick { border-style: dashed; }
+.vx-name { font-size: var(--sky-text-body); color: var(--sky-ink-0); }
+.vx-id { font-size: var(--sky-text-small, 13px); color: var(--sky-ink-2); }
+.vx-preview {
+  min-width: 96px;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--gx-accent) 30%, transparent);
+  background: transparent;
+  color: color-mix(in srgb, var(--gx-accent) 85%, #fff);
+  font-size: var(--sky-text-body);
+}
+.vx-preview[disabled] { opacity: 0.5; }
+:root[data-theme="light"] .vx-pick { color: var(--text-secondary); }
+:root[data-theme="light"] .vx-name { color: var(--text-primary); }
+:root[data-theme="light"] .vx-id { color: var(--text-secondary); }

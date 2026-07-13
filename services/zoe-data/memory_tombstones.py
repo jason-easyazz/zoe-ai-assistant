@@ -1,0 +1,171 @@
+"""Forget tombstones — a forget blocks in-flight/late memory writes for that name.
+
+Memory extraction runs seconds behind the conversation (turn digest, person
+extractor, LLM passes are all fire-and-forget), so a fact mentioned just before
+"forget everything about X" can finish saving just AFTER the forget archived
+everything — one straggler row resurrects the forgotten person (seen live
+2026-07-13 during the F14 verification; pinned in docs/IDEAS.md).
+
+``memory_forget_entity`` writes a short-lived per-user tombstone for the name;
+``MemoryService.ingest`` — the single durable-write chokepoint every extractor
+lane funnels through — drops name-anchored candidates while the tombstone is
+live. An EXPLICIT re-teach ("remember that Delia …") clears the tombstone: the
+user changing their mind beats the guard.
+
+In-process on purpose (not a DB table): zoe-data is a single uvicorn process
+and every extractor pass runs inside it, so the in-flight writes a tombstone
+must block die with the process on restart — nothing can straggle across a
+restart, and cross-process visibility buys nothing. TTL keeps the map bounded.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+import time
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+# How long a forget shadows late writers. Extractor passes complete within
+# seconds; minutes of margin covers a congested Gemma digest without turning
+# the tombstone into a long-lived "never mention X" rule.
+DEFAULT_TTL_S = 300.0
+
+# Ingest sources that are an EXPLICIT user teach (the user dictating a fact
+# right now) — these bypass the tombstone drop so a post-forget re-teach can
+# store, and the teach handler then clears the tombstone AFTER the store
+# succeeds. Async/mined lanes (turn_digest, chat_regex, voice_regex,
+# conversation, idle_consolidation, …) are never listed here.
+EXPLICIT_TEACH_SOURCES = frozenset({"brain_tool", "voice_fact", "review_ui"})
+
+# {user_id: {name_norm: expires_at_monotonic}}
+_tombstones: dict[str, dict[str, float]] = {}
+
+
+def _norm(name: str) -> str:
+    return " ".join(str(name or "").split()).lower()
+
+
+def _purge(user_id: str) -> dict[str, float]:
+    now = time.monotonic()
+    names = _tombstones.get(user_id)
+    if not names:
+        return {}
+    live = {n: exp for n, exp in names.items() if exp > now}
+    if live:
+        _tombstones[user_id] = live
+    else:
+        _tombstones.pop(user_id, None)
+    return live
+
+
+def add(user_id: str, name: str, ttl_s: float = DEFAULT_TTL_S) -> None:
+    """Shadow ``name`` for ``user_id``: name-anchored ingests drop until expiry."""
+    name_norm = _norm(name)
+    if not user_id or not name_norm:
+        return
+    _purge(user_id)
+    _tombstones.setdefault(user_id, {})[name_norm] = time.monotonic() + ttl_s
+    logger.info(
+        "memory_tombstones: shadowing a forgotten entity for user=%s (ttl=%.0fs)",
+        user_id, ttl_s,
+    )
+
+
+def matching_tombstone(user_id: str, text: str) -> Optional[str]:
+    """The live tombstoned name that ``text`` mentions (whole word/phrase,
+    case-insensitive), or None. Same anchoring rule as the forget sweep itself."""
+    if not user_id or not text:
+        return None
+    for name_norm in _purge(user_id):
+        if re.search(r"\b" + re.escape(name_norm) + r"\b", text, re.IGNORECASE):
+            return name_norm
+    return None
+
+
+# An explicit fact-teach: opener + optional "that" + a clause that starts with
+# the fact's subject ("Delia is …", "my friend Delia …", "Delia's birthday …").
+# Reminder/task/plan phrasings are excluded by the lookahead: "… to invite",
+# "… about Delia", "… we need to …", "remind me …" are tasks, not teaches, and
+# must never clear a forget shadow. ONE definition, shared by the chat and
+# voice extraction hooks — extend here, not in the lanes.
+_TEACH_OPENER_RE = re.compile(
+    r"^(?:please\s+)?(?:remember|note|don'?t\s+forget|keep\s+in\s+mind)\s+"
+    r"(?:that\s+)?(?!(?:to|about|we|us|me|you|i|it|this)\b)(?P<clause>\S.*)$",
+    re.IGNORECASE,
+)
+# The clause must actually ASSERT something: within its first few tokens there
+# must be a VERB-SHAPED word (an irregular fact verb, or a lowercase token with
+# a verbal suffix — goes/owns/moved/adores/likes/…) that is NOT part of a
+# to-infinitive ("to call"). Structural, not an allowlist: a verb allowlist
+# under-matched real teaches ("goes by Dee", "owns a red car") and a pure
+# opener blocklist over-matched reminders ("remember tomorrow to call Delia")
+# — both were Greptile P1s.
+_IRREGULAR_VERBS = frozenset({
+    "is", "are", "was", "were", "has", "had", "have", "can", "cannot",
+    "won't", "will", "born", "went", "left", "kept", "means", "met",
+    "isn't", "aren't", "wasn't", "doesn't", "don't", "can't",
+})
+# A to-infinitive/task tail right after the opener is a reminder, never a teach.
+_TASK_TAIL_RE = re.compile(r"^\S+\s+to\s+\w+", re.IGNORECASE)
+
+
+def _has_assertion(clause: str) -> bool:
+    tokens = [t.strip(".,!?:;\"'’") .lower() for t in clause.split()]
+    for i, tok in enumerate(tokens[:7]):
+        if i == 0:
+            continue  # the subject itself is never the verb
+        if tokens[i - 1] == "to":
+            continue  # to-infinitive = task, not assertion
+        if tok in _IRREGULAR_VERBS:
+            return True
+        if len(tok) > 3 and tok.isalpha() and tok.endswith(("ed",)):
+            return True
+        if len(tok) > 3 and tok.isalpha() and tok.endswith("s") and not tok.endswith("ss"):
+            return True
+    return False
+
+
+def is_explicit_teach(text: str) -> bool:
+    """Does ``text`` read as the user dictating a fact (vs a reminder/task)?
+    ONE definition shared by the chat and voice hooks — extend here."""
+    m = _TEACH_OPENER_RE.match((text or "").strip())
+    if not m:
+        return False
+    clause = m.group("clause")
+    if _TASK_TAIL_RE.match(clause):
+        return False
+    return _has_assertion(clause)
+
+
+def clear_matching(user_id: str, text: str) -> int:
+    """Drop every tombstone whose name appears in ``text`` — called by EXPLICIT
+    teach paths so 'forget Delia' → 'remember that Delia …' works immediately.
+    Returns the number cleared."""
+    if not user_id or not text:
+        return 0
+    live = _purge(user_id)
+    cleared = 0
+    for name_norm in list(live):
+        if re.search(r"\b" + re.escape(name_norm) + r"\b", text, re.IGNORECASE):
+            del live[name_norm]
+            cleared += 1
+    if cleared:
+        if live:
+            _tombstones[user_id] = live
+        else:
+            _tombstones.pop(user_id, None)
+        logger.info(
+            "memory_tombstones: cleared %d tombstone(s) for user=%s (explicit re-teach)",
+            cleared, user_id,
+        )
+    return cleared
+
+
+def clear_all(user_id: Optional[str] = None) -> None:
+    """Test/maintenance helper."""
+    if user_id is None:
+        _tombstones.clear()
+    else:
+        _tombstones.pop(user_id, None)

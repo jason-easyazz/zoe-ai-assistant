@@ -11,7 +11,7 @@ from skybridge_service import classify_skybridge_intent, skybridge_intent_requir
     ("play some jazz", "music", "play"),
     ("put on the beatles", "music", "play"),
     ("play the news", "music", "play"),
-    ("play some music", "music", "status"),   # generic → show, not a bogus search
+    ("play some music", "music", "play"),     # generic → PLAY (resume/default), never the "ask me to play" loop
     ("what's playing", "music", "status"),
     ("show music", "music", "status"),
     ("pause the music", "music", "pause"),
@@ -99,7 +99,7 @@ async def test_pause_calls_control(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_play_searches_and_plays(monkeypatch):
-    async def fake_sp(query, player_id="", radio_mode=False): return {"name": "Blue in Green", "artist": "Miles Davis"}
+    async def fake_sp(query, player_id="", radio_mode=False, zoe_user_id=""): return {"name": "Blue in Green", "artist": "Miles Davis"}
     async def fake_np(pid=""): return {"state": "playing", "title": "Blue in Green", "artist": "Miles Davis"}
     monkeypatch.setattr(music_service, "search_and_play", fake_sp)
     monkeypatch.setattr(music_service, "now_playing", fake_np)
@@ -262,7 +262,7 @@ async def test_search_and_play_media_endpoints_delegate(monkeypatch):
     assert r["query"] == "jazz" and r["_types"] == ["track", "album"] and r["_limit"] == 5
 
     played = {}
-    async def fake_play(uri, player_id="", radio_mode=False):
+    async def fake_play(uri, player_id="", option="replace", radio_mode=False):
         played["uri"] = uri; played["pid"] = player_id; return {"ok": True, "player_id": player_id}
     monkeypatch.setattr(music_service, "play_media", fake_play)
     ok = await music_router.music_play_media({"uri": "ytmusic://track/1", "player_id": "bedroom"})
@@ -720,7 +720,7 @@ async def test_search_and_play_reports_failure_when_ma_rejects(monkeypatch):
 @pytest.mark.asyncio
 async def test_resolve_radio_play_speaks_radio(monkeypatch):
     seen = {}
-    async def fake_sp(query, player_id="", radio_mode=False):
+    async def fake_sp(query, player_id="", radio_mode=False, zoe_user_id=""):
         seen["radio"] = radio_mode; return {"name": "Miles Davis", "artist": ""}
     async def fake_np(pid=""): return {"state": "playing", "title": "So What"}
     monkeypatch.setattr(music_service, "search_and_play", fake_sp)

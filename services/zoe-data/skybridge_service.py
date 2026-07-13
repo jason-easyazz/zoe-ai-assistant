@@ -1009,6 +1009,24 @@ _PEOPLE_CREATE_TO_RE = re.compile(
 )
 
 
+# Zoe's speaking voice (the "Zoe's voice" settings card). SET is matched against
+# the ORIGINAL-case message and anchored to the end so "set your voice to ember"
+# captures just the name; SHOW is a deliberately tight vocabulary ("zoe's voice",
+# "voice settings", "change your voice") so ordinary sentences containing the
+# word "voice" fall through to the brain.
+_VOICE_SET_RE = re.compile(
+    r"\b(?:set|change|switch)\s+(?:zoe'?s?|your|the)\s+voice\s+to\s+"
+    r"(?P<name>[A-Za-z0-9_ -]{2,40}?)\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+_VOICE_SHOW_RE = re.compile(
+    r"\bzoe'?s?\s+voice\b"
+    r"|\bvoice\s+settings?\b"
+    r"|\b(?:change|choose|pick|select)\s+(?:zoe'?s?|your)\s+voice\b",
+    re.IGNORECASE,
+)
+
+
 def classify_skybridge_intent(message: str, context: dict[str, Any] | None = None) -> SkybridgeIntent | None:
     """Classify only domains that Skybridge can resolve to real data cards."""
     raw_message = message or ""
@@ -1038,6 +1056,13 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
     music_intent = _classify_music(text)
     if music_intent is not None:
         return music_intent
+    # Zoe's speaking voice — matched early (the phrases are distinctive) so
+    # "set your voice to ember" can't be misread as a calendar/list write.
+    voice_set = _VOICE_SET_RE.search(raw_message)
+    if voice_set:
+        return SkybridgeIntent(domain="voice", action="set", query=voice_set.group("name").strip())
+    if _VOICE_SHOW_RE.search(text):
+        return SkybridgeIntent(domain="voice", action="show")
     calendar_update = _calendar_update_from_text(raw_message, context)
     if calendar_update:
         target, target_time = calendar_update
@@ -1193,7 +1218,12 @@ async def resolve_skybridge_request(
 
     if intent.domain == "music":
         from music_service import resolve_music
-        return _attach_skybridge_context(await resolve_music(intent))
+        # user_id threads the acting user into the listening journal (guest
+        # fallback happens at music_history.resolve_music_user, not here).
+        return _attach_skybridge_context(await resolve_music(intent, user_id=user_id))
+
+    if intent.domain == "voice":
+        return _attach_skybridge_context(await _resolve_voice_settings(intent))
 
     if intent.domain == "smart_home":
         from smart_home_service import resolve_smart_home
@@ -1324,9 +1354,13 @@ def _classify_music(text: str) -> "SkybridgeIntent | None":
     m = re.search(r"\b(?:play|put on|start playing|listen to)\s+(?:some\s+|the\s+|a\s+)?(.+?)\s*$", text)
     if m and (has_ctx or re.search(r"\b(play|put on|listen to)\b", text)):
         query = m.group(1).strip()
-        # "play music" / "play some music" with no real target → just show/resume.
-        if query in ("music", "something", "a song", "songs", "tunes", "some tunes", ""):
-            return SkybridgeIntent(domain="music", action="status")
+        # "play music" / "play some music" with no real target is still a PLAY
+        # (resume the queue or start the house default) — routing it to status
+        # produced the maddening loop "Nothing's playing. Ask me to put
+        # something on." in response to being asked to put something on.
+        if query in ("music", "something", "a song", "songs", "tunes", "some tunes",
+                     "some music", "anything", ""):
+            return SkybridgeIntent(domain="music", action="play", query="")
         return SkybridgeIntent(domain="music", action="play", query=query)
     # Status: "what's playing", "now playing", "show music", bare "music".
     if (has_ctx or re.search(r"\bplaying\b", text)) and re.search(r"\b(what|show|see|playing|song|music)\b", text):
@@ -1490,6 +1524,66 @@ def _resolve_clock(intent: SkybridgeIntent) -> dict[str, Any]:
                 "date_label": now.strftime("%d %B"),
             },
         }],
+    }
+
+
+async def _resolve_voice_settings(intent: SkybridgeIntent) -> dict[str, Any]:
+    """The "Zoe's voice" settings card: pick from the voices bin catalogue.
+
+    Household-shared like clock/music — no identity gate (the kiosk panel is the
+    primary surface). SET persists via voice_settings and the confirmation is
+    naturally spoken in the NEW voice (the TTS path re-reads the preference).
+    Preview is tap-only: the card's Preview buttons call /api/voice/preview from
+    the panel (the typed/tap resolver path carries no audio).
+    """
+    import voice_settings
+
+    spoken = "Here are the voices I can speak with."
+    if intent.action == "set":
+        matched = voice_settings.match_voice(intent.query)
+        if matched is None:
+            spoken = f"I don't have a voice called {intent.query}. Here's what I can use."
+        else:
+            try:
+                await voice_settings.set_tts_voice(matched)
+                spoken = "Done. This is my voice from now on."
+            except ValueError:
+                spoken = f"I don't have a voice called {intent.query}. Here's what I can use."
+            except Exception:  # DB down etc. — honest failure, never a false "done"
+                logger.warning("voice preference write failed", exc_info=True)
+                spoken = "Sorry, I couldn't save that voice right now."
+
+    current = await voice_settings.get_tts_voice()
+    names = voice_settings.list_kokoro_voices()
+    summary = (
+        "Tap a voice to make it mine, or preview it first."
+        if names
+        else "The voice catalogue isn't available right now."
+    )
+    card = {
+        "component": "voice_settings",
+        "props": {
+            "source": "voice_settings",
+            "title": "Zoe's voice",
+            "summary": summary,
+            "current": current,
+            "default": voice_settings.env_default_voice(),
+            "sample_text": voice_settings.PREVIEW_TEXT,
+            "voices": [
+                {
+                    "id": name,
+                    "label": voice_settings.voice_label(name),
+                    "zoe": name.startswith("zoe_"),
+                }
+                for name in names
+            ],
+        },
+    }
+    return {
+        "handled": True,
+        "intent": {"domain": "voice", "action": intent.action},
+        "spoken_summary": spoken,
+        "cards": [card],
     }
 
 
@@ -2043,8 +2137,13 @@ async def _resolve_weather(intent: SkybridgeIntent, user_id: str, db: Any) -> di
         )
         temp = current.get("temp")
         desc = current.get("description") or "current conditions"
-        # Speak naturally: "18.3" → "18 point 3" (bare decimals get mangled to "18 3"),
-        # and join the condition with "and" rather than the robotic "with".
+        # Whole degrees for speech: "18 degrees", never "18 point 3 degrees" —
+        # more natural spoken, and it keeps the reply inside the voice segment
+        # cache's stitch vocabulary (voice_stitch works on integer temps).
+        try:
+            temp = round(float(temp))
+        except (TypeError, ValueError):
+            pass
         spoken = (
             f"It's {_say_num(temp)} degrees and {desc} in {city}."
             if temp is not None else f"Here is the weather for {city}."

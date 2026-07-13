@@ -61,16 +61,12 @@ memory unprompted; its understanding of the user evolves.
   NULL. `memory_idle_consolidation._resolve_owner` resolves the owner from per-turn
   metadata (most-recent non-guest, freq tie-break), falling back to a real
   `chat_sessions.user_id` only. Sessions with no resolvable real user are skipped.
-- **1c ← NEXT** — *lab-prove + gate + prod-enable.* The merged 1a+1b code is gated OFF
-  behind `ZOE_IDLE_CONSOLIDATION_ENABLED`. This increment proves the full loop and
-  preps (does NOT execute) the prod enable. Steps: (1) self-contained CI acceptance
-  test `tests/test_samantha_acceptance_loop.py` exercising live→idle→store→recall
-  against the merged engine (Gemma extractor + DB mocked, real gate + real ingest/recall
-  path); (2) the lab-enable runbook in §8 (flip the flag in a worktree against real
-  Postgres/Chroma/Gemma, replay a morning→afternoon exchange, confirm afternoon
-  cross-session recall, run the zoe-core integration Samantha tests); (3) the prod-enable
-  runbook in §8 — what to flip, what to watch, what still needs the live box. **The prod
-  flag stays OFF; Jason blesses the prod enable.**
+- **1c ✅ (closed 2026-07 — see §6).** All three original steps happened: the CI
+  acceptance loop (`tests/test_samantha_acceptance_loop.py`), the §8 lab proof, and
+  the prod enable (`ZOE_IDLE_CONSOLIDATION_ENABLED=1` live since 2026-06-24, Jason-blessed)
+  — and the §7 positive control has since been shown on organic traffic (real
+  authenticated turns land in `chat_messages` with `metadata.user_id`; recall verified
+  behaviorally, see `memory-qa-review-2026-07.md`). Nothing in 1c is open.
 - **DoD:** a fact told now is consolidated within minutes of idle and recalled in a
   later session, with junk gated out.
 
@@ -113,7 +109,7 @@ memory unprompted; its understanding of the user evolves.
 - [x] **1a** — idle consolidation engine (**PR #771** merged; branch `feat/memory-idle-consolidation`, flag off, tests green, SQL lab-validated)
 - [x] **1b** — persist per-turn user (**PR #775** merged; chat+voice `_save_chat_message` stamps `metadata.user_id`; consolidation resolves owner from per-turn metadata over a guest session; SQL lab-proven a guest-owned session resolves to `jason`)
 - [x] **dedup gate** — `memory_quality.classify_against_existing` ADD/UPDATE/**SKIP** + prefer-richer + same-attribute near-dup merge + "never drop a correction" (**PR #794** squash-merged 2026-06-24; branch tip `f0e30bff` == #794 head, so the "2 unmerged commits" are the squash-ancestry illusion, NOT pending work). This was the stated prod-enable blocker; it is **cleared**. Plus **PR #795/#796** (live-integration suites) and **PR #798** (normalize `GEMMA_SERVER_URL` — the prod `/v1/v1` 404 was killing consolidation).
-- [~] **1c** — lab-prove + prod-enable + **verify prod health** (**1c mechanism PROVEN on real saved voice 2026-07-03** — capture+1b stamping + consolidate + recall verified end-to-end on `~/.zoe-voice-samples/071119_724.wav`, isolated store; live-endpoint auth + idle-timer firing still code-only). (CI bar green: 67 tests pass, demo/synthetic only. **Prod flag is already ON** since 2026-06-24: `ZOE_IDLE_CONSOLIDATION_ENABLED=1` in `services/zoe-data/.env`, confirmed in the live process env (PID-checked 2026-06-26). Engine is **healthy** (NRestarts=0, active). **BUT it has never consolidated a real conversation.** Live Postgres diagnostic 2026-06-26 (read-only): `memory_consolidation_state` has 55 watermark rows and **every one is a `demo_*`/`demo_dedup_*` test session** (last `2026-06-24 21:55`) — all from the dedup lab run, zero real users. Why: (a) **no `chat_messages` traffic in 3.7 days** (newest row ~2026-06-22, total 3150) so nothing is ever inside the 1h lookback; (b) **zero `chat_messages` carry `metadata.user_id`**, so 1b owner-resolution would skip every session — though all 3150 rows **predate the 1b deploy (2026-06-24)**, so 1b stamping is **unverified in prod, not proven broken**. The 3.7-day capture gap is itself suspicious (panel is in active use → is capture even alive?). Also two **separate, older** startup bugs (NOT the idle engine): `proactive/engine.py:208` `_cleanup_expired_pending` does `cur.rowcount` on the compat `_Cursor` (no such attr); `memory_digest.py:706` weekly `run_weekly_consolidation_for_all` fallback hit "connection was closed in the middle of operation". 1c is not done until a *real* authenticated turn is shown to (1) land in `chat_messages` and (2) carry `metadata.user_id`, and then a sweep consolidates it cleanly.)
+- [x] **1c** — **DONE (closed 2026-07 on organic traffic).** Lab-proof on real saved voice (2026-07-03, end-to-end capture+1b stamping+consolidate+recall); prod flag `ZOE_IDLE_CONSOLIDATION_ENABLED=1` live since 2026-06-24 (Jason-blessed), engine healthy; and the final positive control shown during the 2026-07 memory QA arc — real authenticated turns land in `chat_messages` **with** `metadata.user_id`, and recall/capture verified behaviorally on organic Telegram/panel traffic (`memory-qa-review-2026-07.md` + the #1242–#1266 hardening chain). The two older startup bugs noted in the 2026-06-26 diagnostic (`proactive/engine.py` `_cleanup_expired_pending` rowcount; `memory_digest.py` weekly fallback connection) were separate from the idle engine and are tracked outside this plan.
 - [~] **2a** hybrid retrieval — SHIPPED (flag `ZOE_HYBRID_RETRIEVAL_ENABLED`, default **OFF**; real-Chroma lab-smoke passed, flag OFF, value-proof on the realistic corpus still pending). `MemoryService._semantic_search` now composes three cheap, additive, bounded, O(candidates) boosts on top of the existing semantic+hotness re-rank, gated behind the flag; OFF is a byte-for-byte no-op (the boost term is skipped entirely — proved by `test_flag_off_ordering_is_a_true_noop`). Boosts: (1) **keyword/lexical** — normalized alnum token overlap (stopwords dropped, whole-token *or* substring match so "dad"→"dad's"), weight `_HYBRID_KEYWORD_WEIGHT=0.50` — the primary fix for the 0-hit misses (rescues "what is my dad name"→"My dad's name is Neil"); (2) **temporal-proximity** — `exp(-ln2/30d · age)` × `_HYBRID_RECENCY_WEIGHT=0.05` (mild, never dominates relevance); (3) **preference/importance** — `memory_type ∈ {preference,approval,emotional_moment,person,recurring_task}` (or a numeric `importance` field if a producer ever writes one — currently a no-op arm) × `_HYBRID_PREFERENCE_WEIGHT=0.05`. Zero LLM calls, no embedder reload, no new deps. Candidate fetch + status/visibility filtering unchanged (cross-user + approved-only still enforced with the flag ON). Tests: `tests/test_memory_hybrid_retrieval.py` (8, all synthetic, embedding layer mocked). · [~] **2b** compose Postgres+Chroma packet — **SHIPPED** (flag `ZOE_MEMORY_COMPOSE_ENABLED`, default **OFF**, pending lab proof). New `zoe_memory_compose.py` folds the *relational* half (Postgres `people`/`person_relationships`/`person_important_dates` + `user_portraits`) under the existing vector packet in `/api/memories/for-prompt`, each line **cited** (`[people]`/`[relationship]`/`[date]`/`[portrait]`). **Router-gated** by a cheap zero-LLM keyword/pattern classifier (`needs_relational`) so relational facts attach only on person/relationship/date queries — otherwise the packet stays vector-only. OFF (or a non-relational query) is a **byte-for-byte no-op**: `compose_enabled()` short-circuits before any DB read (proved by `test_flag_off_golden_matches_direct_builder`). Reads are three bounded batch queries (no N+1, no LLM), per-user + `visibility='family' OR user_id=?` scoped (no cross-user leakage, soft-deleted excluded), row/char-budgeted. Consumer `memory.ts` unchanged (reads only `packet`). Tests: `tests/test_memory_compose_packet.py` (20, synthetic — fake MemoryService + seeded fake relational store). · [~] **2c** voice mirror — **SHIPPED** (same flag `ZOE_MEMORY_COMPOSE_ENABLED`, default **OFF**; voice + chat now share one composed memory source when enabled). `routers/voice_tts._voice_recall_packet` now folds the SAME cited relational block chat uses into the `[What you remember]` voice block. Both paths call one shared entry point, `zoe_memory_compose.compose_packet(user_id, message)` (new) — it owns the flag + `needs_relational` router gate + `get_db_ctx` + `compose_relational_block`, so the compose/gate logic is NOT duplicated and can't drift; `routers/memories.py` was refactored onto it with **identical** behaviour (its 20 tests unchanged/green). Flag OFF is a **true no-op** for voice: `compose_packet` cheap-gates (pure `compose_enabled()` + `needs_relational()`) before opening any DB connection, so a non-relational or flag-OFF turn is byte-for-byte the pre-2c output (proved by `test_flag_off_identical_to_today`). Hot path preserved (zero-LLM, relational pull only on person/relationship/date turns); per-user + `visibility='family' OR user_id=?` + soft-deleted scoping inherited from 2b; guest fails closed before the read. Tests: `tests/test_voice_recall_compose_2c.py` (11, synthetic — mocked embeddings + seeded fake relational store).
 - [x] **2a/2b/3a-portrait ENABLED IN PROD 2026-07-03** — `ZOE_HYBRID_RETRIEVAL_ENABLED=1` + `ZOE_MEMORY_COMPOSE_ENABLED=1` live after real-store proof (jason recall wrong→right, portrait delivered on identity queries); reversible via flag.
 - [x] **Emotional thread (criterion #2) — SHIPPED + LIVE**. Capture: Flue `EMOTIONAL_CAPTURE_DOCTRINE` (#1003). Recall: for-prompt emotional gate + intensity **pin** (#1004/#1005, `ZOE_EMOTIONAL_RECALL_ENABLED=1` live) + the live Flue brain's new `EMOTIONAL_RECALL_DOCTRINE` (this PR) — measured **4/4** on the live 4B brain ("how have I been feeling?" → recalls the settlement thread).
@@ -145,10 +141,10 @@ is the immediate voice/chat writers + the for-prompt packet + the Flue `recall_m
 > PID-confirmed; set 2026-06-24) and the engine is healthy, so §8.3 below is kept
 > only as reference + the rollback/watch procedure — the enable/restart step is
 > **done**, not pending. §8.2's demo path is likewise proven (55 demo watermark
-> rows). **The actual open 1c item is the §7 positive control:** prove a fresh
-> authenticated turn lands in `chat_messages` *with* `metadata.user_id`, then that a
-> sweep consolidates it. Treat the enable/restart in §8.3 as a no-op unless the flag
-> has been deliberately turned OFF.
+> rows). **The §7 positive control is CLOSED (2026-07):** real authenticated turns
+> land in `chat_messages` *with* `metadata.user_id` on organic traffic (memory QA arc,
+> `memory-qa-review-2026-07.md`). Treat the enable/restart in §8.3 as a no-op unless
+> the flag has been deliberately turned OFF.
 
 ### 8.1 What is already proven (no live box needed)
 - `test_samantha_acceptance_loop.py` drives the merged engine end to end: a short morning
@@ -176,7 +172,7 @@ is the immediate voice/chat writers + the for-prompt packet + the Flue `recall_m
 ### 8.3 Prod-enable — ALREADY DONE 2026-06-24 (reference + rollback/watch only)
 - ⚠️ **The enable below already happened — do NOT perform it again as if fresh.** The flag is on
   in `services/zoe-data/.env` and confirmed in the live process env. Re-running the enable/restart
-  does NOT prove the live capture chain; the open item is the §7 positive-control turn. This bullet
+  does NOT prove the live capture chain (the §7 positive control — CLOSED 2026-07). This bullet
   is retained only to document how the flag is wired and how to re-enable *if it is ever turned off*.
 - The flag is read **per-sweep** (`start_idle_consolidation_loop` re-checks `_enabled()` every
   iteration), so enabling needs no code change and no restart of the loop task itself — but the
@@ -193,7 +189,8 @@ is the immediate voice/chat writers + the for-prompt packet + the Flue `recall_m
 - **Rollback:** set the flag back to `0` and redeploy; the loop idles harmlessly. No data
   migration to undo — only thin distilled facts were added, which the existing memory tooling
   can review/forget.
-- **What still needs the live box to fully prove (cannot be done in CI):** real Gemma extraction
-  quality (do the facts come out clean and owner-attributed?), real Chroma recall ranking of the
-  consolidated fact, and end-to-end latency that the sweep never touches the hot path under real
-  load. These are the 8.2 checks; they gate the 8.3 enable.
+- **Live-box proof (was the 8.2 gate on the 8.3 enable): ✅ satisfied.** The enable is done
+  (flag live since 2026-06-24) and the live-box checks it gated — clean owner-attributed
+  extraction, recall of consolidated facts, hot path untouched — were shown on organic
+  traffic during the 2026-07 memory QA arc. Nothing gates here anymore; this list is kept
+  only as the rollback-and-re-enable checklist if the flag is ever turned OFF.

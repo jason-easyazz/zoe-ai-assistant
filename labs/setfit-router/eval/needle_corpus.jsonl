@@ -1,0 +1,81 @@
+{"id": "time-c1", "style": "canonical", "text": "what time is it", "expected": ["get_time"], "domain": "time"}
+{"id": "time-c2", "style": "canonical", "text": "what's the date today", "expected": ["get_time"], "domain": "time"}
+{"id": "time-p1", "style": "paraphrase", "text": "have you got the time on you", "expected": ["get_time"], "domain": "time"}
+{"id": "time-p2", "style": "paraphrase", "text": "um what day are we on again", "expected": ["get_time"], "domain": "time"}
+{"id": "weather-c1", "style": "canonical", "text": "what's the weather like in Perth", "expected": ["get_weather"], "domain": "weather"}
+{"id": "weather-c2", "style": "canonical", "text": "what's the forecast for tomorrow", "expected": ["get_weather"], "domain": "weather"}
+{"id": "weather-p1", "style": "paraphrase", "text": "do I need a jacket if I go out later", "expected": ["get_weather"], "domain": "weather"}
+{"id": "weather-p2", "style": "paraphrase", "text": "is it going to bucket down this arvo", "expected": ["get_weather"], "domain": "weather"}
+{"id": "weather-p3", "style": "paraphrase", "text": "reckon it'll be nice enough for the beach on saturday", "expected": ["get_weather"], "domain": "weather"}
+{"id": "shoplist-c1", "style": "canonical", "text": "add milk to my shopping list", "expected": ["shopping_list_add", "add_to_list"], "domain": "lists"}
+{"id": "shoplist-c2", "style": "canonical", "text": "put bread on the grocery list", "expected": ["shopping_list_add", "add_to_list"], "domain": "lists"}
+{"id": "shoplist-p1", "style": "paraphrase", "text": "we're out of laundry powder again", "expected": ["shopping_list_add", "add_to_list"], "domain": "lists"}
+{"id": "shoplist-p2", "style": "paraphrase", "text": "chuck dog food on the list when you get a sec", "expected": ["shopping_list_add", "add_to_list"], "domain": "lists"}
+{"id": "shoplist-p3", "style": "paraphrase", "text": "don't let me leave the shops without coffee", "expected": ["shopping_list_add", "add_to_list", "add_reminder"], "domain": "lists"}
+{"id": "listshow-c1", "style": "canonical", "text": "what's on my shopping list", "expected": ["show_list"], "domain": "lists"}
+{"id": "listshow-c2", "style": "canonical", "text": "show me my todo list", "expected": ["show_list"], "domain": "lists"}
+{"id": "listshow-p1", "style": "paraphrase", "text": "what do I still need to grab from the shops", "expected": ["show_list"], "domain": "lists"}
+{"id": "listshow-p2", "style": "paraphrase", "text": "read us back the groceries", "expected": ["show_list"], "domain": "lists"}
+{"id": "listrm-c1", "style": "canonical", "text": "remove bananas from my shopping list", "expected": ["list_remove"], "domain": "lists"}
+{"id": "listrm-p1", "style": "paraphrase", "text": "actually scratch the bananas, we've got heaps", "expected": ["list_remove"], "domain": "lists"}
+{"id": "listrm-p2", "style": "paraphrase", "text": "take the eggs off, nan's bringing some", "expected": ["list_remove"], "domain": "lists"}
+{"id": "cal-show-c1", "style": "canonical", "text": "what's on my calendar today", "expected": ["show_calendar"], "domain": "calendar"}
+{"id": "cal-show-c2", "style": "canonical", "text": "do I have anything on this week", "expected": ["show_calendar"], "domain": "calendar"}
+{"id": "cal-show-p1", "style": "paraphrase", "text": "am I double booked friday or are we sweet", "expected": ["show_calendar"], "domain": "calendar"}
+{"id": "cal-show-p2", "style": "paraphrase", "text": "what have I got on after lunch", "expected": ["show_calendar"], "domain": "calendar"}
+{"id": "cal-add-c1", "style": "canonical", "text": "add a dentist appointment next tuesday at 3pm", "expected": ["add_calendar_event"], "domain": "calendar"}
+{"id": "cal-add-c2", "style": "canonical", "text": "schedule a meeting with sarah for friday at 10", "expected": ["add_calendar_event"], "domain": "calendar"}
+{"id": "cal-add-p1", "style": "paraphrase", "text": "the vet can fit biscuit in thursday morning, lock it in", "expected": ["add_calendar_event"], "domain": "calendar"}
+{"id": "cal-add-p2", "style": "paraphrase", "text": "mum's flight lands sunday 6pm, stick that in", "expected": ["add_calendar_event"], "domain": "calendar"}
+{"id": "rem-add-c1", "style": "canonical", "text": "remind me to water the plants at 7pm tomorrow", "expected": ["add_reminder"], "domain": "reminders"}
+{"id": "rem-add-c2", "style": "canonical", "text": "set a reminder to take the bins out tonight", "expected": ["add_reminder"], "domain": "reminders"}
+{"id": "rem-add-p1", "style": "paraphrase", "text": "don't let me forget to pay the rent on the first", "expected": ["add_reminder"], "domain": "reminders"}
+{"id": "rem-add-p2", "style": "paraphrase", "text": "give us a nudge about the dentist tomorrow morning", "expected": ["add_reminder"], "domain": "reminders"}
+{"id": "rem-add-p3", "style": "paraphrase", "text": "I'll forget the school pickup at 3 unless you say something", "expected": ["add_reminder"], "domain": "reminders"}
+{"id": "rem-list-c1", "style": "canonical", "text": "what reminders do I have", "expected": ["list_reminders"], "domain": "reminders"}
+{"id": "rem-list-p1", "style": "paraphrase", "text": "anything I'm meant to be doing today", "expected": ["list_reminders", "show_calendar"], "domain": "reminders"}
+{"id": "timer-c1", "style": "canonical", "text": "set a timer for 10 minutes", "expected": ["set_timer"], "domain": "timers"}
+{"id": "timer-c2", "style": "canonical", "text": "set a 5 minute timer for the pasta", "expected": ["set_timer"], "domain": "timers"}
+{"id": "timer-p1", "style": "paraphrase", "text": "give me twenty on the clock for the roast spuds", "expected": ["set_timer"], "domain": "timers"}
+{"id": "timer-p2", "style": "paraphrase", "text": "eggs need six minutes, time it", "expected": ["set_timer"], "domain": "timers"}
+{"id": "note-add-c1", "style": "canonical", "text": "make a note: the wifi password is hunter2", "expected": ["create_note"], "domain": "notes"}
+{"id": "note-add-c2", "style": "canonical", "text": "take a note that the gate code is 4482", "expected": ["create_note"], "domain": "notes"}
+{"id": "note-add-p1", "style": "paraphrase", "text": "jot this down before I lose it, plumber quoted 300 for the laundry tap", "expected": ["create_note"], "domain": "notes"}
+{"id": "note-add-p2", "style": "paraphrase", "text": "the good pizza place is the one on marine terrace, keep that somewhere", "expected": ["create_note", "remember_fact"], "domain": "notes"}
+{"id": "note-search-c1", "style": "canonical", "text": "search my notes for the wifi password", "expected": ["note_search"], "domain": "notes"}
+{"id": "note-search-p1", "style": "paraphrase", "text": "what did I say the plumber quoted again", "expected": ["note_search"], "domain": "notes"}
+{"id": "note-search-p2", "style": "paraphrase", "text": "didn't I write down the gate code somewhere", "expected": ["note_search"], "domain": "notes"}
+{"id": "journal-c1", "style": "canonical", "text": "add a journal entry: grateful for the rain today", "expected": ["journal"], "domain": "journal"}
+{"id": "journal-c2", "style": "canonical", "text": "write in my diary that today was a hard one", "expected": ["journal"], "domain": "journal"}
+{"id": "journal-p1", "style": "paraphrase", "text": "today honestly knocked me around, can you put that in the journal", "expected": ["journal"], "domain": "journal"}
+{"id": "journal-p2", "style": "paraphrase", "text": "what did I journal about last week", "expected": ["journal"], "domain": "journal"}
+{"id": "people-c1", "style": "canonical", "text": "add Marcus to my contacts as my colleague", "expected": ["people"], "domain": "people"}
+{"id": "people-c2", "style": "canonical", "text": "who is Zephyrina", "expected": ["people", "recall_memory"], "domain": "people"}
+{"id": "people-p1", "style": "paraphrase", "text": "my sister's name is Kate by the way, keep track of her", "expected": ["people", "remember_fact"], "domain": "people"}
+{"id": "people-p2", "style": "paraphrase", "text": "what do we know about my mate Dave", "expected": ["people", "recall_memory"], "domain": "people"}
+{"id": "media-c1", "style": "canonical", "text": "play some music", "expected": ["media"], "domain": "music"}
+{"id": "media-c2", "style": "canonical", "text": "turn the volume down", "expected": ["media"], "domain": "music"}
+{"id": "media-c3", "style": "canonical", "text": "pause the music", "expected": ["media"], "domain": "music"}
+{"id": "media-p1", "style": "paraphrase", "text": "chuck on something chill while I cook", "expected": ["media"], "domain": "music"}
+{"id": "media-p2", "style": "paraphrase", "text": "that's way too loud, bring it down heaps", "expected": ["media"], "domain": "music"}
+{"id": "media-p3", "style": "paraphrase", "text": "skip this one, not feeling it", "expected": ["media"], "domain": "music"}
+{"id": "home-c1", "style": "canonical", "text": "turn off the kitchen lights", "expected": ["home"], "domain": "smart_home"}
+{"id": "home-c2", "style": "canonical", "text": "dim the lounge room lights", "expected": ["home"], "domain": "smart_home"}
+{"id": "home-p1", "style": "paraphrase", "text": "it's like a cave in here, sort the lights out", "expected": ["home"], "domain": "smart_home"}
+{"id": "home-p2", "style": "paraphrase", "text": "we're heading to bed, kill everything downstairs", "expected": ["home"], "domain": "smart_home"}
+{"id": "recall-c1", "style": "canonical", "text": "what do you remember about me", "expected": ["recall_memory"], "domain": "memory"}
+{"id": "recall-c2", "style": "canonical", "text": "what's my name", "expected": ["recall_memory"], "domain": "memory"}
+{"id": "recall-p1", "style": "paraphrase", "text": "remind me what I told you about my work situation", "expected": ["recall_memory"], "domain": "memory"}
+{"id": "recall-p2", "style": "paraphrase", "text": "you know that thing I said about my knee, what was it", "expected": ["recall_memory"], "domain": "memory"}
+{"id": "fact-c1", "style": "canonical", "text": "remember that my favourite colour is green", "expected": ["remember_fact"], "domain": "memory"}
+{"id": "fact-c2", "style": "canonical", "text": "remember that I'm allergic to peanuts", "expected": ["remember_fact"], "domain": "memory"}
+{"id": "fact-p1", "style": "paraphrase", "text": "for future reference I knock off work at 2:30 on fridays", "expected": ["remember_fact"], "domain": "memory"}
+{"id": "fact-p2", "style": "paraphrase", "text": "the dog's name is Biscuit, don't forget it", "expected": ["remember_fact", "people"], "domain": "memory"}
+{"id": "chat-1", "style": "chat", "text": "hey zoe how's it going", "expected": ["general_chat"], "domain": "chat"}
+{"id": "chat-2", "style": "chat", "text": "tell me something interesting about octopuses", "expected": ["general_chat"], "domain": "chat"}
+{"id": "chat-3", "style": "chat", "text": "I had a really rough day at work", "expected": ["general_chat", "journal", "remember_emotional_moment"], "domain": "chat"}
+{"id": "chat-4", "style": "chat", "text": "what do you think about while I'm asleep", "expected": ["general_chat"], "domain": "chat"}
+{"id": "chat-5", "style": "chat", "text": "why is the sky blue", "expected": ["general_chat"], "domain": "chat"}
+{"id": "chat-6", "style": "chat", "text": "thanks heaps, you're a legend", "expected": ["general_chat"], "domain": "chat"}
+{"id": "chat-7", "style": "chat", "text": "should I get a haircut or let it grow", "expected": ["general_chat"], "domain": "chat"}
+{"id": "chat-8", "style": "chat", "text": "can you explain how compound interest works", "expected": ["general_chat"], "domain": "chat"}
