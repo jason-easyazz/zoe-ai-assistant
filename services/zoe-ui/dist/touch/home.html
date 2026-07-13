@@ -55,6 +55,7 @@
   #home.hide{opacity:0;pointer-events:none}
   #orb{position:absolute;left:44px;bottom:44px;width:68px;height:68px;border-radius:50%;background:radial-gradient(circle at 34% 30%,#a9d4ff,#5b74ff 58%,#7a53ff 100%);box-shadow:0 0 30px rgba(107,138,255,.5),inset 0 2px 8px rgba(255,255,255,.4);z-index:50;animation:breathe 5s ease-in-out infinite;cursor:pointer}
   #orb.busy{animation:breathe 1.1s ease-in-out infinite;box-shadow:0 0 44px rgba(107,138,255,.85),inset 0 2px 8px rgba(255,255,255,.4)}
+  #orb.listening{animation:breathe .9s ease-in-out infinite;box-shadow:0 0 64px rgba(123,150,255,.95),0 0 120px rgba(123,150,255,.4),inset 0 2px 8px rgba(255,255,255,.5)}
   /* ask-Zoe command bar (orb tap) */
   #cmdbar{position:absolute;left:50%;bottom:126px;transform:translateX(-50%) translateY(12px);width:620px;display:none;z-index:55;opacity:0;transition:.25s}
   #cmdbar.on{display:flex;opacity:1;transform:translateX(-50%)}
@@ -405,7 +406,6 @@
   #dock .pc.temp .tkn{position:absolute;left:50%;transform:translate(-50%,50%);width:30px;height:30px;border-radius:50%;background:#fff;box-shadow:0 3px 10px rgba(0,0,0,.4)}
   #dock .dheard{font-size:23px;color:rgba(255,255,255,.6);padding:6px 12px}
   #dock .dheard b{color:#fff;font-weight:500}
-  #dock .dheard .dpulse{display:inline-block;width:12px;height:12px;border-radius:50%;background:var(--accent);margin-right:12px;animation:breathe 1.6s ease-in-out infinite;box-shadow:0 0 12px var(--accent)}
 
   /* launcher: grid button (permanent, first in dock) + full-screen overlay */
   #dock .pc.apps{width:54px;padding:0;justify-content:center}
@@ -550,7 +550,7 @@
         +'<div class="today"><div class="thk">Your Day</div><div id="hToday"></div></div>'
         +'</div>'},
     ask:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="askf"><div class="aa" id="askOut" style="opacity:.55">Just ask — I’ll answer here.</div></div>'},
+      html:'<div class="fcog">'+GEAR+'</div><div class="askf"><div class="aa" id="askOut" style="opacity:.55">Just ask — I’ll answer here.</div></div>'},
     weather:{home:true, bg:DUSK, canvas:true,
       html:'<div class="fcog">'+GEAR+'</div><div class="wloc" id="wxLoc"></div><div class="wbig"><div class="t" id="wxTemp">—°</div><div class="c" id="wxCond"></div></div><div class="whours" id="wxHours"></div>'},
     music:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,
@@ -573,7 +573,7 @@
     reminder:{home:true, bg:GROUND, canvas:false,
       html:'<div class="fcog">'+GEAR+'</div><div class="remf"><div class="dk">Reminders</div><h1 id="remTtl">Loading…</h1><div id="remList" class="remlist"></div></div>'},
     rooms:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="rm"><div class="rchips" id="rmScenes"></div>'
+      html:'<div class="fcog">'+GEAR+'</div><div class="rm"><div class="rchips" id="rmScenes"></div>'
         +'<div class="rhero" id="rmHero" style="display:none"><div class="cover"></div><div class="rhead"><div class="rart" id="rmArt">🎵</div><div><div class="rk">Now Playing</div><div class="rt" id="rmT"></div><div class="ra" id="rmA"></div></div></div><div class="rscrub"><div class="f" id="rmF" style="width:0%"></div></div><div class="rtp"><button data-a="previous">⏮</button><button class="pp" id="rmPP" data-a="playpause">❚❚</button><button data-a="next">⏭</button></div></div>'
         +'<div class="rlights" id="rmLights"></div></div>'}
   };
@@ -594,6 +594,8 @@
   requestAnimationFrame(frame);
 
   var full=document.getElementById('full'),cardwrap=document.getElementById('cardwrap'),host=document.getElementById('host'),dock=document.getElementById('dock'),dbody=document.getElementById('dbody'),home=document.getElementById('home'),glow=document.getElementById('glow'),pick=document.getElementById('pick');
+
+  full.addEventListener('click',function(e){if(e.target.closest('.fcog'))show('settings');});
 
   function show(id){
     var f=FULL[id], c=CARD[id];
@@ -1212,16 +1214,23 @@
   // Live voice state → estate surfaces. touch-ui-executor.js checks for this
   // object and routes its voice events here INSTEAD of building the legacy
   // skybridge overlay box (which never auto-dismissed on the estate).
+  var _lisT=null;
   window.ZoeEstateVoice={
-    listening:function(){dock.classList.remove('hide');dbody.innerHTML='<div class="dheard"><span class="dpulse"></span>Listening…</div>';
-      if(_heardT)clearTimeout(_heardT);_heardT=setTimeout(function(){if(dbody.querySelector('.dpulse')&&_cur!=='sleep')renderDock();},12000);},
-    transcript:function(t){if(t)dockHeard(t);},
-    thinking:function(){var o=document.getElementById('askOut');if(o&&_cur==='ask')o.textContent='…';},
-    responding:function(t){if(!t)return;
+    // Listening is shown on the ORB (fast breathe + bright glow), not by
+    // taking over the dock — the dock keeps its pinned controls until a
+    // transcript arrives. Safety timeout clears the state if no further
+    // voice event lands (e.g. wake false-trigger).
+    listening:function(){orb.classList.add('listening');
+      if(_lisT)clearTimeout(_lisT);_lisT=setTimeout(function(){orb.classList.remove('listening');},20000);},
+    transcript:function(t){orb.classList.remove('listening');if(_lisT)clearTimeout(_lisT);if(t)dockHeard(t);},
+    thinking:function(){orb.classList.remove('listening');orb.classList.add('busy');
+      var o=document.getElementById('askOut');if(o&&_cur==='ask')o.textContent='…';},
+    responding:function(t){orb.classList.remove('listening');orb.classList.add('busy');
+      if(!t)return;
       // Chat answers land on the Ask surface; domain commands keep their screen
       // (the summary is already spoken aloud — the dock keeps the transcript).
       if(_cur==='ask'){var o=document.getElementById('askOut');if(o)o.textContent=t;}},
-    done:function(){}
+    done:function(){orb.classList.remove('listening');orb.classList.remove('busy');if(_lisT)clearTimeout(_lisT);}
   };
 
   orb.addEventListener('click',function(){
