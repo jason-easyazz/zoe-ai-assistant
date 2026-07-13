@@ -486,8 +486,10 @@ async def play_media(uri: str, player_id: str = "", option: str = "replace") -> 
     # does real work synchronously (resolve the stream, start the speaker) and
     # returns 200 in ~6s+, so it needs a longer timeout than the read helpers.
     # option: replace (play now) | add (end of queue) | next (after current) —
-    # the jukebox phone page queues with add/next; anything else is coerced to replace.
-    if option not in ("replace", "add", "next", "play"):
+    # the jukebox phone page queues with add/next; anything else (including
+    # MA's own 'play' alias, which has different queue semantics) is coerced
+    # to replace so play-now behaviour is uniform for every caller.
+    if option not in ("replace", "add", "next"):
         option = "replace"
     if not await _ma_ok("player_queues/play_media", timeout_s=20.0, queue_id=pid,
                         media=uri, option=option, radio_mode=False):
