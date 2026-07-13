@@ -164,6 +164,15 @@
   .setf{position:absolute;inset:0;padding:100px 200px 150px;display:flex;flex-direction:column;overflow-y:auto}
   .setsec{background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.09);border-radius:20px;margin-bottom:14px;overflow:hidden}
   .setsec .sh{display:flex;align-items:center;gap:14px;padding:20px 24px;cursor:pointer;font-size:22px;font-weight:500}
+  .srow2 .sw{width:58px;height:34px;border-radius:999px;background:rgba(255,255,255,.16);position:relative;transition:.25s;flex:none;cursor:pointer}
+  .srow2 .sw::after{content:'';position:absolute;top:4px;left:4px;width:26px;height:26px;border-radius:50%;background:#fff;transition:.25s}
+  .srow2 .sw.on{background:var(--accent)}
+  .srow2 .sw.on::after{left:28px}
+  .srow2 input[type=range]{flex:1;max-width:280px;accent-color:var(--accent);height:34px}
+  .srow2 .sv{min-width:56px;text-align:right;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+  .srow2 .stat{width:12px;height:12px;border-radius:50%;flex:none}
+  .srow2 .stat.ok{background:#66d6a3;box-shadow:0 0 10px rgba(102,214,163,.6)}
+  .srow2 .stat.bad{background:var(--cat-health);box-shadow:0 0 10px rgba(255,122,144,.5)}
   .setsec .sh .caret{margin-left:auto;color:var(--ink-faint);transition:transform .25s}
   .setsec.open .sh .caret{transform:rotate(90deg)}
   .setsec .sbody{max-height:0;overflow:hidden;transition:max-height .3s ease}
@@ -1071,23 +1080,61 @@
   }
 
   // ---- Settings: full-screen expanding sections ----
+  var _setPrefs=null,_setPrefT=null;
+  function _panelDevId(){return localStorage.getItem('zoe_panel_id')||localStorage.getItem('zoe_touch_panel_id')||'default';}
+  function _savePrefs(patch){
+    _setPrefs=Object.assign(_setPrefs||{},patch);
+    if(_setPrefT)clearTimeout(_setPrefT);
+    _setPrefT=setTimeout(function(){
+      apiJson('PUT','/api/system/display/preferences',{device_id:_panelDevId(),preferences:_setPrefs})
+        .catch(function(){toast('Couldn’t save display settings');});
+    },500);   // debounce slider drags into one write
+  }
   function wireSettings(){
     var host=document.getElementById('setSecs');if(!host)return;
     var u=null;try{u=JSON.parse(localStorage.getItem('zoe_session')||'null');}catch(e){}
     var who=(u&&(u.username||u.user_id))||'Guest';
     host.innerHTML=[
-      {t:'Account',b:'<div class="srow2"><span>Signed in as <b>'+esc(who)+'</b></span></div><button class="sout" id="setOut">Sign out</button>'},
-      {t:'Panel & display',b:'<div class="srow2" data-go="/touch/settings.html"><span>All panel settings</span><span class="chev2">›</span></div><div class="srow2" data-go="/touch/updates.html"><span>Updates</span><span class="chev2">›</span></div>'},
-      {t:'Devices & pairing',b:'<div class="srow2" data-act="pair"><span>Link a device</span><span class="chev2">›</span></div>'},
-      {t:'Household',b:'<div class="srow2" data-act="contacts"><span>Contacts</span><span class="chev2">›</span></div><div class="srow2" data-act="rooms"><span>Rooms & devices</span><span class="chev2">›</span></div>'}
+      {t:'Account',b:'<div class="srow2"><span>Signed in as <b>'+esc(who)+'</b></span></div><div class="srow2" data-act="switch"><span>Switch user</span><span class="chev2">›</span></div><button class="sout" id="setOut">Sign out</button>'},
+      {t:'Display',b:'<div id="setDisp"><div class="srow2"><span style="color:var(--ink-faint)">Loading…</span></div></div>'},
+      {t:'System',b:'<div id="setSys"><div class="srow2"><span style="color:var(--ink-faint)">Checking…</span></div></div>'},
+      {t:'Household',b:'<div class="srow2" data-act="contacts"><span>Contacts</span><span class="chev2">›</span></div><div class="srow2" data-act="rooms"><span>Rooms & devices</span><span class="chev2">›</span></div><div class="srow2" data-act="pair"><span>Link a device</span><span class="chev2">›</span></div>'}
     ].map(function(sec,i){return '<div class="setsec"><div class="sh">'+esc(sec.t)+'<span class="caret">›</span></div><div class="sbody"><div class="inner">'+sec.b+'</div></div></div>';}).join('');
+
+    // Display: the panel's real brightness/night/idle prefs, live-wired.
+    apiGet('/api/system/display/preferences?device_id='+encodeURIComponent(_panelDevId())).then(function(d){
+      if(_cur!=='settings')return;var pr=(d&&d.preferences)||{};_setPrefs={};
+      var el=document.getElementById('setDisp');if(!el)return;
+      el.innerHTML=
+        '<div class="srow2"><span>Brightness</span><input type="range" min="10" max="100" step="5" data-pref="day_brightness" value="'+(+pr.day_brightness||100)+'"><span class="sv">'+(+pr.day_brightness||100)+'%</span></div>'
+        +'<div class="srow2"><span>Night mode <small style="color:var(--ink-faint)">'+esc(pr.night_start||'22:00')+'–'+esc(pr.night_end||'06:30')+'</small></span><span class="sw'+(pr.night_enabled?' on':'')+'" data-pref-t="night_enabled"></span></div>'
+        +'<div class="srow2"><span>Night brightness</span><input type="range" min="5" max="60" step="5" data-pref="night_brightness" value="'+(+pr.night_brightness||15)+'"><span class="sv">'+(+pr.night_brightness||15)+'%</span></div>'
+        +'<div class="srow2"><span>Dim when idle <small style="color:var(--ink-faint)">'+Math.round((+pr.idle_seconds||120)/60)+' min</small></span><span class="sw'+(pr.idle_enabled?' on':'')+'" data-pref-t="idle_enabled"></span></div>';
+      el.querySelectorAll('input[type=range]').forEach(function(r){r.oninput=function(){
+        var sv=r.parentElement.querySelector('.sv');if(sv)sv.textContent=r.value+'%';
+        var patch={};patch[r.getAttribute('data-pref')]=+r.value;_savePrefs(patch);};});
+      el.querySelectorAll('.sw[data-pref-t]').forEach(function(sw){sw.onclick=function(){
+        var on=sw.classList.toggle('on');var patch={};patch[sw.getAttribute('data-pref-t')]=on;_savePrefs(patch);};});
+    }).catch(function(){var el=document.getElementById('setDisp');if(el)el.innerHTML='<div class="srow2"><span style="color:var(--ink-faint)">Display settings unavailable</span></div>';});
+
+    // System: live health of the pieces that matter + software version.
+    apiGet('/api/system/status').then(function(st){
+      if(_cur!=='settings')return;var el=document.getElementById('setSys');if(!el)return;
+      function ok(v){return typeof v==='string'&&v.indexOf('ok')===0||v==='connected'||v==='healthy';}
+      var rows=[['Zoe brain',st.llama_server],['Home Assistant',st.ha_bridge],['Database',st.database]];
+      el.innerHTML=rows.map(function(r){return '<div class="srow2"><span>'+esc(r[0])+'</span><span style="display:flex;align-items:center;gap:10px"><span class="stat '+(ok(r[1])?'ok':'bad')+'"></span><span style="color:var(--ink-soft);font-size:17px">'+esc(String(r[1]||'unreachable'))+'</span></span></div>';}).join('')
+        +'<div class="srow2" id="setVer"><span>Software</span><span class="sv" style="min-width:0">…</span></div>';
+      fetch('/sw.js',{cache:'no-store'}).then(function(r){return r.text();}).then(function(t){
+        var m=/SW_VERSION = '([^']+)'/.exec(t);var v=document.querySelector('#setVer .sv');if(v&&m)v.textContent='v'+m[1];}).catch(function(){});
+    }).catch(function(){var el=document.getElementById('setSys');if(el)el.innerHTML='<div class="srow2"><span style="color:var(--ink-faint)">Status unavailable</span></div>';});
+
     host.onclick=function(e){
       var sh=e.target.closest('.sh');
       if(sh){var sec=sh.parentElement;sec.classList.toggle('open');return;}
       var row=e.target.closest('.srow2[data-go]');
       if(row){location.href=row.getAttribute('data-go');return;}
       var act=e.target.closest('.srow2[data-act]');
-      if(act){var a=act.getAttribute('data-act');if(a==='pair')show('pair');if(a==='contacts')show('person');if(a==='rooms')show('rooms');return;}
+      if(act){var a=act.getAttribute('data-act');if(a==='pair')show('pair');if(a==='contacts')show('person');if(a==='rooms')show('rooms');if(a==='switch'&&window.__showAuthCard)window.__showAuthCard();return;}
       if(e.target.closest('#setOut')){var out=e.target.closest('#setOut');out.disabled=true;
         function clearLocal(){try{localStorage.removeItem('zoe_session');localStorage.removeItem('zoe_guest_mode');}catch(e2){}try{sessionStorage.removeItem('zoe_gb');}catch(e2){}}
         fetch('/api/auth/logout',{method:'POST',headers:{'X-Session-ID':sid()},credentials:'include'})
