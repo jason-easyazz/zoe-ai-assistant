@@ -63,12 +63,15 @@ def run_measure(samples: int, service_dir: str, user: str, timeout: int) -> dict
     with tempfile.NamedTemporaryFile("r", suffix=".json", delete=False) as tf:
         out_json = tf.name
     try:
-        # `flock <file> <cmd> [args...]` runs the command WITHOUT a shell, so a path
-        # with spaces or a shell metachar in --user/--service-dir can't be split or
-        # interpreted. ZOE_PERF is passed via env, not a shell prefix. flock still
-        # serializes runs so two Kokoro/replay loads (~2.3GB each) can't run at once.
+        # NO inner flock here: the harness lock (/tmp/zoe-voice-harness.lock)
+        # is the CALLER'S boundary — the systemd unit and the documented manual
+        # invocation both wrap the probe in `flock <lock> python3 probe.py`.
+        # Re-taking the same lock in this child was a guaranteed deadlock: the
+        # parent held it, the child blocked forever, and every run (nightly
+        # AND manual) timed out at ~17 min. The gate never once succeeded.
+        # Args are passed WITHOUT a shell, so paths with spaces/metachars are
+        # safe; ZOE_PERF goes via env, not a shell prefix.
         cmd = [
-            "flock", LOCK,
             "python3", str(MEASURE),
             "--last", str(samples), "--user", user,
             "--service-dir", service_dir, "--json", out_json, "--timeout", str(timeout),
@@ -132,6 +135,141 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def cleanup_replay_artifacts(run_started_utc: str, args) -> bool:
+    """Soft-delete replay artifacts: rows created during the probe window and
+    owned by the replay identities only.
+
+    The replay corpus executes REAL commands through the live pipeline ("add
+    bread to the shopping list", "dentist appointment at 2pm", …), so every run
+    would otherwise accumulate junk in the calendar/lists (operator bug report
+    2026-07-13). Scope is deliberately narrow on BOTH axes: created_at within
+    this run's window AND user_id in {probe user, 'guest'} — a family member's
+    row written during the window under any other account is never touched.
+    Reversible soft-delete (deleted=1); counts printed for the run log.
+
+    Returns True on success (or intentional skip), False on failure — the
+    caller surfaces a failed cleanup in the exit code so a silently dirty
+    calendar can't hide behind a green probe.
+    """
+    if getattr(args, "no_cleanup", False):
+        return True
+    try:
+        import asyncpg  # hard requirement: a probe env without asyncpg must be visible
+    except ImportError as exc:
+        print(f"cleanup: FAILED — asyncpg unavailable in the probe environment: {exc}", file=sys.stderr)
+        return False
+    dsn = os.environ.get("POSTGRES_URL", "")
+    if not dsn:
+        env_file = REPO / "services" / "zoe-data" / ".env"
+        try:
+            with open(env_file) as fh:
+                for line in fh:
+                    if line.startswith("POSTGRES_URL="):
+                        dsn = line[len("POSTGRES_URL="):].strip().strip('"').strip("'")
+                        break
+        except OSError:
+            pass
+    if not dsn:
+        print("cleanup: FAILED — POSTGRES_URL unavailable; replay artifacts were NOT swept", file=sys.stderr)
+        return False
+    replay_users = [getattr(args, "user", "jason") or "jason", "guest"]
+    try:
+        import asyncio
+
+        async def _run() -> tuple[str, str]:
+            conn = await asyncpg.connect(dsn)
+            try:
+                # The replay necessarily writes AS the probe user (identity
+                # threading is part of the pipeline under test), so an owner
+                # filter cannot distinguish probe writes from a human's. The
+                # mitigations are: an off-peak flock-serialized window, a
+                # reversible soft-delete, and a PER-ROW log below so any rare
+                # collision is visible in the unit journal and restorable by id.
+                ev_rows = await conn.fetch(
+                    "SELECT id, user_id, title FROM events "
+                    "WHERE deleted = 0 AND created_at >= $1::timestamptz AND user_id = ANY($2)",
+                    run_started_utc + "+00", replay_users,
+                )
+                li_rows = await conn.fetch(
+                    "SELECT i.id, l.user_id, i.text FROM list_items i JOIN lists l ON i.list_id = l.id "
+                    "WHERE i.deleted = 0 AND i.created_at >= $1::timestamptz AND l.user_id = ANY($2)",
+                    run_started_utc + "+00", replay_users,
+                )
+                for r in ev_rows:
+                    print(f"cleanup: sweeping event id={r['id']} owner={r['user_id']} title={r['title']!r}")
+                for r in li_rows:
+                    print(f"cleanup: sweeping list_item id={r['id']} owner={r['user_id']} text={r['text']!r}")
+                ev = await conn.execute(
+                    "UPDATE events SET deleted = 1, updated_at = NOW() WHERE id = ANY($1)",
+                    [r["id"] for r in ev_rows],
+                )
+                li = await conn.execute(
+                    "UPDATE list_items SET deleted = 1, updated_at = NOW() WHERE id = ANY($1)",
+                    [r["id"] for r in li_rows],
+                )
+                return ev, li
+            finally:
+                await conn.close()
+
+        ev, li = asyncio.run(_run())
+        print(f"cleanup: replay-window artifacts soft-deleted (owners {replay_users}) — events: {ev}, list_items: {li}")
+        return True
+    except Exception as exc:
+        print(f"cleanup: FAILED — replay artifacts were NOT swept: {exc}", file=sys.stderr)
+        return False
+
+
+def _ancestor_holds_lock() -> bool:
+    """True when a PARENT process (e.g. the systemd unit's or the operator's
+    `flock <lock> …` wrapper) already has the lock file open — in that case the
+    run IS serialized and we must not block on our own ancestor."""
+    try:
+        target = os.path.realpath(LOCK)
+        pid = os.getppid()
+        for _ in range(15):
+            if pid <= 1:
+                break
+            fd_dir = f"/proc/{pid}/fd"
+            try:
+                for fd in os.listdir(fd_dir):
+                    try:
+                        if os.path.realpath(os.path.join(fd_dir, fd)) == target:
+                            return True
+                    except OSError:
+                        continue
+            except OSError:
+                pass
+            try:
+                with open(f"/proc/{pid}/status") as fh:
+                    pid = next((int(l.split()[1]) for l in fh if l.startswith("PPid:")), 0)
+            except (OSError, ValueError, StopIteration):
+                break
+    except OSError:
+        pass
+    return False
+
+
+def _acquire_harness_lock():
+    """Serialize against other harness runs even when invoked BARE.
+
+    Returns the held fd (kept open for the process lifetime) or None when a
+    parent wrapper already holds the lock. Exits(3) if another, unrelated
+    harness run holds it — two Kokoro/replay loads (~2.3GB each) would OOM
+    the box."""
+    import fcntl
+    fd = os.open(LOCK, os.O_CREAT | os.O_RDWR, 0o666)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fd   # we own the lock now — bare runs are serialized too
+    except BlockingIOError:
+        os.close(fd)
+        if _ancestor_holds_lock():
+            return None   # our own flock wrapper — already serialized
+        print(f"ABORT: another voice-harness run holds {LOCK} — refusing a "
+              "concurrent Kokoro/replay load (would OOM the box).", file=sys.stderr)
+        raise SystemExit(3)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Zoe voice regression + speed probe.")
     ap.add_argument("--samples", type=int, default=int(os.environ.get("ZOE_VOICE_PROBE_SAMPLES", "20")),
@@ -147,7 +285,11 @@ def main() -> int:
     ap.add_argument("--warn-ms", type=float, default=float(os.environ.get("ZOE_VOICE_WARN_MS", "1500")))
     ap.add_argument("--min-mem-mb", type=int, default=int(os.environ.get("ZOE_VOICE_PROBE_MIN_MEM_MB", "1500")),
                     help="skip (exit 0) if available memory is below this — never OOM the live box")
+    ap.add_argument("--no-cleanup", action="store_true",
+                    help="skip the post-run replay-artifact cleanup (soft-delete of rows created during the replay window)")
     args = ap.parse_args()
+
+    _lock_fd = _acquire_harness_lock()  # noqa: F841 — held for process lifetime
 
     avail = mem_available_mb()
     if avail < args.min_mem_mb:
@@ -155,10 +297,12 @@ def main() -> int:
               f"deferring to avoid OOM on the live box.")
         return 0
 
+    run_started_utc = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
     try:
         report = run_measure(args.samples, args.service_dir, args.user, args.timeout)
     except Exception as exc:
         print(f"ERROR: voice probe could not run: {exc}", file=sys.stderr)
+        cleanup_replay_artifacts(run_started_utc, args)   # even a failed run may have executed turns
         return 2
 
     summary = summarize(report)
@@ -194,7 +338,11 @@ def main() -> int:
         print(f"Baseline saved: {args.baseline}")
     print(f"Results: {args.results}  Trend: {args.trend}")
 
-    return 1 if warnings else 0
+    cleanup_ok = cleanup_replay_artifacts(run_started_utc, args)
+
+    # a failed sweep is a warning-level exit: results are valid but the
+    # calendar/lists are dirty and the systemd unit shows non-zero.
+    return 1 if (warnings or not cleanup_ok) else 0
 
 
 if __name__ == "__main__":

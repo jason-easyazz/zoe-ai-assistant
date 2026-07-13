@@ -1307,9 +1307,13 @@ def _classify_music(text: str) -> "SkybridgeIntent | None":
     m = re.search(r"\b(?:play|put on|start playing|listen to)\s+(?:some\s+|the\s+|a\s+)?(.+?)\s*$", text)
     if m and (has_ctx or re.search(r"\b(play|put on|listen to)\b", text)):
         query = m.group(1).strip()
-        # "play music" / "play some music" with no real target → just show/resume.
-        if query in ("music", "something", "a song", "songs", "tunes", "some tunes", ""):
-            return SkybridgeIntent(domain="music", action="status")
+        # "play music" / "play some music" with no real target is still a PLAY
+        # (resume the queue or start the house default) — routing it to status
+        # produced the maddening loop "Nothing's playing. Ask me to put
+        # something on." in response to being asked to put something on.
+        if query in ("music", "something", "a song", "songs", "tunes", "some tunes",
+                     "some music", "anything", ""):
+            return SkybridgeIntent(domain="music", action="play", query="")
         return SkybridgeIntent(domain="music", action="play", query=query)
     # Status: "what's playing", "now playing", "show music", bare "music".
     if (has_ctx or re.search(r"\bplaying\b", text)) and re.search(r"\b(what|show|see|playing|song|music)\b", text):

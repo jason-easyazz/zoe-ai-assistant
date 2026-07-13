@@ -346,7 +346,12 @@ regression, ever (replay harness is the enforcement).
   swallowed — hence ZERO voice rows ever in Postgres. Two bugs: (a) voice-path identity
   resolution ignores the panel→jason binding; (b) `_schedule_voice_chat_save`'s skip
   guard checks "guest" but not "voice-guest", so the doomed write is attempted and the
-  FK error swallowed. Fix = packet **P-F6** in remediation-packets-2026-07.md. Note:
+  FK error swallowed. Fix = packet **P-F6** — **MERGED as #1160 (2026-07)**; chat/Telegram
+  capture verified on organic traffic (2026-07 memory QA arc). **Spoken-panel positive
+  control PASSED 2026-07-13** after #1282 fixed three stacked transcript-save bugs the
+  control itself exposed (routers.chat lazy-import path, chat_sessions FK minting,
+  streaming lane never persisting the reply): live spoken turn → `chat_messages` rows
+  (user + assistant) with `metadata.user_id=jason`. **W0 is fully closed.** Note:
   synthetic `web_*` eval traffic also runs against the live box (unstamped metadata).
 - [x] **W1.1** barge-in on LiveKit agent — **DONE + LIVE** (#1051: Silero VAD `voice_vad.py`,
   frames flow during PROCESSING/COOLDOWN, ≥250 ms sustained speech cancels the pipeline +
@@ -378,19 +383,15 @@ regression, ever (replay harness is the enforcement).
 
 ## 7. NEXT ACTION (always exactly one)
 
-→ **W3.1 (RAM), then merge P-F6.** P-F6 is **BUILT and CI-validated (PR #1160)** but
-**BLOCKED**: the mandatory voice replay gate self-skips because the live box is under the
-1.5 GB free threshold (measured 215–880 MB 2026-07-08). So the true next action is
-operator-side: **free RAM via W3.1** (18 ccd-cli processes hold ~3.6 GB swap — the sized
-candidate in memory-pressure-profile.md) → re-run `voice_regression_probe.py` on #1160
-(and P-F3 #1161, same block) → merge → deploy → **RE-RUN P-W0's positive control**
-(spoken panel turn → `chat_messages` row with `metadata.user_id=jason` → consolidation
-sweep pickup). Do NOT bypass the replay gate to merge a voice change. W1.1/W1.2 are already
-**live** (#1051/#1081/#1082 — do NOT redo); the remaining W1 work is **W1.3**
-(packet P-W1.3) + the **M3/M4** measurements (packet P-W1.4, bars in §6).
-The #1056 migration-plan doc was retired as overtaken by #1051; its surviving pieces
-(Pipecat re-open triggers → §2, A3 gate bars → W1.4) are folded here. Update this
-section when W0 resolves.
+→ **W3.1 (RAM).** W0 is **fully closed** (2026-07-13): P-F6 merged (#1160), chat/Telegram
+capture verified on organic traffic, and the spoken-panel positive control passed after
+#1282 — live spoken turn → stamped user+assistant `chat_messages` rows under the
+panel-bound user. Next is **W3.1** (18 ccd-cli processes hold ~3.6 GB swap — the sized
+candidate in memory-pressure-profile.md). W1.1/W1.2 are already **live**
+(#1051/#1081/#1082 — do NOT redo); the remaining W1 work is **W1.3** (packet P-W1.3) +
+the **M3/M4** measurements (packet P-W1.4, bars in §6). The #1056 migration-plan doc was
+retired as overtaken by #1051; its surviving pieces (Pipecat re-open triggers → §2, A3
+gate bars → W1.4) are folded here.
 
 ## 8. Prior art & external grounding (researched 2026-07-06/07)
 

@@ -8,6 +8,13 @@ timestamp: 2026-07-07T00:30:00Z
 
 # Fable-day handoff — 2026-07-07
 
+> **STATUS UPDATE (2026-07-13):** this is a point-in-time handoff. **P-W0 is DONE** —
+> merged as #1160, and the spoken positive control passed on 2026-07-13 after #1282
+> fixed the transcript-save bugs it exposed (no Jason-spoken turn needed; run via the
+> panel-bound device token). The current NEXT ACTION lives in
+> `docs/architecture/samantha-evolution-plan.md` §7 (now **W3.1**), which supersedes
+> the pointers below.
+
 This session built the **post-memory Samantha evolution plan** end-to-end and audited
 the whole codebase. Everything of substance lives in the repo (nothing is only in the
 chat). Statuses as of 2026-07-07 ~00:30 AWST — verify merge states before acting.
@@ -34,7 +41,7 @@ chat). Statuses as of 2026-07-07 ~00:30 AWST — verify merge states before acti
 ## How to continue without Fable (the intended loop)
 
 1. Read `docs/architecture/samantha-evolution-plan.md` **§7 NEXT ACTION** — always
-   exactly one. Currently: **execute packet P-W0** (capture positive-control).
+   exactly one. At the time of writing: execute packet P-W0 — **since DONE (see the 2026-07-13 banner above); the live pointer is the plan's §7**.
 2. Take ONE packet from `samantha-evolution-packets.md`, obey its P0 protocol and STOP
    conditions, drive the PR to merge (resolve Greptile threads via GraphQL, REST-verify
    merged), then update plan §6/§7.
@@ -50,7 +57,7 @@ chat). Statuses as of 2026-07-07 ~00:30 AWST — verify merge states before acti
 
 ## Operator-only steps left
 
-- **P-W0 needs Jason** to speak one authenticated voice turn to the panel.
+- ~~P-W0 needs Jason to speak one authenticated voice turn to the panel~~ — **done 2026-07-13** (control run via the panel-bound device token; no human turn needed).
 - **Flue quality re-run**: #1058's script mints the authenticated parity test user —
   run it, then re-run the voice parity gate (clears the 92.5%-vs-95% confound).
 - **W3.1 ccd-cli cleanup** (~3.6 GB swap): host-side kill of stale `--resume` session

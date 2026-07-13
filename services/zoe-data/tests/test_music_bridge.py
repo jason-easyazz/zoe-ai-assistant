@@ -11,7 +11,7 @@ from skybridge_service import classify_skybridge_intent, skybridge_intent_requir
     ("play some jazz", "music", "play"),
     ("put on the beatles", "music", "play"),
     ("play the news", "music", "play"),
-    ("play some music", "music", "status"),   # generic → show, not a bogus search
+    ("play some music", "music", "play"),     # generic → PLAY (resume/default), never the "ask me to play" loop
     ("what's playing", "music", "status"),
     ("show music", "music", "status"),
     ("pause the music", "music", "pause"),
@@ -262,7 +262,7 @@ async def test_search_and_play_media_endpoints_delegate(monkeypatch):
     assert r["query"] == "jazz" and r["_types"] == ["track", "album"] and r["_limit"] == 5
 
     played = {}
-    async def fake_play(uri, player_id=""):
+    async def fake_play(uri, player_id="", option="replace"):
         played["uri"] = uri; played["pid"] = player_id; return {"ok": True, "player_id": player_id}
     monkeypatch.setattr(music_service, "play_media", fake_play)
     ok = await music_router.music_play_media({"uri": "ytmusic://track/1", "player_id": "bedroom"})

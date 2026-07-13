@@ -90,6 +90,11 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
   built OUTSIDE the repo by `setup.sh`; weights from HF at run time, never
   committed). README.md carries the four measured numbers + the adopt/reject
   recommendation. Never wired into the voice path, `fast_tiers`, or CI.
+- `digarr-spike/` — evaluation record for digarr (MIT, Bun/PGlite) as a hidden
+  music-discovery engine behind Zoe: verified batch-run config against the local
+  Gemma llama-server, footprint numbers, listening-source findings, and the
+  recommendations→Music Assistant playlist bridge design. README is a record,
+  not a contract; nothing runs resident and nothing is prod-wired.
 - `flue-zoe-telegram/` — Flue Telegram channel: long-poll bot bridged to zoe-data's
   `/api/chat` (NOT a Flue LLM agent; `src/agents/zoe.ts` is a build-only placeholder
   and registers no model provider — never points at the voice brain on `:11434`).

@@ -582,7 +582,10 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             if (statusEl) statusEl.textContent = text;
         }
 
+        function _estate() { return window.ZoeEstateVoice || null; }
+
         function show() {
+            if (_estate()) return; // estate renders voice state in its dock/surfaces
             if (!_el) _build();
             clearTimeout(_dismissTimer);
             _isVoiceSession = true;
@@ -592,6 +595,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
         }
 
         function dismiss(manual) {
+            if (_estate()) return;
             if (!_el) return;
             _isVoiceSession = false;
             clearTimeout(_dismissTimer);
@@ -600,6 +604,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
         }
 
         function addMessage(role, text) {
+            if (_estate()) return null;
             if (!_el) _build();
             const msgs = document.getElementById('zvo-messages');
             if (!msgs) return null;
@@ -612,6 +617,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
         }
 
         function addThinkingDots() {
+            if (_estate()) return null;
             if (!_el) _build();
             const msgs = document.getElementById('zvo-messages');
             if (!msgs) return null;
@@ -636,6 +642,8 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
 
         // State machine — also dispatches document events so the card overlay (dashboard.html) can react.
         function onListeningStarted() {
+            const E = _estate();
+            if (E) { E.listening(); document.dispatchEvent(new CustomEvent('zoe:voice:wake')); return; }
             if (!_el) _build();
             // Do NOT clear messages — preserve conversation history across wake words
             _setStatus('Listening…', 'listening');
@@ -645,6 +653,8 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
         }
 
         function onTranscript(text) {
+            const E = _estate();
+            if (E) { E.transcript(text); return; }
             const msgs = document.getElementById('zvo-messages');
             if (msgs) {
                 const statusMsgs = msgs.querySelectorAll('.zvo-msg.status');
@@ -654,6 +664,8 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
         }
 
         function onThinking() {
+            const E = _estate();
+            if (E) { E.thinking(); document.dispatchEvent(new CustomEvent('zoe:voice:thinking')); return; }
             _setStatus('Thinking…', 'thinking');
             removeThinkingDots();
             addThinkingDots();
@@ -661,6 +673,8 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
         }
 
         function onResponding(text) {
+            const E = _estate();
+            if (E) { E.responding(text); document.dispatchEvent(new CustomEvent('zoe:voice:responding', { detail: { text } })); return; }
             _setStatus('Responding…', 'responding');
             removeThinkingDots();
             if (text) {
@@ -678,6 +692,8 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
         }
 
         function onDone() {
+            const E = _estate();
+            if (E) { E.done(); document.dispatchEvent(new CustomEvent('zoe:voice:done')); return; }
             _setStatus('Done', '');
             removeThinkingDots();
             clearTimeout(_dismissTimer);
