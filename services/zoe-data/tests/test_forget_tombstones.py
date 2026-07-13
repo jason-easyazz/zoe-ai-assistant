@@ -186,3 +186,32 @@ async def test_explicit_source_bypasses_drop_but_async_sources_blocked(monkeypat
     assert reached == ["Delia: March 25"]
     # bypass does NOT clear — only a successful teach handler clears
     assert mt.matching_tombstone("u1", "Delia: March 25")
+
+
+@pytest.mark.asyncio
+async def test_reteach_clears_regardless_of_answer_lane(monkeypatch):
+    """An explicit 'remember that …' utterance clears the shadow even when the
+    semantic router sends the turn to the note/brain lane (live repro: the
+    re-teach was silently shadow-dropped because no teach lane ran)."""
+    from routers import chat as chat_mod
+
+    async def _noop(*a, **k):
+        return 0
+
+    for mod in ("memory_extractor", "memory_digest", "person_extractor",
+                "person_extractor_llm", "latent_intent_detector"):
+        monkeypatch.setitem(sys.modules, mod, types.SimpleNamespace(
+            extract_and_ingest=_noop, run_turn_digest=_noop,
+            process_text=_noop, process_text_llm=_noop, detect_and_store=_noop,
+        ))
+
+    mt.add("u1", "Delia")
+    await chat_mod._persist_memory_candidates(
+        "u1", "s1", "remember that Delia's birthday is March 25", "Noted.")
+    assert mt.matching_tombstone("u1", "Delia") is None
+
+    # a NON-explicit mention does not clear
+    mt.add("u1", "Delia")
+    await chat_mod._persist_memory_candidates(
+        "u1", "s1", "I saw Delia at the shops today", "Nice!")
+    assert mt.matching_tombstone("u1", "Delia")

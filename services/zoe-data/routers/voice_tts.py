@@ -2295,6 +2295,17 @@ async def _run_voice_memory_passes(
     path — not just the main LLM path at the bottom of voice_command.
     """
     try:
+        # Mirror of the chat-lane guard: an EXPLICIT "remember/note that …"
+        # spoken turn clears any forget tombstone it names, whichever lane
+        # answers (see routers/chat.py::_persist_memory_candidates).
+        try:
+            import re as _re
+            if _re.match(r"^(?:please\s+)?(?:remember|note|don'?t\s+forget|keep\s+in\s+mind)\b",
+                         (user_text or "").strip(), _re.IGNORECASE):
+                from memory_tombstones import clear_matching as _tomb_clear
+                _tomb_clear(user_id, user_text)
+        except Exception:
+            pass
         from memory_extractor import extract_and_ingest as _mi
         from memory_digest import run_turn_digest as _td
         from person_extractor import process_text as _person_extract

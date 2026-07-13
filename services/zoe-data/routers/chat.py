@@ -1257,6 +1257,18 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
             return
     except Exception:
         pass  # never let the guard break extraction itself
+    # The mirror case: an EXPLICIT "remember/note that …" utterance clears any
+    # forget tombstone whose name it mentions — regardless of which lane
+    # answered the turn (the semantic router sometimes sends a re-teach to the
+    # note/brain lane, whose mined extraction would otherwise be shadow-dropped
+    # and the re-teach silently lost; live repro 2026-07-13).
+    try:
+        if re.match(r"^(?:please\s+)?(?:remember|note|don'?t\s+forget|keep\s+in\s+mind)\b",
+                    (user_message or "").strip(), re.IGNORECASE):
+            from memory_tombstones import clear_matching as _tomb_clear
+            _tomb_clear(user_id, user_message)
+    except Exception:
+        pass
     try:
         from memory_extractor import extract_and_ingest
         from memory_digest import run_turn_digest
