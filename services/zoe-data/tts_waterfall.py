@@ -22,6 +22,8 @@ from typing import Optional
 
 import httpx
 
+import voice_settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -271,17 +273,21 @@ def _kokoro_http_client() -> "httpx.AsyncClient":
     return _KOKORO_HTTP
 
 
-async def _synthesize_kokoro_sidecar(text: str) -> Optional[bytes]:
-    """Synthesize via Kokoro PyTorch sidecar (GPU, natural af_sky voice).
+async def _synthesize_kokoro_sidecar(text: str, voice: Optional[str] = None) -> Optional[bytes]:
+    """Synthesize via the Kokoro sidecar (the TTS rock's warm process).
 
     Calls the local FastAPI sidecar on port 10201 which keeps the Kokoro
-    model warm in CUDA memory.  Sub-200ms warm latency on Jetson Orin.
+    model warm.  Sub-200ms warm latency on Jetson Orin.
     Set ZOE_KOKORO_SIDECAR_URL to override (default http://127.0.0.1:10201).
     Falls through silently if the sidecar is unavailable.
+
+    ``voice``: explicit per-call override (the settings Preview); otherwise the
+    persisted household preference resolves, with ZOE_KOKORO_VOICE/af_sky as the
+    fallback default (voice_settings.resolve_tts_voice).
     """
     text = _clean_for_speech(text)
     sidecar_url = os.environ.get("ZOE_KOKORO_SIDECAR_URL", "http://127.0.0.1:10201").rstrip("/")
-    voice = os.environ.get("ZOE_KOKORO_VOICE", "af_sky").strip() or "af_sky"
+    voice = await voice_settings.resolve_tts_voice(voice)
     try:
         client = _kokoro_http_client()
         r = await client.post(
@@ -311,20 +317,21 @@ async def _synthesize_kokoro_sidecar(text: str) -> Optional[bytes]:
         return None
 
 
-async def _synthesize_kokoro(text: str, voice: str = "af_sky") -> Optional[bytes]:
+async def _synthesize_kokoro(text: str, voice: Optional[str] = None) -> Optional[bytes]:
     """Synthesize using Kokoro ONNX (thewh1teagle/kokoro-onnx).
 
     ~82M param ONNX model — sub-100ms first chunk on Jetson CUDA, natural AU voice.
     Install: pip install kokoro-onnx
     Model: download from https://github.com/thewh1teagle/kokoro-onnx/releases
     Set ZOE_KOKORO_MODEL to the path of the kokoro-v1.0.onnx file.
-    Set ZOE_KOKORO_VOICE to override the default voice (af_sky = AU female).
-    Uses module-level cached instance to avoid ~500ms model load per call.
+    Voice resolves per call: explicit override → persisted preference →
+    ZOE_KOKORO_VOICE env default (af_sky). Uses module-level cached instance to
+    avoid ~500ms model load per call.
     """
     kokoro = await _get_kokoro_instance()
     if kokoro is None:
         return None
-    voice = os.environ.get("ZOE_KOKORO_VOICE", voice).strip() or voice
+    voice = await voice_settings.resolve_tts_voice(voice)
     try:
         import numpy as np
         import wave
@@ -366,12 +373,12 @@ def _wav_bytes_from_float32_samples(samples, sample_rate: int) -> bytes:
     return buf.getvalue()
 
 
-async def _stream_kokoro_sentence_wavs(sentence: str, voice: str = "af_sky"):
+async def _stream_kokoro_sentence_wavs(sentence: str, voice: Optional[str] = None):
     """Yield WAV chunks from Kokoro create_stream() for one sentence."""
     kokoro = await _get_kokoro_instance()
     if kokoro is None or not hasattr(kokoro, "create_stream"):
         return
-    voice = os.environ.get("ZOE_KOKORO_VOICE", voice).strip() or voice
+    voice = await voice_settings.resolve_tts_voice(voice)
     kokoro_speed = float(os.environ.get("ZOE_KOKORO_SPEED", "1.15"))
     try:
         async for samples, sample_rate in kokoro.create_stream(

@@ -51,18 +51,24 @@ def _bounded_lru_set(store: "OrderedDict[str, object]", key: str, value: object,
         store.popitem(last=False)
 
 # Intent → touch panel navigation map (page + optional form to open).
+# Panel navigation targets are the ESTATE surfaces (home.html?domain=… opens
+# the matching in-estate screen) — the per-domain legacy pages (calendar.html,
+# lists.html, weather.html, cooking.html, …) are retired panel chrome and kept
+# only for desktop/reference (operator report 2026-07-13: "certain links or
+# buttons take me back to the old interfaces"). notes/journal/recipes have no
+# estate surface yet → no navigation (reply renders as chat/toast).
 _INTENT_PANEL_NAV = {
-    "calendar_create":   ("/touch/calendar.html", "new_event"),
-    "calendar_show":     ("/touch/calendar.html", None),
-    "note_create":       ("/touch/notes.html",    "new_note"),
-    "journal_create":    ("/touch/journal.html",  "new_journal"),
-    "weather":           ("/touch/weather.html",  None),
-    "list_add":          ("/touch/lists.html",    "new_list_item"),
-    "list_show":         ("/touch/lists.html",    None),
-    "timer_create":      ("/touch/cooking.html",  "new_timer"),
-    "recipe_search":     ("/touch/cooking.html",  "recipe_search"),
+    "calendar_create":   ("/touch/home.html?domain=calendar", "new_event"),
+    "calendar_show":     ("/touch/home.html?domain=calendar", None),
+    "note_create":       (None,                   None),
+    "journal_create":    (None,                   None),
+    "weather":           ("/touch/home.html?domain=weather",  None),
+    "list_add":          ("/touch/home.html?domain=lists",    "new_list_item"),
+    "list_show":         ("/touch/home.html?domain=lists",    None),
+    "timer_create":      ("/touch/home.html?domain=timers",   "new_timer"),
+    "recipe_search":     (None,                   None),
     "reminder_create":   (None,                   None),  # handled as toast
-    "lets_talk":         ("/touch/voice.html?conv=1", None),  # open touch phone-call voice mode
+    "lets_talk":         ("/touch/voice.html?conv=1", None),  # phone-call voice mode (still its own surface)
 }
 
 # Intents that show a full-screen interactive action-form overlay on the touch panel
@@ -1257,6 +1263,17 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
             return
     except Exception:
         pass  # never let the guard break extraction itself
+    # The mirror case: an EXPLICIT "remember/note that …" utterance clears any
+    # forget tombstone whose name it mentions — regardless of which lane
+    # answered the turn (the semantic router sometimes sends a re-teach to the
+    # note/brain lane, whose mined extraction would otherwise be shadow-dropped
+    # and the re-teach silently lost; live repro 2026-07-13).
+    try:
+        from memory_tombstones import clear_matching as _tomb_clear, is_explicit_teach
+        if is_explicit_teach(user_message):
+            _tomb_clear(user_id, user_message)
+    except Exception:
+        pass
     try:
         from memory_extractor import extract_and_ingest
         from memory_digest import run_turn_digest

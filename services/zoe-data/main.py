@@ -1108,6 +1108,89 @@ async def lifespan(app: FastAPI):
         except Exception as _ytm_exc:
             logger.warning("YouTube Music auto-refresh not scheduled (non-fatal): %s", _ytm_exc)
 
+    # Listening-journal observed-events poll — back-fills plays Zoe didn't
+    # initiate (radio-mode auto-continuation) from MA's recently-played into
+    # music_play_history (music_history.observe_once: cheap, idempotent,
+    # quiet when MA is down). Default ON; disable with ZOE_MUSIC_HISTORY=off.
+    if os.environ.get("ZOE_MUSIC_HISTORY", "on").lower() in ("on", "true", "1"):
+        try:
+            import music_history as _music_history
+            from proactive.scheduler import get_scheduler as _get_aps
+            _mh_interval = float(os.environ.get("ZOE_MUSIC_HISTORY_INTERVAL_S", "300"))
+            _get_aps().add_job(
+                _music_history.observe_once,
+                trigger="interval",
+                seconds=_mh_interval,
+                id="music_history_observe",
+                replace_existing=True,
+                coalesce=True,
+                max_instances=1,
+            )
+            logger.info("Music listening-journal observer scheduled (every %ss)", _mh_interval)
+        except Exception as _mh_exc:
+            logger.warning("Music listening-journal observer not scheduled (non-fatal): %s", _mh_exc)
+
+    # Weekly music discovery — ephemeral digarr batch refreshing the
+    # "Zoe Discovery" MA playlist (scripts/maintenance/music_discovery_batch.py;
+    # the script owns its own memory + brain-idle gates and container cleanup).
+    # DISABLED by default (ZOE_MUSIC_DISCOVERY=off) — the operator flips it
+    # only after verifying a manual run. Cadence via ZOE_MUSIC_DISCOVERY_DOW
+    # (default sun) + ZOE_MUSIC_DISCOVERY_HOUR (default 3, a quiet window).
+    if os.environ.get("ZOE_MUSIC_DISCOVERY", "off").lower() in ("on", "true", "1"):
+        try:
+            from proactive.scheduler import get_scheduler as _get_aps
+
+            async def _run_music_discovery_batch() -> None:
+                import asyncio as _aio
+                import sys as _sys
+                _script = os.path.normpath(os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)),
+                    "..", "..", "scripts", "maintenance", "music_discovery_batch.py"))
+                proc = await _aio.create_subprocess_exec(
+                    _sys.executable, _script,
+                    stdout=_aio.subprocess.PIPE, stderr=_aio.subprocess.STDOUT)
+                try:
+                    out, _ = await _aio.wait_for(proc.communicate(), timeout=2400)
+                except _aio.TimeoutError:
+                    # SIGTERM first so the script's `finally` can stop+remove
+                    # the digarr container; SIGKILL only if it hangs. Then
+                    # force-remove the container regardless — a leaked 768MB
+                    # container on this memory-tight box is an incident.
+                    proc.terminate()
+                    try:
+                        await _aio.wait_for(proc.communicate(), timeout=60)
+                        logger.error("music discovery batch timed out (terminated; script cleanup ran)")
+                    except _aio.TimeoutError:
+                        proc.kill()
+                        logger.error("music discovery batch timed out (killed)")
+                    _rm = await _aio.create_subprocess_exec(
+                        "docker", "rm", "-f", "zoe-digarr-batch",
+                        stdout=_aio.subprocess.DEVNULL,
+                        stderr=_aio.subprocess.DEVNULL)
+                    await _rm.wait()
+                    return
+                tail = (out or b"").decode(errors="replace")[-2000:]
+                if proc.returncode == 0:
+                    logger.info("music discovery batch ok:\n%s", tail)
+                else:
+                    logger.error("music discovery batch rc=%s:\n%s", proc.returncode, tail)
+
+            _get_aps().add_job(
+                _run_music_discovery_batch,
+                trigger="cron",
+                day_of_week=os.environ.get("ZOE_MUSIC_DISCOVERY_DOW", "sun"),
+                hour=int(os.environ.get("ZOE_MUSIC_DISCOVERY_HOUR", "3")),
+                id="music_discovery_weekly",
+                replace_existing=True,
+                coalesce=True,
+                max_instances=1,
+            )
+            logger.info("Weekly music discovery scheduled (%s @ %sh)",
+                        os.environ.get("ZOE_MUSIC_DISCOVERY_DOW", "sun"),
+                        os.environ.get("ZOE_MUSIC_DISCOVERY_HOUR", "3"))
+        except Exception as _md_exc:
+            logger.warning("Music discovery not scheduled (non-fatal): %s", _md_exc)
+
     # Skills filesystem watcher (live cache invalidation for peer agent cards)
     try:
         from skills_watcher import start_skills_watcher  # type: ignore[import]
@@ -1866,6 +1949,9 @@ app.include_router(chat_router)
 app.include_router(ui_router)
 app.include_router(openclaw_router)
 app.include_router(voice_tts_router)
+from routers.voice_settings import router as voice_settings_router  # noqa: E402
+
+app.include_router(voice_settings_router)
 app.include_router(user_profile_router)
 app.include_router(dashboard_router)
 app.include_router(stubs_router)
