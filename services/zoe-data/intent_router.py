@@ -2952,6 +2952,12 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             if not rid or rid in seen_ids:
                 continue
             seen_ids.add(rid)
+            # Ownership guard: search can surface family-visible rows owned by
+            # another user; a forget sweep must only ever archive the CALLER's
+            # own rows.
+            _md = getattr(r, "metadata", {}) or {}
+            if _md.get("user_id") != user_id and _md.get("wing") != user_id:
+                continue
             if name_re.search(getattr(r, "text", "") or ""):
                 matches.append(r)
         if not matches:

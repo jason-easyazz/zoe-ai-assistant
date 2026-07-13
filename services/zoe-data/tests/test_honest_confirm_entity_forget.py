@@ -215,6 +215,21 @@ def test_forget_entity_paginates_past_first_page(monkeypatch):
     assert "1 thing about Caitlin" in out, out
 
 
+def test_forget_entity_never_archives_other_users_rows(monkeypatch):
+    # Family-visible rows owned by someone else can come back from search;
+    # the sweep must skip them (Greptile P1 ownership guard).
+    other = _Row("m-other", "Caitlin is allergic to nuts")
+    other.metadata["user_id"] = "someone-else"
+    mine = _Row("m-mine", "Caitlin works as a nurse")
+    svc = _FakeSvc(rows=[other, mine])
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: svc)
+    out = _run(intent_router.execute_intent(
+        intent_router.Intent("memory_forget_entity", {"name": "Caitlin"}),
+        "jason"))
+    assert svc.archived == ["m-mine"], svc.archived
+    assert "1 thing about Caitlin" in out, out
+
+
 def test_forget_entity_store_down_is_honest(monkeypatch):
     class _Boom:
         async def search(self, *a, **k):
