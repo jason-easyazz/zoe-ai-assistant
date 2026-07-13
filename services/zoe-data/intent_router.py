@@ -2921,6 +2921,15 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             # Fail closed: guests have no memory store and must not be able to
             # trigger archive sweeps.
             return "I don't keep memories in guest sessions, so there's nothing for me to forget."
+        # Tombstone FIRST — before the lookup — so every exit path is covered:
+        # a forget typed before the async extractor has even written the row
+        # ("no matches") is exactly the in-flight race the tombstone exists
+        # for (Greptile P1). Best-effort; an explicit re-teach clears it.
+        try:
+            from memory_tombstones import add as _tombstone_add
+            _tombstone_add(user_id, name)
+        except Exception as exc:
+            logger.warning("memory_forget_entity: tombstone failed (%s)", type(exc).__name__)
         try:
             svc = get_memory_service()
             # Semantic search surfaces the ranked rows; the approved list makes
@@ -2974,14 +2983,6 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         if forgotten == 0:
             return (f"I found {len(matches)} memories about {name} but couldn't "
                     "archive them just now -- nothing was changed.")
-        # Tombstone the name so in-flight extractor passes from EARLIER turns
-        # can't land a straggler row seconds after this forget (async race seen
-        # live 2026-07-13; pinned in IDEAS.md, now implemented). Best-effort.
-        try:
-            from memory_tombstones import add as _tombstone_add
-            _tombstone_add(user_id, name)
-        except Exception as exc:
-            logger.warning("memory_forget_entity: tombstone failed (%s)", type(exc).__name__)
         # Forgetting a person also withdraws any pending "add X as a contact?"
         # offer — otherwise the just-forgotten name keeps resurfacing in every
         # prompt via the offer seam (live repro 2026-07-13). Best-effort.

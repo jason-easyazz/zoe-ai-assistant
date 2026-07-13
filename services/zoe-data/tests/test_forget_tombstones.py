@@ -129,3 +129,26 @@ async def test_forget_intent_writes_tombstone(monkeypatch):
 
 async def _noop_resolve(user_id, name):
     return 0
+
+
+@pytest.mark.asyncio
+async def test_no_match_forget_still_tombstones(monkeypatch):
+    """A forget issued BEFORE the async extractor wrote any row ("I don't have
+    anything saved…") must still shadow the name — that IS the in-flight race."""
+    import intent_router
+
+    class _EmptySvc:
+        async def search(self, *a, **k):
+            return []
+
+        async def list_by_status(self, **k):
+            return []
+
+    monkeypatch.setitem(sys.modules, "memory_service", types.SimpleNamespace(
+        get_memory_service=lambda: _EmptySvc(),
+        is_guest_memory_user=lambda u: u in ("guest", ""),
+    ))
+    reply = await intent_router.execute_intent(
+        intent_router.Intent("memory_forget_entity", {"name": "Delia"}), "u1")
+    assert "anything saved" in reply.lower()
+    assert mt.matching_tombstone("u1", "Delia: March 15")
