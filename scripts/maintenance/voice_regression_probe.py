@@ -63,12 +63,15 @@ def run_measure(samples: int, service_dir: str, user: str, timeout: int) -> dict
     with tempfile.NamedTemporaryFile("r", suffix=".json", delete=False) as tf:
         out_json = tf.name
     try:
-        # `flock <file> <cmd> [args...]` runs the command WITHOUT a shell, so a path
-        # with spaces or a shell metachar in --user/--service-dir can't be split or
-        # interpreted. ZOE_PERF is passed via env, not a shell prefix. flock still
-        # serializes runs so two Kokoro/replay loads (~2.3GB each) can't run at once.
+        # NO inner flock here: the harness lock (/tmp/zoe-voice-harness.lock)
+        # is the CALLER'S boundary — the systemd unit and the documented manual
+        # invocation both wrap the probe in `flock <lock> python3 probe.py`.
+        # Re-taking the same lock in this child was a guaranteed deadlock: the
+        # parent held it, the child blocked forever, and every run (nightly
+        # AND manual) timed out at ~17 min. The gate never once succeeded.
+        # Args are passed WITHOUT a shell, so paths with spaces/metachars are
+        # safe; ZOE_PERF goes via env, not a shell prefix.
         cmd = [
-            "flock", LOCK,
             "python3", str(MEASURE),
             "--last", str(samples), "--user", user,
             "--service-dir", service_dir, "--json", out_json, "--timeout", str(timeout),
