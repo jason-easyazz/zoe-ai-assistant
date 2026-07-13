@@ -194,7 +194,9 @@ def test_forget_entity_guest_fails_closed(monkeypatch):
     out = _run(intent_router.execute_intent(
         intent_router.Intent("memory_forget_entity", {"name": "Caitlin"}),
         "guest"))
-    assert out is not None and "guest" in out.lower()
+    # The refusal comes from the shared guest gate now (chat matches voice,
+    # 2026-07-13): a sign-in instruction, still failing closed before any sweep.
+    assert out is not None and ("sign in" in out.lower() or "who you are" in out.lower())
     assert svc.archived == [], "guests must never trigger archive sweeps"
 
 

@@ -2777,10 +2777,40 @@ async def _execute_people_search_direct(intent: Intent, user_id: str) -> Optiona
         return None
 
 
+# Personal-data intents an anonymous (guest) session may not touch via CHAT.
+# Mirrors the voice path's identity gate (skybridge_intent_requires_identity:
+# calendar/lists/people) — before this, anonymous /api/chat/ calls could write
+# family-visible guest calendar/list rows the panel then displayed (operator
+# ask 2026-07-13: "make chat require sign-in like voice"). Reminders and
+# memory writes are included: both persist personal data under the identity.
+_GUEST_GATED_INTENTS = (
+    "list_add", "list_remove", "list_show",
+    "calendar_create", "calendar_show",
+    "people_", "person_",
+    "reminder_create", "reminder_list",
+    "memory_remember", "memory_forget_entity", "memory_forget_last",
+    "note_create", "note_search",
+    "journal_",   # create + streak/prompt reads — a guest's journal doesn't exist
+    "transaction_create", "transaction_summary",
+)
+
+
+def _is_guest_identity(user_id: str | None) -> bool:
+    u = (user_id or "").strip()
+    return u in ("", "guest", "voice-guest") or u.startswith("guest-")
+
+
 async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str]:
     # ^ shared write funnel: fail-open to least-privilege guest, not admin, when a
     #   caller omits identity (#1021/#1032 posture). All live callers pass an explicit
     #   user_id; this default is defense-in-depth for future forgetful callers.
+    if _is_guest_identity(user_id) and intent.name.startswith(_GUEST_GATED_INTENTS):
+        # Same posture as voice (which challenges for who+PIN): personal data
+        # needs a signed-in identity. Chat has no PIN pad, so answer with the
+        # instruction instead of silently writing guest-owned family rows.
+        return ("I need to know who you are before I touch personal things like "
+                "calendars, lists or reminders — tap your name on the touch panel "
+                "or sign in to the app, then ask me again.")
     if intent.name == "lets_talk":
         # Navigation is handled by _broadcast_intent_nav via _INTENT_PANEL_NAV in chat.py.
         # Return a short TTS reply confirming we're opening voice mode.
@@ -2921,6 +2951,15 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             # Fail closed: guests have no memory store and must not be able to
             # trigger archive sweeps.
             return "I don't keep memories in guest sessions, so there's nothing for me to forget."
+        # Tombstone FIRST — before the lookup — so every exit path is covered:
+        # a forget typed before the async extractor has even written the row
+        # ("no matches") is exactly the in-flight race the tombstone exists
+        # for (Greptile P1). Best-effort; an explicit re-teach clears it.
+        try:
+            from memory_tombstones import add as _tombstone_add
+            _tombstone_add(user_id, name)
+        except Exception as exc:
+            logger.warning("memory_forget_entity: tombstone failed (%s)", type(exc).__name__)
         try:
             svc = get_memory_service()
             # Semantic search surfaces the ranked rows; the approved list makes
@@ -3078,6 +3117,14 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             # ingest silently drops on PII reject / dedup / opt-out. Don't claim
             # a durable write the store didn't actually make.
             return "I couldn't save that just now — it may already be stored or contain something I can't keep."
+        # An EXPLICIT teach beats a recent forget — but only clear the shadow
+        # AFTER the store succeeded (its source is tombstone-exempt), or a
+        # failed/rejected store would silently drop the protection (Greptile P1).
+        try:
+            from memory_tombstones import clear_matching as _tomb_clear
+            _tomb_clear(user_id, text)
+        except Exception:
+            pass
         return "Got it — I'll remember that."
 
     # ── A2A Federation Status ──────────────────────────────────────────────────

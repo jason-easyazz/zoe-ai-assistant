@@ -256,7 +256,10 @@ async def test_execute_reminder_create_policy_denial_does_not_fall_back_to_mcpor
     monkeypatch.setattr("intent_router._execute_reminder_create_direct", fake_direct)
     monkeypatch.setattr("intent_router._run_mcporter", fail_mcporter)
 
+    # A signed-in caller: guests are short-circuited by the chat sign-in gate
+    # before reaching the direct executor (2026-07-13) — this test is about a
+    # POLICY denial from the executor itself never falling through to mcporter.
     with pytest.raises(HTTPException) as exc_info:
-        await execute_intent(Intent("reminder_create", {"title": "check the oven"}), "guest")
+        await execute_intent(Intent("reminder_create", {"title": "check the oven"}), "jason")
 
     assert exc_info.value.status_code == 403
