@@ -13,10 +13,10 @@ Usage (from repo root):
     # 1) (Re)generate the candidate tensors (pure numpy, instant, no lock needed)
     python3 labs/kokoro-voice-blend/blend_zoe_voices.py
 
-    # 2) Also synthesize audition WAVs (loads kokoro-onnx on CPU ~600MB —
-    #    MUST hold the voice-harness lock; unloads on exit):
-    flock /tmp/zoe-voice-harness.lock \
-        python3 labs/kokoro-voice-blend/blend_zoe_voices.py --audio
+    # 2) Also synthesize audition WAVs (loads kokoro-onnx on CPU ~600MB,
+    #    unloads on exit). The script acquires /tmp/zoe-voice-harness.lock
+    #    ITSELF (bounded wait) — do not wrap it in an outer `flock`:
+    python3 labs/kokoro-voice-blend/blend_zoe_voices.py --audio
 
     # 3) Build an augmented voices bin for deployment (after Jason picks one):
     python3 labs/kokoro-voice-blend/blend_zoe_voices.py \
@@ -115,9 +115,45 @@ def write_tensors(cands: dict[str, np.ndarray]) -> None:
         print(f"wrote {TENSOR_DIR / (name + '.npy')}  shape={tensor.shape}")
 
 
+HARNESS_LOCK = "/tmp/zoe-voice-harness.lock"
+LOCK_TIMEOUT_S = 300.0
+
+
+def _acquire_harness_lock() -> int:
+    """Acquire the shared voice-harness flock (bounded wait, fail loudly).
+
+    Mandatory, not advisory: the script takes the lock itself before loading
+    kokoro-onnx, so a bare `python3 blend_zoe_voices.py --audio` can never race
+    the replay/perf harnesses. Do NOT wrap the script in an outer
+    `flock /tmp/zoe-voice-harness.lock …` — the wrapper's lock lives on a
+    different open file description, so the inner acquire would wait behind it
+    until the timeout. Bounded retry + a clear error instead of a silent hang.
+    Returns the fd, held until process exit.
+    """
+    import fcntl
+    import time
+
+    fd = os.open(HARNESS_LOCK, os.O_CREAT | os.O_RDWR, 0o666)
+    deadline = time.monotonic() + LOCK_TIMEOUT_S
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                os.close(fd)
+                raise SystemExit(
+                    f"Could not acquire {HARNESS_LOCK} within {LOCK_TIMEOUT_S:.0f}s "
+                    "— another voice harness holds it; retry later."
+                )
+            time.sleep(1.0)
+
+
 def synthesize_samples(cands: dict[str, np.ndarray], voices: dict[str, np.ndarray]) -> None:
-    """CPU kokoro-onnx (~600MB), one-shot; caller must hold the harness flock."""
+    """CPU kokoro-onnx (~600MB), one-shot; acquires the harness flock itself."""
     import wave
+
+    _lock_fd = _acquire_harness_lock()  # noqa: F841 — held until process exit
 
     from kokoro_onnx import Kokoro  # local CPU pipeline, unloaded at process exit
 
@@ -149,7 +185,7 @@ def emit_bin(cands: dict[str, np.ndarray], voices: dict[str, np.ndarray], path: 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--audio", action="store_true", help="also synthesize audition WAVs (hold the harness flock)")
+    ap.add_argument("--audio", action="store_true", help="also synthesize audition WAVs (script acquires the harness flock itself)")
     ap.add_argument("--emit-bin", metavar="PATH", help="write an augmented voices .bin including the candidates")
     args = ap.parse_args()
 

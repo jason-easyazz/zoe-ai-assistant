@@ -28,10 +28,20 @@ WAVs of a fixed test paragraph (plus an `af_sky` baseline) live at
 Regenerate any time:
 
 ```bash
-python3 labs/kokoro-voice-blend/blend_zoe_voices.py            # tensors only (no lock)
-flock /tmp/zoe-voice-harness.lock \
-    python3 labs/kokoro-voice-blend/blend_zoe_voices.py --audio  # + WAVs (CPU onnx ~600MB, unloads on exit)
+python3 labs/kokoro-voice-blend/blend_zoe_voices.py           # tensors only (no lock)
+python3 labs/kokoro-voice-blend/blend_zoe_voices.py --audio   # + WAVs (CPU onnx ~600MB, unloads on exit)
 ```
+
+The `--audio` step acquires `/tmp/zoe-voice-harness.lock` itself (bounded
+5-minute wait, fails loudly) — do **not** wrap it in an outer `flock`, the
+wrapper's lock would block the script's own acquire until timeout.
+
+Audition rendering is verified against the **installed** `kokoro-onnx==0.5.0`,
+whose `Kokoro.create()` accepts `voice: str | np.ndarray[float32]` — blended
+tensors are passed directly, bypassing the by-name voice lookup by design
+(the WAVs in `/tmp/zoe-voice-blend-samples/` were produced this way). If the
+installed package is upgraded, re-check that signature first
+(`opensrc path pypi:kokoro-onnx@<version>`).
 
 To tweak a mix: edit the `CANDIDATES` recipes and rerun — everything is
 deterministic from the stock voices bin.
@@ -70,5 +80,5 @@ Once Jason picks a candidate (say `zoe_dawn`):
 
 ## Forbidden (inherited from `labs/AGENTS.md`)
 
-Not wired into any service/unit/CI; hand-run only. Never run the `--audio`
-step without the harness flock.
+Not wired into any service/unit/CI; hand-run only. The `--audio` step
+self-acquires the voice-harness flock.
