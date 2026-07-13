@@ -132,6 +132,61 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def cleanup_replay_artifacts(run_started_utc: str, args) -> None:
+    """Soft-delete calendar events + list items created during the replay window.
+
+    The replay corpus executes REAL commands through the live pipeline ("add
+    bread to the shopping list", "dentist appointment at 2pm", …), so every run
+    would otherwise accumulate junk in Jason's real calendar/lists (operator
+    bug report 2026-07-13). The probe runs off-peak (04:30) under flock, so
+    rows created between run start and now are replay artifacts with
+    overwhelming probability; the delete is a reversible soft-delete
+    (deleted=1) and the counts are printed for the run log.
+    """
+    if getattr(args, "no_cleanup", False):
+        return
+    dsn = os.environ.get("POSTGRES_URL", "")
+    if not dsn:
+        env_file = REPO / "services" / "zoe-data" / ".env"
+        try:
+            with open(env_file) as fh:
+                for line in fh:
+                    if line.startswith("POSTGRES_URL="):
+                        dsn = line[len("POSTGRES_URL="):].strip().strip('"').strip("'")
+                        break
+        except OSError:
+            pass
+    if not dsn:
+        print("cleanup: POSTGRES_URL unavailable — skipping replay-artifact cleanup", file=sys.stderr)
+        return
+    try:
+        import asyncio
+
+        import asyncpg
+
+        async def _run() -> tuple[str, str]:
+            conn = await asyncpg.connect(dsn)
+            try:
+                ev = await conn.execute(
+                    "UPDATE events SET deleted = 1, updated_at = NOW() "
+                    "WHERE deleted = 0 AND created_at >= $1::timestamptz",
+                    run_started_utc + "+00",
+                )
+                li = await conn.execute(
+                    "UPDATE list_items SET deleted = 1, updated_at = NOW() "
+                    "WHERE deleted = 0 AND created_at >= $1::timestamptz",
+                    run_started_utc + "+00",
+                )
+                return ev, li
+            finally:
+                await conn.close()
+
+        ev, li = asyncio.run(_run())
+        print(f"cleanup: replay-window artifacts soft-deleted — events: {ev}, list_items: {li}")
+    except Exception as exc:  # cleanup must never fail the probe
+        print(f"cleanup: replay-artifact cleanup failed (non-fatal): {exc}", file=sys.stderr)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Zoe voice regression + speed probe.")
     ap.add_argument("--samples", type=int, default=int(os.environ.get("ZOE_VOICE_PROBE_SAMPLES", "20")),
@@ -147,6 +202,8 @@ def main() -> int:
     ap.add_argument("--warn-ms", type=float, default=float(os.environ.get("ZOE_VOICE_WARN_MS", "1500")))
     ap.add_argument("--min-mem-mb", type=int, default=int(os.environ.get("ZOE_VOICE_PROBE_MIN_MEM_MB", "1500")),
                     help="skip (exit 0) if available memory is below this — never OOM the live box")
+    ap.add_argument("--no-cleanup", action="store_true",
+                    help="skip the post-run replay-artifact cleanup (soft-delete of rows created during the replay window)")
     args = ap.parse_args()
 
     avail = mem_available_mb()
@@ -155,10 +212,12 @@ def main() -> int:
               f"deferring to avoid OOM on the live box.")
         return 0
 
+    run_started_utc = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
     try:
         report = run_measure(args.samples, args.service_dir, args.user, args.timeout)
     except Exception as exc:
         print(f"ERROR: voice probe could not run: {exc}", file=sys.stderr)
+        cleanup_replay_artifacts(run_started_utc, args)   # even a failed run may have executed turns
         return 2
 
     summary = summarize(report)
@@ -193,6 +252,8 @@ def main() -> int:
         write_json(args.baseline, payload)
         print(f"Baseline saved: {args.baseline}")
     print(f"Results: {args.results}  Trend: {args.trend}")
+
+    cleanup_replay_artifacts(run_started_utc, args)
 
     return 1 if warnings else 0
 
