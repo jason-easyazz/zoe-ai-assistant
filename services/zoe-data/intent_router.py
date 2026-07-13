@@ -1116,6 +1116,28 @@ def detect_intent(
             list_type = _normalize_list(lst)
             return Intent("list_add", {"item": item, "list_type": list_type})
 
+    # --- LIST ADD (STT-garbled leading "add") ---
+    # Moonshine renders a leading "Add" as near-homophones: "Add council to my
+    # work list" arrives as "I'd go to council to my work list" (said-vs-did
+    # bug: the add regexes miss and the semantic router drifts to calendar).
+    # If the utterance ENDS with "to my <known> list", treat it as an add and
+    # strip the garbled lead-in. Bare navigation ("go to my work list") leaves
+    # no item text, so it still falls through to the LIST SHOW/OPEN patterns.
+    m = re.match(
+        r"^(?:i'?d|id|and|at|it|hey|a)?\s*(?:go to |goto )?(.+?) "
+        r"to (?:the |my )?(shopping|grocery|groceries|todo|to do|to-do|personal|work|bucket|tasks?)"
+        r" list[.!?]?$",
+        t,
+    )
+    if m:
+        item = _sanitize_list_item(m.group(1))
+        if item and item.lower() not in {"go", "me", "take me", "us", "take us"}:
+            lst = m.group(2).strip()
+            return Intent(
+                "list_add",
+                {"item": item, "list_type": _normalize_list("tasks" if lst == "task" else lst)},
+            )
+
     # --- LIST ADD (implicit, no list name) ---
     # Defer to the brain when a competing-capability cue is present without an
     # explicit shopping/grocery-list target: "add a journal entry: …", "add
