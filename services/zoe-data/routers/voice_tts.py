@@ -3798,13 +3798,6 @@ async def voice_command(
                         token_buf = ""
 
                     final_reply = " ".join(part.strip() for part in full_reply_parts if part.strip()).strip()
-                    # Persist the assistant turn: the streaming lane never reaches
-                    # voice_command's tail save, so without this the transcript
-                    # holds the user turn (saved early, pre-stream) but never the
-                    # reply. Empty user_text — the user turn is already saved.
-                    if final_reply:
-                        await _schedule_voice_chat_save(session_id, "", final_reply, effective_user)
-                        _spawn_bg(_run_voice_memory_passes(text, final_reply, effective_user, session_id))
                     try:
                         await _bc_stream.broadcast("all", "ui_action", {
                             "action": {
@@ -3839,6 +3832,20 @@ async def voice_command(
                     logger.warning("voice/command stream error: %s", exc)
                     async for out_line in _emit_line({"error": "voice command stream failure"}):
                         yield out_line
+                finally:
+                    # Persist whatever the user actually HEARD — the streaming
+                    # lane never reaches voice_command's tail save, and a
+                    # client disconnect (GeneratorExit) or mid-stream error
+                    # must not drop sentences that were already spoken. Empty
+                    # user_text: the user turn is saved pre-stream.
+                    heard_reply = " ".join(
+                        part.strip() for part in full_reply_parts if part.strip()
+                    ).strip()
+                    if heard_reply:
+                        # Safe during GeneratorExit unwind: neither call suspends
+                        # (_schedule_voice_chat_save only spawns a bg task).
+                        await _schedule_voice_chat_save(session_id, "", heard_reply, effective_user)
+                        _spawn_bg(_run_voice_memory_passes(text, heard_reply, effective_user, session_id))
 
             return StreamingResponse(
                 _generate_voice_stream(),

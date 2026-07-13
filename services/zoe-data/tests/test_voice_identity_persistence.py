@@ -366,6 +366,7 @@ def test_voice_save_import_path_is_real() -> None:
     import importlib.util
 
     assert importlib.util.find_spec("routers.chat") is not None
-    # The buggy spelling must NOT resolve — if a top-level ``chat`` module ever
-    # appears, the lazy imports become ambiguous and this guard needs a rethink.
-    assert importlib.util.find_spec("chat") is None
+    # NOTE: we deliberately do NOT assert that a top-level ``chat`` module is
+    # unresolvable — CI's sys.path includes routers/, so ``chat`` resolves
+    # there (which is exactly how the buggy spelling passed CI while failing
+    # in production, where only the service root is on sys.path).
