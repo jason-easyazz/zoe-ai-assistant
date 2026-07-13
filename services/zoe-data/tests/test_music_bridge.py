@@ -687,17 +687,34 @@ async def test_search_and_play_passes_radio_mode(monkeypatch):
         return [{"player_id": "p1", "available": True, "powered": True}]
     calls = []
     async def fake_ma(command, **args):
-        if command == "music/search":
-            return {"tracks": [{"name": "So What", "uri": "ytmusic://track/1",
-                                "artists": [{"name": "Miles Davis"}]}]}
-        calls.append((command, args)); return {}
+        assert command == "music/search"
+        return {"tracks": [{"name": "So What", "uri": "ytmusic://track/1",
+                            "artists": [{"name": "Miles Davis"}]}]}
+    # The queue write goes through _ma_ok with the LONG write timeout (MA's
+    # play_media works synchronously and can exceed the 5s read timeout).
+    async def fake_ok(command, timeout_s=None, **args):
+        calls.append((command, timeout_s, args)); return True
     monkeypatch.setattr(music_service, "get_players", players)
     monkeypatch.setattr(music_service, "_ma", fake_ma)
+    monkeypatch.setattr(music_service, "_ma_ok", fake_ok)
     hit = await music_service.search_and_play("miles davis", radio_mode=True)
     assert hit is not None
-    assert calls == [("player_queues/play_media",
+    assert calls == [("player_queues/play_media", 20.0,
                       {"queue_id": "p1", "media": "ytmusic://track/1",
                        "option": "replace", "radio_mode": True})]
+
+
+@pytest.mark.asyncio
+async def test_search_and_play_reports_failure_when_ma_rejects(monkeypatch):
+    async def players():
+        return [{"player_id": "p1", "available": True, "powered": True}]
+    async def fake_ma(command, **args):
+        return {"tracks": [{"name": "So What", "uri": "ytmusic://track/1"}]}
+    async def down(command, timeout_s=None, **args): return False
+    monkeypatch.setattr(music_service, "get_players", players)
+    monkeypatch.setattr(music_service, "_ma", fake_ma)
+    monkeypatch.setattr(music_service, "_ma_ok", down)
+    assert await music_service.search_and_play("miles davis") is None
 
 
 @pytest.mark.asyncio
@@ -857,3 +874,23 @@ async def test_play_endpoint_accepts_radio_flag(monkeypatch):
     assert r["ok"] is True and seen == {"q": "miles davis", "radio": True}
     await music_router.music_play({"query": "jazz"})
     assert seen["radio"] is False  # default unchanged
+
+
+@pytest.mark.asyncio
+async def test_recommendations_unwraps_result_shape(monkeypatch):
+    async def fake_ma(command, **args):
+        return {"result": [{"name": "Mixed for you", "items": [
+            {"name": "Yellow", "uri": "ytmusic://track/1", "media_type": "track"}]}]}
+    monkeypatch.setattr(music_service, "_ma", fake_ma)
+    r = await music_service.get_recommendations()
+    assert r["available"] is True and r["folders"][0]["name"] == "Mixed for you"
+
+
+@pytest.mark.asyncio
+async def test_recently_played_skips_non_dict_items(monkeypatch):
+    async def fake_ma(command, **args):
+        return ["garbage", None,
+                {"name": "So What", "uri": "ytmusic://track/2", "media_type": "track"}]
+    monkeypatch.setattr(music_service, "_ma", fake_ma)
+    r = await music_service.get_recently_played()
+    assert [i["name"] for i in r["items"]] == ["So What"]

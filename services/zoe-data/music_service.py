@@ -322,7 +322,12 @@ async def search_and_play(query: str, player_id: str = "",
     uri = hit.get("uri")
     if not uri:
         return None
-    await _ma("player_queues/play_media", queue_id=pid, media=uri, option="replace", radio_mode=radio_mode)
+    # play_media does real work synchronously (resolve the stream, start the
+    # speaker) and can exceed the short read timeout — use the long write
+    # timeout + honest failure reporting, same as play_media() below.
+    if not await _ma_ok("player_queues/play_media", timeout_s=20.0, queue_id=pid,
+                        media=uri, option="replace", radio_mode=radio_mode):
+        return None
     return {"name": hit.get("name", query), "artist": (hit.get("artists") or [{}])[0].get("name", "") if hit.get("artists") else ""}
 
 
@@ -477,6 +482,8 @@ async def get_recommendations() -> dict[str, Any]:
     from providers with RECOMMENDATIONS, normalized to the flat search-hit shape
     the touch page already renders. Best-effort — never raises."""
     folders = await _ma("music/recommendations")
+    if isinstance(folders, dict):  # some shim responses wrap the list
+        folders = folders.get("result") or folders.get("folders") or folders.get("items") or []
     out: list[dict[str, Any]] = []
     for f in folders if isinstance(folders, list) else []:
         if not isinstance(f, dict):
@@ -505,6 +512,8 @@ async def get_recently_played(limit: int = 10,
     raw = await _ma("music/recently_played_items", **args)
     items = []
     for it in _as_list(raw):
+        if not isinstance(it, dict):
+            continue
         norm = _normalize_hit(it, str(it.get("media_type") or "track"))
         if norm:
             items.append(norm)
