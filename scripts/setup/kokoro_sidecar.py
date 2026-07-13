@@ -76,9 +76,17 @@ _device = "cpu"
 _pipeline_lock = asyncio.Lock()  # serialise inference; pipeline is not thread-safe
 
 # Pre-synthesised cache for common short phrases (populated during lifespan startup).
-# Keys are lowercased stripped text; values are WAV bytes.  Only hits when
-# voice == _VOICE and speed == 1.0 to guarantee audio quality matches.
+# Keys are "<voice>|<lowercased stripped text>" (see _phrase_cache_key); values are
+# WAV bytes.  Only hits at speed == 1.0 to guarantee audio quality matches.
+# Voice-scoping the key means a voice switch (the panel's "Zoe's voice" setting,
+# or a KOKORO_VOICE change) can never replay a phrase in the OLD voice: entries
+# for other voices — including pre-voice-scoping persisted entries keyed by text
+# alone — simply miss and age out of the disk budget.  No cache wipe needed.
 _phrase_cache: dict[str, bytes] = {}
+
+
+def _phrase_cache_key(voice: str, text: str) -> str:
+    return f"{voice}|{text.strip().lower()}"
 
 # Phrases to pre-warm at startup.  Chosen to cover the most frequent short Zoe
 # responses so they return in <1ms instead of ~450ms.
@@ -539,7 +547,7 @@ async def lifespan(app: FastAPI):
             cached = 0
             skipped = 0
             for phrase in _WARM_PHRASES:
-                key = phrase.strip().lower()
+                key = _phrase_cache_key(_VOICE, phrase)
                 if key in _phrase_cache:
                     skipped += 1
                     continue
@@ -741,8 +749,10 @@ async def synthesize(req: SynthRequest):
     voice = (req.voice or _VOICE).strip() or _VOICE
 
     # Fast path: serve pre-synthesised / previously-synthesised WAV instantly.
-    cacheable = voice == _VOICE and req.speed == 1.0 and len(text) <= _CACHE_MAX_TEXT_LEN
-    cache_key = text.lower()
+    # Cacheable for ANY voice — the key is voice-scoped, so a non-default voice
+    # gets its own hot set instead of bypassing the cache (or worse, colliding).
+    cacheable = req.speed == 1.0 and len(text) <= _CACHE_MAX_TEXT_LEN
+    cache_key = _phrase_cache_key(voice, text)
     if cacheable:
         hit = _cache_get(cache_key)
         if hit is not None:
