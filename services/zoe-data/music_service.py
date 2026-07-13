@@ -235,6 +235,7 @@ async def now_playing(player_id: str = "") -> Optional[dict[str, Any]]:
         "volume": player.get("volume_level"),
         "queue_id": pid,
         "shuffle": bool((queue or {}).get("shuffle_enabled")),
+        "repeat": str((queue or {}).get("repeat_mode") or "off"),
         "elapsed": elapsed,
         "duration": duration,
     }
@@ -279,6 +280,17 @@ async def control(action: str, player_id: str = "", value: Any = None) -> bool:
         return True
     if action in _PLAYER_CMDS:
         await _ma(_PLAYER_CMDS[action], player_id=pid)
+        return True
+    if action == "shuffle_set":
+        # JSON callers may send "false"/"0"/"off" as strings — bool() would
+        # treat every non-empty string as True and ENABLE shuffle when asked
+        # to disable it.
+        if isinstance(value, str):
+            value = value.strip().lower() in ("1", "true", "on", "yes")
+        await _ma("player_queues/shuffle", queue_id=pid, shuffle_enabled=bool(value))
+        return True
+    if action == "repeat_set" and value in ("off", "all", "one"):
+        await _ma("player_queues/repeat", queue_id=pid, repeat_mode=value)
         return True
     return False
 
@@ -447,7 +459,7 @@ async def search(query: str, media_types: Optional[list[str]] = None,
     return {"available": any_hit, "query": query, "results": results}
 
 
-async def play_media(uri: str, player_id: str = "") -> dict[str, Any]:
+async def play_media(uri: str, player_id: str = "", option: str = "replace") -> dict[str, Any]:
     """Play a specific media URI (from `search`) on a chosen speaker.
 
     In MA the queue id *is* the player id. An explicit player_id must match a
@@ -473,8 +485,14 @@ async def play_media(uri: str, player_id: str = "") -> dict[str, Any]:
     # so the panel shows an error instead of a false "Playing …" toast. play_media
     # does real work synchronously (resolve the stream, start the speaker) and
     # returns 200 in ~6s+, so it needs a longer timeout than the read helpers.
+    # option: replace (play now) | add (end of queue) | next (after current) —
+    # the jukebox phone page queues with add/next; anything else (including
+    # MA's own 'play' alias, which has different queue semantics) is coerced
+    # to replace so play-now behaviour is uniform for every caller.
+    if option not in ("replace", "add", "next"):
+        option = "replace"
     if not await _ma_ok("player_queues/play_media", timeout_s=20.0, queue_id=pid,
-                        media=uri, option="replace", radio_mode=False):
+                        media=uri, option=option, radio_mode=False):
         return {"ok": False, "reason": "playback failed"}
     return {
         "ok": True, "uri": uri, "player_id": pid,

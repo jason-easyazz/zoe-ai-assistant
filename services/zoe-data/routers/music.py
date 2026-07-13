@@ -298,12 +298,14 @@ async def music_search(q: str = "", types: str = "", limit: int = 8) -> dict[str
 async def music_play_media(payload: dict) -> dict[str, Any]:
     """Play a specific search result on a chosen speaker.
 
-    body: {uri, player_id?}. `uri` comes from /api/music/search; `player_id`
-    (optional) targets a speaker from /api/music/players — omitted → active/
-    first powered player."""
+    body: {uri, player_id?, option?}. `uri` comes from /api/music/search;
+    `player_id` (optional) targets a speaker from /api/music/players — omitted
+    → active/first powered player. `option`: replace (default) | add (end of
+    queue) | next (after current) — the jukebox page queues with add."""
     import music_service
     uri = str((payload or {}).get("uri") or "").strip()
     player_id = str((payload or {}).get("player_id") or "")
+    option = str((payload or {}).get("option") or "replace")
     if not uri:
         return {"ok": False, "reason": "missing uri"}
-    return await music_service.play_media(uri, player_id=player_id)
+    return await music_service.play_media(uri, player_id=player_id, option=option)

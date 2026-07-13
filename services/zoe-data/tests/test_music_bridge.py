@@ -262,7 +262,7 @@ async def test_search_and_play_media_endpoints_delegate(monkeypatch):
     assert r["query"] == "jazz" and r["_types"] == ["track", "album"] and r["_limit"] == 5
 
     played = {}
-    async def fake_play(uri, player_id=""):
+    async def fake_play(uri, player_id="", option="replace"):
         played["uri"] = uri; played["pid"] = player_id; return {"ok": True, "player_id": player_id}
     monkeypatch.setattr(music_service, "play_media", fake_play)
     ok = await music_router.music_play_media({"uri": "ytmusic://track/1", "player_id": "bedroom"})
