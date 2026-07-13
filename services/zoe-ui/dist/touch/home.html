@@ -1105,10 +1105,14 @@
     apiGet('/api/system/display/preferences?device_id='+encodeURIComponent(_panelDevId())).then(function(d){
       if(_cur!=='settings')return;var pr=(d&&d.preferences)||{};_setPrefs={};
       var el=document.getElementById('setDisp');if(!el)return;
+      // 0 is a legitimate saved brightness — only fall back when the value is
+      // genuinely absent, or a truthy-|| would render (and later re-save) the default.
+      function nz(v,dflt){var n=+v;return (v==null||isNaN(n))?dflt:n;}
+      var dayB=nz(pr.day_brightness,100),nightB=nz(pr.night_brightness,15);
       el.innerHTML=
-        '<div class="srow2"><span>Brightness</span><input type="range" min="10" max="100" step="5" data-pref="day_brightness" value="'+(+pr.day_brightness||100)+'"><span class="sv">'+(+pr.day_brightness||100)+'%</span></div>'
+        '<div class="srow2"><span>Brightness</span><input type="range" min="0" max="100" step="5" data-pref="day_brightness" value="'+dayB+'"><span class="sv">'+dayB+'%</span></div>'
         +'<div class="srow2"><span>Night mode <small style="color:var(--ink-faint)">'+esc(pr.night_start||'22:00')+'–'+esc(pr.night_end||'06:30')+'</small></span><span class="sw'+(pr.night_enabled?' on':'')+'" data-pref-t="night_enabled"></span></div>'
-        +'<div class="srow2"><span>Night brightness</span><input type="range" min="5" max="60" step="5" data-pref="night_brightness" value="'+(+pr.night_brightness||15)+'"><span class="sv">'+(+pr.night_brightness||15)+'%</span></div>'
+        +'<div class="srow2"><span>Night brightness</span><input type="range" min="0" max="60" step="5" data-pref="night_brightness" value="'+nightB+'"><span class="sv">'+nightB+'%</span></div>'
         +'<div class="srow2"><span>Dim when idle <small style="color:var(--ink-faint)">'+Math.round((+pr.idle_seconds||120)/60)+' min</small></span><span class="sw'+(pr.idle_enabled?' on':'')+'" data-pref-t="idle_enabled"></span></div>';
       el.querySelectorAll('input[type=range]').forEach(function(r){r.oninput=function(){
         var sv=r.parentElement.querySelector('.sv');if(sv)sv.textContent=r.value+'%';
