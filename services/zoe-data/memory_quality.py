@@ -655,7 +655,7 @@ _GUARD_CAL_WORDS = {
 # possessive "Jessica" is still a guard token.
 _NAME_VALUE_RE = re.compile(
     r"(?:\bname\s+is|\bnamed|\bis\s+called|\bname['’]s)\s+(?:spelt\s+|spelled\s+)?"
-    r"([A-Z][a-z]+)\b"
+    r"((?:[A-Z][a-z]+)(?:\s+[A-Z][a-z]+)*)"
 )
 
 
@@ -666,7 +666,9 @@ def _guard_name_tokens(t: str) -> set[str]:
     ``_NAME_VALUE_RE``)."""
     caps = {w.lower() for w in re.findall(r"\b[A-Z][a-z]+\b", t)}
     poss = {w.lower() for w in re.findall(r"\b([a-z]+)['’]s\b", t)}
-    values = {w.lower() for w in _NAME_VALUE_RE.findall(t)}
+    # A value may be multi-word ("Van Morrison") — every word of it is a
+    # value token, or the trailing words would keep the row guarded.
+    values = {w.lower() for m in _NAME_VALUE_RE.findall(t) for w in m.split()}
     # A value token is excluded only when it has no OTHER appearance in the
     # text (a possessive or second mention still marks the row as about them).
     only_values = {

@@ -440,6 +440,10 @@ def test_guard_allows_supersede_of_name_value_rows():
         kept = guard_existing_by_entity(cand, existing, None)
         assert kept == existing, f"{cand!r} was wrongly guarded away"
         assert classify_against_existing(cand, kept) == ("update", "old")
+    # Multi-word values: EVERY word of the value is excluded, or the trailing
+    # words would keep the row guarded.
+    multi = [("old", "my dad's name is Van Morrison")]
+    assert guard_existing_by_entity("my dad's name is Kevin", multi, None) == multi
 
 
 def test_guard_still_protects_third_person_rows():
