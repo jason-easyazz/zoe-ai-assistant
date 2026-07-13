@@ -189,7 +189,9 @@ def main() -> int:
                 # fixed-seed distractors + general_chat (what a WORKING external
                 # prefilter, e.g. Zoe's bge-small, would hand Needle).
                 t0 = time.perf_counter()
-                names = [e for e in c["expected"] if e in by_name][:1]
+                # ALL valid labels go in (multi-label rows keep every correct
+                # option); distractors only top up to at least top_k candidates.
+                names = [e for e in c["expected"] if e in by_name]
                 pool = [n for n in by_name if n not in names and n != "general_chat"]
                 names += rng.sample(pool, max(0, args.top_k - len(names)))
                 if "general_chat" not in names:

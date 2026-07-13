@@ -2,13 +2,13 @@
  "summary": {
   "mode": "oracle",
   "n": 81,
-  "acc_overall": 66.7,
-  "acc_canonical": 88.2,
-  "acc_paraphrase": 56.4,
-  "acc_chat": 25.0,
-  "lat_p50_ms": 2178.7,
-  "lat_p90_ms": 3356.6,
-  "lat_mean_ms": 2295.4,
+  "acc_overall": 79.0,
+  "acc_canonical": 94.1,
+  "acc_paraphrase": 71.8,
+  "acc_chat": 50.0,
+  "lat_p50_ms": 5002.2,
+  "lat_p90_ms": 7079.6,
+  "lat_mean_ms": 5072.2,
   "full_tools_needle_tokens": 1924
  },
  "results": [
@@ -23,7 +23,7 @@
    "pred": "get_time",
    "raw": "[{\"name\":\"get_time\",\"arguments\":{\"query\":\"current time\"}}]",
    "ok": true,
-   "ms": 1573.1
+   "ms": 2668.0
   },
   {
    "id": "time-c2",
@@ -36,7 +36,7 @@
    "pred": "get_time",
    "raw": "[{\"name\":\"get_time\",\"arguments\":{\"query\":\"current date\"}}]",
    "ok": true,
-   "ms": 1589.8
+   "ms": 2272.1
   },
   {
    "id": "time-p1",
@@ -49,7 +49,7 @@
    "pred": "get_time",
    "raw": "[{\"name\":\"get_time\",\"arguments\":{\"query\":\"current time\"}}]",
    "ok": true,
-   "ms": 1604.6
+   "ms": 3267.5
   },
   {
    "id": "time-p2",
@@ -62,7 +62,7 @@
    "pred": "get_time",
    "raw": "[{\"name\":\"get_time\",\"arguments\":{\"query\":\"current day\"}}]",
    "ok": true,
-   "ms": 1611.4
+   "ms": 4152.0
   },
   {
    "id": "weather-c1",
@@ -75,7 +75,7 @@
    "pred": "get_weather",
    "raw": "[{\"name\":\"get_weather\",\"arguments\":{\"forecast\":\"Perth\"}}]",
    "ok": true,
-   "ms": 1664.1
+   "ms": 3684.6
   },
   {
    "id": "weather-c2",
@@ -88,7 +88,7 @@
    "pred": "get_weather",
    "raw": "[{\"name\":\"get_weather\",\"arguments\":{\"forecast\":\"tomorrow\",\"location\":\"current location\"}}]",
    "ok": true,
-   "ms": 1958.8
+   "ms": 3582.9
   },
   {
    "id": "weather-p1",
@@ -101,7 +101,7 @@
    "pred": "get_weather",
    "raw": "[{\"name\":\"get_weather\",\"arguments\":{\"forecast\":\"what is the best time for this weekend\",\"location\":\"current location\"}}]",
    "ok": true,
-   "ms": 2705.1
+   "ms": 5864.4
   },
   {
    "id": "weather-p2",
@@ -114,7 +114,7 @@
    "pred": "remember_fact",
    "raw": "[{\"name\":\"remember_fact\",\"arguments\":{\"fact\":\"week\"}}]",
    "ok": false,
-   "ms": 2178.7
+   "ms": 4899.8
   },
   {
    "id": "weather-p3",
@@ -127,7 +127,7 @@
    "pred": "get_weather",
    "raw": "[{\"name\":\"get_weather\",\"arguments\":{\"forecast\":\"saturday\"}}]",
    "ok": true,
-   "ms": 1709.3
+   "ms": 3267.8
   },
   {
    "id": "shoplist-c1",
@@ -138,10 +138,10 @@
     "add_to_list"
    ],
    "domain": "lists",
-   "pred": "shopping_list_add",
-   "raw": "[{\"name\":\"shopping_list_add\",\"arguments\":{\"item\":\"milk\"}}]",
+   "pred": "add_to_list",
+   "raw": "[{\"name\":\"add_to_list\",\"arguments\":{\"list_type\":\"shopping list\",\"item\":\"milk\"}}]",
    "ok": true,
-   "ms": 1688.4
+   "ms": 5711.9
   },
   {
    "id": "shoplist-c2",
@@ -153,9 +153,9 @@
    ],
    "domain": "lists",
    "pred": "add_to_list",
-   "raw": "[{\"name\":\"add_to_list\",\"arguments\":{\"list_type\":\"grocery list\",\"item\":\"bread\"}}]",
+   "raw": "[{\"name\":\"add_to_list\",\"arguments\":{\"list_type\":\"grocery list\"}}]",
    "ok": true,
-   "ms": 2416.9
+   "ms": 6602.8
   },
   {
    "id": "shoplist-p1",
@@ -166,10 +166,10 @@
     "add_to_list"
    ],
    "domain": "lists",
-   "pred": "add_reminder",
-   "raw": "[{\"name\":\"add_reminder\",\"arguments\":{\"time\":\"now\",\"title\":\"laundry powder\"}}]",
-   "ok": false,
-   "ms": 2196.9
+   "pred": "add_to_list",
+   "raw": "[{\"name\":\"add_to_list\",\"arguments\":{\"list_type\":\"laundry powder\"}}]",
+   "ok": true,
+   "ms": 7369.9
   },
   {
    "id": "shoplist-p2",
@@ -180,10 +180,10 @@
     "add_to_list"
    ],
    "domain": "lists",
-   "pred": "shopping_list_add",
-   "raw": "[{\"name\":\"shopping_list_add\",\"arguments\":{\"item\":\"sec\"}}]",
+   "pred": "add_to_list",
+   "raw": "[{\"name\":\"add_to_list\",\"arguments\":{\"list_type\":\"dog food\"}}]",
    "ok": true,
-   "ms": 1671.8
+   "ms": 5267.6
   },
   {
    "id": "shoplist-p3",
@@ -195,10 +195,10 @@
     "add_reminder"
    ],
    "domain": "lists",
-   "pred": "general_chat",
-   "raw": "[{\"name\":\"general_chat\",\"arguments\":{}}]",
-   "ok": false,
-   "ms": 1449.4
+   "pred": "add_reminder",
+   "raw": "[{\"name\":\"add_reminder\",\"arguments\":{\"time\":\"now\",\"date\":\"tomorrow morning\"}}]",
+   "ok": true,
+   "ms": 5231.7
   },
   {
    "id": "listshow-c1",
@@ -211,7 +211,7 @@
    "pred": "show_list",
    "raw": "[{\"name\":\"show_list\",\"arguments\":{\"list_type\":\"shopping\"}}]",
    "ok": true,
-   "ms": 1699.7
+   "ms": 5195.9
   },
   {
    "id": "listshow-c2",
@@ -224,7 +224,7 @@
    "pred": "show_list",
    "raw": "[{\"name\":\"show_list\",\"arguments\":{\"list_type\":\"todo\"}}]",
    "ok": true,
-   "ms": 1654.2
+   "ms": 4239.7
   },
   {
    "id": "listshow-p1",
@@ -235,9 +235,9 @@
    ],
    "domain": "lists",
    "pred": "show_list",
-   "raw": "[{\"name\":\"show_list\",\"arguments\":{\"list_type\":\"tasks/to-do\"}}]",
+   "raw": "[{\"name\":\"show_list\",\"arguments\":{\"list_type\":\"shopping\"}}]",
    "ok": true,
-   "ms": 2027.7
+   "ms": 3764.0
   },
   {
    "id": "listshow-p2",
@@ -247,10 +247,10 @@
     "show_list"
    ],
    "domain": "lists",
-   "pred": "general_chat",
-   "raw": "[{\"name\":\"general_chat\",\"arguments\":{}}]",
-   "ok": false,
-   "ms": 1424.3
+   "pred": "show_list",
+   "raw": "[{\"name\":\"show_list\",\"arguments\":{\"list_type\":\"tasks/to-do\"}}]",
+   "ok": true,
+   "ms": 5165.2
   },
   {
    "id": "listrm-c1",
@@ -261,9 +261,9 @@
    ],
    "domain": "lists",
    "pred": "list_remove",
-   "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"item\":\"bananas\"}}]",
+   "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"list_type\":\"shopping list\",\"item\":\"bananas\"}}]",
    "ok": true,
-   "ms": 1689.1
+   "ms": 5070.6
   },
   {
    "id": "listrm-p1",
@@ -276,7 +276,7 @@
    "pred": "list_remove",
    "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"list_type\":\"bananas\"}}]",
    "ok": true,
-   "ms": 1859.4
+   "ms": 5002.2
   },
   {
    "id": "listrm-p2",
@@ -287,9 +287,9 @@
    ],
    "domain": "lists",
    "pred": "list_remove",
-   "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"list_type\":\"eggs\",\"item\":\"neppery\"}}]",
+   "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"list_type\":\"eggs\"}}]",
    "ok": true,
-   "ms": 2426.7
+   "ms": 4441.5
   },
   {
    "id": "cal-show-c1",
@@ -302,7 +302,7 @@
    "pred": "show_calendar",
    "raw": "[{\"name\":\"show_calendar\",\"arguments\":{\"qualifier\":\"today\"}}]",
    "ok": true,
-   "ms": 1794.6
+   "ms": 4706.5
   },
   {
    "id": "cal-show-c2",
@@ -312,10 +312,10 @@
     "show_calendar"
    ],
    "domain": "calendar",
-   "pred": "show_list",
-   "raw": "[{\"name\":\"show_list\",\"arguments\":{\"list_type\":\"todo\"}}]",
+   "pred": "general_chat",
+   "raw": "[{\"name\":\"general_chat\",\"arguments\":{}}]",
    "ok": false,
-   "ms": 1760.2
+   "ms": 3773.1
   },
   {
    "id": "cal-show-p1",
@@ -326,9 +326,9 @@
    ],
    "domain": "calendar",
    "pred": "show_calendar",
-   "raw": "[{\"name\":\"show_calendar\",\"arguments\":{\"qualifier\":\"friday\"}}]",
+   "raw": "[{\"name\":\"show_calendar\",\"arguments\":{\"qualifier\":\"double booked friday\"}}]",
    "ok": true,
-   "ms": 2015.1
+   "ms": 5284.9
   },
   {
    "id": "cal-show-p2",
@@ -338,10 +338,10 @@
     "show_calendar"
    ],
    "domain": "calendar",
-   "pred": "list_remove",
-   "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"list_type\":\"lunch\"}}]",
+   "pred": "list_reminders",
+   "raw": "[{\"name\":\"list_reminders\",\"arguments\":{\"qualifier\":\"lunch\"}}]",
    "ok": false,
-   "ms": 1833.8
+   "ms": 4802.2
   },
   {
    "id": "cal-add-c1",
@@ -352,9 +352,9 @@
    ],
    "domain": "calendar",
    "pred": "add_calendar_event",
-   "raw": "[{\"name\":\"add_calendar_event\",\"arguments\":{\"date\":\"next tuesday at 3pm\",\"category\":\"dentist\"}}]",
+   "raw": "[{\"name\":\"add_calendar_event\",\"arguments\":{\"date\":\"next tuesday at 3pm\",\"category\":\"dentist appointment\"}}]",
    "ok": true,
-   "ms": 4189.4
+   "ms": 6608.9
   },
   {
    "id": "cal-add-c2",
@@ -365,9 +365,9 @@
    ],
    "domain": "calendar",
    "pred": "add_calendar_event",
-   "raw": "[{\"name\":\"add_calendar_event\",\"arguments\":{\"date\":\"friday at 10am\",\"category\":\"meeting\"}}]",
+   "raw": "[{\"name\":\"add_calendar_event\",\"arguments\":{\"date\":\"friday at 10am\",\"category\":\"meeting\",\"title\":\"sarah\"}}]",
    "ok": true,
-   "ms": 3498.6
+   "ms": 6328.8
   },
   {
    "id": "cal-add-p1",
@@ -377,10 +377,10 @@
     "add_calendar_event"
    ],
    "domain": "calendar",
-   "pred": "add_calendar_event",
-   "raw": "[{\"name\":\"add_calendar_event\",\"arguments\":{\"time\":\"thursday morning\",\"title\":\"vet biscuit\",\"date\":\"thursday morning\"}}]",
-   "ok": true,
-   "ms": 3753.4
+   "pred": "get_time",
+   "raw": "[{\"name\":\"get_time\",\"arguments\":{\"query\":\"vet_biscuit\"}}]",
+   "ok": false,
+   "ms": 4696.6
   },
   {
    "id": "cal-add-p2",
@@ -393,7 +393,7 @@
    "pred": "add_calendar_event",
    "raw": "[{\"name\":\"add_calendar_event\",\"arguments\":{\"date\":\"6pm\",\"category\":\"flight lands\"}}]",
    "ok": true,
-   "ms": 3161.6
+   "ms": 6926.3
   },
   {
    "id": "rem-add-c1",
@@ -406,7 +406,7 @@
    "pred": "add_reminder",
    "raw": "[{\"name\":\"add_reminder\",\"arguments\":{\"time\":\"7pm tomorrow\",\"title\":\"water the plants\"}}]",
    "ok": true,
-   "ms": 2507.7
+   "ms": 5669.7
   },
   {
    "id": "rem-add-c2",
@@ -419,7 +419,7 @@
    "pred": "add_reminder",
    "raw": "[{\"name\":\"add_reminder\",\"arguments\":{\"date\":\"tonight\",\"title\":\"take the bins out\"}}]",
    "ok": true,
-   "ms": 2695.7
+   "ms": 6234.3
   },
   {
    "id": "rem-add-p1",
@@ -430,9 +430,9 @@
    ],
    "domain": "reminders",
    "pred": "add_reminder",
-   "raw": "[{\"name\":\"add_reminder\",\"arguments\":{\"time\":\"month\",\"title\":\"pay the rent\"}}]",
+   "raw": "[{\"name\":\"add_reminder\",\"arguments\":{\"date\":\"first\",\"title\":\"rent\"}}]",
    "ok": true,
-   "ms": 2663.8
+   "ms": 5143.9
   },
   {
    "id": "rem-add-p2",
@@ -442,10 +442,10 @@
     "add_reminder"
    ],
    "domain": "reminders",
-   "pred": "show_calendar",
-   "raw": "[{\"name\":\"show_calendar\",\"arguments\":{\"qualifier\":\"dentist\"}}]",
-   "ok": false,
-   "ms": 2013.0
+   "pred": "add_reminder",
+   "raw": "[{\"name\":\"add_reminder\",\"arguments\":{\"date\":\"tomorrow morning\",\"title\":\"dentist\"}}]",
+   "ok": true,
+   "ms": 5200.4
   },
   {
    "id": "rem-add-p3",
@@ -456,9 +456,9 @@
    ],
    "domain": "reminders",
    "pred": "add_reminder",
-   "raw": "[{\"name\":\"add_reminder\",\"arguments\":{\"time\":\"3 unless\",\"title\":\"school pickup\"}}]",
+   "raw": "[{\"name\":\"add_reminder\",\"arguments\":{\"date\":\"3 unless\",\"title\":\"school pickup\"}}]",
    "ok": true,
-   "ms": 2601.4
+   "ms": 6732.3
   },
   {
    "id": "rem-list-c1",
@@ -471,7 +471,7 @@
    "pred": "list_reminders",
    "raw": "[{\"name\":\"list_reminders\",\"arguments\":{\"qualifier\":\"I have\"}}]",
    "ok": true,
-   "ms": 2082.7
+   "ms": 4642.9
   },
   {
    "id": "rem-list-p1",
@@ -483,9 +483,9 @@
    ],
    "domain": "reminders",
    "pred": "list_reminders",
-   "raw": "[{\"name\":\"list_reminders\",\"arguments\":{\"qualifier\":\"general_chat\"}}]",
+   "raw": "[{\"name\":\"list_reminders\",\"arguments\":{\"qualifier\":\"meant\"}}]",
    "ok": true,
-   "ms": 2475.0
+   "ms": 4531.0
   },
   {
    "id": "timer-c1",
@@ -496,9 +496,9 @@
    ],
    "domain": "timers",
    "pred": "set_timer",
-   "raw": "[{\"name\":\"set_timer\",\"arguments\":{\"label\":\"timer\",\"minutes\":\"10 minutes\"}}]",
+   "raw": "[{\"name\":\"set_timer\",\"arguments\":{\"label\":\"timer\"}}]",
    "ok": true,
-   "ms": 2325.8
+   "ms": 8326.5
   },
   {
    "id": "timer-c2",
@@ -511,7 +511,7 @@
    "pred": "set_timer",
    "raw": "[{\"name\":\"set_timer\",\"arguments\":{\"label\":\"pasta\",\"minutes\":\"5\"}}]",
    "ok": true,
-   "ms": 2024.6
+   "ms": 5694.9
   },
   {
    "id": "timer-p1",
@@ -522,9 +522,9 @@
    ],
    "domain": "timers",
    "pred": "set_timer",
-   "raw": "[{\"name\":\"set_timer\",\"arguments\":{\"minutes\":\"20\",\"label\":\"roast spuds\"}}]",
+   "raw": "[{\"name\":\"set_timer\",\"arguments\":{\"label\":\"roast spuds\"}}]",
    "ok": true,
-   "ms": 2395.5
+   "ms": 6495.7
   },
   {
    "id": "timer-p2",
@@ -535,9 +535,9 @@
    ],
    "domain": "timers",
    "pred": "set_timer",
-   "raw": "[{\"name\":\"set_timer\",\"arguments\":{\"label\":\"need six minutes\"}}]",
+   "raw": "[{\"name\":\"set_timer\",\"arguments\":{\"minutes\":\"six minutes\",\"label\":\"eggs\"}}]",
    "ok": true,
-   "ms": 2530.7
+   "ms": 4603.9
   },
   {
    "id": "note-add-c1",
@@ -548,9 +548,9 @@
    ],
    "domain": "notes",
    "pred": "create_note",
-   "raw": "[{\"name\":\"create_note\",\"arguments\":{\"content\":\"the wifi password is hunter2\",\"title\":\"wifi password\"}}]",
+   "raw": "[{\"name\":\"create_note\",\"arguments\":{\"content\":\"wifi password is hunter2\",\"title\":\"wifi password\"}}]",
    "ok": true,
-   "ms": 2660.2
+   "ms": 6288.2
   },
   {
    "id": "note-add-c2",
@@ -561,9 +561,9 @@
    ],
    "domain": "notes",
    "pred": "create_note",
-   "raw": "[{\"name\":\"create_note\",\"arguments\":{\"content\":\"the gate code is 4482\",\"title\":\"gate code\"}}]",
+   "raw": "[{\"name\":\"create_note\",\"arguments\":{\"content\":\"4482\",\"title\":\"gate code\"}}]",
    "ok": true,
-   "ms": 2550.3
+   "ms": 5175.6
   },
   {
    "id": "note-add-p1",
@@ -573,10 +573,10 @@
     "create_note"
    ],
    "domain": "notes",
-   "pred": "remember_fact",
-   "raw": "[{\"name\":\"remember_fact\",\"arguments\":{\"fact\":\"300\"}}]",
+   "pred": "add_reminder",
+   "raw": "[{\"name\":\"add_reminder\",\"arguments\":{\"time\":\"300\",\"title\":\"laundry tap\"}}]",
    "ok": false,
-   "ms": 2503.0
+   "ms": 5439.7
   },
   {
    "id": "note-add-p2",
@@ -587,10 +587,10 @@
     "remember_fact"
    ],
    "domain": "notes",
-   "pred": "set_timer",
-   "raw": "[{\"name\":\"set_timer\",\"arguments\":{\"label\":\"pizza place\"}}]",
-   "ok": false,
-   "ms": 2279.5
+   "pred": "remember_fact",
+   "raw": "[{\"name\":\"remember_fact\",\"arguments\":{\"fact\":\"pizza place\"}}]",
+   "ok": true,
+   "ms": 5251.9
   },
   {
    "id": "note-search-c1",
@@ -603,7 +603,7 @@
    "pred": "note_search",
    "raw": "[{\"name\":\"note_search\",\"arguments\":{\"query\":\"wifi password\"}}]",
    "ok": true,
-   "ms": 1697.3
+   "ms": 4146.6
   },
   {
    "id": "note-search-p1",
@@ -613,10 +613,10 @@
     "note_search"
    ],
    "domain": "notes",
-   "pred": "get_time",
-   "raw": "[{\"name\":\"get_time\",\"arguments\":{\"query\":\"plumber quoted\"}}]",
+   "pred": "show_list",
+   "raw": "[{\"name\":\"show_list\",\"arguments\":{\"list_type\":\"plumber\"}}]",
    "ok": false,
-   "ms": 1934.2
+   "ms": 4540.1
   },
   {
    "id": "note-search-p2",
@@ -626,10 +626,10 @@
     "note_search"
    ],
    "domain": "notes",
-   "pred": "note_search",
-   "raw": "[{\"name\":\"note_search\",\"arguments\":{\"query\":\"gate code\"}}]",
-   "ok": true,
-   "ms": 1668.4
+   "pred": "get_time",
+   "raw": "[{\"name\":\"get_time\",\"arguments\":{\"query\":\"gate code\"}}]",
+   "ok": false,
+   "ms": 4405.4
   },
   {
    "id": "journal-c1",
@@ -640,9 +640,9 @@
    ],
    "domain": "journal",
    "pred": "journal",
-   "raw": "[{\"name\":\"journal\",\"arguments\":{\"content\":\"grateful for the rain today\",\"mood\":\"grateful\"}}]",
+   "raw": "[{\"name\":\"journal\",\"arguments\":{\"action\":\"create writes\",\"mood\":\"grateful for the rain today\"}}]",
    "ok": true,
-   "ms": 2646.5
+   "ms": 7079.6
   },
   {
    "id": "journal-c2",
@@ -653,9 +653,9 @@
    ],
    "domain": "journal",
    "pred": "journal",
-   "raw": "[{\"name\":\"journal\",\"arguments\":{\"action\":\"create_note\",\"content\":\"Had one\"}}]",
+   "raw": "[{\"name\":\"journal\",\"arguments\":{\"content\":\"today was a hard one\",\"action\":\"create writes\"}}]",
    "ok": true,
-   "ms": 2205.6
+   "ms": 4965.0
   },
   {
    "id": "journal-p1",
@@ -666,9 +666,9 @@
    ],
    "domain": "journal",
    "pred": "journal",
-   "raw": "[{\"name\":\"journal\",\"arguments\":{\"action\":\"create writes\",\"mood\":\"knocked\"}}]",
+   "raw": "[{\"name\":\"journal\",\"arguments\":{\"action\":\"create_note\",\"content\":\"knocked me around\"}}]",
    "ok": true,
-   "ms": 2469.3
+   "ms": 6066.7
   },
   {
    "id": "journal-p2",
@@ -681,7 +681,7 @@
    "pred": "journal",
    "raw": "[{\"name\":\"journal\",\"arguments\":{\"content\":\"last week\",\"action\":\"create writes\"}}]",
    "ok": true,
-   "ms": 2211.0
+   "ms": 3976.1
   },
   {
    "id": "people-c1",
@@ -692,9 +692,9 @@
    ],
    "domain": "people",
    "pred": "people",
-   "raw": "[{\"name\":\"people\",\"arguments\":{\"relationship\":\"colleague\",\"query\":\"colleague\"}}]",
+   "raw": "[{\"name\":\"people\",\"arguments\":{\"relationship\":\"marcus_colleague\",\"action\":\"created_marcus_id\",\"query\":\"colleague\"}}]",
    "ok": true,
-   "ms": 3728.6
+   "ms": 9248.1
   },
   {
    "id": "people-c2",
@@ -705,10 +705,10 @@
     "recall_memory"
    ],
    "domain": "people",
-   "pred": "show_calendar",
-   "raw": "[{\"name\":\"show_calendar\",\"arguments\":{\"qualifier\":\"Zephyrina\"}}]",
-   "ok": false,
-   "ms": 2128.1
+   "pred": "recall_memory",
+   "raw": "[{\"name\":\"recall_memory\",\"arguments\":{\"query\":\"Zephyrina\"}}]",
+   "ok": true,
+   "ms": 4323.8
   },
   {
    "id": "people-p1",
@@ -719,10 +719,10 @@
     "remember_fact"
    ],
    "domain": "people",
-   "pred": "",
-   "raw": " [{\"name\":\"general_chat\",\"arguments\":{\"relationship\":\"Kate\",\"action\":\"create\":\"a_sister_note\",\"query\":\"Kate by the way\"}}]",
-   "ok": false,
-   "ms": 3971.1
+   "pred": "remember_fact",
+   "raw": "[{\"name\":\"remember_fact\",\"arguments\":{\"fact\":\"Shared\"}}]",
+   "ok": true,
+   "ms": 8814.7
   },
   {
    "id": "people-p2",
@@ -733,10 +733,10 @@
     "recall_memory"
    ],
    "domain": "people",
-   "pred": "list_reminders",
-   "raw": "[{\"name\":\"list_reminders\",\"arguments\":{\"qualifier\":\"Dave\"}}]",
+   "pred": "show_list",
+   "raw": "[{\"name\":\"show_list\",\"arguments\":{\"list_type\":\"Dave\"}}]",
    "ok": false,
-   "ms": 1834.0
+   "ms": 4109.0
   },
   {
    "id": "media-c1",
@@ -747,9 +747,9 @@
    ],
    "domain": "music",
    "pred": "media",
-   "raw": "[{\"name\":\"media\",\"arguments\":{\"action\":\"player_track/tmp/player_track_a.mp3\"}}]",
+   "raw": "[{\"name\":\"media\",\"arguments\":{\"command\":\"player_track_a\",\"direction\":\"a\",\"query\":\"player_music_a\"}}]",
    "ok": true,
-   "ms": 2791.4
+   "ms": 7371.5
   },
   {
    "id": "media-c2",
@@ -762,7 +762,7 @@
    "pred": "",
    "raw": "[]",
    "ok": false,
-   "ms": 506.4
+   "ms": 1248.9
   },
   {
    "id": "media-c3",
@@ -772,10 +772,10 @@
     "media"
    ],
    "domain": "music",
-   "pred": "",
-   "raw": " [{\"name\":\"media\",\"arguments\":{\"action\":\"pause/track/artist/genre/track/tmp/night_playing\",\"direction\":\"a\",\"action\"}}]",
-   "ok": false,
-   "ms": 3792.3
+   "pred": "media",
+   "raw": "[{\"name\":\"media\",\"arguments\":{\"action\":\"pause/resume/tmp/player_track_a.mp3\",\"direction\":\"a\"}}]",
+   "ok": true,
+   "ms": 6042.7
   },
   {
    "id": "media-p1",
@@ -786,9 +786,9 @@
    ],
    "domain": "music",
    "pred": "general_chat",
-   "raw": "[{\"name\":\"general_chat\",\"arguments\":{\"command\":\"chit-chat\",\"action\":\"player\",\"direction\":\"that\"}}]",
+   "raw": "[{\"name\":\"general_chat\",\"arguments\":{}}]",
    "ok": false,
-   "ms": 3356.6
+   "ms": 2731.3
   },
   {
    "id": "media-p2",
@@ -799,9 +799,9 @@
    ],
    "domain": "music",
    "pred": "media",
-   "raw": "[{\"name\":\"media\",\"arguments\":{\"direction\":\"fast\",\"action\":\"start\"}}]",
+   "raw": "[{\"name\":\"media\",\"arguments\":{\"action\":\"player_track_a\",\"direction\":\"fast\",\"query\":\"player_a_player\"}}]",
    "ok": true,
-   "ms": 1846.2
+   "ms": 6649.1
   },
   {
    "id": "media-p3",
@@ -811,10 +811,10 @@
     "media"
    ],
    "domain": "music",
-   "pred": "general_chat",
-   "raw": "[{\"name\":\"general_chat\",\"arguments\":{}}]",
+   "pred": "",
+   "raw": " [{\"name\":\"recall_memory\",\"arguments\":{\"query\":\"Spamy\",\"query\",\"query\":\"Spamet\"}}]",
    "ok": false,
-   "ms": 1488.9
+   "ms": 6152.3
   },
   {
    "id": "home-c1",
@@ -827,7 +827,7 @@
    "pred": "home",
    "raw": "[{\"name\":\"home\",\"arguments\":{\"room\":\"kitchen\",\"action\":\"off\"}}]",
    "ok": true,
-   "ms": 1745.0
+   "ms": 3434.8
   },
   {
    "id": "home-c2",
@@ -838,9 +838,9 @@
    ],
    "domain": "smart_home",
    "pred": "home",
-   "raw": "[{\"name\":\"home\",\"arguments\":{\"action\":\"dim\",\"room\":\"lounge room\"}}]",
+   "raw": "[{\"name\":\"home\",\"arguments\":{\"room\":\"lounge room\",\"action\":\"dim\"}}]",
    "ok": true,
-   "ms": 2028.5
+   "ms": 4764.2
   },
   {
    "id": "home-p1",
@@ -853,7 +853,7 @@
    "pred": "",
    "raw": "[]",
    "ok": false,
-   "ms": 567.0
+   "ms": 1295.0
   },
   {
    "id": "home-p2",
@@ -864,9 +864,9 @@
    ],
    "domain": "smart_home",
    "pred": "general_chat",
-   "raw": "[{\"name\":\"general_chat\",\"arguments\":{\"action\":\"stop\",\"direction\":\"bedroom\",\"query\":\"moving downstairs\"}}]",
+   "raw": "[{\"name\":\"general_chat\",\"arguments\":{}}]",
    "ok": false,
-   "ms": 3250.9
+   "ms": 3600.8
   },
   {
    "id": "recall-c1",
@@ -879,7 +879,7 @@
    "pred": "recall_memory",
    "raw": "[{\"name\":\"recall_memory\",\"arguments\":{\"query\":\"me\"}}]",
    "ok": true,
-   "ms": 2066.4
+   "ms": 3892.1
   },
   {
    "id": "recall-c2",
@@ -892,7 +892,7 @@
    "pred": "recall_memory",
    "raw": "[{\"name\":\"recall_memory\",\"arguments\":{\"query\":\"my name\"}}]",
    "ok": true,
-   "ms": 3206.7
+   "ms": 3823.0
   },
   {
    "id": "recall-p1",
@@ -902,10 +902,10 @@
     "recall_memory"
    ],
    "domain": "memory",
-   "pred": "",
-   "raw": " [{\"name\":\"recall_memory\",\"arguments\":{\"query\":\"work situation\",\"query\"}}]",
-   "ok": false,
-   "ms": 2880.4
+   "pred": "recall_memory",
+   "raw": "[{\"name\":\"recall_memory\",\"arguments\":{\"query\":\"work situation\"}}]",
+   "ok": true,
+   "ms": 4752.9
   },
   {
    "id": "recall-p2",
@@ -916,9 +916,9 @@
    ],
    "domain": "memory",
    "pred": "recall_memory",
-   "raw": "[{\"name\":\"recall_memory\",\"arguments\":{\"query\":\"knee\"}}]",
+   "raw": "[{\"name\":\"recall_memory\",\"arguments\":{\"query\":\"my knee\"}}]",
    "ok": true,
-   "ms": 2249.8
+   "ms": 6748.8
   },
   {
    "id": "fact-c1",
@@ -929,9 +929,9 @@
    ],
    "domain": "memory",
    "pred": "remember_fact",
-   "raw": "[{\"name\":\"remember_fact\",\"arguments\":{\"fact\":\"green\"}}]",
+   "raw": "[{\"name\":\"remember_fact\",\"arguments\":{\"fact\":\"my favourite colour\"}}]",
    "ok": true,
-   "ms": 3518.2
+   "ms": 8631.4
   },
   {
    "id": "fact-c2",
@@ -942,9 +942,9 @@
    ],
    "domain": "memory",
    "pred": "remember_fact",
-   "raw": "[{\"name\":\"remember_fact\",\"arguments\":{\"fact\":\"remember I'm allergic to penicillin\"}}]",
+   "raw": "[{\"name\":\"remember_fact\",\"arguments\":{\"fact\":\"I'm allergic to peanuts\"}}]",
    "ok": true,
-   "ms": 4679.7
+   "ms": 7139.5
   },
   {
    "id": "fact-p1",
@@ -954,10 +954,10 @@
     "remember_fact"
    ],
    "domain": "memory",
-   "pred": "add_reminder",
-   "raw": "[{\"name\":\"add_reminder\",\"arguments\":{\"time\":\"2:30\",\"title\":\"work\"}}]",
-   "ok": false,
-   "ms": 2029.6
+   "pred": "remember_fact",
+   "raw": "[{\"name\":\"remember_fact\",\"arguments\":{\"fact\":\"2:30 on fridays\"}}]",
+   "ok": true,
+   "ms": 6489.8
   },
   {
    "id": "fact-p2",
@@ -969,9 +969,9 @@
    ],
    "domain": "memory",
    "pred": "remember_fact",
-   "raw": "[{\"name\":\"remember_fact\",\"arguments\":{\"fact\":\"south\"}}]",
+   "raw": "[{\"name\":\"remember_fact\",\"arguments\":{\"fact\":\"my_dog_name\"}}]",
    "ok": true,
-   "ms": 2961.3
+   "ms": 8353.9
   },
   {
    "id": "chat-1",
@@ -981,10 +981,10 @@
     "general_chat"
    ],
    "domain": "chat",
-   "pred": "show_calendar",
-   "raw": "[{\"name\":\"show_calendar\",\"arguments\":{\"qualifier\":\"this month\"}}]",
+   "pred": "list_reminders",
+   "raw": "[{\"name\":\"list_reminders\",\"arguments\":{\"qualifier\":\"general_chat\"}}]",
    "ok": false,
-   "ms": 1856.2
+   "ms": 4002.9
   },
   {
    "id": "chat-2",
@@ -994,10 +994,10 @@
     "general_chat"
    ],
    "domain": "chat",
-   "pred": "note_search",
-   "raw": "[{\"name\":\"note_search\",\"arguments\":{\"query\":\"octopuses\"}}]",
-   "ok": false,
-   "ms": 1942.3
+   "pred": "general_chat",
+   "raw": "[{\"name\":\"general_chat\",\"arguments\":{}}]",
+   "ok": true,
+   "ms": 3036.7
   },
   {
    "id": "chat-3",
@@ -1009,10 +1009,10 @@
     "remember_emotional_moment"
    ],
    "domain": "chat",
-   "pred": "create_note",
-   "raw": "[{\"name\":\"create_note\",\"arguments\":{\"content\":\"work\",\"title\":\"rough day\"}}]",
-   "ok": false,
-   "ms": 2128.1
+   "pred": "remember_emotional_moment",
+   "raw": "[{\"name\":\"remember_emotional_moment\",\"arguments\":{\"moment\":\"work\",\"valence\":\"recall_memory\"}}]",
+   "ok": true,
+   "ms": 6552.2
   },
   {
    "id": "chat-4",
@@ -1022,10 +1022,10 @@
     "general_chat"
    ],
    "domain": "chat",
-   "pred": "get_time",
-   "raw": "[{\"name\":\"get_time\",\"arguments\":{\"query\":\"what do you think about while I'm asleep\"}}]",
+   "pred": "show_calendar",
+   "raw": "[{\"name\":\"show_calendar\",\"arguments\":{\"qualifier\":\"what do you think about while I'm asleep\"}}]",
    "ok": false,
-   "ms": 2802.5
+   "ms": 5197.1
   },
   {
    "id": "chat-5",
@@ -1035,10 +1035,10 @@
     "general_chat"
    ],
    "domain": "chat",
-   "pred": "journal",
-   "raw": "[{\"name\":\"journal\",\"arguments\":{\"content\":\"sky blue\",\"mood\":\"blue\"}}]",
+   "pred": "create_note",
+   "raw": "[{\"name\":\"create_note\",\"arguments\":{\"content\":\"sky blue\",\"title\":\"sky blue\"}}]",
    "ok": false,
-   "ms": 2440.5
+   "ms": 4999.5
   },
   {
    "id": "chat-6",
@@ -1049,9 +1049,9 @@
    ],
    "domain": "chat",
    "pred": "general_chat",
-   "raw": "[{\"name\":\"general_chat\",\"arguments\":{\"command\":\"player_name_a\",\"action\":\"start\",\"direction\":\"next\"}}]",
+   "raw": "[{\"name\":\"general_chat\",\"arguments\":{}}]",
    "ok": true,
-   "ms": 3304.6
+   "ms": 2309.9
   },
   {
    "id": "chat-7",
@@ -1062,9 +1062,9 @@
    ],
    "domain": "chat",
    "pred": "general_chat",
-   "raw": "[{\"name\":\"general_chat\",\"arguments\":{\"label\":\"grow\"}}]",
+   "raw": "[{\"name\":\"general_chat\",\"arguments\":{\"query\":\"haircut\"}}]",
    "ok": true,
-   "ms": 2381.6
+   "ms": 3500.2
   },
   {
    "id": "chat-8",
@@ -1077,7 +1077,7 @@
    "pred": "",
    "raw": "[]",
    "ok": false,
-   "ms": 501.0
+   "ms": 1172.8
   }
  ]
 }

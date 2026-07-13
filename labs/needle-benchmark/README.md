@@ -25,7 +25,7 @@ misses"), 8 chat. Box: Jetson Orin NX 16GB, CPU-only, live services running.
 | **Baseline** Tier-0 regex + Tier-1 bge-small (generously scored) | **61.7%** | 85.3% | 35.9% | 87.5% |
 | Needle, full 20-tool block | 30.9% | 52.9% | 17.9% | **0.0%** |
 | Needle, own-retrieval top-3 shortlist | 13.6% | 17.6% | 12.8% | 0.0% |
-| Needle, **oracle** 3-tool shortlist (decoder best case) | 66.7% | 88.2% | **56.4%** | 25.0% |
+| Needle, **oracle** shortlist (decoder best case; all valid labels in the candidate set) | 79.0% | 94.1% | **71.8%** | 50.0% |
 
 - **Full mode is structurally broken**: Zoe's 20-tool schema is **1,924 Needle
   tokens vs the model's 1,024-token encoder cap** — 8 of 21 tools (journal,
@@ -35,11 +35,13 @@ misses"), 8 chat. Box: Jetson Orin NX 16GB, CPU-only, live services running.
   returns **all-zero embeddings** for every input (verified directly), so
   Needle's built-in tool-shortlisting always returns the same 3 tools.
   Shortlist-by-own-retrieval is therefore nonfunctional out of the box.
-- Even with an **oracle** prefilter (expected tool guaranteed in a 3-tool
+- Even with an **oracle** prefilter (every valid tool guaranteed in the
   candidate set — the ceiling for a bge-prefiltered deployment), Needle beats
-  the baseline on paraphrases (56.4% vs 35.9%) but **misroutes 75% of chat
-  turns into a tool call** (chat 25%). An authoritative router that hijacks
-  conversational turns is disqualifying for Samantha-grade conversation.
+  the baseline on paraphrases (71.8% vs 35.9%) but still **misroutes half of
+  chat turns into a tool call** (chat 50%). An authoritative router that
+  hijacks conversational turns is disqualifying for Samantha-grade
+  conversation — and this ceiling assumes a perfect prefilter Needle itself
+  cannot provide (its retrieval head is dead).
 - Baseline detail: Tier-0 regex hit 32/81 (100% precise when it hits);
   paraphrase coverage is the real gap — 21/39 paraphrases fell to the brain.
 
@@ -50,7 +52,10 @@ Steady-state per decision (post-XLA-compile), JAX reference runtime, CPU:
 | mode | p50 | p90 |
 |---|---|---|
 | full block (enc 1024) | 3,612 ms | 4,387 ms |
-| oracle 3-tool (enc 512) | 2,179 ms | 3,357 ms |
+| oracle shortlist (enc 512) | 5,002 ms | 7,080 ms |
+
+(Oracle-run latencies varied 2.2–5.0 s p50 across runs on the busy live box;
+either end of that range is still ~50–100x off target.)
 
 Decomposition (enc 512): encoder ≈ 250 ms; **each decode token ≈ 95 ms**
 because the reference decoder re-runs the whole buffer per token (no KV
@@ -144,9 +149,9 @@ two efforts for a role the box nearly covers already.
 ## Reproduce
 
 ```bash
-WORK=~/needle-work bash labs/needle-benchmark/setup.sh
+B="$(git rev-parse --show-toplevel)/labs/needle-benchmark"   # run from inside your checkout
+WORK=~/needle-work bash "$B/setup.sh"
 cd $WORK
-B=/home/zoe/assistant/labs/needle-benchmark
 PYTHONPATH=$WORK ./venv/bin/python $B/needle_bench.py --ckpt ckpt/needle.pkl --mode full      --out $B/results/needle_full.json
 PYTHONPATH=$WORK ./venv/bin/python $B/needle_bench.py --ckpt ckpt/needle.pkl --mode retrieval --out $B/results/needle_retrieval.json
 PYTHONPATH=$WORK ./venv/bin/python $B/needle_bench.py --ckpt ckpt/needle.pkl --mode shortlist --out $B/results/needle_shortlist.json
