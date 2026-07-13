@@ -8,6 +8,13 @@ timestamp: 2026-07-07T00:30:00Z
 
 # Fable-day handoff — 2026-07-07
 
+> **STATUS UPDATE (2026-07-13):** this is a point-in-time handoff. **P-W0 is DONE** —
+> merged as #1160, and the spoken positive control passed on 2026-07-13 after #1282
+> fixed the transcript-save bugs it exposed (no Jason-spoken turn needed; run via the
+> panel-bound device token). The current NEXT ACTION lives in
+> `docs/architecture/samantha-evolution-plan.md` §7 (now **W3.1**), which supersedes
+> the pointers below.
+
 This session built the **post-memory Samantha evolution plan** end-to-end and audited
 the whole codebase. Everything of substance lives in the repo (nothing is only in the
 chat). Statuses as of 2026-07-07 ~00:30 AWST — verify merge states before acting.
