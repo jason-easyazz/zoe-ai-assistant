@@ -266,3 +266,44 @@ def test_turn_digest_reconcile_error_falls_back_to_add(monkeypatch):
     assert [t for t, _ in svc.ingested] == ["User's father's name is Neil."], \
         "a reconciliation error must never lose the fact"
     assert result.get("new", 0) == 1
+
+
+@pytest.mark.asyncio
+async def test_reconcile_search_is_patient_and_falls_back(caplog):
+    """The write-path reconcile must ask for a LONG search timeout (the 2s
+    default fails open under load, silently degrading corrections to ADD),
+    and must still work with services lacking the timeout_s kwarg."""
+    from memory_quality import reconcile_for_ingest
+
+    seen: dict = {}
+
+    class _PatientSvc:
+        async def search(self, text, *, user_id, limit, timeout_s=None):
+            seen["timeout_s"] = timeout_s
+            return []
+
+    await reconcile_for_ingest(_PatientSvc(), "my dad's name is Kevin", "u1")
+    assert seen["timeout_s"] and seen["timeout_s"] >= 10.0
+
+    class _LegacySvc:
+        async def search(self, text, *, user_id, limit):
+            return []
+
+    op, target = await reconcile_for_ingest(_LegacySvc(), "my dad's name is Kevin", "u1")
+    assert (op, target) == ("add", None)
+
+
+@pytest.mark.asyncio
+async def test_reconcile_empty_hits_logs_warning(caplog):
+    """A no-hit reconcile (timeout/cold store) skips supersession — that must
+    be VISIBLE at warning, not buried at debug."""
+    import logging
+    from memory_quality import reconcile_for_ingest
+
+    class _EmptySvc:
+        async def search(self, text, *, user_id, limit, timeout_s=None):
+            return []
+
+    with caplog.at_level(logging.WARNING):
+        await reconcile_for_ingest(_EmptySvc(), "my dad's name is Kevin", "u1")
+    assert any("without supersession check" in r.getMessage() for r in caplog.records)
