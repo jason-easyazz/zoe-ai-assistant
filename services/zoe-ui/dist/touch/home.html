@@ -162,6 +162,9 @@
   /* Settings — expanding sections */
   .remf{position:absolute;inset:0;padding:110px 150px 158px;display:flex;flex-direction:column}
   .remf .remlist{overflow-y:auto;flex:1}
+  .remrow{display:flex;gap:16px;align-items:baseline;padding:12px 4px;border-bottom:1px solid rgba(255,255,255,.08)}
+  .remrow .rw{font-size:18px;color:var(--ink-faint);min-width:130px;flex:none;font-variant-numeric:tabular-nums}
+  .remrow .rt2{font-size:21px;font-weight:500;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
   .setf{position:absolute;inset:0;padding:100px 200px 150px;display:flex;flex-direction:column;overflow-y:auto}
   .setsec{background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.09);border-radius:20px;margin-bottom:14px;overflow:hidden}
   .setsec .sh{display:flex;align-items:center;gap:14px;padding:20px 24px;cursor:pointer;font-size:22px;font-weight:500}
@@ -202,7 +205,12 @@
   .estmc .btns button{flex:1;height:54px;border-radius:14px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:var(--ink);font:inherit;font-size:19px;cursor:pointer}
   .estmc .btns .save{background:var(--accent);border-color:transparent;color:#fff;font-weight:600}
   .estmc .btns .del{background:rgba(255,122,144,.14);border-color:rgba(255,122,144,.4);color:#ff9db0}
-  .ctcard .ctacts{display:flex;gap:12px;margin-top:20px}
+  .ctcard .ctacts{display:flex;gap:12px;margin-top:20px;flex-wrap:wrap}
+  .ctchips{display:flex;flex-wrap:wrap;gap:8px}
+  .ctchip{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;background:rgba(123,150,255,.14);border:1px solid rgba(123,150,255,.3);font-size:17px;cursor:pointer}
+  .ctchip small{color:var(--ink-faint);font-size:13px}
+  .ctchip .x{color:var(--ink-faint);font-weight:600;padding:0 2px;cursor:pointer}
+  .estmc select{width:100%;height:52px;border-radius:12px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:var(--ink);font:inherit;font-size:19px;padding:0 12px;margin-bottom:6px}
   .ctcard .ctacts button{flex:1;height:50px;border-radius:13px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:var(--ink);font:inherit;font-size:18px;cursor:pointer}
   .ctcard .ctacts .del{background:rgba(255,122,144,.14);border-color:rgba(255,122,144,.4);color:#ff9db0}
   .cev{cursor:pointer}.cwe{cursor:pointer}.caldaylist .dev{cursor:pointer}
@@ -374,8 +382,9 @@
   .rm .rtp{position:relative;display:flex;align-items:center;justify-content:center;gap:44px;margin-top:22px}
   .rm .rtp button svg{width:26px;height:26px}
   .rm .rtp .pp svg{width:30px;height:30px;color:#0a0d18}
-  .rm .rvol{position:relative;display:flex;align-items:center;justify-content:center;gap:22px;margin-top:18px;color:rgba(255,255,255,.6);font-size:17px}
-  .rm .rvol button{width:52px;height:52px;border-radius:50%;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.1);color:#fff;font-size:26px;cursor:pointer}
+  .rm .rvol{position:relative;display:flex;align-items:center;justify-content:center;gap:14px;margin-top:18px;color:rgba(255,255,255,.6);font-size:16px}
+  .rm .rvol input[type=range]{flex:1;max-width:300px;accent-color:#fff;height:40px}
+  .rm .rvol .vv{min-width:44px;text-align:left;font-variant-numeric:tabular-nums}
   .rm .rtp button{width:58px;height:58px;border-radius:50%;border:0;background:rgba(255,255,255,.14);color:#fff;font-size:20px;cursor:pointer}
   .rm .rtp .pp{width:66px;height:66px;background:#fff;color:#10131c;font-size:23px}
   .rm .rlights{position:absolute;right:130px;top:150px;width:440px;display:grid;grid-template-columns:1fr 1fr;gap:14px}
@@ -624,7 +633,7 @@
       html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Reminders</div><div class="chmeta" id="remMeta"></div><div class="remf"><div id="remList" class="remlist"></div></div>'},
     rooms:{home:true, bg:GROUND, canvas:false,
       html:'<div class="fcog">'+GEAR+'</div><div class="rm"><div class="rchips" id="rmScenes"></div>'
-        +'<div class="rhero" id="rmHero" style="display:none"><div class="cover"></div><div class="rhead"><div class="rart" id="rmArt">🎵</div><div><div class="rk">Now Playing</div><div class="rt" id="rmT"></div><div class="ra" id="rmA"></div></div></div><div class="rscrub"><div class="f" id="rmF" style="width:0%"></div></div><div class="rtp"><button data-a="previous">'+PREV_I+'</button><button class="pp" id="rmPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button></div><div class="rvol"><button data-va="volume_down">−</button><span>Volume</span><button data-va="volume_up">+</button></div></div>'
+        +'<div class="rhero" id="rmHero" style="display:none"><div class="cover"></div><div class="rhead"><div class="rart" id="rmArt">🎵</div><div><div class="rk">Now Playing</div><div class="rt" id="rmT"></div><div class="ra" id="rmA"></div></div></div><div class="rscrub"><div class="f" id="rmF" style="width:0%"></div></div><div class="rtp"><button data-a="previous">'+PREV_I+'</button><button class="pp" id="rmPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button></div><div class="rvol"><span class="vlab">Vol</span><input type="range" min="0" max="100" step="2" id="rmVol"><span class="vv" id="rmVolV"></span></div></div>'
         +'<div class="rlights" id="rmLights"></div></div>'}
   };
 
@@ -1009,7 +1018,12 @@
       if(f)f.style.width=(np.duration?Math.min(100,(np.elapsed||0)/np.duration*100):0)+'%';
       if(pp){var pl=(np.state==='playing');pp.dataset.playing=pl?'1':'0';pp.innerHTML=pl?PAUSE_I:PLAY_I;}
       hero.querySelector('.rtp').onclick=function(e){var btn=e.target.closest('button');if(!btn)return;var act=btn.getAttribute('data-a');musicControl(act==='playpause'?(pp.dataset.playing==='1'?'pause':'play'):act);};
-      var rv=hero.querySelector('.rvol');if(rv)rv.onclick=function(e){var btn=e.target.closest('button[data-va]');if(btn)musicControl(btn.getAttribute('data-va'));};
+      var rv=document.getElementById('rmVol'),rvv=document.getElementById('rmVolV');
+      if(rv&&np.volume!=null&&document.activeElement!==rv){rv.value=Math.round(np.volume);if(rvv)rvv.textContent=Math.round(np.volume)+'%';}
+      if(rv&&!rv.dataset.wired){rv.dataset.wired='1';var _vt=null;
+        rv.oninput=function(){if(rvv)rvv.textContent=rv.value+'%';
+          if(_vt)clearTimeout(_vt);
+          _vt=setTimeout(function(){fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({action:'volume_set',player_id:_music.player_id||'',value:+rv.value})}).catch(function(){});},250);};}
     }).catch(function(){});
     _wxTick=setInterval(function(){if(_cur==='rooms')loadHA(paint);},30000);
   }
@@ -1033,16 +1047,47 @@
   }
 
   // ---- Reminders card (real reminders) ----
+  // Format a reminder's "when" from its separate due_date (YYYY-MM-DD) and
+  // due_time (bare "HH:MM"). Handles date+time, date-only, time-only, a full
+  // ISO datetime in due_time, and '' for absent/unparseable values — guarding
+  // against new Date(bad) whose .toLocaleString() renders "Invalid Date".
+  // (Reinstated: the #1263 fix was clobbered by a parallel home.html merge.)
+  function fmtRemWhen(r){
+    var d=r&&r.due_date,t=r&&r.due_time;
+    var m=String(t||'').trim().match(/^(\d{1,2}):(\d{2})/);
+    var tt=m?(('0'+m[1]).slice(-2)+':'+m[2]):'';
+    if(d){var dt=new Date(String(d)+'T'+(tt||'00:00'));
+      if(!isNaN(dt.getTime()))return dt.toLocaleString(undefined,tt?{weekday:'short',hour:'numeric',minute:'2-digit'}:{weekday:'short',month:'short',day:'numeric'});}
+    if(tt){var d2=new Date('1970-01-01T'+tt);if(!isNaN(d2.getTime()))return d2.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'});}
+    if(t){var d3=new Date(t);if(!isNaN(d3.getTime()))return d3.toLocaleString(undefined,{weekday:'short',hour:'numeric',minute:'2-digit'});}
+    return '';
+  }
   function wireReminder(){
     var ttl=document.getElementById('remMeta'),host=document.getElementById('remList');
     apiGet('/api/reminders/').then(function(d){if(_cur!=='reminder')return;
       var rs=(d&&d.reminders)||[];
       if(!rs.length){if(ttl)ttl.textContent='';if(host)host.innerHTML='<div style="color:var(--ink-faint);font-size:22px;padding-top:8px">No reminders set — ask Zoe to remind you of something.</div>';return;}
       if(ttl)ttl.textContent=rs.length+' reminder'+(rs.length===1?'':'s');
-      if(host)host.innerHTML=rs.slice(0,5).map(function(r){var when='';
-        if(r.due_time){try{when=new Date(r.due_time).toLocaleString(undefined,{weekday:'short',hour:'numeric',minute:'2-digit'});}catch(e){when=String(r.due_time);}}
-        return '<div style="display:flex;gap:14px;align-items:baseline;padding:10px 0;border-top:1px solid rgba(255,255,255,.08)"><span style="font-size:18px;color:var(--ink-faint);min-width:120px">'+esc(when)+'</span><span style="font-size:21px;font-weight:500">'+esc(r.title||r.message||'Reminder')+'</span></div>';}).join('');
+      if(host){host.innerHTML=rs.slice(0,12).map(function(r){var when=fmtRemWhen(r);
+        return '<div class="remrow" data-rid="'+esc(String(r.id))+'"><span class="rw">'+esc(when||'—')+'</span><span class="rt2">'+esc(r.title||r.message||'Reminder')+'</span><span class="lact"><button data-act="edit" title="Edit">✎</button><button class="del" data-act="del" title="Delete">✕</button></span></div>';}).join('');
+        host.onclick=function(e){var row=e.target.closest('.remrow');if(!row)return;
+          var rid=row.getAttribute('data-rid'),rem=rs.filter(function(x){return String(x.id)===rid;})[0];if(!rem)return;
+          var act=e.target.closest('[data-act]');if(!act)return;
+          if(act.getAttribute('data-act')==='del'){estConfirm('Delete “'+(rem.title||'this reminder')+'”?',function(){
+            apiJson('DELETE','/api/reminders/'+encodeURIComponent(rid)).then(function(){wireReminder();}).catch(function(){toast('Couldn’t delete');});});return;}
+          editReminder(rem);};}
     }).catch(function(){if(ttl)ttl.textContent='Couldn’t load reminders';});
+  }
+  function editReminder(rem){
+    estOpen('<h3>Edit reminder</h3>'
+      +'<label>Reminder</label><input data-f="title" value="'+esc(rem.title||'')+'">'
+      +'<div class="erow" style="margin-top:0"><div style="flex:1"><label>Date</label><input data-f="due_date" type="date" value="'+esc(rem.due_date||'')+'"></div><div style="width:130px"><label>Time</label><input data-f="due_time" value="'+esc(rem.due_time||'')+'" placeholder="HH:MM"></div></div>'
+      +'<div class="btns"><button data-x="cancel">Cancel</button><button class="save" data-x="save">Save</button></div>');
+    var m=document.getElementById('estModal');
+    m.querySelector('[data-x="cancel"]').onclick=estClose;
+    m.querySelector('[data-x="save"]').onclick=function(){var body={};m.querySelectorAll('input[data-f]').forEach(function(i){body[i.getAttribute('data-f')]=i.value.trim()||null;});
+      if(!body.title){toast('The reminder needs a name');return;}
+      apiJson('PUT','/api/reminders/'+encodeURIComponent(rem.id),body).then(function(){estClose();wireReminder();}).catch(function(){toast('Couldn’t save reminder');});};
   }
 
   // ---- Lists: full multi-column board (all lists, toggle, add, create) ----
@@ -1161,17 +1206,69 @@
         fetch('http://localhost:7777/activate',{method:'POST',signal:AbortSignal.timeout(800)})
           .catch(function(){var cb=document.getElementById('cmdbar');if(cb){cb.classList.add('on');var ci=document.getElementById('cmdin');if(ci){ci.placeholder='Who are you looking for?';setTimeout(function(){ci.focus();},60);}}});
       };
-      grid.onclick=function(e){var t=e.target.closest('.cttile');if(!t)return;var pn=ps[+t.getAttribute('data-i')];if(!pn)return;
+      // Detail card is a function so relationship chips can hop between people.
+      function openContact(pn,idx){
         var rows=[['Relationship',pn.relationship],['Phone',pn.phone],['Email',pn.email],['Birthday',pn.birthday],['Notes',pn.notes]]
           .filter(function(r){return r[1];})
           .map(function(r){return '<div class="ctrow"><span class="cl">'+r[0]+'</span><span>'+esc(String(r[1]))+'</span></div>';}).join('')
           ||'<div class="ctrow"><span class="cl"></span><span style="color:var(--ink-faint)">No details yet — just a name.</span></div>';
-        det.innerHTML='<div class="ctcard"><div class="cthead"><div class="pav" style="background:'+PAVC[(+t.getAttribute('data-i'))%PAVC.length]+'">'+esc((pn.name||'?').charAt(0).toUpperCase())+'</div><div><h2>'+esc(pn.name||'')+'</h2>'+(pn.relationship?'<div class="ctrel">'+esc(pn.relationship)+'</div>':'')+'</div></div>'+rows+'<div class="ctacts"><button data-x="edit">Edit</button><button class="del" data-x="del">Delete</button><button data-x="close">Close</button></div></div>';
+        det.innerHTML='<div class="ctcard"><div class="cthead"><div class="pav" style="background:'+PAVC[(idx||0)%PAVC.length]+'">'+esc((pn.name||'?').charAt(0).toUpperCase())+'</div><div><h2>'+esc(pn.name||'')+'</h2>'+(pn.relationship?'<div class="ctrel">'+esc(pn.relationship)+'</div>':'')+'</div></div>'+rows
+          +'<div class="ctfam"><div class="cl" style="margin:14px 0 8px">Family &amp; links</div><div class="ctchips" id="ctRels"><span style="color:var(--ink-faint);font-size:16px">Loading…</span></div></div>'
+          +'<div class="ctacts"><button data-x="link">＋ Link person</button><button data-x="edit">Edit</button><button class="del" data-x="del">Delete</button><button data-x="close">Close</button></div></div>';
         det.classList.add('on');
+        // Linked people: the person_relationships graph (spouse/parent/child/…).
+        // A "sub-contact" (a friend's kid) is a partial contact created by name
+        // and linked here — it's a real person row, so search finds it too.
+        apiJson('GET','/api/people/'+encodeURIComponent(pn.id)+'/relationships').then(function(rd){
+          var host=document.getElementById('ctRels');if(!host)return;
+          // Response is grouped by circle: {love:[…],family:[…],friend:[…],work:[…]}
+          var g=(rd&&rd.relationships)||{},rels=[];
+          Object.keys(g).forEach(function(k){(g[k]||[]).forEach(function(rl){rels.push(rl);});});
+          host.innerHTML=rels.map(function(rl){
+            return '<span class="ctchip" data-oid="'+esc(String(rl.person_id||''))+'" data-rid="'+esc(String(rl.rel_id||''))+'">'+esc(rl.name||'?')+' <small>'+esc(rl.label||rl.rel_type||'')+'</small><b class="x" title="Unlink">×</b></span>';}).join('')
+            ||'<span style="color:var(--ink-faint);font-size:16px">No links yet.</span>';
+          host.onclick=function(ev){
+            var chip=ev.target.closest('.ctchip');if(!chip)return;
+            if(ev.target.closest('.x')){estConfirm('Remove this link?',function(){
+              apiJson('DELETE','/api/people/'+encodeURIComponent(pn.id)+'/relationships/'+encodeURIComponent(chip.getAttribute('data-rid')))
+                .then(function(){openContact(pn,idx);}).catch(function(){toast('Couldn’t unlink');});});return;}
+            var oid=chip.getAttribute('data-oid');var other=ps.filter(function(x){return String(x.id)===oid;})[0];
+            if(other)openContact(other,ps.indexOf(other));
+            else apiJson('GET','/api/people/'+encodeURIComponent(oid)).then(function(pp){openContact(pp.person||pp,0);}).catch(function(){});
+          };
+        }).catch(function(){var host=document.getElementById('ctRels');if(host)host.innerHTML='<span style="color:var(--ink-faint);font-size:16px">Couldn’t load links.</span>';});
         det.onclick=function(ev){if(ev.target===det||ev.target.closest('[data-x="close"]'))det.classList.remove('on');
           if(ev.target.closest('[data-x="del"]')){det.classList.remove('on');estConfirm('Delete '+(pn.name||'this contact')+'?',function(){
             apiJson('DELETE','/api/people/'+encodeURIComponent(pn.id)).then(function(){wireContacts();}).catch(function(){toast('Couldn’t delete');});});}
-          if(ev.target.closest('[data-x="edit"]')){editContact(pn);}};};
+          if(ev.target.closest('[data-x="edit"]')){editContact(pn);}
+          if(ev.target.closest('[data-x="link"]')){linkPerson(pn,function(){openContact(pn,idx);});}};
+      }
+      grid.onclick=function(e){var t=e.target.closest('.cttile');if(!t)return;var i=+t.getAttribute('data-i');var pn=ps[i];if(pn)openContact(pn,i);};
+      // "＋ Link person": link an existing contact OR create a new (sub-)contact
+      // by name — create_partial makes the person row + the typed edge in one call.
+      function linkPerson(pn,done){
+        apiJson('GET','/api/people/relationship-types').then(function(tp){
+          var flat=[];Object.keys((tp&&tp.types)||{}).forEach(function(g){(tp.types[g]||[]).forEach(function(t2){flat.push(t2);});});
+          var opts=flat.map(function(t2){return '<option value="'+esc(t2.key)+'">'+esc(t2.label_b||t2.key)+' of '+esc(pn.name||'them')+'</option>';}).join('');
+          var existing=ps.filter(function(x){return x.id!==pn.id;}).map(function(x){return '<option value="'+esc(String(x.id))+'">'+esc(x.name||'?')+'</option>';}).join('');
+          estOpen('<h3>Link a person to '+esc(pn.name||'')+'</h3>'
+            +'<label>Who</label><select data-f="oid"><option value="">— New person —</option>'+existing+'</select>'
+            +'<label>New person’s name</label><input data-f="nname" placeholder="Only for a new person">'
+            +'<label>They are the…</label><select data-f="rel">'+opts+'</select>'
+            +'<div class="btns"><button data-x="cancel">Cancel</button><button class="save" data-x="save">Link</button></div>');
+          var m=document.getElementById('estModal');
+          m.querySelector('[data-x="cancel"]').onclick=estClose;
+          m.querySelector('[data-x="save"]').onclick=function(){
+            var oid=m.querySelector('[data-f="oid"]').value,nname=m.querySelector('[data-f="nname"]').value.trim(),rel=m.querySelector('[data-f="rel"]').value;
+            var body={rel_type:rel};
+            if(oid)body.other_person_id=oid;
+            else if(nname){body.other_person_name=nname;body.create_partial=true;}
+            else{toast('Pick a person or type a name');return;}
+            apiJson('POST','/api/people/'+encodeURIComponent(pn.id)+'/relationships',body)
+              .then(function(){estClose();wireContacts();if(done)done();})
+              .catch(function(){toast('Couldn’t link');});};
+        }).catch(function(){toast('Couldn’t load relationship types');});
+      }
     }).catch(function(){if(grid)grid.innerHTML='<div style="color:var(--ink-faint);font-size:20px">Sign in to see your contacts.</div>';});
   }
 
@@ -1338,7 +1435,7 @@
     apiGet('/api/reminders/').then(function(d2){if(_cur!=='day'||!rems)return;
       var rs=(d2&&d2.reminders)||[];
       if(!rs.length){rems.innerHTML='<div class="drem" style="opacity:.6"><span class="rt"></span><span>Nothing set</span></div>';return;}
-      rems.innerHTML=rs.slice(0,5).map(function(r){var when='';if(r.due_time){try{when=new Date(r.due_time).toLocaleString(undefined,{weekday:'short',hour:'numeric',minute:'2-digit'});}catch(e){when=String(r.due_time);}}
+      rems.innerHTML=rs.slice(0,5).map(function(r){var when=fmtRemWhen(r);
         return '<div class="drem"><span class="rt">'+esc(when)+'</span><span>'+esc(r.title||'Reminder')+'</span></div>';}).join('');
     }).catch(function(){rems.innerHTML='<div class="drem" style="opacity:.6"><span class="rt"></span><span>Couldn’t load</span></div>';});
     // Messages/email section stays hidden until a comms backend exists (no fake data).
@@ -1434,7 +1531,7 @@
       var o=document.getElementById('askOut');if(o&&_cur==='ask')o.textContent='…';},
     responding:function(t){orb.classList.remove('listening');orb.classList.add('busy');
       if(!t)return;
-      if(_cur==='ask'){var o=document.getElementById('askOut');if(o)o.textContent=t;return;}
+      if(_cur==='ask'){askShowAnswer(window.__lastHeard||'',t);return;}
       // Domain commands navigate the panel (?heard&say&domain) — a page that
       // JUST voice-arrived shows the summary in the dock. A responding event
       // with NO recent arrival is the brain/chat fallback: those answers
@@ -1495,8 +1592,10 @@
   (function(){
     var sp=new URLSearchParams(location.search);
     var heard=sp.get('heard'),say=sp.get('say'),dom=sp.get('domain');
-    if(!heard&&!say)return;
-    var dest=DOMAIN_SCREEN[dom||'']||'home';
+    if(!heard&&!say&&!dom)return;
+    // Domain → screen map first; a literal surface name (?domain=calendar
+    // for the full calendar) also works so server navigations can be precise.
+    var dest=DOMAIN_SCREEN[dom||'']||(FULL[dom]?dom:'home');
     show(dest);
     // Chat answers land on the Ask surface; every other domain shows the
     // transcript then the spoken summary in the DOCK (never the old

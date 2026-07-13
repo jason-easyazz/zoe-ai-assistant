@@ -8,7 +8,7 @@
 importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.63.34'; // estate: honest initial play state + single drawer-dismiss listener
+const SW_VERSION = '4.63.35'; // estate: round 4 (reminders CRUD, volume slider, contact links, ask-card display, estate-only navigation)
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
