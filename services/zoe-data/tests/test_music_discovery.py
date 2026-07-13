@@ -357,14 +357,21 @@ def _load_batch_module():
 def test_batch_brain_url_strips_v1(monkeypatch):
     mod = _load_batch_module()
     monkeypatch.setenv("ZOE_BRAIN_URL", "http://127.0.0.1:11434/v1")
+    monkeypatch.delenv("GEMMA_SERVER_URL", raising=False)
     assert mod._brain_base_url() == "http://127.0.0.1:11434"
     monkeypatch.setenv("ZOE_BRAIN_URL", "http://127.0.0.1:11434/")
+    assert mod._brain_base_url() == "http://127.0.0.1:11434"
+    # GEMMA_SERVER_URL (zoe-data's existing brain alias) honoured when
+    # ZOE_BRAIN_URL is unset
+    monkeypatch.delenv("ZOE_BRAIN_URL", raising=False)
+    monkeypatch.setenv("GEMMA_SERVER_URL", "http://127.0.0.1:11434/v1")
     assert mod._brain_base_url() == "http://127.0.0.1:11434"
 
 
 def test_batch_container_ai_base_url(monkeypatch):
     mod = _load_batch_module()
     monkeypatch.delenv("ZOE_DIGARR_AI_BASE_URL", raising=False)
+    monkeypatch.delenv("GEMMA_SERVER_URL", raising=False)
     monkeypatch.setenv("ZOE_BRAIN_URL", "http://127.0.0.1:11434")
     assert mod._container_ai_base_url() == "http://host.docker.internal:11434"
     monkeypatch.setenv("ZOE_BRAIN_URL", "http://192.168.1.218:9000")

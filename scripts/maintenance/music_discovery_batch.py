@@ -63,7 +63,9 @@ def _brain_base_url() -> str:
     appends /v1/... itself (spike gotcha) — gets a clean base. Read from the
     environment at CALL time (never a module constant) so a manual run's
     ``load_env_defaults()`` values are honoured."""
-    url = os.environ.get("ZOE_BRAIN_URL", "http://127.0.0.1:11434").rstrip("/")
+    url = (os.environ.get("ZOE_BRAIN_URL")
+           or os.environ.get("GEMMA_SERVER_URL")  # zoe-data's existing alias
+           or "http://127.0.0.1:11434").rstrip("/")
     return url[:-3] if url.endswith("/v1") else url
 
 
