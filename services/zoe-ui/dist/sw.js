@@ -8,7 +8,7 @@
 importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.63.26'; // estate: panel feedback round (launcher, music picker, reminders full, sleep, ask live voice, settings scroll, dock voice + timer chip)
+const SW_VERSION = '4.63.27'; // estate: polish round 2 (multi-timer, music, rooms volume, chrome headers, ask fall-through)
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
