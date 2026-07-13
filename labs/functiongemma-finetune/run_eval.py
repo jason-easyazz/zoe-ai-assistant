@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import statistics
 import subprocess
@@ -32,7 +33,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 CORPUS = HERE.parent / "needle-benchmark" / "corpus.jsonl"
-LLAMA_SERVER = "/home/zoe/llama.cpp/build-jetson-new/bin/llama-server"
+LLAMA_SERVER = os.environ.get(
+    "LLAMA_SERVER", "/home/zoe/llama.cpp/build-jetson-new/bin/llama-server")
 MIN_AVAILABLE_MB = 2048
 
 SYSTEM_PROMPT_PLAIN = (
