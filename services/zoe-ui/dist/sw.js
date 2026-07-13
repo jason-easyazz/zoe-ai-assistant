@@ -8,7 +8,7 @@
 importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.63.32'; // estate: music round 3 (queue drawer, repeat+shuffle, title clamp, pause fix, jukebox QR)
+const SW_VERSION = '4.63.34'; // estate: honest initial play state + single drawer-dismiss listener
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded

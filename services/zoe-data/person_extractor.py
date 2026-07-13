@@ -159,6 +159,10 @@ _NON_NAME_TOKENS = frozenset({
     # a person called "Actually Delia" (live repro 2026-07-13, slug:actually_delia).
     "actually", "wait", "sorry", "oh", "okay", "ok", "hey", "um", "uh",
     "also", "anyway", "remember", "note", "please", "maybe", "hmm",
+    # Quantifiers/deictics: "forget everything about Delia" must never mint a
+    # person "everything about" (live repro 2026-07-13, junk gift-idea row).
+    "everything", "anything", "nothing", "something", "about", "forget",
+    "delete", "remove", "erase",
 })
 
 

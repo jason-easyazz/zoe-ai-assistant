@@ -54,6 +54,14 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
 
 ## Child DOX Index
 
+- `kokoro-voice-blend/` — custom "Zoe" persona voice spike: pure-numpy blends
+  (linear + slerp) of Kokoro style tensors from the stock voices bin, committed
+  candidate tensors (`voices/*.npy`, float16) + reproducible generator
+  (`blend_zoe_voices.py`) + audition WAVs under `/tmp/zoe-voice-blend-samples/`.
+  Audio synthesis runs a one-shot CPU kokoro-onnx (~600MB) and MUST hold
+  `flock /tmp/zoe-voice-harness.lock`; never loads a second full Kokoro. Not
+  wired anywhere; deployment (augmented voices bin + env flip) is a documented
+  operator step gated on the voice replay harness — see its README.
 - `flue-harness-spike/` — Flue autonomous-harness substrate spike (scout → implement
   → verify → openPR slice); README + RUNBOOK + FINDINGS are records, not contracts.
 - `flue-zoe-brain/` — Flue-hosted Pi `Agent` on the local Gemma brain (a third
@@ -116,3 +124,10 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
   for gentle serial synthetic-data paraphrasing (operator-sanctioned for this
   spike), never as a lab engineering model. Hand-run only; README carries
   status (packet-ready) + numbers. Never wired into the voice path or CI.
+- `setfit-router/` — supervised classifier head (logreg/MLP) on the frozen prod
+  bge-small embedding to raise fast-tier routing coverage: 13-domain label set
+  (live ROUTES + missing notes/journal/music/smart_home + chat none-class),
+  1,121-example train set (seeds + local-Gemma paraphrases), heads + eval vs the
+  needle-benchmark 81-case corpus, and a fast_tiers integration PLAN. Verdict:
+  adopt logreg @ conf 0.4 (79.0% raw / 0% chat-FP gated vs 61.7% baseline).
+  Nothing prod-wired; README is a record, not a contract.
