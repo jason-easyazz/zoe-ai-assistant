@@ -8,9 +8,14 @@
 > capture + extractor-failure visibility (#1260/#1261). **F5** contacts seam (non-destructive
 > surfacing, per-user-turn aging, reply matching, backfill filters) (#1265) + any-turn offer
 > gate (#1266). **F6/F8** correction garbling + negation folding (#1264). **F10** was
-> already #1244. **Still open:** F9 (cross-writer supersession; weekly consolidation covers
-> meanwhile), F13 (reply-claims-saved-before-async-extraction, architectural), F14
-> (entity-scoped forget), F15 (relationship edges — flags off by design).
+> already #1244. **F9** cross-writer supersession (#1280 — person_extractor +
+> digest writers now route through the shared classify_against_existing reconciliation).
+> **F13** honest save confirmations + async-failure metric (#1281). **F14** entity-scoped
+> "forget everything about X" (#1281). And the follow-on W0 discovery: panel voice
+> transcripts never persisted (bad lazy import + session FK + streaming lane never saving
+> the reply) — fixed in #1282, spoken positive control passing (stamped user+assistant
+> rows under the panel-bound user). **Still open:** F15 only (relationship edges — flags
+> off by design pending the RAM gate).
 
 End-to-end behavioral review of the conversational memory pipeline, driven through the live
 `POST /api/chat/` API exactly as the Telegram bridge does, with demo users only
