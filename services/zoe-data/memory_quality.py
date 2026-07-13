@@ -655,7 +655,7 @@ _GUARD_CAL_WORDS = {
 # possessive "Jessica" is still a guard token.
 _NAME_VALUE_RE = re.compile(
     r"(?:\bname\s+is|\bnamed|\bis\s+called|\bname['’]s)\s+(?:spelt\s+|spelled\s+)?"
-    r"((?:[A-Z][a-z]+)(?:[\s'’-]+[A-Z][a-z]+)*)"
+    r"((?:[A-Z][A-Za-z'’-]*)(?:\s+[A-Z][A-Za-z'’-]*)*)"
 )
 
 
