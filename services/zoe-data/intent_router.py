@@ -2981,7 +2981,15 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             from pending_suggestions import resolve_person_offers_by_name
             await resolve_person_offers_by_name(user_id, name)
         except Exception as exc:
-            logger.debug("memory_forget_entity: offer withdrawal skipped: %s", exc)
+            # Memories ARE forgotten at this point — a failed offer withdrawal
+            # must be visible (the stale offer would keep resurfacing the name)
+            # but must not fail the forget. Self-healing backstop: offers expire
+            # after 6 user turns regardless.
+            logger.warning(
+                "memory_forget_entity: offer withdrawal FAILED for user=%s (%s) — "
+                "a pending contact offer may resurface until it expires",
+                user_id, type(exc).__name__,
+            )
         things = "thing" if forgotten == 1 else "things"
         suffix = "" if forgotten == len(matches) else (
             f" ({len(matches) - forgotten} I couldn't reach just now.)")
