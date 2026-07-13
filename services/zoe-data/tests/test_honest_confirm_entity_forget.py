@@ -243,3 +243,86 @@ def test_forget_entity_store_down_is_honest(monkeypatch):
         intent_router.Intent("memory_forget_entity", {"name": "Caitlin"}),
         "jason"))
     assert out is not None and "nothing was changed" in out
+
+
+@pytest.mark.asyncio
+async def test_forget_turns_are_not_fact_mined(monkeypatch):
+    """A memory COMMAND is an instruction, not a fact: mining "forget
+    everything about Delia" minted a junk row ("Gift idea for everything
+    about: Delia", live repro 2026-07-13) that resurrected the just-forgotten
+    entity into the recall packet. Every extractor pass must be skipped."""
+    import sys as _sys
+    import types as _types
+    from routers import chat as chat_mod
+
+    called: list[str] = []
+
+    async def _spy(*a, **k):
+        called.append("extract")
+        return 0
+
+    for mod in ("memory_extractor", "memory_digest", "person_extractor",
+                "person_extractor_llm", "latent_intent_detector"):
+        monkeypatch.setitem(_sys.modules, mod, _types.SimpleNamespace(
+            extract_and_ingest=_spy, run_turn_digest=_spy,
+            process_text=_spy, process_text_llm=_spy, detect_and_store=_spy,
+        ))
+
+    for cmd in ("forget everything about Delia", "forget that",
+                "please delete everything about Karen Smith"):
+        await chat_mod._persist_memory_candidates("u1", "s1", cmd, "Okay — done.")
+    assert called == [], "forget turns must not reach any extractor"
+
+    # A normal fact-bearing turn still mines.
+    await chat_mod._persist_memory_candidates(
+        "u1", "s1", "remember that my dad's name is Neil", "Got it.")
+    assert called, "normal turns must still be mined"
+
+
+def test_quantifiers_are_not_person_names():
+    from person_extractor import _looks_like_person_name
+
+    for junk in ("everything about", "forget Delia", "anything", "something Karen"):
+        assert not _looks_like_person_name(junk), junk
+    assert _looks_like_person_name("Delia")
+
+
+@pytest.mark.asyncio
+async def test_forget_entity_withdraws_pending_contact_offer(monkeypatch):
+    """Forgetting a person must also clear their pending contact offer, or the
+    forgotten name re-surfaces in every prompt via the offer seam."""
+    import sys as _sys
+    import types as _types
+    import intent_router
+
+    resolved: list[tuple[str, str]] = []
+
+    async def fake_resolve(user_id, name):
+        resolved.append((user_id, name))
+        return 1
+
+    monkeypatch.setitem(_sys.modules, "pending_suggestions", _types.SimpleNamespace(
+        resolve_person_offers_by_name=fake_resolve))
+
+    class _Row:
+        def __init__(s, i, t):
+            s.id, s.text = i, t
+            s.metadata = {"user_id": "u1", "status": "approved"}
+
+    class _Svc:
+        async def search(self, *a, **k):
+            return [_Row("m1", "Delia: March 15")]
+        async def list_by_status(self, **k):
+            return []
+        async def review(self, mem_id, **kw):
+            return None
+
+    monkeypatch.setitem(_sys.modules, "memory_service", _types.SimpleNamespace(
+        get_memory_service=lambda: _Svc(),
+        is_guest_memory_user=lambda u: u in ("guest", ""),
+    ))
+
+    reply = await intent_router.execute_intent(
+        intent_router.Intent("memory_forget_entity", {"name": "Delia"}), "u1")
+    assert "forgotten" in reply.lower()
+    assert resolved == [("u1", "Delia")]

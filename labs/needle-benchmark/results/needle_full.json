@@ -1,0 +1,1083 @@
+{
+ "summary": {
+  "mode": "full",
+  "n": 81,
+  "acc_overall": 30.9,
+  "acc_canonical": 52.9,
+  "acc_paraphrase": 17.9,
+  "acc_chat": 0.0,
+  "lat_p50_ms": 3612.1,
+  "lat_p90_ms": 4387.1,
+  "lat_mean_ms": 3419.1,
+  "full_tools_needle_tokens": 1924
+ },
+ "results": [
+  {
+   "id": "time-c1",
+   "style": "canonical",
+   "text": "what time is it",
+   "expected": [
+    "get_time"
+   ],
+   "domain": "time",
+   "pred": "get_time",
+   "raw": "[{\"name\":\"get_time\",\"arguments\":{\"query\":\"current time\"}}]",
+   "ok": true,
+   "ms": 2533.8
+  },
+  {
+   "id": "time-c2",
+   "style": "canonical",
+   "text": "what's the date today",
+   "expected": [
+    "get_time"
+   ],
+   "domain": "time",
+   "pred": "get_time",
+   "raw": "[{\"name\":\"get_time\",\"arguments\":{\"query\":\"today\"}}]",
+   "ok": true,
+   "ms": 2422.9
+  },
+  {
+   "id": "time-p1",
+   "style": "paraphrase",
+   "text": "have you got the time on you",
+   "expected": [
+    "get_time"
+   ],
+   "domain": "time",
+   "pred": "get_time",
+   "raw": "[{\"name\":\"get_time\",\"arguments\":{\"query\":\"to-do\"}}]",
+   "ok": true,
+   "ms": 2653.4
+  },
+  {
+   "id": "time-p2",
+   "style": "paraphrase",
+   "text": "um what day are we on again",
+   "expected": [
+    "get_time"
+   ],
+   "domain": "time",
+   "pred": "get_time",
+   "raw": "[{\"name\":\"get_time\",\"arguments\":{\"query\":\"today\"}}]",
+   "ok": true,
+   "ms": 2978.5
+  },
+  {
+   "id": "weather-c1",
+   "style": "canonical",
+   "text": "what's the weather like in Perth",
+   "expected": [
+    "get_weather"
+   ],
+   "domain": "weather",
+   "pred": "get_weather",
+   "raw": "[{\"name\":\"get_weather\",\"arguments\":{\"location\":\"Perth\"}}]",
+   "ok": true,
+   "ms": 3952.1
+  },
+  {
+   "id": "weather-c2",
+   "style": "canonical",
+   "text": "what's the forecast for tomorrow",
+   "expected": [
+    "get_weather"
+   ],
+   "domain": "weather",
+   "pred": "get_weather",
+   "raw": "[{\"name\":\"get_weather\",\"arguments\":{\"forecast\":\"tomorrow\"}}]",
+   "ok": true,
+   "ms": 2415.9
+  },
+  {
+   "id": "weather-p1",
+   "style": "paraphrase",
+   "text": "do I need a jacket if I go out later",
+   "expected": [
+    "get_weather"
+   ],
+   "domain": "weather",
+   "pred": "list_remove",
+   "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"list_type\":\"jacket\",\"item\":\"jacket\"}}]",
+   "ok": false,
+   "ms": 3555.8
+  },
+  {
+   "id": "weather-p2",
+   "style": "paraphrase",
+   "text": "is it going to bucket down this arvo",
+   "expected": [
+    "get_weather"
+   ],
+   "domain": "weather",
+   "pred": "list_remove",
+   "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"list_type\":\"bucket\",\"item\":\"to-do\"}}]",
+   "ok": false,
+   "ms": 3499.4
+  },
+  {
+   "id": "weather-p3",
+   "style": "paraphrase",
+   "text": "reckon it'll be nice enough for the beach on saturday",
+   "expected": [
+    "get_weather"
+   ],
+   "domain": "weather",
+   "pred": "add_reminder",
+   "raw": "[{\"name\":\"add_reminder\",\"arguments\":{\"title\":\"remember to beach\",\"date\":\"saturday\"}}]",
+   "ok": false,
+   "ms": 3639.8
+  },
+  {
+   "id": "shoplist-c1",
+   "style": "canonical",
+   "text": "add milk to my shopping list",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list"
+   ],
+   "domain": "lists",
+   "pred": "add_to_list",
+   "raw": "[{\"name\":\"add_to_list\",\"arguments\":{\"item\":\"milk\"}}]",
+   "ok": true,
+   "ms": 2747.7
+  },
+  {
+   "id": "shoplist-c2",
+   "style": "canonical",
+   "text": "put bread on the grocery list",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list"
+   ],
+   "domain": "lists",
+   "pred": "add_to_list",
+   "raw": "[{\"name\":\"add_to_list\",\"arguments\":{\"list_type\":\"grocery list\"}}]",
+   "ok": true,
+   "ms": 3115.2
+  },
+  {
+   "id": "shoplist-p1",
+   "style": "paraphrase",
+   "text": "we're out of laundry powder again",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list"
+   ],
+   "domain": "lists",
+   "pred": "list_remove",
+   "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"list_type\":\"personal\",\"item\":\"laundry powder\"}}]",
+   "ok": false,
+   "ms": 3549.1
+  },
+  {
+   "id": "shoplist-p2",
+   "style": "paraphrase",
+   "text": "chuck dog food on the list when you get a sec",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list"
+   ],
+   "domain": "lists",
+   "pred": "add_to_list",
+   "raw": "[{\"name\":\"add_to_list\",\"arguments\":{\"list_type\":\"dog food\"}}]",
+   "ok": true,
+   "ms": 3161.6
+  },
+  {
+   "id": "shoplist-p3",
+   "style": "paraphrase",
+   "text": "don't let me leave the shops without coffee",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list",
+    "add_reminder"
+   ],
+   "domain": "lists",
+   "pred": "list_remove",
+   "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"list_type\":\"shopping\",\"item\":\"coffee\"}}]",
+   "ok": false,
+   "ms": 3112.3
+  },
+  {
+   "id": "listshow-c1",
+   "style": "canonical",
+   "text": "what's on my shopping list",
+   "expected": [
+    "show_list"
+   ],
+   "domain": "lists",
+   "pred": "",
+   "raw": " [{\"name\":\"list_remove\",\"arguments\":{\"item\":\"calling_list_id_abc_id_id_salad_id_id_s_id_abc\",\"list_type\":\"shopping_list_for_sefting_id_san_abc",
+   "ok": false,
+   "ms": 8270.2
+  },
+  {
+   "id": "listshow-c2",
+   "style": "canonical",
+   "text": "show me my todo list",
+   "expected": [
+    "show_list"
+   ],
+   "domain": "lists",
+   "pred": "show_list",
+   "raw": "[{\"name\":\"show_list\",\"arguments\":{\"list_type\":\"todo\"}}]",
+   "ok": true,
+   "ms": 2780.8
+  },
+  {
+   "id": "listshow-p1",
+   "style": "paraphrase",
+   "text": "what do I still need to grab from the shops",
+   "expected": [
+    "show_list"
+   ],
+   "domain": "lists",
+   "pred": "list_remove",
+   "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"list_type\":\"personal\",\"item\":\"remember to grab from the shops\"}}]",
+   "ok": false,
+   "ms": 3935.9
+  },
+  {
+   "id": "listshow-p2",
+   "style": "paraphrase",
+   "text": "read us back the groceries",
+   "expected": [
+    "show_list"
+   ],
+   "domain": "lists",
+   "pred": "list_remove",
+   "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"item\":\"don't forget to read us back the groceries\"}}]",
+   "ok": false,
+   "ms": 3634.1
+  },
+  {
+   "id": "listrm-c1",
+   "style": "canonical",
+   "text": "remove bananas from my shopping list",
+   "expected": [
+    "list_remove"
+   ],
+   "domain": "lists",
+   "pred": "list_remove",
+   "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"item\":\"remove bananas\"}}]",
+   "ok": true,
+   "ms": 2771.0
+  },
+  {
+   "id": "listrm-p1",
+   "style": "paraphrase",
+   "text": "actually scratch the bananas, we've got heaps",
+   "expected": [
+    "list_remove"
+   ],
+   "domain": "lists",
+   "pred": "list_remove",
+   "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"list_type\":\"bananas\",\"item\":\"scratch\"}}]",
+   "ok": true,
+   "ms": 3571.4
+  },
+  {
+   "id": "listrm-p2",
+   "style": "paraphrase",
+   "text": "take the eggs off, nan's bringing some",
+   "expected": [
+    "list_remove"
+   ],
+   "domain": "lists",
+   "pred": "list_remove",
+   "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"list_type\":\"personal\",\"item\":\"too expensive\"}}]",
+   "ok": true,
+   "ms": 3482.9
+  },
+  {
+   "id": "cal-show-c1",
+   "style": "canonical",
+   "text": "what's on my calendar today",
+   "expected": [
+    "show_calendar"
+   ],
+   "domain": "calendar",
+   "pred": "show_calendar",
+   "raw": "[{\"name\":\"show_calendar\",\"arguments\":{\"qualifier\":\"today\"}}]",
+   "ok": true,
+   "ms": 2679.5
+  },
+  {
+   "id": "cal-show-c2",
+   "style": "canonical",
+   "text": "do I have anything on this week",
+   "expected": [
+    "show_calendar"
+   ],
+   "domain": "calendar",
+   "pred": "list_remove",
+   "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"item\":\"I don't have anything stored\\u00e1s\"}}]",
+   "ok": false,
+   "ms": 3885.3
+  },
+  {
+   "id": "cal-show-p1",
+   "style": "paraphrase",
+   "text": "am I double booked friday or are we sweet",
+   "expected": [
+    "show_calendar"
+   ],
+   "domain": "calendar",
+   "pred": "add_reminder",
+   "raw": "[{\"name\":\"add_reminder\",\"arguments\":{\"date\":\"friday\",\"title\":\"double booked\"}}]",
+   "ok": false,
+   "ms": 3438.2
+  },
+  {
+   "id": "cal-show-p2",
+   "style": "paraphrase",
+   "text": "what have I got on after lunch",
+   "expected": [
+    "show_calendar"
+   ],
+   "domain": "calendar",
+   "pred": "list_remove",
+   "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"item\":\"calling_for_the_east_lunch_id\"}}]",
+   "ok": false,
+   "ms": 3920.4
+  },
+  {
+   "id": "cal-add-c1",
+   "style": "canonical",
+   "text": "add a dentist appointment next tuesday at 3pm",
+   "expected": [
+    "add_calendar_event"
+   ],
+   "domain": "calendar",
+   "pred": "add_calendar_event",
+   "raw": "[{\"name\":\"add_calendar_event\",\"arguments\":{\"category\":\"dentist\",\"date\":\"next tuesday at 3pm\"}}]",
+   "ok": true,
+   "ms": 4523.9
+  },
+  {
+   "id": "cal-add-c2",
+   "style": "canonical",
+   "text": "schedule a meeting with sarah for friday at 10",
+   "expected": [
+    "add_calendar_event"
+   ],
+   "domain": "calendar",
+   "pred": "add_calendar_event",
+   "raw": "[{\"name\":\"add_calendar_event\",\"arguments\":{\"category\":\"meeting\",\"date\":\"friday at 10am\",\"title\":\"Meeting with Sarah\"}}]",
+   "ok": true,
+   "ms": 4215.9
+  },
+  {
+   "id": "cal-add-p1",
+   "style": "paraphrase",
+   "text": "the vet can fit biscuit in thursday morning, lock it in",
+   "expected": [
+    "add_calendar_event"
+   ],
+   "domain": "calendar",
+   "pred": "add_reminder",
+   "raw": "[{\"name\":\"add_reminder\",\"arguments\":{\"title\":\"vet can fit biscuit\",\"date\":\"thursday morning\"}}]",
+   "ok": false,
+   "ms": 4024.1
+  },
+  {
+   "id": "cal-add-p2",
+   "style": "paraphrase",
+   "text": "mum's flight lands sunday 6pm, stick that in",
+   "expected": [
+    "add_calendar_event"
+   ],
+   "domain": "calendar",
+   "pred": "add_reminder",
+   "raw": "[{\"name\":\"add_reminder\",\"arguments\":{\"date\":\"6pm\",\"title\":\"flight lands\"}}]",
+   "ok": false,
+   "ms": 3300.6
+  },
+  {
+   "id": "rem-add-c1",
+   "style": "canonical",
+   "text": "remind me to water the plants at 7pm tomorrow",
+   "expected": [
+    "add_reminder"
+   ],
+   "domain": "reminders",
+   "pred": "add_reminder",
+   "raw": "[{\"name\":\"add_reminder\",\"arguments\":{\"date\":\"7pm tomorrow\",\"title\":\"water the plants\"}}]",
+   "ok": true,
+   "ms": 3298.7
+  },
+  {
+   "id": "rem-add-c2",
+   "style": "canonical",
+   "text": "set a reminder to take the bins out tonight",
+   "expected": [
+    "add_reminder"
+   ],
+   "domain": "reminders",
+   "pred": "add_reminder",
+   "raw": "[{\"name\":\"add_reminder\",\"arguments\":{\"time\":\"tonight\",\"date\":\"tonight\"}}]",
+   "ok": true,
+   "ms": 3293.6
+  },
+  {
+   "id": "rem-add-p1",
+   "style": "paraphrase",
+   "text": "don't let me forget to pay the rent on the first",
+   "expected": [
+    "add_reminder"
+   ],
+   "domain": "reminders",
+   "pred": "list_reminders",
+   "raw": "[{\"name\":\"list_reminders\",\"arguments\":{\"qualifier\":\"I don't have anything stored for the rent\"}}]",
+   "ok": false,
+   "ms": 3769.4
+  },
+  {
+   "id": "rem-add-p2",
+   "style": "paraphrase",
+   "text": "give us a nudge about the dentist tomorrow morning",
+   "expected": [
+    "add_reminder"
+   ],
+   "domain": "reminders",
+   "pred": "add_calendar_event",
+   "raw": "[{\"name\":\"add_calendar_event\",\"arguments\":{\"title\":\"dentist\",\"date\":\"tomorrow morning\",\"category\":\"Dentist\"}}]",
+   "ok": false,
+   "ms": 4067.0
+  },
+  {
+   "id": "rem-add-p3",
+   "style": "paraphrase",
+   "text": "I'll forget the school pickup at 3 unless you say something",
+   "expected": [
+    "add_reminder"
+   ],
+   "domain": "reminders",
+   "pred": "add_reminder",
+   "raw": "[{\"name\":\"add_reminder\",\"arguments\":{\"title\":\"school pickup\",\"date\":\"3 unless you\"}}]",
+   "ok": true,
+   "ms": 3677.9
+  },
+  {
+   "id": "rem-list-c1",
+   "style": "canonical",
+   "text": "what reminders do I have",
+   "expected": [
+    "list_reminders"
+   ],
+   "domain": "reminders",
+   "pred": "list_reminders",
+   "raw": "[{\"name\":\"list_reminders\",\"arguments\":{\"qualifier\":\"I don't have anything stored\"}}]",
+   "ok": true,
+   "ms": 3756.9
+  },
+  {
+   "id": "rem-list-p1",
+   "style": "paraphrase",
+   "text": "anything I'm meant to be doing today",
+   "expected": [
+    "list_reminders",
+    "show_calendar"
+   ],
+   "domain": "reminders",
+   "pred": "list_remove",
+   "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"list_type\":\"todo\",\"item\":\"meant to be doing today\"}}]",
+   "ok": false,
+   "ms": 3850.1
+  },
+  {
+   "id": "timer-c1",
+   "style": "canonical",
+   "text": "set a timer for 10 minutes",
+   "expected": [
+    "set_timer"
+   ],
+   "domain": "timers",
+   "pred": "set_timer",
+   "raw": "[{\"name\":\"set_timer\",\"arguments\":{\"label\":\"timer\",\"minutes\":\"10 minutes\"}}]",
+   "ok": true,
+   "ms": 2875.7
+  },
+  {
+   "id": "timer-c2",
+   "style": "canonical",
+   "text": "set a 5 minute timer for the pasta",
+   "expected": [
+    "set_timer"
+   ],
+   "domain": "timers",
+   "pred": "set_timer",
+   "raw": "[{\"name\":\"set_timer\",\"arguments\":{\"label\":\"pasta\"}}]",
+   "ok": true,
+   "ms": 2994.1
+  },
+  {
+   "id": "timer-p1",
+   "style": "paraphrase",
+   "text": "give me twenty on the clock for the roast spuds",
+   "expected": [
+    "set_timer"
+   ],
+   "domain": "timers",
+   "pred": "get_time",
+   "raw": "[{\"name\":\"get_time\",\"arguments\":{\"query\":\"roast spuds\"}}]",
+   "ok": false,
+   "ms": 3100.5
+  },
+  {
+   "id": "timer-p2",
+   "style": "paraphrase",
+   "text": "eggs need six minutes, time it",
+   "expected": [
+    "set_timer"
+   ],
+   "domain": "timers",
+   "pred": "set_timer",
+   "raw": "[{\"name\":\"set_timer\",\"arguments\":{\"label\":\"eggs need six minutes\"}}]",
+   "ok": true,
+   "ms": 3786.5
+  },
+  {
+   "id": "note-add-c1",
+   "style": "canonical",
+   "text": "make a note: the wifi password is hunter2",
+   "expected": [
+    "create_note"
+   ],
+   "domain": "notes",
+   "pred": "create_note",
+   "raw": "[{\"name\":\"create_note\",\"arguments\":{\"content\":\"the wifi password is hunter2\"}}]",
+   "ok": true,
+   "ms": 3352.9
+  },
+  {
+   "id": "note-add-c2",
+   "style": "canonical",
+   "text": "take a note that the gate code is 4482",
+   "expected": [
+    "create_note"
+   ],
+   "domain": "notes",
+   "pred": "create_note",
+   "raw": "[{\"name\":\"create_note\",\"arguments\":{\"content\":\"4482\",\"title\":\"gate code\"}}]",
+   "ok": true,
+   "ms": 4798.0
+  },
+  {
+   "id": "note-add-p1",
+   "style": "paraphrase",
+   "text": "jot this down before I lose it, plumber quoted 300 for the laundry tap",
+   "expected": [
+    "create_note"
+   ],
+   "domain": "notes",
+   "pred": "add_to_list",
+   "raw": "[{\"name\":\"add_to_list\",\"arguments\":{\"list_type\":\"laundry\",\"item\":\"300\"}}]",
+   "ok": false,
+   "ms": 4214.4
+  },
+  {
+   "id": "note-add-p2",
+   "style": "paraphrase",
+   "text": "the good pizza place is the one on marine terrace, keep that somewhere",
+   "expected": [
+    "create_note",
+    "remember_fact"
+   ],
+   "domain": "notes",
+   "pred": "add_to_list",
+   "raw": "[{\"name\":\"add_to_list\",\"arguments\":{\"list_type\":\"pizza place\",\"item\":\"marine terrace\"}}]",
+   "ok": false,
+   "ms": 4659.4
+  },
+  {
+   "id": "note-search-c1",
+   "style": "canonical",
+   "text": "search my notes for the wifi password",
+   "expected": [
+    "note_search"
+   ],
+   "domain": "notes",
+   "pred": "",
+   "raw": "[]",
+   "ok": false,
+   "ms": 1239.0
+  },
+  {
+   "id": "note-search-p1",
+   "style": "paraphrase",
+   "text": "what did I say the plumber quoted again",
+   "expected": [
+    "note_search"
+   ],
+   "domain": "notes",
+   "pred": "list_remove",
+   "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"list_type\":\"personal\",\"item\":\"plumber quoted\"}}]",
+   "ok": false,
+   "ms": 4096.7
+  },
+  {
+   "id": "note-search-p2",
+   "style": "paraphrase",
+   "text": "didn't I write down the gate code somewhere",
+   "expected": [
+    "note_search"
+   ],
+   "domain": "notes",
+   "pred": "add_to_list",
+   "raw": "[{\"name\":\"add_to_list\",\"arguments\":{\"list_type\":\"to-do\",\"item\":\"gate code\"}}]",
+   "ok": false,
+   "ms": 4790.9
+  },
+  {
+   "id": "journal-c1",
+   "style": "canonical",
+   "text": "add a journal entry: grateful for the rain today",
+   "expected": [
+    "journal"
+   ],
+   "domain": "journal",
+   "pred": "create_note",
+   "raw": "[{\"name\":\"create_note\",\"arguments\":{\"title\":\"grateful for the rain today\"}}]",
+   "ok": false,
+   "ms": 3782.8
+  },
+  {
+   "id": "journal-c2",
+   "style": "canonical",
+   "text": "write in my diary that today was a hard one",
+   "expected": [
+    "journal"
+   ],
+   "domain": "journal",
+   "pred": "add_to_list",
+   "raw": "[{\"name\":\"add_to_list\",\"arguments\":{\"list_type\":\"to-do\",\"item\":\"hard one\"}}]",
+   "ok": false,
+   "ms": 4428.2
+  },
+  {
+   "id": "journal-p1",
+   "style": "paraphrase",
+   "text": "today honestly knocked me around, can you put that in the journal",
+   "expected": [
+    "journal"
+   ],
+   "domain": "journal",
+   "pred": "add_to_list",
+   "raw": "[{\"name\":\"add_to_list\",\"arguments\":{\"list_type\":\"personal\",\"item\":\"knocked\"}}]",
+   "ok": false,
+   "ms": 4387.1
+  },
+  {
+   "id": "journal-p2",
+   "style": "paraphrase",
+   "text": "what did I journal about last week",
+   "expected": [
+    "journal"
+   ],
+   "domain": "journal",
+   "pred": "show_calendar",
+   "raw": "[{\"name\":\"show_calendar\",\"arguments\":{\"qualifier\":\"journal about last week\"}}]",
+   "ok": false,
+   "ms": 3709.2
+  },
+  {
+   "id": "people-c1",
+   "style": "canonical",
+   "text": "add Marcus to my contacts as my colleague",
+   "expected": [
+    "people"
+   ],
+   "domain": "people",
+   "pred": "add_to_list",
+   "raw": "[{\"name\":\"add_to_list\",\"arguments\":{\"list_type\":\"tasks/to-do\",\"item\":\"Marcus\"}}]",
+   "ok": false,
+   "ms": 4869.3
+  },
+  {
+   "id": "people-c2",
+   "style": "canonical",
+   "text": "who is Zephyrina",
+   "expected": [
+    "people",
+    "recall_memory"
+   ],
+   "domain": "people",
+   "pred": "list_remove",
+   "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"item\":\"Zephyrina\"}}]",
+   "ok": false,
+   "ms": 3418.5
+  },
+  {
+   "id": "people-p1",
+   "style": "paraphrase",
+   "text": "my sister's name is Kate by the way, keep track of her",
+   "expected": [
+    "people",
+    "remember_fact"
+   ],
+   "domain": "people",
+   "pred": "add_to_list",
+   "raw": "[{\"name\":\"add_to_list\",\"arguments\":{\"list_type\":\"personal\",\"item\":\"Kate by the way\"}}]",
+   "ok": false,
+   "ms": 4091.9
+  },
+  {
+   "id": "people-p2",
+   "style": "paraphrase",
+   "text": "what do we know about my mate Dave",
+   "expected": [
+    "people",
+    "recall_memory"
+   ],
+   "domain": "people",
+   "pred": "list_remove",
+   "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"list_type\":\"todo\"}}]",
+   "ok": false,
+   "ms": 2839.3
+  },
+  {
+   "id": "media-c1",
+   "style": "canonical",
+   "text": "play some music",
+   "expected": [
+    "media"
+   ],
+   "domain": "music",
+   "pred": "",
+   "raw": "[]",
+   "ok": false,
+   "ms": 1090.6
+  },
+  {
+   "id": "media-c2",
+   "style": "canonical",
+   "text": "turn the volume down",
+   "expected": [
+    "media"
+   ],
+   "domain": "music",
+   "pred": "",
+   "raw": "[]",
+   "ok": false,
+   "ms": 1048.7
+  },
+  {
+   "id": "media-c3",
+   "style": "canonical",
+   "text": "pause the music",
+   "expected": [
+    "media"
+   ],
+   "domain": "music",
+   "pred": "",
+   "raw": "[]",
+   "ok": false,
+   "ms": 1043.3
+  },
+  {
+   "id": "media-p1",
+   "style": "paraphrase",
+   "text": "chuck on something chill while I cook",
+   "expected": [
+    "media"
+   ],
+   "domain": "music",
+   "pred": "list_remove",
+   "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"list_type\":\"chill\",\"item\":\"matanal\"}}]",
+   "ok": false,
+   "ms": 3843.4
+  },
+  {
+   "id": "media-p2",
+   "style": "paraphrase",
+   "text": "that's way too loud, bring it down heaps",
+   "expected": [
+    "media"
+   ],
+   "domain": "music",
+   "pred": "add_to_list",
+   "raw": "[{\"name\":\"add_to_list\",\"arguments\":{\"list_type\":\"to-do\",\"item\":\"heaps\"}}]",
+   "ok": false,
+   "ms": 4410.8
+  },
+  {
+   "id": "media-p3",
+   "style": "paraphrase",
+   "text": "skip this one, not feeling it",
+   "expected": [
+    "media"
+   ],
+   "domain": "music",
+   "pred": "",
+   "raw": "[]",
+   "ok": false,
+   "ms": 1078.1
+  },
+  {
+   "id": "home-c1",
+   "style": "canonical",
+   "text": "turn off the kitchen lights",
+   "expected": [
+    "home"
+   ],
+   "domain": "smart_home",
+   "pred": "",
+   "raw": "[]",
+   "ok": false,
+   "ms": 1079.2
+  },
+  {
+   "id": "home-c2",
+   "style": "canonical",
+   "text": "dim the lounge room lights",
+   "expected": [
+    "home"
+   ],
+   "domain": "smart_home",
+   "pred": "",
+   "raw": "[]",
+   "ok": false,
+   "ms": 1057.4
+  },
+  {
+   "id": "home-p1",
+   "style": "paraphrase",
+   "text": "it's like a cave in here, sort the lights out",
+   "expected": [
+    "home"
+   ],
+   "domain": "smart_home",
+   "pred": "",
+   "raw": "[]",
+   "ok": false,
+   "ms": 1075.6
+  },
+  {
+   "id": "home-p2",
+   "style": "paraphrase",
+   "text": "we're heading to bed, kill everything downstairs",
+   "expected": [
+    "home"
+   ],
+   "domain": "smart_home",
+   "pred": "list_remove",
+   "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"list_type\":\"todo\",\"item\":\"don't have anything stored\"}}]",
+   "ok": false,
+   "ms": 4132.8
+  },
+  {
+   "id": "recall-c1",
+   "style": "canonical",
+   "text": "what do you remember about me",
+   "expected": [
+    "recall_memory"
+   ],
+   "domain": "memory",
+   "pred": "list_reminders",
+   "raw": "[{\"name\":\"list_reminders\",\"arguments\":{\"qualifier\":\"me\"}}]",
+   "ok": false,
+   "ms": 3248.0
+  },
+  {
+   "id": "recall-c2",
+   "style": "canonical",
+   "text": "what's my name",
+   "expected": [
+    "recall_memory"
+   ],
+   "domain": "memory",
+   "pred": "list_remove",
+   "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"item\":\"calling_name_name_name\"}}]",
+   "ok": false,
+   "ms": 3550.6
+  },
+  {
+   "id": "recall-p1",
+   "style": "paraphrase",
+   "text": "remind me what I told you about my work situation",
+   "expected": [
+    "recall_memory"
+   ],
+   "domain": "memory",
+   "pred": "list_reminders",
+   "raw": "[{\"name\":\"list_reminders\",\"arguments\":{\"qualifier\":\"work_sitting_id\"}}]",
+   "ok": false,
+   "ms": 3552.6
+  },
+  {
+   "id": "recall-p2",
+   "style": "paraphrase",
+   "text": "you know that thing I said about my knee, what was it",
+   "expected": [
+    "recall_memory"
+   ],
+   "domain": "memory",
+   "pred": "list_remove",
+   "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"list_type\":\"personal\",\"item\":\"knee\"}}]",
+   "ok": false,
+   "ms": 3562.7
+  },
+  {
+   "id": "fact-c1",
+   "style": "canonical",
+   "text": "remember that my favourite colour is green",
+   "expected": [
+    "remember_fact"
+   ],
+   "domain": "memory",
+   "pred": "add_to_list",
+   "raw": "[{\"name\":\"add_to_list\",\"arguments\":{\"list_type\":\"colour\",\"item\":\"colour\"}}]",
+   "ok": false,
+   "ms": 4046.4
+  },
+  {
+   "id": "fact-c2",
+   "style": "canonical",
+   "text": "remember that I'm allergic to peanuts",
+   "expected": [
+    "remember_fact"
+   ],
+   "domain": "memory",
+   "pred": "list_reminders",
+   "raw": "[{\"name\":\"list_reminders\",\"arguments\":{\"qualifier\":\"allergic to peanuts\"}}]",
+   "ok": false,
+   "ms": 3612.1
+  },
+  {
+   "id": "fact-p1",
+   "style": "paraphrase",
+   "text": "for future reference I knock off work at 2:30 on fridays",
+   "expected": [
+    "remember_fact"
+   ],
+   "domain": "memory",
+   "pred": "add_calendar_event",
+   "raw": "[{\"name\":\"add_calendar_event\",\"arguments\":{\"date\":\"2:30\",\"title\":\"reference\"}}]",
+   "ok": false,
+   "ms": 3930.3
+  },
+  {
+   "id": "fact-p2",
+   "style": "paraphrase",
+   "text": "the dog's name is Biscuit, don't forget it",
+   "expected": [
+    "remember_fact",
+    "people"
+   ],
+   "domain": "memory",
+   "pred": "list_reminders",
+   "raw": "[{\"name\":\"list_reminders\",\"arguments\":{\"qualifier\":\"Biscuit\"}}]",
+   "ok": false,
+   "ms": 4249.1
+  },
+  {
+   "id": "chat-1",
+   "style": "chat",
+   "text": "hey zoe how's it going",
+   "expected": [
+    "general_chat"
+   ],
+   "domain": "chat",
+   "pred": "list_remove",
+   "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"list_type\":\"to-do\",\"item\":\"calling\"}}]",
+   "ok": false,
+   "ms": 4238.4
+  },
+  {
+   "id": "chat-2",
+   "style": "chat",
+   "text": "tell me something interesting about octopuses",
+   "expected": [
+    "general_chat"
+   ],
+   "domain": "chat",
+   "pred": "list_remove",
+   "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"list_type\":\"octopuses\",\"item\":\"calling\"}}]",
+   "ok": false,
+   "ms": 3796.8
+  },
+  {
+   "id": "chat-3",
+   "style": "chat",
+   "text": "I had a really rough day at work",
+   "expected": [
+    "general_chat",
+    "journal",
+    "remember_emotional_moment"
+   ],
+   "domain": "chat",
+   "pred": "add_reminder",
+   "raw": "[{\"name\":\"add_reminder\",\"arguments\":{\"title\":\"work\",\"date\":\"today\"}}]",
+   "ok": false,
+   "ms": 3638.4
+  },
+  {
+   "id": "chat-4",
+   "style": "chat",
+   "text": "what do you think about while I'm asleep",
+   "expected": [
+    "general_chat"
+   ],
+   "domain": "chat",
+   "pred": "list_remove",
+   "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"list_type\":\"todo\",\"item\":\"too expensive\"}}]",
+   "ok": false,
+   "ms": 4225.8
+  },
+  {
+   "id": "chat-5",
+   "style": "chat",
+   "text": "why is the sky blue",
+   "expected": [
+    "general_chat"
+   ],
+   "domain": "chat",
+   "pred": "list_remove",
+   "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"item\":\"calling_sd_list_id\"}}]",
+   "ok": false,
+   "ms": 3681.8
+  },
+  {
+   "id": "chat-6",
+   "style": "chat",
+   "text": "thanks heaps, you're a legend",
+   "expected": [
+    "general_chat"
+   ],
+   "domain": "chat",
+   "pred": "list_remove",
+   "raw": "[{\"name\":\"list_remove\",\"arguments\":{\"list_type\":\"personal\",\"item\":\"remember to pick up a new place\"}}]",
+   "ok": false,
+   "ms": 3954.6
+  },
+  {
+   "id": "chat-7",
+   "style": "chat",
+   "text": "should I get a haircut or let it grow",
+   "expected": [
+    "general_chat"
+   ],
+   "domain": "chat",
+   "pred": "add_to_list",
+   "raw": "[{\"name\":\"add_to_list\",\"arguments\":{\"list_type\":\"personal\",\"item\":\"haircut\"}}]",
+   "ok": false,
+   "ms": 3776.9
+  },
+  {
+   "id": "chat-8",
+   "style": "chat",
+   "text": "can you explain how compound interest works",
+   "expected": [
+    "general_chat"
+   ],
+   "domain": "chat",
+   "pred": "",
+   "raw": "[]",
+   "ok": false,
+   "ms": 1103.1
+  }
+ ]
+}
