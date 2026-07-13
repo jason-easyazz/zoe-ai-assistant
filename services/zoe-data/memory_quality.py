@@ -763,7 +763,27 @@ async def reconcile_for_ingest(
     failure degrades to ``("add", None)`` so a real fact is never lost because
     reconciliation errored."""
     try:
-        hits = await svc.search(text, user_id=user_id, limit=limit)
+        # Patient search: this is the background WRITE path, not the
+        # latency-gated turn path. The default 2 s search timeout fails open
+        # to [] under load (embedder busy with the turn itself), which
+        # silently degraded every correction to ADD — the stale value stacked
+        # instead of being superseded (live Telegram repro 2026-07-13).
+        try:
+            hits = await svc.search(
+                text, user_id=user_id, limit=limit, timeout_s=15.0
+            )
+        except TypeError:
+            # Fakes/older services without the timeout_s kwarg.
+            hits = await svc.search(text, user_id=user_id, limit=limit)
+        if not hits:
+            # An empty result here usually means the search timed out or the
+            # store is cold — the fact is still stored (ADD), but supersession
+            # was skipped, so make it visible instead of logger.debug.
+            # No raw memory text in logs (it is personal data) — length only.
+            logger.warning(
+                "reconcile_for_ingest: no search hits (user=%s, text_len=%d) — "
+                "storing as ADD without supersession check", user_id, len(text),
+            )
         existing = [
             (getattr(h, "id", ""), getattr(h, "text", "") or "")
             for h in (hits or [])
@@ -772,7 +792,12 @@ async def reconcile_for_ingest(
         existing = guard_existing_by_entity(text, existing, title)
         return classify_against_existing(text, existing)
     except Exception as exc:
-        logger.debug("reconcile_for_ingest unavailable (%s) — plain add", exc)
+        # Exception type only — backend errors can embed the query (which is
+        # the raw candidate memory text) in the exception message.
+        logger.warning(
+            "reconcile_for_ingest unavailable (%s) — plain add",
+            type(exc).__name__,
+        )
         return "add", None
 
 
