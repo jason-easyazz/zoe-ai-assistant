@@ -930,6 +930,10 @@
   function musicControl(action){if(!_music.player_id)return;
     fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({action:action,player_id:_music.player_id})}).then(function(){setTimeout(loadMusic,350);}).catch(function(){});}
   function wireMusic(){
+    // Revisits: seed the play/pause button from the cached snapshot so the
+    // pre-poll icon (and a fast tap) match the last-known real state.
+    if(_music.np){var pp0=document.getElementById('mPP');
+      if(pp0){pp0.dataset.playing=_music.np.playing?'1':'0';pp0.innerHTML=_music.np.playing?PAUSE_I:PLAY_I;}}
     loadMusic();_wxTick=setInterval(function(){if(_cur==='music')loadMusic();},5000);
     if(_homeTick){clearInterval(_homeTick);}_homeTick=setInterval(tickMusic,1000);
     var t=document.getElementById('mTransport');if(t)t.addEventListener('click',function(e){var btn=e.target.closest('button');if(!btn)return;var a=btn.getAttribute('data-a');
