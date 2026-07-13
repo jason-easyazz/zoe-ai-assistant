@@ -19,11 +19,13 @@ from intent_router import Intent, execute_intent
     ("list_show", {"list_type": "shopping"}),
     ("reminder_create", {"message": "van", "time": "16:00"}),
     ("memory_remember", {"fact": "x"}),
+    ("journal_streak", {}),
+    ("journal_prompt", {}),
 ])
 @pytest.mark.parametrize("guest", ["guest", "", "voice-guest", "guest-abc123"])
 async def test_guest_identities_are_gated(name, slots, guest):
     out = await execute_intent(Intent(name, slots), user_id=guest)
-    assert out is not None and "sign in" in out.lower() or "who you are" in out.lower()
+    assert out is not None and ("sign in" in out.lower() or "who you are" in out.lower())
 
 
 async def test_non_personal_intents_pass_for_guest():
