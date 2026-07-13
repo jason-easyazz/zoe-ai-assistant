@@ -1799,6 +1799,13 @@ class MemoryService:
             return []
         if status:
             rows = [r for r in rows if str(r.metadata.get("status") or "") == status]
+        # Expired rows are invisible to every other read path — an expired
+        # entity row must not swallow a fresh restatement as a dedup-skip.
+        rows = [
+            r for r in rows
+            if not (r.metadata.get("expires_at")
+                    and _memory_expired(r.metadata.get("expires_at")))
+        ]
         return rows
 
     async def archive_by_entity(self, entity_id: str, user_id: str) -> int:

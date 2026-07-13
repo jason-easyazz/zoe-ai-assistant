@@ -169,3 +169,47 @@ def test_discourse_openers_are_not_names():
         assert not _looks_like_person_name(junk), junk
     for real in ("Delia", "caitlin farrell", "Mary-Jane Smith"):
         assert _looks_like_person_name(real), real
+
+
+@pytest.mark.asyncio
+async def test_candidate_prefixed_pattern_type_matches(monkeypatch):
+    """MemoryService.ingest namespaces extra metadata as candidate_<key>, so
+    real rows carry candidate_pattern_type — the kind matcher must read it."""
+    row = MemoryRef(
+        id="old", text="Delia: works at the hospital",
+        metadata={"status": "approved", "entity_id": PID,
+                  "candidate_pattern_type": "work"},
+    )
+    svc = _FakeSvc([row])
+    out = await _ingest(svc, "Delia: works at the clinic", "work", monkeypatch)
+    assert out == "new-old"
+    assert svc.ingested == []
+
+
+@pytest.mark.asyncio
+async def test_expired_entity_rows_are_invisible(monkeypatch):
+    """An expired approved row must not swallow a fresh restatement — the
+    service-side list_by_entity filters expiry like every other read path."""
+    from memory_service import MemoryService
+
+    class _Probe(MemoryService):
+        def __init__(self):  # skip real init
+            pass
+
+        async def _run_sync(self, fn, *args):
+            return fn(*args)
+
+        def _entity_rows_sync(self, entity_ids, user_id):
+            return [
+                MemoryRef(id="fresh", text="Delia: March 15",
+                          metadata={"status": "approved"}),
+                MemoryRef(id="stale", text="Delia: March 12",
+                          metadata={"status": "approved",
+                                    "expires_at": "2000-01-01T00:00:00+00:00"}),
+            ]
+
+        def _require(self, value, message):
+            assert value
+
+    rows = await _Probe().list_by_entity("u1", [PID])
+    assert [r.id for r in rows] == ["fresh"]

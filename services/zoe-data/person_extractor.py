@@ -354,7 +354,11 @@ def _same_kind_row(meta: dict, row_text: str, person_name: str, pattern_type: st
     when the row is the compact "Name: <value>" shape whose value parses as a
     date — anything looser risks merging distinct fact kinds (meeting vs
     birthday)."""
-    stored = str(meta.get("pattern_type") or "").strip().lower()
+    # MemoryService.ingest namespaces extra metadata as candidate_<key>, so
+    # rows written through the real service carry candidate_pattern_type.
+    stored = str(
+        meta.get("pattern_type") or meta.get("candidate_pattern_type") or ""
+    ).strip().lower()
     if stored:
         return stored == pattern_type
     if pattern_type != "birthday":
