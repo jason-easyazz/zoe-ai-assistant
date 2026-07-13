@@ -1,0 +1,235 @@
+{"text": "tell me some stuff about ancient rome", "tool": null, "args": {}}
+{"text": "I gotta start keeping a journal someday", "tool": null, "args": {}}
+{"text": "Who came up with the telephone?", "tool": null, "args": {}}
+{"text": "like, what's your go-to jam?", "tool": null, "args": {}}
+{"text": "Hey, who took the W in cricket?", "tool": null, "args": {}}
+{"text": "My sister's coming to visit next week, that ought to be a blast", "tool": null, "args": {}}
+{"text": "Zoe, I've got nothing to do", "tool": null, "args": {}}
+{"text": "ugh i'm so done with monday", "tool": null, "args": {}}
+{"text": "Yo, my buddy set a timer one time and just totally spaced on it for a whole week", "tool": null, "args": {}}
+{"text": "Just wanted to see if your voice works", "tool": null, "args": {}}
+{"text": "got anything fun to talk about", "tool": null, "args": {}}
+{"text": "My back is totally killing me", "tool": null, "args": {}}
+{"text": "hey you with me", "tool": null, "args": {}}
+{"text": "Hey buddy, what's the word?", "tool": null, "args": {}}
+{"text": "Can you tell me a story, do you think?", "tool": null, "args": {}}
+{"text": "Zoe, what are you thinking about today?", "tool": null, "args": {}}
+{"text": "Ugh, we spent like a whole hour talking about the weather, so lame.", "tool": null, "args": {}}
+{"text": "What are you gettin' up to?", "tool": null, "args": {}}
+{"text": "Ever get a bit dull?", "tool": null, "args": {}}
+{"text": "Hey, I'm feeling a little restless, wanna hang out and talk?", "tool": null, "args": {}}
+{"text": "Hey, can you just break down quantum computing for me, in plain terms?", "tool": null, "args": {}}
+{"text": "hey wanna just chill and talk", "tool": null, "args": {}}
+{"text": "Man, this week was rough", "tool": null, "args": {}}
+{"text": "I'm feeling kind of up and down right now", "tool": null, "args": {}}
+{"text": "Hey, can you play something funny?", "tool": null, "args": {}}
+{"text": "Hey, could you just tune in for a sec?", "tool": null, "args": {}}
+{"text": "wanna chat", "tool": null, "args": {}}
+{"text": "How do you feel about pineapple on pizza?", "tool": null, "args": {}}
+{"text": "So, I'm feeling really upbeat today", "tool": null, "args": {}}
+{"text": "man, i am seriously drained today", "tool": null, "args": {}}
+{"text": "Hey, can you put a yoga class on my calendar for Friday, please?", "tool": "add_calendar_event", "args": {"title": "yoga class", "date": "friday", "time": "", "category": ""}}
+{"text": "Put a haircut on my calendar for Saturday at 6:30", "tool": "add_calendar_event", "args": {"title": "haircut", "date": "saturday", "time": "half past six", "category": ""}}
+{"text": "Hey, can you put in my yoga class for today?", "tool": "add_calendar_event", "args": {"title": "yoga class", "date": "today", "time": "", "category": ""}}
+{"text": "Could you set up a time for a haircut next Tuesday if you get a free moment?", "tool": "add_calendar_event", "args": {"title": "haircut", "date": "next tuesday", "time": "", "category": ""}}
+{"text": "Put a doctor checkup on my calendar for Friday at 3pm, Zoe", "tool": "add_calendar_event", "args": {"title": "doctor checkup", "date": "friday", "time": "3pm", "category": ""}}
+{"text": "Can you throw in parent teacher night on June 3rd for me?", "tool": "add_calendar_event", "args": {"title": "parent teacher night", "date": "june 3rd", "time": "", "category": ""}}
+{"text": "Can you set up a parent teacher night on the 15th at 12 noon?", "tool": "add_calendar_event", "args": {"title": "parent teacher night", "date": "the 15th", "time": "noon", "category": ""}}
+{"text": "can you set up a haircut appointment for Monday at 8:30?", "tool": "add_calendar_event", "args": {"title": "haircut", "date": "monday", "time": "8:30", "category": ""}}
+{"text": "Set up a dentist appointment for next Tuesday", "tool": "add_calendar_event", "args": {"title": "dentist appointment", "date": "next tuesday", "time": "", "category": ""}}
+{"text": "Hey, put a new calendar thing down for Parent Teacher Night, June 3rd at 7 AM, cool?", "tool": "add_calendar_event", "args": {"title": "parent teacher night", "date": "june 3rd", "time": "7am", "category": ""}}
+{"text": "Put a yoga class on my calendar for the 15th at six-thirty", "tool": "add_calendar_event", "args": {"title": "yoga class", "date": "the 15th", "time": "half past six", "category": ""}}
+{"text": "Can you book a parent teacher night for next week at seven this evening please", "tool": "add_calendar_event", "args": {"title": "parent teacher night", "date": "next week", "time": "seven tonight", "category": ""}}
+{"text": "Hey Zoe, can you set a reminder for me to take my medication at 7 AM, Zoe?", "tool": "add_reminder", "args": {"title": "take my medication", "date": "", "time": "7am"}}
+{"text": "Hey, remind me to call the plumber on June 3rd, okay?", "tool": "add_reminder", "args": {"title": "call the plumber", "date": "june 3rd", "time": ""}}
+{"text": "Hey, can you set a reminder for me to renew the car rego this Friday at 7 in the morning?", "tool": "add_reminder", "args": {"title": "renew the car rego", "date": "friday", "time": "7am"}}
+{"text": "hey, throw a reminder on there to defrost the chicken tomorrow", "tool": "add_reminder", "args": {"title": "defrost the chicken", "date": "tomorrow", "time": ""}}
+{"text": "Hey, can you give me a heads-up to defrost the chicken at three o'clock this afternoon?", "tool": "add_reminder", "args": {"title": "defrost the chicken", "date": "", "time": "3pm"}}
+{"text": "Hey, set a reminder for next week to water the plants", "tool": "add_reminder", "args": {"title": "water the plants", "date": "next week", "time": ""}}
+{"text": "Remind me to take the bins out next week at 7am.", "tool": "add_reminder", "args": {"title": "take the bins out", "date": "next week", "time": "7am"}}
+{"text": "Hey Zoe, can you remind me next week at 8:30 to take the bins out?", "tool": "add_reminder", "args": {"title": "take the bins out", "date": "next week", "time": "8:30"}}
+{"text": "Hey Zoe, could you drop a reminder for me to take the bins out next Tuesday when you get a free moment?", "tool": "add_reminder", "args": {"title": "take the bins out", "date": "next tuesday", "time": ""}}
+{"text": "Can you set a reminder for me to pay the electricity bill this weekend at six-thirty?", "tool": "add_reminder", "args": {"title": "pay the electricity bill", "date": "this weekend", "time": "half past six"}}
+{"text": "Hey, can you ping me to defrost the chicken at 3 PM when you get a minute?", "tool": "add_reminder", "args": {"title": "defrost the chicken", "date": "", "time": "3pm"}}
+{"text": "Hey, could you ping me to take the bins out at 3pm when you have a minute?", "tool": "add_reminder", "args": {"title": "take the bins out", "date": "", "time": "3pm"}}
+{"text": "Hey Zoe, could you put renew passport on the personal list for me?", "tool": "add_to_list", "args": {"item": "renew passport", "list_type": "personal"}}
+{"text": "Put \"buy a gift for mum\" on my to-do list to add", "tool": "add_to_list", "args": {"item": "buy a gift for mum", "list_type": "to-do"}}
+{"text": "add update my resume to my to-do list", "tool": "add_to_list", "args": {"item": "update my resume", "list_type": "to-do"}}
+{"text": "Put the book flights on my to-do list", "tool": "add_to_list", "args": {"item": "book flights", "list_type": "to-do"}}
+{"text": "hey zoe could you toss \"renew passport\" on the tasks list for me please", "tool": "add_to_list", "args": {"item": "renew passport", "list_type": "tasks"}}
+{"text": "Can you add book flights to my birthday list please?", "tool": "add_to_list", "args": {"item": "book flights", "list_type": "birthday"}}
+{"text": "add fix the fence to the personal list", "tool": "add_to_list", "args": {"item": "fix the fence", "list_type": "personal"}}
+{"text": "add book flights to the personal list", "tool": "add_to_list", "args": {"item": "book flights", "list_type": "personal"}}
+{"text": "Yo Zoe, could you pop \"clean the gutters\" onto the to-do list real fast?", "tool": "add_to_list", "args": {"item": "clean the gutters", "list_type": "to-do"}}
+{"text": "Hey, jot down that the gate code is 2580 for me.", "tool": "create_note", "args": {"content": "the gate code is 2580", "title": ""}}
+{"text": "Hey, can you jot down to return the library books?", "tool": "create_note", "args": {"content": "return the library books", "title": ""}}
+{"text": "Hey Zoe, whip up a note that says Sarah's coffee order is a flat white, Zoe.", "tool": "create_note", "args": {"content": "sarah's coffee order is a flat white", "title": ""}}
+{"text": "Hey, jot this down for me: the good plumber is on 0400 123 456 when you get a chance", "tool": "create_note", "args": {"content": "the good plumber is on 0400 123 456", "title": ""}}
+{"text": "Write down that the gate code is 2580", "tool": "create_note", "args": {"content": "the gate code is 2580", "title": ""}}
+{"text": "Write down that the gate code is 2580", "tool": "create_note", "args": {"content": "the gate code is 2580", "title": ""}}
+{"text": "Hey Zoe, can you jot down that I need to return the library books?", "tool": "create_note", "args": {"content": "return the library books", "title": ""}}
+{"text": "Can you write down that the gate code is 2580 for me?", "tool": "create_note", "args": {"content": "the gate code is 2580", "title": ""}}
+{"text": "Hey Zoe, could you jot this down for me: Sarah's coffee order is a flat white, thanks.", "tool": "create_note", "args": {"content": "sarah's coffee order is a flat white", "title": ""}}
+{"text": "What's the temperature like in Perth today, just for me?", "tool": "get_weather", "args": {"forecast": false, "location": "Perth"}}
+{"text": "What's the forecast looking like in Sydney for me?", "tool": "get_weather", "args": {"forecast": false, "location": "Sydney"}}
+{"text": "Hey Zoe, what's the weather gonna be like this weekend, Zoe?", "tool": "get_weather", "args": {"forecast": true, "location": ""}}
+{"text": "Zoe, should I grab an umbrella?", "tool": "get_weather", "args": {"forecast": false, "location": ""}}
+{"text": "Can you check the weather forecast for this week when you're free?", "tool": "get_weather", "args": {"forecast": true, "location": ""}}
+{"text": "Hey, what's the forecast for this week, please?", "tool": "get_weather", "args": {"forecast": true, "location": ""}}
+{"text": "What's the forecast for London this weekend?", "tool": "get_weather", "args": {"forecast": true, "location": "London"}}
+{"text": "Hey, what's the weather look like over in Sydney?", "tool": "get_weather", "args": {"forecast": false, "location": "Sydney"}}
+{"text": "What's the temperature like in Geraldton today?", "tool": "get_weather", "args": {"forecast": false, "location": "Geraldton"}}
+{"text": "Hey, when you get a sec, can you check if it's raining in Tokyo?", "tool": "get_weather", "args": {"forecast": false, "location": "Tokyo"}}
+{"text": "zoe tell me the temperature in Geraldton right now", "tool": "get_weather", "args": {"forecast": false, "location": "Geraldton"}}
+{"text": "Hey what's the weather like outside right now?", "tool": "get_weather", "args": {"forecast": false, "location": ""}}
+{"text": "Can you flick on the lights in the bedroom for me?", "tool": "home", "args": {"action": "on", "room": "bedroom"}}
+{"text": "Can you turn the office lights on?", "tool": "home", "args": {"action": "on", "room": "office"}}
+{"text": "Lower the lights on the porch", "tool": "home", "args": {"action": "dim", "room": "porch"}}
+{"text": "Turn off the lights in the garage", "tool": "home", "args": {"action": "off", "room": "garage"}}
+{"text": "Turn off the kitchen lights", "tool": "home", "args": {"action": "off", "room": "kitchen"}}
+{"text": "Can you turn up the lights in the kitchen a little bit?", "tool": "home", "args": {"action": "brighten", "room": "kitchen"}}
+{"text": "can you crank up the light in the garage just a touch", "tool": "home", "args": {"action": "brighten", "room": "garage"}}
+{"text": "switch on the lights in the office", "tool": "home", "args": {"action": "on", "room": "office"}}
+{"text": "Hey, can you quickly turn off the porch lights?", "tool": "home", "args": {"action": "off", "room": "porch"}}
+{"text": "Hey, can you flick on the garage light?", "tool": "home", "args": {"action": "on", "room": "garage"}}
+{"text": "Hey Zoe, could you flick on the garage lights for me?", "tool": "home", "args": {"action": "on", "room": "garage"}}
+{"text": "Turn on the garage lights for me", "tool": "home", "args": {"action": "on", "room": "garage"}}
+{"text": "Hey, write down in my diary: today was a really good day", "tool": "journal", "args": {"action": "create", "content": "today was a really good day", "mood": ""}}
+{"text": "Yo Zoe, could you jot down in my journal that work was rough today?", "tool": "journal", "args": {"action": "create", "content": "work was rough today", "mood": ""}}
+{"text": "Hey Zoe, could you jot down in my journal that work was rough today, Zoe?", "tool": "journal", "args": {"action": "create", "content": "work was rough today", "mood": ""}}
+{"text": "Zoe, can you read back my most recent journal entry for me?", "tool": "journal", "args": {"action": "read", "content": "", "mood": ""}}
+{"text": "Hey diary, wanna log that today was a really good day?", "tool": "journal", "args": {"action": "create", "content": "today was a really good day", "mood": ""}}
+{"text": "Hey, can you tell me what my last journal entry was about when you have a sec?", "tool": "journal", "args": {"action": "read", "content": "", "mood": ""}}
+{"text": "What was the topic of my most recent journal entry, thanks", "tool": "journal", "args": {"action": "read", "content": "", "mood": ""}}
+{"text": "Hey Zoe, when you get a sec, could you let me know what I should write about tonight?", "tool": "journal", "args": {"action": "prompt", "content": "", "mood": ""}}
+{"text": "hey zoe, can you tell me what i wrote in my journal yesterday, zoe?", "tool": "journal", "args": {"action": "read", "content": "", "mood": ""}}
+{"text": "Hey Zoe, can you pull up my latest diary entries?", "tool": "journal", "args": {"action": "read", "content": "", "mood": ""}}
+{"text": "What's on the writing menu for tonight?", "tool": "journal", "args": {"action": "prompt", "content": "", "mood": ""}}
+{"text": "Hey Zoe, can I get any reminders for tomorrow?", "tool": "list_reminders", "args": {"qualifier": "tomorrow"}}
+{"text": "Can you pull up my reminders for me?", "tool": "list_reminders", "args": {"qualifier": ""}}
+{"text": "So what's on my agenda for today?", "tool": "list_reminders", "args": {"qualifier": "today"}}
+{"text": "Hey Zoe, can you remind me about anything for tomorrow?", "tool": "list_reminders", "args": {"qualifier": "tomorrow"}}
+{"text": "So Zoe what's my to-do list lookin' like this week", "tool": "list_reminders", "args": {"qualifier": "this week"}}
+{"text": "Hey Zoe, what reminders do you have for tomorrow?", "tool": "list_reminders", "args": {"qualifier": "tomorrow"}}
+{"text": "Hey, what's on my to-do list?", "tool": "list_reminders", "args": {"qualifier": ""}}
+{"text": "Hey, can you pull up my reminders for me?", "tool": "list_reminders", "args": {"qualifier": ""}}
+{"text": "Hey, what's on my to-do list for today?", "tool": "list_reminders", "args": {"qualifier": "today"}}
+{"text": "What's on my to-do list for today?", "tool": "list_reminders", "args": {"qualifier": "today"}}
+{"text": "Can you pull up my reminders?", "tool": "list_reminders", "args": {"qualifier": ""}}
+{"text": "Hey, can you quickly check my reminders for tomorrow?", "tool": "list_reminders", "args": {"qualifier": "tomorrow"}}
+{"text": "Can you take \"call the bank\" out of the birthday list?", "tool": "list_remove", "args": {"item": "call the bank", "list_type": "birthday"}}
+{"text": "Get rid of the book flights from the personal list", "tool": "list_remove", "args": {"item": "book flights", "list_type": "personal"}}
+{"text": "Hey, can you take out the old task from Zoe's tasks list?", "tool": "list_remove", "args": {"item": "old task", "list_type": "tasks"}}
+{"text": "Scratch old task from my birthday list", "tool": "list_remove", "args": {"item": "old task", "list_type": "birthday"}}
+{"text": "Take out the old task from the birthday list", "tool": "list_remove", "args": {"item": "old task", "list_type": "birthday"}}
+{"text": "Hey, can you quickly take out delete fix the fence from the to-do list?", "tool": "list_remove", "args": {"item": "fix the fence", "list_type": "to-do"}}
+{"text": "Take the fix the fence off the birthday list and delete it", "tool": "list_remove", "args": {"item": "fix the fence", "list_type": "birthday"}}
+{"text": "Can you just scratch old task off the birthday list for me?", "tool": "list_remove", "args": {"item": "old task", "list_type": "birthday"}}
+{"text": "take out fix the fence from the work list", "tool": "list_remove", "args": {"item": "fix the fence", "list_type": "work"}}
+{"text": "Hey, can you call the bank for Zoe on the to-do list?", "tool": "list_remove", "args": {"item": "call the bank", "list_type": "to-do"}}
+{"text": "Hey Zoe, when you're free, could you take call the bank off the personal list?", "tool": "list_remove", "args": {"item": "call the bank", "list_type": "personal"}}
+{"text": "Can you take out the book flights from the to-do list at work?", "tool": "list_remove", "args": {"item": "book flights", "list_type": "work"}}
+{"text": "Put on some classical music", "tool": "media", "args": {"action": "play", "query": "classical music", "command": "", "level": "", "direction": ""}}
+{"text": "Hey, can you finish the music for me?", "tool": "media", "args": {"action": "control", "query": "", "command": "resume", "level": "", "direction": ""}}
+{"text": "Play the Beatles for me", "tool": "media", "args": {"action": "play", "query": "the beatles", "command": "", "level": "", "direction": ""}}
+{"text": "Hey Zoe, can you put on some Taylor Swift for me?", "tool": "media", "args": {"action": "play", "query": "taylor swift", "command": "", "level": "", "direction": ""}}
+{"text": "Hey, could you dial down the music just a bit?", "tool": "media", "args": {"action": "volume", "query": "", "command": "", "level": "", "direction": "down"}}
+{"text": "cut the tunes", "tool": "media", "args": {"action": "control", "query": "", "command": "stop", "level": "", "direction": ""}}
+{"text": "Can you skip back a track?", "tool": "media", "args": {"action": "control", "query": "", "command": "previous", "level": "", "direction": ""}}
+{"text": "can you start my chill playlist please", "tool": "media", "args": {"action": "play", "query": "my chill playlist", "command": "", "level": "", "direction": ""}}
+{"text": "get the Fleetwood Mac on", "tool": "media", "args": {"action": "play", "query": "fleetwood mac", "command": "", "level": "", "direction": ""}}
+{"text": "Hey, can you play Taylor Swift?", "tool": "media", "args": {"action": "play", "query": "taylor swift", "command": "", "level": "", "direction": ""}}
+{"text": "Play my chill playlist now", "tool": "media", "args": {"action": "play", "query": "my chill playlist", "command": "", "level": "", "direction": ""}}
+{"text": "Yo, turn the tunes down a bit", "tool": "media", "args": {"action": "volume", "query": "", "command": "", "level": "", "direction": "down"}}
+{"text": "Can you find the note concerning the holiday plans?", "tool": "note_search", "args": {"query": "holiday plans"}}
+{"text": "Can you look through my notes for the meeting notes when you have a sec?", "tool": "note_search", "args": {"query": "the meeting notes"}}
+{"text": "Pull up the note with the plumber's quote", "tool": "note_search", "args": {"query": "the plumber's quote"}}
+{"text": "Hey, what did I jot down for the wifi password?", "tool": "note_search", "args": {"query": "the wifi password"}}
+{"text": "Hey Zoe, can you check my note for the wifi password for a sec?", "tool": "note_search", "args": {"query": "the wifi password"}}
+{"text": "Check my notes for the paint colour", "tool": "note_search", "args": {"query": "the paint colour"}}
+{"text": "hey zoe could you find that note about holiday plans for me real fast", "tool": "note_search", "args": {"query": "holiday plans"}}
+{"text": "Can you track down that note regarding the car insurance when you have a sec", "tool": "note_search", "args": {"query": "the car insurance"}}
+{"text": "Hey, can you look through my notes and tell me what my shoe size is?", "tool": "note_search", "args": {"query": "my shoe size"}}
+{"text": "Check out the note I wrote about my shoe size", "tool": "note_search", "args": {"query": "my shoe size"}}
+{"text": "hey zoe do you happen to have a note regarding my shoe size", "tool": "note_search", "args": {"query": "my shoe size"}}
+{"text": "Hey, can you look through my notes for the garage door code?", "tool": "note_search", "args": {"query": "the garage door code"}}
+{"text": "Hey, can you recall Chloe, the girl I used to live with?", "tool": "people", "args": {"action": "create", "name": "Chloe", "relationship": "my old roommate", "query": "", "notes": ""}}
+{"text": "Hey, when you get a sec, could you tell me who Grace is?", "tool": "people", "args": {"action": "query", "name": "Grace", "relationship": "", "query": "Grace", "notes": ""}}
+{"text": "Can you put Lucy in my contacts as a work pal?", "tool": "people", "args": {"action": "create", "name": "Lucy", "relationship": "a friend from work", "query": "", "notes": ""}}
+{"text": "Hey, can you put Mike in my contacts as my brother-in-law?", "tool": "people", "args": {"action": "create", "name": "Mike", "relationship": "my brother in law", "query": "", "notes": ""}}
+{"text": "Hey Zoe, what's up with Lucy?", "tool": "people", "args": {"action": "query", "name": "Lucy", "relationship": "", "query": "Lucy", "notes": ""}}
+{"text": "Remind me what I said about Ben", "tool": "people", "args": {"action": "query", "name": "Ben", "relationship": "", "query": "Ben", "notes": ""}}
+{"text": "Put Chloe in my contacts, my neighbor", "tool": "people", "args": {"action": "create", "name": "Chloe", "relationship": "my neighbour", "query": "", "notes": ""}}
+{"text": "Keep an eye on Lucy, who is my daughter's teacher.", "tool": "people", "args": {"action": "create", "name": "Lucy", "relationship": "my daughter's teacher", "query": "", "notes": ""}}
+{"text": "Hey, this is Ben, my sister, keep tabs on them", "tool": "people", "args": {"action": "create", "name": "Ben", "relationship": "my sister", "query": "", "notes": ""}}
+{"text": "Can you keep an eye on David, my neighbour, for me?", "tool": "people", "args": {"action": "create", "name": "David", "relationship": "my neighbour", "query": "", "notes": ""}}
+{"text": "Hey Zoe, can you keep an eye on Lucy for me, she's my cousin?", "tool": "people", "args": {"action": "create", "name": "Lucy", "relationship": "my cousin", "query": "", "notes": ""}}
+{"text": "Tell me what you know about Mike", "tool": "people", "args": {"action": "query", "name": "Mike", "relationship": "", "query": "Mike", "notes": ""}}
+{"text": "Hey, remember what I said about my shoe size?", "tool": "recall_memory", "args": {"query": "my shoe size"}}
+{"text": "Yo Zoe, remind me what you recall about my name", "tool": "recall_memory", "args": {"query": "my name"}}
+{"text": "Hey, what do you recall regarding my shoe size?", "tool": "recall_memory", "args": {"query": "my shoe size"}}
+{"text": "What's my doctor's name again?", "tool": "recall_memory", "args": {"query": "my doctor's name"}}
+{"text": "Hey, what's the deal with my allergies again?", "tool": "recall_memory", "args": {"query": "my allergies"}}
+{"text": "Remind me what I said regarding my shoe size", "tool": "recall_memory", "args": {"query": "my shoe size"}}
+{"text": "What's my name again?", "tool": "recall_memory", "args": {"query": "my name"}}
+{"text": "Zoe, could you remind me about my anniversary sometime?", "tool": "recall_memory", "args": {"query": "my anniversary"}}
+{"text": "Hey Zoe, what's my shoe size, Zoe?", "tool": "recall_memory", "args": {"query": "my shoe size"}}
+{"text": "can you recall my anniversary", "tool": "recall_memory", "args": {"query": "my anniversary"}}
+{"text": "what was my shoe size again", "tool": "recall_memory", "args": {"query": "my shoe size"}}
+{"text": "Hey, can you tell me what my doctor's name is?", "tool": "recall_memory", "args": {"query": "my doctor's name"}}
+{"text": "Hey Zoe, write this down: my daughter's birthday is May 9, Zoe.", "tool": "remember_fact", "args": {"fact": "my daughter's birthday is May 9"}}
+{"text": "Just a heads up, remember the spare key is under the pot plant.", "tool": "remember_fact", "args": {"fact": "the spare key is under the pot plant"}}
+{"text": "Hey, remember my anniversary is October 12th?", "tool": "remember_fact", "args": {"fact": "my anniversary is October 12th"}}
+{"text": "Yo Zoe, just a reminder that my locker code is 4417", "tool": "remember_fact", "args": {"fact": "my locker code is 4417"}}
+{"text": "just so you know my locker code is 4417 real fast", "tool": "remember_fact", "args": {"fact": "my locker code is 4417"}}
+{"text": "Hey Zoe, remind you that my daughter's birthday is May 9th, Zoe?", "tool": "remember_fact", "args": {"fact": "my daughter's birthday is May 9"}}
+{"text": "hey zoe just a reminder that my GP is Dr Patel", "tool": "remember_fact", "args": {"fact": "my GP is Dr Patel"}}
+{"text": "Save this, my locker code is 4417", "tool": "remember_fact", "args": {"fact": "my locker code is 4417"}}
+{"text": "Set a timer for two minutes", "tool": "set_timer", "args": {"minutes": 2, "label": ""}}
+{"text": "Set a timer for sixty minutes for tea", "tool": "set_timer", "args": {"minutes": 60, "label": "tea"}}
+{"text": "Can you get a timer going for twenty-five minutes?", "tool": "set_timer", "args": {"minutes": 25, "label": ""}}
+{"text": "set a 30 minute nap timer", "tool": "set_timer", "args": {"minutes": 30, "label": "nap"}}
+{"text": "Hey Zoe, can you set a timer for 15 minutes when you get a sec?", "tool": "set_timer", "args": {"minutes": 15, "label": ""}}
+{"text": "Hey, can you set a timer for 25 minutes?", "tool": "set_timer", "args": {"minutes": 25, "label": ""}}
+{"text": "Set a timer for twenty minutes for my tea whenever you can", "tool": "set_timer", "args": {"minutes": 20, "label": "tea"}}
+{"text": "Set the timer for bread for one minute", "tool": "set_timer", "args": {"minutes": 1, "label": "bread"}}
+{"text": "Hey Zoe, set an eight-minute timer, Zoe", "tool": "set_timer", "args": {"minutes": 8, "label": ""}}
+{"text": "Set an alarm for me in ninety minutes", "tool": "set_timer", "args": {"minutes": 90, "label": ""}}
+{"text": "Hey Zoe, could you throw a 15-minute timer on?", "tool": "set_timer", "args": {"minutes": 15, "label": ""}}
+{"text": "Hey, set a 3-minute timer for tea.", "tool": "set_timer", "args": {"minutes": 3, "label": "tea"}}
+{"text": "can you put some cereal in the grocery list?", "tool": "shopping_list_add", "args": {"item": "cereal"}}
+{"text": "Hey Zoe, could you jot down cereal on the shopping list when you have a sec?", "tool": "shopping_list_add", "args": {"item": "cereal"}}
+{"text": "Hey Zoe, can you remind me to grab eggs when I'm at the shops?", "tool": "shopping_list_add", "args": {"item": "eggs"}}
+{"text": "Add chicken to the list for shopping", "tool": "shopping_list_add", "args": {"item": "chicken"}}
+{"text": "Can you grab some orange juice for the groceries?", "tool": "shopping_list_add", "args": {"item": "orange juice"}}
+{"text": "add eggs to the list", "tool": "shopping_list_add", "args": {"item": "eggs"}}
+{"text": "Could you throw some cereal on my grocery list?", "tool": "shopping_list_add", "args": {"item": "cereal"}}
+{"text": "Hey, we're totally out of milk.", "tool": "shopping_list_add", "args": {"item": "milk"}}
+{"text": "Hey Zoe, can you throw in eggs for me on the shopping list?", "tool": "shopping_list_add", "args": {"item": "eggs"}}
+{"text": "Make sure I grab yogurt when I'm at the shops", "tool": "shopping_list_add", "args": {"item": "yogurt"}}
+{"text": "Hey, we're running low on that laundry detergent, quick!", "tool": "shopping_list_add", "args": {"item": "laundry detergent"}}
+{"text": "Can you add laundry detergent to the shopping list please", "tool": "shopping_list_add", "args": {"item": "laundry detergent"}}
+{"text": "What's up this weekend, real quick?", "tool": "show_calendar", "args": {"qualifier": "this weekend"}}
+{"text": "Hey Zoe, can you remind me what I've got going on tomorrow?", "tool": "show_calendar", "args": {"qualifier": "tomorrow"}}
+{"text": "Hey, what's on my schedule for tomorrow?", "tool": "show_calendar", "args": {"qualifier": "tomorrow"}}
+{"text": "Hey Zoe, can you show me my schedule for this week?", "tool": "show_calendar", "args": {"qualifier": "this week"}}
+{"text": "Hey, what's my schedule looking like for Friday?", "tool": "show_calendar", "args": {"qualifier": "friday"}}
+{"text": "What do I have on my calendar for Monday?", "tool": "show_calendar", "args": {"qualifier": "monday"}}
+{"text": "zoe hey, could you show me my schedule for the week?", "tool": "show_calendar", "args": {"qualifier": "this week"}}
+{"text": "Hey, can you show me what my week is looking like?", "tool": "show_calendar", "args": {"qualifier": "this week"}}
+{"text": "Hey Zoe, what's up on my schedule?", "tool": "show_calendar", "args": {"qualifier": ""}}
+{"text": "Hey Zoe, what's on my schedule for tomorrow?", "tool": "show_calendar", "args": {"qualifier": "tomorrow"}}
+{"text": "Hey, what's up on the calendar for Monday, thanks?", "tool": "show_calendar", "args": {"qualifier": "monday"}}
+{"text": "Hey, when you have a sec, what's on for this weekend?", "tool": "show_calendar", "args": {"qualifier": "this weekend"}}
+{"text": "Hey Zoe, can you give me a quick rundown of my work stuff?", "tool": "show_list", "args": {"list_type": "work"}}
+{"text": "Hey Zoe, can you check my personal to-do list for me, Zoe?", "tool": "show_list", "args": {"list_type": "personal"}}
+{"text": "Hey Zoe, what's on the list for Zoe's birthday?", "tool": "show_list", "args": {"list_type": "birthday"}}
+{"text": "Can you pull up the birthday list for me?", "tool": "show_list", "args": {"list_type": "birthday"}}
+{"text": "zoe hey, what's on my birthday list?", "tool": "show_list", "args": {"list_type": "birthday"}}
+{"text": "Can you pull up my personal list for me", "tool": "show_list", "args": {"list_type": "personal"}}
+{"text": "Yo Zoe, can I check out my personal list?", "tool": "show_list", "args": {"list_type": "personal"}}
+{"text": "What's on the list for my birthday?", "tool": "show_list", "args": {"list_type": "birthday"}}
+{"text": "Hey, can you tell me what's still on the shopping list?", "tool": "show_list", "args": {"list_type": "shopping"}}
+{"text": "zoe hey show me my personal list", "tool": "show_list", "args": {"list_type": "personal"}}
+{"text": "Hey, can you tell me what's on my shopping list, real fast?", "tool": "show_list", "args": {"list_type": "shopping"}}
+{"text": "Hey Zoe, could you run through my to-do list for me?", "tool": "show_list", "args": {"list_type": "to-do"}}
