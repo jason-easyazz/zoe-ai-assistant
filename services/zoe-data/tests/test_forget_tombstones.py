@@ -240,5 +240,6 @@ def test_is_explicit_teach_shapes():
     for task in ("don't forget to invite Delia", "remember to call Delia",
                  "don't forget about Delia", "remember we need to invite Delia",
                  "note about Delia: party", "remember it was Delia's idea",
-                 "remind me about Delia", "I saw Delia today"):
+                 "remind me about Delia", "I saw Delia today",
+                 "remember tomorrow to call Delia", "remember Delia tomorrow"):
         assert not is_explicit_teach(task), task

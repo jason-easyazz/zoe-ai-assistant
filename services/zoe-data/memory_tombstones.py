@@ -90,16 +90,34 @@ def matching_tombstone(user_id: str, text: str) -> Optional[str]:
 # "… about Delia", "… we need to …", "remind me …" are tasks, not teaches, and
 # must never clear a forget shadow. ONE definition, shared by the chat and
 # voice extraction hooks — extend here, not in the lanes.
-_EXPLICIT_TEACH_RE = re.compile(
+_TEACH_OPENER_RE = re.compile(
     r"^(?:please\s+)?(?:remember|note|don'?t\s+forget|keep\s+in\s+mind)\s+"
-    r"(?:that\s+)?(?!(?:to|about|we|us|me|you|i|it|this)\b)\S",
+    r"(?:that\s+)?(?!(?:to|about|we|us|me|you|i|it|this)\b)(?P<clause>\S.*)$",
     re.IGNORECASE,
 )
+# The clause must actually ASSERT something (a fact verb) — blocklisting task
+# openers alone kept leaking timing/plan phrasings ("remember tomorrow to call
+# Delia"). Both conditions must hold: subject-first opening AND a fact verb.
+_FACT_VERB_RE = re.compile(
+    r"\b(?:is|are|was|were|has|had|have|likes?|loves?|hates?|prefers?|"
+    r"lives?|works?|moved|means|turned|allergic|born)\b",
+    re.IGNORECASE,
+)
+# …but a fact verb inside a to-infinitive/task tail doesn't count if the
+# clause LEADS with a task shape ("tomorrow to call …").
+_TASK_TAIL_RE = re.compile(r"^\S+\s+to\s+\w+", re.IGNORECASE)
 
 
 def is_explicit_teach(text: str) -> bool:
-    """Does ``text`` read as the user dictating a fact (vs a reminder/task)?"""
-    return bool(_EXPLICIT_TEACH_RE.match((text or "").strip()))
+    """Does ``text`` read as the user dictating a fact (vs a reminder/task)?
+    ONE definition shared by the chat and voice hooks — extend here."""
+    m = _TEACH_OPENER_RE.match((text or "").strip())
+    if not m:
+        return False
+    clause = m.group("clause")
+    if _TASK_TAIL_RE.match(clause):
+        return False
+    return bool(_FACT_VERB_RE.search(clause))
 
 
 def clear_matching(user_id: str, text: str) -> int:
