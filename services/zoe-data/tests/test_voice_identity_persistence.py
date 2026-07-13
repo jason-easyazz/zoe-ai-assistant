@@ -97,9 +97,15 @@ def _wire_voice_command_fakes(monkeypatch, *, panel_user: str | None):
 
     # Lazy in-function imports resolve through sys.modules — fake them all so
     # the test never touches the real chat stack, push bus, or brain cue path.
+    async def fake_ensure_user_and_chat_session(session_id, user_id):
+        return None
+
     monkeypatch.setitem(
-        sys.modules, "chat",
-        types.SimpleNamespace(_save_chat_message=fake_save_chat_message),
+        sys.modules, "routers.chat",
+        types.SimpleNamespace(
+            _save_chat_message=fake_save_chat_message,
+            _ensure_user_and_chat_session=fake_ensure_user_and_chat_session,
+        ),
     )
     monkeypatch.setitem(
         sys.modules, "skybridge_service",
@@ -220,13 +226,22 @@ async def test_unbound_panel_guest_sentinel_skips_save_cleanly(monkeypatch) -> N
 async def test_schedule_save_skips_voice_guest_sentinel(monkeypatch) -> None:
     """_schedule_voice_chat_save's skip set includes "voice-guest"."""
     scheduled: list[object] = []
+    saved: list[tuple] = []
+    ensured: list[tuple] = []
 
-    async def fake_save_chat_message(*args, **kwargs):
+    async def fake_save_chat_message(session_id, role, content, user_id=None, **_kw):
+        saved.append((session_id, role, content, user_id))
         return True
 
+    async def fake_ensure(session_id, user_id):
+        ensured.append((session_id, user_id))
+
     monkeypatch.setitem(
-        sys.modules, "chat",
-        types.SimpleNamespace(_save_chat_message=fake_save_chat_message),
+        sys.modules, "routers.chat",
+        types.SimpleNamespace(
+            _save_chat_message=fake_save_chat_message,
+            _ensure_user_and_chat_session=fake_ensure,
+        ),
     )
     monkeypatch.setattr(voice_tts, "_spawn_bg", scheduled.append)
 
@@ -235,9 +250,12 @@ async def test_schedule_save_skips_voice_guest_sentinel(monkeypatch) -> None:
     assert scheduled == []
 
     await voice_tts._schedule_voice_chat_save(SESSION_ID, "hi", "hello", BOUND_USER)
-    assert len(scheduled) == 2  # user + assistant turns for a real user
-    for coro in scheduled:
-        coro.close()  # created-but-unscheduled coroutines must not warn
+    assert len(scheduled) == 1  # one persist task covering both turns
+    await scheduled[0]
+    # parent rows are minted BEFORE the inserts (session FK guard)
+    assert ensured == [(SESSION_ID, BOUND_USER)]
+    assert (SESSION_ID, "user", "hi", BOUND_USER) in saved
+    assert (SESSION_ID, "assistant", "hello", BOUND_USER) in saved
 
 
 @pytest.mark.asyncio
@@ -252,9 +270,15 @@ async def test_schedule_save_failure_logs_warning_with_user(monkeypatch, caplog)
         coro.close()
         raise RuntimeError("scheduler down")
 
+    async def fake_ensure(session_id, user_id):
+        return None
+
     monkeypatch.setitem(
-        sys.modules, "chat",
-        types.SimpleNamespace(_save_chat_message=fake_save_chat_message),
+        sys.modules, "routers.chat",
+        types.SimpleNamespace(
+            _save_chat_message=fake_save_chat_message,
+            _ensure_user_and_chat_session=fake_ensure,
+        ),
     )
     monkeypatch.setattr(voice_tts, "_spawn_bg", exploding_spawn)
 
@@ -330,3 +354,19 @@ async def test_identity_resolves_via_dedicated_conn_under_shared_db_race(monkeyp
         "turn was not persisted under the panel-bound user via the dedicated connection "
         "(the P-W0 root cause): %r" % (chat_calls,)
     )
+
+
+def test_voice_save_import_path_is_real() -> None:
+    """Regression for the silent save outage (2026-07-13): the lazy import in
+    _schedule_voice_chat_save must name a module that actually exists at
+    runtime. The old ``from chat import ...`` only worked in tests because they
+    injected a fake top-level ``chat`` into sys.modules; in production it raised
+    ModuleNotFoundError on every panel turn and no transcript was ever saved.
+    """
+    import importlib.util
+
+    assert importlib.util.find_spec("routers.chat") is not None
+    # NOTE: we deliberately do NOT assert that a top-level ``chat`` module is
+    # unresolvable — CI's sys.path includes routers/, so ``chat`` resolves
+    # there (which is exactly how the buggy spelling passed CI while failing
+    # in production, where only the service root is on sys.path).

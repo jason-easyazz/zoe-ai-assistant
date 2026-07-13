@@ -155,6 +155,14 @@ _NON_NAME_TOKENS = frozenset({
     "there", "here", "this", "that", "these", "those", "then", "now", "who", "what",
     "the", "a", "an", "yes", "no", "well", "so", "but", "and", "or",
     "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+    # Discourse/correction openers: "actually Delia's birthday…" must not mint
+    # a person called "Actually Delia" (live repro 2026-07-13, slug:actually_delia).
+    "actually", "wait", "sorry", "oh", "okay", "ok", "hey", "um", "uh",
+    "also", "anyway", "remember", "note", "please", "maybe", "hmm",
+    # Quantifiers/deictics: "forget everything about Delia" must never mint a
+    # person "everything about" (live repro 2026-07-13, junk gift-idea row).
+    "everything", "anything", "nothing", "something", "about", "forget",
+    "delete", "remove", "erase",
 })
 
 
@@ -332,6 +340,107 @@ async def _ensure_db(db_arg):
         return None, False
 
 
+def _normalized_fact_value(text: str, person_name: str) -> str:
+    """The value part of a compact person fact, normalized for comparison.
+    "Delia: March 15" → "march 15"; a non-compact text normalizes whole."""
+    t = (text or "").strip()
+    prefix = f"{person_name}:"
+    if t.lower().startswith(prefix.lower()):
+        t = t[len(prefix):]
+    return re.sub(r"\s+", " ", t).strip().lower().rstrip(".")
+
+
+def _same_kind_row(meta: dict, row_text: str, person_name: str, pattern_type: str) -> bool:
+    """Does this same-person row hold the SAME fact kind as the candidate?
+
+    Primary key: the stored ``pattern_type`` (rows written after 2026-07-13).
+    Legacy fallback (rows without pattern_type): only for ``birthday``, and only
+    when the row is the compact "Name: <value>" shape whose value parses as a
+    date — anything looser risks merging distinct fact kinds (meeting vs
+    birthday)."""
+    # MemoryService.ingest namespaces extra metadata as candidate_<key>, so
+    # rows written through the real service carry candidate_pattern_type.
+    stored = str(
+        meta.get("pattern_type") or meta.get("candidate_pattern_type") or ""
+    ).strip().lower()
+    if stored:
+        return stored == pattern_type
+    if pattern_type != "birthday":
+        return False
+    t = (row_text or "").strip()
+    if not t.lower().startswith(f"{person_name.lower()}:"):
+        return False
+    value = t.split(":", 1)[1].strip()
+    try:
+        month, day, _year = _parse_birthday(value)
+    except Exception:
+        return False
+    return month is not None or day is not None
+
+
+async def _reconcile_same_kind_entity_row(
+    svc,
+    text: str,
+    user_id: str,
+    person_name: str,
+    entity_id: Optional[str],
+    pattern_type: str,
+    source: str,
+) -> Optional[str]:
+    """Supersede/skip against an existing row of the SAME person + SAME kind.
+
+    Returns the surviving mem_id when the candidate was handled here (skip or
+    supersede), or None to fall through to the text reconcile + plain ingest.
+    """
+    slug = f"slug:{person_name.lower().replace(' ', '_')}"
+    entity_ids = [e for e in (entity_id, slug) if e]
+    rows = await svc.list_by_entity(user_id, entity_ids)
+    matches = [
+        r for r in rows
+        if _same_kind_row(r.metadata or {}, r.text, person_name, pattern_type)
+    ]
+    if not matches:
+        return None
+    cand_value = _normalized_fact_value(text, person_name)
+    # Same value already stored → keep the existing row, write nothing.
+    for r in matches:
+        if _normalized_fact_value(r.text, person_name) == cand_value:
+            logger.info(
+                "person_extractor: entity dedup-skip kept=%s kind=%s", r.id, pattern_type
+            )
+            return r.id
+    # Different value for the same person+kind → supersede in place. One row
+    # per kind is the invariant; extra stale duplicates are archived.
+    target, *extras = matches
+    new_ref = await svc.review(
+        target.id,
+        decision="edit",
+        edits=text,
+        actor=source,
+        note=f"person {pattern_type} supersede (entity-keyed, QA 2026-07-13)",
+    )
+    if new_ref is None:
+        return None  # supersede failed — fall through to the normal path
+    logger.info(
+        "person_extractor: entity-superseded %s (kind=%s) with %s",
+        target.id, pattern_type, new_ref.id,
+    )
+    try:
+        if entity_id and not entity_id.startswith("slug:"):
+            await svc.relink_entity(user_id, new_ref.id, "person", entity_id)
+    except Exception as exc:
+        logger.debug("person_extractor: relink after entity supersede failed: %s", exc)
+    for stale in extras:
+        try:
+            await svc.review(
+                stale.id, decision="archive", actor=source,
+                note=f"stale duplicate {pattern_type} (entity-keyed supersede)",
+            )
+        except Exception:
+            pass
+    return new_ref.id
+
+
 async def _ingest_to_mempalace(
     text: str,
     user_id: str,
@@ -340,8 +449,15 @@ async def _ingest_to_mempalace(
     memory_type: str = "person",
     source: str = "conversation",
     session_id: Optional[str] = None,
+    pattern_type: Optional[str] = None,
 ) -> Optional[str]:
-    """Write one fact to MemPalace and return the mem_id."""
+    """Write one fact to MemPalace and return the mem_id.
+
+    ``pattern_type`` (birthday/preference/work/…) is stored on the row and
+    drives the entity-keyed reconciliation: compact "Name: value" rows have no
+    parseable attribute for text reconciliation, so same-person + same-kind
+    supersession is decided by linkage instead (QA follow-up 2026-07-13).
+    """
     try:
         # Quality gate: this LLM person-extraction path was writing transcript
         # echoes as facts ("Zoe: is being addressed in a conversation"). Drop
@@ -352,13 +468,97 @@ async def _ingest_to_mempalace(
             logger.debug("person_extractor: dropped non-fact (%s): %r", reason, text[:60])
             return None
         from memory_service import get_memory_service
-        ref = await get_memory_service().ingest(
+        svc = get_memory_service()
+        # Entity-keyed reconciliation FIRST (QA follow-up 2026-07-13): compact
+        # "Name: value" rows ("Delia: March 15") have no parseable attribute, so
+        # the text reconcile below can never supersede them. When this fact is
+        # linked to a person and has a known kind, look for an existing row of
+        # the SAME person + SAME kind: same value → keep the existing row;
+        # different value → supersede it in place. Best-effort — any failure
+        # falls through to the text reconcile + plain ingest.
+        if pattern_type:
+            try:
+                handled = await _reconcile_same_kind_entity_row(
+                    svc, text, user_id, person_name, entity_id, pattern_type, source
+                )
+            except Exception as exc:
+                logger.debug(
+                    "person_extractor: entity reconcile skipped (%s)", type(exc).__name__
+                )
+                handled = None
+            if handled is not None:
+                return handled
+        # Cross-writer reconciliation (QA review F9): this path used to blind-ADD,
+        # so a re-stated or corrected person fact accumulated near-duplicate /
+        # contradicting rows next to the memory-expert and digest copies. Route
+        # through the shared ADD/UPDATE/SKIP decision (entity-guarded on the
+        # person's name). reconcile_for_ingest never raises — errors → ADD.
+        try:
+            from memory_quality import reconcile_for_ingest
+            op, target_id = await reconcile_for_ingest(
+                svc, text, user_id, title=person_name)
+        except Exception as exc:
+            logger.debug("person_extractor: reconciliation unavailable (%s) — plain ingest", exc)
+            op, target_id = "add", None
+        if op in ("skip", "update") and target_id:
+            # Linkage guard (Greptile P1): the matched row may have come from
+            # another writer (raw voice_fact / digest) and NOT be keyed to this
+            # person — returning/editing it would hand the activity/date/gift
+            # callers a mem_id that person-scoped recall can't see, and edit
+            # preserves the row's old entity link. Only reconcile onto rows
+            # already keyed to THIS person (resolved uuid or same-name pending
+            # slug); anything else falls back to a plain, correctly-linked ADD.
+            try:
+                target = await svc.get(target_id)
+                meta = getattr(target, "metadata", None) or {}
+                slug = f"slug:{person_name.lower().replace(' ', '_')}"
+                acceptable = (
+                    str(meta.get("entity_type") or "") in ("person", "person_pending")
+                    and str(meta.get("entity_id") or "") in {e for e in (entity_id, slug) if e}
+                )
+            except Exception:
+                acceptable = False
+            if not acceptable:
+                op, target_id = "add", None
+        if op == "skip" and target_id:
+            # Existing row is at least as informative — keep it, write nothing.
+            logger.info("person_extractor: dedup-skip kept=%s cand=%r", target_id, text[:60])
+            return target_id
+        if op == "update" and target_id:
+            try:
+                new_ref = await svc.review(
+                    target_id,
+                    decision="edit",
+                    edits=text,
+                    actor=source,
+                    note="person fact supersede (QA F9)",
+                )
+                if new_ref is not None:
+                    logger.info("person_extractor: superseded %s with %r", target_id, text[:60])
+                    # review(edit) keeps the row's old entity link. If this call
+                    # holds a RESOLVED people.id but the matched row is still a
+                    # same-name pending slug, promote it (Greptile P1) —
+                    # relink_entity is metadata-only, per-user-locked, and a
+                    # no-op unless the row is still person_pending. Best-effort:
+                    # a failed relink leaves the pre-existing pending linkage,
+                    # which the idle link-resolver also repairs.
+                    try:
+                        if entity_id and not entity_id.startswith("slug:"):
+                            await svc.relink_entity(
+                                user_id, new_ref.id, "person", entity_id)
+                    except Exception as exc:
+                        logger.debug("person_extractor: relink after supersede failed: %s", exc)
+                    return new_ref.id
+            except Exception as exc:
+                logger.warning("person_extractor: supersede failed (%s) — plain ingest", exc)
+        ref = await svc.ingest(
             text,
             user_id=user_id,
             source=source,
             session_id=session_id,
             memory_type=memory_type,
             status="approved",
+            metadata={"pattern_type": pattern_type} if pattern_type else None,
             tags=["person", "auto_extract", person_name.lower()],
             entity_type="person" if entity_id and not entity_id.startswith("slug:") else "person_pending",
             entity_id=entity_id or f"slug:{person_name.lower().replace(' ', '_')}",
@@ -778,6 +978,7 @@ async def apply_person_fact(
             memory_type="person",
             source=source,
             session_id=session_id,
+            pattern_type=pattern_type,
         )
 
         if not person_uuid:
@@ -948,6 +1149,7 @@ async def process_text(
                 memory_type="person",
                 source=source,
                 session_id=session_id,
+                pattern_type=pattern_type,
             )
 
             # PostgreSQL write (only when we have a DB UUID)

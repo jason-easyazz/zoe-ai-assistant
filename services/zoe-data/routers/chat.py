@@ -1246,6 +1246,17 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
     """
     if user_id == "guest":
         return
+    # A memory COMMAND ("forget everything about Delia", "forget that") is an
+    # instruction, not a fact — mining it minted junk rows ("Gift idea for
+    # everything about: Delia", live repro 2026-07-13) that resurrected the
+    # just-forgotten entity into the recall packet. Skip every extractor pass.
+    try:
+        from intent_router import _FORGET_ENTITY_RE, _FORGET_LAST_RE
+        t = (user_message or "").strip()
+        if _FORGET_LAST_RE.match(t) or _FORGET_ENTITY_RE.match(t):
+            return
+    except Exception:
+        pass  # never let the guard break extraction itself
     try:
         from memory_extractor import extract_and_ingest
         from memory_digest import run_turn_digest
@@ -1303,6 +1314,12 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
                     "memory pass %s FAILED for user=%s (fact loss possible): %s",
                     _mx_name, user_id, _mx_res,
                 )
+                try:  # QA review F13: make silent fact loss countable in ops
+                    from memory_metrics import memory_async_extract_fail_count
+                    memory_async_extract_fail_count.labels(
+                        lane="chat", pass_name=_mx_name).inc()
+                except Exception:
+                    pass
         asyncio.ensure_future(_detect_suggestions(
             user_message,
             user_id=user_id,
