@@ -656,9 +656,12 @@
       var chip=document.createElement('div');chip.className='pc tchip';chip.innerHTML='⏱ <span class="nm">--:--</span>';
       chip.onclick=function(){show('timer');};
       dbody.insertBefore(chip,dbody.firstChild);
-      function tick(){var ms=_dockTmr.exp-Date.now();var el=chip.querySelector('.nm');if(!el||!dbody.contains(chip)||ms<=0){clearInterval(_dockTmr.t);_dockTmr.t=null;if(dbody.contains(chip))chip.remove();return;}
+      var exp=act,myT=null;   // closure-local: a detached chip's queued tick
+      // can only ever clear ITS OWN interval, never a newer chip's.
+      function tick(){var ms=exp-Date.now();var el=chip.querySelector('.nm');
+        if(!el||!dbody.contains(chip)||ms<=0){clearInterval(myT);if(_dockTmr.t===myT)_dockTmr.t=null;if(dbody.contains(chip))chip.remove();return;}
         var sc=Math.round(ms/1000);el.textContent=Math.floor(sc/60)+':'+two(sc%60);}
-      tick();_dockTmr.t=setInterval(tick,1000);
+      tick();myT=setInterval(tick,1000);_dockTmr.t=myT;
     }).catch(function(){});
   }
 
