@@ -53,7 +53,8 @@ class _FakeSvc:
         return [r for r in self.rows if q in r.text.lower()][:limit]
 
     async def list_by_status(self, *, user_id, status="pending", limit=100, offset=0):
-        return [r for r in self.rows if r.metadata.get("status") == status][:limit]
+        rows = [r for r in self.rows if r.metadata.get("status") == status]
+        return rows[offset:offset + limit]
 
     async def review(self, mem_id, *, decision, actor, edits=None, note=None):
         assert decision == "archive", "entity forget must soft-archive, never delete"
@@ -195,6 +196,23 @@ def test_forget_entity_guest_fails_closed(monkeypatch):
         "guest"))
     assert out is not None and "guest" in out.lower()
     assert svc.archived == [], "guests must never trigger archive sweeps"
+
+
+def test_forget_entity_paginates_past_first_page(monkeypatch):
+    # Privacy sweep must not stop at the first 1000-row page (Greptile P1).
+    filler = [_Row(f"f{i}", f"filler fact number {i}") for i in range(1000)]
+    tail = _Row("m-caitlin", "Caitlin loves hiking")
+    svc = _FakeSvc(rows=filler + [tail])
+    # Keep semantic search out of the way so only the paged list can find it.
+    async def _no_search(*a, **k):
+        return []
+    svc.search = _no_search
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: svc)
+    out = _run(intent_router.execute_intent(
+        intent_router.Intent("memory_forget_entity", {"name": "Caitlin"}),
+        "jason"))
+    assert svc.archived == ["m-caitlin"], svc.archived
+    assert "1 thing about Caitlin" in out, out
 
 
 def test_forget_entity_store_down_is_honest(monkeypatch):
