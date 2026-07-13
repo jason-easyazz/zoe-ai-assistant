@@ -84,6 +84,24 @@ def matching_tombstone(user_id: str, text: str) -> Optional[str]:
     return None
 
 
+# An explicit fact-teach: opener + optional "that" + a clause that starts with
+# the fact's subject ("Delia is …", "my friend Delia …", "Delia's birthday …").
+# Reminder/task/plan phrasings are excluded by the lookahead: "… to invite",
+# "… about Delia", "… we need to …", "remind me …" are tasks, not teaches, and
+# must never clear a forget shadow. ONE definition, shared by the chat and
+# voice extraction hooks — extend here, not in the lanes.
+_EXPLICIT_TEACH_RE = re.compile(
+    r"^(?:please\s+)?(?:remember|note|don'?t\s+forget|keep\s+in\s+mind)\s+"
+    r"(?:that\s+)?(?!(?:to|about|we|us|me|you|i|it|this)\b)\S",
+    re.IGNORECASE,
+)
+
+
+def is_explicit_teach(text: str) -> bool:
+    """Does ``text`` read as the user dictating a fact (vs a reminder/task)?"""
+    return bool(_EXPLICIT_TEACH_RE.match((text or "").strip()))
+
+
 def clear_matching(user_id: str, text: str) -> int:
     """Drop every tombstone whose name appears in ``text`` — called by EXPLICIT
     teach paths so 'forget Delia' → 'remember that Delia …' works immediately.
