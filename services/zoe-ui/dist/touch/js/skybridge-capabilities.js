@@ -27,6 +27,9 @@
         setting('security', 'Security', ['pin', 'session', 'password', 'login'], 'PIN, sessions, authentication, and account protection.', 'high', 'settings'),
         setting('panel-identity', 'Panel Identity', ['panel name', 'location', 'default user', 'guest'], 'Touch panel name, room, default user, allowed users, and guest behavior.', 'high', 'settings'),
         setting('general', 'General', ['theme', 'appearance'], 'Theme and general application preferences.', 'low', 'settings'),
+        // "Change setting" emits "change Zoe's Voice", which the skybridge
+        // resolver's voice_settings intent handles with the live picker card.
+        setting('zoe-voice', "Zoe's Voice", ['voice', 'speaking voice', 'tts', 'kokoro', 'preview voice'], 'Choose the voice Zoe speaks with, and preview each one.', 'low', 'settings'),
         setting('display', 'Display', ['brightness', 'night', 'screen', 'volume', 'dim'], 'Panel brightness, idle dimming, night mode, screen-off timing, and device volume.', 'medium', 'display'),
         setting('api', 'Integrations', ['home assistant', 'token', 'api key'], 'External integration endpoints and secrets.', 'critical', 'api'),
         setting('music', 'Music Settings', ['provider', 'audio quality', 'autoplay', 'output'], 'Music providers, quality, output devices, and playback preferences.', 'medium', 'music'),

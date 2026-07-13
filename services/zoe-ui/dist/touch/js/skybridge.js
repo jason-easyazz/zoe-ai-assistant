@@ -235,6 +235,14 @@
             if (event.target.closest('.sky-card.sky-timer-ringing') && acknowledgeRingingTimers()) {
                 return;
             }
+            // "Zoe's voice" card Preview: synthesize the fixed sample sentence in
+            // the tapped voice via /api/voice/preview and play it on the panel —
+            // no resolver round trip, nothing persisted.
+            const previewBtn = event.target.closest('button[data-voice-preview]');
+            if (previewBtn) {
+                playVoicePreview(previewBtn);
+                return;
+            }
             const btn = event.target.closest('button[data-sky-action]');
             if (!btn) return;
             // "+ Add item" and friends: open the composer prefilled so you can type
@@ -266,6 +274,37 @@
                 submitCommand(query);
             }
         });
+    }
+
+    // Fetch + play the fixed voice-preview sample for one voice id. The text is
+    // server-fixed (never sent from the panel); the button disables while the
+    // request/playback is in flight so taps can't queue overlapping samples.
+    async function playVoicePreview(btn) {
+        const voice = btn.dataset.voicePreview;
+        if (!voice || btn.disabled) return;
+        btn.disabled = true;
+        const rearm = () => { btn.disabled = false; };
+        try {
+            const resp = await fetch('/api/voice/preview', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                body: JSON.stringify({ voice })
+            });
+            if (!resp.ok) throw new Error('Preview unavailable');
+            const data = await resp.json();
+            if (!data || !data.audio_base64) throw new Error('Preview unavailable');
+            const bin = atob(data.audio_base64);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            const url = URL.createObjectURL(new Blob([bytes], { type: data.content_type || 'audio/wav' }));
+            const audio = new Audio(url);
+            audio.onended = () => { URL.revokeObjectURL(url); rearm(); };
+            audio.onerror = audio.onended;
+            audio.play().catch(audio.onended);
+        } catch (err) {
+            showError(err.message || 'Voice preview failed');
+            rearm();
+        }
     }
 
     function currentPanelId(storedChallenge) {

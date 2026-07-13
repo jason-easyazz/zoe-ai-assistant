@@ -1866,6 +1866,9 @@ app.include_router(chat_router)
 app.include_router(ui_router)
 app.include_router(openclaw_router)
 app.include_router(voice_tts_router)
+from routers.voice_settings import router as voice_settings_router  # noqa: E402
+
+app.include_router(voice_settings_router)
 app.include_router(user_profile_router)
 app.include_router(dashboard_router)
 app.include_router(stubs_router)
