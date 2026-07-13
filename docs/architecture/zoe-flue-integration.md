@@ -142,8 +142,11 @@ per-process multi-user workaround in `zoe_core_client.py`.
 
 - **Phase 0 — Harness on Flue. ✅ DONE.** scout→implement→verify→openPR proven;
   +1.5 ms voice (PR #858).
-- **Phase 1 — Telegram as a front-door channel.** Transport (long-poll) → zoe-data
-  `/api/chat` with `channel="telegram"` → `fast_tiers`.
+- **Phase 1 — Telegram as a front-door channel. ✅ DONE (live-hardened 2026-07).**
+  Transport (long-poll) → zoe-data `/api/chat` with `channel="telegram"` → `fast_tiers`;
+  identity via signed `/start` deep-link account linking (verified Telegram sender id →
+  Zoe user, no shared guest), `/new` session reset (#1246), health watchdog for the
+  silent poll-loop death mode (#1233).
   *(The running Flue Telegram bot is re-slotted to this — feed the front door with
   the channel tag, not a separate brain.)*
   **Identity is mandatory, not optional:** the bridge must map the *verified*
@@ -409,6 +412,5 @@ sidecar store. Rollback is one env removal + a zoe-data restart (~15 s).
 
 ### Next action
 
-Fix-after #1 and #2 are closed. Next: Phase 1 Telegram front door — re-slot the
-bot (#870) through `/api/chat` with a `channel` tag — then §8.1 Multica
-recreation (gates before any deletion).
+Fix-after #1 and #2 are closed. Phase 1 (Telegram front door) is ✅ done and
+live-hardened (§6). Next: §8.1 Multica recreation (gates before any deletion).

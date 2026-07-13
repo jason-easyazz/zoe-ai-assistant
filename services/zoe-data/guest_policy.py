@@ -54,7 +54,7 @@ USER_SCOPED_INTENTS: frozenset[str] = frozenset({
     "journal_create", "journal_streak", "journal_prompt", "journal_search",
     "transaction_create", "transaction_summary", "transaction_list",
     "people_create", "people_search", "people_update",
-    "memory_forget_last", "memory_remember", "memory_recall",
+    "memory_forget_last", "memory_forget_entity", "memory_remember", "memory_recall",
     "daily_briefing", "agenda_show",
     "build_widget", "build_page", "extend_capability", "ha_full_setup",
     # Panel/board admin intents — need identity.

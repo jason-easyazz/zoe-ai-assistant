@@ -27,9 +27,12 @@ spoken voice reply.
 
 from __future__ import annotations
 
+import logging
 import re
 from difflib import SequenceMatcher
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -624,10 +627,186 @@ def user_relationship_claim_unsupported(fact_text: str, source_text: str) -> boo
     return False
 
 
+# ---------------------------------------------------------------------------
+# Shared cross-writer reconciliation (QA review F9)
+# ---------------------------------------------------------------------------
+
+# Tokens that are NOT person-name signals: calendar words, generic anchors, and
+# user-anchored kinship/role words. Kinship possessives ("my dad's…" /
+# "User's father's…") anchor to the USER, not a named third person — treating
+# them as names blocked legitimate same-person reconciliation ("User's father's
+# name is Neil" vs "My dad's name is Neil"), which expert_dispatch relied on.
+_GUARD_CAL_WORDS = {
+    "january", "february", "march", "april", "may", "june", "july", "august",
+    "september", "october", "november", "december", "monday", "tuesday",
+    "wednesday", "thursday", "friday", "saturday", "sunday", "my", "the", "user",
+    "dad", "father", "mum", "mom", "mother", "brother", "sister", "wife",
+    "husband", "partner", "son", "daughter", "grandma", "grandmother",
+    "grandpa", "grandfather", "aunt", "uncle", "cousin", "friend",
+}
+
+
+# Object of a name-attribute phrase ("…name is Neil", "named Neil", "is called
+# Neil"): that token is the attribute VALUE, not a person the row is ABOUT.
+# Without this exclusion, a user-anchored name fact ("my dad's name is Neil")
+# could never be superseded by a titleless correction ("my dad's name is
+# Kevin") — the value token blocked the guard (residual QA F2 for kinship
+# name facts). Subjects stay protected: in "Jessica's name is …" the
+# possessive "Jessica" is still a guard token.
+# The relation words come from _GUARD_CAL_WORDS' kinship tail (defined above);
+# "my wife is Sarah" / "User's dad is Neil" are user-anchored relation facts,
+# so the trailing name is the VALUE of that relation, not a person the guard
+# should protect from same-attribute supersedes.
+_KINSHIP_RELATION_WORDS = (
+    "dad|father|mum|mom|mother|brother|sister|wife|husband|partner|son|"
+    "daughter|grandma|grandmother|grandpa|grandfather|aunt|uncle|cousin"
+)
+_NAME_VALUE_RE = re.compile(
+    r"(?:\bname\s+is|\bnamed|\bis\s+called|\bname['’]s"
+    rf"|\b(?:{_KINSHIP_RELATION_WORDS})\s+is)\s+(?:spelt\s+|spelled\s+)?"
+    r"((?:[A-Z][A-Za-z'’-]*)(?:\s+[A-Z][A-Za-z'’-]*)*)"
+)
+
+
+def _guard_name_tokens(t: str) -> set[str]:
+    """Name signals in ``t``: capitalized tokens AND lowercase possessives
+    ("karen's birthday…" — users type lowercase), minus calendar/stop words
+    and minus tokens that appear ONLY as a name-attribute value (see
+    ``_NAME_VALUE_RE``)."""
+    caps = {w.lower() for w in re.findall(r"\b[A-Z][a-z]+\b", t)}
+    poss = {w.lower() for w in re.findall(r"\b([a-z]+)['’]s\b", t)}
+    # A value may be multi-word ("Van Morrison") — every word of it is a
+    # value token, or the trailing words would keep the row guarded.
+    # Values may be multi-word or punctuated ("Van Morrison", "Mary-Jane",
+    # "D'Arcy Smith") — every letter-run of the value is a value token, or a
+    # leftover token would keep the row guarded.
+    values = {
+        w.lower()
+        for m in _NAME_VALUE_RE.findall(t)
+        for w in re.findall(r"[A-Za-z]+", m)
+    }
+    # A value token is excluded only when it has no OTHER appearance in the
+    # text (a possessive or second mention still marks the row as about them).
+    only_values = {
+        v for v in values
+        if len(re.findall(rf"\b{re.escape(v)}\b", t, flags=re.IGNORECASE)) == 1
+        and v not in poss
+    }
+    return {w for w in (caps | poss) if w not in _GUARD_CAL_WORDS} - only_values
+
+
+def guard_existing_by_entity(
+    text: str,
+    existing: list[tuple[str, str]],
+    title: Optional[str] = None,
+) -> list[tuple[str, str]]:
+    """Entity guard (Greptile P1/security): filter ``existing`` rows that could
+    belong to a DIFFERENT person than the candidate is about.
+
+    Semantic search can return another person's same-attribute fact ("Karen's
+    birthday is…" for a Jessica correction) — superseding it would overwrite the
+    wrong person's memory. ``title`` is the candidate's person anchor when the
+    writer knows one (e.g. person_extractor's person name); when the candidate
+    has no anchor, any name token in an existing row must also appear in the
+    candidate (namesake / third-person-name protection)."""
+    title = (title or "").strip()
+    if title:
+        toks = title.split()
+        first = toks[0].lower()
+        if len(toks) > 1:
+            # Full-name candidate → the row must mention the FULL name
+            # (a bare "Jessica" row also passes; same person by intro).
+            needle = title.lower()
+            return [
+                (i, t) for i, t in existing
+                if needle in t.lower()
+                or (first in t.lower()
+                    and not re.search(rf"\b(?i:{re.escape(first)})\s+(?:[A-Z][a-z]|[a-z]+['’]s\b)", t))
+            ]
+        # Bare-name candidate ("Jessica") → refuse rows where that name is part
+        # of a LONGER full name ("Jessica Smith") — two people can share a
+        # first name (Greptile P1); ambiguity → ADD.
+        return [
+            (i, t) for i, t in existing
+            if first in t.lower()
+            and not re.search(rf"\b(?i:{re.escape(first)})\s+(?:[A-Z][a-z]|[a-z]+['’]s\b)", t)
+        ]
+    # Titleless candidates (templates/corrections/digest facts without a person
+    # anchor) must not supersede a row about a named third person the candidate
+    # never mentions. Conservative: any name token in the existing row must
+    # appear in the candidate.
+    cand_names = _guard_name_tokens(text)
+    return [
+        (i, t) for i, t in existing
+        if not (_guard_name_tokens(t) - cand_names)
+    ]
+
+
+async def reconcile_for_ingest(
+    svc,
+    text: str,
+    user_id: str,
+    *,
+    title: Optional[str] = None,
+    limit: int = 3,
+) -> tuple[str, Optional[str]]:
+    """Shared ADD/UPDATE/SKIP decision for ALL conversational memory writers.
+
+    QA review F9: each writer (memory_extractor, person_extractor,
+    memory_digest, expert_dispatch) used to blind-ADD near-duplicate or
+    contradicting rows. This helper is the single reconciliation seam: it
+    searches ``svc`` for near-duplicate / same-attribute rows, applies the
+    entity guards (namesake protection, third-person-name guards), then asks
+    :func:`classify_against_existing` what to do.
+
+    Returns ``("add"|"update"|"skip", mem_id_or_None)``. NEVER raises — any
+    failure degrades to ``("add", None)`` so a real fact is never lost because
+    reconciliation errored."""
+    try:
+        # Patient search: this is the background WRITE path, not the
+        # latency-gated turn path. The default 2 s search timeout fails open
+        # to [] under load (embedder busy with the turn itself), which
+        # silently degraded every correction to ADD — the stale value stacked
+        # instead of being superseded (live Telegram repro 2026-07-13).
+        try:
+            hits = await svc.search(
+                text, user_id=user_id, limit=limit, timeout_s=15.0
+            )
+        except TypeError:
+            # Fakes/older services without the timeout_s kwarg.
+            hits = await svc.search(text, user_id=user_id, limit=limit)
+        if not hits:
+            # An empty result here usually means the search timed out or the
+            # store is cold — the fact is still stored (ADD), but supersession
+            # was skipped, so make it visible instead of logger.debug.
+            # No raw memory text in logs (it is personal data) — length only.
+            logger.warning(
+                "reconcile_for_ingest: no search hits (user=%s, text_len=%d) — "
+                "storing as ADD without supersession check", user_id, len(text),
+            )
+        existing = [
+            (getattr(h, "id", ""), getattr(h, "text", "") or "")
+            for h in (hits or [])
+            if getattr(h, "text", None)
+        ]
+        existing = guard_existing_by_entity(text, existing, title)
+        return classify_against_existing(text, existing)
+    except Exception as exc:
+        # Exception type only — backend errors can embed the query (which is
+        # the raw candidate memory text) in the exception message.
+        logger.warning(
+            "reconcile_for_ingest unavailable (%s) — plain add",
+            type(exc).__name__,
+        )
+        return "add", None
+
+
 __all__ = [
     "is_storable_fact",
     "looks_like_correction",
     "ambiguous_negation_subject",
     "classify_against_existing",
+    "guard_existing_by_entity",
+    "reconcile_for_ingest",
     "user_relationship_claim_unsupported",
 ]

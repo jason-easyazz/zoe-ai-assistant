@@ -227,6 +227,30 @@ async def music_seek(payload: dict) -> dict[str, Any]:
     return {"ok": ok, "position_seconds": pos}
 
 
+@router.get("/preferred-player")
+async def get_preferred_player() -> dict[str, Any]:
+    """The household's remembered default speaker for new plays."""
+    import music_service
+    return {"player_id": music_service.get_preferred_player_id()}
+
+
+@router.post("/preferred-player")
+async def set_preferred_player(payload: dict) -> dict[str, Any]:
+    """Remember a speaker as the default target for future plays.
+    body: {player_id}. Set by the panel's speaker picker; voice plays that
+    explicitly target a speaker also update it. Household-shared, like the
+    rest of the music bridge (control/transfer/play are unauthenticated too).
+    Unknown ids are rejected against the live player list."""
+    import music_service
+    pid = str((payload or {}).get("player_id") or "")
+    if pid:
+        players = await music_service.get_players()
+        if not any(p.get("player_id") == pid for p in players):
+            return {"ok": False, "reason": "unknown player_id"}
+    music_service.set_preferred_player_id(pid)
+    return {"ok": True, "player_id": pid}
+
+
 @router.post("/transfer")
 async def music_transfer(payload: dict) -> dict[str, Any]:
     """Move current playback to another speaker. body: {target_player_id,
@@ -274,12 +298,14 @@ async def music_search(q: str = "", types: str = "", limit: int = 8) -> dict[str
 async def music_play_media(payload: dict) -> dict[str, Any]:
     """Play a specific search result on a chosen speaker.
 
-    body: {uri, player_id?}. `uri` comes from /api/music/search; `player_id`
-    (optional) targets a speaker from /api/music/players — omitted → active/
-    first powered player."""
+    body: {uri, player_id?, option?}. `uri` comes from /api/music/search;
+    `player_id` (optional) targets a speaker from /api/music/players — omitted
+    → active/first powered player. `option`: replace (default) | add (end of
+    queue) | next (after current) — the jukebox page queues with add."""
     import music_service
     uri = str((payload or {}).get("uri") or "").strip()
     player_id = str((payload or {}).get("player_id") or "")
+    option = str((payload or {}).get("option") or "replace")
     if not uri:
         return {"ok": False, "reason": "missing uri"}
-    return await music_service.play_media(uri, player_id=player_id)
+    return await music_service.play_media(uri, player_id=player_id, option=option)
