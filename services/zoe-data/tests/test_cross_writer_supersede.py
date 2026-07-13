@@ -41,6 +41,7 @@ class _FakeSvc:
     def __init__(self, search_rows=None, search_exc=None):
         self.ingested: list[tuple[str, dict]] = []
         self.reviewed: list[tuple[str, dict]] = []
+        self.relinked: list[tuple[str, str, str]] = []
         self._search_rows = search_rows or []
         self._search_exc = search_exc
 
@@ -62,6 +63,10 @@ class _FakeSvc:
     async def review(self, mem_id, **kw):
         self.reviewed.append((mem_id, kw))
         return _Row(f"edited-{mem_id}", kw.get("edits", ""))
+
+    async def relink_entity(self, user_id, mem_id, entity_type, entity_id):
+        self.relinked.append((mem_id, entity_type, entity_id))
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +145,21 @@ def test_person_extractor_restatement_skips(monkeypatch):
     assert svc.ingested == [], "sparser restatement must not be stored"
     assert svc.reviewed == []
     assert mem_id == "rich", "skip returns the kept row so linkage still works"
+
+
+def test_person_extractor_supersede_promotes_pending_slug(monkeypatch):
+    # A resolved call editing a same-name pending-slug row must promote the
+    # row's linkage to the real people.id (review(edit) keeps the old link).
+    svc = _FakeSvc(search_rows=[_Row("old", "Jessica's birthday is March 15",
+                                     {"entity_type": "person_pending", "entity_id": "slug:jessica"})])
+    import memory_service
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: svc)
+    uuid_id = "3f0a4a1e-0000-4000-8000-000000000001"
+    mem_id = _run(person_extractor._ingest_to_mempalace(
+        "Jessica's birthday is March 25", "jason", "Jessica", uuid_id))
+    assert [mid for mid, _ in svc.reviewed] == ["old"]
+    assert svc.relinked == [("edited-old", "person", uuid_id)]
+    assert mem_id == "edited-old"
 
 
 def test_person_extractor_unlinked_row_falls_back_to_add(monkeypatch):

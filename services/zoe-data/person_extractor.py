@@ -400,6 +400,19 @@ async def _ingest_to_mempalace(
                 )
                 if new_ref is not None:
                     logger.info("person_extractor: superseded %s with %r", target_id, text[:60])
+                    # review(edit) keeps the row's old entity link. If this call
+                    # holds a RESOLVED people.id but the matched row is still a
+                    # same-name pending slug, promote it (Greptile P1) —
+                    # relink_entity is metadata-only, per-user-locked, and a
+                    # no-op unless the row is still person_pending. Best-effort:
+                    # a failed relink leaves the pre-existing pending linkage,
+                    # which the idle link-resolver also repairs.
+                    try:
+                        if entity_id and not entity_id.startswith("slug:"):
+                            await svc.relink_entity(
+                                user_id, new_ref.id, "person", entity_id)
+                    except Exception as exc:
+                        logger.debug("person_extractor: relink after supersede failed: %s", exc)
                     return new_ref.id
             except Exception as exc:
                 logger.warning("person_extractor: supersede failed (%s) — plain ingest", exc)
