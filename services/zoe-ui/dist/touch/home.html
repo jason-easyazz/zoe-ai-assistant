@@ -642,9 +642,11 @@
 
   // Dock timer chip — a small live countdown pinned in the dock while any
   // timer runs; tapping it opens the timer surface. Refreshed by renderDock.
-  var _dockTmr={t:null,exp:0};
+  var _dockTmr={t:null,exp:0,gen:0};
   function paintDockTimer(){
+    var gen=++_dockTmr.gen;   // overlapping renderDock()s: only the newest response paints
     apiGet('/api/skybridge/timers').then(function(d){
+      if(gen!==_dockTmr.gen)return;
       var ts=(d&&d.timers)||[];var act=null;
       for(var i=0;i<ts.length;i++){var e=+ts[i].expires_at_ms||0;if(e>Date.now()&&(!act||e<act))act=e;}
       if(_dockTmr.t){clearInterval(_dockTmr.t);_dockTmr.t=null;}
@@ -1161,6 +1163,15 @@
   var cmdbar=document.getElementById('cmdbar'),cmdin=document.getElementById('cmdin'),orb=document.getElementById('orb'),toastEl=document.getElementById('saytoast'),_toastT=null;
   function toast(t){if(!t)return;toastEl.textContent=t;toastEl.classList.add('on');if(_toastT)clearTimeout(_toastT);_toastT=setTimeout(function(){toastEl.classList.remove('on');},6000);}
   var _heardT=null,_sending=false;
+  function dockSaid(heard,say){
+    dock.classList.remove('hide');
+    if(_heardT)clearTimeout(_heardT);
+    function restore(){_heardT=setTimeout(function(){if(dbody.querySelector('.dheard')&&_cur!=='sleep')renderDock();},5200);}
+    if(heard){dbody.innerHTML='<div class="dheard">Heard: <b>'+esc(heard)+'</b></div>';
+      if(say){_heardT=setTimeout(function(){dbody.innerHTML='<div class="dheard">'+esc(say)+'</div>';restore();},2600);}
+      else restore();
+    } else if(say){dbody.innerHTML='<div class="dheard">'+esc(say)+'</div>';restore();}
+  }
   function dockHeard(q){dock.classList.remove('hide');dbody.innerHTML='<div class="dheard">Heard: <b>'+esc(q)+'</b></div>';
     // heard is transient — bring the pinned controls back after a few seconds
     if(_heardT)clearTimeout(_heardT);
@@ -1283,10 +1294,11 @@
     if(!heard&&!say)return;
     var dest=DOMAIN_SCREEN[dom||'']||'home';
     show(dest);
-    if(heard)dockHeard(heard);
-    // The summary is SPOKEN by TTS; visually it belongs on the Ask surface
-    // (never the old top-of-screen toast — the dock is the voice surface).
+    // Chat answers land on the Ask surface; every other domain shows the
+    // transcript then the spoken summary in the DOCK (never the old
+    // top-of-screen toast) before the pinned controls return.
     if(say&&dest==='ask')askShowAnswer(heard,say);
+    else if(heard||say)dockSaid(heard,say);
     try{var keep=[];if(sp.get('panel_id'))keep.push('panel_id='+encodeURIComponent(sp.get('panel_id')));if(sp.get('kiosk'))keep.push('kiosk='+encodeURIComponent(sp.get('kiosk')));
       history.replaceState(null,'',location.pathname+(keep.length?('?'+keep.join('&')):''));}catch(e){}
     window.__voiceArrived=true;
