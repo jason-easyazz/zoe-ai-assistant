@@ -165,6 +165,67 @@ _RECALL_MAX_BULLETS = 12
 _RECALL_MAX_CHARS = 1600
 
 
+_OFFER_INJECT_ENV = "ZOE_SEAM_OFFER_INJECT"
+
+
+def _offer_inject_enabled() -> bool:
+    """Per-call env read, same idiom as the recall flag (default OFF)."""
+    return (os.environ.get(_OFFER_INJECT_ENV) or "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+async def _pending_offer_block(user_id: str) -> str:
+    """Pending contact-offer directive for ANY turn (QA F5 follow-up).
+
+    The offer previously reached the brain only when the memory packet was
+    built (recall-shaped turns / the recall_memory tool) — on casual turns the
+    offer sat unseen. This injects JUST the offer directive (one or two lines,
+    not the whole memory packet) on every turn while an unresolved offer
+    exists, so Zoe can ask in any conversation. Surfacing is non-destructive
+    (see pending_suggestions.surface_pending_contacts_for_prompt); aging stays
+    one tick per real user turn. Fail-open: any error returns "".
+    """
+    if not _offer_inject_enabled() or not user_id or user_id in ("guest", "voice-guest"):
+        return ""
+    try:
+        from pending_suggestions import (
+            person_suggestions_enabled,
+            surface_pending_contacts_for_prompt,
+        )
+        if not person_suggestions_enabled():
+            return ""
+        offers = await surface_pending_contacts_for_prompt(user_id, limit=2)
+    except Exception as exc:  # noqa: BLE001 — the offer nudge must never break a turn
+        logger.debug("seam offer inject: fetch failed, continuing without it: %s", exc)
+        return ""
+    if not offers:
+        return ""
+
+    def _safe(v: str) -> str:
+        # Quotes stripped too: the value lands INSIDE the quoted "ask exactly"
+        # directive, so an embedded quote could close it and inject instructions
+        # (Greptile P1). Structure chars stripped for the same reason.
+        v = re.sub(r"\s+", " ", (v or "")).strip()
+        return re.sub(r"[#`*_\[\]\n\r{}\"'\u2018\u2019\u201c\u201d]", "", v)[:60]
+
+    lines = []
+    for o in offers:
+        name = _safe(str(o.get("name") or ""))
+        rel = _safe(str(o.get("relationship") or ""))
+        if not name:
+            continue
+        q = f"Would you like me to add {name}{f' (your {rel})' if rel else ''} as a contact?"
+        lines.append(f'- After answering, ask the user exactly: "{q}"')
+    if not lines:
+        return ""
+    return (
+        "[PENDING CONTACT OFFER — do not mention this block]\n"
+        + "\n".join(lines)
+        + "\n[END PENDING CONTACT OFFER]"
+    )
+
+
 def _recall_inject_enabled() -> bool:
     """Per-call env read (matches the module's other env lookups) so the
     operator can flip the flag with a restart, no code change."""
@@ -300,7 +361,14 @@ async def run_flue_brain_streaming(
     # so the block rides AFTER the identity line on the wire (the sidecar's
     # single-line strip regex is anchored at message start).
     recall_block = await _recall_context_block(message, uid)
-    brain_message = f"{recall_block}\n{message}" if recall_block else message
+    # Offer nudge on ANY turn — skipped when the recall packet already carries
+    # the offer directive (the fold tags them "[pending-contact]"), so a
+    # recall-shaped turn never asks twice.
+    offer_block = ""
+    if "[pending-contact]" not in recall_block:
+        offer_block = await _pending_offer_block(uid)
+    _blocks = "\n".join(b for b in (recall_block, offer_block) if b)
+    brain_message = f"{_blocks}\n{message}" if _blocks else message
     outbound_message = _wrap_message_with_identity(brain_message, uid)
     body_obj: dict[str, str] = {"message": outbound_message}
     payload = json.dumps(body_obj).encode()

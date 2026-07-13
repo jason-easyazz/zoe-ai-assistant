@@ -241,8 +241,11 @@ async def prewarm_vocabulary(
 # Anything else — a decimal temp, a "feels like" clause, a rephrase — simply does
 # not match, so stitch_reply returns None and the caller uses normal TTS. It never
 # guesses: a mis-parse can only FAIL to match, never emit wrong audio.
-_TIME_RE = re.compile(r"^It's (\d{1,2}):(\d{2}) (AM|PM)\.?$")
-_WEATHER_RE = re.compile(r"^It's (\d{1,3}) degrees(?: and ([^,]+?))? in (.+?)\.?$")
+_TIME_RE = re.compile(r"^It(?:'s| is) (\d{1,2}):(\d{2}) (AM|PM)\.?$")
+_WEATHER_RE = re.compile(
+    r"^It's (\d{1,3}) degrees(?: and ([^,]+?))? in ([^,]+?)"
+    r"(?:, and it feels like (\d{1,3}) degrees)?\.?$"
+)
 
 
 async def stitch_reply(
@@ -271,6 +274,15 @@ async def stitch_reply(
     if m:
         temp, desc, city = int(m.group(1)), (m.group(2) or "").strip(), m.group(3).strip()
         segs = weather_segments(temp, desc, city)
-        return await stitch(segs, synth) if segs else None
+        if not segs:
+            return None
+        feels = m.group(4)
+        if feels is not None:
+            fw = number_to_words(int(feels))
+            if fw is None:
+                return None  # out-of-vocab feels-like → full synth
+            # Synth-once passthrough (cached thereafter), like the description.
+            segs.append(f"and it feels like {fw} degrees")
+        return await stitch(segs, synth)
 
     return None
