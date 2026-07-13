@@ -353,8 +353,18 @@ def _record_quality_reject(source: str, reason: str, text: str) -> None:
 async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
                                session_id: Optional[str], user_turn_id: Optional[str],
                                memory_type: str, confidence: float,
-                               tags: list[str]) -> None:
+                               tags: list[str]) -> str:
     """Ingest a conversational fact, merging it with an equivalent existing row.
+
+    Returns an outcome string so callers can be HONEST about what happened
+    (QA review F13 — teach replies must not claim success over a silent drop):
+
+      * "stored"  — a row was written (new or superseding).
+      * "skip"    — an equivalent fact already exists; nothing new written,
+                    but the fact IS in the store, so confirming is honest.
+      * "dropped" — the ingest silently refused the write (PII scrub reject /
+                    opt-out); the fact is NOT stored and the caller must not
+                    claim it is.
 
     Best-effort and OFF the voice hot path (callers already run this in the
     background). Uses MemoryService.search to find a near-duplicate / same-
@@ -384,7 +394,7 @@ async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
                 pass
             logger.info("MEMORY_DEDUP_SKIP source=%s kept=%s cand=%r",
                         source, match_id, text[:80])
-            return
+            return "skip"
         if action == "update" and match_id:
             old_id = match_id
     except Exception as exc:
@@ -399,6 +409,22 @@ async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
         tags=tags, metadata=metadata,
     )
     new_id = getattr(ref, "id", None)
+    if ref is None:
+        # ingest returned None: either an idempotent dedup (fact already in the
+        # store — honest to confirm) or a genuine silent drop (PII reject /
+        # opt-out — NOT stored). Distinguish with the same scrubber ingest uses
+        # so the caller can reply honestly (QA review F13).
+        outcome = "skip"
+        try:
+            from memory_service import scrub_pii
+            _, _pii_reject = scrub_pii(text)
+            if _pii_reject:
+                outcome = "dropped"
+        except Exception:
+            pass  # scrubber unavailable → assume dedup, matching old behaviour
+        if outcome == "dropped":
+            logger.info("MEMORY_STORE_DROPPED source=%s text=%r", source, text[:80])
+        return outcome
     # Only archive the old row if the ingest actually wrote a DISTINCT new row.
     # ingest dedups on a text-derived mem_id, so a near-identical value can map to
     # the same id as old_id (or be dropped, ref=None) — archiving then would delete
@@ -415,6 +441,7 @@ async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
             # New row is already stored; failing to archive the old one just
             # leaves a (harmless) near-dup — don't lose the new fact over it.
             logger.debug("supersede archive failed (%s); new row kept", exc)
+    return "stored"
 
 
 async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
@@ -559,14 +586,27 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
         # high-similarity same-attribute fact already exists ("my dad's name is
         # Neil" vs an earlier value), UPDATE/supersede it instead of stacking a
         # duplicate/contradiction. Falls through to a plain ingest on any error.
-        await _ingest_or_supersede(
+        outcome = await _ingest_or_supersede(
             svc, text, user_id=user_id, source="voice_fact",
             session_id=session_id or None, user_turn_id=user_turn_id,
             memory_type="fact", confidence=0.85, tags=["voice", "self"],
         )
     except Exception as exc:
-        logger.warning("store_fact ingest failed (%s) → brain", exc)
-        return None
+        # QA review F13: this teach fast path replies INSTANTLY, so a failed
+        # write must never be answered with "Got it — I'll remember…" (and
+        # deferring to the brain risks the same false confirmation). Be honest.
+        logger.warning("store_fact ingest failed (%s) → honest no-save reply", exc)
+        return ("Hmm — I couldn't save that just now. "
+                "Mind telling me again in a moment?")
+    if outcome == "dropped":
+        # The store refused the write (e.g. PII scrub). Nothing landed —
+        # don't claim it did, and don't invite a retry that would re-reject.
+        _record_quality_reject("voice_fact", "store_dropped", text)
+        return ("I wasn't able to save that one — it looks like something "
+                "I shouldn't keep. Nothing was stored.")
+    # "stored" or "skip" (an equivalent fact already lives in the store — the
+    # fact IS remembered, so confirming stays honest). Legacy None (test fakes)
+    # also lands here, matching pre-F13 behaviour.
     # Echo the captured fact back (second person) so the user hears exactly what
     # landed and can correct it — a confirmation without a separate "should I
     # save that?" turn.
