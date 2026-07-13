@@ -11,9 +11,11 @@ degrades to a friendly "music isn't set up yet" card, never a broken turn.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
+from pathlib import Path
 from typing import Any, Optional
 
 import httpx
@@ -140,9 +142,34 @@ async def get_players() -> list[dict[str, Any]]:
     return _as_list(await _ma("players/all"))
 
 
+_PREFS_PATH = Path(__file__).resolve().parent / "data" / "music_prefs.json"
+
+
+def get_preferred_player_id() -> str:
+    """The household's remembered default speaker ('' when unset)."""
+    try:
+        with open(_PREFS_PATH) as fh:
+            return str(json.load(fh).get("preferred_player_id") or "")
+    except (OSError, ValueError):
+        return ""
+
+
+def set_preferred_player_id(player_id: str) -> None:
+    """Persist the default speaker — every explicitly targeted play/transfer
+    remembers its speaker so 'the next songs' land there too (operator ask
+    2026-07-13). Best-effort: a failed write never breaks playback."""
+    try:
+        _PREFS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(_PREFS_PATH, "w") as fh:
+            json.dump({"preferred_player_id": str(player_id or "")}, fh)
+    except OSError as exc:
+        logger.warning("music prefs write failed (non-fatal): %s", exc)
+
+
 def _pick_player(players: list[dict[str, Any]], player_id: str = "") -> Optional[dict[str, Any]]:
-    """Choose the target player: the named one, else a playing/paused one, else
-    the first available powered player (a household panel usually has one)."""
+    """Choose the target player: the named one, else a playing/paused one
+    (never hijack an active session's location), else the REMEMBERED default
+    speaker, else the first available powered player."""
     if not players:
         return None
     if player_id:
@@ -152,6 +179,11 @@ def _pick_player(players: list[dict[str, Any]], player_id: str = "") -> Optional
     for state in ("playing", "paused"):
         for p in players:
             if str(p.get("playback_state") or p.get("state")) == state:
+                return p
+    preferred = get_preferred_player_id()
+    if preferred:
+        for p in players:
+            if p.get("player_id") == preferred and p.get("available"):
                 return p
     for p in players:
         if p.get("available") and p.get("powered"):
@@ -289,6 +321,7 @@ async def transfer(target_player_id: str, source_player_id: str = "") -> bool:
     if not source_id or source_id == target_player_id:
         return False
     await _ma("player_queues/transfer", source_queue_id=source_id, target_queue_id=target_player_id)
+    set_preferred_player_id(target_player_id)   # moving music = choosing a speaker
     return True
 
 
@@ -317,6 +350,8 @@ async def search_and_play(query: str, player_id: str = "") -> Optional[dict[str,
     if not uri:
         return None
     await _ma("player_queues/play_media", queue_id=pid, media=uri, option="replace", radio_mode=False)
+    if player_id:  # an explicitly chosen speaker becomes the remembered default
+        set_preferred_player_id(pid)
     return {"name": hit.get("name", query), "artist": (hit.get("artists") or [{}])[0].get("name", "") if hit.get("artists") else ""}
 
 
@@ -526,6 +561,34 @@ def _match_player_by_name(players: list[dict[str, Any]], name: str) -> Optional[
     return None
 
 
+_GENERIC_PLAY = {"", "music", "something", "anything", "a song", "songs", "tunes", "some tunes", "some music"}
+
+
+def split_play_target(query: str, players: list[dict[str, Any]]) -> tuple[str, Optional[dict[str, Any]]]:
+    """Split "jazz in the kitchen" → ("jazz", <Kitchen player>) using the REAL
+    player list; a suffix that matches no player stays in the query ("golden
+    on youtube music" keeps its provider suffix). A generic base ("music",
+    "something", …) returns "" so the caller resumes/prompts instead of
+    searching for the literal word.
+    """
+    q = (query or "").strip()
+    base, target = q, None
+    lowered = f" {q.lower()} "
+    for sep in (" in the ", " on the ", " in ", " on "):
+        idx = lowered.rfind(sep)
+        if idx < 0:
+            continue
+        cand_base = q[: idx].strip() if idx > 0 else ""
+        cand_room = q[idx + len(sep) - 1:].strip()
+        hit = _match_player_by_name(players, cand_room)
+        if hit is not None:
+            base, target = cand_base, hit
+            break
+    if base.lower().strip() in _GENERIC_PLAY:
+        base = ""
+    return base, target
+
+
 async def resolve_music(intent: Any) -> dict[str, Any]:
     """The Skybridge music domain resolver. `intent` has .action and .query."""
     action = getattr(intent, "action", "status")
@@ -553,11 +616,33 @@ async def resolve_music(intent: Any) -> dict[str, Any]:
         np = await now_playing(target.get("player_id", "")) or np0 or {}
         return _result(f"Moved the music to {tname}.", now_playing_card(np), "transfer")
 
-    if action == "play" and query:
-        hit = await search_and_play(query)
+    if action == "play":
+        # Room/speaker targeting: "play jazz in the kitchen" must aim at the
+        # Kitchen player, not search for "jazz in the kitchen" (which used to
+        # match playlists like "Music for Cleaning the Kitchen").
+        players = await get_players()
+        base, target = split_play_target(query, players)
+        player_id = (target or {}).get("player_id", "")
+        tname = (target or {}).get("display_name") or (target or {}).get("name") or ""
+        on_txt = f" on {tname}" if tname else ""
+
+        if not base:
+            # Generic "play some music": resume whatever is queued/paused first.
+            np0 = await now_playing(player_id)
+            if np0 and np0.get("title"):
+                await control("play", player_id=player_id or np0.get("player_id", ""))
+                np = await now_playing(player_id or np0.get("player_id", "")) or np0
+                if np.get("state") == "playing":
+                    return _result(f"Resuming {np.get('title') or 'the music'}{on_txt}.",
+                                   now_playing_card(np), "play")
+            return _result(
+                "What would you like to hear — an artist, a song, or the radio?" + (f" I'll put it on {tname}." if tname else ""),
+                _browse_card(), "play")
+
+        hit = await search_and_play(base, player_id=player_id)
         if hit:
-            np = await now_playing() or {}
-            spoken = f"Playing {hit['name']}." if hit.get("name") else "Playing that now."
+            np = await now_playing(player_id) or {}
+            spoken = (f"Playing {hit['name']}" if hit.get("name") else "Playing that now") + on_txt + "."
             return _result(spoken, now_playing_card(np or {"state": "playing", "title": hit["name"], "artist": hit.get("artist", "")}), "play")
         return _result("I couldn't find that to play.", _browse_card(), "play")
 
