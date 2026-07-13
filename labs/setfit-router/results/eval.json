@@ -1,0 +1,320 @@
+{
+ "logreg": {
+  "overall_acc": 0.7901234567901234,
+  "canonical_acc": 0.9411764705882353,
+  "paraphrase_acc": 0.6410256410256411,
+  "chat_fp_rate": 0.125,
+  "head_latency_ms": 0.193,
+  "errors": [
+   {
+    "text": "we're out of laundry powder again",
+    "gold": "lists",
+    "pred": "smart_home",
+    "conf": 0.305
+   },
+   {
+    "text": "don't let me leave the shops without coffee",
+    "gold": "lists",
+    "pred": "memory",
+    "conf": 0.334
+   },
+   {
+    "text": "actually scratch the bananas, we've got heaps",
+    "gold": "lists",
+    "pred": "chat",
+    "conf": 0.552
+   },
+   {
+    "text": "what have I got on after lunch",
+    "gold": "calendar",
+    "pred": "lists",
+    "conf": 0.386
+   },
+   {
+    "text": "the vet can fit biscuit in thursday morning, lock it in",
+    "gold": "calendar",
+    "pred": "smart_home",
+    "conf": 0.231
+   },
+   {
+    "text": "mum's flight lands sunday 6pm, stick that in",
+    "gold": "calendar",
+    "pred": "reminders",
+    "conf": 0.326
+   },
+   {
+    "text": "anything I'm meant to be doing today",
+    "gold": "reminders",
+    "pred": "calendar",
+    "conf": 0.428
+   },
+   {
+    "text": "take a note that the gate code is 4482",
+    "gold": "notes",
+    "pred": "memory",
+    "conf": 0.285
+   },
+   {
+    "text": "jot this down before I lose it, plumber quoted 300 for the laundry tap",
+    "gold": "notes",
+    "pred": "reminders",
+    "conf": 0.216
+   },
+   {
+    "text": "the good pizza place is the one on marine terrace, keep that somewhere",
+    "gold": "notes",
+    "pred": "memory",
+    "conf": 0.239
+   },
+   {
+    "text": "what did I say the plumber quoted again",
+    "gold": "notes",
+    "pred": "memory",
+    "conf": 0.617
+   },
+   {
+    "text": "chuck on something chill while I cook",
+    "gold": "music",
+    "pred": "smart_home",
+    "conf": 0.212
+   },
+   {
+    "text": "that's way too loud, bring it down heaps",
+    "gold": "music",
+    "pred": "smart_home",
+    "conf": 0.326
+   },
+   {
+    "text": "what's my name",
+    "gold": "memory",
+    "pred": "people",
+    "conf": 0.771
+   },
+   {
+    "text": "for future reference I knock off work at 2:30 on fridays",
+    "gold": "memory",
+    "pred": "calendar",
+    "conf": 0.247
+   },
+   {
+    "text": "the dog's name is Biscuit, don't forget it",
+    "gold": "memory",
+    "pred": "people",
+    "conf": 0.358
+   },
+   {
+    "text": "can you explain how compound interest works",
+    "gold": "chat",
+    "pred": "notes",
+    "conf": 0.306
+   }
+  ],
+  "threshold_sweep": [
+   {
+    "thr": 0.0,
+    "overall_acc": 0.7901234567901234,
+    "paraphrase_acc": 0.6410256410256411,
+    "chat_fp_rate": 0.125,
+    "tool_coverage": 1.0
+   },
+   {
+    "thr": 0.3,
+    "overall_acc": 0.7654320987654321,
+    "paraphrase_acc": 0.6153846153846154,
+    "chat_fp_rate": 0.125,
+    "tool_coverage": 0.8904109589041096
+   },
+   {
+    "thr": 0.4,
+    "overall_acc": 0.7530864197530864,
+    "paraphrase_acc": 0.5641025641025641,
+    "chat_fp_rate": 0.0,
+    "tool_coverage": 0.7808219178082192
+   },
+   {
+    "thr": 0.5,
+    "overall_acc": 0.7160493827160493,
+    "paraphrase_acc": 0.48717948717948717,
+    "chat_fp_rate": 0.0,
+    "tool_coverage": 0.726027397260274
+   },
+   {
+    "thr": 0.6,
+    "overall_acc": 0.6049382716049383,
+    "paraphrase_acc": 0.3076923076923077,
+    "chat_fp_rate": 0.0,
+    "tool_coverage": 0.589041095890411
+   },
+   {
+    "thr": 0.7,
+    "overall_acc": 0.5061728395061729,
+    "paraphrase_acc": 0.23076923076923078,
+    "chat_fp_rate": 0.0,
+    "tool_coverage": 0.4657534246575342
+   },
+   {
+    "thr": 0.8,
+    "overall_acc": 0.3950617283950617,
+    "paraphrase_acc": 0.1282051282051282,
+    "chat_fp_rate": 0.0,
+    "tool_coverage": 0.3287671232876712
+   }
+  ]
+ },
+ "mlp": {
+  "overall_acc": 0.8024691358024691,
+  "canonical_acc": 0.9705882352941176,
+  "paraphrase_acc": 0.6410256410256411,
+  "chat_fp_rate": 0.125,
+  "head_latency_ms": 14.439,
+  "errors": [
+   {
+    "text": "we're out of laundry powder again",
+    "gold": "lists",
+    "pred": "smart_home",
+    "conf": 0.494
+   },
+   {
+    "text": "don't let me leave the shops without coffee",
+    "gold": "lists",
+    "pred": "memory",
+    "conf": 0.626
+   },
+   {
+    "text": "read us back the groceries",
+    "gold": "lists",
+    "pred": "notes",
+    "conf": 0.912
+   },
+   {
+    "text": "actually scratch the bananas, we've got heaps",
+    "gold": "lists",
+    "pred": "chat",
+    "conf": 0.831
+   },
+   {
+    "text": "what have I got on after lunch",
+    "gold": "calendar",
+    "pred": "lists",
+    "conf": 0.977
+   },
+   {
+    "text": "mum's flight lands sunday 6pm, stick that in",
+    "gold": "calendar",
+    "pred": "reminders",
+    "conf": 0.977
+   },
+   {
+    "text": "anything I'm meant to be doing today",
+    "gold": "reminders",
+    "pred": "calendar",
+    "conf": 0.728
+   },
+   {
+    "text": "jot this down before I lose it, plumber quoted 300 for the laundry tap",
+    "gold": "notes",
+    "pred": "smart_home",
+    "conf": 0.395
+   },
+   {
+    "text": "the good pizza place is the one on marine terrace, keep that somewhere",
+    "gold": "notes",
+    "pred": "calendar",
+    "conf": 0.41
+   },
+   {
+    "text": "what did I say the plumber quoted again",
+    "gold": "notes",
+    "pred": "memory",
+    "conf": 0.984
+   },
+   {
+    "text": "chuck on something chill while I cook",
+    "gold": "music",
+    "pred": "smart_home",
+    "conf": 0.532
+   },
+   {
+    "text": "that's way too loud, bring it down heaps",
+    "gold": "music",
+    "pred": "smart_home",
+    "conf": 0.736
+   },
+   {
+    "text": "what's my name",
+    "gold": "memory",
+    "pred": "people",
+    "conf": 0.998
+   },
+   {
+    "text": "for future reference I knock off work at 2:30 on fridays",
+    "gold": "memory",
+    "pred": "calendar",
+    "conf": 0.853
+   },
+   {
+    "text": "the dog's name is Biscuit, don't forget it",
+    "gold": "memory",
+    "pred": "people",
+    "conf": 0.521
+   },
+   {
+    "text": "can you explain how compound interest works",
+    "gold": "chat",
+    "pred": "notes",
+    "conf": 0.613
+   }
+  ],
+  "threshold_sweep": [
+   {
+    "thr": 0.0,
+    "overall_acc": 0.8024691358024691,
+    "paraphrase_acc": 0.6410256410256411,
+    "chat_fp_rate": 0.125,
+    "tool_coverage": 1.0
+   },
+   {
+    "thr": 0.3,
+    "overall_acc": 0.8024691358024691,
+    "paraphrase_acc": 0.6410256410256411,
+    "chat_fp_rate": 0.125,
+    "tool_coverage": 1.0
+   },
+   {
+    "thr": 0.4,
+    "overall_acc": 0.8024691358024691,
+    "paraphrase_acc": 0.6410256410256411,
+    "chat_fp_rate": 0.125,
+    "tool_coverage": 0.9863013698630136
+   },
+   {
+    "thr": 0.5,
+    "overall_acc": 0.8024691358024691,
+    "paraphrase_acc": 0.6410256410256411,
+    "chat_fp_rate": 0.125,
+    "tool_coverage": 0.958904109589041
+   },
+   {
+    "thr": 0.6,
+    "overall_acc": 0.8024691358024691,
+    "paraphrase_acc": 0.6410256410256411,
+    "chat_fp_rate": 0.125,
+    "tool_coverage": 0.9315068493150684
+   },
+   {
+    "thr": 0.7,
+    "overall_acc": 0.7777777777777778,
+    "paraphrase_acc": 0.5897435897435898,
+    "chat_fp_rate": 0.0,
+    "tool_coverage": 0.8767123287671232
+   },
+   {
+    "thr": 0.8,
+    "overall_acc": 0.7530864197530864,
+    "paraphrase_acc": 0.5641025641025641,
+    "chat_fp_rate": 0.0,
+    "tool_coverage": 0.821917808219178
+   }
+  ]
+ }
+}

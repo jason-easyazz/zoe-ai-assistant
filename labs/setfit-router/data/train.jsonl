@@ -1,0 +1,1121 @@
+{"text": "what's on my calendar tomorrow", "label": "calendar", "source": "seed"}
+{"text": "schedule a meeting for friday at 3", "label": "calendar", "source": "seed"}
+{"text": "add a dentist appointment next tuesday", "label": "calendar", "source": "seed"}
+{"text": "am I free on saturday", "label": "calendar", "source": "seed"}
+{"text": "what appointments do I have", "label": "calendar", "source": "seed"}
+{"text": "book me in for a haircut next week", "label": "calendar", "source": "seed"}
+{"text": "put lunch with sarah on my calendar monday", "label": "calendar", "source": "seed"}
+{"text": "add eggs and butter to the list", "label": "lists", "source": "seed"}
+{"text": "create a new packing list", "label": "lists", "source": "seed"}
+{"text": "is milk on my shopping list", "label": "lists", "source": "seed"}
+{"text": "remove bananas from my list", "label": "lists", "source": "seed"}
+{"text": "what do I still need to buy", "label": "lists", "source": "seed"}
+{"text": "remind me to call mum at 6", "label": "reminders", "source": "seed"}
+{"text": "set a reminder to take the bins out", "label": "reminders", "source": "seed"}
+{"text": "remind me to water the plants tomorrow", "label": "reminders", "source": "seed"}
+{"text": "remind me about the meeting", "label": "reminders", "source": "seed"}
+{"text": "nudge me to ring the dentist later", "label": "reminders", "source": "seed"}
+{"text": "don't let me forget to pay the rent", "label": "reminders", "source": "seed"}
+{"text": "start a 5 minute timer", "label": "timers", "source": "seed"}
+{"text": "set a timer for the pasta", "label": "timers", "source": "seed"}
+{"text": "how long left on my timer", "label": "timers", "source": "seed"}
+{"text": "cancel the timer", "label": "timers", "source": "seed"}
+{"text": "give me ten minutes on the timer", "label": "timers", "source": "seed"}
+{"text": "what's the weather like", "label": "weather", "source": "seed"}
+{"text": "is it going to rain today", "label": "weather", "source": "seed"}
+{"text": "what's the temperature outside", "label": "weather", "source": "seed"}
+{"text": "weather forecast for the weekend", "label": "weather", "source": "seed"}
+{"text": "do I need an umbrella", "label": "weather", "source": "seed"}
+{"text": "how hot is it in perth", "label": "weather", "source": "seed"}
+{"text": "will it be sunny this arvo", "label": "weather", "source": "seed"}
+{"text": "what day is it", "label": "time", "source": "seed"}
+{"text": "what's today's date", "label": "time", "source": "seed"}
+{"text": "is it morning or afternoon", "label": "time", "source": "seed"}
+{"text": "got the time on you", "label": "time", "source": "seed"}
+{"text": "when is john's birthday", "label": "people", "source": "seed"}
+{"text": "what's sarah's phone number", "label": "people", "source": "seed"}
+{"text": "tell me about my brother", "label": "people", "source": "seed"}
+{"text": "who is michael", "label": "people", "source": "seed"}
+{"text": "what do I know about emma", "label": "people", "source": "seed"}
+{"text": "what's my wife's favourite colour", "label": "people", "source": "seed"}
+{"text": "what is my mum's name", "label": "people", "source": "seed"}
+{"text": "what's my dad's name", "label": "people", "source": "seed"}
+{"text": "my mum's name is janice", "label": "people", "source": "seed"}
+{"text": "my dad's name is neil", "label": "people", "source": "seed"}
+{"text": "my brother is called tom", "label": "people", "source": "seed"}
+{"text": "my wife's name is sarah", "label": "people", "source": "seed"}
+{"text": "my friend's birthday is in june", "label": "people", "source": "seed"}
+{"text": "remember that my friend lives in perth", "label": "people", "source": "seed"}
+{"text": "let me tell you about my friend", "label": "people", "source": "seed"}
+{"text": "I want to tell you about my mum", "label": "people", "source": "seed"}
+{"text": "her name is emma and she's my sister", "label": "people", "source": "seed"}
+{"text": "his birthday is the third of may", "label": "people", "source": "seed"}
+{"text": "my mum's birthday is the 17th of the 11th 1947", "label": "people", "source": "seed"}
+{"text": "my dad's birthday is the 5th of the 6th 1950", "label": "people", "source": "seed"}
+{"text": "her birthday is the 22nd of the 9th", "label": "people", "source": "seed"}
+{"text": "his anniversary is the 10th of the 6th", "label": "people", "source": "seed"}
+{"text": "what did I say about the project", "label": "memory", "source": "seed"}
+{"text": "do you remember what I told you yesterday", "label": "memory", "source": "seed"}
+{"text": "what did I tell you about my goals", "label": "memory", "source": "seed"}
+{"text": "remind me what we discussed", "label": "memory", "source": "seed"}
+{"text": "what's my favourite restaurant", "label": "memory", "source": "seed"}
+{"text": "have I mentioned my car before", "label": "memory", "source": "seed"}
+{"text": "remember that I parked on level three", "label": "memory", "source": "seed"}
+{"text": "I want you to remember something", "label": "memory", "source": "seed"}
+{"text": "make a note that the wifi password is bluebird", "label": "memory", "source": "seed"}
+{"text": "keep in mind I'm allergic to nuts", "label": "memory", "source": "seed"}
+{"text": "remember I like my coffee black", "label": "memory", "source": "seed"}
+{"text": "take a note about the meeting", "label": "notes", "source": "seed"}
+{"text": "create a note called project ideas", "label": "notes", "source": "seed"}
+{"text": "write this down for me", "label": "notes", "source": "seed"}
+{"text": "start a new note", "label": "notes", "source": "seed"}
+{"text": "find my note about the car service", "label": "notes", "source": "seed"}
+{"text": "search my notes for the recipe", "label": "notes", "source": "seed"}
+{"text": "what does my note about the plumber say", "label": "notes", "source": "seed"}
+{"text": "jot down that the gate code is 4412", "label": "notes", "source": "seed"}
+{"text": "add a journal entry for today", "label": "journal", "source": "seed"}
+{"text": "write in my journal", "label": "journal", "source": "seed"}
+{"text": "journal that today was a good day", "label": "journal", "source": "seed"}
+{"text": "log today in my diary", "label": "journal", "source": "seed"}
+{"text": "make a diary entry about the trip", "label": "journal", "source": "seed"}
+{"text": "record how I'm feeling in my journal", "label": "journal", "source": "seed"}
+{"text": "play jazz in the kitchen", "label": "music", "source": "seed"}
+{"text": "put on my chill playlist", "label": "music", "source": "seed"}
+{"text": "skip this song", "label": "music", "source": "seed"}
+{"text": "next track please", "label": "music", "source": "seed"}
+{"text": "turn the music down", "label": "music", "source": "seed"}
+{"text": "resume playback", "label": "music", "source": "seed"}
+{"text": "what song is this", "label": "music", "source": "seed"}
+{"text": "play the beatles in the living room", "label": "music", "source": "seed"}
+{"text": "turn on the lights", "label": "smart_home", "source": "seed"}
+{"text": "dim the bedroom lights", "label": "smart_home", "source": "seed"}
+{"text": "switch off all the lights", "label": "smart_home", "source": "seed"}
+{"text": "brighten the living room", "label": "smart_home", "source": "seed"}
+{"text": "lights off please", "label": "smart_home", "source": "seed"}
+{"text": "turn on the fan", "label": "smart_home", "source": "seed"}
+{"text": "is the front door locked", "label": "smart_home", "source": "seed"}
+{"text": "set the thermostat to 22", "label": "smart_home", "source": "seed"}
+{"text": "turn off the heater", "label": "smart_home", "source": "seed"}
+{"text": "how are you feeling today", "label": "chat", "source": "seed"}
+{"text": "tell me a joke", "label": "chat", "source": "seed"}
+{"text": "what's the meaning of life", "label": "chat", "source": "seed"}
+{"text": "I'm feeling a bit down today", "label": "chat", "source": "seed"}
+{"text": "what do you think about space", "label": "chat", "source": "seed"}
+{"text": "let's have a chat", "label": "chat", "source": "seed"}
+{"text": "good morning zoe", "label": "chat", "source": "seed"}
+{"text": "thank you so much", "label": "chat", "source": "seed"}
+{"text": "what is the capital of japan", "label": "chat", "source": "seed"}
+{"text": "tell me a fun fact about the ocean", "label": "chat", "source": "seed"}
+{"text": "I was just testing your voice", "label": "chat", "source": "seed"}
+{"text": "give me a reason to drink water", "label": "chat", "source": "seed"}
+{"text": "I love making lists, it keeps me calm", "label": "chat", "source": "seed"}
+{"text": "my friend set a timer once and forgot about it for a week", "label": "chat", "source": "seed"}
+{"text": "do you like music", "label": "chat", "source": "seed"}
+{"text": "what's your favourite song", "label": "chat", "source": "seed"}
+{"text": "we talked about the weather for an hour, so boring", "label": "chat", "source": "seed"}
+{"text": "I should really keep a journal one day", "label": "chat", "source": "seed"}
+{"text": "remembering names has never been my strong suit", "label": "chat", "source": "seed"}
+{"text": "the lights at the concert were amazing", "label": "chat", "source": "seed"}
+{"text": "check my schedule for next monday", "label": "calendar", "source": "synthetic"}
+{"text": "when's my next appointment", "label": "calendar", "source": "synthetic"}
+{"text": "can you put in a dentist checkup for wednesday", "label": "calendar", "source": "synthetic"}
+{"text": "is my afternoon clear on thursday", "label": "calendar", "source": "synthetic"}
+{"text": "what's up for me on the calendar today", "label": "calendar", "source": "synthetic"}
+{"text": "set a reminder for my physio at four", "label": "calendar", "source": "synthetic"}
+{"text": "do I have anything booked for saturday", "label": "calendar", "source": "synthetic"}
+{"text": "block off time for a doctor's visit next tuesday", "label": "calendar", "source": "synthetic"}
+{"text": "what are my commitments for this week", "label": "calendar", "source": "synthetic"}
+{"text": "find an open slot for a call tomorrow morning", "label": "calendar", "source": "synthetic"}
+{"text": "add a dentist visit next week please", "label": "calendar", "source": "synthetic"}
+{"text": "when am I free on wednesday", "label": "calendar", "source": "synthetic"}
+{"text": "check my availability for friday", "label": "calendar", "source": "synthetic"}
+{"text": "can you jot down a meeting with mark for wednesday", "label": "calendar", "source": "synthetic"}
+{"text": "what's my agenda like for this weekend", "label": "calendar", "source": "synthetic"}
+{"text": "schedule a call with the team on tuesday", "label": "calendar", "source": "synthetic"}
+{"text": "set up a reminder for my dentist next week", "label": "calendar", "source": "synthetic"}
+{"text": "what are my next few appointments", "label": "calendar", "source": "synthetic"}
+{"text": "find out what my schedule looks like tomorrow", "label": "calendar", "source": "synthetic"}
+{"text": "book me a time for my haircut next monday", "label": "calendar", "source": "synthetic"}
+{"text": "hey can you check my diary", "label": "calendar", "source": "synthetic"}
+{"text": "what's the plan for this evening", "label": "calendar", "source": "synthetic"}
+{"text": "remind me about that thing on tuesday", "label": "calendar", "source": "synthetic"}
+{"text": "can you slot in a dentist thing next week", "label": "calendar", "source": "synthetic"}
+{"text": "when am i supposed to do my pilates", "label": "calendar", "source": "synthetic"}
+{"text": "got any appointments coming up soon", "label": "calendar", "source": "synthetic"}
+{"text": "what's happening on my schedule for tomorrow", "label": "calendar", "source": "synthetic"}
+{"text": "put in a doctor visit for wednesday afternoon", "label": "calendar", "source": "synthetic"}
+{"text": "is there anything booked for me next monday", "label": "calendar", "source": "synthetic"}
+{"text": "can you just jot down a reminder for the plumber", "label": "calendar", "source": "synthetic"}
+{"text": "i've got a free slot saturday morning can i put something in", "label": "calendar", "source": "synthetic"}
+{"text": "check what's on my list for next week", "label": "calendar", "source": "synthetic"}
+{"text": "can you book in a haircut for sometime soon", "label": "calendar", "source": "synthetic"}
+{"text": "what's my diary looking like this week", "label": "calendar", "source": "synthetic"}
+{"text": "schedule a catch up with jenna for next friday", "label": "calendar", "source": "synthetic"}
+{"text": "do I have anything happening tomorrow afternoon", "label": "calendar", "source": "synthetic"}
+{"text": "add a meeting with the boss for thursday at ten", "label": "calendar", "source": "synthetic"}
+{"text": "can you see if i'm free next tuesday", "label": "calendar", "source": "synthetic"}
+{"text": "book me a dentist for the first tuesday of next month", "label": "calendar", "source": "synthetic"}
+{"text": "what's in my agenda today", "label": "calendar", "source": "synthetic"}
+{"text": "could you check my diary for next wednesday", "label": "calendar", "source": "synthetic"}
+{"text": "i need to see what's happening in my schedule this afternoon", "label": "calendar", "source": "synthetic"}
+{"text": "can you tell me what's booked for me on tuesday", "label": "calendar", "source": "synthetic"}
+{"text": "i wanna put a reminder in my calendar for my physio session", "label": "calendar", "source": "synthetic"}
+{"text": "what's my availability looking like next month", "label": "calendar", "source": "synthetic"}
+{"text": "is there a gap in my commitments sometime next friday", "label": "calendar", "source": "synthetic"}
+{"text": "hey can you slot in a call with tim on thursday at eleven", "label": "calendar", "source": "synthetic"}
+{"text": "i'd like to get a massage scheduled for sometime this weekend", "label": "calendar", "source": "synthetic"}
+{"text": "what's my to-do list looking like for the next few days", "label": "calendar", "source": "synthetic"}
+{"text": "could you book a reminder to call the bank next tuesday", "label": "calendar", "source": "synthetic"}
+{"text": "do I have any conflicts coming up this week", "label": "calendar", "source": "synthetic"}
+{"text": "can you find me a free slot on wednesday for an hour", "label": "calendar", "source": "synthetic"}
+{"text": "i need to get a new dentist appointment booked in", "label": "calendar", "source": "synthetic"}
+{"text": "what does my diary look like next tuesday", "label": "calendar", "source": "synthetic"}
+{"text": "hey could you pop a reminder on my phone for the meeting at four", "label": "calendar", "source": "synthetic"}
+{"text": "i'm free on monday afternoon do you have something scheduled then", "label": "calendar", "source": "synthetic"}
+{"text": "can you add a grocery run to my calendar for sunday morning", "label": "calendar", "source": "synthetic"}
+{"text": "what time am i free on friday morning", "label": "calendar", "source": "synthetic"}
+{"text": "i was wondering if you could set up a recurring appointment every wednesday", "label": "calendar", "source": "synthetic"}
+{"text": "can you check if next monday is clear for me", "label": "calendar", "source": "synthetic"}
+{"text": "hey what's happening today", "label": "calendar", "source": "synthetic"}
+{"text": "can you check my schedule for next wednesday", "label": "calendar", "source": "synthetic"}
+{"text": "i need to put in a dentist appointment on friday afternoon", "label": "calendar", "source": "synthetic"}
+{"text": "what does my calendar look like for tomorrow", "label": "calendar", "source": "synthetic"}
+{"text": "is there anything booked for me saturday", "label": "calendar", "source": "synthetic"}
+{"text": "could you add a reminder for my doctor's visit tuesday", "label": "calendar", "source": "synthetic"}
+{"text": "show me my appointments this week", "label": "calendar", "source": "synthetic"}
+{"text": "when is my next meeting", "label": "calendar", "source": "synthetic"}
+{"text": "book in a plumber sometime next month", "label": "calendar", "source": "synthetic"}
+{"text": "what's the plan for monday", "label": "calendar", "source": "synthetic"}
+{"text": "can you see if i'm available thursday", "label": "calendar", "source": "synthetic"}
+{"text": "i gotta schedule a catch up with david next week", "label": "calendar", "source": "synthetic"}
+{"text": "put a reminder in for my gym session tuesday morning", "label": "calendar", "source": "synthetic"}
+{"text": "what do i have lined up for the weekend", "label": "calendar", "source": "synthetic"}
+{"text": "hey remind me of my appointments for tuesday", "label": "calendar", "source": "synthetic"}
+{"text": "schedule a call with my boss for wednesday", "label": "calendar", "source": "synthetic"}
+{"text": "check my availability for next monday", "label": "calendar", "source": "synthetic"}
+{"text": "i need to put a dentist thing on the books", "label": "calendar", "source": "synthetic"}
+{"text": "what's in my diary today", "label": "calendar", "source": "synthetic"}
+{"text": "can you book a quick coffee with me on friday", "label": "calendar", "source": "synthetic"}
+{"text": "add a carton of milk to the grocery list", "label": "lists", "source": "synthetic"}
+{"text": "put tomatoes on the shopping list", "label": "lists", "source": "synthetic"}
+{"text": "show me the todo list", "label": "lists", "source": "synthetic"}
+{"text": "add chicken to my list", "label": "lists", "source": "synthetic"}
+{"text": "what's the current shopping list", "label": "lists", "source": "synthetic"}
+{"text": "delete bananas from my grocery list", "label": "lists", "source": "synthetic"}
+{"text": "is there any more milk needed", "label": "lists", "source": "synthetic"}
+{"text": "add coffee to the list", "label": "lists", "source": "synthetic"}
+{"text": "display my chores", "label": "lists", "source": "synthetic"}
+{"text": "add bread and cheese to the shopping list", "label": "lists", "source": "synthetic"}
+{"text": "what's still left to do", "label": "lists", "source": "synthetic"}
+{"text": "take out milk from the shopping list", "label": "lists", "source": "synthetic"}
+{"text": "add laundry to the todo list", "label": "lists", "source": "synthetic"}
+{"text": "list everything on the shopping list", "label": "lists", "source": "synthetic"}
+{"text": "remove the eggs from the list", "label": "lists", "source": "synthetic"}
+{"text": "add juice to the grocery list", "label": "lists", "source": "synthetic"}
+{"text": "what items are on my list", "label": "lists", "source": "synthetic"}
+{"text": "add detergent to the todo list", "label": "lists", "source": "synthetic"}
+{"text": "show me what I need", "label": "lists", "source": "synthetic"}
+{"text": "delete the butter from my shopping list", "label": "lists", "source": "synthetic"}
+{"text": "add apples and pears to the grocery list", "label": "lists", "source": "synthetic"}
+{"text": "Gotta chuck milk on the grocery thing", "label": "lists", "source": "synthetic"}
+{"text": "Add some more stuff to what I need", "label": "lists", "source": "synthetic"}
+{"text": "Hey, what's hanging around on the list?", "label": "lists", "source": "synthetic"}
+{"text": "Put coffee on the to-do thing", "label": "lists", "source": "synthetic"}
+{"text": "I need to add some more groceries", "label": "lists", "source": "synthetic"}
+{"text": "Can you tell me what's on the shopping board?", "label": "lists", "source": "synthetic"}
+{"text": "Yeah, take bananas off that list for me", "label": "lists", "source": "synthetic"}
+{"text": "Just throw bread on the list there", "label": "lists", "source": "synthetic"}
+{"text": "Add some stuff to my to-dos", "label": "lists", "source": "synthetic"}
+{"text": "Is there still any milk on that shopping thing?", "label": "lists", "source": "synthetic"}
+{"text": "Need to get some eggs, chuck 'em on the list", "label": "lists", "source": "synthetic"}
+{"text": "Show me what I haven't bought yet", "label": "lists", "source": "synthetic"}
+{"text": "Add a few things to my packing list, yeah", "label": "lists", "source": "synthetic"}
+{"text": "What am I supposed to buy?", "label": "lists", "source": "synthetic"}
+{"text": "Can you grab milk and put it on the list?", "label": "lists", "source": "synthetic"}
+{"text": "Just put some more things on the list, cheers", "label": "lists", "source": "synthetic"}
+{"text": "Remove those bananas from my shopping things", "label": "lists", "source": "synthetic"}
+{"text": "Add a few more things to the grocery list", "label": "lists", "source": "synthetic"}
+{"text": "Is there any more on the list I need?", "label": "lists", "source": "synthetic"}
+{"text": "Hey, what else do I gotta get?", "label": "lists", "source": "synthetic"}
+{"text": "Could you toss apples onto the list for me", "label": "lists", "source": "synthetic"}
+{"text": "I need to add some coffee to the things I have to get", "label": "lists", "source": "synthetic"}
+{"text": "What items are currently scheduled for purchase", "label": "lists", "source": "synthetic"}
+{"text": "Can you show me what's waiting on my to do list", "label": "lists", "source": "synthetic"}
+{"text": "I'd like to chuck some cheese on the grocery rundown", "label": "lists", "source": "synthetic"}
+{"text": "Hey, what's currently on my errands", "label": "lists", "source": "synthetic"}
+{"text": "Can you take out the tomatoes from my list please", "label": "lists", "source": "synthetic"}
+{"text": "I was wondering how much is on my shopping manifest", "label": "lists", "source": "synthetic"}
+{"text": "Please put some rice on the thing I need to buy", "label": "lists", "source": "synthetic"}
+{"text": "What's the current status of my chores list", "label": "lists", "source": "synthetic"}
+{"text": "Would you add some yogurt to the running list", "label": "lists", "source": "synthetic"}
+{"text": "Hey, can you pull up my shopping requirements", "label": "lists", "source": "synthetic"}
+{"text": "I've got some more stuff for the list, add them up", "label": "lists", "source": "synthetic"}
+{"text": "What's up on my to-do board right now", "label": "lists", "source": "synthetic"}
+{"text": "Could you scratch the soda off my list", "label": "lists", "source": "synthetic"}
+{"text": "I wanna see what I still gotta pick up", "label": "lists", "source": "synthetic"}
+{"text": "Can you jot down some flour on my things to get", "label": "lists", "source": "synthetic"}
+{"text": "Would you happen to be able to delete the carrots from the list", "label": "lists", "source": "synthetic"}
+{"text": "What's in my shopping bag for later", "label": "lists", "source": "synthetic"}
+{"text": "Add some chips and dips to the list, if you can", "label": "lists", "source": "synthetic"}
+{"text": "gimme the things i need to get", "label": "lists", "source": "synthetic"}
+{"text": "can i add some cheese to the list", "label": "lists", "source": "synthetic"}
+{"text": "hey add toothpaste to the to do list", "label": "lists", "source": "synthetic"}
+{"text": "show me what's due today", "label": "lists", "source": "synthetic"}
+{"text": "put coffee on my running errands list", "label": "lists", "source": "synthetic"}
+{"text": "what's still on the grocery run", "label": "lists", "source": "synthetic"}
+{"text": "delete tomatoes from my list", "label": "lists", "source": "synthetic"}
+{"text": "hey list what i need to buy", "label": "lists", "source": "synthetic"}
+{"text": "add more cereal to the list mate", "label": "lists", "source": "synthetic"}
+{"text": "can you check my shopping list for me", "label": "lists", "source": "synthetic"}
+{"text": "i need to take out the rubbish so add it to the list", "label": "lists", "source": "synthetic"}
+{"text": "what items are left on my packing list", "label": "lists", "source": "synthetic"}
+{"text": "add some bread rolls and jam to the list", "label": "lists", "source": "synthetic"}
+{"text": "remove chicken from the shopping list", "label": "lists", "source": "synthetic"}
+{"text": "show me my backlog of tasks", "label": "lists", "source": "synthetic"}
+{"text": "add a call to the list please", "label": "lists", "source": "synthetic"}
+{"text": "what's on the list for tomorrow", "label": "lists", "source": "synthetic"}
+{"text": "can i throw away the eggs from the list", "label": "lists", "source": "synthetic"}
+{"text": "add laundry to my to do list", "label": "lists", "source": "synthetic"}
+{"text": "give me the current shopping list", "label": "lists", "source": "synthetic"}
+{"text": "Remind me when the groceries arrive", "label": "reminders", "source": "synthetic"}
+{"text": "Can you set a reminder for 3pm?", "label": "reminders", "source": "synthetic"}
+{"text": "Give me a heads up to call the tradies", "label": "reminders", "source": "synthetic"}
+{"text": "Set a notification for Monday morning", "label": "reminders", "source": "synthetic"}
+{"text": "Nudge me to send that email later", "label": "reminders", "source": "synthetic"}
+{"text": "What's on my to-do list today", "label": "reminders", "source": "synthetic"}
+{"text": "Remind me to book the dentist appointment", "label": "reminders", "source": "synthetic"}
+{"text": "I need a reminder to pick up the dry cleaning", "label": "reminders", "source": "synthetic"}
+{"text": "Set a chime for seven tonight", "label": "reminders", "source": "synthetic"}
+{"text": "Don't forget to post the package at noon", "label": "reminders", "source": "synthetic"}
+{"text": "Remind me to grab milk on the way home", "label": "reminders", "source": "synthetic"}
+{"text": "Give me a prompt to check the oven in an hour", "label": "reminders", "source": "synthetic"}
+{"text": "Schedule a reminder for tomorrow afternoon", "label": "reminders", "source": "synthetic"}
+{"text": "Remind me about the birthday this week", "label": "reminders", "source": "synthetic"}
+{"text": "Alert me when I get to work", "label": "reminders", "source": "synthetic"}
+{"text": "Set a timer reminder for lunchtime", "label": "reminders", "source": "synthetic"}
+{"text": "Bring up my upcoming obligations", "label": "reminders", "source": "synthetic"}
+{"text": "Remind me to water the lawn at sunset", "label": "reminders", "source": "synthetic"}
+{"text": "Put a note in my calendar to call Sarah", "label": "reminders", "source": "synthetic"}
+{"text": "What are my scheduled alerts?", "label": "reminders", "source": "synthetic"}
+{"text": "Gotta set something for later", "label": "reminders", "source": "synthetic"}
+{"text": "Remind me to grab milk before I forget", "label": "reminders", "source": "synthetic"}
+{"text": "Put a nudge on my calendar for the dentist", "label": "reminders", "source": "synthetic"}
+{"text": "Can you flag something for me tomorrow afternoon?", "label": "reminders", "source": "synthetic"}
+{"text": "I need a reminder to check the fridge", "label": "reminders", "source": "synthetic"}
+{"text": "Don't let me forget that dentist appointment next week", "label": "reminders", "source": "synthetic"}
+{"text": "Remind me to feed the cat around the evening", "label": "reminders", "source": "synthetic"}
+{"text": "Set a thing for me to do on friday", "label": "reminders", "source": "synthetic"}
+{"text": "Can you keep me in the loop about that bill?", "label": "reminders", "source": "synthetic"}
+{"text": "Throw a reminder in there for picking up dry cleaning", "label": "reminders", "source": "synthetic"}
+{"text": "I'm going to need a prompt to take the dog out", "label": "reminders", "source": "synthetic"}
+{"text": "Remind me to follow up on that email later", "label": "reminders", "source": "synthetic"}
+{"text": "Hey, remind me about my birthday next month", "label": "reminders", "source": "synthetic"}
+{"text": "Put a little alert up for me to buy coffee", "label": "reminders", "source": "synthetic"}
+{"text": "Don't forget to call Sarah this weekend", "label": "reminders", "source": "synthetic"}
+{"text": "I want a heads up to take the recycling out", "label": "reminders", "source": "synthetic"}
+{"text": "Remind me to pick up some groceries when I leave work", "label": "reminders", "source": "synthetic"}
+{"text": "Give me a reminder about that thing we talked about", "label": "reminders", "source": "synthetic"}
+{"text": "Can you ping me about the bank payment tomorrow morning?", "label": "reminders", "source": "synthetic"}
+{"text": "I'll need a nudge to do my taxes next week", "label": "reminders", "source": "synthetic"}
+{"text": "Hey can you set a reminder for me to pick up the dry cleaning?", "label": "reminders", "source": "synthetic"}
+{"text": "Would you mind reminding me about the appointment next Tuesday?", "label": "reminders", "source": "synthetic"}
+{"text": "Could you drop a note for me to buy milk this evening?", "label": "reminders", "source": "synthetic"}
+{"text": "Remind me when I get home to grab the groceries.", "label": "reminders", "source": "synthetic"}
+{"text": "What's on my schedule for this afternoon?", "label": "reminders", "source": "synthetic"}
+{"text": "Can you give me a heads up to check the oven later?", "label": "reminders", "source": "synthetic"}
+{"text": "Set a nudge for 3 pm to call the bank.", "label": "reminders", "source": "synthetic"}
+{"text": "Could you help me keep track of my chores?", "label": "reminders", "source": "synthetic"}
+{"text": "I need a reminder to send that email tomorrow morning.", "label": "reminders", "source": "synthetic"}
+{"text": "Tell me what I need to remember today.", "label": "reminders", "source": "synthetic"}
+{"text": "Please ping me to sort out the car tyres before I leave.", "label": "reminders", "source": "synthetic"}
+{"text": "Remind me to check the mail as soon as I arrive.", "label": "reminders", "source": "synthetic"}
+{"text": "Could you create a reminder for me to tidy the garage?", "label": "reminders", "source": "synthetic"}
+{"text": "I was wondering if you could remind me about the vet visit.", "label": "reminders", "source": "synthetic"}
+{"text": "Give me a gentle nudge to exercise before dinner.", "label": "reminders", "source": "synthetic"}
+{"text": "Set a reminder to look over the budget tonight.", "label": "reminders", "source": "synthetic"}
+{"text": "Remind me when the workday wraps up to send that report.", "label": "reminders", "source": "synthetic"}
+{"text": "Could you log a reminder to water the garden in the morning?", "label": "reminders", "source": "synthetic"}
+{"text": "Don't forget to remind me to take the dog for a walk.", "label": "reminders", "source": "synthetic"}
+{"text": "I need a prompt to book that dentist appointment.", "label": "reminders", "source": "synthetic"}
+{"text": "hey can you set a reminder for tomorrow", "label": "reminders", "source": "synthetic"}
+{"text": "remind me to grab some groceries when i get home", "label": "reminders", "source": "synthetic"}
+{"text": "put a reminder that i need to call sarah on tuesday", "label": "reminders", "source": "synthetic"}
+{"text": "hey remind me to check my emails at noon", "label": "reminders", "source": "synthetic"}
+{"text": "set a reminder for when i get off work", "label": "reminders", "source": "synthetic"}
+{"text": "i need a reminder to feed the dog at five", "label": "reminders", "source": "synthetic"}
+{"text": "remind me to book that dentist appointment soon", "label": "reminders", "source": "synthetic"}
+{"text": "can you put a reminder that i have a presentation monday", "label": "reminders", "source": "synthetic"}
+{"text": "hey nudge me about paying the power bill", "label": "reminders", "source": "synthetic"}
+{"text": "remind me to pick up the dry cleaning this arvo", "label": "reminders", "source": "synthetic"}
+{"text": "set a reminder to call the mechanic next week", "label": "reminders", "source": "synthetic"}
+{"text": "hey remind me to do the laundry tonight", "label": "reminders", "source": "synthetic"}
+{"text": "don't forget to remind me about that work deadline", "label": "reminders", "source": "synthetic"}
+{"text": "remind me to buy milk and bread when i'm out", "label": "reminders", "source": "synthetic"}
+{"text": "put a reminder that i need to exercise today", "label": "reminders", "source": "synthetic"}
+{"text": "remind me to send that invoice by friday", "label": "reminders", "source": "synthetic"}
+{"text": "i need a reminder to check the oven in an hour", "label": "reminders", "source": "synthetic"}
+{"text": "remind me about picking up the kids after school", "label": "reminders", "source": "synthetic"}
+{"text": "what do my reminders say for the week", "label": "reminders", "source": "synthetic"}
+{"text": "remind me to call dad on his birthday", "label": "reminders", "source": "synthetic"}
+{"text": "Set a timer for twenty", "label": "timers", "source": "synthetic"}
+{"text": "Start a timer for two hours", "label": "timers", "source": "synthetic"}
+{"text": "How much time do I have left on my kitchen timer", "label": "timers", "source": "synthetic"}
+{"text": "Cancel the countdown", "label": "timers", "source": "synthetic"}
+{"text": "Set the timer for baking", "label": "timers", "source": "synthetic"}
+{"text": "Timer for half an hour please", "label": "timers", "source": "synthetic"}
+{"text": "Can you start a five minute kitchen timer", "label": "timers", "source": "synthetic"}
+{"text": "Stop the timer", "label": "timers", "source": "synthetic"}
+{"text": "Set a timer for the onions", "label": "timers", "source": "synthetic"}
+{"text": "Check the timer", "label": "timers", "source": "synthetic"}
+{"text": "Start a twenty minute countdown", "label": "timers", "source": "synthetic"}
+{"text": "How long until my timer goes off", "label": "timers", "source": "synthetic"}
+{"text": "Cancel that timer", "label": "timers", "source": "synthetic"}
+{"text": "Set a timer for twenty minutes sharp", "label": "timers", "source": "synthetic"}
+{"text": "Start the timer for boiling", "label": "timers", "source": "synthetic"}
+{"text": "Time left on the clock", "label": "timers", "source": "synthetic"}
+{"text": "Cancel the ticking", "label": "timers", "source": "synthetic"}
+{"text": "Set a timer for the sauce", "label": "timers", "source": "synthetic"}
+{"text": "Give me a ten minute countdown", "label": "timers", "source": "synthetic"}
+{"text": "Stop the timer for the rice", "label": "timers", "source": "synthetic"}
+{"text": "Can you ping me in a bit", "label": "timers", "source": "synthetic"}
+{"text": "I need to set a countdown", "label": "timers", "source": "synthetic"}
+{"text": "Remember to be ready in twenty", "label": "timers", "source": "synthetic"}
+{"text": "How much time do I have left on that thing", "label": "timers", "source": "synthetic"}
+{"text": "Stop the clock please", "label": "timers", "source": "synthetic"}
+{"text": "Set a timer for when the water boils", "label": "timers", "source": "synthetic"}
+{"text": "Is that thing still counting down", "label": "timers", "source": "synthetic"}
+{"text": "Hey, stop that timer", "label": "timers", "source": "synthetic"}
+{"text": "Need to know when my ten minutes are up", "label": "timers", "source": "synthetic"}
+{"text": "Can you count down to a quarter of an hour", "label": "timers", "source": "synthetic"}
+{"text": "Timer for the baking, yeah", "label": "timers", "source": "synthetic"}
+{"text": "Just ping me when it's done", "label": "timers", "source": "synthetic"}
+{"text": "Cancel the countdown, it's too long", "label": "timers", "source": "synthetic"}
+{"text": "How much time is remaining on my kitchen timer", "label": "timers", "source": "synthetic"}
+{"text": "Start a fifteen minute countdown", "label": "timers", "source": "synthetic"}
+{"text": "Set a timer for when dinner's done", "label": "timers", "source": "synthetic"}
+{"text": "Stop the timer, I've got it", "label": "timers", "source": "synthetic"}
+{"text": "Can you tell me when it's gone in five", "label": "timers", "source": "synthetic"}
+{"text": "Ping me in ten minutes", "label": "timers", "source": "synthetic"}
+{"text": "I need a countdown for the soup", "label": "timers", "source": "synthetic"}
+{"text": "Could you please set a timer for twenty minutes?", "label": "timers", "source": "synthetic"}
+{"text": "I need a countdown for my baking, how about fifteen minutes?", "label": "timers", "source": "synthetic"}
+{"text": "Can you start a quick timer for ten minutes?", "label": "timers", "source": "synthetic"}
+{"text": "What time is left on my kitchen clock?", "label": "timers", "source": "synthetic"}
+{"text": "Stop the timer, please.", "label": "timers", "source": "synthetic"}
+{"text": "Hey, can you ring a timer for the spaghetti cooking time?", "label": "timers", "source": "synthetic"}
+{"text": "I was wondering if you could set a timer for a quarter of an hour.", "label": "timers", "source": "synthetic"}
+{"text": "Can you check the remaining time on my current timer?", "label": "timers", "source": "synthetic"}
+{"text": "Set a countdown for thirty seconds, cheers.", "label": "timers", "source": "synthetic"}
+{"text": "Timeout for my coffee, please, five minutes.", "label": "timers", "source": "synthetic"}
+{"text": "Could you give me a fifteen minute kitchen reminder?", "label": "timers", "source": "synthetic"}
+{"text": "What's left on the clock, mate?", "label": "timers", "source": "synthetic"}
+{"text": "Hang up the timer, it's done.", "label": "timers", "source": "synthetic"}
+{"text": "Can you put a timer on for the roast?", "label": "timers", "source": "synthetic"}
+{"text": "How much longer till my cooking time is up?", "label": "timers", "source": "synthetic"}
+{"text": "Set a timer for the prep work, twenty minutes.", "label": "timers", "source": "synthetic"}
+{"text": "I need a timer for my chopping, how about twenty minutes?", "label": "timers", "source": "synthetic"}
+{"text": "Could you initiate a short timer, maybe five minutes?", "label": "timers", "source": "synthetic"}
+{"text": "Tell me how long I have left on the clock.", "label": "timers", "source": "synthetic"}
+{"text": "Please stop the timer I started earlier.", "label": "timers", "source": "synthetic"}
+{"text": "hey can you set a timer for like twenty minutes", "label": "timers", "source": "synthetic"}
+{"text": "put a timer on for an hour please", "label": "timers", "source": "synthetic"}
+{"text": "i need a countdown for like half an hour", "label": "timers", "source": "synthetic"}
+{"text": "hey timer set it for the baking", "label": "timers", "source": "synthetic"}
+{"text": "how much time do i have left on this thing", "label": "timers", "source": "synthetic"}
+{"text": "stop that timer please", "label": "timers", "source": "synthetic"}
+{"text": "set a quick timer for like five minutes", "label": "timers", "source": "synthetic"}
+{"text": "can you start a ten minute countdown for me", "label": "timers", "source": "synthetic"}
+{"text": "i forgot what time is left on the timer", "label": "timers", "source": "synthetic"}
+{"text": "cancel the kitchen timer", "label": "timers", "source": "synthetic"}
+{"text": "hey timer what's left on the pasta thing", "label": "timers", "source": "synthetic"}
+{"text": "i want to set a timer for like twenty twenty minutes", "label": "timers", "source": "synthetic"}
+{"text": "how long till my countdown finishes", "label": "timers", "source": "synthetic"}
+{"text": "can you ring a timer for like fifteen minutes", "label": "timers", "source": "synthetic"}
+{"text": "stop the countdown", "label": "timers", "source": "synthetic"}
+{"text": "set a timer for the sauce to boil", "label": "timers", "source": "synthetic"}
+{"text": "check the timer how much time left", "label": "timers", "source": "synthetic"}
+{"text": "give me a timer for ten minutes please", "label": "timers", "source": "synthetic"}
+{"text": "cancel the thing that's running", "label": "timers", "source": "synthetic"}
+{"text": "set a countdown for like forty five minutes", "label": "timers", "source": "synthetic"}
+{"text": "what's the weather doing today", "label": "weather", "source": "synthetic"}
+{"text": "is it warm out", "label": "weather", "source": "synthetic"}
+{"text": "tell me the forecast", "label": "weather", "source": "synthetic"}
+{"text": "is it going to pour", "label": "weather", "source": "synthetic"}
+{"text": "what's the sky looking like", "label": "weather", "source": "synthetic"}
+{"text": "how's the weather looking", "label": "weather", "source": "synthetic"}
+{"text": "any showers expected", "label": "weather", "source": "synthetic"}
+{"text": "how high is the temp", "label": "weather", "source": "synthetic"}
+{"text": "is it chilly today", "label": "weather", "source": "synthetic"}
+{"text": "what's the outlook for tomorrow", "label": "weather", "source": "synthetic"}
+{"text": "is it going to be sunny", "label": "weather", "source": "synthetic"}
+{"text": "how hot is it right now", "label": "weather", "source": "synthetic"}
+{"text": "is there a chance of rain", "label": "weather", "source": "synthetic"}
+{"text": "what's the weather like in sydney", "label": "weather", "source": "synthetic"}
+{"text": "will it be windy", "label": "weather", "source": "synthetic"}
+{"text": "what's the temperature now", "label": "weather", "source": "synthetic"}
+{"text": "is it raining anywhere", "label": "weather", "source": "synthetic"}
+{"text": "is it going to be mild", "label": "weather", "source": "synthetic"}
+{"text": "how's the sky looking at the moment", "label": "weather", "source": "synthetic"}
+{"text": "tell me about the weather down here", "label": "weather", "source": "synthetic"}
+{"text": "is it gonna be nice out later", "label": "weather", "source": "synthetic"}
+{"text": "is there any chance of a downpour", "label": "weather", "source": "synthetic"}
+{"text": "any idea how warm it is right now", "label": "weather", "source": "synthetic"}
+{"text": "what's the plan for the weather this week", "label": "weather", "source": "synthetic"}
+{"text": "will we get any rain this weekend", "label": "weather", "source": "synthetic"}
+{"text": "is it boiling out there", "label": "weather", "source": "synthetic"}
+{"text": "what's the current weather situation", "label": "weather", "source": "synthetic"}
+{"text": "what's the forecast for a few days", "label": "weather", "source": "synthetic"}
+{"text": "should I wear a jacket today", "label": "weather", "source": "synthetic"}
+{"text": "is it going to be a scorcher today", "label": "weather", "source": "synthetic"}
+{"text": "what's the chance of sunshine tomorrow", "label": "weather", "source": "synthetic"}
+{"text": "is it chucking it down right now", "label": "weather", "source": "synthetic"}
+{"text": "how's the weather looking for a walk later", "label": "weather", "source": "synthetic"}
+{"text": "is it gonna be breezy", "label": "weather", "source": "synthetic"}
+{"text": "what's the temperature reading outside", "label": "weather", "source": "synthetic"}
+{"text": "what's the vibe with the weather today", "label": "weather", "source": "synthetic"}
+{"text": "how's the heat holding up", "label": "weather", "source": "synthetic"}
+{"text": "Can you tell me what the sky looks like", "label": "weather", "source": "synthetic"}
+{"text": "I'd like to know if there's any precipitation planned", "label": "weather", "source": "synthetic"}
+{"text": "What's the current heat reading", "label": "weather", "source": "synthetic"}
+{"text": "What are the chances of a downpour later", "label": "weather", "source": "synthetic"}
+{"text": "Could you check the forecast for tomorrow", "label": "weather", "source": "synthetic"}
+{"text": "I wonder if it will be warm today", "label": "weather", "source": "synthetic"}
+{"text": "What's the outlook for this afternoon", "label": "weather", "source": "synthetic"}
+{"text": "Is there any chance of showers coming on", "label": "weather", "source": "synthetic"}
+{"text": "Tell me how warm it is right now", "label": "weather", "source": "synthetic"}
+{"text": "What's the long-term outlook for the week", "label": "weather", "source": "synthetic"}
+{"text": "Will I need a jacket later", "label": "weather", "source": "synthetic"}
+{"text": "Give me the weather update for my location", "label": "weather", "source": "synthetic"}
+{"text": "Is it going to be sunny later today", "label": "weather", "source": "synthetic"}
+{"text": "How chilly is it outside at the moment", "label": "weather", "source": "synthetic"}
+{"text": "Could you give me a heads up on the rain", "label": "weather", "source": "synthetic"}
+{"text": "What's the air quality looking like", "label": "weather", "source": "synthetic"}
+{"text": "What's the expected high temperature", "label": "weather", "source": "synthetic"}
+{"text": "Do I need to worry about storms today", "label": "weather", "source": "synthetic"}
+{"text": "What's the general weather vibe for today", "label": "weather", "source": "synthetic"}
+{"text": "Is the weather pleasant this evening", "label": "weather", "source": "synthetic"}
+{"text": "hey what's the forecast looking like", "label": "weather", "source": "synthetic"}
+{"text": "how's the weather been lately", "label": "weather", "source": "synthetic"}
+{"text": "is it going to be chucking it down", "label": "weather", "source": "synthetic"}
+{"text": "what's the current temp over here", "label": "weather", "source": "synthetic"}
+{"text": "can you check the weather for sydney", "label": "weather", "source": "synthetic"}
+{"text": "i wonder if it's gonna be a scorcher", "label": "weather", "source": "synthetic"}
+{"text": "tell me about the conditions today", "label": "weather", "source": "synthetic"}
+{"text": "what's the rain chance this afternoon", "label": "weather", "source": "synthetic"}
+{"text": "is it chilly outside right now", "label": "weather", "source": "synthetic"}
+{"text": "how warm is it in melbourne", "label": "weather", "source": "synthetic"}
+{"text": "what's the long range weather prediction", "label": "weather", "source": "synthetic"}
+{"text": "what's the sky doing at the moment", "label": "weather", "source": "synthetic"}
+{"text": "what's the vibe on the weather today", "label": "weather", "source": "synthetic"}
+{"text": "how much is the heat in adelaide", "label": "weather", "source": "synthetic"}
+{"text": "is it supposed to be nice this weekend", "label": "weather", "source": "synthetic"}
+{"text": "can you give me a weather update please", "label": "weather", "source": "synthetic"}
+{"text": "what's the temperature right now", "label": "weather", "source": "synthetic"}
+{"text": "how's the weather looking for tomorrow", "label": "weather", "source": "synthetic"}
+{"text": "what's the clock sayin", "label": "time", "source": "synthetic"}
+{"text": "tell me the time", "label": "time", "source": "synthetic"}
+{"text": "what time do we have", "label": "time", "source": "synthetic"}
+{"text": "how much time is there", "label": "time", "source": "synthetic"}
+{"text": "what's the date", "label": "time", "source": "synthetic"}
+{"text": "what day of the week is it", "label": "time", "source": "synthetic"}
+{"text": "is it noon yet", "label": "time", "source": "synthetic"}
+{"text": "what's the current time", "label": "time", "source": "synthetic"}
+{"text": "what's the day today", "label": "time", "source": "synthetic"}
+{"text": "what's it lookin like on the calendar", "label": "time", "source": "synthetic"}
+{"text": "tell me the date", "label": "time", "source": "synthetic"}
+{"text": "is it daytime now", "label": "time", "source": "synthetic"}
+{"text": "what's the time now", "label": "time", "source": "synthetic"}
+{"text": "what's the day", "label": "time", "source": "synthetic"}
+{"text": "what's the date for today", "label": "time", "source": "synthetic"}
+{"text": "what time are we at", "label": "time", "source": "synthetic"}
+{"text": "how much time left", "label": "time", "source": "synthetic"}
+{"text": "what's the current day", "label": "time", "source": "synthetic"}
+{"text": "what's the hour", "label": "time", "source": "synthetic"}
+{"text": "tell me the day of the week", "label": "time", "source": "synthetic"}
+{"text": "reckon what time it is", "label": "time", "source": "synthetic"}
+{"text": "any chance you can tell me the time", "label": "time", "source": "synthetic"}
+{"text": "how long has it been since noon", "label": "time", "source": "synthetic"}
+{"text": "what's the date right now mate", "label": "time", "source": "synthetic"}
+{"text": "could you let me know what day it is", "label": "time", "source": "synthetic"}
+{"text": "is it lunchtime yet", "label": "time", "source": "synthetic"}
+{"text": "give me the clock time", "label": "time", "source": "synthetic"}
+{"text": "what's the calendar saying", "label": "time", "source": "synthetic"}
+{"text": "how many days 'til the weekend", "label": "time", "source": "synthetic"}
+{"text": "is it mid-afternoon", "label": "time", "source": "synthetic"}
+{"text": "what's the date, like for real", "label": "time", "source": "synthetic"}
+{"text": "can you check the time for me", "label": "time", "source": "synthetic"}
+{"text": "what day of the week is this", "label": "time", "source": "synthetic"}
+{"text": "give me the current time", "label": "time", "source": "synthetic"}
+{"text": "when is today according to the system", "label": "time", "source": "synthetic"}
+{"text": "is it morning or evening right now", "label": "time", "source": "synthetic"}
+{"text": "how late is it", "label": "time", "source": "synthetic"}
+{"text": "tell me the date please", "label": "time", "source": "synthetic"}
+{"text": "can you tell me the time please", "label": "time", "source": "synthetic"}
+{"text": "what time is it right now", "label": "time", "source": "synthetic"}
+{"text": "could you check the current time", "label": "time", "source": "synthetic"}
+{"text": "what's the date today mate", "label": "time", "source": "synthetic"}
+{"text": "i wonder what time it is", "label": "time", "source": "synthetic"}
+{"text": "could you give me the time", "label": "time", "source": "synthetic"}
+{"text": "what is the current date", "label": "time", "source": "synthetic"}
+{"text": "what's the date please", "label": "time", "source": "synthetic"}
+{"text": "what day are we on", "label": "time", "source": "synthetic"}
+{"text": "is it morning or afternoon already", "label": "time", "source": "synthetic"}
+{"text": "what time has it become", "label": "time", "source": "synthetic"}
+{"text": "could you say what the time is", "label": "time", "source": "synthetic"}
+{"text": "what's the date now", "label": "time", "source": "synthetic"}
+{"text": "what day is it today", "label": "time", "source": "synthetic"}
+{"text": "time for me please", "label": "time", "source": "synthetic"}
+{"text": "what time is it right now mate", "label": "time", "source": "synthetic"}
+{"text": "can you tell me what time we are", "label": "time", "source": "synthetic"}
+{"text": "what's the time please", "label": "time", "source": "synthetic"}
+{"text": "how late is it out there", "label": "time", "source": "synthetic"}
+{"text": "is it morning or is it evening", "label": "time", "source": "synthetic"}
+{"text": "give me the time quick", "label": "time", "source": "synthetic"}
+{"text": "tell me what time it is now", "label": "time", "source": "synthetic"}
+{"text": "what time is it today", "label": "time", "source": "synthetic"}
+{"text": "how late is it already", "label": "time", "source": "synthetic"}
+{"text": "can you say what time it is", "label": "time", "source": "synthetic"}
+{"text": "is it morning or afternoon yet", "label": "time", "source": "synthetic"}
+{"text": "what's the time on the clock", "label": "time", "source": "synthetic"}
+{"text": "tell me the time please", "label": "time", "source": "synthetic"}
+{"text": "what time do we have now", "label": "time", "source": "synthetic"}
+{"text": "What time has it got?", "label": "time", "source": "synthetic"}
+{"text": "Any idea what time it is?", "label": "time", "source": "synthetic"}
+{"text": "When is it now?", "label": "time", "source": "synthetic"}
+{"text": "Can you tell me the time?", "label": "time", "source": "synthetic"}
+{"text": "Is it midday?", "label": "time", "source": "synthetic"}
+{"text": "Give me the time please.", "label": "time", "source": "synthetic"}
+{"text": "What's the date right now?", "label": "time", "source": "synthetic"}
+{"text": "What time is it over there?", "label": "time", "source": "synthetic"}
+{"text": "What's the date and day?", "label": "time", "source": "synthetic"}
+{"text": "When is it?", "label": "time", "source": "synthetic"}
+{"text": "Is it afternoon yet?", "label": "time", "source": "synthetic"}
+{"text": "tell me about my best mate", "label": "people", "source": "synthetic"}
+{"text": "what's my cousin's name", "label": "people", "source": "synthetic"}
+{"text": "when did anna start school", "label": "people", "source": "synthetic"}
+{"text": "what's the address for my uncle", "label": "people", "source": "synthetic"}
+{"text": "tell me who david is", "label": "people", "source": "synthetic"}
+{"text": "what's my neighbour's name", "label": "people", "source": "synthetic"}
+{"text": "when is liam's big day", "label": "people", "source": "synthetic"}
+{"text": "can you find my partner's birthday", "label": "people", "source": "synthetic"}
+{"text": "who is the person I'm talking about?", "label": "people", "source": "synthetic"}
+{"text": "give me details on my aunt", "label": "people", "source": "synthetic"}
+{"text": "what's my sister's job", "label": "people", "source": "synthetic"}
+{"text": "tell me somethin about tim", "label": "people", "source": "synthetic"}
+{"text": "who's the one I met last week", "label": "people", "source": "synthetic"}
+{"text": "my boss is called gary", "label": "people", "source": "synthetic"}
+{"text": "my partner's middle name", "label": "people", "source": "synthetic"}
+{"text": "what's the name of my high school buddy", "label": "people", "source": "synthetic"}
+{"text": "tell me about my brother-in-law", "label": "people", "source": "synthetic"}
+{"text": "when is my friend's party", "label": "people", "source": "synthetic"}
+{"text": "what's the relationship between me and ryan", "label": "people", "source": "synthetic"}
+{"text": "what's my colleague's name", "label": "people", "source": "synthetic"}
+{"text": "Tell me a bit about my cousin", "label": "people", "source": "synthetic"}
+{"text": "I can't remember when Sarah's birthday is", "label": "people", "source": "synthetic"}
+{"text": "What do you know about my mate Dave", "label": "people", "source": "synthetic"}
+{"text": "Who is that person I mentioned earlier", "label": "people", "source": "synthetic"}
+{"text": "Just tell me stuff about my uncle", "label": "people", "source": "synthetic"}
+{"text": "What's the name of my best friend's partner", "label": "people", "source": "synthetic"}
+{"text": "How old is my sister", "label": "people", "source": "synthetic"}
+{"text": "Give me some details on my neighbour", "label": "people", "source": "synthetic"}
+{"text": "What should I know about Emily", "label": "people", "source": "synthetic"}
+{"text": "Do you know my brother's occupation", "label": "people", "source": "synthetic"}
+{"text": "Remind me what my mother's full name is", "label": "people", "source": "synthetic"}
+{"text": "I forgot who my boss is", "label": "people", "source": "synthetic"}
+{"text": "Can you tell me something about my old uni mate", "label": "people", "source": "synthetic"}
+{"text": "What's the name of my ex's sister", "label": "people", "source": "synthetic"}
+{"text": "Tell me about my friend who lives in Sydney", "label": "people", "source": "synthetic"}
+{"text": "What's the birthday for my aunt", "label": "people", "source": "synthetic"}
+{"text": "Who's that person I was just talking about", "label": "people", "source": "synthetic"}
+{"text": "Can you tell me about my partner's family", "label": "people", "source": "synthetic"}
+{"text": "I need to know more about Chloe", "label": "people", "source": "synthetic"}
+{"text": "What's the name of my childhood best friend", "label": "people", "source": "synthetic"}
+{"text": "could you tell me about my cousin", "label": "people", "source": "synthetic"}
+{"text": "i need to know when my best friend was born", "label": "people", "source": "synthetic"}
+{"text": "what's the deal with my colleague's background", "label": "people", "source": "synthetic"}
+{"text": "can you look up my sister's date of birth", "label": "people", "source": "synthetic"}
+{"text": "i was wondering if you knew my old school mate's details", "label": "people", "source": "synthetic"}
+{"text": "what's my partner's middle name", "label": "people", "source": "synthetic"}
+{"text": "do you have any info on my uncle", "label": "people", "source": "synthetic"}
+{"text": "who is the person I mentioned last", "label": "people", "source": "synthetic"}
+{"text": "give me the details on my friend", "label": "people", "source": "synthetic"}
+{"text": "can you find out my niece's birthday", "label": "people", "source": "synthetic"}
+{"text": "i'd like to know something about my neighbor", "label": "people", "source": "synthetic"}
+{"text": "what's the relationship between my aunt and uncle", "label": "people", "source": "synthetic"}
+{"text": "tell me more about the bloke I talked about", "label": "people", "source": "synthetic"}
+{"text": "i need the birthday for my significant other", "label": "people", "source": "synthetic"}
+{"text": "what can you tell me about my childhood friend", "label": "people", "source": "synthetic"}
+{"text": "could you pull up my friend's contact info", "label": "people", "source": "synthetic"}
+{"text": "what is the name of my high school teacher", "label": "people", "source": "synthetic"}
+{"text": "i'm looking for some background information on my acquaintance", "label": "people", "source": "synthetic"}
+{"text": "what's the date of birth for my relative", "label": "people", "source": "synthetic"}
+{"text": "do you know who that person is", "label": "people", "source": "synthetic"}
+{"text": "Hey, remember that I hate cilantro", "label": "memory", "source": "synthetic"}
+{"text": "Can you pull up what I told you about my trip", "label": "memory", "source": "synthetic"}
+{"text": "What was the name of that dog I mentioned", "label": "memory", "source": "synthetic"}
+{"text": "Just jot down that I'm from Sydney", "label": "memory", "source": "synthetic"}
+{"text": "Remind me what I said about the meeting time", "label": "memory", "source": "synthetic"}
+{"text": "Did I ever tell you about my brother", "label": "memory", "source": "synthetic"}
+{"text": "Can you recall what I said yesterday regarding finances", "label": "memory", "source": "synthetic"}
+{"text": "I need you to log that I prefer coffee over tea", "label": "memory", "source": "synthetic"}
+{"text": "What'd I say about moving house", "label": "memory", "source": "synthetic"}
+{"text": "Note down that my birthday is in November", "label": "memory", "source": "synthetic"}
+{"text": "Remind me of that story I told you", "label": "memory", "source": "synthetic"}
+{"text": "Can you remember my preferred contact number", "label": "memory", "source": "synthetic"}
+{"text": "What was that detail I gave you last week", "label": "memory", "source": "synthetic"}
+{"text": "Save this: my favorite color is green", "label": "memory", "source": "synthetic"}
+{"text": "I told you something about gardening, what was it", "label": "memory", "source": "synthetic"}
+{"text": "Did I mention I'm a vegetarian", "label": "memory", "source": "synthetic"}
+{"text": "Keep track that my birthday is next month", "label": "memory", "source": "synthetic"}
+{"text": "What did I say about the pet adoption", "label": "memory", "source": "synthetic"}
+{"text": "Fetch the detail I shared about my job", "label": "memory", "source": "synthetic"}
+{"text": "Just write down that I like spicy food", "label": "memory", "source": "synthetic"}
+{"text": "hey, can you recall what I mentioned earlier about that trip", "label": "memory", "source": "synthetic"}
+{"text": "i was telling you something the other day, what was it", "label": "memory", "source": "synthetic"}
+{"text": "remind me about that thing i said regarding my brother", "label": "memory", "source": "synthetic"}
+{"text": "what's that one detail i gave you before", "label": "memory", "source": "synthetic"}
+{"text": "i think i mentioned something about my dog, what was it again", "label": "memory", "source": "synthetic"}
+{"text": "remember that i hate cilantro", "label": "memory", "source": "synthetic"}
+{"text": "i told ya about my birthday, do you remember", "label": "memory", "source": "synthetic"}
+{"text": "what was that thing i was rambling about last week", "label": "memory", "source": "synthetic"}
+{"text": "i want you to jot down that i'm allergic to shellfish", "label": "memory", "source": "synthetic"}
+{"text": "do you recall the name of that author i mentioned", "label": "memory", "source": "synthetic"}
+{"text": "i mentioned a problem with my internet, can you pull that up", "label": "memory", "source": "synthetic"}
+{"text": "i was telling you my travel plans, what did i say", "label": "memory", "source": "synthetic"}
+{"text": "keep in mind that i prefer the north side", "label": "memory", "source": "synthetic"}
+{"text": "what was that piece of advice i gave you", "label": "memory", "source": "synthetic"}
+{"text": "hey, check if i've told you about my cousin", "label": "memory", "source": "synthetic"}
+{"text": "remember i'm a big fan of coffee", "label": "memory", "source": "synthetic"}
+{"text": "i was talking about a meeting, what was the main point i made", "label": "memory", "source": "synthetic"}
+{"text": "can you pull up the thing i said about my old job", "label": "memory", "source": "synthetic"}
+{"text": "i mentioned that i need to renew my passport, what was the date", "label": "memory", "source": "synthetic"}
+{"text": "just a heads up, remember that i don't like spicy food", "label": "memory", "source": "synthetic"}
+{"text": "Could you keep in mind that I prefer coffee over tea", "label": "memory", "source": "synthetic"}
+{"text": "Can you recall the thing I mentioned earlier about travel", "label": "memory", "source": "synthetic"}
+{"text": "What was that thing I told you regarding the trip", "label": "memory", "source": "synthetic"}
+{"text": "I'd like you to jot down that I'm from Sydney", "label": "memory", "source": "synthetic"}
+{"text": "Do you remember the colour of my dog", "label": "memory", "source": "synthetic"}
+{"text": "Can you remember that my sister's name is Sarah", "label": "memory", "source": "synthetic"}
+{"text": "Would you mind recalling what I said about the meeting", "label": "memory", "source": "synthetic"}
+{"text": "Please keep in mind that I work from home", "label": "memory", "source": "synthetic"}
+{"text": "Could you fetch what I mentioned regarding the new software", "label": "memory", "source": "synthetic"}
+{"text": "Do you recall the name of my childhood pet", "label": "memory", "source": "synthetic"}
+{"text": "Can you jot down that I have a meeting at three", "label": "memory", "source": "synthetic"}
+{"text": "I need you to keep track that my birthday is in October", "label": "memory", "source": "synthetic"}
+{"text": "What did I say about needing a new laptop", "label": "memory", "source": "synthetic"}
+{"text": "Would you be able to recall that I dislike spicy food", "label": "memory", "source": "synthetic"}
+{"text": "Remember that my favourite sport is surfing", "label": "memory", "source": "synthetic"}
+{"text": "Could you remind yourself that I mentioned hiking last week", "label": "memory", "source": "synthetic"}
+{"text": "I want you to file away that I'm vegetarian", "label": "memory", "source": "synthetic"}
+{"text": "Can you look back and see what I told you about my plans", "label": "memory", "source": "synthetic"}
+{"text": "Please remember that my phone number is 0412345678", "label": "memory", "source": "synthetic"}
+{"text": "hey can you recall what i was saying earlier about that trip", "label": "memory", "source": "synthetic"}
+{"text": "did i ever mention i hate cilantro", "label": "memory", "source": "synthetic"}
+{"text": "so what was that thing i told ya about the weekend", "label": "memory", "source": "synthetic"}
+{"text": "remind me what i said about the boss meeting", "label": "memory", "source": "synthetic"}
+{"text": "you remember that thing i told you about my dog", "label": "memory", "source": "synthetic"}
+{"text": "what was that detail i gave you yesterday", "label": "memory", "source": "synthetic"}
+{"text": "do you recall the thing i said re my hobbies", "label": "memory", "source": "synthetic"}
+{"text": "can you pull up what i said about the new house", "label": "memory", "source": "synthetic"}
+{"text": "i want you to log that i prefer iced coffee", "label": "memory", "source": "synthetic"}
+{"text": "make sure you keep track that my birthday is in october", "label": "memory", "source": "synthetic"}
+{"text": "what did i tell you regarding the software upgrade", "label": "memory", "source": "synthetic"}
+{"text": "i need you to jot down that my favourite colour is green", "label": "memory", "source": "synthetic"}
+{"text": "what was the snippet i mentioned about my travel plans", "label": "memory", "source": "synthetic"}
+{"text": "remember that i prefer tea over coffee", "label": "memory", "source": "synthetic"}
+{"text": "hey what was that bit i said about my childhood", "label": "memory", "source": "synthetic"}
+{"text": "can you just store that i'm not a fan of spicy food", "label": "memory", "source": "synthetic"}
+{"text": "do you have any record of me mentioning my sister", "label": "memory", "source": "synthetic"}
+{"text": "what did i say about the weekend plans again", "label": "memory", "source": "synthetic"}
+{"text": "i want you to note that i live near the park", "label": "memory", "source": "synthetic"}
+{"text": "tell me what i said about getting a new car", "label": "memory", "source": "synthetic"}
+{"text": "Make a quick memo about lunch", "label": "notes", "source": "synthetic"}
+{"text": "Put this in my notes", "label": "notes", "source": "synthetic"}
+{"text": "Scribble something down for me", "label": "notes", "source": "synthetic"}
+{"text": "I need a new entry in my notes", "label": "notes", "source": "synthetic"}
+{"text": "Check my notes for anything on bills", "label": "notes", "source": "synthetic"}
+{"text": "Log this thought", "label": "notes", "source": "synthetic"}
+{"text": "Record this idea", "label": "notes", "source": "synthetic"}
+{"text": "Add a note about the weekend plans", "label": "notes", "source": "synthetic"}
+{"text": "What did I write about the holiday?", "label": "notes", "source": "synthetic"}
+{"text": "Start a blank note for now", "label": "notes", "source": "synthetic"}
+{"text": "Save this thought for later", "label": "notes", "source": "synthetic"}
+{"text": "I want to search my notes for the address", "label": "notes", "source": "synthetic"}
+{"text": "Quick note on the flight details", "label": "notes", "source": "synthetic"}
+{"text": "Can you add a point to my notes?", "label": "notes", "source": "synthetic"}
+{"text": "Pull up the note from last week", "label": "notes", "source": "synthetic"}
+{"text": "File this under my to-do list", "label": "notes", "source": "synthetic"}
+{"text": "Hey, jot down this address", "label": "notes", "source": "synthetic"}
+{"text": "Find the note about the contractor", "label": "notes", "source": "synthetic"}
+{"text": "Just a quick reminder note", "label": "notes", "source": "synthetic"}
+{"text": "Log this conversation point", "label": "notes", "source": "synthetic"}
+{"text": "Hey, chuck a note down about that chat", "label": "notes", "source": "synthetic"}
+{"text": "Can you whip up a quick memo on the budget", "label": "notes", "source": "synthetic"}
+{"text": "Just scribble this down for me later", "label": "notes", "source": "synthetic"}
+{"text": "Remember to log that call under 'Client Update'", "label": "notes", "source": "synthetic"}
+{"text": "I need to pull up the thing I wrote about the trip", "label": "notes", "source": "synthetic"}
+{"text": "What's the gist of my notes on the dog's vet visit?", "label": "notes", "source": "synthetic"}
+{"text": "Make a file for my grocery list ideas", "label": "notes", "source": "synthetic"}
+{"text": "Hey, just put this down quickly", "label": "notes", "source": "synthetic"}
+{"text": "Can you look for the entry about my weekend plans?", "label": "notes", "source": "synthetic"}
+{"text": "Write down this reminder for Monday", "label": "notes", "source": "synthetic"}
+{"text": "Got a minute to jot this thought down?", "label": "notes", "source": "synthetic"}
+{"text": "I've got this random thing I need to save somewhere", "label": "notes", "source": "synthetic"}
+{"text": "Show me the stuff I wrote concerning the house repairs", "label": "notes", "source": "synthetic"}
+{"text": "Put this in my notes, something about the holiday dates", "label": "notes", "source": "synthetic"}
+{"text": "Find where I scribbled down those passwords", "label": "notes", "source": "synthetic"}
+{"text": "Can you log that we discussed the new software?", "label": "notes", "source": "synthetic"}
+{"text": "Start a blank note for my to-do list", "label": "notes", "source": "synthetic"}
+{"text": "Hey, what did I write down about that fancy restaurant?", "label": "notes", "source": "synthetic"}
+{"text": "I need to document this quickly", "label": "notes", "source": "synthetic"}
+{"text": "Scribble down this random thought for me", "label": "notes", "source": "synthetic"}
+{"text": "I need to make a quick note about lunch", "label": "notes", "source": "synthetic"}
+{"text": "Could you put something in my notes about the dentist appointment?", "label": "notes", "source": "synthetic"}
+{"text": "Hey, log this for me: the meeting is at three", "label": "notes", "source": "synthetic"}
+{"text": "I want to start a fresh piece of paper for some brainstorming", "label": "notes", "source": "synthetic"}
+{"text": "Can you pull up my notes regarding the weekend plans?", "label": "notes", "source": "synthetic"}
+{"text": "What was the thing I wrote down about the broken tap?", "label": "notes", "source": "synthetic"}
+{"text": "Would you mind recording this thought for later?", "label": "notes", "source": "synthetic"}
+{"text": "Hey, let's document this conversation.", "label": "notes", "source": "synthetic"}
+{"text": "I was wondering if I could jot down some shopping items.", "label": "notes", "source": "synthetic"}
+{"text": "Fetch the note where I saved the house keys location.", "label": "notes", "source": "synthetic"}
+{"text": "Please capture this reminder for me.", "label": "notes", "source": "synthetic"}
+{"text": "I'd like to open a new entry to track my expenses.", "label": "notes", "source": "synthetic"}
+{"text": "Can you look through my notes for the contact details?", "label": "notes", "source": "synthetic"}
+{"text": "Summarize what's in the note about the travel itinerary.", "label": "notes", "source": "synthetic"}
+{"text": "Could you transcribe this for my files?", "label": "notes", "source": "synthetic"}
+{"text": "Put a record in my notes about the dog's vet visit.", "label": "notes", "source": "synthetic"}
+{"text": "I need to search my documents for the address we discussed.", "label": "notes", "source": "synthetic"}
+{"text": "Maybe you could add a point to my current note.", "label": "notes", "source": "synthetic"}
+{"text": "Hey, file this under 'Work Stuff'.", "label": "notes", "source": "synthetic"}
+{"text": "Remind me later about the thing I scribbled down.", "label": "notes", "source": "synthetic"}
+{"text": "hey could you make a quick note for me about that thing we discussed", "label": "notes", "source": "synthetic"}
+{"text": "i need to log some thoughts on the weekend project", "label": "notes", "source": "synthetic"}
+{"text": "can you add a reminder to my notes to buy milk", "label": "notes", "source": "synthetic"}
+{"text": "just jot down that the presentation is tomorrow", "label": "notes", "source": "synthetic"}
+{"text": "i want to hear what i wrote down yesterday about budgeting", "label": "notes", "source": "synthetic"}
+{"text": "look up my scribbles from last tuesday about the trip", "label": "notes", "source": "synthetic"}
+{"text": "write down this i heard on the radio", "label": "notes", "source": "synthetic"}
+{"text": "start a new entry for my grocery list", "label": "notes", "source": "synthetic"}
+{"text": "tell me what my note says about the car warranty", "label": "notes", "source": "synthetic"}
+{"text": "make a note saying i need to call the dentist", "label": "notes", "source": "synthetic"}
+{"text": "could you pull up my notes regarding the renovation costs", "label": "notes", "source": "synthetic"}
+{"text": "i need to capture this idea right now", "label": "notes", "source": "synthetic"}
+{"text": "can you add this to my personal notes please", "label": "notes", "source": "synthetic"}
+{"text": "what did i write down about that new software", "label": "notes", "source": "synthetic"}
+{"text": "set a quick note about the dog walk time", "label": "notes", "source": "synthetic"}
+{"text": "make a record that the meeting was rescheduled", "label": "notes", "source": "synthetic"}
+{"text": "i wanna find my thoughts on the marketing campaign", "label": "notes", "source": "synthetic"}
+{"text": "add this piece of info to my diary notes", "label": "notes", "source": "synthetic"}
+{"text": "hey save this thought for me", "label": "notes", "source": "synthetic"}
+{"text": "check my notes for anything about the holiday plans", "label": "notes", "source": "synthetic"}
+{"text": "Log some thoughts for today", "label": "journal", "source": "synthetic"}
+{"text": "Put something in my diary", "label": "journal", "source": "synthetic"}
+{"text": "Time to write in my journal", "label": "journal", "source": "synthetic"}
+{"text": "Document my day", "label": "journal", "source": "synthetic"}
+{"text": "Diary update time", "label": "journal", "source": "synthetic"}
+{"text": "Log a feeling for my diary", "label": "journal", "source": "synthetic"}
+{"text": "Add a note to my journal", "label": "journal", "source": "synthetic"}
+{"text": "Capture how I'm doing", "label": "journal", "source": "synthetic"}
+{"text": "Journal some stuff", "label": "journal", "source": "synthetic"}
+{"text": "Make a diary entry", "label": "journal", "source": "synthetic"}
+{"text": "Write about my day", "label": "journal", "source": "synthetic"}
+{"text": "Log some reflections", "label": "journal", "source": "synthetic"}
+{"text": "Update my journal entry", "label": "journal", "source": "synthetic"}
+{"text": "Add an entry", "label": "journal", "source": "synthetic"}
+{"text": "Write down my thoughts", "label": "journal", "source": "synthetic"}
+{"text": "Time for a diary entry", "label": "journal", "source": "synthetic"}
+{"text": "Record a moment", "label": "journal", "source": "synthetic"}
+{"text": "Capture the day", "label": "journal", "source": "synthetic"}
+{"text": "Add a journal entry about my mood", "label": "journal", "source": "synthetic"}
+{"text": "Log some daily thoughts", "label": "journal", "source": "synthetic"}
+{"text": "Hey, jot down something about my morning", "label": "journal", "source": "synthetic"}
+{"text": "Can you put down what's been on my mind", "label": "journal", "source": "synthetic"}
+{"text": "Just put a note in the diary for me", "label": "journal", "source": "synthetic"}
+{"text": "Log how rubbish my day was today", "label": "journal", "source": "synthetic"}
+{"text": "Need to get this down somewhere, write it up", "label": "journal", "source": "synthetic"}
+{"text": "Scribble down a bit about work, yeah", "label": "journal", "source": "synthetic"}
+{"text": "Make a little entry for my private thoughts", "label": "journal", "source": "synthetic"}
+{"text": "Can you capture how I'm actually feeling right now", "label": "journal", "source": "synthetic"}
+{"text": "I want to document what happened today", "label": "journal", "source": "synthetic"}
+{"text": "Just stash this thought in the diary", "label": "journal", "source": "synthetic"}
+{"text": "Record the vibe of my afternoon", "label": "journal", "source": "synthetic"}
+{"text": "Put a little diary update in the system", "label": "journal", "source": "synthetic"}
+{"text": "Can you just add something to the daily log", "label": "journal", "source": "synthetic"}
+{"text": "Tell my diary about this weird day", "label": "journal", "source": "synthetic"}
+{"text": "Just chuck this down in my notes", "label": "journal", "source": "synthetic"}
+{"text": "How do I put down what's been going on?", "label": "journal", "source": "synthetic"}
+{"text": "A quick entry about my headspace, please", "label": "journal", "source": "synthetic"}
+{"text": "Settle this feeling down somewhere", "label": "journal", "source": "synthetic"}
+{"text": "Can you just add a quick diary blip?", "label": "journal", "source": "synthetic"}
+{"text": "Write down that thing I was just thinking", "label": "journal", "source": "synthetic"}
+{"text": "I want to jot down some thoughts for my journal", "label": "journal", "source": "synthetic"}
+{"text": "Can you capture what I've been up to today?", "label": "journal", "source": "synthetic"}
+{"text": "Please document my moods for the day", "label": "journal", "source": "synthetic"}
+{"text": "I'd like to make a note about how I'm feeling right now", "label": "journal", "source": "synthetic"}
+{"text": "Put a diary entry down about my afternoon", "label": "journal", "source": "synthetic"}
+{"text": "Remember this feeling for my personal log", "label": "journal", "source": "synthetic"}
+{"text": "Could you help me log today's events in my diary?", "label": "journal", "source": "synthetic"}
+{"text": "I need to scribble something down for my diary", "label": "journal", "source": "synthetic"}
+{"text": "Log this moment in my private journal, please", "label": "journal", "source": "synthetic"}
+{"text": "Record my thoughts from the last few hours", "label": "journal", "source": "synthetic"}
+{"text": "I'm wondering if you can add an entry about my day", "label": "journal", "source": "synthetic"}
+{"text": "Write up what happened today in my diary", "label": "journal", "source": "synthetic"}
+{"text": "Hey, log this up in my personal diary", "label": "journal", "source": "synthetic"}
+{"text": "Can you capture my day's highlights in my journal?", "label": "journal", "source": "synthetic"}
+{"text": "Please note how I'm feeling right now in my journal", "label": "journal", "source": "synthetic"}
+{"text": "Add a little entry about this day, will ya?", "label": "journal", "source": "synthetic"}
+{"text": "I want to write something down about my experiences today", "label": "journal", "source": "synthetic"}
+{"text": "Would you mind keeping a record of my day?", "label": "journal", "source": "synthetic"}
+{"text": "Make sure to record my feelings for my diary", "label": "journal", "source": "synthetic"}
+{"text": "Can you diary this for me?", "label": "journal", "source": "synthetic"}
+{"text": "hey can you jot down something for my diary", "label": "journal", "source": "synthetic"}
+{"text": "i wanna quickly write up how the day went", "label": "journal", "source": "synthetic"}
+{"text": "put a little note in my journal about this afternoon", "label": "journal", "source": "synthetic"}
+{"text": "hey add a quick entry to my logs", "label": "journal", "source": "synthetic"}
+{"text": "remember this moment in my private book", "label": "journal", "source": "synthetic"}
+{"text": "can you document my mood right now", "label": "journal", "source": "synthetic"}
+{"text": "i need to scribe something down for my diary", "label": "journal", "source": "synthetic"}
+{"text": "make a note about what happened today", "label": "journal", "source": "synthetic"}
+{"text": "hey diary time log this feeling", "label": "journal", "source": "synthetic"}
+{"text": "write up a bit about my afternoon in the journal", "label": "journal", "source": "synthetic"}
+{"text": "put this in my daily record please", "label": "journal", "source": "synthetic"}
+{"text": "i wanna chronicle how i'm feeling today", "label": "journal", "source": "synthetic"}
+{"text": "save this thought for my journal", "label": "journal", "source": "synthetic"}
+{"text": "log some stuff in my personal diary", "label": "journal", "source": "synthetic"}
+{"text": "hey jot down what's on my mind right now", "label": "journal", "source": "synthetic"}
+{"text": "document my day in the private section", "label": "journal", "source": "synthetic"}
+{"text": "i gotta capture this feeling in my log", "label": "journal", "source": "synthetic"}
+{"text": "can you add a little story to my journal", "label": "journal", "source": "synthetic"}
+{"text": "remember this whole day for my diary", "label": "journal", "source": "synthetic"}
+{"text": "write down my thoughts for the day please", "label": "journal", "source": "synthetic"}
+{"text": "play a mellow tune", "label": "music", "source": "synthetic"}
+{"text": "shuffle the tracks", "label": "music", "source": "synthetic"}
+{"text": "start the playlist", "label": "music", "source": "synthetic"}
+{"text": "hold up the music", "label": "music", "source": "synthetic"}
+{"text": "change to the next vibe", "label": "music", "source": "synthetic"}
+{"text": "volume up a bit", "label": "music", "source": "synthetic"}
+{"text": "mute the tunes", "label": "music", "source": "synthetic"}
+{"text": "blast some tunes", "label": "music", "source": "synthetic"}
+{"text": "stop the music right now", "label": "music", "source": "synthetic"}
+{"text": "play my workout mix", "label": "music", "source": "synthetic"}
+{"text": "get me some tunes", "label": "music", "source": "synthetic"}
+{"text": "skip forward", "label": "music", "source": "synthetic"}
+{"text": "lower the volume", "label": "music", "source": "synthetic"}
+{"text": "resume where i left off", "label": "music", "source": "synthetic"}
+{"text": "spin on some rock", "label": "music", "source": "synthetic"}
+{"text": "queue up some tunes", "label": "music", "source": "synthetic"}
+{"text": "duck the sound", "label": "music", "source": "synthetic"}
+{"text": "play the latest hits", "label": "music", "source": "synthetic"}
+{"text": "what's playing", "label": "music", "source": "synthetic"}
+{"text": "give me some tunes", "label": "music", "source": "synthetic"}
+{"text": "start playing something", "label": "music", "source": "synthetic"}
+{"text": "can you find a new song", "label": "music", "source": "synthetic"}
+{"text": "change the station", "label": "music", "source": "synthetic"}
+{"text": "stop that track", "label": "music", "source": "synthetic"}
+{"text": "turn it up a bit", "label": "music", "source": "synthetic"}
+{"text": "lower the volume please", "label": "music", "source": "synthetic"}
+{"text": "play the upbeat stuff", "label": "music", "source": "synthetic"}
+{"text": "shuffle my favorites", "label": "music", "source": "synthetic"}
+{"text": "what's the vibe right now", "label": "music", "source": "synthetic"}
+{"text": "next song come on", "label": "music", "source": "synthetic"}
+{"text": "skip ahead a bit", "label": "music", "source": "synthetic"}
+{"text": "play some mellow tracks", "label": "music", "source": "synthetic"}
+{"text": "give me something to listen to", "label": "music", "source": "synthetic"}
+{"text": "put on some background noise", "label": "music", "source": "synthetic"}
+{"text": "can we have another one", "label": "music", "source": "synthetic"}
+{"text": "switch the vibe", "label": "music", "source": "synthetic"}
+{"text": "play some tunes loud", "label": "music", "source": "synthetic"}
+{"text": "how many songs are left", "label": "music", "source": "synthetic"}
+{"text": "could you start playing some tunes", "label": "music", "source": "synthetic"}
+{"text": "throw on some ambient tracks", "label": "music", "source": "synthetic"}
+{"text": "I'd like to hear some classic rock", "label": "music", "source": "synthetic"}
+{"text": "turn the volume up a notch", "label": "music", "source": "synthetic"}
+{"text": "change the song to something different", "label": "music", "source": "synthetic"}
+{"text": "could you switch to my workout playlist", "label": "music", "source": "synthetic"}
+{"text": "hey, let's hear something more upbeat", "label": "music", "source": "synthetic"}
+{"text": "dim the music a bit, cheers", "label": "music", "source": "synthetic"}
+{"text": "what's the next tune on the queue", "label": "music", "source": "synthetic"}
+{"text": "can you pause what you're playing", "label": "music", "source": "synthetic"}
+{"text": "put on a mellow playlist for me", "label": "music", "source": "synthetic"}
+{"text": "play some instrumental music over here", "label": "music", "source": "synthetic"}
+{"text": "skip to the end of this song", "label": "music", "source": "synthetic"}
+{"text": "i'm done with this track, move on", "label": "music", "source": "synthetic"}
+{"text": "could you dial the volume way down", "label": "music", "source": "synthetic"}
+{"text": "resume where we left off", "label": "music", "source": "synthetic"}
+{"text": "start playing something lively", "label": "music", "source": "synthetic"}
+{"text": "play some soul in the background", "label": "music", "source": "synthetic"}
+{"text": "i want to hear my favorite mellow tunes", "label": "music", "source": "synthetic"}
+{"text": "hey, could you bump the volume slightly", "label": "music", "source": "synthetic"}
+{"text": "can you start up some tunes", "label": "music", "source": "synthetic"}
+{"text": "put on some mellow stuff", "label": "music", "source": "synthetic"}
+{"text": "hit play on the rock channel", "label": "music", "source": "synthetic"}
+{"text": "i want to pause the juke", "label": "music", "source": "synthetic"}
+{"text": "next track mate", "label": "music", "source": "synthetic"}
+{"text": "turn the volume up a bit", "label": "music", "source": "synthetic"}
+{"text": "can you skip to the next one", "label": "music", "source": "synthetic"}
+{"text": "play some upbeat tunes", "label": "music", "source": "synthetic"}
+{"text": "what song is playing right now", "label": "music", "source": "synthetic"}
+{"text": "put on my driving mix", "label": "music", "source": "synthetic"}
+{"text": "turn the volume way down", "label": "music", "source": "synthetic"}
+{"text": "play something chill in the background", "label": "music", "source": "synthetic"}
+{"text": "i need to skip this", "label": "music", "source": "synthetic"}
+{"text": "start the playlist i like", "label": "music", "source": "synthetic"}
+{"text": "can you pause it for a sec", "label": "music", "source": "synthetic"}
+{"text": "play some classic rock", "label": "music", "source": "synthetic"}
+{"text": "volume down please", "label": "music", "source": "synthetic"}
+{"text": "what's this song called", "label": "music", "source": "synthetic"}
+{"text": "brighten the hall", "label": "smart_home", "source": "synthetic"}
+{"text": "switch the bedroom light on", "label": "smart_home", "source": "synthetic"}
+{"text": "kill the main lights", "label": "smart_home", "source": "synthetic"}
+{"text": "turn the fan up", "label": "smart_home", "source": "synthetic"}
+{"text": "can you lock the front door", "label": "smart_home", "source": "synthetic"}
+{"text": "make the living room dimmer", "label": "smart_home", "source": "synthetic"}
+{"text": "switch off the downstairs lights", "label": "smart_home", "source": "synthetic"}
+{"text": "set temp to 21 degrees", "label": "smart_home", "source": "synthetic"}
+{"text": "turn on the bathroom light", "label": "smart_home", "source": "synthetic"}
+{"text": "lock up the back door", "label": "smart_home", "source": "synthetic"}
+{"text": "turn the fan down a bit", "label": "smart_home", "source": "synthetic"}
+{"text": "lights on mate", "label": "smart_home", "source": "synthetic"}
+{"text": "switch off the downstairs", "label": "smart_home", "source": "synthetic"}
+{"text": "adjust the temperature to twenty-two", "label": "smart_home", "source": "synthetic"}
+{"text": "is the lock engaged", "label": "smart_home", "source": "synthetic"}
+{"text": "turn the overhead lights on", "label": "smart_home", "source": "synthetic"}
+{"text": "kill the lights down the hall", "label": "smart_home", "source": "synthetic"}
+{"text": "set the thermostat to twenty-four", "label": "smart_home", "source": "synthetic"}
+{"text": "turn the fan off", "label": "smart_home", "source": "synthetic"}
+{"text": "switch the kitchen lights off", "label": "smart_home", "source": "synthetic"}
+{"text": "can you get the living room brighter", "label": "smart_home", "source": "synthetic"}
+{"text": "hey make the downstairs brighter", "label": "smart_home", "source": "synthetic"}
+{"text": "turn down the heat a bit", "label": "smart_home", "source": "synthetic"}
+{"text": "hey, it's getting too hot in here", "label": "smart_home", "source": "synthetic"}
+{"text": "switch off everything in the lounge", "label": "smart_home", "source": "synthetic"}
+{"text": "can you just turn the lights off for me", "label": "smart_home", "source": "synthetic"}
+{"text": "put the fan on for me", "label": "smart_home", "source": "synthetic"}
+{"text": "is the front door locked up tight", "label": "smart_home", "source": "synthetic"}
+{"text": "what's the temp set to right now", "label": "smart_home", "source": "synthetic"}
+{"text": "can you chuck the heater on", "label": "smart_home", "source": "synthetic"}
+{"text": "switch off the bathroom lights", "label": "smart_home", "source": "synthetic"}
+{"text": "dim the ceiling lights a bit", "label": "smart_home", "source": "synthetic"}
+{"text": "turn off the bedroom fan", "label": "smart_home", "source": "synthetic"}
+{"text": "hey, make the lights go off", "label": "smart_home", "source": "synthetic"}
+{"text": "can you check if the front door's locked", "label": "smart_home", "source": "synthetic"}
+{"text": "lower the thermostat please", "label": "smart_home", "source": "synthetic"}
+{"text": "get the lights down a bit", "label": "smart_home", "source": "synthetic"}
+{"text": "switch off the living room lights", "label": "smart_home", "source": "synthetic"}
+{"text": "can you set the house to seventy two degrees", "label": "smart_home", "source": "synthetic"}
+{"text": "turn the lights off in here", "label": "smart_home", "source": "synthetic"}
+{"text": "Hey, could you switch on the downstairs lights?", "label": "smart_home", "source": "synthetic"}
+{"text": "Can you dim the lights in the study a bit?", "label": "smart_home", "source": "synthetic"}
+{"text": "Please turn the aircon down to twenty-one degrees.", "label": "smart_home", "source": "synthetic"}
+{"text": "Is the main door bolted right now?", "label": "smart_home", "source": "synthetic"}
+{"text": "Hey, flick the kitchen switch off.", "label": "smart_home", "source": "synthetic"}
+{"text": "Could you get the living room brighter?", "label": "smart_home", "source": "synthetic"}
+{"text": "I want all the lamps off, cheers.", "label": "smart_home", "source": "synthetic"}
+{"text": "Turn on the ceiling fan in the lounge, mate.", "label": "smart_home", "source": "synthetic"}
+{"text": "What's the temperature set to in the house?", "label": "smart_home", "source": "synthetic"}
+{"text": "Can you lock up the back door for me?", "label": "smart_home", "source": "synthetic"}
+{"text": "Light up the hallway, would you?", "label": "smart_home", "source": "synthetic"}
+{"text": "Could you lower the temperature slightly?", "label": "smart_home", "source": "synthetic"}
+{"text": "Hey, switch off the bedroom light please.", "label": "smart_home", "source": "synthetic"}
+{"text": "Is the front gate secured?", "label": "smart_home", "source": "synthetic"}
+{"text": "Turn the fan up a bit in here.", "label": "smart_home", "source": "synthetic"}
+{"text": "Maybe turn on the overhead lights in the kitchen?", "label": "smart_home", "source": "synthetic"}
+{"text": "Lock the garage, can you?", "label": "smart_home", "source": "synthetic"}
+{"text": "Could you brighten the main room?", "label": "smart_home", "source": "synthetic"}
+{"text": "Turn off the cooling system, please.", "label": "smart_home", "source": "synthetic"}
+{"text": "Is the patio door secured?", "label": "smart_home", "source": "synthetic"}
+{"text": "hey can you flick the lights on", "label": "smart_home", "source": "synthetic"}
+{"text": "make it a bit brighter in here", "label": "smart_home", "source": "synthetic"}
+{"text": "i wanna dim the downstairs lamps", "label": "smart_home", "source": "synthetic"}
+{"text": "turn off the upstairs lights please", "label": "smart_home", "source": "synthetic"}
+{"text": "can you switch the fan on in the lounge", "label": "smart_home", "source": "synthetic"}
+{"text": "what's the temperature at the house right now", "label": "smart_home", "source": "synthetic"}
+{"text": "set the heat down to eighteen degrees", "label": "smart_home", "source": "synthetic"}
+{"text": "is the back door secured", "label": "smart_home", "source": "synthetic"}
+{"text": "turn the bedroom lights on softly", "label": "smart_home", "source": "synthetic"}
+{"text": "could you shut off all the indoor lights", "label": "smart_home", "source": "synthetic"}
+{"text": "brighten up the dining room", "label": "smart_home", "source": "synthetic"}
+{"text": "turn off the hallway lights mate", "label": "smart_home", "source": "synthetic"}
+{"text": "set the air conditioning to twenty five", "label": "smart_home", "source": "synthetic"}
+{"text": "check if the main door is locked", "label": "smart_home", "source": "synthetic"}
+{"text": "turn the living room lights on a bit", "label": "smart_home", "source": "synthetic"}
+{"text": "i'd like the fans going in the study", "label": "smart_home", "source": "synthetic"}
+{"text": "could you put the lights on full brightness", "label": "smart_home", "source": "synthetic"}
+{"text": "switch off the kitchen lights for me", "label": "smart_home", "source": "synthetic"}
+{"text": "check the lock status on the front entry", "label": "smart_home", "source": "synthetic"}
+{"text": "turn the fan up a notch", "label": "smart_home", "source": "synthetic"}
+{"text": "how's your day going", "label": "chat", "source": "synthetic"}
+{"text": "got any good stories", "label": "chat", "source": "synthetic"}
+{"text": "what are your thoughts on the weather", "label": "chat", "source": "synthetic"}
+{"text": "tell me something interesting", "label": "chat", "source": "synthetic"}
+{"text": "you ever been to australia", "label": "chat", "source": "synthetic"}
+{"text": "what should we talk about", "label": "chat", "source": "synthetic"}
+{"text": "i'm just bored wanna chat", "label": "chat", "source": "synthetic"}
+{"text": "what's up", "label": "chat", "source": "synthetic"}
+{"text": "tell me something funny", "label": "chat", "source": "synthetic"}
+{"text": "what's the best thing that happened today", "label": "chat", "source": "synthetic"}
+{"text": "how's your week been", "label": "chat", "source": "synthetic"}
+{"text": "got any recommendations for a book", "label": "chat", "source": "synthetic"}
+{"text": "i'm kinda feeling lonely", "label": "chat", "source": "synthetic"}
+{"text": "what's your favourite colour", "label": "chat", "source": "synthetic"}
+{"text": "how do you process information", "label": "chat", "source": "synthetic"}
+{"text": "spill the tea", "label": "chat", "source": "synthetic"}
+{"text": "anything interesting happening lately", "label": "chat", "source": "synthetic"}
+{"text": "just wanna have a yarn", "label": "chat", "source": "synthetic"}
+{"text": "what's the deal with black holes", "label": "chat", "source": "synthetic"}
+{"text": "i'm feeling pretty cheerful", "label": "chat", "source": "synthetic"}
+{"text": "what's up mate", "label": "chat", "source": "synthetic"}
+{"text": "how's your day been", "label": "chat", "source": "synthetic"}
+{"text": "i'm a bit bored", "label": "chat", "source": "synthetic"}
+{"text": "reckon you can tell me a story", "label": "chat", "source": "synthetic"}
+{"text": "you sound nice today how's it going", "label": "chat", "source": "synthetic"}
+{"text": "got any good chit-chat", "label": "chat", "source": "synthetic"}
+{"text": "what gives you a chuckle", "label": "chat", "source": "synthetic"}
+{"text": "just hang out for a bit", "label": "chat", "source": "synthetic"}
+{"text": "what's the deal with penguins", "label": "chat", "source": "synthetic"}
+{"text": "i'm having a bit of a moody one", "label": "chat", "source": "synthetic"}
+{"text": "can we just talk about anything", "label": "chat", "source": "synthetic"}
+{"text": "spill the beans on something cool", "label": "chat", "source": "synthetic"}
+{"text": "how's the world lately", "label": "chat", "source": "synthetic"}
+{"text": "i've got nothing specific mind", "label": "chat", "source": "synthetic"}
+{"text": "tell me something random", "label": "chat", "source": "synthetic"}
+{"text": "what's the consensus on this", "label": "chat", "source": "synthetic"}
+{"text": "you alright", "label": "chat", "source": "synthetic"}
+{"text": "how's your day been so far", "label": "chat", "source": "synthetic"}
+{"text": "what's on your mind today", "label": "chat", "source": "synthetic"}
+{"text": "could you just chat with me for a bit", "label": "chat", "source": "synthetic"}
+{"text": "i was wondering if you could share a bit of wisdom", "label": "chat", "source": "synthetic"}
+{"text": "do you have any thoughts on the weather", "label": "chat", "source": "synthetic"}
+{"text": "tell me something interesting about history", "label": "chat", "source": "synthetic"}
+{"text": "how about you, what are you up to", "label": "chat", "source": "synthetic"}
+{"text": "i'm a bit bored, anything to talk about", "label": "chat", "source": "synthetic"}
+{"text": "could you just keep me company", "label": "chat", "source": "synthetic"}
+{"text": "what's your take on modern art", "label": "chat", "source": "synthetic"}
+{"text": "i feel like having a yarn", "label": "chat", "source": "synthetic"}
+{"text": "can we just have a friendly conversation", "label": "chat", "source": "synthetic"}
+{"text": "do you have a good pun for me", "label": "chat", "source": "synthetic"}
+{"text": "i'm just having a chinwag", "label": "chat", "source": "synthetic"}
+{"text": "tell me about something you find fascinating", "label": "chat", "source": "synthetic"}
+{"text": "what's the latest scoop on world events", "label": "chat", "source": "synthetic"}
+{"text": "i feel like venting a little bit", "label": "chat", "source": "synthetic"}
+{"text": "would you mind just listening to me", "label": "chat", "source": "synthetic"}
+{"text": "what's the story behind black holes", "label": "chat", "source": "synthetic"}
+{"text": "i need a bit of a friendly ear", "label": "chat", "source": "synthetic"}
+{"text": "hey how ya going", "label": "chat", "source": "synthetic"}
+{"text": "i'm just bored want to talk", "label": "chat", "source": "synthetic"}
+{"text": "gimme a laugh", "label": "chat", "source": "synthetic"}
+{"text": "what do you reckon about the weather", "label": "chat", "source": "synthetic"}
+{"text": "i'm kinda feeling a bit meh", "label": "chat", "source": "synthetic"}
+{"text": "can you just have a yarn with me", "label": "chat", "source": "synthetic"}
+{"text": "speak a bit about australian wildlife", "label": "chat", "source": "synthetic"}
+{"text": "tell me some random stuff", "label": "chat", "source": "synthetic"}
+{"text": "i'm just chilling wanna chat", "label": "chat", "source": "synthetic"}
+{"text": "hey zoe tell me something", "label": "chat", "source": "synthetic"}
+{"text": "how's your day going so far", "label": "chat", "source": "synthetic"}
+{"text": "what's the best thing about your day", "label": "chat", "source": "synthetic"}
+{"text": "i'm feeling super optimistic today", "label": "chat", "source": "synthetic"}
+{"text": "what's a good story you know", "label": "chat", "source": "synthetic"}
+{"text": "do you have any opinions on movies", "label": "chat", "source": "synthetic"}
+{"text": "can we just have a casual chat", "label": "chat", "source": "synthetic"}
+{"text": "what do you know about ancient rome", "label": "chat", "source": "synthetic"}
