@@ -81,24 +81,28 @@ async def main(execute: bool, assume_yes: bool, expect_db: str, expect_host: str
     parts = urlsplit(dsn)
     target_db = (parts.path or "/").lstrip("/")
     target_host = parts.hostname or ""
+    target_port = parts.port or 5432
+    target_hostport = f"{target_host}:{target_port}"
     print(f"Target database: {target}")
 
-    # Non-interactive runs must positively assert BOTH the target DB name and
-    # host — a db name alone ("zoe") could match a different PostgreSQL
-    # instance that happens to use the same name. --yes only skips the
-    # interactive prompt, never these checks.
+    # Non-interactive runs must positively assert the FULL target — db name,
+    # host and port. A name alone ("zoe"), or host alone, could match a
+    # different PostgreSQL instance (e.g. localhost:5433 vs :5432). --yes only
+    # skips the interactive prompt, never these checks. --expect-host accepts
+    # "host" (default port 5432) or "host:port".
     if execute and assume_yes:
         if not expect_db or not expect_host:
             print(
                 "\nRefusing non-interactive --yes without a full target assertion: pass "
-                f"--expect-db {target_db!r} --expect-host {target_host!r} to assert the intended target.",
+                f"--expect-db {target_db!r} --expect-host {target_hostport!r} to assert the intended target.",
                 file=sys.stderr,
             )
             return 2
-        if expect_db != target_db or expect_host != target_host:
+        expect_hostport = expect_host if ":" in expect_host else f"{expect_host}:5432"
+        if expect_db != target_db or expect_hostport != target_hostport:
             print(
-                f"\nTarget mismatch: resolved target is {target_db!r} on {target_host!r} but the "
-                f"assertion is {expect_db!r} on {expect_host!r}. Aborting — nothing changed.",
+                f"\nTarget mismatch: resolved target is {target_db!r} on {target_hostport!r} but the "
+                f"assertion is {expect_db!r} on {expect_hostport!r}. Aborting — nothing changed.",
                 file=sys.stderr,
             )
             return 2
@@ -161,6 +165,6 @@ if __name__ == "__main__":
     ap.add_argument("--expect-db", default="",
                     help="assert the resolved target DB name; required with --yes")
     ap.add_argument("--expect-host", default="",
-                    help="assert the resolved target DB host; required with --yes")
+                    help="assert the resolved target DB host, as host or host:port (port defaults to 5432); required with --yes")
     args = ap.parse_args()
     sys.exit(asyncio.run(main(args.execute, args.yes, args.expect_db, args.expect_host)))
