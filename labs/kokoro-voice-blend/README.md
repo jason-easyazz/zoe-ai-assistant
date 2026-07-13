@@ -35,6 +35,9 @@ python3 labs/kokoro-voice-blend/blend_zoe_voices.py --audio   # + WAVs (CPU onnx
 The `--audio` step acquires `/tmp/zoe-voice-harness.lock` itself (bounded
 5-minute wait, fails loudly) — do **not** wrap it in an outer `flock`, the
 wrapper's lock would block the script's own acquire until timeout.
+It also refuses to run while the live `kokoro-tts.service` sidecar is up
+unless you pass `--force-alongside-sidecar` AND `MemAvailable` is at least
+3 GB (the flock only excludes other harness runs, not the sidecar).
 
 Audition rendering is verified against the **installed** `kokoro-onnx==0.5.0`,
 whose `Kokoro.create()` accepts `voice: str | np.ndarray[float32]` — blended

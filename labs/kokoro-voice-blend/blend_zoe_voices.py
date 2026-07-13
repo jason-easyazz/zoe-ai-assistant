@@ -149,11 +149,74 @@ def _acquire_harness_lock() -> int:
             time.sleep(1.0)
 
 
-def synthesize_samples(cands: dict[str, np.ndarray], voices: dict[str, np.ndarray]) -> None:
-    """CPU kokoro-onnx (~600MB), one-shot; acquires the harness flock itself."""
+def _sidecar_is_live() -> bool:
+    """True when the live Kokoro sidecar is running (unit active or :10201 up)."""
+    import socket
+    import subprocess
+
+    try:
+        r = subprocess.run(
+            ["systemctl", "--user", "is-active", "--quiet", "kokoro-tts.service"],
+            timeout=5,
+        )
+        if r.returncode == 0:
+            return True
+    except Exception:
+        pass  # no systemd user session — fall through to the port probe
+    try:
+        with socket.create_connection(("127.0.0.1", 10201), timeout=1.0):
+            return True
+    except OSError:
+        return False
+
+
+def _mem_available_gb() -> float:
+    with open("/proc/meminfo") as f:
+        for line in f:
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) / (1024 * 1024)
+    return 0.0
+
+
+_MIN_FREE_GB = 3.0
+
+
+def _guard_against_live_sidecar(force: bool) -> None:
+    """The harness flock only excludes other harness runs — the live sidecar
+    does NOT hold it. Loading a second kokoro-onnx (~600MB CPU) beside a
+    running sidecar needs an explicit flag AND enough free RAM."""
+    if not _sidecar_is_live():
+        return
+    if not force:
+        raise SystemExit(
+            "Live kokoro-tts sidecar detected (unit active / :10201 up). "
+            "Re-run with --force-alongside-sidecar to load a second CPU "
+            "kokoro-onnx (~600MB) beside it, or stop the sidecar first."
+        )
+    free = _mem_available_gb()
+    if free < _MIN_FREE_GB:
+        raise SystemExit(
+            f"MemAvailable {free:.1f} GB < {_MIN_FREE_GB:.0f} GB required to load a "
+            "second kokoro-onnx beside the live sidecar — aborting to protect the "
+            "box. Free memory or stop kokoro-tts.service and retry."
+        )
+    print(
+        f"[warn] proceeding alongside the live sidecar "
+        f"(MemAvailable {free:.1f} GB >= {_MIN_FREE_GB:.0f} GB)."
+    )
+
+
+def synthesize_samples(
+    cands: dict[str, np.ndarray],
+    voices: dict[str, np.ndarray],
+    force_alongside_sidecar: bool = False,
+) -> None:
+    """CPU kokoro-onnx (~600MB), one-shot; acquires the harness flock itself
+    and refuses to double-load beside the live sidecar unless forced + RAM ok."""
     import wave
 
     _lock_fd = _acquire_harness_lock()  # noqa: F841 — held until process exit
+    _guard_against_live_sidecar(force_alongside_sidecar)
 
     from kokoro_onnx import Kokoro  # local CPU pipeline, unloaded at process exit
 
@@ -187,6 +250,12 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--audio", action="store_true", help="also synthesize audition WAVs (script acquires the harness flock itself)")
     ap.add_argument("--emit-bin", metavar="PATH", help="write an augmented voices .bin including the candidates")
+    ap.add_argument(
+        "--force-alongside-sidecar",
+        action="store_true",
+        help="allow --audio while the live kokoro-tts sidecar is running "
+        f"(requires MemAvailable >= {_MIN_FREE_GB:.0f} GB)",
+    )
     args = ap.parse_args()
 
     voices = load_voices()
@@ -195,7 +264,7 @@ def main() -> int:
     if args.emit_bin:
         emit_bin(cands, voices, args.emit_bin)
     if args.audio:
-        synthesize_samples(cands, voices)
+        synthesize_samples(cands, voices, args.force_alongside_sidecar)
     return 0
 
 
