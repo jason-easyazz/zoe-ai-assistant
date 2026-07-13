@@ -2788,7 +2788,7 @@ _GUEST_GATED_INTENTS = (
     "calendar_create", "calendar_show",
     "people_", "person_",
     "reminder_create", "reminder_list",
-    "memory_remember", "memory_forget_entity", "memory_forget_last",
+    "memory_",   # remember/store/forget/count — all personal memory
     "note_create", "note_search",
     "journal_",   # create + streak/prompt reads — a guest's journal doesn't exist
     "transaction_create", "transaction_summary",
