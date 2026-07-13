@@ -176,16 +176,33 @@ def cleanup_replay_artifacts(run_started_utc: str, args) -> bool:
         async def _run() -> tuple[str, str]:
             conn = await asyncpg.connect(dsn)
             try:
-                ev = await conn.execute(
-                    "UPDATE events SET deleted = 1, updated_at = NOW() "
+                # The replay necessarily writes AS the probe user (identity
+                # threading is part of the pipeline under test), so an owner
+                # filter cannot distinguish probe writes from a human's. The
+                # mitigations are: an off-peak flock-serialized window, a
+                # reversible soft-delete, and a PER-ROW log below so any rare
+                # collision is visible in the unit journal and restorable by id.
+                ev_rows = await conn.fetch(
+                    "SELECT id, user_id, title FROM events "
                     "WHERE deleted = 0 AND created_at >= $1::timestamptz AND user_id = ANY($2)",
                     run_started_utc + "+00", replay_users,
                 )
-                li = await conn.execute(
-                    "UPDATE list_items SET deleted = 1, updated_at = NOW() "
-                    "WHERE deleted = 0 AND created_at >= $1::timestamptz AND list_id IN "
-                    "(SELECT id FROM lists WHERE user_id = ANY($2))",
+                li_rows = await conn.fetch(
+                    "SELECT i.id, l.user_id, i.text FROM list_items i JOIN lists l ON i.list_id = l.id "
+                    "WHERE i.deleted = 0 AND i.created_at >= $1::timestamptz AND l.user_id = ANY($2)",
                     run_started_utc + "+00", replay_users,
+                )
+                for r in ev_rows:
+                    print(f"cleanup: sweeping event id={r['id']} owner={r['user_id']} title={r['title']!r}")
+                for r in li_rows:
+                    print(f"cleanup: sweeping list_item id={r['id']} owner={r['user_id']} text={r['text']!r}")
+                ev = await conn.execute(
+                    "UPDATE events SET deleted = 1, updated_at = NOW() WHERE id = ANY($1)",
+                    [r["id"] for r in ev_rows],
+                )
+                li = await conn.execute(
+                    "UPDATE list_items SET deleted = 1, updated_at = NOW() WHERE id = ANY($1)",
+                    [r["id"] for r in li_rows],
                 )
                 return ev, li
             finally:
