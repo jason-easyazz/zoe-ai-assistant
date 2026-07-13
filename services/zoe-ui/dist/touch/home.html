@@ -101,7 +101,8 @@
   .ltabs{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px}
   .ltab{font-size:19px;font-weight:500;color:var(--ink-soft);padding:10px 20px;border-radius:999px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);cursor:pointer;white-space:nowrap}
   .ltab.on{background:rgba(123,150,255,.22);border-color:rgba(123,150,255,.55);color:var(--ink);font-weight:600}
-  .lmeta{font-size:15px;color:var(--ink-faint);margin-bottom:14px}
+  .lhead{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+  .lcount{font-size:17px;color:var(--ink-faint);padding-top:12px;flex:none}
   .lcols{flex:1;column-count:3;column-gap:28px;overflow-y:auto}
   .lrow2{display:flex;align-items:center;gap:12px;padding:11px 4px;border-bottom:1px solid rgba(255,255,255,.07);font-size:20px;cursor:pointer;break-inside:avoid}
   .lrow2 .bx{width:24px;height:24px;border-radius:8px;border:2px solid rgba(255,255,255,.3);flex:none;display:grid;place-items:center;color:#08131c}
@@ -158,8 +159,7 @@
   .cwe small{display:block;color:var(--ink-soft);opacity:.8;margin-top:1px;font-variant-numeric:tabular-nums}
   .caldaylist .dev{display:flex;align-items:center;gap:16px;padding:15px 0;border-top:1px solid rgba(255,255,255,.08)}
   /* Settings — expanding sections */
-  .remf{position:absolute;inset:0;padding:100px 150px 158px;display:flex;flex-direction:column}
-  .remf h1{font-size:44px;font-weight:600;letter-spacing:-.01em;margin:6px 0 18px}
+  .remf{position:absolute;inset:0;padding:110px 150px 158px;display:flex;flex-direction:column}
   .remf .remlist{overflow-y:auto;flex:1}
   .setf{position:absolute;inset:0;padding:100px 200px 150px;display:flex;flex-direction:column;overflow-y:auto}
   .setsec{background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.09);border-radius:20px;margin-bottom:14px;overflow:hidden}
@@ -187,7 +187,8 @@
   .estmc input,.estmc select{width:100%;height:50px;border-radius:13px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.06);color:var(--ink);font:inherit;font-size:19px;padding:0 14px;outline:none}
   .estmc .erow{display:flex;gap:12px}
   .estmc .btns{display:flex;gap:12px;margin-top:24px}
-  .estmc .spkopt{display:block;width:100%;text-align:left;margin-top:10px;padding:16px 18px;border-radius:14px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:#fff;font:inherit;font-size:21px;cursor:pointer}
+  .estmc .spkgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;max-height:380px;overflow-y:auto}
+  .estmc .spkopt{display:block;width:100%;text-align:left;padding:15px 18px;border-radius:14px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:#fff;font:inherit;font-size:20px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .estmc .btns button{flex:1;height:54px;border-radius:14px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:var(--ink);font:inherit;font-size:19px;cursor:pointer}
   .estmc .btns .save{background:var(--accent);border-color:transparent;color:#fff;font-weight:600}
   .estmc .btns .del{background:rgba(255,122,144,.14);border-color:rgba(255,122,144,.4);color:#ff9db0}
@@ -274,7 +275,7 @@
   .mfull .mkick{font-size:16px;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.6)}
   .mfull .mtitle{font-size:66px;font-weight:700;letter-spacing:-.02em;margin-top:14px;line-height:1}
   .mfull .martist{font-size:30px;color:rgba(255,255,255,.78);margin-top:12px}
-  .mfull .mscrub{position:absolute;left:90px;right:120px;bottom:270px}
+  .mfull .mscrub{position:absolute;left:440px;right:120px;bottom:270px}
   .mfull .mtrack{position:relative;height:7px;border-radius:999px;background:rgba(255,255,255,.22)}
   .mfull .mfill{position:absolute;left:0;top:0;bottom:0;width:38%;border-radius:999px;background:#fff}
   .mfull .mknob{position:absolute;top:50%;left:38%;transform:translate(-50%,-50%);width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.4)}
@@ -284,13 +285,16 @@
   .mfull .mtransport .pp{width:84px;height:84px;background:#fff;color:#10131c;font-size:28px}
 
   /* timer full */
-  .tfull{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:0;padding:56px 0 158px}
-  .tfull .tkick{font-size:20px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:20px}
-  .tfull .tring{position:relative;width:300px;height:300px}
+  .tfull{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:0;padding:96px 0 158px}
+  .tfull .trings{display:flex;gap:64px;align-items:flex-start;justify-content:center}
+  .tfull .tunit{display:flex;flex-direction:column;align-items:center}
+  .tfull .tring{position:relative;width:250px;height:250px}
+  .tfull .tring.one{width:300px;height:300px}
   .tfull .tring svg{transform:rotate(-90deg)}
-  .tfull .tring .ttime{position:absolute;inset:0;display:grid;place-items:center;font-size:78px;font-weight:200;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
-  .tfull .tsub{font-size:24px;color:var(--ink-soft);margin-top:10px}
-  .tfull .tctrls{display:flex;gap:20px;margin-top:22px}
+  .tfull .tring .ttime{position:absolute;inset:0;display:grid;place-items:center;font-size:62px;font-weight:200;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+  .tfull .tring.one .ttime{font-size:78px}
+  .tfull .tsub{font-size:22px;color:var(--ink-soft);margin-top:8px}
+  .tfull .tctrls{display:flex;gap:20px;margin-top:14px}
   .tfull .tctrls button{width:66px;height:66px;border-radius:50%;border:0;cursor:pointer;font-size:24px;background:rgba(255,255,255,.12);color:#fff;display:grid;place-items:center}
   .tfull .tctrls .stop{background:var(--cat-health);color:#2a0910}
 
@@ -298,7 +302,7 @@
   .hfull .htemp{position:absolute;top:38px;right:60px;text-align:right;text-shadow:0 2px 16px rgba(0,0,0,.4)}
   .hfull .htemp .n{font-size:58px;font-weight:250;letter-spacing:-.02em;line-height:1}
   .hfull .htemp .c{font-size:20px;color:rgba(255,255,255,.8);margin-top:4px}
-  .hfull .hclock{position:absolute;left:74px;top:176px;text-shadow:0 4px 34px rgba(0,0,0,.4)}
+  .hfull .hclock{position:absolute;left:74px;top:44px;text-shadow:0 4px 34px rgba(0,0,0,.4)}
   .hfull .hclock .ht{font-size:170px;font-weight:200;letter-spacing:-.045em;line-height:.88}
   .hfull .hclock .hd{font-size:30px;color:rgba(255,255,255,.84);margin-top:14px}
   .hfull .today{position:absolute;right:70px;bottom:176px;width:434px}
@@ -327,7 +331,7 @@
   .slp .sc.on{background:radial-gradient(circle at 40% 28%,rgba(255,214,140,.8),rgba(255,180,90,.22));color:#3a2a10;border-color:rgba(255,205,125,.4);box-shadow:0 0 34px rgba(255,190,100,.35)}
 
   /* ROOMS — a control panel for everything in a room */
-  .rm .rchips{position:absolute;top:46px;right:56px;display:flex;gap:8px}
+  .rm .rchips{position:absolute;top:46px;right:122px;display:flex;gap:8px}
   .rm .rchip{font-size:22px;font-weight:500;color:rgba(255,255,255,.5);padding:10px 20px;border-radius:999px}
   .rm .rchip.on{background:rgba(255,255,255,.12);color:#fff;font-weight:600}
   .rm .rhero{position:absolute;left:60px;top:150px;width:560px;bottom:150px;border-radius:28px;overflow:hidden;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);padding:38px;display:flex;flex-direction:column;justify-content:center}
@@ -340,6 +344,8 @@
   .rm .rscrub{position:relative;height:6px;border-radius:999px;background:rgba(255,255,255,.2);margin-top:32px}
   .rm .rscrub .f{position:absolute;left:0;top:0;bottom:0;width:38%;border-radius:999px;background:#fff}
   .rm .rtp{position:relative;display:flex;align-items:center;justify-content:center;gap:44px;margin-top:22px}
+  .rm .rvol{position:relative;display:flex;align-items:center;justify-content:center;gap:22px;margin-top:18px;color:rgba(255,255,255,.6);font-size:17px}
+  .rm .rvol button{width:52px;height:52px;border-radius:50%;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.1);color:#fff;font-size:26px;cursor:pointer}
   .rm .rtp button{width:58px;height:58px;border-radius:50%;border:0;background:rgba(255,255,255,.14);color:#fff;font-size:20px;cursor:pointer}
   .rm .rtp .pp{width:66px;height:66px;background:#fff;color:#10131c;font-size:23px}
   .rm .rlights{position:absolute;right:130px;top:150px;width:440px;display:grid;grid-template-columns:1fr 1fr;gap:14px}
@@ -375,6 +381,10 @@
   /* settings cog — per card, and per full-screen */
   .card .cog{position:absolute;top:22px;right:22px;width:44px;height:44px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);color:var(--ink-soft);cursor:pointer;z-index:6}
   .card .cog svg{width:22px;height:22px}
+  .chttl{position:absolute;top:38px;left:110px;height:48px;display:flex;align-items:center;font-size:30px;font-weight:600;letter-spacing:-.01em;z-index:30}
+  .chmeta{position:absolute;top:38px;right:122px;height:48px;display:flex;align-items:center;gap:10px;font-size:20px;color:var(--ink-soft);z-index:30}
+  .chmeta .chbtn{width:48px;height:48px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.2);color:#fff;cursor:pointer}
+  .chmeta .chbtn svg{width:24px;height:24px}
   .fcog{position:absolute;top:38px;right:56px;width:48px;height:48px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.2);color:#fff;cursor:pointer;z-index:30}
   .fcog svg{width:24px;height:24px}
   .hfull .htemp{right:120px} /* clear the home cog */
@@ -556,25 +566,25 @@
     music:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,
       html:'<div class="fcog">'+GEAR+'</div><button class="spk" id="mSpk">'+SPKR+' <span class="spkname">Speaker</span> <span class="cx">▾</span></button><div class="mfull"><div class="mart" id="mArt">🎵</div><div class="minfo"><div class="mkick">Now Playing</div><div class="mtitle" id="mTitle">—</div><div class="martist" id="mArtist"></div></div><div class="mscrub"><div class="mtrack"><div class="mfill" id="mFill" style="width:0%"></div></div><div class="mtimes"><span id="mElapsed">0:00</span><span id="mDur">0:00</span></div></div><div class="mtransport" id="mTransport"><button data-a="previous">⏮</button><button class="pp" id="mPP" data-a="playpause">❚❚</button><button data-a="next">⏭</button></div></div>'},
     timer:{home:true, bg:'radial-gradient(120% 100% at 50% 44%,#122447,#080b12 62%)', canvas:false, glow:'radial-gradient(closest-side at 50% 44%,rgba(123,150,255,.35),transparent 70%)',
-      html:'<div class="fcog">'+GEAR+'</div><div class="tfull"><div class="tkick">Timers</div><div class="tring"><svg width="300" height="300" viewBox="0 0 420 420"><circle cx="210" cy="210" r="188" fill="none" stroke="rgba(255,255,255,.12)" stroke-width="14"/><circle id="tmArc" cx="210" cy="210" r="188" fill="none" stroke="#8ea6ff" stroke-width="14" stroke-linecap="round" stroke-dasharray="1181" stroke-dashoffset="1181" style="filter:drop-shadow(0 0 14px rgba(123,150,255,.7))"/></svg><div class="ttime" id="tmTime">--:--</div></div><div class="tsub" id="tmLabel"></div><div class="tctrls" id="tmCtl"></div><div class="tmore" id="tmMore"></div></div>'},
+      html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Timers</div><div class="tfull"><div class="trings" id="tmRings"></div><div class="tmore" id="tmMore"></div></div>'},
     list:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="lstf2"><div class="ltabs" id="lstTabs"></div><div class="lmeta" id="lstMeta"></div><div class="lcols" id="lstItems"></div></div>'},
+      html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Lists</div><div class="chmeta" id="lstMeta"></div><div class="lstf2"><div class="lhead"><div class="ltabs" id="lstTabs"></div><div class="lcount" id="lstCount"></div></div><div class="lcols" id="lstItems"></div></div>'},
     calendar:{home:true, bg:GROUND, canvas:false,
       html:'<div class="fcog">'+GEAR+'</div><div class="calf"><div class="calhead"><h1 id="calTtl"></h1><div class="calviews" id="calViews"><button data-v="day">Day</button><button data-v="week" class="on">Week</button><button data-v="month">Month</button></div></div><div class="calbody" id="calBody"></div></div>'},
     person:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="ctf"><div class="ctwrap"><div class="ctgrid" id="ctGrid"></div><div class="ctaz" id="ctAZ"></div></div></div><div class="ctdetail" id="ctDetail"></div>'},
+      html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Contacts</div><div class="chmeta"><button class="chbtn" id="ctSearch" title="Search by voice"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button></div><div class="ctf"><div class="ctwrap"><div class="ctgrid" id="ctGrid"></div><div class="ctaz" id="ctAZ"></div></div></div><div class="ctdetail" id="ctDetail"></div>'},
     settings:{home:true, bg:GROUND, canvas:false,
       html:'<div class="fcog">'+GEAR+'</div><div class="setf"><div class="dk" style="margin-bottom:14px">Settings</div><div id="setSecs"></div></div>'},
     day:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="dayf"><div class="dc1"><div class="dk">Your Day</div><h1 id="dayTtl"></h1><div id="dayEvents"></div></div><div class="dc2"><div class="dsec"><h4>Reminders</h4><div id="dayRems"></div></div><div class="dsec" id="dayComms" style="display:none"><h4>Messages</h4><div id="dayCommsList"></div></div></div></div>'},
+      html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Your Day</div><div class="chmeta" id="dayMeta"></div><div class="dayf"><div class="dc1"><div class="dsec"><h4>Calendar</h4><div id="dayEvents"></div></div></div><div class="dc2"><div class="dsec"><h4>Reminders</h4><div id="dayRems"></div></div><div class="dsec" id="dayComms" style="display:none"><h4>Messages</h4><div id="dayCommsList"></div></div></div></div>'},
     sleep:{home:false, bg:'radial-gradient(120% 90% at 50% 46%,#0a0e18,#02030a 72%)', canvas:false,
       html:'<div class="slp"><div class="sclock" id="slClock"><span>--</span><span>--</span></div><div class="sdate" id="slDate"></div>'
         +'<div class="sdock" id="slDock"></div></div>'},
     reminder:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="remf"><div class="dk">Reminders</div><h1 id="remTtl">Loading…</h1><div id="remList" class="remlist"></div></div>'},
+      html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Reminders</div><div class="chmeta" id="remMeta"></div><div class="remf"><div id="remList" class="remlist"></div></div>'},
     rooms:{home:true, bg:GROUND, canvas:false,
       html:'<div class="fcog">'+GEAR+'</div><div class="rm"><div class="rchips" id="rmScenes"></div>'
-        +'<div class="rhero" id="rmHero" style="display:none"><div class="cover"></div><div class="rhead"><div class="rart" id="rmArt">🎵</div><div><div class="rk">Now Playing</div><div class="rt" id="rmT"></div><div class="ra" id="rmA"></div></div></div><div class="rscrub"><div class="f" id="rmF" style="width:0%"></div></div><div class="rtp"><button data-a="previous">⏮</button><button class="pp" id="rmPP" data-a="playpause">❚❚</button><button data-a="next">⏭</button></div></div>'
+        +'<div class="rhero" id="rmHero" style="display:none"><div class="cover"></div><div class="rhead"><div class="rart" id="rmArt">🎵</div><div><div class="rk">Now Playing</div><div class="rt" id="rmT"></div><div class="ra" id="rmA"></div></div></div><div class="rscrub"><div class="f" id="rmF" style="width:0%"></div></div><div class="rtp"><button data-a="previous">⏮</button><button class="pp" id="rmPP" data-a="playpause">❚❚</button><button data-a="next">⏭</button></div><div class="rvol"><button data-va="volume_down">−</button><span>Volume</span><button data-va="volume_up">+</button></div></div>'
         +'<div class="rlights" id="rmLights"></div></div>'}
   };
 
@@ -599,6 +609,10 @@
 
   function show(id){
     var f=FULL[id], c=CARD[id];
+    // Any navigation cancels a pending chat-fallback jump to Ask — the user
+    // (or a domain arrival) choosing a screen always wins over the deferred
+    // answer display.
+    if(typeof _askFallT!=='undefined'&&_askFallT){clearTimeout(_askFallT);_askFallT=null;}
     _cur=id; clearScreenTimers();
     var cb=document.getElementById('cmdbar');if(cb)cb.classList.remove('on');
     stage.classList.remove('wxlight');
@@ -642,25 +656,27 @@
 
   // Dock timer chip — a small live countdown pinned in the dock while any
   // timer runs; tapping it opens the timer surface. Refreshed by renderDock.
-  var _dockTmr={t:null,exp:0,gen:0};
+  var _dockTmr={t:null,gen:0};
   function paintDockTimer(){
     var gen=++_dockTmr.gen;   // overlapping renderDock()s: only the newest response paints
     apiGet('/api/skybridge/timers').then(function(d){
       if(gen!==_dockTmr.gen)return;
-      var ts=(d&&d.timers)||[];var act=null;
-      for(var i=0;i<ts.length;i++){var e=+ts[i].expires_at_ms||0;if(e>Date.now()&&(!act||e<act))act=e;}
+      var now=Date.now();
+      var exps=((d&&d.timers)||[]).map(function(t){return +t.expires_at_ms||0;}).filter(function(e){return e>now;}).sort(function(a,b){return a-b;}).slice(0,3);
       if(_dockTmr.t){clearInterval(_dockTmr.t);_dockTmr.t=null;}
-      var old=dbody.querySelector('.pc.tchip');if(old)old.remove();
-      if(!act)return;
-      _dockTmr.exp=act;
-      var chip=document.createElement('div');chip.className='pc tchip';chip.innerHTML='⏱ <span class="nm">--:--</span>';
-      chip.onclick=function(){show('timer');};
-      dbody.insertBefore(chip,dbody.firstChild);
-      var exp=act,myT=null;   // closure-local: a detached chip's queued tick
-      // can only ever clear ITS OWN interval, never a newer chip's.
-      function tick(){var ms=exp-Date.now();var el=chip.querySelector('.nm');
-        if(!el||!dbody.contains(chip)||ms<=0){clearInterval(myT);if(_dockTmr.t===myT)_dockTmr.t=null;if(dbody.contains(chip))chip.remove();return;}
-        var sc=Math.round(ms/1000);el.textContent=Math.floor(sc/60)+':'+two(sc%60);}
+      dbody.querySelectorAll('.pc.tchip').forEach(function(c){c.remove();});
+      if(!exps.length)return;
+      // one chip PER active timer (soonest first), all driven by one interval;
+      // closure-local so a detached set can only ever clear its own interval.
+      var chips=exps.map(function(){var c=document.createElement('div');c.className='pc tchip';c.innerHTML='⏱ <span class="nm">--:--</span>';c.onclick=function(){show('timer');};return c;});
+      for(var i=chips.length-1;i>=0;i--)dbody.insertBefore(chips[i],dbody.firstChild);
+      var myT=null;
+      function tick(){var alive=false;
+        chips.forEach(function(c,i){if(!dbody.contains(c))return;
+          var ms=exps[i]-Date.now();
+          if(ms<=0){c.remove();return;}
+          alive=true;var sc=Math.round(ms/1000);c.querySelector('.nm').textContent=Math.floor(sc/60)+':'+two(sc%60);});
+        if(!alive){clearInterval(myT);if(_dockTmr.t===myT)_dockTmr.t=null;}}
       tick();myT=setInterval(tick,1000);_dockTmr.t=myT;
     }).catch(function(){});
   }
@@ -820,15 +836,24 @@
       if(ar)ar.textContent=np.artist||'';
       if(art){if(np.image&&/^https?:\/\//i.test(np.image)){art.innerHTML='<img alt="" style="width:100%;height:100%;object-fit:cover;border-radius:28px;display:block" src="'+esc(np.image)+'">';}else{art.innerHTML='🎵';}}
       var el=np.elapsed||0,du=np.duration||0;
+      _music.np={elapsed:el,duration:du,playing:np.state==='playing',at:Date.now()};
       if(fill)fill.style.width=(du?Math.min(100,el/du*100):0)+'%';
       if(te)te.textContent=fmtDur(el);if(td)td.textContent=fmtDur(du);
       if(pp)pp.textContent=(np.state==='playing')?'❚❚':'▶';
     }).catch(function(){});
   }
+  // Smooth elapsed between the 5s polls — the scrub advances every second
+  // while something is playing instead of jumping on each poll.
+  function tickMusic(){if(_cur!=='music'||!_music.np||!_music.np.playing)return;
+    var el=_music.np.elapsed+(Date.now()-_music.np.at)/1000,du=_music.np.duration||0;
+    var fill=document.getElementById('mFill'),te=document.getElementById('mElapsed');
+    if(fill&&du)fill.style.width=Math.min(100,el/du*100)+'%';
+    if(te)te.textContent=fmtDur(Math.min(el,du||el));}
   function musicControl(action){if(!_music.player_id)return;
     fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({action:action,player_id:_music.player_id})}).then(function(){setTimeout(loadMusic,350);}).catch(function(){});}
   function wireMusic(){
     loadMusic();_wxTick=setInterval(function(){if(_cur==='music')loadMusic();},5000);
+    if(_homeTick){clearInterval(_homeTick);}_homeTick=setInterval(tickMusic,1000);
     var t=document.getElementById('mTransport');if(t)t.addEventListener('click',function(e){var btn=e.target.closest('button');if(!btn)return;var a=btn.getAttribute('data-a');musicControl(a==='playpause'?(document.getElementById('mPP').textContent==='❚❚'?'pause':'play'):a);});
     // Speaker picker: list Music Assistant players, tap to move playback there.
     var spk=document.getElementById('mSpk');
@@ -836,10 +861,10 @@
       apiGet('/api/music/players').then(function(d){
         var ps=(d&&d.players)||[];
         if(!ps.length){toast('No speakers found');return;}
-        estOpen('<h3>Play on…</h3>'+ps.map(function(pl){var pid=pl.player_id||pl.id||'';var nm=pl.display_name||pl.name||pid;
+        estOpen('<h3>Play on…</h3><div class="spkgrid">'+ps.map(function(pl){var pid=pl.player_id||pl.id||'';var nm=pl.display_name||pl.name||pid;
           var cur=(_music.player_id&&pid===_music.player_id)?' style="border-color:var(--accent)"':'';
           return '<button class="spkopt" data-pid="'+esc(String(pid))+'"'+cur+'>'+esc(String(nm))+'</button>';}).join('')
-          +'<div class="btns"><button data-x="cancel">Cancel</button></div>');
+          +'</div><div class="btns"><button data-x="cancel">Cancel</button></div>');
         var m=document.getElementById('estModal');
         m.querySelector('[data-x="cancel"]').onclick=estClose;
         m.querySelectorAll('.spkopt').forEach(function(b){b.onclick=function(){
@@ -879,6 +904,7 @@
       if(f)f.style.width=(np.duration?Math.min(100,(np.elapsed||0)/np.duration*100):0)+'%';
       if(pp)pp.textContent=(np.state==='playing')?'❚❚':'▶';
       hero.querySelector('.rtp').onclick=function(e){var btn=e.target.closest('button');if(!btn)return;var act=btn.getAttribute('data-a');musicControl(act==='playpause'?(pp.textContent==='❚❚'?'pause':'play'):act);};
+      var rv=hero.querySelector('.rvol');if(rv)rv.onclick=function(e){var btn=e.target.closest('button[data-va]');if(btn)musicControl(btn.getAttribute('data-va'));};
     }).catch(function(){});
     _wxTick=setInterval(function(){if(_cur==='rooms')loadHA(paint);},30000);
   }
@@ -903,10 +929,10 @@
 
   // ---- Reminders card (real reminders) ----
   function wireReminder(){
-    var ttl=document.getElementById('remTtl'),host=document.getElementById('remList');
+    var ttl=document.getElementById('remMeta'),host=document.getElementById('remList');
     apiGet('/api/reminders/').then(function(d){if(_cur!=='reminder')return;
       var rs=(d&&d.reminders)||[];
-      if(!rs.length){if(ttl)ttl.textContent='No reminders set';if(host)host.innerHTML='';return;}
+      if(!rs.length){if(ttl)ttl.textContent='';if(host)host.innerHTML='<div style="color:var(--ink-faint);font-size:22px;padding-top:8px">No reminders set — ask Zoe to remind you of something.</div>';return;}
       if(ttl)ttl.textContent=rs.length+' reminder'+(rs.length===1?'':'s');
       if(host)host.innerHTML=rs.slice(0,5).map(function(r){var when='';
         if(r.due_time){try{when=new Date(r.due_time).toLocaleString(undefined,{weekday:'short',hour:'numeric',minute:'2-digit'});}catch(e){when=String(r.due_time);}}
@@ -955,7 +981,9 @@
     if(!sel||!items)return;
     apiJson('GET','/api/lists/'+sel.list_type+'/'+sel.id+'/items').then(function(d){if(_cur!=='list'||_lst.sel!==sel.id)return;
       var its=d.items||[],done=its.filter(function(i){return i.completed;}).length;
-      if(meta)meta.textContent=its.length+' item'+(its.length===1?'':'s')+(done?' · '+done+' done':'');
+      if(meta)meta.textContent=sel.name||sel.list_type;
+      var cnt=document.getElementById('lstCount');
+      if(cnt)cnt.textContent=its.length+' item'+(its.length===1?'':'s')+(done?' · '+done+' done':'');
       items.innerHTML=its.map(function(i){return '<div class="lrow2'+(i.completed?' done':'')+'" data-item="'+esc(i.id)+'" data-done="'+(i.completed?1:0)+'"><span class="bx">'+(i.completed?CHK:'')+'</span><span class="tx2">'+esc(i.text)+'</span><span class="lact"><button data-act="edit" title="Edit">✎</button><button class="del" data-act="del" title="Delete">✕</button></span></div>';}).join('')
         ||'<div style="color:var(--ink-faint);font-size:19px">List is empty — just ask Zoe to add something.</div>';
       var base='/api/lists/'+sel.list_type+'/'+sel.id+'/items/';
@@ -978,24 +1006,32 @@
 
   // ---- Timers: live countdowns + cancel (server-authoritative) ----
   function fmtT(s){s=Math.max(0,Math.round(s));var m=Math.floor(s/60);return m+':'+two(s%60);}
+  function timerRemain(t){if(t.expires_at_ms!=null)return (t.expires_at_ms-Date.now())/1000;if(t.ends_at)return (new Date(t.ends_at).getTime()-Date.now())/1000;if(t.remaining_seconds!=null)return t.remaining_seconds;return t.duration_seconds||0;}
   function wireTimer(){
     function paint(){apiJson('GET','/api/skybridge/timers').then(function(d){if(_cur!=='timer')return;
-      var ts=(d.timers||[]);
-      var timeEl=document.getElementById('tmTime'),lab=document.getElementById('tmLabel'),ctl=document.getElementById('tmCtl'),more=document.getElementById('tmMore'),arc=document.getElementById('tmArc');
-      if(!ts.length){if(timeEl)timeEl.textContent='0:00';if(lab)lab.textContent='No timers — ask Zoe to set one';if(ctl)ctl.innerHTML='';if(more)more.innerHTML='';if(arc)arc.style.strokeDashoffset=1181;return;}
-      function remainOf(t){if(t.expires_at_ms!=null)return (t.expires_at_ms-Date.now())/1000;if(t.ends_at)return (new Date(t.ends_at).getTime()-Date.now())/1000;if(t.remaining_seconds!=null)return t.remaining_seconds;return t.duration_seconds||0;}
-      var first=ts[0];
-      function tick(){if(_cur!=='timer')return;var rem=remainOf(first),dur=first.duration_seconds||Math.max(rem,1);
-        if(timeEl)timeEl.textContent=fmtT(rem);
-        if(arc)arc.style.strokeDashoffset=(1181*(1-Math.max(0,Math.min(1,rem/dur)))).toFixed(0);
-        if(rem<=0)paint();}
+      var ts=(d.timers||[]).filter(function(t){return timerRemain(t)>0;}).sort(function(a,b){return timerRemain(a)-timerRemain(b);});
+      var rings=document.getElementById('tmRings'),more=document.getElementById('tmMore');
+      if(!rings)return;
+      if(!ts.length){rings.innerHTML='<div class="tring one"><svg width="300" height="300" viewBox="0 0 420 420"><circle cx="210" cy="210" r="188" fill="none" stroke="rgba(255,255,255,.12)" stroke-width="14"/></svg><div class="ttime">0:00</div></div><div class="tsub" style="width:100%;text-align:center">No timers — ask Zoe to set one</div>';if(more)more.innerHTML='';return;}
+      // Up to two timers SHARE the main screen as full rings; any further
+      // timers appear as live-ticking chips underneath.
+      var main=ts.slice(0,2),rest=ts.slice(2,6),two=main.length>1,sz=two?250:300;
+      rings.innerHTML=main.map(function(t,i){var id=esc(String(t.timer_id||t.id));
+        return '<div class="tunit"><div class="tring'+(two?'':' one')+'"><svg width="'+sz+'" height="'+sz+'" viewBox="0 0 420 420"><circle cx="210" cy="210" r="188" fill="none" stroke="rgba(255,255,255,.12)" stroke-width="14"/><circle class="tarc" data-i="'+i+'" cx="210" cy="210" r="188" fill="none" stroke="#8ea6ff" stroke-width="14" stroke-linecap="round" stroke-dasharray="1181" stroke-dashoffset="1181" style="filter:drop-shadow(0 0 14px rgba(123,150,255,.7))"/></svg><div class="ttime" data-i="'+i+'">--:--</div></div><div class="tsub">'+esc(t.label||t.title||'Timer')+'</div><div class="tctrls"><button class="stop" data-tid="'+id+'">■</button></div></div>';}).join('');
+      if(more)more.innerHTML=rest.map(function(t,i){return '<div class="tmr"><b class="trem" data-i="'+(i+2)+'">'+fmtT(timerRemain(t))+'</b><span class="tx3">'+esc(t.label||'Timer')+'</span><button data-tid="'+esc(String(t.timer_id||t.id))+'">✕</button></div>';}).join('');
+      function tick(){if(_cur!=='timer')return;var expired=false;
+        ts.forEach(function(t,i){var rem=timerRemain(t);if(rem<=0)expired=true;
+          var te=document.querySelector('.ttime[data-i="'+i+'"]'),ar=document.querySelector('.tarc[data-i="'+i+'"]'),tr=document.querySelector('.trem[data-i="'+i+'"]');
+          var dur=t.duration_seconds||Math.max(rem,1);
+          if(te)te.textContent=fmtT(rem);
+          if(ar)ar.style.strokeDashoffset=(1181*(1-Math.max(0,Math.min(1,rem/dur)))).toFixed(0);
+          if(tr)tr.textContent=fmtT(rem);});
+        if(expired)paint();}
       if(_homeTick){clearInterval(_homeTick);_homeTick=null;}   // repaints must not stack tickers
       tick();_homeTick=setInterval(tick,1000);
-      if(lab)lab.textContent=first.label||first.title||'Timer';
-      if(ctl)ctl.innerHTML='<button class="stop" data-tid="'+esc(first.timer_id||first.id)+'">■</button>';
-      if(more)more.innerHTML=ts.slice(1,4).map(function(t){return '<div class="tmr"><b>'+fmtT(remainOf(t))+'</b><span class="tx3">'+esc(t.label||'Timer')+'</span><button data-tid="'+esc(t.timer_id||t.id)+'">✕</button></div>';}).join('');
-      [ctl,more].forEach(function(el){if(!el)return;el.onclick=function(e){var b=e.target.closest('button[data-tid]');if(!b)return;
-        apiJson('POST','/api/skybridge/timers/cancel',{timer_id:b.getAttribute('data-tid')}).then(function(){clearInterval(_homeTick);paint();}).catch(function(){});};});
+      var host=document.querySelector('.tfull');
+      if(host)host.onclick=function(e){var b=e.target.closest('button[data-tid]');if(!b)return;
+        apiJson('POST','/api/skybridge/timers/cancel',{timer_id:b.getAttribute('data-tid')}).then(function(){if(_homeTick){clearInterval(_homeTick);_homeTick=null;}paint();renderDock();}).catch(function(){});};
     }).catch(function(){});}
     paint();_wxTick=setInterval(function(){if(_cur==='timer')paint();},15000);
   }
@@ -1013,6 +1049,13 @@
         ||'<div style="color:var(--ink-faint);font-size:20px">Nobody here yet — tell Zoe about the people in your life.</div>';
       if(az){az.innerHTML=('#'+'ABCDEFGHIJKLMNOPQRSTUVWXYZ').split('').map(function(L){return '<span'+(have[L]?' class="has"':'')+' data-l="'+L+'">'+L+'</span>';}).join('');
         az.onclick=function(e){var t=e.target.closest('span[data-l]');if(!t)return;var el=grid.querySelector('.cttile[data-letter="'+t.getAttribute('data-l')+'"]');if(el)el.scrollIntoView({behavior:'smooth',block:'start'});};}
+      var srch=document.getElementById('ctSearch');
+      if(srch)srch.onclick=function(){
+        // Hand the mic to Zoe — she asks who to look for. Same daemon endpoint
+        // the panel's orb uses; falls back to the typed command bar off-panel.
+        fetch('http://localhost:7777/activate',{method:'POST',signal:AbortSignal.timeout(800)})
+          .catch(function(){var cb=document.getElementById('cmdbar');if(cb){cb.classList.add('on');var ci=document.getElementById('cmdin');if(ci){ci.placeholder='Who are you looking for?';setTimeout(function(){ci.focus();},60);}}});
+      };
       grid.onclick=function(e){var t=e.target.closest('.cttile');if(!t)return;var pn=ps[+t.getAttribute('data-i')];if(!pn)return;
         var rows=[['Relationship',pn.relationship],['Phone',pn.phone],['Email',pn.email],['Birthday',pn.birthday],['Notes',pn.notes]]
           .filter(function(r){return r[1];})
@@ -1037,7 +1080,7 @@
       {t:'Panel & display',b:'<div class="srow2" data-go="/touch/settings.html"><span>All panel settings</span><span class="chev2">›</span></div><div class="srow2" data-go="/touch/updates.html"><span>Updates</span><span class="chev2">›</span></div>'},
       {t:'Devices & pairing',b:'<div class="srow2" data-act="pair"><span>Link a device</span><span class="chev2">›</span></div>'},
       {t:'Household',b:'<div class="srow2" data-act="contacts"><span>Contacts</span><span class="chev2">›</span></div><div class="srow2" data-act="rooms"><span>Rooms & devices</span><span class="chev2">›</span></div>'}
-    ].map(function(sec,i){return '<div class="setsec'+(i===0?' open':'')+'"><div class="sh">'+esc(sec.t)+'<span class="caret">›</span></div><div class="sbody"><div class="inner">'+sec.b+'</div></div></div>';}).join('');
+    ].map(function(sec,i){return '<div class="setsec"><div class="sh">'+esc(sec.t)+'<span class="caret">›</span></div><div class="sbody"><div class="inner">'+sec.b+'</div></div></div>';}).join('');
     host.onclick=function(e){
       var sh=e.target.closest('.sh');
       if(sh){var sec=sh.parentElement;sec.classList.toggle('open');return;}
@@ -1137,7 +1180,7 @@
 
   // ---- Day: full-screen — today's events + reminders (+ comms when a source exists) ----
   function wireDay(){
-    var ttl=document.getElementById('dayTtl'),host=document.getElementById('dayEvents'),rems=document.getElementById('dayRems');
+    var ttl=document.getElementById('dayMeta'),host=document.getElementById('dayEvents'),rems=document.getElementById('dayRems');
     if(ttl)ttl.textContent=new Date().toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long'});
     var d=new Date(),ds=d.getFullYear()+'-'+two(d.getMonth()+1)+'-'+two(d.getDate());
     apiGet('/api/calendar/events?start_date='+ds+'&end_date='+ds).then(function(data){if(_cur!=='day'||!host)return;
@@ -1228,7 +1271,7 @@
   // Live voice state → estate surfaces. touch-ui-executor.js checks for this
   // object and routes its voice events here INSTEAD of building the legacy
   // skybridge overlay box (which never auto-dismissed on the estate).
-  var _lisT=null;
+  var _lisT=null,_askFallT=null;
   window.ZoeEstateVoice={
     // Listening is shown on the ORB (fast breathe + bright glow), not by
     // taking over the dock — the dock keeps its pinned controls until a
@@ -1236,15 +1279,22 @@
     // voice event lands (e.g. wake false-trigger).
     listening:function(){orb.classList.add('listening');
       if(_lisT)clearTimeout(_lisT);_lisT=setTimeout(function(){orb.classList.remove('listening');},20000);},
-    transcript:function(t){orb.classList.remove('listening');if(_lisT)clearTimeout(_lisT);if(t)dockHeard(t);},
+    transcript:function(t){orb.classList.remove('listening');if(_lisT)clearTimeout(_lisT);if(t){window.__lastHeard=t;dockHeard(t);}},
     thinking:function(){orb.classList.remove('listening');orb.classList.add('busy');
       var o=document.getElementById('askOut');if(o&&_cur==='ask')o.textContent='…';},
     responding:function(t){orb.classList.remove('listening');orb.classList.add('busy');
       if(!t)return;
-      // Chat answers land on the Ask surface; on any other screen the spoken
-      // summary shows in the DOCK (same sequencing as URL arrivals).
-      if(_cur==='ask'){var o=document.getElementById('askOut');if(o)o.textContent=t;}
-      else dockSaid(null,t);},
+      if(_cur==='ask'){var o=document.getElementById('askOut');if(o)o.textContent=t;return;}
+      // Domain commands navigate the panel (?heard&say&domain) — a page that
+      // JUST voice-arrived shows the summary in the dock. A responding event
+      // with NO recent arrival is the brain/chat fallback: those answers
+      // belong on the Ask surface ("she shows her answers in text"). Defer
+      // briefly so a navigation that's still in flight wins instead.
+      if(window.__voiceArrivedAt&&(Date.now()-window.__voiceArrivedAt)<10000){dockSaid(null,t);return;}
+      if(_askFallT)clearTimeout(_askFallT);
+      var heardNow=window.__lastHeard||'';   // capture at schedule time — a newer
+      // transcript arriving during the defer must not pair with this answer
+      _askFallT=setTimeout(function(){_askFallT=null;askShowAnswer(heardNow,t);},1200);},
     done:function(){orb.classList.remove('listening');orb.classList.remove('busy');if(_lisT)clearTimeout(_lisT);}
   };
 
@@ -1305,7 +1355,7 @@
     else if(heard||say)dockSaid(heard,say);
     try{var keep=[];if(sp.get('panel_id'))keep.push('panel_id='+encodeURIComponent(sp.get('panel_id')));if(sp.get('kiosk'))keep.push('kiosk='+encodeURIComponent(sp.get('kiosk')));
       history.replaceState(null,'',location.pathname+(keep.length?('?'+keep.join('&')):''));}catch(e){}
-    window.__voiceArrived=true;
+    window.__voiceArrived=true;window.__voiceArrivedAt=Date.now();
   })();
 
   if(!window.__voiceArrived)show('home');
