@@ -1292,7 +1292,9 @@
       // briefly so a navigation that's still in flight wins instead.
       if(window.__voiceArrivedAt&&(Date.now()-window.__voiceArrivedAt)<10000){dockSaid(null,t);return;}
       if(_askFallT)clearTimeout(_askFallT);
-      _askFallT=setTimeout(function(){_askFallT=null;askShowAnswer(window.__lastHeard||'',t);},1200);},
+      var heardNow=window.__lastHeard||'';   // capture at schedule time — a newer
+      // transcript arriving during the defer must not pair with this answer
+      _askFallT=setTimeout(function(){_askFallT=null;askShowAnswer(heardNow,t);},1200);},
     done:function(){orb.classList.remove('listening');orb.classList.remove('busy');if(_lisT)clearTimeout(_lisT);}
   };
 
