@@ -260,6 +260,12 @@
   #stage.wxlight .wbig .c small{color:rgba(27,39,64,.6)}
   #stage.wxlight .whours .hh .lab{color:rgba(27,39,64,.72)}
   #stage.wxlight .whours .hh .d{color:#1b2740}
+  #stage.wxlight .hfull .hclock .ht,#stage.wxlight .hfull .htemp .n{color:#1b2740;text-shadow:none}
+  #stage.wxlight .hfull .hclock .hd,#stage.wxlight .hfull .htemp .c{color:rgba(27,39,64,.8);text-shadow:none}
+  #stage.wxlight .hfull .today .thk{color:rgba(27,39,64,.66)}
+  #stage.wxlight .hfull .today .tr{border-top-color:rgba(27,39,64,.2)}
+  #stage.wxlight .hfull .today .tt{color:rgba(27,39,64,.7)}
+  #stage.wxlight .hfull .today .tn{color:#1b2740}
 
   /* music full */
   .mfull .mart{position:absolute;left:90px;top:150px;width:300px;height:300px;border-radius:28px;display:grid;place-items:center;font-size:120px;background:linear-gradient(140deg,#8ea6ff,#b49bff);box-shadow:0 34px 80px rgba(0,0,0,.5);background-size:cover;background-position:center}
@@ -579,10 +585,10 @@
   };
 
   var cv=document.getElementById('cv'),ctx=cv.getContext('2d'),W=1280,H=720;cv.width=W;cv.height=H;
-  var stars=[],drops=[],wxOn=false;
+  var stars=[],drops=[],wxOn=false,wxGlow=true; // wxGlow: warm dusk glow, off for clear night
   (function seed(){for(var i=0;i<26;i++)stars.push({x:Math.random()*W,y:Math.random()*H*.6,r:Math.random()*1.6+.3,tw:Math.random()*6.28});})();
   function frame(t){ if(wxOn){ctx.clearRect(0,0,W,H);
-      var s2=ctx.createRadialGradient(220,560,10,220,560,280);s2.addColorStop(0,'rgba(255,210,150,.6)');s2.addColorStop(1,'rgba(255,210,150,0)');ctx.fillStyle=s2;ctx.beginPath();ctx.arc(220,560,280,0,6.29);ctx.fill();
+      if(wxGlow){var s2=ctx.createRadialGradient(220,560,10,220,560,280);s2.addColorStop(0,'rgba(255,210,150,.6)');s2.addColorStop(1,'rgba(255,210,150,0)');ctx.fillStyle=s2;ctx.beginPath();ctx.arc(220,560,280,0,6.29);ctx.fill();}
       ctx.fillStyle='#fff';stars.forEach(function(st){ctx.globalAlpha=(.5+.5*Math.sin(t/700+st.tw))*.9;ctx.beginPath();ctx.arc(st.x,st.y,st.r,0,6.29);ctx.fill();});ctx.globalAlpha=1;
     } requestAnimationFrame(frame); }
   requestAnimationFrame(frame);
@@ -755,7 +761,13 @@
       throw new Error('auth');}
     if(!r.ok)throw new Error('http '+r.status);return r.json();});}
   function tickClock(){var c=document.getElementById('hClock');if(!c)return;var d=new Date(),h=d.getHours()%12;if(h===0)h=12;c.textContent=h+':'+two(d.getMinutes());var dt=document.getElementById('hDate');if(dt)dt.textContent=d.toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long'});}
-  function loadWeather(){apiGet('/api/weather/current').then(function(w){if(_cur!=='home')return;var el=document.getElementById('hTemp');if(!el||!w)return;var t=(w.temp!=null?w.temp:w.temperature);el.querySelector('.n').textContent=(t!=null?Math.round(t):'—')+'°';var c=(w.description||w.condition||'');el.querySelector('.c').textContent=c?c.charAt(0).toUpperCase()+c.slice(1):'';}).catch(function(){});}
+  function loadWeather(){apiGet('/api/weather/current').then(function(w){if(_cur!=='home')return;var el=document.getElementById('hTemp');if(!el||!w)return;var t=(w.temp!=null?w.temp:w.temperature);el.querySelector('.n').textContent=(t!=null?Math.round(t):'—')+'°';var c=(w.description||w.condition||'');el.querySelector('.c').textContent=c?c.charAt(0).toUpperCase()+c.slice(1):'';
+    // The home scene matches the sky (design intent): same scene mapping as
+    // the weather surface — clear day, clear night, cloud, rain — with the
+    // dusk gradient kept for golden-hour codes and as the pre-fetch default.
+    var scene=wxScene(w.icon);
+    if(_cur==='home'){stage.style.background=WXBG[scene]||DUSK;stage.classList.toggle('wxlight',scene==='day');wxOn=(scene!=='day');wxGlow=(scene==='dusk');cv.classList.toggle('on',wxOn);}
+  }).catch(function(){});}
   function loadToday(){var host=document.getElementById('hToday');if(!host)return;var d=new Date(),ds=d.getFullYear()+'-'+two(d.getMonth()+1)+'-'+two(d.getDate());
     apiGet('/api/calendar/events?start_date='+ds+'&end_date='+ds).then(function(data){
       if(_cur!=='home')return;
@@ -778,7 +790,7 @@
       var t=document.getElementById('wxTemp');if(t&&w.temp!=null)t.textContent=Math.round(w.temp)+'°';
       var cond=(w.description||'');cond=cond?cond.charAt(0).toUpperCase()+cond.slice(1):'';
       var cd=document.getElementById('wxCond');if(cd)cd.innerHTML=esc(cond)+(w.feels_like!=null?' &nbsp;<small>feels like '+Math.round(w.feels_like)+'°</small>':'');
-      var scene=wxScene(w.icon);stage.style.background=WXBG[scene]||DUSK;stage.classList.toggle('wxlight',scene==='day');
+      var scene=wxScene(w.icon);stage.style.background=WXBG[scene]||DUSK;stage.classList.toggle('wxlight',scene==='day');wxGlow=(scene==='dusk');
     }).catch(function(){});
     apiGet('/api/weather/forecast').then(function(f){if(_cur!=='weather'||!f||!f.hourly)return;
       var host=document.getElementById('wxHours');if(!host)return;
