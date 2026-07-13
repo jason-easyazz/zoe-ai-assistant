@@ -3768,6 +3768,7 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False,
             # Whole degrees for speech: "17 degrees", never "17 point 1 degrees"
             # — more natural spoken, and it makes the reply stitchable by the
             # voice segment cache (voice_stitch works on the integer vocab).
+            raw_temp = temp
             try:
                 temp = round(float(temp))
             except (TypeError, ValueError):
@@ -3775,7 +3776,9 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False,
             msg = f"It's {_say_num(temp)} degrees{desc_part} in {city_name}"
             if feels is not None:
                 try:
-                    if abs(float(feels) - float(temp)) > 2:
+                    # Gate on the REAL delta, not the rounded speech value —
+                    # rounding must not change whether feels-like is mentioned.
+                    if abs(float(feels) - float(raw_temp)) > 2:
                         msg += f", and it feels like {_say_num(round(float(feels)))} degrees"
                 except Exception:
                     pass
