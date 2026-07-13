@@ -98,3 +98,10 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
   request can't impersonate; `auth.resolve_acting_user`). Unlinked senders are told
   their id and refused (never reach the brain as a real user). Ships the opt-in unit
   template above. Hand-started, demo-only; README is a record, not a contract.
+- `setfit-router/` — supervised classifier head (logreg/MLP) on the frozen prod
+  bge-small embedding to raise fast-tier routing coverage: 13-domain label set
+  (live ROUTES + missing notes/journal/music/smart_home + chat none-class),
+  1,121-example train set (seeds + local-Gemma paraphrases), heads + eval vs the
+  needle-benchmark 81-case corpus, and a fast_tiers integration PLAN. Verdict:
+  adopt logreg @ conf 0.4 (79.0% raw / 0% chat-FP gated vs 61.7% baseline).
+  Nothing prod-wired; README is a record, not a contract.
