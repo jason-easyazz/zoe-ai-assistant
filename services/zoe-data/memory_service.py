@@ -565,6 +565,22 @@ class MemoryService:
             )
             return None
 
+        # Forget tombstones: "forget everything about X" shadows X for a few
+        # minutes so in-flight/late extractor passes can't resurrect the name
+        # (ingest is the one durable-write chokepoint every lane funnels
+        # through). Explicit re-teach paths clear the tombstone first.
+        try:
+            from memory_tombstones import matching_tombstone
+            if matching_tombstone(user_id, scrubbed):
+                self._bump("tombstone_drop", source)
+                logger.info(
+                    "memory_service: ingest dropped — mentions a just-forgotten "
+                    "entity (user=%s source=%s)", user_id, source,
+                )
+                return None
+        except Exception:
+            pass  # the guard must never break ingestion
+
         idem_key = self._idempotency_key(
             user_id,
             user_turn_id,

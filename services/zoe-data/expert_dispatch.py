@@ -453,6 +453,14 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
     Statements are persisted to MemPalace via MemoryService.ingest (which has
     built-in idempotency via user_turn_id, so a double-submit can't double-store)
     so they become recallable. Questions fall back to the recall expert."""
+    # An EXPLICIT teach beats a recent forget: clear any tombstone whose name
+    # this fact mentions (see memory_tombstones; forget-then-re-teach must work
+    # immediately, not after the TTL).
+    try:
+        from memory_tombstones import clear_matching as _tomb_clear
+        _tomb_clear(user_id, text)
+    except Exception:
+        pass
     text = (text or "").strip()
     if not text:
         return None

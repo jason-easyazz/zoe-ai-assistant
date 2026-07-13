@@ -2974,6 +2974,14 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         if forgotten == 0:
             return (f"I found {len(matches)} memories about {name} but couldn't "
                     "archive them just now -- nothing was changed.")
+        # Tombstone the name so in-flight extractor passes from EARLIER turns
+        # can't land a straggler row seconds after this forget (async race seen
+        # live 2026-07-13; pinned in IDEAS.md, now implemented). Best-effort.
+        try:
+            from memory_tombstones import add as _tombstone_add
+            _tombstone_add(user_id, name)
+        except Exception as exc:
+            logger.warning("memory_forget_entity: tombstone failed (%s)", type(exc).__name__)
         # Forgetting a person also withdraws any pending "add X as a contact?"
         # offer — otherwise the just-forgotten name keeps resurfacing in every
         # prompt via the offer seam (live repro 2026-07-13). Best-effort.
@@ -3016,6 +3024,14 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         text = str(slots.get("text", "")).strip()
         if not text:
             return "There's nothing to remember — what would you like me to store?"
+        # An EXPLICIT teach beats a recent forget: clear any tombstone whose
+        # name this fact mentions, so "forget Delia" → "remember that Delia…"
+        # works immediately instead of being shadow-dropped at ingest.
+        try:
+            from memory_tombstones import clear_matching as _tomb_clear
+            _tomb_clear(user_id, text)
+        except Exception:
+            pass
         # memory_type is model/caller-controlled, so validate it against an
         # allowlist rather than forwarding an arbitrary string to the store: a
         # direct/replayed intent-dispatch (internal-token only) must not be able to
