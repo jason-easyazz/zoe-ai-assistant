@@ -235,6 +235,9 @@ def test_is_explicit_teach_shapes():
                   "remember Delia is allergic to nuts",
                   "note that Delia moved to Perth",
                   "don't forget Delia's birthday is in May",
+                  "remember that Delia goes by Dee",
+                  "note that Delia owns a red car",
+                  "remember Delia's favourite colour is blue",
                   "keep in mind that my friend Delia hates olives"):
         assert is_explicit_teach(teach), teach
     for task in ("don't forget to invite Delia", "remember to call Delia",
