@@ -82,10 +82,17 @@ Gotchas learned the hard way:
 | quick-discover full pipeline | 84 s (job `quick_discover`, AI + MusicBrainz resolve) |
 
 Box had ~1.9 GB available before the run — 768 MiB fits for a batch window but
-NOT as a resident service. **Always `docker stop` after the batch.** Never run a
-batch while a voice-heavy session is active (Gemma slot contention: discovery
-prompts queue behind voice turns on :11434 — acceptable for a background batch,
-but schedule it in idle windows).
+NOT as a resident service. **Always `docker stop` after the batch.**
+
+**Brain-slot guardrail (labs contract):** this spike points at `:11434` by
+design — its explicit subject is Gemma-mediated music discovery for Zoe (the
+same carve-out class as `flue-zoe-brain/`), not harness self-engineering, which
+the labs contract forbids from using the voice brain. Even so: **never run a
+discovery batch while voice is in active use.** Discovery prompts queue on the
+single live brain slot and would regress voice latency. Hand-run batches only
+in confirmed-idle windows; any future scripted batch MUST gate on brain
+idleness (e.g. probe llama-server for in-flight work / recent voice activity)
+before submitting, and back off rather than queue.
 
 ## Listening-source: what we can feed it TODAY
 
