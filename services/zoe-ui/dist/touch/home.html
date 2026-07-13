@@ -604,7 +604,7 @@
     weather:{home:true, bg:DUSK, canvas:true,
       html:'<div class="fcog">'+GEAR+'</div><div class="wloc" id="wxLoc"></div><div class="wbig"><div class="t" id="wxTemp">—°</div><div class="c" id="wxCond"></div></div><div class="whours" id="wxHours"></div>'},
     music:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="mtop"><button class="spk" id="mSpk">'+SPKR+' <span class="spkname">Speaker</span> <span class="cx">▾</span></button><button class="mqbtn" id="mQBtn" title="Queue">'+QICON+'</button></div><div class="mfull"><div class="mart" id="mArt">🎵</div><div class="minfo"><div class="mkick">Now Playing</div><div class="mtitle" id="mTitle">—</div><div class="martist" id="mArtist"></div></div><div class="mscrub"><div class="mtrack"><div class="mfill" id="mFill" style="width:0%"></div></div><div class="mtimes"><span id="mElapsed">0:00</span><span id="mDur">0:00</span></div></div><div class="mtransport" id="mTransport"><button class="sml" id="mShuf" data-a="shuffle" title="Shuffle">'+SHUF_I+'</button><button data-a="previous">'+PREV_I+'</button><button class="pp" id="mPP" data-a="playpause">'+PAUSE_I+'</button><button data-a="next">'+NEXT_I+'</button><button class="sml" id="mRep" data-a="repeat" title="Repeat">'+REP_I+'</button></div></div><aside class="mqueue" id="mQueue"><h3>Up next</h3><div id="mQList"></div></aside><div class="mqr" id="mQR"><div class="qrbox" id="mQRCode"></div><div class="qrlab">Scan to queue</div></div>'},
+      html:'<div class="fcog">'+GEAR+'</div><div class="mtop"><button class="spk" id="mSpk">'+SPKR+' <span class="spkname">Speaker</span> <span class="cx">▾</span></button><button class="mqbtn" id="mQBtn" title="Queue">'+QICON+'</button></div><div class="mfull"><div class="mart" id="mArt">🎵</div><div class="minfo"><div class="mkick">Now Playing</div><div class="mtitle" id="mTitle">—</div><div class="martist" id="mArtist"></div></div><div class="mscrub"><div class="mtrack"><div class="mfill" id="mFill" style="width:0%"></div></div><div class="mtimes"><span id="mElapsed">0:00</span><span id="mDur">0:00</span></div></div><div class="mtransport" id="mTransport"><button class="sml" id="mShuf" data-a="shuffle" title="Shuffle">'+SHUF_I+'</button><button data-a="previous">'+PREV_I+'</button><button class="pp" id="mPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button><button class="sml" id="mRep" data-a="repeat" title="Repeat">'+REP_I+'</button></div></div><aside class="mqueue" id="mQueue"><h3>Up next</h3><div id="mQList"></div></aside><div class="mqr" id="mQR"><div class="qrbox" id="mQRCode"></div><div class="qrlab">Scan to queue</div></div>'},
     timer:{home:true, bg:'radial-gradient(120% 100% at 50% 44%,#122447,#080b12 62%)', canvas:false, glow:'radial-gradient(closest-side at 50% 44%,rgba(123,150,255,.35),transparent 70%)',
       html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Timers</div><div class="tfull"><div class="trings" id="tmRings"></div><div class="tmore" id="tmMore"></div></div>'},
     list:{home:true, bg:GROUND, canvas:false,
@@ -624,7 +624,7 @@
       html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Reminders</div><div class="chmeta" id="remMeta"></div><div class="remf"><div id="remList" class="remlist"></div></div>'},
     rooms:{home:true, bg:GROUND, canvas:false,
       html:'<div class="fcog">'+GEAR+'</div><div class="rm"><div class="rchips" id="rmScenes"></div>'
-        +'<div class="rhero" id="rmHero" style="display:none"><div class="cover"></div><div class="rhead"><div class="rart" id="rmArt">🎵</div><div><div class="rk">Now Playing</div><div class="rt" id="rmT"></div><div class="ra" id="rmA"></div></div></div><div class="rscrub"><div class="f" id="rmF" style="width:0%"></div></div><div class="rtp"><button data-a="previous">'+PREV_I+'</button><button class="pp" id="rmPP" data-a="playpause">'+PAUSE_I+'</button><button data-a="next">'+NEXT_I+'</button></div><div class="rvol"><button data-va="volume_down">−</button><span>Volume</span><button data-va="volume_up">+</button></div></div>'
+        +'<div class="rhero" id="rmHero" style="display:none"><div class="cover"></div><div class="rhead"><div class="rart" id="rmArt">🎵</div><div><div class="rk">Now Playing</div><div class="rt" id="rmT"></div><div class="ra" id="rmA"></div></div></div><div class="rscrub"><div class="f" id="rmF" style="width:0%"></div></div><div class="rtp"><button data-a="previous">'+PREV_I+'</button><button class="pp" id="rmPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button></div><div class="rvol"><button data-va="volume_down">−</button><span>Volume</span><button data-va="volume_up">+</button></div></div>'
         +'<div class="rlights" id="rmLights"></div></div>'}
   };
 
@@ -646,6 +646,12 @@
   var full=document.getElementById('full'),cardwrap=document.getElementById('cardwrap'),host=document.getElementById('host'),dock=document.getElementById('dock'),dbody=document.getElementById('dbody'),home=document.getElementById('home'),glow=document.getElementById('glow'),pick=document.getElementById('pick');
 
   full.addEventListener('click',function(e){if(e.target.closest('.fcog'))show('settings');});
+  // Queue-drawer outside-tap dismiss — ONE delegated listener (the drawer is
+  // recreated on every music show(), so query it per event, never capture it).
+  full.addEventListener('click',function(e){
+    var qd=document.getElementById('mQueue');
+    if(qd&&qd.classList.contains('open')&&!e.target.closest('.mqueue')&&!e.target.closest('#mQBtn'))qd.classList.remove('open');
+  });
 
   function show(id){
     var f=FULL[id], c=CARD[id];
@@ -924,6 +930,10 @@
   function musicControl(action){if(!_music.player_id)return;
     fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({action:action,player_id:_music.player_id})}).then(function(){setTimeout(loadMusic,350);}).catch(function(){});}
   function wireMusic(){
+    // Revisits: seed the play/pause button from the cached snapshot so the
+    // pre-poll icon (and a fast tap) match the last-known real state.
+    if(_music.np){var pp0=document.getElementById('mPP');
+      if(pp0){pp0.dataset.playing=_music.np.playing?'1':'0';pp0.innerHTML=_music.np.playing?PAUSE_I:PLAY_I;}}
     loadMusic();_wxTick=setInterval(function(){if(_cur==='music')loadMusic();},5000);
     if(_homeTick){clearInterval(_homeTick);}_homeTick=setInterval(tickMusic,1000);
     var t=document.getElementById('mTransport');if(t)t.addEventListener('click',function(e){var btn=e.target.closest('button');if(!btn)return;var a=btn.getAttribute('data-a');
@@ -932,13 +942,7 @@
       musicControl(a==='playpause'?(document.getElementById('mPP').dataset.playing==='1'?'pause':'play'):a);});
     // Queue drawer: slide in from the right with what's up next.
     var qb=document.getElementById('mQBtn'),qd=document.getElementById('mQueue');
-    if(qb&&qd){
-      qb.onclick=function(e){e.stopPropagation();if(qd.classList.toggle('open'))loadQueue();};
-      // tap anywhere outside the open drawer to dismiss it
-      full.addEventListener('click',function(e){
-        if(qd.classList.contains('open')&&!e.target.closest('.mqueue')&&!e.target.closest('#mQBtn'))qd.classList.remove('open');
-      });
-    }
+    if(qb&&qd)qb.onclick=function(e){e.stopPropagation();if(qd.classList.toggle('open'))loadQueue();};
     // Jukebox QR: phones scan it to search + queue music (jukebox.html).
     var qr=document.getElementById('mQRCode');
     if(qr&&!qr.dataset.done){qr.dataset.done='1';

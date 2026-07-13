@@ -158,8 +158,11 @@ async def update_event(
     row = await cursor.fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Event not found")
-    if dict(row).get("user_id") != user_id:
-        raise HTTPException(status_code=403, detail="Not authorised to edit this event")
+    # Household model: a family-visible event is editable by any signed-in
+    # household member (the visibility filter above already scopes the lookup
+    # to family-or-own). This mirrors the people router — the panel is a
+    # shared surface, and the stricter owner-only check made family events
+    # uneditable from it (403s in the operator's 2026-07-13 report).
 
     updates = []
     params = []
@@ -212,8 +215,9 @@ async def delete_event(
     row = await cursor.fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Event not found")
-    if dict(row).get("user_id") != user_id:
-        raise HTTPException(status_code=403, detail="Not authorised to delete this event")
+    # Household model: family-visible events are deletable by any signed-in
+    # household member — same rationale as update_event above (soft delete,
+    # reversible; mirrors the people router's family-or-own semantics).
 
     await db.execute(
         "UPDATE events SET deleted = 1, updated_at = NOW() WHERE id = ?",
