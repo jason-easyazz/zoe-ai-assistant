@@ -132,19 +132,29 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def cleanup_replay_artifacts(run_started_utc: str, args) -> None:
-    """Soft-delete calendar events + list items created during the replay window.
+def cleanup_replay_artifacts(run_started_utc: str, args) -> bool:
+    """Soft-delete replay artifacts: rows created during the probe window and
+    owned by the replay identities only.
 
     The replay corpus executes REAL commands through the live pipeline ("add
     bread to the shopping list", "dentist appointment at 2pm", …), so every run
-    would otherwise accumulate junk in Jason's real calendar/lists (operator
-    bug report 2026-07-13). The probe runs off-peak (04:30) under flock, so
-    rows created between run start and now are replay artifacts with
-    overwhelming probability; the delete is a reversible soft-delete
-    (deleted=1) and the counts are printed for the run log.
+    would otherwise accumulate junk in the calendar/lists (operator bug report
+    2026-07-13). Scope is deliberately narrow on BOTH axes: created_at within
+    this run's window AND user_id in {probe user, 'guest'} — a family member's
+    row written during the window under any other account is never touched.
+    Reversible soft-delete (deleted=1); counts printed for the run log.
+
+    Returns True on success (or intentional skip), False on failure — the
+    caller surfaces a failed cleanup in the exit code so a silently dirty
+    calendar can't hide behind a green probe.
     """
     if getattr(args, "no_cleanup", False):
-        return
+        return True
+    try:
+        import asyncpg  # hard requirement: a probe env without asyncpg must be visible
+    except ImportError as exc:
+        print(f"cleanup: FAILED — asyncpg unavailable in the probe environment: {exc}", file=sys.stderr)
+        return False
     dsn = os.environ.get("POSTGRES_URL", "")
     if not dsn:
         env_file = REPO / "services" / "zoe-data" / ".env"
@@ -157,34 +167,36 @@ def cleanup_replay_artifacts(run_started_utc: str, args) -> None:
         except OSError:
             pass
     if not dsn:
-        print("cleanup: POSTGRES_URL unavailable — skipping replay-artifact cleanup", file=sys.stderr)
-        return
+        print("cleanup: FAILED — POSTGRES_URL unavailable; replay artifacts were NOT swept", file=sys.stderr)
+        return False
+    replay_users = [getattr(args, "user", "jason") or "jason", "guest"]
     try:
         import asyncio
-
-        import asyncpg
 
         async def _run() -> tuple[str, str]:
             conn = await asyncpg.connect(dsn)
             try:
                 ev = await conn.execute(
                     "UPDATE events SET deleted = 1, updated_at = NOW() "
-                    "WHERE deleted = 0 AND created_at >= $1::timestamptz",
-                    run_started_utc + "+00",
+                    "WHERE deleted = 0 AND created_at >= $1::timestamptz AND user_id = ANY($2)",
+                    run_started_utc + "+00", replay_users,
                 )
                 li = await conn.execute(
                     "UPDATE list_items SET deleted = 1, updated_at = NOW() "
-                    "WHERE deleted = 0 AND created_at >= $1::timestamptz",
-                    run_started_utc + "+00",
+                    "WHERE deleted = 0 AND created_at >= $1::timestamptz AND list_id IN "
+                    "(SELECT id FROM lists WHERE user_id = ANY($2))",
+                    run_started_utc + "+00", replay_users,
                 )
                 return ev, li
             finally:
                 await conn.close()
 
         ev, li = asyncio.run(_run())
-        print(f"cleanup: replay-window artifacts soft-deleted — events: {ev}, list_items: {li}")
-    except Exception as exc:  # cleanup must never fail the probe
-        print(f"cleanup: replay-artifact cleanup failed (non-fatal): {exc}", file=sys.stderr)
+        print(f"cleanup: replay-window artifacts soft-deleted (owners {replay_users}) — events: {ev}, list_items: {li}")
+        return True
+    except Exception as exc:
+        print(f"cleanup: FAILED — replay artifacts were NOT swept: {exc}", file=sys.stderr)
+        return False
 
 
 def main() -> int:
@@ -253,9 +265,11 @@ def main() -> int:
         print(f"Baseline saved: {args.baseline}")
     print(f"Results: {args.results}  Trend: {args.trend}")
 
-    cleanup_replay_artifacts(run_started_utc, args)
+    cleanup_ok = cleanup_replay_artifacts(run_started_utc, args)
 
-    return 1 if warnings else 0
+    # a failed sweep is a warning-level exit: results are valid but the
+    # calendar/lists are dirty and the systemd unit shows non-zero.
+    return 1 if (warnings or not cleanup_ok) else 0
 
 
 if __name__ == "__main__":

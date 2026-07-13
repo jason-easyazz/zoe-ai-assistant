@@ -81,9 +81,10 @@ jobs:
       # (operator bug report 2026-07-13). Always sweep the orphaned guest/test
       # rows afterwards; reversible soft-delete, scoped to guest + test-sec-b
       # owners only (never a real household user's data).
+      # NOT continue-on-error: if this sweep fails, junk stays on the live
+      # panel — the workflow must go red so it gets fixed, not ignored.
       - name: Clean up live test artifacts
         if: always()
-        continue-on-error: true
         run: |
           cd "${{ github.workspace }}"
           python3 scripts/maintenance/purge_orphaned_test_data.py --execute --yes \
