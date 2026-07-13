@@ -49,9 +49,9 @@ llama-server --model <gguf> --host 127.0.0.1 --port 11435 \
 
 | run | RSS after load | RSS after bench | cold load |
 |---|---|---|---|
-| Q4_K_M, CPU (`-ngl 0`) | 562 MB | 652 MB | 2.0–2.4 s |
-| Q8_0, CPU | 595 MB | 668 MB | 2.2 s |
-| Q8_0, GPU (`-ngl 99`) | 804 MB | 861 MB | 2.0 s |
+| Q4_K_M, CPU (`-ngl 0`) | 561 MB | 651 MB | 2.4 s |
+| Q8_0, CPU | 594 MB | 659 MB | 2.2 s |
+| Q8_0, GPU (`-ngl 99`) | 803 MB | 858 MB | 2.4 s |
 
 Box stayed healthy on every run (harness gates on MemAvailable ≥ 2 GB before
 loading and re-reads it after; no OOM, zram state unchanged). Note: this box
@@ -62,12 +62,16 @@ sits under chronic memory pressure — during setup MemAvailable swung between
 
 | run | prompt | prompt tokens (p50) | p50 | p90 |
 |---|---|---|---|---|
-| Q8 CPU | full 20+1-tool block | 2,235 | 768 ms | 974 ms |
-| Q8 CPU | 3-tool block | 300 | 389 ms | 775 ms |
-| Q4 CPU | full block | 2,235 | 706 ms | 1,029 ms |
-| Q4 CPU | 3-tool block | 300 | 479 ms | 788 ms |
-| Q8 GPU | full block | 2,235 | 383 ms | 448 ms |
-| Q8 GPU | 3-tool block | 300 | 162 ms | 341 ms |
+| Q8 CPU | full 20+1-tool block | 2,235 | 789 ms | 1,042 ms |
+| Q8 CPU | 3-tool block | 300 | 378 ms | 754 ms |
+| Q4 CPU | full block | 2,235 | 722 ms | 1,012 ms |
+| Q4 CPU | 3-tool block | 300 | 485 ms | 754 ms |
+| Q8 GPU | full block | 2,235 | 514 ms | 979 ms |
+| Q8 GPU | 3-tool block | 300 | 339 ms | 558 ms |
+
+GPU-offload latency is the most load-sensitive number (shares the GPU with the
+live brain): an earlier run measured 383/448 ms full-block — treat GPU figures
+as indicative only. Accuracy reproduced exactly across regenerations (temp 0).
 
 ### Stock accuracy (81-case corpus; scored as in needle-benchmark: predicted ∈ expected, no-call ≡ general_chat)
 
