@@ -1761,6 +1761,46 @@ class MemoryService:
         )
         return results.get("ids", []) if results else []
 
+    def _entity_rows_sync(self, entity_ids: list[str], user_id: str) -> list["MemoryRef"]:
+        col = self._collection()
+        results = col.get(
+            where={"$and": [
+                {"$or": [{"user_id": user_id}, {"wing": user_id}]},
+                {"entity_id": {"$in": entity_ids}} if len(entity_ids) > 1
+                else {"entity_id": entity_ids[0]},
+            ]},
+            include=["documents", "metadatas"],
+        )
+        refs: list[MemoryRef] = []
+        for i, doc, meta in zip(
+            results.get("ids", []),
+            results.get("documents", []) or [],
+            results.get("metadatas", []) or [],
+        ):
+            refs.append(MemoryRef(id=i, text=doc or "", metadata=meta or {}))
+        return refs
+
+    async def list_by_entity(
+        self, user_id: str, entity_ids: list[str], *, status: str = "approved"
+    ) -> list["MemoryRef"]:
+        """All of a user's rows linked to any of ``entity_ids`` (person uuid or
+        pending slug), filtered to ``status``. Used by the person-extractor's
+        entity-keyed reconciliation — compact "Name: value" rows have no
+        parseable attribute for text reconciliation, so supersession for them
+        is decided by linkage + fact kind instead."""
+        ids = [e for e in entity_ids if e]
+        if not ids:
+            return []
+        self._require(user_id, "user_id is required")
+        try:
+            rows = await self._run_sync(self._entity_rows_sync, ids, user_id)
+        except Exception as exc:
+            logger.debug("list_by_entity failed (%s)", type(exc).__name__)
+            return []
+        if status:
+            rows = [r for r in rows if str(r.metadata.get("status") or "") == status]
+        return rows
+
     async def archive_by_entity(self, entity_id: str, user_id: str) -> int:
         """Archive all MemPalace facts for a given entity (e.g. when a person is deleted).
 
