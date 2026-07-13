@@ -895,9 +895,11 @@
           var pid=b.getAttribute('data-pid');
           var active=_music.np&&_music.np.active;   // paused still owns a queue — transfer it
           if(!active){
-            // Nothing to move — just aim the NEXT play at this speaker.
+            // Nothing to move — remember this speaker as the default for the
+            // NEXT play (server-side, so voice plays land there too).
             _music.player_id=pid;estClose();
             var sn=spk.querySelector('.spkname');if(sn)sn.textContent=b.textContent;
+            apiJson('POST','/api/music/preferred-player',{player_id:pid}).catch(function(){});
             toast('Music will play on '+b.textContent);
             return;
           }

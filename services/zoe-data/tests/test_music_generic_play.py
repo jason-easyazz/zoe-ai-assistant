@@ -62,3 +62,25 @@ def test_non_player_suffix_stays_in_query():
 def test_no_suffix():
     base, target = split_play_target("the beatles", PLAYERS)
     assert base == "the beatles" and target is None
+
+
+def test_preferred_player_roundtrip(tmp_path, monkeypatch):
+    import music_service as ms
+    monkeypatch.setattr(ms, "_PREFS_PATH", tmp_path / "prefs.json")
+    assert ms.get_preferred_player_id() == ""
+    ms.set_preferred_player_id("RINCON_X")
+    assert ms.get_preferred_player_id() == "RINCON_X"
+
+
+def test_pick_player_prefers_remembered(tmp_path, monkeypatch):
+    import music_service as ms
+    monkeypatch.setattr(ms, "_PREFS_PATH", tmp_path / "prefs.json")
+    players = [
+        {"player_id": "a", "available": True, "powered": True, "state": "idle"},
+        {"player_id": "b", "available": True, "powered": True, "state": "idle"},
+    ]
+    ms.set_preferred_player_id("b")
+    assert ms._pick_player(players)["player_id"] == "b"
+    # an active session still wins (never hijack playing music's location)
+    players[0]["state"] = "playing"
+    assert ms._pick_player(players)["player_id"] == "a"

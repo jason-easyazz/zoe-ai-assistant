@@ -227,6 +227,30 @@ async def music_seek(payload: dict) -> dict[str, Any]:
     return {"ok": ok, "position_seconds": pos}
 
 
+@router.get("/preferred-player")
+async def get_preferred_player() -> dict[str, Any]:
+    """The household's remembered default speaker for new plays."""
+    import music_service
+    return {"player_id": music_service.get_preferred_player_id()}
+
+
+@router.post("/preferred-player")
+async def set_preferred_player(payload: dict) -> dict[str, Any]:
+    """Remember a speaker as the default target for future plays.
+    body: {player_id}. Set by the panel's speaker picker; voice plays that
+    explicitly target a speaker also update it. Household-shared, like the
+    rest of the music bridge (control/transfer/play are unauthenticated too).
+    Unknown ids are rejected against the live player list."""
+    import music_service
+    pid = str((payload or {}).get("player_id") or "")
+    if pid:
+        players = await music_service.get_players()
+        if not any(p.get("player_id") == pid for p in players):
+            return {"ok": False, "reason": "unknown player_id"}
+    music_service.set_preferred_player_id(pid)
+    return {"ok": True, "player_id": pid}
+
+
 @router.post("/transfer")
 async def music_transfer(payload: dict) -> dict[str, Any]:
     """Move current playback to another speaker. body: {target_player_id,

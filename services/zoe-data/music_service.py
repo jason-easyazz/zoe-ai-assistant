@@ -11,9 +11,11 @@ degrades to a friendly "music isn't set up yet" card, never a broken turn.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
+from pathlib import Path
 from typing import Any, Optional
 
 import httpx
@@ -140,9 +142,34 @@ async def get_players() -> list[dict[str, Any]]:
     return _as_list(await _ma("players/all"))
 
 
+_PREFS_PATH = Path(__file__).resolve().parent / "data" / "music_prefs.json"
+
+
+def get_preferred_player_id() -> str:
+    """The household's remembered default speaker ('' when unset)."""
+    try:
+        with open(_PREFS_PATH) as fh:
+            return str(json.load(fh).get("preferred_player_id") or "")
+    except (OSError, ValueError):
+        return ""
+
+
+def set_preferred_player_id(player_id: str) -> None:
+    """Persist the default speaker — every explicitly targeted play/transfer
+    remembers its speaker so 'the next songs' land there too (operator ask
+    2026-07-13). Best-effort: a failed write never breaks playback."""
+    try:
+        _PREFS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(_PREFS_PATH, "w") as fh:
+            json.dump({"preferred_player_id": str(player_id or "")}, fh)
+    except OSError as exc:
+        logger.warning("music prefs write failed (non-fatal): %s", exc)
+
+
 def _pick_player(players: list[dict[str, Any]], player_id: str = "") -> Optional[dict[str, Any]]:
-    """Choose the target player: the named one, else a playing/paused one, else
-    the first available powered player (a household panel usually has one)."""
+    """Choose the target player: the named one, else a playing/paused one
+    (never hijack an active session's location), else the REMEMBERED default
+    speaker, else the first available powered player."""
     if not players:
         return None
     if player_id:
@@ -152,6 +179,11 @@ def _pick_player(players: list[dict[str, Any]], player_id: str = "") -> Optional
     for state in ("playing", "paused"):
         for p in players:
             if str(p.get("playback_state") or p.get("state")) == state:
+                return p
+    preferred = get_preferred_player_id()
+    if preferred:
+        for p in players:
+            if p.get("player_id") == preferred and p.get("available"):
                 return p
     for p in players:
         if p.get("available") and p.get("powered"):
@@ -289,6 +321,7 @@ async def transfer(target_player_id: str, source_player_id: str = "") -> bool:
     if not source_id or source_id == target_player_id:
         return False
     await _ma("player_queues/transfer", source_queue_id=source_id, target_queue_id=target_player_id)
+    set_preferred_player_id(target_player_id)   # moving music = choosing a speaker
     return True
 
 
@@ -317,6 +350,8 @@ async def search_and_play(query: str, player_id: str = "") -> Optional[dict[str,
     if not uri:
         return None
     await _ma("player_queues/play_media", queue_id=pid, media=uri, option="replace", radio_mode=False)
+    if player_id:  # an explicitly chosen speaker becomes the remembered default
+        set_preferred_player_id(pid)
     return {"name": hit.get("name", query), "artist": (hit.get("artists") or [{}])[0].get("name", "") if hit.get("artists") else ""}
 
 
