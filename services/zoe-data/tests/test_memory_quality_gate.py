@@ -449,6 +449,15 @@ def test_guard_allows_supersede_of_name_value_rows():
         ex = [("old", row)]
         cand = "my sister's name is Kim" if "sister" in row else "my dad's name is Kevin"
         assert guard_existing_by_entity(cand, ex, None) == ex, row
+    # Bare kinship-relation facts: the name is the VALUE of a singular
+    # user-anchored relation ("User's wife is Sarah") — a same-relation
+    # correction must reach classification. "friend" is deliberately NOT a
+    # relation value (users have many friends; "friend is Jessica" names WHO
+    # the row is about).
+    wife = [("old", "User's wife is Sarah")]
+    assert guard_existing_by_entity("my wife is Emma", wife, None) == wife
+    assert guard_existing_by_entity(
+        "my friend is Emma", [("f", "User's friend is Jessica")], None) == []
 
 
 def test_guard_still_protects_third_person_rows():
