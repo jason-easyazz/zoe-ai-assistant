@@ -392,6 +392,34 @@ async def run_turn_digest(
                     continue
             except Exception:
                 pass
+            # Cross-writer reconciliation (QA review F9): the turn digest used
+            # to blind-ADD, stacking its variant of a fact next to the memory-
+            # expert and person_extractor copies. Shared ADD/UPDATE/SKIP
+            # decision (entity-guarded); never raises — errors → ADD.
+            try:
+                from memory_quality import reconcile_for_ingest
+                op, target_id = await reconcile_for_ingest(svc, fact, user_id)
+            except Exception:
+                op, target_id = "add", None
+            if op == "skip":
+                result["skipped_duplicates"] += 1
+                logger.info("turn_digest: dedup-skip kept=%s cand=%r", target_id, fact[:60])
+                continue
+            if op == "update" and target_id:
+                try:
+                    new_ref = await svc.review(
+                        target_id,
+                        decision="edit",
+                        edits=fact,
+                        actor="turn_digest",
+                        note="turn digest supersede (QA F9)",
+                    )
+                    if new_ref is not None:
+                        result["new"] += 1
+                        logger.info("turn_digest: superseded %s with %r", target_id, fact[:60])
+                        continue
+                except Exception as exc:
+                    logger.warning("turn_digest: supersede failed (%s) — plain ingest", exc)
             try:
                 ref = await svc.ingest(
                     fact,
@@ -530,6 +558,34 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
             tags = ["digest", item.get("type", "unknown")]
             if not _passes_quality_gate(fact):
                 continue
+            # Cross-writer reconciliation (QA review F9): the nightly digest's
+            # contradiction pass above only supersedes on detected
+            # contradictions — plain re-statements of an already-stored fact
+            # still blind-ADDed. Shared ADD/UPDATE/SKIP decision
+            # (entity-guarded); never raises — errors → ADD.
+            try:
+                from memory_quality import reconcile_for_ingest
+                op, target_id = await reconcile_for_ingest(svc, fact, user_id)
+            except Exception:
+                op, target_id = "add", None
+            if op == "skip":
+                logger.info("memory_digest: dedup-skip kept=%s cand=%r", target_id, fact[:60])
+                continue
+            if op == "update" and target_id:
+                try:
+                    new_ref = await svc.review(
+                        target_id,
+                        decision="edit",
+                        edits=fact,
+                        actor="digest",
+                        note="nightly digest supersede (QA F9)",
+                    )
+                    if new_ref is not None:
+                        result["superseded"] += 1
+                        logger.info("memory_digest: superseded %s with %r", target_id, fact[:60])
+                        continue
+                except Exception as exc:
+                    logger.warning("memory_digest: supersede failed (%s) — plain ingest", exc)
             try:
                 ref = await svc.ingest(
                     fact,

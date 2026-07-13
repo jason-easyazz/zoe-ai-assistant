@@ -164,6 +164,15 @@
   .setf{position:absolute;inset:0;padding:100px 200px 150px;display:flex;flex-direction:column;overflow-y:auto}
   .setsec{background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.09);border-radius:20px;margin-bottom:14px;overflow:hidden}
   .setsec .sh{display:flex;align-items:center;gap:14px;padding:20px 24px;cursor:pointer;font-size:22px;font-weight:500}
+  .srow2 .sw{width:58px;height:34px;border-radius:999px;background:rgba(255,255,255,.16);position:relative;transition:.25s;flex:none;cursor:pointer}
+  .srow2 .sw::after{content:'';position:absolute;top:4px;left:4px;width:26px;height:26px;border-radius:50%;background:#fff;transition:.25s}
+  .srow2 .sw.on{background:var(--accent)}
+  .srow2 .sw.on::after{left:28px}
+  .srow2 input[type=range]{flex:1;max-width:280px;accent-color:var(--accent);height:34px}
+  .srow2 .sv{min-width:56px;text-align:right;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+  .srow2 .stat{width:12px;height:12px;border-radius:50%;flex:none}
+  .srow2 .stat.ok{background:#66d6a3;box-shadow:0 0 10px rgba(102,214,163,.6)}
+  .srow2 .stat.bad{background:var(--cat-health);box-shadow:0 0 10px rgba(255,122,144,.5)}
   .setsec .sh .caret{margin-left:auto;color:var(--ink-faint);transition:transform .25s}
   .setsec.open .sh .caret{transform:rotate(90deg)}
   .setsec .sbody{max-height:0;overflow:hidden;transition:max-height .3s ease}
@@ -273,14 +282,28 @@
   .mfull .mart{position:absolute;left:90px;top:150px;width:300px;height:300px;border-radius:28px;display:grid;place-items:center;font-size:120px;background:linear-gradient(140deg,#8ea6ff,#b49bff);box-shadow:0 34px 80px rgba(0,0,0,.5);background-size:cover;background-position:center}
   .mfull .minfo{position:absolute;left:440px;top:214px;right:120px}
   .mfull .mkick{font-size:16px;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.6)}
-  .mfull .mtitle{font-size:66px;font-weight:700;letter-spacing:-.02em;margin-top:14px;line-height:1}
-  .mfull .martist{font-size:30px;color:rgba(255,255,255,.78);margin-top:12px}
+  .mfull .mtitle{font-size:52px;font-weight:700;letter-spacing:-.02em;margin-top:14px;line-height:1.06;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
+  .mfull .martist{font-size:26px;color:rgba(255,255,255,.78);margin-top:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .mfull .mscrub{position:absolute;left:440px;right:120px;bottom:270px}
   .mfull .mtrack{position:relative;height:7px;border-radius:999px;background:rgba(255,255,255,.22)}
   .mfull .mfill{position:absolute;left:0;top:0;bottom:0;width:38%;border-radius:999px;background:#fff}
   .mfull .mknob{position:absolute;top:50%;left:38%;transform:translate(-50%,-50%);width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.4)}
   .mfull .mtimes{display:flex;justify-content:space-between;margin-top:12px;font-size:18px;color:rgba(255,255,255,.6);font-variant-numeric:tabular-nums}
-  .mfull .mtransport{position:absolute;left:0;right:0;bottom:172px;display:flex;justify-content:center;align-items:center;gap:56px}
+  .mfull .mtransport{position:absolute;left:0;right:0;bottom:172px;display:flex;justify-content:center;align-items:center;gap:44px}
+  .mfull .mtransport .sml{font-size:26px;opacity:.55;background:none;border:0;color:#fff;cursor:pointer;width:56px;height:56px;border-radius:50%}
+  .mfull .mtransport .sml.on{opacity:1;background:rgba(123,150,255,.25);box-shadow:0 0 16px rgba(123,150,255,.35)}
+  .mqbtn{position:absolute;top:40px;right:190px;width:48px;height:48px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.2);color:#fff;font-size:20px;cursor:pointer;z-index:30}
+  .mqueue{position:absolute;top:0;right:-380px;width:360px;height:100%;background:rgba(10,13,24,.92);backdrop-filter:blur(20px);border-left:1px solid rgba(255,255,255,.12);z-index:45;transition:right .32s cubic-bezier(.2,.8,.3,1);padding:96px 26px 150px;overflow-y:auto}
+  .mqueue.open{right:0}
+  .mqueue h3{font-size:16px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:14px}
+  .mqueue .qi{display:flex;gap:12px;align-items:center;padding:12px 8px;border-radius:12px;font-size:19px}
+  .mqueue .qi.cur{background:rgba(123,150,255,.16)}
+  .mqueue .qi .qn{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mqueue .qi .qd{color:var(--ink-faint);font-size:15px;flex:none;font-variant-numeric:tabular-nums}
+  .mqr{position:absolute;right:36px;bottom:150px;display:flex;flex-direction:column;align-items:center;gap:8px;z-index:25}
+  .mqr .qrbox{width:110px;height:110px;background:#fff;border-radius:12px;padding:8px;display:grid;place-items:center}
+  .mqr .qrbox img,.mqr .qrbox canvas{width:100%;height:100%}
+  .mqr .qrlab{font-size:13px;color:var(--ink-faint);text-align:center;line-height:1.3}
   .mfull .mtransport button{width:68px;height:68px;border-radius:50%;border:0;background:rgba(255,255,255,.16);color:#fff;font-size:24px;cursor:pointer}
   .mfull .mtransport .pp{width:84px;height:84px;background:#fff;color:#10131c;font-size:28px}
 
@@ -564,7 +587,7 @@
     weather:{home:true, bg:DUSK, canvas:true,
       html:'<div class="fcog">'+GEAR+'</div><div class="wloc" id="wxLoc"></div><div class="wbig"><div class="t" id="wxTemp">—°</div><div class="c" id="wxCond"></div></div><div class="whours" id="wxHours"></div>'},
     music:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><button class="spk" id="mSpk">'+SPKR+' <span class="spkname">Speaker</span> <span class="cx">▾</span></button><div class="mfull"><div class="mart" id="mArt">🎵</div><div class="minfo"><div class="mkick">Now Playing</div><div class="mtitle" id="mTitle">—</div><div class="martist" id="mArtist"></div></div><div class="mscrub"><div class="mtrack"><div class="mfill" id="mFill" style="width:0%"></div></div><div class="mtimes"><span id="mElapsed">0:00</span><span id="mDur">0:00</span></div></div><div class="mtransport" id="mTransport"><button data-a="previous">⏮</button><button class="pp" id="mPP" data-a="playpause">❚❚</button><button data-a="next">⏭</button></div></div>'},
+      html:'<div class="fcog">'+GEAR+'</div><button class="spk" id="mSpk">'+SPKR+' <span class="spkname">Speaker</span> <span class="cx">▾</span></button><div class="mfull"><div class="mart" id="mArt">🎵</div><div class="minfo"><div class="mkick">Now Playing</div><div class="mtitle" id="mTitle">—</div><div class="martist" id="mArtist"></div></div><div class="mscrub"><div class="mtrack"><div class="mfill" id="mFill" style="width:0%"></div></div><div class="mtimes"><span id="mElapsed">0:00</span><span id="mDur">0:00</span></div></div><div class="mtransport" id="mTransport"><button class="sml" id="mShuf" data-a="shuffle" title="Shuffle">🔀</button><button data-a="previous">⏮</button><button class="pp" id="mPP" data-a="playpause">❚❚</button><button data-a="next">⏭</button><button class="sml" id="mRep" data-a="repeat" title="Repeat">🔁</button></div></div><button class="mqbtn" id="mQBtn" title="Queue">☰</button><aside class="mqueue" id="mQueue"><h3>Up next</h3><div id="mQList"></div></aside><div class="mqr" id="mQR"><div class="qrbox" id="mQRCode"></div><div class="qrlab">Scan to queue<br>from your phone</div></div>'},
     timer:{home:true, bg:'radial-gradient(120% 100% at 50% 44%,#122447,#080b12 62%)', canvas:false, glow:'radial-gradient(closest-side at 50% 44%,rgba(123,150,255,.35),transparent 70%)',
       html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Timers</div><div class="tfull"><div class="trings" id="tmRings"></div><div class="tmore" id="tmMore"></div></div>'},
     list:{home:true, bg:GROUND, canvas:false,
@@ -637,7 +660,6 @@
       if(id==='reminder')wireReminder();
       full.querySelectorAll('.sc[data-t], .rlt[data-l], .hdock .hpc.light').forEach(function(el){el.onclick=function(){el.classList.toggle('on');var rs=el.querySelector('.rs');if(rs)rs.textContent=el.classList.contains('on')?'On':'Off';};});
       full.querySelectorAll('.rchip').forEach(function(c){c.onclick=function(){full.querySelectorAll('.rchip').forEach(function(x){x.classList.remove('on')});c.classList.add('on');};});
-      var pp=full.querySelector('.pp');if(pp)pp.onclick=function(){pp.textContent=pp.textContent==='❚❚'?'▶':'❚❚';};
     } else {
       full.classList.remove('on'); wxOn=false; cv.classList.remove('on'); glow.classList.remove('on');
       stage.style.background=GROUND; home.classList.remove('hide');
@@ -829,17 +851,36 @@
     apiGet('/api/music/now-playing').then(function(d){if(_cur!=='music')return;
       var np=d&&d.now_playing;
       var spk=document.getElementById('mSpk'),art=document.getElementById('mArt'),ti=document.getElementById('mTitle'),ar=document.getElementById('mArtist'),fill=document.getElementById('mFill'),te=document.getElementById('mElapsed'),td=document.getElementById('mDur'),pp=document.getElementById('mPP');
-      if(!d||!d.available||!np){_music.player_id=null;if(ti)ti.textContent='Nothing playing';if(ar)ar.textContent='';if(art)art.innerHTML='🎵';if(pp)pp.textContent='▶';if(fill)fill.style.width='0%';return;}
+      var idle=!d||!d.available||!np||!(np.title||np.state==='playing'||np.state==='paused');
+      var scrub=document.querySelector('.mfull .mscrub'),tp=document.getElementById('mTransport');
+      if(idle){
+        // Idle is a real state, not a broken card: say so, keep the speaker
+        // choice (it targets the NEXT play), point at the voice path, and
+        // hide the controls that have nothing to act on.
+        if(np&&np.player_id&&!_music.player_id)_music.player_id=np.player_id;
+        _music.np=null;
+        if(ti)ti.textContent='Nothing playing';
+        if(ar)ar.innerHTML='Say <b style="color:var(--ink)">“Hey Zoe, play some music”</b> — or pick a speaker first.';
+        if(art)art.innerHTML='🎵';
+        if(scrub)scrub.style.display='none';if(tp)tp.style.display='none';
+        if(np&&spk){var nm0=spk.querySelector('.spkname');if(nm0&&np.player_name)nm0.textContent=np.player_name;}
+        return;
+      }
+      if(scrub)scrub.style.display='';if(tp)tp.style.display='';
       _music.player_id=np.player_id;
       if(spk){var nm=spk.querySelector('.spkname');if(nm)nm.textContent=np.player_name||'';}
       if(ti)ti.textContent=np.title||'';
       if(ar)ar.textContent=np.artist||'';
       if(art){if(np.image&&/^https?:\/\//i.test(np.image)){art.innerHTML='<img alt="" style="width:100%;height:100%;object-fit:cover;border-radius:28px;display:block" src="'+esc(np.image)+'">';}else{art.innerHTML='🎵';}}
       var el=np.elapsed||0,du=np.duration||0;
-      _music.np={elapsed:el,duration:du,playing:np.state==='playing',at:Date.now()};
+      _music.np={elapsed:el,duration:du,playing:np.state==='playing',active:(np.state==='playing'||np.state==='paused'),at:Date.now()};
       if(fill)fill.style.width=(du?Math.min(100,el/du*100):0)+'%';
       if(te)te.textContent=fmtDur(el);if(td)td.textContent=fmtDur(du);
       if(pp)pp.textContent=(np.state==='playing')?'❚❚':'▶';
+      var sh=document.getElementById('mShuf');if(sh)sh.classList.toggle('on',!!np.shuffle);
+      var rp=document.getElementById('mRep');if(rp){var rm=np.repeat||'off';_music.repeat=rm;
+        rp.classList.toggle('on',rm!=='off');rp.textContent=rm==='one'?'🔂':'🔁';}
+      _music.shuffle=!!np.shuffle;
     }).catch(function(){});
   }
   // Smooth elapsed between the 5s polls — the scrub advances every second
@@ -849,12 +890,40 @@
     var fill=document.getElementById('mFill'),te=document.getElementById('mElapsed');
     if(fill&&du)fill.style.width=Math.min(100,el/du*100)+'%';
     if(te)te.textContent=fmtDur(Math.min(el,du||el));}
+  function musicSet(action,value){if(!_music.player_id)return;
+    fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({action:action,player_id:_music.player_id,value:value})}).then(function(){setTimeout(loadMusic,350);}).catch(function(){});}
+  function fmtQ(sec){sec=Math.max(0,Math.round(sec||0));return Math.floor(sec/60)+':'+two(sec%60);}
+  function loadQueue(){var host=document.getElementById('mQList');if(!host||!_music.player_id)return;
+    host.innerHTML='<div style="color:var(--ink-faint)">Loading…</div>';
+    apiGet('/api/music/queue/'+encodeURIComponent(_music.player_id)).then(function(d){
+      if(_cur!=='music')return;var its=(d&&d.items)||[];
+      var curTitle=(document.getElementById('mTitle')||{}).textContent||'';
+      host.innerHTML=its.slice(0,40).map(function(q){var nm=q.name||'';
+        var cur=curTitle&&nm.indexOf(curTitle)>=0;
+        return '<div class="qi'+(cur?' cur':'')+'"><span class="qn">'+esc(nm)+'</span><span class="qd">'+(q.duration?fmtQ(q.duration):'')+'</span></div>';}).join('')
+        ||'<div style="color:var(--ink-faint)">Queue is empty.</div>';
+    }).catch(function(){host.innerHTML='<div style="color:var(--ink-faint)">Couldn’t load the queue.</div>';});}
   function musicControl(action){if(!_music.player_id)return;
     fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({action:action,player_id:_music.player_id})}).then(function(){setTimeout(loadMusic,350);}).catch(function(){});}
   function wireMusic(){
     loadMusic();_wxTick=setInterval(function(){if(_cur==='music')loadMusic();},5000);
     if(_homeTick){clearInterval(_homeTick);}_homeTick=setInterval(tickMusic,1000);
-    var t=document.getElementById('mTransport');if(t)t.addEventListener('click',function(e){var btn=e.target.closest('button');if(!btn)return;var a=btn.getAttribute('data-a');musicControl(a==='playpause'?(document.getElementById('mPP').textContent==='❚❚'?'pause':'play'):a);});
+    var t=document.getElementById('mTransport');if(t)t.addEventListener('click',function(e){var btn=e.target.closest('button');if(!btn)return;var a=btn.getAttribute('data-a');
+      if(a==='shuffle'){musicSet('shuffle_set',!_music.shuffle);return;}
+      if(a==='repeat'){var nxt={off:'all',all:'one',one:'off'}[_music.repeat||'off'];musicSet('repeat_set',nxt);return;}
+      musicControl(a==='playpause'?(document.getElementById('mPP').textContent==='❚❚'?'pause':'play'):a);});
+    // Queue drawer: slide in from the right with what's up next.
+    var qb=document.getElementById('mQBtn'),qd=document.getElementById('mQueue');
+    if(qb&&qd)qb.onclick=function(){
+      if(qd.classList.toggle('open'))loadQueue();
+    };
+    // Jukebox QR: phones scan it to search + queue music (jukebox.html).
+    var qr=document.getElementById('mQRCode');
+    if(qr&&!qr.dataset.done){qr.dataset.done='1';
+      var url=location.origin+'/jukebox.html';
+      var sc=document.createElement('script');sc.src='/js/qrcode.min.js';
+      sc.onload=function(){try{new QRCode(qr,{text:url,width:94,height:94,correctLevel:QRCode.CorrectLevel.M});}catch(e){}};
+      document.head.appendChild(sc);}
     // Speaker picker: list Music Assistant players, tap to move playback there.
     var spk=document.getElementById('mSpk');
     if(spk)spk.onclick=function(){
@@ -869,6 +938,16 @@
         m.querySelector('[data-x="cancel"]').onclick=estClose;
         m.querySelectorAll('.spkopt').forEach(function(b){b.onclick=function(){
           var pid=b.getAttribute('data-pid');
+          var active=_music.np&&_music.np.active;   // paused still owns a queue — transfer it
+          if(!active){
+            // Nothing to move — remember this speaker as the default for the
+            // NEXT play (server-side, so voice plays land there too).
+            _music.player_id=pid;estClose();
+            var sn=spk.querySelector('.spkname');if(sn)sn.textContent=b.textContent;
+            apiJson('POST','/api/music/preferred-player',{player_id:pid}).catch(function(){});
+            toast('Music will play on '+b.textContent);
+            return;
+          }
           apiJson('POST','/api/music/transfer',{target_player_id:pid,source_player_id:_music.player_id||undefined})
             .then(function(){estClose();var sn=spk.querySelector('.spkname');if(sn)sn.textContent=b.textContent;loadMusic();})
             .catch(function(){toast('Couldn’t switch speaker');});};});
@@ -1071,23 +1150,65 @@
   }
 
   // ---- Settings: full-screen expanding sections ----
+  var _setPrefs=null,_setPrefT=null;
+  function _panelDevId(){return localStorage.getItem('zoe_panel_id')||localStorage.getItem('zoe_touch_panel_id')||'default';}
+  function _savePrefs(patch){
+    _setPrefs=Object.assign(_setPrefs||{},patch);
+    if(_setPrefT)clearTimeout(_setPrefT);
+    _setPrefT=setTimeout(function(){
+      apiJson('PUT','/api/system/display/preferences',{device_id:_panelDevId(),preferences:_setPrefs})
+        .catch(function(){toast('Couldn’t save display settings');});
+    },500);   // debounce slider drags into one write
+  }
   function wireSettings(){
     var host=document.getElementById('setSecs');if(!host)return;
     var u=null;try{u=JSON.parse(localStorage.getItem('zoe_session')||'null');}catch(e){}
     var who=(u&&(u.username||u.user_id))||'Guest';
     host.innerHTML=[
-      {t:'Account',b:'<div class="srow2"><span>Signed in as <b>'+esc(who)+'</b></span></div><button class="sout" id="setOut">Sign out</button>'},
-      {t:'Panel & display',b:'<div class="srow2" data-go="/touch/settings.html"><span>All panel settings</span><span class="chev2">›</span></div><div class="srow2" data-go="/touch/updates.html"><span>Updates</span><span class="chev2">›</span></div>'},
-      {t:'Devices & pairing',b:'<div class="srow2" data-act="pair"><span>Link a device</span><span class="chev2">›</span></div>'},
-      {t:'Household',b:'<div class="srow2" data-act="contacts"><span>Contacts</span><span class="chev2">›</span></div><div class="srow2" data-act="rooms"><span>Rooms & devices</span><span class="chev2">›</span></div>'}
+      {t:'Account',b:'<div class="srow2"><span>Signed in as <b>'+esc(who)+'</b></span></div><div class="srow2" data-act="switch"><span>Switch user</span><span class="chev2">›</span></div><button class="sout" id="setOut">Sign out</button>'},
+      {t:'Display',b:'<div id="setDisp"><div class="srow2"><span style="color:var(--ink-faint)">Loading…</span></div></div>'},
+      {t:'System',b:'<div id="setSys"><div class="srow2"><span style="color:var(--ink-faint)">Checking…</span></div></div>'},
+      {t:'Household',b:'<div class="srow2" data-act="contacts"><span>Contacts</span><span class="chev2">›</span></div><div class="srow2" data-act="rooms"><span>Rooms & devices</span><span class="chev2">›</span></div><div class="srow2" data-act="pair"><span>Link a device</span><span class="chev2">›</span></div>'}
     ].map(function(sec,i){return '<div class="setsec"><div class="sh">'+esc(sec.t)+'<span class="caret">›</span></div><div class="sbody"><div class="inner">'+sec.b+'</div></div></div>';}).join('');
+
+    // Display: the panel's real brightness/night/idle prefs, live-wired.
+    apiGet('/api/system/display/preferences?device_id='+encodeURIComponent(_panelDevId())).then(function(d){
+      if(_cur!=='settings')return;var pr=(d&&d.preferences)||{};_setPrefs={};
+      var el=document.getElementById('setDisp');if(!el)return;
+      // 0 is a legitimate saved brightness — only fall back when the value is
+      // genuinely absent, or a truthy-|| would render (and later re-save) the default.
+      function nz(v,dflt){var n=+v;return (v==null||isNaN(n))?dflt:n;}
+      var dayB=nz(pr.day_brightness,100),nightB=nz(pr.night_brightness,15);
+      el.innerHTML=
+        '<div class="srow2"><span>Brightness</span><input type="range" min="0" max="100" step="5" data-pref="day_brightness" value="'+dayB+'"><span class="sv">'+dayB+'%</span></div>'
+        +'<div class="srow2"><span>Night mode <small style="color:var(--ink-faint)">'+esc(pr.night_start||'22:00')+'–'+esc(pr.night_end||'06:30')+'</small></span><span class="sw'+(pr.night_enabled?' on':'')+'" data-pref-t="night_enabled"></span></div>'
+        +'<div class="srow2"><span>Night brightness</span><input type="range" min="0" max="60" step="5" data-pref="night_brightness" value="'+nightB+'"><span class="sv">'+nightB+'%</span></div>'
+        +'<div class="srow2"><span>Dim when idle <small style="color:var(--ink-faint)">'+Math.round((+pr.idle_seconds||120)/60)+' min</small></span><span class="sw'+(pr.idle_enabled?' on':'')+'" data-pref-t="idle_enabled"></span></div>';
+      el.querySelectorAll('input[type=range]').forEach(function(r){r.oninput=function(){
+        var sv=r.parentElement.querySelector('.sv');if(sv)sv.textContent=r.value+'%';
+        var patch={};patch[r.getAttribute('data-pref')]=+r.value;_savePrefs(patch);};});
+      el.querySelectorAll('.sw[data-pref-t]').forEach(function(sw){sw.onclick=function(){
+        var on=sw.classList.toggle('on');var patch={};patch[sw.getAttribute('data-pref-t')]=on;_savePrefs(patch);};});
+    }).catch(function(){var el=document.getElementById('setDisp');if(el)el.innerHTML='<div class="srow2"><span style="color:var(--ink-faint)">Display settings unavailable</span></div>';});
+
+    // System: live health of the pieces that matter + software version.
+    apiGet('/api/system/status').then(function(st){
+      if(_cur!=='settings')return;var el=document.getElementById('setSys');if(!el)return;
+      function ok(v){return typeof v==='string'&&v.indexOf('ok')===0||v==='connected'||v==='healthy';}
+      var rows=[['Zoe brain',st.llama_server],['Home Assistant',st.ha_bridge],['Database',st.database]];
+      el.innerHTML=rows.map(function(r){return '<div class="srow2"><span>'+esc(r[0])+'</span><span style="display:flex;align-items:center;gap:10px"><span class="stat '+(ok(r[1])?'ok':'bad')+'"></span><span style="color:var(--ink-soft);font-size:17px">'+esc(String(r[1]||'unreachable'))+'</span></span></div>';}).join('')
+        +'<div class="srow2" id="setVer"><span>Software</span><span class="sv" style="min-width:0">…</span></div>';
+      fetch('/sw.js',{cache:'no-store'}).then(function(r){return r.text();}).then(function(t){
+        var m=/SW_VERSION = '([^']+)'/.exec(t);var v=document.querySelector('#setVer .sv');if(v&&m)v.textContent='v'+m[1];}).catch(function(){});
+    }).catch(function(){var el=document.getElementById('setSys');if(el)el.innerHTML='<div class="srow2"><span style="color:var(--ink-faint)">Status unavailable</span></div>';});
+
     host.onclick=function(e){
       var sh=e.target.closest('.sh');
       if(sh){var sec=sh.parentElement;sec.classList.toggle('open');return;}
       var row=e.target.closest('.srow2[data-go]');
       if(row){location.href=row.getAttribute('data-go');return;}
       var act=e.target.closest('.srow2[data-act]');
-      if(act){var a=act.getAttribute('data-act');if(a==='pair')show('pair');if(a==='contacts')show('person');if(a==='rooms')show('rooms');return;}
+      if(act){var a=act.getAttribute('data-act');if(a==='pair')show('pair');if(a==='contacts')show('person');if(a==='rooms')show('rooms');if(a==='switch'&&window.__showAuthCard)window.__showAuthCard();return;}
       if(e.target.closest('#setOut')){var out=e.target.closest('#setOut');out.disabled=true;
         function clearLocal(){try{localStorage.removeItem('zoe_session');localStorage.removeItem('zoe_guest_mode');}catch(e2){}try{sessionStorage.removeItem('zoe_gb');}catch(e2){}}
         fetch('/api/auth/logout',{method:'POST',headers:{'X-Session-ID':sid()},credentials:'include'})

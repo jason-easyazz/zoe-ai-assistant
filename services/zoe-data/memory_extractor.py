@@ -895,68 +895,16 @@ async def extract_and_ingest(
         entity_type, entity_id = resolved_links.get(idx, (c.entity_type, c.entity_id))
         # Reconciliation (mem0 ADD/UPDATE/SKIP) — QA review F2: value corrections
         # ("her birthday is actually March 25") were stored as NEW rows and the
-        # stale value kept outranking the fix. classify_against_existing existed
-        # but was never invoked on this write path. UPDATE → supersede the stale
-        # row via review(edit) (links old→new); SKIP → drop the sparser echo;
-        # ADD → plain ingest below. Best-effort: any error falls through to ADD.
+        # stale value kept outranking the fix. The search + entity guards
+        # (namesake / third-person-name protection) + classify decision now
+        # live in memory_quality.reconcile_for_ingest, shared by ALL writers
+        # (QA F9). UPDATE → supersede the stale row via review(edit) (links
+        # old→new); SKIP → drop the sparser echo; ADD → plain ingest below.
+        # reconcile_for_ingest never raises — errors degrade to ADD.
         try:
-            from memory_quality import classify_against_existing
-            hits = await svc.search(c.text, user_id=user_id, limit=3)
-            existing = [(h.id, h.text or "") for h in hits if h.text]
-            # Entity guard (Greptile P1/security): semantic search can return a
-            # DIFFERENT person's same-attribute fact ("Karen's birthday is…" for a
-            # Jessica correction) — superseding it would overwrite the wrong
-            # person's memory. When the candidate is about a named person, only
-            # rows that mention that person's first name are eligible.
-            _CAL_WORDS = {
-                "january","february","march","april","may","june","july","august",
-                "september","october","november","december","monday","tuesday",
-                "wednesday","thursday","friday","saturday","sunday","my","the","user",
-            }
-
-            def _name_tokens(t: str) -> set[str]:
-                # Name signals: capitalized tokens AND lowercase possessives
-                # ("karen's birthday…" — users type lowercase), minus calendar/
-                # stop words. Possessive detection keeps a lowercase-typed
-                # person's row protected from titleless supersedes (Greptile P1).
-                caps = {w.lower() for w in re.findall(r"\b[A-Z][a-z]+\b", t)}
-                poss = {w.lower() for w in re.findall(r"\b([a-z]+)['\u2019]s\b", t)}
-                return {w for w in (caps | poss) if w not in _CAL_WORDS}
-
-            if getattr(c, "title", None):
-                _toks = c.title.split()
-                if len(_toks) > 1:
-                    # Full-name candidate → the row must mention the FULL name
-                    # (a bare "Jessica" row also passes; same person by intro).
-                    _needle = c.title.lower()
-                    _first = _toks[0].lower()
-                    existing = [
-                        (i, t) for i, t in existing
-                        if _needle in t.lower()
-                        or (_first in t.lower()
-                            and not re.search(rf"\b(?i:{re.escape(_first)})\s+(?:[A-Z][a-z]|[a-z]+['\u2019]s\b)", t))
-                    ]
-                else:
-                    # Bare-name candidate ("Jessica") → refuse rows where that
-                    # name is part of a LONGER full name ("Jessica Smith") — two
-                    # people can share a first name (Greptile P1); ambiguity → ADD.
-                    _first = _toks[0].lower()
-                    existing = [
-                        (i, t) for i, t in existing
-                        if _first in t.lower()
-                        and not re.search(rf"\b(?i:{re.escape(_first)})\s+(?:[A-Z][a-z]|[a-z]+['\u2019]s\b)", t)
-                    ]
-            else:
-                # Titleless candidates (templates/corrections without a person
-                # anchor) must not supersede a row about a named third person the
-                # candidate never mentions (Greptile P1). Conservative: any
-                # name token in the existing row must appear in the candidate.
-                _cand_names = _name_tokens(c.text)
-                existing = [
-                    (i, t) for i, t in existing
-                    if not (_name_tokens(t) - _cand_names)
-                ]
-            op, target_id = classify_against_existing(c.text, existing)
+            from memory_quality import reconcile_for_ingest
+            op, target_id = await reconcile_for_ingest(
+                svc, c.text, user_id, title=getattr(c, "title", None))
         except Exception as exc:
             logger.debug("reconciliation unavailable (%s) — plain ingest", exc)
             op, target_id = "add", None

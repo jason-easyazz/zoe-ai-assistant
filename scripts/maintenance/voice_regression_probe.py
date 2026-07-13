@@ -63,12 +63,15 @@ def run_measure(samples: int, service_dir: str, user: str, timeout: int) -> dict
     with tempfile.NamedTemporaryFile("r", suffix=".json", delete=False) as tf:
         out_json = tf.name
     try:
-        # `flock <file> <cmd> [args...]` runs the command WITHOUT a shell, so a path
-        # with spaces or a shell metachar in --user/--service-dir can't be split or
-        # interpreted. ZOE_PERF is passed via env, not a shell prefix. flock still
-        # serializes runs so two Kokoro/replay loads (~2.3GB each) can't run at once.
+        # NO inner flock here: the harness lock (/tmp/zoe-voice-harness.lock)
+        # is the CALLER'S boundary — the systemd unit and the documented manual
+        # invocation both wrap the probe in `flock <lock> python3 probe.py`.
+        # Re-taking the same lock in this child was a guaranteed deadlock: the
+        # parent held it, the child blocked forever, and every run (nightly
+        # AND manual) timed out at ~17 min. The gate never once succeeded.
+        # Args are passed WITHOUT a shell, so paths with spaces/metachars are
+        # safe; ZOE_PERF goes via env, not a shell prefix.
         cmd = [
-            "flock", LOCK,
             "python3", str(MEASURE),
             "--last", str(samples), "--user", user,
             "--service-dir", service_dir, "--json", out_json, "--timeout", str(timeout),
@@ -216,6 +219,57 @@ def cleanup_replay_artifacts(run_started_utc: str, args) -> bool:
         return False
 
 
+def _ancestor_holds_lock() -> bool:
+    """True when a PARENT process (e.g. the systemd unit's or the operator's
+    `flock <lock> …` wrapper) already has the lock file open — in that case the
+    run IS serialized and we must not block on our own ancestor."""
+    try:
+        target = os.path.realpath(LOCK)
+        pid = os.getppid()
+        for _ in range(15):
+            if pid <= 1:
+                break
+            fd_dir = f"/proc/{pid}/fd"
+            try:
+                for fd in os.listdir(fd_dir):
+                    try:
+                        if os.path.realpath(os.path.join(fd_dir, fd)) == target:
+                            return True
+                    except OSError:
+                        continue
+            except OSError:
+                pass
+            try:
+                with open(f"/proc/{pid}/status") as fh:
+                    pid = next((int(l.split()[1]) for l in fh if l.startswith("PPid:")), 0)
+            except (OSError, ValueError, StopIteration):
+                break
+    except OSError:
+        pass
+    return False
+
+
+def _acquire_harness_lock():
+    """Serialize against other harness runs even when invoked BARE.
+
+    Returns the held fd (kept open for the process lifetime) or None when a
+    parent wrapper already holds the lock. Exits(3) if another, unrelated
+    harness run holds it — two Kokoro/replay loads (~2.3GB each) would OOM
+    the box."""
+    import fcntl
+    fd = os.open(LOCK, os.O_CREAT | os.O_RDWR, 0o666)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fd   # we own the lock now — bare runs are serialized too
+    except BlockingIOError:
+        os.close(fd)
+        if _ancestor_holds_lock():
+            return None   # our own flock wrapper — already serialized
+        print(f"ABORT: another voice-harness run holds {LOCK} — refusing a "
+              "concurrent Kokoro/replay load (would OOM the box).", file=sys.stderr)
+        raise SystemExit(3)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Zoe voice regression + speed probe.")
     ap.add_argument("--samples", type=int, default=int(os.environ.get("ZOE_VOICE_PROBE_SAMPLES", "20")),
@@ -234,6 +288,8 @@ def main() -> int:
     ap.add_argument("--no-cleanup", action="store_true",
                     help="skip the post-run replay-artifact cleanup (soft-delete of rows created during the replay window)")
     args = ap.parse_args()
+
+    _lock_fd = _acquire_harness_lock()  # noqa: F841 — held for process lifetime
 
     avail = mem_available_mb()
     if avail < args.min_mem_mb:
