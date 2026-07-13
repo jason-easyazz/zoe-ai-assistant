@@ -282,6 +282,11 @@ async def control(action: str, player_id: str = "", value: Any = None) -> bool:
         await _ma(_PLAYER_CMDS[action], player_id=pid)
         return True
     if action == "shuffle_set":
+        # JSON callers may send "false"/"0"/"off" as strings — bool() would
+        # treat every non-empty string as True and ENABLE shuffle when asked
+        # to disable it.
+        if isinstance(value, str):
+            value = value.strip().lower() in ("1", "true", "on", "yes")
         await _ma("player_queues/shuffle", queue_id=pid, shuffle_enabled=bool(value))
         return True
     if action == "repeat_set" and value in ("off", "all", "one"):
