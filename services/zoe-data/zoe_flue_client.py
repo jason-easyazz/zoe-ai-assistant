@@ -203,8 +203,11 @@ async def _pending_offer_block(user_id: str) -> str:
         return ""
 
     def _safe(v: str) -> str:
+        # Quotes stripped too: the value lands INSIDE the quoted "ask exactly"
+        # directive, so an embedded quote could close it and inject instructions
+        # (Greptile P1). Structure chars stripped for the same reason.
         v = re.sub(r"\s+", " ", (v or "")).strip()
-        return re.sub(r"[#`*_\[\]\n\r{}]", "", v)[:60]
+        return re.sub(r"[#`*_\[\]\n\r{}\"'\u2018\u2019\u201c\u201d]", "", v)[:60]
 
     lines = []
     for o in offers:
