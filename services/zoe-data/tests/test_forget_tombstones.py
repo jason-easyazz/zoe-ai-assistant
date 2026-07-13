@@ -215,3 +215,10 @@ async def test_reteach_clears_regardless_of_answer_lane(monkeypatch):
     await chat_mod._persist_memory_candidates(
         "u1", "s1", "I saw Delia at the shops today", "Nice!")
     assert mt.matching_tombstone("u1", "Delia")
+
+    # REMINDER shapes ("… to <verb> …") are tasks, not re-teaches — they must
+    # NOT clear the shadow (Greptile P1: "don't forget to invite Delia").
+    for reminder in ("don't forget to invite Delia",
+                     "remember to call Delia tomorrow"):
+        await chat_mod._persist_memory_candidates("u1", "s1", reminder, "Okay.")
+        assert mt.matching_tombstone("u1", "Delia"), reminder

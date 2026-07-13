@@ -2300,7 +2300,7 @@ async def _run_voice_memory_passes(
         # answers (see routers/chat.py::_persist_memory_candidates).
         try:
             import re as _re
-            if _re.match(r"^(?:please\s+)?(?:remember|note|don'?t\s+forget|keep\s+in\s+mind)\b",
+            if _re.match(r"^(?:please\s+)?(?:remember|note|don'?t\s+forget|keep\s+in\s+mind)\s+(?:that\s+)?(?!to\b)\S",
                          (user_text or "").strip(), _re.IGNORECASE):
                 from memory_tombstones import clear_matching as _tomb_clear
                 _tomb_clear(user_id, user_text)
