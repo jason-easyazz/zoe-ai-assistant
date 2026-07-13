@@ -76,10 +76,14 @@ fine-tuning only if the gated head plateaus in shadow mode.
 ```bash
 cd labs/setfit-router
 pip install -r requirements.txt   # exact pinned versions used for the committed artifacts
-# regeneration is OPTIONAL (data/train.jsonl is committed). It hits a live
-# llama-server: name it EXPLICITLY and run OFF-PEAK; requests are sequential
-# and capped at --max-rps (default 0.5 req/s).
-python3 build_dataset.py --brain-url http://localhost:11434 --max-rps 0.5
+# regeneration is OPTIONAL (data/train.jsonl is committed) — DEFAULT PATH:
+# spin up a SEPARATE offline llama-server on a spare port with the same GGUF
+# and point --brain-url at it (requests are sequential + capped at --max-rps):
+#   llama-server -m /home/zoe/models/gemma4-e4b-qat/*.gguf --port 11435 &
+python3 build_dataset.py --brain-url http://localhost:11435 --max-rps 0.5
+# Using the LIVE brain (:11434) is an operator-approved exception only:
+# memory on the box is too tight for a second server in some states — if so,
+# get the operator's OK, run off-peak, keep --max-rps <= 0.5.
 python3 train.py           # embeds via fastembed bge-small-en-v1.5 (prod model), writes artifacts/
 python3 eval.py            # evaluates on eval/needle_corpus.jsonl, writes results/eval.json
 ```
