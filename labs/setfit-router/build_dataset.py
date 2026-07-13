@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Build the training set: seeds + synthetic paraphrases via local llama-server.
 
-LAB-ONLY. Talks to the live Gemma brain at :11434 (OpenAI-compatible) at a
-gentle sequential rate (one request at a time + pause) so live voice turns are
-not starved. Output: data/train.jsonl ({text, label}); dedup-normalized and
+LAB-ONLY. Talks to an OpenAI-compatible llama-server you name EXPLICITLY via
+--brain-url (no default: pointing this at the live brain must be a deliberate
+choice, made off-peak). Requests are strictly sequential and rate-capped by
+--max-rps (default 0.5 req/s) so live voice turns are never starved. Output: data/train.jsonl ({text, label}); dedup-normalized and
 filtered against the held-out eval corpus (eval/needle_corpus.jsonl) so no
 eval utterance leaks into training.
 
-Usage: python3 build_dataset.py [--target-per-class 80] [--sleep 2.0]
+Usage: python3 build_dataset.py --brain-url http://localhost:11434 [--target-per-class 80] [--max-rps 0.5]
 """
 from __future__ import annotations
 
@@ -21,7 +22,9 @@ from pathlib import Path
 from labels import LABELS, SEEDS
 
 HERE = Path(__file__).parent
-LLAMA = "http://localhost:11434/v1/chat/completions"
+BRAIN_URL = None  # set from --brain-url in main()
+_LAST_CALL = 0.0
+MAX_RPS = 0.5
 
 CLASS_DESC = {
     "calendar": "checking or adding calendar events / appointments / schedule",
@@ -45,13 +48,18 @@ def norm(t: str) -> str:
 
 
 def llama(prompt: str, max_tokens: int = 700) -> str:
+    global _LAST_CALL
+    wait = (1.0 / MAX_RPS) - (time.monotonic() - _LAST_CALL)
+    if wait > 0:
+        time.sleep(wait)
+    _LAST_CALL = time.monotonic()
     body = json.dumps({
         "model": "gemma",
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 1.0,
         "max_tokens": max_tokens,
     }).encode()
-    req = urllib.request.Request(LLAMA, data=body,
+    req = urllib.request.Request(BRAIN_URL.rstrip("/") + "/v1/chat/completions", data=body,
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=180) as r:
         return json.load(r)["choices"][0]["message"]["content"]
@@ -81,10 +89,17 @@ STYLES = [
 
 
 def main():
+    global BRAIN_URL, MAX_RPS
     ap = argparse.ArgumentParser()
+    ap.add_argument("--brain-url", required=True,
+                    help="OpenAI-compatible llama-server base URL (e.g. http://localhost:11434). "
+                         "No default on purpose: hitting the LIVE brain must be explicit; run off-peak.")
     ap.add_argument("--target-per-class", type=int, default=80)
-    ap.add_argument("--sleep", type=float, default=2.0)
+    ap.add_argument("--max-rps", type=float, default=0.5,
+                    help="max requests/second to the brain (default 0.5; keep conservative)")
     args = ap.parse_args()
+    BRAIN_URL = args.brain_url
+    MAX_RPS = max(0.01, args.max_rps)
 
     # held-out eval texts: NEVER in training
     eval_norms = {norm(json.loads(l)["text"])
@@ -122,7 +137,6 @@ def main():
             except Exception as e:
                 print(f"[{lab}] gen error: {e}; backing off")
                 time.sleep(10)
-            time.sleep(args.sleep)  # gentle on the live brain
             print(f"[{lab}] {count()}/{args.target_per_class}")
         # checkpoint after each class
         with out_path.open("w") as f:
