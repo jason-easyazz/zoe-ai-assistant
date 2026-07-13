@@ -78,5 +78,22 @@ def test_statements_are_stored(spy, s):
     svc, recalled = spy
     out = _run(expert_dispatch.store_fact("people", s, "jason"))
     assert recalled == [], f"{s!r} was wrongly treated as recall"
-    assert svc.ingested == [s], f"{s!r} should be stored"
+    # Since the #1242/#1264 chain, store_fact routes teach turns through the
+    # coreference-aware extractor first, which stores a CANONICAL template form
+    # ("my dad's name is Neil" → "User's dad is named Neil") rather than the raw
+    # utterance (and the raw-path write reconciles against it in production).
+    # Assert the semantic payload survived, not the exact phrasing.
+    assert svc.ingested, f"{s!r} should be stored"
+    payload = _distinctive_token(s)
+    assert any(payload.lower() in stored.lower() for stored in svc.ingested), (
+        f"stored rows {svc.ingested!r} lost the payload {payload!r} of {s!r}"
+    )
     assert out and out.startswith("Got it")
+
+
+def _distinctive_token(statement: str) -> str:
+    """The value-bearing token of each parametrized fact (name/number/show/month)."""
+    for tok in ("Neil", "NCIS", "47", "May", "Tuesday"):
+        if tok.lower() in statement.lower():
+            return tok
+    raise AssertionError(f"no known payload token in {statement!r}")
