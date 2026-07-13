@@ -1,5 +1,17 @@
 # Memory pipeline QA / red-team review — 2026-07-12
 
+> **RESOLUTION STATUS (added 2026-07-13):** this report is a point-in-time snapshot;
+> everything below describes the state **as found on 2026-07-12, before the fix wave**.
+> Shipped since: **F1** pool leak fixed (#1258) + pool hardening/timeouts/503s/gauges
+> (#1262) — the "production is wedged" section below is historical, service restarted and
+> healthy. **F2** corrections-supersede-on-ingest (#1260/#1261). **F3/F11** possessive
+> capture + extractor-failure visibility (#1260/#1261). **F5** contacts seam (non-destructive
+> surfacing, per-user-turn aging, reply matching, backfill filters) (#1265) + any-turn offer
+> gate (#1266). **F6/F8** correction garbling + negation folding (#1264). **F10** was
+> already #1244. **Still open:** F9 (cross-writer supersession; weekly consolidation covers
+> meanwhile), F13 (reply-claims-saved-before-async-extraction, architectural), F14
+> (entity-scoped forget), F15 (relationship edges — flags off by design).
+
 End-to-end behavioral review of the conversational memory pipeline, driven through the live
 `POST /api/chat/` API exactly as the Telegram bridge does, with demo users only
 (`demo-review-a`, `demo-review-b`; all demo data cleaned up at the end), plus a focused
