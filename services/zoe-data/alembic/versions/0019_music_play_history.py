@@ -1,4 +1,4 @@
-"""0018 — music_play_history: Zoe's per-user listening journal.
+"""0019 — music_play_history: Zoe's per-user listening journal.
 
 Append-only play events with ZOE-side user attribution. Music Assistant's own
 playlog cannot do this: it upserts one row per item/user with 90-day retention,
@@ -22,8 +22,8 @@ PostgreSQL; the SQLite branch exists for test DBs (0016's pattern).
 
 from alembic import op
 
-revision = "0018"
-down_revision = "0017"
+revision = "0019"
+down_revision = "0018"
 branch_labels = None
 depends_on = None
 

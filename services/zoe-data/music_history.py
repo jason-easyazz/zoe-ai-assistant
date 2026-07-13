@@ -4,7 +4,7 @@ WHY THIS EXISTS: Music Assistant's playlog cannot answer "who listened to
 what": it upserts ONE row per item/user (no event timeline), prunes at 90
 days, and every Zoe-initiated play collapses to the single household MA-token
 user. Attribution therefore happens at ZOE's layer, in the
-``music_play_history`` table (alembic 0018), which feeds per-user taste
+``music_play_history`` table (alembic 0019), which feeds per-user taste
 profiles for the weekly discovery batch (music_discovery.py).
 
 Two event sources:
@@ -64,7 +64,7 @@ def _now_iso() -> str:
 
 async def _ensure_table(conn) -> bool:
     """True when music_play_history is usable. Existence check first — a
-    least-privilege role must not issue CREATE once alembic 0018 has run."""
+    least-privilege role must not issue CREATE once alembic 0019 has run."""
     global _table_ready
     if _table_ready:
         return True
