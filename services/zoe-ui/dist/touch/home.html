@@ -1238,9 +1238,10 @@
       var o=document.getElementById('askOut');if(o&&_cur==='ask')o.textContent='…';},
     responding:function(t){orb.classList.remove('listening');orb.classList.add('busy');
       if(!t)return;
-      // Chat answers land on the Ask surface; domain commands keep their screen
-      // (the summary is already spoken aloud — the dock keeps the transcript).
-      if(_cur==='ask'){var o=document.getElementById('askOut');if(o)o.textContent=t;}},
+      // Chat answers land on the Ask surface; on any other screen the spoken
+      // summary shows in the DOCK (same sequencing as URL arrivals).
+      if(_cur==='ask'){var o=document.getElementById('askOut');if(o)o.textContent=t;}
+      else dockSaid(null,t);},
     done:function(){orb.classList.remove('listening');orb.classList.remove('busy');if(_lisT)clearTimeout(_lisT);}
   };
 
