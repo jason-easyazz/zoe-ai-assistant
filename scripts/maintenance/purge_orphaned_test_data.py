@@ -16,7 +16,8 @@ Contacts (people) are intentionally NOT touched.
 Usage (run on the zoe-data host):
     python3 scripts/maintenance/purge_orphaned_test_data.py            # dry-run (counts only)
     python3 scripts/maintenance/purge_orphaned_test_data.py --execute  # apply (asks to confirm)
-    python3 scripts/maintenance/purge_orphaned_test_data.py --execute --yes --expect-db zoe  # non-interactive
+    python3 scripts/maintenance/purge_orphaned_test_data.py --execute --yes \
+        --expect-db zoe --expect-host localhost  # non-interactive
 
 POSTGRES_URL is read from the environment; if unset it is loaded from the
 zoe-data service .env (same file the service uses), so the documented command
@@ -66,7 +67,7 @@ def _redacted_target(dsn: str) -> str:
     return f"{db} on {host}{port} (as {who})"
 
 
-async def main(execute: bool, assume_yes: bool, expect_db: str) -> int:
+async def main(execute: bool, assume_yes: bool, expect_db: str, expect_host: str) -> int:
     dsn = _resolve_dsn()
     if not dsn:
         print(
@@ -77,24 +78,27 @@ async def main(execute: bool, assume_yes: bool, expect_db: str) -> int:
         return 2
 
     target = _redacted_target(dsn)
-    target_db = (urlsplit(dsn).path or "/").lstrip("/")
+    parts = urlsplit(dsn)
+    target_db = (parts.path or "/").lstrip("/")
+    target_host = parts.hostname or ""
     print(f"Target database: {target}")
 
-    # Non-interactive runs must positively assert the target DB name, so an
-    # automation shell with a stale POSTGRES_URL aborts instead of mutating the
-    # wrong database. --yes only skips the interactive prompt, never this check.
+    # Non-interactive runs must positively assert BOTH the target DB name and
+    # host — a db name alone ("zoe") could match a different PostgreSQL
+    # instance that happens to use the same name. --yes only skips the
+    # interactive prompt, never these checks.
     if execute and assume_yes:
-        if not expect_db:
+        if not expect_db or not expect_host:
             print(
-                "\nRefusing non-interactive --yes without --expect-db: pass "
-                f"--expect-db {target_db!r} to assert the intended target.",
+                "\nRefusing non-interactive --yes without a full target assertion: pass "
+                f"--expect-db {target_db!r} --expect-host {target_host!r} to assert the intended target.",
                 file=sys.stderr,
             )
             return 2
-        if expect_db != target_db:
+        if expect_db != target_db or expect_host != target_host:
             print(
-                f"\nTarget mismatch: resolved DB is {target_db!r} but --expect-db "
-                f"is {expect_db!r}. Aborting — nothing changed.",
+                f"\nTarget mismatch: resolved target is {target_db!r} on {target_host!r} but the "
+                f"assertion is {expect_db!r} on {expect_host!r}. Aborting — nothing changed.",
                 file=sys.stderr,
             )
             return 2
@@ -156,5 +160,7 @@ if __name__ == "__main__":
                     help="skip the interactive confirmation (automation); requires --expect-db")
     ap.add_argument("--expect-db", default="",
                     help="assert the resolved target DB name; required with --yes")
+    ap.add_argument("--expect-host", default="",
+                    help="assert the resolved target DB host; required with --yes")
     args = ap.parse_args()
-    sys.exit(asyncio.run(main(args.execute, args.yes, args.expect_db)))
+    sys.exit(asyncio.run(main(args.execute, args.yes, args.expect_db, args.expect_host)))
