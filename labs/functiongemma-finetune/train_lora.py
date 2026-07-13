@@ -181,9 +181,12 @@ def main() -> None:
     if not device_ok:
         # bf16 matmuls are emulated (pathologically slow) on aarch64 CPU
         torch.set_num_threads(int(os.environ.get("TRAIN_THREADS", "6")))
+    # eager attention materializes O(seq^2) matrices for autograd — at
+    # plain's ~2.3k tokens that is ~4 GB saved tensors; SDPA avoids it.
+    attn = "sdpa" if args.variant == "plain" else "eager"
     model = AutoModelForCausalLM.from_pretrained(
         args.model_dir, dtype=torch.bfloat16 if device_ok else torch.float32,
-        attn_implementation="eager")  # gemma3 recommends eager for training
+        attn_implementation=attn)
     model.config.use_cache = False
 
     lora_kwargs = dict(

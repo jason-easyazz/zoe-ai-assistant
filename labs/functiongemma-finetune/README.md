@@ -15,12 +15,18 @@ systemd, or CI. Eval runs on **:11435**, never the live brain port.
 The functok variant was trained **on this box, CPU-only** (nice 19,
 OOM-shielded, 2 GB memory gate enforced throughout; 1 epoch, ~2.4 h at
 ~50 s/step) and evaluated on the held-out corpus — headline numbers below.
-The plain variant is CPU-hostile (~2.3k-token prompts ≈ 25× the FLOPs per
-example → ~45 h/epoch full-set), so it runs at reduced scope: a stratified
-414-example subsample (18/tool + 54 chat), 1 epoch, with a windowed-loss
-trainer (`logits_to_keep`) because full-sequence logits alone are
-~2.5 GB fp32 *per example* at a 262k vocab. Off-box packet below remains the
-path to the full-strength A/B (3 epochs, full set, both variants).
+The plain variant is **not runnable on this box** and ships as the off-box
+packet: its ~2.3k-token prompts measure **78 s/example fwd+bwd** on CPU even
+after every mitigation (fp32, SDPA instead of eager — eager's O(seq²) saved
+attention alone was ~4 GB —, gradient checkpointing, and a windowed-loss
+trainer using `logits_to_keep=96` because full-sequence logits are ~2.5 GB
+fp32 per example at the 262k vocab). Even a stratified 414-example subsample
+(committed as `data/train_plain_subsample.jsonl`) is a ~9 h run that holds
+peak RSS ~4.8 GB against the live brain; three on-box attempts were killed
+for swap-thrashing the box (available memory fell to 164–287 MB) before the
+mitigations, and the mitigated run was measured then abandoned as
+out-of-budget. The off-box packet (below) is the path to the full-strength
+A/B (3 epochs, full set, both variants).
 
 On-box engineering record (why things are the way they are):
 - **GPU training is not usable on this box**: even with the brain stopped
@@ -128,7 +134,8 @@ no schema in the prompt (empty output ≡ no-call ≡ chat).
 | config | overall | canonical | paraphrase | chat-FP | prompt toks p50 | p50 | p90 |
 |---|---|---|---|---|---|---|---|
 | **functok, no schema in prompt** (1 epoch CPU) | **74.1%** | 91.2% | 53.8% | **0.0%** | **47** | **360 ms** | 483 ms |
-| plain fine-tuned (reduced-scope leg) | *see results/plain-q8-cpu.json* | | | | | | |
+| plain fine-tuned | *not run on-box (CPU-infeasible — see STATUS); off-box packet* | | | | | | |
+| (plain-side stock references: full block 33.3% / shortlist 93.8% — see below) | | | | | | | |
 
 functok highlights vs the reference points:
 - **+40.8 pts over stock full-block** (33.3% → 74.1%) with the 2,235-token
