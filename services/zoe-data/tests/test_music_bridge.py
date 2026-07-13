@@ -11,7 +11,7 @@ from skybridge_service import classify_skybridge_intent, skybridge_intent_requir
     ("play some jazz", "music", "play"),
     ("put on the beatles", "music", "play"),
     ("play the news", "music", "play"),
-    ("play some music", "music", "status"),   # generic → show, not a bogus search
+    ("play some music", "music", "play"),     # generic → PLAY (resume/default), never the "ask me to play" loop
     ("what's playing", "music", "status"),
     ("show music", "music", "status"),
     ("pause the music", "music", "pause"),
