@@ -189,7 +189,8 @@ is the immediate voice/chat writers + the for-prompt packet + the Flue `recall_m
 - **Rollback:** set the flag back to `0` and redeploy; the loop idles harmlessly. No data
   migration to undo — only thin distilled facts were added, which the existing memory tooling
   can review/forget.
-- **What still needs the live box to fully prove (cannot be done in CI):** real Gemma extraction
-  quality (do the facts come out clean and owner-attributed?), real Chroma recall ranking of the
-  consolidated fact, and end-to-end latency that the sweep never touches the hot path under real
-  load. These are the 8.2 checks; they gate the 8.3 enable.
+- **Live-box proof (was the 8.2 gate on the 8.3 enable): ✅ satisfied.** The enable is done
+  (flag live since 2026-06-24) and the live-box checks it gated — clean owner-attributed
+  extraction, recall of consolidated facts, hot path untouched — were shown on organic
+  traffic during the 2026-07 memory QA arc. Nothing gates here anymore; this list is kept
+  only as the rollback-and-re-enable checklist if the flag is ever turned OFF.
