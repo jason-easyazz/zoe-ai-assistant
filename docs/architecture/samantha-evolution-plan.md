@@ -347,8 +347,11 @@ regression, ever (replay harness is the enforcement).
   resolution ignores the panel→jason binding; (b) `_schedule_voice_chat_save`'s skip
   guard checks "guest" but not "voice-guest", so the doomed write is attempted and the
   FK error swallowed. Fix = packet **P-F6** — **MERGED as #1160 (2026-07)**; chat/Telegram
-  capture verified stamping on organic traffic during the 2026-07 memory QA arc. Remaining:
-  re-run the spoken-panel positive control (panel turn → stamped `chat_messages` row). Note:
+  capture verified on organic traffic (2026-07 memory QA arc). **Spoken-panel positive
+  control PASSED 2026-07-13** after #1282 fixed three stacked transcript-save bugs the
+  control itself exposed (routers.chat lazy-import path, chat_sessions FK minting,
+  streaming lane never persisting the reply): live spoken turn → `chat_messages` rows
+  (user + assistant) with `metadata.user_id=jason`. **W0 is fully closed.** Note:
   synthetic `web_*` eval traffic also runs against the live box (unstamped metadata).
 - [x] **W1.1** barge-in on LiveKit agent — **DONE + LIVE** (#1051: Silero VAD `voice_vad.py`,
   frames flow during PROCESSING/COOLDOWN, ≥250 ms sustained speech cancels the pipeline +
@@ -380,11 +383,10 @@ regression, ever (replay harness is the enforcement).
 
 ## 7. NEXT ACTION (always exactly one)
 
-→ **Re-run P-W0's spoken positive control, then W3.1 (RAM).** P-F6 **MERGED (#1160)**
-and chat/Telegram capture is verified stamping on organic traffic (2026-07 memory QA arc);
-the one W0 item left is the spoken-panel positive control (panel turn → `chat_messages`
-row with `metadata.user_id=jason` → consolidation sweep pickup) — live DB still shows no
-voice-session rows. Then **W3.1** (18 ccd-cli processes hold ~3.6 GB swap — the sized
+→ **W3.1 (RAM).** W0 is **fully closed** (2026-07-13): P-F6 merged (#1160), chat/Telegram
+capture verified on organic traffic, and the spoken-panel positive control passed after
+#1282 — live spoken turn → stamped user+assistant `chat_messages` rows under the
+panel-bound user. Next is **W3.1** (18 ccd-cli processes hold ~3.6 GB swap — the sized
 candidate in memory-pressure-profile.md). W1.1/W1.2 are already **live**
 (#1051/#1081/#1082 — do NOT redo); the remaining W1 work is **W1.3** (packet P-W1.3) +
 the **M3/M4** measurements (packet P-W1.4, bars in §6). The #1056 migration-plan doc was
