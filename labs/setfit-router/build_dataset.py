@@ -8,7 +8,7 @@ choice, made off-peak). Requests are strictly sequential and rate-capped by
 filtered against the held-out eval corpus (eval/needle_corpus.jsonl) so no
 eval utterance leaks into training.
 
-Usage: python3 build_dataset.py --brain-url http://localhost:11434 [--target-per-class 80] [--max-rps 0.5]
+Usage: python3 build_dataset.py --brain-url http://localhost:11435 [--target-per-class 80] [--max-rps 0.5]
 """
 from __future__ import annotations
 
@@ -92,7 +92,7 @@ def main():
     global BRAIN_URL, MAX_RPS
     ap = argparse.ArgumentParser()
     ap.add_argument("--brain-url", required=True,
-                    help="OpenAI-compatible llama-server base URL (e.g. http://localhost:11434). "
+                    help="OpenAI-compatible llama-server base URL (e.g. http://localhost:11435 — a separate offline server). "
                          "No default on purpose: hitting the LIVE brain must be explicit; run off-peak.")
     ap.add_argument("--target-per-class", type=int, default=80)
     ap.add_argument("--max-rps", type=float, default=0.5,
