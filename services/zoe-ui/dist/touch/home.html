@@ -1278,8 +1278,11 @@
     // transcript arrives. Safety timeout clears the state if no further
     // voice event lands (e.g. wake false-trigger).
     listening:function(){orb.classList.add('listening');
+      window.__voiceArrivedAt=0;   // a NEW turn started — the last arrival no longer owns responding events
       if(_lisT)clearTimeout(_lisT);_lisT=setTimeout(function(){orb.classList.remove('listening');},20000);},
-    transcript:function(t){orb.classList.remove('listening');if(_lisT)clearTimeout(_lisT);if(t){window.__lastHeard=t;dockHeard(t);}},
+    transcript:function(t){orb.classList.remove('listening');if(_lisT)clearTimeout(_lisT);
+      window.__voiceArrivedAt=0;   // new turn — see listening()
+      if(t){window.__lastHeard=t;dockHeard(t);}},
     thinking:function(){orb.classList.remove('listening');orb.classList.add('busy');
       var o=document.getElementById('askOut');if(o&&_cur==='ask')o.textContent='…';},
     responding:function(t){orb.classList.remove('listening');orb.classList.add('busy');
