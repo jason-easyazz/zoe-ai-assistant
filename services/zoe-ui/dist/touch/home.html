@@ -103,7 +103,8 @@
   .ltab.on{background:rgba(123,150,255,.22);border-color:rgba(123,150,255,.55);color:var(--ink);font-weight:600}
   .lhead{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
   .lcount{font-size:17px;color:var(--ink-faint);padding-top:12px;flex:none}
-  .lcols{flex:1;column-count:3;column-gap:28px;overflow-y:auto}
+  .lcols{flex:1;overflow-y:auto}
+  .lcols .lin{column-count:3;column-gap:28px}
   .lrow2{display:flex;align-items:center;gap:12px;padding:11px 4px;border-bottom:1px solid rgba(255,255,255,.07);font-size:20px;cursor:pointer;break-inside:avoid}
   .lrow2 .bx{width:24px;height:24px;border-radius:8px;border:2px solid rgba(255,255,255,.3);flex:none;display:grid;place-items:center;color:#08131c}
   .lrow2.done .bx{background:var(--cat-personal);border-color:var(--cat-personal)}
@@ -290,9 +291,13 @@
   .mfull .mknob{position:absolute;top:50%;left:38%;transform:translate(-50%,-50%);width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.4)}
   .mfull .mtimes{display:flex;justify-content:space-between;margin-top:12px;font-size:18px;color:rgba(255,255,255,.6);font-variant-numeric:tabular-nums}
   .mfull .mtransport{position:absolute;left:0;right:0;bottom:172px;display:flex;justify-content:center;align-items:center;gap:44px}
-  .mfull .mtransport .sml{font-size:26px;opacity:.55;background:none;border:0;color:#fff;cursor:pointer;width:56px;height:56px;border-radius:50%}
+  .mfull .mtransport .sml{opacity:.55;background:none;border:0;color:#fff;cursor:pointer;width:56px;height:56px;border-radius:50%;display:grid;place-items:center}
+  .mfull .mtransport .sml svg{width:26px;height:26px}
+  .mfull .mtransport button svg{width:28px;height:28px}
+  .mfull .mtransport .pp svg{width:32px;height:32px;color:#0a0d18}
   .mfull .mtransport .sml.on{opacity:1;background:rgba(123,150,255,.25);box-shadow:0 0 16px rgba(123,150,255,.35)}
-  .mqbtn{position:absolute;top:40px;right:190px;width:48px;height:48px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.2);color:#fff;font-size:20px;cursor:pointer;z-index:30}
+  .mqbtn{width:48px;height:48px;flex:none;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.2);color:#fff;cursor:pointer}
+  .mqbtn svg{width:22px;height:22px}
   .mqueue{position:absolute;top:0;right:-380px;width:360px;height:100%;background:rgba(10,13,24,.92);backdrop-filter:blur(20px);border-left:1px solid rgba(255,255,255,.12);z-index:45;transition:right .32s cubic-bezier(.2,.8,.3,1);padding:96px 26px 150px;overflow-y:auto}
   .mqueue.open{right:0}
   .mqueue h3{font-size:16px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:14px}
@@ -300,10 +305,10 @@
   .mqueue .qi.cur{background:rgba(123,150,255,.16)}
   .mqueue .qi .qn{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .mqueue .qi .qd{color:var(--ink-faint);font-size:15px;flex:none;font-variant-numeric:tabular-nums}
-  .mqr{position:absolute;right:36px;bottom:150px;display:flex;flex-direction:column;align-items:center;gap:8px;z-index:25}
-  .mqr .qrbox{width:110px;height:110px;background:#fff;border-radius:12px;padding:8px;display:grid;place-items:center}
+  .mqr{position:absolute;right:36px;bottom:44px;display:flex;flex-direction:column;align-items:center;gap:6px;z-index:25}
+  .mqr .qrbox{width:86px;height:86px;background:#fff;border-radius:10px;padding:6px;display:grid;place-items:center}
   .mqr .qrbox img,.mqr .qrbox canvas{width:100%;height:100%}
-  .mqr .qrlab{font-size:13px;color:var(--ink-faint);text-align:center;line-height:1.3}
+  .mqr .qrlab{font-size:11px;color:var(--ink-faint);text-align:center;line-height:1.25}
   .mfull .mtransport button{width:68px;height:68px;border-radius:50%;border:0;background:rgba(255,255,255,.16);color:#fff;font-size:24px;cursor:pointer}
   .mfull .mtransport .pp{width:84px;height:84px;background:#fff;color:#10131c;font-size:28px}
 
@@ -367,6 +372,8 @@
   .rm .rscrub{position:relative;height:6px;border-radius:999px;background:rgba(255,255,255,.2);margin-top:32px}
   .rm .rscrub .f{position:absolute;left:0;top:0;bottom:0;width:38%;border-radius:999px;background:#fff}
   .rm .rtp{position:relative;display:flex;align-items:center;justify-content:center;gap:44px;margin-top:22px}
+  .rm .rtp button svg{width:26px;height:26px}
+  .rm .rtp .pp svg{width:30px;height:30px;color:#0a0d18}
   .rm .rvol{position:relative;display:flex;align-items:center;justify-content:center;gap:22px;margin-top:18px;color:rgba(255,255,255,.6);font-size:17px}
   .rm .rvol button{width:52px;height:52px;border-radius:50%;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.1);color:#fff;font-size:26px;cursor:pointer}
   .rm .rtp button{width:58px;height:58px;border-radius:50%;border:0;background:rgba(255,255,255,.14);color:#fff;font-size:20px;cursor:pointer}
@@ -413,7 +420,9 @@
   .hfull .htemp{right:120px} /* clear the home cog */
 
   /* speaker / cast selection on music */
-  .spk{position:absolute;top:40px;right:120px;display:flex;align-items:center;gap:11px;padding:13px 20px;border-radius:999px;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.22);color:#fff;font:inherit;font-size:19px;font-weight:500;cursor:pointer;z-index:30}
+  .mtop{position:absolute;top:40px;right:120px;display:flex;align-items:center;gap:12px;z-index:60}
+  .spk{display:flex;align-items:center;gap:11px;padding:13px 20px;border-radius:999px;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.22);color:#fff;font:inherit;font-size:19px;font-weight:500;cursor:pointer;max-width:340px}
+  .spk .spkname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .spk svg{width:22px;height:22px}
   .spk .cx{color:rgba(255,255,255,.7);font-size:16px}
 
@@ -570,6 +579,14 @@
   var GEAR='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-7M6 7H4M20 17h-2M11 17H4"/><circle cx="9" cy="7" r="2.4"/><circle cx="15" cy="17" r="2.4"/></svg>';
   var SPKR='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2.5" width="14" height="19" rx="3"/><circle cx="12" cy="14" r="3.4"/><circle cx="12" cy="6.5" r="1"/></svg>';
   var COG='<button class="cog" title="Settings">'+GEAR+'</button>';
+  var QICON='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>';
+  var SHUF_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>';
+  var REP_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>';
+  var PREV_I='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h2v14H6zM20 5v14l-10-7z"/></svg>';
+  var NEXT_I='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 5h2v14h-2zM4 5v14l10-7z"/></svg>';
+  var PLAY_I='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
+  var PAUSE_I='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h3.4v14H7zM13.6 5H17v14h-3.4z"/></svg>';
+  var REP1_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/><path d="M11 10h1v4"/></svg>';
   var GROUND='radial-gradient(120% 90% at 50% -10%,#131a2b,#080b12 62%)';
   var DUSK='linear-gradient(180deg,#20264d,#3a3a6b 34%,#8a5a86 60%,#d98a63 82%,#efb27a)';
 
@@ -587,7 +604,7 @@
     weather:{home:true, bg:DUSK, canvas:true,
       html:'<div class="fcog">'+GEAR+'</div><div class="wloc" id="wxLoc"></div><div class="wbig"><div class="t" id="wxTemp">—°</div><div class="c" id="wxCond"></div></div><div class="whours" id="wxHours"></div>'},
     music:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><button class="spk" id="mSpk">'+SPKR+' <span class="spkname">Speaker</span> <span class="cx">▾</span></button><div class="mfull"><div class="mart" id="mArt">🎵</div><div class="minfo"><div class="mkick">Now Playing</div><div class="mtitle" id="mTitle">—</div><div class="martist" id="mArtist"></div></div><div class="mscrub"><div class="mtrack"><div class="mfill" id="mFill" style="width:0%"></div></div><div class="mtimes"><span id="mElapsed">0:00</span><span id="mDur">0:00</span></div></div><div class="mtransport" id="mTransport"><button class="sml" id="mShuf" data-a="shuffle" title="Shuffle">🔀</button><button data-a="previous">⏮</button><button class="pp" id="mPP" data-a="playpause">❚❚</button><button data-a="next">⏭</button><button class="sml" id="mRep" data-a="repeat" title="Repeat">🔁</button></div></div><button class="mqbtn" id="mQBtn" title="Queue">☰</button><aside class="mqueue" id="mQueue"><h3>Up next</h3><div id="mQList"></div></aside><div class="mqr" id="mQR"><div class="qrbox" id="mQRCode"></div><div class="qrlab">Scan to queue<br>from your phone</div></div>'},
+      html:'<div class="fcog">'+GEAR+'</div><div class="mtop"><button class="spk" id="mSpk">'+SPKR+' <span class="spkname">Speaker</span> <span class="cx">▾</span></button><button class="mqbtn" id="mQBtn" title="Queue">'+QICON+'</button></div><div class="mfull"><div class="mart" id="mArt">🎵</div><div class="minfo"><div class="mkick">Now Playing</div><div class="mtitle" id="mTitle">—</div><div class="martist" id="mArtist"></div></div><div class="mscrub"><div class="mtrack"><div class="mfill" id="mFill" style="width:0%"></div></div><div class="mtimes"><span id="mElapsed">0:00</span><span id="mDur">0:00</span></div></div><div class="mtransport" id="mTransport"><button class="sml" id="mShuf" data-a="shuffle" title="Shuffle">'+SHUF_I+'</button><button data-a="previous">'+PREV_I+'</button><button class="pp" id="mPP" data-a="playpause">'+PAUSE_I+'</button><button data-a="next">'+NEXT_I+'</button><button class="sml" id="mRep" data-a="repeat" title="Repeat">'+REP_I+'</button></div></div><aside class="mqueue" id="mQueue"><h3>Up next</h3><div id="mQList"></div></aside><div class="mqr" id="mQR"><div class="qrbox" id="mQRCode"></div><div class="qrlab">Scan to queue</div></div>'},
     timer:{home:true, bg:'radial-gradient(120% 100% at 50% 44%,#122447,#080b12 62%)', canvas:false, glow:'radial-gradient(closest-side at 50% 44%,rgba(123,150,255,.35),transparent 70%)',
       html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Timers</div><div class="tfull"><div class="trings" id="tmRings"></div><div class="tmore" id="tmMore"></div></div>'},
     list:{home:true, bg:GROUND, canvas:false,
@@ -607,7 +624,7 @@
       html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Reminders</div><div class="chmeta" id="remMeta"></div><div class="remf"><div id="remList" class="remlist"></div></div>'},
     rooms:{home:true, bg:GROUND, canvas:false,
       html:'<div class="fcog">'+GEAR+'</div><div class="rm"><div class="rchips" id="rmScenes"></div>'
-        +'<div class="rhero" id="rmHero" style="display:none"><div class="cover"></div><div class="rhead"><div class="rart" id="rmArt">🎵</div><div><div class="rk">Now Playing</div><div class="rt" id="rmT"></div><div class="ra" id="rmA"></div></div></div><div class="rscrub"><div class="f" id="rmF" style="width:0%"></div></div><div class="rtp"><button data-a="previous">⏮</button><button class="pp" id="rmPP" data-a="playpause">❚❚</button><button data-a="next">⏭</button></div><div class="rvol"><button data-va="volume_down">−</button><span>Volume</span><button data-va="volume_up">+</button></div></div>'
+        +'<div class="rhero" id="rmHero" style="display:none"><div class="cover"></div><div class="rhead"><div class="rart" id="rmArt">🎵</div><div><div class="rk">Now Playing</div><div class="rt" id="rmT"></div><div class="ra" id="rmA"></div></div></div><div class="rscrub"><div class="f" id="rmF" style="width:0%"></div></div><div class="rtp"><button data-a="previous">'+PREV_I+'</button><button class="pp" id="rmPP" data-a="playpause">'+PAUSE_I+'</button><button data-a="next">'+NEXT_I+'</button></div><div class="rvol"><button data-va="volume_down">−</button><span>Volume</span><button data-va="volume_up">+</button></div></div>'
         +'<div class="rlights" id="rmLights"></div></div>'}
   };
 
@@ -860,6 +877,7 @@
         if(np&&np.player_id&&!_music.player_id)_music.player_id=np.player_id;
         _music.np=null;
         if(ti)ti.textContent='Nothing playing';
+        var pp0=document.getElementById('mPP');if(pp0){pp0.dataset.playing='0';pp0.innerHTML=PLAY_I;}
         if(ar)ar.innerHTML='Say <b style="color:var(--ink)">“Hey Zoe, play some music”</b> — or pick a speaker first.';
         if(art)art.innerHTML='🎵';
         if(scrub)scrub.style.display='none';if(tp)tp.style.display='none';
@@ -876,10 +894,10 @@
       _music.np={elapsed:el,duration:du,playing:np.state==='playing',active:(np.state==='playing'||np.state==='paused'),at:Date.now()};
       if(fill)fill.style.width=(du?Math.min(100,el/du*100):0)+'%';
       if(te)te.textContent=fmtDur(el);if(td)td.textContent=fmtDur(du);
-      if(pp)pp.textContent=(np.state==='playing')?'❚❚':'▶';
+      if(pp){var playing=(np.state==='playing');pp.dataset.playing=playing?'1':'0';pp.innerHTML=playing?PAUSE_I:PLAY_I;}
       var sh=document.getElementById('mShuf');if(sh)sh.classList.toggle('on',!!np.shuffle);
       var rp=document.getElementById('mRep');if(rp){var rm=np.repeat||'off';_music.repeat=rm;
-        rp.classList.toggle('on',rm!=='off');rp.textContent=rm==='one'?'🔂':'🔁';}
+        rp.classList.toggle('on',rm!=='off');rp.innerHTML=rm==='one'?REP1_I:REP_I;}
       _music.shuffle=!!np.shuffle;
     }).catch(function(){});
   }
@@ -911,18 +929,22 @@
     var t=document.getElementById('mTransport');if(t)t.addEventListener('click',function(e){var btn=e.target.closest('button');if(!btn)return;var a=btn.getAttribute('data-a');
       if(a==='shuffle'){musicSet('shuffle_set',!_music.shuffle);return;}
       if(a==='repeat'){var nxt={off:'all',all:'one',one:'off'}[_music.repeat||'off'];musicSet('repeat_set',nxt);return;}
-      musicControl(a==='playpause'?(document.getElementById('mPP').textContent==='❚❚'?'pause':'play'):a);});
+      musicControl(a==='playpause'?(document.getElementById('mPP').dataset.playing==='1'?'pause':'play'):a);});
     // Queue drawer: slide in from the right with what's up next.
     var qb=document.getElementById('mQBtn'),qd=document.getElementById('mQueue');
-    if(qb&&qd)qb.onclick=function(){
-      if(qd.classList.toggle('open'))loadQueue();
-    };
+    if(qb&&qd){
+      qb.onclick=function(e){e.stopPropagation();if(qd.classList.toggle('open'))loadQueue();};
+      // tap anywhere outside the open drawer to dismiss it
+      full.addEventListener('click',function(e){
+        if(qd.classList.contains('open')&&!e.target.closest('.mqueue')&&!e.target.closest('#mQBtn'))qd.classList.remove('open');
+      });
+    }
     // Jukebox QR: phones scan it to search + queue music (jukebox.html).
     var qr=document.getElementById('mQRCode');
     if(qr&&!qr.dataset.done){qr.dataset.done='1';
       var url=location.origin+'/jukebox.html';
       var sc=document.createElement('script');sc.src='/js/qrcode.min.js';
-      sc.onload=function(){try{new QRCode(qr,{text:url,width:94,height:94,correctLevel:QRCode.CorrectLevel.M});}catch(e){}};
+      sc.onload=function(){try{new QRCode(qr,{text:url,width:74,height:74,correctLevel:QRCode.CorrectLevel.M});}catch(e){}};
       document.head.appendChild(sc);}
     // Speaker picker: list Music Assistant players, tap to move playback there.
     var spk=document.getElementById('mSpk');
@@ -981,8 +1003,8 @@
       var t=document.getElementById('rmT'),a=document.getElementById('rmA'),f=document.getElementById('rmF'),pp=document.getElementById('rmPP');
       if(t)t.textContent=np.title||'';if(a)a.textContent=np.artist||'';
       if(f)f.style.width=(np.duration?Math.min(100,(np.elapsed||0)/np.duration*100):0)+'%';
-      if(pp)pp.textContent=(np.state==='playing')?'❚❚':'▶';
-      hero.querySelector('.rtp').onclick=function(e){var btn=e.target.closest('button');if(!btn)return;var act=btn.getAttribute('data-a');musicControl(act==='playpause'?(pp.textContent==='❚❚'?'pause':'play'):act);};
+      if(pp){var pl=(np.state==='playing');pp.dataset.playing=pl?'1':'0';pp.innerHTML=pl?PAUSE_I:PLAY_I;}
+      hero.querySelector('.rtp').onclick=function(e){var btn=e.target.closest('button');if(!btn)return;var act=btn.getAttribute('data-a');musicControl(act==='playpause'?(pp.dataset.playing==='1'?'pause':'play'):act);};
       var rv=hero.querySelector('.rvol');if(rv)rv.onclick=function(e){var btn=e.target.closest('button[data-va]');if(btn)musicControl(btn.getAttribute('data-va'));};
     }).catch(function(){});
     _wxTick=setInterval(function(){if(_cur==='rooms')loadHA(paint);},30000);
@@ -1063,8 +1085,8 @@
       if(meta)meta.textContent=sel.name||sel.list_type;
       var cnt=document.getElementById('lstCount');
       if(cnt)cnt.textContent=its.length+' item'+(its.length===1?'':'s')+(done?' · '+done+' done':'');
-      items.innerHTML=its.map(function(i){return '<div class="lrow2'+(i.completed?' done':'')+'" data-item="'+esc(i.id)+'" data-done="'+(i.completed?1:0)+'"><span class="bx">'+(i.completed?CHK:'')+'</span><span class="tx2">'+esc(i.text)+'</span><span class="lact"><button data-act="edit" title="Edit">✎</button><button class="del" data-act="del" title="Delete">✕</button></span></div>';}).join('')
-        ||'<div style="color:var(--ink-faint);font-size:19px">List is empty — just ask Zoe to add something.</div>';
+      items.innerHTML='<div class="lin">'+(its.map(function(i){return '<div class="lrow2'+(i.completed?' done':'')+'" data-item="'+esc(i.id)+'" data-done="'+(i.completed?1:0)+'"><span class="bx">'+(i.completed?CHK:'')+'</span><span class="tx2">'+esc(i.text)+'</span><span class="lact"><button data-act="edit" title="Edit">✎</button><button class="del" data-act="del" title="Delete">✕</button></span></div>';}).join('')
+        ||'<div style="color:var(--ink-faint);font-size:19px">List is empty — just ask Zoe to add something.</div>')+'</div>';
       var base='/api/lists/'+sel.list_type+'/'+sel.id+'/items/';
       items.onclick=function(e){var row=e.target.closest('.lrow2');if(!row)return;var iid=row.getAttribute('data-item');
         var act=e.target.closest('[data-act]');
