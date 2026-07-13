@@ -163,10 +163,16 @@ async def update_event(
     # to family-or-own). This mirrors the people router — the panel is a
     # shared surface, and the stricter owner-only check made family events
     # uneditable from it (403s in the operator's 2026-07-13 report).
+    # …but only the OWNER may change visibility: a non-owner flipping a family
+    # event to 'personal' would hijack it out of the household's (and the
+    # owner's) view entirely (same guard as reminders).
+    is_owner = dict(row).get("user_id") == user_id
 
     updates = []
     params = []
     data = payload.model_dump(exclude_unset=True)
+    if not is_owner:
+        data.pop("visibility", None)
 
     for key, value in data.items():
         if key == "metadata":
