@@ -29,9 +29,10 @@ def _run(coro):
 
 
 class _Row:
-    def __init__(self, mem_id, text):
+    def __init__(self, mem_id, text, metadata=None):
         self.id = mem_id
         self.text = text
+        self.metadata = metadata if metadata is not None else {}
 
 
 class _FakeSvc:
@@ -51,6 +52,12 @@ class _FakeSvc:
         if self._search_exc:
             raise self._search_exc
         return self._search_rows
+
+    async def get(self, mem_id):
+        for r in self._search_rows:
+            if r.id == mem_id:
+                return r
+        return None
 
     async def review(self, mem_id, **kw):
         self.reviewed.append((mem_id, kw))
@@ -111,7 +118,8 @@ def test_reconcile_titleless_guard_third_person_name():
 # ---------------------------------------------------------------------------
 
 def test_person_extractor_update_supersedes_not_duplicates(monkeypatch):
-    svc = _FakeSvc(search_rows=[_Row("old", "Jessica's birthday is March 15")])
+    svc = _FakeSvc(search_rows=[_Row("old", "Jessica's birthday is March 15",
+                                    {"entity_type": "person_pending", "entity_id": "slug:jessica"})])
     import memory_service
     monkeypatch.setattr(memory_service, "get_memory_service", lambda: svc)
     mem_id = _run(person_extractor._ingest_to_mempalace(
@@ -123,7 +131,8 @@ def test_person_extractor_update_supersedes_not_duplicates(monkeypatch):
 
 
 def test_person_extractor_restatement_skips(monkeypatch):
-    svc = _FakeSvc(search_rows=[_Row("rich", "Jessica's birthday is March 15, she loves cake")])
+    svc = _FakeSvc(search_rows=[_Row("rich", "Jessica's birthday is March 15, she loves cake",
+                                    {"entity_type": "person_pending", "entity_id": "slug:jessica"})])
     import memory_service
     monkeypatch.setattr(memory_service, "get_memory_service", lambda: svc)
     mem_id = _run(person_extractor._ingest_to_mempalace(
@@ -131,6 +140,21 @@ def test_person_extractor_restatement_skips(monkeypatch):
     assert svc.ingested == [], "sparser restatement must not be stored"
     assert svc.reviewed == []
     assert mem_id == "rich", "skip returns the kept row so linkage still works"
+
+
+def test_person_extractor_unlinked_row_falls_back_to_add(monkeypatch):
+    # Linkage guard: a matched row from another writer that is NOT keyed to this
+    # person (raw voice_fact / generic digest row) must not be edited or
+    # returned as this person's mem_id — plain, correctly-linked ADD instead.
+    svc = _FakeSvc(search_rows=[_Row("raw", "Jessica's birthday is March 15",
+                                     {"entity_type": "conversation", "entity_id": ""})])
+    import memory_service
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: svc)
+    mem_id = _run(person_extractor._ingest_to_mempalace(
+        "Jessica's birthday is March 25", "jason", "Jessica", "slug:jessica"))
+    assert svc.reviewed == [], "must not edit a row not keyed to this person"
+    assert [t for t, _ in svc.ingested] == ["Jessica's birthday is March 25"]
+    assert mem_id == "new-1"
 
 
 def test_person_extractor_reconcile_error_falls_back_to_add(monkeypatch):

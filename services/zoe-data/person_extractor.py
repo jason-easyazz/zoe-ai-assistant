@@ -365,6 +365,26 @@ async def _ingest_to_mempalace(
         except Exception as exc:
             logger.debug("person_extractor: reconciliation unavailable (%s) — plain ingest", exc)
             op, target_id = "add", None
+        if op in ("skip", "update") and target_id:
+            # Linkage guard (Greptile P1): the matched row may have come from
+            # another writer (raw voice_fact / digest) and NOT be keyed to this
+            # person — returning/editing it would hand the activity/date/gift
+            # callers a mem_id that person-scoped recall can't see, and edit
+            # preserves the row's old entity link. Only reconcile onto rows
+            # already keyed to THIS person (resolved uuid or same-name pending
+            # slug); anything else falls back to a plain, correctly-linked ADD.
+            try:
+                target = await svc.get(target_id)
+                meta = getattr(target, "metadata", None) or {}
+                slug = f"slug:{person_name.lower().replace(' ', '_')}"
+                acceptable = (
+                    str(meta.get("entity_type") or "") in ("person", "person_pending")
+                    and str(meta.get("entity_id") or "") in {e for e in (entity_id, slug) if e}
+                )
+            except Exception:
+                acceptable = False
+            if not acceptable:
+                op, target_id = "add", None
         if op == "skip" and target_id:
             # Existing row is at least as informative — keep it, write nothing.
             logger.info("person_extractor: dedup-skip kept=%s cand=%r", target_id, text[:60])
