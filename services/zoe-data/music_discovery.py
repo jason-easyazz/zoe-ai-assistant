@@ -178,6 +178,10 @@ def save_discovery_run(profiles: list[dict[str, Any]]) -> Path:
         for key in ("seed", "recommendations"):
             if previous.get(key):
                 payload[key] = previous[key]
+        # First-ever run: no previous file — still emit the PR-1 shape keys.
+        payload.setdefault("seed", household.get("seed") if household else None)
+        payload.setdefault("recommendations",
+                           (household.get("recommendations") if household else None) or [])
     RECOMMENDATIONS_PATH.write_text(json.dumps(payload, indent=2))
     return RECOMMENDATIONS_PATH
 

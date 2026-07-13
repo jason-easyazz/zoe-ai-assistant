@@ -492,3 +492,16 @@ def test_save_discovery_run_keeps_last_good_household(tmp_path, monkeypatch):
     saved = md.load_recommendations()
     assert saved["recommendations"] == [{"artistName": "X"}]
     assert len(saved["profiles"]) == 2
+
+
+def test_save_discovery_run_first_empty_household_keeps_shape(tmp_path, monkeypatch):
+    monkeypatch.setattr(md, "RECOMMENDATIONS_PATH", tmp_path / "recs.json")
+    md.save_discovery_run([
+        {"user_id": None, "playlist": "Zoe Discovery",
+         "seed": {"artists": []}, "recommendations": []},
+        {"user_id": "jason", "playlist": "Zoe Discovery — Jason",
+         "seed": {"artists": ["B"]}, "recommendations": [{"artistName": "Y"}]},
+    ])
+    saved = md.load_recommendations()
+    assert saved["recommendations"] == []  # keys present even with no history
+    assert "seed" in saved
