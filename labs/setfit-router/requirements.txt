@@ -1,0 +1,7 @@
+# Exact versions used to train/eval the committed artifacts (Jetson, CPU-only).
+# fastembed provides the pinned BAAI/bge-small-en-v1.5 ONNX embedding —
+# the same model+runtime prod semantic_router.py uses.
+scikit-learn==1.7.2
+joblib==1.5.3
+numpy==1.26.4
+fastembed==0.8.0
