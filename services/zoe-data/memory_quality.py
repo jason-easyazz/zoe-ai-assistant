@@ -646,14 +646,35 @@ _GUARD_CAL_WORDS = {
 }
 
 
+# Object of a name-attribute phrase ("…name is Neil", "named Neil", "is called
+# Neil"): that token is the attribute VALUE, not a person the row is ABOUT.
+# Without this exclusion, a user-anchored name fact ("my dad's name is Neil")
+# could never be superseded by a titleless correction ("my dad's name is
+# Kevin") — the value token blocked the guard (residual QA F2 for kinship
+# name facts). Subjects stay protected: in "Jessica's name is …" the
+# possessive "Jessica" is still a guard token.
+_NAME_VALUE_RE = re.compile(
+    r"(?:\bname\s+is|\bnamed|\bis\s+called|\bname['’]s)\s+(?:spelt\s+|spelled\s+)?"
+    r"([A-Z][a-z]+)\b"
+)
+
+
 def _guard_name_tokens(t: str) -> set[str]:
     """Name signals in ``t``: capitalized tokens AND lowercase possessives
-    ("karen's birthday…" — users type lowercase), minus calendar/stop words.
-    Possessive detection keeps a lowercase-typed person's row protected from
-    titleless supersedes (Greptile P1)."""
+    ("karen's birthday…" — users type lowercase), minus calendar/stop words
+    and minus tokens that appear ONLY as a name-attribute value (see
+    ``_NAME_VALUE_RE``)."""
     caps = {w.lower() for w in re.findall(r"\b[A-Z][a-z]+\b", t)}
     poss = {w.lower() for w in re.findall(r"\b([a-z]+)['’]s\b", t)}
-    return {w for w in (caps | poss) if w not in _GUARD_CAL_WORDS}
+    values = {w.lower() for w in _NAME_VALUE_RE.findall(t)}
+    # A value token is excluded only when it has no OTHER appearance in the
+    # text (a possessive or second mention still marks the row as about them).
+    only_values = {
+        v for v in values
+        if len(re.findall(rf"\b{re.escape(v)}\b", t, flags=re.IGNORECASE)) == 1
+        and v not in poss
+    }
+    return {w for w in (caps | poss) if w not in _GUARD_CAL_WORDS} - only_values
 
 
 def guard_existing_by_entity(
