@@ -2026,8 +2026,13 @@ async def _resolve_weather(intent: SkybridgeIntent, user_id: str, db: Any) -> di
         )
         temp = current.get("temp")
         desc = current.get("description") or "current conditions"
-        # Speak naturally: "18.3" → "18 point 3" (bare decimals get mangled to "18 3"),
-        # and join the condition with "and" rather than the robotic "with".
+        # Whole degrees for speech: "18 degrees", never "18 point 3 degrees" —
+        # more natural spoken, and it keeps the reply inside the voice segment
+        # cache's stitch vocabulary (voice_stitch works on integer temps).
+        try:
+            temp = round(float(temp))
+        except (TypeError, ValueError):
+            pass
         spoken = (
             f"It's {_say_num(temp)} degrees and {desc} in {city}."
             if temp is not None else f"Here is the weather for {city}."
