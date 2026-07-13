@@ -83,8 +83,10 @@ refuses to start under 2 GB `MemAvailable`, aborts mid-run under 600 MB.
   `plain` (~2,300-token prompts) ≈ **2–4 h** at batch 4 (raise batch on
   bigger cards).
 - Outputs: `runs/<variant>/adapter` + `runs/<variant>/merged`; convert with
-  `./export_gguf.sh runs/<variant>/merged functok-q8.gguf` (llama.cpp
-  ≥ gemma3 support) and copy the GGUF back to `/home/zoe/models/lab/`.
+  `LLAMA_CPP=<llama.cpp checkout> ./export_gguf.sh runs/<variant>/merged
+  functok-q8.gguf` (validated; needs gemma3 support) and copy the GGUF back
+  to `/home/zoe/models/lab/`. Off-box eval likewise needs
+  `LLAMA_SERVER=<path to llama-server>` (defaults are this box's paths).
 
 ## Eval (held-out 81-case corpus, :11435)
 

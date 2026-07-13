@@ -8,6 +8,10 @@ set -euo pipefail
 LLAMA_CPP="${LLAMA_CPP:-/home/zoe/llama.cpp}"
 MERGED="$1"
 OUT="$2"
+if [ ! -f "$LLAMA_CPP/convert_hf_to_gguf.py" ]; then
+  echo "ERROR: $LLAMA_CPP/convert_hf_to_gguf.py not found — set LLAMA_CPP to a llama.cpp checkout (>= gemma3 support)" >&2
+  exit 1
+fi
 python3 "$LLAMA_CPP/convert_hf_to_gguf.py" "$MERGED" \
     --outfile "$OUT" --outtype q8_0
 echo "wrote $OUT"
