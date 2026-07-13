@@ -1217,7 +1217,9 @@ async def resolve_skybridge_request(
 
     if intent.domain == "music":
         from music_service import resolve_music
-        return _attach_skybridge_context(await resolve_music(intent))
+        # user_id threads the acting user into the listening journal (guest
+        # fallback happens at music_history.resolve_music_user, not here).
+        return _attach_skybridge_context(await resolve_music(intent, user_id=user_id))
 
     if intent.domain == "voice":
         return _attach_skybridge_context(await _resolve_voice_settings(intent))

@@ -337,10 +337,15 @@ async def transfer(target_player_id: str, source_player_id: str = "") -> bool:
     return True
 
 
-async def search_and_play(query: str, player_id: str = "") -> Optional[dict[str, Any]]:
+async def search_and_play(query: str, player_id: str = "",
+                          zoe_user_id: str = "") -> Optional[dict[str, Any]]:
     """Search MA and play the top hit on the target player. Returns the matched
     item {name, media_type} or None. Local-first: searches all configured
-    providers (builtin/radio/local files work with no account)."""
+    providers (builtin/radio/local files work with no account).
+
+    `zoe_user_id` is the acting user for the listening journal (identity-
+    threaded callers pass it; unidentified callers leave it '' → journaled as
+    the reserved guest user via music_history.resolve_music_user)."""
     players = await get_players()
     player = _pick_player(players, player_id)
     if player is None:
@@ -364,6 +369,11 @@ async def search_and_play(query: str, player_id: str = "") -> Optional[dict[str,
     await _ma("player_queues/play_media", queue_id=pid, media=uri, option="replace", radio_mode=False)
     if player_id:  # an explicitly chosen speaker becomes the remembered default
         set_preferred_player_id(pid)
+    # Per-user listening journal (initiated event). Lazy import — music_history
+    # imports this module for its observed-events poll.
+    import music_history as _mh
+    await _mh.record_play(zoe_user_id, source="initiated", player_id=pid,
+                          **_mh.media_fields(hit))
     return {"name": hit.get("name", query), "artist": (hit.get("artists") or [{}])[0].get("name", "") if hit.get("artists") else ""}
 
 
@@ -459,8 +469,12 @@ async def search(query: str, media_types: Optional[list[str]] = None,
     return {"available": any_hit, "query": query, "results": results}
 
 
-async def play_media(uri: str, player_id: str = "", option: str = "replace") -> dict[str, Any]:
+async def play_media(uri: str, player_id: str = "", option: str = "replace",
+                     zoe_user_id: str = "") -> dict[str, Any]:
     """Play a specific media URI (from `search`) on a chosen speaker.
+
+    `zoe_user_id`: acting user for the listening journal ('' → reserved guest
+    user; see music_history.resolve_music_user).
 
     In MA the queue id *is* the player id. An explicit player_id must match a
     real player (so a stale id fails loudly instead of playing on the wrong
@@ -494,6 +508,13 @@ async def play_media(uri: str, player_id: str = "", option: str = "replace") -> 
     if not await _ma_ok("player_queues/play_media", timeout_s=20.0, queue_id=pid,
                         media=uri, option=option, radio_mode=False):
         return {"ok": False, "reason": "playback failed"}
+    # Per-user listening journal (initiated event). The URI alone carries no
+    # metadata, so enrich via item_by_uri — best-effort, one cheap local call.
+    import music_history as _mh
+    _item = await _ma("music/item_by_uri", uri=uri)
+    _fields = _mh.media_fields(_item if isinstance(_item, dict) else {"uri": uri})
+    _fields["uri"] = uri
+    await _mh.record_play(zoe_user_id, source="initiated", player_id=pid, **_fields)
     return {
         "ok": True, "uri": uri, "player_id": pid,
         "player_name": player.get("display_name") or player.get("name") or "",
@@ -607,8 +628,9 @@ def split_play_target(query: str, players: list[dict[str, Any]]) -> tuple[str, O
     return base, target
 
 
-async def resolve_music(intent: Any) -> dict[str, Any]:
-    """The Skybridge music domain resolver. `intent` has .action and .query."""
+async def resolve_music(intent: Any, user_id: str = "") -> dict[str, Any]:
+    """The Skybridge music domain resolver. `intent` has .action and .query.
+    `user_id` is the acting user for the listening journal ('' → guest)."""
     action = getattr(intent, "action", "status")
     query = (getattr(intent, "query", "") or "").strip()
 
@@ -657,7 +679,25 @@ async def resolve_music(intent: Any) -> dict[str, Any]:
                 "What would you like to hear — an artist, a song, or the radio?" + (f" I'll put it on {tname}." if tname else ""),
                 _browse_card(), "play")
 
-        hit = await search_and_play(base, player_id=player_id)
+        # "Play my discovery playlist" → the Zoe Discovery playlist that the
+        # weekly digarr batch maintains (music_discovery.py). Lazy import —
+        # music_discovery imports this module. Falls through to a friendly
+        # nudge when no batch has run yet (playlist doesn't exist).
+        import music_discovery as _md
+        if _md.is_discovery_playlist_query(base):
+            res = await _md.play_discovery(player_id=player_id, zoe_user_id=user_id)
+            if res.get("ok"):
+                np = await now_playing(player_id) or {}
+                return _result(f"Playing your discovery playlist{on_txt}.",
+                               now_playing_card(np or {"state": "playing",
+                                                       "title": _md.DISCOVERY_PLAYLIST_NAME,
+                                                       "artist": ""}), "play")
+            return _result(
+                "I haven't put together a discovery playlist yet — "
+                "I'll have one after my next music discovery run.",
+                _browse_card(), "play")
+
+        hit = await search_and_play(base, player_id=player_id, zoe_user_id=user_id)
         if hit:
             np = await now_playing(player_id) or {}
             spoken = (f"Playing {hit['name']}" if hit.get("name") else "Playing that now") + on_txt + "."
