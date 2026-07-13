@@ -87,6 +87,14 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
   Gemma llama-server, footprint numbers, listening-source findings, and the
   recommendations→Music Assistant playlist bridge design. README is a record,
   not a contract; nothing runs resident and nothing is prod-wired.
+- `functiongemma-feasibility/` — feasibility record for FunctionGemma-270M
+  (Q8_0 GGUF via llama.cpp CPU-only on :11435) as a complete-call fast-tier
+  router: RAM/latency/stock-accuracy/cold-load measured on-box; verdict **GO**
+  for the fine-tune follow-up (stock 33% vs the 61.7% routing baseline, but
+  ~0.4–0.8 s latency, 0% chat false-positives, 94% on a 3-tool block). README
+  is a record, not a contract; harness is hand-run, hard-gated on
+  MemAvailable ≥ 2 GB, never resident, never prod-wired. Weights stay at
+  `/home/zoe/models/lab/`.
 - `flue-zoe-telegram/` — Flue Telegram channel: long-poll bot bridged to zoe-data's
   `/api/chat` (NOT a Flue LLM agent; `src/agents/zoe.ts` is a build-only placeholder
   and registers no model provider — never points at the voice brain on `:11434`).

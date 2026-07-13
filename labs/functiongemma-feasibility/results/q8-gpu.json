@@ -1,0 +1,1022 @@
+{
+ "gguf": "/home/zoe/models/lab/functiongemma-270m-it-Q8_0.gguf",
+ "ngl": 99,
+ "cmd": "/home/zoe/llama.cpp/build-jetson-new/bin/llama-server --model /home/zoe/models/lab/functiongemma-270m-it-Q8_0.gguf --host 127.0.0.1 --port 11435 --ctx-size 4096 --n-gpu-layers 99 --jinja --parallel 1 --threads 4",
+ "mem_available_mb_before": 2121,
+ "cold_load_s": 2.02,
+ "rss_mb_after_load": 804,
+ "small_3tool": {
+  "label": "3-tool block",
+  "n": 16,
+  "prompt_tokens_p50": 300,
+  "latency_ms_p50": 161.6,
+  "latency_ms_p90": 341.2,
+  "accuracy_overall_pct": 87.5,
+  "accuracy_canonical_pct": 75.0,
+  "accuracy_paraphrase_pct": 75.0,
+  "chat_false_positive_pct": 0.0,
+  "cases": [
+   {
+    "id": "time-c1",
+    "style": "canonical",
+    "predicted": "get_time",
+    "expected": [
+     "get_time"
+    ],
+    "ok": true,
+    "latency_ms": 122.5
+   },
+   {
+    "id": "time-c2",
+    "style": "canonical",
+    "predicted": "general_chat",
+    "expected": [
+     "get_time"
+    ],
+    "ok": false,
+    "latency_ms": 91.2
+   },
+   {
+    "id": "time-p1",
+    "style": "paraphrase",
+    "predicted": "get_time",
+    "expected": [
+     "get_time"
+    ],
+    "ok": true,
+    "latency_ms": 91.3
+   },
+   {
+    "id": "time-p2",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "get_time"
+    ],
+    "ok": false,
+    "latency_ms": 340.5
+   },
+   {
+    "id": "timer-c1",
+    "style": "canonical",
+    "predicted": "set_timer",
+    "expected": [
+     "set_timer"
+    ],
+    "ok": true,
+    "latency_ms": 137.3
+   },
+   {
+    "id": "timer-c2",
+    "style": "canonical",
+    "predicted": "set_timer",
+    "expected": [
+     "set_timer"
+    ],
+    "ok": true,
+    "latency_ms": 139.5
+   },
+   {
+    "id": "timer-p1",
+    "style": "paraphrase",
+    "predicted": "set_timer",
+    "expected": [
+     "set_timer"
+    ],
+    "ok": true,
+    "latency_ms": 133.1
+   },
+   {
+    "id": "timer-p2",
+    "style": "paraphrase",
+    "predicted": "set_timer",
+    "expected": [
+     "set_timer"
+    ],
+    "ok": true,
+    "latency_ms": 132.3
+   },
+   {
+    "id": "chat-1",
+    "style": "chat",
+    "predicted": null,
+    "expected": [
+     "general_chat"
+    ],
+    "ok": true,
+    "latency_ms": 139.0
+   },
+   {
+    "id": "chat-2",
+    "style": "chat",
+    "predicted": "general_chat",
+    "expected": [
+     "general_chat"
+    ],
+    "ok": true,
+    "latency_ms": 183.8
+   },
+   {
+    "id": "chat-3",
+    "style": "chat",
+    "predicted": null,
+    "expected": [
+     "general_chat",
+     "journal",
+     "remember_emotional_moment"
+    ],
+    "ok": true,
+    "latency_ms": 342.9
+   },
+   {
+    "id": "chat-4",
+    "style": "chat",
+    "predicted": null,
+    "expected": [
+     "general_chat"
+    ],
+    "ok": true,
+    "latency_ms": 328.2
+   },
+   {
+    "id": "chat-5",
+    "style": "chat",
+    "predicted": null,
+    "expected": [
+     "general_chat"
+    ],
+    "ok": true,
+    "latency_ms": 258.3
+   },
+   {
+    "id": "chat-6",
+    "style": "chat",
+    "predicted": null,
+    "expected": [
+     "general_chat"
+    ],
+    "ok": true,
+    "latency_ms": 292.1
+   },
+   {
+    "id": "chat-7",
+    "style": "chat",
+    "predicted": null,
+    "expected": [
+     "general_chat"
+    ],
+    "ok": true,
+    "latency_ms": 296.9
+   },
+   {
+    "id": "chat-8",
+    "style": "chat",
+    "predicted": null,
+    "expected": [
+     "general_chat"
+    ],
+    "ok": true,
+    "latency_ms": 301.4
+   }
+  ]
+ },
+ "full_20tool": {
+  "label": "full 20+1-tool block",
+  "n": 81,
+  "prompt_tokens_p50": 2235,
+  "latency_ms_p50": 383.4,
+  "latency_ms_p90": 447.9,
+  "accuracy_overall_pct": 33.3,
+  "accuracy_canonical_pct": 41.2,
+  "accuracy_paraphrase_pct": 12.8,
+  "chat_false_positive_pct": 0.0,
+  "cases": [
+   {
+    "id": "time-c1",
+    "style": "canonical",
+    "predicted": null,
+    "expected": [
+     "get_time"
+    ],
+    "ok": false,
+    "latency_ms": 653.5
+   },
+   {
+    "id": "time-c2",
+    "style": "canonical",
+    "predicted": "get_time",
+    "expected": [
+     "get_time"
+    ],
+    "ok": true,
+    "latency_ms": 237.7
+   },
+   {
+    "id": "time-p1",
+    "style": "paraphrase",
+    "predicted": "get_time",
+    "expected": [
+     "get_time"
+    ],
+    "ok": true,
+    "latency_ms": 167.3
+   },
+   {
+    "id": "time-p2",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "get_time"
+    ],
+    "ok": false,
+    "latency_ms": 437.5
+   },
+   {
+    "id": "weather-c1",
+    "style": "canonical",
+    "predicted": "get_weather",
+    "expected": [
+     "get_weather"
+    ],
+    "ok": true,
+    "latency_ms": 265.2
+   },
+   {
+    "id": "weather-c2",
+    "style": "canonical",
+    "predicted": "get_weather",
+    "expected": [
+     "get_weather"
+    ],
+    "ok": true,
+    "latency_ms": 202.6
+   },
+   {
+    "id": "weather-p1",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "get_weather"
+    ],
+    "ok": false,
+    "latency_ms": 402.2
+   },
+   {
+    "id": "weather-p2",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "get_weather"
+    ],
+    "ok": false,
+    "latency_ms": 371.2
+   },
+   {
+    "id": "weather-p3",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "get_weather"
+    ],
+    "ok": false,
+    "latency_ms": 425.8
+   },
+   {
+    "id": "shoplist-c1",
+    "style": "canonical",
+    "predicted": "add_to_list",
+    "expected": [
+     "shopping_list_add",
+     "add_to_list"
+    ],
+    "ok": true,
+    "latency_ms": 220.8
+   },
+   {
+    "id": "shoplist-c2",
+    "style": "canonical",
+    "predicted": "shopping_list_add",
+    "expected": [
+     "shopping_list_add",
+     "add_to_list"
+    ],
+    "ok": true,
+    "latency_ms": 218.5
+   },
+   {
+    "id": "shoplist-p1",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "shopping_list_add",
+     "add_to_list"
+    ],
+    "ok": false,
+    "latency_ms": 405.3
+   },
+   {
+    "id": "shoplist-p2",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "shopping_list_add",
+     "add_to_list"
+    ],
+    "ok": false,
+    "latency_ms": 400.3
+   },
+   {
+    "id": "shoplist-p3",
+    "style": "paraphrase",
+    "predicted": "general_chat",
+    "expected": [
+     "shopping_list_add",
+     "add_to_list",
+     "add_reminder"
+    ],
+    "ok": false,
+    "latency_ms": 164.8
+   },
+   {
+    "id": "listshow-c1",
+    "style": "canonical",
+    "predicted": "list_reminders",
+    "expected": [
+     "show_list"
+    ],
+    "ok": false,
+    "latency_ms": 174.8
+   },
+   {
+    "id": "listshow-c2",
+    "style": "canonical",
+    "predicted": "list_reminders",
+    "expected": [
+     "show_list"
+    ],
+    "ok": false,
+    "latency_ms": 224.9
+   },
+   {
+    "id": "listshow-p1",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "show_list"
+    ],
+    "ok": false,
+    "latency_ms": 392.5
+   },
+   {
+    "id": "listshow-p2",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "show_list"
+    ],
+    "ok": false,
+    "latency_ms": 427.9
+   },
+   {
+    "id": "listrm-c1",
+    "style": "canonical",
+    "predicted": null,
+    "expected": [
+     "list_remove"
+    ],
+    "ok": false,
+    "latency_ms": 428.6
+   },
+   {
+    "id": "listrm-p1",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "list_remove"
+    ],
+    "ok": false,
+    "latency_ms": 480.8
+   },
+   {
+    "id": "listrm-p2",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "list_remove"
+    ],
+    "ok": false,
+    "latency_ms": 433.5
+   },
+   {
+    "id": "cal-show-c1",
+    "style": "canonical",
+    "predicted": "list_reminders",
+    "expected": [
+     "show_calendar"
+    ],
+    "ok": false,
+    "latency_ms": 172.1
+   },
+   {
+    "id": "cal-show-c2",
+    "style": "canonical",
+    "predicted": "list_reminders",
+    "expected": [
+     "show_calendar"
+    ],
+    "ok": false,
+    "latency_ms": 173.1
+   },
+   {
+    "id": "cal-show-p1",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "show_calendar"
+    ],
+    "ok": false,
+    "latency_ms": 415.6
+   },
+   {
+    "id": "cal-show-p2",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "show_calendar"
+    ],
+    "ok": false,
+    "latency_ms": 435.2
+   },
+   {
+    "id": "cal-add-c1",
+    "style": "canonical",
+    "predicted": "add_reminder",
+    "expected": [
+     "add_calendar_event"
+    ],
+    "ok": false,
+    "latency_ms": 444.4
+   },
+   {
+    "id": "cal-add-c2",
+    "style": "canonical",
+    "predicted": null,
+    "expected": [
+     "add_calendar_event"
+    ],
+    "ok": false,
+    "latency_ms": 362.4
+   },
+   {
+    "id": "cal-add-p1",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "add_calendar_event"
+    ],
+    "ok": false,
+    "latency_ms": 467.6
+   },
+   {
+    "id": "cal-add-p2",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "add_calendar_event"
+    ],
+    "ok": false,
+    "latency_ms": 419.0
+   },
+   {
+    "id": "rem-add-c1",
+    "style": "canonical",
+    "predicted": "set_timer",
+    "expected": [
+     "add_reminder"
+    ],
+    "ok": false,
+    "latency_ms": 268.8
+   },
+   {
+    "id": "rem-add-c2",
+    "style": "canonical",
+    "predicted": null,
+    "expected": [
+     "add_reminder"
+    ],
+    "ok": false,
+    "latency_ms": 389.2
+   },
+   {
+    "id": "rem-add-p1",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "add_reminder"
+    ],
+    "ok": false,
+    "latency_ms": 433.2
+   },
+   {
+    "id": "rem-add-p2",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "add_reminder"
+    ],
+    "ok": false,
+    "latency_ms": 427.2
+   },
+   {
+    "id": "rem-add-p3",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "add_reminder"
+    ],
+    "ok": false,
+    "latency_ms": 438.5
+   },
+   {
+    "id": "rem-list-c1",
+    "style": "canonical",
+    "predicted": "list_reminders",
+    "expected": [
+     "list_reminders"
+    ],
+    "ok": true,
+    "latency_ms": 224.2
+   },
+   {
+    "id": "rem-list-p1",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "list_reminders",
+     "show_calendar"
+    ],
+    "ok": false,
+    "latency_ms": 467.1
+   },
+   {
+    "id": "timer-c1",
+    "style": "canonical",
+    "predicted": null,
+    "expected": [
+     "set_timer"
+    ],
+    "ok": false,
+    "latency_ms": 354.3
+   },
+   {
+    "id": "timer-c2",
+    "style": "canonical",
+    "predicted": "set_timer",
+    "expected": [
+     "set_timer"
+    ],
+    "ok": true,
+    "latency_ms": 285.6
+   },
+   {
+    "id": "timer-p1",
+    "style": "paraphrase",
+    "predicted": "general_chat",
+    "expected": [
+     "set_timer"
+    ],
+    "ok": false,
+    "latency_ms": 164.6
+   },
+   {
+    "id": "timer-p2",
+    "style": "paraphrase",
+    "predicted": "set_timer",
+    "expected": [
+     "set_timer"
+    ],
+    "ok": true,
+    "latency_ms": 205.8
+   },
+   {
+    "id": "note-add-c1",
+    "style": "canonical",
+    "predicted": "note_search",
+    "expected": [
+     "create_note"
+    ],
+    "ok": false,
+    "latency_ms": 210.0
+   },
+   {
+    "id": "note-add-c2",
+    "style": "canonical",
+    "predicted": "add_calendar_event",
+    "expected": [
+     "create_note"
+    ],
+    "ok": false,
+    "latency_ms": 386.2
+   },
+   {
+    "id": "note-add-p1",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "create_note"
+    ],
+    "ok": false,
+    "latency_ms": 434.1
+   },
+   {
+    "id": "note-add-p2",
+    "style": "paraphrase",
+    "predicted": "search_my_stores",
+    "expected": [
+     "create_note",
+     "remember_fact"
+    ],
+    "ok": false,
+    "latency_ms": 236.0
+   },
+   {
+    "id": "note-search-c1",
+    "style": "canonical",
+    "predicted": "search_notes",
+    "expected": [
+     "note_search"
+    ],
+    "ok": false,
+    "latency_ms": 166.0
+   },
+   {
+    "id": "note-search-p1",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "note_search"
+    ],
+    "ok": false,
+    "latency_ms": 448.7
+   },
+   {
+    "id": "note-search-p2",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "note_search"
+    ],
+    "ok": false,
+    "latency_ms": 417.5
+   },
+   {
+    "id": "journal-c1",
+    "style": "canonical",
+    "predicted": "journal",
+    "expected": [
+     "journal"
+    ],
+    "ok": true,
+    "latency_ms": 420.4
+   },
+   {
+    "id": "journal-c2",
+    "style": "canonical",
+    "predicted": "note_search",
+    "expected": [
+     "journal"
+    ],
+    "ok": false,
+    "latency_ms": 220.0
+   },
+   {
+    "id": "journal-p1",
+    "style": "paraphrase",
+    "predicted": "journal",
+    "expected": [
+     "journal"
+    ],
+    "ok": true,
+    "latency_ms": 224.1
+   },
+   {
+    "id": "journal-p2",
+    "style": "paraphrase",
+    "predicted": "journal",
+    "expected": [
+     "journal"
+    ],
+    "ok": true,
+    "latency_ms": 277.5
+   },
+   {
+    "id": "people-c1",
+    "style": "canonical",
+    "predicted": "people",
+    "expected": [
+     "people"
+    ],
+    "ok": true,
+    "latency_ms": 242.5
+   },
+   {
+    "id": "people-c2",
+    "style": "canonical",
+    "predicted": null,
+    "expected": [
+     "people",
+     "recall_memory"
+    ],
+    "ok": false,
+    "latency_ms": 426.3
+   },
+   {
+    "id": "people-p1",
+    "style": "paraphrase",
+    "predicted": "remember_fact",
+    "expected": [
+     "people",
+     "remember_fact"
+    ],
+    "ok": true,
+    "latency_ms": 256.9
+   },
+   {
+    "id": "people-p2",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "people",
+     "recall_memory"
+    ],
+    "ok": false,
+    "latency_ms": 302.2
+   },
+   {
+    "id": "media-c1",
+    "style": "canonical",
+    "predicted": null,
+    "expected": [
+     "media"
+    ],
+    "ok": false,
+    "latency_ms": 290.3
+   },
+   {
+    "id": "media-c2",
+    "style": "canonical",
+    "predicted": null,
+    "expected": [
+     "media"
+    ],
+    "ok": false,
+    "latency_ms": 367.2
+   },
+   {
+    "id": "media-c3",
+    "style": "canonical",
+    "predicted": "media",
+    "expected": [
+     "media"
+    ],
+    "ok": true,
+    "latency_ms": 191.4
+   },
+   {
+    "id": "media-p1",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "media"
+    ],
+    "ok": false,
+    "latency_ms": 369.4
+   },
+   {
+    "id": "media-p2",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "media"
+    ],
+    "ok": false,
+    "latency_ms": 434.2
+   },
+   {
+    "id": "media-p3",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "media"
+    ],
+    "ok": false,
+    "latency_ms": 344.7
+   },
+   {
+    "id": "home-c1",
+    "style": "canonical",
+    "predicted": "home",
+    "expected": [
+     "home"
+    ],
+    "ok": true,
+    "latency_ms": 219.7
+   },
+   {
+    "id": "home-c2",
+    "style": "canonical",
+    "predicted": "home",
+    "expected": [
+     "home"
+    ],
+    "ok": true,
+    "latency_ms": 230.3
+   },
+   {
+    "id": "home-p1",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "home"
+    ],
+    "ok": false,
+    "latency_ms": 414.1
+   },
+   {
+    "id": "home-p2",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "home"
+    ],
+    "ok": false,
+    "latency_ms": 482.4
+   },
+   {
+    "id": "recall-c1",
+    "style": "canonical",
+    "predicted": "remember_emotional_moment",
+    "expected": [
+     "recall_memory"
+    ],
+    "ok": false,
+    "latency_ms": 217.0
+   },
+   {
+    "id": "recall-c2",
+    "style": "canonical",
+    "predicted": null,
+    "expected": [
+     "recall_memory"
+    ],
+    "ok": false,
+    "latency_ms": 413.6
+   },
+   {
+    "id": "recall-p1",
+    "style": "paraphrase",
+    "predicted": "set_timer",
+    "expected": [
+     "recall_memory"
+    ],
+    "ok": false,
+    "latency_ms": 276.7
+   },
+   {
+    "id": "recall-p2",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "recall_memory"
+    ],
+    "ok": false,
+    "latency_ms": 426.6
+   },
+   {
+    "id": "fact-c1",
+    "style": "canonical",
+    "predicted": "remember_fact",
+    "expected": [
+     "remember_fact"
+    ],
+    "ok": true,
+    "latency_ms": 231.9
+   },
+   {
+    "id": "fact-c2",
+    "style": "canonical",
+    "predicted": "remember_fact",
+    "expected": [
+     "remember_fact"
+    ],
+    "ok": true,
+    "latency_ms": 238.2
+   },
+   {
+    "id": "fact-p1",
+    "style": "paraphrase",
+    "predicted": null,
+    "expected": [
+     "remember_fact"
+    ],
+    "ok": false,
+    "latency_ms": 400.8
+   },
+   {
+    "id": "fact-p2",
+    "style": "paraphrase",
+    "predicted": "get_time",
+    "expected": [
+     "remember_fact",
+     "people"
+    ],
+    "ok": false,
+    "latency_ms": 204.5
+   },
+   {
+    "id": "chat-1",
+    "style": "chat",
+    "predicted": null,
+    "expected": [
+     "general_chat"
+    ],
+    "ok": true,
+    "latency_ms": 394.8
+   },
+   {
+    "id": "chat-2",
+    "style": "chat",
+    "predicted": null,
+    "expected": [
+     "general_chat"
+    ],
+    "ok": true,
+    "latency_ms": 401.4
+   },
+   {
+    "id": "chat-3",
+    "style": "chat",
+    "predicted": null,
+    "expected": [
+     "general_chat",
+     "journal",
+     "remember_emotional_moment"
+    ],
+    "ok": true,
+    "latency_ms": 531.0
+   },
+   {
+    "id": "chat-4",
+    "style": "chat",
+    "predicted": null,
+    "expected": [
+     "general_chat"
+    ],
+    "ok": true,
+    "latency_ms": 464.8
+   },
+   {
+    "id": "chat-5",
+    "style": "chat",
+    "predicted": null,
+    "expected": [
+     "general_chat"
+    ],
+    "ok": true,
+    "latency_ms": 408.2
+   },
+   {
+    "id": "chat-6",
+    "style": "chat",
+    "predicted": null,
+    "expected": [
+     "general_chat"
+    ],
+    "ok": true,
+    "latency_ms": 426.7
+   },
+   {
+    "id": "chat-7",
+    "style": "chat",
+    "predicted": null,
+    "expected": [
+     "general_chat"
+    ],
+    "ok": true,
+    "latency_ms": 426.8
+   },
+   {
+    "id": "chat-8",
+    "style": "chat",
+    "predicted": null,
+    "expected": [
+     "general_chat"
+    ],
+    "ok": true,
+    "latency_ms": 383.4
+   }
+  ]
+ },
+ "rss_mb_after_bench": 861,
+ "mem_available_mb_after": 1458
+}
