@@ -41,6 +41,14 @@ logger = logging.getLogger(__name__)
 
 DISCOVERY_PLAYLIST_NAME = "Zoe Discovery"
 
+
+def playlist_name_for_user(user_id: str) -> str:
+    """'jason' → 'Zoe Discovery — Jason'. Ids are the display handle we have;
+    a nicer family-users display-name lookup can slot in here later."""
+    uid = (user_id or "").strip()
+    return f"{DISCOVERY_PLAYLIST_NAME} — {uid[:1].upper()}{uid[1:]}" if uid \
+        else DISCOVERY_PLAYLIST_NAME
+
 _DATA_DIR = Path(__file__).resolve().parent / "data" / "music_discovery"
 RECOMMENDATIONS_PATH = Path(
     os.environ.get("ZOE_MUSIC_DISCOVERY_JSON", str(_DATA_DIR / "recommendations.json"))
@@ -152,10 +160,17 @@ def build_mood_query(artists: list[str], default_mood: str = "") -> str:
 
 # ── Recommendations store (local JSON, written by the batch) ─────────────────
 
-def save_recommendations(recs: list[dict[str, Any]], seed: dict[str, Any]) -> Path:
-    """Persist the batch output (recommendations + how they were seeded)."""
+def save_discovery_run(profiles: list[dict[str, Any]]) -> Path:
+    """Persist one batch run: a list of per-profile results
+    ({user_id: None|str, seed, recommendations, playlist}). The household
+    profile (user_id None) is mirrored at the top level for readers of the
+    PR-1 single-profile shape."""
     RECOMMENDATIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"generated_at": int(time.time()), "seed": seed, "recommendations": recs}
+    payload: dict[str, Any] = {"generated_at": int(time.time()), "profiles": profiles}
+    household = next((p for p in profiles if p.get("user_id") is None), None)
+    if household:
+        payload["seed"] = household.get("seed")
+        payload["recommendations"] = household.get("recommendations")
     RECOMMENDATIONS_PATH.write_text(json.dumps(payload, indent=2))
     return RECOMMENDATIONS_PATH
 
@@ -208,18 +223,18 @@ async def resolve_recommendation_tracks(rec: dict[str, Any],
     return uris
 
 
-async def get_discovery_playlist() -> Optional[dict[str, Any]]:
-    """The 'Zoe Discovery' library playlist, or None."""
-    items = await ms._ma("music/playlists/library_items",
-                         search=DISCOVERY_PLAYLIST_NAME, limit=10)
+async def get_discovery_playlist(name: str = DISCOVERY_PLAYLIST_NAME) -> Optional[dict[str, Any]]:
+    """The named discovery library playlist, or None."""
+    items = await ms._ma("music/playlists/library_items", search=name, limit=10)
     for p in ms._as_list(items):
-        if (p.get("name") or "").strip().casefold() == DISCOVERY_PLAYLIST_NAME.casefold():
+        if (p.get("name") or "").strip().casefold() == name.casefold():
             return p
     return None
 
 
-async def replace_discovery_playlist(track_uris: list[str]) -> dict[str, Any]:
-    """Create-or-replace the 'Zoe Discovery' playlist with `track_uris`.
+async def replace_discovery_playlist(track_uris: list[str],
+                                     name: str = DISCOVERY_PLAYLIST_NAME) -> dict[str, Any]:
+    """Create-or-replace the named discovery playlist with `track_uris`.
 
     MA has no atomic replace: existing tracks are removed by position
     (``remove_playlist_tracks``), then the new set is added
@@ -227,10 +242,9 @@ async def replace_discovery_playlist(track_uris: list[str]) -> dict[str, Any]:
     """
     if not track_uris:
         return {"ok": False, "reason": "no resolvable tracks"}
-    playlist = await get_discovery_playlist()
+    playlist = await get_discovery_playlist(name)
     if playlist is None:
-        playlist = await ms._ma("music/playlists/create_playlist",
-                                name=DISCOVERY_PLAYLIST_NAME)
+        playlist = await ms._ma("music/playlists/create_playlist", name=name)
         if not isinstance(playlist, dict) or not playlist.get("item_id"):
             return {"ok": False, "reason": "could not create playlist"}
     else:
@@ -259,12 +273,22 @@ async def replace_discovery_playlist(track_uris: list[str]) -> dict[str, Any]:
 # ── Intent surface: "play my discovery playlist" ─────────────────────────────
 
 async def play_discovery(player_id: str = "", zoe_user_id: str = "") -> dict[str, Any]:
-    """Play the 'Zoe Discovery' playlist on the target speaker.
+    """Play the requesting user's discovery playlist on the target speaker.
 
+    An identified user gets their personal "Zoe Discovery — <Name>" playlist
+    when the batch has built one; everyone (incl. guests, or a user without a
+    personal playlist yet) falls back to the household "Zoe Discovery".
     Returns music_service.play_media()'s shape; ok=False with a friendly
-    reason when the playlist doesn't exist yet (no batch has run).
+    reason when no discovery playlist exists yet (no batch has run).
     """
-    playlist = await get_discovery_playlist()
+    import music_history as mh
+
+    playlist = None
+    uid = mh.resolve_music_user(zoe_user_id)
+    if uid != mh.GUEST_USER_ID:
+        playlist = await get_discovery_playlist(playlist_name_for_user(uid))
+    if playlist is None or not playlist.get("uri"):
+        playlist = await get_discovery_playlist()
     if playlist is None or not playlist.get("uri"):
         return {"ok": False, "reason": "no discovery playlist yet"}
     return await ms.play_media(playlist["uri"], player_id=player_id,

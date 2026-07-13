@@ -4,9 +4,11 @@
 digarr (labs/digarr-spike/ — hidden engine, family never sees it) runs as a
 BATCH-ONLY docker container against the local Gemma llama-server (:11434,
 OpenAI-compatible, base URL WITHOUT /v1), proposes new artists/albums via one
-mood/discover call seeded from Music Assistant's own play history (fully
-local — no cloud scrobbler), and is stopped + removed before this script
-exits. Results land in services/zoe-data/data/music_discovery/ and are
+mood/discover call per taste profile — the household (always) plus each
+identified user with enough listening-journal history (personal
+"Zoe Discovery — <Name>" playlists; guest history only feeds the household) —
+all seeded fully locally (no cloud scrobbler), and the container is stopped +
+removed before this script exits. Results land in services/zoe-data/data/music_discovery/ and are
 bridged into the "Zoe Discovery" playlist through MA's playlist API
 (digarr's M3U export is Spotify-URL entries MA cannot play — spike finding).
 
@@ -267,21 +269,50 @@ def run_mood_discovery(token: str, query: str) -> list[dict[str, Any]]:
     return res.get("results") or []
 
 
-async def build_seed() -> tuple[str, dict[str, Any]]:
-    import music_discovery  # deferred: needs services/zoe-data on sys.path
+async def build_profiles() -> list[dict[str, Any]]:
+    """The taste profiles this run discovers for: the household (always,
+    user_id None → the shared "Zoe Discovery" playlist) plus every identified
+    user with enough journal history for a personal playlist (guest history
+    only ever feeds the household — never a personal profile). Bounded by
+    ZOE_DISCOVERY_MAX_USERS; thin-history users simply aren't listed and keep
+    using the household playlist."""
+    import music_discovery
+    import music_history
 
-    artists = await music_discovery.taste_seed()
+    default_mood = os.environ.get("ZOE_DISCOVERY_DEFAULT_MOOD", "")
+    profiles: list[dict[str, Any]] = []
+
+    household_artists = await music_discovery.taste_seed()
     query = build_query_override() or music_discovery.build_mood_query(
-        artists, os.environ.get("ZOE_DISCOVERY_DEFAULT_MOOD", ""))
-    return query, {"artists": artists, "query": query}
+        household_artists, default_mood)
+    profiles.append({"user_id": None,
+                     "playlist": music_discovery.DISCOVERY_PLAYLIST_NAME,
+                     "seed": {"artists": household_artists, "query": query}})
+    if build_query_override():
+        return profiles  # an explicit --mood is a one-off household run
+
+    max_users = int(os.environ.get("ZOE_DISCOVERY_MAX_USERS", "4"))
+    min_plays = int(os.environ.get("ZOE_DISCOVERY_MIN_PLAYS", "10"))
+    users = await music_history.users_with_history(min_plays=min_plays)
+    for uid in users[:max_users]:
+        artists = await music_discovery.taste_seed(user_id=uid)
+        if not artists:
+            continue
+        profiles.append({
+            "user_id": uid,
+            "playlist": music_discovery.playlist_name_for_user(uid),
+            "seed": {"artists": artists,
+                     "query": music_discovery.build_mood_query(artists, default_mood)},
+        })
+    return profiles
 
 
 def build_query_override() -> str:
     return getattr(build_query_override, "_override", "") or ""
 
 
-async def bridge_to_playlist(recs: list[dict[str, Any]],
-                             per_artist: int) -> dict[str, Any]:
+async def bridge_to_playlist(recs: list[dict[str, Any]], per_artist: int,
+                             playlist_name: str) -> dict[str, Any]:
     import music_discovery
 
     uris: list[str] = []
@@ -295,7 +326,7 @@ async def bridge_to_playlist(recs: list[dict[str, Any]],
         else:
             skipped.append(artist)
             log.info("unresolvable in MA (skipped): %s", artist)
-    result = await music_discovery.replace_discovery_playlist(uris)
+    result = await music_discovery.replace_discovery_playlist(uris, name=playlist_name)
     result["skipped"] = skipped
     return result
 
@@ -326,33 +357,54 @@ def main() -> int:
 
     started = False
     try:
-        query, seed = asyncio.run(build_seed())
+        profiles = asyncio.run(build_profiles())
         if not start_digarr():
             return 1
         started = True
         if not wait_digarr_ready():
             return 1
         token = digarr_login()
-        recs = run_mood_discovery(token, query)[: args.limit]
-        if not recs:
-            log.error("digarr returned no recommendations")
-            return 1
-        path = music_discovery.save_recommendations(recs, seed)
-        log.info("wrote %d recommendation(s) to %s", len(recs), path)
-        # Free the container (and its RAM) BEFORE the MA bridge — the bridge
-        # only talks to MA and can take a while resolving tracks.
+        # All Gemma-bound work first (one ~46s mood call per profile), so the
+        # container + brain are released BEFORE the MA-only bridge phase.
+        for profile in profiles:
+            who = profile["user_id"] or "household"
+            try:
+                profile["recommendations"] = run_mood_discovery(
+                    token, profile["seed"]["query"])[: args.limit]
+            except Exception as exc:  # noqa: BLE001 — one profile must not sink the run
+                log.error("discovery failed for %s (skipped): %s", who, exc)
+                profile["recommendations"] = []
         if stop_digarr():
             started = False
+        if not any(p["recommendations"] for p in profiles):
+            # Do NOT save: an all-failed run must not clobber the last good
+            # recommendations.json with empty data.
+            log.error("digarr returned no recommendations for any profile")
+            return 1
+        path = music_discovery.save_discovery_run(profiles)
+        log.info("wrote %d profile(s) to %s", len(profiles), path)
         if args.no_bridge:
             return 0
-        result = asyncio.run(bridge_to_playlist(recs, args.per_artist))
-        if not result.get("ok"):
-            log.error("playlist bridge failed: %s", result.get("reason"))
-            return 1
-        log.info("'%s' playlist updated: %d tracks (skipped: %s)",
-                 music_discovery.DISCOVERY_PLAYLIST_NAME, result["added"],
-                 ", ".join(result["skipped"]) or "none")
-        return 0
+        rc = 0
+        for profile in profiles:
+            if not profile["recommendations"]:
+                if profile["user_id"] is None:
+                    rc = 1  # empty household discovery leaves the fallback playlist stale
+                continue
+            result = asyncio.run(bridge_to_playlist(
+                profile["recommendations"], args.per_artist, profile["playlist"]))
+            if result.get("ok"):
+                log.info("'%s' playlist updated: %d tracks (skipped: %s)",
+                         profile["playlist"], result["added"],
+                         ", ".join(result["skipped"]) or "none")
+            else:
+                log.error("playlist bridge failed for '%s': %s",
+                          profile["playlist"], result.get("reason"))
+                # The household playlist is the guest + missing-personal
+                # fallback — a stale one is a FAILED run, not a partial pass.
+                if profile["user_id"] is None:
+                    rc = 1
+        return rc
     except Exception:  # noqa: BLE001 — log the traceback, still clean up
         log.exception("discovery batch failed")
         return 1

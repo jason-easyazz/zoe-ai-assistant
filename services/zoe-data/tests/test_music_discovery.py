@@ -382,3 +382,96 @@ def test_batch_container_ai_base_url(monkeypatch):
     assert mod._container_ai_base_url() == "http://host.docker.internal:9999"
     monkeypatch.setenv("ZOE_DIGARR_AI_BASE_URL", "http://other:1234/")
     assert mod._container_ai_base_url() == "http://other:1234"
+
+
+# ── PR-2: per-user discovery playlists ───────────────────────────────────────
+
+def test_playlist_name_for_user():
+    assert md.playlist_name_for_user("jason") == "Zoe Discovery — Jason"
+    assert md.playlist_name_for_user("") == md.DISCOVERY_PLAYLIST_NAME
+
+
+@pytest.mark.asyncio
+async def test_play_discovery_prefers_personal_playlist(monkeypatch):
+    async def fake(command, **args):
+        assert command == "music/playlists/library_items"
+        if args["search"] == "Zoe Discovery — Jason":
+            return [{"item_id": 9, "name": "Zoe Discovery — Jason",
+                     "uri": "library://playlist/9"}]
+        return [{"item_id": 7, "name": "Zoe Discovery", "uri": "library://playlist/7"}]
+
+    played = {}
+
+    async def fake_play(uri, player_id="", zoe_user_id=""):
+        played["uri"] = uri
+        return {"ok": True, "uri": uri}
+
+    monkeypatch.setattr(ms, "_ma", fake)
+    monkeypatch.setattr(ms, "play_media", fake_play)
+    res = await md.play_discovery(zoe_user_id="jason")
+    assert res["ok"] and played["uri"] == "library://playlist/9"
+
+
+@pytest.mark.asyncio
+async def test_play_discovery_guest_and_missing_personal_fall_back(monkeypatch):
+    searches = []
+
+    async def fake(command, **args):
+        searches.append(args["search"])
+        if args["search"] == md.DISCOVERY_PLAYLIST_NAME:
+            return [{"item_id": 7, "name": "Zoe Discovery", "uri": "library://playlist/7"}]
+        return []  # no personal playlist built yet
+
+    played = {}
+
+    async def fake_play(uri, player_id="", zoe_user_id=""):
+        played["uri"] = uri
+        return {"ok": True, "uri": uri}
+
+    monkeypatch.setattr(ms, "_ma", fake)
+    monkeypatch.setattr(ms, "play_media", fake_play)
+    # identified user without a personal playlist → household
+    res = await md.play_discovery(zoe_user_id="delia")
+    assert res["ok"] and played["uri"] == "library://playlist/7"
+    assert searches[0] == "Zoe Discovery — Delia"
+    # guest → household directly, never a personal lookup
+    searches.clear()
+    res = await md.play_discovery(zoe_user_id="voice-guest")
+    assert res["ok"]
+    assert searches == [md.DISCOVERY_PLAYLIST_NAME]
+
+
+@pytest.mark.asyncio
+async def test_replace_playlist_creates_named_personal_playlist(monkeypatch):
+    created = {}
+
+    async def fake(command, **args):
+        if command == "music/playlists/library_items":
+            return []
+        if command == "music/playlists/create_playlist":
+            created.update(args)
+            return {"item_id": 11, "name": args["name"], "uri": "library://playlist/11"}
+        raise AssertionError(command)
+
+    async def fake_ok(command, timeout_s=0, **args):
+        return True
+
+    monkeypatch.setattr(ms, "_ma", fake)
+    monkeypatch.setattr(ms, "_ma_ok", fake_ok)
+    res = await md.replace_discovery_playlist(["yt://t/1"], name="Zoe Discovery — Jason")
+    assert res["ok"]
+    assert created["name"] == "Zoe Discovery — Jason"
+
+
+def test_save_discovery_run_mirrors_household(tmp_path, monkeypatch):
+    monkeypatch.setattr(md, "RECOMMENDATIONS_PATH", tmp_path / "recs.json")
+    profiles = [
+        {"user_id": None, "playlist": "Zoe Discovery",
+         "seed": {"artists": ["A"]}, "recommendations": [{"artistName": "X"}]},
+        {"user_id": "jason", "playlist": "Zoe Discovery — Jason",
+         "seed": {"artists": ["B"]}, "recommendations": [{"artistName": "Y"}]},
+    ]
+    md.save_discovery_run(profiles)
+    saved = md.load_recommendations()
+    assert len(saved["profiles"]) == 2
+    assert saved["recommendations"] == [{"artistName": "X"}]  # PR-1 shape kept
