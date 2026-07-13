@@ -779,9 +779,10 @@ async def reconcile_for_ingest(
             # An empty result here usually means the search timed out or the
             # store is cold — the fact is still stored (ADD), but supersession
             # was skipped, so make it visible instead of logger.debug.
+            # No raw memory text in logs (it is personal data) — length only.
             logger.warning(
-                "reconcile_for_ingest: no search hits for %r (user=%s) — "
-                "storing as ADD without supersession check", text[:60], user_id,
+                "reconcile_for_ingest: no search hits (user=%s, text_len=%d) — "
+                "storing as ADD without supersession check", user_id, len(text),
             )
         existing = [
             (getattr(h, "id", ""), getattr(h, "text", "") or "")
