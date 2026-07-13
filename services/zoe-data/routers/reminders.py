@@ -166,8 +166,9 @@ async def update_reminder(
     row = await cursor.fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Reminder not found")
-    if dict(row).get("user_id") != user_id:
-        raise HTTPException(status_code=403, detail="Not authorised to edit this reminder")
+    # Household model: family-visible reminders are editable by any signed-in
+    # member (mirrors calendar #1303 / people) — the visibility filter above
+    # already scopes the lookup to family-or-own.
 
     updates = []
     params = []
@@ -227,8 +228,7 @@ async def delete_reminder(
     row = await cursor.fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Reminder not found")
-    if dict(row).get("user_id") != user_id:
-        raise HTTPException(status_code=403, detail="Not authorised to delete this reminder")
+    # Household model: deletable family-wide (soft delete, reversible) — see update above.
 
     # B2: cancel the pending job BEFORE marking deleted so it can't fire after
     # delete; the in-job obligation re-read also aborts a sub-second in-flight job.
