@@ -365,9 +365,13 @@ def test_batch_brain_url_strips_v1(monkeypatch):
 def test_batch_container_ai_base_url(monkeypatch):
     mod = _load_batch_module()
     monkeypatch.delenv("ZOE_DIGARR_AI_BASE_URL", raising=False)
-    monkeypatch.setattr(mod, "LLAMA_URL", "http://127.0.0.1:11434")
+    monkeypatch.setenv("ZOE_BRAIN_URL", "http://127.0.0.1:11434")
     assert mod._container_ai_base_url() == "http://host.docker.internal:11434"
-    monkeypatch.setattr(mod, "LLAMA_URL", "http://192.168.1.218:9000")
+    monkeypatch.setenv("ZOE_BRAIN_URL", "http://192.168.1.218:9000")
     assert mod._container_ai_base_url() == "http://192.168.1.218:9000"
+    # .env-loaded values (set after import) must be honoured — call-time read
+    monkeypatch.setenv("ZOE_BRAIN_URL", "http://127.0.0.1:9999/v1")
+    assert mod._brain_base_url() == "http://127.0.0.1:9999"
+    assert mod._container_ai_base_url() == "http://host.docker.internal:9999"
     monkeypatch.setenv("ZOE_DIGARR_AI_BASE_URL", "http://other:1234/")
     assert mod._container_ai_base_url() == "http://other:1234"

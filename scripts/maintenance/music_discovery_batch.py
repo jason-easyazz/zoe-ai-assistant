@@ -52,34 +52,36 @@ log = logging.getLogger("music_discovery_batch")
 CONTAINER_NAME = "zoe-digarr-batch"
 DIGARR_PORT = int(os.environ.get("ZOE_DIGARR_PORT", "3199"))
 DIGARR_URL = f"http://127.0.0.1:{DIGARR_PORT}"
+DATA_DIR = ZOE_DATA / "data" / "music_discovery"
+
+
 def _brain_base_url() -> str:
     """The llama-server BASE url (no /v1) for probes AND the container.
 
     Zoe's brain URL convention sometimes carries /v1 (e.g. GEMMA_SERVER_URL);
     strip it so /health + /slots probe the server root and digarr — which
-    appends /v1/... itself (spike gotcha) — gets a clean base."""
+    appends /v1/... itself (spike gotcha) — gets a clean base. Read from the
+    environment at CALL time (never a module constant) so a manual run's
+    ``load_env_defaults()`` values are honoured."""
     url = os.environ.get("ZOE_BRAIN_URL", "http://127.0.0.1:11434").rstrip("/")
     return url[:-3] if url.endswith("/v1") else url
 
 
-LLAMA_URL = _brain_base_url()
-
-
 def _container_ai_base_url() -> str:
-    """LLAMA_URL as seen from inside the digarr container: loopback/localhost
-    become host.docker.internal (mapped via --add-host host-gateway) with the
-    same port; anything else (a real LAN address) passes through. Override:
-    ZOE_DIGARR_AI_BASE_URL."""
+    """The brain base URL as seen from inside the digarr container: loopback/
+    localhost become host.docker.internal (mapped via --add-host host-gateway)
+    with the same port; anything else (a real LAN address) passes through.
+    Override: ZOE_DIGARR_AI_BASE_URL."""
     override = os.environ.get("ZOE_DIGARR_AI_BASE_URL", "").rstrip("/")
     if override:
         return override
     from urllib.parse import urlparse
-    parsed = urlparse(LLAMA_URL)
+    base = _brain_base_url()
+    parsed = urlparse(base)
     if parsed.hostname in ("127.0.0.1", "localhost", "0.0.0.0"):  # noqa: S104
         port = parsed.port or 80
         return f"{parsed.scheme}://host.docker.internal:{port}"
-    return LLAMA_URL
-DATA_DIR = ZOE_DATA / "data" / "music_discovery"
+    return base
 AUTH_PATH = DATA_DIR / "digarr_auth.json"
 
 
@@ -131,12 +133,12 @@ def check_brain_idle() -> bool:
     (or in front of) a voice turn. /slots is authoritative; /health-only when
     the server doesn't expose slots."""
     try:
-        _http_json("GET", f"{LLAMA_URL}/health", timeout=5.0)
+        _http_json("GET", f"{_brain_base_url()}/health", timeout=5.0)
     except Exception as exc:  # noqa: BLE001
         log.error("ABORT: brain health probe failed (%s)", exc)
         return False
     try:
-        slots = _http_json("GET", f"{LLAMA_URL}/slots", timeout=5.0)
+        slots = _http_json("GET", f"{_brain_base_url()}/slots", timeout=5.0)
     except urllib.error.HTTPError as exc:
         log.warning("brain /slots unavailable (HTTP %s) — proceeding on /health only", exc.code)
         return True
@@ -177,7 +179,7 @@ def brain_model_id() -> str:
     if override:
         return override
     try:
-        models = _http_json("GET", f"{LLAMA_URL}/v1/models", timeout=5.0)
+        models = _http_json("GET", f"{_brain_base_url()}/v1/models", timeout=5.0)
         return models["data"][0]["id"]
     except Exception:  # noqa: BLE001
         return "local-gemma"
