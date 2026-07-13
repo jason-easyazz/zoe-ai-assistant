@@ -186,3 +186,63 @@ async def test_explicit_source_bypasses_drop_but_async_sources_blocked(monkeypat
     assert reached == ["Delia: March 25"]
     # bypass does NOT clear — only a successful teach handler clears
     assert mt.matching_tombstone("u1", "Delia: March 25")
+
+
+@pytest.mark.asyncio
+async def test_reteach_clears_regardless_of_answer_lane(monkeypatch):
+    """An explicit 'remember that …' utterance clears the shadow even when the
+    semantic router sends the turn to the note/brain lane (live repro: the
+    re-teach was silently shadow-dropped because no teach lane ran)."""
+    from routers import chat as chat_mod
+
+    async def _noop(*a, **k):
+        return 0
+
+    for mod in ("memory_extractor", "memory_digest", "person_extractor",
+                "person_extractor_llm", "latent_intent_detector"):
+        monkeypatch.setitem(sys.modules, mod, types.SimpleNamespace(
+            extract_and_ingest=_noop, run_turn_digest=_noop,
+            process_text=_noop, process_text_llm=_noop, detect_and_store=_noop,
+        ))
+
+    mt.add("u1", "Delia")
+    await chat_mod._persist_memory_candidates(
+        "u1", "s1", "remember that Delia's birthday is March 25", "Noted.")
+    assert mt.matching_tombstone("u1", "Delia") is None
+
+    # a NON-explicit mention does not clear
+    mt.add("u1", "Delia")
+    await chat_mod._persist_memory_candidates(
+        "u1", "s1", "I saw Delia at the shops today", "Nice!")
+    assert mt.matching_tombstone("u1", "Delia")
+
+    # REMINDER/task/plan shapes are not re-teaches — they must NOT clear the
+    # shadow (Greptile P1 ×2). The single definition lives in
+    # memory_tombstones.is_explicit_teach; extend the cases there.
+    for reminder in ("don't forget to invite Delia",
+                     "remember to call Delia tomorrow",
+                     "don't forget about Delia",
+                     "remember we need to invite Delia",
+                     "remember you said Delia is coming"):
+        await chat_mod._persist_memory_candidates("u1", "s1", reminder, "Okay.")
+        assert mt.matching_tombstone("u1", "Delia"), reminder
+
+
+def test_is_explicit_teach_shapes():
+    from memory_tombstones import is_explicit_teach
+
+    for teach in ("remember that Delia's birthday is March 25",
+                  "remember Delia is allergic to nuts",
+                  "note that Delia moved to Perth",
+                  "don't forget Delia's birthday is in May",
+                  "remember that Delia goes by Dee",
+                  "note that Delia owns a red car",
+                  "remember Delia's favourite colour is blue",
+                  "keep in mind that my friend Delia hates olives"):
+        assert is_explicit_teach(teach), teach
+    for task in ("don't forget to invite Delia", "remember to call Delia",
+                 "don't forget about Delia", "remember we need to invite Delia",
+                 "note about Delia: party", "remember it was Delia's idea",
+                 "remind me about Delia", "I saw Delia today",
+                 "remember tomorrow to call Delia", "remember Delia tomorrow"):
+        assert not is_explicit_teach(task), task

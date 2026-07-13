@@ -84,6 +84,61 @@ def matching_tombstone(user_id: str, text: str) -> Optional[str]:
     return None
 
 
+# An explicit fact-teach: opener + optional "that" + a clause that starts with
+# the fact's subject ("Delia is …", "my friend Delia …", "Delia's birthday …").
+# Reminder/task/plan phrasings are excluded by the lookahead: "… to invite",
+# "… about Delia", "… we need to …", "remind me …" are tasks, not teaches, and
+# must never clear a forget shadow. ONE definition, shared by the chat and
+# voice extraction hooks — extend here, not in the lanes.
+_TEACH_OPENER_RE = re.compile(
+    r"^(?:please\s+)?(?:remember|note|don'?t\s+forget|keep\s+in\s+mind)\s+"
+    r"(?:that\s+)?(?!(?:to|about|we|us|me|you|i|it|this)\b)(?P<clause>\S.*)$",
+    re.IGNORECASE,
+)
+# The clause must actually ASSERT something: within its first few tokens there
+# must be a VERB-SHAPED word (an irregular fact verb, or a lowercase token with
+# a verbal suffix — goes/owns/moved/adores/likes/…) that is NOT part of a
+# to-infinitive ("to call"). Structural, not an allowlist: a verb allowlist
+# under-matched real teaches ("goes by Dee", "owns a red car") and a pure
+# opener blocklist over-matched reminders ("remember tomorrow to call Delia")
+# — both were Greptile P1s.
+_IRREGULAR_VERBS = frozenset({
+    "is", "are", "was", "were", "has", "had", "have", "can", "cannot",
+    "won't", "will", "born", "went", "left", "kept", "means", "met",
+    "isn't", "aren't", "wasn't", "doesn't", "don't", "can't",
+})
+# A to-infinitive/task tail right after the opener is a reminder, never a teach.
+_TASK_TAIL_RE = re.compile(r"^\S+\s+to\s+\w+", re.IGNORECASE)
+
+
+def _has_assertion(clause: str) -> bool:
+    tokens = [t.strip(".,!?:;\"'’") .lower() for t in clause.split()]
+    for i, tok in enumerate(tokens[:7]):
+        if i == 0:
+            continue  # the subject itself is never the verb
+        if tokens[i - 1] == "to":
+            continue  # to-infinitive = task, not assertion
+        if tok in _IRREGULAR_VERBS:
+            return True
+        if len(tok) > 3 and tok.isalpha() and tok.endswith(("ed",)):
+            return True
+        if len(tok) > 3 and tok.isalpha() and tok.endswith("s") and not tok.endswith("ss"):
+            return True
+    return False
+
+
+def is_explicit_teach(text: str) -> bool:
+    """Does ``text`` read as the user dictating a fact (vs a reminder/task)?
+    ONE definition shared by the chat and voice hooks — extend here."""
+    m = _TEACH_OPENER_RE.match((text or "").strip())
+    if not m:
+        return False
+    clause = m.group("clause")
+    if _TASK_TAIL_RE.match(clause):
+        return False
+    return _has_assertion(clause)
+
+
 def clear_matching(user_id: str, text: str) -> int:
     """Drop every tombstone whose name appears in ``text`` — called by EXPLICIT
     teach paths so 'forget Delia' → 'remember that Delia …' works immediately.
