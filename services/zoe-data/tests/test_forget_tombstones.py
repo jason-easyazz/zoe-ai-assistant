@@ -152,3 +152,37 @@ async def test_no_match_forget_still_tombstones(monkeypatch):
         intent_router.Intent("memory_forget_entity", {"name": "Delia"}), "u1")
     assert "anything saved" in reply.lower()
     assert mt.matching_tombstone("u1", "Delia: March 15")
+
+
+@pytest.mark.asyncio
+async def test_explicit_source_bypasses_drop_but_async_sources_blocked(monkeypatch):
+    from memory_service import MemoryService
+
+    reached: list[str] = []
+
+    class _Probe(MemoryService):
+        def __init__(self):
+            self._seen_keys = {}
+            self._user_locks = {}
+
+        def _bump(self, *a, **k):
+            pass
+
+    svc = _Probe()
+
+    def _record(user_id, user_turn_id, text, **kw):
+        reached.append(text)
+        raise RuntimeError("stop-after-guard")
+
+    monkeypatch.setattr(svc, "_idempotency_key", _record)
+    mt.add("u1", "Delia")
+
+    # async lane: dropped
+    assert await svc.ingest("Delia: March 25", user_id="u1", source="turn_digest") is None
+    assert reached == []
+    # explicit teach lane: bypasses the shadow (handler clears after success)
+    with pytest.raises(RuntimeError):
+        await svc.ingest("Delia: March 25", user_id="u1", source="voice_fact")
+    assert reached == ["Delia: March 25"]
+    # bypass does NOT clear — only a successful teach handler clears
+    assert mt.matching_tombstone("u1", "Delia: March 25")

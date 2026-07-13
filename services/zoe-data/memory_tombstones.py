@@ -32,6 +32,13 @@ logger = logging.getLogger(__name__)
 # the tombstone into a long-lived "never mention X" rule.
 DEFAULT_TTL_S = 300.0
 
+# Ingest sources that are an EXPLICIT user teach (the user dictating a fact
+# right now) — these bypass the tombstone drop so a post-forget re-teach can
+# store, and the teach handler then clears the tombstone AFTER the store
+# succeeds. Async/mined lanes (turn_digest, chat_regex, voice_regex,
+# conversation, idle_consolidation, …) are never listed here.
+EXPLICIT_TEACH_SOURCES = frozenset({"brain_tool", "voice_fact", "review_ui"})
+
 # {user_id: {name_norm: expires_at_monotonic}}
 _tombstones: dict[str, dict[str, float]] = {}
 

@@ -570,8 +570,8 @@ class MemoryService:
         # (ingest is the one durable-write chokepoint every lane funnels
         # through). Explicit re-teach paths clear the tombstone first.
         try:
-            from memory_tombstones import matching_tombstone
-            if matching_tombstone(user_id, scrubbed):
+            from memory_tombstones import EXPLICIT_TEACH_SOURCES, matching_tombstone
+            if source not in EXPLICIT_TEACH_SOURCES and matching_tombstone(user_id, scrubbed):
                 self._bump("tombstone_drop", source)
                 logger.info(
                     "memory_service: ingest dropped — mentions a just-forgotten "

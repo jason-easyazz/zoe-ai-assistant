@@ -3025,14 +3025,6 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         text = str(slots.get("text", "")).strip()
         if not text:
             return "There's nothing to remember — what would you like me to store?"
-        # An EXPLICIT teach beats a recent forget: clear any tombstone whose
-        # name this fact mentions, so "forget Delia" → "remember that Delia…"
-        # works immediately instead of being shadow-dropped at ingest.
-        try:
-            from memory_tombstones import clear_matching as _tomb_clear
-            _tomb_clear(user_id, text)
-        except Exception:
-            pass
         # memory_type is model/caller-controlled, so validate it against an
         # allowlist rather than forwarding an arbitrary string to the store: a
         # direct/replayed intent-dispatch (internal-token only) must not be able to
@@ -3095,6 +3087,14 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             # ingest silently drops on PII reject / dedup / opt-out. Don't claim
             # a durable write the store didn't actually make.
             return "I couldn't save that just now — it may already be stored or contain something I can't keep."
+        # An EXPLICIT teach beats a recent forget — but only clear the shadow
+        # AFTER the store succeeded (its source is tombstone-exempt), or a
+        # failed/rejected store would silently drop the protection (Greptile P1).
+        try:
+            from memory_tombstones import clear_matching as _tomb_clear
+            _tomb_clear(user_id, text)
+        except Exception:
+            pass
         return "Got it — I'll remember that."
 
     # ── A2A Federation Status ──────────────────────────────────────────────────

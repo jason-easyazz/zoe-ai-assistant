@@ -453,14 +453,6 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
     Statements are persisted to MemPalace via MemoryService.ingest (which has
     built-in idempotency via user_turn_id, so a double-submit can't double-store)
     so they become recallable. Questions fall back to the recall expert."""
-    # An EXPLICIT teach beats a recent forget: clear any tombstone whose name
-    # this fact mentions (see memory_tombstones; forget-then-re-teach must work
-    # immediately, not after the TTL).
-    try:
-        from memory_tombstones import clear_matching as _tomb_clear
-        _tomb_clear(user_id, text)
-    except Exception:
-        pass
     text = (text or "").strip()
     if not text:
         return None
@@ -549,6 +541,14 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
         logger.debug("store_fact person-link path skipped (%s)", exc)
         linked = 0
     if linked and linked > 0:
+        # Fact landed via the coreference extractor — an EXPLICIT teach beats a
+        # recent forget, but only clear the shadow AFTER a successful store
+        # (the extractor's voice_fact source is tombstone-exempt at ingest).
+        try:
+            from memory_tombstones import clear_matching as _tomb_clear_l
+            _tomb_clear_l(user_id, text)
+        except Exception:
+            pass
         if correctionish:
             # A correction the extractor resolved — never echo the raw
             # negation ("I'll remember No Caitlin is…") back as a teach.
@@ -620,6 +620,14 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
     # Echo the captured fact back (second person) so the user hears exactly what
     # landed and can correct it — a confirmation without a separate "should I
     # save that?" turn.
+    # Store succeeded (or an equivalent fact already lives there): the explicit
+    # teach now clears any matching forget tombstone. Never on the failure/
+    # dropped paths above — a failed store must keep the shadow (Greptile P1).
+    try:
+        from memory_tombstones import clear_matching as _tomb_clear
+        _tomb_clear(user_id, text)
+    except Exception:
+        pass
     echo = _echo_fact(text)
     return f"Got it — I'll remember {echo}." if echo else "Got it — I'll remember that."
 
