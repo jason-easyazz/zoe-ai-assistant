@@ -352,7 +352,38 @@ async def _ingest_to_mempalace(
             logger.debug("person_extractor: dropped non-fact (%s): %r", reason, text[:60])
             return None
         from memory_service import get_memory_service
-        ref = await get_memory_service().ingest(
+        svc = get_memory_service()
+        # Cross-writer reconciliation (QA review F9): this path used to blind-ADD,
+        # so a re-stated or corrected person fact accumulated near-duplicate /
+        # contradicting rows next to the memory-expert and digest copies. Route
+        # through the shared ADD/UPDATE/SKIP decision (entity-guarded on the
+        # person's name). reconcile_for_ingest never raises — errors → ADD.
+        try:
+            from memory_quality import reconcile_for_ingest
+            op, target_id = await reconcile_for_ingest(
+                svc, text, user_id, title=person_name)
+        except Exception as exc:
+            logger.debug("person_extractor: reconciliation unavailable (%s) — plain ingest", exc)
+            op, target_id = "add", None
+        if op == "skip" and target_id:
+            # Existing row is at least as informative — keep it, write nothing.
+            logger.info("person_extractor: dedup-skip kept=%s cand=%r", target_id, text[:60])
+            return target_id
+        if op == "update" and target_id:
+            try:
+                new_ref = await svc.review(
+                    target_id,
+                    decision="edit",
+                    edits=text,
+                    actor=source,
+                    note="person fact supersede (QA F9)",
+                )
+                if new_ref is not None:
+                    logger.info("person_extractor: superseded %s with %r", target_id, text[:60])
+                    return new_ref.id
+            except Exception as exc:
+                logger.warning("person_extractor: supersede failed (%s) — plain ingest", exc)
+        ref = await svc.ingest(
             text,
             user_id=user_id,
             source=source,

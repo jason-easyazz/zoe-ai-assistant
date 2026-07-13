@@ -371,10 +371,12 @@ async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
     real fact."""
     old_id: Optional[str] = None
     try:
-        from memory_quality import classify_against_existing
-        rows = await svc.search(text, user_id=user_id, limit=3)
-        existing = [(getattr(r, "id", ""), getattr(r, "text", "") or "") for r in (rows or [])]
-        action, match_id = classify_against_existing(text, existing)
+        # Shared cross-writer decision (QA review F9): reconcile_for_ingest
+        # wraps search + classify_against_existing AND the entity guards
+        # (namesake / third-person-name protection) this path previously
+        # lacked — a Jessica correction can no longer supersede Karen's row.
+        from memory_quality import reconcile_for_ingest
+        action, match_id = await reconcile_for_ingest(svc, text, user_id)
         if action == "skip" and match_id:
             # The existing row is at least as good — don't write a duplicate.
             try:

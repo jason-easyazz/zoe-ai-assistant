@@ -27,9 +27,12 @@ spoken voice reply.
 
 from __future__ import annotations
 
+import logging
 import re
 from difflib import SequenceMatcher
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -624,10 +627,122 @@ def user_relationship_claim_unsupported(fact_text: str, source_text: str) -> boo
     return False
 
 
+# ---------------------------------------------------------------------------
+# Shared cross-writer reconciliation (QA review F9)
+# ---------------------------------------------------------------------------
+
+# Tokens that are NOT person-name signals: calendar words, generic anchors, and
+# user-anchored kinship/role words. Kinship possessives ("my dad's…" /
+# "User's father's…") anchor to the USER, not a named third person — treating
+# them as names blocked legitimate same-person reconciliation ("User's father's
+# name is Neil" vs "My dad's name is Neil"), which expert_dispatch relied on.
+_GUARD_CAL_WORDS = {
+    "january", "february", "march", "april", "may", "june", "july", "august",
+    "september", "october", "november", "december", "monday", "tuesday",
+    "wednesday", "thursday", "friday", "saturday", "sunday", "my", "the", "user",
+    "dad", "father", "mum", "mom", "mother", "brother", "sister", "wife",
+    "husband", "partner", "son", "daughter", "grandma", "grandmother",
+    "grandpa", "grandfather", "aunt", "uncle", "cousin", "friend",
+}
+
+
+def _guard_name_tokens(t: str) -> set[str]:
+    """Name signals in ``t``: capitalized tokens AND lowercase possessives
+    ("karen's birthday…" — users type lowercase), minus calendar/stop words.
+    Possessive detection keeps a lowercase-typed person's row protected from
+    titleless supersedes (Greptile P1)."""
+    caps = {w.lower() for w in re.findall(r"\b[A-Z][a-z]+\b", t)}
+    poss = {w.lower() for w in re.findall(r"\b([a-z]+)['’]s\b", t)}
+    return {w for w in (caps | poss) if w not in _GUARD_CAL_WORDS}
+
+
+def guard_existing_by_entity(
+    text: str,
+    existing: list[tuple[str, str]],
+    title: Optional[str] = None,
+) -> list[tuple[str, str]]:
+    """Entity guard (Greptile P1/security): filter ``existing`` rows that could
+    belong to a DIFFERENT person than the candidate is about.
+
+    Semantic search can return another person's same-attribute fact ("Karen's
+    birthday is…" for a Jessica correction) — superseding it would overwrite the
+    wrong person's memory. ``title`` is the candidate's person anchor when the
+    writer knows one (e.g. person_extractor's person name); when the candidate
+    has no anchor, any name token in an existing row must also appear in the
+    candidate (namesake / third-person-name protection)."""
+    title = (title or "").strip()
+    if title:
+        toks = title.split()
+        first = toks[0].lower()
+        if len(toks) > 1:
+            # Full-name candidate → the row must mention the FULL name
+            # (a bare "Jessica" row also passes; same person by intro).
+            needle = title.lower()
+            return [
+                (i, t) for i, t in existing
+                if needle in t.lower()
+                or (first in t.lower()
+                    and not re.search(rf"\b(?i:{re.escape(first)})\s+(?:[A-Z][a-z]|[a-z]+['’]s\b)", t))
+            ]
+        # Bare-name candidate ("Jessica") → refuse rows where that name is part
+        # of a LONGER full name ("Jessica Smith") — two people can share a
+        # first name (Greptile P1); ambiguity → ADD.
+        return [
+            (i, t) for i, t in existing
+            if first in t.lower()
+            and not re.search(rf"\b(?i:{re.escape(first)})\s+(?:[A-Z][a-z]|[a-z]+['’]s\b)", t)
+        ]
+    # Titleless candidates (templates/corrections/digest facts without a person
+    # anchor) must not supersede a row about a named third person the candidate
+    # never mentions. Conservative: any name token in the existing row must
+    # appear in the candidate.
+    cand_names = _guard_name_tokens(text)
+    return [
+        (i, t) for i, t in existing
+        if not (_guard_name_tokens(t) - cand_names)
+    ]
+
+
+async def reconcile_for_ingest(
+    svc,
+    text: str,
+    user_id: str,
+    *,
+    title: Optional[str] = None,
+    limit: int = 3,
+) -> tuple[str, Optional[str]]:
+    """Shared ADD/UPDATE/SKIP decision for ALL conversational memory writers.
+
+    QA review F9: each writer (memory_extractor, person_extractor,
+    memory_digest, expert_dispatch) used to blind-ADD near-duplicate or
+    contradicting rows. This helper is the single reconciliation seam: it
+    searches ``svc`` for near-duplicate / same-attribute rows, applies the
+    entity guards (namesake protection, third-person-name guards), then asks
+    :func:`classify_against_existing` what to do.
+
+    Returns ``("add"|"update"|"skip", mem_id_or_None)``. NEVER raises — any
+    failure degrades to ``("add", None)`` so a real fact is never lost because
+    reconciliation errored."""
+    try:
+        hits = await svc.search(text, user_id=user_id, limit=limit)
+        existing = [
+            (getattr(h, "id", ""), getattr(h, "text", "") or "")
+            for h in (hits or [])
+            if getattr(h, "text", None)
+        ]
+        existing = guard_existing_by_entity(text, existing, title)
+        return classify_against_existing(text, existing)
+    except Exception as exc:
+        logger.debug("reconcile_for_ingest unavailable (%s) — plain add", exc)
+        return "add", None
+
+
 __all__ = [
     "is_storable_fact",
     "looks_like_correction",
     "ambiguous_negation_subject",
     "classify_against_existing",
+    "guard_existing_by_entity",
+    "reconcile_for_ingest",
     "user_relationship_claim_unsupported",
 ]
