@@ -16,7 +16,7 @@ Contacts (people) are intentionally NOT touched.
 Usage (run on the zoe-data host):
     python3 scripts/maintenance/purge_orphaned_test_data.py            # dry-run (counts only)
     python3 scripts/maintenance/purge_orphaned_test_data.py --execute  # apply (asks to confirm)
-    python3 scripts/maintenance/purge_orphaned_test_data.py --execute --yes  # non-interactive
+    python3 scripts/maintenance/purge_orphaned_test_data.py --execute --yes --expect-db zoe  # non-interactive
 
 POSTGRES_URL is read from the environment; if unset it is loaded from the
 zoe-data service .env (same file the service uses), so the documented command
@@ -66,7 +66,7 @@ def _redacted_target(dsn: str) -> str:
     return f"{db} on {host}{port} (as {who})"
 
 
-async def main(execute: bool, assume_yes: bool) -> int:
+async def main(execute: bool, assume_yes: bool, expect_db: str) -> int:
     dsn = _resolve_dsn()
     if not dsn:
         print(
@@ -77,7 +77,27 @@ async def main(execute: bool, assume_yes: bool) -> int:
         return 2
 
     target = _redacted_target(dsn)
+    target_db = (urlsplit(dsn).path or "/").lstrip("/")
     print(f"Target database: {target}")
+
+    # Non-interactive runs must positively assert the target DB name, so an
+    # automation shell with a stale POSTGRES_URL aborts instead of mutating the
+    # wrong database. --yes only skips the interactive prompt, never this check.
+    if execute and assume_yes:
+        if not expect_db:
+            print(
+                "\nRefusing non-interactive --yes without --expect-db: pass "
+                f"--expect-db {target_db!r} to assert the intended target.",
+                file=sys.stderr,
+            )
+            return 2
+        if expect_db != target_db:
+            print(
+                f"\nTarget mismatch: resolved DB is {target_db!r} but --expect-db "
+                f"is {expect_db!r}. Aborting — nothing changed.",
+                file=sys.stderr,
+            )
+            return 2
 
     conn = await asyncpg.connect(dsn)
     try:
@@ -132,6 +152,9 @@ async def main(execute: bool, assume_yes: bool) -> int:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--execute", action="store_true", help="apply the soft-delete (default is dry-run)")
-    ap.add_argument("--yes", action="store_true", help="skip the interactive confirmation (for automation)")
+    ap.add_argument("--yes", action="store_true",
+                    help="skip the interactive confirmation (automation); requires --expect-db")
+    ap.add_argument("--expect-db", default="",
+                    help="assert the resolved target DB name; required with --yes")
     args = ap.parse_args()
-    sys.exit(asyncio.run(main(args.execute, args.yes)))
+    sys.exit(asyncio.run(main(args.execute, args.yes, args.expect_db)))
