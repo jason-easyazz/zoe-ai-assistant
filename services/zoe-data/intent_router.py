@@ -2974,6 +2974,14 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         if forgotten == 0:
             return (f"I found {len(matches)} memories about {name} but couldn't "
                     "archive them just now -- nothing was changed.")
+        # Forgetting a person also withdraws any pending "add X as a contact?"
+        # offer — otherwise the just-forgotten name keeps resurfacing in every
+        # prompt via the offer seam (live repro 2026-07-13). Best-effort.
+        try:
+            from pending_suggestions import resolve_person_offers_by_name
+            await resolve_person_offers_by_name(user_id, name)
+        except Exception as exc:
+            logger.debug("memory_forget_entity: offer withdrawal skipped: %s", exc)
         things = "thing" if forgotten == 1 else "things"
         suffix = "" if forgotten == len(matches) else (
             f" ({len(matches) - forgotten} I couldn't reach just now.)")
