@@ -374,18 +374,22 @@ def main() -> int:
             except Exception as exc:  # noqa: BLE001 — one profile must not sink the run
                 log.error("discovery failed for %s (skipped): %s", who, exc)
                 profile["recommendations"] = []
-        path = music_discovery.save_discovery_run(profiles)
-        log.info("wrote %d profile(s) to %s", len(profiles), path)
         if stop_digarr():
             started = False
         if not any(p["recommendations"] for p in profiles):
+            # Do NOT save: an all-failed run must not clobber the last good
+            # recommendations.json with empty data.
             log.error("digarr returned no recommendations for any profile")
             return 1
+        path = music_discovery.save_discovery_run(profiles)
+        log.info("wrote %d profile(s) to %s", len(profiles), path)
         if args.no_bridge:
             return 0
-        failed = 0
+        rc = 0
         for profile in profiles:
             if not profile["recommendations"]:
+                if profile["user_id"] is None:
+                    rc = 1  # empty household discovery leaves the fallback playlist stale
                 continue
             result = asyncio.run(bridge_to_playlist(
                 profile["recommendations"], args.per_artist, profile["playlist"]))
@@ -394,10 +398,13 @@ def main() -> int:
                          profile["playlist"], result["added"],
                          ", ".join(result["skipped"]) or "none")
             else:
-                failed += 1
                 log.error("playlist bridge failed for '%s': %s",
                           profile["playlist"], result.get("reason"))
-        return 1 if failed == len([p for p in profiles if p["recommendations"]]) else 0
+                # The household playlist is the guest + missing-personal
+                # fallback — a stale one is a FAILED run, not a partial pass.
+                if profile["user_id"] is None:
+                    rc = 1
+        return rc
     except Exception:  # noqa: BLE001 — log the traceback, still clean up
         log.exception("discovery batch failed")
         return 1
