@@ -228,6 +228,16 @@ def main() -> int:
                   file=sys.stderr)
             return 1
         out["cold_load_s"] = round(time.perf_counter() - t0, 2)
+        # identity check: the 200 must come from OUR child serving OUR gguf,
+        # not another process that grabbed the port mid-run
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{args.port}/props", timeout=5) as r:
+            served = json.load(r).get("model_path", "")
+        if proc.poll() is not None or served != args.gguf:
+            print(f"ABORT: server on :{args.port} is not ours "
+                  f"(model_path={served!r}, child alive={proc.poll() is None})",
+                  file=sys.stderr)
+            return 2
         out["rss_mb_after_load"] = rss_mb(proc.pid)
 
         # one warmup call, excluded from stats
