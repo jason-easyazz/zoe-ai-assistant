@@ -66,6 +66,14 @@ memory_quality_reject_count = Counter(
     ["source", "reason"],
     registry=REGISTRY,
 )
+memory_async_extract_fail_count = Counter(
+    "zoe_memory_async_extract_fail_count",
+    "Async post-turn memory extractor passes that raised (facts possibly lost "
+    "while the turn reply already claimed success), labelled by lane "
+    "(chat|voice) and the pass that failed.",
+    ["lane", "pass_name"],
+    registry=REGISTRY,
+)
 memory_supersede_count = Counter(
     "zoe_memory_supersede_count",
     "Conversational writes that updated/superseded an existing same-attribute "

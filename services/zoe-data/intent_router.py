@@ -436,6 +436,22 @@ _FORGET_LAST_RE = re.compile(
     re.IGNORECASE,
 )
 
+# "forget what I told you about X" / "forget everything about X" -- entity-scoped
+# forget (QA review F14). Deterministic, no LLM. The captured entity must pass
+# strict name validation (person_extractor._looks_like_person_name) before the
+# intent fires, so "forget about it/that/her" never nukes anything fuzzy.
+_FORGET_ENTITY_RE = re.compile(
+    r"^(?:please\s+)?"
+    r"(?:forget|delete|remove|erase|scrap)\s+"
+    r"(?:everything|all(?:\s+of\s+it)?|anything"
+    r"|what(?:ever)?\s+i(?:'?ve)?\s+(?:just\s+)?(?:told\s+you|said|mentioned)"
+    r"|what\s+you\s+know|your\s+memories|the\s+memories)?\s*"
+    r"(?:you\s+know\s+)?about\s+"
+    r"(?P<entity>[A-Za-z][A-Za-z'\-]*(?:\s+[A-Za-z][A-Za-z'\-]*){0,2})"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
 # ── Portrait intents ───────────────────────────────────────────────────────────
 # "how well do you know me" / "what do you understand about me" → reveal portrait
 _PORTRAIT_REVEAL_RE = re.compile(
@@ -635,6 +651,31 @@ def detect_intent(
     # Matched very early so it never collides with other verbs.
     if _FORGET_LAST_RE.match(t):
         return Intent("memory_forget_last", {})
+
+    # "forget everything about X" -- entity-scoped forget (QA review F14).
+    # Only fires when the captured entity is name-shaped: "forget about it",
+    # "forget about my day" etc. fall through to normal routing.
+    m = _FORGET_ENTITY_RE.match(t)
+    if m:
+        # Prefer the raw text's capture so the name keeps the user's casing
+        # ("Mary Jane", not "mary jane"); t is lowercased by normalization.
+        _m_raw = _FORGET_ENTITY_RE.match((text or "").strip())
+        _entity = ((_m_raw or m).group("entity") or "").strip().rstrip(".!?")
+        # Quantifiers / deictics / time words the name validator lets through:
+        # "forget about everything|today|it all" must never become a sweep.
+        _FORGET_ENTITY_STOP = {
+            "everything", "anything", "something", "nothing", "all", "stuff",
+            "things", "life", "today", "tomorrow", "yesterday", "now",
+            "earlier", "before", "again", "ourselves", "yourself", "myself",
+        }
+        try:
+            from person_extractor import _looks_like_person_name
+            _namey = (_entity.lower() not in _FORGET_ENTITY_STOP
+                      and _looks_like_person_name(_entity))
+        except Exception:
+            _namey = False  # validator unavailable -> fail closed, never nuke
+        if _namey:
+            return Intent("memory_forget_entity", {"name": _entity})
 
     # Portrait intents — how well Zoe knows the user, and rebuilding understanding.
     if _PORTRAIT_REVEAL_RE.search(t):
@@ -2862,6 +2903,65 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         if len(preview) > 80:
             preview = preview[:77] + "…"
         return f"Done — I forgot: \"{preview}\"."
+
+    # "forget everything about X" -- archive (soft-delete, NEVER hard-delete)
+    # every memory of the caller's that is name-anchored on X (QA review F14).
+    # Deterministic: MemoryService search + list, then a strict whole-word
+    # match on the entity name -- no fuzzy nuking, no LLM. Guests fail closed.
+    if intent.name == "memory_forget_entity":
+        name = str(intent.slots.get("name", "")).strip()
+        if not name:
+            return "Who should I forget about? Give me the name and I'll do it."
+        try:
+            from memory_service import get_memory_service, is_guest_memory_user
+        except Exception as exc:
+            logger.info("memory_forget_entity: service unavailable: %s", exc)
+            return "I couldn't reach the memory store right now, so nothing was changed."
+        if is_guest_memory_user(user_id):
+            # Fail closed: guests have no memory store and must not be able to
+            # trigger archive sweeps.
+            return "I don't keep memories in guest sessions, so there's nothing for me to forget."
+        try:
+            svc = get_memory_service()
+            # Semantic search surfaces the ranked rows; the approved list makes
+            # the sweep complete even when the entity falls outside search's
+            # top-k. Both sides still pass the strict name filter below.
+            rows = list(await svc.search(name, user_id=user_id, limit=25))
+            rows.extend(await svc.list_by_status(
+                user_id=user_id, status="approved", limit=1000))
+        except Exception as exc:
+            logger.info("memory_forget_entity: lookup failed: %s", exc)
+            return "I couldn't reach the memory store right now, so nothing was changed."
+        # Strict name anchoring: the row's text must contain the entity name as
+        # a whole word/phrase (case-insensitive). No stemming, no similarity.
+        name_re = re.compile(r"\b" + re.escape(name) + r"\b", re.IGNORECASE)
+        seen_ids: set[str] = set()
+        matches = []
+        for r in rows:
+            rid = getattr(r, "id", "") or ""
+            if not rid or rid in seen_ids:
+                continue
+            seen_ids.add(rid)
+            if name_re.search(getattr(r, "text", "") or ""):
+                matches.append(r)
+        if not matches:
+            return f"I don't have anything saved about {name}."
+        forgotten = 0
+        for r in matches:
+            try:
+                await svc.review(r.id, decision="archive", actor=user_id,
+                                 note=f"forget_entity:{name}")
+                forgotten += 1
+            except Exception as exc:
+                logger.warning("memory_forget_entity: archive failed id=%s: %s",
+                               r.id, exc)
+        if forgotten == 0:
+            return (f"I found {len(matches)} memories about {name} but couldn't "
+                    "archive them just now -- nothing was changed.")
+        things = "thing" if forgotten == 1 else "things"
+        suffix = "" if forgotten == len(matches) else (
+            f" ({len(matches) - forgotten} I couldn't reach just now.)")
+        return f"Okay — I've forgotten {forgotten} {things} about {name}.{suffix}"
 
     # "remember that <fact>" — an EXPLICIT, model-callable memory write. This is
     # the fulfillment for the Flue sidecar's remember_fact + remember_emotional_moment

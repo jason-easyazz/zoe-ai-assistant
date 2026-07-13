@@ -2290,7 +2290,7 @@ async def _run_voice_memory_passes(
         from person_extractor import process_text as _person_extract
         from person_extractor_llm import process_text_llm as _person_extract_llm
         from latent_intent_detector import detect_and_store as _detect_suggestions
-        await asyncio.gather(
+        _mx_results = await asyncio.gather(
             _mi(user_text, reply, user_id=user_id, session_id=session_id,
                 source="voice_regex", auto_approve=True),
             _td(user_id, user_text, reply, session_id=session_id,
@@ -2313,6 +2313,25 @@ async def _run_voice_memory_passes(
             ),
             return_exceptions=True,
         )
+        # QA review F13 / #1261: name-and-shame each failed pass at WARNING and
+        # count it, so silent fact loss behind the instant "Got it" reply is
+        # visible in ops (mirrors routers/chat.py::_persist_memory_candidates).
+        for _mx_name, _mx_res in zip(
+            ("extract_and_ingest", "run_turn_digest",
+             "person_extract", "person_extract_llm"),
+            _mx_results,
+        ):
+            if isinstance(_mx_res, BaseException):
+                logger.warning(
+                    "voice memory pass %s FAILED for user=%s (fact loss possible): %s",
+                    _mx_name, user_id, _mx_res,
+                )
+                try:
+                    from memory_metrics import memory_async_extract_fail_count
+                    memory_async_extract_fail_count.labels(
+                        lane="voice", pass_name=_mx_name).inc()
+                except Exception:
+                    pass
         _spawn_bg(_detect_suggestions(
             user_text,
             user_id=user_id,
