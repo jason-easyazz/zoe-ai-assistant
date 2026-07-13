@@ -653,8 +653,17 @@ _GUARD_CAL_WORDS = {
 # Kevin") — the value token blocked the guard (residual QA F2 for kinship
 # name facts). Subjects stay protected: in "Jessica's name is …" the
 # possessive "Jessica" is still a guard token.
+# The relation words come from _GUARD_CAL_WORDS' kinship tail (defined above);
+# "my wife is Sarah" / "User's dad is Neil" are user-anchored relation facts,
+# so the trailing name is the VALUE of that relation, not a person the guard
+# should protect from same-attribute supersedes.
+_KINSHIP_RELATION_WORDS = (
+    "dad|father|mum|mom|mother|brother|sister|wife|husband|partner|son|"
+    "daughter|grandma|grandmother|grandpa|grandfather|aunt|uncle|cousin"
+)
 _NAME_VALUE_RE = re.compile(
-    r"(?:\bname\s+is|\bnamed|\bis\s+called|\bname['’]s)\s+(?:spelt\s+|spelled\s+)?"
+    r"(?:\bname\s+is|\bnamed|\bis\s+called|\bname['’]s"
+    rf"|\b(?:{_KINSHIP_RELATION_WORDS})\s+is)\s+(?:spelt\s+|spelled\s+)?"
     r"((?:[A-Z][A-Za-z'’-]*)(?:\s+[A-Z][A-Za-z'’-]*)*)"
 )
 
