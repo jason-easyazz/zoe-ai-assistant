@@ -860,7 +860,7 @@
       if(ar)ar.textContent=np.artist||'';
       if(art){if(np.image&&/^https?:\/\//i.test(np.image)){art.innerHTML='<img alt="" style="width:100%;height:100%;object-fit:cover;border-radius:28px;display:block" src="'+esc(np.image)+'">';}else{art.innerHTML='🎵';}}
       var el=np.elapsed||0,du=np.duration||0;
-      _music.np={elapsed:el,duration:du,playing:np.state==='playing',at:Date.now()};
+      _music.np={elapsed:el,duration:du,playing:np.state==='playing',active:(np.state==='playing'||np.state==='paused'),at:Date.now()};
       if(fill)fill.style.width=(du?Math.min(100,el/du*100):0)+'%';
       if(te)te.textContent=fmtDur(el);if(td)td.textContent=fmtDur(du);
       if(pp)pp.textContent=(np.state==='playing')?'❚❚':'▶';
@@ -893,8 +893,8 @@
         m.querySelector('[data-x="cancel"]').onclick=estClose;
         m.querySelectorAll('.spkopt').forEach(function(b){b.onclick=function(){
           var pid=b.getAttribute('data-pid');
-          var playing=_music.np&&_music.np.playing;
-          if(!playing){
+          var active=_music.np&&_music.np.active;   // paused still owns a queue — transfer it
+          if(!active){
             // Nothing to move — just aim the NEXT play at this speaker.
             _music.player_id=pid;estClose();
             var sn=spk.querySelector('.spkname');if(sn)sn.textContent=b.textContent;
