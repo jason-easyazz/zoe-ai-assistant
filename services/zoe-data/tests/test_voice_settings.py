@@ -29,6 +29,9 @@ import voice_settings
 def _reset_caches(monkeypatch):
     voice_settings.invalidate_cache()
     monkeypatch.setattr(voice_settings, "_catalogue_cache", None)
+    # Deterministic: no catalogue unless a test builds one (the host running the
+    # tests may have a real ZOE_KOKORO_VOICES in its environment).
+    monkeypatch.delenv("ZOE_KOKORO_VOICES", raising=False)
     yield
     voice_settings.invalidate_cache()
 
@@ -119,6 +122,26 @@ async def test_resolve_override_wins(monkeypatch):
     assert await voice_settings.resolve_tts_voice("zoe_dawn") == "zoe_dawn"
     # Garbage overrides (shell-ish / spaces) are ignored, not passed through.
     assert await voice_settings.resolve_tts_voice("bad voice; rm") == "af_bella"
+
+
+@pytest.mark.asyncio
+async def test_stale_voice_not_in_catalogue_falls_back(tmp_path, monkeypatch):
+    """A stored/env voice missing from the loaded bin degrades to a usable one
+    instead of making every synth call miss into the fallback engines."""
+    path = _make_voices_bin(tmp_path, ["af_sky", "af_heart"])
+    monkeypatch.setenv("ZOE_KOKORO_VOICES", str(path))
+
+    async def _pref():
+        return "zoe_ember"  # was valid under the augmented bin, now removed
+
+    monkeypatch.setattr(voice_settings, "_read_persisted_voice", _pref)
+    monkeypatch.setenv("ZOE_KOKORO_VOICE", "af_heart")
+    assert await voice_settings.get_tts_voice() == "af_heart"
+    # Env default also stale → FALLBACK_VOICE (present in this bin).
+    monkeypatch.setenv("ZOE_KOKORO_VOICE", "bf_gone")
+    assert await voice_settings.get_tts_voice() == "af_sky"
+    # Overrides not in the catalogue fall through to the preference chain too.
+    assert await voice_settings.resolve_tts_voice("zoe_ember") == "af_sky"
 
 
 # ── catalogue ─────────────────────────────────────────────────────────────

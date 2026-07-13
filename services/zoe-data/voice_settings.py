@@ -140,8 +140,20 @@ async def _read_persisted_voice() -> Optional[str]:
     return value if _VOICE_NAME_RE.match(value) else None
 
 
+def _in_catalogue(voice: str, catalogue: list[str]) -> bool:
+    """True when the voice is usable: present in the bin, or no catalogue is
+    readable (fail-open — never block speech on a missing/broken bin)."""
+    return not catalogue or voice in catalogue
+
+
 async def get_tts_voice() -> str:
-    """The voice Zoe should speak with right now (pref → env default)."""
+    """The voice Zoe should speak with right now (pref → env default).
+
+    A candidate that is no longer in the loaded voices bin (e.g. the operator
+    swapped back to the stock bin after a zoe_* voice was picked) is skipped, so
+    a stale preference degrades to the env default / a catalogue voice instead
+    of making every synth call miss into the lower-quality fallback engines.
+    """
     global _pref_cache
     now = time.monotonic()
     if _pref_cache and _pref_cache[0] > now:
@@ -149,14 +161,19 @@ async def get_tts_voice() -> str:
     else:
         stored = await _read_persisted_voice()
         _pref_cache = (now + _PREF_TTL_S, stored)
-    return stored or env_default_voice()
+    catalogue = list_kokoro_voices()
+    for candidate in (stored, env_default_voice(), FALLBACK_VOICE):
+        if candidate and _in_catalogue(candidate, catalogue):
+            return candidate
+    return catalogue[0]  # non-empty here: an empty catalogue accepted FALLBACK
 
 
 async def resolve_tts_voice(override: Optional[str] = None) -> str:
-    """Per-call voice: explicit override (validated shape) beats the preference."""
+    """Per-call voice: explicit override (shape- and catalogue-checked) beats
+    the preference; an unusable override falls through to the preference."""
     if override:
         candidate = str(override).strip()
-        if _VOICE_NAME_RE.match(candidate):
+        if _VOICE_NAME_RE.match(candidate) and _in_catalogue(candidate, list_kokoro_voices()):
             return candidate
     return await get_tts_voice()
 
