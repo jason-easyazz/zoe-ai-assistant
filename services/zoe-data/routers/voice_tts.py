@@ -2264,11 +2264,21 @@ async def _schedule_voice_chat_save(
     if not session_id or user_id in _GUEST_SENTINEL_USERS:
         return
     try:
-        from chat import _save_chat_message as _svc  # lazy — avoids circular import
-        if user_text:
-            _spawn_bg(_svc(session_id, "user", user_text, user_id=user_id))
-        if reply:
-            _spawn_bg(_svc(session_id, "assistant", reply, user_id=user_id))
+        # lazy — avoids circular import (routers.chat lazily imports us back)
+        from routers.chat import _ensure_user_and_chat_session, _save_chat_message as _svc
+
+        async def _persist() -> None:
+            # Voice sessions are minted server-side and never go through
+            # POST /sessions/, so the chat_sessions parent row must be created
+            # here or every insert dies on the session FK (the silent zero-
+            # voice-rows outage behind W0).
+            await _ensure_user_and_chat_session(session_id, user_id)
+            if user_text:
+                await _svc(session_id, "user", user_text, user_id=user_id)
+            if reply:
+                await _svc(session_id, "assistant", reply, user_id=user_id)
+
+        _spawn_bg(_persist())
     except Exception as exc:
         logger.warning(
             "voice chat save scheduling failed for user %s (session %s): %s",
@@ -2530,8 +2540,18 @@ async def voice_command(
     # (nightly digest, _load_voice_history, multi-turn context) have the transcript.
     if text and effective_user not in _GUEST_SENTINEL_USERS:
         try:
-            from chat import _save_chat_message as _svc_user_turn
-            _spawn_bg(_svc_user_turn(session_id, "user", text, user_id=effective_user))
+            from routers.chat import (
+                _ensure_user_and_chat_session as _ensure_sess_user_turn,
+                _save_chat_message as _svc_user_turn,
+            )
+
+            async def _persist_user_turn() -> None:
+                # Same FK guard as _schedule_voice_chat_save: voice session ids
+                # never pass through POST /sessions/, so mint the parent row.
+                await _ensure_sess_user_turn(session_id, effective_user)
+                await _svc_user_turn(session_id, "user", text, user_id=effective_user)
+
+            _spawn_bg(_persist_user_turn())
         except Exception as exc:
             logger.warning(
                 "voice user-turn save scheduling failed for user %s (session %s): %s",
@@ -3831,6 +3851,20 @@ async def voice_command(
                     logger.warning("voice/command stream error: %s", exc)
                     async for out_line in _emit_line({"error": "voice command stream failure"}):
                         yield out_line
+                finally:
+                    # Persist whatever the user actually HEARD — the streaming
+                    # lane never reaches voice_command's tail save, and a
+                    # client disconnect (GeneratorExit) or mid-stream error
+                    # must not drop sentences that were already spoken. Empty
+                    # user_text: the user turn is saved pre-stream.
+                    heard_reply = " ".join(
+                        part.strip() for part in full_reply_parts if part.strip()
+                    ).strip()
+                    if heard_reply:
+                        # Safe during GeneratorExit unwind: neither call suspends
+                        # (_schedule_voice_chat_save only spawns a bg task).
+                        await _schedule_voice_chat_save(session_id, "", heard_reply, effective_user)
+                        _spawn_bg(_run_voice_memory_passes(text, heard_reply, effective_user, session_id))
 
             return StreamingResponse(
                 _generate_voice_stream(),
