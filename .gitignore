@@ -304,3 +304,11 @@ services/zoe-data/models/*
 !services/zoe-data/models/router_head_logreg.joblib
 !services/zoe-data/models/router_head_mlp.joblib
 services/zoe-data/data/router_head_shadow.jsonl
+
+# Router self-training loop — miner (labs/router-selftrain/) + orchestrator
+# (scripts/maintenance/router_selftrain.py). Candidate datasets are mined from
+# REAL family utterances (raw text) and must NEVER be committed; the run
+# journals, scoreboard, work dirs and multi-hundred-MB GGUFs are local runtime
+# artifacts. See labs/router-selftrain/README.md and
+# docs/knowledge/router-selftrain-loop.md.
+data/router_selftrain/

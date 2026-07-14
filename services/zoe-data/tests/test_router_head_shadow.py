@@ -199,3 +199,98 @@ def test_shadow_report_aggregates(tmp_path):
     text = mod.report(recs)
     assert "agreement" in text and "1/2" in text
     assert "chat -> lists: 1" in text
+
+
+# --------------------------------------------------------------------------- #
+# ZOE_ROUTER_SHADOW_TEXT — opt-in raw-text capture (default OFF)               #
+# --------------------------------------------------------------------------- #
+def test_shadow_text_default_off(monkeypatch):
+    monkeypatch.delenv("ZOE_ROUTER_SHADOW_TEXT", raising=False)
+    assert semantic_router.shadow_text_enabled() is False
+
+
+@pytest.mark.parametrize("val,want", [
+    ("1", True), ("true", True), ("on", True), ("YES", True),
+    ("0", False), ("false", False), ("", False), ("bogus", False),
+])
+def test_shadow_text_flag_parsing(monkeypatch, val, want):
+    monkeypatch.setenv("ZOE_ROUTER_SHADOW_TEXT", val)
+    assert semantic_router.shadow_text_enabled() is want
+
+
+def test_shadow_log_has_no_raw_text_by_default(monkeypatch, tmp_path):
+    """The privacy default: the log is keyed by hash and NEVER stores the words."""
+    _fake_router(monkeypatch)
+    log = tmp_path / "shadow.jsonl"
+    monkeypatch.delenv("ZOE_ROUTER_SHADOW_TEXT", raising=False)
+    monkeypatch.setenv("ZOE_ROUTER_HEAD", "shadow")
+    monkeypatch.setattr(semantic_router, "_HEAD_LOG_PATH", str(log))
+    _set_head(monkeypatch, _FakeHead([0.9, 0.05, 0.05]))
+
+    utterance = "my private family utterance"
+    semantic_router.route(utterance)
+
+    raw = log.read_text()
+    assert utterance not in raw
+    assert "utt_text" not in json.loads(raw.strip().splitlines()[-1])
+
+
+def test_shadow_log_captures_raw_text_when_opted_in(monkeypatch, tmp_path):
+    _fake_router(monkeypatch)
+    log = tmp_path / "shadow.jsonl"
+    monkeypatch.setenv("ZOE_ROUTER_SHADOW_TEXT", "1")
+    monkeypatch.setenv("ZOE_ROUTER_HEAD", "shadow")
+    monkeypatch.setattr(semantic_router, "_HEAD_LOG_PATH", str(log))
+    _set_head(monkeypatch, _FakeHead([0.9, 0.05, 0.05]))
+
+    utterance = "add a dentist appointment"
+    semantic_router.route(utterance)
+
+    rec = json.loads(log.read_text().strip().splitlines()[-1])
+    assert rec["utt_text"] == utterance
+    assert len(rec["utt"]) == 12          # the hash is kept either way
+
+
+def test_two_stage_rec_text_is_opt_in(monkeypatch):
+    monkeypatch.delenv("ZOE_ROUTER_SHADOW_TEXT", raising=False)
+    off = semantic_router._two_stage_rec("hello", {"tool": "get_time"}, "active", "time")
+    assert "utt_text" not in off
+
+    monkeypatch.setenv("ZOE_ROUTER_SHADOW_TEXT", "1")
+    on = semantic_router._two_stage_rec("hello", {"tool": "get_time"}, "active", "time")
+    assert on["utt_text"] == "hello"
+    assert on["utt"] == off["utt"]        # same hash, extra field
+
+
+def test_two_stage_info_line_never_carries_raw_text(monkeypatch, tmp_path, caplog):
+    """Opting in adds text to the FILE only — journald/log shipping stays hash-only."""
+    monkeypatch.setenv("ZOE_ROUTER_SHADOW_TEXT", "1")
+    log = tmp_path / "shadow.jsonl"
+    monkeypatch.setattr(semantic_router, "_HEAD_LOG_PATH", str(log))
+
+    rec = semantic_router._two_stage_rec("secret words", {"tool": "get_time"},
+                                         "active", "time")
+    with caplog.at_level("INFO", logger="zoe.router_head_shadow"):
+        semantic_router._log_two_stage(rec)
+
+    assert "secret words" not in caplog.text
+    assert json.loads(log.read_text().strip())["utt_text"] == "secret words"
+
+
+def test_two_stage_rec_logs_the_similarity_baseline(monkeypatch):
+    """In 'active' the two-stage decision IS the route, so actual_routed echoes
+    two_stage_domain. The record must also carry the INDEPENDENT similarity
+    baseline, or a self-training miner can never tell that the router was wrong."""
+    monkeypatch.delenv("ZOE_ROUTER_SHADOW_TEXT", raising=False)
+
+    active = semantic_router._two_stage_rec(
+        "put dinner in the diary", {"tool": "add_reminder", "domain": "reminders"},
+        "active", "reminders", similarity_routed="calendar")
+    assert active["actual_routed"] == "reminders"      # the two-stage's own output
+    assert active["similarity_routed"] == "calendar"   # the baseline it pre-empted
+
+    # shadow2 doesn't route, so the baseline and the actual route are the same
+    s2 = semantic_router._two_stage_rec(
+        "put dinner in the diary", {"tool": "add_reminder", "domain": "reminders"},
+        "shadow2", "calendar")
+    assert s2["similarity_routed"] == "calendar" == s2["actual_routed"]
