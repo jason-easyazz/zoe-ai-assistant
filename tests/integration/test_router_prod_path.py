@@ -26,10 +26,6 @@ REPO = Path(__file__).resolve().parents[2]
 EVAL = REPO / "labs" / "router-90-campaign" / "prod_path_eval.py"
 
 
-@pytest.mark.skipif(
-    os.environ.get("ZOE_ROUTER_PROD_PATH_EVAL") != "1",
-    reason="opt-in sidecar eval: set ZOE_ROUTER_PROD_PATH_EVAL=1 "
-           "(launches llama-server on :11436, needs the lab r2 GGUF)")
 def _sidecar_up() -> bool:
     import urllib.request
     try:
@@ -39,6 +35,10 @@ def _sidecar_up() -> bool:
         return False
 
 
+@pytest.mark.skipif(
+    os.environ.get("ZOE_ROUTER_PROD_PATH_EVAL") != "1",
+    reason="opt-in sidecar eval: set ZOE_ROUTER_PROD_PATH_EVAL=1 "
+           "(needs the r2 sidecar on :11436 or launches one ad hoc)")
 def test_prod_path_gates(tmp_path):
     out_json = tmp_path / "prod-path.json"
     # the resident systemd sidecar (functiongemma-router.service) may own
