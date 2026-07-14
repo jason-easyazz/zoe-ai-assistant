@@ -82,6 +82,12 @@ collapses (paraphrase slice: 10.3%).
   discipline as `labs/functiongemma-feasibility/run_feasibility.py`
   (memory gate ≥1500 MB, port-free + `/props` identity check on :11435,
   CPU-only `-ngl 0`, always kills its server, never touches :11434).
+  On hosts where the llama-server build or GGUFs live at different paths,
+  override all that differ, e.g.
+  `LLAMA_SERVER=/path/to/llama-server GGUF_STOCK=/path/to/stock.gguf
+  GGUF_FUNCTOK=/path/to/functok.gguf python3
+  labs/two-stage-router-eval/run_two_stage.py --config a`
+  (setting `LLAMA_SERVER` alone is not enough if the models moved too).
 - `results/a.json`, `results/b.json`, `results/functok.json` — full per-case
   records incl. shortlist, confidence, raw model output, failure attribution.
 
