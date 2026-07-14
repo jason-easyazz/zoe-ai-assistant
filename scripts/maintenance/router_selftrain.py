@@ -771,7 +771,15 @@ def restore_lkg(lkg: Path) -> bool:
     shutil.copy2(lkg, tmp)
     os.replace(tmp, SERVED_GGUF)  # atomic
     ok = restart_and_verify_sidecar(lkg)
-    DEPLOY_MARKER.unlink(missing_ok=True)  # the swap is undone
+    if ok:
+        # Clear the marker ONLY once the rollback is verified. If the restart did
+        # not come back healthy on the last-known-good, the sidecar is still in a
+        # bad state — and this marker is the only durable record that lets a later
+        # `--recover` retry the restore. Deleting it here would strand production.
+        DEPLOY_MARKER.unlink(missing_ok=True)
+    else:
+        log("rollback did not verify — KEEPING the deploy marker so --recover can "
+            "retry the restore.")
     return ok
 
 

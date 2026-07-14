@@ -352,6 +352,23 @@ def test_sigkilled_mid_deploy_is_recovered_from_disk(sandbox, monkeypatch):
     assert not rs.DEPLOY_MARKER.exists(), "deploy marker not cleared after recovery"
 
 
+def test_unverified_rollback_keeps_the_marker_for_a_retry(sandbox, monkeypatch):
+    """If the rollback's restart does not verify, the sidecar is still in a bad
+    state — the marker is the ONLY durable record that lets --recover retry.
+    Clearing it would make a later recovery say 'nothing in flight' and strand
+    production on a broken router."""
+    _fake_gguf(rs.SERVED_GGUF, b"CANDIDATE")
+    lkg = _fake_gguf(rs.ARCHIVE_DIR / "lkg_x.gguf", b"INCUMBENT")
+    rs.DEPLOY_MARKER.write_text(json.dumps({
+        "stamp": "x", "last_known_good": str(lkg), "served": str(rs.SERVED_GGUF)}))
+    monkeypatch.setattr(rs, "restart_and_verify_sidecar", lambda expect: False)
+
+    assert rs.restore_lkg(lkg) is False
+    assert rs.DEPLOY_MARKER.exists(), "marker cleared despite an unverified rollback"
+    # the good bytes are on disk regardless, so the retry has something to serve
+    assert rs.SERVED_GGUF.read_bytes()[:13] == b"GGUF" + b"INCUMBENT"
+
+
 def test_recover_is_a_noop_when_nothing_was_in_flight(sandbox, monkeypatch):
     """--recover must be safe to run at any time, including when all is well."""
     monkeypatch.setattr(rs, "http_ok", lambda *a, **k: True)
