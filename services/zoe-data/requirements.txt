@@ -28,6 +28,11 @@ moonshine-voice
 # Tier-1 semantic router: bge-small ONNX embeddings (~7-30ms/query, CPU) for
 # fuzzy domain classification between the regex fast-path and the Pi brain.
 fastembed
+# SetFit router head (shadow mode, ZOE_ROUTER_HEAD): loads
+# models/router_head_logreg.joblib — pins MUST match the versions the artifact
+# was trained with (labs/setfit-router/requirements.txt).
+scikit-learn==1.7.2
+joblib==1.5.3
 # Speaker diarization for ambient memory (Jetson CUDA only)
 pyannote.audio>=3.3.2
 # VAD for barge-in and ambient capture (server-side copy; Pi uses same package)

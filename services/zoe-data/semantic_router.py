@@ -9,9 +9,17 @@ the LLM in the routing hot-path (the approach that failed on the Jetson before).
 Runs OBSERVE-ONLY by default (ZOE_ROUTER_MODE=shadow) — it logs its decision and
 whether that agrees with what actually handled the turn, so accuracy can be
 validated on live traffic before it ever changes behavior.
+
+SetFit head (ZOE_ROUTER_HEAD=off|shadow, default off): a 38 KB logreg head
+(labs/setfit-router) on the same embedding. In 'shadow' it logs prediction +
+agreement per turn (utterance-hash only) and never influences routing; 'active'
+is deliberately NotImplementedError until live agreement is confirmed. Score
+the shadow log with scripts/maintenance/router_shadow_report.py.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import threading
 import time
@@ -20,6 +28,10 @@ from typing import Optional
 import numpy as np
 
 logger = __import__("logging").getLogger(__name__)
+
+# Dedicated logger for the SetFit-head shadow comparison lines so they can be
+# filtered/scored independently of the main router logs.
+shadow_logger = __import__("logging").getLogger("zoe.router_head_shadow")
 
 # Domain example utterances. Keep paraphrase-diverse; the embedding generalizes.
 ROUTES: dict[str, list[str]] = {
@@ -99,6 +111,47 @@ _DOM_IDX: dict[str, np.ndarray] = {}
 _LOCK = threading.Lock()
 _MODEL_NAME = os.environ.get("ZOE_ROUTER_MODEL", "BAAI/bge-small-en-v1.5")
 
+# --- SetFit classifier head (labs/setfit-router PR #1296) -------------------
+# A 38 KB logistic-regression head trained on the SAME bge-small embedding this
+# module already computes per turn (+~0.2 ms). SHADOW-ONLY today: it logs its
+# prediction + agreement with the similarity router and NEVER changes routing.
+_HEAD = None
+_HEAD_FAILED = False  # load failed once → don't retry every turn
+_HEAD_PATH = os.environ.get(
+    "ZOE_ROUTER_HEAD_PATH",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                 "models", "router_head_logreg.joblib"),
+)
+_HEAD_LOG_PATH = os.environ.get(
+    "ZOE_ROUTER_HEAD_LOG",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                 "data", "router_head_shadow.jsonl"),
+)
+
+
+def head_mode() -> str:
+    """ZOE_ROUTER_HEAD: 'off' (default) | 'shadow' | 'active' (not implemented)."""
+    val = (os.environ.get("ZOE_ROUTER_HEAD", "off") or "off").strip().lower()
+    if val in ("", "0", "false", "no", "off"):
+        return "off"
+    if val == "shadow":
+        return "shadow"
+    if val == "active":
+        raise NotImplementedError(
+            "ZOE_ROUTER_HEAD=active is not implemented yet — the head is "
+            "shadow-only until live agreement confirms the offline numbers."
+        )
+    logger.warning("unknown ZOE_ROUTER_HEAD=%r — treating as 'off'", val)
+    return "off"
+
+
+def head_threshold() -> float:
+    """Confidence gate for the head's *hypothetical* decision (README: 0.4)."""
+    try:
+        return float(os.environ.get("ZOE_ROUTER_HEAD_THRESHOLD", "0.4"))
+    except Exception:
+        return 0.4
+
 
 def is_enabled() -> bool:
     return (os.environ.get("ZOE_ROUTER_ENABLED", "1").strip().lower()
@@ -141,6 +194,33 @@ def _ensure_loaded():
         _MODEL = model
         logger.info("semantic_router loaded %s (%d examples, %d domains)",
                     _MODEL_NAME, len(labels), len(ROUTES))
+    _ensure_head_loaded()
+
+
+def _ensure_head_loaded():
+    """Lazy-load the SetFit head (only when ZOE_ROUTER_HEAD != off)."""
+    global _HEAD, _HEAD_FAILED
+    if _HEAD is not None or _HEAD_FAILED:
+        return
+    if head_mode() == "off":  # 'active' raises NotImplementedError here
+        return
+    with _LOCK:
+        if _HEAD is not None or _HEAD_FAILED:
+            return
+        try:
+            import joblib
+
+            head = joblib.load(_HEAD_PATH)
+            # sanity: needs predict_proba + classes_ (sklearn LogisticRegression)
+            if not (hasattr(head, "predict_proba") and hasattr(head, "classes_")):
+                raise TypeError(f"unexpected head artifact type {type(head)!r}")
+            _HEAD = head
+            logger.info("semantic_router head loaded %s (%d classes)",
+                        _HEAD_PATH, len(head.classes_))
+        except Exception as exc:
+            _HEAD_FAILED = True
+            logger.warning("semantic_router head load failed (shadow disabled, "
+                           "non-fatal): %s", exc)
 
 
 def warm() -> bool:
@@ -156,6 +236,49 @@ def warm() -> bool:
     except Exception as exc:
         logger.warning("semantic_router warmup failed (non-fatal): %s", exc)
         return False
+
+
+def _head_shadow(text: str, v: np.ndarray, routed: str) -> None:
+    """SHADOW-ONLY head comparison. Never influences routing, never raises
+    (except the explicit NotImplementedError for ZOE_ROUTER_HEAD=active).
+
+    Logs a structured line keyed by an utterance HASH (no raw text at INFO —
+    privacy) so live agreement can be scored later via
+    scripts/maintenance/router_shadow_report.py.
+    """
+    if head_mode() != "shadow":  # 'active' raises NotImplementedError here
+        return
+    try:
+        _ensure_head_loaded()
+        if _HEAD is None:
+            return
+        t0 = time.perf_counter()
+        proba = _HEAD.predict_proba(v.reshape(1, -1))[0]
+        idx = int(np.argmax(proba))
+        head_pred = str(_HEAD.classes_[idx])
+        head_conf = float(proba[idx])
+        # the decision the head WOULD take under the recommended gate
+        head_routed = (head_pred
+                       if (head_conf >= head_threshold() and head_pred != "chat")
+                       else "chat")
+        rec = {
+            "ts": round(time.time(), 3),
+            "utt": hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:12],
+            "head_pred": head_pred,
+            "head_conf": round(head_conf, 4),
+            "head_routed": head_routed,
+            "actual_routed": routed,
+            "agree": head_routed == routed,
+            "head_ms": round((time.perf_counter() - t0) * 1000, 3),
+        }
+        shadow_logger.info("router_head_shadow %s", json.dumps(rec, sort_keys=True))
+        try:
+            with open(_HEAD_LOG_PATH, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(rec, sort_keys=True) + "\n")
+        except OSError as exc:
+            shadow_logger.debug("shadow log append failed: %s", exc)
+    except Exception as exc:  # shadow must never break a turn
+        logger.warning("router head shadow failed (non-fatal): %s", exc)
 
 
 def route(text: str) -> dict:
@@ -174,6 +297,7 @@ def route(text: str) -> dict:
     score = scores[domain]
     thr = threshold()
     routed = domain if (score >= thr and domain != "chat") else "chat"
+    _head_shadow(text, v, routed)
     return {
         "domain": domain,
         "score": round(score, 3),

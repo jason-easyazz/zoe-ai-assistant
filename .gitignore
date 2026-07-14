@@ -293,3 +293,10 @@ labs/flue-zoe-brain/parity/gate-results/
 # functiongemma-feasibility lab: committed measurement artifacts (labs/functiongemma-feasibility/README.md)
 !labs/functiongemma-feasibility/zoe_tools.json
 !labs/functiongemma-feasibility/results/*.json
+
+# SetFit router head (shadow mode): the 38 KB logreg artifact is tracked
+# deliberately; the runtime shadow log is not.
+!services/zoe-data/models/
+services/zoe-data/models/*
+!services/zoe-data/models/router_head_logreg.joblib
+services/zoe-data/data/router_head_shadow.jsonl
