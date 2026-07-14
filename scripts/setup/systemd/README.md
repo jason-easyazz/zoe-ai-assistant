@@ -12,12 +12,10 @@ Secrets are never inlined — they are read from `.env` files.
 | Unit | Port | Purpose |
 |------|------|---------|
 | `llama-server.service`     | 11434 | Local LLM (Gemma 4 E4B-QAT+MTP via llama.cpp) — **platform-specific paths** |
-| `hermes-agent.service`     | 8642  | Engineering/planning/review agent gateway |
-| `openclaw-gateway.service` | 18789 | Browser/exec agent fallback (needs `openclaw` npm pkg) |
-| `kokoro-tts.service`       | 10201 | Local neural TTS sidecar (optional) |
-| `functiongemma-router.service` | 11436 | Two-stage router stage-2 decoder (FunctionGemma-270M r2, CPU) — **platform-specific paths** |
+| `kokoro-tts.service`       | 10201 | Local neural TTS sidecar |
 | `zoe-data.service`         | 8000  | Primary backend API |
-| `flue-zoe-brain.service`   | 3578  | Flue Zoe-brain sidecar (lab; optional, operator opt-in) |
+| `functiongemma-router.service` | 11436 | Two-stage router stage-2 decoder (FunctionGemma-270M r2, CPU) — **platform-specific paths**; optional |
+| `flue-zoe-brain.service`   | 3578  | Flue Zoe-brain sidecar (optional, operator opt-in) |
 
 ## Install
 
@@ -29,11 +27,11 @@ cp scripts/setup/systemd/*.service ~/.config/systemd/user/
 #   ${EDITOR:-nano} ~/.config/systemd/user/llama-server.service
 
 systemctl --user daemon-reload
-systemctl --user enable --now llama-server hermes-agent openclaw-gateway kokoro-tts zoe-data
+systemctl --user enable --now llama-server zoe-data kokoro-tts
 ```
 
 `flue-zoe-brain.service` is deliberately NOT in that enable line: it supervises
-the lab sidecar behind zoe-data's default-OFF `ZOE_BRAIN_BACKEND=flue` seam.
+the sidecar behind zoe-data's default-OFF `ZOE_BRAIN_BACKEND=flue` seam.
 Enable it only when running the Flue brain — build + env steps are in
 [labs/flue-zoe-brain/README.md](../../../labs/flue-zoe-brain/README.md).
 

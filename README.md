@@ -16,26 +16,36 @@ required for the core experience.
 Zoe is a split stack — Docker for the stateful/edge services, host-native
 systemd user services for the latency-sensitive ones.
 
+### Core spine
+
 | Layer | Service | Port | How it runs |
 |-------|---------|------|-------------|
 | Data  | `zoe-database` (PostgreSQL + pgvector) | 5432  | Docker |
 | Auth  | `zoe-auth`        | 8002  | Docker |
 | UI    | `zoe-ui` (nginx)  | 80/443 | Docker |
 | Home  | `homeassistant` + `homeassistant-mcp-bridge` | 8123 | Docker |
-| LLM   | `llama-server` (Gemma 4 E4B, llama.cpp) | 11434 | systemd (host) |
-| Agent | `hermes-agent`    | 8642  | systemd (host) |
-| Agent | `openclaw-gateway` (fallback) | 18789 | systemd (host) |
-| Voice | `kokoro-tts` (optional) | 10201 | systemd (host) |
-| API   | `zoe-data` (primary backend) | 8000 | systemd (host) |
+| Brain (LLM) | `llama-server` (Gemma 4 E4B-QAT + MTP, llama.cpp) | 11434 | systemd (host) |
+| API   | `zoe-data` (primary backend: chat, memory, Skybridge) | 8000 | systemd (host) |
+| STT   | Moonshine v2 Medium (in-process in `zoe-data`) | — | systemd (host) |
+| TTS   | `kokoro-tts` (Kokoro → Edge TTS → espeak-ng waterfall) | 10201 | systemd (host) |
 
-Boot order matters and is documented in
+### Optional / opt-in
+
+| Layer | Service | Port | Notes |
+|-------|---------|------|-------|
+| Brain sidecar | `flue-zoe-brain` | 3578 | Flue Pi-Agent brain, enabled via `ZOE_BRAIN_BACKEND=flue` |
+| Router | `functiongemma-router` | 11436 | Two-stage router stage-2 decoder (FunctionGemma-270M) |
+| Music | `zoe-music-assistant` (Music Assistant) | 8095 | Docker module (`docker-compose.modules.yml`), proxied at `/modules/music-assistant/` |
+
+The brain, STT, and TTS models above are **locked** — Gemma 4 E4B-QAT+MTP
+(brain), Moonshine v2 Medium (STT), Kokoro (TTS). See
+[docs/CANONICAL.md](docs/CANONICAL.md). Boot order matters and is documented in
 [docs/guides/OPERATOR_RUNBOOK.md](docs/guides/OPERATOR_RUNBOOK.md).
 
-`services/zoe-core` is **not** retired: it's the wired default `core` brain
-(Pi on Gemma 4) — the fallback lane below the live `flue` sidecar in
-`services/zoe-data/brain_dispatch.py`. The old Docker/RouteLLM-MemAgent monolith
-that once carried the name was removed and lives in git history only
-(`docs/archive/` was purged 2026-06-25). The active layout is described in
+**Brain dispatch.** `services/zoe-data/brain_dispatch.py` selects the brain,
+priority `flue > core` — both sharing the same Gemma 4 rock on `llama-server`.
+`services/zoe-core` (the Pi agent) is the wired default `core` lane; `flue` is
+the opt-in sidecar. The active layout is described in
 [docs/guides/REPO_LAYOUT.md](docs/guides/REPO_LAYOUT.md).
 
 ## Prerequisites
@@ -43,7 +53,6 @@ that once carried the name was removed and lives in git history only
 - **Host:** Linux. Reference target is NVIDIA Jetson Orin (JetPack 6, CUDA 12.6).
 - **Docker** + Docker Compose plugin.
 - **Python 3.10+** with `pip` (host-native services run on system Python).
-- **Node.js 22+** (for the optional OpenClaw agent gateway).
 - **A GGUF chat model** for `llama-server` (~8 GB VRAM for the reference model).
 - The repo is expected at `~/assistant`. Some setup scripts assume that path.
 
@@ -71,9 +80,14 @@ docker compose up -d zoe-database zoe-auth zoe-ui homeassistant homeassistant-mc
 # 6. Install + start the host-native services
 #    Templates and full instructions: scripts/setup/systemd/README.md
 cp scripts/setup/systemd/*.service ~/.config/systemd/user/
-#    Edit llama-server.service for your binary + model path, then:
+#    Edit llama-server.service for your binary + model path, then start the spine:
 systemctl --user daemon-reload
-systemctl --user enable --now llama-server hermes-agent openclaw-gateway kokoro-tts zoe-data
+systemctl --user enable --now llama-server zoe-data kokoro-tts
+#    Optional sidecars — enable only if you need them:
+#    flue-zoe-brain, functiongemma-router
+
+# 7. (Optional) Start add-on modules, e.g. Music Assistant on :8095
+docker compose -f docker-compose.modules.yml up -d music-assistant
 ```
 
 See [scripts/setup/systemd/README.md](scripts/setup/systemd/README.md) for the
