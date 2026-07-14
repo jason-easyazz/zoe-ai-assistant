@@ -1,0 +1,1337 @@
+{
+ "harness": "prod_path_eval",
+ "stub": false,
+ "sidecar_port": 11436,
+ "mem_available_mb_before": 2922,
+ "summary": {
+  "n": 81,
+  "accuracy_overall_pct": 91.4,
+  "accuracy_canonical_pct": 100.0,
+  "accuracy_paraphrase_pct": 82.1,
+  "chat_false_positive_pct": 0.0,
+  "latency_ms_p50": 393.3,
+  "latency_ms_p90": 554.0,
+  "fallback_by_source": {
+   "two_stage": 69,
+   "gate_abstain": 11,
+   "shortlist_miss": 1
+  },
+  "brain_fallback_pct": 14.8,
+  "router_reported_ms_p50": 393.2,
+  "gates": {
+   "overall_ge_90": true,
+   "chat_fp_zero": true,
+   "p50_lt_600ms": true
+  },
+  "gates_pass": true
+ },
+ "cases": [
+  {
+   "id": "time-c1",
+   "style": "canonical",
+   "expected": [
+    "get_time"
+   ],
+   "predicted": "get_time",
+   "source": "two_stage",
+   "confidence": 1.0,
+   "args": {
+    "query": "what time is it"
+   },
+   "ok": true,
+   "latency_ms": 369.0,
+   "router_latency_ms": 369.0
+  },
+  {
+   "id": "time-c2",
+   "style": "canonical",
+   "expected": [
+    "get_time"
+   ],
+   "predicted": "get_time",
+   "source": "two_stage",
+   "confidence": 0.999,
+   "args": {
+    "query": "what's the date today"
+   },
+   "ok": true,
+   "latency_ms": 588.3,
+   "router_latency_ms": 588.2
+  },
+  {
+   "id": "time-p1",
+   "style": "paraphrase",
+   "expected": [
+    "get_time"
+   ],
+   "predicted": "get_time",
+   "source": "two_stage",
+   "confidence": 0.997,
+   "args": {
+    "query": "have you got the time on you"
+   },
+   "ok": true,
+   "latency_ms": 935.0,
+   "router_latency_ms": 934.9
+  },
+  {
+   "id": "time-p2",
+   "style": "paraphrase",
+   "expected": [
+    "get_time"
+   ],
+   "predicted": "get_time",
+   "source": "two_stage",
+   "confidence": 0.996,
+   "args": {},
+   "ok": true,
+   "latency_ms": 248.2,
+   "router_latency_ms": 248.2
+  },
+  {
+   "id": "weather-c1",
+   "style": "canonical",
+   "expected": [
+    "get_weather"
+   ],
+   "predicted": "get_weather",
+   "source": "two_stage",
+   "confidence": 1.0,
+   "args": {
+    "forecast": false,
+    "location": "Perth"
+   },
+   "ok": true,
+   "latency_ms": 424.6,
+   "router_latency_ms": 424.6
+  },
+  {
+   "id": "weather-c2",
+   "style": "canonical",
+   "expected": [
+    "get_weather"
+   ],
+   "predicted": "get_weather",
+   "source": "two_stage",
+   "confidence": 0.999,
+   "args": {
+    "forecast": true
+   },
+   "ok": true,
+   "latency_ms": 310.3,
+   "router_latency_ms": 310.3
+  },
+  {
+   "id": "weather-p1",
+   "style": "paraphrase",
+   "expected": [
+    "get_weather"
+   ],
+   "predicted": "get_weather",
+   "source": "two_stage",
+   "confidence": 0.993,
+   "args": {
+    "forecast": false
+   },
+   "ok": true,
+   "latency_ms": 314.7,
+   "router_latency_ms": 314.7
+  },
+  {
+   "id": "weather-p2",
+   "style": "paraphrase",
+   "expected": [
+    "get_weather"
+   ],
+   "predicted": "get_weather",
+   "source": "two_stage",
+   "confidence": 0.989,
+   "args": {
+    "forecast": true
+   },
+   "ok": true,
+   "latency_ms": 287.1,
+   "router_latency_ms": 287.1
+  },
+  {
+   "id": "weather-p3",
+   "style": "paraphrase",
+   "expected": [
+    "get_weather"
+   ],
+   "predicted": "get_weather",
+   "source": "two_stage",
+   "confidence": 0.999,
+   "args": {
+    "forecast": true
+   },
+   "ok": true,
+   "latency_ms": 328.3,
+   "router_latency_ms": 328.2
+  },
+  {
+   "id": "shoplist-c1",
+   "style": "canonical",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list"
+   ],
+   "predicted": "shopping_list_add",
+   "source": "two_stage",
+   "confidence": 1.0,
+   "args": {
+    "item": "milk"
+   },
+   "ok": true,
+   "latency_ms": 417.0,
+   "router_latency_ms": 416.9
+  },
+  {
+   "id": "shoplist-c2",
+   "style": "canonical",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list"
+   ],
+   "predicted": "shopping_list_add",
+   "source": "two_stage",
+   "confidence": 0.995,
+   "args": {
+    "item": "bread"
+   },
+   "ok": true,
+   "latency_ms": 380.0,
+   "router_latency_ms": 380.0
+  },
+  {
+   "id": "shoplist-p1",
+   "style": "paraphrase",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list"
+   ],
+   "predicted": null,
+   "source": "gate_abstain",
+   "confidence": 0.494,
+   "args": {},
+   "ok": false,
+   "latency_ms": 33.6,
+   "router_latency_ms": 33.6
+  },
+  {
+   "id": "shoplist-p2",
+   "style": "paraphrase",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list"
+   ],
+   "predicted": "shopping_list_add",
+   "source": "two_stage",
+   "confidence": 1.0,
+   "args": {
+    "item": "dog food"
+   },
+   "ok": true,
+   "latency_ms": 451.6,
+   "router_latency_ms": 451.6
+  },
+  {
+   "id": "shoplist-p3",
+   "style": "paraphrase",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list",
+    "add_reminder"
+   ],
+   "predicted": "shopping_list_add",
+   "source": "two_stage",
+   "confidence": 0.626,
+   "args": {
+    "item": "coffee"
+   },
+   "ok": true,
+   "latency_ms": 398.9,
+   "router_latency_ms": 398.8
+  },
+  {
+   "id": "listshow-c1",
+   "style": "canonical",
+   "expected": [
+    "show_list"
+   ],
+   "predicted": "show_list",
+   "source": "two_stage",
+   "confidence": 1.0,
+   "args": {
+    "list_type": "shopping"
+   },
+   "ok": true,
+   "latency_ms": 387.3,
+   "router_latency_ms": 387.2
+  },
+  {
+   "id": "listshow-c2",
+   "style": "canonical",
+   "expected": [
+    "show_list"
+   ],
+   "predicted": "show_list",
+   "source": "two_stage",
+   "confidence": 1.0,
+   "args": {
+    "list_type": "todo"
+   },
+   "ok": true,
+   "latency_ms": 393.3,
+   "router_latency_ms": 393.2
+  },
+  {
+   "id": "listshow-p1",
+   "style": "paraphrase",
+   "expected": [
+    "show_list"
+   ],
+   "predicted": "show_list",
+   "source": "two_stage",
+   "confidence": 0.969,
+   "args": {},
+   "ok": true,
+   "latency_ms": 324.8,
+   "router_latency_ms": 324.8
+  },
+  {
+   "id": "listshow-p2",
+   "style": "paraphrase",
+   "expected": [
+    "show_list"
+   ],
+   "predicted": "show_list",
+   "source": "two_stage",
+   "confidence": 0.912,
+   "args": {},
+   "ok": true,
+   "latency_ms": 332.0,
+   "router_latency_ms": 332.0
+  },
+  {
+   "id": "listrm-c1",
+   "style": "canonical",
+   "expected": [
+    "list_remove"
+   ],
+   "predicted": "list_remove",
+   "source": "two_stage",
+   "confidence": 0.999,
+   "args": {
+    "item": "bananas",
+    "list_type": "shopping"
+   },
+   "ok": true,
+   "latency_ms": 429.5,
+   "router_latency_ms": 429.5
+  },
+  {
+   "id": "listrm-p1",
+   "style": "paraphrase",
+   "expected": [
+    "list_remove"
+   ],
+   "predicted": null,
+   "source": "gate_abstain",
+   "confidence": 0.832,
+   "args": {},
+   "ok": false,
+   "latency_ms": 33.4,
+   "router_latency_ms": 33.4
+  },
+  {
+   "id": "listrm-p2",
+   "style": "paraphrase",
+   "expected": [
+    "list_remove"
+   ],
+   "predicted": "list_remove",
+   "source": "two_stage",
+   "confidence": 0.671,
+   "args": {
+    "item": "eggs"
+   },
+   "ok": true,
+   "latency_ms": 474.2,
+   "router_latency_ms": 474.2
+  },
+  {
+   "id": "cal-show-c1",
+   "style": "canonical",
+   "expected": [
+    "show_calendar"
+   ],
+   "predicted": "show_calendar",
+   "source": "two_stage",
+   "confidence": 0.989,
+   "args": {
+    "qualifier": "today"
+   },
+   "ok": true,
+   "latency_ms": 384.7,
+   "router_latency_ms": 384.7
+  },
+  {
+   "id": "cal-show-c2",
+   "style": "canonical",
+   "expected": [
+    "show_calendar"
+   ],
+   "predicted": "show_calendar",
+   "source": "two_stage",
+   "confidence": 0.999,
+   "args": {
+    "qualifier": "this week"
+   },
+   "ok": true,
+   "latency_ms": 393.7,
+   "router_latency_ms": 393.7
+  },
+  {
+   "id": "cal-show-p1",
+   "style": "paraphrase",
+   "expected": [
+    "show_calendar"
+   ],
+   "predicted": "show_calendar",
+   "source": "two_stage",
+   "confidence": 0.974,
+   "args": {
+    "qualifier": "friday"
+   },
+   "ok": true,
+   "latency_ms": 339.2,
+   "router_latency_ms": 339.2
+  },
+  {
+   "id": "cal-show-p2",
+   "style": "paraphrase",
+   "expected": [
+    "show_calendar"
+   ],
+   "predicted": "show_calendar",
+   "source": "two_stage",
+   "confidence": 0.977,
+   "args": {
+    "qualifier": "after lunch"
+   },
+   "ok": true,
+   "latency_ms": 353.6,
+   "router_latency_ms": 353.6
+  },
+  {
+   "id": "cal-add-c1",
+   "style": "canonical",
+   "expected": [
+    "add_calendar_event"
+   ],
+   "predicted": "add_calendar_event",
+   "source": "two_stage",
+   "confidence": 1.0,
+   "args": {
+    "date": "next tuesday",
+    "time": "3pm",
+    "title": "dentist appointment"
+   },
+   "ok": true,
+   "latency_ms": 619.7,
+   "router_latency_ms": 619.6
+  },
+  {
+   "id": "cal-add-c2",
+   "style": "canonical",
+   "expected": [
+    "add_calendar_event"
+   ],
+   "predicted": "add_calendar_event",
+   "source": "two_stage",
+   "confidence": 0.937,
+   "args": {
+    "date": "friday",
+    "time": "10",
+    "title": "meeting with sarah"
+   },
+   "ok": true,
+   "latency_ms": 628.1,
+   "router_latency_ms": 628.1
+  },
+  {
+   "id": "cal-add-p1",
+   "style": "paraphrase",
+   "expected": [
+    "add_calendar_event"
+   ],
+   "predicted": "add_calendar_event",
+   "source": "two_stage",
+   "confidence": 0.767,
+   "args": {
+    "date": "thursday",
+    "title": "vet"
+   },
+   "ok": true,
+   "latency_ms": 447.2,
+   "router_latency_ms": 447.2
+  },
+  {
+   "id": "cal-add-p2",
+   "style": "paraphrase",
+   "expected": [
+    "add_calendar_event"
+   ],
+   "predicted": "add_reminder",
+   "source": "two_stage",
+   "confidence": 0.977,
+   "args": {
+    "time": "sunday",
+    "title": "mum's flight"
+   },
+   "ok": false,
+   "latency_ms": 491.6,
+   "router_latency_ms": 491.6
+  },
+  {
+   "id": "rem-add-c1",
+   "style": "canonical",
+   "expected": [
+    "add_reminder"
+   ],
+   "predicted": "add_reminder",
+   "source": "two_stage",
+   "confidence": 0.993,
+   "args": {
+    "time": "7pm",
+    "title": "water the plants"
+   },
+   "ok": true,
+   "latency_ms": 469.9,
+   "router_latency_ms": 469.8
+  },
+  {
+   "id": "rem-add-c2",
+   "style": "canonical",
+   "expected": [
+    "add_reminder"
+   ],
+   "predicted": "add_reminder",
+   "source": "two_stage",
+   "confidence": 1.0,
+   "args": {
+    "date": "tonight",
+    "title": "take the bins out"
+   },
+   "ok": true,
+   "latency_ms": 450.1,
+   "router_latency_ms": 450.1
+  },
+  {
+   "id": "rem-add-p1",
+   "style": "paraphrase",
+   "expected": [
+    "add_reminder"
+   ],
+   "predicted": "add_reminder",
+   "source": "two_stage",
+   "confidence": 0.992,
+   "args": {
+    "title": "pay the rent"
+   },
+   "ok": true,
+   "latency_ms": 359.2,
+   "router_latency_ms": 359.2
+  },
+  {
+   "id": "rem-add-p2",
+   "style": "paraphrase",
+   "expected": [
+    "add_reminder"
+   ],
+   "predicted": "add_reminder",
+   "source": "two_stage",
+   "confidence": 0.868,
+   "args": {
+    "date": "tomorrow morning",
+    "title": "dentist"
+   },
+   "ok": true,
+   "latency_ms": 423.0,
+   "router_latency_ms": 423.0
+  },
+  {
+   "id": "rem-add-p3",
+   "style": "paraphrase",
+   "expected": [
+    "add_reminder"
+   ],
+   "predicted": "add_reminder",
+   "source": "two_stage",
+   "confidence": 0.822,
+   "args": {
+    "time": "3",
+    "title": "the school pickup"
+   },
+   "ok": true,
+   "latency_ms": 458.8,
+   "router_latency_ms": 458.7
+  },
+  {
+   "id": "rem-list-c1",
+   "style": "canonical",
+   "expected": [
+    "list_reminders"
+   ],
+   "predicted": "list_reminders",
+   "source": "two_stage",
+   "confidence": 0.978,
+   "args": {},
+   "ok": true,
+   "latency_ms": 287.0,
+   "router_latency_ms": 287.0
+  },
+  {
+   "id": "rem-list-p1",
+   "style": "paraphrase",
+   "expected": [
+    "list_reminders",
+    "show_calendar"
+   ],
+   "predicted": "list_reminders",
+   "source": "two_stage",
+   "confidence": 0.728,
+   "args": {
+    "qualifier": "today"
+   },
+   "ok": true,
+   "latency_ms": 350.7,
+   "router_latency_ms": 350.7
+  },
+  {
+   "id": "timer-c1",
+   "style": "canonical",
+   "expected": [
+    "set_timer"
+   ],
+   "predicted": "set_timer",
+   "source": "two_stage",
+   "confidence": 0.999,
+   "args": {
+    "minutes": 10
+   },
+   "ok": true,
+   "latency_ms": 299.0,
+   "router_latency_ms": 299.0
+  },
+  {
+   "id": "timer-c2",
+   "style": "canonical",
+   "expected": [
+    "set_timer"
+   ],
+   "predicted": "set_timer",
+   "source": "two_stage",
+   "confidence": 1.0,
+   "args": {
+    "label": "pasta",
+    "minutes": 5
+   },
+   "ok": true,
+   "latency_ms": 407.7,
+   "router_latency_ms": 407.7
+  },
+  {
+   "id": "timer-p1",
+   "style": "paraphrase",
+   "expected": [
+    "set_timer"
+   ],
+   "predicted": "add_calendar_event",
+   "source": "two_stage",
+   "confidence": 0.992,
+   "args": {
+    "date": "the roast spuds",
+    "title": "on the clock"
+   },
+   "ok": false,
+   "latency_ms": 480.2,
+   "router_latency_ms": 480.2
+  },
+  {
+   "id": "timer-p2",
+   "style": "paraphrase",
+   "expected": [
+    "set_timer"
+   ],
+   "predicted": "set_timer",
+   "source": "two_stage",
+   "confidence": 0.992,
+   "args": {
+    "label": "eggs",
+    "minutes": 6
+   },
+   "ok": true,
+   "latency_ms": 353.1,
+   "router_latency_ms": 353.1
+  },
+  {
+   "id": "note-add-c1",
+   "style": "canonical",
+   "expected": [
+    "create_note"
+   ],
+   "predicted": "create_note",
+   "source": "two_stage",
+   "confidence": 0.649,
+   "args": {
+    "content": "the wifi password is hunter2"
+   },
+   "ok": true,
+   "latency_ms": 409.8,
+   "router_latency_ms": 409.8
+  },
+  {
+   "id": "note-add-c2",
+   "style": "canonical",
+   "expected": [
+    "create_note"
+   ],
+   "predicted": "create_note",
+   "source": "two_stage",
+   "confidence": 0.725,
+   "args": {
+    "content": "the gate code is 4482"
+   },
+   "ok": true,
+   "latency_ms": 429.7,
+   "router_latency_ms": 429.7
+  },
+  {
+   "id": "note-add-p1",
+   "style": "paraphrase",
+   "expected": [
+    "create_note"
+   ],
+   "predicted": null,
+   "source": "gate_abstain",
+   "confidence": 0.395,
+   "args": {},
+   "ok": false,
+   "latency_ms": 26.8,
+   "router_latency_ms": 26.8
+  },
+  {
+   "id": "note-add-p2",
+   "style": "paraphrase",
+   "expected": [
+    "create_note",
+    "remember_fact"
+   ],
+   "predicted": null,
+   "source": "gate_abstain",
+   "confidence": 0.41,
+   "args": {},
+   "ok": false,
+   "latency_ms": 38.0,
+   "router_latency_ms": 38.0
+  },
+  {
+   "id": "note-search-c1",
+   "style": "canonical",
+   "expected": [
+    "note_search"
+   ],
+   "predicted": "note_search",
+   "source": "two_stage",
+   "confidence": 0.997,
+   "args": {
+    "query": "the wifi password"
+   },
+   "ok": true,
+   "latency_ms": 340.9,
+   "router_latency_ms": 340.9
+  },
+  {
+   "id": "note-search-p1",
+   "style": "paraphrase",
+   "expected": [
+    "note_search"
+   ],
+   "predicted": "note_search",
+   "source": "two_stage",
+   "confidence": 0.984,
+   "args": {
+    "query": "plumber"
+   },
+   "ok": true,
+   "latency_ms": 363.4,
+   "router_latency_ms": 363.4
+  },
+  {
+   "id": "note-search-p2",
+   "style": "paraphrase",
+   "expected": [
+    "note_search"
+   ],
+   "predicted": "note_search",
+   "source": "two_stage",
+   "confidence": 0.97,
+   "args": {
+    "query": "the gate code"
+   },
+   "ok": true,
+   "latency_ms": 679.9,
+   "router_latency_ms": 679.9
+  },
+  {
+   "id": "journal-c1",
+   "style": "canonical",
+   "expected": [
+    "journal"
+   ],
+   "predicted": "journal",
+   "source": "two_stage",
+   "confidence": 0.932,
+   "args": {
+    "action": "create",
+    "content": "grateful for the rain today"
+   },
+   "ok": true,
+   "latency_ms": 932.8,
+   "router_latency_ms": 932.7
+  },
+  {
+   "id": "journal-c2",
+   "style": "canonical",
+   "expected": [
+    "journal"
+   ],
+   "predicted": "journal",
+   "source": "two_stage",
+   "confidence": 1.0,
+   "args": {
+    "action": "create",
+    "content": "today was a hard one",
+    "mood": "stressed"
+   },
+   "ok": true,
+   "latency_ms": 511.8,
+   "router_latency_ms": 511.8
+  },
+  {
+   "id": "journal-p1",
+   "style": "paraphrase",
+   "expected": [
+    "journal"
+   ],
+   "predicted": "journal",
+   "source": "two_stage",
+   "confidence": 1.0,
+   "args": {
+    "action": "create",
+    "content": "today honestly knocked me around"
+   },
+   "ok": true,
+   "latency_ms": 491.6,
+   "router_latency_ms": 491.6
+  },
+  {
+   "id": "journal-p2",
+   "style": "paraphrase",
+   "expected": [
+    "journal"
+   ],
+   "predicted": "journal",
+   "source": "two_stage",
+   "confidence": 0.896,
+   "args": {
+    "action": "read"
+   },
+   "ok": true,
+   "latency_ms": 470.5,
+   "router_latency_ms": 470.4
+  },
+  {
+   "id": "people-c1",
+   "style": "canonical",
+   "expected": [
+    "people"
+   ],
+   "predicted": "people",
+   "source": "two_stage",
+   "confidence": 0.958,
+   "args": {
+    "action": "create",
+    "name": "Marcus",
+    "relationship": " my colleague"
+   },
+   "ok": true,
+   "latency_ms": 527.1,
+   "router_latency_ms": 527.1
+  },
+  {
+   "id": "people-c2",
+   "style": "canonical",
+   "expected": [
+    "people",
+    "recall_memory"
+   ],
+   "predicted": "people",
+   "source": "two_stage",
+   "confidence": 0.928,
+   "args": {
+    "query": "Zephyrina"
+   },
+   "ok": true,
+   "latency_ms": 351.4,
+   "router_latency_ms": 351.4
+  },
+  {
+   "id": "people-p1",
+   "style": "paraphrase",
+   "expected": [
+    "people",
+    "remember_fact"
+   ],
+   "predicted": "people",
+   "source": "two_stage",
+   "confidence": 0.654,
+   "args": {
+    "action": "create",
+    "name": "Kate",
+    "relationship": " sister"
+   },
+   "ok": true,
+   "latency_ms": 488.2,
+   "router_latency_ms": 488.1
+  },
+  {
+   "id": "people-p2",
+   "style": "paraphrase",
+   "expected": [
+    "people",
+    "recall_memory"
+   ],
+   "predicted": "people",
+   "source": "two_stage",
+   "confidence": 1.0,
+   "args": {
+    "query": "Dave"
+   },
+   "ok": true,
+   "latency_ms": 376.1,
+   "router_latency_ms": 376.1
+  },
+  {
+   "id": "media-c1",
+   "style": "canonical",
+   "expected": [
+    "media"
+   ],
+   "predicted": "media",
+   "source": "two_stage",
+   "confidence": 1.0,
+   "args": {
+    "action": "play"
+   },
+   "ok": true,
+   "latency_ms": 318.6,
+   "router_latency_ms": 318.6
+  },
+  {
+   "id": "media-c2",
+   "style": "canonical",
+   "expected": [
+    "media"
+   ],
+   "predicted": "media",
+   "source": "two_stage",
+   "confidence": 0.999,
+   "args": {
+    "action": "volume",
+    "direction": "down"
+   },
+   "ok": true,
+   "latency_ms": 462.7,
+   "router_latency_ms": 462.7
+  },
+  {
+   "id": "media-c3",
+   "style": "canonical",
+   "expected": [
+    "media"
+   ],
+   "predicted": "media",
+   "source": "two_stage",
+   "confidence": 1.0,
+   "args": {
+    "action": "control",
+    "command": "pause"
+   },
+   "ok": true,
+   "latency_ms": 425.3,
+   "router_latency_ms": 425.3
+  },
+  {
+   "id": "media-p1",
+   "style": "paraphrase",
+   "expected": [
+    "media"
+   ],
+   "predicted": "home",
+   "source": "two_stage",
+   "confidence": 0.532,
+   "args": {
+    "action": "play"
+   },
+   "ok": false,
+   "latency_ms": 455.1,
+   "router_latency_ms": 455.1
+  },
+  {
+   "id": "media-p2",
+   "style": "paraphrase",
+   "expected": [
+    "media"
+   ],
+   "predicted": "media",
+   "source": "two_stage",
+   "confidence": 0.737,
+   "args": {
+    "action": "volume",
+    "direction": "down"
+   },
+   "ok": true,
+   "latency_ms": 443.0,
+   "router_latency_ms": 442.9
+  },
+  {
+   "id": "media-p3",
+   "style": "paraphrase",
+   "expected": [
+    "media"
+   ],
+   "predicted": "media",
+   "source": "two_stage",
+   "confidence": 0.989,
+   "args": {
+    "action": "control",
+    "command": "next"
+   },
+   "ok": true,
+   "latency_ms": 468.9,
+   "router_latency_ms": 468.9
+  },
+  {
+   "id": "home-c1",
+   "style": "canonical",
+   "expected": [
+    "home"
+   ],
+   "predicted": "home",
+   "source": "two_stage",
+   "confidence": 1.0,
+   "args": {
+    "action": "off",
+    "room": "kitchen"
+   },
+   "ok": true,
+   "latency_ms": 361.7,
+   "router_latency_ms": 361.7
+  },
+  {
+   "id": "home-c2",
+   "style": "canonical",
+   "expected": [
+    "home"
+   ],
+   "predicted": "home",
+   "source": "two_stage",
+   "confidence": 1.0,
+   "args": {
+    "action": "dim",
+    "room": "lounge room"
+   },
+   "ok": true,
+   "latency_ms": 475.2,
+   "router_latency_ms": 475.2
+  },
+  {
+   "id": "home-p1",
+   "style": "paraphrase",
+   "expected": [
+    "home"
+   ],
+   "predicted": "home",
+   "source": "two_stage",
+   "confidence": 1.0,
+   "args": {
+    "action": "off"
+   },
+   "ok": true,
+   "latency_ms": 382.3,
+   "router_latency_ms": 382.3
+  },
+  {
+   "id": "home-p2",
+   "style": "paraphrase",
+   "expected": [
+    "home"
+   ],
+   "predicted": "home",
+   "source": "two_stage",
+   "confidence": 0.984,
+   "args": {
+    "action": "off"
+   },
+   "ok": true,
+   "latency_ms": 391.6,
+   "router_latency_ms": 391.6
+  },
+  {
+   "id": "recall-c1",
+   "style": "canonical",
+   "expected": [
+    "recall_memory"
+   ],
+   "predicted": "recall_memory",
+   "source": "two_stage",
+   "confidence": 0.984,
+   "args": {
+    "query": "what do you remember about me"
+   },
+   "ok": true,
+   "latency_ms": 427.8,
+   "router_latency_ms": 427.8
+  },
+  {
+   "id": "recall-c2",
+   "style": "canonical",
+   "expected": [
+    "recall_memory"
+   ],
+   "predicted": "recall_memory",
+   "source": "two_stage",
+   "confidence": 0.999,
+   "args": {
+    "query": "my name"
+   },
+   "ok": true,
+   "latency_ms": 374.4,
+   "router_latency_ms": 374.4
+  },
+  {
+   "id": "recall-p1",
+   "style": "paraphrase",
+   "expected": [
+    "recall_memory"
+   ],
+   "predicted": "recall_memory",
+   "source": "two_stage",
+   "confidence": 0.949,
+   "args": {
+    "query": "remind me what I told you about my work situation"
+   },
+   "ok": true,
+   "latency_ms": 509.0,
+   "router_latency_ms": 508.9
+  },
+  {
+   "id": "recall-p2",
+   "style": "paraphrase",
+   "expected": [
+    "recall_memory"
+   ],
+   "predicted": "recall_memory",
+   "source": "two_stage",
+   "confidence": 0.998,
+   "args": {
+    "query": "You know that thing I said about my knee"
+   },
+   "ok": true,
+   "latency_ms": 560.8,
+   "router_latency_ms": 560.7
+  },
+  {
+   "id": "fact-c1",
+   "style": "canonical",
+   "expected": [
+    "remember_fact"
+   ],
+   "predicted": "remember_fact",
+   "source": "two_stage",
+   "confidence": 0.997,
+   "args": {
+    "fact": "my favourite colour is green"
+   },
+   "ok": true,
+   "latency_ms": 397.5,
+   "router_latency_ms": 397.5
+  },
+  {
+   "id": "fact-c2",
+   "style": "canonical",
+   "expected": [
+    "remember_fact"
+   ],
+   "predicted": "remember_fact",
+   "source": "two_stage",
+   "confidence": 0.997,
+   "args": {
+    "fact": "I'm allergic to peanuts"
+   },
+   "ok": true,
+   "latency_ms": 443.7,
+   "router_latency_ms": 443.7
+  },
+  {
+   "id": "fact-p1",
+   "style": "paraphrase",
+   "expected": [
+    "remember_fact"
+   ],
+   "predicted": "remember_fact",
+   "source": "two_stage",
+   "confidence": 0.853,
+   "args": {
+    "fact": "I knock off work at 2:30 on fridays"
+   },
+   "ok": true,
+   "latency_ms": 617.4,
+   "router_latency_ms": 617.4
+  },
+  {
+   "id": "fact-p2",
+   "style": "paraphrase",
+   "expected": [
+    "remember_fact",
+    "people"
+   ],
+   "predicted": "remember_fact",
+   "source": "two_stage",
+   "confidence": 0.521,
+   "args": {
+    "fact": "Biscuit"
+   },
+   "ok": true,
+   "latency_ms": 375.9,
+   "router_latency_ms": 375.9
+  },
+  {
+   "id": "chat-1",
+   "style": "chat",
+   "expected": [
+    "general_chat"
+   ],
+   "predicted": null,
+   "source": "gate_abstain",
+   "confidence": 0.999,
+   "args": {},
+   "ok": true,
+   "latency_ms": 16.6,
+   "router_latency_ms": 16.6
+  },
+  {
+   "id": "chat-2",
+   "style": "chat",
+   "expected": [
+    "general_chat"
+   ],
+   "predicted": null,
+   "source": "gate_abstain",
+   "confidence": 1.0,
+   "args": {},
+   "ok": true,
+   "latency_ms": 26.7,
+   "router_latency_ms": 26.6
+  },
+  {
+   "id": "chat-3",
+   "style": "chat",
+   "expected": [
+    "general_chat",
+    "journal",
+    "remember_emotional_moment"
+   ],
+   "predicted": null,
+   "source": "gate_abstain",
+   "confidence": 0.982,
+   "args": {},
+   "ok": true,
+   "latency_ms": 24.4,
+   "router_latency_ms": 24.4
+  },
+  {
+   "id": "chat-4",
+   "style": "chat",
+   "expected": [
+    "general_chat"
+   ],
+   "predicted": null,
+   "source": "gate_abstain",
+   "confidence": 0.995,
+   "args": {},
+   "ok": true,
+   "latency_ms": 27.3,
+   "router_latency_ms": 27.2
+  },
+  {
+   "id": "chat-5",
+   "style": "chat",
+   "expected": [
+    "general_chat"
+   ],
+   "predicted": null,
+   "source": "gate_abstain",
+   "confidence": 0.996,
+   "args": {},
+   "ok": true,
+   "latency_ms": 34.6,
+   "router_latency_ms": 34.6
+  },
+  {
+   "id": "chat-6",
+   "style": "chat",
+   "expected": [
+    "general_chat"
+   ],
+   "predicted": null,
+   "source": "gate_abstain",
+   "confidence": 0.977,
+   "args": {},
+   "ok": true,
+   "latency_ms": 27.1,
+   "router_latency_ms": 27.1
+  },
+  {
+   "id": "chat-7",
+   "style": "chat",
+   "expected": [
+    "general_chat"
+   ],
+   "predicted": null,
+   "source": "gate_abstain",
+   "confidence": 0.607,
+   "args": {},
+   "ok": true,
+   "latency_ms": 27.5,
+   "router_latency_ms": 27.5
+  },
+  {
+   "id": "chat-8",
+   "style": "chat",
+   "expected": [
+    "general_chat"
+   ],
+   "predicted": null,
+   "source": "shortlist_miss",
+   "confidence": 0.614,
+   "args": {},
+   "ok": true,
+   "latency_ms": 193.9,
+   "router_latency_ms": 193.9
+  }
+ ]
+}

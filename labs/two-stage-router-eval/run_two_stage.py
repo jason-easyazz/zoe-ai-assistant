@@ -185,26 +185,30 @@ def start_server(gguf: str, port: int) -> subprocess.Popen:
     print("starting:", " ".join(cmd))
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL)
-    for _ in range(600):
-        if proc.poll() is not None:
-            raise SystemExit("server died during load")
-        try:
-            urllib.request.urlopen(f"http://127.0.0.1:{port}/health",
-                                   timeout=1)
-            break
-        except (urllib.error.URLError, TimeoutError, OSError):
-            time.sleep(0.2)
-    else:
+    try:
+        for _ in range(600):
+            if proc.poll() is not None:
+                raise SystemExit("server died during load")
+            try:
+                urllib.request.urlopen(f"http://127.0.0.1:{port}/health",
+                                       timeout=1)
+                break
+            except (urllib.error.URLError, TimeoutError, OSError):
+                time.sleep(0.2)
+        else:
+            raise SystemExit("server never became healthy")
+        # identity check: our child, our gguf
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/props",
+                                    timeout=5) as r:
+            served = json.load(r).get("model_path", "")
+        if proc.poll() is not None or served != gguf:
+            raise SystemExit(f"ABORT: server on :{port} is not ours "
+                             f"(model_path={served!r})")
+    except BaseException:
+        # never leak the spawned server, whatever failed post-spawn
         proc.kill()
-        raise SystemExit("server never became healthy")
-    # identity check: our child, our gguf
-    with urllib.request.urlopen(f"http://127.0.0.1:{port}/props",
-                                timeout=5) as r:
-        served = json.load(r).get("model_path", "")
-    if proc.poll() is not None or served != gguf:
-        proc.kill()
-        raise SystemExit(f"ABORT: server on :{port} is not ours "
-                         f"(model_path={served!r})")
+        proc.wait()
+        raise
     return proc
 
 
