@@ -16,10 +16,10 @@
 #     [--device-token <TOKEN>] [--audio-device hw:2,0]
 #
 # Options:
-#   --host IP            Pi hostname/IP            (default 192.168.1.61)
+#   --host IP            Pi hostname/IP            (REQUIRED)
 #   --user NAME          SSH user on the Pi        (default zoe)
 #   --ssh-key PATH       SSH identity file         (optional)
-#   --server-url URL     Zoe host base URL         (default https://192.168.1.218)
+#   --server-url URL     Zoe host base URL         (REQUIRED, e.g. https://192.168.1.10)
 #   --panel-id ID        panel identifier          (default zoe-touch-pi)
 #   --device-token TOK   panel device token for voice auth (see note below)
 #   --audio-device DEV   ALSA capture device       (default default; `arecord -l`)
@@ -39,10 +39,10 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "${ROOT_DIR}/scripts/setup/lib/common.sh"
 SETUP_DIR="${ROOT_DIR}/scripts/setup"
 
-HOST="192.168.1.61"
+HOST=""
 USER_NAME="zoe"
 SSH_KEY=""
-SERVER_URL="https://192.168.1.218"
+SERVER_URL=""
 PANEL_ID="zoe-touch-pi"
 DEVICE_TOKEN=""
 AUDIO_DEVICE="default"
@@ -67,6 +67,8 @@ done
 
 require_cmd ssh
 require_cmd scp
+[[ -n "$HOST" ]] || die "--host <PI_IP> is required (try --help)."
+[[ -n "$SERVER_URL" ]] || die "--server-url https://<ZOE_HOST_IP> is required (try --help)."
 REMOTE="${USER_NAME}@${HOST}"
 SSH_OPTS=(-o ConnectTimeout=10)
 [[ -n "$SSH_KEY" ]] && SSH_OPTS+=(-i "$SSH_KEY")

@@ -22,6 +22,7 @@
 #   --skip-systemd    don't install/enable host-native units
 #   --with-router     also fetch the two-stage router decoder model
 #   --models-dir DIR  override the brain model directory
+#   --llama-bin PATH  path to the llama-server binary (default: the Jetson build path)
 #   -h, --help        show this help
 # ============================================================================
 set -euo pipefail
@@ -49,6 +50,7 @@ while [[ $# -gt 0 ]]; do
     --skip-systemd) SKIP_SYSTEMD=1; shift ;;
     --with-router) WITH_ROUTER=1; shift ;;
     --models-dir) MODELS_DIR="$2"; shift 2 ;;
+    --llama-bin) LLAMA_BIN="$2"; shift 2 ;;
     -h|--help) grep '^#' "$0" | grep -v '^#!' | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "Unknown argument: $1 (try --help)" ;;
   esac

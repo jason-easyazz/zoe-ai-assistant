@@ -41,7 +41,7 @@ if have_cmd hf; then HF="hf"
 elif have_cmd huggingface-cli; then HF="huggingface-cli"
 else
   log "Installing huggingface_hub CLI…"
-  pip3 install -U "huggingface_hub[cli]" >/dev/null
+  pip3 install -U "huggingface_hub[cli]"
   HF="hf"; have_cmd hf || HF="huggingface-cli"
 fi
 
