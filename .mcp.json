@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "serena": {
-      "command": "/home/zoe/.local/bin/serena",
+      "command": "/home/zoe/assistant/scripts/maintenance/serena_mcp_capped.sh",
       "args": [
         "start-mcp-server",
         "--context", "claude-code",
