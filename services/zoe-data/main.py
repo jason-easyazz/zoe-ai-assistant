@@ -1232,28 +1232,35 @@ async def lifespan(app: FastAPI):
                     proc = await _run_off_loop(
                         [_sys.executable, _script], env=_env, timeout=_timeout)
                 except _sp.TimeoutExpired:
-                    # run_to_completion kills the child on timeout. The script traps
-                    # SIGTERM and unwinds so its `finally` restores the brain — but a
-                    # SIGKILL cannot be caught, and a timeout can land inside a
-                    # training window with llama-server STOPPED. Restoring the brain is
-                    # a hard rule, so ensure it unconditionally here (`start` on a
-                    # running unit is a no-op, so this is safe either way).
-                    logger.error("router self-train timed out after %ss (child killed)", _timeout)
+                    # The helper KILLs the child on timeout (SIGKILL — no in-process
+                    # handler survives it). So a timeout can land (a) inside a training
+                    # window with llama-server stopped, or (b) mid-deploy, after the
+                    # served GGUF was swapped but before the new model passed its live
+                    # checks — leaving the sidecar on an UNVERIFIED model.
+                    # `--recover` is the idempotent cleanup for both: it ensures the
+                    # brain is up and, if the on-disk deploy marker says a swap was in
+                    # flight, restores the last-known-good GGUF and restarts onto it.
+                    # Safe to run when nothing is broken.
+                    logger.error("router self-train timed out after %ss (child killed) "
+                                 "— running --recover", _timeout)
                     try:
-                        _restore = await _run_off_loop(
-                            ["systemctl", "--user", "start", _brain],
-                            env=_env, timeout=180)
-                        if _restore.returncode == 0:
-                            logger.info("router self-train timeout: brain (%s) ensured up", _brain)
+                        _rec = await _run_off_loop(
+                            [_sys.executable, _script, "--recover"],
+                            env=_env, timeout=900)
+                        _rtail = (_rec.stdout or b"").decode(errors="replace")[-1500:]
+                        if _rec.returncode == 0:
+                            logger.info("router self-train recovery ok:\n%s", _rtail)
                         else:
                             logger.error(
-                                "router self-train timeout: FAILED to restore the brain (%s): %s "
-                                "— OPERATOR ACTION REQUIRED",
-                                _brain, (_restore.stderr or b"").decode(errors="replace")[:500])
+                                "router self-train RECOVERY FAILED (rc=%s) — OPERATOR "
+                                "ACTION REQUIRED (brain may be down and/or the sidecar "
+                                "may be serving an unverified model):\n%s",
+                                _rec.returncode, _rtail)
                     except Exception as _rexc:
                         logger.error(
-                            "router self-train timeout: FAILED to restore the brain (%s): %s "
-                            "— OPERATOR ACTION REQUIRED", _brain, _rexc)
+                            "router self-train RECOVERY FAILED (%s) — OPERATOR ACTION "
+                            "REQUIRED: brain (%s) may be down and the sidecar may be "
+                            "serving an unverified model", _rexc, _brain)
                     return
 
                 tail = (proc.stdout or b"").decode(errors="replace")[-3000:]

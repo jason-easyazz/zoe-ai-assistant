@@ -71,6 +71,13 @@ CAMPAIGN = LABS / "router-90-campaign"
 SELFTRAIN_DIR = REPO / "data" / "router_selftrain"
 RUNS_DIR = SELFTRAIN_DIR / "runs"
 SCOREBOARD = SELFTRAIN_DIR / "scoreboard.jsonl"
+# Crash-safety intent record. Written to disk BEFORE the served model file is
+# swapped and removed only once the new model is verified live (or rolled back).
+# If this file exists, a deploy was interrupted and the sidecar may be serving an
+# UNVERIFIED model — recover() undoes it. This cannot live in memory: the
+# scheduler's timeout kills the child with SIGKILL, which no in-process handler
+# can catch, so the only thing that survives is what is on disk.
+DEPLOY_MARKER = SELFTRAIN_DIR / "deploy_in_progress.json"
 
 # --- the frozen eval corpus (NEVER a training input) ------------------------
 FROZEN_CORPUS = LABS / "needle-benchmark" / "corpus.jsonl"
@@ -119,6 +126,14 @@ POST_DEPLOY_TOLERANCE_PCT = 2.0
 MIN_FREE_DISK_MB = 4096
 MIN_TRAIN_MEM_MB = 2048  # train_lora.py refuses to start below this
 MIN_EVAL_MEM_MB = 1600   # prod_path_eval aborts below 1500; fail fast before that
+
+# Nothing is ever copied onto the LIVE served model path without passing this.
+# Learned the hard way: a stale marker pointing at a stray file let a 9-BYTE file
+# be written over the live 292 MB router GGUF, taking the sidecar down. Any file
+# heading for the served path must be a real GGUF of a plausible size, and any
+# last-known-good must come from OUR archive dir — never an arbitrary path.
+GGUF_MAGIC = b"GGUF"
+MIN_GGUF_BYTES = 50 * 1024 * 1024  # the 270M Q8_0 is ~292 MB
 ARCHIVE_KEEP = int(os.environ.get("ZOE_ROUTER_ARCHIVE_KEEP", "3"))
 
 
@@ -677,43 +692,164 @@ def replay_gate(journal: dict) -> ReplayVerdict:
         f"n={summary.get('n_samples')} ok_rate={summary.get('ok_rate')} rc={proc.returncode}")
 
 
+def validate_gguf(path: Path) -> tuple:
+    """Is this plausibly a real router model? (ok, reason)
+
+    Cheap structural check, deliberately paranoid — it guards the one write this
+    loop makes to a live production path.
+    """
+    if not path.exists():
+        return False, f"{path} does not exist"
+    size = path.stat().st_size
+    if size < MIN_GGUF_BYTES:
+        return False, (f"{path.name} is {size} bytes — far below the {MIN_GGUF_BYTES} "
+                       "byte floor for this model. Refusing to serve a truncated or "
+                       "placeholder file.")
+    try:
+        with path.open("rb") as f:
+            magic = f.read(4)
+    except OSError as e:
+        return False, f"cannot read {path}: {e}"
+    if magic != GGUF_MAGIC:
+        return False, f"{path.name} is not a GGUF (magic {magic!r})"
+    return True, ""
+
+
+def validate_lkg(lkg: Path) -> tuple:
+    """A last-known-good must be a real GGUF that WE archived. (ok, reason)
+
+    The containment check matters: the recovery marker is read off disk and could
+    be stale, hand-edited, or written by a different checkout. Restoring from an
+    arbitrary path is how a stray file ends up being served as the router.
+    """
+    try:
+        resolved = lkg.resolve()
+        archive = ARCHIVE_DIR.resolve()
+    except OSError as e:
+        return False, f"cannot resolve {lkg}: {e}"
+    if not str(resolved).startswith(str(archive) + os.sep):
+        return False, (f"last-known-good {resolved} is not inside the archive dir "
+                       f"{archive} — refusing to restore from an arbitrary path")
+    return validate_gguf(resolved)
+
+
+def restart_and_verify_sidecar(expect: Path) -> bool:
+    """Restart the sidecar unit and prove it is serving exactly `expect`."""
+    systemctl("restart", SIDECAR_UNIT, check=False)
+    if not wait_for(lambda: http_ok(f"http://127.0.0.1:{LIVE_PORT}/health"),
+                    timeout=120):
+        log("sidecar did not come back healthy")
+        return False
+    try:
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{LIVE_PORT}/props", timeout=10) as r:
+            served = json.load(r).get("model_path", "")
+    except OSError as e:
+        log(f"cannot read /props: {e}")
+        return False
+    if Path(served).resolve() != SERVED_GGUF.resolve():
+        log(f"sidecar serves {served!r}, expected {SERVED_GGUF}")
+        return False
+    if sha256(SERVED_GGUF) != sha256(expect):
+        log("served file is not byte-identical to the intended model")
+        return False
+    return True
+
+
+def restore_lkg(lkg: Path) -> bool:
+    """Put the last-known-good GGUF back and restart onto it.
+
+    The FILE is restored before the restart, so even an interrupt during the
+    restart leaves the good model on disk for the next start (or for --recover).
+    """
+    ok, why = validate_lkg(lkg)
+    if not ok:
+        log(f"REFUSING to restore: {why}")
+        log("OPERATOR ACTION REQUIRED — the sidecar was NOT modified.")
+        return False
+    tmp = SERVED_GGUF.with_suffix(".rollback.tmp")
+    shutil.copy2(lkg, tmp)
+    os.replace(tmp, SERVED_GGUF)  # atomic
+    ok = restart_and_verify_sidecar(lkg)
+    DEPLOY_MARKER.unlink(missing_ok=True)  # the swap is undone
+    return ok
+
+
+def recover() -> int:
+    """Idempotent crash recovery — safe to run at any time, even with nothing broken.
+
+    The scheduler kills a timed-out run with SIGKILL, which no in-process handler
+    can catch. If that lands after the served model file was swapped but before
+    the new model passed its live checks, the sidecar is left serving an
+    UNVERIFIED model. The on-disk DEPLOY_MARKER is what survives to say so.
+
+    This: (1) makes sure the brain is up, and (2) if a deploy was in flight,
+    restores the last-known-good GGUF and restarts the sidecar onto it.
+    """
+    log("=== RECOVER ===")
+    rc = 0
+    if not http_ok(BRAIN_HEALTH):
+        log(f"brain not healthy — starting {BRAIN_UNIT}")
+        systemctl("start", BRAIN_UNIT, check=False)
+        if wait_for(lambda: http_ok(BRAIN_HEALTH), timeout=180):
+            log("brain restored")
+        else:
+            log(f"OPERATOR ACTION REQUIRED: {BRAIN_UNIT} did not come back healthy")
+            rc = 1
+
+    if not DEPLOY_MARKER.exists():
+        log("no deploy was in flight — sidecar model untouched, nothing to undo")
+        return rc
+
+    marker = json.loads(DEPLOY_MARKER.read_text())
+    lkg = Path(marker["last_known_good"])
+    log(f"INTERRUPTED DEPLOY detected (run {marker.get('stamp')}) — the sidecar may "
+        f"be serving an UNVERIFIED model. Restoring {lkg.name}")
+
+    # The marker is untrusted input: it is read off disk and may be stale, from a
+    # different checkout, or point at a file that is no longer a model. Validate
+    # BEFORE copying anything onto the live served path.
+    marker_served = marker.get("served")
+    if marker_served and Path(marker_served).resolve() != SERVED_GGUF.resolve():
+        log(f"REFUSING to recover: marker targets {marker_served}, but this loop "
+            f"serves {SERVED_GGUF}. Stale or foreign marker — the sidecar was NOT "
+            "modified. Remove the marker by hand if it is junk.")
+        return 1
+    ok, why = validate_lkg(lkg)
+    if not ok:
+        log(f"OPERATOR ACTION REQUIRED: cannot auto-restore — {why}")
+        return 1
+    if restore_lkg(lkg):
+        log("RECOVERED — last-known-good restored and verified live.")
+        return rc
+    log("OPERATOR ACTION REQUIRED: restore of last-known-good did not verify.")
+    return 1
+
+
 def deploy(candidate_gguf: Path, stamp: str, baseline_live: EvalScore,
            journal: dict) -> int:
     """Swap the served model file, restart, verify, re-eval live. Rollback on any failure."""
     log("=== 6. DEPLOY ===")
+    # Never write anything but a real model onto the live served path.
+    ok, why = validate_gguf(candidate_gguf)
+    if not ok:
+        raise SystemExit(f"ABORT: refusing to deploy — {why}")
+
     ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
     lkg = ARCHIVE_DIR / f"lkg_{stamp}_{SERVED_GGUF.name}"
     shutil.copy2(SERVED_GGUF, lkg)  # copy, never move — LKG must always exist
+    ok, why = validate_gguf(lkg)
+    if not ok:  # a bad archive is a rollback we could never perform
+        raise SystemExit(f"ABORT: archived last-known-good is unusable — {why}")
     log(f"archived last-known-good → {lkg.name}")
 
     def _restart_and_verify(expect: Path) -> bool:
-        systemctl("restart", SIDECAR_UNIT, check=False)
-        if not wait_for(lambda: http_ok(f"http://127.0.0.1:{LIVE_PORT}/health"),
-                        timeout=120):
-            log("sidecar did not come back healthy")
-            return False
-        try:
-            with urllib.request.urlopen(
-                    f"http://127.0.0.1:{LIVE_PORT}/props", timeout=10) as r:
-                served = json.load(r).get("model_path", "")
-        except OSError as e:
-            log(f"cannot read /props: {e}")
-            return False
-        if Path(served).resolve() != SERVED_GGUF.resolve():
-            log(f"sidecar serves {served!r}, expected {SERVED_GGUF}")
-            return False
-        if sha256(SERVED_GGUF) != sha256(expect):
-            log("served file is not byte-identical to the intended model")
-            return False
-        return True
+        return restart_and_verify_sidecar(expect)
 
     def _rollback(why: str) -> int:
         log(f"!!! POST-DEPLOY FAILURE: {why}")
         log("!!! AUTO-ROLLBACK to last-known-good")
-        tmp = SERVED_GGUF.with_suffix(".rollback.tmp")
-        shutil.copy2(lkg, tmp)
-        os.replace(tmp, SERVED_GGUF)  # atomic
-        ok = _restart_and_verify(lkg)
+        ok = restore_lkg(lkg)
         journal["deploy"] = {"promoted": False, "rolled_back": True,
                              "rollback_verified": ok, "reason": why,
                              "last_known_good": str(lkg)}
@@ -722,6 +858,16 @@ def deploy(candidate_gguf: Path, stamp: str, baseline_live: EvalScore,
         else:
             log("ROLLBACK FAILED TO VERIFY — SIDECAR MAY BE DEGRADED. OPERATOR NEEDED.")
         return 1
+
+    # Record the intent BEFORE touching the served file. If we are SIGKILLed
+    # between here and a verified promotion, this marker is the only evidence the
+    # sidecar may be serving an unverified model — `--recover` reads it and undoes
+    # the swap. (The scheduler's timeout kill is a SIGKILL; no handler survives it.)
+    DEPLOY_MARKER.write_text(json.dumps({
+        "stamp": stamp, "last_known_good": str(lkg),
+        "served": str(SERVED_GGUF), "candidate": str(candidate_gguf),
+        "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }, indent=1))
 
     tmp = SERVED_GGUF.with_suffix(".new.tmp")
     shutil.copy2(candidate_gguf, tmp)
@@ -758,6 +904,8 @@ def deploy(candidate_gguf: Path, stamp: str, baseline_live: EvalScore,
                    "post_deploy_live": asdict(post)},
         "last_known_good": str(lkg),
     }, indent=1))
+    # verified live — the swap is complete, so the interrupted-deploy marker goes
+    DEPLOY_MARKER.unlink(missing_ok=True)
     journal["deploy"] = {"promoted": True, "rolled_back": False,
                          "post_deploy": asdict(post),
                          "last_known_good": str(lkg)}
@@ -816,8 +964,14 @@ def main() -> int:
     ap.add_argument("--epochs", type=float, default=2.0)
     ap.add_argument("--skip-train", metavar="GGUF",
                     help="evaluate an already-exported candidate GGUF (debug)")
+    ap.add_argument("--recover", action="store_true",
+                    help="idempotent crash recovery: ensure the brain is up and, if a "
+                         "deploy was interrupted, restore the last-known-good GGUF")
     args = ap.parse_args()
     _EPOCHS = args.epochs
+
+    if args.recover:
+        return recover()
 
     # --force-promote is deliberately NOT implemented. The ratchet is the entire
     # safety story of this loop; a bypass flag would quietly delete it.
@@ -831,6 +985,17 @@ def main() -> int:
                "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     log(f"router self-train run {stamp}{' (DRY RUN — will not promote)' if args.dry_run else ''}")
+
+    # A marker left behind means a previous run was killed mid-deploy and the
+    # sidecar may be serving an unverified model. Heal that before measuring
+    # anything — otherwise this run would "re-measure the incumbent" against a
+    # model that was never promoted.
+    if DEPLOY_MARKER.exists():
+        log("stale deploy marker found — a previous run was interrupted mid-deploy")
+        if recover() != 0:
+            raise SystemExit(
+                "ABORT: could not recover the sidecar from an interrupted deploy. "
+                "Refusing to train or promote on top of an unverified model.")
 
     rc = 0
     try:

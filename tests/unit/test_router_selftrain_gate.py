@@ -10,6 +10,7 @@ Pure-logic only (stdlib), so this runs in the fast `ci_safe` lane.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -236,7 +237,35 @@ def test_sigterm_unwinds_so_the_brain_is_restored():
     signal.signal(signal.SIGTERM, signal.SIG_DFL)  # restore, don't poison the suite
 
 
-def test_interrupt_after_model_swap_rolls_back(tmp_path, monkeypatch):
+def _fake_gguf(path: Path, tag: bytes) -> Path:
+    """A file that passes validate_gguf: GGUF magic + plausible size."""
+    path.write_bytes(b"GGUF" + tag + b"\0" * rs.MIN_GGUF_BYTES)
+    return path
+
+
+@pytest.fixture
+def sandbox(tmp_path, monkeypatch):
+    """Isolate EVERY live path the deploy/recover code touches.
+
+    This fixture exists because an earlier version of these tests patched
+    SERVED_GGUF but NOT DEPLOY_MARKER — so `deploy()` wrote a marker to the REAL
+    data/router_selftrain/, pointing at pytest temp files. A later `--recover` on
+    the box read that marker and copied a 9-byte test file over the live 292 MB
+    router GGUF, taking the sidecar down. Patch the whole set, always.
+    """
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    monkeypatch.setattr(rs, "SERVED_GGUF", tmp_path / "served.gguf")
+    monkeypatch.setattr(rs, "ARCHIVE_DIR", archive)
+    monkeypatch.setattr(rs, "DEPLOY_MARKER", tmp_path / "deploy_in_progress.json")
+    monkeypatch.setattr(rs, "PROVENANCE", tmp_path / "provenance.json")
+    monkeypatch.setattr(rs, "RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(rs, "systemctl", lambda *a, **k: None)
+    monkeypatch.setattr(rs, "prune_archive", lambda: None)
+    return tmp_path
+
+
+def test_interrupt_after_model_swap_rolls_back(sandbox, monkeypatch):
     """Once the served GGUF is swapped, ANY exit must roll back.
 
     The scheduler SIGTERMs the script on timeout and our handler turns that into
@@ -244,27 +273,98 @@ def test_interrupt_after_model_swap_rolls_back(tmp_path, monkeypatch):
     `except Exception` would not catch it and the sidecar would be left serving a
     model that never passed its live checks — the one thing deploy must never do.
     """
-    served = tmp_path / "served.gguf"
-    served.write_bytes(b"INCUMBENT")
-    cand = tmp_path / "cand.gguf"
-    cand.write_bytes(b"CANDIDATE")
+    _fake_gguf(rs.SERVED_GGUF, b"INCUMBENT")
+    cand = _fake_gguf(sandbox / "cand.gguf", b"CANDIDATE")
 
-    monkeypatch.setattr(rs, "SERVED_GGUF", served)
-    monkeypatch.setattr(rs, "ARCHIVE_DIR", tmp_path / "archive")
-    monkeypatch.setattr(rs, "PROVENANCE", tmp_path / "provenance.json")
-    monkeypatch.setattr(rs, "systemctl", lambda *a, **k: None)
-    monkeypatch.setattr(rs, "prune_archive", lambda: None)
-    # the interrupt lands during verification, after the file swap
     def _boom(*_a, **_k):
-        raise SystemExit("SIGTERM")
-    monkeypatch.setattr(rs, "_restart_and_verify", _boom, raising=False)
+        raise SystemExit("SIGTERM")           # the interrupt, after the swap
     monkeypatch.setattr(rs, "wait_for", _boom)
 
     with pytest.raises(SystemExit):
         rs.deploy(cand, "teststamp", INCUMBENT, {})
 
-    assert served.read_bytes() == b"INCUMBENT", (
+    assert rs.SERVED_GGUF.read_bytes()[:13] == b"GGUF" + b"INCUMBENT", (
         "served model was left as the unverified candidate after an interrupt")
+
+
+# --- never write junk onto the live model path ------------------------------
+def test_refuses_to_restore_a_truncated_file(sandbox):
+    """The 9-byte-file incident, as a test. A stray/truncated 'model' must never
+    reach the served path — the sidecar cannot load it and goes down."""
+    _fake_gguf(rs.SERVED_GGUF, b"GOOD")
+    junk = rs.ARCHIVE_DIR / "lkg_junk.gguf"
+    junk.write_bytes(b"INCUMBENT")            # 9 bytes, exactly the incident
+    assert rs.restore_lkg(junk) is False
+    assert rs.SERVED_GGUF.read_bytes()[:8] == b"GGUFGOOD", "live model was overwritten"
+
+
+def test_refuses_to_restore_from_outside_the_archive(sandbox):
+    """The recovery marker is untrusted input read off disk — it must not be able
+    to point the restore at an arbitrary path."""
+    _fake_gguf(rs.SERVED_GGUF, b"GOOD")
+    stray = _fake_gguf(sandbox / "stray.gguf", b"STRAY")   # valid GGUF, wrong place
+    ok, why = rs.validate_lkg(stray)
+    assert ok is False
+    assert "not inside the archive" in why
+    assert rs.restore_lkg(stray) is False
+    assert rs.SERVED_GGUF.read_bytes()[:8] == b"GGUFGOOD"
+
+
+def test_recover_rejects_a_marker_for_a_different_served_path(sandbox):
+    """A stale marker from another checkout must not drive a live restore."""
+    _fake_gguf(rs.SERVED_GGUF, b"GOOD")
+    lkg = _fake_gguf(rs.ARCHIVE_DIR / "lkg_x.gguf", b"OLD")
+    rs.DEPLOY_MARKER.write_text(json.dumps({
+        "stamp": "x", "last_known_good": str(lkg),
+        "served": "/some/other/checkout/model.gguf"}))
+    assert rs.recover() == 1
+    assert rs.SERVED_GGUF.read_bytes()[:8] == b"GGUFGOOD"
+
+
+def test_deploy_refuses_a_junk_candidate(sandbox):
+    _fake_gguf(rs.SERVED_GGUF, b"GOOD")
+    junk = sandbox / "junk.gguf"
+    junk.write_bytes(b"not a model")
+    with pytest.raises(SystemExit):
+        rs.deploy(junk, "s", INCUMBENT, {})
+    assert rs.SERVED_GGUF.read_bytes()[:8] == b"GGUFGOOD"
+
+
+def test_sigkilled_mid_deploy_is_recovered_from_disk(sandbox, monkeypatch):
+    """The scheduler's timeout kills the run with SIGKILL — no handler survives it.
+
+    If that lands after the model file was swapped but before the live checks
+    passed, the sidecar is left serving an UNVERIFIED model and nothing in the
+    dead process can fix it. The on-disk deploy marker is what survives, and
+    --recover must use it to put the last-known-good back.
+    """
+    _fake_gguf(rs.SERVED_GGUF, b"CANDIDATE")                    # swap happened
+    lkg = _fake_gguf(rs.ARCHIVE_DIR / "lkg_x_served.gguf", b"INCUMBENT")
+    rs.DEPLOY_MARKER.write_text(json.dumps({
+        "stamp": "x", "last_known_good": str(lkg), "served": str(rs.SERVED_GGUF)}))
+
+    monkeypatch.setattr(rs, "http_ok", lambda *a, **k: True)     # brain healthy
+    monkeypatch.setattr(rs, "restart_and_verify_sidecar", lambda expect: True)
+
+    assert rs.recover() == 0
+    assert rs.SERVED_GGUF.read_bytes()[:13] == b"GGUF" + b"INCUMBENT", (
+        "unverified candidate is still the served model")
+    assert not rs.DEPLOY_MARKER.exists(), "deploy marker not cleared after recovery"
+
+
+def test_recover_is_a_noop_when_nothing_was_in_flight(sandbox, monkeypatch):
+    """--recover must be safe to run at any time, including when all is well."""
+    monkeypatch.setattr(rs, "http_ok", lambda *a, **k: True)
+    assert rs.recover() == 0
+
+
+def test_recover_refuses_when_lkg_is_missing(sandbox, monkeypatch):
+    """Never silently 'recover' into a model we cannot verify."""
+    rs.DEPLOY_MARKER.write_text(json.dumps({
+        "stamp": "x", "last_known_good": str(rs.ARCHIVE_DIR / "gone.gguf"),
+        "served": str(rs.SERVED_GGUF)}))
+    monkeypatch.setattr(rs, "http_ok", lambda *a, **k: True)
+    assert rs.recover() == 1
 
 
 def test_systemctl_sets_user_bus_env():

@@ -196,6 +196,40 @@ systemctl --user restart zoe-data.service
 | `ZOE_ROUTER_SCRATCH_PORT` | `11437` | candidate-eval sidecar (never :11436) |
 | `ZOE_ROUTER_ARCHIVE_KEEP` | `3` | last-known-good GGUFs retained (never 0) |
 
+## Crash recovery (`--recover`)
+
+The scheduler kills a timed-out run with **SIGKILL**, which no in-process handler
+can catch. If that lands *after* the served model file was swapped but *before* the
+new model passed its live checks, the sidecar is left serving an **unverified
+model**, and the dead process can't fix it.
+
+So the intent is recorded **on disk** before the swap
+(`data/router_selftrain/deploy_in_progress.json`) and removed only once the new
+model is verified live (or rolled back). `--recover` reads it:
+
+```bash
+python3 scripts/maintenance/router_selftrain.py --recover
+```
+
+It ensures the brain is up and, if a deploy was in flight, restores the
+last-known-good GGUF and restarts the sidecar onto it. It is **idempotent** — safe
+to run when nothing is broken (it says so and exits 0). The scheduler runs it
+automatically after a timeout, and every run self-heals a stale marker on startup.
+
+### Nothing unvalidated ever reaches the served model path
+
+Learned the hard way during development: a stale marker pointing at a stray file
+caused a **9-byte file to be copied over the live 292 MB router GGUF**, and the
+sidecar went down (it cannot load a truncated model). Recovered from
+`/home/zoe/models/lab/…-r2-Q8_0.gguf`, the pristine source the unit was installed
+from — worth knowing that copy exists.
+
+Every write to the served path is now guarded: the file must carry the **`GGUF`
+magic** and be **≥ 50 MB**, a last-known-good must live **inside the archive dir**
+(never an arbitrary path), and a marker naming a *different* served path is
+rejected as stale/foreign. The marker is untrusted input — it is read off disk and
+may be stale, hand-edited, or written by another checkout.
+
 ## Rollback
 
 Automatic on any post-deploy failure. To roll back by hand:
