@@ -34,10 +34,13 @@ from collections import Counter
 
 DEFAULT_LOG = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "services", "zoe-data", "data", "router_head_shadow2.jsonl",
+    "services", "zoe-data", "data", "router_head_shadow.jsonl",
 )
 
-ROUTE_KEYS = ("final_routed", "routed", "shadow2_routed", "head_routed")
+# `two_stage_domain` is the field the live router (semantic_router.py) actually
+# writes for the would-be shadow2/active decision; the others are tolerated for
+# forward/backward compatibility. Keep it first so it wins when present.
+ROUTE_KEYS = ("two_stage_domain", "final_routed", "routed", "shadow2_routed", "head_routed")
 TOTAL_MS_KEYS = ("total_ms", "shadow2_ms", "two_stage_ms")
 STAGE1_MS_KEYS = ("head_ms", "stage1_ms")
 STAGE2_MS_KEYS = ("fg_ms", "stage2_ms", "sidecar_ms")
