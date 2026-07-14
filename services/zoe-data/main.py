@@ -1221,10 +1221,16 @@ async def lifespan(app: FastAPI):
                 try:
                     out, _ = await _aio.wait_for(proc.communicate(), timeout=_timeout)
                 except _aio.TimeoutError:
-                    # SIGTERM first so the script's `finally` can restore the
-                    # brain and write its journal; SIGKILL only if it hangs.
-                    # A killed run leaves the LIVE sidecar untouched — promotion
-                    # happens only after every gate has already passed.
+                    # SIGTERM first: the script installs a handler that unwinds so
+                    # its `finally` restores the brain and writes the journal.
+                    # SIGKILL only if it hangs — and SIGKILL cannot be caught, so
+                    # a killed run may leave llama-server STOPPED (the script may
+                    # have stopped it for the training window). Restoring the brain
+                    # is a hard rule, so do it unconditionally here as a
+                    # belt-and-braces net. `start` on an already-running unit is a
+                    # no-op, so this is safe in the terminate-succeeded case too.
+                    # The LIVE sidecar is untouched either way — promotion happens
+                    # only after every gate has already passed.
                     proc.terminate()
                     try:
                         await _aio.wait_for(proc.communicate(), timeout=120)
@@ -1232,6 +1238,21 @@ async def lifespan(app: FastAPI):
                     except _aio.TimeoutError:
                         proc.kill()
                         logger.error("router self-train timed out (killed)")
+                    _env = dict(os.environ)
+                    _env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+                    _brain = os.environ.get("ZOE_BRAIN_UNIT", "llama-server.service")
+                    _restore = await _aio.create_subprocess_exec(
+                        "systemctl", "--user", "start", _brain, env=_env,
+                        stdout=_aio.subprocess.DEVNULL,
+                        stderr=_aio.subprocess.PIPE)
+                    _, _err = await _restore.communicate()
+                    if _restore.returncode == 0:
+                        logger.info("router self-train timeout: brain (%s) ensured up", _brain)
+                    else:
+                        logger.error(
+                            "router self-train timeout: FAILED to restore the brain (%s): %s "
+                            "— OPERATOR ACTION REQUIRED",
+                            _brain, (_err or b"").decode(errors="replace")[:500])
                     return
                 tail = (out or b"").decode(errors="replace")[-3000:]
                 if proc.returncode == 0:

@@ -191,6 +191,32 @@ def test_frozen_corpus_texts_parses_real_corpus():
     assert "" not in texts
 
 
+# --- never leave the brain stopped -----------------------------------------
+def test_sigterm_unwinds_so_the_brain_is_restored():
+    """Python's DEFAULT SIGTERM disposition exits WITHOUT running `finally`.
+
+    The scheduled job SIGTERMs this script on timeout, and a timeout can land
+    inside a training window with llama-server stopped — so the default behaviour
+    would leave the brain DOWN. The handler must raise SystemExit so train()'s
+    `finally` restores it.
+    """
+    import signal
+    rs._install_signal_handlers()
+    handler = signal.getsignal(signal.SIGTERM)
+    assert handler not in (signal.SIG_DFL, signal.SIG_IGN)
+    with pytest.raises(SystemExit):
+        handler(signal.SIGTERM, None)
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)  # restore, don't poison the suite
+
+
+def test_systemctl_sets_user_bus_env():
+    """`systemctl --user` from a scheduled subprocess has no login session; without
+    XDG_RUNTIME_DIR the brain-restore silently fails (scripts/AGENTS.md)."""
+    import inspect
+    src = inspect.getsource(rs.systemctl)
+    assert "XDG_RUNTIME_DIR" in src
+
+
 # --- no bypass exists ------------------------------------------------------
 def test_no_force_promote_symbol_exists():
     """If someone ever adds a bypass, this test is the tripwire."""

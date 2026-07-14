@@ -54,6 +54,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -356,8 +357,15 @@ def read_env_var(env_file: Path, key: str) -> str | None:
 
 
 def systemctl(*args: str, check: bool = True) -> subprocess.CompletedProcess:
+    # This runs from a scheduled zoe-data subprocess with no login session, so the
+    # user bus must be pointed at explicitly or `systemctl --user` fails — and the
+    # brain-restore path would then only log a warning while leaving the brain
+    # stopped. (scripts/AGENTS.md: "Scripts run by timers/CI have no login
+    # session: prefix user-service systemctl calls with XDG_RUNTIME_DIR".)
+    env = dict(os.environ)
+    env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
     return subprocess.run(["systemctl", "--user", *args],
-                          capture_output=True, text=True, check=check)
+                          capture_output=True, text=True, check=check, env=env)
 
 
 def unit_active(unit: str) -> bool:
@@ -755,8 +763,26 @@ def write_journal(journal: dict) -> Path:
 
 
 # ===========================================================================
+def _install_signal_handlers() -> None:
+    """Make SIGTERM unwind the stack so the brain-restore `finally` actually runs.
+
+    Python's default SIGTERM disposition terminates the process WITHOUT running
+    `finally` blocks. The scheduled job SIGTERMs this script on timeout — so
+    without this, a timeout during a training window (when llama-server has been
+    stopped) would leave the brain DOWN. Raising SystemExit instead lets train()'s
+    `finally` restore it. (SIGKILL cannot be caught; the scheduler has its own
+    belt-and-braces restore for that case.)
+    """
+    def _bail(signum, _frame):
+        raise SystemExit(f"ABORT: received signal {signum} — unwinding so the "
+                         "brain and sidecar are restored")
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, _bail)
+
+
 def main() -> int:
     global _EPOCHS
+    _install_signal_handlers()
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--candidate", help="candidate dataset (default: newest)")
     ap.add_argument("--dry-run", action="store_true",
