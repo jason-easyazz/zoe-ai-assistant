@@ -96,10 +96,12 @@ def check_sidecar_identity(port: int, gguf: str) -> None:
         raise SystemExit(
             f"ABORT: no reachable sidecar on :{port} ({e}); "
             "pass --launch-sidecar to start one") from e
-    if served != gguf:
+    # the resident systemd sidecar serves the r2 GGUF from its own copy under
+    # /home/zoe/models/functiongemma-router/ — match on the artifact name
+    if Path(served).name != Path(gguf).name:
         raise SystemExit(
-            f"ABORT: sidecar on :{port} serves {served!r}, expected {gguf!r} "
-            "— refusing to produce numbers from the wrong model")
+            f"ABORT: sidecar on :{port} serves {served!r}, expected "
+            f"{Path(gguf).name!r} — refusing numbers from the wrong model")
 
 
 def run(route_fn, cases: list[dict]) -> tuple[list[dict], list[float]]:
