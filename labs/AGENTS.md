@@ -139,6 +139,24 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
   needle-benchmark 81-case corpus, and a fast_tiers integration PLAN. Verdict:
   adopt logreg @ conf 0.4 (79.0% raw / 0% chat-FP gated vs 61.7% baseline).
   Nothing prod-wired; README is a record, not a contract.
+- `router-selftrain/` — MINER + LABELER (lane A) of the router self-training loop:
+  turns real family traffic into labelled training examples of the router's own
+  measured mistakes. Joins the hash-keyed shadow log to raw text (forward: the
+  `ZOE_ROUTER_SHADOW_TEXT=1` opt-in adds `utt_text` to the shadow-log FILE, default
+  OFF, never leaves the box; bootstrap: re-hash `chat_messages.content` with the
+  router's own `sha256(text)[:12]` and join), mines three reasons (disagreement /
+  abstention / chat-negative), and labels each with the local Gemma brain
+  (`:11434`, `json_schema`-constrained, serial + `/slots`-gated — a labeling
+  ORACLE, the `functiongemma-finetune` paraphrase precedent, not a lab engineering
+  model). Writes `data/router_selftrain/candidate_<stamp>.jsonl` (+ `.meta.json`)
+  in the shape `train_lora.py` consumes, for the lane-B train→eval→promote
+  orchestrator. **Hard rails:** an explicit held-out guard ABORTS the run (writing
+  nothing) on any collision with the frozen `needle-benchmark/corpus.jsonl` eval
+  corpus — the promotion gate's integrity; a label survives only on two-source
+  agreement (independent oracle + live route), so the live router's own misroutes
+  are dropped, not learned; ≤400 examples/round; candidate files are git-ignored
+  (raw family text is never committed). Hand-run; `mine_candidates.py` is the only
+  entrypoint. The `semantic_router.py` opt-in flag is the one prod-side seam.
 - `router-90-campaign/` — campaign lab to push the tool-level router to ≥90%
   on the 81-case corpus: GBNF grammar-constrained eval harness
   (`run_grammar_eval.py`, :11435; grammar(a) all-21 names, grammar(b)

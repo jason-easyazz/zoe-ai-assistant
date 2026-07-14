@@ -1219,6 +1219,102 @@ async def lifespan(app: FastAPI):
         except Exception as _md_exc:
             logger.warning("Music discovery not scheduled (non-fatal): %s", _md_exc)
 
+    # Weekly router self-training — retrain the two-stage router's stage-2
+    # decoder on mined real-traffic mistakes and PROMOTE ONLY IF PROVABLY BETTER
+    # (scripts/maintenance/router_selftrain.py owns the ratchet: no accuracy
+    # regression, zero chat-FP, p50 under budget, voice replay gate passed —
+    # otherwise the incumbent keeps serving). The script's only production
+    # mutation is swapping the sidecar model file + restarting that one unit,
+    # and it auto-rolls-back to last-known-good on any post-deploy failure.
+    # DISABLED by default (ZOE_ROUTER_SELFTRAIN=off) — the operator flips it on
+    # only after verifying a manual --dry-run. Cadence via
+    # ZOE_ROUTER_SELFTRAIN_DOW (default sat) + _HOUR (default 1, a quiet window
+    # that does not collide with the sun@3 music batch: training may stop the
+    # brain for hours). See docs/knowledge/router-selftrain-loop.md.
+    if os.environ.get("ZOE_ROUTER_SELFTRAIN", "off").lower() in ("on", "true", "1"):
+        try:
+            from proactive.scheduler import get_scheduler as _get_aps
+
+            async def _run_router_selftrain() -> None:
+                import subprocess as _sp
+                import sys as _sys
+
+                from async_subprocess import run_to_completion as _run_off_loop
+
+                _script = os.path.normpath(os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)),
+                    "..", "..", "scripts", "maintenance", "router_selftrain.py"))
+                _timeout = int(os.environ.get(
+                    "ZOE_ROUTER_SELFTRAIN_TIMEOUT_S", "28800"))  # 8h: CPU train is slow
+                _brain = os.environ.get("ZOE_BRAIN_UNIT", "llama-server.service")
+                _env = dict(os.environ)
+                # no login session in a scheduled job — point systemctl at the user bus
+                _env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+
+                # NOTE: every spawn here goes through async_subprocess.run_to_completion
+                # (fork+exec inside a thread pool). asyncio.create_subprocess_exec forks
+                # ON the loop thread, which in this large multi-threaded process can
+                # deadlock pre-exec and freeze the whole API — that is the 2026-06-29
+                # outage. See services/zoe-data/AGENTS.md.
+                try:
+                    proc = await _run_off_loop(
+                        [_sys.executable, _script], env=_env, timeout=_timeout)
+                except _sp.TimeoutExpired:
+                    # The helper KILLs the child on timeout (SIGKILL — no in-process
+                    # handler survives it). So a timeout can land (a) inside a training
+                    # window with llama-server stopped, or (b) mid-deploy, after the
+                    # served GGUF was swapped but before the new model passed its live
+                    # checks — leaving the sidecar on an UNVERIFIED model.
+                    # `--recover` is the idempotent cleanup for both: it ensures the
+                    # brain is up and, if the on-disk deploy marker says a swap was in
+                    # flight, restores the last-known-good GGUF and restarts onto it.
+                    # Safe to run when nothing is broken.
+                    logger.error("router self-train timed out after %ss (child killed) "
+                                 "— running --recover", _timeout)
+                    try:
+                        _rec = await _run_off_loop(
+                            [_sys.executable, _script, "--recover"],
+                            env=_env, timeout=900)
+                        _rtail = (_rec.stdout or b"").decode(errors="replace")[-1500:]
+                        if _rec.returncode == 0:
+                            logger.info("router self-train recovery ok:\n%s", _rtail)
+                        else:
+                            logger.error(
+                                "router self-train RECOVERY FAILED (rc=%s) — OPERATOR "
+                                "ACTION REQUIRED (brain may be down and/or the sidecar "
+                                "may be serving an unverified model):\n%s",
+                                _rec.returncode, _rtail)
+                    except Exception as _rexc:
+                        logger.error(
+                            "router self-train RECOVERY FAILED (%s) — OPERATOR ACTION "
+                            "REQUIRED: brain (%s) may be down and the sidecar may be "
+                            "serving an unverified model", _rexc, _brain)
+                    return
+
+                tail = (proc.stdout or b"").decode(errors="replace")[-3000:]
+                if proc.returncode == 0:
+                    logger.info("router self-train ok:\n%s", tail)
+                else:
+                    # rc!=0 includes an auto-rollback — loud on purpose.
+                    logger.error("router self-train rc=%s:\n%s\n%s", proc.returncode, tail,
+                                 (proc.stderr or b"").decode(errors="replace")[-1000:])
+
+            _get_aps().add_job(
+                _run_router_selftrain,
+                trigger="cron",
+                day_of_week=os.environ.get("ZOE_ROUTER_SELFTRAIN_DOW", "sat"),
+                hour=int(os.environ.get("ZOE_ROUTER_SELFTRAIN_HOUR", "1")),
+                id="router_selftrain_weekly",
+                replace_existing=True,
+                coalesce=True,
+                max_instances=1,
+            )
+            logger.info("Weekly router self-train scheduled (%s @ %sh)",
+                        os.environ.get("ZOE_ROUTER_SELFTRAIN_DOW", "sat"),
+                        os.environ.get("ZOE_ROUTER_SELFTRAIN_HOUR", "1"))
+        except Exception as _rst_exc:
+            logger.warning("Router self-train not scheduled (non-fatal): %s", _rst_exc)
+
     # Skills filesystem watcher (live cache invalidation for peer agent cards)
     try:
         from skills_watcher import start_skills_watcher  # type: ignore[import]
