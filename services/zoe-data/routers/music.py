@@ -266,13 +266,16 @@ async def music_transfer(payload: dict) -> dict[str, Any]:
 
 @router.post("/play")
 async def music_play(payload: dict) -> dict[str, Any]:
-    """Search MA and play the top hit. body: {query, player_id?}."""
+    """Search MA and play the top hit. body: {query, player_id?, radio?}.
+    radio:true seeds an endless station of similar tracks from the hit
+    (MA's native radio_mode; needs a SIMILAR_TRACKS provider)."""
     import music_service
     query = str((payload or {}).get("query") or "").strip()
     player_id = str((payload or {}).get("player_id") or "")
+    radio = bool((payload or {}).get("radio"))
     if not query:
         return {"ok": False, "reason": "empty query"}
-    hit = await music_service.search_and_play(query, player_id=player_id)
+    hit = await music_service.search_and_play(query, player_id=player_id, radio_mode=radio)
     return {"ok": hit is not None, "playing": hit}
 
 
@@ -305,7 +308,38 @@ async def music_play_media(payload: dict) -> dict[str, Any]:
     import music_service
     uri = str((payload or {}).get("uri") or "").strip()
     player_id = str((payload or {}).get("player_id") or "")
+    radio = bool((payload or {}).get("radio"))
     option = str((payload or {}).get("option") or "replace")
     if not uri:
         return {"ok": False, "reason": "missing uri"}
-    return await music_service.play_media(uri, player_id=player_id, option=option)
+    return await music_service.play_media(uri, player_id=player_id, option=option, radio_mode=radio)
+
+
+# ── Discovery: MA-native recommendations + play history ──────────────────────
+
+@router.get("/recommendations")
+async def music_recommendations() -> dict[str, Any]:
+    """MA's native recommendation shelves ("Listen again", "Mixed for you", …),
+    normalized to the same flat item shape as /search results."""
+    import music_service
+    return await music_service.get_recommendations()
+
+
+@router.get("/recently-played")
+async def music_recently_played(limit: int = 10, types: str = "") -> dict[str, Any]:
+    """The household's recently played items from MA's play history.
+    ?limit=10&types=track,album (optional comma list, same as /search)."""
+    import music_service
+    media_types = [t.strip() for t in (types or "").split(",") if t.strip()] or None
+    return await music_service.get_recently_played(limit=limit, media_types=media_types)
+
+
+@router.post("/dont-stop")
+async def music_dont_stop(payload: dict) -> dict[str, Any]:
+    """Toggle MA's "Don't stop the music" (auto-continue with similar tracks).
+    body: {enabled: bool, player_id?}."""
+    import music_service
+    enabled = bool((payload or {}).get("enabled", True))
+    player_id = str((payload or {}).get("player_id") or "")
+    ok = await music_service.set_dont_stop_the_music(enabled, player_id=player_id)
+    return {"ok": ok, "enabled": enabled}

@@ -1406,13 +1406,15 @@ def test_music_search_and_play_media_endpoints_exist():
     assert '@router.get("/search")' in router
     assert '@router.post("/play_media")' in router
     assert "music_service.search(q, media_types=media_types, limit=n)" in router
-    assert "music_service.play_media(uri, player_id=player_id, option=option)" in router
+    assert "music_service.play_media(uri, player_id=player_id, option=option, radio_mode=radio)" in router
 
     assert "async def search(query: str" in service
     assert 'async def play_media(uri: str, player_id: str = "", option: str = "replace",' in service
     # Per-type fan-out (MA/YT drops tracks/albums on a combined query).
     assert '"music/search", search_query=query, media_types=[mt]' in service
-    assert '"player_queues/play_media", queue_id=pid, media=uri' in service
+    # Queue writes go through _ma_ok with the LONG write timeout (MA's
+    # play_media works synchronously and can exceed the 5s read timeout).
+    assert '"player_queues/play_media", timeout_s=20.0, queue_id=pid' in service
 
 
 def test_touch_music_page_is_ds1_browse_surface():
