@@ -662,12 +662,42 @@
     if(qd&&qd.classList.contains('open')&&!e.target.closest('.mqueue')&&!e.target.closest('#mQBtn'))qd.classList.remove('open');
   });
 
+  // ---- Ambient return -------------------------------------------------------
+  // A screen Zoe opened BY VOICE is a glance, not a destination: when the turn
+  // is over it drifts back home so the panel is always the ambient home face.
+  // A screen the user opened by TOUCH is a deliberate visit and never drifts.
+  // Cancelled by: any touch, a follow-up voice turn, an open modal/command bar.
+  // The Ask surface gets reading time (its answer is text you're mid-sentence in).
+  var AUTO_HOME_MS=7000, AUTO_HOME_READ_MS=110, AUTO_HOME_MAX_MS=30000;
+  var _autoHomeT=null,_voiceScreen=false;
+  function cancelAutoHome(){if(_autoHomeT){clearTimeout(_autoHomeT);_autoHomeT=null;}}
+  function armAutoHome(){
+    cancelAutoHome();
+    if(!_voiceScreen||_cur==='home'||_cur==='sleep')return;
+    var ms=AUTO_HOME_MS;
+    if(_cur==='ask'){var o=document.getElementById('askOut');
+      // ~110ms per character on top of the base dwell, capped — long answers
+      // stay up long enough to finish reading.
+      ms=Math.min(AUTO_HOME_MAX_MS,AUTO_HOME_MS+((o&&o.textContent||'').length*AUTO_HOME_READ_MS));}
+    _autoHomeT=setTimeout(function(){
+      _autoHomeT=null;
+      if(!_voiceScreen||_cur==='home'||_cur==='sleep')return;
+      var m=document.getElementById('estModal'),cb=document.getElementById('cmdbar');
+      if((m&&m.classList.contains('on'))||(cb&&cb.classList.contains('on')))return;  // mid-interaction
+      show('home');
+    },ms);
+  }
+  // Any touch on the panel means the user took over — the screen is theirs now.
+  document.addEventListener('pointerdown',function(){_voiceScreen=false;cancelAutoHome();},true);
+
   function show(id){
     var f=FULL[id], c=CARD[id];
     // Any navigation cancels a pending chat-fallback jump to Ask — the user
     // (or a domain arrival) choosing a screen always wins over the deferred
     // answer display.
     if(typeof _askFallT!=='undefined'&&_askFallT){clearTimeout(_askFallT);_askFallT=null;}
+    // Navigating supersedes any pending drift; voice paths re-arm after this.
+    cancelAutoHome();_voiceScreen=false;
     _cur=id; clearScreenTimers();
     var cb=document.getElementById('cmdbar');if(cb)cb.classList.remove('on');
     stage.classList.remove('wxlight');
@@ -1508,9 +1538,13 @@
   // Voice answer display on the Ask surface (used by URL-arrival + live voice events)
   function askShowAnswer(q,a){
     FULL.ask.html='<div class="askf"><div class="aa" id="askOut"></div></div>';
-    if(_cur!=='ask')show('ask');
+    if(_cur!=='ask')show('ask');   // show() clears the drift flags…
     var o=document.getElementById('askOut');if(o)o.textContent=a||'';
     if(q)dockHeard(q);
+    // …so re-arm here: an answer Zoe SPOKE drifts home once it's been readable
+    // for a while (the dwell scales with the answer's length). A typed ask
+    // (cmdbar/askZoe) leaves _voiceScreen false and never drifts.
+    if(window.__lastHeard||q){_voiceScreen=true;armAutoHome();}
   }
   // Live voice state → estate surfaces. touch-ui-executor.js checks for this
   // object and routes its voice events here INSTEAD of building the legacy
@@ -1523,11 +1557,13 @@
     // voice event lands (e.g. wake false-trigger).
     listening:function(){orb.classList.add('listening');
       window.__voiceArrivedAt=0;   // a NEW turn started — the last arrival no longer owns responding events
+      cancelAutoHome();            // a follow-up is coming — hold the screen
       if(_lisT)clearTimeout(_lisT);_lisT=setTimeout(function(){orb.classList.remove('listening');},20000);},
     transcript:function(t){orb.classList.remove('listening');if(_lisT)clearTimeout(_lisT);
       window.__voiceArrivedAt=0;   // new turn — see listening()
+      cancelAutoHome();
       if(t){window.__lastHeard=t;dockHeard(t);}},
-    thinking:function(){orb.classList.remove('listening');orb.classList.add('busy');
+    thinking:function(){orb.classList.remove('listening');orb.classList.add('busy');cancelAutoHome();
       var o=document.getElementById('askOut');if(o&&_cur==='ask')o.textContent='…';},
     responding:function(t){orb.classList.remove('listening');orb.classList.add('busy');
       if(!t)return;
@@ -1542,7 +1578,9 @@
       var heardNow=window.__lastHeard||'';   // capture at schedule time — a newer
       // transcript arriving during the defer must not pair with this answer
       _askFallT=setTimeout(function(){_askFallT=null;askShowAnswer(heardNow,t);},1200);},
-    done:function(){orb.classList.remove('listening');orb.classList.remove('busy');if(_lisT)clearTimeout(_lisT);}
+    // Zoe finished speaking: THIS is when the dwell clock should start.
+    done:function(){orb.classList.remove('listening');orb.classList.remove('busy');if(_lisT)clearTimeout(_lisT);
+      if(_cur!=='home'&&_cur!=='sleep'){_voiceScreen=true;armAutoHome();}}
   };
 
   orb.addEventListener('click',function(){
@@ -1602,6 +1640,7 @@
     // top-of-screen toast) before the pinned controls return.
     if(say&&dest==='ask')askShowAnswer(heard,say);
     else if(heard||say)dockSaid(heard,say);
+    _voiceScreen=true;armAutoHome();
     try{var keep=[];if(sp.get('panel_id'))keep.push('panel_id='+encodeURIComponent(sp.get('panel_id')));if(sp.get('kiosk'))keep.push('kiosk='+encodeURIComponent(sp.get('kiosk')));
       history.replaceState(null,'',location.pathname+(keep.length?('?'+keep.join('&')):''));}catch(e){}
     window.__voiceArrived=true;window.__voiceArrivedAt=Date.now();
