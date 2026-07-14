@@ -88,8 +88,14 @@ def load(path: str) -> list[dict]:
                 rec = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            # Only two-stage records: the shared log also holds stage-one
+            # `head` shadow records (from ZOE_ROUTER_HEAD=shadow) which carry
+            # `actual_routed` + `head_routed` but NO `two_stage_domain`. Gating
+            # on that marker (plus mode when present) keeps stage-one turns out
+            # of the two-stage denominators.
             if (isinstance(rec, dict) and "actual_routed" in rec
-                    and shadow_route(rec) is not None):
+                    and "two_stage_domain" in rec
+                    and rec.get("mode", "shadow2") in ("shadow2", "active")):
                 recs.append(rec)
     return recs
 
