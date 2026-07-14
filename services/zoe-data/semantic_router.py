@@ -155,6 +155,33 @@ def head_mode() -> str:
     return "off"
 
 
+def shadow_text_enabled() -> bool:
+    """ZOE_ROUTER_SHADOW_TEXT — opt-in RAW-TEXT capture in the shadow log.
+
+    DEFAULT OFF. The shadow log is keyed by an utterance HASH by design, so a
+    routing post-mortem never needs the family's words. Turning this on adds a
+    plaintext ``utt_text`` field to the shadow-log FILE records (never to the
+    INFO log line, which stays hash-only so journald/log shipping is unaffected)
+    so the router self-training miner can build labelled training data from real
+    traffic instead of templates.
+
+    This is a LOCAL-ONLY, family-opt-in training-data switch: the text is written
+    to a file on this box, is mined by a local script, and is labelled by the
+    local Gemma brain. It never leaves the box. Leave it off unless the household
+    has agreed to a self-training round; the hash is kept either way.
+    """
+    return ((os.environ.get("ZOE_ROUTER_SHADOW_TEXT", "") or "")
+            .strip().lower() in ("1", "true", "yes", "on"))
+
+
+def _with_text(rec: dict, text: str) -> dict:
+    """The record as written to the shadow-log FILE: hash always, raw text only
+    under the ZOE_ROUTER_SHADOW_TEXT opt-in."""
+    if not shadow_text_enabled():
+        return rec
+    return {**rec, "utt_text": text or ""}
+
+
 def head_threshold() -> float:
     """Confidence gate for the head's *hypothetical* decision (README: 0.4)."""
     try:
@@ -284,7 +311,7 @@ def _head_shadow(text: str, v: np.ndarray, routed: str) -> None:
         try:
             os.makedirs(os.path.dirname(_HEAD_LOG_PATH), exist_ok=True)
             with open(_HEAD_LOG_PATH, "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(rec, sort_keys=True) + "\n")
+                fh.write(json.dumps(_with_text(rec, text), sort_keys=True) + "\n")
         except OSError as exc:
             shadow_logger.debug("shadow log append failed: %s", exc)
     except Exception as exc:  # shadow must never break a turn
@@ -292,9 +319,15 @@ def _head_shadow(text: str, v: np.ndarray, routed: str) -> None:
 
 
 def _log_two_stage(rec: dict) -> None:
-    """Append a structured two-stage line to the shadow log (hash only)."""
+    """Append a structured two-stage line to the shadow log.
+
+    The INFO log line is ALWAYS hash-only (privacy: journald never sees the
+    family's words). The file record carries raw text only when the record was
+    built under the ZOE_ROUTER_SHADOW_TEXT opt-in (see `_with_text`).
+    """
     try:
-        shadow_logger.info("router_two_stage %s", json.dumps(rec, sort_keys=True))
+        line_rec = {k: v for k, v in rec.items() if k != "utt_text"}
+        shadow_logger.info("router_two_stage %s", json.dumps(line_rec, sort_keys=True))
         os.makedirs(os.path.dirname(_HEAD_LOG_PATH), exist_ok=True)
         with open(_HEAD_LOG_PATH, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(rec, sort_keys=True) + "\n")
@@ -303,12 +336,25 @@ def _log_two_stage(rec: dict) -> None:
 
 
 def _two_stage_rec(text: str, decision: Optional[dict], mode_: str,
-                   actual_routed: str) -> dict:
+                   actual_routed: str,
+                   similarity_routed: Optional[str] = None) -> dict:
+    """One shadow-log record for a two-stage decision.
+
+    `similarity_routed` is the INDEPENDENT baseline — what the similarity router
+    would have done. It matters in 'active' mode, where the two-stage decision IS
+    the route and `actual_routed` is therefore just an echo of `two_stage_domain`
+    (comparing them is a tautology). Without the baseline field, an active record
+    cannot express "the router got this wrong", and the self-training miner has
+    nothing to learn from. In 'shadow2' the two-stage doesn't route, so the
+    baseline and the actual route are the same thing.
+    """
     d = decision or {}
-    return {
+    return _with_text({
         "ts": round(time.time(), 3),
         "mode": mode_,
         "utt": hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:12],
+        "similarity_routed": (similarity_routed if similarity_routed is not None
+                              else actual_routed),
         "two_stage_tool": d.get("tool"),
         "two_stage_domain": d.get("domain"),
         "shortlist": d.get("shortlist"),
@@ -317,7 +363,7 @@ def _two_stage_rec(text: str, decision: Optional[dict], mode_: str,
         "failed": decision is None,
         "two_stage_ms": d.get("ms"),
         "actual_routed": actual_routed,
-    }
+    }, text)
 
 
 def _two_stage_shadow2(text: str, v: np.ndarray, routed: str) -> None:
@@ -433,7 +479,10 @@ def route(text: str) -> dict:
             # threshold gates deny rather than act on a borrowed confidence.
             out["score"] = round(float(scores.get(ts_domain, 0.0)), 3)
             out["ms"] = round((time.perf_counter() - t0) * 1000, 1)
+            # `routed` is still the SIMILARITY decision the two-stage pre-empted —
+            # log it as the independent baseline (out["routed"] is now the
+            # two-stage's own output, so it cannot serve as ground truth).
             _log_two_stage(_two_stage_rec(text, decision, "active",
-                                          out["routed"]))
+                                          out["routed"], similarity_routed=routed))
         # decision None → similarity behavior unchanged (brain-safe)
     return out

@@ -304,3 +304,7 @@ services/zoe-data/models/*
 !services/zoe-data/models/router_head_logreg.joblib
 !services/zoe-data/models/router_head_mlp.joblib
 services/zoe-data/data/router_head_shadow.jsonl
+
+# Router self-training candidates: mined from REAL family utterances (raw text).
+# Local-only training data — never commit. See labs/router-selftrain/README.md.
+data/router_selftrain/
