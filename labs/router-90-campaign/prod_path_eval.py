@@ -86,6 +86,15 @@ def load_router(stub: bool):
     return route_two_stage
 
 
+def _sha256(path: Path) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def check_sidecar_identity(port: int, gguf: str) -> None:
     """A pre-existing server on :port must actually serve the r2 GGUF."""
     try:
@@ -97,11 +106,20 @@ def check_sidecar_identity(port: int, gguf: str) -> None:
             f"ABORT: no reachable sidecar on :{port} ({e}); "
             "pass --launch-sidecar to start one") from e
     # the resident systemd sidecar serves the r2 GGUF from its own copy under
-    # /home/zoe/models/functiongemma-router/ — match on the artifact name
-    if Path(served).name != Path(gguf).name:
+    # /home/zoe/models/functiongemma-router/ — accept the same inode or a
+    # byte-identical copy (sha256), never a mere basename match
+    sp, gp = Path(served), Path(gguf)
+    try:
+        same = sp.exists() and gp.exists() and (
+            sp.samefile(gp) or _sha256(sp) == _sha256(gp))
+    except OSError as e:
         raise SystemExit(
-            f"ABORT: sidecar on :{port} serves {served!r}, expected "
-            f"{Path(gguf).name!r} — refusing numbers from the wrong model")
+            f"ABORT: cannot verify sidecar model identity ({e})") from e
+    if not same:
+        raise SystemExit(
+            f"ABORT: sidecar on :{port} serves {served!r}, which is not "
+            f"byte-identical to {gguf!r} — refusing numbers from the wrong "
+            "model")
 
 
 def run(route_fn, cases: list[dict]) -> tuple[list[dict], list[float]]:
