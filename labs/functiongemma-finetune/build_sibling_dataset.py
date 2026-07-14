@@ -93,20 +93,20 @@ def gen_tool_cases(rng: random.Random) -> list[dict]:
                  "what needs picking up today",
                  "read back what's on there",
                  "what's on the list before I head out"]
-    out += [T(t, "show_list", {"list": "shopping"}) for t in show_pool]
-    out += [T(f"read out the {ln} list", "show_list", {"list": ln})
+    out += [T(t, "show_list", {"list_type": "shopping"}) for t in show_pool]
+    out += [T(f"read out the {ln} list", "show_list", {"list_type": ln})
             for ln in LISTS]
     out += [T(f"what's on the {ln} list at the moment", "show_list",
-              {"list": ln}) for ln in LISTS]
+              {"list_type": ln}) for ln in LISTS]
     for it in ITEMS:
         out.append(T(f"scratch {it} off, we've got plenty", "list_remove",
-                     {"item": it, "list": "shopping"}))
+                     {"item": it, "list_type": "shopping"}))
         out.append(T(rng.choice([
             f"take {it} off the list, found some in the pantry",
             f"cross {it} off, already grabbed it",
             f"you can drop {it} off the list",
             f"we don't need {it} anymore, pull it off",
-        ]), "list_remove", {"item": it, "list": "shopping"}))
+        ]), "list_remove", {"item": it, "list_type": "shopping"}))
         out.append(T(rng.choice([
             f"we're nearly out of {it}",
             f"running low on {it} again",
@@ -221,6 +221,240 @@ def gen_tool_cases(rng: random.Random) -> list[dict]:
     return out
 
 
+# --------------------------------------------------------------------------
+# ROUND 2 (2026-07-14 pm): heavy targeted coverage for the 13 residual
+# functok-gb failures (results/functok-gb.json + def-gb-mlp.json).  Families
+# mirror the measured confusions; texts are paraphrase-styled but NEVER copy
+# eval-corpus utterances (the held-out guard below enforces it).
+# Output: data/train_round2.jsonl (train = expanded + round2 concatenated).
+# --------------------------------------------------------------------------
+
+TIMEFRAMES = ["tomorrow", "this arvo", "tonight", "thursday", "next tuesday",
+              "on the weekend", "before lunch tomorrow", "after dinner",
+              "friday morning", "later today", "in the morning",
+              "tomorrow arvo"]
+ACTIVITIES = ["the beach", "a bbq", "a picnic", "the footy", "camping",
+              "a swim", "mowing the lawn", "a bike ride", "fishing",
+              "a walk along the foreshore", "hanging the washing out",
+              "a run"]
+DAYS = ["saturday", "sunday", "tomorrow", "friday", "monday", "next weekend",
+        "thursday arvo", "in the morning"]
+NAMES = ["Zeke", "Marisol", "Tobias", "Anouk", "Freddie", "Priyanka",
+         "Callum", "Wilhelmina", "Dusty", "Ophelia", "Barnaby", "Sunny"]
+TRADES = [("plumber", "the hot water system"), ("sparky", "the switchboard"),
+          ("roofer", "the gutters"), ("tiler", "the bathroom"),
+          ("painter", "the outside of the house"), ("fencer", "the back fence"),
+          ("arborist", "taking the gum tree down"), ("glazier", "the window")]
+ARRIVALS = [("dad's train", "gets in", "friday", "4pm"),
+            ("the removalists", "rock up", "tuesday", "7am"),
+            ("aunty june's bus", "arrives", "saturday", "noon"),
+            ("the delivery", "is due", "monday", "10am"),
+            ("nan's ferry", "docks", "sunday", "5:30"),
+            ("the inspection", "is set for", "wednesday", "1pm"),
+            ("the boys' game", "kicks off", "saturday", "9am"),
+            ("grandpa's flight", "gets in", "thursday", "8pm")]
+ROOMS = ["downstairs", "in the lounge", "out the back", "upstairs",
+         "in the kitchen", "in the kids' rooms", "on the patio",
+         "in the study"]
+VIBES2 = ["chill", "loud", "summery", "moody", "funky", "relaxing",
+          "upbeat", "christmassy"]
+DOING = ["I cook", "we eat", "I fold the washing", "we clean up",
+         "I do the ironing", "we set the table", "I wrap presents",
+         "we do the dishes"]
+FORGETTABLES = [("the parking meter", "in an hour"), ("the roast", "at 6"),
+                ("the school run", "at quarter to 3"),
+                ("bin night", "tonight"), ("the chemist closing", "at 5"),
+                ("footy pickup", "at 4:30"), ("the library books", "friday"),
+                ("mum's call", "at 7")]
+SCHEDULE_FACTS = ["I finish early on wednesdays", "the gym shuts at 9",
+                  "the good bakery is closed mondays",
+                  "our mortgage comes out on the 15th",
+                  "I start at 7 on tuesdays", "school pickup moved to gate 3",
+                  "the pool opens at 6 in summer",
+                  "recycling week is the odd weeks"]
+
+
+def gen_round2_cases(rng: random.Random) -> list[dict]:
+    out = []
+
+    # ---- A. show_calendar: "what's on / what have I got / am I free" -------
+    for tf in TIMEFRAMES:
+        out.append(T(rng.choice([
+            f"what have I got on {tf}",
+            f"have I got anything on {tf}",
+            f"anything on {tf} or am I free",
+            f"what's on for me {tf}",
+        ]), "show_calendar", {"qualifier": tf}))
+        out.append(T(rng.choice([
+            f"am I double booked {tf} or are we right",
+            f"is {tf} clear or have I got something",
+            f"are we free {tf} or is something booked",
+            f"is anything booked in for {tf}",
+        ]), "show_calendar", {"qualifier": tf}))
+    out += [T(t, "show_calendar", {"qualifier": ""}) for t in [
+        "what's the diary looking like this week",
+        "what am I up for after work",
+        "have we got much on over the next few days",
+        "whereabouts am I meant to be this afternoon",
+        "what's the go with my schedule today",
+        "do I have a full day or a quiet one tomorrow",
+        "what else is on my plate today appointment wise",
+        "is my morning free or booked solid",
+    ]]
+
+    # ---- A'. list_reminders contrast (nudges, not appointments) ------------
+    out += [T(t, "list_reminders", {}) for t in [
+        "what reminders are still outstanding",
+        "run through the reminders you've got for me",
+        "what have I told you to nudge me about",
+        "which reminders are due today",
+        "have you got any nudges waiting for me",
+        "what's left on my reminders",
+        "read out my reminders for this week",
+        "anything you're supposed to remind me of tonight",
+        "what pings have you got lined up for me",
+        "show us the reminder list",
+    ]]
+
+    # ---- B. get_weather: activity-suitability paraphrases ------------------
+    for act in ACTIVITIES:
+        d = rng.choice(DAYS)
+        out.append(T(rng.choice([
+            f"reckon it'll be decent enough for {act} {d}",
+            f"is the weather gonna hold for {act} {d}",
+            f"will it be right for {act} {d} you reckon",
+            f"any good for {act} {d} or will it bucket down",
+        ]), "get_weather", {"forecast": True, "location": ""}))
+    out += [T(t, "get_weather", {"forecast": True, "location": ""}) for t in [
+        "is saturday looking sunny or a washout",
+        "reckon sunday's a beach day",
+        "will it stay dry for the school fete",
+        "what are we in for weather wise this weekend",
+        "is it meant to cool down by friday",
+        "how's the mercury looking tomorrow",
+        "gonna need the brolly today or not",
+        "is tonight going to be freezing",
+    ]]
+
+    # ---- C. add_calendar_event: "stick that in / lock it in" statements ----
+    for what, verb, day, tm in ARRIVALS:
+        out.append(T(rng.choice([
+            f"{what} {verb} {day} at {tm}, stick that in",
+            f"{what} {verb} {day} {tm}, chuck it in the calendar",
+            f"{what} {verb} {day} at {tm}, get that in the diary",
+            f"{what} {verb} {day} at {tm}, lock that in for me",
+        ]), "add_calendar_event", {"title": what, "date": day, "time": tm}))
+        out.append(T(rng.choice([
+            f"pop {what} in for {day} {tm}",
+            f"whack {what} in the calendar, {day} at {tm}",
+            f"can you diary {what} for {day} at {tm}",
+        ]), "add_calendar_event", {"title": what, "date": day, "time": tm}))
+
+    # ---- C'. add_reminder: "I'll forget X unless you say something" --------
+    for thing, when in FORGETTABLES:
+        out.append(T(rng.choice([
+            f"I'll forget {thing} {when} unless you pipe up",
+            f"I'm bound to forget {thing} unless you remind me {when}",
+            f"no way I'll remember {thing}, give us a shout {when}",
+            f"sing out about {thing} {when} or it won't happen",
+        ]), "add_reminder", {"title": thing, "date": "", "time": when}))
+        out.append(T(rng.choice([
+            f"remind me about {thing} {when}",
+            f"nudge me on {thing} {when} yeah",
+        ]), "add_reminder", {"title": thing, "date": "", "time": when}))
+
+    # ---- C''. remember_fact: "for future reference" durable facts ----------
+    for fact in SCHEDULE_FACTS:
+        out.append(T(rng.choice([
+            f"for future reference {fact}",
+            f"file this away: {fact}",
+            f"so you know going forward, {fact}",
+            f"one for the memory bank: {fact}",
+        ]), "remember_fact", {"fact": fact}))
+
+    # ---- D. note_search: "what did I say X quoted / what did I write" ------
+    for trade, job in TRADES:
+        out.append(T(rng.choice([
+            f"what did I say the {trade} quoted for {job}",
+            f"what was the {trade}'s quote on {job} again",
+            f"didn't I jot down what the {trade} wanted for {job}",
+            f"look up what the {trade} said about {job}",
+        ]), "note_search", {"query": trade}))
+    out += [T(t, "note_search", {"query": t}) for t in [
+        "find the note with the wifi password for the beach house",
+        "what did I write down about the insurance renewal",
+        "search my notes for the paint colour we picked",
+        "pull up whatever I noted from the parent teacher meeting",
+        "what was in that note about the car rego",
+    ]]
+
+    # ---- D'. recall_memory contrast (personal history, not notes) ----------
+    out += [T(t, "recall_memory", {"query": t}) for t in [
+        "what have I told you about my brother's new job",
+        "remind me what I said about the holiday plans",
+        "what do you remember about my knee playing up",
+        "have I mentioned anything about the neighbours' renovation",
+        "what did I tell you my favourite takeaway was",
+    ]]
+
+    # ---- E. list_remove: "actually scratch X, we've got heaps" -------------
+    for it in ITEMS[:12]:
+        out.append(T(rng.choice([
+            f"actually scratch the {it}, we've got heaps",
+            f"on second thought take the {it} off, there's plenty here",
+            f"actually we're right for {it}, pull it off the list",
+            f"turns out we've got stacks of {it}, cross it off",
+        ]), "list_remove", {"item": it, "list_type": "shopping"}))
+        out.append(T(rng.choice([
+            f"no more {it} in the cupboard, add it",
+            f"we're clean out of {it}",
+            f"gone through the last of the {it}, stick it on the list",
+            f"{it} is all gone again",
+        ]), "shopping_list_add", {"item": it}))
+
+    # ---- F. media: "chuck on something X while I Y" -------------------------
+    for vibe in VIBES2:
+        doing = rng.choice(DOING)
+        out.append(T(rng.choice([
+            f"chuck on something {vibe} while {doing}",
+            f"put something {vibe} on while {doing}",
+            f"can we get some {vibe} tunes going while {doing}",
+            f"throw on a {vibe} playlist while {doing}",
+        ]), "media", {"action": "play", "query": vibe}))
+    out += [T(t, "media", {"action": "play", "query": ""}) for t in [
+        "get some background music happening",
+        "stick some tunes on for us",
+        "bit of music wouldn't hurt right now",
+        "let's have some music while we wait",
+    ]]
+
+    # ---- F'. home: "kill everything downstairs / heading to bed" -----------
+    for room in ROOMS:
+        out.append(T(rng.choice([
+            f"we're heading up, kill everything {room}",
+            f"shut everything down {room}, we're done for the night",
+            f"turn the lot off {room}",
+            f"everything off {room} thanks, calling it a night",
+        ]), "home", {"action": "off", "target": room}))
+    out += [T(t, "home", {"action": "off", "target": ""}) for t in [
+        "we're off to bed, shut the house down",
+        "lights out everywhere, movie's starting",
+        "kill the lot, we're leaving for the airport",
+        "power everything down for the night",
+    ]]
+
+    # ---- G. people: "who is <name>" positives -------------------------------
+    for name in NAMES:
+        out.append(T(rng.choice([
+            f"who is {name}",
+            f"who's {name} again",
+            f"do you know who {name} is",
+            f"who even is {name}",
+            f"remind me who {name} is",
+        ]), "people", {"query": name}))
+    return out
+
+
 CHAT_NEGATIVES = [
     # tool-adjacent but NOT commands — the hard boundary
     "my shopping list of problems just keeps growing",
@@ -301,12 +535,35 @@ def main() -> None:
             continue
         seen.add(n)
         final.append(c)
+    OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text("".join(json.dumps(c) + "\n" for c in final))
     by_tool: dict[str, int] = {}
     for c in final:
         by_tool[c["tool"] or "chat"] = by_tool.get(c["tool"] or "chat", 0) + 1
     print(f"wrote {len(final)} examples -> {OUT}")
     print(json.dumps(by_tool, indent=1))
+
+    # round 2: same guard, own file, own prefix-wrap pass
+    r2 = []
+    for c in gen_round2_cases(rng):
+        t = c["text"]
+        if rng.random() < 0.4:
+            t = (rng.choice(PREFIXES) + t + rng.choice(SUFFIXES)).strip()
+        r2.append({**c, "text": t, "source": "sibling_r2"})
+    seen2, final2 = set(seen), []
+    for c in r2:
+        n = _norm(c["text"])
+        if not n or n in seen2 or n in held:
+            continue
+        seen2.add(n)
+        final2.append(c)
+    out2 = HERE / "data" / "train_round2.jsonl"
+    out2.write_text("".join(json.dumps(c) + "\n" for c in final2))
+    by2: dict[str, int] = {}
+    for c in final2:
+        by2[c["tool"] or "chat"] = by2.get(c["tool"] or "chat", 0) + 1
+    print(f"wrote {len(final2)} examples -> {out2}")
+    print(json.dumps(by2, indent=1))
 
 
 if __name__ == "__main__":

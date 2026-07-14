@@ -19,8 +19,14 @@ LAB-ONLY: nothing wired into the voice path; eval on :11435, never :11434.
 | functok e1 (1 epoch), no grammar | 74.1% | 91.2% | 53.8% | 0% | reference (#1317-era) |
 | **functok e1 + grammar(a) all-21** | **74.1%** | 91.2% | 53.8% | 0% | Δ=0: grammar kills hallucinated names, but those cases fall to legal siblings |
 | **functok e1 + SetFit shortlist + grammar(b) [HYBRID]** | **75.3%** | 91.2% | 56.4% | 0% | best measured; +1.2 |
-| functok e3 (3 epochs, old data) | pending (training, ETA ~15–20 h @ ~250 s/step nice-19 CPU) | | | | eval w/ + w/o grammar when done |
-| functok definitive (expanded data, `run_definitive_training.sh`) | pending | | | | **the credible shot at 90%** |
+| functok e3 (3 epochs, old data) | pending (training, nice-19 CPU; ~95–250 s/step depending on contention) | | | | eval w/ ± grammar when done |
+| **functok definitive r1 + shortlist grammar(b), logreg head** | **84.0%** | 94.1% | 71.8% | 0% | +8.7 over e1 hybrid (`results/functok-gb.json`, def GGUF) |
+| **functok definitive r1 + shortlist grammar(b), mlp head** | **85.2%** | 94.1% | 74.4% | 0% | **best measured**; 12 fails = 9 stage2 wrong picks + 3 shortlist misses |
+| definitive r1 hybrid, gate 0.35 | 72.8% | 88.2% | 53.8% | 0% | gate ate 14 tool turns — keep the gate OFF |
+| functok definitive r2 (retrained with corrected `list_type` arg keys) | pending | | | | key drift affected args only, never tool choice/scoring |
+
+Note: `results/functok-gb.json` now holds the definitive-r1 run; the e1
+hybrid per-case JSON it replaced is in git history (the 75.3% row above).
 
 Latency note: grammar-run latencies in `results/*.json` (~2.5 s p50) are
 NOT comparable to the earlier ~360 ms numbers — the e3 CPU trainer was

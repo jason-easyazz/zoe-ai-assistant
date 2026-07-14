@@ -1,84 +1,84 @@
-{"text": "hey what's still left on the list", "tool": "show_list", "args": {"list": "shopping"}, "source": "sibling_v2"}
-{"text": "run me through what we need from the shops", "tool": "show_list", "args": {"list": "shopping"}, "source": "sibling_v2"}
-{"text": "what have we got on the list so far", "tool": "show_list", "args": {"list": "shopping"}, "source": "sibling_v2"}
-{"text": "hey zoe anything still to get at the shops", "tool": "show_list", "args": {"list": "shopping"}, "source": "sibling_v2"}
-{"text": "zoe how long is the list looking please", "tool": "show_list", "args": {"list": "shopping"}, "source": "sibling_v2"}
-{"text": "what's the damage on the shopping list", "tool": "show_list", "args": {"list": "shopping"}, "source": "sibling_v2"}
-{"text": "give us a rundown of the list", "tool": "show_list", "args": {"list": "shopping"}, "source": "sibling_v2"}
-{"text": "zoe what needs picking up today for me", "tool": "show_list", "args": {"list": "shopping"}, "source": "sibling_v2"}
-{"text": "read back what's on there", "tool": "show_list", "args": {"list": "shopping"}, "source": "sibling_v2"}
-{"text": "what's on the list before I head out", "tool": "show_list", "args": {"list": "shopping"}, "source": "sibling_v2"}
-{"text": "read out the shopping list", "tool": "show_list", "args": {"list": "shopping"}, "source": "sibling_v2"}
-{"text": "read out the grocery list", "tool": "show_list", "args": {"list": "grocery"}, "source": "sibling_v2"}
-{"text": "read out the todo list", "tool": "show_list", "args": {"list": "todo"}, "source": "sibling_v2"}
-{"text": "read out the hardware list", "tool": "show_list", "args": {"list": "hardware"}, "source": "sibling_v2"}
-{"text": "read out the camping list for me", "tool": "show_list", "args": {"list": "camping"}, "source": "sibling_v2"}
-{"text": "read out the packing list", "tool": "show_list", "args": {"list": "packing"}, "source": "sibling_v2"}
-{"text": "what's on the shopping list at the moment", "tool": "show_list", "args": {"list": "shopping"}, "source": "sibling_v2"}
-{"text": "what's on the grocery list at the moment", "tool": "show_list", "args": {"list": "grocery"}, "source": "sibling_v2"}
-{"text": "um what's on the todo list at the moment please", "tool": "show_list", "args": {"list": "todo"}, "source": "sibling_v2"}
-{"text": "what's on the hardware list at the moment", "tool": "show_list", "args": {"list": "hardware"}, "source": "sibling_v2"}
-{"text": "what's on the camping list at the moment", "tool": "show_list", "args": {"list": "camping"}, "source": "sibling_v2"}
-{"text": "what's on the packing list at the moment", "tool": "show_list", "args": {"list": "packing"}, "source": "sibling_v2"}
-{"text": "scratch milk off, we've got plenty", "tool": "list_remove", "args": {"item": "milk", "list": "shopping"}, "source": "sibling_v2"}
-{"text": "take milk off the list, found some in the pantry", "tool": "list_remove", "args": {"item": "milk", "list": "shopping"}, "source": "sibling_v2"}
+{"text": "hey what's still left on the list", "tool": "show_list", "args": {"list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "run me through what we need from the shops", "tool": "show_list", "args": {"list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "what have we got on the list so far", "tool": "show_list", "args": {"list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "hey zoe anything still to get at the shops", "tool": "show_list", "args": {"list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "zoe how long is the list looking please", "tool": "show_list", "args": {"list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "what's the damage on the shopping list", "tool": "show_list", "args": {"list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "give us a rundown of the list", "tool": "show_list", "args": {"list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "zoe what needs picking up today for me", "tool": "show_list", "args": {"list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "read back what's on there", "tool": "show_list", "args": {"list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "what's on the list before I head out", "tool": "show_list", "args": {"list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "read out the shopping list", "tool": "show_list", "args": {"list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "read out the grocery list", "tool": "show_list", "args": {"list_type": "grocery"}, "source": "sibling_v2"}
+{"text": "read out the todo list", "tool": "show_list", "args": {"list_type": "todo"}, "source": "sibling_v2"}
+{"text": "read out the hardware list", "tool": "show_list", "args": {"list_type": "hardware"}, "source": "sibling_v2"}
+{"text": "read out the camping list for me", "tool": "show_list", "args": {"list_type": "camping"}, "source": "sibling_v2"}
+{"text": "read out the packing list", "tool": "show_list", "args": {"list_type": "packing"}, "source": "sibling_v2"}
+{"text": "what's on the shopping list at the moment", "tool": "show_list", "args": {"list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "what's on the grocery list at the moment", "tool": "show_list", "args": {"list_type": "grocery"}, "source": "sibling_v2"}
+{"text": "um what's on the todo list at the moment please", "tool": "show_list", "args": {"list_type": "todo"}, "source": "sibling_v2"}
+{"text": "what's on the hardware list at the moment", "tool": "show_list", "args": {"list_type": "hardware"}, "source": "sibling_v2"}
+{"text": "what's on the camping list at the moment", "tool": "show_list", "args": {"list_type": "camping"}, "source": "sibling_v2"}
+{"text": "what's on the packing list at the moment", "tool": "show_list", "args": {"list_type": "packing"}, "source": "sibling_v2"}
+{"text": "scratch milk off, we've got plenty", "tool": "list_remove", "args": {"item": "milk", "list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "take milk off the list, found some in the pantry", "tool": "list_remove", "args": {"item": "milk", "list_type": "shopping"}, "source": "sibling_v2"}
 {"text": "we're nearly out of milk", "tool": "shopping_list_add", "args": {"item": "milk"}, "source": "sibling_v2"}
-{"text": "okay zoe scratch eggs off, we've got plenty for me", "tool": "list_remove", "args": {"item": "eggs", "list": "shopping"}, "source": "sibling_v2"}
-{"text": "you can drop eggs off the list", "tool": "list_remove", "args": {"item": "eggs", "list": "shopping"}, "source": "sibling_v2"}
+{"text": "okay zoe scratch eggs off, we've got plenty for me", "tool": "list_remove", "args": {"item": "eggs", "list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "you can drop eggs off the list", "tool": "list_remove", "args": {"item": "eggs", "list_type": "shopping"}, "source": "sibling_v2"}
 {"text": "we're nearly out of eggs", "tool": "shopping_list_add", "args": {"item": "eggs"}, "source": "sibling_v2"}
-{"text": "scratch bread off, we've got plenty", "tool": "list_remove", "args": {"item": "bread", "list": "shopping"}, "source": "sibling_v2"}
-{"text": "you can drop bread off the list", "tool": "list_remove", "args": {"item": "bread", "list": "shopping"}, "source": "sibling_v2"}
+{"text": "scratch bread off, we've got plenty", "tool": "list_remove", "args": {"item": "bread", "list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "you can drop bread off the list", "tool": "list_remove", "args": {"item": "bread", "list_type": "shopping"}, "source": "sibling_v2"}
 {"text": "running low on bread again thanks", "tool": "shopping_list_add", "args": {"item": "bread"}, "source": "sibling_v2"}
-{"text": "scratch coffee off, we've got plenty", "tool": "list_remove", "args": {"item": "coffee", "list": "shopping"}, "source": "sibling_v2"}
-{"text": "we don't need coffee anymore, pull it off", "tool": "list_remove", "args": {"item": "coffee", "list": "shopping"}, "source": "sibling_v2"}
+{"text": "scratch coffee off, we've got plenty", "tool": "list_remove", "args": {"item": "coffee", "list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "we don't need coffee anymore, pull it off", "tool": "list_remove", "args": {"item": "coffee", "list_type": "shopping"}, "source": "sibling_v2"}
 {"text": "we're nearly out of coffee", "tool": "shopping_list_add", "args": {"item": "coffee"}, "source": "sibling_v2"}
-{"text": "scratch bananas off, we've got plenty", "tool": "list_remove", "args": {"item": "bananas", "list": "shopping"}, "source": "sibling_v2"}
-{"text": "take bananas off the list, found some in the pantry", "tool": "list_remove", "args": {"item": "bananas", "list": "shopping"}, "source": "sibling_v2"}
+{"text": "scratch bananas off, we've got plenty", "tool": "list_remove", "args": {"item": "bananas", "list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "take bananas off the list, found some in the pantry", "tool": "list_remove", "args": {"item": "bananas", "list_type": "shopping"}, "source": "sibling_v2"}
 {"text": "running low on bananas again", "tool": "shopping_list_add", "args": {"item": "bananas"}, "source": "sibling_v2"}
-{"text": "zoe scratch dog food off, we've got plenty", "tool": "list_remove", "args": {"item": "dog food", "list": "shopping"}, "source": "sibling_v2"}
-{"text": "hey zoe take dog food off the list, found some in the pantry", "tool": "list_remove", "args": {"item": "dog food", "list": "shopping"}, "source": "sibling_v2"}
+{"text": "zoe scratch dog food off, we've got plenty", "tool": "list_remove", "args": {"item": "dog food", "list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "hey zoe take dog food off the list, found some in the pantry", "tool": "list_remove", "args": {"item": "dog food", "list_type": "shopping"}, "source": "sibling_v2"}
 {"text": "we've gone through all the dog food", "tool": "shopping_list_add", "args": {"item": "dog food"}, "source": "sibling_v2"}
-{"text": "scratch butter off, we've got plenty", "tool": "list_remove", "args": {"item": "butter", "list": "shopping"}, "source": "sibling_v2"}
-{"text": "you can drop butter off the list", "tool": "list_remove", "args": {"item": "butter", "list": "shopping"}, "source": "sibling_v2"}
+{"text": "scratch butter off, we've got plenty", "tool": "list_remove", "args": {"item": "butter", "list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "you can drop butter off the list", "tool": "list_remove", "args": {"item": "butter", "list_type": "shopping"}, "source": "sibling_v2"}
 {"text": "we've gone through all the butter", "tool": "shopping_list_add", "args": {"item": "butter"}, "source": "sibling_v2"}
-{"text": "scratch cheese off, we've got plenty", "tool": "list_remove", "args": {"item": "cheese", "list": "shopping"}, "source": "sibling_v2"}
-{"text": "take cheese off the list, found some in the pantry", "tool": "list_remove", "args": {"item": "cheese", "list": "shopping"}, "source": "sibling_v2"}
+{"text": "scratch cheese off, we've got plenty", "tool": "list_remove", "args": {"item": "cheese", "list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "take cheese off the list, found some in the pantry", "tool": "list_remove", "args": {"item": "cheese", "list_type": "shopping"}, "source": "sibling_v2"}
 {"text": "we're nearly out of cheese", "tool": "shopping_list_add", "args": {"item": "cheese"}, "source": "sibling_v2"}
-{"text": "hey scratch toothpaste off, we've got plenty thanks", "tool": "list_remove", "args": {"item": "toothpaste", "list": "shopping"}, "source": "sibling_v2"}
-{"text": "hey cross toothpaste off, already grabbed it thanks", "tool": "list_remove", "args": {"item": "toothpaste", "list": "shopping"}, "source": "sibling_v2"}
+{"text": "hey scratch toothpaste off, we've got plenty thanks", "tool": "list_remove", "args": {"item": "toothpaste", "list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "hey cross toothpaste off, already grabbed it thanks", "tool": "list_remove", "args": {"item": "toothpaste", "list_type": "shopping"}, "source": "sibling_v2"}
 {"text": "we've gone through all the toothpaste", "tool": "shopping_list_add", "args": {"item": "toothpaste"}, "source": "sibling_v2"}
-{"text": "scratch washing powder off, we've got plenty", "tool": "list_remove", "args": {"item": "washing powder", "list": "shopping"}, "source": "sibling_v2"}
-{"text": "take washing powder off the list, found some in the pantry", "tool": "list_remove", "args": {"item": "washing powder", "list": "shopping"}, "source": "sibling_v2"}
+{"text": "scratch washing powder off, we've got plenty", "tool": "list_remove", "args": {"item": "washing powder", "list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "take washing powder off the list, found some in the pantry", "tool": "list_remove", "args": {"item": "washing powder", "list_type": "shopping"}, "source": "sibling_v2"}
 {"text": "um running low on washing powder again when you get a sec", "tool": "shopping_list_add", "args": {"item": "washing powder"}, "source": "sibling_v2"}
-{"text": "scratch apples off, we've got plenty", "tool": "list_remove", "args": {"item": "apples", "list": "shopping"}, "source": "sibling_v2"}
-{"text": "we don't need apples anymore, pull it off", "tool": "list_remove", "args": {"item": "apples", "list": "shopping"}, "source": "sibling_v2"}
+{"text": "scratch apples off, we've got plenty", "tool": "list_remove", "args": {"item": "apples", "list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "we don't need apples anymore, pull it off", "tool": "list_remove", "args": {"item": "apples", "list_type": "shopping"}, "source": "sibling_v2"}
 {"text": "running low on apples again", "tool": "shopping_list_add", "args": {"item": "apples"}, "source": "sibling_v2"}
-{"text": "okay zoe scratch mince off, we've got plenty thanks", "tool": "list_remove", "args": {"item": "mince", "list": "shopping"}, "source": "sibling_v2"}
-{"text": "you can drop mince off the list", "tool": "list_remove", "args": {"item": "mince", "list": "shopping"}, "source": "sibling_v2"}
+{"text": "okay zoe scratch mince off, we've got plenty thanks", "tool": "list_remove", "args": {"item": "mince", "list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "you can drop mince off the list", "tool": "list_remove", "args": {"item": "mince", "list_type": "shopping"}, "source": "sibling_v2"}
 {"text": "running low on mince again", "tool": "shopping_list_add", "args": {"item": "mince"}, "source": "sibling_v2"}
-{"text": "scratch toilet paper off, we've got plenty", "tool": "list_remove", "args": {"item": "toilet paper", "list": "shopping"}, "source": "sibling_v2"}
-{"text": "we don't need toilet paper anymore, pull it off", "tool": "list_remove", "args": {"item": "toilet paper", "list": "shopping"}, "source": "sibling_v2"}
+{"text": "scratch toilet paper off, we've got plenty", "tool": "list_remove", "args": {"item": "toilet paper", "list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "we don't need toilet paper anymore, pull it off", "tool": "list_remove", "args": {"item": "toilet paper", "list_type": "shopping"}, "source": "sibling_v2"}
 {"text": "zoe we've gone through all the toilet paper please", "tool": "shopping_list_add", "args": {"item": "toilet paper"}, "source": "sibling_v2"}
-{"text": "scratch sunscreen off, we've got plenty", "tool": "list_remove", "args": {"item": "sunscreen", "list": "shopping"}, "source": "sibling_v2"}
-{"text": "cross sunscreen off, already grabbed it", "tool": "list_remove", "args": {"item": "sunscreen", "list": "shopping"}, "source": "sibling_v2"}
+{"text": "scratch sunscreen off, we've got plenty", "tool": "list_remove", "args": {"item": "sunscreen", "list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "cross sunscreen off, already grabbed it", "tool": "list_remove", "args": {"item": "sunscreen", "list_type": "shopping"}, "source": "sibling_v2"}
 {"text": "okay zoe we've gone through all the sunscreen", "tool": "shopping_list_add", "args": {"item": "sunscreen"}, "source": "sibling_v2"}
-{"text": "scratch capsicum off, we've got plenty", "tool": "list_remove", "args": {"item": "capsicum", "list": "shopping"}, "source": "sibling_v2"}
-{"text": "hey we don't need capsicum anymore, pull it off please", "tool": "list_remove", "args": {"item": "capsicum", "list": "shopping"}, "source": "sibling_v2"}
+{"text": "scratch capsicum off, we've got plenty", "tool": "list_remove", "args": {"item": "capsicum", "list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "hey we don't need capsicum anymore, pull it off please", "tool": "list_remove", "args": {"item": "capsicum", "list_type": "shopping"}, "source": "sibling_v2"}
 {"text": "hey zoe chuck capsicum on the list for the shops when you get a sec", "tool": "shopping_list_add", "args": {"item": "capsicum"}, "source": "sibling_v2"}
-{"text": "um scratch yoghurt off, we've got plenty", "tool": "list_remove", "args": {"item": "yoghurt", "list": "shopping"}, "source": "sibling_v2"}
-{"text": "zoe you can drop yoghurt off the list", "tool": "list_remove", "args": {"item": "yoghurt", "list": "shopping"}, "source": "sibling_v2"}
+{"text": "um scratch yoghurt off, we've got plenty", "tool": "list_remove", "args": {"item": "yoghurt", "list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "zoe you can drop yoghurt off the list", "tool": "list_remove", "args": {"item": "yoghurt", "list_type": "shopping"}, "source": "sibling_v2"}
 {"text": "hey we're nearly out of yoghurt for me", "tool": "shopping_list_add", "args": {"item": "yoghurt"}, "source": "sibling_v2"}
-{"text": "hey scratch weetbix off, we've got plenty for me", "tool": "list_remove", "args": {"item": "weetbix", "list": "shopping"}, "source": "sibling_v2"}
-{"text": "we don't need weetbix anymore, pull it off", "tool": "list_remove", "args": {"item": "weetbix", "list": "shopping"}, "source": "sibling_v2"}
+{"text": "hey scratch weetbix off, we've got plenty for me", "tool": "list_remove", "args": {"item": "weetbix", "list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "we don't need weetbix anymore, pull it off", "tool": "list_remove", "args": {"item": "weetbix", "list_type": "shopping"}, "source": "sibling_v2"}
 {"text": "chuck weetbix on the list for the shops", "tool": "shopping_list_add", "args": {"item": "weetbix"}, "source": "sibling_v2"}
-{"text": "scratch tomato sauce off, we've got plenty", "tool": "list_remove", "args": {"item": "tomato sauce", "list": "shopping"}, "source": "sibling_v2"}
-{"text": "you can drop tomato sauce off the list", "tool": "list_remove", "args": {"item": "tomato sauce", "list": "shopping"}, "source": "sibling_v2"}
+{"text": "scratch tomato sauce off, we've got plenty", "tool": "list_remove", "args": {"item": "tomato sauce", "list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "you can drop tomato sauce off the list", "tool": "list_remove", "args": {"item": "tomato sauce", "list_type": "shopping"}, "source": "sibling_v2"}
 {"text": "um chuck tomato sauce on the list for the shops", "tool": "shopping_list_add", "args": {"item": "tomato sauce"}, "source": "sibling_v2"}
-{"text": "um scratch snags off, we've got plenty", "tool": "list_remove", "args": {"item": "snags", "list": "shopping"}, "source": "sibling_v2"}
-{"text": "you can drop snags off the list", "tool": "list_remove", "args": {"item": "snags", "list": "shopping"}, "source": "sibling_v2"}
+{"text": "um scratch snags off, we've got plenty", "tool": "list_remove", "args": {"item": "snags", "list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "you can drop snags off the list", "tool": "list_remove", "args": {"item": "snags", "list_type": "shopping"}, "source": "sibling_v2"}
 {"text": "hey we're nearly out of snags when you get a sec", "tool": "shopping_list_add", "args": {"item": "snags"}, "source": "sibling_v2"}
-{"text": "scratch avocados off, we've got plenty", "tool": "list_remove", "args": {"item": "avocados", "list": "shopping"}, "source": "sibling_v2"}
-{"text": "we don't need avocados anymore, pull it off", "tool": "list_remove", "args": {"item": "avocados", "list": "shopping"}, "source": "sibling_v2"}
+{"text": "scratch avocados off, we've got plenty", "tool": "list_remove", "args": {"item": "avocados", "list_type": "shopping"}, "source": "sibling_v2"}
+{"text": "we don't need avocados anymore, pull it off", "tool": "list_remove", "args": {"item": "avocados", "list_type": "shopping"}, "source": "sibling_v2"}
 {"text": "okay zoe we've gone through all the avocados", "tool": "shopping_list_add", "args": {"item": "avocados"}, "source": "sibling_v2"}
 {"text": "what's my day looking like tomorrow", "tool": "show_calendar", "args": {"qualifier": ""}, "source": "sibling_v2"}
 {"text": "have I got anything on this arvo", "tool": "show_calendar", "args": {"qualifier": ""}, "source": "sibling_v2"}
