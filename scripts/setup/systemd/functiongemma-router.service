@@ -1,0 +1,44 @@
+# FunctionGemma Router Sidecar — stage-2 decoder of the two-stage router.
+#
+# Serves the round-2 fine-tuned FunctionGemma-270M GGUF (proven 90.1% overall /
+# 0% chat-FP on the 81-case corpus, labs/router-90-campaign) on :11436, CPU-only
+# (-ngl 0, ~600 MB RSS), for services/zoe-data/router_two_stage.py. The brain
+# (Gemma 4 E4B on :11434) is untouched — this is a fast-tier FRONT, not a brain
+# swap (docs/CANONICAL.md rocks hold).
+#
+# Install (user unit, like kokoro-tts.service):
+#   mkdir -p /home/zoe/models/functiongemma-router
+#   cp /home/zoe/models/lab/functiongemma-270m-zoe-functok-r2-Q8_0.gguf \
+#      /home/zoe/models/functiongemma-router/
+#   cp scripts/setup/systemd/functiongemma-router.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now functiongemma-router.service
+# Verify: curl -s localhost:11436/health && curl -s localhost:11436/props | grep r2
+[Unit]
+Description=FunctionGemma Router Sidecar (two-stage router stage-2, CPU :11436)
+After=network.target
+
+[Service]
+Type=simple
+Environment=LD_LIBRARY_PATH=/home/zoe/llama.cpp/build-jetson-new/bin
+ExecStart=/home/zoe/llama.cpp/build-jetson-new/bin/llama-server \
+  --model /home/zoe/models/functiongemma-router/functiongemma-270m-zoe-functok-r2-Q8_0.gguf \
+  --host 127.0.0.1 \
+  --port 11436 \
+  --ctx-size 4096 \
+  --n-gpu-layers 0 \
+  --parallel 1 \
+  --threads 4 \
+  --jinja
+# Startup gate: healthy AND serving exactly the r2 GGUF (identity check —
+# a wrong model here would silently change routing quality).
+ExecStartPost=/bin/bash -c 'for i in $(seq 1 60); do curl -sf http://127.0.0.1:11436/health >/dev/null 2>&1 && break; sleep 1; done; curl -sf http://127.0.0.1:11436/props | grep -q "functiongemma-270m-zoe-functok-r2-Q8_0.gguf"'
+Restart=always
+RestartSec=5
+TimeoutStartSec=120
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=functiongemma-router
+
+[Install]
+WantedBy=default.target

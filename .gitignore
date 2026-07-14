@@ -302,4 +302,5 @@ labs/flue-zoe-brain/parity/gate-results/
 !services/zoe-data/models/
 services/zoe-data/models/*
 !services/zoe-data/models/router_head_logreg.joblib
+!services/zoe-data/models/router_head_mlp.joblib
 services/zoe-data/data/router_head_shadow.jsonl

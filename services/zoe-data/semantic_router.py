@@ -10,11 +10,15 @@ Runs OBSERVE-ONLY by default (ZOE_ROUTER_MODE=shadow) — it logs its decision a
 whether that agrees with what actually handled the turn, so accuracy can be
 validated on live traffic before it ever changes behavior.
 
-SetFit head (ZOE_ROUTER_HEAD=off|shadow, default off): a 38 KB logreg head
-(labs/setfit-router) on the same embedding. In 'shadow' it logs prediction +
-agreement per turn (utterance-hash only) and never influences routing; 'active'
-is deliberately NotImplementedError until live agreement is confirmed. Score
-the shadow log with scripts/maintenance/router_shadow_report.py.
+SetFit head (ZOE_ROUTER_HEAD=off|shadow|shadow2|active, default off): 'shadow'
+logs the logreg head's prediction + agreement per turn (utterance-hash only)
+and never routes. 'shadow2' computes + logs the FULL two-stage decision
+(router_two_stage: MLP top-3 shortlist + 0.5 chat gate + grammar-constrained
+FunctionGemma sidecar on :11436) in a background thread — still never routes.
+'active' lets that two-stage decision pick the domain (proven 90.1%/0% chat-FP
+on the 81-case corpus, labs/router-90-campaign); ANY failure falls back to the
+similarity decision and thence the brain. Score logs with
+scripts/maintenance/router_shadow_report.py.
 """
 from __future__ import annotations
 
@@ -23,6 +27,7 @@ import json
 import os
 import threading
 import time
+from dataclasses import dataclass, field
 from typing import Optional
 
 import numpy as np
@@ -130,17 +135,22 @@ _HEAD_LOG_PATH = os.environ.get(
 
 
 def head_mode() -> str:
-    """ZOE_ROUTER_HEAD: 'off' (default) | 'shadow' | 'active' (not implemented)."""
+    """ZOE_ROUTER_HEAD: 'off' (default) | 'shadow' | 'shadow2' | 'active'.
+
+    off      no head at all (similarity routing only).
+    shadow   logreg head logs prediction+agreement per turn; never routes.
+    shadow2  the FULL two-stage decision (router_two_stage.decide: MLP top-3
+             shortlist + gate + FunctionGemma sidecar) is computed in a
+             BACKGROUND thread and logged; never routes. Rehearsal for active.
+    active   the two-stage decision routes: its tool→domain replaces the
+             similarity domain in route(); any failure/timeout/gate-abstain
+             falls back to the similarity decision (and thence the brain).
+    """
     val = (os.environ.get("ZOE_ROUTER_HEAD", "off") or "off").strip().lower()
     if val in ("", "0", "false", "no", "off"):
         return "off"
-    if val == "shadow":
-        return "shadow"
-    if val == "active":
-        raise NotImplementedError(
-            "ZOE_ROUTER_HEAD=active is not implemented yet — the head is "
-            "shadow-only until live agreement confirms the offline numbers."
-        )
+    if val in ("shadow", "shadow2", "active"):
+        return val
     logger.warning("unknown ZOE_ROUTER_HEAD=%r — treating as 'off'", val)
     return "off"
 
@@ -202,7 +212,7 @@ def _ensure_head_loaded():
     global _HEAD, _HEAD_FAILED
     if _HEAD is not None or _HEAD_FAILED:
         return
-    if head_mode() == "off":  # 'active' raises NotImplementedError here
+    if head_mode() == "off":
         return
     with _LOCK:
         if _HEAD is not None or _HEAD_FAILED:
@@ -239,14 +249,13 @@ def warm() -> bool:
 
 
 def _head_shadow(text: str, v: np.ndarray, routed: str) -> None:
-    """SHADOW-ONLY head comparison. Never influences routing, never raises
-    (except the explicit NotImplementedError for ZOE_ROUTER_HEAD=active).
+    """SHADOW-ONLY head comparison. Never influences routing, never raises.
 
     Logs a structured line keyed by an utterance HASH (no raw text at INFO —
     privacy) so live agreement can be scored later via
     scripts/maintenance/router_shadow_report.py.
     """
-    if head_mode() != "shadow":  # 'active' raises NotImplementedError here
+    if head_mode() != "shadow":
         return
     try:
         _ensure_head_loaded()
@@ -282,6 +291,105 @@ def _head_shadow(text: str, v: np.ndarray, routed: str) -> None:
         logger.warning("router head shadow failed (non-fatal): %s", exc)
 
 
+def _log_two_stage(rec: dict) -> None:
+    """Append a structured two-stage line to the shadow log (hash only)."""
+    try:
+        shadow_logger.info("router_two_stage %s", json.dumps(rec, sort_keys=True))
+        os.makedirs(os.path.dirname(_HEAD_LOG_PATH), exist_ok=True)
+        with open(_HEAD_LOG_PATH, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec, sort_keys=True) + "\n")
+    except Exception as exc:
+        shadow_logger.debug("two_stage log append failed: %s", exc)
+
+
+def _two_stage_rec(text: str, decision: Optional[dict], mode_: str,
+                   actual_routed: str) -> dict:
+    d = decision or {}
+    return {
+        "ts": round(time.time(), 3),
+        "mode": mode_,
+        "utt": hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:12],
+        "two_stage_tool": d.get("tool"),
+        "two_stage_domain": d.get("domain"),
+        "shortlist": d.get("shortlist"),
+        "head_conf": d.get("head_conf"),
+        "gated": d.get("gated"),
+        "failed": decision is None,
+        "two_stage_ms": d.get("ms"),
+        "actual_routed": actual_routed,
+    }
+
+
+def _two_stage_shadow2(text: str, v: np.ndarray, routed: str) -> None:
+    """shadow2: compute+log the full two-stage decision OFF the turn's
+    critical path (the sidecar call is ~400 ms — never block a live turn)."""
+    def _run():
+        try:
+            import router_two_stage
+
+            decision = router_two_stage.decide(text, v)
+            _log_two_stage(_two_stage_rec(text, decision, "shadow2", routed))
+        except Exception as exc:  # shadow must never break anything
+            logger.warning("two_stage shadow2 failed (non-fatal): %s", exc)
+    threading.Thread(target=_run, name="router-shadow2", daemon=True).start()
+
+
+def _two_stage_active(text: str, v: np.ndarray) -> Optional[dict]:
+    """active: the two-stage decision, synchronous (it IS the route).
+    None → caller keeps the similarity decision (brain-safe fallback)."""
+    try:
+        import router_two_stage
+
+        return router_two_stage.decide(text, v)
+    except Exception as exc:
+        logger.warning("two_stage active failed (non-fatal, similarity "
+                       "fallback): %s", exc)
+        return None
+
+
+@dataclass
+class RouterDecision:
+    """Public result of the two-stage router (interface contract for the
+    corpus/prod-path harness). `source`:
+      two_stage       the sidecar decoded a validated tool call
+      gate_abstain    stage-1 said chat (top==chat or conf < gate) → brain
+      shortlist_miss  the decoder took the chat escape / no legal tool → brain
+      error_fallback  head/sidecar failure or timeout → brain
+    """
+    tool: Optional[str]
+    args: dict = field(default_factory=dict)
+    confidence: float = 0.0
+    source: str = "error_fallback"
+    latency_ms: float = 0.0
+
+
+def route_two_stage(text: str) -> RouterDecision:
+    """Run ONLY the two-stage decision for `text` (embed → MLP shortlist +
+    gate → grammar-constrained sidecar decode). Standalone: needs the
+    sidecar up, not the zoe-data server. Never raises."""
+    t0 = time.perf_counter()
+    try:
+        _ensure_loaded()
+        v = np.asarray(next(iter(_MODEL.embed([text or ""]))), dtype=np.float32)
+        v /= (np.linalg.norm(v) + 1e-9)
+        import router_two_stage
+
+        d = router_two_stage.decide(text, v)
+    except Exception as exc:
+        logger.warning("route_two_stage failed (non-fatal): %s", exc)
+        d = None
+    ms = round((time.perf_counter() - t0) * 1000, 1)
+    if d is None:
+        return RouterDecision(None, {}, 0.0, "error_fallback", ms)
+    conf = float(d.get("head_conf") or 0.0)
+    if d.get("tool"):
+        return RouterDecision(d["tool"], dict(d.get("args") or {}), conf,
+                              "two_stage", ms)
+    if d.get("gated"):
+        return RouterDecision(None, {}, conf, "gate_abstain", ms)
+    return RouterDecision(None, {}, conf, "shortlist_miss", ms)
+
+
 def route(text: str) -> dict:
     """Classify an utterance. Returns {domain, score, routed, scores, ms}.
 
@@ -299,10 +407,30 @@ def route(text: str) -> dict:
     thr = threshold()
     routed = domain if (score >= thr and domain != "chat") else "chat"
     _head_shadow(text, v, routed)
-    return {
+    out = {
         "domain": domain,
         "score": round(score, 3),
         "routed": routed,
         "scores": {k: round(v, 3) for k, v in sorted(scores.items(), key=lambda x: -x[1])},
         "ms": round((time.perf_counter() - t0) * 1000, 1),
     }
+    hm = head_mode()
+    if hm == "shadow2":
+        _two_stage_shadow2(text, v, routed)
+    elif hm == "active":
+        decision = _two_stage_active(text, v)
+        if decision is not None:
+            ts_domain = decision.get("domain") or "chat"
+            out["two_stage"] = decision
+            out["similarity_domain"] = domain
+            out["similarity_routed"] = routed
+            out["domain"] = ts_domain
+            out["routed"] = "chat" if ts_domain == "chat" else ts_domain
+            # keep `score` meaningful for downstream per-domain gates: the
+            # similarity score OF the two-stage-chosen domain.
+            out["score"] = round(float(scores.get(ts_domain, score)), 3)
+            out["ms"] = round((time.perf_counter() - t0) * 1000, 1)
+            _log_two_stage(_two_stage_rec(text, decision, "active",
+                                          out["routed"]))
+        # decision None → similarity behavior unchanged (brain-safe)
+    return out

@@ -17,6 +17,11 @@ a link to the detail + where it's up to. Mark ✅ when done so nothing lingers h
 
 ## 🔨 Active
 
+### Two-stage router ACTIVE (SetFit MLP shortlist → FunctionGemma sidecar)
+- **Goal:** the lab-proven 90.1% tool-level router (labs/router-90-campaign, `results/r2-gb-mlp-g0.5.json`: 90.1% overall / 100% canonical / 0% chat-FP / 424 ms p50) wired into the live voice path as a fast-tier FRONT for the brain (Gemma 4 E4B stays the rock and the fallback for every abstain/miss/failure).
+- **Shipped:** `functiongemma-router.service` sidecar (r2 GGUF, CPU :11436, ~600 MB), `services/zoe-data/router_two_stage.py` decision module (MLP top-3 shortlist + 0.5 chat gate + shortlist-restricted GBNF decode, 1.5 s client timeout), `ZOE_ROUTER_HEAD` grown to `off|shadow|shadow2|active` (`shadow2` = full decision logged off-turn, never routes; `active` = decision picks the domain, executed via the existing expert dispatch). Measured through the production decision path (81-case corpus, live sidecar): **91.4% / 0 chat-FP / p50 356 ms**; the permanent corpus harness lands separately against `semantic_router.route_two_stage()`.
+- **Next:** mine `data/router_head_shadow.jsonl` shadow2/active lines for real-traffic hard negatives → next fine-tune round (`labs/functiongemma-finetune`); rollback = `ZOE_ROUTER_HEAD=off` + restart zoe-data.
+
 ### Music discovery (hidden digarr engine) + per-user listening journal
 - **Goal:** Zoe finds the family new music — digarr runs as a batch-only ephemeral container against the local Gemma brain (labs/digarr-spike/ verdict), seeded from a fully-local per-user listening journal; results land as the "Zoe Discovery" MA playlist ("play my discovery playlist" just works). Nothing leaves the house (no cloud scrobblers).
 - **Now (PR-1):** journal (`music_play_history`, alembic 0019; initiated-event capture at the play choke points + observed-events poll, guest-fallback attribution via `music_history.resolve_music_user`), taste seed (journal-first, MA recently-played/play_count fallback), batch script (`scripts/maintenance/music_discovery_batch.py`, memory + brain-idle gated), JSON→MA playlist bridge, discovery-playlist intent alias, weekly cron behind `ZOE_MUSIC_DISCOVERY` (default OFF — operator flips after a verified manual run: `python3 scripts/maintenance/music_discovery_batch.py` in an idle voice window).

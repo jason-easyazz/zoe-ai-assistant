@@ -190,7 +190,10 @@ async def resolve(
 
         # Ambiguity margin — if the top two domains are within MARGIN, treat as
         # ambiguous and defer to the brain rather than guessing a domain.
-        margin = _router_margin()
+        # Skipped when the ACTIVE two-stage router made the call: its decision
+        # is already sibling-discriminated (grammar-constrained decode), so the
+        # similarity margin no longer measures its ambiguity.
+        margin = 0.0 if rr.get("two_stage") else _router_margin()
         if margin > 0:
             scores = rr.get("scores") or {}
             if isinstance(scores, dict) and len(scores) >= 2:
