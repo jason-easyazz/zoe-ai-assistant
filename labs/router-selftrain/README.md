@@ -61,11 +61,30 @@ self-training round.** When on:
 Only **two-stage** records (`mode` ∈ `shadow2`/`active`) can be mined — a
 head-shadow-only record has no router decision to disagree with.
 
+Tool reasons are judged against the **baseline route** — never against the
+two-stage's own output:
+
+| mode | baseline | why |
+| --- | --- | --- |
+| `shadow2` | `actual_routed` | the two-stage doesn't route, so the actual route *is* independent |
+| `active` | `similarity_routed` | the two-stage **is** the route, so `actual_routed` merely echoes `two_stage_domain` — comparing them is a **tautology** |
+
+This is why `semantic_router` now logs `similarity_routed` on active records. Without
+it, an active record cannot express *"the router got this wrong"*: disagreement
+would be structurally impossible, and a wrongly **abstaining** router would look
+like an ordinary chat turn — so we'd have trained it to keep chatting on exactly the
+turns it got wrong. Legacy active records written before that field have no
+recoverable baseline and are **not** mined for tool reasons.
+
 | reason | condition | gold |
 | --- | --- | --- |
-| `disagreement` | two-stage picked a different domain than the live route, and the live route was a real tool domain | the correct call for that domain |
-| `abstention` | two-stage gated / abstained / failed, but the live route **was** a real tool domain | the correct call for that domain |
-| `chat-negative` | the live route was `chat` | no tool (`null`) |
+| `disagreement` | two-stage picked a different domain than the baseline, and the baseline was a real tool domain | the correct call for that domain |
+| `abstention` | two-stage gated / abstained / failed, but the baseline **was** a real tool domain | the correct call for that domain |
+| `chat-negative` | the turn actually ended in `chat` | no tool (`null`) |
+
+A domain that unlocks no concrete tool is never mined — no oracle answer could ever
+match it, so every such example would be silently dropped instead of becoming
+training data.
 
 Agreement on a tool is **not** mined — there is nothing to learn from a case the
 router already gets right.
@@ -131,9 +150,12 @@ correctly refused to complete them. The guard did exactly its job.
 
 The honest read: **tool-example yield is currently limited by shadow-log volume**,
 not by the miner. The window is small and mostly harness traffic, and the hash join
-only recovers turns that reached `chat_messages`. Volume comes once
-`ZOE_ROUTER_SHADOW_TEXT=1` is flipped for a round and real family traffic
-accumulates.
+only recovers turns that reached `chat_messages`. Both mined tool candidates came
+from `shadow2` records — the *active*-mode records in the existing log predate
+`similarity_routed`, so their tool signal is unrecoverable (it was previously being
+lost to the tautology described above, which is exactly the bug this PR fixes).
+Volume comes once `ZOE_ROUTER_SHADOW_TEXT=1` is flipped for a round, real family
+traffic accumulates, and active records start carrying the baseline.
 
 ## Tests
 

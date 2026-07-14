@@ -336,12 +336,25 @@ def _log_two_stage(rec: dict) -> None:
 
 
 def _two_stage_rec(text: str, decision: Optional[dict], mode_: str,
-                   actual_routed: str) -> dict:
+                   actual_routed: str,
+                   similarity_routed: Optional[str] = None) -> dict:
+    """One shadow-log record for a two-stage decision.
+
+    `similarity_routed` is the INDEPENDENT baseline — what the similarity router
+    would have done. It matters in 'active' mode, where the two-stage decision IS
+    the route and `actual_routed` is therefore just an echo of `two_stage_domain`
+    (comparing them is a tautology). Without the baseline field, an active record
+    cannot express "the router got this wrong", and the self-training miner has
+    nothing to learn from. In 'shadow2' the two-stage doesn't route, so the
+    baseline and the actual route are the same thing.
+    """
     d = decision or {}
     return _with_text({
         "ts": round(time.time(), 3),
         "mode": mode_,
         "utt": hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:12],
+        "similarity_routed": (similarity_routed if similarity_routed is not None
+                              else actual_routed),
         "two_stage_tool": d.get("tool"),
         "two_stage_domain": d.get("domain"),
         "shortlist": d.get("shortlist"),
@@ -466,7 +479,10 @@ def route(text: str) -> dict:
             # threshold gates deny rather than act on a borrowed confidence.
             out["score"] = round(float(scores.get(ts_domain, 0.0)), 3)
             out["ms"] = round((time.perf_counter() - t0) * 1000, 1)
+            # `routed` is still the SIMILARITY decision the two-stage pre-empted —
+            # log it as the independent baseline (out["routed"] is now the
+            # two-stage's own output, so it cannot serve as ground truth).
             _log_two_stage(_two_stage_rec(text, decision, "active",
-                                          out["routed"]))
+                                          out["routed"], similarity_routed=routed))
         # decision None → similarity behavior unchanged (brain-safe)
     return out

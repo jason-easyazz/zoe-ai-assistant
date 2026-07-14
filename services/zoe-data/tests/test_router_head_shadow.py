@@ -275,3 +275,22 @@ def test_two_stage_info_line_never_carries_raw_text(monkeypatch, tmp_path, caplo
 
     assert "secret words" not in caplog.text
     assert json.loads(log.read_text().strip())["utt_text"] == "secret words"
+
+
+def test_two_stage_rec_logs_the_similarity_baseline(monkeypatch):
+    """In 'active' the two-stage decision IS the route, so actual_routed echoes
+    two_stage_domain. The record must also carry the INDEPENDENT similarity
+    baseline, or a self-training miner can never tell that the router was wrong."""
+    monkeypatch.delenv("ZOE_ROUTER_SHADOW_TEXT", raising=False)
+
+    active = semantic_router._two_stage_rec(
+        "put dinner in the diary", {"tool": "add_reminder", "domain": "reminders"},
+        "active", "reminders", similarity_routed="calendar")
+    assert active["actual_routed"] == "reminders"      # the two-stage's own output
+    assert active["similarity_routed"] == "calendar"   # the baseline it pre-empted
+
+    # shadow2 doesn't route, so the baseline and the actual route are the same
+    s2 = semantic_router._two_stage_rec(
+        "put dinner in the diary", {"tool": "add_reminder", "domain": "reminders"},
+        "shadow2", "calendar")
+    assert s2["similarity_routed"] == "calendar" == s2["actual_routed"]

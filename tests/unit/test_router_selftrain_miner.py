@@ -38,8 +38,18 @@ miner = _load_miner()
 
 
 # ── fixtures ────────────────────────────────────────────────────────────────
-def _rec(utt_text, actual, ts_domain, *, tool="x", gated=False, mode="active"):
-    return {
+_UNSET = object()
+
+
+def _rec(utt_text, actual, ts_domain, *, tool="x", gated=False, mode="shadow2",
+         similarity=_UNSET):
+    """A two-stage shadow record.
+
+    In shadow2 the two-stage doesn't route, so actual_routed IS the baseline.
+    In active the two-stage IS the route, so the baseline lives in
+    similarity_routed (pass it explicitly).
+    """
+    rec = {
         "ts": 1783992283.0,
         "mode": mode,
         "utt": miner.utt_hash(utt_text),
@@ -50,6 +60,9 @@ def _rec(utt_text, actual, ts_domain, *, tool="x", gated=False, mode="active"):
         "failed": False,
         "actual_routed": actual,
     }
+    if similarity is not _UNSET:
+        rec["similarity_routed"] = similarity
+    return rec
 
 
 @pytest.fixture
@@ -157,6 +170,60 @@ def test_mine_caps_total(shadow):
     assert len(miner.mine(shadow, miner.hash_to_text(shadow, {}), max_total=2)) == 2
 
 
+def test_active_records_are_judged_against_the_similarity_baseline():
+    """Regression: in active mode the two-stage decision IS the route, so
+    `actual_routed` merely echoes `two_stage_domain`. Comparing them is a
+    tautology — disagreement would be structurally impossible and a wrongly
+    ABSTAINING router would look like an ordinary chat turn. Tool reasons must be
+    judged against `similarity_routed`, the baseline the two-stage pre-empted.
+    """
+    # the two-stage routed to reminders; the similarity baseline said calendar
+    disagree = _rec("put dinner in the diary friday", actual="reminders",
+                    ts_domain="reminders", tool="add_reminder",
+                    mode="active", similarity="calendar")
+    # the two-stage abstained → the turn fell through to chat, but the baseline
+    # had a real tool domain: this is an ABSTENTION, never a chat-negative
+    abstain = _rec("chuck oat milk on the shopping list", actual="chat",
+                   ts_domain="chat", tool=None, gated=True,
+                   mode="active", similarity="lists")
+
+    shadow = [disagree, abstain]
+    cands = {c.text: c for c in miner.mine(shadow, miner.hash_to_text(shadow, {}))}
+
+    assert cands["put dinner in the diary friday"].reason == "disagreement"
+    assert cands["put dinner in the diary friday"].domain == "calendar"
+    assert cands["chuck oat milk on the shopping list"].reason == "abstention"
+    assert cands["chuck oat milk on the shopping list"].domain == "lists"
+
+
+def test_legacy_active_records_without_a_baseline_are_not_mined_for_tools():
+    """Records written before `similarity_routed` existed have no recoverable
+    baseline, so they must not be mined for tool reasons (their `actual_routed`
+    is the two-stage's own echo). A chat outcome is still a usable negative — the
+    oracle independently confirms it in label()."""
+    legacy_tool = _rec("book the dentist", actual="reminders",
+                       ts_domain="reminders", tool="add_reminder", mode="active")
+    legacy_chat = _rec("how are you", actual="chat", ts_domain="chat",
+                       tool=None, mode="active")
+
+    shadow = [legacy_tool, legacy_chat]
+    cands = miner.mine(shadow, miner.hash_to_text(shadow, {}))
+    assert [(c.text, c.reason) for c in cands] == [("how are you", "chat-negative")]
+
+
+def test_domains_with_no_concrete_tools_are_never_mined():
+    """A domain that unlocks no tool can never satisfy label()'s oracle-agreement
+    check, so mining it would silently drop every example instead of producing
+    training data. Guard at the source."""
+    assert miner._is_tool_domain("lists") is True
+    assert miner._is_tool_domain("chat") is False
+    assert miner._is_tool_domain(None) is False
+    assert miner._is_tool_domain("not_a_domain") is False
+    # every domain the miner accepts must actually unlock at least one tool
+    assert all(miner.DOMAIN_TOOLS[d] for d in miner.DOMAIN_TOOLS
+               if miner._is_tool_domain(d))
+
+
 def test_mine_skips_utterances_whose_hash_never_resolved():
     # no utt_text, no chat_messages hit → nothing to train on, must be skipped
     rec = {"ts": 1.0, "mode": "active", "utt": "deadbeefcafe",
@@ -173,7 +240,7 @@ def test_utt_hash_matches_the_router_and_joins_chat_messages():
     import hashlib
     assert miner.utt_hash(text) == hashlib.sha256(text.encode()).hexdigest()[:12]
 
-    rec = {"ts": 1.0, "mode": "active", "utt": miner.utt_hash(text),
+    rec = {"ts": 1.0, "mode": "shadow2", "utt": miner.utt_hash(text),
            "two_stage_domain": "reminders", "two_stage_tool": "add_reminder",
            "actual_routed": "calendar"}
     texts = miner.hash_to_text([rec], {miner.utt_hash(text): text})

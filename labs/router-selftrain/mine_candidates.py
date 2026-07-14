@@ -227,7 +227,33 @@ def hash_to_text(shadow: list[dict], chat_texts: dict[str, str]) -> dict[str, st
 
 # ── Mining ──────────────────────────────────────────────────────────────────
 def _is_tool_domain(domain: Optional[str]) -> bool:
-    return bool(domain) and domain != "chat" and domain in DOMAIN_TOOLS
+    """A domain we can actually build a training label for.
+
+    Must be a real (non-chat) domain that unlocks at least one concrete tool —
+    a domain with an empty tool list can never satisfy the oracle-agreement check
+    in `label()`, so mining it would silently drop every example instead of
+    producing training data.
+    """
+    return bool(domain) and domain != "chat" and bool(DOMAIN_TOOLS.get(domain))
+
+
+def baseline_route(rec: dict) -> Optional[str]:
+    """The INDEPENDENT route the two-stage decision must be judged against.
+
+    In `active` mode the two-stage decision *is* the route, so the record's
+    `actual_routed` is just an echo of `two_stage_domain` — comparing them is a
+    tautology, and a wrongly-abstaining router would look like a chat turn. The
+    ground truth there is `similarity_routed`, the baseline the two-stage
+    pre-empted. In `shadow2` the two-stage doesn't route, so `actual_routed` IS
+    the independent baseline.
+
+    Returns None for legacy `active` records written before `similarity_routed`
+    existed: their baseline is unrecoverable, so they must not be mined for tool
+    reasons (see `mine`).
+    """
+    if rec.get("mode") == "active":
+        return rec.get("similarity_routed")
+    return rec.get("actual_routed")
 
 
 def mine(shadow: list[dict], texts: dict[str, str],
@@ -237,7 +263,8 @@ def mine(shadow: list[dict], texts: dict[str, str],
 
     Only two-stage records (mode shadow2/active, i.e. carrying a two-stage
     decision) can be mined — a head-shadow-only record has no router decision to
-    disagree with.
+    disagree with. Tool reasons are judged against `baseline_route`, never against
+    the two-stage's own output.
     """
     tool_cands: list[Candidate] = []
     chat_fp: list[Candidate] = []      # live-chat but two-stage fired a tool
@@ -255,21 +282,22 @@ def mine(shadow: list[dict], texts: dict[str, str],
             continue
 
         actual = rec.get("actual_routed")
+        base = baseline_route(rec)          # None on legacy active records
         ts_domain = rec.get("two_stage_domain")
         abstained = bool(rec.get("gated") or rec.get("failed")
                          or rec.get("two_stage_tool") is None)
 
-        if _is_tool_domain(actual):
-            # The live system routed to a real tool domain and acted on it —
-            # that is the ground truth the router should have reproduced.
+        if _is_tool_domain(base):
+            # The baseline router landed on a real tool domain — that is the
+            # ground truth the two-stage should have reproduced.
             if abstained:
                 reason = "abstention"       # should have caught this, didn't
-            elif ts_domain != actual:
+            elif ts_domain != base:
                 reason = "disagreement"     # caught it, chose the wrong domain
             else:
                 continue                    # agreed and fired — nothing to learn
             seen.add(key)
-            tool_cands.append(Candidate(text=text, reason=reason, domain=actual))
+            tool_cands.append(Candidate(text=text, reason=reason, domain=base))
 
         elif actual == "chat":
             seen.add(key)
