@@ -90,6 +90,10 @@ jobs:
       - name: Unit tests (pure logic and auth contracts)
         run: |
           pip install --quiet -r services/zoe-auth/requirements.txt
+          # numpy: lets the ci_safe semantic_router/router-head tests actually run
+          # in this slim lane (they fake the embedding model + head; no fastembed
+          # or sklearn needed). Without it they importorskip -> silently skip.
+          pip install --quiet "numpy<2"
           # zoe-data slim-dep-green tests are selected by the `ci_safe` marker
           # (registered in pytest.ini), not a hand-enumerated file list — so a new
           # slim-safe test runs here just by adding a co-located
