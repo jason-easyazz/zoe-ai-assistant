@@ -185,6 +185,14 @@ async def _check_tts_ready(timeout_s: float = 2.0) -> dict:
             detail["pipeline_loaded"] = bool(payload.get("pipeline_loaded"))
             detail["voice"] = payload.get("voice")
             detail["device"] = payload.get("device")
+            # A sidecar that fell back to CPU still loads its pipeline and serves
+            # audio, so ok stays True (flipping it would make the waterfall drop
+            # Kokoro for espeak — worse). But CPU synthesis is slower than real time
+            # and makes replies choppy, so surface it here: watchdogs gate only on
+            # pipeline_loaded/ok and would otherwise never see the regression.
+            if payload.get("degraded"):
+                detail["degraded"] = True
+                detail["degraded_reason"] = payload.get("degraded_reason")
             detail["ok"] = bool(payload.get("pipeline_loaded"))
             if not detail["ok"]:
                 detail["error"] = "pipeline_not_loaded"
