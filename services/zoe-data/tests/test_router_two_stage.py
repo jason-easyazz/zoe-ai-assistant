@@ -299,3 +299,21 @@ def test_route_two_stage_contract_error_fallback(monkeypatch):
     d = semantic_router.route_two_stage("set a timer")
     assert d.tool is None and d.source == "error_fallback"
     assert d.confidence == 0.0
+
+
+def test_active_unscored_domain_gets_zero_score(monkeypatch, tmp_path):
+    """A two-stage domain with no similarity examples must not borrow
+    another domain's similarity score (Greptile #1322 P1)."""
+    _fake_router(monkeypatch)
+    monkeypatch.setenv("ZOE_ROUTER_HEAD", "active")
+    monkeypatch.setattr(semantic_router, "_HEAD_LOG_PATH",
+                        str(tmp_path / "log.jsonl"))
+    monkeypatch.setattr(
+        semantic_router, "_two_stage_active",
+        lambda text, v: {"tool": "create_note", "domain": "notes",
+                         "args": {}, "shortlist": ["notes"],
+                         "head_top": "notes", "head_conf": 0.9,
+                         "gated": False, "ms": 5.0})
+    rr = semantic_router.route("jot this down")
+    assert rr["domain"] == "notes"
+    assert rr["score"] == 0.0  # never a borrowed score

@@ -427,8 +427,11 @@ def route(text: str) -> dict:
             out["domain"] = ts_domain
             out["routed"] = "chat" if ts_domain == "chat" else ts_domain
             # keep `score` meaningful for downstream per-domain gates: the
-            # similarity score OF the two-stage-chosen domain.
-            out["score"] = round(float(scores.get(ts_domain, score)), 3)
+            # similarity score OF the two-stage-chosen domain. A domain with
+            # no similarity examples (notes/journal/music/smart_home) gets
+            # 0.0 — never another domain's score — so expert per-domain
+            # threshold gates deny rather than act on a borrowed confidence.
+            out["score"] = round(float(scores.get(ts_domain, 0.0)), 3)
             out["ms"] = round((time.perf_counter() - t0) * 1000, 1)
             _log_two_stage(_two_stage_rec(text, decision, "active",
                                           out["routed"]))
