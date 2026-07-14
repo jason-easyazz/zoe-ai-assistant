@@ -73,6 +73,11 @@ _ONNX_VOICES = os.environ.get("ZOE_KOKORO_VOICES", "/home/zoe/models/voices-v1.0
 
 _pipeline = None
 _device = "cpu"
+# Set when the pytorch backend was asked for CUDA but had to settle for CPU. Surfaced
+# on /health so a silent fall back to slower-than-realtime (choppy) TTS is visible.
+_degraded_reason: str | None = None
+_CUDA_LOAD_ATTEMPTS = int(os.environ.get("ZOE_KOKORO_CUDA_ATTEMPTS", "3"))
+_CUDA_RETRY_DELAY_S = float(os.environ.get("ZOE_KOKORO_CUDA_RETRY_DELAY_S", "6"))
 _pipeline_lock = asyncio.Lock()  # serialise inference; pipeline is not thread-safe
 
 # Pre-synthesised cache for common short phrases (populated during lifespan startup).
@@ -457,21 +462,46 @@ def _load_pipeline():
         logger.info("Kokoro ONNX pipeline ready (CPU) — same af_sky weights, ~600MB, no GPU.")
         return pipeline
 
-    # ── PyTorch / CUDA fallback (ZOE_KOKORO_BACKEND=pytorch) ──────────────────
+    # ── PyTorch / CUDA (ZOE_KOKORO_BACKEND=pytorch) ───────────────────────────
+    global _degraded_reason
     import torch
     from kokoro import KPipeline  # type: ignore
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info("Loading Kokoro KPipeline (lang=a device=%s voice=%s)…", device, _VOICE)
-    try:
-        pipeline = KPipeline(lang_code="a", device=device)
-        _device = device
-        logger.info("Kokoro pipeline ready on %s.", device)
-    except Exception as exc:
-        logger.warning("CUDA load failed (%s) — falling back to CPU.", exc)
-        pipeline = KPipeline(lang_code="a", device="cpu")
-        _device = "cpu"
-        logger.info("Kokoro pipeline ready on cpu (fallback).")
+
+    # CUDA needs ~2.3GB of unified memory, and at boot the brain (mlock'd, ~5.2GB) and
+    # the rest of the stack are still settling — an allocation that fails now often
+    # succeeds seconds later. Retry before giving up, because the CPU fallback is not
+    # merely slower: it synthesizes SLOWER THAN REAL TIME (RTF ~1.0-1.8x), so the
+    # sentence-streamed voice pipe starves and every reply plays back in pieces.
+    last_exc: Exception | None = None
+    if device == "cuda":
+        for attempt in range(1, _CUDA_LOAD_ATTEMPTS + 1):
+            try:
+                pipeline = KPipeline(lang_code="a", device="cuda")
+                _device = "cuda"
+                _degraded_reason = None
+                logger.info("Kokoro pipeline ready on cuda.")
+                return pipeline
+            except Exception as exc:
+                last_exc = exc
+                if attempt < _CUDA_LOAD_ATTEMPTS:
+                    logger.warning(
+                        "CUDA load failed (attempt %d/%d: %s) — retrying in %.0fs…",
+                        attempt, _CUDA_LOAD_ATTEMPTS, exc, _CUDA_RETRY_DELAY_S,
+                    )
+                    time.sleep(_CUDA_RETRY_DELAY_S)
+
+    _degraded_reason = f"CUDA unavailable ({last_exc or 'torch.cuda not available'})"
+    logger.error(
+        "DEGRADED: Kokoro fell back to CPU after %d attempt(s) — %s. CPU synthesis is "
+        "SLOWER THAN REAL TIME, so replies will play back choppy. Free ~2.3GB and "
+        "restart kokoro-tts.service. (/health reports degraded=true.)",
+        _CUDA_LOAD_ATTEMPTS, _degraded_reason,
+    )
+    pipeline = KPipeline(lang_code="a", device="cpu")
+    _device = "cpu"
     return pipeline
 
 
@@ -730,12 +760,18 @@ class SynthRequest(BaseModel):
 
 @app.get("/health")
 async def health():
-    return {
+    body = {
         "status": "ok",
         "voice": _VOICE,
         "device": _device,
         "pipeline_loaded": _pipeline is not None,
     }
+    if _degraded_reason:
+        # Not a hard failure — Zoe still speaks — but CPU synthesis is slower than
+        # real time, so the streamed reply plays back in pieces. Make it visible.
+        body["degraded"] = True
+        body["degraded_reason"] = _degraded_reason
+    return body
 
 
 @app.post("/synthesize")

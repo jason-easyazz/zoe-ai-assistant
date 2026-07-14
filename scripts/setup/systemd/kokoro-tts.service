@@ -3,7 +3,11 @@
 [Unit]
 Description=Kokoro TTS sidecar (local neural voice for Zoe, port 10201)
 Documentation=https://github.com/hexgrad/kokoro
-After=network.target
+# Start after the brain: llama-server mlocks ~5.2GB, and Kokoro's CUDA init needs
+# ~2.3GB of the same unified memory. Letting the brain claim its pages first turns a
+# boot-time race (Kokoro OOMs -> silently falls back to slow, choppy CPU TTS) into a
+# deterministic order.
+After=network.target llama-server.service
 
 [Service]
 Type=simple
@@ -11,6 +15,11 @@ WorkingDirectory=%h/assistant/scripts/setup
 ExecStart=/usr/bin/python3 %h/assistant/scripts/setup/kokoro_sidecar.py
 Environment=KOKORO_VOICE=af_sky
 Environment=KOKORO_SIDECAR_PORT=10201
+# CUDA backend: the ONNX/CPU path synthesizes SLOWER than real time (RTF ~1.0-1.8x),
+# so the sentence-streamed voice pipe starves and the reply plays back in pieces.
+# KPipeline on CUDA runs at RTF ~0.1. Costs ~2.3GB unified memory; the sidecar falls
+# back to CPU on its own if CUDA cannot load.
+Environment=ZOE_KOKORO_BACKEND=pytorch
 Environment=LD_LIBRARY_PATH=%h/.local/lib:/usr/local/cuda-12.6/lib64:/usr/lib/aarch64-linux-gnu
 Restart=always
 RestartSec=10
