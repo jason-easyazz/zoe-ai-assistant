@@ -1,0 +1,1637 @@
+{
+ "config": "b",
+ "gguf": "/home/zoe/models/lab/functiongemma-270m-it-Q8_0.gguf",
+ "head": "mlp",
+ "gate": 0.7,
+ "mem_available_mb_before": 2027,
+ "rss_mb_after_load": 587,
+ "rss_mb_after_bench": 885,
+ "mem_available_mb_after": 1355,
+ "summary": {
+  "n": 81,
+  "accuracy_overall_pct": 33.3,
+  "accuracy_canonical_pct": 47.1,
+  "accuracy_paraphrase_pct": 7.7,
+  "chat_false_positive_pct": 0.0,
+  "latency_ms_p50": 599.5,
+  "latency_ms_p90": 1227.9,
+  "stage1_ms_p50": 35.1,
+  "stage1_ms_p90": 99.3,
+  "stage2_ms_p50": 643.6,
+  "stage2_ms_p90": 1484.1,
+  "failure_attribution": {
+   "stage2_wrong_pick": 43,
+   "stage1_gate_ate_tool_turn": 10,
+   "stage1_shortlist_miss": 1
+  }
+ },
+ "cases": [
+  {
+   "id": "time-c1",
+   "style": "canonical",
+   "expected": [
+    "get_time"
+   ],
+   "top_domain": "time",
+   "conf": 1.0,
+   "shortlist": [
+    "time",
+    "people",
+    "weather"
+   ],
+   "prompt_tokens": 433,
+   "predicted": null,
+   "ok": false,
+   "latency_ms": 664.2,
+   "raw": "I apologize, but I cannot assist with finding the current time or date. My current capabilities are limited to managing personal assistant functions like route planning and weather.",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "time-c2",
+   "style": "canonical",
+   "expected": [
+    "get_time"
+   ],
+   "top_domain": "time",
+   "conf": 0.999,
+   "shortlist": [
+    "time",
+    "calendar",
+    "people"
+   ],
+   "prompt_tokens": 521,
+   "predicted": "general_chat",
+   "ok": false,
+   "latency_ms": 353.7,
+   "raw": "<start_function_call>call:general_chat{}",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "time-p1",
+   "style": "paraphrase",
+   "expected": [
+    "get_time"
+   ],
+   "top_domain": "time",
+   "conf": 0.997,
+   "shortlist": [
+    "time",
+    "timers",
+    "music"
+   ],
+   "prompt_tokens": 487,
+   "predicted": "get_time",
+   "ok": true,
+   "latency_ms": 315.9,
+   "raw": "<start_function_call>call:get_time{}"
+  },
+  {
+   "id": "time-p2",
+   "style": "paraphrase",
+   "expected": [
+    "get_time"
+   ],
+   "top_domain": "time",
+   "conf": 0.996,
+   "shortlist": [
+    "time",
+    "calendar",
+    "weather"
+   ],
+   "prompt_tokens": 500,
+   "predicted": null,
+   "ok": false,
+   "latency_ms": 957.2,
+   "raw": "I apologize, but I cannot assist with finding the day of your return. My current capabilities are limited to managing calendar and weather-related assistant functions like getting current time, showin",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "weather-c1",
+   "style": "canonical",
+   "expected": [
+    "get_weather"
+   ],
+   "top_domain": "weather",
+   "conf": 1.0,
+   "shortlist": [
+    "weather",
+    "smart_home",
+    "people"
+   ],
+   "prompt_tokens": 463,
+   "predicted": "get_weather",
+   "ok": true,
+   "latency_ms": 419.9,
+   "raw": "<start_function_call>call:get_weather{location:<escape>Perth<escape>}"
+  },
+  {
+   "id": "weather-c2",
+   "style": "canonical",
+   "expected": [
+    "get_weather"
+   ],
+   "top_domain": "weather",
+   "conf": 0.999,
+   "shortlist": [
+    "weather",
+    "time",
+    "calendar"
+   ],
+   "prompt_tokens": 500,
+   "predicted": "get_weather",
+   "ok": true,
+   "latency_ms": 416.0,
+   "raw": "<start_function_call>call:get_weather{forecast:<escape>tomorrow<escape>}"
+  },
+  {
+   "id": "weather-p1",
+   "style": "paraphrase",
+   "expected": [
+    "get_weather"
+   ],
+   "top_domain": "weather",
+   "conf": 0.993,
+   "shortlist": [
+    "weather",
+    "memory",
+    "calendar"
+   ],
+   "prompt_tokens": 891,
+   "predicted": null,
+   "ok": false,
+   "latency_ms": 914.4,
+   "raw": "I cannot assist with recommending or recommending recommending clothing or accessories. My current capabilities are focused on managing calendar and communication assistant functions like route, recal",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "weather-p2",
+   "style": "paraphrase",
+   "expected": [
+    "get_weather"
+   ],
+   "top_domain": "weather",
+   "conf": 0.989,
+   "shortlist": [
+    "weather",
+    "smart_home",
+    "music"
+   ],
+   "prompt_tokens": 524,
+   "predicted": null,
+   "ok": false,
+   "latency_ms": 844.9,
+   "raw": "I apologize, but I cannot assist with predicting weather or checking bucket down forecasts. My current capabilities are limited to managing smart home devices like lights, music, and media. I cannot p",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "weather-p3",
+   "style": "paraphrase",
+   "expected": [
+    "get_weather"
+   ],
+   "top_domain": "weather",
+   "conf": 0.999,
+   "shortlist": [
+    "weather",
+    "memory",
+    "calendar"
+   ],
+   "prompt_tokens": 894,
+   "predicted": "general_chat",
+   "ok": false,
+   "latency_ms": 636.6,
+   "raw": "<start_function_call>call:general_chat{utterance:<escape>I'm feeling a little bit lazy today, and I'm hoping tomorrow will be better.<escape>}",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "shoplist-c1",
+   "style": "canonical",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list"
+   ],
+   "top_domain": "lists",
+   "conf": 1.0,
+   "shortlist": [
+    "lists",
+    "reminders",
+    "memory"
+   ],
+   "prompt_tokens": 1094,
+   "predicted": "add_to_list",
+   "ok": true,
+   "latency_ms": 599.5,
+   "raw": "<start_function_call>call:add_to_list{item:<escape>milk<escape>}"
+  },
+  {
+   "id": "shoplist-c2",
+   "style": "canonical",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list"
+   ],
+   "top_domain": "lists",
+   "conf": 0.995,
+   "shortlist": [
+    "lists",
+    "notes",
+    "memory"
+   ],
+   "prompt_tokens": 1086,
+   "predicted": "create_note",
+   "ok": false,
+   "latency_ms": 652.4,
+   "raw": "<start_function_call>call:create_note{content:<escape>Put bread on the grocery list.<escape>}",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "shoplist-p1",
+   "style": "paraphrase",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list"
+   ],
+   "top_domain": "smart_home",
+   "conf": 0.494,
+   "shortlist": [
+    "smart_home",
+    "music",
+    "weather"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": false,
+   "latency_ms": 18.2,
+   "raw": "",
+   "failure_stage": "stage1_gate_ate_tool_turn"
+  },
+  {
+   "id": "shoplist-p2",
+   "style": "paraphrase",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list"
+   ],
+   "top_domain": "lists",
+   "conf": 0.999,
+   "shortlist": [
+    "lists",
+    "reminders",
+    "timers"
+   ],
+   "prompt_tokens": 737,
+   "predicted": "list_remove",
+   "ok": false,
+   "latency_ms": 523.4,
+   "raw": "<start_function_call>call:list_remove{item:<escape>dog food<escape>}",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "shoplist-p3",
+   "style": "paraphrase",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list",
+    "add_reminder"
+   ],
+   "top_domain": "memory",
+   "conf": 0.626,
+   "shortlist": [
+    "memory",
+    "reminders",
+    "lists"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": false,
+   "latency_ms": 22.3,
+   "raw": "",
+   "failure_stage": "stage1_gate_ate_tool_turn"
+  },
+  {
+   "id": "listshow-c1",
+   "style": "canonical",
+   "expected": [
+    "show_list"
+   ],
+   "top_domain": "lists",
+   "conf": 1.0,
+   "shortlist": [
+    "lists",
+    "reminders",
+    "calendar"
+   ],
+   "prompt_tokens": 828,
+   "predicted": "list_reminders",
+   "ok": false,
+   "latency_ms": 577.3,
+   "raw": "<start_function_call>call:list_reminders{qualifier:<escape>remind me to take the bins out at 7pm<escape>}",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "listshow-c2",
+   "style": "canonical",
+   "expected": [
+    "show_list"
+   ],
+   "top_domain": "lists",
+   "conf": 1.0,
+   "shortlist": [
+    "lists",
+    "notes",
+    "memory"
+   ],
+   "prompt_tokens": 1085,
+   "predicted": "list_remove",
+   "ok": false,
+   "latency_ms": 325.7,
+   "raw": "<start_function_call>call:list_remove{item:<escape>todo[]}",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "listshow-p1",
+   "style": "paraphrase",
+   "expected": [
+    "show_list"
+   ],
+   "top_domain": "lists",
+   "conf": 0.969,
+   "shortlist": [
+    "lists",
+    "calendar",
+    "reminders"
+   ],
+   "prompt_tokens": 831,
+   "predicted": "shopping_list_add",
+   "ok": false,
+   "latency_ms": 522.9,
+   "raw": "<start_function_call>call:shopping_list_add{item:<escape>products<escape>}",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "listshow-p2",
+   "style": "paraphrase",
+   "expected": [
+    "show_list"
+   ],
+   "top_domain": "notes",
+   "conf": 0.912,
+   "shortlist": [
+    "notes",
+    "lists",
+    "music"
+   ],
+   "prompt_tokens": 814,
+   "predicted": "shopping_list_add",
+   "ok": false,
+   "latency_ms": 503.9,
+   "raw": "<start_function_call>call:shopping_list_add{item:<escape>milk<escape>}",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "listrm-c1",
+   "style": "canonical",
+   "expected": [
+    "list_remove"
+   ],
+   "top_domain": "lists",
+   "conf": 0.999,
+   "shortlist": [
+    "lists",
+    "reminders",
+    "timers"
+   ],
+   "prompt_tokens": 732,
+   "predicted": "list_remove",
+   "ok": true,
+   "latency_ms": 493.5,
+   "raw": "<start_function_call>call:list_remove{item:<escape>bananas<escape>}"
+  },
+  {
+   "id": "listrm-p1",
+   "style": "paraphrase",
+   "expected": [
+    "list_remove"
+   ],
+   "top_domain": "chat",
+   "conf": 0.832,
+   "shortlist": [
+    "lists",
+    "weather",
+    "music"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": false,
+   "latency_ms": 47.4,
+   "raw": "",
+   "failure_stage": "stage1_gate_ate_tool_turn"
+  },
+  {
+   "id": "listrm-p2",
+   "style": "paraphrase",
+   "expected": [
+    "list_remove"
+   ],
+   "top_domain": "lists",
+   "conf": 0.671,
+   "shortlist": [
+    "lists",
+    "reminders",
+    "smart_home"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": false,
+   "latency_ms": 37.8,
+   "raw": "",
+   "failure_stage": "stage1_gate_ate_tool_turn"
+  },
+  {
+   "id": "cal-show-c1",
+   "style": "canonical",
+   "expected": [
+    "show_calendar"
+   ],
+   "top_domain": "calendar",
+   "conf": 0.989,
+   "shortlist": [
+    "calendar",
+    "reminders",
+    "lists"
+   ],
+   "prompt_tokens": 828,
+   "predicted": "show_calendar",
+   "ok": true,
+   "latency_ms": 415.2,
+   "raw": "<start_function_call>call:show_calendar{}"
+  },
+  {
+   "id": "cal-show-c2",
+   "style": "canonical",
+   "expected": [
+    "show_calendar"
+   ],
+   "top_domain": "calendar",
+   "conf": 0.999,
+   "shortlist": [
+    "calendar",
+    "lists",
+    "reminders"
+   ],
+   "prompt_tokens": 828,
+   "predicted": "general_chat",
+   "ok": false,
+   "latency_ms": 408.1,
+   "raw": "<start_function_call>call:general_chat{}",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "cal-show-p1",
+   "style": "paraphrase",
+   "expected": [
+    "show_calendar"
+   ],
+   "top_domain": "calendar",
+   "conf": 0.974,
+   "shortlist": [
+    "calendar",
+    "memory",
+    "weather"
+   ],
+   "prompt_tokens": 890,
+   "predicted": null,
+   "ok": false,
+   "latency_ms": 1110.4,
+   "raw": "I apologize, but I cannot assist with booking travel arrangements or checking double bookings. My current capabilities are limited to assisting with managing calendar and memory tools like showing sch",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "cal-show-p2",
+   "style": "paraphrase",
+   "expected": [
+    "show_calendar"
+   ],
+   "top_domain": "lists",
+   "conf": 0.977,
+   "shortlist": [
+    "lists",
+    "calendar",
+    "reminders"
+   ],
+   "prompt_tokens": 828,
+   "predicted": "list_reminders",
+   "ok": false,
+   "latency_ms": 418.4,
+   "raw": "<start_function_call>call:list_reminders{qualifier:<escape>after lunch<escape>}",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "cal-add-c1",
+   "style": "canonical",
+   "expected": [
+    "add_calendar_event"
+   ],
+   "top_domain": "calendar",
+   "conf": 1.0,
+   "shortlist": [
+    "calendar",
+    "reminders",
+    "timers"
+   ],
+   "prompt_tokens": 582,
+   "predicted": "add_calendar_event",
+   "ok": true,
+   "latency_ms": 875.0,
+   "raw": "<start_function_call>call:add_calendar_event{category:<escape>dental<escape>,date:<escape>next Tuesday<escape>,time:<escape>3pm<escape>}"
+  },
+  {
+   "id": "cal-add-c2",
+   "style": "canonical",
+   "expected": [
+    "add_calendar_event"
+   ],
+   "top_domain": "calendar",
+   "conf": 0.937,
+   "shortlist": [
+    "calendar",
+    "reminders",
+    "people"
+   ],
+   "prompt_tokens": 615,
+   "predicted": "people",
+   "ok": false,
+   "latency_ms": 685.8,
+   "raw": "<start_function_call>call:people {name:<escape>sarah<escape>,relationship:<escape>partner<escape>}",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "cal-add-p1",
+   "style": "paraphrase",
+   "expected": [
+    "add_calendar_event"
+   ],
+   "top_domain": "calendar",
+   "conf": 0.767,
+   "shortlist": [
+    "calendar",
+    "smart_home",
+    "reminders"
+   ],
+   "prompt_tokens": 584,
+   "predicted": null,
+   "ok": false,
+   "latency_ms": 2899.5,
+   "raw": "I apologize, but I cannot assist with retrieving or organizing personal information such as pet ownership or veterinary advice. My current capabilities are limited to assisting with managing smart hom",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "cal-add-p2",
+   "style": "paraphrase",
+   "expected": [
+    "add_calendar_event"
+   ],
+   "top_domain": "reminders",
+   "conf": 0.977,
+   "shortlist": [
+    "reminders",
+    "people",
+    "smart_home"
+   ],
+   "prompt_tokens": 521,
+   "predicted": null,
+   "ok": false,
+   "latency_ms": 1706.2,
+   "raw": "I apologize, but I cannot assist with rescheduling or managing flights. My current tools are focused on managing smart home devices like lights, reminders, and general chat. I cannot connect with or a",
+   "failure_stage": "stage1_shortlist_miss"
+  },
+  {
+   "id": "rem-add-c1",
+   "style": "canonical",
+   "expected": [
+    "add_reminder"
+   ],
+   "top_domain": "reminders",
+   "conf": 0.993,
+   "shortlist": [
+    "reminders",
+    "calendar",
+    "timers"
+   ],
+   "prompt_tokens": 584,
+   "predicted": "add_reminder",
+   "ok": true,
+   "latency_ms": 806.4,
+   "raw": "<start_function_call>call:add_reminder{date:<escape>tomorrow<escape>,time:<escape>19:00<escape>}"
+  },
+  {
+   "id": "rem-add-c2",
+   "style": "canonical",
+   "expected": [
+    "add_reminder"
+   ],
+   "top_domain": "reminders",
+   "conf": 1.0,
+   "shortlist": [
+    "reminders",
+    "calendar",
+    "timers"
+   ],
+   "prompt_tokens": 581,
+   "predicted": "add_reminder",
+   "ok": true,
+   "latency_ms": 1497.7,
+   "raw": "<start_function_call>call:add_reminder{date:<escape>2024-06-14T23:00:00<escape>,time:<escape>23:00:00<escape>}"
+  },
+  {
+   "id": "rem-add-p1",
+   "style": "paraphrase",
+   "expected": [
+    "add_reminder"
+   ],
+   "top_domain": "reminders",
+   "conf": 0.992,
+   "shortlist": [
+    "reminders",
+    "notes",
+    "memory"
+   ],
+   "prompt_tokens": 906,
+   "predicted": "recall_memory",
+   "ok": false,
+   "latency_ms": 2688.0,
+   "raw": "<start_function_call>call:recall_memory{query:<escape>I don't want to forget to pay the rent on the first.<escape>}",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "rem-add-p2",
+   "style": "paraphrase",
+   "expected": [
+    "add_reminder"
+   ],
+   "top_domain": "reminders",
+   "conf": 0.868,
+   "shortlist": [
+    "reminders",
+    "calendar",
+    "weather"
+   ],
+   "prompt_tokens": 590,
+   "predicted": "add_calendar_event",
+   "ok": false,
+   "latency_ms": 2260.2,
+   "raw": "<start_function_call>call:add_calendar_event{date:<escape>tomorrow<escape>,time:<escape>10am<escape>}",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "rem-add-p3",
+   "style": "paraphrase",
+   "expected": [
+    "add_reminder"
+   ],
+   "top_domain": "reminders",
+   "conf": 0.822,
+   "shortlist": [
+    "reminders",
+    "memory",
+    "timers"
+   ],
+   "prompt_tokens": 853,
+   "predicted": null,
+   "ok": false,
+   "latency_ms": 1685.5,
+   "raw": "I apologize, but I cannot assist with rescheduling or forgetting appointments. My current tools are designed for managing reminders, recording, recalling, and managing time. I cannot access or recall ",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "rem-list-c1",
+   "style": "canonical",
+   "expected": [
+    "list_reminders"
+   ],
+   "top_domain": "reminders",
+   "conf": 0.978,
+   "shortlist": [
+    "reminders",
+    "calendar",
+    "notes"
+   ],
+   "prompt_tokens": 631,
+   "predicted": "list_reminders",
+   "ok": true,
+   "latency_ms": 618.7,
+   "raw": "<start_function_call>call:list_reminders{}"
+  },
+  {
+   "id": "rem-list-p1",
+   "style": "paraphrase",
+   "expected": [
+    "list_reminders",
+    "show_calendar"
+   ],
+   "top_domain": "calendar",
+   "conf": 0.728,
+   "shortlist": [
+    "calendar",
+    "reminders",
+    "lists"
+   ],
+   "prompt_tokens": 830,
+   "predicted": "general_chat",
+   "ok": false,
+   "latency_ms": 515.8,
+   "raw": "<start_function_call>call:general_chat{}",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "timer-c1",
+   "style": "canonical",
+   "expected": [
+    "set_timer"
+   ],
+   "top_domain": "timers",
+   "conf": 0.999,
+   "shortlist": [
+    "timers",
+    "reminders",
+    "smart_home"
+   ],
+   "prompt_tokens": 485,
+   "predicted": "set_timer",
+   "ok": true,
+   "latency_ms": 435.8,
+   "raw": "<start_function_call>call:set_timer{minutes:<escape>60<escape>}"
+  },
+  {
+   "id": "timer-c2",
+   "style": "canonical",
+   "expected": [
+    "set_timer"
+   ],
+   "top_domain": "timers",
+   "conf": 1.0,
+   "shortlist": [
+    "timers",
+    "notes",
+    "music"
+   ],
+   "prompt_tokens": 569,
+   "predicted": "set_timer",
+   "ok": true,
+   "latency_ms": 461.0,
+   "raw": "<start_function_call>call:set_timer{minutes:5}"
+  },
+  {
+   "id": "timer-p1",
+   "style": "paraphrase",
+   "expected": [
+    "set_timer"
+   ],
+   "top_domain": "timers",
+   "conf": 0.991,
+   "shortlist": [
+    "timers",
+    "lists",
+    "calendar"
+   ],
+   "prompt_tokens": 770,
+   "predicted": "general_chat",
+   "ok": false,
+   "latency_ms": 809.6,
+   "raw": "<start_function_call>call:general_chat{utterance:<escape>I'm starving. I can't stop. I'm gonna roast spuds.<escape>}",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "timer-p2",
+   "style": "paraphrase",
+   "expected": [
+    "set_timer"
+   ],
+   "top_domain": "timers",
+   "conf": 0.992,
+   "shortlist": [
+    "timers",
+    "time",
+    "lists"
+   ],
+   "prompt_tokens": 645,
+   "predicted": "get_time",
+   "ok": false,
+   "latency_ms": 508.6,
+   "raw": "<start_function_call>call:get_time{query:<escape>6 minutes<escape>}",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "note-add-c1",
+   "style": "canonical",
+   "expected": [
+    "create_note"
+   ],
+   "top_domain": "notes",
+   "conf": 0.649,
+   "shortlist": [
+    "notes",
+    "memory",
+    "smart_home"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": false,
+   "latency_ms": 43.9,
+   "raw": "",
+   "failure_stage": "stage1_gate_ate_tool_turn"
+  },
+  {
+   "id": "note-add-c2",
+   "style": "canonical",
+   "expected": [
+    "create_note"
+   ],
+   "top_domain": "notes",
+   "conf": 0.725,
+   "shortlist": [
+    "notes",
+    "memory",
+    "smart_home"
+   ],
+   "prompt_tokens": 844,
+   "predicted": "note_search",
+   "ok": false,
+   "latency_ms": 762.8,
+   "raw": "<start_function_call>call:note_search{query:<escape>4482 gate code<escape>}",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "note-add-p1",
+   "style": "paraphrase",
+   "expected": [
+    "create_note"
+   ],
+   "top_domain": "smart_home",
+   "conf": 0.395,
+   "shortlist": [
+    "smart_home",
+    "calendar",
+    "notes"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": false,
+   "latency_ms": 142.3,
+   "raw": "",
+   "failure_stage": "stage1_gate_ate_tool_turn"
+  },
+  {
+   "id": "note-add-p2",
+   "style": "paraphrase",
+   "expected": [
+    "create_note",
+    "remember_fact"
+   ],
+   "top_domain": "calendar",
+   "conf": 0.41,
+   "shortlist": [
+    "calendar",
+    "smart_home",
+    "memory"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": false,
+   "latency_ms": 78.4,
+   "raw": "",
+   "failure_stage": "stage1_gate_ate_tool_turn"
+  },
+  {
+   "id": "note-search-c1",
+   "style": "canonical",
+   "expected": [
+    "note_search"
+   ],
+   "top_domain": "notes",
+   "conf": 0.997,
+   "shortlist": [
+    "notes",
+    "memory",
+    "calendar"
+   ],
+   "prompt_tokens": 933,
+   "predicted": "note_search",
+   "ok": true,
+   "latency_ms": 728.0,
+   "raw": "<start_function_call>call:note_search{query:<escape>wifi password<escape>}"
+  },
+  {
+   "id": "note-search-p1",
+   "style": "paraphrase",
+   "expected": [
+    "note_search"
+   ],
+   "top_domain": "memory",
+   "conf": 0.983,
+   "shortlist": [
+    "memory",
+    "notes",
+    "smart_home"
+   ],
+   "prompt_tokens": 839,
+   "predicted": null,
+   "ok": false,
+   "latency_ms": 1088.9,
+   "raw": "I apologize, but I cannot assist with finding or retrieving information about past plumber quotes. My current tools are focused on managing smart home devices like voice assistants and note management",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "note-search-p2",
+   "style": "paraphrase",
+   "expected": [
+    "note_search"
+   ],
+   "top_domain": "notes",
+   "conf": 0.97,
+   "shortlist": [
+    "notes",
+    "memory",
+    "reminders"
+   ],
+   "prompt_tokens": 903,
+   "predicted": null,
+   "ok": false,
+   "latency_ms": 955.7,
+   "raw": "I apologize, but I cannot assist with writing down or retrieving information about specific geographical locations or codes. My current capabilities are limited to assisting with managing reminders, n",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "journal-c1",
+   "style": "canonical",
+   "expected": [
+    "journal"
+   ],
+   "top_domain": "journal",
+   "conf": 0.932,
+   "shortlist": [
+    "journal",
+    "notes",
+    "weather"
+   ],
+   "prompt_tokens": 500,
+   "predicted": "journal",
+   "ok": true,
+   "latency_ms": 753.7,
+   "raw": "<start_function_call>call:journal{action:<escape>add<escape>,content:<escape>I'm grateful for the rain today. I feel so refreshed and energized.<escape>}"
+  },
+  {
+   "id": "journal-c2",
+   "style": "canonical",
+   "expected": [
+    "journal"
+   ],
+   "top_domain": "journal",
+   "conf": 1.0,
+   "shortlist": [
+    "journal",
+    "calendar",
+    "notes"
+   ],
+   "prompt_tokens": 586,
+   "predicted": "journal",
+   "ok": true,
+   "latency_ms": 739.0,
+   "raw": "<start_function_call>call:journal{action:<escape>write<escape>,content:<escape>Today was a hard one. I couldn't stand it anymore.<escape>}"
+  },
+  {
+   "id": "journal-p1",
+   "style": "paraphrase",
+   "expected": [
+    "journal"
+   ],
+   "top_domain": "journal",
+   "conf": 1.0,
+   "shortlist": [
+    "journal",
+    "calendar",
+    "smart_home"
+   ],
+   "prompt_tokens": 535,
+   "predicted": "journal",
+   "ok": true,
+   "latency_ms": 963.7,
+   "raw": "<start_function_call>call:journal{action:<escape>write<escape>,content:<escape>I honestly knocked me around today, and I'm feeling a bit rundown. I couldn't concentrate or focus right now.<escape>}"
+  },
+  {
+   "id": "journal-p2",
+   "style": "paraphrase",
+   "expected": [
+    "journal"
+   ],
+   "top_domain": "journal",
+   "conf": 0.896,
+   "shortlist": [
+    "journal",
+    "calendar",
+    "notes"
+   ],
+   "prompt_tokens": 583,
+   "predicted": "journal",
+   "ok": true,
+   "latency_ms": 553.0,
+   "raw": "<start_function_call>call:journal{action:<escape>write<escape>,content:<escape>}"
+  },
+  {
+   "id": "people-c1",
+   "style": "canonical",
+   "expected": [
+    "people"
+   ],
+   "top_domain": "people",
+   "conf": 0.958,
+   "shortlist": [
+    "people",
+    "memory",
+    "calendar"
+   ],
+   "prompt_tokens": 911,
+   "predicted": "add_calendar_event",
+   "ok": false,
+   "latency_ms": 992.4,
+   "raw": "<start_function_call>call:add_calendar_event{category:<escape>team & colleagues<escape>,date:<escape>2024-06-01<escape>,time:<escape>10am<escape>}",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "people-c2",
+   "style": "canonical",
+   "expected": [
+    "people",
+    "recall_memory"
+   ],
+   "top_domain": "people",
+   "conf": 0.928,
+   "shortlist": [
+    "people",
+    "memory",
+    "lists"
+   ],
+   "prompt_tokens": 1062,
+   "predicted": "general_chat",
+   "ok": false,
+   "latency_ms": 669.6,
+   "raw": "<start_function_call>call:general_chat{utterance:<escape>I'm looking for a recipe. Could you help?<escape>}",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "people-p1",
+   "style": "paraphrase",
+   "expected": [
+    "people",
+    "remember_fact"
+   ],
+   "top_domain": "people",
+   "conf": 0.654,
+   "shortlist": [
+    "people",
+    "memory",
+    "reminders"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": false,
+   "latency_ms": 30.9,
+   "raw": "",
+   "failure_stage": "stage1_gate_ate_tool_turn"
+  },
+  {
+   "id": "people-p2",
+   "style": "paraphrase",
+   "expected": [
+    "people",
+    "recall_memory"
+   ],
+   "top_domain": "people",
+   "conf": 1.0,
+   "shortlist": [
+    "people",
+    "memory",
+    "weather"
+   ],
+   "prompt_tokens": 825,
+   "predicted": "remember_emotional_moment",
+   "ok": false,
+   "latency_ms": 577.0,
+   "raw": "<start_function_call>call:remember_emotional_moment{valence:<escape>happy<escape>,intensity:<escape>sparing<escape>}",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "media-c1",
+   "style": "canonical",
+   "expected": [
+    "media"
+   ],
+   "top_domain": "music",
+   "conf": 1.0,
+   "shortlist": [
+    "music",
+    "time",
+    "journal"
+   ],
+   "prompt_tokens": 495,
+   "predicted": null,
+   "ok": false,
+   "latency_ms": 637.1,
+   "raw": "I can certainly help with that! To set up your music playback, could you please specify the genre or artist you are interested in?",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "media-c2",
+   "style": "canonical",
+   "expected": [
+    "media"
+   ],
+   "top_domain": "music",
+   "conf": 0.999,
+   "shortlist": [
+    "music",
+    "smart_home",
+    "timers"
+   ],
+   "prompt_tokens": 510,
+   "predicted": null,
+   "ok": false,
+   "latency_ms": 615.4,
+   "raw": "I can certainly help with that. To set the volume for you, could you please specify the desired level (on/off/dim)?",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "media-c3",
+   "style": "canonical",
+   "expected": [
+    "media"
+   ],
+   "top_domain": "music",
+   "conf": 1.0,
+   "shortlist": [
+    "music",
+    "timers",
+    "journal"
+   ],
+   "prompt_tokens": 521,
+   "predicted": "media",
+   "ok": true,
+   "latency_ms": 401.5,
+   "raw": "<start_function_call>call:media{action:<escape>pause<escape>}"
+  },
+  {
+   "id": "media-p1",
+   "style": "paraphrase",
+   "expected": [
+    "media"
+   ],
+   "top_domain": "smart_home",
+   "conf": 0.532,
+   "shortlist": [
+    "smart_home",
+    "timers",
+    "memory"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": false,
+   "latency_ms": 44.9,
+   "raw": "",
+   "failure_stage": "stage1_gate_ate_tool_turn"
+  },
+  {
+   "id": "media-p2",
+   "style": "paraphrase",
+   "expected": [
+    "media"
+   ],
+   "top_domain": "smart_home",
+   "conf": 0.737,
+   "shortlist": [
+    "smart_home",
+    "music",
+    "timers"
+   ],
+   "prompt_tokens": 517,
+   "predicted": null,
+   "ok": false,
+   "latency_ms": 730.0,
+   "raw": "I cannot assist with managing noise levels. My current capabilities are limited to controlling smart home devices like lights and music. I cannot reduce noise or bring them down.",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "media-p3",
+   "style": "paraphrase",
+   "expected": [
+    "media"
+   ],
+   "top_domain": "music",
+   "conf": 0.989,
+   "shortlist": [
+    "music",
+    "journal",
+    "weather"
+   ],
+   "prompt_tokens": 534,
+   "predicted": null,
+   "ok": false,
+   "latency_ms": 1034.5,
+   "raw": "I apologize, but I cannot assist with managing your preferences or preferences for specific actions. My current capabilities are limited to assisting with voice assistant tasks like managing audio pla",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "home-c1",
+   "style": "canonical",
+   "expected": [
+    "home"
+   ],
+   "top_domain": "smart_home",
+   "conf": 1.0,
+   "shortlist": [
+    "smart_home",
+    "timers",
+    "lists"
+   ],
+   "prompt_tokens": 669,
+   "predicted": "home",
+   "ok": true,
+   "latency_ms": 543.0,
+   "raw": "<start_function_call>call:home{action:<escape>off|dim|brighten}"
+  },
+  {
+   "id": "home-c2",
+   "style": "canonical",
+   "expected": [
+    "home"
+   ],
+   "top_domain": "smart_home",
+   "conf": 1.0,
+   "shortlist": [
+    "smart_home",
+    "music",
+    "lists"
+   ],
+   "prompt_tokens": 760,
+   "predicted": "media",
+   "ok": false,
+   "latency_ms": 673.1,
+   "raw": "<start_function_call>call:media{action:<escape>set_music_volume<escape>,level:<escape>100<escape>}",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "home-p1",
+   "style": "paraphrase",
+   "expected": [
+    "home"
+   ],
+   "top_domain": "smart_home",
+   "conf": 1.0,
+   "shortlist": [
+    "smart_home",
+    "journal",
+    "music"
+   ],
+   "prompt_tokens": 531,
+   "predicted": null,
+   "ok": false,
+   "latency_ms": 962.9,
+   "raw": "I am sorry, but I cannot assist with sorting or organizing items. My current capabilities are limited to controlling smart home devices such as lights and music. I cannot access or manage external dat",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "home-p2",
+   "style": "paraphrase",
+   "expected": [
+    "home"
+   ],
+   "top_domain": "smart_home",
+   "conf": 0.984,
+   "shortlist": [
+    "smart_home",
+    "lists",
+    "journal"
+   ],
+   "prompt_tokens": 686,
+   "predicted": null,
+   "ok": false,
+   "latency_ms": 1222.2,
+   "raw": "I am sorry, but I cannot assist with managing your household tasks or dealing with existential crises related to death. My current capabilities are limited to assisting with specific user requests usi",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "recall-c1",
+   "style": "canonical",
+   "expected": [
+    "recall_memory"
+   ],
+   "top_domain": "memory",
+   "conf": 0.984,
+   "shortlist": [
+    "memory",
+    "people",
+    "journal"
+   ],
+   "prompt_tokens": 826,
+   "predicted": "remember_emotional_moment",
+   "ok": false,
+   "latency_ms": 605.5,
+   "raw": "<start_function_call>call:remember_emotional_moment{valence:<escape>happy<escape>}",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "recall-c2",
+   "style": "canonical",
+   "expected": [
+    "recall_memory"
+   ],
+   "top_domain": "people",
+   "conf": 0.998,
+   "shortlist": [
+    "people",
+    "memory",
+    "time"
+   ],
+   "prompt_tokens": 787,
+   "predicted": "general_chat",
+   "ok": false,
+   "latency_ms": 642.8,
+   "raw": "<start_function_call>call:general_chat{utterance:<escape>I am named Sarah.<escape>}",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "recall-p1",
+   "style": "paraphrase",
+   "expected": [
+    "recall_memory"
+   ],
+   "top_domain": "memory",
+   "conf": 0.949,
+   "shortlist": [
+    "memory",
+    "reminders",
+    "notes"
+   ],
+   "prompt_tokens": 904,
+   "predicted": "add_reminder",
+   "ok": false,
+   "latency_ms": 1658.4,
+   "raw": "<start_function_call>call:add_reminder{date:<escape>2024-05-15T12:00:00<escape>,time:<escape>24h<escape>,title:<escape>remind me about my work situation<escape>}",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "recall-p2",
+   "style": "paraphrase",
+   "expected": [
+    "recall_memory"
+   ],
+   "top_domain": "memory",
+   "conf": 0.998,
+   "shortlist": [
+    "memory",
+    "people",
+    "notes"
+   ],
+   "prompt_tokens": 875,
+   "predicted": null,
+   "ok": false,
+   "latency_ms": 1072.3,
+   "raw": "I apologize, but I cannot assist with retrieving specific medical information or details about a person's knee. My current capabilities are limited to assisting with voice commands and memory manageme",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "fact-c1",
+   "style": "canonical",
+   "expected": [
+    "remember_fact"
+   ],
+   "top_domain": "memory",
+   "conf": 0.997,
+   "shortlist": [
+    "memory",
+    "people",
+    "smart_home"
+   ],
+   "prompt_tokens": 815,
+   "predicted": "remember_emotional_moment",
+   "ok": false,
+   "latency_ms": 906.5,
+   "raw": "<start_function_call>call:remember_emotional_moment{valence:<escape>happy<escape>,intensity:<escape>SPARINGLY<escape>}",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "fact-c2",
+   "style": "canonical",
+   "expected": [
+    "remember_fact"
+   ],
+   "top_domain": "memory",
+   "conf": 0.997,
+   "shortlist": [
+    "memory",
+    "reminders",
+    "notes"
+   ],
+   "prompt_tokens": 901,
+   "predicted": "remember_emotional_moment",
+   "ok": false,
+   "latency_ms": 592.1,
+   "raw": "<start_function_call>call:remember_emotional_moment{valence:<escape>placid<escape>}",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "fact-p1",
+   "style": "paraphrase",
+   "expected": [
+    "remember_fact"
+   ],
+   "top_domain": "calendar",
+   "conf": 0.853,
+   "shortlist": [
+    "calendar",
+    "smart_home",
+    "memory"
+   ],
+   "prompt_tokens": 888,
+   "predicted": null,
+   "ok": false,
+   "latency_ms": 1229.3,
+   "raw": "I apologize, but I cannot assist with planning or managing tasks like knocking off work. My current capabilities are limited to assisting with voice assistant functions such as managing smart home lig",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "fact-p2",
+   "style": "paraphrase",
+   "expected": [
+    "remember_fact",
+    "people"
+   ],
+   "top_domain": "people",
+   "conf": 0.521,
+   "shortlist": [
+    "people",
+    "memory",
+    "notes"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": false,
+   "latency_ms": 22.5,
+   "raw": "",
+   "failure_stage": "stage1_gate_ate_tool_turn"
+  },
+  {
+   "id": "chat-1",
+   "style": "chat",
+   "expected": [
+    "general_chat"
+   ],
+   "top_domain": "chat",
+   "conf": 0.999,
+   "shortlist": [
+    "weather",
+    "people",
+    "time"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": true,
+   "latency_ms": 35.7,
+   "raw": ""
+  },
+  {
+   "id": "chat-2",
+   "style": "chat",
+   "expected": [
+    "general_chat"
+   ],
+   "top_domain": "chat",
+   "conf": 1.0,
+   "shortlist": [
+    "weather",
+    "people",
+    "memory"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": true,
+   "latency_ms": 84.1,
+   "raw": ""
+  },
+  {
+   "id": "chat-3",
+   "style": "chat",
+   "expected": [
+    "general_chat",
+    "journal",
+    "remember_emotional_moment"
+   ],
+   "top_domain": "chat",
+   "conf": 0.982,
+   "shortlist": [
+    "journal",
+    "memory",
+    "people"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": true,
+   "latency_ms": 31.9,
+   "raw": ""
+  },
+  {
+   "id": "chat-4",
+   "style": "chat",
+   "expected": [
+    "general_chat"
+   ],
+   "top_domain": "chat",
+   "conf": 0.995,
+   "shortlist": [
+    "journal",
+    "reminders",
+    "memory"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": true,
+   "latency_ms": 52.3,
+   "raw": ""
+  },
+  {
+   "id": "chat-5",
+   "style": "chat",
+   "expected": [
+    "general_chat"
+   ],
+   "top_domain": "chat",
+   "conf": 0.996,
+   "shortlist": [
+    "weather",
+    "memory",
+    "people"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": true,
+   "latency_ms": 55.9,
+   "raw": ""
+  },
+  {
+   "id": "chat-6",
+   "style": "chat",
+   "expected": [
+    "general_chat"
+   ],
+   "top_domain": "chat",
+   "conf": 0.977,
+   "shortlist": [
+    "memory",
+    "people",
+    "smart_home"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": true,
+   "latency_ms": 26.7,
+   "raw": ""
+  },
+  {
+   "id": "chat-7",
+   "style": "chat",
+   "expected": [
+    "general_chat"
+   ],
+   "top_domain": "chat",
+   "conf": 0.607,
+   "shortlist": [
+    "weather",
+    "music",
+    "memory"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": true,
+   "latency_ms": 57.1,
+   "raw": ""
+  },
+  {
+   "id": "chat-8",
+   "style": "chat",
+   "expected": [
+    "general_chat"
+   ],
+   "top_domain": "notes",
+   "conf": 0.614,
+   "shortlist": [
+    "notes",
+    "music",
+    "people"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": true,
+   "latency_ms": 48.1,
+   "raw": ""
+  }
+ ]
+}
