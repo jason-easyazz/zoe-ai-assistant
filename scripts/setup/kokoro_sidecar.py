@@ -450,7 +450,11 @@ def _reload_from_disk(cache_dir: Path, max_entries: int) -> tuple[dict, dict]:
 # ─── Pipeline loading ─────────────────────────────────────────────────────────
 
 _BRAIN_HEALTH_URL = os.environ.get("ZOE_KOKORO_BRAIN_HEALTH_URL", "http://127.0.0.1:11434/health")
-_BRAIN_WAIT_S = float(os.environ.get("ZOE_KOKORO_BRAIN_WAIT_S", "45"))
+# Default matches llama-server.service TimeoutStartSec (180s): the brain can take that
+# long to load on a slow boot, and a shorter ceiling would let Kokoro give up waiting
+# and race the CUDA alloc anyway. The wait returns the instant the brain is healthy, so
+# a high ceiling is free on a normal boot and only spends time on the slow path.
+_BRAIN_WAIT_S = float(os.environ.get("ZOE_KOKORO_BRAIN_WAIT_S", "180"))
 _BRAIN_POLL_S = float(os.environ.get("ZOE_KOKORO_BRAIN_POLL_S", "2"))
 
 
