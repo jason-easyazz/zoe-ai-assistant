@@ -1,0 +1,1530 @@
+{
+ "config": "functok-gb",
+ "gguf": "/home/zoe/models/lab/functiongemma-270m-zoe-functok-r2-Q8_0.gguf",
+ "gate": 0.7,
+ "head": "mlp",
+ "grammar": "shortlist",
+ "mem_available_mb_before": 9970,
+ "rss_mb_after_load": 594,
+ "rss_mb_after_bench": 665,
+ "mem_available_mb_after": 9239,
+ "summary": {
+  "n": 81,
+  "accuracy_overall_pct": 84.0,
+  "accuracy_canonical_pct": 97.1,
+  "accuracy_paraphrase_pct": 69.2,
+  "chat_false_positive_pct": 0.0,
+  "latency_ms_p50": 424.3,
+  "latency_ms_p90": 529.6,
+  "failure_attribution": {
+   "stage1_gate_ate_tool_turn": 10,
+   "stage1_shortlist_miss": 1,
+   "stage2_wrong_pick": 2
+  }
+ },
+ "cases": [
+  {
+   "id": "time-c1",
+   "style": "canonical",
+   "expected": [
+    "get_time"
+   ],
+   "top_domain": "time",
+   "conf": 1.0,
+   "shortlist": [
+    "time",
+    "people",
+    "weather"
+   ],
+   "predicted": "get_time",
+   "ok": true,
+   "latency_ms": 425.7,
+   "raw": "<start_function_call>call:get_time{query:<escape>what time is it<escape>}"
+  },
+  {
+   "id": "time-c2",
+   "style": "canonical",
+   "expected": [
+    "get_time"
+   ],
+   "top_domain": "time",
+   "conf": 0.999,
+   "shortlist": [
+    "time",
+    "calendar",
+    "people"
+   ],
+   "predicted": "get_time",
+   "ok": true,
+   "latency_ms": 468.4,
+   "raw": "<start_function_call>call:get_time{query:<escape>what's the date today<escape>}"
+  },
+  {
+   "id": "time-p1",
+   "style": "paraphrase",
+   "expected": [
+    "get_time"
+   ],
+   "top_domain": "time",
+   "conf": 0.997,
+   "shortlist": [
+    "time",
+    "timers",
+    "music"
+   ],
+   "predicted": "get_time",
+   "ok": true,
+   "latency_ms": 446.3,
+   "raw": "<start_function_call>call:get_time{query:<escape>have you got the time on you<escape>}"
+  },
+  {
+   "id": "time-p2",
+   "style": "paraphrase",
+   "expected": [
+    "get_time"
+   ],
+   "top_domain": "time",
+   "conf": 0.996,
+   "shortlist": [
+    "time",
+    "calendar",
+    "weather"
+   ],
+   "predicted": "get_time",
+   "ok": true,
+   "latency_ms": 296.2,
+   "raw": "<start_function_call>call:get_time{}"
+  },
+  {
+   "id": "weather-c1",
+   "style": "canonical",
+   "expected": [
+    "get_weather"
+   ],
+   "top_domain": "weather",
+   "conf": 1.0,
+   "shortlist": [
+    "weather",
+    "smart_home",
+    "people"
+   ],
+   "predicted": "get_weather",
+   "ok": true,
+   "latency_ms": 456.7,
+   "raw": "<start_function_call>call:get_weather{forecast:false,location:<escape>Perth<escape>}"
+  },
+  {
+   "id": "weather-c2",
+   "style": "canonical",
+   "expected": [
+    "get_weather"
+   ],
+   "top_domain": "weather",
+   "conf": 0.999,
+   "shortlist": [
+    "weather",
+    "time",
+    "calendar"
+   ],
+   "predicted": "get_weather",
+   "ok": true,
+   "latency_ms": 364.8,
+   "raw": "<start_function_call>call:get_weather{forecast:true}"
+  },
+  {
+   "id": "weather-p1",
+   "style": "paraphrase",
+   "expected": [
+    "get_weather"
+   ],
+   "top_domain": "weather",
+   "conf": 0.993,
+   "shortlist": [
+    "weather",
+    "memory",
+    "calendar"
+   ],
+   "predicted": "get_weather",
+   "ok": true,
+   "latency_ms": 367.6,
+   "raw": "<start_function_call>call:get_weather{forecast:false}"
+  },
+  {
+   "id": "weather-p2",
+   "style": "paraphrase",
+   "expected": [
+    "get_weather"
+   ],
+   "top_domain": "weather",
+   "conf": 0.989,
+   "shortlist": [
+    "weather",
+    "smart_home",
+    "music"
+   ],
+   "predicted": "get_weather",
+   "ok": true,
+   "latency_ms": 347.8,
+   "raw": "<start_function_call>call:get_weather{forecast:true}"
+  },
+  {
+   "id": "weather-p3",
+   "style": "paraphrase",
+   "expected": [
+    "get_weather"
+   ],
+   "top_domain": "weather",
+   "conf": 0.999,
+   "shortlist": [
+    "weather",
+    "memory",
+    "calendar"
+   ],
+   "predicted": "get_weather",
+   "ok": true,
+   "latency_ms": 369.2,
+   "raw": "<start_function_call>call:get_weather{forecast:true}"
+  },
+  {
+   "id": "shoplist-c1",
+   "style": "canonical",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list"
+   ],
+   "top_domain": "lists",
+   "conf": 1.0,
+   "shortlist": [
+    "lists",
+    "reminders",
+    "memory"
+   ],
+   "predicted": "shopping_list_add",
+   "ok": true,
+   "latency_ms": 401.0,
+   "raw": "<start_function_call>call:shopping_list_add{item:<escape>milk<escape>}"
+  },
+  {
+   "id": "shoplist-c2",
+   "style": "canonical",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list"
+   ],
+   "top_domain": "lists",
+   "conf": 0.995,
+   "shortlist": [
+    "lists",
+    "notes",
+    "memory"
+   ],
+   "predicted": "shopping_list_add",
+   "ok": true,
+   "latency_ms": 408.6,
+   "raw": "<start_function_call>call:shopping_list_add{item:<escape>bread<escape>}"
+  },
+  {
+   "id": "shoplist-p1",
+   "style": "paraphrase",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list"
+   ],
+   "top_domain": "smart_home",
+   "conf": 0.494,
+   "shortlist": [
+    "smart_home",
+    "music",
+    "weather"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": false,
+   "latency_ms": 38.6,
+   "raw": "",
+   "failure_stage": "stage1_gate_ate_tool_turn"
+  },
+  {
+   "id": "shoplist-p2",
+   "style": "paraphrase",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list"
+   ],
+   "top_domain": "lists",
+   "conf": 0.999,
+   "shortlist": [
+    "lists",
+    "reminders",
+    "timers"
+   ],
+   "predicted": "shopping_list_add",
+   "ok": true,
+   "latency_ms": 461.3,
+   "raw": "<start_function_call>call:shopping_list_add{item:<escape>dog food<escape>}"
+  },
+  {
+   "id": "shoplist-p3",
+   "style": "paraphrase",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list",
+    "add_reminder"
+   ],
+   "top_domain": "memory",
+   "conf": 0.626,
+   "shortlist": [
+    "memory",
+    "reminders",
+    "lists"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": false,
+   "latency_ms": 22.3,
+   "raw": "",
+   "failure_stage": "stage1_gate_ate_tool_turn"
+  },
+  {
+   "id": "listshow-c1",
+   "style": "canonical",
+   "expected": [
+    "show_list"
+   ],
+   "top_domain": "lists",
+   "conf": 1.0,
+   "shortlist": [
+    "lists",
+    "reminders",
+    "calendar"
+   ],
+   "predicted": "show_list",
+   "ok": true,
+   "latency_ms": 424.3,
+   "raw": "<start_function_call>call:show_list{list_type:<escape>shopping<escape>}"
+  },
+  {
+   "id": "listshow-c2",
+   "style": "canonical",
+   "expected": [
+    "show_list"
+   ],
+   "top_domain": "lists",
+   "conf": 1.0,
+   "shortlist": [
+    "lists",
+    "notes",
+    "memory"
+   ],
+   "predicted": "show_list",
+   "ok": true,
+   "latency_ms": 405.7,
+   "raw": "<start_function_call>call:show_list{list_type:<escape>todo<escape>}"
+  },
+  {
+   "id": "listshow-p1",
+   "style": "paraphrase",
+   "expected": [
+    "show_list"
+   ],
+   "top_domain": "lists",
+   "conf": 0.969,
+   "shortlist": [
+    "lists",
+    "calendar",
+    "reminders"
+   ],
+   "predicted": "show_list",
+   "ok": true,
+   "latency_ms": 393.5,
+   "raw": "<start_function_call>call:show_list{list:<escape>shopping<escape>}"
+  },
+  {
+   "id": "listshow-p2",
+   "style": "paraphrase",
+   "expected": [
+    "show_list"
+   ],
+   "top_domain": "notes",
+   "conf": 0.912,
+   "shortlist": [
+    "notes",
+    "lists",
+    "music"
+   ],
+   "predicted": "show_list",
+   "ok": true,
+   "latency_ms": 374.1,
+   "raw": "<start_function_call>call:show_list{list:<escape>shopping<escape>}"
+  },
+  {
+   "id": "listrm-c1",
+   "style": "canonical",
+   "expected": [
+    "list_remove"
+   ],
+   "top_domain": "lists",
+   "conf": 0.999,
+   "shortlist": [
+    "lists",
+    "reminders",
+    "timers"
+   ],
+   "predicted": "list_remove",
+   "ok": true,
+   "latency_ms": 490.9,
+   "raw": "<start_function_call>call:list_remove{item:<escape>bananas<escape>,list_type:<escape>shopping<escape>}"
+  },
+  {
+   "id": "listrm-p1",
+   "style": "paraphrase",
+   "expected": [
+    "list_remove"
+   ],
+   "top_domain": "chat",
+   "conf": 0.832,
+   "shortlist": [
+    "lists",
+    "weather",
+    "music"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": false,
+   "latency_ms": 32.6,
+   "raw": "",
+   "failure_stage": "stage1_gate_ate_tool_turn"
+  },
+  {
+   "id": "listrm-p2",
+   "style": "paraphrase",
+   "expected": [
+    "list_remove"
+   ],
+   "top_domain": "lists",
+   "conf": 0.671,
+   "shortlist": [
+    "lists",
+    "reminders",
+    "smart_home"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": false,
+   "latency_ms": 48.8,
+   "raw": "",
+   "failure_stage": "stage1_gate_ate_tool_turn"
+  },
+  {
+   "id": "cal-show-c1",
+   "style": "canonical",
+   "expected": [
+    "show_calendar"
+   ],
+   "top_domain": "calendar",
+   "conf": 0.989,
+   "shortlist": [
+    "calendar",
+    "reminders",
+    "lists"
+   ],
+   "predicted": "show_calendar",
+   "ok": true,
+   "latency_ms": 463.2,
+   "raw": "<start_function_call>call:show_calendar{qualifier:<escape>today<escape>}"
+  },
+  {
+   "id": "cal-show-c2",
+   "style": "canonical",
+   "expected": [
+    "show_calendar"
+   ],
+   "top_domain": "calendar",
+   "conf": 0.999,
+   "shortlist": [
+    "calendar",
+    "lists",
+    "reminders"
+   ],
+   "predicted": "show_calendar",
+   "ok": true,
+   "latency_ms": 448.5,
+   "raw": "<start_function_call>call:show_calendar{qualifier:<escape>this week<escape>}"
+  },
+  {
+   "id": "cal-show-p1",
+   "style": "paraphrase",
+   "expected": [
+    "show_calendar"
+   ],
+   "top_domain": "calendar",
+   "conf": 0.974,
+   "shortlist": [
+    "calendar",
+    "memory",
+    "weather"
+   ],
+   "predicted": "show_calendar",
+   "ok": true,
+   "latency_ms": 410.1,
+   "raw": "<start_function_call>call:show_calendar{qualifier:<escape>friday<escape>}"
+  },
+  {
+   "id": "cal-show-p2",
+   "style": "paraphrase",
+   "expected": [
+    "show_calendar"
+   ],
+   "top_domain": "lists",
+   "conf": 0.977,
+   "shortlist": [
+    "lists",
+    "calendar",
+    "reminders"
+   ],
+   "predicted": "show_calendar",
+   "ok": true,
+   "latency_ms": 415.0,
+   "raw": "<start_function_call>call:show_calendar{qualifier:<escape>after lunch<escape>}"
+  },
+  {
+   "id": "cal-add-c1",
+   "style": "canonical",
+   "expected": [
+    "add_calendar_event"
+   ],
+   "top_domain": "calendar",
+   "conf": 1.0,
+   "shortlist": [
+    "calendar",
+    "reminders",
+    "timers"
+   ],
+   "predicted": "add_calendar_event",
+   "ok": true,
+   "latency_ms": 655.9,
+   "raw": "<start_function_call>call:add_calendar_event{date:<escape>next tuesday<escape>,time:<escape>3pm<escape>,title:<escape>dentist appointment<escape>}"
+  },
+  {
+   "id": "cal-add-c2",
+   "style": "canonical",
+   "expected": [
+    "add_calendar_event"
+   ],
+   "top_domain": "calendar",
+   "conf": 0.937,
+   "shortlist": [
+    "calendar",
+    "reminders",
+    "people"
+   ],
+   "predicted": "add_calendar_event",
+   "ok": true,
+   "latency_ms": 630.1,
+   "raw": "<start_function_call>call:add_calendar_event{date:<escape>friday<escape>,time:<escape>10<escape>,title:<escape>meeting with sarah<escape>}"
+  },
+  {
+   "id": "cal-add-p1",
+   "style": "paraphrase",
+   "expected": [
+    "add_calendar_event"
+   ],
+   "top_domain": "calendar",
+   "conf": 0.767,
+   "shortlist": [
+    "calendar",
+    "smart_home",
+    "reminders"
+   ],
+   "predicted": "add_calendar_event",
+   "ok": true,
+   "latency_ms": 497.1,
+   "raw": "<start_function_call>call:add_calendar_event{date:<escape>thursday<escape>,title:<escape>vet<escape>}"
+  },
+  {
+   "id": "cal-add-p2",
+   "style": "paraphrase",
+   "expected": [
+    "add_calendar_event"
+   ],
+   "top_domain": "reminders",
+   "conf": 0.977,
+   "shortlist": [
+    "reminders",
+    "people",
+    "smart_home"
+   ],
+   "predicted": "add_reminder",
+   "ok": false,
+   "latency_ms": 576.7,
+   "raw": "<start_function_call>call:add_reminder{time:<escape>sunday<escape>,title:<escape>mum's flight<escape>}",
+   "failure_stage": "stage1_shortlist_miss"
+  },
+  {
+   "id": "rem-add-c1",
+   "style": "canonical",
+   "expected": [
+    "add_reminder"
+   ],
+   "top_domain": "reminders",
+   "conf": 0.993,
+   "shortlist": [
+    "reminders",
+    "calendar",
+    "timers"
+   ],
+   "predicted": "add_reminder",
+   "ok": true,
+   "latency_ms": 518.0,
+   "raw": "<start_function_call>call:add_reminder{time:<escape>7pm<escape>,title:<escape>water the plants<escape>}"
+  },
+  {
+   "id": "rem-add-c2",
+   "style": "canonical",
+   "expected": [
+    "add_reminder"
+   ],
+   "top_domain": "reminders",
+   "conf": 1.0,
+   "shortlist": [
+    "reminders",
+    "calendar",
+    "timers"
+   ],
+   "predicted": "add_reminder",
+   "ok": true,
+   "latency_ms": 526.6,
+   "raw": "<start_function_call>call:add_reminder{date:<escape>tonight<escape>,title:<escape>take the bins out<escape>}"
+  },
+  {
+   "id": "rem-add-p1",
+   "style": "paraphrase",
+   "expected": [
+    "add_reminder"
+   ],
+   "top_domain": "reminders",
+   "conf": 0.992,
+   "shortlist": [
+    "reminders",
+    "notes",
+    "memory"
+   ],
+   "predicted": "add_reminder",
+   "ok": true,
+   "latency_ms": 428.8,
+   "raw": "<start_function_call>call:add_reminder{title:<escape>pay the rent<escape>}"
+  },
+  {
+   "id": "rem-add-p2",
+   "style": "paraphrase",
+   "expected": [
+    "add_reminder"
+   ],
+   "top_domain": "reminders",
+   "conf": 0.868,
+   "shortlist": [
+    "reminders",
+    "calendar",
+    "weather"
+   ],
+   "predicted": "add_reminder",
+   "ok": true,
+   "latency_ms": 497.7,
+   "raw": "<start_function_call>call:add_reminder{date:<escape>tomorrow morning<escape>,title:<escape>dentist<escape>}"
+  },
+  {
+   "id": "rem-add-p3",
+   "style": "paraphrase",
+   "expected": [
+    "add_reminder"
+   ],
+   "top_domain": "reminders",
+   "conf": 0.822,
+   "shortlist": [
+    "reminders",
+    "memory",
+    "timers"
+   ],
+   "predicted": "add_reminder",
+   "ok": true,
+   "latency_ms": 495.8,
+   "raw": "<start_function_call>call:add_reminder{time:<escape>3<escape>,title:<escape>the school pickup<escape>}"
+  },
+  {
+   "id": "rem-list-c1",
+   "style": "canonical",
+   "expected": [
+    "list_reminders"
+   ],
+   "top_domain": "reminders",
+   "conf": 0.978,
+   "shortlist": [
+    "reminders",
+    "calendar",
+    "notes"
+   ],
+   "predicted": "list_reminders",
+   "ok": true,
+   "latency_ms": 305.9,
+   "raw": "<start_function_call>call:list_reminders{}"
+  },
+  {
+   "id": "rem-list-p1",
+   "style": "paraphrase",
+   "expected": [
+    "list_reminders",
+    "show_calendar"
+   ],
+   "top_domain": "calendar",
+   "conf": 0.728,
+   "shortlist": [
+    "calendar",
+    "reminders",
+    "lists"
+   ],
+   "predicted": "list_reminders",
+   "ok": true,
+   "latency_ms": 409.3,
+   "raw": "<start_function_call>call:list_reminders{qualifier:<escape>today<escape>}"
+  },
+  {
+   "id": "timer-c1",
+   "style": "canonical",
+   "expected": [
+    "set_timer"
+   ],
+   "top_domain": "timers",
+   "conf": 0.999,
+   "shortlist": [
+    "timers",
+    "reminders",
+    "smart_home"
+   ],
+   "predicted": "set_timer",
+   "ok": true,
+   "latency_ms": 387.7,
+   "raw": "<start_function_call>call:set_timer{minutes:10}"
+  },
+  {
+   "id": "timer-c2",
+   "style": "canonical",
+   "expected": [
+    "set_timer"
+   ],
+   "top_domain": "timers",
+   "conf": 1.0,
+   "shortlist": [
+    "timers",
+    "notes",
+    "music"
+   ],
+   "predicted": "set_timer",
+   "ok": true,
+   "latency_ms": 432.5,
+   "raw": "<start_function_call>call:set_timer{label:<escape>pasta<escape>,minutes:5}"
+  },
+  {
+   "id": "timer-p1",
+   "style": "paraphrase",
+   "expected": [
+    "set_timer"
+   ],
+   "top_domain": "timers",
+   "conf": 0.991,
+   "shortlist": [
+    "timers",
+    "lists",
+    "calendar"
+   ],
+   "predicted": "add_calendar_event",
+   "ok": false,
+   "latency_ms": 550.6,
+   "raw": "<start_function_call>call:add_calendar_event{date:<escape>the roast spuds<escape>,title:<escape>on the clock<escape>}",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "timer-p2",
+   "style": "paraphrase",
+   "expected": [
+    "set_timer"
+   ],
+   "top_domain": "timers",
+   "conf": 0.992,
+   "shortlist": [
+    "timers",
+    "time",
+    "lists"
+   ],
+   "predicted": "set_timer",
+   "ok": true,
+   "latency_ms": 426.7,
+   "raw": "<start_function_call>call:set_timer{label:<escape>eggs<escape>,minutes:6}"
+  },
+  {
+   "id": "note-add-c1",
+   "style": "canonical",
+   "expected": [
+    "create_note"
+   ],
+   "top_domain": "notes",
+   "conf": 0.649,
+   "shortlist": [
+    "notes",
+    "memory",
+    "smart_home"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": false,
+   "latency_ms": 25.7,
+   "raw": "",
+   "failure_stage": "stage1_gate_ate_tool_turn"
+  },
+  {
+   "id": "note-add-c2",
+   "style": "canonical",
+   "expected": [
+    "create_note"
+   ],
+   "top_domain": "notes",
+   "conf": 0.725,
+   "shortlist": [
+    "notes",
+    "memory",
+    "smart_home"
+   ],
+   "predicted": "create_note",
+   "ok": true,
+   "latency_ms": 518.9,
+   "raw": "<start_function_call>call:create_note{content:<escape>the gate code is 4482<escape>}"
+  },
+  {
+   "id": "note-add-p1",
+   "style": "paraphrase",
+   "expected": [
+    "create_note"
+   ],
+   "top_domain": "smart_home",
+   "conf": 0.395,
+   "shortlist": [
+    "smart_home",
+    "calendar",
+    "notes"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": false,
+   "latency_ms": 34.2,
+   "raw": "",
+   "failure_stage": "stage1_gate_ate_tool_turn"
+  },
+  {
+   "id": "note-add-p2",
+   "style": "paraphrase",
+   "expected": [
+    "create_note",
+    "remember_fact"
+   ],
+   "top_domain": "calendar",
+   "conf": 0.41,
+   "shortlist": [
+    "calendar",
+    "smart_home",
+    "memory"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": false,
+   "latency_ms": 51.6,
+   "raw": "",
+   "failure_stage": "stage1_gate_ate_tool_turn"
+  },
+  {
+   "id": "note-search-c1",
+   "style": "canonical",
+   "expected": [
+    "note_search"
+   ],
+   "top_domain": "notes",
+   "conf": 0.997,
+   "shortlist": [
+    "notes",
+    "memory",
+    "calendar"
+   ],
+   "predicted": "note_search",
+   "ok": true,
+   "latency_ms": 430.5,
+   "raw": "<start_function_call>call:note_search{query:<escape>the wifi password<escape>}"
+  },
+  {
+   "id": "note-search-p1",
+   "style": "paraphrase",
+   "expected": [
+    "note_search"
+   ],
+   "top_domain": "memory",
+   "conf": 0.983,
+   "shortlist": [
+    "memory",
+    "notes",
+    "smart_home"
+   ],
+   "predicted": "note_search",
+   "ok": true,
+   "latency_ms": 426.6,
+   "raw": "<start_function_call>call:note_search{query:<escape>plumber<escape>}"
+  },
+  {
+   "id": "note-search-p2",
+   "style": "paraphrase",
+   "expected": [
+    "note_search"
+   ],
+   "top_domain": "notes",
+   "conf": 0.97,
+   "shortlist": [
+    "notes",
+    "memory",
+    "reminders"
+   ],
+   "predicted": "create_note",
+   "ok": false,
+   "latency_ms": 417.5,
+   "raw": "<start_function_call>call:create_note{content:<escape>the gate code<escape>}",
+   "failure_stage": "stage2_wrong_pick"
+  },
+  {
+   "id": "journal-c1",
+   "style": "canonical",
+   "expected": [
+    "journal"
+   ],
+   "top_domain": "journal",
+   "conf": 0.932,
+   "shortlist": [
+    "journal",
+    "notes",
+    "weather"
+   ],
+   "predicted": "journal",
+   "ok": true,
+   "latency_ms": 493.4,
+   "raw": "<start_function_call>call:journal{action:<escape>create<escape>,content:<escape>grateful for the rain today<escape>}"
+  },
+  {
+   "id": "journal-c2",
+   "style": "canonical",
+   "expected": [
+    "journal"
+   ],
+   "top_domain": "journal",
+   "conf": 1.0,
+   "shortlist": [
+    "journal",
+    "calendar",
+    "notes"
+   ],
+   "predicted": "journal",
+   "ok": true,
+   "latency_ms": 566.2,
+   "raw": "<start_function_call>call:journal{action:<escape>create<escape>,content:<escape>today was a hard one<escape>,mood:<escape>stressed<escape>}"
+  },
+  {
+   "id": "journal-p1",
+   "style": "paraphrase",
+   "expected": [
+    "journal"
+   ],
+   "top_domain": "journal",
+   "conf": 1.0,
+   "shortlist": [
+    "journal",
+    "calendar",
+    "smart_home"
+   ],
+   "predicted": "journal",
+   "ok": true,
+   "latency_ms": 493.4,
+   "raw": "<start_function_call>call:journal{action:<escape>create<escape>,content:<escape>today honestly knocked me around<escape>}"
+  },
+  {
+   "id": "journal-p2",
+   "style": "paraphrase",
+   "expected": [
+    "journal"
+   ],
+   "top_domain": "journal",
+   "conf": 0.896,
+   "shortlist": [
+    "journal",
+    "calendar",
+    "notes"
+   ],
+   "predicted": "journal",
+   "ok": true,
+   "latency_ms": 522.1,
+   "raw": "<start_function_call>call:journal{action:<escape>read<escape>}"
+  },
+  {
+   "id": "people-c1",
+   "style": "canonical",
+   "expected": [
+    "people"
+   ],
+   "top_domain": "people",
+   "conf": 0.958,
+   "shortlist": [
+    "people",
+    "memory",
+    "calendar"
+   ],
+   "predicted": "people",
+   "ok": true,
+   "latency_ms": 595.9,
+   "raw": "<start_function_call>call:people{action:<escape>create<escape>,name:<escape>Marcus<escape>,relationship:<escape> my colleague<escape>}"
+  },
+  {
+   "id": "people-c2",
+   "style": "canonical",
+   "expected": [
+    "people",
+    "recall_memory"
+   ],
+   "top_domain": "people",
+   "conf": 0.928,
+   "shortlist": [
+    "people",
+    "memory",
+    "lists"
+   ],
+   "predicted": "people",
+   "ok": true,
+   "latency_ms": 402.8,
+   "raw": "<start_function_call>call:people{query:<escape>Zephyrina<escape>}"
+  },
+  {
+   "id": "people-p1",
+   "style": "paraphrase",
+   "expected": [
+    "people",
+    "remember_fact"
+   ],
+   "top_domain": "people",
+   "conf": 0.654,
+   "shortlist": [
+    "people",
+    "memory",
+    "reminders"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": false,
+   "latency_ms": 34.6,
+   "raw": "",
+   "failure_stage": "stage1_gate_ate_tool_turn"
+  },
+  {
+   "id": "people-p2",
+   "style": "paraphrase",
+   "expected": [
+    "people",
+    "recall_memory"
+   ],
+   "top_domain": "people",
+   "conf": 1.0,
+   "shortlist": [
+    "people",
+    "memory",
+    "weather"
+   ],
+   "predicted": "people",
+   "ok": true,
+   "latency_ms": 409.2,
+   "raw": "<start_function_call>call:people{query:<escape>Dave<escape>}"
+  },
+  {
+   "id": "media-c1",
+   "style": "canonical",
+   "expected": [
+    "media"
+   ],
+   "top_domain": "music",
+   "conf": 1.0,
+   "shortlist": [
+    "music",
+    "time",
+    "journal"
+   ],
+   "predicted": "media",
+   "ok": true,
+   "latency_ms": 349.0,
+   "raw": "<start_function_call>call:media{action:<escape>play<escape>}"
+  },
+  {
+   "id": "media-c2",
+   "style": "canonical",
+   "expected": [
+    "media"
+   ],
+   "top_domain": "music",
+   "conf": 0.999,
+   "shortlist": [
+    "music",
+    "smart_home",
+    "timers"
+   ],
+   "predicted": "media",
+   "ok": true,
+   "latency_ms": 452.6,
+   "raw": "<start_function_call>call:media{action:<escape>volume<escape>,direction:<escape>down<escape>}"
+  },
+  {
+   "id": "media-c3",
+   "style": "canonical",
+   "expected": [
+    "media"
+   ],
+   "top_domain": "music",
+   "conf": 1.0,
+   "shortlist": [
+    "music",
+    "timers",
+    "journal"
+   ],
+   "predicted": "media",
+   "ok": true,
+   "latency_ms": 419.2,
+   "raw": "<start_function_call>call:media{action:<escape>control<escape>,command:<escape>pause<escape>}"
+  },
+  {
+   "id": "media-p1",
+   "style": "paraphrase",
+   "expected": [
+    "media"
+   ],
+   "top_domain": "smart_home",
+   "conf": 0.532,
+   "shortlist": [
+    "smart_home",
+    "timers",
+    "memory"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": false,
+   "latency_ms": 24.6,
+   "raw": "",
+   "failure_stage": "stage1_gate_ate_tool_turn"
+  },
+  {
+   "id": "media-p2",
+   "style": "paraphrase",
+   "expected": [
+    "media"
+   ],
+   "top_domain": "smart_home",
+   "conf": 0.737,
+   "shortlist": [
+    "smart_home",
+    "music",
+    "timers"
+   ],
+   "predicted": "media",
+   "ok": true,
+   "latency_ms": 490.9,
+   "raw": "<start_function_call>call:media{action:<escape>volume<escape>,direction:<escape>down<escape>}"
+  },
+  {
+   "id": "media-p3",
+   "style": "paraphrase",
+   "expected": [
+    "media"
+   ],
+   "top_domain": "music",
+   "conf": 0.989,
+   "shortlist": [
+    "music",
+    "journal",
+    "weather"
+   ],
+   "predicted": "media",
+   "ok": true,
+   "latency_ms": 441.0,
+   "raw": "<start_function_call>call:media{action:<escape>control<escape>,command:<escape>next<escape>}"
+  },
+  {
+   "id": "home-c1",
+   "style": "canonical",
+   "expected": [
+    "home"
+   ],
+   "top_domain": "smart_home",
+   "conf": 1.0,
+   "shortlist": [
+    "smart_home",
+    "timers",
+    "lists"
+   ],
+   "predicted": "home",
+   "ok": true,
+   "latency_ms": 442.0,
+   "raw": "<start_function_call>call:home{action:<escape>off<escape>,room:<escape>kitchen<escape>}"
+  },
+  {
+   "id": "home-c2",
+   "style": "canonical",
+   "expected": [
+    "home"
+   ],
+   "top_domain": "smart_home",
+   "conf": 1.0,
+   "shortlist": [
+    "smart_home",
+    "music",
+    "lists"
+   ],
+   "predicted": "home",
+   "ok": true,
+   "latency_ms": 461.2,
+   "raw": "<start_function_call>call:home{action:<escape>dim<escape>,room:<escape>lounge room<escape>}"
+  },
+  {
+   "id": "home-p1",
+   "style": "paraphrase",
+   "expected": [
+    "home"
+   ],
+   "top_domain": "smart_home",
+   "conf": 1.0,
+   "shortlist": [
+    "smart_home",
+    "journal",
+    "music"
+   ],
+   "predicted": "home",
+   "ok": true,
+   "latency_ms": 382.1,
+   "raw": "<start_function_call>call:home{action:<escape>off<escape>}"
+  },
+  {
+   "id": "home-p2",
+   "style": "paraphrase",
+   "expected": [
+    "home"
+   ],
+   "top_domain": "smart_home",
+   "conf": 0.984,
+   "shortlist": [
+    "smart_home",
+    "lists",
+    "journal"
+   ],
+   "predicted": "home",
+   "ok": true,
+   "latency_ms": 453.7,
+   "raw": "<start_function_call>call:home{action:<escape>off<escape>,target:<escape>downstairs<escape>}"
+  },
+  {
+   "id": "recall-c1",
+   "style": "canonical",
+   "expected": [
+    "recall_memory"
+   ],
+   "top_domain": "memory",
+   "conf": 0.984,
+   "shortlist": [
+    "memory",
+    "people",
+    "journal"
+   ],
+   "predicted": "recall_memory",
+   "ok": true,
+   "latency_ms": 451.9,
+   "raw": "<start_function_call>call:recall_memory{query:<escape>what do you remember about me<escape>}"
+  },
+  {
+   "id": "recall-c2",
+   "style": "canonical",
+   "expected": [
+    "recall_memory"
+   ],
+   "top_domain": "people",
+   "conf": 0.998,
+   "shortlist": [
+    "people",
+    "memory",
+    "time"
+   ],
+   "predicted": "recall_memory",
+   "ok": true,
+   "latency_ms": 389.6,
+   "raw": "<start_function_call>call:recall_memory{query:<escape>my name<escape>}"
+  },
+  {
+   "id": "recall-p1",
+   "style": "paraphrase",
+   "expected": [
+    "recall_memory"
+   ],
+   "top_domain": "memory",
+   "conf": 0.949,
+   "shortlist": [
+    "memory",
+    "reminders",
+    "notes"
+   ],
+   "predicted": "recall_memory",
+   "ok": true,
+   "latency_ms": 530.4,
+   "raw": "<start_function_call>call:recall_memory{query:<escape>remind me what I told you about my work situation<escape>}"
+  },
+  {
+   "id": "recall-p2",
+   "style": "paraphrase",
+   "expected": [
+    "recall_memory"
+   ],
+   "top_domain": "memory",
+   "conf": 0.998,
+   "shortlist": [
+    "memory",
+    "people",
+    "notes"
+   ],
+   "predicted": "recall_memory",
+   "ok": true,
+   "latency_ms": 495.8,
+   "raw": "<start_function_call>call:recall_memory{query:<escape>You know that thing I said about my knee<escape>}"
+  },
+  {
+   "id": "fact-c1",
+   "style": "canonical",
+   "expected": [
+    "remember_fact"
+   ],
+   "top_domain": "memory",
+   "conf": 0.997,
+   "shortlist": [
+    "memory",
+    "people",
+    "smart_home"
+   ],
+   "predicted": "remember_fact",
+   "ok": true,
+   "latency_ms": 436.7,
+   "raw": "<start_function_call>call:remember_fact{fact:<escape>my favourite colour is green<escape>}"
+  },
+  {
+   "id": "fact-c2",
+   "style": "canonical",
+   "expected": [
+    "remember_fact"
+   ],
+   "top_domain": "memory",
+   "conf": 0.997,
+   "shortlist": [
+    "memory",
+    "reminders",
+    "notes"
+   ],
+   "predicted": "remember_fact",
+   "ok": true,
+   "latency_ms": 486.2,
+   "raw": "<start_function_call>call:remember_fact{fact:<escape>I'm allergic to peanuts<escape>}"
+  },
+  {
+   "id": "fact-p1",
+   "style": "paraphrase",
+   "expected": [
+    "remember_fact"
+   ],
+   "top_domain": "calendar",
+   "conf": 0.853,
+   "shortlist": [
+    "calendar",
+    "smart_home",
+    "memory"
+   ],
+   "predicted": "remember_fact",
+   "ok": true,
+   "latency_ms": 590.7,
+   "raw": "<start_function_call>call:remember_fact{fact:<escape>I knock off work at 2:30 on fridays<escape>}"
+  },
+  {
+   "id": "fact-p2",
+   "style": "paraphrase",
+   "expected": [
+    "remember_fact",
+    "people"
+   ],
+   "top_domain": "people",
+   "conf": 0.521,
+   "shortlist": [
+    "people",
+    "memory",
+    "notes"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": false,
+   "latency_ms": 19.3,
+   "raw": "",
+   "failure_stage": "stage1_gate_ate_tool_turn"
+  },
+  {
+   "id": "chat-1",
+   "style": "chat",
+   "expected": [
+    "general_chat"
+   ],
+   "top_domain": "chat",
+   "conf": 0.999,
+   "shortlist": [
+    "weather",
+    "people",
+    "time"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": true,
+   "latency_ms": 30.1,
+   "raw": ""
+  },
+  {
+   "id": "chat-2",
+   "style": "chat",
+   "expected": [
+    "general_chat"
+   ],
+   "top_domain": "chat",
+   "conf": 1.0,
+   "shortlist": [
+    "weather",
+    "people",
+    "memory"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": true,
+   "latency_ms": 30.9,
+   "raw": ""
+  },
+  {
+   "id": "chat-3",
+   "style": "chat",
+   "expected": [
+    "general_chat",
+    "journal",
+    "remember_emotional_moment"
+   ],
+   "top_domain": "chat",
+   "conf": 0.982,
+   "shortlist": [
+    "journal",
+    "memory",
+    "people"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": true,
+   "latency_ms": 44.2,
+   "raw": ""
+  },
+  {
+   "id": "chat-4",
+   "style": "chat",
+   "expected": [
+    "general_chat"
+   ],
+   "top_domain": "chat",
+   "conf": 0.995,
+   "shortlist": [
+    "journal",
+    "reminders",
+    "memory"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": true,
+   "latency_ms": 45.8,
+   "raw": ""
+  },
+  {
+   "id": "chat-5",
+   "style": "chat",
+   "expected": [
+    "general_chat"
+   ],
+   "top_domain": "chat",
+   "conf": 0.996,
+   "shortlist": [
+    "weather",
+    "memory",
+    "people"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": true,
+   "latency_ms": 46.2,
+   "raw": ""
+  },
+  {
+   "id": "chat-6",
+   "style": "chat",
+   "expected": [
+    "general_chat"
+   ],
+   "top_domain": "chat",
+   "conf": 0.977,
+   "shortlist": [
+    "memory",
+    "people",
+    "smart_home"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": true,
+   "latency_ms": 53.9,
+   "raw": ""
+  },
+  {
+   "id": "chat-7",
+   "style": "chat",
+   "expected": [
+    "general_chat"
+   ],
+   "top_domain": "chat",
+   "conf": 0.607,
+   "shortlist": [
+    "weather",
+    "music",
+    "memory"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": true,
+   "latency_ms": 44.3,
+   "raw": ""
+  },
+  {
+   "id": "chat-8",
+   "style": "chat",
+   "expected": [
+    "general_chat"
+   ],
+   "top_domain": "notes",
+   "conf": 0.614,
+   "shortlist": [
+    "notes",
+    "music",
+    "people"
+   ],
+   "gated": true,
+   "predicted": "general_chat",
+   "ok": true,
+   "latency_ms": 23.4,
+   "raw": ""
+  }
+ ]
+}

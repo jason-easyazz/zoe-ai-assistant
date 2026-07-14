@@ -104,6 +104,8 @@ def main() -> int:
                     choices=["functok-ga", "functok-gb", "stock-gb"])
     ap.add_argument("--gate", type=float, default=0.0,
                     help="stage-1 chat gate for *-gb configs (0.0 = off)")
+    ap.add_argument("--head", default="logreg", choices=["logreg", "mlp"],
+                    help="stage-1 SetFit head for *-gb configs")
     ap.add_argument("--port", type=int, default=11435)
     ap.add_argument("--tag", default=None)
     args = ap.parse_args()
@@ -128,12 +130,13 @@ def main() -> int:
         import joblib
         import numpy as np
         from fastembed import TextEmbedding
-        clf = joblib.load(ARTIFACTS / "head_logreg.joblib")
+        clf = joblib.load(ARTIFACTS / f"head_{args.head}.joblib")
         embedder = TextEmbedding(model_name=EMBED_MODEL)
         list(embedder.embed(["warmup"]))
 
     proc = start_server(gguf, args.port)
     out: dict = {"config": args.config, "gguf": gguf, "gate": args.gate,
+                 "head": args.head if use_shortlist else None,
                  "grammar": "shortlist" if use_shortlist else "all-21",
                  "mem_available_mb_before": avail,
                  "rss_mb_after_load": rss_mb(proc.pid)}
