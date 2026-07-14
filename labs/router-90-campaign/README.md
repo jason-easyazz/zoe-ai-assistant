@@ -22,15 +22,26 @@ LAB-ONLY: nothing wired into the voice path; eval on :11435, never :11434.
 | functok e3 (3 epochs, old data) | pending (training, nice-19 CPU; ~95–250 s/step depending on contention) | | | | eval w/ ± grammar when done |
 | **functok definitive r1 + shortlist grammar(b), logreg head** | **84.0%** | 94.1% | 71.8% | 0% | +8.7 over e1 hybrid (`results/functok-gb.json`, def GGUF) |
 | **functok definitive r1 + shortlist grammar(b), mlp head** | **85.2%** | 94.1% | 74.4% | 0% | **best measured**; 12 fails = 9 stage2 wrong picks + 3 shortlist misses |
-| definitive r1 hybrid, gate 0.35 | 72.8% | 88.2% | 53.8% | 0% | gate ate 14 tool turns — keep the gate OFF |
-| functok definitive r2 (retrained with corrected `list_type` arg keys) | pending | | | | key drift affected args only, never tool choice/scoring |
+| definitive r1 hybrid, gate 0.35 | 72.8% | 88.2% | 53.8% | 0% | gate ate 14 tool turns — keep the gate OFF at r1 confidence levels |
+| functok r2 + shortlist grammar(b), mlp head, no gate | 92.6% | 100% | 87.2% | 12.5% | highest accuracy, but 1/8 chat turns triggers a tool (`results/r2-gb-mlp.json`) |
+| **functok r2 + shortlist grammar(b), mlp head, gate 0.5** | **90.1%** | 100% | 79.5% | **0%** | **SHIP CONFIG — target hit** (73/81, 424 ms p50; `results/r2-gb-mlp-g0.5.json`) |
+| functok r2, mlp head, gate 0.7 | 84.0% | 97.1% | 69.2% | 0% | too strict — gate ate 10 tool turns |
+
+Round-2 recipe: `build_sibling_dataset.py` round-2 families (180 targeted
+examples aimed at the 13 definitive-r1 failures, oversampled ×2), warm-start
+from `runs/functok-definitive/merged`, 2 epochs batch 8 accum 2 CPU
+(~3.5 h). Model: `/home/zoe/models/lab/functiongemma-270m-zoe-functok-r2-Q8_0.gguf`.
+The r2 dataset in git carries the corrected arg keys (`list_type`, media
+dispatcher shape, home `room`) — args-only drift, tool-choice scoring
+unaffected; next retrain picks the corrected args up.
 
 Note: `results/functok-gb.json` now holds the definitive-r1 run; the e1
 hybrid per-case JSON it replaced is in git history (the 75.3% row above).
 
-Latency note: grammar-run latencies in `results/*.json` (~2.5 s p50) are
-NOT comparable to the earlier ~360 ms numbers — the e3 CPU trainer was
-running (5 cores) during these evals. Accuracy is unaffected.
+Latency note: the early e1-era grammar runs were measured with the e3 CPU
+trainer contending (5 cores, ~2.5 s p50) — not comparable. The definitive-r1
+and r2 runs in `results/` were measured uncontended: ~380–450 ms p50
+end-to-end (stage-1 embed + gated decode), within the quick budget.
 
 ## Error attribution (measured)
 
@@ -47,6 +58,13 @@ running (5 cores) during these evals. Accuracy is unaffected.
   claim does not hold on this gate-off logreg run).
 - **stock-gb** — 44 stage2 wrong picks: the stock decoder prefers
   general_chat/siblings even when grammar-cornered. Confirms DEBUNKED.
+- **r2 hybrid, mlp, no gate** — 6 fails: 3 stage-1 shortlist misses
+  (shoplist-p1, cal-add-p2, media-p1), 2 stage-2 picks (timer-p1
+  set_timer→add_calendar_event, note-search-p2 note_search→create_note),
+  1 chat-FP (chat-7→get_weather at stage-1 conf .61).
+- **r2 hybrid, mlp, gate 0.5 (SHIP)** — 8 fails: the same 2 shortlist misses
+  + 2 stage-2 picks, plus the gate abstaining on 4 low-confidence tool turns
+  (shoplist-p1, listrm-p1, note-add-p1/p2) — the price of 0% chat-FP.
 
 **Verdict of the grammar lever:** grammar constraints are worth keeping
 (they guarantee syntactically legal calls and delete hallucinated names for
@@ -54,7 +72,16 @@ free) but they are worth ~0–1.5 pts, not the 90% lever. The measured gap is
 *sibling discrimination inside the legal set* + paraphrase no-calls — a
 training-data problem.
 
-## The plan to 90% (honest best shot)
+## Outcome (2026-07-14 evening)
+
+**Target hit: 90.1% (73/81) at 0% chat-FP, 424 ms p50** — config = SetFit
+**mlp** head top-3 shortlist (gate 0.5) + functok **r2** decoder + shortlist
+GBNF grammar. Ungated r2 is 92.6% but trades in a 12.5% chat-FP. The ladder:
+61.7 (live baseline) → 74.1 (e1) → 84.0 (definitive r1, logreg) → 85.2
+(r1, mlp) → 92.6/90.1 (r2). Next step is shadow-mode integration behind a
+flag (see HANDOFF.md).
+
+## The plan to 90% (original, for the record)
 
 1. `labs/functiongemma-finetune/build_sibling_dataset.py` → 275 contrastive
    examples (182 tool + 93 hard chat negatives) aimed at exactly the

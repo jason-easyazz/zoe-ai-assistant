@@ -141,22 +141,22 @@
 {"text": "didn't we note what the school said", "tool": "note_search", "args": {"query": "the school"}, "source": "sibling_v2"}
 {"text": "quick note: the pool guy reckons the pump needs replacing", "tool": "create_note", "args": {"content": "the pool guy reckons the pump needs replacing"}, "source": "sibling_v2"}
 {"text": "check my notes for what the pool guy said", "tool": "note_search", "args": {"query": "the pool guy"}, "source": "sibling_v2"}
-{"text": "chuck on something upbeat for me", "tool": "media", "args": {"action": "play", "query": "something upbeat"}, "source": "sibling_v2"}
-{"text": "zoe chuck on some old rock when you get a sec", "tool": "media", "args": {"action": "play", "query": "some old rock"}, "source": "sibling_v2"}
-{"text": "chuck on a bit of jazz", "tool": "media", "args": {"action": "play", "query": "a bit of jazz"}, "source": "sibling_v2"}
-{"text": "chuck on the cooking playlist", "tool": "media", "args": {"action": "play", "query": "the cooking playlist"}, "source": "sibling_v2"}
-{"text": "hey zoe chuck on something mellow for me", "tool": "media", "args": {"action": "play", "query": "something mellow"}, "source": "sibling_v2"}
-{"text": "chuck on some 80s stuff", "tool": "media", "args": {"action": "play", "query": "some 80s stuff"}, "source": "sibling_v2"}
-{"text": "okay zoe chuck on anything acoustic", "tool": "media", "args": {"action": "play", "query": "anything acoustic"}, "source": "sibling_v2"}
-{"text": "hey zoe chuck on the kids' playlist", "tool": "media", "args": {"action": "play", "query": "the kids' playlist"}, "source": "sibling_v2"}
-{"text": "that's blasting, wind it back a bit", "tool": "media", "args": {"action": "volume_down"}, "source": "sibling_v2"}
-{"text": "um too quiet, crank it up when you get a sec", "tool": "media", "args": {"action": "volume_up"}, "source": "sibling_v2"}
-{"text": "um not this song, next one", "tool": "media", "args": {"action": "next"}, "source": "sibling_v2"}
-{"text": "give the music a rest for a sec", "tool": "media", "args": {"action": "pause"}, "source": "sibling_v2"}
-{"text": "um righto put the tunes back on please", "tool": "media", "args": {"action": "play"}, "source": "sibling_v2"}
-{"text": "hey bit loud for the baby, drop it down please", "tool": "media", "args": {"action": "volume_down"}, "source": "sibling_v2"}
-{"text": "okay zoe skip ahead, heard this one to death please", "tool": "media", "args": {"action": "next"}, "source": "sibling_v2"}
-{"text": "throw some music on out the back", "tool": "media", "args": {"action": "play"}, "source": "sibling_v2"}
+{"text": "chuck on something upbeat for me", "tool": "media", "args": {"action": "play", "query": "something upbeat", "command": "", "level": "", "direction": ""}, "source": "sibling_v2"}
+{"text": "zoe chuck on some old rock when you get a sec", "tool": "media", "args": {"action": "play", "query": "some old rock", "command": "", "level": "", "direction": ""}, "source": "sibling_v2"}
+{"text": "chuck on a bit of jazz", "tool": "media", "args": {"action": "play", "query": "a bit of jazz", "command": "", "level": "", "direction": ""}, "source": "sibling_v2"}
+{"text": "chuck on the cooking playlist", "tool": "media", "args": {"action": "play", "query": "the cooking playlist", "command": "", "level": "", "direction": ""}, "source": "sibling_v2"}
+{"text": "hey zoe chuck on something mellow for me", "tool": "media", "args": {"action": "play", "query": "something mellow", "command": "", "level": "", "direction": ""}, "source": "sibling_v2"}
+{"text": "chuck on some 80s stuff", "tool": "media", "args": {"action": "play", "query": "some 80s stuff", "command": "", "level": "", "direction": ""}, "source": "sibling_v2"}
+{"text": "okay zoe chuck on anything acoustic", "tool": "media", "args": {"action": "play", "query": "anything acoustic", "command": "", "level": "", "direction": ""}, "source": "sibling_v2"}
+{"text": "hey zoe chuck on the kids' playlist", "tool": "media", "args": {"action": "play", "query": "the kids' playlist", "command": "", "level": "", "direction": ""}, "source": "sibling_v2"}
+{"text": "that's blasting, wind it back a bit", "tool": "media", "args": {"action": "volume", "query": "", "command": "", "level": "", "direction": "down"}, "source": "sibling_v2"}
+{"text": "um too quiet, crank it up when you get a sec", "tool": "media", "args": {"action": "volume", "query": "", "command": "", "level": "", "direction": "up"}, "source": "sibling_v2"}
+{"text": "um not this song, next one", "tool": "media", "args": {"action": "control", "query": "", "command": "next", "level": "", "direction": ""}, "source": "sibling_v2"}
+{"text": "give the music a rest for a sec", "tool": "media", "args": {"action": "control", "query": "", "command": "pause", "level": "", "direction": ""}, "source": "sibling_v2"}
+{"text": "um righto put the tunes back on please", "tool": "media", "args": {"action": "control", "query": "", "command": "resume", "level": "", "direction": ""}, "source": "sibling_v2"}
+{"text": "hey bit loud for the baby, drop it down please", "tool": "media", "args": {"action": "volume", "query": "", "command": "", "level": "", "direction": "down"}, "source": "sibling_v2"}
+{"text": "okay zoe skip ahead, heard this one to death please", "tool": "media", "args": {"action": "control", "query": "", "command": "next", "level": "", "direction": ""}, "source": "sibling_v2"}
+{"text": "throw some music on out the back", "tool": "media", "args": {"action": "play", "query": "", "command": "", "level": "", "direction": ""}, "source": "sibling_v2"}
 {"text": "count down 12 for the rice", "tool": "set_timer", "args": {"minutes": 12, "label": "the rice"}, "source": "sibling_v2"}
 {"text": "the spuds needs 25 minutes, time it", "tool": "set_timer", "args": {"minutes": 25, "label": "the spuds"}, "source": "sibling_v2"}
 {"text": "start 40 minutes for the washing", "tool": "set_timer", "args": {"minutes": 40, "label": "the washing"}, "source": "sibling_v2"}

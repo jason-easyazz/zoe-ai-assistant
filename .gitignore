@@ -163,6 +163,9 @@ credentials/
 # needle-benchmark lab: committed measurement artifacts (labs/needle-benchmark/README.md)
 !labs/needle-benchmark/zoe_tools.json
 !labs/needle-benchmark/results/*.json
+# router-90-campaign lab: committed measurement artifacts (labs/router-90-campaign/README.md)
+!labs/router-90-campaign/results/*.json
+!labs/router-90-campaign/run_definitive_training.sh
 
 # API Keys and Secrets
 *.env

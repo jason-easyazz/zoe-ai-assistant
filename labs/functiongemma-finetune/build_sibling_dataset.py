@@ -78,6 +78,30 @@ T = lambda text, tool, args: {"text": text, "tool": tool, "args": args,
                               "source": "sibling_v2"}
 
 
+# live media dispatcher arg shapes (mirror build_dataset.gen_media exactly)
+def _media_play(q):
+    return {"action": "play", "query": q, "command": "", "level": "",
+            "direction": ""}
+
+
+def _media_ctrl(c):
+    return {"action": "control", "query": "", "command": c, "level": "",
+            "direction": ""}
+
+
+def _media_vol(d):
+    return {"action": "volume", "query": "", "command": "", "level": "",
+            "direction": d}
+
+
+def _room(loc):
+    """Strip locative prefixes so the home arg carries just the room name."""
+    for pre in ("in the ", "on the ", "in "):
+        if loc.startswith(pre):
+            return loc[len(pre):]
+    return loc
+
+
 def gen_tool_cases(rng: random.Random) -> list[dict]:
     out = []
 
@@ -179,16 +203,18 @@ def gen_tool_cases(rng: random.Random) -> list[dict]:
         ]), "note_search", {"query": who}))
 
     # ---- media paraphrases (decoded as chat/None today) --------------------
-    media = [("chuck on " + v, {"action": "play", "query": v}) for v in SONGS_VIBES]
+    # args follow the live media dispatcher shape (build_dataset.gen_media):
+    # play -> query; control -> command; volume -> direction
+    media = [("chuck on " + v, _media_play(v)) for v in SONGS_VIBES]
     media += [
-        ("that's blasting, wind it back a bit", {"action": "volume_down"}),
-        ("too quiet, crank it up", {"action": "volume_up"}),
-        ("not this song, next one", {"action": "next"}),
-        ("give the music a rest for a sec", {"action": "pause"}),
-        ("righto put the tunes back on", {"action": "play"}),
-        ("bit loud for the baby, drop it down", {"action": "volume_down"}),
-        ("skip ahead, heard this one to death", {"action": "next"}),
-        ("throw some music on out the back", {"action": "play"}),
+        ("that's blasting, wind it back a bit", _media_vol("down")),
+        ("too quiet, crank it up", _media_vol("up")),
+        ("not this song, next one", _media_ctrl("next")),
+        ("give the music a rest for a sec", _media_ctrl("pause")),
+        ("righto put the tunes back on", _media_ctrl("resume")),
+        ("bit loud for the baby, drop it down", _media_vol("down")),
+        ("skip ahead, heard this one to death", _media_ctrl("next")),
+        ("throw some music on out the back", _media_play("")),
     ]
     out += [T(t, "media", a) for t, a in media]
 
@@ -420,8 +446,8 @@ def gen_round2_cases(rng: random.Random) -> list[dict]:
             f"put something {vibe} on while {doing}",
             f"can we get some {vibe} tunes going while {doing}",
             f"throw on a {vibe} playlist while {doing}",
-        ]), "media", {"action": "play", "query": vibe}))
-    out += [T(t, "media", {"action": "play", "query": ""}) for t in [
+        ]), "media", _media_play(vibe)))
+    out += [T(t, "media", _media_play("")) for t in [
         "get some background music happening",
         "stick some tunes on for us",
         "bit of music wouldn't hurt right now",
@@ -435,8 +461,8 @@ def gen_round2_cases(rng: random.Random) -> list[dict]:
             f"shut everything down {room}, we're done for the night",
             f"turn the lot off {room}",
             f"everything off {room} thanks, calling it a night",
-        ]), "home", {"action": "off", "target": room}))
-    out += [T(t, "home", {"action": "off", "target": ""}) for t in [
+        ]), "home", {"action": "off", "room": _room(room)}))
+    out += [T(t, "home", {"action": "off", "room": ""}) for t in [
         "we're off to bed, shut the house down",
         "lights out everywhere, movie's starting",
         "kill the lot, we're leaving for the airport",

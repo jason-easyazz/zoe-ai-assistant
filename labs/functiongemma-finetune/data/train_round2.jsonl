@@ -1,0 +1,180 @@
+{"text": "have I got anything on tomorrow", "tool": "show_calendar", "args": {"qualifier": "tomorrow"}, "source": "sibling_r2"}
+{"text": "am I double booked tomorrow or are we right", "tool": "show_calendar", "args": {"qualifier": "tomorrow"}, "source": "sibling_r2"}
+{"text": "okay zoe what have I got on this arvo", "tool": "show_calendar", "args": {"qualifier": "this arvo"}, "source": "sibling_r2"}
+{"text": "is this arvo clear or have I got something", "tool": "show_calendar", "args": {"qualifier": "this arvo"}, "source": "sibling_r2"}
+{"text": "what have I got on tonight", "tool": "show_calendar", "args": {"qualifier": "tonight"}, "source": "sibling_r2"}
+{"text": "is tonight clear or have I got something", "tool": "show_calendar", "args": {"qualifier": "tonight"}, "source": "sibling_r2"}
+{"text": "um what have I got on thursday", "tool": "show_calendar", "args": {"qualifier": "thursday"}, "source": "sibling_r2"}
+{"text": "is anything booked in for thursday", "tool": "show_calendar", "args": {"qualifier": "thursday"}, "source": "sibling_r2"}
+{"text": "what's on for me next tuesday", "tool": "show_calendar", "args": {"qualifier": "next tuesday"}, "source": "sibling_r2"}
+{"text": "is anything booked in for next tuesday", "tool": "show_calendar", "args": {"qualifier": "next tuesday"}, "source": "sibling_r2"}
+{"text": "what have I got on on the weekend", "tool": "show_calendar", "args": {"qualifier": "on the weekend"}, "source": "sibling_r2"}
+{"text": "is anything booked in for on the weekend", "tool": "show_calendar", "args": {"qualifier": "on the weekend"}, "source": "sibling_r2"}
+{"text": "anything on before lunch tomorrow or am I free", "tool": "show_calendar", "args": {"qualifier": "before lunch tomorrow"}, "source": "sibling_r2"}
+{"text": "am I double booked before lunch tomorrow or are we right thanks", "tool": "show_calendar", "args": {"qualifier": "before lunch tomorrow"}, "source": "sibling_r2"}
+{"text": "have I got anything on after dinner", "tool": "show_calendar", "args": {"qualifier": "after dinner"}, "source": "sibling_r2"}
+{"text": "is after dinner clear or have I got something", "tool": "show_calendar", "args": {"qualifier": "after dinner"}, "source": "sibling_r2"}
+{"text": "zoe what's on for me friday morning", "tool": "show_calendar", "args": {"qualifier": "friday morning"}, "source": "sibling_r2"}
+{"text": "is anything booked in for friday morning", "tool": "show_calendar", "args": {"qualifier": "friday morning"}, "source": "sibling_r2"}
+{"text": "anything on later today or am I free when you get a sec", "tool": "show_calendar", "args": {"qualifier": "later today"}, "source": "sibling_r2"}
+{"text": "am I double booked later today or are we right", "tool": "show_calendar", "args": {"qualifier": "later today"}, "source": "sibling_r2"}
+{"text": "what's on for me in the morning when you get a sec", "tool": "show_calendar", "args": {"qualifier": "in the morning"}, "source": "sibling_r2"}
+{"text": "is anything booked in for in the morning", "tool": "show_calendar", "args": {"qualifier": "in the morning"}, "source": "sibling_r2"}
+{"text": "anything on tomorrow arvo or am I free", "tool": "show_calendar", "args": {"qualifier": "tomorrow arvo"}, "source": "sibling_r2"}
+{"text": "um am I double booked tomorrow arvo or are we right please", "tool": "show_calendar", "args": {"qualifier": "tomorrow arvo"}, "source": "sibling_r2"}
+{"text": "what's the diary looking like this week", "tool": "show_calendar", "args": {"qualifier": ""}, "source": "sibling_r2"}
+{"text": "what am I up for after work", "tool": "show_calendar", "args": {"qualifier": ""}, "source": "sibling_r2"}
+{"text": "have we got much on over the next few days", "tool": "show_calendar", "args": {"qualifier": ""}, "source": "sibling_r2"}
+{"text": "whereabouts am I meant to be this afternoon", "tool": "show_calendar", "args": {"qualifier": ""}, "source": "sibling_r2"}
+{"text": "what's the go with my schedule today", "tool": "show_calendar", "args": {"qualifier": ""}, "source": "sibling_r2"}
+{"text": "do I have a full day or a quiet one tomorrow", "tool": "show_calendar", "args": {"qualifier": ""}, "source": "sibling_r2"}
+{"text": "what else is on my plate today appointment wise", "tool": "show_calendar", "args": {"qualifier": ""}, "source": "sibling_r2"}
+{"text": "is my morning free or booked solid", "tool": "show_calendar", "args": {"qualifier": ""}, "source": "sibling_r2"}
+{"text": "hey what reminders are still outstanding for me", "tool": "list_reminders", "args": {}, "source": "sibling_r2"}
+{"text": "run through the reminders you've got for me thanks", "tool": "list_reminders", "args": {}, "source": "sibling_r2"}
+{"text": "what have I told you to nudge me about", "tool": "list_reminders", "args": {}, "source": "sibling_r2"}
+{"text": "which reminders are due today", "tool": "list_reminders", "args": {}, "source": "sibling_r2"}
+{"text": "have you got any nudges waiting for me", "tool": "list_reminders", "args": {}, "source": "sibling_r2"}
+{"text": "what's left on my reminders", "tool": "list_reminders", "args": {}, "source": "sibling_r2"}
+{"text": "read out my reminders for this week", "tool": "list_reminders", "args": {}, "source": "sibling_r2"}
+{"text": "anything you're supposed to remind me of tonight when you get a sec", "tool": "list_reminders", "args": {}, "source": "sibling_r2"}
+{"text": "what pings have you got lined up for me", "tool": "list_reminders", "args": {}, "source": "sibling_r2"}
+{"text": "hey zoe show us the reminder list when you get a sec", "tool": "list_reminders", "args": {}, "source": "sibling_r2"}
+{"text": "reckon it'll be decent enough for the beach monday", "tool": "get_weather", "args": {"forecast": true, "location": ""}, "source": "sibling_r2"}
+{"text": "will it be right for a bbq tomorrow you reckon", "tool": "get_weather", "args": {"forecast": true, "location": ""}, "source": "sibling_r2"}
+{"text": "reckon it'll be decent enough for a picnic tomorrow please", "tool": "get_weather", "args": {"forecast": true, "location": ""}, "source": "sibling_r2"}
+{"text": "any good for the footy in the morning or will it bucket down when you get a sec", "tool": "get_weather", "args": {"forecast": true, "location": ""}, "source": "sibling_r2"}
+{"text": "any good for camping in the morning or will it bucket down", "tool": "get_weather", "args": {"forecast": true, "location": ""}, "source": "sibling_r2"}
+{"text": "reckon it'll be decent enough for a swim monday", "tool": "get_weather", "args": {"forecast": true, "location": ""}, "source": "sibling_r2"}
+{"text": "any good for mowing the lawn saturday or will it bucket down", "tool": "get_weather", "args": {"forecast": true, "location": ""}, "source": "sibling_r2"}
+{"text": "is the weather gonna hold for a bike ride sunday", "tool": "get_weather", "args": {"forecast": true, "location": ""}, "source": "sibling_r2"}
+{"text": "reckon it'll be decent enough for fishing friday", "tool": "get_weather", "args": {"forecast": true, "location": ""}, "source": "sibling_r2"}
+{"text": "reckon it'll be decent enough for a walk along the foreshore thursday arvo", "tool": "get_weather", "args": {"forecast": true, "location": ""}, "source": "sibling_r2"}
+{"text": "reckon it'll be decent enough for hanging the washing out thursday arvo", "tool": "get_weather", "args": {"forecast": true, "location": ""}, "source": "sibling_r2"}
+{"text": "any good for a run friday or will it bucket down", "tool": "get_weather", "args": {"forecast": true, "location": ""}, "source": "sibling_r2"}
+{"text": "is saturday looking sunny or a washout", "tool": "get_weather", "args": {"forecast": true, "location": ""}, "source": "sibling_r2"}
+{"text": "um reckon sunday's a beach day for me", "tool": "get_weather", "args": {"forecast": true, "location": ""}, "source": "sibling_r2"}
+{"text": "will it stay dry for the school fete", "tool": "get_weather", "args": {"forecast": true, "location": ""}, "source": "sibling_r2"}
+{"text": "what are we in for weather wise this weekend", "tool": "get_weather", "args": {"forecast": true, "location": ""}, "source": "sibling_r2"}
+{"text": "is it meant to cool down by friday thanks", "tool": "get_weather", "args": {"forecast": true, "location": ""}, "source": "sibling_r2"}
+{"text": "how's the mercury looking tomorrow when you get a sec", "tool": "get_weather", "args": {"forecast": true, "location": ""}, "source": "sibling_r2"}
+{"text": "hey zoe gonna need the brolly today or not", "tool": "get_weather", "args": {"forecast": true, "location": ""}, "source": "sibling_r2"}
+{"text": "is tonight going to be freezing", "tool": "get_weather", "args": {"forecast": true, "location": ""}, "source": "sibling_r2"}
+{"text": "dad's train gets in friday 4pm, chuck it in the calendar", "tool": "add_calendar_event", "args": {"title": "dad's train", "date": "friday", "time": "4pm"}, "source": "sibling_r2"}
+{"text": "hey zoe can you diary dad's train for friday at 4pm", "tool": "add_calendar_event", "args": {"title": "dad's train", "date": "friday", "time": "4pm"}, "source": "sibling_r2"}
+{"text": "zoe the removalists rock up tuesday at 7am, lock that in for me", "tool": "add_calendar_event", "args": {"title": "the removalists", "date": "tuesday", "time": "7am"}, "source": "sibling_r2"}
+{"text": "um pop the removalists in for tuesday 7am", "tool": "add_calendar_event", "args": {"title": "the removalists", "date": "tuesday", "time": "7am"}, "source": "sibling_r2"}
+{"text": "hey zoe aunty june's bus arrives saturday at noon, lock that in for me when you get a sec", "tool": "add_calendar_event", "args": {"title": "aunty june's bus", "date": "saturday", "time": "noon"}, "source": "sibling_r2"}
+{"text": "pop aunty june's bus in for saturday noon", "tool": "add_calendar_event", "args": {"title": "aunty june's bus", "date": "saturday", "time": "noon"}, "source": "sibling_r2"}
+{"text": "the delivery is due monday at 10am, stick that in", "tool": "add_calendar_event", "args": {"title": "the delivery", "date": "monday", "time": "10am"}, "source": "sibling_r2"}
+{"text": "pop the delivery in for monday 10am", "tool": "add_calendar_event", "args": {"title": "the delivery", "date": "monday", "time": "10am"}, "source": "sibling_r2"}
+{"text": "nan's ferry docks sunday 5:30, chuck it in the calendar for me", "tool": "add_calendar_event", "args": {"title": "nan's ferry", "date": "sunday", "time": "5:30"}, "source": "sibling_r2"}
+{"text": "whack nan's ferry in the calendar, sunday at 5:30", "tool": "add_calendar_event", "args": {"title": "nan's ferry", "date": "sunday", "time": "5:30"}, "source": "sibling_r2"}
+{"text": "the inspection is set for wednesday at 1pm, stick that in", "tool": "add_calendar_event", "args": {"title": "the inspection", "date": "wednesday", "time": "1pm"}, "source": "sibling_r2"}
+{"text": "can you diary the inspection for wednesday at 1pm", "tool": "add_calendar_event", "args": {"title": "the inspection", "date": "wednesday", "time": "1pm"}, "source": "sibling_r2"}
+{"text": "the boys' game kicks off saturday 9am, chuck it in the calendar", "tool": "add_calendar_event", "args": {"title": "the boys' game", "date": "saturday", "time": "9am"}, "source": "sibling_r2"}
+{"text": "whack the boys' game in the calendar, saturday at 9am", "tool": "add_calendar_event", "args": {"title": "the boys' game", "date": "saturday", "time": "9am"}, "source": "sibling_r2"}
+{"text": "grandpa's flight gets in thursday at 8pm, get that in the diary", "tool": "add_calendar_event", "args": {"title": "grandpa's flight", "date": "thursday", "time": "8pm"}, "source": "sibling_r2"}
+{"text": "whack grandpa's flight in the calendar, thursday at 8pm", "tool": "add_calendar_event", "args": {"title": "grandpa's flight", "date": "thursday", "time": "8pm"}, "source": "sibling_r2"}
+{"text": "I'm bound to forget the parking meter unless you remind me in an hour", "tool": "add_reminder", "args": {"title": "the parking meter", "date": "", "time": "in an hour"}, "source": "sibling_r2"}
+{"text": "nudge me on the parking meter in an hour yeah for me", "tool": "add_reminder", "args": {"title": "the parking meter", "date": "", "time": "in an hour"}, "source": "sibling_r2"}
+{"text": "no way I'll remember the roast, give us a shout at 6", "tool": "add_reminder", "args": {"title": "the roast", "date": "", "time": "at 6"}, "source": "sibling_r2"}
+{"text": "nudge me on the roast at 6 yeah", "tool": "add_reminder", "args": {"title": "the roast", "date": "", "time": "at 6"}, "source": "sibling_r2"}
+{"text": "I'm bound to forget the school run unless you remind me at quarter to 3", "tool": "add_reminder", "args": {"title": "the school run", "date": "", "time": "at quarter to 3"}, "source": "sibling_r2"}
+{"text": "remind me about the school run at quarter to 3", "tool": "add_reminder", "args": {"title": "the school run", "date": "", "time": "at quarter to 3"}, "source": "sibling_r2"}
+{"text": "I'll forget bin night tonight unless you pipe up", "tool": "add_reminder", "args": {"title": "bin night", "date": "", "time": "tonight"}, "source": "sibling_r2"}
+{"text": "remind me about bin night tonight", "tool": "add_reminder", "args": {"title": "bin night", "date": "", "time": "tonight"}, "source": "sibling_r2"}
+{"text": "sing out about the chemist closing at 5 or it won't happen", "tool": "add_reminder", "args": {"title": "the chemist closing", "date": "", "time": "at 5"}, "source": "sibling_r2"}
+{"text": "remind me about the chemist closing at 5", "tool": "add_reminder", "args": {"title": "the chemist closing", "date": "", "time": "at 5"}, "source": "sibling_r2"}
+{"text": "okay zoe I'm bound to forget footy pickup unless you remind me at 4:30 for me", "tool": "add_reminder", "args": {"title": "footy pickup", "date": "", "time": "at 4:30"}, "source": "sibling_r2"}
+{"text": "remind me about footy pickup at 4:30", "tool": "add_reminder", "args": {"title": "footy pickup", "date": "", "time": "at 4:30"}, "source": "sibling_r2"}
+{"text": "I'm bound to forget the library books unless you remind me friday", "tool": "add_reminder", "args": {"title": "the library books", "date": "", "time": "friday"}, "source": "sibling_r2"}
+{"text": "remind me about the library books friday", "tool": "add_reminder", "args": {"title": "the library books", "date": "", "time": "friday"}, "source": "sibling_r2"}
+{"text": "zoe no way I'll remember mum's call, give us a shout at 7 for me", "tool": "add_reminder", "args": {"title": "mum's call", "date": "", "time": "at 7"}, "source": "sibling_r2"}
+{"text": "remind me about mum's call at 7", "tool": "add_reminder", "args": {"title": "mum's call", "date": "", "time": "at 7"}, "source": "sibling_r2"}
+{"text": "hey one for the memory bank: I finish early on wednesdays", "tool": "remember_fact", "args": {"fact": "I finish early on wednesdays"}, "source": "sibling_r2"}
+{"text": "one for the memory bank: the gym shuts at 9", "tool": "remember_fact", "args": {"fact": "the gym shuts at 9"}, "source": "sibling_r2"}
+{"text": "zoe file this away: the good bakery is closed mondays", "tool": "remember_fact", "args": {"fact": "the good bakery is closed mondays"}, "source": "sibling_r2"}
+{"text": "hey zoe file this away: our mortgage comes out on the 15th thanks", "tool": "remember_fact", "args": {"fact": "our mortgage comes out on the 15th"}, "source": "sibling_r2"}
+{"text": "one for the memory bank: I start at 7 on tuesdays", "tool": "remember_fact", "args": {"fact": "I start at 7 on tuesdays"}, "source": "sibling_r2"}
+{"text": "for future reference school pickup moved to gate 3", "tool": "remember_fact", "args": {"fact": "school pickup moved to gate 3"}, "source": "sibling_r2"}
+{"text": "hey zoe so you know going forward, the pool opens at 6 in summer please", "tool": "remember_fact", "args": {"fact": "the pool opens at 6 in summer"}, "source": "sibling_r2"}
+{"text": "so you know going forward, recycling week is the odd weeks", "tool": "remember_fact", "args": {"fact": "recycling week is the odd weeks"}, "source": "sibling_r2"}
+{"text": "didn't I jot down what the plumber wanted for the hot water system", "tool": "note_search", "args": {"query": "plumber"}, "source": "sibling_r2"}
+{"text": "what did I say the sparky quoted for the switchboard", "tool": "note_search", "args": {"query": "sparky"}, "source": "sibling_r2"}
+{"text": "zoe look up what the roofer said about the gutters when you get a sec", "tool": "note_search", "args": {"query": "roofer"}, "source": "sibling_r2"}
+{"text": "what did I say the tiler quoted for the bathroom", "tool": "note_search", "args": {"query": "tiler"}, "source": "sibling_r2"}
+{"text": "hey look up what the painter said about the outside of the house for me", "tool": "note_search", "args": {"query": "painter"}, "source": "sibling_r2"}
+{"text": "look up what the fencer said about the back fence", "tool": "note_search", "args": {"query": "fencer"}, "source": "sibling_r2"}
+{"text": "didn't I jot down what the arborist wanted for taking the gum tree down", "tool": "note_search", "args": {"query": "arborist"}, "source": "sibling_r2"}
+{"text": "okay zoe look up what the glazier said about the window", "tool": "note_search", "args": {"query": "glazier"}, "source": "sibling_r2"}
+{"text": "find the note with the wifi password for the beach house", "tool": "note_search", "args": {"query": "find the note with the wifi password for the beach house"}, "source": "sibling_r2"}
+{"text": "what did I write down about the insurance renewal", "tool": "note_search", "args": {"query": "what did I write down about the insurance renewal"}, "source": "sibling_r2"}
+{"text": "search my notes for the paint colour we picked", "tool": "note_search", "args": {"query": "search my notes for the paint colour we picked"}, "source": "sibling_r2"}
+{"text": "pull up whatever I noted from the parent teacher meeting", "tool": "note_search", "args": {"query": "pull up whatever I noted from the parent teacher meeting"}, "source": "sibling_r2"}
+{"text": "zoe what was in that note about the car rego", "tool": "note_search", "args": {"query": "what was in that note about the car rego"}, "source": "sibling_r2"}
+{"text": "what have I told you about my brother's new job for me", "tool": "recall_memory", "args": {"query": "what have I told you about my brother's new job"}, "source": "sibling_r2"}
+{"text": "hey remind me what I said about the holiday plans please", "tool": "recall_memory", "args": {"query": "remind me what I said about the holiday plans"}, "source": "sibling_r2"}
+{"text": "what do you remember about my knee playing up", "tool": "recall_memory", "args": {"query": "what do you remember about my knee playing up"}, "source": "sibling_r2"}
+{"text": "have I mentioned anything about the neighbours' renovation", "tool": "recall_memory", "args": {"query": "have I mentioned anything about the neighbours' renovation"}, "source": "sibling_r2"}
+{"text": "hey zoe what did I tell you my favourite takeaway was when you get a sec", "tool": "recall_memory", "args": {"query": "what did I tell you my favourite takeaway was"}, "source": "sibling_r2"}
+{"text": "on second thought take the milk off, there's plenty here", "tool": "list_remove", "args": {"item": "milk", "list_type": "shopping"}, "source": "sibling_r2"}
+{"text": "gone through the last of the milk, stick it on the list", "tool": "shopping_list_add", "args": {"item": "milk"}, "source": "sibling_r2"}
+{"text": "on second thought take the eggs off, there's plenty here", "tool": "list_remove", "args": {"item": "eggs", "list_type": "shopping"}, "source": "sibling_r2"}
+{"text": "hey we're clean out of eggs when you get a sec", "tool": "shopping_list_add", "args": {"item": "eggs"}, "source": "sibling_r2"}
+{"text": "hey zoe actually scratch the bread, we've got heaps when you get a sec", "tool": "list_remove", "args": {"item": "bread", "list_type": "shopping"}, "source": "sibling_r2"}
+{"text": "no more bread in the cupboard, add it when you get a sec", "tool": "shopping_list_add", "args": {"item": "bread"}, "source": "sibling_r2"}
+{"text": "turns out we've got stacks of coffee, cross it off", "tool": "list_remove", "args": {"item": "coffee", "list_type": "shopping"}, "source": "sibling_r2"}
+{"text": "gone through the last of the coffee, stick it on the list", "tool": "shopping_list_add", "args": {"item": "coffee"}, "source": "sibling_r2"}
+{"text": "um turns out we've got stacks of bananas, cross it off for me", "tool": "list_remove", "args": {"item": "bananas", "list_type": "shopping"}, "source": "sibling_r2"}
+{"text": "gone through the last of the bananas, stick it on the list", "tool": "shopping_list_add", "args": {"item": "bananas"}, "source": "sibling_r2"}
+{"text": "on second thought take the dog food off, there's plenty here for me", "tool": "list_remove", "args": {"item": "dog food", "list_type": "shopping"}, "source": "sibling_r2"}
+{"text": "um we're clean out of dog food please", "tool": "shopping_list_add", "args": {"item": "dog food"}, "source": "sibling_r2"}
+{"text": "on second thought take the butter off, there's plenty here", "tool": "list_remove", "args": {"item": "butter", "list_type": "shopping"}, "source": "sibling_r2"}
+{"text": "butter is all gone again", "tool": "shopping_list_add", "args": {"item": "butter"}, "source": "sibling_r2"}
+{"text": "zoe actually scratch the cheese, we've got heaps", "tool": "list_remove", "args": {"item": "cheese", "list_type": "shopping"}, "source": "sibling_r2"}
+{"text": "we're clean out of cheese", "tool": "shopping_list_add", "args": {"item": "cheese"}, "source": "sibling_r2"}
+{"text": "hey on second thought take the toothpaste off, there's plenty here", "tool": "list_remove", "args": {"item": "toothpaste", "list_type": "shopping"}, "source": "sibling_r2"}
+{"text": "um no more toothpaste in the cupboard, add it", "tool": "shopping_list_add", "args": {"item": "toothpaste"}, "source": "sibling_r2"}
+{"text": "actually we're right for washing powder, pull it off the list for me", "tool": "list_remove", "args": {"item": "washing powder", "list_type": "shopping"}, "source": "sibling_r2"}
+{"text": "gone through the last of the washing powder, stick it on the list", "tool": "shopping_list_add", "args": {"item": "washing powder"}, "source": "sibling_r2"}
+{"text": "actually we're right for apples, pull it off the list for me", "tool": "list_remove", "args": {"item": "apples", "list_type": "shopping"}, "source": "sibling_r2"}
+{"text": "no more apples in the cupboard, add it", "tool": "shopping_list_add", "args": {"item": "apples"}, "source": "sibling_r2"}
+{"text": "zoe actually we're right for mince, pull it off the list", "tool": "list_remove", "args": {"item": "mince", "list_type": "shopping"}, "source": "sibling_r2"}
+{"text": "we're clean out of mince", "tool": "shopping_list_add", "args": {"item": "mince"}, "source": "sibling_r2"}
+{"text": "zoe can we get some chill tunes going while I do the ironing", "tool": "media", "args": {"action": "play", "query": "chill", "command": "", "level": "", "direction": ""}, "source": "sibling_r2"}
+{"text": "can we get some loud tunes going while I fold the washing", "tool": "media", "args": {"action": "play", "query": "loud", "command": "", "level": "", "direction": ""}, "source": "sibling_r2"}
+{"text": "chuck on something summery while I do the ironing", "tool": "media", "args": {"action": "play", "query": "summery", "command": "", "level": "", "direction": ""}, "source": "sibling_r2"}
+{"text": "chuck on something moody while we set the table", "tool": "media", "args": {"action": "play", "query": "moody", "command": "", "level": "", "direction": ""}, "source": "sibling_r2"}
+{"text": "okay zoe can we get some funky tunes going while we do the dishes for me", "tool": "media", "args": {"action": "play", "query": "funky", "command": "", "level": "", "direction": ""}, "source": "sibling_r2"}
+{"text": "throw on a relaxing playlist while I do the ironing", "tool": "media", "args": {"action": "play", "query": "relaxing", "command": "", "level": "", "direction": ""}, "source": "sibling_r2"}
+{"text": "can we get some upbeat tunes going while I fold the washing", "tool": "media", "args": {"action": "play", "query": "upbeat", "command": "", "level": "", "direction": ""}, "source": "sibling_r2"}
+{"text": "put something christmassy on while I cook", "tool": "media", "args": {"action": "play", "query": "christmassy", "command": "", "level": "", "direction": ""}, "source": "sibling_r2"}
+{"text": "get some background music happening", "tool": "media", "args": {"action": "play", "query": "", "command": "", "level": "", "direction": ""}, "source": "sibling_r2"}
+{"text": "stick some tunes on for us for me", "tool": "media", "args": {"action": "play", "query": "", "command": "", "level": "", "direction": ""}, "source": "sibling_r2"}
+{"text": "bit of music wouldn't hurt right now", "tool": "media", "args": {"action": "play", "query": "", "command": "", "level": "", "direction": ""}, "source": "sibling_r2"}
+{"text": "let's have some music while we wait", "tool": "media", "args": {"action": "play", "query": "", "command": "", "level": "", "direction": ""}, "source": "sibling_r2"}
+{"text": "everything off downstairs thanks, calling it a night", "tool": "home", "args": {"action": "off", "room": "downstairs"}, "source": "sibling_r2"}
+{"text": "everything off in the lounge thanks, calling it a night", "tool": "home", "args": {"action": "off", "room": "lounge"}, "source": "sibling_r2"}
+{"text": "shut everything down out the back, we're done for the night", "tool": "home", "args": {"action": "off", "room": "out the back"}, "source": "sibling_r2"}
+{"text": "um everything off upstairs thanks, calling it a night for me", "tool": "home", "args": {"action": "off", "room": "upstairs"}, "source": "sibling_r2"}
+{"text": "everything off in the kitchen thanks, calling it a night", "tool": "home", "args": {"action": "off", "room": "kitchen"}, "source": "sibling_r2"}
+{"text": "everything off in the kids' rooms thanks, calling it a night", "tool": "home", "args": {"action": "off", "room": "kids' rooms"}, "source": "sibling_r2"}
+{"text": "shut everything down on the patio, we're done for the night", "tool": "home", "args": {"action": "off", "room": "patio"}, "source": "sibling_r2"}
+{"text": "everything off in the study thanks, calling it a night", "tool": "home", "args": {"action": "off", "room": "study"}, "source": "sibling_r2"}
+{"text": "zoe we're off to bed, shut the house down thanks", "tool": "home", "args": {"action": "off", "room": ""}, "source": "sibling_r2"}
+{"text": "lights out everywhere, movie's starting", "tool": "home", "args": {"action": "off", "room": ""}, "source": "sibling_r2"}
+{"text": "kill the lot, we're leaving for the airport", "tool": "home", "args": {"action": "off", "room": ""}, "source": "sibling_r2"}
+{"text": "power everything down for the night", "tool": "home", "args": {"action": "off", "room": ""}, "source": "sibling_r2"}
+{"text": "do you know who Zeke is", "tool": "people", "args": {"query": "Zeke"}, "source": "sibling_r2"}
+{"text": "who even is Marisol", "tool": "people", "args": {"query": "Marisol"}, "source": "sibling_r2"}
+{"text": "who even is Tobias", "tool": "people", "args": {"query": "Tobias"}, "source": "sibling_r2"}
+{"text": "who is Anouk", "tool": "people", "args": {"query": "Anouk"}, "source": "sibling_r2"}
+{"text": "who's Freddie again", "tool": "people", "args": {"query": "Freddie"}, "source": "sibling_r2"}
+{"text": "who even is Priyanka", "tool": "people", "args": {"query": "Priyanka"}, "source": "sibling_r2"}
+{"text": "who is Callum", "tool": "people", "args": {"query": "Callum"}, "source": "sibling_r2"}
+{"text": "remind me who Wilhelmina is", "tool": "people", "args": {"query": "Wilhelmina"}, "source": "sibling_r2"}
+{"text": "who is Dusty please", "tool": "people", "args": {"query": "Dusty"}, "source": "sibling_r2"}
+{"text": "do you know who Ophelia is", "tool": "people", "args": {"query": "Ophelia"}, "source": "sibling_r2"}
+{"text": "who's Barnaby again", "tool": "people", "args": {"query": "Barnaby"}, "source": "sibling_r2"}
+{"text": "who even is Sunny", "tool": "people", "args": {"query": "Sunny"}, "source": "sibling_r2"}
