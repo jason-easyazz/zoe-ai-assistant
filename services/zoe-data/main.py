@@ -231,14 +231,34 @@ async def _build_readiness_report_uncached() -> dict:
     )
     dependencies = {"brain": brain, "stt": stt, "tts": tts}
     ready = all(bool(dep.get("ok")) for dep in dependencies.values())
-    return {
-        "status": "ok" if ready else "degraded",
+    # A dependency can be up (ok) yet degraded — e.g. Kokoro serving on CPU instead
+    # of CUDA: replies still play but slower-than-realtime, so they come out choppy.
+    # This is a quality regression, not an outage, so it must NOT flip `ready`/HTTP
+    # 503 (that restarts zoe-data — the wrong service, and a busy box would just flap
+    # since it's the sidecar that needs to re-grab CUDA). Instead we lift it to the
+    # top-level `status`, which deploy/watchdog checks already gate on, so a silent
+    # CPU fallback stops reading as fully healthy.
+    degraded_reasons = {
+        name: dep.get("degraded_reason") or True
+        for name, dep in dependencies.items()
+        if dep.get("degraded")
+    }
+    degraded = bool(degraded_reasons)
+    # status is "ok" only when fully ready AND no dependency is degraded; unchanged
+    # "degraded" for the not-ready case (was already that), now also for ready-but-degraded.
+    status = "ok" if (ready and not degraded) else "degraded"
+    report = {
+        "status": status,
         "service": "zoe-data",
         "version": "1.0.0",
         "memory_capture": _memory_capture_health,
         "ready": ready,
         "dependencies": dependencies,
     }
+    if degraded:
+        report["degraded"] = True
+        report["degraded_reasons"] = degraded_reasons
+    return report
 
 
 async def _build_readiness_report(*, use_cache: bool = True) -> dict:
