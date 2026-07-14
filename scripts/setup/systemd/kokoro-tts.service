@@ -3,10 +3,12 @@
 [Unit]
 Description=Kokoro TTS sidecar (local neural voice for Zoe, port 10201)
 Documentation=https://github.com/hexgrad/kokoro
-# Start after the brain: llama-server mlocks ~5.2GB, and Kokoro's CUDA init needs
-# ~2.3GB of the same unified memory. Letting the brain claim its pages first turns a
-# boot-time race (Kokoro OOMs -> silently falls back to slow, choppy CPU TTS) into a
-# deterministic order.
+# Order after the brain as a hint (llama-server mlocks ~5.2GB; Kokoro's CUDA init
+# needs ~2.3GB of the same unified memory). NOTE: After= only orders the START
+# event, not readiness — with a Type=simple brain unit it does NOT guarantee the
+# brain has finished loading. The real gate is in the sidecar: _wait_for_brain_ready()
+# polls the brain's /health before the CUDA alloc, so the boot-time OOM race (Kokoro
+# -> silent slow/choppy CPU TTS) is closed in code regardless of unit timing.
 After=network.target llama-server.service
 
 [Service]

@@ -449,6 +449,39 @@ def _reload_from_disk(cache_dir: Path, max_entries: int) -> tuple[dict, dict]:
 
 # ─── Pipeline loading ─────────────────────────────────────────────────────────
 
+_BRAIN_HEALTH_URL = os.environ.get("ZOE_KOKORO_BRAIN_HEALTH_URL", "http://127.0.0.1:11434/health")
+_BRAIN_WAIT_S = float(os.environ.get("ZOE_KOKORO_BRAIN_WAIT_S", "45"))
+_BRAIN_POLL_S = float(os.environ.get("ZOE_KOKORO_BRAIN_POLL_S", "2"))
+
+
+def _wait_for_brain_ready() -> None:
+    """Block until the brain's /health answers 200, or the bounded window elapses.
+
+    Best-effort: the brain owning the same unified memory should claim its pages
+    before Kokoro asks CUDA for ~2.3GB. If the endpoint never comes up within the
+    window we proceed anyway — the CUDA retry loop + CPU fallback still cover it, so
+    this can never wedge the sidecar at boot. Set ZOE_KOKORO_BRAIN_WAIT_S=0 to skip.
+    """
+    if _BRAIN_WAIT_S <= 0:
+        return
+    import urllib.request
+
+    deadline = time.monotonic() + _BRAIN_WAIT_S
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(_BRAIN_HEALTH_URL, timeout=2) as resp:
+                if 200 <= resp.status < 300:
+                    logger.info("Brain healthy (%s) — proceeding with CUDA load.", _BRAIN_HEALTH_URL)
+                    return
+        except Exception:
+            pass  # not up yet
+        time.sleep(_BRAIN_POLL_S)
+    logger.warning(
+        "Brain not healthy after %.0fs (%s) — attempting CUDA anyway; retry loop + "
+        "CPU fallback still apply.", _BRAIN_WAIT_S, _BRAIN_HEALTH_URL,
+    )
+
+
 def _load_pipeline():
     """Load and return the Kokoro pipeline (blocking; run once in thread pool)."""
     global _device
@@ -470,11 +503,19 @@ def _load_pipeline():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info("Loading Kokoro KPipeline (lang=a device=%s voice=%s)…", device, _VOICE)
 
-    # CUDA needs ~2.3GB of unified memory, and at boot the brain (mlock'd, ~5.2GB) and
-    # the rest of the stack are still settling — an allocation that fails now often
-    # succeeds seconds later. Retry before giving up, because the CPU fallback is not
-    # merely slower: it synthesizes SLOWER THAN REAL TIME (RTF ~1.0-1.8x), so the
-    # sentence-streamed voice pipe starves and every reply plays back in pieces.
+    # Wait for the brain to finish loading before touching CUDA. `After=llama-server`
+    # in the unit only orders the START event, not readiness — with a Type=simple
+    # brain unit, Kokoro would otherwise race the brain's mlock of ~5.2GB and OOM its
+    # CUDA alloc. Gate on the brain's own /health (best-effort, bounded): once it
+    # answers, its pages are claimed and the ~2.3GB CUDA alloc has a stable budget.
+    if device == "cuda":
+        _wait_for_brain_ready()
+
+    # CUDA needs ~2.3GB of unified memory. Even after the brain is up the box can be
+    # momentarily tight, and an allocation that fails now often succeeds seconds
+    # later — so retry before giving up. The CPU fallback is not merely slower: it
+    # synthesizes SLOWER THAN REAL TIME (RTF ~1.0-1.8x), so the sentence-streamed
+    # voice pipe starves and every reply plays back in pieces.
     last_exc: Exception | None = None
     if device == "cuda":
         for attempt in range(1, _CUDA_LOAD_ATTEMPTS + 1):
