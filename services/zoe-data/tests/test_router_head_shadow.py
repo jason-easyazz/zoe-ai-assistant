@@ -64,10 +64,14 @@ def test_head_mode_shadow(monkeypatch):
     assert semantic_router.head_mode() == "shadow"
 
 
-def test_head_mode_active_not_implemented(monkeypatch):
+def test_head_mode_active(monkeypatch):
     monkeypatch.setenv("ZOE_ROUTER_HEAD", "active")
-    with pytest.raises(NotImplementedError):
-        semantic_router.head_mode()
+    assert semantic_router.head_mode() == "active"
+
+
+def test_head_mode_shadow2(monkeypatch):
+    monkeypatch.setenv("ZOE_ROUTER_HEAD", "shadow2")
+    assert semantic_router.head_mode() == "shadow2"
 
 
 def test_head_mode_unknown_is_off(monkeypatch):
