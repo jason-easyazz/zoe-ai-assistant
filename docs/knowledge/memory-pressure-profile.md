@@ -65,8 +65,14 @@ was running** — the on-demand reap (below) had it stopped.
 
 ### Kokoro sidecar (PID 1547)
 
-- Default backend is **ONNX on CPU, ~600 MB** (`scripts/setup/kokoro_sidecar.py:59-64`); the widely
-  quoted 2.3 GB figure is the PyTorch-GPU backend, which is not the default.
+- Backend is **PyTorch on CUDA, ~2.3 GB** (`ZOE_KOKORO_BACKEND=pytorch` in `kokoro-tts.service`).
+  This memory is **load-bearing and must not be reclaimed**: the ONNX/CPU backend (~600 MB) is
+  slower than real time (RTF ~1.0–1.8x vs 0.08x on CUDA), so the sentence-streamed voice pipe
+  starves and every reply plays back chopped into pieces. Budget the 2.3 GB; don't "save" it.
+- CUDA init needs ~2.3 GB free at load. If the box is busy it OOMs (`NvMapMemAllocInternalTagged:
+  error 12`) and silently degrades to CPU — the sidecar now retries, logs `DEGRADED`, and sets
+  `degraded=true` on `/health`. The unit is ordered `After=llama-server.service` so the brain
+  claims its mlock'd pages first.
 - Measured: `VmRSS` 1.2 MB / `VmSwap` 630 MB / `VmHWM` 607 MB — at idle the kernel swaps it out
   almost entirely; it pages back in on TTS use. Effectively an involuntary "reap-by-swap".
 

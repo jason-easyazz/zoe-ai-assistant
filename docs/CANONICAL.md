@@ -23,7 +23,7 @@ Changing one means editing this file **and** the lock-in test, in a PR, on purpo
 |---|---|---|
 | **Brain (LLM)** | **Gemma 4 E4B-QAT + MTP drafter** | host-native `llama-server` on `:11434` → `~/models/gemma4-e4b-qat/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf` (+ `mtp-gemma-4-E4B-it.gguf`) |
 | **STT** | **Moonshine v2 Medium** | `services/zoe-data` (`warm_moonshine` warmup on startup) |
-| **TTS** | **Kokoro** (ONNX, GPU) | `/api/voice/synthesize` waterfall: Kokoro → Edge TTS → espeak-ng |
+| **TTS** | **Kokoro** (PyTorch on CUDA, `ZOE_KOKORO_BACKEND=pytorch`) | `/api/voice/synthesize` waterfall: Kokoro → Edge TTS → espeak-ng. CUDA is load-bearing, not a nicety: the ONNX/CPU backend synthesizes **slower than real time** (RTF ~1.0–1.8x), which starves the sentence-streamed voice pipe and makes replies play back in pieces. CUDA runs at RTF ~0.08x. Costs ~2.3 GB unified memory; `/health` reports `degraded=true` if it ever falls back to CPU. |
 
 <!-- LOCKED-ROCKS: machine-readable; the CI test parses this block. Do not edit casually. -->
 ```yaml

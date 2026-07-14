@@ -17,8 +17,10 @@ _SRC = open(_DAEMON, encoding="utf-8").read()
 
 
 def test_preroll_widened_for_onset():
-    # ~960ms pre-roll (12 chunks) so the command onset survives the wake word.
-    assert re.search(r'PREROLL_CHUNKS"\s*,\s*"12"', _SRC), "PREROLL_CHUNKS default should be 12"
+    # ~1.6s pre-roll (20 chunks) so the command onset survives the wake word + the
+    # 2-confirm delay + openWakeWord's lag. 12 chunks (~960ms) landed inside the wake
+    # word, so real captures began on "Zoe" and lost the command onset (PR #1326).
+    assert re.search(r'PREROLL_CHUNKS"\s*,\s*"20"', _SRC), "PREROLL_CHUNKS default should be 20"
 
 
 def test_followup_vad_threshold_sensitive():

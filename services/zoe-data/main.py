@@ -185,6 +185,14 @@ async def _check_tts_ready(timeout_s: float = 2.0) -> dict:
             detail["pipeline_loaded"] = bool(payload.get("pipeline_loaded"))
             detail["voice"] = payload.get("voice")
             detail["device"] = payload.get("device")
+            # A sidecar that fell back to CPU still loads its pipeline and serves
+            # audio, so ok stays True (flipping it would make the waterfall drop
+            # Kokoro for espeak — worse). But CPU synthesis is slower than real time
+            # and makes replies choppy, so surface it here: watchdogs gate only on
+            # pipeline_loaded/ok and would otherwise never see the regression.
+            if payload.get("degraded"):
+                detail["degraded"] = True
+                detail["degraded_reason"] = payload.get("degraded_reason")
             detail["ok"] = bool(payload.get("pipeline_loaded"))
             if not detail["ok"]:
                 detail["error"] = "pipeline_not_loaded"
@@ -223,14 +231,34 @@ async def _build_readiness_report_uncached() -> dict:
     )
     dependencies = {"brain": brain, "stt": stt, "tts": tts}
     ready = all(bool(dep.get("ok")) for dep in dependencies.values())
-    return {
-        "status": "ok" if ready else "degraded",
+    # A dependency can be up (ok) yet degraded — e.g. Kokoro serving on CPU instead
+    # of CUDA: replies still play but slower-than-realtime, so they come out choppy.
+    # This is a quality regression, not an outage, so it must NOT flip `ready`/HTTP
+    # 503 (that restarts zoe-data — the wrong service, and a busy box would just flap
+    # since it's the sidecar that needs to re-grab CUDA). Instead we lift it to the
+    # top-level `status`, which deploy/watchdog checks already gate on, so a silent
+    # CPU fallback stops reading as fully healthy.
+    degraded_reasons = {
+        name: dep.get("degraded_reason") or True
+        for name, dep in dependencies.items()
+        if dep.get("degraded")
+    }
+    degraded = bool(degraded_reasons)
+    # status is "ok" only when fully ready AND no dependency is degraded; unchanged
+    # "degraded" for the not-ready case (was already that), now also for ready-but-degraded.
+    status = "ok" if (ready and not degraded) else "degraded"
+    report = {
+        "status": status,
         "service": "zoe-data",
         "version": "1.0.0",
         "memory_capture": _memory_capture_health,
         "ready": ready,
         "dependencies": dependencies,
     }
+    if degraded:
+        report["degraded"] = True
+        report["degraded_reasons"] = degraded_reasons
+    return report
 
 
 async def _build_readiness_report(*, use_cache: bool = True) -> dict:
