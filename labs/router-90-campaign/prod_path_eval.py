@@ -29,9 +29,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import statistics
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -43,8 +45,10 @@ from run_two_stage import (  # noqa: E402
     CORPUS, MIN_AVAILABLE_MB, mem_available_mb, score, start_server,
     summarize)
 
-SIDECAR_PORT = 11436
-GGUF_R2 = "/home/zoe/models/lab/functiongemma-270m-zoe-functok-r2-Q8_0.gguf"
+SIDECAR_PORT = int(os.environ.get("ZOE_ROUTER_SIDECAR_PORT", "11436"))
+GGUF_R2 = os.environ.get(
+    "GGUF_R2",
+    "/home/zoe/models/lab/functiongemma-270m-zoe-functok-r2-Q8_0.gguf")
 FALLBACK_SOURCES = ("gate_abstain", "shortlist_miss", "error_fallback")
 
 # Acceptance gates
@@ -72,8 +76,30 @@ def _stub_route_two_stage(text: str):
 def load_router(stub: bool):
     if stub:
         return _stub_route_two_stage
-    from semantic_router import route_two_stage  # the real prod function
+    try:
+        from semantic_router import route_two_stage  # the real prod function
+    except ImportError as e:
+        raise SystemExit(
+            "ABORT: semantic_router.route_two_stage is not available on this "
+            "checkout — it lands with the two-stage-router-active PR (lane 1)."
+            f" Import error: {e}") from e
     return route_two_stage
+
+
+def check_sidecar_identity(port: int, gguf: str) -> None:
+    """A pre-existing server on :port must actually serve the r2 GGUF."""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/props",
+                                    timeout=5) as r:
+            served = json.load(r).get("model_path", "")
+    except OSError as e:
+        raise SystemExit(
+            f"ABORT: no reachable sidecar on :{port} ({e}); "
+            "pass --launch-sidecar to start one") from e
+    if served != gguf:
+        raise SystemExit(
+            f"ABORT: sidecar on :{port} serves {served!r}, expected {gguf!r} "
+            "— refusing to produce numbers from the wrong model")
 
 
 def run(route_fn, cases: list[dict]) -> tuple[list[dict], list[float]]:
@@ -150,12 +176,16 @@ def main() -> int:
               file=sys.stderr)
         return 2
 
+    # import before spawning anything so an import failure leaks no server
+    route_fn = load_router(stub=args.stub)
+    cases = [json.loads(l) for l in CORPUS.open()]
+
     proc = None
-    if args.launch_sidecar:
-        proc = start_server(GGUF_R2, SIDECAR_PORT)
     try:
-        route_fn = load_router(stub=args.stub)
-        cases = [json.loads(l) for l in CORPUS.open()]
+        if args.launch_sidecar:
+            proc = start_server(GGUF_R2, SIDECAR_PORT)
+        elif not args.stub:
+            check_sidecar_identity(SIDECAR_PORT, GGUF_R2)
         results, lat = run(route_fn, cases)
     finally:
         if proc is not None:
