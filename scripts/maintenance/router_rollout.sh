@@ -130,14 +130,16 @@ line_count() { [ -f "$1" ] && wc -l < "$1" || echo 0; }
 probe_routes() {
   # Routes for ONE probe, scoped to records written after the probe (skip the
   # pre-probe line count $2) and matched to the probe utterance $3 by the
-  # record's sha256 hash ("utt", #1318 privacy convention). Falls back to all
-  # new records if the writer doesn't log "utt". Prints one route per line;
-  # nothing if no new records — live traffic can no longer alias the probe.
+  # record's sha256 hash ("utt", #1318 privacy convention). ONLY hash-matched
+  # records are printed (one route per line): a record without the probe's
+  # identity is never attributed to the probe, so unrelated live traffic can
+  # never decide a probe. If the log writer doesn't record "utt", this prints
+  # nothing and the caller sees route "?" — reconcile the log contract instead.
   python3 - "$1" "$2" "$3" <<'PY'
 import hashlib, json, sys
 path, skip, text = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 utt = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
-matched, unmatched = [], []
+matched = []
 try:
     with open(path, encoding="utf-8") as fh:
         for i, line in enumerate(fh):
@@ -155,11 +157,11 @@ try:
                 if rec.get(key):
                     route = str(rec[key])
                     break
-            (matched if str(rec.get("utt", "")).startswith(utt[:12]) else unmatched
-             ).append(route)
+            if str(rec.get("utt", "")).startswith(utt[:12]):
+                matched.append(route)
 except OSError:
     pass
-for r in (matched or unmatched):
+for r in matched:
     print(r)
 PY
 }
@@ -278,7 +280,7 @@ stage_active() {
   sleep "$SETTLE_S"
   route="$(probe_route_for "$skip2" "$skip1" "$CMD_UTTERANCE")"
   if [ "$route" = "chat" ] || [ "$route" = "?" ]; then
-    fail "command probe route='$route' per router log — active router did not take the tool route"
+    fail "command probe route='$route' per router log — active router did not take the tool route ('?' = no record carrying the probe's utt hash; check the log path/record contract)"
   fi
   log "  command probe: HTTP 200 in ${ms}ms, route=$route — OK"
 
@@ -294,6 +296,7 @@ stage_active() {
     if [ "$route" != "chat" ] && [ "$route" != "?" ]; then
       fail "chat-FP: '$u' routed to '$route' under active — roll back and investigate"
     fi
+    [ "$route" = "?" ] && log "  WARNING: no log record matched this probe's utt hash — chat probe verified by response only"
     log "  chat probe ok (${ms}ms, route=$route): $u"
   done
 
