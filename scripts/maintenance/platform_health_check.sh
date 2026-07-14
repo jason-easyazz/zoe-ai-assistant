@@ -21,21 +21,23 @@ warn() {
 check_tts_not_degraded() {
     # The Kokoro sidecar answers /health with device + a `degraded` flag it sets when
     # it fell back from CUDA to CPU. CPU synthesis is slower than real time, so replies
-    # play back choppy — a real quality regression that root /health (pool liveness)
-    # can't see. Surface it here (WARN, non-fatal): choppy-but-working voice is not a
-    # platform outage and must not fail the gate the deploy/autopilot path keys on, but
-    # it must be visible so a silent CUDA fallback doesn't hide.
+    # play back choppy — a real, fixable regression that root /health (pool liveness)
+    # cannot see. A *reachable but degraded* sidecar is unambiguous, so it FAILs the
+    # gate (exit 1): the signal is worthless if nothing gates on it, and freeing memory
+    # + restarting kokoro-tts.service is the known fix. An UNREACHABLE sidecar is only a
+    # WARN: it is optional by design (zoe-data falls back to edge/espeak TTS), so its
+    # absence must not fail the platform gate the deploy/autopilot path keys on.
     local url="${1:-http://127.0.0.1:10201/health}"
     local body
     body="$(curl --silent --show-error --fail --max-time 5 "$url" 2>&1)" || {
-        warn "Kokoro TTS sidecar unreachable at $url (voice may be on a fallback engine): $body"
+        warn "Kokoro TTS sidecar unreachable at $url (optional — voice may be on a fallback engine): $body"
         return
     }
     if printf '%s' "$body" | python3 -c \
         'import json,sys; v=json.load(sys.stdin); raise SystemExit(1 if v.get("degraded") else 0)'; then
         pass "Kokoro TTS on accelerated path (not degraded)"
     else
-        warn "Kokoro TTS is DEGRADED (CPU fallback → choppy replies): $body — free ~2.3GB and restart kokoro-tts.service"
+        fail "Kokoro TTS is DEGRADED (CPU fallback → choppy replies): $body — free ~2.3GB and restart kokoro-tts.service"
     fi
 }
 

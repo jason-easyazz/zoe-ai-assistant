@@ -38,22 +38,34 @@ DAEMON = Path(__file__).resolve().parents[2] / "scripts" / "setup" / "zoe_voice_
 
 @pytest.fixture(scope="module")
 def daemon():
-    """Import the daemon with pyaudio stubbed (it is not installed off the panel)."""
+    """Import the daemon with its device-only top-level deps stubbed.
+
+    The daemon imports pyaudio and requests at module load (mic + HTTP to the
+    Jetson) — neither is installed in the slim unit-test lane, so importing it
+    unstubbed fails at collection with ModuleNotFoundError before any assertion
+    runs. numpy is NOT stubbed: it is universally available here and the capture
+    path under test uses it functionally (the amplitude endpointer).
+    """
+    stubs = {}
     fake_pyaudio = types.ModuleType("pyaudio")
     fake_pyaudio.paInt16 = 8
     fake_pyaudio.PyAudio = object
-    saved = sys.modules.get("pyaudio")
-    sys.modules["pyaudio"] = fake_pyaudio
+    stubs["pyaudio"] = fake_pyaudio
+    stubs["requests"] = types.ModuleType("requests")
+
+    saved = {name: sys.modules.get(name) for name in stubs}
+    sys.modules.update(stubs)
     try:
         spec = importlib.util.spec_from_file_location("zoe_voice_daemon_undertest", DAEMON)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         yield mod
     finally:
-        if saved is not None:
-            sys.modules["pyaudio"] = saved
-        else:
-            sys.modules.pop("pyaudio", None)
+        for name, prev in saved.items():
+            if prev is not None:
+                sys.modules[name] = prev
+            else:
+                sys.modules.pop(name, None)
 
 
 class FakeStream:
