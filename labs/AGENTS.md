@@ -139,6 +139,16 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
   needle-benchmark 81-case corpus, and a fast_tiers integration PLAN. Verdict:
   adopt logreg @ conf 0.4 (79.0% raw / 0% chat-FP gated vs 61.7% baseline).
   Nothing prod-wired; README is a record, not a contract.
+- `router-90-campaign/` — campaign lab to push the tool-level router to ≥90%
+  on the 81-case corpus: GBNF grammar-constrained eval harness
+  (`run_grammar_eval.py`, :11435; grammar(a) all-21 names, grammar(b)
+  SetFit-shortlist, incl. the hybrid shortlist+functok config), the queued
+  definitive expanded-data training launcher, a running scoreboard README and
+  HANDOFF.md. Companion dataset `functiongemma-finetune/build_sibling_dataset.py`
+  → `data/train_sibling.jsonl` (275 sibling-discrimination examples,
+  held-out-guarded). Hand-run only, memory-gated (500 MB non-prod floor),
+  never prod-wired. Best measured so far: hybrid 75.3%; verdict: grammar is
+  hygiene (~0–1.5 pts), sibling training data is the 90% lever.
 - `two-stage-router-eval/` — honest end-to-end eval of the SetFit-top-3 →
   stock-FunctionGemma two-stage router on the full 81-case corpus (replaces
   the oracle-shortlist 16-case 93.8% claim): real pipeline scores 35.8%
