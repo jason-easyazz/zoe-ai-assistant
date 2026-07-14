@@ -37,6 +37,11 @@ export PATH="$ZOE_LOCAL_BIN:$PATH"
 if ! command -v jedi-language-server >/dev/null 2>&1; then
     if command -v uv >/dev/null 2>&1; then
         uv tool install --quiet jedi-language-server >&2 || true
+        # uv installs into the CALLER's tool bin dir, which may not be
+        # /home/zoe/.local/bin when launched with a foreign HOME — add it
+        # to PATH before re-checking.
+        UV_BIN_DIR="$(uv tool dir --bin 2>/dev/null || echo "${HOME:-/nonexistent}/.local/bin")"
+        export PATH="$UV_BIN_DIR:$PATH"
     fi
 fi
 if ! command -v jedi-language-server >/dev/null 2>&1; then
