@@ -3,7 +3,13 @@
 [Unit]
 Description=Kokoro TTS sidecar (local neural voice for Zoe, port 10201)
 Documentation=https://github.com/hexgrad/kokoro
-After=network.target
+# Order after the brain as a hint (llama-server mlocks ~5.2GB; Kokoro's CUDA init
+# needs ~2.3GB of the same unified memory). NOTE: After= only orders the START
+# event, not readiness — with a Type=simple brain unit it does NOT guarantee the
+# brain has finished loading. The real gate is in the sidecar: _wait_for_brain_ready()
+# polls the brain's /health before the CUDA alloc, so the boot-time OOM race (Kokoro
+# -> silent slow/choppy CPU TTS) is closed in code regardless of unit timing.
+After=network.target llama-server.service
 
 [Service]
 Type=simple
@@ -11,14 +17,22 @@ WorkingDirectory=%h/assistant/scripts/setup
 ExecStart=/usr/bin/python3 %h/assistant/scripts/setup/kokoro_sidecar.py
 Environment=KOKORO_VOICE=af_sky
 Environment=KOKORO_SIDECAR_PORT=10201
+# CUDA backend: the ONNX/CPU path synthesizes SLOWER than real time (RTF ~1.0-1.8x),
+# so the sentence-streamed voice pipe starves and the reply plays back in pieces.
+# KPipeline on CUDA runs at RTF ~0.1. Costs ~2.3GB unified memory; the sidecar falls
+# back to CPU on its own if CUDA cannot load.
+Environment=ZOE_KOKORO_BACKEND=pytorch
 Environment=LD_LIBRARY_PATH=%h/.local/lib:/usr/local/cuda-12.6/lib64:/usr/lib/aarch64-linux-gnu
 Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=kokoro-tts
-# Allow time for the model to load and CUDA to warm up.
-TimeoutStartSec=120
+# Cover the worst-case startup: up to ZOE_KOKORO_BRAIN_WAIT_S (180s, matching the
+# brain's own TimeoutStartSec) waiting for the brain, plus the model load + CUDA warm.
+# (Type=simple means systemd already counts the unit started at exec, so this is a
+# belt-and-braces ceiling — but it's sized so nothing can kill the sidecar mid-wait.)
+TimeoutStartSec=300
 
 [Install]
 WantedBy=default.target

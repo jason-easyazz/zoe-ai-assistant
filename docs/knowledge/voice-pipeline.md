@@ -69,6 +69,36 @@ cold STT** (warmup skipped under pressure) and **wake-word bleed** on the first 
 *measurement* over guessing (`VISION.md` principle 4) — when you change the path, measure live, not
 just the harness.
 
+## Two failure modes that are easy to misdiagnose (2026-07-14)
+
+Both were reported as "the wake word gets the first use wrong" and "the voice is broken into
+pieces". Neither was a model problem — Moonshine and Kokoro were fine. Symptoms in the voice path
+are usually **plumbing**, so measure the audio before blaming the model.
+
+**1. Dead air between wake and capture (STT looks like it mis-hears).**
+The daemon closed the mic on wake, played the chime with a *blocking* `subprocess.run`, then opened a
+fresh mic stream — several hundred ms in which the user was already talking. Those words were deleted
+before STT ever saw them, so a *correct* transcript of a *mutilated* recording looked like a bad model:
+
+    "Hey Zoe, what's my name?"           -> "My name."
+    "Hey Zoe, what's on my calendar?"    -> "That's not my calendar this week."
+
+It only bit when the wake word and command were spoken **in one breath**; pausing after "Hey Zoe" let
+the hole land in silence, which is why it seemed intermittent. Tell: the capture starts *hot* (no
+lead-in silence) and the raw Moonshine lines begin at `"Zoe."` with `"Hey"` chopped off. Fix: record
+from the still-open wake stream (`record_command(pa, stream=...)`), chime fire-and-forget, pre-roll
+widened to ~1.6 s. Pinned by `tests/unit/test_voice_wake_no_dead_air.py`.
+
+**2. TTS slower than real time (reply plays back chopped).**
+`turn_stream` synthesizes the reply sentence-by-sentence and feeds a single persistent `aplay` pipe.
+That only works if synthesis outruns playback. On the ONNX/**CPU** backend Kokoro ran at **RTF
+~1.0–1.8x** — slower than real time — so the pipe *had* to run dry at every chunk boundary (ALSA
+underrun -> gap). Short chunks made it worse: per-call overhead pushed a 10-char stub to RTF 1.8x,
+so the very chunking that bought fast first-audio was what starved the pipe. Fix: Kokoro on CUDA
+(`ZOE_KOKORO_BACKEND=pytorch`), RTF **0.08x**. **Diagnostic: if replies ever sound chopped again,
+check `curl localhost:10201/health` for `device` and `degraded` first** — a busy box can OOM the
+CUDA init and silently drop back to CPU.
+
 ## Voice selection — "Zoe's voice" (user-facing)
 
 Zoe's speaking voice is a **household setting**, picked from the touch panel's "Zoe's voice"

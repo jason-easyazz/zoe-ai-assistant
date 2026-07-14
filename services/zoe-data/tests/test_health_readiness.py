@@ -117,6 +117,36 @@ def test_readiness_report_degrades_when_brain_is_dead(monkeypatch):
     assert report["dependencies"]["brain"]["error"] == "ConnectError"
 
 
+def test_degraded_tts_flips_status_but_stays_ready(monkeypatch):
+    # Kokoro on CPU (CUDA fell back) still serves audio, so the deps are all `ok`
+    # and readiness must stay True — a 503 here would restart zoe-data (the wrong
+    # service) and flap. But the top-level `status` drops to "degraded" and a
+    # top-level `degraded` flag appears, so a deploy/watchdog check gating on
+    # status=="ok" catches the slower-than-realtime (choppy) TTS. PR #1326.
+    import main
+
+    async def brain():
+        return {"ok": True, "engine": "gemma"}
+
+    async def stt():
+        return {"ok": True, "engine": "moonshine"}
+
+    async def tts():
+        return {"ok": True, "provider": "kokoro-sidecar", "device": "cpu",
+                "degraded": True, "degraded_reason": "CUDA unavailable (OOM)"}
+
+    monkeypatch.setattr(main, "_check_brain_ready", brain)
+    monkeypatch.setattr(main, "_check_stt_ready", stt)
+    monkeypatch.setattr(main, "_check_tts_ready", tts)
+
+    report = asyncio.run(main._build_readiness_report(use_cache=False))
+
+    assert report["ready"] is True            # still serving → /readyz stays 200, no restart
+    assert report["status"] == "degraded"     # but not "ok" → watchdogs/deploy see it
+    assert report["degraded"] is True
+    assert report["degraded_reasons"]["tts"] == "CUDA unavailable (OOM)"
+
+
 def test_tts_mode_edge_counts_ready_without_kokoro(monkeypatch):
     import main
 

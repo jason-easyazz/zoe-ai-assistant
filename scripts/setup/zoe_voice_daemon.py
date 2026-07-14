@@ -213,7 +213,11 @@ _BARGE_QUEUE: "queue.Queue[bytes]" = None  # type: ignore  # set in main()
 _AMBIENT_QUEUE: "queue.Queue[bytes]" = None  # type: ignore  # set in main()
 # Pre-roll ring buffer so the wake->record stream-open gap does not clip the
 # START of the command (the "what's the" that went missing).
-_PREROLL: deque = deque(maxlen=int(os.environ.get("PREROLL_CHUNKS", "12")))  # ~960ms @1280/16k — wide enough that the command onset survives the 2-confirm wake
+# ~1.6s @1280/16k. The window must reach back from the wake-fire instant (end of
+# the wake word + the 2-confirm delay + openWakeWord's own lag) to BEFORE "Hey", or
+# the capture opens mid-phrase: at 12 chunks (960ms) it landed inside the wake word
+# and real captures began on "Zoe", losing the command onset behind it.
+_PREROLL: deque = deque(maxlen=int(os.environ.get("PREROLL_CHUNKS", "20")))
 import queue as _queue_module
 
 
@@ -708,9 +712,16 @@ def _wake_panel_agent() -> None:
 
 
 def on_wake():
-    """Called when wake word is detected."""
+    """Called when wake word is detected.
+
+    Everything here is fire-and-forget: the command is already being recorded from
+    the still-open wake stream, so any blocking work (the chime spawns aplay and
+    opens the ALSA device — hundreds of ms) would just delay capture. The chime now
+    overlaps the start of the recording; a quiet ~260ms two-tone is far cheaper than
+    deleting the words the user is saying. Set WAKE_BEEP_ENABLED=false to drop it.
+    """
     log.info("Wake word detected! Notifying Jetson and waking screen...")
-    play_wake_beep()
+    threading.Thread(target=play_wake_beep, daemon=True, name="wake-beep").start()
     threading.Thread(target=_wake_panel_agent, daemon=True, name="wake-screen").start()
     threading.Thread(target=_notify_wake_background, daemon=True, name="wake-notify").start()
 
@@ -747,31 +758,44 @@ def play_follow_up_beep() -> None:
         log.debug("Follow-up beep failed: %s", exc)
 
 
-def record_command(pa: pyaudio.PyAudio) -> bytes | None:
-    """Record audio until silence or max duration."""
+def record_command(pa: pyaudio.PyAudio, stream=None) -> bytes | None:
+    """Record audio until silence or max duration.
+
+    When ``stream`` is given, record from that ALREADY-OPEN mic stream (the
+    always-on wake stream) and leave closing it to the caller — the no-dead-air
+    path. Closing the wake stream, playing the chime and opening a fresh stream
+    took several hundred ms, and every word spoken in that window was silently
+    dropped: "Hey Zoe, what's my name?" reached STT as "My name.". Recording
+    straight from the open stream keeps the capture contiguous with the pre-roll,
+    so a command spoken in one breath with the wake word survives intact.
+
+    ``stream=None`` keeps the open-my-own-stream behaviour used by the follow-up
+    windows, which run after the wake stream is closed for the turn.
+    """
     log.info("Recording command (max %ds)...", RECORD_SECONDS)
-    kw: dict = dict(
-        format=pyaudio.paInt16,
-        channels=1,
-        rate=SAMPLE_RATE,
-        input=True,
-        frames_per_buffer=CHUNK_SIZE,
-    )
-    if _INPUT_DEVICE_INDEX is not None:
-        kw["input_device_index"] = _INPUT_DEVICE_INDEX
-    stream = None
-    for attempt in range(1, 6):
-        try:
-            stream = pa.open(**kw)
-            break
-        except OSError as exc:
-            # USB speakerphones can report transient busy/unavailable right after wake playback.
-            if attempt == 5:
-                log.error("Could not open mic stream for command recording: %s", exc)
-                return None
-            wait_s = 0.15 * attempt
-            log.warning("Mic open failed (%s), retrying in %.2fs [%d/5]...", exc, wait_s, attempt)
-            time.sleep(wait_s)
+    owns_stream = stream is None
+    if owns_stream:
+        kw: dict = dict(
+            format=pyaudio.paInt16,
+            channels=1,
+            rate=SAMPLE_RATE,
+            input=True,
+            frames_per_buffer=CHUNK_SIZE,
+        )
+        if _INPUT_DEVICE_INDEX is not None:
+            kw["input_device_index"] = _INPUT_DEVICE_INDEX
+        for attempt in range(1, 6):
+            try:
+                stream = pa.open(**kw)
+                break
+            except OSError as exc:
+                # USB speakerphones can report transient busy/unavailable right after wake playback.
+                if attempt == 5:
+                    log.error("Could not open mic stream for command recording: %s", exc)
+                    return None
+                wait_s = 0.15 * attempt
+                log.warning("Mic open failed (%s), retrying in %.2fs [%d/5]...", exc, wait_s, attempt)
+                time.sleep(wait_s)
     frames = list(_PREROLL)  # prepend pre-roll so the start of speech is kept
     endpointer = _Endpointer()
     stop_reason = "max_duration"
@@ -782,8 +806,9 @@ def record_command(pa: pyaudio.PyAudio) -> bytes | None:
         if endpointer.push(data, len(frames)):
             stop_reason = "silence"
             break
-    stream.stop_stream()
-    stream.close()
+    if owns_stream:
+        stream.stop_stream()
+        stream.close()
     duration_s = len(frames) * CHUNK_SIZE / float(SAMPLE_RATE)
     log.info(
         "Recorded command: duration=%.2fs chunks=%d stop=%s endpoint=%s silence_timeout=%.2fs",
@@ -1348,13 +1373,28 @@ def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None) -> byt
         return None
 
 
-def voice_command(pa: pyaudio.PyAudio, oww) -> None:
-    """Record, transcribe, send command, play response, then follow-up listen."""
+def voice_command(pa: pyaudio.PyAudio, oww, wake_stream=None) -> None:
+    """Record, transcribe, send command, play response, then follow-up listen.
+
+    ``wake_stream`` is the still-open always-on mic stream. The command is recorded
+    from it so no audio is lost between wake and capture; it is then closed here,
+    before the turn runs, because the Jabra rejects a second input stream and
+    _BargeMonitor needs the device for the duration of playback.
+    """
     global _ignore_wake_until
     _recording_active.set()
     follow_ups_done = 0
     try:
-        wav = record_command(pa)
+        try:
+            wav = record_command(pa, stream=wake_stream)
+        finally:
+            # Hand the mic device back before anything else opens it.
+            if wake_stream is not None:
+                try:
+                    wake_stream.stop_stream()
+                    wake_stream.close()
+                except Exception as exc:
+                    log.debug("wake stream close failed (non-fatal): %s", exc)
         if not wav:
             return
 
@@ -1739,14 +1779,16 @@ def main():
                 if (now - _last_wake_at) < MIN_WAKE_INTERVAL_S:
                     continue
                 _last_wake_at = now
-                # Close the always-on wake stream before command capture.
-                # On some USB speakerphones (e.g. Jabra), opening a second input stream
-                # while this one is paused causes PyAudio -9985 "Device unavailable".
-                stream.stop_stream()
-                stream.close()
+                # Keep the wake stream OPEN and record the command straight from it.
+                # Closing it here (then chiming, then opening a fresh stream) left a
+                # several-hundred-ms hole in which the user was already speaking, so
+                # the front of the command was deleted before STT ever saw it.
+                # voice_command() closes this stream once the command is captured —
+                # before _BargeMonitor opens the device, since some USB speakerphones
+                # (e.g. Jabra) reject a second input stream with -9985.
                 try:
                     on_wake()
-                    voice_command(pa, oww)
+                    voice_command(pa, oww, wake_stream=stream)
                 except Exception as exc:
                     log.error("Command pipeline error: %s", exc)
                 finally:
