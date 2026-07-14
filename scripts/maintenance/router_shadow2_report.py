@@ -42,6 +42,13 @@ TOTAL_MS_KEYS = ("total_ms", "shadow2_ms", "two_stage_ms")
 STAGE1_MS_KEYS = ("head_ms", "stage1_ms")
 STAGE2_MS_KEYS = ("fg_ms", "stage2_ms", "sidecar_ms")
 
+# route values that are NOT a real tool route (partial/error/abstain turns)
+NON_TOOL_ROUTES = {"chat", "", "none", "null", "abstain", "error", "unknown"}
+
+
+def _is_tool(route: object) -> bool:
+    return isinstance(route, str) and route.strip().lower() not in NON_TOOL_ROUTES
+
 
 def _pctl(values: list[float], p: float) -> float:
     if not values:
@@ -92,26 +99,33 @@ def report(recs: list[dict]) -> str:
         return "\n".join(out + ["(no shadow2 records — is ZOE_ROUTER_HEAD=shadow2 live?)"])
     out.append(f"unique utterances: {len({r.get('utt') for r in recs})}")
 
-    agree = sum(1 for r in recs
-                if r.get("agree", shadow_route(r) == r.get("actual_routed")))
+    # always recompute agreement from the routes: a logged `agree` may be a
+    # string ("false" is truthy) or carried over from an earlier stage
+    agree = sum(1 for r in recs if shadow_route(r) == r.get("actual_routed"))
     out.append(f"agreement (shadow2 vs actual): {agree}/{n} = {agree / n:.1%}")
 
-    shadow_tool = sum(1 for r in recs if shadow_route(r) != "chat")
-    actual_tool = sum(1 for r in recs if r.get("actual_routed") != "chat")
+    invalid = sum(1 for r in recs if not _is_tool(r.get("actual_routed"))
+                  and r.get("actual_routed") != "chat")
+    if invalid:
+        out.append(f"records with non-route actual_routed (null/abstain/error — "
+                   f"excluded from tool denominators): {invalid}")
+
+    shadow_tool = sum(1 for r in recs if _is_tool(shadow_route(r)))
+    actual_tool = sum(1 for r in recs if _is_tool(r.get("actual_routed")))
     out.append(f"shadow2 would-tool: {shadow_tool}/{n} = {shadow_tool / n:.1%}")
-    out.append(f"actual non-chat routes: {actual_tool}/{n} = {actual_tool / n:.1%}")
+    out.append(f"actual tool routes: {actual_tool}/{n} = {actual_tool / n:.1%}")
 
     # would-be fallback: live router took a tool route, shadow2 abstained to chat
     fallback = sum(1 for r in recs
-                   if r.get("actual_routed") != "chat" and shadow_route(r) == "chat")
+                   if _is_tool(r.get("actual_routed")) and shadow_route(r) == "chat")
     if actual_tool:
         out.append(f"would-be fallback (actual tool, shadow2 chat): "
                    f"{fallback}/{actual_tool} = {fallback / actual_tool:.1%}")
 
     # would-be chat false positives: actual chat, shadow2 says tool
     chat_fp = sum(1 for r in recs
-                  if r.get("actual_routed") == "chat" and shadow_route(r) != "chat")
-    actual_chat = n - actual_tool
+                  if r.get("actual_routed") == "chat" and _is_tool(shadow_route(r)))
+    actual_chat = sum(1 for r in recs if r.get("actual_routed") == "chat")
     if actual_chat:
         out.append(f"shadow2 tool-call on actual-chat turns: {chat_fp}/{actual_chat} = "
                    f"{chat_fp / actual_chat:.1%}")

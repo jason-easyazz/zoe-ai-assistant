@@ -127,30 +127,49 @@ post_chat() {
 
 line_count() { [ -f "$1" ] && wc -l < "$1" || echo 0; }
 
-last_route() {
-  # newest record's route from a tolerant set of keys; "?" if unreadable
-  python3 - "$1" <<'PY'
-import json, sys
-path = sys.argv[1]
-route = "?"
+probe_routes() {
+  # Routes for ONE probe, scoped to records written after the probe (skip the
+  # pre-probe line count $2) and matched to the probe utterance $3 by the
+  # record's sha256 hash ("utt", #1318 privacy convention). Falls back to all
+  # new records if the writer doesn't log "utt". Prints one route per line;
+  # nothing if no new records — live traffic can no longer alias the probe.
+  python3 - "$1" "$2" "$3" <<'PY'
+import hashlib, json, sys
+path, skip, text = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+utt = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+matched, unmatched = [], []
 try:
     with open(path, encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
+        for i, line in enumerate(fh):
+            if i < skip or not line.strip():
                 continue
             try:
                 rec = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            for key in ("final_routed", "routed", "shadow2_routed", "head_routed", "actual_routed"):
-                if isinstance(rec, dict) and rec.get(key):
+            if not isinstance(rec, dict):
+                continue
+            route = "?"
+            for key in ("final_routed", "routed", "shadow2_routed", "head_routed",
+                        "actual_routed"):
+                if rec.get(key):
                     route = str(rec[key])
                     break
+            (matched if str(rec.get("utt", "")).startswith(utt[:12]) else unmatched
+             ).append(route)
 except OSError:
     pass
-print(route)
+for r in (matched or unmatched):
+    print(r)
 PY
+}
+
+probe_route_for() {
+  # route for one probe utterance across the shadow2 + stage-1 logs
+  local skip2="$1" skip1="$2" msg="$3" routes
+  routes="$(probe_routes "$SHADOW2_LOG" "$skip2" "$msg")"
+  [ -n "$routes" ] || routes="$(probe_routes "$SHADOW_LOG" "$skip1" "$msg")"
+  [ -n "$routes" ] && echo "$routes" | tail -n1 || echo "?"
 }
 
 # ----------------------------------------------------------------- pre-flight
@@ -248,7 +267,8 @@ stage_active() {
   restart_and_verify
 
   # post-deploy check 1: canonical command routes to a tool, sub-second
-  local out code ms body
+  local out code ms body skip2 skip1 route
+  skip2="$(line_count "$SHADOW2_LOG")"; skip1="$(line_count "$SHADOW_LOG")"
   out="$(post_chat "$CMD_UTTERANCE")"
   code="${out%% *}"; ms="$(echo "$out" | awk '{print $2}')"; body="${out#* * }"
   [ "$code" = "200" ] || fail "command probe failed (HTTP $code): $CMD_UTTERANCE"
@@ -256,23 +276,21 @@ stage_active() {
   [ "$ms" -le "$ACTIVE_MAX_MS" ] \
     || fail "command probe took ${ms}ms > ${ACTIVE_MAX_MS}ms — active router is not on the fast path"
   sleep "$SETTLE_S"
-  local route
-  route="$(last_route "$SHADOW2_LOG")"
-  [ "$route" = "?" ] && route="$(last_route "$SHADOW_LOG")"
-  if [ "$route" = "chat" ]; then
-    fail "command probe routed to 'chat' per router log — active router did not take the tool route"
+  route="$(probe_route_for "$skip2" "$skip1" "$CMD_UTTERANCE")"
+  if [ "$route" = "chat" ] || [ "$route" = "?" ]; then
+    fail "command probe route='$route' per router log — active router did not take the tool route"
   fi
   log "  command probe: HTTP 200 in ${ms}ms, route=$route — OK"
 
   # post-deploy check 2: chat utterances must NOT tool-call
   local u
   for u in "${CHAT_UTTERANCES[@]}"; do
+    skip2="$(line_count "$SHADOW2_LOG")"; skip1="$(line_count "$SHADOW_LOG")"
     out="$(post_chat "$u")"
     code="${out%% *}"; ms="$(echo "$out" | awk '{print $2}')"
     [ "$code" = "200" ] || fail "chat probe failed (HTTP $code): $u"
     sleep "$SETTLE_S"
-    route="$(last_route "$SHADOW2_LOG")"
-    [ "$route" = "?" ] && route="$(last_route "$SHADOW_LOG")"
+    route="$(probe_route_for "$skip2" "$skip1" "$u")"
     if [ "$route" != "chat" ] && [ "$route" != "?" ]; then
       fail "chat-FP: '$u' routed to '$route' under active — roll back and investigate"
     fi
@@ -280,7 +298,7 @@ stage_active() {
   done
 
   FLAG_TOUCHED=0  # success: flag stays
-  log "STAGE active COMPLETE — voice replay gate still applies before calling this done (see runbook)"
+  log "ACTIVE ROUTER PROBES COMPLETE — the stage is NOT done yet: run the mandatory voice replay gate before calling active done (see runbook)"
 }
 
 rollback() {
