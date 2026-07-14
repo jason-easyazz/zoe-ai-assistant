@@ -139,3 +139,10 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
   needle-benchmark 81-case corpus, and a fast_tiers integration PLAN. Verdict:
   adopt logreg @ conf 0.4 (79.0% raw / 0% chat-FP gated vs 61.7% baseline).
   Nothing prod-wired; README is a record, not a contract.
+- `two-stage-router-eval/` — honest end-to-end eval of the SetFit-top-3 →
+  stock-FunctionGemma two-stage router on the full 81-case corpus (replaces
+  the oracle-shortlist 16-case 93.8% claim): real pipeline scores 35.8%
+  (stage 2 collapses on sibling-tool blocks; stage-1 shortlist near-perfect).
+  Verdict: plan around SetFit-alone 80.2%; a two-stage needs a fine-tuned
+  decoder. Hand-run only (`run_two_stage.py`, :11435, memory-gated); results
+  committed under `results/`.
