@@ -304,3 +304,9 @@ services/zoe-data/models/*
 !services/zoe-data/models/router_head_logreg.joblib
 !services/zoe-data/models/router_head_mlp.joblib
 services/zoe-data/data/router_head_shadow.jsonl
+
+# Router self-training loop (scripts/maintenance/router_selftrain.py).
+# Runtime artifacts only — and the candidate datasets are MINED REAL TRAFFIC
+# (verbatim user utterances), which must never be committed. Journals,
+# scoreboard, work dirs and multi-hundred-MB GGUFs stay local to the box.
+data/router_selftrain/
