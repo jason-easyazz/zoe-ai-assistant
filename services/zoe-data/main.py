@@ -1208,58 +1208,61 @@ async def lifespan(app: FastAPI):
             from proactive.scheduler import get_scheduler as _get_aps
 
             async def _run_router_selftrain() -> None:
-                import asyncio as _aio
+                import subprocess as _sp
                 import sys as _sys
+
+                from async_subprocess import run_to_completion as _run_off_loop
+
                 _script = os.path.normpath(os.path.join(
                     os.path.dirname(os.path.abspath(__file__)),
                     "..", "..", "scripts", "maintenance", "router_selftrain.py"))
                 _timeout = int(os.environ.get(
                     "ZOE_ROUTER_SELFTRAIN_TIMEOUT_S", "28800"))  # 8h: CPU train is slow
-                proc = await _aio.create_subprocess_exec(
-                    _sys.executable, _script,
-                    stdout=_aio.subprocess.PIPE, stderr=_aio.subprocess.STDOUT)
+                _brain = os.environ.get("ZOE_BRAIN_UNIT", "llama-server.service")
+                _env = dict(os.environ)
+                # no login session in a scheduled job — point systemctl at the user bus
+                _env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+
+                # NOTE: every spawn here goes through async_subprocess.run_to_completion
+                # (fork+exec inside a thread pool). asyncio.create_subprocess_exec forks
+                # ON the loop thread, which in this large multi-threaded process can
+                # deadlock pre-exec and freeze the whole API — that is the 2026-06-29
+                # outage. See services/zoe-data/AGENTS.md.
                 try:
-                    out, _ = await _aio.wait_for(proc.communicate(), timeout=_timeout)
-                except _aio.TimeoutError:
-                    # SIGTERM first: the script installs a handler that unwinds so
-                    # its `finally` restores the brain and writes the journal.
-                    # SIGKILL only if it hangs — and SIGKILL cannot be caught, so
-                    # a killed run may leave llama-server STOPPED (the script may
-                    # have stopped it for the training window). Restoring the brain
-                    # is a hard rule, so do it unconditionally here as a
-                    # belt-and-braces net. `start` on an already-running unit is a
-                    # no-op, so this is safe in the terminate-succeeded case too.
-                    # The LIVE sidecar is untouched either way — promotion happens
-                    # only after every gate has already passed.
-                    proc.terminate()
+                    proc = await _run_off_loop(
+                        [_sys.executable, _script], env=_env, timeout=_timeout)
+                except _sp.TimeoutExpired:
+                    # run_to_completion kills the child on timeout. The script traps
+                    # SIGTERM and unwinds so its `finally` restores the brain — but a
+                    # SIGKILL cannot be caught, and a timeout can land inside a
+                    # training window with llama-server STOPPED. Restoring the brain is
+                    # a hard rule, so ensure it unconditionally here (`start` on a
+                    # running unit is a no-op, so this is safe either way).
+                    logger.error("router self-train timed out after %ss (child killed)", _timeout)
                     try:
-                        await _aio.wait_for(proc.communicate(), timeout=120)
-                        logger.error("router self-train timed out (terminated; cleanup ran)")
-                    except _aio.TimeoutError:
-                        proc.kill()
-                        logger.error("router self-train timed out (killed)")
-                    _env = dict(os.environ)
-                    _env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
-                    _brain = os.environ.get("ZOE_BRAIN_UNIT", "llama-server.service")
-                    _restore = await _aio.create_subprocess_exec(
-                        "systemctl", "--user", "start", _brain, env=_env,
-                        stdout=_aio.subprocess.DEVNULL,
-                        stderr=_aio.subprocess.PIPE)
-                    _, _err = await _restore.communicate()
-                    if _restore.returncode == 0:
-                        logger.info("router self-train timeout: brain (%s) ensured up", _brain)
-                    else:
+                        _restore = await _run_off_loop(
+                            ["systemctl", "--user", "start", _brain],
+                            env=_env, timeout=180)
+                        if _restore.returncode == 0:
+                            logger.info("router self-train timeout: brain (%s) ensured up", _brain)
+                        else:
+                            logger.error(
+                                "router self-train timeout: FAILED to restore the brain (%s): %s "
+                                "— OPERATOR ACTION REQUIRED",
+                                _brain, (_restore.stderr or b"").decode(errors="replace")[:500])
+                    except Exception as _rexc:
                         logger.error(
                             "router self-train timeout: FAILED to restore the brain (%s): %s "
-                            "— OPERATOR ACTION REQUIRED",
-                            _brain, (_err or b"").decode(errors="replace")[:500])
+                            "— OPERATOR ACTION REQUIRED", _brain, _rexc)
                     return
-                tail = (out or b"").decode(errors="replace")[-3000:]
+
+                tail = (proc.stdout or b"").decode(errors="replace")[-3000:]
                 if proc.returncode == 0:
                     logger.info("router self-train ok:\n%s", tail)
                 else:
                     # rc!=0 includes an auto-rollback — loud on purpose.
-                    logger.error("router self-train rc=%s:\n%s", proc.returncode, tail)
+                    logger.error("router self-train rc=%s:\n%s\n%s", proc.returncode, tail,
+                                 (proc.stderr or b"").decode(errors="replace")[-1000:])
 
             _get_aps().add_job(
                 _run_router_selftrain,

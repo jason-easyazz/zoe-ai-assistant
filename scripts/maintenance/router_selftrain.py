@@ -728,15 +728,28 @@ def deploy(candidate_gguf: Path, stamp: str, baseline_live: EvalScore,
     os.replace(tmp, SERVED_GGUF)  # atomic swap of the served file
     log(f"swapped served model ← {candidate_gguf.name}")
 
-    if not _restart_and_verify(candidate_gguf):
-        return _rollback("sidecar health/identity check failed after restart")
+    # ---- CROSSED THE RUBICON ------------------------------------------------
+    # The served file is now the candidate. From here EVERY exit path must end
+    # with either a verified promotion or a rollback — including SIGTERM (the
+    # scheduler's timeout kill, which our own handler turns into SystemExit) and
+    # KeyboardInterrupt. Without this, an interrupt during restart/verify or the
+    # post-deploy eval would unwind straight past _rollback() and leave the
+    # sidecar serving a model that never passed its live checks. Hence
+    # BaseException, not Exception.
+    try:
+        if not _restart_and_verify(candidate_gguf):
+            return _rollback("sidecar health/identity check failed after restart")
 
-    post = run_eval(SERVED_GGUF, LIVE_PORT,
-                    RUNS_DIR / f"{stamp}-post-deploy.json",
-                    launch=False, label="post-deploy-live")
-    verdict = decide_rollback(post, baseline_live)
-    if not verdict.promote:
-        return _rollback("; ".join(verdict.reasons))
+        post = run_eval(SERVED_GGUF, LIVE_PORT,
+                        RUNS_DIR / f"{stamp}-post-deploy.json",
+                        launch=False, label="post-deploy-live")
+        verdict = decide_rollback(post, baseline_live)
+        if not verdict.promote:
+            return _rollback("; ".join(verdict.reasons))
+    except BaseException as exc:
+        _rollback(f"interrupted or errored mid-deploy ({exc!r}) — the sidecar must "
+                  "never be left serving an unverified model")
+        raise
 
     PROVENANCE.write_text(json.dumps({
         "promoted_at": stamp, "gguf_sha256": sha256(SERVED_GGUF),

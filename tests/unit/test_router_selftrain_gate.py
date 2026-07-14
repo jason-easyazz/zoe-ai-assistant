@@ -236,6 +236,37 @@ def test_sigterm_unwinds_so_the_brain_is_restored():
     signal.signal(signal.SIGTERM, signal.SIG_DFL)  # restore, don't poison the suite
 
 
+def test_interrupt_after_model_swap_rolls_back(tmp_path, monkeypatch):
+    """Once the served GGUF is swapped, ANY exit must roll back.
+
+    The scheduler SIGTERMs the script on timeout and our handler turns that into
+    SystemExit. If that lands during restart/verify or the post-deploy eval, an
+    `except Exception` would not catch it and the sidecar would be left serving a
+    model that never passed its live checks — the one thing deploy must never do.
+    """
+    served = tmp_path / "served.gguf"
+    served.write_bytes(b"INCUMBENT")
+    cand = tmp_path / "cand.gguf"
+    cand.write_bytes(b"CANDIDATE")
+
+    monkeypatch.setattr(rs, "SERVED_GGUF", served)
+    monkeypatch.setattr(rs, "ARCHIVE_DIR", tmp_path / "archive")
+    monkeypatch.setattr(rs, "PROVENANCE", tmp_path / "provenance.json")
+    monkeypatch.setattr(rs, "systemctl", lambda *a, **k: None)
+    monkeypatch.setattr(rs, "prune_archive", lambda: None)
+    # the interrupt lands during verification, after the file swap
+    def _boom(*_a, **_k):
+        raise SystemExit("SIGTERM")
+    monkeypatch.setattr(rs, "_restart_and_verify", _boom, raising=False)
+    monkeypatch.setattr(rs, "wait_for", _boom)
+
+    with pytest.raises(SystemExit):
+        rs.deploy(cand, "teststamp", INCUMBENT, {})
+
+    assert served.read_bytes() == b"INCUMBENT", (
+        "served model was left as the unverified candidate after an interrupt")
+
+
 def test_systemctl_sets_user_bus_env():
     """`systemctl --user` from a scheduled subprocess has no login session; without
     XDG_RUNTIME_DIR the brain-restore silently fails (scripts/AGENTS.md)."""
