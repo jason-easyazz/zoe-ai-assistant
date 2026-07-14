@@ -1,0 +1,414 @@
+{"text": "could you can you set a 1 minute timer for me", "tool": "set_timer", "args": {"minutes": 1, "label": ""}, "source": "template"}
+{"text": "could you note down the good plumber is on 0400 123 456 for me", "tool": "create_note", "args": {"content": "the good plumber is on 0400 123 456", "title": ""}, "source": "template"}
+{"text": "please tell me about Grace", "tool": "people", "args": {"action": "query", "name": "Grace", "relationship": "", "query": "Grace", "notes": ""}, "source": "template"}
+{"text": "zoe I need a reminder to pick up the kids on today at 10pm", "tool": "add_reminder", "args": {"title": "pick up the kids", "date": "today", "time": "10pm"}, "source": "template"}
+{"text": "book in a dinner with mum tomorrow", "tool": "add_calendar_event", "args": {"title": "dinner with mum", "date": "tomorrow", "time": "", "category": ""}, "source": "template"}
+{"text": "hey zoe can you log in my diary: work was rough today zoe", "tool": "journal", "args": {"action": "create", "content": "work was rough today", "mood": "grateful"}, "source": "template"}
+{"text": "please stick clean the gutters on my personal list thanks", "tool": "add_to_list", "args": {"item": "clean the gutters", "list_type": "personal"}, "source": "template"}
+{"text": "zoe take book flights off my tasks list", "tool": "list_remove", "args": {"item": "book flights", "list_type": "tasks"}, "source": "template"}
+{"text": "Hey, remember my anniversary is October 12th?", "tool": "remember_fact", "args": {"fact": "my anniversary is October 12th"}, "source": "brain-paraphrase"}
+{"text": "zoe what am I supposed to do this week please", "tool": "list_reminders", "args": {"qualifier": "this week"}, "source": "template"}
+{"text": "could you do you remember my doctor's name thanks", "tool": "recall_memory", "args": {"query": "my doctor's name"}, "source": "template"}
+{"text": "today marks a year since we lost the dog and it still hurts", "tool": "remember_emotional_moment", "args": {"moment": "today marks a year since we lost the dog and it still hurts", "valence": "negative", "intensity": "medium"}, "source": "template"}
+{"text": "search my notes for the car insurance please", "tool": "note_search", "args": {"query": "the car insurance"}, "source": "template"}
+{"text": "my friend set a timer once and forgot about it for a week", "tool": null, "args": {}, "source": "chat-seed"}
+{"text": "zoe log in my diary: had a lovely walk on the beach zoe", "tool": "journal", "args": {"action": "create", "content": "had a lovely walk on the beach", "mood": "happy"}, "source": "template"}
+{"text": "please for future reference I prefer window seats", "tool": "remember_fact", "args": {"fact": "I prefer window seats"}, "source": "template"}
+{"text": "tell me what you remember about my name zoe", "tool": "recall_memory", "args": {"query": "my name"}, "source": "template"}
+{"text": "okay zoe anything on the calendar for monday real quick", "tool": "show_calendar", "args": {"qualifier": "monday"}, "source": "template"}
+{"text": "what do you know about ancient rome", "tool": null, "args": {}, "source": "chat-seed"}
+{"text": "could you who is Tom again real quick", "tool": "people", "args": {"action": "query", "name": "Tom", "relationship": "", "query": "Tom", "notes": ""}, "source": "template"}
+{"text": "put fix the fence on the work list", "tool": "add_to_list", "args": {"item": "fix the fence", "list_type": "work"}, "source": "template"}
+{"text": "okay what do you reckon about the weather", "tool": null, "args": {}, "source": "chat-mutated"}
+{"text": "remind me to email the accountant friday", "tool": "add_reminder", "args": {"title": "email the accountant", "date": "friday", "time": ""}, "source": "template"}
+{"text": "what's the weather like", "tool": "get_weather", "args": {"forecast": false, "location": ""}, "source": "template"}
+{"text": "hey zoe can you Lucy moved to Brisbane, make a note of that", "tool": "people", "args": {"action": "update", "name": "Lucy", "relationship": "", "query": "", "notes": "moved to Brisbane"}, "source": "template"}
+{"text": "do I have a note about the paint colour", "tool": "note_search", "args": {"query": "the paint colour"}, "source": "template"}
+{"text": "any reminders for tomorrow", "tool": "list_reminders", "args": {"qualifier": "tomorrow"}, "source": "template"}
+{"text": "dear diary the kids made me laugh so hard tonight", "tool": "journal", "args": {"action": "create", "content": "the kids made me laugh so hard tonight", "mood": ""}, "source": "template"}
+{"text": "zoe what's happening this weekend for me", "tool": "show_calendar", "args": {"qualifier": "this weekend"}, "source": "template"}
+{"text": "okay i'm feeling super optimistic today", "tool": null, "args": {}, "source": "chat-mutated"}
+{"text": "um what do you know about where I park at work thanks", "tool": "recall_memory", "args": {"query": "where I park at work"}, "source": "template"}
+{"text": "new calendar event soccer practice saturday at 9 in the morning", "tool": "add_calendar_event", "args": {"title": "soccer practice", "date": "saturday", "time": "9 in the morning", "category": ""}, "source": "template"}
+{"text": "please do you have the time zoe", "tool": "get_time", "args": {"query": "please do you have the time zoe"}, "source": "template"}
+{"text": "remind me to pick up the kids tomorrow", "tool": "add_reminder", "args": {"title": "pick up the kids", "date": "tomorrow", "time": ""}, "source": "template"}
+{"text": "note down the good plumber is on 0400 123 456 thanks", "tool": "create_note", "args": {"content": "the good plumber is on 0400 123 456", "title": ""}, "source": "template"}
+{"text": "hey zoe can you can I see my birthday list for me", "tool": "show_list", "args": {"list_type": "birthday"}, "source": "template"}
+{"text": "hey turn it down a bit", "tool": "media", "args": {"action": "volume", "query": "", "command": "", "level": "", "direction": "down"}, "source": "template"}
+{"text": "could you add fix the fence to my birthday list", "tool": "add_to_list", "args": {"item": "fix the fence", "list_type": "birthday"}, "source": "template"}
+{"text": "okay zoe what do we have on the work list for me", "tool": "show_list", "args": {"list_type": "work"}, "source": "template"}
+{"text": "please what did I tell you about my coffee order when you get a chance", "tool": "recall_memory", "args": {"query": "my coffee order"}, "source": "template"}
+{"text": "can you is it past 7am yet zoe", "tool": "get_time", "args": {"query": "can you is it past 7am yet zoe"}, "source": "template"}
+{"text": "zoe tell me the temperature in Geraldton right now", "tool": "get_weather", "args": {"forecast": false, "location": "Geraldton"}, "source": "brain-paraphrase"}
+{"text": "journal entry: today was a really good day", "tool": "journal", "args": {"action": "create", "content": "today was a really good day", "mood": ""}, "source": "template"}
+{"text": "hey i'm just chilling wanna chat", "tool": null, "args": {}, "source": "chat-mutated"}
+{"text": "hey what was my last journal entry about when you get a chance", "tool": "journal", "args": {"action": "read", "content": "", "mood": ""}, "source": "template"}
+{"text": "search my notes for my shoe size", "tool": "note_search", "args": {"query": "my shoe size"}, "source": "template"}
+{"text": "please new calendar event lunch with sam next week at seven tonight when you get a chance", "tool": "add_calendar_event", "args": {"title": "lunch with sam", "date": "next week", "time": "seven tonight", "category": ""}, "source": "template"}
+{"text": "hey how do you process information", "tool": null, "args": {}, "source": "chat-mutated"}
+{"text": "remind me to take the bins out at seven tonight", "tool": "add_reminder", "args": {"title": "take the bins out", "date": "", "time": "seven tonight"}, "source": "template"}
+{"text": "cross old task off the birthday list real quick", "tool": "list_remove", "args": {"item": "old task", "list_type": "birthday"}, "source": "template"}
+{"text": "okay zoe tell me what you remember about what I told you about my sister for me", "tool": "recall_memory", "args": {"query": "what I told you about my sister"}, "source": "template"}
+{"text": "take a note that the gate code is 2580", "tool": "create_note", "args": {"content": "the gate code is 2580", "title": ""}, "source": "template"}
+{"text": "what's the deal with penguins", "tool": null, "args": {}, "source": "chat-seed"}
+{"text": "hey add fix the fence to my tasks list", "tool": "add_to_list", "args": {"item": "fix the fence", "list_type": "tasks"}, "source": "template"}
+{"text": "remind me to defrost the chicken at seven tonight", "tool": "add_reminder", "args": {"title": "defrost the chicken", "date": "", "time": "seven tonight"}, "source": "template"}
+{"text": "brighten the porch a bit please", "tool": "home", "args": {"action": "brighten", "room": "porch"}, "source": "template"}
+{"text": "what's the weather looking like this week when you get a chance", "tool": "get_weather", "args": {"forecast": true, "location": ""}, "source": "template"}
+{"text": "don't let me forget toothpaste at the shops", "tool": "shopping_list_add", "args": {"item": "toothpaste"}, "source": "template"}
+{"text": "okay can dogs eat grapes", "tool": null, "args": {}, "source": "chat-mutated"}
+{"text": "hey zoe can you do I have any appointments next week for me", "tool": "show_calendar", "args": {"qualifier": "next week"}, "source": "template"}
+{"text": "hey zoe can you write this down: sarah's coffee order is a flat white", "tool": "create_note", "args": {"content": "sarah's coffee order is a flat white", "title": ""}, "source": "template"}
+{"text": "shopping list olive oil", "tool": "shopping_list_add", "args": {"item": "olive oil"}, "source": "template"}
+{"text": "okay thank you so much", "tool": null, "args": {}, "source": "chat-mutated"}
+{"text": "okay zoe what does my week look like please", "tool": "show_calendar", "args": {"qualifier": "this week"}, "source": "template"}
+{"text": "do you know what I told you about my sister", "tool": "recall_memory", "args": {"query": "what I told you about my sister"}, "source": "template"}
+{"text": "hey can you play 80s hits", "tool": "media", "args": {"action": "play", "query": "80s hits", "command": "", "level": "", "direction": ""}, "source": "template"}
+{"text": "zoe tomatoes is done take it off the shopping list when you get a chance", "tool": "list_remove", "args": {"item": "tomatoes", "list_type": "shopping"}, "source": "template"}
+{"text": "can you set a 12 minute timer", "tool": "set_timer", "args": {"minutes": 12, "label": ""}, "source": "template"}
+{"text": "kill the lights in the kitchen", "tool": "home", "args": {"action": "off", "room": "kitchen"}, "source": "template"}
+{"text": "cross old task off the tasks list zoe", "tool": "list_remove", "args": {"item": "old task", "list_type": "tasks"}, "source": "template"}
+{"text": "um throw on taylor swift", "tool": "media", "args": {"action": "play", "query": "taylor swift", "command": "", "level": "", "direction": ""}, "source": "template"}
+{"text": "don't let me forget cheese at the shops", "tool": "shopping_list_add", "args": {"item": "cheese"}, "source": "template"}
+{"text": "zoe could you just keep me company", "tool": null, "args": {}, "source": "chat-mutated"}
+{"text": "okay what should I cook for dinner", "tool": null, "args": {}, "source": "chat-mutated"}
+{"text": "Put a doctor checkup on my calendar for Friday at 3pm, Zoe", "tool": "add_calendar_event", "args": {"title": "doctor checkup", "date": "friday", "time": "3pm", "category": ""}, "source": "brain-paraphrase"}
+{"text": "please can I see my tasks list please", "tool": "show_list", "args": {"list_type": "tasks"}, "source": "template"}
+{"text": "I keep thinking about the argument with Emma, it's eating at me", "tool": "remember_emotional_moment", "args": {"moment": "I keep thinking about the argument with Emma, it's eating at me", "valence": "negative", "intensity": "medium"}, "source": "template"}
+{"text": "hey zoe can you can you add finish the report to the to-do list", "tool": "add_to_list", "args": {"item": "finish the report", "list_type": "to-do"}, "source": "template"}
+{"text": "zoe what are my reminders zoe", "tool": "list_reminders", "args": {"qualifier": ""}, "source": "template"}
+{"text": "tell me about Lucy", "tool": "people", "args": {"action": "query", "name": "Lucy", "relationship": "", "query": "Lucy", "notes": ""}, "source": "template"}
+{"text": "throw on some jazz", "tool": "media", "args": {"action": "play", "query": "some jazz", "command": "", "level": "", "direction": ""}, "source": "template"}
+{"text": "um go back a song when you get a chance", "tool": "media", "args": {"action": "control", "query": "", "command": "previous", "level": "", "direction": ""}, "source": "template"}
+{"text": "any reminders for tomorrow real quick", "tool": "list_reminders", "args": {"qualifier": "tomorrow"}, "source": "template"}
+{"text": "show me the personal list real quick", "tool": "show_list", "args": {"list_type": "personal"}, "source": "template"}
+{"text": "hey zoe what did I write about the paint colour when you get a chance", "tool": "note_search", "args": {"query": "the paint colour"}, "source": "template"}
+{"text": "can you delete book flights from the birthday list for me", "tool": "list_remove", "args": {"item": "book flights", "list_type": "birthday"}, "source": "template"}
+{"text": "I had a huge falling out with Chloe today", "tool": "remember_emotional_moment", "args": {"moment": "I had a huge falling out with Chloe today", "valence": "negative", "intensity": "high"}, "source": "template"}
+{"text": "we're out of milk", "tool": "shopping_list_add", "args": {"item": "milk"}, "source": "template"}
+{"text": "read out my to-do list", "tool": "show_list", "args": {"list_type": "to-do"}, "source": "template"}
+{"text": "don't forget my daughter's birthday is May 9 please", "tool": "remember_fact", "args": {"fact": "my daughter's birthday is May 9"}, "source": "template"}
+{"text": "zoe do I have a note about the garage door code zoe", "tool": "note_search", "args": {"query": "the garage door code"}, "source": "template"}
+{"text": "can you play something upbeat", "tool": "media", "args": {"action": "play", "query": "something upbeat", "command": "", "level": "", "direction": ""}, "source": "template"}
+{"text": "can you what have I told you about Sarah", "tool": "people", "args": {"action": "query", "name": "Sarah", "relationship": "", "query": "Sarah", "notes": ""}, "source": "template"}
+{"text": "zoe countdown 12 minutes when you get a chance", "tool": "set_timer", "args": {"minutes": 12, "label": ""}, "source": "template"}
+{"text": "do you like music", "tool": null, "args": {}, "source": "chat-seed"}
+{"text": "save a note saying we liked the second paint sample", "tool": "create_note", "args": {"content": "we liked the second paint sample", "title": ""}, "source": "template"}
+{"text": "put yoga class on the calendar next week", "tool": "add_calendar_event", "args": {"title": "yoga class", "date": "next week", "time": "", "category": ""}, "source": "template"}
+{"text": "meet Grace - a friend from work, keep track of them", "tool": "people", "args": {"action": "create", "name": "Grace", "relationship": "a friend from work", "query": "", "notes": ""}, "source": "template"}
+{"text": "add buy a gift for mum to my personal list", "tool": "add_to_list", "args": {"item": "buy a gift for mum", "list_type": "personal"}, "source": "template"}
+{"text": "okay zoe add buy a gift for mum to my work list real quick", "tool": "add_to_list", "args": {"item": "buy a gift for mum", "list_type": "work"}, "source": "template"}
+{"text": "hey turn off the office light zoe", "tool": "home", "args": {"action": "off", "room": "office"}, "source": "template"}
+{"text": "good morning", "tool": null, "args": {}, "source": "chat-seed"}
+{"text": "please time check", "tool": "get_time", "args": {"query": "please time check"}, "source": "template"}
+{"text": "um shopping list yogurt thanks", "tool": "shopping_list_add", "args": {"item": "yogurt"}, "source": "template"}
+{"text": "Hey, jot down that the gate code is 2580 for me.", "tool": "create_note", "args": {"content": "the gate code is 2580", "title": ""}, "source": "brain-paraphrase"}
+{"text": "we're out of cheese", "tool": "shopping_list_add", "args": {"item": "cheese"}, "source": "template"}
+{"text": "tell me about Emma", "tool": "people", "args": {"action": "query", "name": "Emma", "relationship": "", "query": "Emma", "notes": ""}, "source": "template"}
+{"text": "what's the weather in Geraldton", "tool": "get_weather", "args": {"forecast": false, "location": "Geraldton"}, "source": "template"}
+{"text": "man, i am seriously drained today", "tool": null, "args": {}, "source": "brain-paraphrase"}
+{"text": "put pasta on the shopping list for me", "tool": "shopping_list_add", "args": {"item": "pasta"}, "source": "template"}
+{"text": "Zoe, what are you thinking about today?", "tool": null, "args": {}, "source": "brain-paraphrase"}
+{"text": "can you write in my journal that had a lovely walk on the beach", "tool": "journal", "args": {"action": "create", "content": "had a lovely walk on the beach", "mood": ""}, "source": "template"}
+{"text": "Can you find the note concerning the holiday plans?", "tool": "note_search", "args": {"query": "holiday plans"}, "source": "brain-paraphrase"}
+{"text": "hey put clean the gutters on the work list", "tool": "add_to_list", "args": {"item": "clean the gutters", "list_type": "work"}, "source": "template"}
+{"text": "um give me 2 minutes for meeting prep real quick", "tool": "set_timer", "args": {"minutes": 2, "label": "meeting prep"}, "source": "template"}
+{"text": "you there?", "tool": null, "args": {}, "source": "chat-seed"}
+{"text": "Emma finally called me after two years, I cried", "tool": "remember_emotional_moment", "args": {"moment": "Emma finally called me after two years, I cried", "valence": "positive", "intensity": "high"}, "source": "template"}
+{"text": "is it past 5:45pm yet", "tool": "get_time", "args": {"query": "is it past 5:45pm yet"}, "source": "template"}
+{"text": "remember that my favourite colour is green real quick", "tool": "remember_fact", "args": {"fact": "my favourite colour is green"}, "source": "template"}
+{"text": "please don't let me forget to pay the electricity bill today at seven tonight for me", "tool": "add_reminder", "args": {"title": "pay the electricity bill", "date": "today", "time": "seven tonight"}, "source": "template"}
+{"text": "show me the to-do list", "tool": "show_list", "args": {"list_type": "to-do"}, "source": "template"}
+{"text": "paper towels is done take it off the shopping list", "tool": "list_remove", "args": {"item": "paper towels", "list_type": "shopping"}, "source": "template"}
+{"text": "zoe what's on my work list real quick", "tool": "show_list", "args": {"list_type": "work"}, "source": "template"}
+{"text": "can you tell me the time please real quick", "tool": "get_time", "args": {"query": "can you tell me the time please real quick"}, "source": "template"}
+{"text": "hey zoe remove old task from the birthday list thanks", "tool": "list_remove", "args": {"item": "old task", "list_type": "birthday"}, "source": "template"}
+{"text": "Lower the lights on the porch", "tool": "home", "args": {"action": "dim", "room": "porch"}, "source": "brain-paraphrase"}
+{"text": "could you show me my reminders", "tool": "list_reminders", "args": {"qualifier": ""}, "source": "template"}
+{"text": "okay zoe log in my diary: the kids made me laugh so hard tonight zoe", "tool": "journal", "args": {"action": "create", "content": "the kids made me laugh so hard tonight", "mood": ""}, "source": "template"}
+{"text": "book in a dinner with mum monday for me", "tool": "add_calendar_event", "args": {"title": "dinner with mum", "date": "monday", "time": "", "category": ""}, "source": "template"}
+{"text": "what have I told you about David", "tool": "people", "args": {"action": "query", "name": "David", "relationship": "", "query": "David", "notes": ""}, "source": "template"}
+{"text": "what's what I said about the holiday again", "tool": "recall_memory", "args": {"query": "what I said about the holiday"}, "source": "template"}
+{"text": "Emma surprised me for my birthday, I feel so loved", "tool": "remember_emotional_moment", "args": {"moment": "Emma surprised me for my birthday, I feel so loved", "valence": "positive", "intensity": "medium"}, "source": "template"}
+{"text": "um new calendar event team meeting the 15th at 9 in the morning please", "tool": "add_calendar_event", "args": {"title": "team meeting", "date": "the 15th", "time": "9 in the morning", "category": ""}, "source": "template"}
+{"text": "could you set a 1 minute timer for nap when you get a chance", "tool": "set_timer", "args": {"minutes": 1, "label": "nap"}, "source": "template"}
+{"text": "watching my niece take her first steps today was magic", "tool": "remember_emotional_moment", "args": {"moment": "watching my niece take her first steps today was magic", "valence": "positive", "intensity": "high"}, "source": "template"}
+{"text": "um what's happening this weekend for me", "tool": "show_calendar", "args": {"qualifier": "this weekend"}, "source": "template"}
+{"text": "okay you alright", "tool": null, "args": {}, "source": "chat-mutated"}
+{"text": "time check thanks", "tool": "get_time", "args": {"query": "time check thanks"}, "source": "template"}
+{"text": "please don't forget the spare key is under the pot plant for me", "tool": "remember_fact", "args": {"fact": "the spare key is under the pot plant"}, "source": "template"}
+{"text": "Hey, can you put in my yoga class for today?", "tool": "add_calendar_event", "args": {"title": "yoga class", "date": "today", "time": "", "category": ""}, "source": "brain-paraphrase"}
+{"text": "Sarah surprised me for my birthday, I feel so loved", "tool": "remember_emotional_moment", "args": {"moment": "Sarah surprised me for my birthday, I feel so loved", "valence": "positive", "intensity": "medium"}, "source": "template"}
+{"text": "remind me to water the plants this weekend real quick", "tool": "add_reminder", "args": {"title": "water the plants", "date": "this weekend", "time": ""}, "source": "template"}
+{"text": "could you switch off the lights in the living room", "tool": "home", "args": {"action": "off", "room": "living room"}, "source": "template"}
+{"text": "do I have a note about the meeting notes", "tool": "note_search", "args": {"query": "the meeting notes"}, "source": "template"}
+{"text": "hey zoe switch off the lights in the garage real quick", "tool": "home", "args": {"action": "off", "room": "garage"}, "source": "template"}
+{"text": "wake me in 90 minutes", "tool": "set_timer", "args": {"minutes": 90, "label": ""}, "source": "template"}
+{"text": "don't forget I'm allergic to peanuts", "tool": "remember_fact", "args": {"fact": "I'm allergic to peanuts"}, "source": "template"}
+{"text": "do you have any opinions on movies", "tool": null, "args": {}, "source": "chat-seed"}
+{"text": "Can you tell me a story, do you think?", "tool": null, "args": {}, "source": "brain-paraphrase"}
+{"text": "okay zoe look up my note on holiday plans when you get a chance", "tool": "note_search", "args": {"query": "holiday plans"}, "source": "template"}
+{"text": "stick fix the fence on my personal list", "tool": "add_to_list", "args": {"item": "fix the fence", "list_type": "personal"}, "source": "template"}
+{"text": "please add orange juice to groceries please", "tool": "shopping_list_add", "args": {"item": "orange juice"}, "source": "template"}
+{"text": "zoe thank you so much", "tool": null, "args": {}, "source": "chat-mutated"}
+{"text": "so we talked about the weather for an hour, so boring", "tool": null, "args": {}, "source": "chat-mutated"}
+{"text": "Hey, can you finish the music for me?", "tool": "media", "args": {"action": "control", "query": "", "command": "resume", "level": "", "direction": ""}, "source": "brain-paraphrase"}
+{"text": "time bread for 5 minutes", "tool": "set_timer", "args": {"minutes": 5, "label": "bread"}, "source": "template"}
+{"text": "zoe current time please", "tool": "get_time", "args": {"query": "zoe current time please"}, "source": "template"}
+{"text": "Hey, can you look through my notes for the garage door code?", "tool": "note_search", "args": {"query": "the garage door code"}, "source": "brain-paraphrase"}
+{"text": "hey zoe what's the forecast for Geraldton tomorrow when you get a chance", "tool": "get_weather", "args": {"forecast": true, "location": "Geraldton"}, "source": "template"}
+{"text": "Zoe, should I grab an umbrella?", "tool": "get_weather", "args": {"forecast": false, "location": ""}, "source": "brain-paraphrase"}
+{"text": "hey zoe what did I write about that recipe idea zoe", "tool": "note_search", "args": {"query": "that recipe idea"}, "source": "template"}
+{"text": "Hey, what's on my schedule for tomorrow?", "tool": "show_calendar", "args": {"qualifier": "tomorrow"}, "source": "brain-paraphrase"}
+{"text": "dim the hallway lights", "tool": "home", "args": {"action": "dim", "room": "hallway"}, "source": "template"}
+{"text": "hey what's happening this weekend real quick", "tool": "show_calendar", "args": {"qualifier": "this weekend"}, "source": "template"}
+{"text": "make a note: pick up dry cleaning friday when you get a chance", "tool": "create_note", "args": {"content": "pick up dry cleaning friday", "title": ""}, "source": "template"}
+{"text": "countdown 25 minutes", "tool": "set_timer", "args": {"minutes": 25, "label": ""}, "source": "template"}
+{"text": "hey what does my week look like", "tool": "show_calendar", "args": {"qualifier": "this week"}, "source": "template"}
+{"text": "Hey, can you look through my notes and tell me what my shoe size is?", "tool": "note_search", "args": {"query": "my shoe size"}, "source": "brain-paraphrase"}
+{"text": "is it past 3pm yet", "tool": "get_time", "args": {"query": "is it past 3pm yet"}, "source": "template"}
+{"text": "so what should we talk about", "tool": null, "args": {}, "source": "chat-mutated"}
+{"text": "any reminders for tomorrow please", "tool": "list_reminders", "args": {"qualifier": "tomorrow"}, "source": "template"}
+{"text": "I want to hear the beatles", "tool": "media", "args": {"action": "play", "query": "the beatles", "command": "", "level": "", "direction": ""}, "source": "template"}
+{"text": "remember Chloe, my daughter's teacher", "tool": "people", "args": {"action": "create", "name": "Chloe", "relationship": "my daughter's teacher", "query": "", "notes": ""}, "source": "template"}
+{"text": "can you save a note saying the gate code is 2580 please", "tool": "create_note", "args": {"content": "the gate code is 2580", "title": ""}, "source": "template"}
+{"text": "hey zoe can you can you play taylor swift zoe", "tool": "media", "args": {"action": "play", "query": "taylor swift", "command": "", "level": "", "direction": ""}, "source": "template"}
+{"text": "save a note saying pick up dry cleaning friday thanks", "tool": "create_note", "args": {"content": "pick up dry cleaning friday", "title": ""}, "source": "template"}
+{"text": "Tell me what you know about Mike", "tool": "people", "args": {"action": "query", "name": "Mike", "relationship": "", "query": "Mike", "notes": ""}, "source": "brain-paraphrase"}
+{"text": "please what time is it please", "tool": "get_time", "args": {"query": "please what time is it please"}, "source": "template"}
+{"text": "turn the lights on zoe", "tool": "home", "args": {"action": "on", "room": ""}, "source": "template"}
+{"text": "please what do you know about my name thanks", "tool": "recall_memory", "args": {"query": "my name"}, "source": "template"}
+{"text": "I want to hear something upbeat", "tool": "media", "args": {"action": "play", "query": "something upbeat", "command": "", "level": "", "direction": ""}, "source": "template"}
+{"text": "Hey Zoe, what's on the list for Zoe's birthday?", "tool": "show_list", "args": {"list_type": "birthday"}, "source": "brain-paraphrase"}
+{"text": "write this down: we liked the second paint sample", "tool": "create_note", "args": {"content": "we liked the second paint sample", "title": ""}, "source": "template"}
+{"text": "don't let me forget to email the accountant the 15th at noon", "tool": "add_reminder", "args": {"title": "email the accountant", "date": "the 15th", "time": "noon"}, "source": "template"}
+{"text": "could you make a note: the good plumber is on 0400 123 456 when you get a chance", "tool": "create_note", "args": {"content": "the good plumber is on 0400 123 456", "title": ""}, "source": "template"}
+{"text": "hey zoe can you what's on my calendar", "tool": "show_calendar", "args": {"qualifier": ""}, "source": "template"}
+{"text": "turn off the bathroom light", "tool": "home", "args": {"action": "off", "room": "bathroom"}, "source": "template"}
+{"text": "how are you feeling today", "tool": null, "args": {}, "source": "chat-seed"}
+{"text": "play taylor swift please", "tool": "media", "args": {"action": "play", "query": "taylor swift", "command": "", "level": "", "direction": ""}, "source": "template"}
+{"text": "show me my reminders for me", "tool": "list_reminders", "args": {"qualifier": ""}, "source": "template"}
+{"text": "journal entry: the kids made me laugh so hard tonight", "tool": "journal", "args": {"action": "create", "content": "the kids made me laugh so hard tonight", "mood": ""}, "source": "template"}
+{"text": "please what's happening this weekend", "tool": "show_calendar", "args": {"qualifier": "this weekend"}, "source": "template"}
+{"text": "can you cross book flights off the work list for me", "tool": "list_remove", "args": {"item": "book flights", "list_type": "work"}, "source": "template"}
+{"text": "put milk on the shopping list", "tool": "shopping_list_add", "args": {"item": "milk"}, "source": "template"}
+{"text": "um what's your favourite song", "tool": null, "args": {}, "source": "chat-mutated"}
+{"text": "zoe put on taylor swift for me", "tool": "media", "args": {"action": "play", "query": "taylor swift", "command": "", "level": "", "direction": ""}, "source": "template"}
+{"text": "hey zoe can you don't let me forget eggs at the shops", "tool": "shopping_list_add", "args": {"item": "eggs"}, "source": "template"}
+{"text": "can I see my work list please", "tool": "show_list", "args": {"list_type": "work"}, "source": "template"}
+{"text": "I'm bored", "tool": null, "args": {}, "source": "chat-seed"}
+{"text": "show me the tasks list", "tool": "show_list", "args": {"list_type": "tasks"}, "source": "template"}
+{"text": "hey zoe what's my doctor's name again when you get a chance", "tool": "recall_memory", "args": {"query": "my doctor's name"}, "source": "template"}
+{"text": "we need apples", "tool": "shopping_list_add", "args": {"item": "apples"}, "source": "template"}
+{"text": "zoe search my notes for the paint colour", "tool": "note_search", "args": {"query": "the paint colour"}, "source": "template"}
+{"text": "My sister's coming to visit next week, that ought to be a blast", "tool": null, "args": {}, "source": "brain-paraphrase"}
+{"text": "okay zoe add a dentist appointment to my calendar for next tuesday at half past six when you get a chance", "tool": "add_calendar_event", "args": {"title": "dentist appointment", "date": "next tuesday", "time": "half past six", "category": ""}, "source": "template"}
+{"text": "could you anything on the calendar for monday", "tool": "show_calendar", "args": {"qualifier": "monday"}, "source": "template"}
+{"text": "can you book in a dinner with mum saturday for me", "tool": "add_calendar_event", "args": {"title": "dinner with mum", "date": "saturday", "time": "", "category": ""}, "source": "template"}
+{"text": "don't forget I take my coffee black thanks", "tool": "remember_fact", "args": {"fact": "I take my coffee black"}, "source": "template"}
+{"text": "can you set a 1 minute timer", "tool": "set_timer", "args": {"minutes": 1, "label": ""}, "source": "template"}
+{"text": "um can you add update my resume to the birthday list real quick", "tool": "add_to_list", "args": {"item": "update my resume", "list_type": "birthday"}, "source": "template"}
+{"text": "just so you know my locker code is 4417 real fast", "tool": "remember_fact", "args": {"fact": "my locker code is 4417"}, "source": "brain-paraphrase"}
+{"text": "could you do I have any appointments next week real quick", "tool": "show_calendar", "args": {"qualifier": "next week"}, "source": "template"}
+{"text": "zoe log in my diary: feeling a bit off lately when you get a chance", "tool": "journal", "args": {"action": "create", "content": "feeling a bit off lately", "mood": ""}, "source": "template"}
+{"text": "okay zoe turn off all the lights zoe", "tool": "home", "args": {"action": "off", "room": ""}, "source": "template"}
+{"text": "zoe what do you reckon about the weather", "tool": null, "args": {}, "source": "chat-mutated"}
+{"text": "dad and I finally talked properly after all these years", "tool": "remember_emotional_moment", "args": {"moment": "dad and I finally talked properly after all these years", "valence": "positive", "intensity": "medium"}, "source": "template"}
+{"text": "hey zoe turn on the porch lights thanks", "tool": "home", "args": {"action": "on", "room": "porch"}, "source": "template"}
+{"text": "keep in mind that my favourite colour is green", "tool": "remember_fact", "args": {"fact": "my favourite colour is green"}, "source": "template"}
+{"text": "do you know my shoe size", "tool": "recall_memory", "args": {"query": "my shoe size"}, "source": "template"}
+{"text": "can you what day is it today real quick", "tool": "get_time", "args": {"query": "can you what day is it today real quick"}, "source": "template"}
+{"text": "okay zoe what's happening this weekend zoe", "tool": "show_calendar", "args": {"qualifier": "this weekend"}, "source": "template"}
+{"text": "i'm having a bit of a moody one", "tool": null, "args": {}, "source": "chat-seed"}
+{"text": "put update my resume on the to-do list", "tool": "add_to_list", "args": {"item": "update my resume", "list_type": "to-do"}, "source": "template"}
+{"text": "Grace graduated today, I was in tears watching", "tool": "remember_emotional_moment", "args": {"moment": "Grace graduated today, I was in tears watching", "valence": "positive", "intensity": "high"}, "source": "template"}
+{"text": "hey zoe save a note saying car service due in august real quick", "tool": "create_note", "args": {"content": "car service due in august", "title": ""}, "source": "template"}
+{"text": "what do you know about my doctor's name please", "tool": "recall_memory", "args": {"query": "my doctor's name"}, "source": "template"}
+{"text": "hey what does my week look like thanks", "tool": "show_calendar", "args": {"qualifier": "this week"}, "source": "template"}
+{"text": "please countdown 2 minutes", "tool": "set_timer", "args": {"minutes": 2, "label": ""}, "source": "template"}
+{"text": "switch off the lights in the porch", "tool": "home", "args": {"action": "off", "room": "porch"}, "source": "template"}
+{"text": "um put call the bank on the birthday list", "tool": "add_to_list", "args": {"item": "call the bank", "list_type": "birthday"}, "source": "template"}
+{"text": "hey zoe how hot is it in Geraldton today", "tool": "get_weather", "args": {"forecast": false, "location": "Geraldton"}, "source": "template"}
+{"text": "Hey Zoe, could you flick on the garage lights for me?", "tool": "home", "args": {"action": "on", "room": "garage"}, "source": "brain-paraphrase"}
+{"text": "zoe cross call the bank off the birthday list", "tool": "list_remove", "args": {"item": "call the bank", "list_type": "birthday"}, "source": "template"}
+{"text": "how's your day been", "tool": null, "args": {}, "source": "chat-seed"}
+{"text": "hey who is Emma again when you get a chance", "tool": "people", "args": {"action": "query", "name": "Emma", "relationship": "", "query": "Emma", "notes": ""}, "source": "template"}
+{"text": "what's the weather in London for me", "tool": "get_weather", "args": {"forecast": false, "location": "London"}, "source": "template"}
+{"text": "anything on the calendar for monday when you get a chance", "tool": "show_calendar", "args": {"qualifier": "monday"}, "source": "template"}
+{"text": "zoe lights on in the garage zoe", "tool": "home", "args": {"action": "on", "room": "garage"}, "source": "template"}
+{"text": "remove old task from the work list", "tool": "list_remove", "args": {"item": "old task", "list_type": "work"}, "source": "template"}
+{"text": "zoe go back a song please", "tool": "media", "args": {"action": "control", "query": "", "command": "previous", "level": "", "direction": ""}, "source": "template"}
+{"text": "please store this, I'm allergic to peanuts real quick", "tool": "remember_fact", "args": {"fact": "I'm allergic to peanuts"}, "source": "template"}
+{"text": "hey start a 45 minute timer", "tool": "set_timer", "args": {"minutes": 45, "label": ""}, "source": "template"}
+{"text": "stick call the bank on my personal list", "tool": "add_to_list", "args": {"item": "call the bank", "list_type": "personal"}, "source": "template"}
+{"text": "hey zoe can you give me today's date thanks", "tool": "get_time", "args": {"query": "hey zoe can you give me today's date thanks"}, "source": "template"}
+{"text": "Grace got engaged today and the whole family is over the moon", "tool": "remember_emotional_moment", "args": {"moment": "Grace got engaged today and the whole family is over the moon", "valence": "positive", "intensity": "high"}, "source": "template"}
+{"text": "please who is Emma again", "tool": "people", "args": {"action": "query", "name": "Emma", "relationship": "", "query": "Emma", "notes": ""}, "source": "template"}
+{"text": "time workout for 30 minutes", "tool": "set_timer", "args": {"minutes": 30, "label": "workout"}, "source": "template"}
+{"text": "stick clean the gutters on my tasks list", "tool": "add_to_list", "args": {"item": "clean the gutters", "list_type": "tasks"}, "source": "template"}
+{"text": "um what do I have to do today thanks", "tool": "list_reminders", "args": {"qualifier": "today"}, "source": "template"}
+{"text": "hey write this down: return the library books", "tool": "create_note", "args": {"content": "return the library books", "title": ""}, "source": "template"}
+{"text": "hey zoe can you remind me to water the plants next week", "tool": "add_reminder", "args": {"title": "water the plants", "date": "next week", "time": ""}, "source": "template"}
+{"text": "hey zoe can you set a timer for 8 minutes for me", "tool": "set_timer", "args": {"minutes": 8, "label": ""}, "source": "template"}
+{"text": "okay zoe timer 5 minutes please", "tool": "set_timer", "args": {"minutes": 5, "label": ""}, "source": "template"}
+{"text": "Hey, can you pull up my reminders for me?", "tool": "list_reminders", "args": {"qualifier": ""}, "source": "brain-paraphrase"}
+{"text": "okay zoe turn on the garage lights thanks", "tool": "home", "args": {"action": "on", "room": "garage"}, "source": "template"}
+{"text": "hey zoe can you will it rain in Tokyo this weekend when you get a chance", "tool": "get_weather", "args": {"forecast": true, "location": "Tokyo"}, "source": "template"}
+{"text": "cross fix the fence off the tasks list please", "tool": "list_remove", "args": {"item": "fix the fence", "list_type": "tasks"}, "source": "template"}
+{"text": "don't let me forget to take the bins out the 15th at 10pm real quick", "tool": "add_reminder", "args": {"title": "take the bins out", "date": "the 15th", "time": "10pm"}, "source": "template"}
+{"text": "delete old task from the personal list", "tool": "list_remove", "args": {"item": "old task", "list_type": "personal"}, "source": "template"}
+{"text": "meet Lucy - my daughter's teacher, keep track of them", "tool": "people", "args": {"action": "create", "name": "Lucy", "relationship": "my daughter's teacher", "query": "", "notes": ""}, "source": "template"}
+{"text": "could you schedule a parent teacher night for next week at seven tonight please", "tool": "add_calendar_event", "args": {"title": "parent teacher night", "date": "next week", "time": "seven tonight", "category": ""}, "source": "template"}
+{"text": "zoe keep in mind that I take my coffee black real quick", "tool": "remember_fact", "args": {"fact": "I take my coffee black"}, "source": "template"}
+{"text": "zoe what have I got on tomorrow", "tool": "show_calendar", "args": {"qualifier": "tomorrow"}, "source": "template"}
+{"text": "can you remember this: my locker code is 4417 thanks", "tool": "remember_fact", "args": {"fact": "my locker code is 4417"}, "source": "template"}
+{"text": "i'm a bit bored", "tool": null, "args": {}, "source": "chat-seed"}
+{"text": "please remember this: my GP is Dr Patel when you get a chance", "tool": "remember_fact", "args": {"fact": "my GP is Dr Patel"}, "source": "template"}
+{"text": "um what am I supposed to do this week", "tool": "list_reminders", "args": {"qualifier": "this week"}, "source": "template"}
+{"text": "get the Fleetwood Mac on", "tool": "media", "args": {"action": "play", "query": "fleetwood mac", "command": "", "level": "", "direction": ""}, "source": "brain-paraphrase"}
+{"text": "okay what's the best thing about your day", "tool": null, "args": {}, "source": "chat-mutated"}
+{"text": "what's on my to-do for tomorrow zoe", "tool": "list_reminders", "args": {"qualifier": "tomorrow"}, "source": "template"}
+{"text": "okay zoe current time please", "tool": "get_time", "args": {"query": "okay zoe current time please"}, "source": "template"}
+{"text": "could you what am I supposed to do this week for me", "tool": "list_reminders", "args": {"qualifier": "this week"}, "source": "template"}
+{"text": "I've got a soccer practice this weekend can you add it", "tool": "add_calendar_event", "args": {"title": "soccer practice", "date": "this weekend", "time": "", "category": ""}, "source": "template"}
+{"text": "what languages do you speak", "tool": null, "args": {}, "source": "chat-seed"}
+{"text": "please what have I got on tomorrow", "tool": "show_calendar", "args": {"qualifier": "tomorrow"}, "source": "template"}
+{"text": "can you can I see my tasks list for me", "tool": "show_list", "args": {"list_type": "tasks"}, "source": "template"}
+{"text": "hey zoe can you can you add renew passport to the tasks list thanks", "tool": "add_to_list", "args": {"item": "renew passport", "list_type": "tasks"}, "source": "template"}
+{"text": "delete old task from the birthday list", "tool": "list_remove", "args": {"item": "old task", "list_type": "birthday"}, "source": "template"}
+{"text": "how long until midnight", "tool": "get_time", "args": {"query": "how long until midnight"}, "source": "template"}
+{"text": "please what day is it today please", "tool": "get_time", "args": {"query": "please what day is it today please"}, "source": "template"}
+{"text": "just wanna have a yarn", "tool": null, "args": {}, "source": "chat-seed"}
+{"text": "hey zoe can you what should I write about tonight when you get a chance", "tool": "journal", "args": {"action": "prompt", "content": "", "mood": ""}, "source": "template"}
+{"text": "okay zoe read out my tasks list please", "tool": "show_list", "args": {"list_type": "tasks"}, "source": "template"}
+{"text": "hey read out my reminders", "tool": "list_reminders", "args": {"qualifier": ""}, "source": "template"}
+{"text": "don't let me forget yogurt at the shops", "tool": "shopping_list_add", "args": {"item": "yogurt"}, "source": "template"}
+{"text": "hey zoe can you can you add call the bank to the personal list", "tool": "add_to_list", "args": {"item": "call the bank", "list_type": "personal"}, "source": "template"}
+{"text": "hey what do we have on the personal list", "tool": "show_list", "args": {"list_type": "personal"}, "source": "template"}
+{"text": "Ben told me she's proud of me and it meant everything", "tool": "remember_emotional_moment", "args": {"moment": "Ben told me she's proud of me and it meant everything", "valence": "positive", "intensity": "high"}, "source": "template"}
+{"text": "what have I told you about Tom for me", "tool": "people", "args": {"action": "query", "name": "Tom", "relationship": "", "query": "Tom", "notes": ""}, "source": "template"}
+{"text": "add fix the fence to my to-do list", "tool": "add_to_list", "args": {"item": "fix the fence", "list_type": "to-do"}, "source": "template"}
+{"text": "hey zoe can you recall my shoe size for me", "tool": "recall_memory", "args": {"query": "my shoe size"}, "source": "template"}
+{"text": "please countdown 60 minutes zoe", "tool": "set_timer", "args": {"minutes": 60, "label": ""}, "source": "template"}
+{"text": "hey lights out everywhere for me", "tool": "home", "args": {"action": "off", "room": ""}, "source": "template"}
+{"text": "saying goodbye to my niece at the airport broke my heart", "tool": "remember_emotional_moment", "args": {"moment": "saying goodbye to my niece at the airport broke my heart", "valence": "negative", "intensity": "medium"}, "source": "template"}
+{"text": "so who invented the telephone", "tool": null, "args": {}, "source": "chat-mutated"}
+{"text": "zoe hey, could you show me my schedule for the week?", "tool": "show_calendar", "args": {"qualifier": "this week"}, "source": "brain-paraphrase"}
+{"text": "how long do you cook a soft boiled egg", "tool": null, "args": {}, "source": "chat-seed"}
+{"text": "um read out my work list", "tool": "show_list", "args": {"list_type": "work"}, "source": "template"}
+{"text": "hey zoe what are my reminders", "tool": "list_reminders", "args": {"qualifier": ""}, "source": "template"}
+{"text": "can you just have a yarn with me", "tool": null, "args": {}, "source": "chat-seed"}
+{"text": "um search my notes for holiday plans real quick", "tool": "note_search", "args": {"query": "holiday plans"}, "source": "template"}
+{"text": "what's the forecast for tomorrow for me", "tool": "get_weather", "args": {"forecast": true, "location": ""}, "source": "template"}
+{"text": "can you turn the music up please", "tool": "media", "args": {"action": "volume", "query": "", "command": "", "level": "", "direction": "up"}, "source": "template"}
+{"text": "Remind me what I said about Ben", "tool": "people", "args": {"action": "query", "name": "Ben", "relationship": "", "query": "Ben", "notes": ""}, "source": "brain-paraphrase"}
+{"text": "um what is the capital of japan", "tool": null, "args": {}, "source": "chat-mutated"}
+{"text": "what's on my shopping list for me", "tool": "show_list", "args": {"list_type": "shopping"}, "source": "template"}
+{"text": "please will it rain in Melbourne this weekend", "tool": "get_weather", "args": {"forecast": true, "location": "Melbourne"}, "source": "template"}
+{"text": "hey tell me about Emma thanks", "tool": "people", "args": {"action": "query", "name": "Emma", "relationship": "", "query": "Emma", "notes": ""}, "source": "template"}
+{"text": "okay zoe keep in mind that my anniversary is October 12th real quick", "tool": "remember_fact", "args": {"fact": "my anniversary is October 12th"}, "source": "template"}
+{"text": "what's my favourite colour again", "tool": "recall_memory", "args": {"query": "my favourite colour"}, "source": "template"}
+{"text": "I keep thinking about the argument with grandma, it's eating at me", "tool": "remember_emotional_moment", "args": {"moment": "I keep thinking about the argument with grandma, it's eating at me", "valence": "negative", "intensity": "medium"}, "source": "template"}
+{"text": "hey what's on your mind today", "tool": null, "args": {}, "source": "chat-mutated"}
+{"text": "where's that note about the wifi password", "tool": "note_search", "args": {"query": "the wifi password"}, "source": "template"}
+{"text": "please dear diary big win at work today thanks", "tool": "journal", "args": {"action": "create", "content": "big win at work today", "mood": ""}, "source": "template"}
+{"text": "remind me to take my medication at half past six please", "tool": "add_reminder", "args": {"title": "take my medication", "date": "", "time": "half past six"}, "source": "template"}
+{"text": "zoe do I have a note about my shoe size", "tool": "note_search", "args": {"query": "my shoe size"}, "source": "template"}
+{"text": "hey gimme a laugh", "tool": null, "args": {}, "source": "chat-mutated"}
+{"text": "hey explain quantum computing simply", "tool": null, "args": {}, "source": "chat-mutated"}
+{"text": "find my note about the plumber's quote", "tool": "note_search", "args": {"query": "the plumber's quote"}, "source": "template"}
+{"text": "please search my notes for the car insurance when you get a chance", "tool": "note_search", "args": {"query": "the car insurance"}, "source": "template"}
+{"text": "please book flights is done take it off the to-do list", "tool": "list_remove", "args": {"item": "book flights", "list_type": "to-do"}, "source": "template"}
+{"text": "put laundry detergent on the shopping list real quick", "tool": "shopping_list_add", "args": {"item": "laundry detergent"}, "source": "template"}
+{"text": "please take a note that pick up dry cleaning friday thanks", "tool": "create_note", "args": {"content": "pick up dry cleaning friday", "title": ""}, "source": "template"}
+{"text": "make a note: car service due in august", "tool": "create_note", "args": {"content": "car service due in august", "title": ""}, "source": "template"}
+{"text": "stick shampoo on the list zoe", "tool": "shopping_list_add", "args": {"item": "shampoo"}, "source": "template"}
+{"text": "so I was just testing your voice", "tool": null, "args": {}, "source": "chat-mutated"}
+{"text": "zoe Mike had her baby, make a note of that please", "tool": "people", "args": {"action": "update", "name": "Mike", "relationship": "", "query": "", "notes": "had her baby"}, "source": "template"}
+{"text": "the divorce was finalised today, feeling hollow", "tool": "remember_emotional_moment", "args": {"moment": "the divorce was finalised today, feeling hollow", "valence": "negative", "intensity": "high"}, "source": "template"}
+{"text": "could you delete book flights from the tasks list", "tool": "list_remove", "args": {"item": "book flights", "list_type": "tasks"}, "source": "template"}
+{"text": "um what's the forecast for Tokyo tomorrow", "tool": "get_weather", "args": {"forecast": true, "location": "Tokyo"}, "source": "template"}
+{"text": "save a note saying the gate code is 2580", "tool": "create_note", "args": {"content": "the gate code is 2580", "title": ""}, "source": "template"}
+{"text": "time meeting prep for 25 minutes", "tool": "set_timer", "args": {"minutes": 25, "label": "meeting prep"}, "source": "template"}
+{"text": "remind me to email the accountant tomorrow", "tool": "add_reminder", "args": {"title": "email the accountant", "date": "tomorrow", "time": ""}, "source": "template"}
+{"text": "hey zoe will it rain in Melbourne this weekend real quick", "tool": "get_weather", "args": {"forecast": true, "location": "Melbourne"}, "source": "template"}
+{"text": "um write this down: wifi password is on the fridge thanks", "tool": "create_note", "args": {"content": "wifi password is on the fridge", "title": ""}, "source": "template"}
+{"text": "book in a dinner with mum the 15th", "tool": "add_calendar_event", "args": {"title": "dinner with mum", "date": "the 15th", "time": "", "category": ""}, "source": "template"}
+{"text": "add finish the report to my to-do list", "tool": "add_to_list", "args": {"item": "finish the report", "list_type": "to-do"}, "source": "template"}
+{"text": "hey zoe can you add to my journal had a lovely walk on the beach zoe", "tool": "journal", "args": {"action": "create", "content": "had a lovely walk on the beach", "mood": ""}, "source": "template"}
+{"text": "okay tell me some random stuff", "tool": null, "args": {}, "source": "chat-mutated"}
+{"text": "save a note saying sarah's coffee order is a flat white", "tool": "create_note", "args": {"content": "sarah's coffee order is a flat white", "title": ""}, "source": "template"}
+{"text": "hey zoe timer 60 minutes please zoe", "tool": "set_timer", "args": {"minutes": 60, "label": ""}, "source": "template"}
+{"text": "okay I should really keep a journal one day", "tool": null, "args": {}, "source": "chat-mutated"}
+{"text": "Can you keep an eye on David, my neighbour, for me?", "tool": "people", "args": {"action": "create", "name": "David", "relationship": "my neighbour", "query": "", "notes": ""}, "source": "brain-paraphrase"}
+{"text": "what's left on the work list", "tool": "show_list", "args": {"list_type": "work"}, "source": "template"}
+{"text": "Lucy and I finally talked properly after all these years", "tool": "remember_emotional_moment", "args": {"moment": "Lucy and I finally talked properly after all these years", "valence": "positive", "intensity": "medium"}, "source": "template"}
+{"text": "could you tell me the time please real quick", "tool": "get_time", "args": {"query": "could you tell me the time please real quick"}, "source": "template"}
+{"text": "please do you remember my name", "tool": "recall_memory", "args": {"query": "my name"}, "source": "template"}
+{"text": "it's been a long week", "tool": null, "args": {}, "source": "chat-seed"}
+{"text": "show me my reminders", "tool": "list_reminders", "args": {"qualifier": ""}, "source": "template"}
+{"text": "add a haircut to my calendar for friday at 7am thanks", "tool": "add_calendar_event", "args": {"title": "haircut", "date": "friday", "time": "7am", "category": ""}, "source": "template"}
+{"text": "show my recent diary entries zoe", "tool": "journal", "args": {"action": "read", "content": "", "mood": ""}, "source": "template"}
+{"text": "we're out of eggs thanks", "tool": "shopping_list_add", "args": {"item": "eggs"}, "source": "template"}
+{"text": "what are my reminders for me", "tool": "list_reminders", "args": {"qualifier": ""}, "source": "template"}
+{"text": "read out my personal list", "tool": "show_list", "args": {"list_type": "personal"}, "source": "template"}
+{"text": "remind me to call the plumber at noon", "tool": "add_reminder", "args": {"title": "call the plumber", "date": "", "time": "noon"}, "source": "template"}
+{"text": "my niece surprised me for my birthday, I feel so loved", "tool": "remember_emotional_moment", "args": {"moment": "my niece surprised me for my birthday, I feel so loved", "valence": "positive", "intensity": "medium"}, "source": "template"}
+{"text": "can you put on something upbeat", "tool": "media", "args": {"action": "play", "query": "something upbeat", "command": "", "level": "", "direction": ""}, "source": "template"}
+{"text": "um what's the weather like", "tool": "get_weather", "args": {"forecast": false, "location": ""}, "source": "template"}
+{"text": "add tomatoes to groceries please thanks", "tool": "shopping_list_add", "args": {"item": "tomatoes"}, "source": "template"}
+{"text": "okay zoe do you remember my name", "tool": "recall_memory", "args": {"query": "my name"}, "source": "template"}
+{"text": "don't let me forget to renew the car rego friday at 8:30", "tool": "add_reminder", "args": {"title": "renew the car rego", "date": "friday", "time": "8:30"}, "source": "template"}
+{"text": "um what are my reminders zoe", "tool": "list_reminders", "args": {"qualifier": ""}, "source": "template"}
+{"text": "can you dear diary today was a really good day", "tool": "journal", "args": {"action": "create", "content": "today was a really good day", "mood": "excited"}, "source": "template"}
+{"text": "cross call the bank off the personal list", "tool": "list_remove", "args": {"item": "call the bank", "list_type": "personal"}, "source": "template"}
+{"text": "I want to journal but don't know what to write", "tool": "journal", "args": {"action": "prompt", "content": "", "mood": ""}, "source": "template"}
+{"text": "remember that I'm allergic to peanuts for me", "tool": "remember_fact", "args": {"fact": "I'm allergic to peanuts"}, "source": "template"}
+{"text": "Can you add laundry detergent to the shopping list please", "tool": "shopping_list_add", "args": {"item": "laundry detergent"}, "source": "brain-paraphrase"}
+{"text": "can you recall what I said about the holiday", "tool": "recall_memory", "args": {"query": "what I said about the holiday"}, "source": "template"}
+{"text": "do you remember my doctor's name", "tool": "recall_memory", "args": {"query": "my doctor's name"}, "source": "template"}
+{"text": "um what do we have on the shopping list thanks", "tool": "show_list", "args": {"list_type": "shopping"}, "source": "template"}
+{"text": "so talk to me about space", "tool": null, "args": {}, "source": "chat-mutated"}
+{"text": "hey zoe can you do I need a jacket today for me", "tool": "get_weather", "args": {"forecast": false, "location": ""}, "source": "template"}
+{"text": "Yo Zoe, just a reminder that my locker code is 4417", "tool": "remember_fact", "args": {"fact": "my locker code is 4417"}, "source": "brain-paraphrase"}
+{"text": "book in a soccer practice next week", "tool": "add_calendar_event", "args": {"title": "soccer practice", "date": "next week", "time": "", "category": ""}, "source": "template"}
+{"text": "hey how was your day", "tool": null, "args": {}, "source": "chat-mutated"}
+{"text": "what gives you a chuckle", "tool": null, "args": {}, "source": "chat-seed"}
+{"text": "remind me to call the plumber at half past six", "tool": "add_reminder", "args": {"title": "call the plumber", "date": "", "time": "half past six"}, "source": "template"}
+{"text": "okay zoe countdown 20 minutes", "tool": "set_timer", "args": {"minutes": 20, "label": ""}, "source": "template"}
+{"text": "okay how far away is the moon", "tool": null, "args": {}, "source": "chat-mutated"}
+{"text": "zoe what day of the week is it real quick", "tool": "get_time", "args": {"query": "zoe what day of the week is it real quick"}, "source": "template"}
+{"text": "hey you with me", "tool": null, "args": {}, "source": "brain-paraphrase"}
+{"text": "Tom graduated today, I was in tears watching", "tool": "remember_emotional_moment", "args": {"moment": "Tom graduated today, I was in tears watching", "valence": "positive", "intensity": "high"}, "source": "template"}
+{"text": "book in a dentist appointment monday for me", "tool": "add_calendar_event", "args": {"title": "dentist appointment", "date": "monday", "time": "", "category": ""}, "source": "template"}
+{"text": "lights on in the office", "tool": "home", "args": {"action": "on", "room": "office"}, "source": "template"}
+{"text": "book in a car service the 15th", "tool": "add_calendar_event", "args": {"title": "car service", "date": "the 15th", "time": "", "category": ""}, "source": "template"}
+{"text": "my back is killing me", "tool": null, "args": {}, "source": "chat-seed"}
+{"text": "keep in mind that my locker code is 4417 real quick", "tool": "remember_fact", "args": {"fact": "my locker code is 4417"}, "source": "template"}
+{"text": "um what time is it", "tool": "get_time", "args": {"query": "um what time is it"}, "source": "template"}
+{"text": "hey put on taylor swift for me", "tool": "media", "args": {"action": "play", "query": "taylor swift", "command": "", "level": "", "direction": ""}, "source": "template"}
+{"text": "zoe current time please thanks", "tool": "get_time", "args": {"query": "zoe current time please thanks"}, "source": "template"}
+{"text": "add to my journal the kids made me laugh so hard tonight for me", "tool": "journal", "args": {"action": "create", "content": "the kids made me laugh so hard tonight", "mood": "tired"}, "source": "template"}
+{"text": "what are my reminders", "tool": "list_reminders", "args": {"qualifier": ""}, "source": "template"}
+{"text": "Play the Beatles for me", "tool": "media", "args": {"action": "play", "query": "the beatles", "command": "", "level": "", "direction": ""}, "source": "brain-paraphrase"}
+{"text": "okay zoe turn on the bedroom lights when you get a chance", "tool": "home", "args": {"action": "on", "room": "bedroom"}, "source": "template"}
+{"text": "look up my note on the meeting notes", "tool": "note_search", "args": {"query": "the meeting notes"}, "source": "template"}
+{"text": "um is it raining in London", "tool": "get_weather", "args": {"forecast": false, "location": "London"}, "source": "template"}
+{"text": "um I want to journal but don't know what to write", "tool": "journal", "args": {"action": "prompt", "content": "", "mood": ""}, "source": "template"}
+{"text": "remove book flights from the birthday list", "tool": "list_remove", "args": {"item": "book flights", "list_type": "birthday"}, "source": "template"}
+{"text": "my best mate is moving overseas and I'm gutted", "tool": "remember_emotional_moment", "args": {"moment": "my best mate is moving overseas and I'm gutted", "valence": "negative", "intensity": "medium"}, "source": "template"}
+{"text": "dear diary today was a really good day real quick", "tool": "journal", "args": {"action": "create", "content": "today was a really good day", "mood": ""}, "source": "template"}
+{"text": "okay zoe remind me to renew the car rego at 7am please", "tool": "add_reminder", "args": {"title": "renew the car rego", "date": "", "time": "7am"}, "source": "template"}
+{"text": "can you delete call the bank from the to-do list", "tool": "list_remove", "args": {"item": "call the bank", "list_type": "to-do"}, "source": "template"}
+{"text": "zoe will it be hot this weekend", "tool": "get_weather", "args": {"forecast": true, "location": ""}, "source": "template"}
+{"text": "could you can you add milk to my groceries for me", "tool": "shopping_list_add", "args": {"item": "milk"}, "source": "template"}
+{"text": "so what's up mate", "tool": null, "args": {}, "source": "chat-mutated"}
+{"text": "zoe remind me what where I park at work is thanks", "tool": "recall_memory", "args": {"query": "where I park at work"}, "source": "template"}
+{"text": "schedule a team meeting for the 15th at 8:30", "tool": "add_calendar_event", "args": {"title": "team meeting", "date": "the 15th", "time": "8:30", "category": ""}, "source": "template"}
+{"text": "um recommend me a book", "tool": null, "args": {}, "source": "chat-mutated"}
+{"text": "i'm just bored want to talk", "tool": null, "args": {}, "source": "chat-seed"}
+{"text": "okay just hang out for a bit", "tool": null, "args": {}, "source": "chat-mutated"}
+{"text": "hey zoe can you remind me to take my medication saturday", "tool": "add_reminder", "args": {"title": "take my medication", "date": "saturday", "time": ""}, "source": "template"}
+{"text": "um remind me to pay the electricity bill this weekend", "tool": "add_reminder", "args": {"title": "pay the electricity bill", "date": "this weekend", "time": ""}, "source": "template"}
+{"text": "could you what's the weather in London real quick", "tool": "get_weather", "args": {"forecast": false, "location": "London"}, "source": "template"}
+{"text": "okay zoe keep in mind that the spare key is under the pot plant for me", "tool": "remember_fact", "args": {"fact": "the spare key is under the pot plant"}, "source": "template"}

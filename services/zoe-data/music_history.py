@@ -256,3 +256,29 @@ async def top_artists(user_id: Optional[str] = None, days: int = 90,
     except Exception as exc:  # noqa: BLE001
         logger.warning("music top_artists failed (non-fatal): %s", exc)
         return []
+
+
+async def users_with_history(days: int = 90, min_plays: int = 10,
+                             min_artists: int = 3) -> list[str]:
+    """Identified users with enough journal signal for a personal taste
+    profile. Excludes the reserved guest id (guest history only ever feeds
+    the household profile). Thresholds keep thin histories from producing
+    junk seeds — such users fall back to the household playlist.
+    Never raises; [] on any failure."""
+    try:
+        from db_pool import get_db_ctx
+        since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        async with get_db_ctx() as conn:
+            if not await _ensure_table(conn):
+                return []
+            rows = await conn.fetch(
+                "SELECT zoe_user_id, COUNT(*) AS plays, "
+                "COUNT(DISTINCT artist) AS artists FROM music_play_history "
+                "WHERE played_at >= $1 AND zoe_user_id <> $2 AND artist <> '' "
+                "GROUP BY zoe_user_id ORDER BY plays DESC",
+                since, GUEST_USER_ID)
+        return [r["zoe_user_id"] for r in rows
+                if r["plays"] >= min_plays and r["artists"] >= min_artists]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("music users_with_history failed (non-fatal): %s", exc)
+        return []

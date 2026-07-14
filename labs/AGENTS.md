@@ -122,6 +122,16 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
   request can't impersonate; `auth.resolve_acting_user`). Unlinked senders are told
   their id and refused (never reach the brain as a real user). Ships the opt-in unit
   template above. Hand-started, demo-only; README is a record, not a contract.
+- `functiongemma-finetune/` — fine-tune FunctionGemma-270M as the complete-call
+  fast-tier router (follow-up to the feasibility spike, PR #1283): committed
+  training set (2,950 examples; templates + setfit-seed chat negatives + brain
+  paraphrases, held-out-guarded against `needle-benchmark/corpus.jsonl`),
+  LoRA training script with a functional-token (Octopus-style, `<unusedK>`
+  vocab rows) vs plain A/B, GGUF export, and the :11435 eval harness. All
+  scripts enforce the 2 GB `MemAvailable` gate; brain `:11434` was used only
+  for gentle serial synthetic-data paraphrasing (operator-sanctioned for this
+  spike), never as a lab engineering model. Hand-run only; README carries
+  status (packet-ready) + numbers. Never wired into the voice path or CI.
 - `setfit-router/` — supervised classifier head (logreg/MLP) on the frozen prod
   bge-small embedding to raise fast-tier routing coverage: 13-domain label set
   (live ROUTES + missing notes/journal/music/smart_home + chat none-class),
