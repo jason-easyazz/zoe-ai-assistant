@@ -162,25 +162,52 @@ def test_quiet_rig_is_valid():
 
 
 # --- held-out guard (never train on the frozen eval corpus) ----------------
+# The REAL shape written by the miner, labs/router-selftrain/mine_candidates.py:
+#   "held_out_guard": {"result": "pass", "corpus": ..., "entries": N, "collisions": 0}
+MINER_META = {"held_out_guard": {"result": "pass", "corpus": "labs/needle-benchmark/corpus.jsonl",
+                                 "entries": 81, "collisions": 0}}
+
+
+def test_heldout_guard_accepts_the_real_miner_meta():
+    """Pins the lane-A contract: the orchestrator must accept what the miner
+    actually writes (`held_out_guard.result == 'pass'`)."""
+    ok, reasons = rs.check_heldout_guard(
+        MINER_META, ["put milk on the shopping list"], {"what time is it"})
+    assert ok is True, reasons
+
+
 def test_heldout_guard_missing_meta_rejects():
     ok, reasons = rs.check_heldout_guard({}, ["turn the kitchen lights off"], set())
     assert ok is False
     assert "held-out guard" in " ".join(reasons)
 
 
+def test_heldout_guard_requires_a_positive_pass_not_just_presence():
+    """A present-but-not-passing guard block must not sneak through."""
+    ok, _ = rs.check_heldout_guard(
+        {"held_out_guard": {"result": "fail"}}, ["x"], set())
+    assert ok is False
+
+
+def test_heldout_guard_rejects_miner_reported_collisions():
+    meta = {"held_out_guard": {"result": "pass", "collisions": 3}}
+    ok, reasons = rs.check_heldout_guard(meta, ["x"], set())
+    assert ok is False
+    assert "collision" in " ".join(reasons)
+
+
 def test_heldout_guard_detects_frozen_corpus_leak():
     """We do not merely trust the miner's meta — we recompute the overlap."""
-    meta = {"heldout_guard": {"ran": True, "leaked": 0}}  # miner claims clean
     frozen = {"what time is it"}
-    ok, reasons = rs.check_heldout_guard(meta, ["What time is it?"], frozen)
+    ok, reasons = rs.check_heldout_guard(MINER_META, ["What time is it?"], frozen)
     assert ok is False
     assert "FROZEN eval corpus" in " ".join(reasons)
 
 
 def test_heldout_guard_clean_candidate_passes():
-    meta = {"heldout_guard": {"ran": True, "leaked": 0}}
     frozen = {"what time is it"}
-    ok, reasons = rs.check_heldout_guard(meta, ["put milk on the shopping list"], frozen)
+    ok, reasons = rs.check_heldout_guard(
+        MINER_META, ["put milk on the shopping list"], frozen)
     assert ok is True
     assert reasons == []
 

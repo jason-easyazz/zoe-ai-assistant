@@ -294,11 +294,24 @@ def check_heldout_guard(meta: dict, candidate_texts: list, frozen: set) -> tuple
     Returns (ok, reasons).
     """
     reasons = []
-    guard = (meta or {}).get("heldout_guard") or {}
-    if not guard.get("ran"):
+    # The miner (labs/router-selftrain/mine_candidates.py) writes:
+    #   "held_out_guard": {"result": "pass", "corpus": ..., "collisions": 0}
+    # `heldout_guard: {ran: true}` is also accepted so the contract is not brittle
+    # to that one key. The guard must POSITIVELY assert a pass — a merely-present
+    # key, or a recorded collision, is not good enough.
+    meta = meta or {}
+    guard = meta.get("held_out_guard") or meta.get("heldout_guard") or {}
+    passed = (str(guard.get("result", "")).lower() == "pass") or bool(guard.get("ran"))
+    collisions = guard.get("collisions")
+    if not passed:
         reasons.append(
-            "candidate meta does not record a held-out guard run "
-            "(meta.heldout_guard.ran) — refusing to train on an unguarded set")
+            "candidate meta does not record a PASSING held-out guard "
+            "(meta.held_out_guard.result == 'pass') — refusing to train on an "
+            "unguarded set")
+    elif collisions not in (None, 0):
+        reasons.append(
+            f"candidate meta records {collisions} held-out guard collision(s) — "
+            "the miner itself says the eval corpus leaked into the training set")
     leaked = [t for t in candidate_texts if _normalize(t) in frozen]
     if leaked:
         reasons.append(
