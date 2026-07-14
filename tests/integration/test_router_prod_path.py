@@ -30,10 +30,23 @@ EVAL = REPO / "labs" / "router-90-campaign" / "prod_path_eval.py"
     os.environ.get("ZOE_ROUTER_PROD_PATH_EVAL") != "1",
     reason="opt-in sidecar eval: set ZOE_ROUTER_PROD_PATH_EVAL=1 "
            "(launches llama-server on :11436, needs the lab r2 GGUF)")
+def _sidecar_up() -> bool:
+    import urllib.request
+    try:
+        urllib.request.urlopen("http://127.0.0.1:11436/health", timeout=2)
+        return True
+    except OSError:
+        return False
+
+
 def test_prod_path_gates(tmp_path):
     out_json = tmp_path / "prod-path.json"
+    # the resident systemd sidecar (functiongemma-router.service) may own
+    # :11436 — reuse it (the harness sha256-verifies its model); launch ad
+    # hoc only when the port is free
+    launch = [] if _sidecar_up() else ["--launch-sidecar"]
     proc = subprocess.run(
-        [sys.executable, str(EVAL), "--launch-sidecar", "--no-assert",
+        [sys.executable, str(EVAL), *launch, "--no-assert",
          "--out", str(out_json)],
         cwd=REPO, capture_output=True, text=True, timeout=1800)
     assert proc.returncode == 0, (
