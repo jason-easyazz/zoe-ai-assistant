@@ -15,6 +15,7 @@ Secrets are never inlined — they are read from `.env` files.
 | `hermes-agent.service`     | 8642  | Engineering/planning/review agent gateway |
 | `openclaw-gateway.service` | 18789 | Browser/exec agent fallback (needs `openclaw` npm pkg) |
 | `kokoro-tts.service`       | 10201 | Local neural TTS sidecar (optional) |
+| `functiongemma-router.service` | 11436 | Two-stage router stage-2 decoder (FunctionGemma-270M r2, CPU) — **platform-specific paths** |
 | `zoe-data.service`         | 8000  | Primary backend API |
 | `flue-zoe-brain.service`   | 3578  | Flue Zoe-brain sidecar (lab; optional, operator opt-in) |
 
