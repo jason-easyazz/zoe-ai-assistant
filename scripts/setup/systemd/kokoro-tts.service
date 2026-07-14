@@ -28,8 +28,11 @@ RestartSec=10
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=kokoro-tts
-# Allow time for the model to load and CUDA to warm up.
-TimeoutStartSec=120
+# Cover the worst-case startup: up to ZOE_KOKORO_BRAIN_WAIT_S (180s, matching the
+# brain's own TimeoutStartSec) waiting for the brain, plus the model load + CUDA warm.
+# (Type=simple means systemd already counts the unit started at exec, so this is a
+# belt-and-braces ceiling — but it's sized so nothing can kill the sidecar mid-wait.)
+TimeoutStartSec=300
 
 [Install]
 WantedBy=default.target
