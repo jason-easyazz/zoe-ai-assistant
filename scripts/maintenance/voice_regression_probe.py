@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import datetime, timezone
 import os
 import subprocess
 import sys
@@ -82,6 +83,15 @@ def run_measure(samples: int, service_dir: str, user: str, timeout: int) -> dict
         )
         if proc.returncode not in (0, 1):  # 1 = measure_voice's own "a turn broke function"
             raise RuntimeError(f"measure_voice failed (rc={proc.returncode}): {proc.stderr[-400:]}")
+        if not os.path.getsize(out_json):
+            # measure_voice exits 0 on its skip paths (no .env in --service-dir,
+            # missing replay harness) without writing JSON — surface that
+            # instead of a cryptic JSONDecodeError. Worktree runs must point
+            # --service-dir at the LIVE services/zoe-data (env lives there).
+            raise RuntimeError(
+                "measure_voice skipped without results — likely no .env in "
+                f"--service-dir; stderr: {proc.stderr[-300:]}"
+            )
         with open(out_json) as fh:
             return json.load(fh)
     finally:
@@ -187,13 +197,13 @@ def cleanup_replay_artifacts(run_started_utc: str, args) -> bool:
                 # collision is visible in the unit journal and restorable by id.
                 ev_rows = await conn.fetch(
                     "SELECT id, user_id, title FROM events "
-                    "WHERE deleted = 0 AND created_at >= $1::timestamptz AND user_id = ANY($2)",
-                    run_started_utc + "+00", replay_users,
+                    "WHERE deleted = 0 AND created_at::timestamptz >= $1::timestamptz AND user_id = ANY($2)",
+                    datetime.strptime(run_started_utc, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc), replay_users,
                 )
                 li_rows = await conn.fetch(
                     "SELECT i.id, l.user_id, i.text FROM list_items i JOIN lists l ON i.list_id = l.id "
-                    "WHERE i.deleted = 0 AND i.created_at >= $1::timestamptz AND l.user_id = ANY($2)",
-                    run_started_utc + "+00", replay_users,
+                    "WHERE i.deleted = 0 AND i.created_at::timestamptz >= $1::timestamptz AND l.user_id = ANY($2)",
+                    datetime.strptime(run_started_utc, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc), replay_users,
                 )
                 for r in ev_rows:
                     print(f"cleanup: sweeping event id={r['id']} owner={r['user_id']} title={r['title']!r}")
