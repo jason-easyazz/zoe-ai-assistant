@@ -273,6 +273,7 @@ def _head_shadow(text: str, v: np.ndarray, routed: str) -> None:
         }
         shadow_logger.info("router_head_shadow %s", json.dumps(rec, sort_keys=True))
         try:
+            os.makedirs(os.path.dirname(_HEAD_LOG_PATH), exist_ok=True)
             with open(_HEAD_LOG_PATH, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(rec, sort_keys=True) + "\n")
         except OSError as exc:
