@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import statistics
 import subprocess
@@ -45,9 +46,13 @@ LABS = HERE.parent
 CORPUS = LABS / "needle-benchmark" / "corpus.jsonl"
 TOOLS_JSON = LABS / "functiongemma-finetune" / "zoe_tools.json"
 ARTIFACTS = LABS / "setfit-router" / "artifacts"
-LLAMA_SERVER = "/home/zoe/llama.cpp/build-jetson-new/bin/llama-server"
-GGUF_STOCK = "/home/zoe/models/lab/functiongemma-270m-it-Q8_0.gguf"
-GGUF_FUNCTOK = "/home/zoe/models/lab/functiongemma-270m-zoe-functok-Q8_0.gguf"
+LLAMA_SERVER = os.environ.get(
+    "LLAMA_SERVER", "/home/zoe/llama.cpp/build-jetson-new/bin/llama-server")
+GGUF_STOCK = os.environ.get(
+    "GGUF_STOCK", "/home/zoe/models/lab/functiongemma-270m-it-Q8_0.gguf")
+GGUF_FUNCTOK = os.environ.get(
+    "GGUF_FUNCTOK",
+    "/home/zoe/models/lab/functiongemma-270m-zoe-functok-Q8_0.gguf")
 MIN_AVAILABLE_MB = 1500
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"  # pinned: prod semantic_router default
 

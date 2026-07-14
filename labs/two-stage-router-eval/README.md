@@ -16,10 +16,22 @@ needle-benchmark corpus, scored identically to every prior eval.
 | **TWO-STAGE A**: logreg top-3, gate 0.4 → stock FG shortlist block | **35.8%** | 50.0% | 10.3% | **0.0%** | 469 ms | 907 ms |
 | **TWO-STAGE B**: mlp top-3, gate 0.7 → stock FG shortlist block | 33.3% | 47.1% | 7.7% | **0.0%** | 600 ms | 1228 ms |
 | Single-stage **functok fine-tune** (no schema, 47-token prompt) — re-run, matches reference | **74.1%** | 91.2% | 53.8% | **0.0%** | 367 ms | 487 ms |
-| *ref:* SetFit mlp head alone (labs/setfit-router) | **80.2%** | 97.1% | 64.1% | 12.5% | +14 ms on prod embed | — |
+| *ref:* SetFit mlp head alone (labs/setfit-router) — **domain-level**, see caveat | **80.2%** | 97.1% | 64.1% | 12.5% | +14 ms on prod embed | — |
 | *ref:* Tier-0 regex + Tier-1 bge baseline (PR #1276) | 61.7% | 85.3% | 35.9% | 12.5% | — | — |
 | *ref:* stock FG Q8 CPU, full 20+1-tool block | 33.3% | 41.2% | 12.8% | 0.0% | — | — |
 | *ref:* stock FG Q8 CPU, **oracle** 3-tool block, 16-case subset | 93.8% | 100% | 75.0% | 0.0% | — | — |
+
+**Scoring caveat (not apples-to-apples on one axis):** the SetFit-alone row
+is **domain-level** accuracy (13-way domain incl. chat, per
+`labs/setfit-router/eval.py`); the two-stage and FunctionGemma rows are
+**tool-level** (exact tool name in the case's `expected` list, 20+1 tools).
+A domain hit still needs a domain→tool dispatch step to become an executed
+call, so 80.2% is an upper bound on what SetFit-alone delivers end-to-end —
+but the two-stage was built precisely to BE that dispatch step, and it turns
+80.2%-worth of near-perfect shortlists into 35.8% executed calls. The
+directional verdict (two-stage with a stock decoder is a large net loss)
+does not depend on the caveat; the strongest measured tool-level system
+remains the functok fine-tune at 74.1%.
 
 End-to-end two-stage latency (what production would pay, embedding included):
 config A p50 **469 ms** / p90 **907 ms** per decision — stage 1
@@ -53,8 +65,10 @@ collapses (paraphrase slice: 10.3%).
 - **The real two-stage does NOT beat SetFit-alone.** 35.8% vs 80.2% — it is
   44 points WORSE, and worse than the 61.7% live baseline and even the
   33.3% stock-full-block row it was meant to fix (B literally ties it).
-- **The honest number to plan around for shadow-mode is SetFit-alone 80.2%**
-  (+14 ms on the already-computed prod embedding), with the functok
+- **The honest number to plan around for shadow-mode is SetFit-alone 80.2%
+  domain-level** (+14 ms on the already-computed prod embedding; tool
+  dispatch within the domain still needed — see the scoring caveat above),
+  with the functok
   fine-tune's 74.1% (367 ms p50, args included, 0% chat-FP) as the only
   viable FG-based alternative today.
 - If a two-stage is still wanted, stage 2 must be a **fine-tuned** decoder
