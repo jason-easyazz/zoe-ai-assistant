@@ -1,0 +1,1007 @@
+{
+ "config": "functok",
+ "gguf": "/home/zoe/models/lab/functiongemma-270m-zoe-functok-Q8_0.gguf",
+ "head": null,
+ "gate": null,
+ "mem_available_mb_before": 2100,
+ "rss_mb_after_load": 593,
+ "rss_mb_after_bench": 641,
+ "mem_available_mb_after": 2956,
+ "summary": {
+  "n": 81,
+  "accuracy_overall_pct": 74.1,
+  "accuracy_canonical_pct": 91.2,
+  "accuracy_paraphrase_pct": 53.8,
+  "chat_false_positive_pct": 0.0,
+  "latency_ms_p50": 367.4,
+  "latency_ms_p90": 486.9
+ },
+ "cases": [
+  {
+   "id": "time-c1",
+   "style": "canonical",
+   "expected": [
+    "get_time"
+   ],
+   "prompt_tokens": 43,
+   "predicted": "get_time",
+   "ok": true,
+   "latency_ms": 411.7,
+   "raw": "<start_function_call>call:get_time{query:<escape>what time is it<escape>}"
+  },
+  {
+   "id": "time-c2",
+   "style": "canonical",
+   "expected": [
+    "get_time"
+   ],
+   "prompt_tokens": 45,
+   "predicted": "get_time",
+   "ok": true,
+   "latency_ms": 441.6,
+   "raw": "<start_function_call>call:get_time{query:<escape>what's the date today<escape>}"
+  },
+  {
+   "id": "time-p1",
+   "style": "paraphrase",
+   "expected": [
+    "get_time"
+   ],
+   "prompt_tokens": 46,
+   "predicted": "get_time",
+   "ok": true,
+   "latency_ms": 411.4,
+   "raw": "<start_function_call>call:get_time{query:<escape>have you got the time on you<escape>}"
+  },
+  {
+   "id": "time-p2",
+   "style": "paraphrase",
+   "expected": [
+    "get_time"
+   ],
+   "prompt_tokens": 46,
+   "predicted": "list_reminders",
+   "ok": false,
+   "latency_ms": 357.8,
+   "raw": "<start_function_call>call:list_reminders{qualifier:<escape>um<escape>}"
+  },
+  {
+   "id": "weather-c1",
+   "style": "canonical",
+   "expected": [
+    "get_weather"
+   ],
+   "prompt_tokens": 47,
+   "predicted": "get_weather",
+   "ok": true,
+   "latency_ms": 396.0,
+   "raw": "<start_function_call>call:get_weather{forecast:false,location:<escape>Perth<escape>}"
+  },
+  {
+   "id": "weather-c2",
+   "style": "canonical",
+   "expected": [
+    "get_weather"
+   ],
+   "prompt_tokens": 46,
+   "predicted": "get_weather",
+   "ok": true,
+   "latency_ms": 326.1,
+   "raw": "<start_function_call>call:get_weather{forecast:true}"
+  },
+  {
+   "id": "weather-p1",
+   "style": "paraphrase",
+   "expected": [
+    "get_weather"
+   ],
+   "prompt_tokens": 49,
+   "predicted": "get_weather",
+   "ok": true,
+   "latency_ms": 333.3,
+   "raw": "<start_function_call>call:get_weather{forecast:false}"
+  },
+  {
+   "id": "weather-p2",
+   "style": "paraphrase",
+   "expected": [
+    "get_weather"
+   ],
+   "prompt_tokens": 48,
+   "predicted": "get_media",
+   "ok": false,
+   "latency_ms": 428.5,
+   "raw": "<start_function_call>call:get_media{action:<escape>control<escape>,media={<escape>volume<escape>}<escape>}"
+  },
+  {
+   "id": "weather-p3",
+   "style": "paraphrase",
+   "expected": [
+    "get_weather"
+   ],
+   "prompt_tokens": 52,
+   "predicted": null,
+   "ok": false,
+   "latency_ms": 163.1,
+   "raw": ""
+  },
+  {
+   "id": "shoplist-c1",
+   "style": "canonical",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list"
+   ],
+   "prompt_tokens": 45,
+   "predicted": "shopping_list_add",
+   "ok": true,
+   "latency_ms": 340.2,
+   "raw": "<start_function_call>call:shopping_list_add{item:<escape>milk<escape>}"
+  },
+  {
+   "id": "shoplist-c2",
+   "style": "canonical",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list"
+   ],
+   "prompt_tokens": 45,
+   "predicted": "shopping_list_add",
+   "ok": true,
+   "latency_ms": 339.8,
+   "raw": "<start_function_call>call:shopping_list_add{item:<escape>bread<escape>}"
+  },
+  {
+   "id": "shoplist-p1",
+   "style": "paraphrase",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list"
+   ],
+   "prompt_tokens": 47,
+   "predicted": "shopping_list_add",
+   "ok": true,
+   "latency_ms": 366.6,
+   "raw": "<start_function_call>call:shopping_list_add{item:<escape>laundry powder<escape>}"
+  },
+  {
+   "id": "shoplist-p2",
+   "style": "paraphrase",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list"
+   ],
+   "prompt_tokens": 50,
+   "predicted": "shopping_list_add",
+   "ok": true,
+   "latency_ms": 361.9,
+   "raw": "<start_function_call>call:shopping_list_add{item:<escape>dog food<escape>}"
+  },
+  {
+   "id": "shoplist-p3",
+   "style": "paraphrase",
+   "expected": [
+    "shopping_list_add",
+    "add_to_list",
+    "add_reminder"
+   ],
+   "prompt_tokens": 49,
+   "predicted": "shopping_list_add",
+   "ok": true,
+   "latency_ms": 348.5,
+   "raw": "<start_function_call>call:shopping_list_add{item:<escape>coffee<escape>}"
+  },
+  {
+   "id": "listshow-c1",
+   "style": "canonical",
+   "expected": [
+    "show_list"
+   ],
+   "prompt_tokens": 46,
+   "predicted": "show_list",
+   "ok": true,
+   "latency_ms": 342.6,
+   "raw": "<start_function_call>call:show_list{list_type:<escape>shopping<escape>}"
+  },
+  {
+   "id": "listshow-c2",
+   "style": "canonical",
+   "expected": [
+    "show_list"
+   ],
+   "prompt_tokens": 44,
+   "predicted": "show_list",
+   "ok": true,
+   "latency_ms": 366.1,
+   "raw": "<start_function_call>call:show_list{list_type:<escape>todo<escape>}"
+  },
+  {
+   "id": "listshow-p1",
+   "style": "paraphrase",
+   "expected": [
+    "show_list"
+   ],
+   "prompt_tokens": 49,
+   "predicted": "shopping_list_add",
+   "ok": false,
+   "latency_ms": 406.1,
+   "raw": "<start_function_call>call:shopping_list_add{item:<escape>shopping bags<escape>}"
+  },
+  {
+   "id": "listshow-p2",
+   "style": "paraphrase",
+   "expected": [
+    "show_list"
+   ],
+   "prompt_tokens": 44,
+   "predicted": "shopping_list_query",
+   "ok": false,
+   "latency_ms": 365.9,
+   "raw": "<start_function_call>call:shopping_list_query{item:<escape> groceries<escape>}"
+  },
+  {
+   "id": "listrm-c1",
+   "style": "canonical",
+   "expected": [
+    "list_remove"
+   ],
+   "prompt_tokens": 45,
+   "predicted": "list_remove",
+   "ok": true,
+   "latency_ms": 475.0,
+   "raw": "<start_function_call>call:list_remove{item:<escape>bananas<escape>,list_type:<escape>shopping<escape>}"
+  },
+  {
+   "id": "listrm-p1",
+   "style": "paraphrase",
+   "expected": [
+    "list_remove"
+   ],
+   "prompt_tokens": 49,
+   "predicted": "shopping_list_add",
+   "ok": false,
+   "latency_ms": 408.6,
+   "raw": "<start_function_call>call:shopping_list_add{item:<escape>shred<escape>}"
+  },
+  {
+   "id": "listrm-p2",
+   "style": "paraphrase",
+   "expected": [
+    "list_remove"
+   ],
+   "prompt_tokens": 49,
+   "predicted": "shopping_list_add",
+   "ok": false,
+   "latency_ms": 389.5,
+   "raw": "<start_function_call>call:shopping_list_add{item:<escape>eggs<escape>}"
+  },
+  {
+   "id": "cal-show-c1",
+   "style": "canonical",
+   "expected": [
+    "show_calendar"
+   ],
+   "prompt_tokens": 46,
+   "predicted": "show_calendar",
+   "ok": true,
+   "latency_ms": 351.5,
+   "raw": "<start_function_call>call:show_calendar{qualifier:<escape>today<escape>}"
+  },
+  {
+   "id": "cal-show-c2",
+   "style": "canonical",
+   "expected": [
+    "show_calendar"
+   ],
+   "prompt_tokens": 46,
+   "predicted": "list_reminders",
+   "ok": false,
+   "latency_ms": 353.9,
+   "raw": "<start_function_call>call:list_reminders{qualifier:<escape>this week<escape>}"
+  },
+  {
+   "id": "cal-show-p1",
+   "style": "paraphrase",
+   "expected": [
+    "show_calendar"
+   ],
+   "prompt_tokens": 48,
+   "predicted": "people",
+   "ok": false,
+   "latency_ms": 468.6,
+   "raw": "<start_function_call>call:people{action:<escape>query<escape>,name:<escape>zooe<escape>,query:<escape>friday<escape>}"
+  },
+  {
+   "id": "cal-show-p2",
+   "style": "paraphrase",
+   "expected": [
+    "show_calendar"
+   ],
+   "prompt_tokens": 46,
+   "predicted": null,
+   "ok": false,
+   "latency_ms": 157.2,
+   "raw": ""
+  },
+  {
+   "id": "cal-add-c1",
+   "style": "canonical",
+   "expected": [
+    "add_calendar_event"
+   ],
+   "prompt_tokens": 49,
+   "predicted": "add_calendar_event",
+   "ok": true,
+   "latency_ms": 554.4,
+   "raw": "<start_function_call>call:add_calendar_event{date:<escape>next tuesday<escape>,time:<escape>3pm<escape>,title:<escape>dentist appointment<escape>}"
+  },
+  {
+   "id": "cal-add-c2",
+   "style": "canonical",
+   "expected": [
+    "add_calendar_event"
+   ],
+   "prompt_tokens": 51,
+   "predicted": "add_calendar_event",
+   "ok": true,
+   "latency_ms": 558.5,
+   "raw": "<start_function_call>call:add_calendar_event{date:<escape>friday<escape>,time:<escape>10<escape>,title:<escape>meeting with sarah<escape>}"
+  },
+  {
+   "id": "cal-add-p1",
+   "style": "paraphrase",
+   "expected": [
+    "add_calendar_event"
+   ],
+   "prompt_tokens": 51,
+   "predicted": "add_calendar_event",
+   "ok": true,
+   "latency_ms": 488.1,
+   "raw": "<start_function_call>call:add_calendar_event{date:<escape>thursday<escape>,title:<escape>the vet can fit biscuit<escape>}"
+  },
+  {
+   "id": "cal-add-p2",
+   "style": "paraphrase",
+   "expected": [
+    "add_calendar_event"
+   ],
+   "prompt_tokens": 52,
+   "predicted": "add_reminder",
+   "ok": false,
+   "latency_ms": 551.9,
+   "raw": "<start_function_call>call:add_reminder{date:<escape>saturday<escape>,time:<escape>7pm<escape>,title:<escape>mum's flight landings<escape>}"
+  },
+  {
+   "id": "rem-add-c1",
+   "style": "canonical",
+   "expected": [
+    "add_reminder"
+   ],
+   "prompt_tokens": 51,
+   "predicted": "add_reminder",
+   "ok": true,
+   "latency_ms": 528.3,
+   "raw": "<start_function_call>call:add_reminder{date:<escape>tomorrow<escape>,time:<escape>7pm<escape>,title:<escape>water the plants<escape>}"
+  },
+  {
+   "id": "rem-add-c2",
+   "style": "canonical",
+   "expected": [
+    "add_reminder"
+   ],
+   "prompt_tokens": 48,
+   "predicted": "add_reminder",
+   "ok": true,
+   "latency_ms": 439.2,
+   "raw": "<start_function_call>call:add_reminder{date:<escape> tonight<escape>,title:<escape>take the bins out<escape>}"
+  },
+  {
+   "id": "rem-add-p1",
+   "style": "paraphrase",
+   "expected": [
+    "add_reminder"
+   ],
+   "prompt_tokens": 52,
+   "predicted": "add_reminder",
+   "ok": true,
+   "latency_ms": 480.5,
+   "raw": "<start_function_call>call:add_reminder{date:<escape>the first<escape>,title:<escape>pay the rent<escape>}"
+  },
+  {
+   "id": "rem-add-p2",
+   "style": "paraphrase",
+   "expected": [
+    "add_reminder"
+   ],
+   "prompt_tokens": 48,
+   "predicted": "add_reminder",
+   "ok": true,
+   "latency_ms": 431.0,
+   "raw": "<start_function_call>call:add_reminder{date:<escape>tomorrow<escape>,title:<escape>dentist appointment<escape>}"
+  },
+  {
+   "id": "rem-add-p3",
+   "style": "paraphrase",
+   "expected": [
+    "add_reminder"
+   ],
+   "prompt_tokens": 53,
+   "predicted": "remember_fact",
+   "ok": false,
+   "latency_ms": 498.3,
+   "raw": "<start_function_call>call:remember_fact{fact:<escape>I'll forget the school pickup at 3 unless you say something<escape>}"
+  },
+  {
+   "id": "rem-list-c1",
+   "style": "canonical",
+   "expected": [
+    "list_reminders"
+   ],
+   "prompt_tokens": 44,
+   "predicted": "list_reminders",
+   "ok": true,
+   "latency_ms": 253.5,
+   "raw": "<start_function_call>call:list_reminders{}"
+  },
+  {
+   "id": "rem-list-p1",
+   "style": "paraphrase",
+   "expected": [
+    "list_reminders",
+    "show_calendar"
+   ],
+   "prompt_tokens": 48,
+   "predicted": "list_reminders",
+   "ok": true,
+   "latency_ms": 350.3,
+   "raw": "<start_function_call>call:list_reminders{qualifier:<escape>today<escape>}"
+  },
+  {
+   "id": "timer-c1",
+   "style": "canonical",
+   "expected": [
+    "set_timer"
+   ],
+   "prompt_tokens": 47,
+   "predicted": "set_timer",
+   "ok": true,
+   "latency_ms": 306.9,
+   "raw": "<start_function_call>call:set_timer{minutes:10}"
+  },
+  {
+   "id": "timer-c2",
+   "style": "canonical",
+   "expected": [
+    "set_timer"
+   ],
+   "prompt_tokens": 48,
+   "predicted": "set_timer",
+   "ok": true,
+   "latency_ms": 381.4,
+   "raw": "<start_function_call>call:set_timer{label:<escape>pasta<escape>,minutes:5}"
+  },
+  {
+   "id": "timer-p1",
+   "style": "paraphrase",
+   "expected": [
+    "set_timer"
+   ],
+   "prompt_tokens": 50,
+   "predicted": "shopping_list_add",
+   "ok": false,
+   "latency_ms": 379.2,
+   "raw": "<start_function_call>call:shopping_list_add{item:<escape>2 on the clock<escape>}"
+  },
+  {
+   "id": "timer-p2",
+   "style": "paraphrase",
+   "expected": [
+    "set_timer"
+   ],
+   "prompt_tokens": 46,
+   "predicted": "set_timer",
+   "ok": true,
+   "latency_ms": 363.5,
+   "raw": "<start_function_call>call:set_timer{label:<escape>eggs<escape>,minutes:6}"
+  },
+  {
+   "id": "note-add-c1",
+   "style": "canonical",
+   "expected": [
+    "create_note"
+   ],
+   "prompt_tokens": 49,
+   "predicted": "create_note",
+   "ok": true,
+   "latency_ms": 384.7,
+   "raw": "<start_function_call>call:create_note{content:<escape>the wifi password is hunter2<escape>}"
+  },
+  {
+   "id": "note-add-c2",
+   "style": "canonical",
+   "expected": [
+    "create_note"
+   ],
+   "prompt_tokens": 52,
+   "predicted": "create_note",
+   "ok": true,
+   "latency_ms": 432.9,
+   "raw": "<start_function_call>call:create_note{content:<escape>the gate code is 4482<escape>}"
+  },
+  {
+   "id": "note-add-p1",
+   "style": "paraphrase",
+   "expected": [
+    "create_note"
+   ],
+   "prompt_tokens": 57,
+   "predicted": "create_note",
+   "ok": true,
+   "latency_ms": 378.8,
+   "raw": "<start_function_call>call:create_note{content:<escape>jot this down<escape>}"
+  },
+  {
+   "id": "note-add-p2",
+   "style": "paraphrase",
+   "expected": [
+    "create_note",
+    "remember_fact"
+   ],
+   "prompt_tokens": 53,
+   "predicted": "shopping_list_add",
+   "ok": false,
+   "latency_ms": 409.4,
+   "raw": "<start_function_call>call:shopping_list_add{item:<escape>the good pizza place<escape>}"
+  },
+  {
+   "id": "note-search-c1",
+   "style": "canonical",
+   "expected": [
+    "note_search"
+   ],
+   "prompt_tokens": 46,
+   "predicted": "note_search",
+   "ok": true,
+   "latency_ms": 353.3,
+   "raw": "<start_function_call>call:note_search{query:<escape>the wifi password<escape>}"
+  },
+  {
+   "id": "note-search-p1",
+   "style": "paraphrase",
+   "expected": [
+    "note_search"
+   ],
+   "prompt_tokens": 47,
+   "predicted": "recall_memory",
+   "ok": false,
+   "latency_ms": 399.3,
+   "raw": "<start_function_call>call:recall_memory{query:<escape>what I said the plumber quoted again<escape>}"
+  },
+  {
+   "id": "note-search-p2",
+   "style": "paraphrase",
+   "expected": [
+    "note_search"
+   ],
+   "prompt_tokens": 49,
+   "predicted": "create_note",
+   "ok": false,
+   "latency_ms": 354.8,
+   "raw": "<start_function_call>call:create_note{content:<escape>the gate code<escape>}"
+  },
+  {
+   "id": "journal-c1",
+   "style": "canonical",
+   "expected": [
+    "journal"
+   ],
+   "prompt_tokens": 49,
+   "predicted": "journal",
+   "ok": true,
+   "latency_ms": 434.8,
+   "raw": "<start_function_call>call:journal{action:<escape>create<escape>,content:<escape>grateful for the rain today<escape>}"
+  },
+  {
+   "id": "journal-c2",
+   "style": "canonical",
+   "expected": [
+    "journal"
+   ],
+   "prompt_tokens": 49,
+   "predicted": "journal",
+   "ok": true,
+   "latency_ms": 506.8,
+   "raw": "<start_function_call>call:journal{action:<escape>create<escape>,content:<escape>today was a hard one<escape>,mood:<escape>stressed<escape>}"
+  },
+  {
+   "id": "journal-p1",
+   "style": "paraphrase",
+   "expected": [
+    "journal"
+   ],
+   "prompt_tokens": 52,
+   "predicted": "journal",
+   "ok": true,
+   "latency_ms": 445.0,
+   "raw": "<start_function_call>call:journal{action:<escape>create<escape>,content:<escape>today honestly knocked me around<escape>}"
+  },
+  {
+   "id": "journal-p2",
+   "style": "paraphrase",
+   "expected": [
+    "journal"
+   ],
+   "prompt_tokens": 46,
+   "predicted": "journal",
+   "ok": true,
+   "latency_ms": 285.6,
+   "raw": "<start_function_call>call:journal{action:<escape>read<escape>}"
+  },
+  {
+   "id": "people-c1",
+   "style": "canonical",
+   "expected": [
+    "people"
+   ],
+   "prompt_tokens": 47,
+   "predicted": "people",
+   "ok": true,
+   "latency_ms": 446.1,
+   "raw": "<start_function_call>call:people{action:<escape>create<escape>,name:<escape>Marcus<escape>,relationship:<escape>my colleague<escape>}"
+  },
+  {
+   "id": "people-c2",
+   "style": "canonical",
+   "expected": [
+    "people",
+    "recall_memory"
+   ],
+   "prompt_tokens": 44,
+   "predicted": null,
+   "ok": false,
+   "latency_ms": 152.7,
+   "raw": ""
+  },
+  {
+   "id": "people-p1",
+   "style": "paraphrase",
+   "expected": [
+    "people",
+    "remember_fact"
+   ],
+   "prompt_tokens": 54,
+   "predicted": "people",
+   "ok": true,
+   "latency_ms": 540.8,
+   "raw": "<start_function_call>call:people{action:<escape>create<escape>,name:<escape>Kate<escape>,relationship:<escape>my sister's name is Kate<escape>}"
+  },
+  {
+   "id": "people-p2",
+   "style": "paraphrase",
+   "expected": [
+    "people",
+    "recall_memory"
+   ],
+   "prompt_tokens": 47,
+   "predicted": "people",
+   "ok": true,
+   "latency_ms": 472.8,
+   "raw": "<start_function_call>call:people{action:<escape>query<escape>,name:<escape>Dave<escape>,query:<escape>my mate Dave<escape>}"
+  },
+  {
+   "id": "media-c1",
+   "style": "canonical",
+   "expected": [
+    "media"
+   ],
+   "prompt_tokens": 42,
+   "predicted": "media",
+   "ok": true,
+   "latency_ms": 362.1,
+   "raw": "<start_function_call>call:media{action:<escape>play<escape>,query:<escape>some music<escape>}"
+  },
+  {
+   "id": "media-c2",
+   "style": "canonical",
+   "expected": [
+    "media"
+   ],
+   "prompt_tokens": 43,
+   "predicted": "media",
+   "ok": true,
+   "latency_ms": 359.2,
+   "raw": "<start_function_call>call:media{action:<escape>volume<escape>,direction:<escape>down<escape>}"
+  },
+  {
+   "id": "media-c3",
+   "style": "canonical",
+   "expected": [
+    "media"
+   ],
+   "prompt_tokens": 42,
+   "predicted": "media",
+   "ok": true,
+   "latency_ms": 350.5,
+   "raw": "<start_function_call>call:media{action:<escape>control<escape>,command:<escape>pause<escape>}"
+  },
+  {
+   "id": "media-p1",
+   "style": "paraphrase",
+   "expected": [
+    "media"
+   ],
+   "prompt_tokens": 46,
+   "predicted": null,
+   "ok": false,
+   "latency_ms": 160.0,
+   "raw": ""
+  },
+  {
+   "id": "media-p2",
+   "style": "paraphrase",
+   "expected": [
+    "media"
+   ],
+   "prompt_tokens": 50,
+   "predicted": null,
+   "ok": false,
+   "latency_ms": 164.1,
+   "raw": ""
+  },
+  {
+   "id": "media-p3",
+   "style": "paraphrase",
+   "expected": [
+    "media"
+   ],
+   "prompt_tokens": 46,
+   "predicted": "list_remove",
+   "ok": false,
+   "latency_ms": 420.7,
+   "raw": "<start_function_call>call:list_remove{item:<escape>this<escape>,list_type:<escape>previous<escape>}"
+  },
+  {
+   "id": "home-c1",
+   "style": "canonical",
+   "expected": [
+    "home"
+   ],
+   "prompt_tokens": 44,
+   "predicted": "home",
+   "ok": true,
+   "latency_ms": 291.2,
+   "raw": "<start_function_call>call:home{action:<escape>off<escape>}"
+  },
+  {
+   "id": "home-c2",
+   "style": "canonical",
+   "expected": [
+    "home"
+   ],
+   "prompt_tokens": 44,
+   "predicted": "home",
+   "ok": true,
+   "latency_ms": 378.0,
+   "raw": "<start_function_call>call:home{action:<escape>dim<escape>,room:<escape>lounge<escape>}"
+  },
+  {
+   "id": "home-p1",
+   "style": "paraphrase",
+   "expected": [
+    "home"
+   ],
+   "prompt_tokens": 52,
+   "predicted": "home",
+   "ok": true,
+   "latency_ms": 398.1,
+   "raw": "<start_function_call>call:home{action:<escape>brighten<escape>,room:<escape>caves<escape>}"
+  },
+  {
+   "id": "home-p2",
+   "style": "paraphrase",
+   "expected": [
+    "home"
+   ],
+   "prompt_tokens": 49,
+   "predicted": "home",
+   "ok": true,
+   "latency_ms": 367.4,
+   "raw": "<start_function_call>call:home{action:<escape>create<escape>,room:<escape>bedroom<escape>}"
+  },
+  {
+   "id": "recall-c1",
+   "style": "canonical",
+   "expected": [
+    "recall_memory"
+   ],
+   "prompt_tokens": 45,
+   "predicted": null,
+   "ok": false,
+   "latency_ms": 145.7,
+   "raw": ""
+  },
+  {
+   "id": "recall-c2",
+   "style": "canonical",
+   "expected": [
+    "recall_memory"
+   ],
+   "prompt_tokens": 44,
+   "predicted": "recall_memory",
+   "ok": true,
+   "latency_ms": 315.2,
+   "raw": "<start_function_call>call:recall_memory{query:<escape>my name<escape>}"
+  },
+  {
+   "id": "recall-p1",
+   "style": "paraphrase",
+   "expected": [
+    "recall_memory"
+   ],
+   "prompt_tokens": 50,
+   "predicted": "recall_memory",
+   "ok": true,
+   "latency_ms": 406.3,
+   "raw": "<start_function_call>call:recall_memory{query:<escape>what I told you about my work situation<escape>}"
+  },
+  {
+   "id": "recall-p2",
+   "style": "paraphrase",
+   "expected": [
+    "recall_memory"
+   ],
+   "prompt_tokens": 52,
+   "predicted": "recall_memory",
+   "ok": true,
+   "latency_ms": 395.4,
+   "raw": "<start_function_call>call:recall_memory{query:<escape>what I said about my knee<escape>}"
+  },
+  {
+   "id": "fact-c1",
+   "style": "canonical",
+   "expected": [
+    "remember_fact"
+   ],
+   "prompt_tokens": 46,
+   "predicted": "remember_fact",
+   "ok": true,
+   "latency_ms": 363.4,
+   "raw": "<start_function_call>call:remember_fact{fact:<escape>my favourite colour is green<escape>}"
+  },
+  {
+   "id": "fact-c2",
+   "style": "canonical",
+   "expected": [
+    "remember_fact"
+   ],
+   "prompt_tokens": 47,
+   "predicted": "remember_fact",
+   "ok": true,
+   "latency_ms": 372.5,
+   "raw": "<start_function_call>call:remember_fact{fact:<escape>I'm allergic to peanuts<escape>}"
+  },
+  {
+   "id": "fact-p1",
+   "style": "paraphrase",
+   "expected": [
+    "remember_fact"
+   ],
+   "prompt_tokens": 55,
+   "predicted": "remember_fact",
+   "ok": true,
+   "latency_ms": 481.9,
+   "raw": "<start_function_call>call:remember_fact{fact:<escape>I knock off work at 2:30 on fridays<escape>}"
+  },
+  {
+   "id": "fact-p2",
+   "style": "paraphrase",
+   "expected": [
+    "remember_fact",
+    "people"
+   ],
+   "prompt_tokens": 52,
+   "predicted": "remember_fact",
+   "ok": true,
+   "latency_ms": 404.3,
+   "raw": "<start_function_call>call:remember_fact{fact:<escape>the dog's name is Biscuit<escape>}"
+  },
+  {
+   "id": "chat-1",
+   "style": "chat",
+   "expected": [
+    "general_chat"
+   ],
+   "prompt_tokens": 47,
+   "predicted": null,
+   "ok": true,
+   "latency_ms": 158.0,
+   "raw": ""
+  },
+  {
+   "id": "chat-2",
+   "style": "chat",
+   "expected": [
+    "general_chat"
+   ],
+   "prompt_tokens": 47,
+   "predicted": null,
+   "ok": true,
+   "latency_ms": 157.7,
+   "raw": ""
+  },
+  {
+   "id": "chat-3",
+   "style": "chat",
+   "expected": [
+    "general_chat",
+    "journal",
+    "remember_emotional_moment"
+   ],
+   "prompt_tokens": 47,
+   "predicted": null,
+   "ok": true,
+   "latency_ms": 157.4,
+   "raw": ""
+  },
+  {
+   "id": "chat-4",
+   "style": "chat",
+   "expected": [
+    "general_chat"
+   ],
+   "prompt_tokens": 49,
+   "predicted": null,
+   "ok": true,
+   "latency_ms": 166.8,
+   "raw": ""
+  },
+  {
+   "id": "chat-5",
+   "style": "chat",
+   "expected": [
+    "general_chat"
+   ],
+   "prompt_tokens": 44,
+   "predicted": null,
+   "ok": true,
+   "latency_ms": 153.6,
+   "raw": ""
+  },
+  {
+   "id": "chat-6",
+   "style": "chat",
+   "expected": [
+    "general_chat"
+   ],
+   "prompt_tokens": 47,
+   "predicted": null,
+   "ok": true,
+   "latency_ms": 157.5,
+   "raw": ""
+  },
+  {
+   "id": "chat-7",
+   "style": "chat",
+   "expected": [
+    "general_chat"
+   ],
+   "prompt_tokens": 48,
+   "predicted": null,
+   "ok": true,
+   "latency_ms": 162.7,
+   "raw": ""
+  },
+  {
+   "id": "chat-8",
+   "style": "chat",
+   "expected": [
+    "general_chat"
+   ],
+   "prompt_tokens": 46,
+   "predicted": null,
+   "ok": true,
+   "latency_ms": 147.0,
+   "raw": ""
+  }
+ ]
+}
