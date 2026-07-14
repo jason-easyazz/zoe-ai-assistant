@@ -62,9 +62,12 @@ collapses (paraphrase slice: 10.3%).
 
 ## Verdict
 
-- **The real two-stage does NOT beat SetFit-alone.** 35.8% vs 80.2% — it is
-  44 points WORSE, and worse than the 61.7% live baseline and even the
-  33.3% stock-full-block row it was meant to fix (B literally ties it).
+- **The real two-stage does NOT beat SetFit-alone.** 35.8% tool-level vs
+  80.2% domain-level (an upper bound on SetFit-alone; different scoring
+  axes, so read it as a directional loss, not an exact 44-point gap —
+  see the scoring caveat). On the SAME tool-level axis it is worse than
+  the 74.1% functok fine-tune and the 61.7% live baseline, and B literally
+  ties the 33.3% stock-full-block row it was meant to fix.
 - **The honest number to plan around for shadow-mode is SetFit-alone 80.2%
   domain-level** (+14 ms on the already-computed prod embedding; tool
   dispatch within the domain still needed — see the scoring caveat above),
