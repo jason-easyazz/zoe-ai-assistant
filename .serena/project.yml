@@ -31,8 +31,12 @@ project_name: "assistant"
 # When using multiple languages, the first language server that supports a given file will be used for that file.
 # The first language is the default language and the respective language server will be used as a fallback.
 # Note that when using the JetBrains backend, language servers are not used and this list is correspondingly ignored.
+# python_jedi (jedi-language-server) instead of default python (Pyright): Pyright's
+# node process grows unboundedly on this repo (upstream oraios/serena#944) and
+# starves the 16GB Orin. jedi-language-server must be on PATH:
+# `uv tool install jedi-language-server`.
 languages:
-- python
+- python_jedi
 
 # the encoding used by text files in the project
 # For a list of possible encodings, see https://docs.python.org/3.11/library/codecs.html#standard-encodings
