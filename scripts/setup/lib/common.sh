@@ -72,9 +72,10 @@ PY
   fi
 }
 
-# env_get <file> <KEY> — echo the current value (empty if unset/blank)
+# env_get <file> <KEY> — echo the current value (empty if unset/blank).
+# `|| true` so a miss returns "" instead of aborting a `set -e` caller.
 env_get() {
-  grep -E "^${2}=" "$1" 2>/dev/null | head -1 | cut -d= -f2-
+  grep -E "^${2}=" "$1" 2>/dev/null | head -1 | cut -d= -f2- || true
 }
 
 # env_is_placeholder <value> — true if empty or a replace-with-* placeholder
