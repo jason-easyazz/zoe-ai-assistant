@@ -32,7 +32,7 @@
 #   ROLLOUT_BRAIN_URL     brain llama-server       (default http://127.0.0.1:11434)
 #   ROLLOUT_EXPECTED_GGUF substring expected in sidecar /props model path
 #                                                  (default functiongemma-270m-zoe-functok-r2)
-#   ROLLOUT_SHADOW2_LOG   shadow2 JSONL            (default $REPO/services/zoe-data/data/router_head_shadow2.jsonl)
+#   ROLLOUT_SHADOW2_LOG   shadow2 JSONL            (default $REPO/services/zoe-data/data/router_head_shadow.jsonl)
 #   ROLLOUT_SHADOW_LOG    stage-1 shadow JSONL     (default $REPO/services/zoe-data/data/router_head_shadow.jsonl)
 #   ROLLOUT_CMD_UTTERANCE canonical command probe  (default "add rollout probe to my shopping list")
 #   ROLLOUT_ACTIVE_MAX_MS sub-second gate for the command probe (default 1000)
@@ -48,7 +48,7 @@ API="${ROLLOUT_API:-http://127.0.0.1:8000}"
 SIDECAR_URL="${ROLLOUT_SIDECAR_URL:-http://127.0.0.1:11436}"
 BRAIN_URL="${ROLLOUT_BRAIN_URL:-http://127.0.0.1:11434}"
 EXPECTED_GGUF="${ROLLOUT_EXPECTED_GGUF:-functiongemma-270m-zoe-functok-r2}"
-SHADOW2_LOG="${ROLLOUT_SHADOW2_LOG:-$REPO/services/zoe-data/data/router_head_shadow2.jsonl}"
+SHADOW2_LOG="${ROLLOUT_SHADOW2_LOG:-$REPO/services/zoe-data/data/router_head_shadow.jsonl}"
 SHADOW_LOG="${ROLLOUT_SHADOW_LOG:-$REPO/services/zoe-data/data/router_head_shadow.jsonl}"
 CMD_UTTERANCE="${ROLLOUT_CMD_UTTERANCE:-add rollout probe to my shopping list}"
 ACTIVE_MAX_MS="${ROLLOUT_ACTIVE_MAX_MS:-1000}"

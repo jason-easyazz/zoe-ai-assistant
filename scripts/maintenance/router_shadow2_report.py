@@ -7,7 +7,7 @@ runs the FULL two-stage pipeline off the hot path — SetFit shortlist head
 logs what it WOULD have done vs what the live Tier-0/1 router actually did.
 
 Reads the JSONL written by the shadow2 hook (default
-services/zoe-data/data/router_head_shadow2.jsonl) and reports:
+services/zoe-data/data/router_head_shadow.jsonl) and reports:
 
 - turn count + unique utterances (by hash)
 - agreement rate: shadow2's would-be route vs the route actually taken
@@ -17,10 +17,11 @@ services/zoe-data/data/router_head_shadow2.jsonl) and reports:
 - per-domain confusion (actual -> shadow2 disagreements)
 - would-be latency percentiles (total, plus per-stage when logged)
 
-Tolerant of exact field names (built before lane 1's shape froze): the
-shadow2 route is read from the first present of final_routed / routed /
-shadow2_routed / head_routed; latency from total_ms / shadow2_ms / two_stage_ms
-(stage keys: head_ms / stage1_ms, fg_ms / stage2_ms / sidecar_ms).
+Reads the schema semantic_router.py actually writes: the would-be route is
+`two_stage_domain` and latency is `two_stage_ms`. Only two-stage records
+(carrying `two_stage_domain`, mode shadow2/active) are counted — stage-one
+`head` shadow records in the same shared log are excluded. Legacy field
+aliases are still tolerated for forward/backward compatibility.
 
 Usage:
     python3 scripts/maintenance/router_shadow2_report.py [path/to/log.jsonl]

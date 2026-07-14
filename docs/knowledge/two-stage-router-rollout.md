@@ -52,7 +52,7 @@ scripts/maintenance/router_rollout.sh --stage shadow2
 
 Sets the flag, restarts, verifies health, POSTs 3 synthetic utterances to
 `/api/chat/?stream=false`, and confirms shadow2 log lines appear
-(`services/zoe-data/data/router_head_shadow2.jsonl`, or the zoe-data journal).
+(`services/zoe-data/data/router_head_shadow.jsonl`, or the zoe-data journal).
 
 Let it soak on real traffic (a day of panel/chat/Telegram turns), then score:
 
@@ -98,7 +98,7 @@ uninstalling the sidecar mid-incident (it is inert when the flag is off).
 
 ## Where the numbers land
 
-- shadow2 JSONL: `services/zoe-data/data/router_head_shadow2.jsonl`
+- shadow2 JSONL: `services/zoe-data/data/router_head_shadow.jsonl`
   (summary: `router_shadow2_report.py`)
 - stage-1 shadow JSONL (#1318): `services/zoe-data/data/router_head_shadow.jsonl`
   (summary: `router_shadow_report.py`)
