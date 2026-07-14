@@ -101,12 +101,22 @@ if [[ "$SKIP_VOICE" == "0" ]]; then
     "${REMOTE}:${REMOTE_TMP}/"
   ok "installer + daemon copied to ${REMOTE}:${REMOTE_TMP}"
 
+  # The device token is a credential — never pass it as a --flag (it would show
+  # up in `ps aux` on the Pi). Instead ship it over stdin to a 0600 file, then
+  # feed it to the installer as an env var (the installer honours $DEVICE_TOKEN)
+  # and shred the file. voice_args carry only non-secret values.
   voice_args=(--zoe-url "$SERVER_URL" --panel-id "$PANEL_ID" --audio-device "$AUDIO_DEVICE")
-  [[ -n "$DEVICE_TOKEN" ]] && voice_args+=(--device-token "$DEVICE_TOKEN")
   log "Running voice daemon installer on ${REMOTE}…"
-  # Quote args for the remote shell.
   printf -v remote_cmd 'bash %q/pi_voice_daemon_install.sh' "$REMOTE_TMP"
   for a in "${voice_args[@]}"; do printf -v remote_cmd '%s %q' "$remote_cmd" "$a"; done
+
+  if [[ -n "$DEVICE_TOKEN" ]]; then
+    # shellcheck disable=SC2029  # REMOTE_TMP is a local constant; client-side expansion intended
+    printf '%s' "$DEVICE_TOKEN" | ssh "${SSH_OPTS[@]}" "$REMOTE" "umask 077; cat > ${REMOTE_TMP}/.device_token"
+    # $(cat ...), $? and $rc are escaped so they evaluate on the Pi, keeping the
+    # token out of both the ssh command string and the installer's argv.
+    remote_cmd="DEVICE_TOKEN=\$(cat ${REMOTE_TMP}/.device_token) ${remote_cmd}; rc=\$?; rm -f ${REMOTE_TMP}/.device_token; exit \$rc"
+  fi
   # shellcheck disable=SC2029  # remote_cmd is pre-quoted with %q; expand it on the remote
   ssh "${SSH_OPTS[@]}" "$REMOTE" "$remote_cmd"
   ssh "${SSH_OPTS[@]}" "$REMOTE" "systemctl --user restart zoe-voice.service || systemctl --user start zoe-voice.service || true"
