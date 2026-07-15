@@ -459,7 +459,9 @@ async def queue_save_playlist(queue_id: str, name: str) -> bool:
 
 async def list_playlists() -> list[dict[str, Any]]:
     """The user's playlist library (name + uri + art), for the manager's browser."""
-    res = await _ma("music/playlists/library_items", favorite=False, limit=100)
+    # No `favorite` filter: MA treats it as a strict boolean (True→only favourites,
+    # False→only non-favourites), so passing False would hide any hearted playlist.
+    res = await _ma("music/playlists/library_items", limit=100)
     out: list[dict[str, Any]] = []
     for pl in (res.get("items", []) if isinstance(res, dict) else (res or [])):
         if not isinstance(pl, dict):
