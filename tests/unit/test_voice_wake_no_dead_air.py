@@ -227,7 +227,7 @@ def test_silence_trim_collapses_the_padding_but_keeps_speech(daemon):
     assert (np.abs(a) > 100).sum() >= int(rate * 1.0), "trim ate into the speech body"
 
 
-def test_silence_trim_is_a_safe_passthrough(daemon):
+def test_silence_trim_is_a_safe_passthrough(daemon, monkeypatch):
     """Never risk dropping real audio: non-16-bit and all-silent chunks pass through
     untouched, and disabling the flag is a no-op."""
     rate = 24000
@@ -238,8 +238,6 @@ def test_silence_trim_is_a_safe_passthrough(daemon):
     # 24-bit (width=3) is not handled → must be returned byte-for-byte
     assert daemon._trim_chunk_silence(pcm, rate, 1, 3) == pcm, "non-16-bit must pass through"
 
-    daemon._TTS_TRIM_SILENCE = False
-    try:
-        assert daemon._trim_chunk_silence(pcm, rate, 1, 2) == pcm, "disabled flag must be a no-op"
-    finally:
-        daemon._TTS_TRIM_SILENCE = True
+    # monkeypatch restores the module global on teardown (even on a non-assert error).
+    monkeypatch.setattr(daemon, "_TTS_TRIM_SILENCE", False)
+    assert daemon._trim_chunk_silence(pcm, rate, 1, 2) == pcm, "disabled flag must be a no-op"

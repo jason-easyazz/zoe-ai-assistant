@@ -55,6 +55,19 @@ def _env(name: str, default: str, *legacy_names: str) -> str:
     return default
 
 
+def _int_env(name: str, default: int) -> int:
+    """Read an int env var, falling back to the default on a missing or malformed
+    value instead of crashing the daemon at import (e.g. ZOE_TTS_KEEP_TAIL_MS=off)."""
+    raw = os.environ.get(name)
+    if raw in (None, ""):
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        log.warning("Env %s=%r is not an integer; using default %d", name, raw, default)
+        return default
+
+
 # Optional persistent log file (e.g. ZOE_VOICE_LOG=/home/zoe/.zoe-voice/voice.log)
 _voice_log = os.environ.get("ZOE_VOICE_LOG", "").strip()
 if _voice_log:
@@ -960,8 +973,8 @@ def _pcm_from_wav(wav_bytes: bytes):
 # each chunk's leading/trailing near-silence before feeding aplay, keeping a short tail
 # so sentences don't slur together. Set ZOE_TTS_TRIM_SILENCE=false to disable.
 _TTS_TRIM_SILENCE = os.environ.get("ZOE_TTS_TRIM_SILENCE", "true").lower() in ("1", "true", "yes")
-_TTS_KEEP_TAIL_MS = int(os.environ.get("ZOE_TTS_KEEP_TAIL_MS", "130"))
-_TTS_LEAD_GUARD_MS = int(os.environ.get("ZOE_TTS_LEAD_GUARD_MS", "20"))
+_TTS_KEEP_TAIL_MS = _int_env("ZOE_TTS_KEEP_TAIL_MS", 130)
+_TTS_LEAD_GUARD_MS = _int_env("ZOE_TTS_LEAD_GUARD_MS", 20)
 
 
 def _trim_chunk_silence(pcm: bytes, rate: int, ch: int, width: int) -> bytes:
