@@ -12,7 +12,7 @@
 1. **Worktree:** `git worktree add --detach /home/zoe/.worktrees/<packet-id> origin/main`,
    branch `fix/<packet-id>` or `feature/<packet-id>`. Never work in `/home/zoe/assistant`.
    **Immediately symlink the live env in:**
-   `ln -sf /home/zoe/assistant/services/zoe-data/.env <worktree>/services/zoe-data/.env`.
+   `ln -sf /home/zoe/assistant/services/zoe-data/.env /home/zoe/.worktrees/<packet-id>/services/zoe-data/.env`.
    Without it the voice replay gate (rule 3) **silently skips** — `measure_voice.py`
    requires the live-service `.env` and exits 0 with no JSON, which reads as a pass but
    validated nothing. (Learned 2026-07-08: the Agent-tool auto-worktrees omit this, so
