@@ -317,6 +317,75 @@ async def music_play_media(payload: dict) -> dict[str, Any]:
 
 # ── Discovery: MA-native recommendations + play history ──────────────────────
 
+@router.post("/queue/move")
+async def music_queue_move(payload: dict) -> dict[str, Any]:
+    """Reorder the queue. body: {queue_id, item_id, to_index}."""
+    import music_service
+    b = payload or {}
+    ok = await music_service.queue_move(str(b.get("queue_id") or ""), str(b.get("item_id") or ""), int(b.get("to_index") or 0))
+    return {"ok": ok}
+
+
+@router.post("/queue/remove")
+async def music_queue_remove(payload: dict) -> dict[str, Any]:
+    """Remove a track from the queue. body: {queue_id, item_id}."""
+    import music_service
+    b = payload or {}
+    return {"ok": await music_service.queue_remove(str(b.get("queue_id") or ""), str(b.get("item_id") or ""))}
+
+
+@router.post("/queue/clear")
+async def music_queue_clear(payload: dict) -> dict[str, Any]:
+    """Clear the queue. body: {queue_id}."""
+    import music_service
+    return {"ok": await music_service.queue_clear(str((payload or {}).get("queue_id") or ""))}
+
+
+@router.post("/queue/play-index")
+async def music_queue_play_index(payload: dict) -> dict[str, Any]:
+    """Jump to a queue position. body: {queue_id, index}."""
+    import music_service
+    b = payload or {}
+    return {"ok": await music_service.queue_play_index(str(b.get("queue_id") or ""), int(b.get("index") or 0))}
+
+
+@router.post("/queue/save")
+async def music_queue_save(payload: dict) -> dict[str, Any]:
+    """Save the current queue as a playlist. body: {queue_id, name}."""
+    import music_service
+    b = payload or {}
+    return {"ok": await music_service.queue_save_playlist(str(b.get("queue_id") or ""), str(b.get("name") or ""))}
+
+
+@router.get("/playlists")
+async def music_playlists() -> dict[str, Any]:
+    """The user's playlist library."""
+    import music_service
+    return {"playlists": await music_service.list_playlists()}
+
+
+@router.get("/playlists/tracks")
+async def music_playlist_tracks(uri: str = "", limit: int = 100) -> dict[str, Any]:
+    """Tracks in a playlist. ?uri=<playlist uri>."""
+    import music_service
+    return {"tracks": await music_service.playlist_tracks(uri, limit=limit)}
+
+
+@router.post("/playlists/add")
+async def music_playlist_add(payload: dict) -> dict[str, Any]:
+    """Add a track to a playlist. body: {playlist_uri, track_uri}."""
+    import music_service
+    b = payload or {}
+    return {"ok": await music_service.playlist_add(str(b.get("playlist_uri") or ""), str(b.get("track_uri") or ""))}
+
+
+@router.post("/favorite")
+async def music_favorite(payload: dict) -> dict[str, Any]:
+    """Favorite / add-to-library a media item. body: {uri}."""
+    import music_service
+    return {"ok": await music_service.favorite_add(str((payload or {}).get("uri") or ""))}
+
+
 @router.get("/recommendations")
 async def music_recommendations() -> dict[str, Any]:
     """MA's native recommendation shelves ("Listen again", "Mixed for you", …),
