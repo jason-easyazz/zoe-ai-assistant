@@ -121,8 +121,11 @@ Stitch assembles time/weather from **cached word-level segments glued with a 70 
 ("it's" ⏸ "twenty-two" ⏸ "degrees"…). It was a CPU-era latency hack — obsolete on GPU (a fresh
 full-sentence synth is ~0.3 s with **zero** internal gaps). **The code default is OFF; the choppiness
 came from `ZOE_VOICE_STITCH_ENABLED=1` set in the live `services/zoe-data/.env`.** Fix: set it to `0`
-+ restart zoe-data. **Diagnostic: if time/weather (but not chat) go choppy, `grep ZOE_VOICE_STITCH
-services/zoe-data/.env` FIRST** — a reprovision from a template that re-sets `=1` brings it back.
++ restart zoe-data. No repo change is needed — verified nothing git-tracked sets `=1` (the code
+default in `voice_stitch.py` is OFF and no `.env.example` / installer / provisioning file references
+it), so the `=1` was a purely local live-`.env` override with **no template source to correct**. If a
+host-level provisioning script outside this repo ever sets it, fix it there too. **Diagnostic: if
+time/weather (but not chat) go choppy, `grep ZOE_VOICE_STITCH services/zoe-data/.env` FIRST.**
 
 Meta-lesson: the fast-path and the brain path have **separate chunkers** (`_split_sentences` +
 `stitch_reply` vs `_extract_first_unit`), so a voice-naturalness fix must cover BOTH — fixing one
