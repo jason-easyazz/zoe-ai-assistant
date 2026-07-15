@@ -59,6 +59,40 @@ harness under the shared flock. Scheduled daily off-peak via the
 `~/.config/systemd/user/`). Numbers are RELATIVE (warm harness) — used for *drift vs baseline*, not
 as live performance.
 
+## The gate emits a heartbeat, and the deploy path checks it
+
+*"A gate that can silently not-run is not a gate."* This gate was once deadlocked from birth (it
+re-took a flock its caller already held, timed out ~17 min every run, and NEVER once succeeded —
+yet merged work claimed to be replay-gated). The deadlock is fixed (#1292, self-serializing); the
+generalized lesson is a **result artifact + a checker**, mirroring the router self-train ratchet's
+`replay_gate_passed` (a *skip* is not a *pass*).
+
+- **Result artifact (produced by `voice_regression_probe.py` on EVERY run):**
+  `~/.cache/zoe/voice_regression_last.json` (override `ZOE_VOICE_RESULTS`), also appended to
+  `…_trend.jsonl`. Machine-readable contract — keep these keys stable:
+
+  ```json
+  {"status": "pass|fail|skip|error", "timestamp": "…Z",
+   "said_vs_did_regressions": ["FUNCTION: …"], "per_stage_speed_deltas": {"stt_ms": {"cur_ms": …, "baseline_ms": …, "delta_ms": …, "ratio": …}, …},
+   "baseline_ref": {"path": "…", "created_at": "…Z", "ok_rate": …},
+   "reason": "…", "summary": {"n_samples": …, "ok_rate": …, "medians_ms": {…}}}
+  ```
+
+  A **skip** (box too tight), **timeout**, or **error** (harness couldn't run) MUST still write an
+  artifact with `status != "pass"` — an *absent* file is never "nothing wrong". `summary` +
+  `created_at` are retained for the router self-train `replay_gate` reader.
+
+- **Deploy-path checker — `scripts/maintenance/voice_gate_check.py`:** the cheap counterpart the
+  blessed deploy (`deploy_live.sh`) invokes. If the incoming git diff touches the **voice runtime
+  path** (`voice_tts.py` / `zoe_core_client.py` / `fast_tiers.py` / `*kokoro*` / `*moonshine*`;
+  override `ZOE_VOICE_GATE_PATHS`), it asserts a **fresh** (`< ZOE_VOICE_GATE_MAX_AGE_H`, default 24h)
+  **passing** artifact **matching the current baseline** before the restart — else it fails loudly
+  (non-zero exit) and the deploy is refused. Non-voice deploys are a no-op pass. **It never runs the
+  heavy Kokoro harness** (that would OOM the box under flock) — it only reads the artifact the gate
+  produced. Standing rule: *any mandatory loop/gate/job must emit a heartbeat that something checks.*
+  Pinned by `tests/unit/test_voice_gate_check.py` (missing → block, stale → block, fresh pass →
+  allow; skip/error/baseline-drift all block).
+
 ## The caveat that bites (read this)
 
 The replay harness uses **warm models and stops *before* TTS**, so **its numbers UNDERSTATE real live
@@ -69,11 +103,13 @@ cold STT** (warmup skipped under pressure) and **wake-word bleed** on the first 
 *measurement* over guessing (`VISION.md` principle 4) — when you change the path, measure live, not
 just the harness.
 
-## Two failure modes that are easy to misdiagnose (2026-07-14)
+## Failure modes that are easy to misdiagnose (2026-07-14 / -15)
 
-Both were reported as "the wake word gets the first use wrong" and "the voice is broken into
-pieces". Neither was a model problem — Moonshine and Kokoro were fine. Symptoms in the voice path
-are usually **plumbing**, so measure the audio before blaming the model.
+All were reported as "the wake word gets the first use wrong" or "the voice is choppy / broken into
+pieces". None was a model problem — Moonshine and Kokoro were fine. Symptoms in the voice path are
+usually **plumbing**, so measure the audio before blaming the model. Several of these were latency
+hacks from the slow-**CPU** Kokoro era that became pure downside once Kokoro moved to GPU — when
+synthesis is fast, splitting/stitching for speed only adds pauses.
 
 **1. Dead air between wake and capture (STT looks like it mis-hears).**
 The daemon closed the mic on wake, played the chime with a *blocking* `subprocess.run`, then opened a
@@ -98,6 +134,36 @@ so the very chunking that bought fast first-audio was what starved the pipe. Fix
 (`ZOE_KOKORO_BACKEND=pytorch`), RTF **0.08x**. **Diagnostic: if replies ever sound chopped again,
 check `curl localhost:10201/health` for `device` and `degraded` first** — a busy box can OOM the
 CUDA init and silently drop back to CPU.
+
+**3. Per-sentence chunking split short replies mid-sentence (#1330 / #1331).** Two compounding
+issues once the pipe no longer starved: (a) Kokoro pads every utterance with ~0.4–0.5 s of silence
+front and back, and the panel concatenated the chunks keeping all of it → ~0.9 s dead air at each
+sentence join → trim it in the daemon (`_trim_chunk_silence`, keep ~130 ms tail); (b) the server's
+`_extract_first_unit` broke the first chunk at the first comma/colon — even *inside* a number
+("The time is 8:" ⏸ "05…") — and each fragment is a standalone utterance with sentence-final prosody,
+so a short reply sounded broken. Fix: only sentence-boundary chunks for short replies; clause-break
+only long openings; every boundary needs a following space. Pinned by `test_voice_first_audio.py` /
+`test_voice_invariants.py`.
+
+**4. Voice stitch made ONLY time/weather choppy — a live-`.env` landmine (2026-07-15).**
+Tell: *chat replies (e.g. "meaning of life") are smooth but time/weather are choppy.* They take
+different paths — chat streams through the brain + `_extract_first_unit`; the **fast-path** domains
+(time/weather/date/list/calendar via `fast_tiers.resolve`) are synthesized in
+`turn_stream._wrapped()`'s `elif reply_text:` branch, which first tries `voice_stitch.stitch_reply`.
+Stitch assembles time/weather from **cached word-level segments glued with a 70 ms micro-pause**
+(`_GAP_MS`); with each segment's own baked-in silence it measured **600–840 ms gaps between words**
+("it's" ⏸ "twenty-two" ⏸ "degrees"…). It was a CPU-era latency hack — obsolete on GPU (a fresh
+full-sentence synth is ~0.3 s with **zero** internal gaps). **The code default is OFF; the choppiness
+came from `ZOE_VOICE_STITCH_ENABLED=1` set in the live `services/zoe-data/.env`.** Fix: set it to `0`
++ restart zoe-data. No repo change is needed — verified nothing git-tracked sets `=1` (the code
+default in `voice_stitch.py` is OFF and no `.env.example` / installer / provisioning file references
+it), so the `=1` was a purely local live-`.env` override with **no template source to correct**. If a
+host-level provisioning script outside this repo ever sets it, fix it there too. **Diagnostic: if
+time/weather (but not chat) go choppy, `grep ZOE_VOICE_STITCH services/zoe-data/.env` FIRST.**
+
+Meta-lesson: the fast-path and the brain path have **separate chunkers** (`_split_sentences` +
+`stitch_reply` vs `_extract_first_unit`), so a voice-naturalness fix must cover BOTH — fixing one
+leaves the other symptom live (exactly how #1331 fixed chat while time/weather stayed choppy).
 
 ## Voice selection — "Zoe's voice" (user-facing)
 
