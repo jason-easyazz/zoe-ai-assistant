@@ -50,8 +50,11 @@ class _PanelSessionDb:
     """Fake DB whose ``ui_panel_sessions`` SELECTs return a configurable owner.
 
     ``session_owner`` is either ``None`` (panel unclaimed / no session row) or a
-    dict like ``{"user_id": "guest"}`` / ``{"user_id": "jason"}``. Writes are
-    recorded so tests can assert an upsert did (or did not) happen.
+    dict like ``{"user_id": "guest"}`` / ``{"user_id": "jason"}``. The
+    ``_authorize_panel`` SELECT computes an ``owner_stale`` flag in SQL; the real
+    DB evaluates it, so here we let tests set it via the row (defaulting to
+    ``False`` = fresh owner when omitted). Writes are recorded so tests can assert
+    an upsert did (or did not) happen, and inspect the emitted SQL/params.
     """
 
     def __init__(self, session_owner):
@@ -62,7 +65,10 @@ class _PanelSessionDb:
     async def execute(self, sql, params=()):
         head = sql.strip().upper()
         if head.startswith("SELECT") and "FROM UI_PANEL_SESSIONS" in head:
-            return _Cursor(row=self._session_owner)
+            row = self._session_owner
+            if row is not None and "owner_stale" not in row:
+                row = {**row, "owner_stale": False}
+            return _Cursor(row=row)
         if head.startswith("SELECT") and "FROM UI_ACTIONS" in head:
             return _Cursor(rows=[])
         if head.startswith(("INSERT", "UPDATE", "DELETE")):
@@ -124,6 +130,81 @@ async def test_guest_cannot_bind_panel_owned_by_real_user(monkeypatch):
     # No upsert / commit — the hijack is blocked before any write.
     assert db.writes == []
     assert db.commits == 0
+
+
+# ── reclaim: stale non-guest owner ────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_guest_can_reclaim_panel_with_stale_owner(monkeypatch):
+    """A guest kiosk may reclaim a panel whose non-guest owner has gone silent
+    (stale last_seen_at) — the owner signed out and stopped refreshing the row."""
+    monkeypatch.setattr(ui_actions, "require_feature_access", _allow)
+    db = _PanelSessionDb(session_owner={"user_id": "jason", "owner_stale": True})
+
+    result = await ui_actions.bind_panel(
+        {"panel_id": "zoe-touch-pi", "page": "/touch/home.html"},
+        user=GUEST,
+        db=db,
+    )
+
+    assert result["status"] == "ok"
+    assert db.commits == 1
+    # The reclaim upsert ran, rebinding the panel to guest.
+    upserts = [sql for sql, _ in db.writes if "INSERT INTO ui_panel_sessions" in sql]
+    assert len(upserts) == 1
+
+
+@pytest.mark.asyncio
+async def test_guest_cannot_reclaim_panel_with_fresh_owner(monkeypatch):
+    """A guest cannot reclaim a panel whose non-guest owner is ACTIVELY present
+    (fresh last_seen_at) — the owner-present protection must hold."""
+    monkeypatch.setattr(ui_actions, "require_feature_access", _allow)
+    db = _PanelSessionDb(session_owner={"user_id": "jason", "owner_stale": False})
+
+    with pytest.raises(ui_actions.HTTPException) as exc:
+        await ui_actions.bind_panel(
+            {"panel_id": "zoe-touch-pi"},
+            user=GUEST,
+            db=db,
+        )
+
+    assert exc.value.status_code == 403
+    assert db.writes == []
+    assert db.commits == 0
+
+
+@pytest.mark.asyncio
+async def test_reclaim_upsert_is_toctou_safe_against_racing_fresh_owner(monkeypatch):
+    """The reclaim upsert must not clobber a fresh owner that races in between
+    the authorize check and the write. We can't run real Postgres in this lane,
+    so assert the STRUCTURAL guard: the guest bind upsert appends a WHERE clause
+    that (a) permits guest/stale rows and (b) is evaluated against the row's
+    CURRENT state at upsert time — so a just-written fresh owner (user_id != guest
+    AND last_seen_at not stale) fails the WHERE and is left untouched."""
+    monkeypatch.setattr(ui_actions, "require_feature_access", _allow)
+    db = _PanelSessionDb(session_owner={"user_id": "jason", "owner_stale": True})
+
+    await ui_actions.bind_panel({"panel_id": "zoe-touch-pi"}, user=GUEST, db=db)
+
+    upsert_sql = next(
+        sql for sql, _ in db.writes if "INSERT INTO ui_panel_sessions" in sql
+    )
+    assert "ON CONFLICT(panel_id) DO UPDATE SET" in upsert_sql
+    # Guard present: guest-owned OR stale owner, and the staleness half casts the
+    # TEXT column to timestamptz (a bare NOW() - last_seen_at would raise).
+    assert "WHERE ui_panel_sessions.user_id = 'guest'" in upsert_sql
+    assert "ui_panel_sessions.last_seen_at::timestamptz" in upsert_sql
+    assert "CURRENT_TIMESTAMP - INTERVAL" in upsert_sql
+
+
+def test_guest_conflict_guard_only_applies_to_guests():
+    """The upsert guard is emitted for guests only; non-guest upserts stay
+    unrestricted (device-token / bound-user paths)."""
+    guard = ui_actions._guest_conflict_guard(GUEST)
+    assert guard.startswith(" WHERE ui_panel_sessions.user_id = 'guest' OR ")
+    assert "last_seen_at::timestamptz" in guard
+
+    assert ui_actions._guest_conflict_guard({"user_id": "jason", "role": "user"}) == ""
 
 
 # ── state/sync ────────────────────────────────────────────────────────────────
@@ -193,6 +274,32 @@ async def test_guest_cannot_pull_pending_for_other_users_panel(monkeypatch):
     assert exc.value.status_code == 403
     # Never reached the stale-expire / supersede cleanup, so nothing committed.
     assert db.commits == 0
+
+
+@pytest.mark.asyncio
+async def test_guest_pending_never_serves_stale_owner_queue(monkeypatch):
+    """When a guest polls a panel whose non-guest owner is stale (allowed through
+    for reclaim, but the row is not yet rebound), the pending read must serve the
+    GUEST queue — never the real owner's queued actions."""
+    monkeypatch.setattr(ui_actions, "require_feature_access", _allow)
+    db = _PanelSessionDb(session_owner={"user_id": "jason", "owner_stale": True})
+
+    result = await ui_actions.get_pending_ui_actions(
+        panel_id="zoe-touch-pi",
+        limit=10,
+        user=GUEST,
+        db=db,
+    )
+
+    assert result == {"actions": [], "count": 0}
+    # Every ui_actions cleanup query is scoped to user_id='guest', not 'jason'.
+    ui_action_writes = [
+        (sql, params) for sql, params in db.writes if "ui_actions" in sql
+    ]
+    assert ui_action_writes, "expected the pending-path cleanup UPDATEs to run"
+    for _sql, params in ui_action_writes:
+        assert params[0] == "guest"
+        assert "jason" not in params
 
 
 # ── enqueue protections (POST /actions) ───────────────────────────────────────
