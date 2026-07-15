@@ -1129,6 +1129,7 @@
     // pre-poll icon (and a fast tap) match the last-known real state.
     if(_music.np){var pp0=document.getElementById('mPP');
       if(pp0){pp0.dataset.playing=_music.np.playing?'1':'0';pp0.innerHTML=_music.np.playing?PAUSE_I:PLAY_I;}}
+    _qtab='queue';   // DOM rebuilds to the Queue tab each show(); keep state in sync
     loadMusic();_wxTick=setInterval(function(){if(_cur==='music')loadMusic();},5000);
     if(_homeTick){clearInterval(_homeTick);}_homeTick=setInterval(tickMusic,1000);
     var t=document.getElementById('mTransport');if(t)t.addEventListener('click',function(e){var btn=e.target.closest('button');if(!btn)return;var a=btn.getAttribute('data-a');
