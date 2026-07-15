@@ -1326,9 +1326,19 @@
     set('h',_dt.hasTime?two(_dt.h):'--');set('mi',_dt.hasTime?two(_dt.mi):'--');}
   function _dtStep(f,dir){
     if((f==='h'||f==='mi')&&!_dt.hasTime){_dt.hasTime=true;return;}   // first time-tap just reveals 09:00
+    if(f==='mo'||f==='y'){
+      // Month/year steps must CLAMP the day to the target month (Jan 31 → Feb
+      // stays Feb 28/29, not overflowing to March) — setMonth/setFullYear alone
+      // silently roll the day forward.
+      var y=_dt.y,mo=_dt.mo+(f==='mo'?dir:0);
+      if(f==='y')y+=dir;
+      y+=Math.floor(mo/12);mo=((mo%12)+12)%12;
+      var dim=new Date(y,mo+1,0).getDate();
+      _dt.y=y;_dt.mo=mo;_dt.d=Math.min(_dt.d,dim);return;
+    }
     var dd=new Date(_dt.y,_dt.mo,_dt.d,_dt.h,_dt.mi);
-    if(f==='d')dd.setDate(dd.getDate()+dir);else if(f==='mo')dd.setMonth(dd.getMonth()+dir);
-    else if(f==='y')dd.setFullYear(dd.getFullYear()+dir);else if(f==='h')dd.setHours(dd.getHours()+dir);
+    if(f==='d')dd.setDate(dd.getDate()+dir);
+    else if(f==='h')dd.setHours(dd.getHours()+dir);
     else if(f==='mi')dd.setMinutes(dd.getMinutes()+dir*5);
     _dt.y=dd.getFullYear();_dt.mo=dd.getMonth();_dt.d=dd.getDate();_dt.h=dd.getHours();_dt.mi=dd.getMinutes();}
   function _dtWire(m){_dtPaint(m);m.querySelectorAll('.dtp button[data-s]').forEach(function(b){b.onclick=function(){var s=b.getAttribute('data-s').split(',');_dtStep(s[0],+s[1]);_dtPaint(m);};});}
