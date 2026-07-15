@@ -107,3 +107,13 @@ def test_get_session_ignores_inactive_db_session(sessions_db):
     _insert_session(sessions_db, sid, expires_at=future, is_active=0)
 
     assert session_manager.get_session(sid) is None
+
+
+def test_get_session_survives_db_error_during_fallback(sessions_db, monkeypatch):
+    # A store failure on the cache-miss path must degrade to "no session"
+    # (401 handled upstream), never propagate out of get_session.
+    def boom():
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(db_module.auth_db, "get_connection", boom)
+
+    assert session_manager.get_session("guest-db-down") is None

@@ -200,10 +200,17 @@ class EnhancedSessionManager:
         """
         with self.session_lock:
             session = self.active_sessions.get(session_id)
-            if session is None:
-                session = self._load_session_from_db(session_id)
-                if session is not None:
-                    self.active_sessions[session_id] = session
+
+        if session is None:
+            # DB round-trip on the cache-miss path runs WITHOUT session_lock held,
+            # so a slow/blocked store never stalls concurrent session ops (logins,
+            # logouts, permission checks). Re-acquire only to update the cache.
+            loaded = self._load_session_from_db(session_id)
+            if loaded is not None:
+                with self.session_lock:
+                    session = self.active_sessions.setdefault(session_id, loaded)
+
+        with self.session_lock:
             if session and self._is_session_valid(session):
                 return session
             elif session:
