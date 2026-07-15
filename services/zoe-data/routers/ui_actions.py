@@ -20,6 +20,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ui", tags=["ui"])
 
 
+def _guest_conflict_guard(user: dict) -> str:
+    """SQL fragment appended to the ``ui_panel_sessions`` upsert for guests.
+
+    ``_authorize_panel`` verifies (via a SELECT) that a guest is acting on an
+    unclaimed or already guest-owned panel, but that check and the ON CONFLICT
+    upsert are separate statements — a real user could bind the same panel_id in
+    between, and the guest's upsert would then overwrite that real user's
+    ``user_id`` (the panel-hijack class this gate guards against). Guarding the
+    ON CONFLICT DO UPDATE with ``WHERE ui_panel_sessions.user_id = 'guest'``
+    closes the race structurally: in Postgres a conflicting real-user row simply
+    fails the WHERE and is left untouched (no error, no overwrite). Empty for
+    non-guest callers (device-token / bound-user), whose upserts are unrestricted.
+    """
+    return " WHERE ui_panel_sessions.user_id = 'guest'" if is_guest_user(user) else ""
+
+
 async def _authorize_panel(db, user: dict, panel_id: str) -> None:
     """Ensure the caller is allowed to act on ``panel_id``.
 
@@ -110,7 +126,7 @@ async def bind_panel(
         )
 
     await db.execute(
-        """INSERT INTO ui_panel_sessions (panel_id, user_id, chat_session_id, page, ui_context, is_foreground)
+        f"""INSERT INTO ui_panel_sessions (panel_id, user_id, chat_session_id, page, ui_context, is_foreground)
            VALUES (?, ?, ?, ?, ?, ?)
            ON CONFLICT(panel_id) DO UPDATE SET
              user_id=excluded.user_id,
@@ -119,7 +135,7 @@ async def bind_panel(
              ui_context=excluded.ui_context,
              is_foreground=excluded.is_foreground,
              last_seen_at=NOW(),
-             updated_at=NOW()""",
+             updated_at=NOW(){_guest_conflict_guard(user)}""",
         (panel_id, user_id, chat_session_id, page, ui_context, is_foreground),
     )
     await db.commit()
@@ -346,7 +362,7 @@ async def sync_ui_state(
     ui_context = json.dumps(payload.get("ui_context", {}))
     is_foreground = 1 if payload.get("is_foreground", True) else 0
     await db.execute(
-        """INSERT INTO ui_panel_sessions (panel_id, user_id, chat_session_id, page, ui_context, is_foreground)
+        f"""INSERT INTO ui_panel_sessions (panel_id, user_id, chat_session_id, page, ui_context, is_foreground)
            VALUES (?, ?, ?, ?, ?, ?)
            ON CONFLICT(panel_id) DO UPDATE SET
              user_id=excluded.user_id,
@@ -355,7 +371,7 @@ async def sync_ui_state(
              ui_context=excluded.ui_context,
              is_foreground=excluded.is_foreground,
              last_seen_at=NOW(),
-             updated_at=NOW()""",
+             updated_at=NOW(){_guest_conflict_guard(user)}""",
         (panel_id, user_id, chat_session_id, page, ui_context, is_foreground),
     )
     await db.commit()

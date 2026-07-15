@@ -223,6 +223,90 @@ async def test_guest_cannot_enqueue_to_other_users_panel(monkeypatch):
     assert exc.value.status_code == 403
 
 
+# ── ack (POST /actions/{id}/ack) ──────────────────────────────────────────────
+
+class _GuestAckDb:
+    """Fake DB for the ack path. ``select_row`` is what the ack SELECT returns
+    (the matched ui_actions row, or None when the caller isn't authorized)."""
+
+    def __init__(self, select_row):
+        self._select_row = select_row
+        self.updated = []
+        self.ledger = []
+        self.commits = 0
+
+    async def execute(self, sql, params=()):
+        if "FROM ui_actions" in sql and "EXISTS" in sql:
+            return _Cursor(row=self._select_row)
+        if "UPDATE ui_actions" in sql:
+            self.updated.append((sql, params))
+            return _Cursor()
+        if "INSERT INTO ui_action_ledger" in sql:
+            self.ledger.append((sql, params))
+            return _Cursor()
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+    async def commit(self):
+        self.commits += 1
+
+
+class _Broadcaster:
+    async def broadcast(self, *_args, **_kwargs):
+        return 1
+
+
+@pytest.mark.asyncio
+async def test_guest_can_ack_own_guest_owned_action(monkeypatch):
+    """Poll → ack: a guest acks an action stored under user_id='guest' for its
+    own panel. The SQL's ``user_id = ?`` branch matches, so the ack lands."""
+    monkeypatch.setattr(ui_actions, "require_feature_access", _allow)
+    monkeypatch.setattr(ui_actions, "broadcaster", _Broadcaster())
+
+    db = _GuestAckDb(select_row={
+        "id": "act-1",
+        "user_id": "guest",
+        "panel_id": "zoe-touch-pi",
+        "status": "queued",
+    })
+
+    result = await ui_actions.ack_ui_action(
+        "act-1",
+        {"status": "success", "panel_id": "zoe-touch-pi"},
+        user=GUEST,
+        db=db,
+    )
+
+    assert result == {"status": "ok", "action_id": "act-1", "state": "success"}
+    assert len(db.updated) == 1
+    # The UPDATE is scoped to the action's own user_id ('guest').
+    assert db.updated[0][1][-1] == "guest"
+    assert len(db.ledger) == 1
+    assert db.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_guest_cannot_ack_real_users_action(monkeypatch):
+    """A guest that is not registered on the panel cannot ack an action stored
+    under a real user's user_id — the SELECT matches nothing, so it's a no-op
+    (idempotent already_acked), never a cross-user mutation."""
+    monkeypatch.setattr(ui_actions, "require_feature_access", _allow)
+    monkeypatch.setattr(ui_actions, "broadcaster", _Broadcaster())
+
+    db = _GuestAckDb(select_row=None)
+
+    result = await ui_actions.ack_ui_action(
+        "act-1",
+        {"status": "failed", "panel_id": "zoe-touch-pi"},
+        user=GUEST,
+        db=db,
+    )
+
+    assert result == {"status": "already_acked", "action_id": "act-1"}
+    assert db.updated == []
+    assert db.ledger == []
+    assert db.commits == 0
+
+
 @pytest.mark.asyncio
 async def test_guest_cannot_use_sensitive_ui_action_type():
     """Privileged (sensitive_ui) action types remain denied for guest;
