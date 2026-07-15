@@ -58,37 +58,65 @@ the opt-in sidecar. The active layout is described in
 
 ## Install
 
+### Quick install (recommended)
+
+One idempotent script does the whole host: generates `.env` secrets, starts the
+Docker spine, runs Postgres migrations, downloads the Gemma 4 brain, and installs
+the host-native systemd services.
+
 ```bash
-# 1. Clone to the expected location
+git clone https://github.com/jason-easyazz/zoe-ai-assistant.git ~/assistant
+cd ~/assistant
+./scripts/setup/install-jetson.sh          # add -y for non-interactive
+```
+
+It's re-runnable — existing `.env`, models, and running services are left in
+place. After it finishes, fill in the user-supplied values it flags in `.env`
+(`HA_ACCESS_TOKEN`, and cloud `*_API_KEY`s only if you use the cloud agent
+tiers). Useful flags: `--skip-models`, `--skip-docker`, `--skip-systemd`,
+`--with-router`, `--models-dir DIR` (`--help` for all).
+
+> **llama.cpp is platform-specific.** The installer downloads the model but does
+> not build llama.cpp. If the `llama-server` binary isn't present it says so and
+> skips enabling that unit; build llama.cpp for your platform, point
+> `~/.config/systemd/user/llama-server.service` at your binary + GGUFs, then
+> `systemctl --user enable --now llama-server`. See
+> [HARDWARE_COMPATIBILITY.md](HARDWARE_COMPATIBILITY.md).
+
+Optional add-on modules (e.g. Music Assistant on `:8095`):
+
+```bash
+docker compose -f docker-compose.modules.yml up -d music-assistant
+```
+
+### Manual install
+
+<details>
+<summary>Step-by-step equivalent of the quick installer</summary>
+
+```bash
 git clone https://github.com/jason-easyazz/zoe-ai-assistant.git ~/assistant
 cd ~/assistant
 
-# 2. Configure secrets (DB password, tokens, API keys)
+# Secrets — generate strong values for POSTGRES_URL/password + tokens
 cp .env.example .env
 cp services/zoe-data/.env.example services/zoe-data/.env
-# Edit both .env files — generate strong values for POSTGRES_URL, tokens, etc.
 
-# 3. Initialise database schemas
-./scripts/setup/init_databases.sh
-
-# 4. Download the local LLM model (or supply your own GGUF)
-./scripts/setup/download_gguf_models.sh
-
-# 5. Start the Docker layer
+# Docker spine
 docker compose up -d zoe-database zoe-auth zoe-ui homeassistant homeassistant-mcp-bridge
 
-# 6. Install + start the host-native services
-#    Templates and full instructions: scripts/setup/systemd/README.md
+# PostgreSQL migrations (alembic + auth DDL)
+./scripts/deploy/migrate.sh
+
+# Local brain — Gemma 4 E4B-QAT + MTP drafter
+./scripts/setup/download_gguf_models.sh
+
+# Host-native services (edit llama-server.service for your binary + model path)
 cp scripts/setup/systemd/*.service ~/.config/systemd/user/
-#    Edit llama-server.service for your binary + model path, then start the spine:
 systemctl --user daemon-reload
 systemctl --user enable --now llama-server zoe-data kokoro-tts
-#    Optional sidecars — enable only if you need them:
-#    flue-zoe-brain, functiongemma-router
-
-# 7. (Optional) Start add-on modules, e.g. Music Assistant on :8095
-docker compose -f docker-compose.modules.yml up -d music-assistant
 ```
+</details>
 
 See [scripts/setup/systemd/README.md](scripts/setup/systemd/README.md) for the
 host-native services and [OPERATOR_RUNBOOK.md](docs/guides/OPERATOR_RUNBOOK.md)
@@ -120,18 +148,22 @@ matrix is in the [OPERATOR_RUNBOOK.md](docs/guides/OPERATOR_RUNBOOK.md).
 
 ## Touch panel (optional)
 
-Zoe supports a kiosk touch panel on a separate Linux device.
-
-- Installer + templates: `scripts/setup/touchscreen/`
-- Guides: [docs/guides/](docs/guides/)
+Zoe supports a kiosk touch panel on a separate Linux device (Raspberry Pi). One
+script provisions it over SSH — kiosk UI **and** the wake-word/voice daemon:
 
 ```bash
-scripts/setup/touchscreen/install_touchscreen.sh \
+./scripts/setup/install-pi.sh \
   --host <TOUCH_PANEL_IP> \
   --user <USER> \
   --server-url https://<ZOE_SERVER_IP> \
   --panel-id zoe-touch-pi
 ```
+
+Mint a panel device token on the host (admin: `POST /api/panels/<panel-id>/token`)
+and pass it with `--device-token` to enable voice auth in the same run. Use
+`--skip-voice` / `--skip-kiosk` to run just one half; `--help` for all flags.
+The underlying pieces live in `scripts/setup/touchscreen/` and
+`scripts/setup/pi_voice_daemon_install.sh`; guides in [docs/guides/](docs/guides/).
 
 ## Documentation map
 

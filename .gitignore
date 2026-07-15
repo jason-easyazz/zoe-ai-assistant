@@ -126,6 +126,7 @@ aider_env/
 !scripts/deploy/*.sh
 !scripts/permanent/*.sh
 !scripts/setup/*.sh
+!scripts/setup/lib/*.sh
 !scripts/setup/jetson/*.sh
 !scripts/train/*.sh
 !labs/needle-benchmark/setup.sh
