@@ -854,6 +854,23 @@ async def get_memory_loops_status(user: dict = Depends(require_admin)):
     return {"loops": memory_loop_status()}
 
 
+@router.get("/memory-reconcile/failopen-status")
+async def get_reconcile_failopen_status(user: dict = Depends(require_admin)):
+    """Fail-open-to-ADD rate for the shared ``reconcile_for_ingest`` chokepoint.
+
+    ``sustained: true`` means reconciliation is repeatedly storing facts WITHOUT
+    a supersession check (search timing out / empty / erroring) — under load
+    that turns the memory store into a duplicate factory. The behaviour is
+    unchanged by design (duplicates over lost facts); this only surfaces the
+    tradeoff. Prometheus equivalent + PromQL alert rule live in
+    ``docs/knowledge/incident-runbook.md`` (metric
+    ``zoe_memory_reconcile_failopen_count`` on ``/metrics``).
+    """
+    from memory_metrics import reconcile_failopen_status
+
+    return {"reconcile_failopen": reconcile_failopen_status()}
+
+
 @router.post("/memories/consolidate")
 async def trigger_memory_consolidation(
     user_id: Optional[str] = None,
