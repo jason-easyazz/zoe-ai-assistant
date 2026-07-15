@@ -1023,6 +1023,7 @@
         if(art)art.innerHTML='🎵';
         if(scrub)scrub.style.display='none';if(tp)tp.style.display='none';
         if(np&&spk){var nm0=spk.querySelector('.spkname');if(nm0&&np.player_name)nm0.textContent=np.player_name;}
+        _syncQueueOverlay();   // clear the stale now-playing/up-next when playback stops
         return;
       }
       if(scrub)scrub.style.display='';if(tp)tp.style.display='';
@@ -1033,7 +1034,7 @@
       if(art){if(np.image&&/^https?:\/\//i.test(np.image)){art.innerHTML='<img alt="" style="width:100%;height:100%;object-fit:cover;border-radius:28px;display:block" src="'+esc(np.image)+'">';}else{art.innerHTML='🎵';}}
       var el=np.elapsed||0,du=np.duration||0;
       _music.np={elapsed:el,duration:du,playing:np.state==='playing',active:(np.state==='playing'||np.state==='paused'),at:Date.now(),uri:np.uri||np.media_uri||'',queueItemId:np.queue_item_id||null,index:(np.queue_index!=null?np.queue_index:null),title:np.title||'',artist:np.artist||'',image:np.image||''};
-      if(_cur==='music'&&_qtab==='queue'&&document.querySelector('.mqueue.open'))paintQueueNow();
+      _syncQueueOverlay();
       if(fill)fill.style.width=(du?Math.min(100,el/du*100):0)+'%';
       if(te)te.textContent=fmtDur(el);if(td)td.textContent=fmtDur(du);
       if(pp){var playing=(np.state==='playing');pp.dataset.playing=playing?'1':'0';pp.innerHTML=playing?PAUSE_I:PLAY_I;}
@@ -1073,6 +1074,7 @@
     if(ttl)ttl.textContent='Up next';
     if(!_music.player_id){host.innerHTML=_qempty('Nothing playing.');return;}
     host.classList.add('queue');
+    _music._qKey=(_music.np&&_music.np.queueItemId)||'idle';   // track this render's song for _syncQueueOverlay
     host.innerHTML='<div class="mqnow" id="mqNow"></div><div class="mqup" id="mqUp">'+_qmsg('Loading…')+'</div>';
     paintQueueNow();
     apiGet('/api/music/queue/'+encodeURIComponent(_music.player_id)).then(function(d){
@@ -1087,6 +1089,15 @@
       }).join('')||_qempty('Nothing up next.');
       _wireUpNext(upEl);
     }).catch(function(){var upEl=document.getElementById('mqUp');if(upEl)upEl.innerHTML=_qempty('Couldn’t load the queue.');});}
+  // Keep the open queue overlay in sync with playback: reload both panels
+  // (now-playing + numbered up-next) only when the current track actually
+  // changes — a skip/next or a stop — so the `base` offset for play-index
+  // stays correct and a stopped track doesn't linger. No per-poll flicker.
+  function _syncQueueOverlay(){
+    if(_cur!=='music'||_qtab!=='queue'||!document.querySelector('.mqueue.open'))return;
+    var key=(_music.np&&_music.np.queueItemId)||'idle';
+    if(key!==_music._qKey)loadQueue();
+  }
   // The now-playing card in the queue tab's left column (mirrors _music.np).
   function paintQueueNow(){var el=document.getElementById('mqNow');if(!el)return;var np=_music.np;
     var art=(np&&np.image&&/^https?:/.test(np.image))?'<img alt="" src="'+esc(np.image)+'">':'🎵';
