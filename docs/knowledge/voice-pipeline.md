@@ -59,6 +59,40 @@ harness under the shared flock. Scheduled daily off-peak via the
 `~/.config/systemd/user/`). Numbers are RELATIVE (warm harness) — used for *drift vs baseline*, not
 as live performance.
 
+## The gate emits a heartbeat, and the deploy path checks it
+
+*"A gate that can silently not-run is not a gate."* This gate was once deadlocked from birth (it
+re-took a flock its caller already held, timed out ~17 min every run, and NEVER once succeeded —
+yet merged work claimed to be replay-gated). The deadlock is fixed (#1292, self-serializing); the
+generalized lesson is a **result artifact + a checker**, mirroring the router self-train ratchet's
+`replay_gate_passed` (a *skip* is not a *pass*).
+
+- **Result artifact (produced by `voice_regression_probe.py` on EVERY run):**
+  `~/.cache/zoe/voice_regression_last.json` (override `ZOE_VOICE_RESULTS`), also appended to
+  `…_trend.jsonl`. Machine-readable contract — keep these keys stable:
+
+  ```json
+  {"status": "pass|fail|skip|error", "timestamp": "…Z",
+   "said_vs_did_regressions": ["FUNCTION: …"], "per_stage_speed_deltas": {"stt_ms": {"cur_ms": …, "baseline_ms": …, "delta_ms": …, "ratio": …}, …},
+   "baseline_ref": {"path": "…", "created_at": "…Z", "ok_rate": …},
+   "reason": "…", "summary": {"n_samples": …, "ok_rate": …, "medians_ms": {…}}}
+  ```
+
+  A **skip** (box too tight), **timeout**, or **error** (harness couldn't run) MUST still write an
+  artifact with `status != "pass"` — an *absent* file is never "nothing wrong". `summary` +
+  `created_at` are retained for the router self-train `replay_gate` reader.
+
+- **Deploy-path checker — `scripts/maintenance/voice_gate_check.py`:** the cheap counterpart the
+  blessed deploy (`deploy_live.sh`) invokes. If the incoming git diff touches the **voice runtime
+  path** (`voice_tts.py` / `zoe_core_client.py` / `fast_tiers.py` / `*kokoro*` / `*moonshine*`;
+  override `ZOE_VOICE_GATE_PATHS`), it asserts a **fresh** (`< ZOE_VOICE_GATE_MAX_AGE_H`, default 24h)
+  **passing** artifact **matching the current baseline** before the restart — else it fails loudly
+  (non-zero exit) and the deploy is refused. Non-voice deploys are a no-op pass. **It never runs the
+  heavy Kokoro harness** (that would OOM the box under flock) — it only reads the artifact the gate
+  produced. Standing rule: *any mandatory loop/gate/job must emit a heartbeat that something checks.*
+  Pinned by `tests/unit/test_voice_gate_check.py` (missing → block, stale → block, fresh pass →
+  allow; skip/error/baseline-drift all block).
+
 ## The caveat that bites (read this)
 
 The replay harness uses **warm models and stops *before* TTS**, so **its numbers UNDERSTATE real live

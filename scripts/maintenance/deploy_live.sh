@@ -12,6 +12,7 @@ set -euo pipefail
 
 LIVE="${ZOE_LIVE_TREE:-/home/zoe/assistant}"
 SERVICE="${ZOE_SERVICE:-zoe-data}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 require_clean_tree() {
     local phase="$1"
@@ -59,6 +60,22 @@ echo "▶ live tree on main — pulling latest…"
 # stale commit, or abort under `set -e` (skipping the recovery restart) if it was
 # never set.
 prev="$(git -C "$LIVE" rev-parse HEAD)"
+
+# Voice replay-gate heartbeat ("a gate that can silently not-run is not a gate").
+# Resolve what main is ABOUT to become without merging yet, so the gate runs
+# against the incoming diff — and a block leaves the live tree at $prev, so a
+# retry re-evaluates the same change instead of fast-forwarding past it and
+# skipping the gate. If the incoming change touches the voice runtime path
+# (STT/brain/TTS), a FRESH, PASSING replay-gate artifact must already exist; a
+# missing/stale/skipped/failed artifact BLOCKS the deploy before any restart.
+# Non-voice deploys are a no-op pass. This never runs the heavy Kokoro harness.
+git -C "$LIVE" fetch --quiet origin main
+target="$(git -C "$LIVE" rev-parse FETCH_HEAD)"
+if ! python3 "$SCRIPT_DIR/voice_gate_check.py" --repo "$LIVE" --diff "${prev}..${target}"; then
+    echo "✗ REFUSING TO DEPLOY: voice-path change without a fresh passing replay-gate result (see above)." >&2
+    exit 1
+fi
+
 git -C "$LIVE" pull --ff-only origin main
 
 echo "▶ restarting $SERVICE…"
