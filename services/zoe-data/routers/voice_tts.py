@@ -553,8 +553,9 @@ def _extract_complete_sentences(buffer: str) -> tuple[list[str], str]:
     return complete, buffer[last_end:]
 
 
-_FIRST_UNIT_MIN_CHARS = 12  # don't synthesize a tiny stub like "So,"
-_FIRST_UNIT_SOFT_CAP = 40   # flush at a word boundary by here even without punctuation
+_FIRST_UNIT_MIN_CHARS = 12   # don't synthesize a tiny stub like "So,"
+_FIRST_UNIT_CLAUSE_MIN = 60  # only clause-break (mid-sentence) once the opening is this long
+_FIRST_UNIT_SOFT_CAP = 90    # word-boundary flush by here even without punctuation
 
 
 def _fast_first_audio_enabled() -> bool:
@@ -687,20 +688,39 @@ async def _forward_voice_activity(delta: str, send_json, tool_names: dict) -> bo
 def _extract_first_unit(buffer: str) -> tuple[Optional[str], str]:
     """Pull the FIRST speakable unit out of a streaming buffer as early as possible.
 
-    Time-to-first-audio dominates how fast a voice reply *feels*. Waiting for a full
-    sentence (`.!?`) before the first synth adds ~1-2s of silence at 22 tok/s. For
-    the first chunk only, break on the first clause boundary (, ; : — or sentence
-    end) once we have a few words, or at a word boundary by the soft cap — so audio
-    starts almost immediately. Punctuation must be followed by space/end so decimals
-    ('twelve point four') and 'a.m.' don't split. Returns (unit|None, remainder)."""
+    Each unit is synthesized as a STANDALONE Kokoro utterance, so every split point
+    gets sentence-final prosody + padding — an audible pause and pitch reset. Splitting
+    mid-sentence therefore makes a short reply sound broken ("It's currently 22
+    degrees," <pause> "mostly clear…"), and matching punctuation at the end of a still-
+    streaming buffer even split inside numbers ("The time is 8:" <pause> "05…"). Kokoro
+    is now fast on GPU, so we no longer need a sub-sentence break for first-audio on
+    short replies. Rules:
+      * emit a COMPLETE sentence as soon as one closes (`.!?` + following space) —
+        short weather/time replies play as one natural utterance;
+      * only clause-break (`,;:—`) once the opening is long (`_FIRST_UNIT_CLAUSE_MIN`),
+        so a genuine paragraph still starts fast;
+      * word-boundary flush by the soft cap as the last resort.
+    Every boundary requires a FOLLOWING SPACE, so a comma/period/colon inside a partial
+    token or a number ("8:05", "12.4", "22,") can never trigger a split — the trailing
+    unpunctuated remainder is emitted by the stream loop's end-of-turn flush.
+    Returns (unit|None, remainder)."""
     stripped = buffer.lstrip()
     if len(stripped) < _FIRST_UNIT_MIN_CHARS:
         return None, buffer
-    m = re.search(r"(.{%d,}?[,;:.!?—–])(?:\s|$)" % _FIRST_UNIT_MIN_CHARS, buffer, re.DOTALL)
+    # 1. A complete sentence closed → emit it whole (never sub-split a short reply).
+    m = re.search(r"(.{%d,}?[.!?])\s" % _FIRST_UNIT_MIN_CHARS, buffer)
     if m:
         return m.group(1).strip(), buffer[m.end():]
-    # No clause break yet but the buffer is getting long — flush at a word boundary
-    # so the first audio doesn't stall behind a long opening clause.
+    # 2. Long opening with no sentence end yet → clause-break to keep first-audio
+    #    snappy. The boundary itself must be at least _FIRST_UNIT_CLAUSE_MIN chars in
+    #    (not just the buffer), so a short sentence with an early comma is never split
+    #    ("It's 22 degrees, mostly clear…" stays whole) — only a genuinely long opening
+    #    with a late clause boundary breaks early.
+    if len(buffer) >= _FIRST_UNIT_CLAUSE_MIN:
+        m = re.search(r"(.{%d,}?[,;:—–])\s" % _FIRST_UNIT_CLAUSE_MIN, buffer)
+        if m:
+            return m.group(1).strip(), buffer[m.end():]
+    # 3. Very long opening, still no punctuation → flush at a word boundary.
     if len(buffer) >= _FIRST_UNIT_SOFT_CAP:
         cut = buffer.rfind(" ", _FIRST_UNIT_MIN_CHARS, _FIRST_UNIT_SOFT_CAP)
         if cut > 0:
