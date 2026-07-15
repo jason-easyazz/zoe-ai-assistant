@@ -103,10 +103,11 @@ if (workbox) {
 
     // ===== CACHING STRATEGIES =====
 
-    // The estate home + skybridge are live voice/data surfaces. Never serve
-    // stale HTML, auth, or runtime JS for them.
+    // The estate home is a live voice/data surface. Never serve stale HTML,
+    // auth, or runtime JS for it. (The /touch/js/skybridge* prefix still covers
+    // the shared design-system theme script loaded by the login page.)
     workbox.routing.registerRoute(
-        ({ url }) => url.pathname === '/touch/home.html' || url.pathname === '/touch/skybridge.html' || url.pathname === '/js/auth.js' || url.pathname.startsWith('/touch/js/skybridge'),
+        ({ url }) => url.pathname === '/touch/home.html' || url.pathname === '/js/auth.js' || url.pathname.startsWith('/touch/js/skybridge'),
         new workbox.strategies.NetworkOnly()
     );
 

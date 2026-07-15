@@ -1,4 +1,4 @@
-"""zoe-compose renderer — behavioral node-harness tests (escaping, actions, integration)."""
+"""zoe-compose renderer — behavioral node-harness tests (escaping, actions)."""
 import json
 import shutil
 import subprocess
@@ -61,43 +61,6 @@ process.stdout.write(JSON.stringify({
     )
     checks = _run_node(harness, UI / "js" / "zoe-compose.js")
     assert all(checks.values()), f"compose renderer failed: {checks}"
-
-
-def test_compose_card_renders_through_skybridge_registry(tmp_path):
-    harness = tmp_path / "integration_harness.cjs"
-    harness.write_text(
-        """
-const fs = require('fs');
-const vm = require('vm');
-const sandbox = { window: {} };
-vm.createContext(sandbox);
-vm.runInContext(fs.readFileSync(process.argv[2], 'utf8'), sandbox); // zoe-compose first
-vm.runInContext(fs.readFileSync(process.argv[3], 'utf8'), sandbox); // then renderer
-const R = sandbox.window.SkybridgeRenderer;
-const card = { component: 'compose', props: { title: 'Morning', tree: {
-  component: 'Stack', children: [ { component: 'Text', text: 'composed!', role: 'body' } ]
-} } };
-const html = R.render(card);
-const missing = R.render({ component: 'compose', props: { title: 'X', summary: 'fallback body' } });
-process.stdout.write(JSON.stringify({
-  card_shell: html.includes('sky-card'),
-  compose_tone: html.includes('compose-card'),
-  tree_rendered: html.includes('composed!') && html.includes('zx-text'),
-  fallback_is_status: missing.includes('fallback body') && !missing.includes('zx-root')
-}));
-""",
-        encoding="utf-8",
-    )
-    checks = _run_node(harness, UI / "js" / "zoe-compose.js", UI / "js" / "skybridge-renderer.js")
-    assert all(checks.values()), f"compose integration failed: {checks}"
-
-
-def test_skybridge_page_loads_compose_assets():
-    html = (UI / "skybridge.html").read_text(encoding="utf-8")
-    assert "cards/compose.css" in html
-    assert "zoe-compose.js" in html
-    # Load order: the catalog renderer must be available before skybridge-renderer.
-    assert html.index("zoe-compose.js") < html.index("js/skybridge-renderer.js?")
 
 
 def test_steps_and_compare_render_and_escape(tmp_path):
