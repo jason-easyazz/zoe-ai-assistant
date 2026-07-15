@@ -42,6 +42,9 @@ def guest_session(monkeypatch):
                         lambda sid: sess if sid == sess.session_id else None)
     # synthetic guest → no auth_users row
     monkeypatch.setattr(auth_api.auth_manager, "get_user_info", lambda uid: None)
+    # control the module-level rbac singleton (else the guest fast-path hits a
+    # live DB round-trip + mutates its permission_cache across tests)
+    monkeypatch.setattr(auth_api.rbac_manager, "list_user_permissions", lambda uid: [])
     return sess
 
 
