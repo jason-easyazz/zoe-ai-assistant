@@ -15,6 +15,7 @@ event.
 from __future__ import annotations
 
 import time
+from collections import deque
 
 from prometheus_client import Counter, Gauge, Histogram, CollectorRegistry
 
@@ -112,6 +113,72 @@ db_pool_free = Gauge(
     "Pooled connections currently idle and available for acquire.",
     registry=REGISTRY,
 )
+
+# Reconciliation fail-open-to-ADD observability (QA concern #4). The shared
+# reconcile_for_ingest chokepoint (#1280) all conversational writers route
+# through PREFERS DUPLICATES OVER LOST FACTS: on a search timeout / empty result
+# it stores the fact as ADD without a supersession check. That is a deliberate
+# tradeoff, but under sustained load it becomes a duplicate factory — and the
+# WARNING it logged needed a watcher (the standing lesson: any mandatory
+# loop/gate must emit a heartbeat something checks). This counter + sliding
+# window make the tradeoff visible WITHOUT changing it. Alert on
+# `increase(zoe_memory_reconcile_failopen_count[5m])`.
+memory_reconcile_failopen_count = Counter(
+    "zoe_memory_reconcile_failopen_count",
+    "reconcile_for_ingest fail-open events: a fact stored as ADD WITHOUT a "
+    "supersession check because search timed out / returned empty / errored. "
+    "Labelled by cause (search_timeout | empty_results | search_error).",
+    ["cause"],
+    registry=REGISTRY,
+)
+
+# Sliding-window watcher for the fail-open rate. A few fail-opens are normal (a
+# cold store, a genuinely new fact); a SUSTAINED burst means search is failing
+# and reconciliation is silently duplicating every write. `sustained` trips when
+# the window count reaches the threshold — the human-queryable mirror of the
+# PromQL alert, and the signal the caller uses to escalate WARNING → ERROR.
+_RECONCILE_FAILOPEN_WINDOW_S = 300.0
+_RECONCILE_FAILOPEN_THRESHOLD = 20
+_RECONCILE_FAILOPEN_EVENTS: deque[float] = deque()
+
+
+def reconcile_failopen_status(now: float | None = None) -> dict:
+    """Fail-open-to-ADD rate over the recent window + a ``sustained`` trip flag.
+
+    Prunes events older than the window, then reports how many fail-open ADDs
+    landed inside it. ``sustained: True`` (count >= threshold) is the signal
+    that reconciliation has become a duplicate factory — alert on it. The
+    Prometheus equivalent is ``increase(zoe_memory_reconcile_failopen_count[5m])``.
+    """
+    now_ts = time.time() if now is None else now
+    cutoff = now_ts - _RECONCILE_FAILOPEN_WINDOW_S
+    while _RECONCILE_FAILOPEN_EVENTS and _RECONCILE_FAILOPEN_EVENTS[0] < cutoff:
+        _RECONCILE_FAILOPEN_EVENTS.popleft()
+    count = len(_RECONCILE_FAILOPEN_EVENTS)
+    return {
+        "window_seconds": _RECONCILE_FAILOPEN_WINDOW_S,
+        "count": count,
+        "threshold": _RECONCILE_FAILOPEN_THRESHOLD,
+        "sustained": count >= _RECONCILE_FAILOPEN_THRESHOLD,
+    }
+
+
+def record_reconcile_failopen(cause: str, *, now: float | None = None) -> dict:
+    """Count one reconcile fail-open-to-ADD and return the current window status.
+
+    Increments the Prometheus counter (labelled by ``cause``) and appends to the
+    sliding window backing :func:`reconcile_failopen_status`. Returns that status
+    so the caller can escalate its log level when the rate is sustained. Never
+    raises — observability must never break the memory write path.
+    """
+    now_ts = time.time() if now is None else now
+    try:
+        memory_reconcile_failopen_count.labels(cause=cause).inc()
+    except Exception:  # pragma: no cover - metrics must never break the write
+        pass
+    _RECONCILE_FAILOPEN_EVENTS.append(now_ts)
+    return reconcile_failopen_status(now=now_ts)
+
 
 # Self-learning / feedback
 chat_feedback_count = Counter(
@@ -365,6 +432,9 @@ __all__ = [
     "db_pool_size",
     "db_pool_in_use",
     "db_pool_free",
+    "memory_reconcile_failopen_count",
+    "record_reconcile_failopen",
+    "reconcile_failopen_status",
     "chat_feedback_count",
     "training_last_success_timestamp",
     "training_last_eval_accuracy",

@@ -29,10 +29,41 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from difflib import SequenceMatcher
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+try:
+    from memory_metrics import record_reconcile_failopen
+    _METRICS_OK = True
+except Exception:  # pragma: no cover - optional instrumentation module
+    _METRICS_OK = False
+
+# Patient search budget for the WRITE path (not the latency-gated turn path).
+# The 2 s default failed open to [] under load and silently degraded every
+# correction to ADD (live Telegram repro 2026-07-13). MemoryService.search
+# swallows its own TimeoutError and returns [], so a fail-open that burned
+# ~this whole budget was a TIMEOUT; a fast empty is a cold / genuinely-empty
+# store — the elapsed time is what tells the two fail-open causes apart.
+_RECONCILE_SEARCH_TIMEOUT_S = 15.0
+
+
+def _record_failopen(cause: str) -> bool:
+    """Count a reconcile fail-open-to-ADD event; return True if the rate is now
+    sustained (so the caller escalates WARNING → ERROR).
+
+    Pure observability: never raises, never changes the fail-open ADD decision
+    (Jason's rule: duplicates over lost facts). Degrades to a no-op when the
+    metrics module is unavailable."""
+    if not _METRICS_OK:
+        return False
+    try:
+        status = record_reconcile_failopen(cause)
+        return bool(status.get("sustained"))
+    except Exception:  # pragma: no cover - metrics must never break the write
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -761,28 +792,43 @@ async def reconcile_for_ingest(
 
     Returns ``("add"|"update"|"skip", mem_id_or_None)``. NEVER raises — any
     failure degrades to ``("add", None)`` so a real fact is never lost because
-    reconciliation errored."""
+    reconciliation errored. Every such fail-open ADD is COUNTED (by cause) via
+    :func:`memory_metrics.record_reconcile_failopen` so the duplicate-factory
+    risk is watchable; the decision itself is unchanged."""
+    t0 = time.monotonic()
     try:
         # Patient search: this is the background WRITE path, not the
-        # latency-gated turn path. The default 2 s search timeout fails open
-        # to [] under load (embedder busy with the turn itself), which
-        # silently degraded every correction to ADD — the stale value stacked
-        # instead of being superseded (live Telegram repro 2026-07-13).
+        # latency-gated turn path (see _RECONCILE_SEARCH_TIMEOUT_S).
         try:
             hits = await svc.search(
-                text, user_id=user_id, limit=limit, timeout_s=15.0
+                text, user_id=user_id, limit=limit,
+                timeout_s=_RECONCILE_SEARCH_TIMEOUT_S,
             )
         except TypeError:
             # Fakes/older services without the timeout_s kwarg.
             hits = await svc.search(text, user_id=user_id, limit=limit)
         if not hits:
-            # An empty result here usually means the search timed out or the
-            # store is cold — the fact is still stored (ADD), but supersession
-            # was skipped, so make it visible instead of logger.debug.
-            # No raw memory text in logs (it is personal data) — length only.
-            logger.warning(
-                "reconcile_for_ingest: no search hits (user=%s, text_len=%d) — "
-                "storing as ADD without supersession check", user_id, len(text),
+            # Empty here means the fact is stored as ADD without a supersession
+            # check (fail-open — duplicates over lost facts). Distinguish the
+            # cause: a search that burned ~the whole budget TIMED OUT (embedder
+            # busy under load); a fast empty is a cold / genuinely-empty store.
+            # Count it so a sustained burst is alertable, and escalate the log
+            # from WARNING → ERROR once the rate trips. No raw memory text in
+            # logs (personal data) — length only.
+            elapsed = time.monotonic() - t0
+            cause = (
+                "search_timeout"
+                if elapsed >= _RECONCILE_SEARCH_TIMEOUT_S * 0.9
+                else "empty_results"
+            )
+            sustained = _record_failopen(cause)
+            (logger.error if sustained else logger.warning)(
+                "reconcile_for_ingest: no search hits (user=%s, text_len=%d, "
+                "cause=%s, elapsed=%.1fs) — storing as ADD without supersession "
+                "check%s",
+                user_id, len(text), cause, elapsed,
+                " [SUSTAINED fail-open rate — reconciliation is duplicating "
+                "writes; check search/embedder health]" if sustained else "",
             )
         existing = [
             (getattr(h, "id", ""), getattr(h, "text", "") or "")
@@ -794,9 +840,11 @@ async def reconcile_for_ingest(
     except Exception as exc:
         # Exception type only — backend errors can embed the query (which is
         # the raw candidate memory text) in the exception message.
-        logger.warning(
-            "reconcile_for_ingest unavailable (%s) — plain add",
+        sustained = _record_failopen("search_error")
+        (logger.error if sustained else logger.warning)(
+            "reconcile_for_ingest unavailable (%s) — plain add%s",
             type(exc).__name__,
+            " [SUSTAINED fail-open rate]" if sustained else "",
         )
         return "add", None
 
