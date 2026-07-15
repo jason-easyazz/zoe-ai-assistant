@@ -1954,7 +1954,7 @@ def _self_lan_origins() -> frozenset[str]:
     """Origins that point at THIS host's own LAN address (https://<own-ip>).
 
     The touch kiosk loads the UI from the server's LAN IP
-    (https://192.168.1.218/touch/skybridge.html — see
+    (https://192.168.1.218/touch/home.html — see
     scripts/setup/touchscreen/config.json), so its browser sends
     ``Origin: https://<this-host's-ip>``. That origin is same-site by
     construction — the page was served BY this stack — yet the name-based

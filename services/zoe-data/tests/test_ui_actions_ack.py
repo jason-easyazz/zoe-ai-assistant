@@ -78,7 +78,7 @@ async def test_ack_ui_action_accepts_matching_panel_when_user_differs(monkeypatc
     db = _AckDb()
     result = await ack_ui_action(
         "action-1",
-        {"status": "success", "panel_id": "zoe-touch-pi", "ui_context": {"page": "/touch/skybridge.html"}},
+        {"status": "success", "panel_id": "zoe-touch-pi", "ui_context": {"page": "/touch/home.html"}},
         user={"user_id": "browser-user", "role": "guest"},
         db=db,
     )

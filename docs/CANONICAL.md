@@ -63,7 +63,10 @@ The Pi-as-brain path and the services it depends on. These are real and load-bea
 - **`zoe-database`** — PostgreSQL (asyncpg, `$1` placeholders). Relational + temporal memory.
 - **Chroma / MemPalace** — vector store for memory (raw-first).
 - **`llama-server`** (host-native, `:11434`) — serves the brain rock above.
-- **`services/zoe-ui`** — the touch/web UI + Skybridge front-end.
+- **`services/zoe-ui`** — the touch/web UI. The **estate** (`dist/touch/home.html`) is the
+  panel chrome; the old Skybridge front-end (`skybridge.html` + its JS/CSS) is **retired** (a
+  compat redirect stub remains). The server-side Skybridge resolve/timers engine (`/api/skybridge/*`,
+  `skybridge_service.py`) is still live — the estate calls it.
 - **`zoe-auth`**, **`zoe-cloudflared`** — auth + edge tunnel (infra).
 
 ## 🧩 Live modules (don't mistake these for dead)

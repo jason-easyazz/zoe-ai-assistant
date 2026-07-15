@@ -92,7 +92,7 @@ def test_supersedes_stale_voice_actions_for_skybridge_surface() -> None:
         "new-card",
     )
     assert not _should_supersede_voice_skybridge_action(
-        _row("panel_navigate", {"url": "/touch/skybridge.html"}, key="new-nav"),
+        _row("panel_navigate", {"url": "/touch/home.html"}, key="new-nav"),
         "new-nav",
         "new-card",
     )
