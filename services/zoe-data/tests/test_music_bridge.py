@@ -894,3 +894,39 @@ async def test_recently_played_skips_non_dict_items(monkeypatch):
     monkeypatch.setattr(music_service, "_ma", fake_ma)
     r = await music_service.get_recently_played()
     assert [i["name"] for i in r["items"]] == ["So What"]
+
+
+# ── art extraction: MA library items nest real art under metadata.images ──────
+
+def test_first_image_reads_metadata_images():
+    """MA playlists/tracks carry art under metadata.images[].path, not a
+    top-level image — the manager was showing blank thumbs until we scanned it."""
+    item = {"name": "Pop Hotlist", "metadata": {"images": [
+        {"type": "thumb", "path": "https://yt3.ggpht.com/abc=s576", "remotely_accessible": True}]}}
+    assert music_service._first_image(item) == "https://yt3.ggpht.com/abc=s576"
+
+
+def test_first_image_drops_builtin_relative_placeholder():
+    """The builtin 'logo.png' placeholder is relative/non-http → never trusted,
+    so a generated playlist shows the empty box rather than a broken image."""
+    item = {"name": "500 Random tracks", "metadata": {"images": [
+        {"type": "thumb", "path": "logo.png", "provider": "builtin", "remotely_accessible": False}]}}
+    assert music_service._first_image(item) == ""
+
+
+def test_first_image_falls_back_to_album_metadata():
+    item = {"name": "Golden", "metadata": {"images": []},
+            "album": {"name": "KPop Demon Hunters", "metadata": {"images": [
+                {"type": "thumb", "path": "https://img/album.jpg"}]}}}
+    assert music_service._first_image(item) == "https://img/album.jpg"
+
+
+@pytest.mark.asyncio
+async def test_list_playlists_maps_metadata_art(monkeypatch):
+    async def fake_ma(command, **args):
+        assert "favorite" not in args  # never filter the library
+        return [{"name": "Pop Hotlist", "uri": "library://playlist/1",
+                 "metadata": {"images": [{"type": "thumb", "path": "https://yt3.ggpht.com/x=s240"}]}}]
+    monkeypatch.setattr(music_service, "_ma", fake_ma)
+    pls = await music_service.list_playlists()
+    assert pls and pls[0]["image"].startswith("https://yt3.ggpht.com/")

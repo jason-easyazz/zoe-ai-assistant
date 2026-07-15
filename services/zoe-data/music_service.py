@@ -104,18 +104,26 @@ async def _ma_response(command: str, timeout_s: float = _TIMEOUT_S, **args: Any)
 
 def _first_image(item: dict[str, Any]) -> str:
     """Best square art for a media item — its own image else the album's; only
-    trusts absolute http(s) urls (never a relative/opaque path)."""
+    trusts absolute http(s) urls (never a relative/opaque path). MA library
+    items (playlists, tracks, search hits) carry their real art under
+    metadata.images[].path — NOT a top-level image/images field — so scan both
+    (the builtin `logo.png` placeholder is relative → dropped by the http guard)."""
     for src in (item, item.get("album") if isinstance(item.get("album"), dict) else None):
-        if not src:
+        if not isinstance(src, dict):
             continue
+        # top-level image/images (radio, some now-playing shapes)
         imgs = src.get("image") or src.get("images")
         if isinstance(imgs, str) and imgs.startswith(("http://", "https://")):
             return imgs
-        if isinstance(imgs, list):
-            for im in imgs:
-                u = im.get("path") if isinstance(im, dict) else im
-                if isinstance(u, str) and u.startswith(("http://", "https://")):
-                    return u
+        candidates = list(imgs) if isinstance(imgs, list) else []
+        # metadata.images[] — where MA nests library-item art
+        md_imgs = (src.get("metadata") or {}).get("images")
+        if isinstance(md_imgs, list):
+            candidates += md_imgs
+        for im in candidates:
+            u = im.get("path") if isinstance(im, dict) else im
+            if isinstance(u, str) and u.startswith(("http://", "https://")):
+                return u
     return ""
 
 
@@ -518,21 +526,6 @@ _SEARCH_RESULT_KEY = {
 }
 
 
-def _search_image(item: dict[str, Any]) -> str:
-    """Best square art for a search hit — the item's own image, else its album's.
-    Google-hosted (YT Music) art is bumped to a crisp square; other hosts pass
-    through untouched. Non-http(s)/relative paths are dropped (never trusted)."""
-    for src in (item, item.get("album") if isinstance(item.get("album"), dict) else None):
-        if not isinstance(src, dict):
-            continue
-        images = (src.get("metadata") or {}).get("images") or []
-        for img in images if isinstance(images, list) else []:
-            path = img.get("path") if isinstance(img, dict) else None
-            if isinstance(path, str) and path.startswith(("http://", "https://")):
-                return _hi_res_art(path)
-    return ""
-
-
 def _normalize_hit(item: Any, media_type: str) -> Optional[dict[str, Any]]:
     """One search hit → the flat shape the touch page renders + can play back.
     Drops items with no playable URI (can't act on them)."""
@@ -552,7 +545,7 @@ def _normalize_hit(item: Any, media_type: str) -> Optional[dict[str, Any]]:
         "media_type": item.get("media_type") or media_type,
         "artist": artist,
         "album": album_name,
-        "image": _search_image(item),
+        "image": _hi_res_art(_first_image(item)),
     }
 
 
