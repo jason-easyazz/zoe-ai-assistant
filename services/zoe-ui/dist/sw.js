@@ -8,7 +8,7 @@
 importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.63.43'; // estate: timer surface vertically centered in the safe area (balanced for 1 + multi-timer side-by-side)
+const SW_VERSION = '4.63.44'; // estate: list pills → chrome header row (by cog); reminder + list-item edit/delete always visible (touch, no hover)
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded

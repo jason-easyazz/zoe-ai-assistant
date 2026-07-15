@@ -98,11 +98,13 @@
   .dayf .drem .rt{color:var(--ink-faint);font-size:16px;min-width:96px}
   /* Lists v2 — tab selector + selected list in flowing columns */
   .lstf2{position:absolute;inset:0;padding:100px 64px 150px;display:flex;flex-direction:column}
-  .ltabs{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px}
-  .ltab{font-size:19px;font-weight:500;color:var(--ink-soft);padding:10px 20px;border-radius:999px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);cursor:pointer;white-space:nowrap}
+  .ltabs{display:flex;gap:10px;flex-wrap:wrap}
+  .ltab{font-size:19px;font-weight:500;color:var(--ink-soft);padding:9px 18px;border-radius:999px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);cursor:pointer;white-space:nowrap}
   .ltab.on{background:rgba(123,150,255,.22);border-color:rgba(123,150,255,.55);color:var(--ink);font-weight:600}
-  .lhead{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
-  .lcount{font-size:17px;color:var(--ink-faint);padding-top:12px;flex:none}
+  /* List selector pills live in the chrome header row (title position), by the cog. */
+  .lhdr{position:absolute;top:38px;left:110px;right:118px;height:52px;display:flex;align-items:center;gap:16px;z-index:30}
+  .lhdr .ltabs{flex:1;min-width:0;flex-wrap:nowrap;overflow-x:auto}
+  .lcount{font-size:17px;color:var(--ink-faint);flex:none;white-space:nowrap}
   .lcols{flex:1;overflow-y:auto}
   .lcols .lin{column-count:3;column-gap:28px}
   .lrow2{display:flex;align-items:center;gap:12px;padding:11px 4px;border-bottom:1px solid rgba(255,255,255,.07);font-size:20px;cursor:pointer;break-inside:avoid}
@@ -187,8 +189,8 @@
   .setsec .sout{margin-top:14px;width:100%;height:50px;border-radius:13px;border:1px solid rgba(255,122,144,.4);background:rgba(255,122,144,.12);color:#ff9db0;font:inherit;font-size:18px;cursor:pointer}
   /* CRUD affordances */
   .lrow2{position:relative}
-  .lact{margin-left:auto;display:flex;gap:6px;opacity:0;transition:opacity .15s}
-  .lrow2:hover .lact,.lact.show{opacity:1}
+  /* Always visible — this is a touch panel, there is no hover to reveal on. */
+  .lact{margin-left:auto;display:flex;gap:6px}
   .lact button{width:34px;height:34px;border-radius:9px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:var(--ink-soft);font-size:15px;cursor:pointer}
   .lact button.del{color:#ff9db0}
   .lrow2 input.edit{flex:1;height:36px;border-radius:9px;border:1px solid rgba(123,150,255,.5);background:rgba(255,255,255,.08);color:var(--ink);font:inherit;font-size:19px;padding:0 10px;outline:none}
@@ -675,7 +677,7 @@
     timer:{home:true, bg:'radial-gradient(120% 100% at 50% 44%,#122447,#080b12 62%)', canvas:false, glow:'radial-gradient(closest-side at 50% 44%,rgba(123,150,255,.35),transparent 70%)',
       html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Timers</div><div class="tfull"><div class="trings" id="tmRings"></div><div class="tmore" id="tmMore"></div></div>'},
     list:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Lists</div><div class="chmeta" id="lstMeta"></div><div class="lstf2"><div class="lhead"><div class="ltabs" id="lstTabs"></div><div class="lcount" id="lstCount"></div></div><div class="lcols" id="lstItems"></div></div>'},
+      html:'<div class="fcog">'+GEAR+'</div><div class="lhdr"><div class="ltabs" id="lstTabs"></div><div class="lcount" id="lstCount"></div></div><div class="lstf2"><div class="lcols" id="lstItems"></div></div>'},
     calendar:{home:true, bg:GROUND, canvas:false,
       html:'<div class="fcog">'+GEAR+'</div><div class="calf"><div class="calhead"><h1 id="calTtl"></h1><div class="calviews" id="calViews"><button data-v="day">Day</button><button data-v="week" class="on">Week</button><button data-v="month">Month</button></div></div><div class="calbody" id="calBody"></div></div>'},
     person:{home:true, bg:GROUND, canvas:false,
