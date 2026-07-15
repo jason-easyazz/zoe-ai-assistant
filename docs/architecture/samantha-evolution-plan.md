@@ -8,21 +8,22 @@
 > broken the entire time — zero panel voice turns had ever been persisted** (P-W0). Root
 > cause found 2026-07-09: `voice_command` runs as a detached task and queried a
 > request-scoped DB connection that had been released back to the pool, so identity +
-> auth silently resolved to guest and every turn was dropped (fixes #1191 + #1194,
-> pending live proof). **Lesson for this plan: "delivered" was declared on seeded evals
+> auth silently resolved to guest and every turn was dropped (root cause fixed #1191 +
+> #1194; **positive control PASSED 2026-07-13 after #1282 — W0 now fully closed**, see §6).
+> **Lesson for this plan: "delivered" was declared on seeded evals
 > while the foundation was unverified end-to-end. Do not call a pillar delivered until
 > its live path is proven — W0 (verify capture) is a hard gate, not one workstream of 18.**
 >
 > Memory *recall* is real (relationship graph, emotional-thread machinery, portraits —
-> all proven on seeded data). Memory *capture from voice* is only trustworthy once the
-> #1194 fix is deployed and a real spoken turn is verified to persist. This plan
+> all proven on seeded data). Memory *capture from voice* was broken until #1191/#1194
+> and is now **proven end-to-end (positive control PASSED 2026-07-13 after #1282)**. This plan
 > sequences everything *after* memory — ears, voice-first initiative, constant presence —
 > grounded in the 2026-07-06 capability audit, the ambient-voice ADR's spike verdict,
 > and the memory-pressure profile of the live host. A fresh session reads this
 > top-to-bottom, does the **§7 NEXT ACTION**, updates **§6**, repeats.
 >
 > Companion docs: [`docs/VISION.md`](../VISION.md) (why) ·
-> [`zoe-memory-samantha-buildplan.md`](zoe-memory-samantha-buildplan.md) (pillar 1: recall done, capture fixed #1194, pending live proof) ·
+> [`zoe-memory-samantha-buildplan.md`](zoe-memory-samantha-buildplan.md) (pillar 1: recall done, capture fixed #1191/#1194, proven 2026-07-13) ·
 > [`ADR-ambient-voice-framework.md`](../adr/ADR-ambient-voice-framework.md) (voice decision) ·
 > [`docs/knowledge/memory-pressure-profile.md`](../knowledge/memory-pressure-profile.md) (RAM facts).
 
@@ -50,7 +51,7 @@ Samantha is seven fused capabilities. The scorecard, strongest → weakest:
 
 | # | Capability | State | Evidence |
 |---|---|---|---|
-| 4 | **Knows the thread of your life** (memory) | 🟡 recall delivered, **capture was broken** | Recall 40/40 on *seeded* data; but voice capture persisted **0 turns ever** (P-W0) — detached-task released-connection bug, fixed #1191/#1194, **pending live proof**. Not 🟢 until a real spoken turn is verified to persist |
+| 4 | **Knows the thread of your life** (memory) | 🟢 recall delivered, **capture fixed + proven** | Recall 40/40 on *seeded* data; voice capture had persisted **0 turns ever** (P-W0) — detached-task released-connection bug, fixed #1191/#1194; **positive control PASSED 2026-07-13 after #1282** (real spoken turn → stamped `chat_messages` rows). W0 fully closed |
 | 5 | **Initiates** (proactivity) | 🟡 built, wrong medium | 9 triggers + quiet hours + LLM composition (`proactive/engine.py`), but every path terminates in web-push — Zoe never *speaks* first |
 | 1+2 | **Always there + full-duplex conversation** | 🟡 walkie-talkie | 3 voice lanes; LiveKit lane drops incoming audio during PROCESSING/COOLDOWN (no barge-in exactly where it matters); energy-RMS endpointing; "let's talk" opener (#1049) opens into a half-duplex room |
 | 3 | **Hears *how* you say things** (mood from voice) | 🔴 absent | Zero prosody/affect analysis anywhere; `pyannote.audio` in requirements, unimported; everything emotional is inferred from text |
@@ -360,12 +361,14 @@ regression, ever (replay harness is the enforcement).
   swallowed — hence ZERO voice rows ever in Postgres. Two bugs: (a) voice-path identity
   resolution ignores the panel→jason binding; (b) `_schedule_voice_chat_save`'s skip
   guard checks "guest" but not "voice-guest", so the doomed write is attempted and the
-  FK error swallowed. Fix = packet **P-F6** — **MERGED as #1160 (2026-07)**; chat/Telegram
-  capture verified on organic traffic (2026-07 memory QA arc). **Spoken-panel positive
-  control PASSED 2026-07-13** after #1282 fixed three stacked transcript-save bugs the
-  control itself exposed (routers.chat lazy-import path, chat_sessions FK minting,
-  streaming lane never persisting the reply): live spoken turn → `chat_messages` rows
-  (user + assistant) with `metadata.user_id=jason`. **W0 is fully closed.** Note:
+  FK error swallowed. **Fix chain:** P-F6 (**#1160**, 2026-07-08) was a symptom-level
+  fallback; the real root cause — a detached-task **released DB connection** (identity/auth
+  silently failed → guest) — was then fixed by **#1191 + #1194** (identity/auth on a
+  dedicated connection, racy fallback removed). **Spoken-panel positive control PASSED
+  2026-07-13** after #1282 fixed three more stacked transcript-save bugs the control itself
+  exposed (routers.chat lazy-import path, chat_sessions FK minting, streaming lane never
+  persisting the reply): live spoken turn → `chat_messages` rows (user + assistant) with
+  `metadata.user_id=jason`. **W0 is fully closed.** Note:
   synthetic `web_*` eval traffic also runs against the live box (unstamped metadata).
 - [x] **W1.1** barge-in on LiveKit agent — **DONE + LIVE** (#1051: Silero VAD `voice_vad.py`,
   frames flow during PROCESSING/COOLDOWN, ≥250 ms sustained speech cancels the pipeline +
@@ -397,7 +400,8 @@ regression, ever (replay harness is the enforcement).
 
 ## 7. NEXT ACTION (always exactly one)
 
-→ **W3.1 (RAM).** W0 is **fully closed** (2026-07-13): P-F6 merged (#1160), chat/Telegram
+→ **W3.1 (RAM).** W0 is **fully closed** (2026-07-13): the released-connection root cause
+was fixed by #1191 + #1194 (P-F6/#1160 was the earlier symptom-level fallback), chat/Telegram
 capture verified on organic traffic, and the spoken-panel positive control passed after
 #1282 — live spoken turn → stamped user+assistant `chat_messages` rows under the
 panel-bound user. Next is **W3.1** (18 ccd-cli processes hold ~3.6 GB swap — the sized

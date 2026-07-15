@@ -40,7 +40,7 @@ memory unprompted; its understanding of the user evolves.
 - **Stores (already running):** Chroma/MemPalace (vector recall, raw-first) +
   PostgreSQL (entities/relationships/temporal/user-model: `people`,
   `person_relationships`, `person_important_dates`, `user_portraits`, `events`).
-- **Capture:** every chat/voice turn → `chat_messages` verbatim. ⚠️ MECHANISM REAL, LIVE-UNCONFIRMED POST-1b. Code-traced + demo-proven; 68 organic `voice-panel-*` rows + 728 `web_*` rows exist historically. BUT the newest `chat_messages` row of ANY kind is 2026-06-22 — *before* the 1b deploy (2026-06-24) — so **zero rows carry `metadata.user_id`** and the table is dominated by test/replay harness sessions. No persisted turn has occurred since 1b shipped, so owner-stamping is unconfirmed on live organic traffic. Open either/or: no real voice *commands* since (wake-bleed empty transcripts + panel polling only) vs a persistence regression ~2026-06-24. Note: organic panel voice ALSO has its own per-turn memory path (`voice_tts._run_voice_memory_passes` → `latent_intent_detector.detect_and_store`) independent of idle consolidation.
+- **Capture:** every chat/voice turn → `chat_messages` verbatim. ⚠️ **CORRECTION 2026-07-09 (see §7): voice capture was PROVEN BROKEN, then fixed** — the P-W0 positive control found every panel voice turn was dropped before storage (detached-task released-DB-connection bug → identity/auth → guest → FK-swallowed write); fixed in #1191/#1194 and the positive control **PASSED 2026-07-13 after #1282**, so capture is now proven end-to-end. The 68 historical `voice-panel-*` rows were **NOT evidence the voice-capture path worked**: they all predate the 1b deploy (2026-06-24), carry **zero `metadata.user_id`**, and — given the drop bug — were broken-path/unowned/test-harness rows that did **not** satisfy the live-proof gate (the first owner-stamped organic turn only persisted 2026-07-13). (728 `web_*` rows similarly are eval/replay traffic.) Note: organic panel voice ALSO has its own per-turn memory path (`voice_tts._run_voice_memory_passes` → `latent_intent_detector.detect_and_store`) independent of idle consolidation — which was subject to the same drop bug.
 - **Consolidate (Increment 1):** idle-triggered whole-conversation pass → clean facts
   via the write-quality gate. `memory_idle_consolidation.py`.
 - **Retrieve (Increment 2):** `zoe_memory_router` composes Chroma + Postgres into the
@@ -132,13 +132,16 @@ detached task (from `voice_turn_stream`'s `ensure_future` and `panel_auth.submit
 pool → identity + auth silently resolved to guest → **every panel voice turn was dropped
 before it could be stored.** Diagnosed via the P-W0 positive-control (a live diagnostic,
 after the misdirected F6/P-F7 detours); fixed in #1191 (identity) + #1194 (auth gates +
-the racy-fallback removal). Memory recall is real; **memory *capture from voice* is
-unproven until #1194 is deployed and a spoken turn is verified to persist.**
+the racy-fallback removal). Memory recall is real; voice **capture** was broken then fixed,
+and the **P-W0 positive control PASSED 2026-07-13 after #1282** (three more stacked
+transcript-save bugs) — a live spoken turn now lands `chat_messages` rows (user + assistant)
+with `metadata.user_id=jason`. Capture is proven end-to-end; **W0 is closed.**
 
-→ **NEXT ACTION: deploy #1194, speak one authenticated turn to the panel, and confirm a
-`chat_messages` row lands with `metadata.user_id=jason`** (re-run the P-W0 positive
-control). Only then is voice capture — and therefore this pillar — actually delivered.
-Watch `scripts/maintenance/check_emotional_thread.py` for the first real row. Do NOT
+→ **NEXT ACTION: monitoring, not building.** Capture is proven, but jason still has **0 real
+`emotional_moment` rows** — the emotional path is proven on seeded/demo data and does nothing
+for him until a genuine emotional conversation is captured live. Watch
+`scripts/maintenance/check_emotional_thread.py` for the first real row; when it appears,
+spot-check that recall + the morning brief surface it. Do NOT
 resurrect the dead idle-consolidation path (§8) as "the" memory path — live memory is the
 immediate voice/chat writers + the for-prompt packet + the Flue `recall_memory` tool.
 
