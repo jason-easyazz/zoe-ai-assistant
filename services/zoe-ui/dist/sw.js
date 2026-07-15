@@ -8,7 +8,7 @@
 importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.63.45'; // estate: list pills right-of-cog; day-card edit/delete; touch date stepper; 4 timers across; dock timers hidden on timer surface; timer-finish alarm
+const SW_VERSION = '4.63.46'; // estate round7 + fixes: timeless reminders stay time-less (no auto-09:00); bound alarm map; spoken timer-done announce
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded

@@ -1313,21 +1313,26 @@
   var _dt={y:2026,mo:0,d:1,h:9,mi:0};
   var _MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   function _dtInit(dateStr,timeStr){var now=new Date();
-    var y=now.getFullYear(),mo=now.getMonth(),d=now.getDate(),h=9,mi=0;
+    var y=now.getFullYear(),mo=now.getMonth(),d=now.getDate(),h=9,mi=0,hasTime=false;
     if(dateStr&&/^\d{4}-\d{2}-\d{2}/.test(dateStr)){var p=dateStr.split('-');y=+p[0];mo=(+p[1])-1;d=+p[2].slice(0,2);}
-    if(timeStr&&/^\d{1,2}:\d{2}/.test(timeStr)){var q=timeStr.split(':');h=+q[0];mi=+q[1];}
-    _dt={y:y,mo:mo,d:d,h:h,mi:mi};}
+    if(timeStr&&/^\d{1,2}:\d{2}/.test(timeStr)){var q=timeStr.split(':');h=+q[0];mi=+q[1];hasTime=true;}
+    _dt={y:y,mo:mo,d:d,h:h,mi:mi,hasTime:hasTime};}
   function _dtg(f,lab){return '<div class="dtg"><button type="button" data-s="'+f+',1">▲</button><span class="dtv" data-v="'+f+'"></span><button type="button" data-s="'+f+',-1">▼</button><span class="dtl">'+lab+'</span></div>';}
   function _dtHtml(){return '<div class="dtp">'+_dtg('d','day')+_dtg('mo','mon')+_dtg('y','yr')+'<span class="dtsep"></span>'+_dtg('h','hr')+_dtg('mi','min')+'</div>';}
   function _dtPaint(m){function set(f,v){var el=m.querySelector('.dtv[data-v="'+f+'"]');if(el)el.textContent=v;}
-    set('d',two(_dt.d));set('mo',_MON[_dt.mo]);set('y',_dt.y);set('h',two(_dt.h));set('mi',two(_dt.mi));}
-  function _dtStep(f,dir){var dd=new Date(_dt.y,_dt.mo,_dt.d,_dt.h,_dt.mi);
+    set('d',two(_dt.d));set('mo',_MON[_dt.mo]);set('y',_dt.y);
+    // No time set (e.g. a timeless reminder / all-day event) shows "--" — tap a
+    // time stepper to add one; otherwise it stays time-less (never auto-09:00).
+    set('h',_dt.hasTime?two(_dt.h):'--');set('mi',_dt.hasTime?two(_dt.mi):'--');}
+  function _dtStep(f,dir){
+    if((f==='h'||f==='mi')&&!_dt.hasTime){_dt.hasTime=true;return;}   // first time-tap just reveals 09:00
+    var dd=new Date(_dt.y,_dt.mo,_dt.d,_dt.h,_dt.mi);
     if(f==='d')dd.setDate(dd.getDate()+dir);else if(f==='mo')dd.setMonth(dd.getMonth()+dir);
     else if(f==='y')dd.setFullYear(dd.getFullYear()+dir);else if(f==='h')dd.setHours(dd.getHours()+dir);
     else if(f==='mi')dd.setMinutes(dd.getMinutes()+dir*5);
-    _dt={y:dd.getFullYear(),mo:dd.getMonth(),d:dd.getDate(),h:dd.getHours(),mi:dd.getMinutes()};}
+    _dt.y=dd.getFullYear();_dt.mo=dd.getMonth();_dt.d=dd.getDate();_dt.h=dd.getHours();_dt.mi=dd.getMinutes();}
   function _dtWire(m){_dtPaint(m);m.querySelectorAll('.dtp button[data-s]').forEach(function(b){b.onclick=function(){var s=b.getAttribute('data-s').split(',');_dtStep(s[0],+s[1]);_dtPaint(m);};});}
-  function _dtGet(){return {date:_dt.y+'-'+two(_dt.mo+1)+'-'+two(_dt.d),time:two(_dt.h)+':'+two(_dt.mi)};}
+  function _dtGet(){return {date:_dt.y+'-'+two(_dt.mo+1)+'-'+two(_dt.d),time:_dt.hasTime?(two(_dt.h)+':'+two(_dt.mi)):null};}
   function editReminder(rem){
     _dtInit(rem.due_date,rem.due_time);
     estOpen('<h3>Edit reminder</h3>'
@@ -1676,7 +1681,7 @@
     m.querySelector('[data-x="save"]').onclick=function(){var body={};m.querySelectorAll('[data-f]').forEach(function(i){body[i.getAttribute('data-f')]=i.value.trim();});
       var dt=_dtGet();body.start_date=dt.date;
       var allday=m.querySelector('[data-f2="allday"]');
-      if(allday&&allday.checked){body.all_day=true;body.start_time=null;}else{body.all_day=false;body.start_time=dt.time;}
+      if((allday&&allday.checked)||dt.time===null){body.all_day=true;body.start_time=null;}else{body.all_day=false;body.start_time=dt.time;}
       apiJson('PUT','/api/calendar/events/'+encodeURIComponent(ev.id),body).then(function(){estClose();if(_cur==='day')wireDay();else paintCal();}).catch(function(){toast('Couldn’t save event');});};
   }
 
@@ -1724,10 +1729,13 @@
     ((d&&d.timers)||[]).forEach(function(t){var id=String(t.timer_id||t.id||''),exp=+t.expires_at_ms||0;if(!id||!exp)return;seen[id]=1;
       if(!_tAlarm.fired[id])_tAlarm.known[id]={exp:exp,label:t.label||t.title||'Timer'};});
     Object.keys(_tAlarm.known).forEach(function(id){if(!seen[id]&&_tAlarm.known[id].exp>now+1500)delete _tAlarm.known[id];});
+    // Bound `fired` on a long-lived kiosk: drop ids fired >6h ago (their timers
+    // are long gone, so they can never re-appear and re-fire).
+    Object.keys(_tAlarm.fired).forEach(function(id){if(_tAlarm.fired[id]<now-21600000)delete _tAlarm.fired[id];});
   }).catch(function(){});}
   function _tAlarmTick(){var now=Date.now();
     Object.keys(_tAlarm.known).forEach(function(id){var t=_tAlarm.known[id];
-      if(now>=t.exp&&!_tAlarm.fired[id]){_tAlarm.fired[id]=1;delete _tAlarm.known[id];timerAlarm(t.label);}});}
+      if(now>=t.exp&&!_tAlarm.fired[id]){_tAlarm.fired[id]=now;delete _tAlarm.known[id];timerAlarm(t.label);}});}
   function _beep(){try{if(!_tAlarm.ctx)_tAlarm.ctx=new (window.AudioContext||window.webkitAudioContext)();var c=_tAlarm.ctx;
     if(c.state==='suspended')c.resume();
     function ping(t0){var o=c.createOscillator(),g=c.createGain();o.type='sine';o.frequency.value=880;o.connect(g);g.connect(c.destination);
@@ -1739,6 +1747,10 @@
     ov.innerHTML='<div class="tab"><div class="tak">⏱ Timer done</div><div class="tal">'+esc(label||'Timer')+'</div><button class="tad" id="tmrAlarmX">Dismiss</button></div>';
     ov.classList.add('on');
     _beep();if(_tAlarm.chime)clearInterval(_tAlarm.chime);_tAlarm.chime=setInterval(_beep,2200);
+    // Spoken announcement (best-effort) so it's noticed even when the panel
+    // isn't in view — browser TTS fallback; a Kokoro-voiced server announce is
+    // the nicer follow-up but this needs no backend.
+    try{if(window.speechSynthesis){var u=new SpeechSynthesisUtterance((label||'Timer')+' timer is done');u.rate=.96;speechSynthesis.cancel();speechSynthesis.speak(u);}}catch(e){}
     document.getElementById('tmrAlarmX').onclick=function(){ov.classList.remove('on');if(_tAlarm.chime){clearInterval(_tAlarm.chime);_tAlarm.chime=null;}
       if(_cur==='timer'&&typeof wireTimer==='function'){}};
   }
