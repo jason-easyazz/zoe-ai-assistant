@@ -21,6 +21,19 @@ stops before TTS, so its timings UNDERSTATE real live latency — this probe tra
 *relative drift vs baseline*, not absolute live performance. See
 docs/knowledge/voice-pipeline.md.
 
+RESULT ARTIFACT CONTRACT ("a gate that can silently not-run is not a gate"):
+every run — pass, fail, SKIP (box too tight), or ERROR (could not run) — writes a
+durable, machine-readable result to --results (default
+~/.cache/zoe/voice_regression_last.json):
+
+    {status: pass|fail|skip|error, timestamp, said_vs_did_regressions,
+     per_stage_speed_deltas, baseline_ref, reason, summary}
+
+A skip/timeout/error MUST leave an artifact with status != "pass" — never an
+ABSENT file that a downstream checker could misread as "nothing wrong". The
+deploy-path checker scripts/maintenance/voice_gate_check.py reads exactly this
+contract to decide whether a voice-path deploy is allowed to proceed.
+
 Examples:
     # establish/refresh the baseline (run when the path is known-good):
     python3 scripts/maintenance/voice_regression_probe.py --update-baseline
@@ -138,6 +151,66 @@ def compare(cur: dict[str, Any], baseline: dict[str, Any], warn_ratio: float, wa
             warnings.append(f"SPEED {stage}: {cur_ms:.0f}ms vs baseline {base_ms:.0f}ms "
                             f"({ratio:.2f}x, +{delta:.0f}ms)")
     return warnings
+
+
+def stage_speed_deltas(summary: dict[str, Any], baseline: dict[str, Any]) -> dict[str, Any]:
+    """Per-stage medians this run vs the baseline — recorded on EVERY run so the
+    result artifact carries the raw speed picture even when nothing regressed.
+    The pass/fail DECISION stays in compare(); this only records the numbers."""
+    base = baseline.get("summary") if isinstance(baseline, dict) else None
+    base_med = base.get("medians_ms", {}) if isinstance(base, dict) else {}
+    if not isinstance(base_med, dict):
+        base_med = {}
+    out: dict[str, Any] = {}
+    for stage, cur_ms in (summary.get("medians_ms") or {}).items():
+        base_ms = base_med.get(stage)
+        entry: dict[str, Any] = {"cur_ms": cur_ms, "baseline_ms": base_ms}
+        if isinstance(cur_ms, (int, float)) and isinstance(base_ms, (int, float)) and base_ms > 0:
+            entry["delta_ms"] = round(cur_ms - base_ms, 1)
+            entry["ratio"] = round(cur_ms / base_ms, 3)
+        out[stage] = entry
+    return out
+
+
+EMPTY_SUMMARY = {"n_samples": 0, "ok_rate": 0.0, "ok": 0, "fail": 0,
+                 "total": 0, "verdicts": {}, "medians_ms": {}}
+
+
+def emit_result(args, *, status: str, summary: dict[str, Any],
+                said_vs_did: list[str], speed_deltas: dict[str, Any],
+                baseline: dict[str, Any], reason: str = "") -> dict[str, Any]:
+    """Write the durable, machine-readable RESULT ARTIFACT — on EVERY exit path.
+
+    This is the whole point of the gate's hardening: a skip / timeout / error
+    leaves an artifact whose status != "pass", never an ABSENT file that a
+    downstream checker could misread as "nothing wrong". voice_gate_check.py
+    reads exactly this contract; keep the keys stable. `summary` and `created_at`
+    are also retained for the existing router_selftrain replay_gate reader."""
+    ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    base_summary = baseline.get("summary") if isinstance(baseline, dict) else None
+    baseline_ref = {
+        "path": str(args.baseline),
+        "created_at": (baseline or {}).get("created_at"),
+        "ok_rate": (base_summary or {}).get("ok_rate") if isinstance(base_summary, dict) else None,
+    }
+    payload = {
+        "status": status,                       # pass | fail | skip | error
+        "timestamp": ts,
+        "created_at": ts,                       # back-compat: router_selftrain reads mtime + summary
+        "reason": reason,
+        "said_vs_did_regressions": said_vs_did,
+        "per_stage_speed_deltas": speed_deltas,
+        "baseline_ref": baseline_ref,
+        "summary": summary,                     # back-compat: n_samples / ok_rate / medians_ms
+    }
+    write_json(args.results, payload)
+    try:
+        args.trend.parent.mkdir(parents=True, exist_ok=True)
+        with open(args.trend, "a") as fh:
+            fh.write(json.dumps(payload, separators=(",", ":")) + "\n")
+    except OSError:
+        pass
+    return payload
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -301,40 +374,39 @@ def main() -> int:
 
     _lock_fd = _acquire_harness_lock()  # noqa: F841 — held for process lifetime
 
+    # Baseline is loaded up front so EVERY exit path — including skip/error —
+    # can record which baseline it was (or would have been) judged against.
+    baseline: dict[str, Any] = {}
+    try:
+        baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+
     avail = mem_available_mb()
     if avail < args.min_mem_mb:
-        print(f"SKIP: available memory {avail}MB < {args.min_mem_mb}MB threshold — "
-              f"deferring to avoid OOM on the live box.")
+        reason = (f"available memory {avail}MB < {args.min_mem_mb}MB threshold — "
+                  "deferring to avoid OOM on the live box")
+        print(f"SKIP: {reason}.")
+        emit_result(args, status="skip", summary=dict(EMPTY_SUMMARY),
+                    said_vs_did=[], speed_deltas={}, baseline=baseline, reason=reason)
+        print(f"Results: {args.results}  (status=skip — a skip is NOT a pass)")
         return 0
 
     run_started_utc = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
     try:
         report = run_measure(args.samples, args.service_dir, args.user, args.timeout)
     except Exception as exc:
-        print(f"ERROR: voice probe could not run: {exc}", file=sys.stderr)
+        reason = f"voice probe could not run: {exc}"
+        print(f"ERROR: {reason}", file=sys.stderr)
+        emit_result(args, status="error", summary=dict(EMPTY_SUMMARY),
+                    said_vs_did=[], speed_deltas={}, baseline=baseline, reason=reason)
         cleanup_replay_artifacts(run_started_utc, args)   # even a failed run may have executed turns
         return 2
 
     summary = summarize(report)
-    payload = {
-        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "summary": summary,
-    }
-    write_json(args.results, payload)
-    # Append to the trend log so drift is visible over time (one line per run).
-    try:
-        args.trend.parent.mkdir(parents=True, exist_ok=True)
-        with open(args.trend, "a") as fh:
-            fh.write(json.dumps(payload, separators=(",", ":")) + "\n")
-    except OSError:
-        pass
-
-    baseline = {}
-    try:
-        baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
-    except Exception:
-        pass
     warnings = compare(summary, baseline, args.warn_ratio, args.warn_ms)
+    said_vs_did = [w for w in warnings if w.startswith("FUNCTION")]
+    speed_deltas = stage_speed_deltas(summary, baseline)
 
     m = summary["medians_ms"]
     print(f"Zoe voice regression probe — {summary['n_samples']} samples, "
@@ -344,14 +416,29 @@ def main() -> int:
         print(f"WARN {w}")
 
     if args.update_baseline or not args.baseline.exists():
-        write_json(args.baseline, payload)
+        write_json(args.baseline, {
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "summary": summary,
+        })
         print(f"Baseline saved: {args.baseline}")
-    print(f"Results: {args.results}  Trend: {args.trend}")
+        # This run IS the new bar now — reload so baseline_ref points at it.
+        try:
+            baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
+        except Exception:
+            pass
 
     cleanup_ok = cleanup_replay_artifacts(run_started_utc, args)
 
     # a failed sweep is a warning-level exit: results are valid but the
     # calendar/lists are dirty and the systemd unit shows non-zero.
+    status = "pass" if (not warnings and cleanup_ok) else "fail"
+    reason_parts = list(warnings)
+    if not cleanup_ok:
+        reason_parts.append("replay-artifact cleanup FAILED (calendar/lists may be dirty)")
+    emit_result(args, status=status, summary=summary, said_vs_did=said_vs_did,
+                speed_deltas=speed_deltas, baseline=baseline, reason="; ".join(reason_parts))
+
+    print(f"Results: {args.results}  Trend: {args.trend}  (status={status})")
     return 1 if (warnings or not cleanup_ok) else 0
 
 
