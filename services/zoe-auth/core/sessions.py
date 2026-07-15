@@ -188,16 +188,68 @@ class EnhancedSessionManager:
             )
 
     def get_session(self, session_id: str) -> Optional[AuthSession]:
-        """Get session by ID with validation"""
+        """Get session by ID with validation.
+
+        The in-memory ``active_sessions`` dict is a cache; the DB is the source
+        of truth. On a cache miss, fall back to the persisted session so a valid
+        session still validates after it has fallen out of this process's cache
+        — e.g. a long-lived worker that only loaded sessions at startup, or a
+        session minted by a different worker. Without this, guest sessions the
+        panel mints validated only on the minting process and 404'd everywhere
+        else, walling the kiosk on the sign-in card.
+        """
         with self.session_lock:
             session = self.active_sessions.get(session_id)
+
+        if session is None:
+            # DB round-trip on the cache-miss path runs WITHOUT session_lock held,
+            # so a slow/blocked store never stalls concurrent session ops (logins,
+            # logouts, permission checks). Re-acquire only to update the cache.
+            loaded = self._load_session_from_db(session_id)
+            if loaded is not None:
+                with self.session_lock:
+                    session = self.active_sessions.setdefault(session_id, loaded)
+
+        with self.session_lock:
             if session and self._is_session_valid(session):
                 return session
             elif session:
                 # Session expired, remove it
                 logger.debug(f"Session expired, removing: {session_id[:20]}...")
                 self._remove_session(session_id)
-                
+
+            return None
+
+    def _load_session_from_db(self, session_id: str) -> Optional[AuthSession]:
+        """Load one active session from the persisted store by id (get_session's
+        cache-miss fallback). Mirrors _load_active_sessions' row→AuthSession map."""
+        try:
+            with auth_db.get_connection() as conn:
+                row = conn.execute("""
+                    SELECT session_id, user_id, session_type, auth_method, device_info,
+                           created_at, last_activity, expires_at, permissions_cache,
+                           role_cache, metadata
+                    FROM auth_sessions
+                    WHERE session_id = ? AND is_active = 1
+                """, (session_id,)).fetchone()
+            if not row:
+                return None
+            return AuthSession(
+                session_id=row[0],
+                user_id=row[1],
+                session_type=SessionType(row[2]),
+                auth_method=AuthMethod(row[3]),
+                device_info=json.loads(row[4]),
+                created_at=datetime.fromisoformat(row[5]),
+                last_activity=datetime.fromisoformat(row[6]),
+                expires_at=datetime.fromisoformat(row[7]),
+                is_active=True,
+                permissions_cache=json.loads(row[8] or '[]'),
+                role_cache=row[9],
+                metadata=json.loads(row[10] or '{}')
+            )
+        except Exception as e:
+            logger.error(f"Failed to load session from DB: {e}")
             return None
 
     def validate_session_permission(self, session_id: str, permission: str,
@@ -560,9 +612,18 @@ class EnhancedSessionManager:
             return True
 
     def _is_session_valid(self, session: AuthSession) -> bool:
-        """Check if session is still valid"""
-        return (session.is_active and 
-                datetime.now(timezone.utc) < session.expires_at)
+        """Check if session is still valid.
+
+        Tolerate a timezone-naive expires_at (legacy rows / callers): treat it
+        as UTC rather than letting `aware < naive` raise a TypeError that would
+        bubble up as an opaque failure during validation.
+        """
+        expires_at = session.expires_at
+        if expires_at is not None and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        return bool(session.is_active and
+                    expires_at is not None and
+                    datetime.now(timezone.utc) < expires_at)
 
     def _is_rate_limited(self, user_id: str, ip_address: Optional[str],
                          action: str = "login") -> bool:
