@@ -10,8 +10,8 @@ actually runs.** `start-kiosk.sh` and `systemd/zoe-kiosk.service` are the same l
 
 - systemd **`zoe-kiosk.service`** runs as user **`pi`** (`/etc/systemd/system/zoe-kiosk.service`)
   → execs `/opt/TouchKio/start-kiosk.sh` → launches **`chromium-browser --kiosk`**.
-- It loads `config.json`'s `url` = **`/touch/skybridge.html`** (the Skybridge UI; the panel
-  was migrated off the old `dashboard.html`).
+- It loads `config.json`'s `url` = **`/touch/home.html`** (the estate — the panel chrome;
+  it superseded both `dashboard.html` and the retired `skybridge.html`).
 - `start-kiosk.sh` passes **`--use-fake-ui-for-media-stream`**, which auto-grants the real
   microphone — in `--kiosk` mode Chromium can't show the mic prompt, so `getUserMedia` used
   to hang and the voice UI fell back to typing. Security note: the kiosk auto-grants mic to
@@ -28,7 +28,7 @@ panel still runs the pre-hardening versions until these are deployed:
   flag; debug from the host via `ssh -L 9222:127.0.0.1:9222`.
 - **Local fallback URL** — live panel falls back to `zoe.the411.life/touch/dashboard.html`
   (Cloudflare-blocked from the panel + retired surface); tracked launcher falls back to the
-  local LAN Skybridge URL from `config.json`.
+  local LAN estate URL from `config.json`.
 - **Chromium binary resolution** — `chromium-browser` then `chromium`, loud failure if absent.
 - **Network gating** — unit waits for `network-online.target`; the launcher pings the host
   from the configured URL and exits non-zero on total failure so systemd retries instead of
