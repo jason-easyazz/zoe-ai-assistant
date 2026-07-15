@@ -25,9 +25,12 @@ def _src(rel: str) -> str:
     return open(os.path.join(DATA, rel), encoding="utf-8").read()
 
 
-# ── 1. SPEED: first audio snaps out on the first clause ──────────────────────
-# Regressed: first-audio drifted from ~0.7s feel back to ~3s because the synth
-# waited for a whole first sentence. #757 restored the clause flush.
+# ── 1. SPEED vs NATURALNESS: first audio starts fast without wrecking prosody ─
+# History: first-audio once drifted to ~3s (waited for a whole sentence), #757 added
+# an aggressive clause flush to fix it — but that split SHORT replies mid-sentence,
+# giving a pause + pitch reset ("22 degrees," <pause> "mostly clear…") and even
+# splitting inside "8:05". Kokoro on GPU is fast now, so short replies play whole and
+# only long openings clause-break. Keep the flush wired, but not mid-short-sentence.
 def test_fast_first_audio_present_and_wired():
     s = _src("routers/voice_tts.py")
     assert "def _extract_first_unit" in s, "first-audio clause splitter removed"
@@ -36,11 +39,16 @@ def test_fast_first_audio_present_and_wired():
     assert "_emit_sentence(first_unit)" in s, "first-unit flush not wired into stream loop"
 
 
-def test_first_unit_splits_early_and_is_decimal_safe():
+def test_first_unit_keeps_short_replies_whole_and_is_number_safe():
     import routers.voice_tts as v
-    unit, _ = v._extract_first_unit("It's twelve degrees and clear, with a light breeze.")
-    assert unit == "It's twelve degrees and clear,"           # early clause break
-    assert v._extract_first_unit("It's 12.4 degrees")[0] is None  # never split a decimal
+    # short reply: held whole (no mid-sentence pause), NOT clause-split
+    assert v._extract_first_unit("It's twelve degrees and clear, with a light breeze.")[0] is None
+    assert v._extract_first_unit("It's 12.4 degrees")[0] is None          # never split a decimal
+    assert v._extract_first_unit("The current time is 8:")[0] is None      # never split inside a time
+    # long opening still clause-breaks for fast first-audio
+    long_open = ("Honey is one of the very few foods that never spoils, and archaeologists "
+                 "have even found edible pots of it. ")
+    assert v._extract_first_unit(long_open)[0] == "Honey is one of the very few foods that never spoils,"
 
 
 # ── 2. TTFT: zoe-core streams text_delta (the 2.1s→0.7s win, #729) ───────────
