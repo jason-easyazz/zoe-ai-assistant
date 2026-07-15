@@ -331,7 +331,6 @@
   .mfull .mfav{position:absolute;top:0;right:0;width:52px;height:52px;border-radius:50%;border:0;background:rgba(255,255,255,.08);color:rgba(255,255,255,.6);display:grid;place-items:center;cursor:pointer}
   .mfull .mfav.on{color:var(--cat-health);background:rgba(255,122,144,.16)}
   .mfull .mfav svg{width:26px;height:26px}
-  .mfull .minfo{position:relative}
   #dock .pc.dnp{display:flex;align-items:center;gap:10px;max-width:280px;padding:6px 12px 6px 6px}
   #dock .pc.dnp .da{width:38px;height:38px;border-radius:8px;overflow:hidden;flex:none;background:rgba(255,255,255,.1)}
   #dock .pc.dnp .da img{width:100%;height:100%;object-fit:cover}
@@ -1071,7 +1070,8 @@
     var held=null,startY=0,moved=false,pressT=null;
     function rowAt(y){var rows=[].slice.call(host.querySelectorAll('.qi.q'));for(var i=0;i<rows.length;i++){var r=rows[i].getBoundingClientRect();if(y<r.top+r.height/2)return rows[i];}return null;}
     host.addEventListener('pointerdown',function(e){var row=e.target.closest('.qi.q');if(!row||e.target.closest('.qx'))return;
-      pressT=setTimeout(function(){held=row;moved=false;startY=e.clientY;row.dataset.dragging='1';row.classList.add('drag');
+      startY=e.clientY;                       // captured NOW so the move-guard has a real baseline
+      pressT=setTimeout(function(){held=row;moved=false;row.dataset.dragging='1';row.classList.add('drag');
         try{host.setPointerCapture(e.pointerId);}catch(_){}} ,320);});
     host.addEventListener('pointermove',function(e){if(!held){if(pressT&&Math.abs(e.clientY-startY)>8){clearTimeout(pressT);pressT=null;}return;}
       moved=true;var over=rowAt(e.clientY);
