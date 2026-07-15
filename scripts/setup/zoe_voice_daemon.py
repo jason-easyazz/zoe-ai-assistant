@@ -954,6 +954,46 @@ def _pcm_from_wav(wav_bytes: bytes):
         return wf.readframes(wf.getnframes()), wf.getframerate(), wf.getnchannels(), wf.getsampwidth()
 
 
+# The reply is streamed one sentence per TTS chunk, and Kokoro bakes ~0.4-0.5s of
+# silence onto the front AND back of every utterance. Concatenated back-to-back that
+# is ~0.9s of dead air at every sentence boundary — the reply plays "in pieces". Trim
+# each chunk's leading/trailing near-silence before feeding aplay, keeping a short tail
+# so sentences don't slur together. Set ZOE_TTS_TRIM_SILENCE=false to disable.
+_TTS_TRIM_SILENCE = os.environ.get("ZOE_TTS_TRIM_SILENCE", "true").lower() in ("1", "true", "yes")
+_TTS_KEEP_TAIL_MS = int(os.environ.get("ZOE_TTS_KEEP_TAIL_MS", "130"))
+_TTS_LEAD_GUARD_MS = int(os.environ.get("ZOE_TTS_LEAD_GUARD_MS", "20"))
+
+
+def _trim_chunk_silence(pcm: bytes, rate: int, ch: int, width: int) -> bytes:
+    """Trim baked-in leading/trailing silence from one 16-bit PCM chunk, keeping a
+    short natural tail. Non-16-bit or all-silent chunks pass through untouched, so a
+    mis-detection can never drop real speech."""
+    if not _TTS_TRIM_SILENCE or width != 2 or not pcm:
+        return pcm
+    try:
+        a = np.frombuffer(pcm, dtype=np.int16)
+        frames = a.reshape(-1, ch) if ch > 1 else a
+        env = np.abs(frames).max(axis=1) if ch > 1 else np.abs(a)
+        if env.size == 0:
+            return pcm
+        peak = int(env.max())
+        if peak == 0:
+            return pcm
+        thr = max(int(peak * 0.02), 96)  # 2% of this chunk's peak, with a floor
+        loud = np.where(env > thr)[0]
+        if loud.size == 0:
+            return pcm  # no clear speech detected — leave the chunk intact
+        lead_guard = int(rate * _TTS_LEAD_GUARD_MS / 1000)
+        keep_tail = int(rate * _TTS_KEEP_TAIL_MS / 1000)
+        start = max(0, int(loud[0]) - lead_guard)
+        end = min(env.size, int(loud[-1]) + 1 + keep_tail)
+        trimmed = frames[start:end]
+        return (trimmed.reshape(-1) if ch > 1 else trimmed).astype(np.int16).tobytes()
+    except Exception as exc:
+        log.debug("silence trim failed (%s) — feeding chunk untrimmed", exc)
+        return pcm
+
+
 def _feed_pcm_chunk(aplay, wav_bytes: bytes):
     """Strip the WAV header and stream raw PCM into a single persistent aplay so
     sentence chunks play gaplessly. Starts aplay on the first chunk (format taken
@@ -965,6 +1005,7 @@ def _feed_pcm_chunk(aplay, wav_bytes: bytes):
     except Exception as exc:
         log.debug("bad wav chunk: %s", exc)
         return aplay
+    pcm = _trim_chunk_silence(pcm, rate, ch, width)
     if aplay is None:
         fmt = {1: "U8", 2: "S16_LE", 3: "S24_3LE", 4: "S32_LE"}.get(width, "S16_LE")
         cmd = ["aplay", "-q", "-t", "raw", "-f", fmt, "-c", str(ch), "-r", str(rate)]

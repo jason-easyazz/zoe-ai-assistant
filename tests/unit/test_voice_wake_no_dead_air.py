@@ -191,3 +191,55 @@ def test_on_wake_does_not_block_the_recording(daemon, monkeypatch):
 
     assert started.wait(timeout=2.0), "the chime never played"
     assert elapsed < 0.2, f"on_wake blocked for {elapsed:.2f}s — it delays the capture"
+
+
+def _pcm(*, lead_ms, speech_ms, trail_ms, rate=24000, amp=12000):
+    """Build a mono 16-bit PCM buffer: silence, loud speech, silence."""
+    import numpy as np
+
+    def n(ms):
+        return int(rate * ms / 1000)
+    body = np.concatenate([
+        np.zeros(n(lead_ms), dtype=np.int16),
+        np.full(n(speech_ms), amp, dtype=np.int16),
+        np.zeros(n(trail_ms), dtype=np.int16),
+    ])
+    return body.tobytes(), rate
+
+
+def test_silence_trim_collapses_the_padding_but_keeps_speech(daemon):
+    """Kokoro pads each sentence with ~0.4s of silence front and back; concatenated
+    that is ~0.9s of dead air per join — the reply plays 'in pieces'. The trim must
+    strip the padding down to the lead-guard + keep-tail while preserving all speech.
+    """
+    rate = 24000
+    pcm, _ = _pcm(lead_ms=400, speech_ms=1000, trail_ms=460, rate=rate)
+    out = daemon._trim_chunk_silence(pcm, rate, 1, 2)
+
+    import numpy as np
+    a = np.frombuffer(out, dtype=np.int16)
+    dur_ms = len(a) * 1000 / rate
+    # speech (1000ms) + lead guard (~20ms) + keep tail (~130ms) ≈ 1150ms, well under
+    # the untrimmed 1860ms, and comfortably above the 1000ms of speech alone.
+    assert 1000 < dur_ms < 1400, f"trim left {dur_ms:.0f}ms (expected ~1150ms)"
+    # the loud speech samples must all survive
+    assert int(np.abs(a).max()) == 12000, "trim altered the speech amplitude"
+    assert (np.abs(a) > 100).sum() >= int(rate * 1.0), "trim ate into the speech body"
+
+
+def test_silence_trim_is_a_safe_passthrough(daemon):
+    """Never risk dropping real audio: non-16-bit and all-silent chunks pass through
+    untouched, and disabling the flag is a no-op."""
+    rate = 24000
+    silent = (b"\x00\x00" * rate)  # 1s of pure silence, 16-bit
+    assert daemon._trim_chunk_silence(silent, rate, 1, 2) == silent, "all-silent chunk must pass through"
+
+    pcm, _ = _pcm(lead_ms=400, speech_ms=500, trail_ms=400, rate=rate)
+    # 24-bit (width=3) is not handled → must be returned byte-for-byte
+    assert daemon._trim_chunk_silence(pcm, rate, 1, 3) == pcm, "non-16-bit must pass through"
+
+    daemon._TTS_TRIM_SILENCE = False
+    try:
+        assert daemon._trim_chunk_silence(pcm, rate, 1, 2) == pcm, "disabled flag must be a no-op"
+    finally:
+        daemon._TTS_TRIM_SILENCE = True
