@@ -306,28 +306,53 @@
   .mfull .mtransport .sml.on{opacity:1;background:rgba(123,150,255,.25);box-shadow:0 0 16px rgba(123,150,255,.35)}
   .mqbtn{width:48px;height:48px;flex:none;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.2);color:#fff;cursor:pointer}
   .mqbtn svg{width:22px;height:22px}
-  .mqueue{position:absolute;top:0;right:-380px;width:360px;height:100%;background:rgba(10,13,24,.92);backdrop-filter:blur(20px);border-left:1px solid rgba(255,255,255,.12);z-index:45;transition:right .32s cubic-bezier(.2,.8,.3,1);padding:96px 26px 150px;overflow-y:auto}
-  .mqueue.open{right:0}
-  .mqhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
-  .mqhead h3{font-size:15px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-faint)}
-  .mqacts{display:flex;gap:8px}
-  .mqacts button{width:38px;height:38px;border-radius:10px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:#fff;display:grid;place-items:center;cursor:pointer}
-  .mqacts button svg{width:19px;height:19px}
-  .mqtabs{display:flex;gap:6px;margin-bottom:12px}
-  .mqtabs button{flex:1;height:38px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.05);color:var(--ink-soft);font:inherit;font-size:15px;cursor:pointer}
+  /* Full-card queue/playlist overlay (was a narrow right drawer). Sits below
+     the dock (z46) so the speaker/now-playing dock stays visible on top. */
+  .mqueue{position:absolute;inset:0;z-index:44;background:radial-gradient(120% 115% at 22% 14%,rgba(74,74,147,.97),rgba(11,14,28,.98) 60%);backdrop-filter:blur(26px);display:flex;flex-direction:column;padding:30px 56px 124px;opacity:0;transform:translateY(18px);pointer-events:none;transition:opacity .3s ease,transform .32s cubic-bezier(.2,.8,.3,1)}
+  .mqueue.open{opacity:1;transform:none;pointer-events:auto}
+  .mqtop{display:flex;align-items:center;gap:18px;margin-bottom:18px;flex:none}
+  .mqback{width:56px;height:56px;border-radius:50%;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.1);color:#fff;display:grid;place-items:center;cursor:pointer;flex:none}
+  .mqback svg{width:26px;height:26px}
+  .mqtop h3{flex:1;font-size:30px;font-weight:600;letter-spacing:-.01em;color:#fff}
+  .mqacts{display:flex;gap:10px}
+  .mqacts button{width:52px;height:52px;border-radius:16px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.07);color:var(--ink-soft);display:grid;place-items:center;cursor:pointer}
+  .mqacts button svg{width:23px;height:23px}
+  /* now-playing + transport strip (music control lives here too) */
+  .mqnp{display:flex;align-items:center;gap:16px;padding:14px 18px;border-radius:20px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);margin-bottom:16px;flex:none}
+  .mqnp .npart{width:62px;height:62px;border-radius:14px;flex:none;background:linear-gradient(140deg,#8ea6ff,#b49bff);display:grid;place-items:center;font-size:30px;overflow:hidden;background-size:cover;background-position:center}
+  .mqnp .npart img{width:100%;height:100%;object-fit:cover;display:block}
+  .mqnp .npi{flex:1;min-width:0}
+  .mqnp .npt{font-size:23px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mqnp .npa{font-size:17px;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px}
+  .mqnp .nptp{display:flex;align-items:center;gap:14px;flex:none}
+  .mqnp .nptp button{width:54px;height:54px;border-radius:50%;border:0;background:rgba(255,255,255,.12);color:#fff;display:grid;place-items:center;cursor:pointer}
+  .mqnp .nptp button svg{width:24px;height:24px}
+  .mqnp .nptp .pp{background:#fff}
+  .mqnp .nptp .pp svg{color:#0a0d18;width:26px;height:26px}
+  .mqtabs{display:flex;gap:8px;margin-bottom:14px;flex:none}
+  .mqtabs button{flex:1;height:48px;border-radius:14px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.05);color:var(--ink-soft);font:inherit;font-size:19px;cursor:pointer}
   .mqtabs button.on{background:rgba(123,150,255,.22);border-color:rgba(123,150,255,.4);color:#fff}
-  .mqlist{overflow-y:auto}
-  .mqueue .qi{display:flex;align-items:center;gap:10px;padding:9px 6px;border-radius:12px;font-size:18px}
+  .mqlist{flex:1;overflow-y:auto;min-height:0}
+  .mqueue .qi{display:flex;align-items:center;gap:14px;padding:12px;border-radius:14px;font-size:20px}
+  .mqueue .qi.q,.mqueue .qi.br{cursor:pointer}
   .mqueue .qi.cur{background:rgba(123,150,255,.16)}
   .mqueue .qi.drag{background:rgba(123,150,255,.28);box-shadow:0 8px 22px rgba(0,0,0,.4)}
-  .mqueue .qthumb{width:40px;height:40px;border-radius:8px;object-fit:cover;flex:none;background:rgba(255,255,255,.08)}
+  .mqueue .qthumb{width:56px;height:56px;border-radius:12px;object-fit:cover;flex:none;background:rgba(255,255,255,.08)}
   .mqueue .qthumb.ph{display:inline-block}
-  .mqueue .qgrip{color:var(--ink-faint);flex:none;cursor:grab;font-size:14px;letter-spacing:-2px}
+  .mqueue .qgrip{color:var(--ink-faint);flex:none;cursor:grab;font-size:18px;letter-spacing:-2px}
   .mqueue .qn{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .mqueue .qn small{color:var(--ink-faint);font-size:13px}
-  .mqueue .qd{color:var(--ink-faint);font-size:14px;flex:none;font-variant-numeric:tabular-nums}
-  .mqueue .qx,.mqueue .qadd{width:32px;height:32px;border-radius:50%;border:0;background:rgba(255,255,255,.08);color:var(--ink-faint);font-size:16px;flex:none;cursor:pointer}
+  .mqueue .qn small{color:var(--ink-faint);font-size:15px}
+  .mqueue .qd{color:var(--ink-faint);font-size:16px;flex:none;font-variant-numeric:tabular-nums}
+  .mqueue .qx,.mqueue .qadd{width:40px;height:40px;border-radius:50%;border:0;background:rgba(255,255,255,.08);color:var(--ink-faint);font-size:18px;flex:none;cursor:pointer}
   .mqueue .qadd{color:var(--accent)}
+  /* playlists render as an album-art grid (the "all the good stuff" view) */
+  .mqlist.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px 18px;align-content:start;padding-top:2px}
+  .mqlist.grid .qi.pl{flex-direction:column;align-items:stretch;gap:0;padding:0;background:none;cursor:pointer;font-size:19px}
+  .mqlist.grid .qi.pl .pcov{position:relative;width:100%;aspect-ratio:1;border-radius:18px;overflow:hidden;background:linear-gradient(140deg,#6d7bd6,#9b7bd6);display:grid;place-items:center;box-shadow:0 16px 34px rgba(0,0,0,.35)}
+  .mqlist.grid .qi.pl .pcov img{width:100%;height:100%;object-fit:cover;display:block}
+  .mqlist.grid .qi.pl .pcov .pph{font-size:52px;color:rgba(255,255,255,.55)}
+  .mqlist.grid .qi.pl .pcov .pcount{position:absolute;right:8px;bottom:8px;background:rgba(0,0,0,.55);border-radius:999px;padding:3px 10px;font-size:14px}
+  .mqlist.grid .qi.pl .qn{margin-top:10px;white-space:normal;line-height:1.2;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   .mfull .mfav{position:absolute;top:0;right:0;width:52px;height:52px;border-radius:50%;border:0;background:rgba(255,255,255,.08);color:rgba(255,255,255,.6);display:grid;place-items:center;cursor:pointer}
   .mfull .mfav.on{color:var(--cat-health);background:rgba(255,122,144,.16)}
   .mfull .mfav svg{width:26px;height:26px}
@@ -338,10 +363,6 @@
   #dock .pc.dnp .dnm{font-size:17px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   #dock .pc.dnp .dpp{width:38px;height:38px;border-radius:50%;border:0;background:rgba(255,255,255,.14);color:#fff;display:grid;place-items:center;cursor:pointer;flex:none}
   #dock .pc.dnp .dpp svg{width:18px;height:18px}
-  .mqueue .qi{display:flex;gap:12px;align-items:center;padding:12px 8px;border-radius:12px;font-size:19px}
-  .mqueue .qi.cur{background:rgba(123,150,255,.16)}
-  .mqueue .qi .qn{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .mqueue .qi .qd{color:var(--ink-faint);font-size:15px;flex:none;font-variant-numeric:tabular-nums}
   .mqr{position:absolute;right:36px;bottom:44px;display:flex;flex-direction:column;align-items:center;gap:6px;z-index:25}
   .mqr .qrbox{width:86px;height:86px;background:#fff;border-radius:10px;padding:6px;display:grid;place-items:center}
   .mqr .qrbox img,.mqr .qrbox canvas{width:100%;height:100%}
@@ -645,7 +666,7 @@
     weather:{home:true, bg:DUSK, canvas:true,
       html:'<div class="fcog">'+GEAR+'</div><div class="wloc" id="wxLoc"></div><div class="wbig"><div class="t" id="wxTemp">—°</div><div class="c" id="wxCond"></div></div><div class="whours" id="wxHours"></div>'},
     music:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="mtop"><button class="spk" id="mSpk">'+SPKR+' <span class="spkname">Speaker</span> <span class="cx">▾</span></button><button class="mqbtn" id="mQBtn" title="Queue">'+QICON+'</button></div><div class="mfull"><div class="mart" id="mArt">🎵</div><div class="minfo"><div class="mkick">Now Playing</div><div class="mtitle" id="mTitle">—</div><div class="martist" id="mArtist"></div><button class="mfav" id="mFav" title="Favourite">'+HEART_I+'</button></div><div class="mscrub"><div class="mtrack"><div class="mfill" id="mFill" style="width:0%"></div></div><div class="mtimes"><span id="mElapsed">0:00</span><span id="mDur">0:00</span></div></div><div class="mtransport" id="mTransport"><button class="sml" id="mShuf" data-a="shuffle" title="Shuffle">'+SHUF_I+'</button><button data-a="previous">'+PREV_I+'</button><button class="pp" id="mPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button><button class="sml" id="mRep" data-a="repeat" title="Repeat">'+REP_I+'</button></div></div><aside class="mqueue" id="mQueue"><div class="mqhead"><h3 id="mQTitle">Up next</h3><div class="mqacts"><button id="mQSave" title="Save as playlist">'+SAVE_I+'</button><button id="mQClear" title="Clear queue">'+TRASH_I+'</button></div></div><div class="mqtabs"><button class="on" data-qt="queue">Queue</button><button data-qt="recent">Recent</button><button data-qt="playlists">Playlists</button></div><div id="mQList" class="mqlist"></div></aside><div class="mqr" id="mQR"><div class="qrbox" id="mQRCode"></div><div class="qrlab">Scan to queue</div></div>'},
+      html:'<div class="fcog">'+GEAR+'</div><div class="mtop"><button class="spk" id="mSpk">'+SPKR+' <span class="spkname">Speaker</span> <span class="cx">▾</span></button><button class="mqbtn" id="mQBtn" title="Queue">'+QICON+'</button></div><div class="mfull"><div class="mart" id="mArt">🎵</div><div class="minfo"><div class="mkick">Now Playing</div><div class="mtitle" id="mTitle">—</div><div class="martist" id="mArtist"></div><button class="mfav" id="mFav" title="Favourite">'+HEART_I+'</button></div><div class="mscrub"><div class="mtrack"><div class="mfill" id="mFill" style="width:0%"></div></div><div class="mtimes"><span id="mElapsed">0:00</span><span id="mDur">0:00</span></div></div><div class="mtransport" id="mTransport"><button class="sml" id="mShuf" data-a="shuffle" title="Shuffle">'+SHUF_I+'</button><button data-a="previous">'+PREV_I+'</button><button class="pp" id="mPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button><button class="sml" id="mRep" data-a="repeat" title="Repeat">'+REP_I+'</button></div></div><aside class="mqueue" id="mQueue"><div class="mqtop"><button class="mqback" id="mQBack" title="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button><h3 id="mQTitle">Up Next</h3><div class="mqacts"><button id="mQSave" title="Save as playlist">'+SAVE_I+'</button><button id="mQClear" title="Clear queue">'+TRASH_I+'</button></div></div><div class="mqnp"><div class="npart" id="mQNpArt">🎵</div><div class="npi"><div class="npt" id="mQNpT">Nothing playing</div><div class="npa" id="mQNpA"></div></div><div class="nptp" id="mQNpTp"><button data-a="previous">'+PREV_I+'</button><button class="pp" id="mQNpPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button></div></div><div class="mqtabs"><button class="on" data-qt="queue">Queue</button><button data-qt="recent">Recent</button><button data-qt="playlists">Playlists</button></div><div id="mQList" class="mqlist"></div></aside><div class="mqr" id="mQR"><div class="qrbox" id="mQRCode"></div><div class="qrlab">Scan to queue</div></div>'},
     timer:{home:true, bg:'radial-gradient(120% 100% at 50% 44%,#122447,#080b12 62%)', canvas:false, glow:'radial-gradient(closest-side at 50% 44%,rgba(123,150,255,.35),transparent 70%)',
       html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Timers</div><div class="tfull"><div class="trings" id="tmRings"></div><div class="tmore" id="tmMore"></div></div>'},
     list:{home:true, bg:GROUND, canvas:false,
@@ -691,7 +712,7 @@
   // recreated on every music show(), so query it per event, never capture it).
   full.addEventListener('click',function(e){
     var qd=document.getElementById('mQueue');
-    if(qd&&qd.classList.contains('open')&&!e.target.closest('.mqueue')&&!e.target.closest('#mQBtn'))qd.classList.remove('open');
+    if(qd&&qd.classList.contains('open')&&!e.target.closest('.mqueue')&&!e.target.closest('#mQBtn')){qd.classList.remove('open');var hb=document.getElementById('home');if(hb)hb.classList.remove('hide');}
   });
 
   // ---- Ambient return -------------------------------------------------------
@@ -994,6 +1015,7 @@
         if(art)art.innerHTML='🎵';
         if(scrub)scrub.style.display='none';if(tp)tp.style.display='none';
         if(np&&spk){var nm0=spk.querySelector('.spkname');if(nm0&&np.player_name)nm0.textContent=np.player_name;}
+        _setMiniNP(null);
         return;
       }
       if(scrub)scrub.style.display='';if(tp)tp.style.display='';
@@ -1011,7 +1033,18 @@
       var rp=document.getElementById('mRep');if(rp){var rm=np.repeat||'off';_music.repeat=rm;
         rp.classList.toggle('on',rm!=='off');rp.innerHTML=rm==='one'?REP1_I:REP_I;}
       _music.shuffle=!!np.shuffle;
+      _setMiniNP(np);
     }).catch(function(){});
+  }
+  // Mirror now-playing into the overlay's mini bar (art + title + play/pause),
+  // so the full-card queue/playlist view carries music control of its own.
+  function _setMiniNP(np){
+    var a=document.getElementById('mQNpArt'),t=document.getElementById('mQNpT'),ar=document.getElementById('mQNpA'),pp=document.getElementById('mQNpPP');
+    if(!t)return;
+    if(!np){t.textContent='Nothing playing';if(ar)ar.textContent='';if(a)a.innerHTML='🎵';if(pp){pp.dataset.playing='0';pp.innerHTML=PLAY_I;}return;}
+    t.textContent=np.title||'';if(ar)ar.textContent=np.artist||'';
+    if(a)a.innerHTML=(np.image&&/^https?:\/\//i.test(np.image))?'<img alt="" src="'+esc(np.image)+'">':'🎵';
+    if(pp){var playing=(np.state==='playing');pp.dataset.playing=playing?'1':'0';pp.innerHTML=playing?PAUSE_I:PLAY_I;}
   }
   // Smooth elapsed between the 5s polls — the scrub advances every second
   // while something is playing instead of jumping on each poll.
@@ -1027,6 +1060,7 @@
   function _qpost(path,body){return apiJson('POST','/api/music/'+path,body);}
   function loadQueue(){var host=document.getElementById('mQList');if(!host)return;
     var ttl=document.getElementById('mQTitle');
+    host.classList.toggle('grid',_qtab==='playlists');   // album-art grid only for playlists
     if(_qtab==='recent'){if(ttl)ttl.textContent='Recently played';
       host.innerHTML='<div style="color:var(--ink-faint)">Loading…</div>';
       apiGet('/api/music/recently-played').then(function(d){if(_cur!=='music')return;var its=(d&&d.items)||[];
@@ -1035,7 +1069,7 @@
     if(_qtab==='playlists'){if(ttl)ttl.textContent='Your playlists';
       host.innerHTML='<div style="color:var(--ink-faint)">Loading…</div>';
       apiGet('/api/music/playlists').then(function(d){if(_cur!=='music')return;var pls=(d&&d.playlists)||[];
-        host.innerHTML=pls.map(function(pl){return '<div class="qi pl" data-uri="'+esc(pl.uri)+'">'+_thumb(pl.image)+'<span class="qn">'+esc(pl.name)+'</span><span class="qd">'+(pl.count?pl.count:'')+'</span></div>';}).join('')||_qempty('No playlists yet — build one with Save.');
+        host.innerHTML=pls.map(_pltile).join('')||_qempty('No playlists yet — build one with Save.');
         host.onclick=function(e){var r=e.target.closest('.qi.pl');if(!r)return;_qpost('play_media',{uri:r.getAttribute('data-uri'),player_id:_music.player_id||undefined,option:'replace'}).then(function(){toast('Playing playlist');setTimeout(loadMusic,600);}).catch(function(){toast('Couldn’t play');});};
       }).catch(function(){host.innerHTML=_qempty('Couldn’t load playlists.');});return;}
     // ---- queue tab ----
@@ -1052,6 +1086,9 @@
     }).catch(function(){host.innerHTML=_qempty('Couldn’t load the queue.');});}
   function _qempty(t){return '<div style="color:var(--ink-faint);padding:8px 4px">'+esc(t)+'</div>';}
   function _thumb(u){return (u&&/^https?:/.test(u))?'<img class="qthumb" alt="" src="'+esc(u)+'">':'<span class="qthumb ph"></span>';}
+  function _pltile(pl){var cov=(pl.image&&/^https?:/.test(pl.image))?'<img alt="" src="'+esc(pl.image)+'">':'<span class="pph">🎵</span>';
+    var cnt=pl.count?'<span class="pcount">'+esc(String(pl.count))+'</span>':'';
+    return '<div class="qi pl" data-uri="'+esc(pl.uri)+'"><div class="pcov">'+cov+cnt+'</div><span class="qn">'+esc(pl.name)+'</span></div>';}
   function _mrow(t,kind){return '<div class="qi br" data-uri="'+esc(t.uri||'')+'">'+_thumb(t.image)+'<span class="qn">'+esc(t.name||'')+(t.artist?' <small>'+esc(t.artist)+'</small>':'')+'</span><button class="qadd" title="Add to queue">＋</button></div>';}
   function _wireBrowseRow(host){host.onclick=function(e){var r=e.target.closest('.qi.br');if(!r)return;var uri=r.getAttribute('data-uri');
     var add=e.target.closest('.qadd');
@@ -1066,21 +1103,24 @@
   }
   // Long-press to pick a row up, then drag it to reorder. Touch-first (kiosk),
   // also works with a mouse. On drop, commit the new absolute index to MA.
+  // Handlers are ASSIGNED (on*) not addEventListener'd: loadQueue() reloads into
+  // the SAME persistent host element, so addEventListener would stack a fresh
+  // listener set each reload → the drop would commit queue/move once per reload.
   function _wireQueueDrag(host){
     var held=null,startY=0,moved=false,pressT=null;
     function rowAt(y){var rows=[].slice.call(host.querySelectorAll('.qi.q'));for(var i=0;i<rows.length;i++){var r=rows[i].getBoundingClientRect();if(y<r.top+r.height/2)return rows[i];}return null;}
-    host.addEventListener('pointerdown',function(e){var row=e.target.closest('.qi.q');if(!row||e.target.closest('.qx'))return;
+    host.onpointerdown=function(e){var row=e.target.closest('.qi.q');if(!row||e.target.closest('.qx'))return;
       startY=e.clientY;                       // captured NOW so the move-guard has a real baseline
       pressT=setTimeout(function(){held=row;moved=false;row.dataset.dragging='1';row.classList.add('drag');
-        try{host.setPointerCapture(e.pointerId);}catch(_){}} ,320);});
-    host.addEventListener('pointermove',function(e){if(!held){if(pressT&&Math.abs(e.clientY-startY)>8){clearTimeout(pressT);pressT=null;}return;}
+        try{host.setPointerCapture(e.pointerId);}catch(_){}} ,320);};
+    host.onpointermove=function(e){if(!held){if(pressT&&Math.abs(e.clientY-startY)>8){clearTimeout(pressT);pressT=null;}return;}
       moved=true;var over=rowAt(e.clientY);
-      if(over&&over!==held){var rect=over.getBoundingClientRect();host.insertBefore(held, (e.clientY<rect.top+rect.height/2)?over:over.nextSibling);}});
+      if(over&&over!==held){var rect=over.getBoundingClientRect();host.insertBefore(held, (e.clientY<rect.top+rect.height/2)?over:over.nextSibling);}};
     function end(e){if(pressT){clearTimeout(pressT);pressT=null;}if(!held)return;var row=held;held=null;row.classList.remove('drag');
       var to=[].slice.call(host.querySelectorAll('.qi.q')).indexOf(row);
       if(moved&&to>=0){_qpost('queue/move',{queue_id:_music.player_id,item_id:row.getAttribute('data-iid'),to_index:to}).then(function(){loadQueue();}).catch(function(){loadQueue();});}
       setTimeout(function(){delete row.dataset.dragging;},50);}
-    host.addEventListener('pointerup',end);host.addEventListener('pointercancel',end);
+    host.onpointerup=end;host.onpointercancel=end;
   }
   function musicControl(action){if(!_music.player_id)return;
     fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({action:action,player_id:_music.player_id})}).then(function(){setTimeout(loadMusic,350);}).catch(function(){});}
@@ -1095,9 +1135,19 @@
       if(a==='shuffle'){musicSet('shuffle_set',!_music.shuffle);return;}
       if(a==='repeat'){var nxt={off:'all',all:'one',one:'off'}[_music.repeat||'off'];musicSet('repeat_set',nxt);return;}
       musicControl(a==='playpause'?(document.getElementById('mPP').dataset.playing==='1'?'pause':'play'):a);});
-    // Queue drawer: slide in from the right with what's up next.
+    // Queue/playlist manager: full-card overlay. Burger opens it, back closes.
     var qb=document.getElementById('mQBtn'),qd=document.getElementById('mQueue');
-    if(qb&&qd)qb.onclick=function(e){e.stopPropagation();if(qd.classList.toggle('open'))loadQueue();};
+    // Open/close also toggles the global home button: the overlay's own back
+    // button owns the top-left corner while open (else #home, z60, overlaps it
+    // and steals the tap — sending you home instead of back to now-playing).
+    function _qOpen(o){qd.classList.toggle('open',o);var hb=document.getElementById('home');if(hb)hb.classList.toggle('hide',o);}
+    if(qb&&qd)qb.onclick=function(e){e.stopPropagation();_qOpen(true);loadQueue();};
+    var qback=document.getElementById('mQBack');
+    if(qback&&qd)qback.onclick=function(e){e.stopPropagation();_qOpen(false);};
+    // mini transport strip inside the overlay mirrors the main transport
+    var ntp=document.getElementById('mQNpTp');
+    if(ntp)ntp.addEventListener('click',function(e){var btn=e.target.closest('button');if(!btn)return;var a=btn.getAttribute('data-a');
+      musicControl(a==='playpause'?(document.getElementById('mQNpPP').dataset.playing==='1'?'pause':'play'):a);});
     // Playlist-manager: tab switch, save-as-playlist, clear, favourite.
     var tabs=document.querySelector('.mqtabs');
     if(tabs)tabs.onclick=function(e){var b=e.target.closest('button[data-qt]');if(!b)return;

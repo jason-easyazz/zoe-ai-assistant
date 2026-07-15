@@ -8,7 +8,7 @@
 importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.63.38'; // estate: music playlist manager (queue drag/tap/remove/save/clear, recent+playlists tabs, favourite) + dock now-playing control; fix drag-arm baseline + duplicate .minfo CSS
+const SW_VERSION = '4.63.39'; // estate: music queue/playlist manager → FULL-CARD overlay (back button, now-playing+transport strip, dock stays visible, album-art playlist grid); drag re-wire idempotent (single queue/move)
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
