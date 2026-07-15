@@ -1534,14 +1534,70 @@ async def _touch_panel_session(panel_id: str, user_id: str) -> None:
         logger.debug("voice: panel session heartbeat failed for panel=%s (non-fatal): %s", panel_id, exc)
 
 
+_PANEL_IDLE_LOGOUT_KEY = "panel_idle_logout_s"
+_PANEL_IDLE_MAX_S = 24 * 60 * 60
+_panel_idle_cache: dict = {"value": None, "expires": 0.0}
+
+
+def _clamp_idle_s(value: int) -> int:
+    return max(0, min(int(value), _PANEL_IDLE_MAX_S))
+
+
 def _panel_session_trust_window_s() -> int:
-    """Seconds that an active panel session is trusted for voice scope gating."""
+    """Env/default fallback for the idle-logout window (used when nothing is
+    persisted in app_settings). The panel setting overrides this — see
+    _panel_idle_logout_s()."""
     raw = str(os.environ.get("ZOE_PANEL_SESSION_TRUST_WINDOW_S", "900")).strip()
     try:
-        value = int(raw)
+        return _clamp_idle_s(int(raw))
     except Exception:
         return 900
-    return max(0, min(value, 24 * 60 * 60))
+
+
+async def _read_persisted_idle_logout_s() -> Optional[int]:
+    """Panel idle-logout window persisted in app_settings (settable from the panel
+    settings screen) or None; never raises (fail-open to the env default)."""
+    try:
+        from database import get_db_ctx
+        async with get_db_ctx() as db:
+            cur = await db.execute(
+                "SELECT value FROM app_settings WHERE key = ?", (_PANEL_IDLE_LOGOUT_KEY,)
+            )
+            row = await cur.fetchone()
+        if row and str(row["value"]).strip():
+            return _clamp_idle_s(int(str(row["value"]).strip()))
+    except Exception as exc:
+        logger.debug("panel idle-logout read failed (fail-open to env): %s", exc)
+    return None
+
+
+async def _panel_idle_logout_s() -> int:
+    """Effective idle-logout window: persisted panel setting → env → default,
+    cached in-process (30s) so it isn't a DB read on every voice turn."""
+    import time as _t
+    if _panel_idle_cache["value"] is not None and _t.monotonic() < _panel_idle_cache["expires"]:
+        return _panel_idle_cache["value"]
+    persisted = await _read_persisted_idle_logout_s()
+    value = persisted if persisted is not None else _panel_session_trust_window_s()
+    _panel_idle_cache["value"] = value
+    _panel_idle_cache["expires"] = _t.monotonic() + 30.0
+    return value
+
+
+async def _set_panel_idle_logout_s(seconds: int) -> int:
+    """Persist the panel idle-logout window to app_settings and invalidate the cache."""
+    seconds = _clamp_idle_s(seconds)
+    from database import get_db_ctx
+    async with get_db_ctx() as db:
+        await db.execute(
+            """INSERT INTO app_settings (key, value, updated_at)
+               VALUES (?, ?, NOW())
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = NOW()""",
+            (_PANEL_IDLE_LOGOUT_KEY, str(seconds)),
+        )
+        await db.commit()
+    _panel_idle_cache["value"] = None
+    return seconds
 
 
 async def _resolve_recent_panel_session_user(panel_id: str, db) -> Optional[str]:
@@ -1549,7 +1605,7 @@ async def _resolve_recent_panel_session_user(panel_id: str, db) -> Optional[str]
     Resolve panel user only when the panel session heartbeat is fresh enough
     to be considered actively authenticated.
     """
-    trust_window_s = _panel_session_trust_window_s()
+    trust_window_s = await _panel_idle_logout_s()
     if trust_window_s <= 0:
         return None
     try:

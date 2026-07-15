@@ -2249,6 +2249,38 @@ async def get_display_preferences(
     }
 
 
+@router.get("/panel/idle-logout")
+async def get_panel_idle_logout():
+    """The panel idle-logout window in seconds (no interaction → session lapses).
+
+    Deliberately unauthenticated so the panel settings screen can display it
+    without a token — it's not sensitive.
+    """
+    from routers.voice_tts import _panel_idle_logout_s
+    return {"seconds": await _panel_idle_logout_s()}
+
+
+@router.put("/panel/idle-logout")
+async def put_panel_idle_logout(
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Set the panel idle-logout window (seconds, clamped 0..24h). Requires a
+    signed-in, non-guest user — it governs how long a login stays trusted."""
+    role = (user or {}).get("role")
+    uid = (user or {}).get("user_id")
+    if role in (None, "guest") or uid in (None, "guest"):
+        raise HTTPException(status_code=403, detail="Sign in to change this setting")
+    body = await request.json()
+    try:
+        seconds = int((body or {}).get("seconds"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="seconds must be an integer")
+    from routers.voice_tts import _set_panel_idle_logout_s
+    saved = await _set_panel_idle_logout_s(seconds)
+    return {"seconds": saved}
+
+
 async def _proxy_reload_to_pi(pi_host: str) -> None:
     """Fire-and-forget POST /reload so settings apply within ~1s."""
     if not pi_host:
