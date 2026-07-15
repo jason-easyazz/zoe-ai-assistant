@@ -1555,13 +1555,13 @@ def _panel_session_trust_window_s() -> int:
 
 
 async def _read_persisted_idle_logout_s() -> Optional[int]:
-    """Panel idle-logout window persisted in app_settings (settable from the panel
-    settings screen) or None; never raises (fail-open to the env default)."""
+    """Panel idle-logout window persisted in system_preferences (settable from the
+    panel settings screen) or None; never raises (fail-open to the env default)."""
     try:
         from database import get_db_ctx
         async with get_db_ctx() as db:
             cur = await db.execute(
-                "SELECT value FROM app_settings WHERE key = ?", (_PANEL_IDLE_LOGOUT_KEY,)
+                "SELECT value FROM system_preferences WHERE key = ?", (_PANEL_IDLE_LOGOUT_KEY,)
             )
             row = await cur.fetchone()
         if row and str(row["value"]).strip():
@@ -1584,16 +1584,17 @@ async def _panel_idle_logout_s() -> int:
     return value
 
 
-async def _set_panel_idle_logout_s(seconds: int) -> int:
-    """Persist the panel idle-logout window to app_settings and invalidate the cache."""
+async def _set_panel_idle_logout_s(seconds: int, updated_by: str = "panel-settings") -> int:
+    """Persist the panel idle-logout window to system_preferences; invalidate cache."""
     seconds = _clamp_idle_s(seconds)
     from database import get_db_ctx
     async with get_db_ctx() as db:
         await db.execute(
-            """INSERT INTO app_settings (key, value, updated_at)
-               VALUES (?, ?, NOW())
-               ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = NOW()""",
-            (_PANEL_IDLE_LOGOUT_KEY, str(seconds)),
+            """INSERT INTO system_preferences (key, value, updated_by, updated_at)
+               VALUES (?, ?, ?, NOW()::text)
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                 updated_by = excluded.updated_by, updated_at = NOW()::text""",
+            (_PANEL_IDLE_LOGOUT_KEY, str(seconds), updated_by),
         )
         await db.commit()
     _panel_idle_cache["value"] = None
