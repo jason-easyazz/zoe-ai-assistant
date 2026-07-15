@@ -45,10 +45,9 @@ def test_first_unit_keeps_short_replies_whole_and_is_number_safe():
     assert v._extract_first_unit("It's twelve degrees and clear, with a light breeze.")[0] is None
     assert v._extract_first_unit("It's 12.4 degrees")[0] is None          # never split a decimal
     assert v._extract_first_unit("The current time is 8:")[0] is None      # never split inside a time
-    # long opening still clause-breaks for fast first-audio
-    long_open = ("Honey is one of the very few foods that never spoils, and archaeologists "
-                 "have even found edible pots of it. ")
-    assert v._extract_first_unit(long_open)[0] == "Honey is one of the very few foods that never spoils,"
+    # long opening (LATE clause boundary, mid-stream) still clause-breaks for fast first-audio
+    mid_stream = "The weather this morning across the whole region is looking quite pleasant, and "
+    assert v._extract_first_unit(mid_stream)[0] == "The weather this morning across the whole region is looking quite pleasant,"
 
 
 # ── 2. TTFT: zoe-core streams text_delta (the 2.1s→0.7s win, #729) ───────────

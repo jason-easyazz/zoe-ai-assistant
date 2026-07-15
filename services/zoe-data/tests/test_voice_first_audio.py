@@ -55,19 +55,28 @@ def test_decimal_not_split():
 
 
 def test_long_opening_still_clause_breaks_for_first_audio():
-    # A genuine paragraph (no sentence end for a long time) must still start fast —
-    # clause-break once past the clause-min so first-audio doesn't stall.
-    long_open = ("Honey is one of the very few foods that never spoils, and archaeologists "
-                 "have even found edible pots of it. ")
-    unit, rest = v._extract_first_unit(long_open)
-    assert unit == "Honey is one of the very few foods that never spoils,"
-    assert rest.strip().startswith("and archaeologists")
+    # A genuine long opening must still start fast. Mimic mid-stream: the buffer has a
+    # LATE clause boundary (comma past the clause-min) but no sentence end yet, so the
+    # early clause break fires. The comma after "pleasant" is ~70 chars in.
+    mid_stream = "The weather this morning across the whole region is looking quite pleasant, and "
+    unit, rest = v._extract_first_unit(mid_stream)
+    assert unit == "The weather this morning across the whole region is looking quite pleasant,"
+    assert rest.strip() == "and"
+
+
+def test_early_comma_in_a_long_sentence_is_not_split():
+    # The clause boundary must be past the clause-min, not just the buffer length — a
+    # short clause at the front of a longer sentence must NOT trigger a split.
+    mid_stream = "It's 22 degrees, mostly clear and calm across the whole region this morning "
+    assert v._extract_first_unit(mid_stream)[0] is None
 
 
 def test_soft_cap_flushes_long_unpunctuated_opening_at_word_boundary():
-    # No punctuation at all but the opening is very long → flush at a word boundary
-    # so audio doesn't stall behind a run-on clause.
-    long_open = "The weather across the whole midwest region this particular morning is looking really"
+    # No punctuation at all but the opening exceeds the soft cap → flush at a word
+    # boundary so audio doesn't stall behind a run-on clause. Must be > SOFT_CAP chars.
+    long_open = ("The weather right across the whole midwest region on this particular "
+                 "sunny morning is looking really quite")
+    assert len(long_open) > v._FIRST_UNIT_SOFT_CAP
     unit, rest = v._extract_first_unit(long_open)
     assert unit and len(unit) <= v._FIRST_UNIT_SOFT_CAP
     assert unit.split()[0] == "The" and not unit.endswith(" ")

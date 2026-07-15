@@ -711,9 +711,13 @@ def _extract_first_unit(buffer: str) -> tuple[Optional[str], str]:
     m = re.search(r"(.{%d,}?[.!?])\s" % _FIRST_UNIT_MIN_CHARS, buffer)
     if m:
         return m.group(1).strip(), buffer[m.end():]
-    # 2. Long opening with no sentence end yet → clause-break to keep first-audio snappy.
+    # 2. Long opening with no sentence end yet → clause-break to keep first-audio
+    #    snappy. The boundary itself must be at least _FIRST_UNIT_CLAUSE_MIN chars in
+    #    (not just the buffer), so a short sentence with an early comma is never split
+    #    ("It's 22 degrees, mostly clear…" stays whole) — only a genuinely long opening
+    #    with a late clause boundary breaks early.
     if len(buffer) >= _FIRST_UNIT_CLAUSE_MIN:
-        m = re.search(r"(.{%d,}?[,;:—–])\s" % _FIRST_UNIT_MIN_CHARS, buffer)
+        m = re.search(r"(.{%d,}?[,;:—–])\s" % _FIRST_UNIT_CLAUSE_MIN, buffer)
         if m:
             return m.group(1).strip(), buffer[m.end():]
     # 3. Very long opening, still no punctuation → flush at a word boundary.
