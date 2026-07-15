@@ -76,7 +76,10 @@ if ! python3 "$SCRIPT_DIR/voice_gate_check.py" --repo "$LIVE" --diff "${prev}..$
     exit 1
 fi
 
-git -C "$LIVE" pull --ff-only origin main
+# Fast-forward to EXACTLY the gate-checked SHA — not `pull --ff-only origin main`,
+# which runs a second fetch and could advance the tree to a commit pushed after
+# the gate ran (a silent bypass of the very gate above). Greptile P1 on #1344.
+git -C "$LIVE" merge --ff-only "$target"
 
 echo "▶ restarting $SERVICE…"
 systemctl --user restart "$SERVICE"
