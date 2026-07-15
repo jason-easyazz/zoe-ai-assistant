@@ -643,6 +643,26 @@ async def get_current_user(current_session = Depends(get_current_session)):
     try:
         user_info = auth_manager.get_user_info(current_session.user_id)
         if not user_info:
+            # Guest is a synthetic identity (guest_login mints a session with
+            # user_id="guest" but no auth_users row), so get_user_info returns
+            # None. Return the guest profile instead of 404 — otherwise every
+            # guest session fails validation and the kiosk loops on the sign-in
+            # card. Mirrors the guest_user_info that guest_login returns.
+            if current_session.session_type == SessionType.GUEST or current_session.user_id == "guest":
+                created = current_session.created_at.isoformat() if hasattr(current_session.created_at, "isoformat") else str(current_session.created_at)
+                last = current_session.last_activity.isoformat() if hasattr(current_session.last_activity, "isoformat") else str(current_session.last_activity)
+                return UserResponse(
+                    user_id="guest",
+                    username="Guest",
+                    email="",
+                    role="guest",
+                    is_active=True,
+                    is_verified=False,
+                    created_at=created,
+                    last_login=last,
+                    has_passcode=False,
+                    permissions=rbac_manager.list_user_permissions("guest"),
+                )
             raise HTTPException(status_code=404, detail="User not found")
 
         # Get passcode info
