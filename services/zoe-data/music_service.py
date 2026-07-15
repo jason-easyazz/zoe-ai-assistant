@@ -102,6 +102,23 @@ async def _ma_response(command: str, timeout_s: float = _TIMEOUT_S, **args: Any)
         return None
 
 
+def _first_image(item: dict[str, Any]) -> str:
+    """Best square art for a media item — its own image else the album's; only
+    trusts absolute http(s) urls (never a relative/opaque path)."""
+    for src in (item, item.get("album") if isinstance(item.get("album"), dict) else None):
+        if not src:
+            continue
+        imgs = src.get("image") or src.get("images")
+        if isinstance(imgs, str) and imgs.startswith(("http://", "https://")):
+            return imgs
+        if isinstance(imgs, list):
+            for im in imgs:
+                u = im.get("path") if isinstance(im, dict) else im
+                if isinstance(u, str) and u.startswith(("http://", "https://")):
+                    return u
+    return ""
+
+
 async def _ma(command: str, **args: Any) -> Any:
     """POST one MA command. Returns the parsed result or None on any failure."""
     r = await _ma_response(command, **args)
@@ -386,6 +403,104 @@ async def search_and_play(query: str, player_id: str = "",
     await _mh.record_play(zoe_user_id, source="initiated", player_id=pid,
                           **_mh.media_fields(hit))
     return {"name": hit.get("name", query), "artist": (hit.get("artists") or [{}])[0].get("name", "") if hit.get("artists") else ""}
+
+
+# ── Queue management + playlists (the playlist-manager overlay) ───────────────
+# Thin proxies over MA's player_queues / music.playlists commands. Every write
+# is best-effort (returns ok:bool, never raises) so the panel can show a toast
+# on failure without a 500.
+
+async def _queue_items(queue_id: str, limit: int = 100) -> list[dict[str, Any]]:
+    """Raw queue items straight from MA (the router has its own richer mapper;
+    the manager only needs positions + ids here)."""
+    res = await _ma("player_queues/items", queue_id=queue_id, limit=limit)
+    return res if isinstance(res, list) else (res.get("items", []) if isinstance(res, dict) else [])
+
+
+async def queue_move(queue_id: str, item_id: str, to_index: int) -> bool:
+    """Reorder: move a queue item to an absolute index. MA's move_item takes a
+    signed pos_shift, so compute it from the live position (robust vs a stale
+    client index)."""
+    items = await _queue_items(queue_id)
+    if not items:
+        return False
+    frm = next((i for i, it in enumerate(items) if str(it.get("queue_item_id")) == str(item_id)), None)
+    if frm is None:
+        return False
+    to = max(0, min(int(to_index), len(items) - 1))
+    if to == frm:
+        return True
+    return await _ma_ok("player_queues/move_item", queue_id=queue_id,
+                        queue_item_id=item_id, pos_shift=to - frm)
+
+
+async def queue_remove(queue_id: str, item_id: str) -> bool:
+    """Remove one item from the queue (by queue_item_id)."""
+    return await _ma_ok("player_queues/delete_item", queue_id=queue_id, item_id_or_index=item_id)
+
+
+async def queue_clear(queue_id: str) -> bool:
+    """Clear the whole queue."""
+    return await _ma_ok("player_queues/clear", queue_id=queue_id)
+
+
+async def queue_play_index(queue_id: str, index: int) -> bool:
+    """Jump to (and play) a specific queue position."""
+    return await _ma_ok("player_queues/play_index", queue_id=queue_id, index=int(index))
+
+
+async def queue_save_playlist(queue_id: str, name: str) -> bool:
+    """Save the current queue as a new playlist."""
+    name = (name or "").strip()
+    if not name:
+        return False
+    return await _ma_ok("player_queues/save_as_playlist", timeout_s=20.0, queue_id=queue_id, name=name)
+
+
+async def list_playlists() -> list[dict[str, Any]]:
+    """The user's playlist library (name + uri + art), for the manager's browser."""
+    res = await _ma("music/playlists/library_items", favorite=False, limit=100)
+    out: list[dict[str, Any]] = []
+    for pl in (res.get("items", []) if isinstance(res, dict) else (res or [])):
+        if not isinstance(pl, dict):
+            continue
+        out.append({
+            "name": pl.get("name", ""),
+            "uri": pl.get("uri", ""),
+            "image": _hi_res_art(_first_image(pl)),
+            "count": pl.get("count") or (pl.get("metadata") or {}).get("count"),
+        })
+    return out
+
+
+async def playlist_tracks(uri: str, limit: int = 100) -> list[dict[str, Any]]:
+    """Tracks in a playlist (for previewing before playing/queuing)."""
+    res = await _ma("music/playlists/playlist_tracks", item_id=uri, limit=limit)
+    out: list[dict[str, Any]] = []
+    for t in (res or []):
+        if not isinstance(t, dict):
+            continue
+        out.append({
+            "name": t.get("name", ""),
+            "uri": t.get("uri", ""),
+            "artist": ((t.get("artists") or [{}])[0].get("name", "")) if t.get("artists") else "",
+            "image": _hi_res_art(_first_image(t)),
+        })
+    return out
+
+
+async def playlist_add(playlist_uri: str, track_uri: str) -> bool:
+    """Add a track to an existing playlist."""
+    if not (playlist_uri and track_uri):
+        return False
+    return await _ma_ok("music/playlists/add_playlist_tracks", db_playlist_id=playlist_uri, uris=[track_uri])
+
+
+async def favorite_add(uri: str) -> bool:
+    """Favorite (thumbs-up / add to library) a media item by uri."""
+    if not uri:
+        return False
+    return await _ma_ok("music/favorites/add_item", item=uri)
 
 
 # ── Browse: structured search + play-by-URI (the "use your music" surface) ────
