@@ -177,10 +177,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="skip the baseline-identity match (freshness + status only)")
     args = ap.parse_args(argv)
 
-    # 1. Decide whether this deploy needs the gate at all.
-    need_gate = True
+    # 1. Decide whether this deploy needs the gate at all. Default is to require
+    #    it; --diff narrows that to "only when the incoming change touches voice".
     if not args.require and args.diff:
-        patterns = voice_path_patterns()
         try:
             changed = git_changed_files(args.repo, args.diff)
         except RuntimeError as exc:
@@ -188,9 +187,8 @@ def main(argv: list[str] | None = None) -> int:
             # than wave a possible voice-path change through unproven.
             print(f"voice-gate: could not compute diff {args.diff!r} ({exc}); "
                   "requiring the gate to be safe.", file=sys.stderr)
-            changed, patterns = [], ()
         else:
-            hits = touched_voice_files(changed, patterns)
+            hits = touched_voice_files(changed, voice_path_patterns())
             if not hits:
                 print(f"voice-gate: OK — no voice-path files in {args.diff} "
                       f"({len(changed)} file(s) changed); replay gate not required.")
