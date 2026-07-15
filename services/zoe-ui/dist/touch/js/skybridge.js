@@ -971,6 +971,7 @@
     let npPollHandle = null;
     let npInFlight = false;
     let contactOfferPollHandle = null;
+    let contactOfferInFlight = false;   // guard: never let two overlapping polls both addCard
     let npPlayerId = '';          // stick to the active player for control calls
     let npLastArt = '';           // avoid reloading identical album art each poll
     let npActive = false;         // true while something is actually playing/paused
@@ -1011,12 +1012,17 @@
     }
 
     async function pollContactOffers() {
+        if (contactOfferInFlight) return;   // a slow poll is still running — don't double-surface
         if (!document.body.classList.contains('sky-empty')) return;  // only when idle
         const panelId = new URLSearchParams(location.search).get('panel_id')
             || localStorage.getItem('zoe_panel_id') || localStorage.getItem('zoe_touch_panel_id');
         if (!panelId) return;
+        contactOfferInFlight = true;
         try {
-            const resp = await fetch('/api/ui/actions/pending?panel_id=' + encodeURIComponent(panelId) + '&limit=10',
+            // source=contact_offer filters server-side BEFORE the LIMIT, so an offer
+            // can't be starved behind other queued cards (client-side filter would miss it).
+            const resp = await fetch('/api/ui/actions/pending?panel_id=' + encodeURIComponent(panelId)
+                    + '&source=contact_offer&limit=10',
                 { headers: { 'Accept': 'application/json' } });
             if (!resp.ok) return;
             const payload = await resp.json();
@@ -1034,7 +1040,9 @@
                 });
                 break;  // one offer at a time — the rest wait for the next idle poll
             }
-        } catch (_) { /* non-fatal */ }
+        } catch (_) { /* non-fatal */ } finally {
+            contactOfferInFlight = false;
+        }
     }
 
     async function pollNowPlaying() {

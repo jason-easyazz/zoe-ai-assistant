@@ -297,13 +297,22 @@ async def _maybe_push_contact_offer_cards(user_id: str, suggestions: list[dict])
                 name = str(slots.get("name") or "").strip()
                 if not name:
                     continue
-                card = _person_confirm_card(name, slots.get("relationship"))
+                relationship = slots.get("relationship")
+                card = _person_confirm_card(name, relationship)
+                # Include the relationship in the idempotency key so two DISTINCT
+                # same-name people (e.g. a brother Daniel and a coworker Daniel) get
+                # separate offer cards instead of the second collapsing into the
+                # first. Same name + same relationship still dedupes (anti-spam).
+                rel_slug = str(relationship or "").strip().lower().replace(" ", "-")
+                idem = f"contact_offer_{user_id}_{name.lower()}"
+                if rel_slug:
+                    idem += f"_{rel_slug}"
                 await enqueue_ui_action(
                     db,
                     user_id=user_id,
                     action_type="show_card",
                     payload={"source": "contact_offer", "name": name, "card": card, "cards": [card]},
-                    idempotency_key=f"contact_offer_{user_id}_{name.lower()}",
+                    idempotency_key=idem,
                 )
     except Exception as exc:  # noqa: BLE001 — proactive nicety, never fatal
         logger.debug("contact-offer panel push skipped: %s", exc)

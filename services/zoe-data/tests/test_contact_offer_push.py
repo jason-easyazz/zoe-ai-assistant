@@ -51,7 +51,7 @@ async def test_pushes_person_confirm_card_when_flag_on(monkeypatch):
     assert len(calls) == 1
     kw = calls[0]
     assert kw["user_id"] == "u1" and kw["action_type"] == "show_card"
-    assert kw["idempotency_key"] == "contact_offer_u1_daniel"
+    assert kw["idempotency_key"] == "contact_offer_u1_daniel_brother"
     payload = kw["payload"]
     assert payload["source"] == "contact_offer" and payload["name"] == "Daniel"
     assert payload["card"]["component"] == "person_confirm"
@@ -64,6 +64,24 @@ async def test_only_person_create_offers_pushed(monkeypatch):
     mixed = [{"action_type": "list_add", "pre_filled_slots": {"item": "milk"}}] + _sugg("Fiona", "friend")
     calls = await _run(monkeypatch, mixed)
     assert len(calls) == 1 and calls[0]["payload"]["name"] == "Fiona"
+
+
+@pytest.mark.asyncio
+async def test_same_name_distinct_relationship_gets_distinct_keys(monkeypatch):
+    # Two different people with the same name (brother Daniel + coworker Daniel)
+    # must not collapse onto one idempotency key, or the ledger dedupes the second.
+    monkeypatch.setenv("ZOE_CONTACT_OFFER_PANEL_PUSH", "1")
+    two = _sugg("Daniel", "brother") + _sugg("Daniel", "coworker")
+    calls = await _run(monkeypatch, two)
+    keys = {c["idempotency_key"] for c in calls}
+    assert keys == {"contact_offer_u1_daniel_brother", "contact_offer_u1_daniel_coworker"}
+
+
+@pytest.mark.asyncio
+async def test_relationless_offer_key_has_no_trailing_underscore(monkeypatch):
+    monkeypatch.setenv("ZOE_CONTACT_OFFER_PANEL_PUSH", "1")
+    calls = await _run(monkeypatch, [{"action_type": "person_create", "pre_filled_slots": {"name": "Sam"}}])
+    assert calls[0]["idempotency_key"] == "contact_offer_u1_sam"
 
 
 @pytest.mark.asyncio

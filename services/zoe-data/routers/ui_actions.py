@@ -141,6 +141,7 @@ async def create_ui_action(
 async def get_pending_ui_actions(
     panel_id: str = Query(...),
     limit: int = Query(20, ge=1, le=100),
+    source: str | None = Query(None),
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
@@ -199,14 +200,24 @@ async def get_pending_ui_actions(
     )
     await db.commit()
 
+    # Optional server-side source filter. Without it a caller that only wants a
+    # specific card class (e.g. the contact-offer poller) would filter client-side
+    # AFTER the LIMIT, so its action could be starved behind >=limit older queued
+    # actions and never returned. Filtering in SQL guarantees it is found.
+    source_clause = ""
+    params: list = [panel_user_id, panel_id]
+    if source:
+        source_clause = " AND payload::jsonb->>'source' = ?"
+        params.append(source)
+    params.append(limit)
     cursor = await db.execute(
-        """SELECT id, panel_id, chat_session_id, action_type, payload, status, requires_confirmation,
+        f"""SELECT id, panel_id, chat_session_id, action_type, payload, status, requires_confirmation,
                   confirmation_token, retry_count, max_retries, created_at, updated_at
            FROM ui_actions
-           WHERE user_id = ? AND panel_id = ? AND status IN ('queued', 'running')
+           WHERE user_id = ? AND panel_id = ? AND status IN ('queued', 'running'){source_clause}
            ORDER BY created_at ASC
            LIMIT ?""",
-        (panel_user_id, panel_id, limit),
+        tuple(params),
     )
     rows = await cursor.fetchall()
     actions = []
