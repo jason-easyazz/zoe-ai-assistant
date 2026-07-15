@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from auth import get_current_user
 from database import get_db
-from guest_policy import can_use_ui_action, require_feature_access
+from guest_policy import can_use_ui_action, is_guest_user, require_feature_access
 from push import broadcaster
 from ui_orchestrator import (
     ACTION_STATES,
@@ -30,6 +30,8 @@ async def _authorize_panel(db, user: dict, panel_id: str) -> None:
         / ``_resolve_device_token_user``). It may act ONLY on its own panel.
       * A **human session user explicitly bound to the panel** via
         ``panel_user_bindings`` (``binding_type`` 'default' or 'allowed').
+      * The **kiosk auto-guest** — but ONLY for a panel that is unclaimed or
+        already guest-owned (see the guest branch below).
 
     Any other authenticated user is rejected with 403. Without this gate a
     normal session could bind/sync an arbitrary ``panel_id`` (the
@@ -54,6 +56,31 @@ async def _authorize_panel(db, user: dict, panel_id: str) -> None:
         ).fetchone()
         if row:
             return
+        # A non-guest user without a binding is never allowed to act on this
+        # panel — fall through to 403 (do NOT reach the guest branch below).
+        raise HTTPException(status_code=403, detail="Not authorized for this panel")
+
+    # Kiosk auto-guest. The touch panel deliberately runs UI-action bind/sync/poll
+    # as a bare guest (no device token / session) — see touch-ui-executor's
+    # getDataApiSession(), which sends no X-Session-ID for guest so Data treats it
+    # as guest. A guest may act on a panel ONLY when that panel is unclaimed
+    # (no session row yet) or already guest-owned. This lets the kiosk RECEIVE
+    # actions pushed to its OWN panel_id while still blocking the panel-hijack
+    # class this gate guards against: a guest cannot bind/sync/drain a panel that
+    # a real (non-guest) user owns, because the upsert would rewrite that panel's
+    # user_id and the poll would return the real user's queued actions.
+    # Action-TYPE limits are enforced separately by can_use_ui_action, so a guest
+    # still cannot ENQUEUE sensitive_ui actions via POST /actions.
+    if is_guest_user(user):
+        session_row = await (
+            await db.execute(
+                "SELECT user_id FROM ui_panel_sessions WHERE panel_id = ? LIMIT 1",
+                (panel_id,),
+            )
+        ).fetchone()
+        if session_row is None or str(session_row["user_id"]) == "guest":
+            return
+        raise HTTPException(status_code=403, detail="Panel is owned by another user")
 
     raise HTTPException(status_code=403, detail="Not authorized for this panel")
 
