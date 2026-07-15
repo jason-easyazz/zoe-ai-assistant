@@ -18,8 +18,9 @@
 # Options:
 #   -y, --yes         non-interactive (assume yes to prompts)
 #   --skip-models     don't download the GGUF brain (e.g. models already staged)
-#   --skip-docker     don't touch the Docker layer
+#   --skip-docker     don't touch the Docker layer (implies --skip-migrations)
 #   --skip-systemd    don't install/enable host-native units
+#   --skip-migrations don't run DB migrations (e.g. an externally-managed DB)
 #   --with-router     also fetch the two-stage router decoder model
 #   --models-dir DIR  override the brain model directory
 #   --llama-bin PATH  path to the llama-server binary (default: the Jetson build path)
@@ -35,6 +36,7 @@ ASSUME_YES=0
 SKIP_MODELS=0
 SKIP_DOCKER=0
 SKIP_SYSTEMD=0
+SKIP_MIGRATIONS=0
 WITH_ROUTER=0
 MODELS_DIR="${HOME}/models/gemma4-e4b-qat"
 
@@ -48,6 +50,7 @@ while [[ $# -gt 0 ]]; do
     --skip-models) SKIP_MODELS=1; shift ;;
     --skip-docker) SKIP_DOCKER=1; shift ;;
     --skip-systemd) SKIP_SYSTEMD=1; shift ;;
+    --skip-migrations) SKIP_MIGRATIONS=1; shift ;;
     --with-router) WITH_ROUTER=1; shift ;;
     --models-dir) MODELS_DIR="$2"; shift 2 ;;
     --llama-bin) LLAMA_BIN="$2"; shift 2 ;;
@@ -136,11 +139,17 @@ fi
 
 # ── 4. Database migrations ──────────────────────────────────────────────────
 step "Database migrations"
-if [[ -x "${ROOT_DIR}/scripts/deploy/migrate.sh" ]]; then
-  ( cd "$ROOT_DIR" && bash scripts/deploy/migrate.sh )
+if [[ "$SKIP_MIGRATIONS" == "1" ]]; then
+  warn "--skip-migrations: not running DB migrations"
+elif [[ "$SKIP_DOCKER" == "1" ]]; then
+  warn "--skip-docker set: skipping migrations (Postgres was not started by this run)."
+  warn "  Run scripts/deploy/migrate.sh yourself once your database is reachable."
+elif [[ ! -x "${ROOT_DIR}/scripts/deploy/migrate.sh" ]]; then
+  warn "scripts/deploy/migrate.sh missing — skipping migrations"
+elif ( cd "$ROOT_DIR" && bash scripts/deploy/migrate.sh ); then
   ok "alembic + auth DDL applied"
 else
-  warn "scripts/deploy/migrate.sh missing — skipping migrations"
+  die "Database migrations failed — is Postgres up and POSTGRES_URL correct? (see migrate.sh output above). Re-run once it's reachable, or pass --skip-migrations."
 fi
 
 # ── 5. Models ───────────────────────────────────────────────────────────────
