@@ -317,50 +317,55 @@
   .mqacts{display:flex;gap:10px}
   .mqacts button{width:52px;height:52px;border-radius:16px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.07);color:var(--ink-soft);display:grid;place-items:center;cursor:pointer}
   .mqacts button svg{width:23px;height:23px}
-  /* now-playing + transport strip (music control lives here too) */
-  .mqnp{display:flex;align-items:center;gap:16px;padding:14px 18px;border-radius:20px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);margin-bottom:16px;flex:none}
-  .mqnp .npart{width:62px;height:62px;border-radius:14px;flex:none;background:linear-gradient(140deg,#8ea6ff,#b49bff);display:grid;place-items:center;font-size:30px;overflow:hidden;background-size:cover;background-position:center}
-  .mqnp .npart img{width:100%;height:100%;object-fit:cover;display:block}
-  .mqnp .npi{flex:1;min-width:0}
-  .mqnp .npt{font-size:23px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .mqnp .npa{font-size:17px;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px}
-  .mqnp .nptp{display:flex;align-items:center;gap:14px;flex:none}
-  .mqnp .nptp button{width:54px;height:54px;border-radius:50%;border:0;background:rgba(255,255,255,.12);color:#fff;display:grid;place-items:center;cursor:pointer}
-  .mqnp .nptp button svg{width:24px;height:24px}
-  .mqnp .nptp .pp{background:#fff}
-  .mqnp .nptp .pp svg{color:#0a0d18;width:26px;height:26px}
+  /* Music control lives in the dock (now-playing pill) — no in-overlay strip,
+     so the content gets the full card height. */
   .mqtabs{display:flex;gap:8px;margin-bottom:14px;flex:none}
   .mqtabs button{flex:1;height:48px;border-radius:14px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.05);color:var(--ink-soft);font:inherit;font-size:19px;cursor:pointer}
   .mqtabs button.on{background:rgba(123,150,255,.22);border-color:rgba(123,150,255,.4);color:#fff}
   .mqlist{flex:1;overflow-y:auto;min-height:0}
-  .mqueue .qi{display:flex;align-items:center;gap:14px;padding:12px;border-radius:14px;font-size:20px}
-  .mqueue .qi.q,.mqueue .qi.br{cursor:pointer}
-  .mqueue .qi.cur{background:rgba(123,150,255,.16)}
-  .mqueue .qi.drag{background:rgba(123,150,255,.28);box-shadow:0 8px 22px rgba(0,0,0,.4)}
-  .mqueue .qthumb{width:56px;height:56px;border-radius:12px;object-fit:cover;flex:none;background:rgba(255,255,255,.08)}
-  .mqueue .qthumb.ph{display:inline-block}
-  .mqueue .qgrip{color:var(--ink-faint);flex:none;cursor:grab;font-size:18px;letter-spacing:-2px}
-  .mqueue .qn{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .mqueue .qn small{color:var(--ink-faint);font-size:15px}
-  .mqueue .qd{color:var(--ink-faint);font-size:16px;flex:none;font-variant-numeric:tabular-nums}
-  .mqueue .qx,.mqueue .qadd{width:40px;height:40px;border-radius:50%;border:0;background:rgba(255,255,255,.08);color:var(--ink-faint);font-size:18px;flex:none;cursor:pointer}
-  .mqueue .qadd{color:var(--accent)}
-  /* playlists render as an album-art grid (the "all the good stuff" view) */
-  .mqlist.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px 18px;align-content:start;padding-top:2px}
-  .mqlist.grid .qi.pl{flex-direction:column;align-items:stretch;gap:0;padding:0;background:none;cursor:pointer;font-size:19px}
-  .mqlist.grid .qi.pl .pcov{position:relative;width:100%;aspect-ratio:1;border-radius:18px;overflow:hidden;background:linear-gradient(140deg,#6d7bd6,#9b7bd6);display:grid;place-items:center;box-shadow:0 16px 34px rgba(0,0,0,.35)}
+  .mqueue .qthumb.ph{display:block}
+  /* ---- Queue tab: now-playing on the left, numbered up-next tiles on the right ---- */
+  .mqlist.queue{display:flex;gap:26px;overflow:hidden}
+  .mqnow{width:300px;flex:none;display:flex;flex-direction:column}
+  .mqnow .nowart{width:100%;aspect-ratio:1;border-radius:22px;overflow:hidden;background:linear-gradient(140deg,#8ea6ff,#b49bff);display:grid;place-items:center;font-size:74px;box-shadow:0 20px 44px rgba(0,0,0,.42)}
+  .mqnow .nowart img{width:100%;height:100%;object-fit:cover;display:block}
+  .mqnow .nowk{font-size:14px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint);margin-top:18px}
+  .mqnow .nowt{font-size:26px;font-weight:700;line-height:1.14;margin-top:6px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .mqnow .nowa{font-size:18px;color:var(--ink-soft);margin-top:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mqup{flex:1;min-width:0;overflow-y:auto;display:grid;grid-template-columns:repeat(2,1fr);gap:12px;align-content:start}
+  .qslot{display:flex;align-items:center;gap:12px;padding:8px 12px 8px 8px;border-radius:14px;background:rgba(255,255,255,.05);cursor:pointer}
+  .qslot .qnum{flex:none;width:24px;text-align:center;font-size:16px;font-weight:600;color:var(--ink-faint);font-variant-numeric:tabular-nums}
+  .qslot .qthumb{width:48px;height:48px;border-radius:10px;object-fit:cover;flex:none;background:rgba(255,255,255,.08)}
+  .qslot .qsn{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center}
+  .qslot .qsn .qn{font-size:17px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .qslot .qsn .qsd{font-size:13px;color:var(--ink-faint);font-variant-numeric:tabular-nums;margin-top:2px}
+  .qslot .qx{flex:none;width:34px;height:34px;border-radius:50%;border:0;background:rgba(255,255,255,.08);color:var(--ink-faint);font-size:15px;cursor:pointer}
+  /* ---- Recent tab: a grid of rectangle tiles (fits more) ---- */
+  .mqlist.recent{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;align-content:start}
+  .rtile{display:flex;align-items:center;gap:14px;padding:10px 12px;border-radius:16px;background:rgba(255,255,255,.05);cursor:pointer}
+  .rtile .qthumb{width:56px;height:56px;border-radius:12px;object-fit:cover;flex:none;background:rgba(255,255,255,.08)}
+  .rtile .rti{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center}
+  .rtile .rti .qn{font-size:18px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .rtile .rti .ra{font-size:14px;color:var(--ink-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px}
+  .rtile .qadd{flex:none;width:38px;height:38px;border-radius:50%;border:0;background:rgba(255,255,255,.08);color:var(--accent);font-size:18px;cursor:pointer}
+  /* ---- Playlists tab: compact album-art grid (smaller tiles, more per row) ---- */
+  .mqlist.grid{display:grid;grid-template-columns:repeat(5,1fr);gap:16px 14px;align-content:start;padding-top:2px}
+  .mqlist.grid .qi.pl{display:flex;flex-direction:column;align-items:stretch;gap:0;padding:0;background:none;cursor:pointer;font-size:15px}
+  .mqlist.grid .qi.pl .pcov{position:relative;width:100%;aspect-ratio:1;border-radius:14px;overflow:hidden;background:linear-gradient(140deg,#6d7bd6,#9b7bd6);display:grid;place-items:center;box-shadow:0 10px 22px rgba(0,0,0,.32)}
   .mqlist.grid .qi.pl .pcov img{width:100%;height:100%;object-fit:cover;display:block}
-  .mqlist.grid .qi.pl .pcov .pph{font-size:52px;color:rgba(255,255,255,.55)}
-  .mqlist.grid .qi.pl .pcov .pcount{position:absolute;right:8px;bottom:8px;background:rgba(0,0,0,.55);border-radius:999px;padding:3px 10px;font-size:14px}
-  .mqlist.grid .qi.pl .qn{margin-top:10px;white-space:normal;line-height:1.2;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .mqlist.grid .qi.pl .pcov .pph{font-size:34px;color:rgba(255,255,255,.55)}
+  .mqlist.grid .qi.pl .pcov .pcount{position:absolute;right:6px;bottom:6px;background:rgba(0,0,0,.55);border-radius:999px;padding:2px 8px;font-size:12px}
+  .mqlist.grid .qi.pl .qn{margin-top:8px;white-space:normal;line-height:1.2;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   .mfull .mfav{position:absolute;top:0;right:0;width:52px;height:52px;border-radius:50%;border:0;background:rgba(255,255,255,.08);color:rgba(255,255,255,.6);display:grid;place-items:center;cursor:pointer}
   .mfull .mfav.on{color:var(--cat-health);background:rgba(255,122,144,.16)}
   .mfull .mfav svg{width:26px;height:26px}
-  #dock .pc.dnp{display:flex;align-items:center;gap:10px;max-width:280px;padding:6px 12px 6px 6px}
+  #dock .pc.dnp{display:flex;align-items:center;gap:8px;max-width:380px;padding:6px 10px 6px 6px}
   #dock .pc.dnp .da{width:38px;height:38px;border-radius:8px;overflow:hidden;flex:none;background:rgba(255,255,255,.1)}
   #dock .pc.dnp .da img{width:100%;height:100%;object-fit:cover}
   #dock .pc.dnp .da .ph{display:block;width:100%;height:100%}
-  #dock .pc.dnp .dnm{font-size:17px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #dock .pc.dnp .dnm{font-size:17px;max-width:132px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #dock .pc.dnp .dprev,#dock .pc.dnp .dnext{width:34px;height:34px;border-radius:50%;border:0;background:transparent;color:rgba(255,255,255,.82);display:grid;place-items:center;cursor:pointer;flex:none}
+  #dock .pc.dnp .dprev svg,#dock .pc.dnp .dnext svg{width:20px;height:20px}
   #dock .pc.dnp .dpp{width:38px;height:38px;border-radius:50%;border:0;background:rgba(255,255,255,.14);color:#fff;display:grid;place-items:center;cursor:pointer;flex:none}
   #dock .pc.dnp .dpp svg{width:18px;height:18px}
   .mqr{position:absolute;right:36px;bottom:44px;display:flex;flex-direction:column;align-items:center;gap:6px;z-index:25}
@@ -666,7 +671,7 @@
     weather:{home:true, bg:DUSK, canvas:true,
       html:'<div class="fcog">'+GEAR+'</div><div class="wloc" id="wxLoc"></div><div class="wbig"><div class="t" id="wxTemp">—°</div><div class="c" id="wxCond"></div></div><div class="whours" id="wxHours"></div>'},
     music:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="mtop"><button class="spk" id="mSpk">'+SPKR+' <span class="spkname">Speaker</span> <span class="cx">▾</span></button><button class="mqbtn" id="mQBtn" title="Queue">'+QICON+'</button></div><div class="mfull"><div class="mart" id="mArt">🎵</div><div class="minfo"><div class="mkick">Now Playing</div><div class="mtitle" id="mTitle">—</div><div class="martist" id="mArtist"></div><button class="mfav" id="mFav" title="Favourite">'+HEART_I+'</button></div><div class="mscrub"><div class="mtrack"><div class="mfill" id="mFill" style="width:0%"></div></div><div class="mtimes"><span id="mElapsed">0:00</span><span id="mDur">0:00</span></div></div><div class="mtransport" id="mTransport"><button class="sml" id="mShuf" data-a="shuffle" title="Shuffle">'+SHUF_I+'</button><button data-a="previous">'+PREV_I+'</button><button class="pp" id="mPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button><button class="sml" id="mRep" data-a="repeat" title="Repeat">'+REP_I+'</button></div></div><aside class="mqueue" id="mQueue"><div class="mqtop"><button class="mqback" id="mQBack" title="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button><h3 id="mQTitle">Up Next</h3><div class="mqacts"><button id="mQSave" title="Save as playlist">'+SAVE_I+'</button><button id="mQClear" title="Clear queue">'+TRASH_I+'</button></div></div><div class="mqnp"><div class="npart" id="mQNpArt">🎵</div><div class="npi"><div class="npt" id="mQNpT">Nothing playing</div><div class="npa" id="mQNpA"></div></div><div class="nptp" id="mQNpTp"><button data-a="previous">'+PREV_I+'</button><button class="pp" id="mQNpPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button></div></div><div class="mqtabs"><button class="on" data-qt="queue">Queue</button><button data-qt="recent">Recent</button><button data-qt="playlists">Playlists</button></div><div id="mQList" class="mqlist"></div></aside><div class="mqr" id="mQR"><div class="qrbox" id="mQRCode"></div><div class="qrlab">Scan to queue</div></div>'},
+      html:'<div class="fcog">'+GEAR+'</div><div class="mtop"><button class="spk" id="mSpk">'+SPKR+' <span class="spkname">Speaker</span> <span class="cx">▾</span></button><button class="mqbtn" id="mQBtn" title="Queue">'+QICON+'</button></div><div class="mfull"><div class="mart" id="mArt">🎵</div><div class="minfo"><div class="mkick">Now Playing</div><div class="mtitle" id="mTitle">—</div><div class="martist" id="mArtist"></div><button class="mfav" id="mFav" title="Favourite">'+HEART_I+'</button></div><div class="mscrub"><div class="mtrack"><div class="mfill" id="mFill" style="width:0%"></div></div><div class="mtimes"><span id="mElapsed">0:00</span><span id="mDur">0:00</span></div></div><div class="mtransport" id="mTransport"><button class="sml" id="mShuf" data-a="shuffle" title="Shuffle">'+SHUF_I+'</button><button data-a="previous">'+PREV_I+'</button><button class="pp" id="mPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button><button class="sml" id="mRep" data-a="repeat" title="Repeat">'+REP_I+'</button></div></div><aside class="mqueue" id="mQueue"><div class="mqtop"><button class="mqback" id="mQBack" title="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button><h3 id="mQTitle">Up Next</h3><div class="mqacts"><button id="mQSave" title="Save as playlist">'+SAVE_I+'</button><button id="mQClear" title="Clear queue">'+TRASH_I+'</button></div></div><div class="mqtabs"><button class="on" data-qt="queue">Queue</button><button data-qt="recent">Recent</button><button data-qt="playlists">Playlists</button></div><div id="mQList" class="mqlist"></div></aside><div class="mqr" id="mQR"><div class="qrbox" id="mQRCode"></div><div class="qrlab">Scan to queue</div></div>'},
     timer:{home:true, bg:'radial-gradient(120% 100% at 50% 44%,#122447,#080b12 62%)', canvas:false, glow:'radial-gradient(closest-side at 50% 44%,rgba(123,150,255,.35),transparent 70%)',
       html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Timers</div><div class="tfull"><div class="trings" id="tmRings"></div><div class="tmore" id="tmMore"></div></div>'},
     list:{home:true, bg:GROUND, canvas:false,
@@ -813,14 +818,17 @@
       var playing=np.state==='playing';
       var art=(np.image&&/^https?:/.test(np.image))?'<img alt="" src="'+esc(np.image)+'">':'<span class="ph"></span>';
       var chip=document.createElement('div');chip.className='pc dnp';
-      chip.innerHTML='<span class="da">'+art+'</span><span class="dnm">'+esc(np.title)+'</span><button class="dpp" title="Play/Pause">'+(playing?PAUSE_I:PLAY_I)+'</button>';
+      chip.innerHTML='<span class="da">'+art+'</span><span class="dnm">'+esc(np.title)+'</span><button class="dprev" title="Previous">'+PREV_I+'</button><button class="dpp" title="Play/Pause">'+(playing?PAUSE_I:PLAY_I)+'</button><button class="dnext" title="Next">'+NEXT_I+'</button>';
       dbody.insertBefore(chip,dbody.firstChild);
+      function _dockCtl(action){fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({action:action,player_id:np.player_id})}).then(function(){setTimeout(paintDockMusic,450);if(_cur==='music')setTimeout(loadMusic,450);}).catch(function(){});}
       chip.querySelector('.dpp').onclick=function(e){e.stopPropagation();
         var b=chip.querySelector('.dpp'),now=b.dataset.pl!=='0';   // optimistic flip
         b.dataset.pl=now?'0':'1';b.innerHTML=now?PLAY_I:PAUSE_I;
-        fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({action:now?'pause':'play',player_id:np.player_id})}).catch(function(){});};
+        fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({action:now?'pause':'play',player_id:np.player_id})}).then(function(){if(_cur==='music')setTimeout(loadMusic,450);}).catch(function(){});};
       chip.querySelector('.dpp').dataset.pl=playing?'1':'0';
-      chip.onclick=function(e){if(e.target.closest('.dpp'))return;show('music');};
+      chip.querySelector('.dprev').onclick=function(e){e.stopPropagation();_dockCtl('previous');};
+      chip.querySelector('.dnext').onclick=function(e){e.stopPropagation();_dockCtl('next');};
+      chip.onclick=function(e){if(e.target.closest('button'))return;show('music');};
       // keep it fresh while it's visible (title/art/state change on skip)
       _dockMusicT=setTimeout(function(){if(dbody.contains(chip)&&!dbody.querySelector('.dheard'))paintDockMusic();},5000);
     }).catch(function(){});
@@ -1015,7 +1023,6 @@
         if(art)art.innerHTML='🎵';
         if(scrub)scrub.style.display='none';if(tp)tp.style.display='none';
         if(np&&spk){var nm0=spk.querySelector('.spkname');if(nm0&&np.player_name)nm0.textContent=np.player_name;}
-        _setMiniNP(null);
         return;
       }
       if(scrub)scrub.style.display='';if(tp)tp.style.display='';
@@ -1025,7 +1032,8 @@
       if(ar)ar.textContent=np.artist||'';
       if(art){if(np.image&&/^https?:\/\//i.test(np.image)){art.innerHTML='<img alt="" style="width:100%;height:100%;object-fit:cover;border-radius:28px;display:block" src="'+esc(np.image)+'">';}else{art.innerHTML='🎵';}}
       var el=np.elapsed||0,du=np.duration||0;
-      _music.np={elapsed:el,duration:du,playing:np.state==='playing',active:(np.state==='playing'||np.state==='paused'),at:Date.now(),uri:np.uri||np.media_uri||'',queueItemId:np.queue_item_id||null,index:(np.queue_index!=null?np.queue_index:null)};
+      _music.np={elapsed:el,duration:du,playing:np.state==='playing',active:(np.state==='playing'||np.state==='paused'),at:Date.now(),uri:np.uri||np.media_uri||'',queueItemId:np.queue_item_id||null,index:(np.queue_index!=null?np.queue_index:null),title:np.title||'',artist:np.artist||'',image:np.image||''};
+      if(_cur==='music'&&_qtab==='queue'&&document.querySelector('.mqueue.open'))paintQueueNow();
       if(fill)fill.style.width=(du?Math.min(100,el/du*100):0)+'%';
       if(te)te.textContent=fmtDur(el);if(td)td.textContent=fmtDur(du);
       if(pp){var playing=(np.state==='playing');pp.dataset.playing=playing?'1':'0';pp.innerHTML=playing?PAUSE_I:PLAY_I;}
@@ -1033,18 +1041,7 @@
       var rp=document.getElementById('mRep');if(rp){var rm=np.repeat||'off';_music.repeat=rm;
         rp.classList.toggle('on',rm!=='off');rp.innerHTML=rm==='one'?REP1_I:REP_I;}
       _music.shuffle=!!np.shuffle;
-      _setMiniNP(np);
     }).catch(function(){});
-  }
-  // Mirror now-playing into the overlay's mini bar (art + title + play/pause),
-  // so the full-card queue/playlist view carries music control of its own.
-  function _setMiniNP(np){
-    var a=document.getElementById('mQNpArt'),t=document.getElementById('mQNpT'),ar=document.getElementById('mQNpA'),pp=document.getElementById('mQNpPP');
-    if(!t)return;
-    if(!np){t.textContent='Nothing playing';if(ar)ar.textContent='';if(a)a.innerHTML='🎵';if(pp){pp.dataset.playing='0';pp.innerHTML=PLAY_I;}return;}
-    t.textContent=np.title||'';if(ar)ar.textContent=np.artist||'';
-    if(a)a.innerHTML=(np.image&&/^https?:\/\//i.test(np.image))?'<img alt="" src="'+esc(np.image)+'">':'🎵';
-    if(pp){var playing=(np.state==='playing');pp.dataset.playing=playing?'1':'0';pp.innerHTML=playing?PAUSE_I:PLAY_I;}
   }
   // Smooth elapsed between the 5s polls — the scrub advances every second
   // while something is playing instead of jumping on each poll.
@@ -1060,67 +1057,55 @@
   function _qpost(path,body){return apiJson('POST','/api/music/'+path,body);}
   function loadQueue(){var host=document.getElementById('mQList');if(!host)return;
     var ttl=document.getElementById('mQTitle');
-    host.classList.toggle('grid',_qtab==='playlists');   // album-art grid only for playlists
-    if(_qtab==='recent'){if(ttl)ttl.textContent='Recently played';
-      host.innerHTML='<div style="color:var(--ink-faint)">Loading…</div>';
+    host.classList.remove('grid','recent','queue');
+    if(_qtab==='recent'){host.classList.add('recent');if(ttl)ttl.textContent='Recently played';
+      host.innerHTML=_qmsg('Loading…');
       apiGet('/api/music/recently-played').then(function(d){if(_cur!=='music')return;var its=(d&&d.items)||[];
-        host.innerHTML=its.slice(0,40).map(function(t){return _mrow(t,'recent');}).join('')||_qempty('Nothing played yet.');
+        host.innerHTML=its.slice(0,40).map(_rtile).join('')||_qempty('Nothing played yet.');
         _wireBrowseRow(host);}).catch(function(){host.innerHTML=_qempty('Couldn’t load.');});return;}
-    if(_qtab==='playlists'){if(ttl)ttl.textContent='Your playlists';
-      host.innerHTML='<div style="color:var(--ink-faint)">Loading…</div>';
+    if(_qtab==='playlists'){host.classList.add('grid');if(ttl)ttl.textContent='Your playlists';
+      host.innerHTML=_qmsg('Loading…');
       apiGet('/api/music/playlists').then(function(d){if(_cur!=='music')return;var pls=(d&&d.playlists)||[];
         host.innerHTML=pls.map(_pltile).join('')||_qempty('No playlists yet — build one with Save.');
         host.onclick=function(e){var r=e.target.closest('.qi.pl');if(!r)return;_qpost('play_media',{uri:r.getAttribute('data-uri'),player_id:_music.player_id||undefined,option:'replace'}).then(function(){toast('Playing playlist');setTimeout(loadMusic,600);}).catch(function(){toast('Couldn’t play');});};
       }).catch(function(){host.innerHTML=_qempty('Couldn’t load playlists.');});return;}
-    // ---- queue tab ----
+    // ---- queue tab: now-playing on the left, numbered up-next tiles on the right ----
     if(ttl)ttl.textContent='Up next';
     if(!_music.player_id){host.innerHTML=_qempty('Nothing playing.');return;}
-    host.innerHTML='<div style="color:var(--ink-faint)">Loading…</div>';
+    host.classList.add('queue');
+    host.innerHTML='<div class="mqnow" id="mqNow"></div><div class="mqup" id="mqUp">'+_qmsg('Loading…')+'</div>';
+    paintQueueNow();
     apiGet('/api/music/queue/'+encodeURIComponent(_music.player_id)).then(function(d){
       if(_cur!=='music')return;var its=(d&&d.items)||[];
       var curId=(_music.np&&_music.np.queueItemId)||null;
-      host.innerHTML=its.slice(0,60).map(function(q,i){var cur=curId?String(q.queue_item_id)===String(curId):(q.index===(_music.np&&_music.np.index));
-        return '<div class="qi q'+(cur?' cur':'')+'" draggable="false" data-iid="'+esc(String(q.queue_item_id))+'" data-idx="'+i+'"><span class="qgrip">⣿</span>'+_thumb(q.image)+'<span class="qn">'+esc(q.name||'')+'</span><span class="qd">'+(q.duration?fmtQ(q.duration):'')+'</span><button class="qx" title="Remove">✕</button></div>';}).join('')
-        ||_qempty('Queue is empty.');
-      _wireQueueRows(host);
-    }).catch(function(){host.innerHTML=_qempty('Couldn’t load the queue.');});}
+      var curIdx=-1;
+      for(var j=0;j<its.length;j++){if(curId?String(its[j].queue_item_id)===String(curId):(its[j].index===(_music.np&&_music.np.index))){curIdx=j;break;}}
+      var base=curIdx>=0?curIdx+1:0, up=its.slice(base);
+      var upEl=document.getElementById('mqUp');if(!upEl)return;
+      upEl.innerHTML=up.slice(0,40).map(function(q,i){
+        return '<div class="qslot" data-idx="'+(base+i)+'" data-iid="'+esc(String(q.queue_item_id))+'"><span class="qnum">'+(i+1)+'</span>'+_thumb(q.image)+'<span class="qsn"><span class="qn">'+esc(q.name||'')+'</span>'+(q.duration?'<span class="qsd">'+fmtQ(q.duration)+'</span>':'')+'</span><button class="qx" title="Remove">✕</button></div>';
+      }).join('')||_qempty('Nothing up next.');
+      _wireUpNext(upEl);
+    }).catch(function(){var upEl=document.getElementById('mqUp');if(upEl)upEl.innerHTML=_qempty('Couldn’t load the queue.');});}
+  // The now-playing card in the queue tab's left column (mirrors _music.np).
+  function paintQueueNow(){var el=document.getElementById('mqNow');if(!el)return;var np=_music.np;
+    var art=(np&&np.image&&/^https?:/.test(np.image))?'<img alt="" src="'+esc(np.image)+'">':'🎵';
+    el.innerHTML='<div class="nowart">'+art+'</div><div class="nowk">Now Playing</div><div class="nowt">'+esc((np&&np.title)||'Nothing playing')+'</div><div class="nowa">'+esc((np&&np.artist)||'')+'</div>';}
+  function _qmsg(t){return '<div class="mqmsg" style="color:var(--ink-faint);padding:8px 4px">'+esc(t)+'</div>';}
   function _qempty(t){return '<div style="color:var(--ink-faint);padding:8px 4px">'+esc(t)+'</div>';}
   function _thumb(u){return (u&&/^https?:/.test(u))?'<img class="qthumb" alt="" src="'+esc(u)+'">':'<span class="qthumb ph"></span>';}
   function _pltile(pl){var cov=(pl.image&&/^https?:/.test(pl.image))?'<img alt="" src="'+esc(pl.image)+'">':'<span class="pph">🎵</span>';
     var cnt=pl.count?'<span class="pcount">'+esc(String(pl.count))+'</span>':'';
     return '<div class="qi pl" data-uri="'+esc(pl.uri)+'"><div class="pcov">'+cov+cnt+'</div><span class="qn">'+esc(pl.name)+'</span></div>';}
-  function _mrow(t,kind){return '<div class="qi br" data-uri="'+esc(t.uri||'')+'">'+_thumb(t.image)+'<span class="qn">'+esc(t.name||'')+(t.artist?' <small>'+esc(t.artist)+'</small>':'')+'</span><button class="qadd" title="Add to queue">＋</button></div>';}
+  function _rtile(t){return '<div class="rtile qi br" data-uri="'+esc(t.uri||'')+'">'+_thumb(t.image)+'<span class="rti"><span class="qn">'+esc(t.name||'')+'</span>'+(t.artist?'<span class="ra">'+esc(t.artist)+'</span>':'')+'</span><button class="qadd" title="Add to queue">＋</button></div>';}
   function _wireBrowseRow(host){host.onclick=function(e){var r=e.target.closest('.qi.br');if(!r)return;var uri=r.getAttribute('data-uri');
     var add=e.target.closest('.qadd');
     _qpost('play_media',{uri:uri,player_id:_music.player_id||undefined,option:add?'add':'replace'}).then(function(){toast(add?'Added to queue':'Playing now');if(!add)setTimeout(loadMusic,600);else setTimeout(function(){if(_qtab==='queue')loadQueue();},600);}).catch(function(){toast('Couldn’t do that');});};}
-  function _wireQueueRows(host){
-    // tap = jump to it; ✕ = remove; long-press-drag = reorder.
-    host.onclick=function(e){var row=e.target.closest('.qi.q');if(!row)return;
+  function _wireUpNext(host){
+    // tap a slot = jump to it; ✕ = remove from queue.
+    host.onclick=function(e){var row=e.target.closest('.qslot');if(!row)return;
       if(e.target.closest('.qx')){_qpost('queue/remove',{queue_id:_music.player_id,item_id:row.getAttribute('data-iid')}).then(function(){loadQueue();}).catch(function(){toast('Couldn’t remove');});return;}
-      if(row.dataset.dragging)return;   // ignore the click that ends a drag
       _qpost('queue/play-index',{queue_id:_music.player_id,index:+row.getAttribute('data-idx')}).then(function(){setTimeout(loadMusic,400);setTimeout(loadQueue,600);}).catch(function(){});};
-    _wireQueueDrag(host);
-  }
-  // Long-press to pick a row up, then drag it to reorder. Touch-first (kiosk),
-  // also works with a mouse. On drop, commit the new absolute index to MA.
-  // Handlers are ASSIGNED (on*) not addEventListener'd: loadQueue() reloads into
-  // the SAME persistent host element, so addEventListener would stack a fresh
-  // listener set each reload → the drop would commit queue/move once per reload.
-  function _wireQueueDrag(host){
-    var held=null,startY=0,moved=false,pressT=null;
-    function rowAt(y){var rows=[].slice.call(host.querySelectorAll('.qi.q'));for(var i=0;i<rows.length;i++){var r=rows[i].getBoundingClientRect();if(y<r.top+r.height/2)return rows[i];}return null;}
-    host.onpointerdown=function(e){var row=e.target.closest('.qi.q');if(!row||e.target.closest('.qx'))return;
-      startY=e.clientY;                       // captured NOW so the move-guard has a real baseline
-      pressT=setTimeout(function(){held=row;moved=false;row.dataset.dragging='1';row.classList.add('drag');
-        try{host.setPointerCapture(e.pointerId);}catch(_){}} ,320);};
-    host.onpointermove=function(e){if(!held){if(pressT&&Math.abs(e.clientY-startY)>8){clearTimeout(pressT);pressT=null;}return;}
-      moved=true;var over=rowAt(e.clientY);
-      if(over&&over!==held){var rect=over.getBoundingClientRect();host.insertBefore(held, (e.clientY<rect.top+rect.height/2)?over:over.nextSibling);}};
-    function end(e){if(pressT){clearTimeout(pressT);pressT=null;}if(!held)return;var row=held;held=null;row.classList.remove('drag');
-      var to=[].slice.call(host.querySelectorAll('.qi.q')).indexOf(row);
-      if(moved&&to>=0){_qpost('queue/move',{queue_id:_music.player_id,item_id:row.getAttribute('data-iid'),to_index:to}).then(function(){loadQueue();}).catch(function(){loadQueue();});}
-      setTimeout(function(){delete row.dataset.dragging;},50);}
-    host.onpointerup=end;host.onpointercancel=end;
   }
   function musicControl(action){if(!_music.player_id)return;
     fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({action:action,player_id:_music.player_id})}).then(function(){setTimeout(loadMusic,350);}).catch(function(){});}
@@ -1145,10 +1130,6 @@
     if(qb&&qd)qb.onclick=function(e){e.stopPropagation();_qOpen(true);loadQueue();};
     var qback=document.getElementById('mQBack');
     if(qback&&qd)qback.onclick=function(e){e.stopPropagation();_qOpen(false);};
-    // mini transport strip inside the overlay mirrors the main transport
-    var ntp=document.getElementById('mQNpTp');
-    if(ntp)ntp.addEventListener('click',function(e){var btn=e.target.closest('button');if(!btn)return;var a=btn.getAttribute('data-a');
-      musicControl(a==='playpause'?(document.getElementById('mQNpPP').dataset.playing==='1'?'pause':'play'):a);});
     // Playlist-manager: tab switch, save-as-playlist, clear, favourite.
     var tabs=document.querySelector('.mqtabs');
     if(tabs)tabs.onclick=function(e){var b=e.target.closest('button[data-qt]');if(!b)return;
