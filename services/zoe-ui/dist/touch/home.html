@@ -95,15 +95,20 @@
   .dayf .dsec h4{font-size:14px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:10px}
   .dayf .drem{display:flex;gap:12px;align-items:baseline;padding:9px 0;border-top:1px solid rgba(255,255,255,.07);font-size:19px}
   .dayf .drem:first-of-type{border-top:0}
-  .dayf .drem .rt{color:var(--ink-faint);font-size:16px;min-width:96px}
+  .dayf .drem .rt{color:var(--ink-faint);font-size:16px;min-width:96px;flex:none}
+  .dayf .dev .dey{flex:1;min-width:0}
+  .dayf .drem .rtx{flex:1;min-width:0}
+  .dayf .dev .lact,.dayf .drem .lact{align-self:center}
+  .dayf .drem .lact button,.dayf .dev .lact button{width:34px;height:34px}
   /* Lists v2 — tab selector + selected list in flowing columns */
   .lstf2{position:absolute;inset:0;padding:100px 64px 150px;display:flex;flex-direction:column}
   .ltabs{display:flex;gap:10px;flex-wrap:wrap}
   .ltab{font-size:19px;font-weight:500;color:var(--ink-soft);padding:9px 18px;border-radius:999px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);cursor:pointer;white-space:nowrap}
   .ltab.on{background:rgba(123,150,255,.22);border-color:rgba(123,150,255,.55);color:var(--ink);font-weight:600}
-  /* List selector pills live in the chrome header row (title position), by the cog. */
-  .lhdr{position:absolute;top:38px;left:110px;right:118px;height:52px;display:flex;align-items:center;gap:16px;z-index:30}
-  .lhdr .ltabs{flex:1;min-width:0;flex-wrap:nowrap;overflow-x:auto}
+  /* List selector pills live in the chrome header row, pushed to the RIGHT next
+     to the settings cog (count sits on the left where the title used to be). */
+  .lhdr{position:absolute;top:38px;left:110px;right:118px;height:52px;display:flex;align-items:center;justify-content:space-between;gap:16px;z-index:30}
+  .lhdr .ltabs{flex:0 1 auto;min-width:0;flex-wrap:nowrap;overflow-x:auto;justify-content:flex-end}
   .lcount{font-size:17px;color:var(--ink-faint);flex:none;white-space:nowrap}
   .lcols{flex:1;overflow-y:auto}
   .lcols .lin{column-count:3;column-gap:28px}
@@ -206,6 +211,16 @@
   .estmc .spkopt{display:block;width:100%;text-align:left;padding:15px 18px;border-radius:14px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:#fff;font:inherit;font-size:20px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .estmc .btns button{flex:1;height:54px;border-radius:14px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:var(--ink);font:inherit;font-size:19px;cursor:pointer}
   .estmc .btns .save{background:var(--accent);border-color:transparent;color:#fff;font-weight:600}
+  .estmc .btns .del{background:rgba(255,122,144,.16);border-color:rgba(255,122,144,.4);color:#ff9db0}
+  /* touch date+time stepper (replaces native <input type=date> on the kiosk) */
+  .estmc .dtp{display:flex;gap:12px;align-items:flex-start;margin-top:4px;flex-wrap:wrap}
+  .estmc .dtg{display:flex;flex-direction:column;align-items:center;gap:6px}
+  .estmc .dtg button{width:60px;height:40px;border-radius:11px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:#fff;font-size:15px;cursor:pointer;padding:0}
+  .estmc .dtg .dtv{font-size:24px;font-weight:600;font-variant-numeric:tabular-nums;min-width:60px;text-align:center;line-height:1}
+  .estmc .dtg .dtl{font-size:12px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.1em}
+  .estmc .dtsep{width:1px;align-self:stretch;background:rgba(255,255,255,.14);margin:2px 4px}
+  .estmc label.dtall{display:flex;align-items:center;gap:10px;font-size:16px;color:var(--ink);margin-top:14px}
+  .estmc label.dtall input{width:22px;height:22px;flex:none}
   .estmc .btns .del{background:rgba(255,122,144,.14);border-color:rgba(255,122,144,.4);color:#ff9db0}
   .ctcard .ctacts{display:flex;gap:12px;margin-top:20px;flex-wrap:wrap}
   .ctchips{display:flex;flex-wrap:wrap;gap:8px}
@@ -390,6 +405,14 @@
   .tfull .tctrls{display:flex;gap:20px;margin-top:14px}
   .tfull .tctrls button{width:66px;height:66px;border-radius:50%;border:0;cursor:pointer;font-size:24px;background:rgba(255,255,255,.12);color:#fff;display:grid;place-items:center}
   .tfull .tctrls .stop{background:var(--cat-health);color:#2a0910}
+  /* timer-finish alarm overlay (panel-wide) */
+  #tmrAlarm{position:absolute;inset:0;z-index:85;display:none;align-items:center;justify-content:center;background:rgba(7,10,22,.72);backdrop-filter:blur(16px)}
+  #tmrAlarm.on{display:flex;animation:tapulse 1.1s ease-in-out infinite}
+  #tmrAlarm .tab{text-align:center}
+  #tmrAlarm .tak{font-size:22px;letter-spacing:.14em;text-transform:uppercase;color:var(--cat-health)}
+  #tmrAlarm .tal{font-size:64px;font-weight:700;letter-spacing:-.02em;margin:14px 0 30px;max-width:900px}
+  #tmrAlarm .tad{font-size:23px;padding:16px 46px;border-radius:999px;border:0;background:var(--cat-health);color:#2a0910;cursor:pointer;font-weight:600}
+  @keyframes tapulse{0%,100%{background:rgba(7,10,22,.72)}50%{background:rgba(70,16,28,.8)}}
 
   /* HOME = the living weather ambient with your day on it (no shopping) */
   .hfull .htemp{position:absolute;top:38px;right:60px;text-align:right;text-shadow:0 2px 16px rgba(0,0,0,.4)}
@@ -677,7 +700,7 @@
     timer:{home:true, bg:'radial-gradient(120% 100% at 50% 44%,#122447,#080b12 62%)', canvas:false, glow:'radial-gradient(closest-side at 50% 44%,rgba(123,150,255,.35),transparent 70%)',
       html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Timers</div><div class="tfull"><div class="trings" id="tmRings"></div><div class="tmore" id="tmMore"></div></div>'},
     list:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="lhdr"><div class="ltabs" id="lstTabs"></div><div class="lcount" id="lstCount"></div></div><div class="lstf2"><div class="lcols" id="lstItems"></div></div>'},
+      html:'<div class="fcog">'+GEAR+'</div><div class="lhdr"><div class="lcount" id="lstCount"></div><div class="ltabs" id="lstTabs"></div></div><div class="lstf2"><div class="lcols" id="lstItems"></div></div>'},
     calendar:{home:true, bg:GROUND, canvas:false,
       html:'<div class="fcog">'+GEAR+'</div><div class="calf"><div class="calhead"><h1 id="calTtl"></h1><div class="calviews" id="calViews"><button data-v="day">Day</button><button data-v="week" class="on">Week</button><button data-v="month">Month</button></div></div><div class="calbody" id="calBody"></div></div>'},
     person:{home:true, bg:GROUND, canvas:false,
@@ -843,10 +866,12 @@
     apiGet('/api/skybridge/timers').then(function(d){
       if(gen!==_dockTmr.gen)return;
       var now=Date.now();
-      var exps=((d&&d.timers)||[]).map(function(t){return +t.expires_at_ms||0;}).filter(function(e){return e>now;}).sort(function(a,b){return a-b;}).slice(0,3);
+      var exps=((d&&d.timers)||[]).map(function(t){return +t.expires_at_ms||0;}).filter(function(e){return e>now;}).sort(function(a,b){return a-b;}).slice(0,4);
       if(_dockTmr.t){clearInterval(_dockTmr.t);_dockTmr.t=null;}
       dbody.querySelectorAll('.pc.tchip').forEach(function(c){c.remove();});
-      if(!exps.length)return;
+      // On the timer surface the rings already show every countdown, so the dock
+      // chips are redundant there — show them only on OTHER surfaces.
+      if(!exps.length||_cur==='timer')return;
       // one chip PER active timer (soonest first), all driven by one interval;
       // closure-local so a detached set can only ever clear its own interval.
       var chips=exps.map(function(){var c=document.createElement('div');c.className='pc tchip';c.innerHTML='⏱ <span class="nm">--:--</span>';c.onclick=function(){show('timer');};return c;});
@@ -1283,16 +1308,40 @@
           editReminder(rem);};}
     }).catch(function(){if(ttl)ttl.textContent='Couldn’t load reminders';});
   }
+  // Touch-friendly date+time stepper (native <input type=date> is a poor fit on
+  // the kiosk — tiny native pickers). Big ▲/▼ steppers for day/mon/yr/hr/min.
+  var _dt={y:2026,mo:0,d:1,h:9,mi:0};
+  var _MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  function _dtInit(dateStr,timeStr){var now=new Date();
+    var y=now.getFullYear(),mo=now.getMonth(),d=now.getDate(),h=9,mi=0;
+    if(dateStr&&/^\d{4}-\d{2}-\d{2}/.test(dateStr)){var p=dateStr.split('-');y=+p[0];mo=(+p[1])-1;d=+p[2].slice(0,2);}
+    if(timeStr&&/^\d{1,2}:\d{2}/.test(timeStr)){var q=timeStr.split(':');h=+q[0];mi=+q[1];}
+    _dt={y:y,mo:mo,d:d,h:h,mi:mi};}
+  function _dtg(f,lab){return '<div class="dtg"><button type="button" data-s="'+f+',1">▲</button><span class="dtv" data-v="'+f+'"></span><button type="button" data-s="'+f+',-1">▼</button><span class="dtl">'+lab+'</span></div>';}
+  function _dtHtml(){return '<div class="dtp">'+_dtg('d','day')+_dtg('mo','mon')+_dtg('y','yr')+'<span class="dtsep"></span>'+_dtg('h','hr')+_dtg('mi','min')+'</div>';}
+  function _dtPaint(m){function set(f,v){var el=m.querySelector('.dtv[data-v="'+f+'"]');if(el)el.textContent=v;}
+    set('d',two(_dt.d));set('mo',_MON[_dt.mo]);set('y',_dt.y);set('h',two(_dt.h));set('mi',two(_dt.mi));}
+  function _dtStep(f,dir){var dd=new Date(_dt.y,_dt.mo,_dt.d,_dt.h,_dt.mi);
+    if(f==='d')dd.setDate(dd.getDate()+dir);else if(f==='mo')dd.setMonth(dd.getMonth()+dir);
+    else if(f==='y')dd.setFullYear(dd.getFullYear()+dir);else if(f==='h')dd.setHours(dd.getHours()+dir);
+    else if(f==='mi')dd.setMinutes(dd.getMinutes()+dir*5);
+    _dt={y:dd.getFullYear(),mo:dd.getMonth(),d:dd.getDate(),h:dd.getHours(),mi:dd.getMinutes()};}
+  function _dtWire(m){_dtPaint(m);m.querySelectorAll('.dtp button[data-s]').forEach(function(b){b.onclick=function(){var s=b.getAttribute('data-s').split(',');_dtStep(s[0],+s[1]);_dtPaint(m);};});}
+  function _dtGet(){return {date:_dt.y+'-'+two(_dt.mo+1)+'-'+two(_dt.d),time:two(_dt.h)+':'+two(_dt.mi)};}
   function editReminder(rem){
+    _dtInit(rem.due_date,rem.due_time);
     estOpen('<h3>Edit reminder</h3>'
       +'<label>Reminder</label><input data-f="title" value="'+esc(rem.title||'')+'">'
-      +'<div class="erow" style="margin-top:0"><div style="flex:1"><label>Date</label><input data-f="due_date" type="date" value="'+esc(rem.due_date||'')+'"></div><div style="width:130px"><label>Time</label><input data-f="due_time" value="'+esc(rem.due_time||'')+'" placeholder="HH:MM"></div></div>'
-      +'<div class="btns"><button data-x="cancel">Cancel</button><button class="save" data-x="save">Save</button></div>');
-    var m=document.getElementById('estModal');
+      +'<label>When</label>'+_dtHtml()
+      +'<div class="btns"><button class="del" data-x="del">Delete</button><button data-x="cancel">Cancel</button><button class="save" data-x="save">Save</button></div>');
+    var m=document.getElementById('estModal');_dtWire(m);
     m.querySelector('[data-x="cancel"]').onclick=estClose;
-    m.querySelector('[data-x="save"]').onclick=function(){var body={};m.querySelectorAll('input[data-f]').forEach(function(i){body[i.getAttribute('data-f')]=i.value.trim()||null;});
-      if(!body.title){toast('The reminder needs a name');return;}
-      apiJson('PUT','/api/reminders/'+encodeURIComponent(rem.id),body).then(function(){estClose();wireReminder();}).catch(function(){toast('Couldn’t save reminder');});};
+    m.querySelector('[data-x="del"]').onclick=function(){estConfirm('Delete “'+(rem.title||'this reminder')+'”?',function(){
+      apiJson('DELETE','/api/reminders/'+encodeURIComponent(rem.id)).then(function(){estClose();wireReminder();}).catch(function(){toast('Couldn’t delete');});});};
+    m.querySelector('[data-x="save"]').onclick=function(){var title=(m.querySelector('input[data-f="title"]').value||'').trim();
+      if(!title){toast('The reminder needs a name');return;}
+      var dt=_dtGet();
+      apiJson('PUT','/api/reminders/'+encodeURIComponent(rem.id),{title:title,due_date:dt.date,due_time:dt.time}).then(function(){estClose();if(_cur==='reminder')wireReminder();else if(_cur==='day')wireDay();}).catch(function(){toast('Couldn’t save reminder');});};
   }
 
   // ---- Lists: full multi-column board (all lists, toggle, add, create) ----
@@ -1368,12 +1417,14 @@
       var rings=document.getElementById('tmRings'),more=document.getElementById('tmMore');
       if(!rings)return;
       if(!ts.length){rings.innerHTML='<div class="tring one"><svg width="300" height="300" viewBox="0 0 420 420"><circle cx="210" cy="210" r="188" fill="none" stroke="rgba(255,255,255,.12)" stroke-width="14"/></svg><div class="ttime">0:00</div></div><div class="tsub" style="width:100%;text-align:center">No timers — ask Zoe to set one</div>';if(more)more.innerHTML='';return;}
-      // Up to two timers SHARE the main screen as full rings; any further
-      // timers appear as live-ticking chips underneath.
-      var main=ts.slice(0,2),rest=ts.slice(2,6),two=main.length>1,sz=two?250:300;
+      // Up to FOUR timers share the main screen as full rings (sized down as
+      // more run); any beyond four appear as live-ticking chips underneath.
+      var main=ts.slice(0,4),rest=ts.slice(4,8),n=main.length;
+      var SZ={1:300,2:252,3:212,4:178}[n]||178, FS={1:76,2:60,3:50,4:42}[n]||42, GAP={1:0,2:56,3:40,4:28}[n]||28;
+      rings.style.gap=GAP+'px';
       rings.innerHTML=main.map(function(t,i){var id=esc(String(t.timer_id||t.id));
-        return '<div class="tunit"><div class="tring'+(two?'':' one')+'"><svg width="'+sz+'" height="'+sz+'" viewBox="0 0 420 420"><circle cx="210" cy="210" r="188" fill="none" stroke="rgba(255,255,255,.12)" stroke-width="14"/><circle class="tarc" data-i="'+i+'" cx="210" cy="210" r="188" fill="none" stroke="#8ea6ff" stroke-width="14" stroke-linecap="round" stroke-dasharray="1181" stroke-dashoffset="1181" style="filter:drop-shadow(0 0 14px rgba(123,150,255,.7))"/></svg><div class="ttime" data-i="'+i+'">--:--</div></div><div class="tsub">'+esc(t.label||t.title||'Timer')+'</div><div class="tctrls"><button class="stop" data-tid="'+id+'">■</button></div></div>';}).join('');
-      if(more)more.innerHTML=rest.map(function(t,i){return '<div class="tmr"><b class="trem" data-i="'+(i+2)+'">'+fmtT(timerRemain(t))+'</b><span class="tx3">'+esc(t.label||'Timer')+'</span><button data-tid="'+esc(String(t.timer_id||t.id))+'">✕</button></div>';}).join('');
+        return '<div class="tunit"><div class="tring" style="width:'+SZ+'px;height:'+SZ+'px"><svg width="'+SZ+'" height="'+SZ+'" viewBox="0 0 420 420"><circle cx="210" cy="210" r="188" fill="none" stroke="rgba(255,255,255,.12)" stroke-width="14"/><circle class="tarc" data-i="'+i+'" cx="210" cy="210" r="188" fill="none" stroke="#8ea6ff" stroke-width="14" stroke-linecap="round" stroke-dasharray="1181" stroke-dashoffset="1181" style="filter:drop-shadow(0 0 14px rgba(123,150,255,.7))"/></svg><div class="ttime" data-i="'+i+'" style="font-size:'+FS+'px">--:--</div></div><div class="tsub">'+esc(t.label||t.title||'Timer')+'</div><div class="tctrls"><button class="stop" data-tid="'+id+'">■</button></div></div>';}).join('');
+      if(more)more.innerHTML=rest.map(function(t,i){return '<div class="tmr"><b class="trem" data-i="'+(i+4)+'">'+fmtT(timerRemain(t))+'</b><span class="tx3">'+esc(t.label||'Timer')+'</span><button data-tid="'+esc(String(t.timer_id||t.id))+'">✕</button></div>';}).join('');
       function tick(){if(_cur!=='timer')return;var expired=false;
         ts.forEach(function(t,i){var rem=timerRemain(t);if(rem<=0)expired=true;
           var te=document.querySelector('.ttime[data-i="'+i+'"]'),ar=document.querySelector('.tarc[data-i="'+i+'"]'),tr=document.querySelector('.trem[data-i="'+i+'"]');
@@ -1610,21 +1661,23 @@
 
   function editEvent(ev){
     var cats=['general','work','personal','family','health','social','appointment','birthday'];
+    _dtInit(ev.start_date,ev.start_time);
     estOpen('<h3>Edit event</h3>'
       +'<label>Title</label><input data-f="title" value="'+esc(ev.title||'')+'">'
-      +'<div class="erow" style="margin-top:0"><div style="flex:1"><label>Date</label><input data-f="start_date" type="date" value="'+esc(ev.start_date||'')+'"></div><div style="width:130px"><label>Time</label><input data-f="start_time" value="'+esc(ev.start_time||'')+'" placeholder="HH:MM"></div></div>'
+      +'<label>When</label>'+_dtHtml()
+      +'<label class="dtall"><input type="checkbox" data-f2="allday"'+(ev.all_day?' checked':'')+'> All day</label>'
       +'<label>Category</label><select data-f="category">'+cats.map(function(c){return '<option value="'+c+'"'+((ev.category||'general').toLowerCase()===c?' selected':'')+'>'+c.charAt(0).toUpperCase()+c.slice(1)+'</option>';}).join('')+'</select>'
       +'<label>Location</label><input data-f="location" value="'+esc(ev.location||'')+'">'
       +'<div class="btns"><button class="del" data-x="del">Delete</button><button data-x="cancel">Cancel</button><button class="save" data-x="save">Save</button></div>');
-    var m=document.getElementById('estModal');
+    var m=document.getElementById('estModal');_dtWire(m);
     m.querySelector('[data-x="cancel"]').onclick=estClose;
     m.querySelector('[data-x="del"]').onclick=function(){estConfirm('Delete “'+(ev.title||'this event')+'”?',function(){
-      apiJson('DELETE','/api/calendar/events/'+encodeURIComponent(ev.id)).then(function(){estClose();paintCal();}).catch(function(){toast('Couldn’t delete');});});};
+      apiJson('DELETE','/api/calendar/events/'+encodeURIComponent(ev.id)).then(function(){estClose();if(_cur==='day')wireDay();else paintCal();}).catch(function(){toast('Couldn’t delete');});});};
     m.querySelector('[data-x="save"]').onclick=function(){var body={};m.querySelectorAll('[data-f]').forEach(function(i){body[i.getAttribute('data-f')]=i.value.trim();});
-      // A cleared time means an all-day event — send start_time:null so the stored
-      // time is actually cleared (a partial update would leave the old value behind).
-      if(!body.start_time){body.all_day=true;body.start_time=null;}else{body.all_day=false;}
-      apiJson('PUT','/api/calendar/events/'+encodeURIComponent(ev.id),body).then(function(){estClose();paintCal();}).catch(function(){toast('Couldn’t save event');});};
+      var dt=_dtGet();body.start_date=dt.date;
+      var allday=m.querySelector('[data-f2="allday"]');
+      if(allday&&allday.checked){body.all_day=true;body.start_time=null;}else{body.all_day=false;body.start_time=dt.time;}
+      apiJson('PUT','/api/calendar/events/'+encodeURIComponent(ev.id),body).then(function(){estClose();if(_cur==='day')wireDay();else paintCal();}).catch(function(){toast('Couldn’t save event');});};
   }
 
   // ---- Day: full-screen — today's events + reminders (+ comms when a source exists) ----
@@ -1635,13 +1688,21 @@
     apiGet('/api/calendar/events?start_date='+ds+'&end_date='+ds).then(function(data){if(_cur!=='day'||!host)return;
       var evs=((data&&data.events)||[]).filter(function(e){return !e.deleted;}).sort(function(a,b){return (a.start_time||'').localeCompare(b.start_time||'');});
       if(!evs.length){host.innerHTML='<div class="dev" style="opacity:.6"><div class="t"></div><span class="dot" style="--c:var(--accent)"></span><div><div class="en">Nothing scheduled today</div></div></div>';return;}
-      host.innerHTML=evs.map(function(e){var cat=CAT[(e.category||'').toLowerCase()]||'var(--accent)';var when=e.all_day?'All day':fmt12(e.start_time);return '<div class="dev"><div class="t">'+esc(when)+'</div><span class="dot" style="--c:'+cat+'"></span><div><div class="en">'+esc(e.title||'Event')+'</div>'+(e.location?'<div class="es">'+esc(e.location)+'</div>':'')+'</div></div>';}).join('');
+      host.innerHTML=evs.map(function(e){var cat=CAT[(e.category||'').toLowerCase()]||'var(--accent)';var when=e.all_day?'All day':fmt12(e.start_time);return '<div class="dev" data-eid="'+esc(String(e.id))+'"><div class="t">'+esc(when)+'</div><span class="dot" style="--c:'+cat+'"></span><div class="dey"><div class="en">'+esc(e.title||'Event')+'</div>'+(e.location?'<div class="es">'+esc(e.location)+'</div>':'')+'</div><span class="lact"><button data-act="edit" title="Edit">✎</button><button class="del" data-act="del" title="Delete">✕</button></span></div>';}).join('');
+      host.onclick=function(ev){var row=ev.target.closest('.dev[data-eid]');if(!row)return;var e=evs.filter(function(x){return String(x.id)===row.getAttribute('data-eid');})[0];if(!e)return;
+        var act=ev.target.closest('[data-act]');
+        if(act&&act.getAttribute('data-act')==='del'){estConfirm('Delete “'+(e.title||'this event')+'”?',function(){apiJson('DELETE','/api/calendar/events/'+encodeURIComponent(e.id)).then(wireDay).catch(function(){toast('Couldn’t delete');});});return;}
+        editEvent(e);};
     }).catch(function(){if(host)host.innerHTML='<div class="dev" style="opacity:.6"><div class="t"></div><span class="dot" style="--c:var(--cat-health)"></span><div><div class="en">Couldn’t load your day</div></div></div>';});
     apiGet('/api/reminders/').then(function(d2){if(_cur!=='day'||!rems)return;
       var rs=(d2&&d2.reminders)||[];
       if(!rs.length){rems.innerHTML='<div class="drem" style="opacity:.6"><span class="rt"></span><span>Nothing set</span></div>';return;}
-      rems.innerHTML=rs.slice(0,5).map(function(r){var when=fmtRemWhen(r);
-        return '<div class="drem"><span class="rt">'+esc(when)+'</span><span>'+esc(r.title||'Reminder')+'</span></div>';}).join('');
+      rems.innerHTML=rs.slice(0,6).map(function(r){var when=fmtRemWhen(r);
+        return '<div class="drem" data-rid="'+esc(String(r.id))+'"><span class="rt">'+esc(when)+'</span><span class="rtx">'+esc(r.title||'Reminder')+'</span><span class="lact"><button data-act="edit" title="Edit">✎</button><button class="del" data-act="del" title="Delete">✕</button></span></div>';}).join('');
+      rems.onclick=function(ev){var row=ev.target.closest('.drem[data-rid]');if(!row)return;var r=rs.filter(function(x){return String(x.id)===row.getAttribute('data-rid');})[0];if(!r)return;
+        var act=ev.target.closest('[data-act]');
+        if(act&&act.getAttribute('data-act')==='del'){estConfirm('Delete “'+(r.title||'this reminder')+'”?',function(){apiJson('DELETE','/api/reminders/'+encodeURIComponent(r.id)).then(wireDay).catch(function(){toast('Couldn’t delete');});});return;}
+        editReminder(r);};
     }).catch(function(){rems.innerHTML='<div class="drem" style="opacity:.6"><span class="rt"></span><span>Couldn’t load</span></div>';});
     // Messages/email section stays hidden until a comms backend exists (no fake data).
   }
@@ -1650,6 +1711,38 @@
   ORDER.forEach(function(o){ if(o[0]==='SEP'){var s=document.createElement('div');s.className='sep';pick.appendChild(s);return;} var b=document.createElement('button');b.dataset.id=o[0];b.textContent=o[1];b.onclick=function(){show(o[0]);};pick.appendChild(b);});
   home.onclick=function(){lclose();show('home');};
   setInterval(refreshHA,30000);   // keep dock HA state fresh + recover from a failed load
+
+  // ---- Timer-finish alarm (panel-wide) ----
+  // A timer can finish on ANY surface, so this watcher runs globally: it learns
+  // active timers by polling, then a 1s ticker fires a chime + dismissible
+  // alert the moment one crosses zero (the server drops an expired timer, so we
+  // detect the crossing client-side). Cancelled timers (gone while still in the
+  // future) are pruned so they never alarm.
+  var _tAlarm={known:{},fired:{},chime:null};
+  function _tAlarmRefresh(){apiGet('/api/skybridge/timers').then(function(d){
+    var seen={},now=Date.now();
+    ((d&&d.timers)||[]).forEach(function(t){var id=String(t.timer_id||t.id||''),exp=+t.expires_at_ms||0;if(!id||!exp)return;seen[id]=1;
+      if(!_tAlarm.fired[id])_tAlarm.known[id]={exp:exp,label:t.label||t.title||'Timer'};});
+    Object.keys(_tAlarm.known).forEach(function(id){if(!seen[id]&&_tAlarm.known[id].exp>now+1500)delete _tAlarm.known[id];});
+  }).catch(function(){});}
+  function _tAlarmTick(){var now=Date.now();
+    Object.keys(_tAlarm.known).forEach(function(id){var t=_tAlarm.known[id];
+      if(now>=t.exp&&!_tAlarm.fired[id]){_tAlarm.fired[id]=1;delete _tAlarm.known[id];timerAlarm(t.label);}});}
+  function _beep(){try{if(!_tAlarm.ctx)_tAlarm.ctx=new (window.AudioContext||window.webkitAudioContext)();var c=_tAlarm.ctx;
+    if(c.state==='suspended')c.resume();
+    function ping(t0){var o=c.createOscillator(),g=c.createGain();o.type='sine';o.frequency.value=880;o.connect(g);g.connect(c.destination);
+      g.gain.setValueAtTime(0,t0);g.gain.linearRampToValueAtTime(.45,t0+.02);g.gain.linearRampToValueAtTime(0,t0+.4);o.start(t0);o.stop(t0+.42);}
+    var t=c.currentTime;ping(t);ping(t+.55);ping(t+1.1);}catch(e){}}
+  function timerAlarm(label){
+    var ov=document.getElementById('tmrAlarm');
+    if(!ov){ov=document.createElement('div');ov.id='tmrAlarm';(document.getElementById('stage')||document.body).appendChild(ov);}
+    ov.innerHTML='<div class="tab"><div class="tak">⏱ Timer done</div><div class="tal">'+esc(label||'Timer')+'</div><button class="tad" id="tmrAlarmX">Dismiss</button></div>';
+    ov.classList.add('on');
+    _beep();if(_tAlarm.chime)clearInterval(_tAlarm.chime);_tAlarm.chime=setInterval(_beep,2200);
+    document.getElementById('tmrAlarmX').onclick=function(){ov.classList.remove('on');if(_tAlarm.chime){clearInterval(_tAlarm.chime);_tAlarm.chime=null;}
+      if(_cur==='timer'&&typeof wireTimer==='function'){}};
+  }
+  _tAlarmRefresh();setInterval(_tAlarmRefresh,15000);setInterval(_tAlarmTick,1000);
 
   // ---- ask-Zoe command loop (orb tap → /api/skybridge/resolve → result) ----
   // Same resolver the voice pipeline uses, so typed and spoken commands behave
