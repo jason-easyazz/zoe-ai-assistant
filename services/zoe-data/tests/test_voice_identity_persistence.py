@@ -196,6 +196,75 @@ async def test_bound_panel_guest_sentinel_saves_as_bound_user(monkeypatch) -> No
 
 
 @pytest.mark.asyncio
+async def test_lapsed_session_on_bound_panel_revives_and_refreshes_heartbeat(monkeypatch) -> None:
+    """A bound panel whose ui_panel_sessions heartbeat lapsed (recent=None, but the
+    panel is bound → default=jason) must resolve to the bound user AND refresh the
+    heartbeat, so active voice keeps the login alive instead of silently dropping to
+    guest and blocking scoped commands."""
+    chat_calls, spawned = _wire_voice_command_fakes(monkeypatch, panel_user=None)
+
+    async def recent_none(_pid, _db):
+        return None
+
+    async def default_bound(_pid, _db):
+        return BOUND_USER
+
+    touched: list[tuple[str, str]] = []
+
+    async def fake_touch(panel_id, user_id):
+        touched.append((panel_id, user_id))
+
+    monkeypatch.setattr(voice_tts, "_resolve_recent_panel_session_user", recent_none)
+    monkeypatch.setattr(voice_tts, "_resolve_panel_default_user", default_bound)
+    monkeypatch.setattr(voice_tts, "_touch_panel_session", fake_touch)
+
+    response = await voice_command(
+        {"text": UTTERANCE, "panel_id": PANEL_ID, "session_id": SESSION_ID},
+        caller={"source": "device", "user_id": "voice-daemon", "panel_id": PANEL_ID},
+        stream=False,
+        db=object(),
+    )
+    if spawned:
+        await asyncio.gather(*spawned)
+
+    assert response["ok"] is True
+    # 1. the heartbeat was refreshed for the bound user → active use keeps the login alive
+    assert (PANEL_ID, BOUND_USER) in touched, (
+        "voice turn did not refresh the panel session heartbeat for the bound user: %r" % (touched,)
+    )
+    # 2. the turn is attributed to the bound user, not guest
+    assert (SESSION_ID, "user", UTTERANCE, BOUND_USER) in chat_calls, (
+        "lapsed-session turn was not persisted under the bound user: %r" % (chat_calls,)
+    )
+
+
+@pytest.mark.asyncio
+async def test_unbound_panel_does_not_refresh_heartbeat(monkeypatch) -> None:
+    """An UNbound panel (recent=None, default=None) must NOT fabricate a heartbeat —
+    keepalive only extends a real login, never invents one for guest."""
+    # panel_user=None wires BOTH _resolve_recent_* and _resolve_default_* to return None.
+    chat_calls, spawned = _wire_voice_command_fakes(monkeypatch, panel_user=None)
+
+    touched: list[tuple[str, str]] = []
+
+    async def fake_touch(panel_id, user_id):
+        touched.append((panel_id, user_id))
+
+    monkeypatch.setattr(voice_tts, "_touch_panel_session", fake_touch)
+
+    await voice_command(
+        {"text": UTTERANCE, "panel_id": PANEL_ID, "session_id": SESSION_ID},
+        caller={"source": "device", "user_id": "voice-daemon", "panel_id": PANEL_ID},
+        stream=False,
+        db=object(),
+    )
+    if spawned:
+        await asyncio.gather(*spawned)
+
+    assert touched == [], "keepalive fabricated a session for an unbound (guest) panel: %r" % (touched,)
+
+
+@pytest.mark.asyncio
 async def test_unbound_panel_guest_sentinel_skips_save_cleanly(monkeypatch) -> None:
     """With no panel binding the sentinel stays — and NO write may be attempted
     (the old code attempted it and died on the users FK, silently)."""
