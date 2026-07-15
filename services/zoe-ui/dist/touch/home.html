@@ -1743,9 +1743,12 @@
     // are long gone, so they can never re-appear and re-fire).
     Object.keys(_tAlarm.fired).forEach(function(id){if(_tAlarm.fired[id]<now-21600000)delete _tAlarm.fired[id];});
   }).catch(function(){});}
-  function _tAlarmTick(){var now=Date.now();
+  function _tAlarmTick(){var now=Date.now(),due=[];
     Object.keys(_tAlarm.known).forEach(function(id){var t=_tAlarm.known[id];
-      if(now>=t.exp&&!_tAlarm.fired[id]){_tAlarm.fired[id]=now;delete _tAlarm.known[id];timerAlarm(t.label);}});}
+      if(now>=t.exp&&!_tAlarm.fired[id]){_tAlarm.fired[id]=now;delete _tAlarm.known[id];due.push(t.label);}});
+    // Batch same-tick expiries into ONE alarm ("Pasta / Eggs") so a second
+    // timer finishing doesn't overwrite the first's label + speech.
+    if(due.length)timerAlarm(due.join(' / '));}
   function _beep(){try{if(!_tAlarm.ctx)_tAlarm.ctx=new (window.AudioContext||window.webkitAudioContext)();var c=_tAlarm.ctx;
     if(c.state==='suspended')c.resume();
     function ping(t0){var o=c.createOscillator(),g=c.createGain();o.type='sine';o.frequency.value=880;o.connect(g);g.connect(c.destination);
