@@ -46,8 +46,13 @@ def _fake_sidecar(monkeypatch, raw):
     return calls
 
 
-def _wait_for(predicate, *, timeout_s=2.5, interval_s=0.05):
-    """Poll predicate() until it returns a truthy value; None on timeout.
+def _wait_until_truthy(predicate, *, timeout_s=2.5, interval_s=0.05):
+    """Poll predicate() until it returns a TRUTHY value; None on timeout.
+
+    Truthiness IS the ready signal — a falsy result means "not yet". Both callers
+    wait for a value to appear (a dict entry, a non-empty list), so that reads
+    naturally; a predicate whose valid answer is falsy (0/False/"") would need a
+    different helper. Named for the contract so that isn't a surprise.
 
     Budget matches the original 50 x 0.05s waits.
     """
@@ -78,7 +83,7 @@ def _wait_for_log_lines(path, *, timeout_s=2.5):
             return None
         return text.splitlines() if text.strip() else None
 
-    lines = _wait_for(_lines, timeout_s=timeout_s)
+    lines = _wait_until_truthy(_lines, timeout_s=timeout_s)
     assert lines, (
         f"shadow log {path} received no line within {timeout_s}s — the "
         "background writer never flushed one"
@@ -288,7 +293,7 @@ def test_shadow2_never_changes_routing(monkeypatch, tmp_path):
     assert "two_stage" not in rr
     # Both waits below poll for CONTENT, never for mere file existence — the
     # shadow work happens on a background thread (see _wait_for_log_lines).
-    assert _wait_for(lambda: seen.get("text")) == "anything", (
+    assert _wait_until_truthy(lambda: seen.get("text")) == "anything", (
         "shadow2 background thread never called router_two_stage.decide() "
         "with the utterance within 2.5s"
     )
