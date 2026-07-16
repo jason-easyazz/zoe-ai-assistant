@@ -3,12 +3,12 @@ type: Reference
 title: Zoe Runtime Topology
 description: The live runtime — host, services, ports, where each thing is served from and logs to, the touch panel, and the memory-tight envelope. Orientation for any agent before touching the running system.
 tags: [topology, runtime, services, deployment, orientation]
-timestamp: 2026-06-26T00:00:00Z
+timestamp: 2026-07-16T00:00:00Z
 ---
 
 # Zoe Runtime Topology
 
-Where Zoe actually runs, verified live 2026-06-26. For the *locked* model/voice choices see
+Where Zoe actually runs, verified live 2026-07-16. For the *locked* model/voice choices see
 [CANONICAL.md](../CANONICAL.md) (the rocks); for the tool layer see [zoe-tool-stack.md](zoe-tool-stack.md).
 Point-in-time facts (ports, paths) — verify with `docker ps` / `ss -ltnp` / `systemctl --user` before relying on them.
 
@@ -27,7 +27,10 @@ These run as **user systemd** units (`systemctl --user`), straight on the host:
 |---|---|---|---|---|
 | API | `zoe-data.service` | `0.0.0.0:8000` | FastAPI/uvicorn (`main:app`) — voice + chat path, memory router, Skybridge; Prometheus at `/metrics` | `~/.zoe-logs/zoe-data.{stdout,stderr}.log` (append; **not** journald) |
 | Brain | `llama-server.service` | `0.0.0.0:11434` | host-native llama.cpp serving the Gemma 4 E4B-QAT + MTP rock (~5.2 GB mlock) | journald |
-| TTS | `kokoro-tts.service` | `127.0.0.1:10201` | Kokoro voice sidecar (localhost-only) | journald |
+| TTS | `kokoro-tts.service` | `127.0.0.1:10201` | Kokoro voice sidecar (localhost-only, `device=cuda`, RTF ~0.08) | journald |
+| Router (stage-2) | `functiongemma-router.service` | `127.0.0.1:11436` | FunctionGemma-270M decoder for the **two-stage router** (SetFit MLP shortlist → GBNF decode); zoe-data selects it via `ZOE_ROUTER_HEAD=active` (#1322, live) | journald |
+| Brain sidecar | `flue-zoe-brain.service` | `127.0.0.1:3578` | Flue Pi-Agent brain sidecar; **LIVE** on this deployment via `ZOE_BRAIN_BACKEND=flue` (shares the Gemma rock on `:11434`) | journald |
+| Telegram | `flue-zoe-telegram.service` | — | Flue Telegram front door (re-slotted through `/api/chat`) | journald |
 
 - `zoe-data` runs from the **live checkout** `WorkingDirectory=/home/zoe/assistant/services/zoe-data`,
   with `MALLOC_ARENA_MAX=2` set in the unit (caps glibc arena bloat — see [zoe-tool-stack.md] note;
@@ -39,14 +42,18 @@ These run as **user systemd** units (`systemctl --user`), straight on the host:
 
 `zoe-auth`, `zoe-database` (Postgres), `zoe-ui` (+nginx), `zoe-music-assistant`,
 `zoe-multica-{backend,web}`, `zoe-omnigent` (`:6767`, remote-coding meta-harness), `homeassistant`
-(+`homeassistant-mcp-bridge`), `zoe-cloudflared` (edge tunnel), `zoe-smb-drop`. The brain, TTS, and
-zoe-data are **host-native, not containers** — don't look for them in `docker ps`.
+(+`homeassistant-mcp-bridge`), `zoe-cloudflared` (edge tunnel), `zoe-smb-drop`, `zoe-ytmusic-potoken`.
+The brain, TTS, router/flue sidecars, and zoe-data are **host-native, not containers** — don't look
+for them in `docker ps`.
 
 ## The touch panel
 
 A **separate Raspberry Pi**, hostname `zoe-touch` at **192.168.1.61**, user `pi`. `zoe-kiosk.service`
-→ `/opt/TouchKio/start-kiosk.sh` (chromium kiosk) → loads `https://192.168.1.218/touch/skybridge.html`.
-Tracked config under `scripts/setup/touchscreen/` (SSH access to the panel needs operator OK).
+→ `/opt/TouchKio/start-kiosk.sh` (chromium kiosk) → loads
+`https://192.168.1.218/touch/home.html?panel_id=zoe-touch-pi&kiosk=1` — the **estate** UI, the panel
+chrome. (The old `skybridge.html` front-end was **retired** in #1345; only a compat redirect stub →
+`home.html` remains. `dashboard.html` was superseded too.) Tracked config under
+`scripts/setup/touchscreen/` (SSH access to the panel needs operator OK).
 
 ## Deploy (important)
 
