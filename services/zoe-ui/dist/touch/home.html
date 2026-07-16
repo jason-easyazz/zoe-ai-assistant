@@ -181,7 +181,13 @@
   .srow2 .sw.on{background:var(--accent)}
   .srow2 .sw.on::after{left:28px}
   .srow2 input[type=range]{flex:1;max-width:280px;accent-color:var(--accent);height:34px}
-  .srow2 .sset{margin-left:auto;background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.14);color:var(--ink);border-radius:12px;padding:10px 14px;font-size:19px;min-height:44px;cursor:pointer}
+  /* color-scheme:dark is load-bearing, not cosmetic: the OPEN dropdown is a NATIVE
+     popup the browser paints on a light background by default, while `color` above
+     is near-white (--ink) — so the option text rendered white-on-white and was
+     unreadable. It tells the browser to paint its own UI dark; the explicit option
+     rule below is the fallback for engines that don't honour color-scheme there. */
+  .srow2 .sset{margin-left:auto;background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.14);color:var(--ink);border-radius:12px;padding:10px 14px;font-size:19px;min-height:44px;cursor:pointer;color-scheme:dark}
+  .srow2 .sset option{background:#131a2b;color:var(--ink)}
   .srow2 .sbtn{margin-left:auto;background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.14);color:var(--ink);border-radius:12px;padding:10px 18px;font:inherit;font-size:18px;min-height:44px;cursor:pointer}
   .srow2 .sbtn:disabled{opacity:.5}
   .srow2 .sv{min-width:56px;text-align:right;color:var(--ink-soft);font-variant-numeric:tabular-nums}
