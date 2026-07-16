@@ -60,6 +60,10 @@ The Pi-as-brain path and the services it depends on. These are real and load-bea
   - **`legacy`** — `services/zoe-data/zoe_agent.py`, the last fallback (only when
     `ZOE_BRAIN_BACKEND` is not `flue` AND `ZOE_USE_CORE_BRAIN` is off).
 - **`services/zoe-data`** — FastAPI app (`:8000`): voice/chat path, memory router, Skybridge.
+- **Two-stage router** (LIVE, `ZOE_ROUTER_HEAD=active`) — a fast tool-router *front* on the voice
+  path: SetFit MLP shortlist → `functiongemma-router.service` GBNF decoder (host-native, `:11436`).
+  The Gemma 4 E4B rock stays the brain and the fallback for every abstain/miss. Self-training loop
+  (`ZOE_ROUTER_SELFTRAIN`, default OFF) can mine → retrain → ratchet-promote. See [`PLANS.md`](PLANS.md).
 - **`zoe-database`** — PostgreSQL (asyncpg, `$1` placeholders). Relational + temporal memory.
 - **Chroma / MemPalace** — vector store for memory (raw-first).
 - **`llama-server`** (host-native, `:11434`) — serves the brain rock above.

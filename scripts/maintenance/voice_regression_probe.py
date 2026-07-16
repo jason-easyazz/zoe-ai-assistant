@@ -218,6 +218,41 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _dsn_from_env_file(env_file: Path) -> str:
+    """Parse POSTGRES_URL out of a services `.env` file; "" if absent/unreadable."""
+    try:
+        with open(env_file) as fh:
+            for line in fh:
+                if line.startswith("POSTGRES_URL="):
+                    return line[len("POSTGRES_URL="):].strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return ""
+
+
+def _resolve_dsn(args) -> str:
+    """Resolve the Postgres DSN for the cleanup sweep. Precedence:
+
+    1. an explicit ``POSTGRES_URL`` in the environment;
+    2. ``--service-dir/.env`` — the SAME directory measure_voice.py uses to reach
+       the live service, so a probe run from a git WORKTREE (which has no
+       gitignored services/zoe-data/.env of its own) resolves the DSN as long as
+       --service-dir points at the live services/zoe-data;
+    3. ``REPO/services/zoe-data/.env`` — last-ditch fallback for the in-tree run.
+
+    Returns "" when the DSN is genuinely unresolvable (caller must fail loudly,
+    not hide a real failure behind a silent success)."""
+    env_dsn = os.environ.get("POSTGRES_URL", "")
+    if env_dsn:
+        return env_dsn
+    service_dir = getattr(args, "service_dir", None)
+    if service_dir:
+        dsn = _dsn_from_env_file(Path(service_dir) / ".env")
+        if dsn:
+            return dsn
+    return _dsn_from_env_file(REPO / "services" / "zoe-data" / ".env")
+
+
 def cleanup_replay_artifacts(run_started_utc: str, args) -> bool:
     """Soft-delete replay artifacts: rows created during the probe window and
     owned by the replay identities only.
@@ -241,19 +276,11 @@ def cleanup_replay_artifacts(run_started_utc: str, args) -> bool:
     except ImportError as exc:
         print(f"cleanup: FAILED — asyncpg unavailable in the probe environment: {exc}", file=sys.stderr)
         return False
-    dsn = os.environ.get("POSTGRES_URL", "")
+    dsn = _resolve_dsn(args)
     if not dsn:
-        env_file = REPO / "services" / "zoe-data" / ".env"
-        try:
-            with open(env_file) as fh:
-                for line in fh:
-                    if line.startswith("POSTGRES_URL="):
-                        dsn = line[len("POSTGRES_URL="):].strip().strip('"').strip("'")
-                        break
-        except OSError:
-            pass
-    if not dsn:
-        print("cleanup: FAILED — POSTGRES_URL unavailable; replay artifacts were NOT swept", file=sys.stderr)
+        print("cleanup: FAILED — POSTGRES_URL unavailable (checked env, "
+              "--service-dir/.env, and REPO/services/zoe-data/.env); replay "
+              "artifacts were NOT swept", file=sys.stderr)
         return False
     replay_users = [getattr(args, "user", "jason") or "jason", "guest"]
     try:
