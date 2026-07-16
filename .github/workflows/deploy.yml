@@ -88,8 +88,8 @@ jobs:
           # Ordering is deliberate (same as #1344): blocking BEFORE the reset
           # leaves the live tree at $prev, so a retry re-evaluates the SAME change
           # instead of fast-forwarding past it and skipping the gate entirely.
-          prev="$(git rev-parse HEAD)"
-          target="$(git rev-parse FETCH_HEAD)"
+          prev="$(git rev-parse HEAD)" || exit 1
+          target="$(git rev-parse FETCH_HEAD)" || exit 1
           if ! python3 scripts/maintenance/voice_gate_check.py \
                  --repo /home/zoe/assistant --diff "${prev}..${target}"; then
             echo "::error::REFUSING TO DEPLOY: ${prev:0:7}..${target:0:7} changes the voice runtime path without a fresh passing replay-gate result (see above)."
