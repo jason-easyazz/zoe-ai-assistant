@@ -209,7 +209,7 @@ When the user requests a durable behavior change, record it here or in the relev
 ## Child DOX Index
 
 - [services/AGENTS.md](services/AGENTS.md) — runtime services: zoe-data production web/chat API, zoe-ui static UI + nginx, zoe-auth, MCP bridges, LiveKit
-- [skills/AGENTS.md](skills/AGENTS.md) — user-facing Zoe runtime skills (SKILL.md dirs discovered by the router)
+- [skills/AGENTS.md](skills/AGENTS.md) — Zoe skill definitions (SKILL.md dirs); documentation only — NOT wired to runtime discovery, which reads `~/.openclaw/workspace/skills` + `~/.hermes/skills`
 - [tools/AGENTS.md](tools/AGENTS.md) — audit, cleanup, validation, and generator utilities (structure/critical-file validators live here)
 - [scripts/AGENTS.md](scripts/AGENTS.md) — setup, maintenance, deployment, and utility scripts, including systemd unit templates
 - [tests/AGENTS.md](tests/AGENTS.md) — unit, integration, performance, e2e, and voice test suites
