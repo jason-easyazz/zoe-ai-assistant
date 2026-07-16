@@ -99,11 +99,12 @@ def run_measure(samples: int, service_dir: str, user: str, timeout: int) -> dict
         if not os.path.getsize(out_json):
             # measure_voice exits 0 on its skip paths (no .env in --service-dir,
             # missing replay harness) without writing JSON — surface that
-            # instead of a cryptic JSONDecodeError. Worktree runs must point
-            # --service-dir at the LIVE services/zoe-data (env lives there).
+            # instead of a cryptic JSONDecodeError. --service-dir auto-resolves
+            # to the live env (see _resolve_service_dir); reaching here means it
+            # found none anywhere, which is a loud error, never a pass.
             raise RuntimeError(
-                "measure_voice skipped without results — likely no .env in "
-                f"--service-dir; stderr: {proc.stderr[-300:]}"
+                "measure_voice skipped without results — no .env in resolved "
+                f"--service-dir {service_dir!r}; stderr: {proc.stderr[-300:]}"
             )
         with open(out_json) as fh:
             return json.load(fh)
@@ -218,6 +219,62 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _main_worktree_root() -> Path | None:
+    """The MAIN checkout of this repo, or None when it can't be determined.
+
+    Resolved via git's COMMON dir (shared by every linked worktree) rather than a
+    hardcoded host path: from any worktree, `--git-common-dir` points at the main
+    checkout's `.git`, so its parent is the main checkout itself. In the main
+    checkout it resolves to that same checkout, making this a no-op there."""
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            cwd=str(REPO), capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return None
+    return Path(proc.stdout.strip()).parent
+
+
+def _service_dir_candidates() -> list[Path]:
+    """Service dirs that may hold the LIVE `.env`, in resolution order:
+
+    1. ``REPO/services/zoe-data`` — the in-tree run (and the live checkout itself);
+    2. ``<main worktree>/services/zoe-data`` — the documented agent workflow runs
+       this probe from a git WORKTREE, where `services/zoe-data/.env` is
+       gitignored and therefore absent.
+    """
+    candidates = [REPO / "services" / "zoe-data"]
+    main_root = _main_worktree_root()
+    if main_root is not None:
+        main_service_dir = main_root / "services" / "zoe-data"
+        if main_service_dir not in candidates:
+            candidates.append(main_service_dir)
+    return candidates
+
+
+def _resolve_service_dir(explicit: str | None) -> Path:
+    """Resolve --service-dir: the dir whose `.env` reaches the LIVE service.
+
+    Ladder: an explicit ``--service-dir`` ALWAYS wins; otherwise the first
+    candidate (see `_service_dir_candidates`) that actually has a `.env`.
+
+    When nothing resolves we deliberately return the in-tree default so the
+    EXISTING loud error still fires downstream (measure_voice skips without
+    results -> the probe reports status=error / exit 2). A skip must never be
+    mistaken for a pass — that is the doctrine this gate exists to enforce, and
+    this resolver must not paper over a genuinely missing env."""
+    if explicit:
+        return Path(explicit)
+    candidates = _service_dir_candidates()
+    for candidate in candidates:
+        if (candidate / ".env").is_file():
+            return candidate
+    return candidates[0]
+
+
 def _dsn_from_env_file(env_file: Path) -> str:
     """Parse POSTGRES_URL out of a services `.env` file; "" if absent/unreadable."""
     try:
@@ -235,10 +292,10 @@ def _resolve_dsn(args) -> str:
 
     1. an explicit ``POSTGRES_URL`` in the environment;
     2. ``--service-dir/.env`` — the SAME directory measure_voice.py uses to reach
-       the live service, so a probe run from a git WORKTREE (which has no
-       gitignored services/zoe-data/.env of its own) resolves the DSN as long as
-       --service-dir points at the live services/zoe-data;
-    3. ``REPO/services/zoe-data/.env`` — last-ditch fallback for the in-tree run.
+       the live service (already resolved by `_resolve_service_dir`, so a probe
+       run from a git WORKTREE lands on the live services/zoe-data);
+    3. each `_service_dir_candidates()` entry's `.env` — the same ladder the
+       service-dir resolution walks, so the two can't drift apart.
 
     Returns "" when the DSN is genuinely unresolvable (caller must fail loudly,
     not hide a real failure behind a silent success)."""
@@ -250,7 +307,11 @@ def _resolve_dsn(args) -> str:
         dsn = _dsn_from_env_file(Path(service_dir) / ".env")
         if dsn:
             return dsn
-    return _dsn_from_env_file(REPO / "services" / "zoe-data" / ".env")
+    for candidate in _service_dir_candidates():
+        dsn = _dsn_from_env_file(candidate / ".env")
+        if dsn:
+            return dsn
+    return ""
 
 
 def cleanup_replay_artifacts(run_started_utc: str, args) -> bool:
@@ -385,7 +446,10 @@ def main() -> int:
     ap.add_argument("--samples", type=int, default=int(os.environ.get("ZOE_VOICE_PROBE_SAMPLES", "20")),
                     help="newest N corpus samples to replay")
     ap.add_argument("--user", default=os.environ.get("ZOE_VOICE_PROBE_USER", "jason"))
-    ap.add_argument("--service-dir", default=str(REPO / "services" / "zoe-data"))
+    ap.add_argument("--service-dir", default=None,
+                    help="services/zoe-data dir holding the LIVE .env. Default: this repo's "
+                         "services/zoe-data if it has a .env, else the MAIN worktree's "
+                         "(so a run from a git worktree needs no flag).")
     ap.add_argument("--timeout", type=int, default=int(os.environ.get("ZOE_VOICE_PROBE_TIMEOUT_S", "900")))
     ap.add_argument("--baseline", type=Path, default=Path(os.environ.get("ZOE_VOICE_BASELINE", DEFAULT_BASELINE)))
     ap.add_argument("--results", type=Path, default=Path(os.environ.get("ZOE_VOICE_RESULTS", DEFAULT_RESULTS)))
@@ -398,6 +462,9 @@ def main() -> int:
     ap.add_argument("--no-cleanup", action="store_true",
                     help="skip the post-run replay-artifact cleanup (soft-delete of rows created during the replay window)")
     args = ap.parse_args()
+    # Resolve BEFORE anything reads it: _resolve_dsn and run_measure both consume
+    # args.service_dir, and both must see the same live dir.
+    args.service_dir = str(_resolve_service_dir(args.service_dir))
 
     _lock_fd = _acquire_harness_lock()  # noqa: F841 — held for process lifetime
 
