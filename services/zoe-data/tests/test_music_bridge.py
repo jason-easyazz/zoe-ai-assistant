@@ -921,6 +921,39 @@ def test_first_image_falls_back_to_album_metadata():
     assert music_service._first_image(item) == "https://img/album.jpg"
 
 
+def test_first_image_reads_brief_single_image_dict():
+    """Regression: MA's *brief* item shape — what music/recently_played_items and
+    search hits return — carries ONE image dict with an empty metadata{} and no
+    album. That dict matched neither the str nor the list branch, so every
+    recently-played tile rendered art-less while playlists (full library items,
+    metadata.images[]) looked fine. Payload copied from the live MA."""
+    item = {"name": "Golden", "media_type": "track", "uri": "ytmusic://track/x",
+            "image": {"type": "thumb", "path": "https://yt3.googleusercontent.com/1U=s120",
+                      "provider": "ytmusic", "remotely_accessible": True},
+            "metadata": {}, "album": None}
+    assert music_service._first_image(item) == "https://yt3.googleusercontent.com/1U=s120"
+
+
+def test_first_image_brief_dict_still_honours_http_guard():
+    """The single-dict branch is not a bypass: a relative placeholder path is
+    dropped exactly like the list branch drops it."""
+    item = {"name": "Local track",
+            "image": {"type": "thumb", "path": "logo.png", "provider": "builtin"},
+            "metadata": {}}
+    assert music_service._first_image(item) == ""
+
+
+def test_recently_played_hits_carry_art_end_to_end():
+    """The whole point: a brief hit normalizes WITH art (and gets the hi-res
+    rewrite), so the Recent tiles aren't blank."""
+    hit = {"name": "Cruel Summer", "uri": "ytmusic://track/y", "media_type": "track",
+           "image": {"type": "thumb", "path": "https://lh3.googleusercontent.com/x=w60-h60"},
+           "metadata": {}}
+    norm = music_service._normalize_hit(hit, "track")
+    assert norm["image"].startswith("https://")
+    assert norm["image"].endswith("=w544-h544")  # _hi_res_art upgraded the thumb
+
+
 @pytest.mark.asyncio
 async def test_list_playlists_maps_metadata_art(monkeypatch):
     async def fake_ma(command, **args):
