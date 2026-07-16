@@ -26,6 +26,8 @@ sys.path.insert(0, str(SVC))
 import money  # noqa: E402
 from routers import transactions  # noqa: E402
 
+pytestmark = pytest.mark.ci_safe
+
 
 # ─── Exact cents vs float-sum drift ───────────────────────────────────────────
 
