@@ -358,3 +358,41 @@ async def test_intelligence_settings_db_error_surfaces_degraded_response():
     assert result["status"] == "degraded"
     assert result["error"] == "settings_storage_unavailable"
     assert result["settings"] == dict(stubs._INTELLIGENCE_DEFAULTS)
+
+
+class _BrokenWriteDB:
+    async def execute(self, sql: str, params=()):
+        raise RuntimeError("database unavailable: relation does not exist")
+
+    async def commit(self):  # pragma: no cover — never reached
+        pass
+
+
+class _FakeJSONRequest:
+    def __init__(self, payload: dict):
+        self._payload = payload
+
+    async def json(self):
+        return self._payload
+
+
+@pytest.mark.asyncio
+async def test_intelligence_settings_write_failure_is_a_500_not_a_200():
+    """A failed settings WRITE must never answer 200.
+
+    The panel does `if (res.ok) alert('Saved')`, so the old
+    200-with-{"status": "error"} body told the user their settings had saved
+    when nothing was written. A write either persisted or it didn't — the read
+    path's "degraded" shape has no honest meaning here.
+    """
+    with pytest.raises(HTTPException) as excinfo:
+        await stubs.save_intelligence_settings(
+            request=_FakeJSONRequest({"learning_enabled": True}),
+            user={"user_id": "u-1", "role": "member"},
+            db=_BrokenWriteDB(),
+        )
+
+    assert excinfo.value.status_code == 500
+    # The raw exception must not reach the client: it can carry DB schema and
+    # connection detail, and any signed-in user can call this endpoint.
+    assert "relation does not exist" not in str(excinfo.value.detail)
