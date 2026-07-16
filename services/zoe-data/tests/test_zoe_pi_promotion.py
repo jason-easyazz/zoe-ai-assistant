@@ -22,6 +22,8 @@ from zoe_pi_promotion import (
     summarize_pi_promotion,
 )
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _sample(index, *, group="weather", zoe="reminder_list", pi="weather", expected="weather", zoe_ms=900, pi_ms=300, **kwargs):
     metadata = dict(kwargs.pop("metadata", {}) or {})
