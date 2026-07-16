@@ -8,7 +8,7 @@
 importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.63.50'; // panel: idle → dimmed sleep screen (estate auto-sleep), backlight never fully off (off_enabled default false)
+const SW_VERSION = '4.63.51'; // panel idle-sleep: server-configurable window + short mid-interaction retry
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded

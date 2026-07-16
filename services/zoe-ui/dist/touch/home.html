@@ -782,14 +782,17 @@
   // drifts to the 'sleep' surface; any touch/voice/navigation resets it. The
   // backlight NEVER fully powers off (panel-agent off_enabled=false) — it stays
   // a dim, visible sleep screen.
-  var _idleSleepT=null, IDLE_SLEEP_MS=180000;
-  function armIdleSleep(){if(_idleSleepT){clearTimeout(_idleSleepT);_idleSleepT=null;}
-    if(_cur==='sleep')return;
+  // IDLE_SLEEP_MS / _sleepEnabled are overridden from the display-preferences
+  // endpoint at boot (sleep_seconds / sleep_enabled) so an operator can tune the
+  // active-display window without a redeploy, like idle_seconds/off_seconds.
+  var _idleSleepT=null, IDLE_SLEEP_MS=180000, _sleepEnabled=true, IDLE_SLEEP_RETRY_MS=30000;
+  function armIdleSleep(ms){if(_idleSleepT){clearTimeout(_idleSleepT);_idleSleepT=null;}
+    if(_cur==='sleep'||!_sleepEnabled)return;
     _idleSleepT=setTimeout(function(){_idleSleepT=null;
       var m=document.getElementById('estModal'),cb=document.getElementById('cmdbar');
-      if((m&&m.classList.contains('on'))||(cb&&cb.classList.contains('on'))){armIdleSleep();return;}  // mid-interaction — check again shortly
+      if((m&&m.classList.contains('on'))||(cb&&cb.classList.contains('on'))){armIdleSleep(IDLE_SLEEP_RETRY_MS);return;}  // mid-interaction — re-check in 30s, not a full window
       if(_cur!=='sleep')show('sleep');
-    },IDLE_SLEEP_MS);}
+    },ms||IDLE_SLEEP_MS);}
   // Any touch on the panel means the user took over — the screen is theirs.
   document.addEventListener('pointerdown',function(){_userTookOver=true;_voiceScreen=false;cancelAutoHome();armIdleSleep();},true);
 
@@ -1971,6 +1974,15 @@
   })();
 
   if(!window.__voiceArrived)show('home');
+  // Tune the idle→sleep window from server display-prefs (falls back to the
+  // hardcoded 3-min default if unreachable), so it's operator-adjustable like
+  // idle_seconds/off_seconds without a redeploy.
+  try{var _dev=(localStorage.getItem('zoe_panel_id')||'default');
+    apiGet('/api/system/display/preferences?device_id='+encodeURIComponent(_dev)).then(function(d){var p=(d&&d.preferences)||{};
+      if(p.sleep_enabled===false)_sleepEnabled=false;
+      var s=+p.sleep_seconds; if(s>0)IDLE_SLEEP_MS=s*1000;
+      armIdleSleep();
+    }).catch(function(){});}catch(e){}
 })();
 </script>
 <script src="/js/touch-ui-executor.js?v=estate-2"></script>

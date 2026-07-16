@@ -2209,6 +2209,10 @@ _DEFAULT_DISPLAY_PREFS = {
     # dim, visible clock rather than going black.
     "off_enabled": False,
     "off_seconds": 900,
+    # Estate idle→dimmed-sleep drift (the touch UI reads these): after
+    # sleep_seconds of no touch/voice the panel shows the dim 'sleep' clock.
+    "sleep_enabled": True,
+    "sleep_seconds": 180,
 }
 
 _DEFAULT_PI_HOST = os.environ.get("ZOE_PI_HOST", "192.168.1.61")
