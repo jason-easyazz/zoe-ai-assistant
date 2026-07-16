@@ -90,11 +90,15 @@ function run({ tokenOk = true, bundleOk = true } = {}) {
       const e = makeEl(tag);
       if (tag === 'script') {
         // Record the lazy-load and resolve it like a real <script> would.
+        // bundleOk: true = loads; false = 404 (onerror); 'noglobal' = the script
+        // loads but exports no LivekitClient (onload with the global absent).
         Object.defineProperty(e, 'src', {
           set(v) {
             trace.scripts.push(v);
+            const ok = typeof bundleOk === 'function' ? bundleOk() : bundleOk;
             setTimeout(() => {
-              if (bundleOk) { global.window.LivekitClient = fakeLiveKit(trace); e.onload && e.onload(); }
+              if (ok === true) { sandbox.window.LivekitClient = fakeLiveKit(trace); e.onload && e.onload(); }
+              else if (ok === 'noglobal') { e.onload && e.onload(); }
               else { e.onerror && e.onerror(new Error('404')); }
             }, 0);
           },
@@ -256,6 +260,35 @@ const tick = () => new Promise((r) => setTimeout(r, 5));
     await tick();
     assert.strictEqual(sandbox.window.__zoeConv.live(), false, 'bundle 404 must not leave a live session');
     assert.ok(trace.mic.indexOf(true) < 0, 'bundle 404 must never open the mic');
+  }
+  // A script that loads but exports no global must also fail cleanly.
+  {
+    const { sandbox, trace } = run({ bundleOk: 'noglobal' });
+    await sandbox.window.__zoeConv.start();
+    await tick();
+    assert.strictEqual(sandbox.window.__zoeConv.live(), false, 'missing global must not leave a live session');
+    assert.ok(trace.mic.indexOf(true) < 0, 'missing global must never open the mic');
+  }
+
+  // ── 6b. A failed load must not poison every later attempt ─────────────────
+  // The load promise is cached; if a failure path leaves the rejected promise
+  // cached, the Talk button is dead until the kiosk is reloaded. Both failure
+  // paths (404 and script-loads-but-no-global) must clear the cache so a retry
+  // can actually recover.
+  for (const firstFailure of [false, 'noglobal']) {
+    let attempt = 0;
+    const { trace, sandbox } = run({ bundleOk: () => (++attempt === 1 ? firstFailure : true) });
+    await sandbox.window.__zoeConv.start();
+    await tick();
+    assert.strictEqual(sandbox.window.__zoeConv.live(), false, 'first attempt fails (' + firstFailure + ')');
+
+    await sandbox.window.__zoeConv.start();   // retry — must re-fetch and succeed
+    await tick();
+    assert.strictEqual(trace.scripts.length, 2,
+      'retry after a failed load must re-fetch the bundle (' + firstFailure + '), got ' + trace.scripts.length);
+    assert.strictEqual(sandbox.window.__zoeConv.live(), true,
+      'retry after a failed load must recover (' + firstFailure + ')');
+    assert.ok(trace.mic.indexOf(true) >= 0, 'retry publishes the mic (' + firstFailure + ')');
   }
 
   // ── 7. A live session suppresses idle->sleep AND ambient-return ───────────

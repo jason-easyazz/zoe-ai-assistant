@@ -1930,7 +1930,13 @@
     if(_lkLoad)return _lkLoad;
     _lkLoad=new Promise(function(res,rej){
       var s=document.createElement('script');s.src=LK_SRC;s.async=true;
-      s.onload=function(){window.LivekitClient?res(window.LivekitClient):rej(new Error('livekit global missing'));};
+      // Both failure paths must clear _lkLoad, or the cache guard above hands
+      // every later attempt the same rejected promise and the Talk button is
+      // dead until the kiosk is reloaded.
+      s.onload=function(){
+        if(window.LivekitClient){res(window.LivekitClient);return;}
+        _lkLoad=null;rej(new Error('livekit global missing'));
+      };
       s.onerror=function(){_lkLoad=null;rej(new Error('livekit bundle failed to load'));};
       document.head.appendChild(s);
     });
