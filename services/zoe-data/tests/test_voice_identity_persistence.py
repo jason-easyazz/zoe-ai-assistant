@@ -196,11 +196,19 @@ async def test_bound_panel_guest_sentinel_saves_as_bound_user(monkeypatch) -> No
 
 
 @pytest.mark.asyncio
-async def test_lapsed_session_on_bound_panel_revives_and_refreshes_heartbeat(monkeypatch) -> None:
-    """A bound panel whose ui_panel_sessions heartbeat lapsed (recent=None, but the
-    panel is bound → default=jason) must resolve to the bound user AND refresh the
-    heartbeat, so active voice keeps the login alive instead of silently dropping to
-    guest and blocking scoped commands."""
+async def test_lapsed_session_on_bound_panel_attributes_but_does_not_revive(monkeypatch) -> None:
+    """A LAPSED panel session is attributed, but never revived.
+
+    recent=None (the login lapsed) + default=jason. The turn is still ATTRIBUTED to
+    the bound user rather than guest — that was #1349's legitimate goal, and it holds
+    because `_panel_default_user` is already the last resort in `effective_user`.
+
+    But the lapsed session must NOT be resurrected. Promoting `_panel_default_user`
+    into the freshness-gated `_panel_recent_user` (as #1349 did) re-trusted a
+    logged-OUT user for `_scope_identity_user` and every `user_scoped` PIN gate, and
+    the heartbeat then refreshed the expired session on every turn — including a
+    guest's — so idle logout could never fire. Freshness confers trust (#1348).
+    """
     chat_calls, spawned = _wire_voice_command_fakes(monkeypatch, panel_user=None)
 
     async def recent_none(_pid, _db):
@@ -228,11 +236,15 @@ async def test_lapsed_session_on_bound_panel_revives_and_refreshes_heartbeat(mon
         await asyncio.gather(*spawned)
 
     assert response["ok"] is True
-    # 1. the heartbeat was refreshed for the bound user → active use keeps the login alive
-    assert (PANEL_ID, BOUND_USER) in touched, (
-        "voice turn did not refresh the panel session heartbeat for the bound user: %r" % (touched,)
+    # 1. SECURITY: a lapsed session is NOT resurrected. Refreshing the heartbeat here
+    #    would re-trust a logged-out user for the PIN gates and, because the refresh
+    #    happens on every turn (a guest's included), idle logout could never fire.
+    assert (PANEL_ID, BOUND_USER) not in touched, (
+        "lapsed panel session was revived — the heartbeat must only refresh a user "
+        "whose session is still fresh: %r" % (touched,)
     )
-    # 2. the turn is attributed to the bound user, not guest
+    # 2. the turn is still attributed to the bound user, not guest (#1349's real goal;
+    #    holds via _panel_default_user's place in the effective_user chain)
     assert (SESSION_ID, "user", UTTERANCE, BOUND_USER) in chat_calls, (
         "lapsed-session turn was not persisted under the bound user: %r" % (chat_calls,)
     )
