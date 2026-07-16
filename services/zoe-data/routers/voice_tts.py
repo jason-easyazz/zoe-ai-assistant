@@ -2642,16 +2642,25 @@ async def voice_command(
         except Exception:
             _panel_recent_user = None
             _panel_default_user = None
-    # Keep the panel's login alive while it's actively in use. The session is meant
-    # to track "whoever is logged into the panel" and lapse only after real
-    # inactivity — but ui_panel_sessions is written only on touch/login, so a
-    # VOICE-only session expired mid-conversation (~15 min trust window), dropping
-    # the user to guest and blocking their scoped commands. If the panel is bound to
-    # a real user but the session lapsed, treat active voice as that user (the panel
-    # binding is the operator's "this panel belongs to X"); either way, refresh the
-    # heartbeat so continued use keeps the login fresh.
-    if not _panel_recent_user and _panel_default_user and _panel_default_user not in _GUEST_SENTINEL_USERS:
-        _panel_recent_user = _panel_default_user
+    # Keep the panel's login alive while it's actively in use. The session tracks
+    # "whoever is logged into the panel" and should lapse only after real inactivity
+    # — but ui_panel_sessions is written only on touch/login, so a VOICE-only session
+    # expired mid-conversation (~15 min trust window), dropping the user to guest and
+    # blocking their scoped commands. The heartbeat below is that fix (#1349): a user
+    # whose session is STILL FRESH keeps it fresh by talking.
+    #
+    # A lapsed session must NOT be revived here. `_panel_recent_user` is the
+    # freshness-gated signal, and it feeds `_scope_identity_user` → the skybridge
+    # user and every `user_scoped` PIN gate. `_resolve_panel_default_user` has NO
+    # freshness filter — it returns the newest `ui_panel_sessions` row, i.e. "whoever
+    # last signed in here", not an operator-declared owner. Promoting it into
+    # `_panel_recent_user` therefore re-trusts a logged-OUT user indefinitely, so
+    # anyone at the panel reads their lists/calendar/reminders with no PIN. It is
+    # also self-perpetuating: the heartbeat would refresh that expired session on
+    # every turn — including a guest's — so idle logout could never fire and #1348's
+    # stale-owner reclaim could never arm. Freshness confers trust (#1348); a stale
+    # owner is reclaimable. Attribution is unaffected: `_panel_default_user` is
+    # already the last resort in `effective_user` below.
     if _panel_recent_user and _panel_recent_user not in _GUEST_SENTINEL_USERS:
         await _touch_panel_session(panel_id, _panel_recent_user)
     if not _bound_user and _panel_recent_user:
