@@ -965,3 +965,46 @@ async def test_list_playlists_maps_metadata_art(monkeypatch):
     monkeypatch.setattr(music_service, "_ma", fake_ma)
     pls = await music_service.list_playlists()
     assert pls and pls[0]["image"].startswith("https://yt3.ggpht.com/")
+
+
+# ── queue item art: the endpoint the Cover Flow reads ────────────────────────
+
+def test_queue_item_art_prefers_media_item_maxres():
+    """Regression: /api/music/queue/{id} passed MA's payload through VERBATIM, so
+    `image` reached the panel as a raw dict and rendered "[object Object]" — the
+    Cover Flow covers were blank on the live panel. It also dodged the shared
+    extractor that had already fixed this on the other paths.
+
+    media_item carries the i.ytimg maxres art that now-playing reports, so
+    preferring it keeps the centre cover consistent with the now-playing image.
+    Payload copied from the live MA queue.
+    """
+    from routers.music import _queue_item_art
+    item = {
+        "name": "Livingston - Shadow", "index": 0, "queue_item_id": "6c70e504",
+        "image": {"type": "thumb", "path": "https://yt3.googleusercontent.com/cXo=s120"},
+        "media_item": {"name": "Shadow", "image": {
+            "type": "thumb", "path": "https://i.ytimg.com/vi/h3_9NEQPUBg/maxresdefault.jpg"}},
+    }
+    assert _queue_item_art(item) == "https://i.ytimg.com/vi/h3_9NEQPUBg/maxresdefault.jpg"
+
+
+def test_queue_item_art_falls_back_to_item_thumb():
+    """No media_item art (MA leaves it null on some providers) → the item's own
+    thumb still resolves rather than leaking the dict."""
+    from routers.music import _queue_item_art
+    item = {"name": "PEGGY - ALICE",
+            "image": {"type": "thumb", "path": "https://yt3.googleusercontent.com/sa0=s120"},
+            "media_item": {"name": "ALICE", "image": None}}
+    assert _queue_item_art(item) == "https://yt3.googleusercontent.com/sa0=s120"
+
+
+def test_queue_item_art_never_leaks_a_dict():
+    """The actual panel symptom: anything unresolvable must be "" (→ placeholder),
+    never a dict that stringifies to "[object Object]" in an <img src>."""
+    from routers.music import _queue_item_art
+    for item in ({"name": "x"},
+                 {"name": "x", "image": {"type": "thumb", "path": "logo.png"}},
+                 {"name": "x", "image": None, "media_item": None}):
+        art = _queue_item_art(item)
+        assert isinstance(art, str) and (art == "" or art.startswith("http"))

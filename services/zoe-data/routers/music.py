@@ -13,6 +13,8 @@ from typing import Any
 import httpx
 from fastapi import APIRouter
 
+from music_service import _first_image, _hi_res_art
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/music", tags=["music"])
@@ -76,6 +78,21 @@ async def _get_players() -> list | None:
     return None
 
 
+def _queue_item_art(item: dict) -> str:
+    """Resolve one queue item's cover to a real http(s) url.
+
+    MA hands a queue item its art as a single dict — {"type","path"} — and hangs
+    a richer `media_item` off it. Prefer the media_item's art: it's the same
+    i.ytimg maxres source `now-playing` reports, so the centre cover of the flow
+    matches the now-playing art instead of a lower-res yt3 thumb. Fall back to
+    the item's own thumb. `_first_image` understands both shapes and drops
+    anything non-http, so a missing cover degrades to the placeholder.
+    """
+    media_item = item.get("media_item")
+    art = _first_image(media_item) if isinstance(media_item, dict) else ""
+    return _hi_res_art(art or _first_image(item))
+
+
 async def _get_queue_items(queue_id: str, limit: int = 50) -> list | None:
     try:
         async with httpx.AsyncClient(timeout=5.0) as c:
@@ -86,7 +103,16 @@ async def _get_queue_items(queue_id: str, limit: int = 50) -> list | None:
             )
             if r.status_code == 200:
                 data = r.json()
-                return data if isinstance(data, list) else (data.get("items") or [])
+                items = data if isinstance(data, list) else (data.get("items") or [])
+                # Normalize art HERE or it reaches the panel as MA's raw dict and
+                # renders as "[object Object]" — this endpoint used to pass MA's
+                # payload through verbatim, which is how it dodged the shared
+                # extractor that already fixed the same bug on the other paths.
+                return [
+                    {**it, "image": _queue_item_art(it)}
+                    for it in items
+                    if isinstance(it, dict)
+                ]
     except Exception as exc:
         logger.debug("MA player_queues/items unreachable: %s", exc)
     return None
