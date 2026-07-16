@@ -64,7 +64,16 @@ human, or the scheduled timer) runs to catch drift on TWO axes at once:
 It mirrors `zoe_latency_probe.py`: `--update-baseline` to set the bar, baseline at
 `~/.cache/zoe/voice_regression_baseline.json`, a `…_trend.jsonl` history, non-zero exit + `WARN` on
 regression. It self-guards: **SKIPs if available memory is low** (never OOMs the box) and runs the
-harness under the shared flock. Scheduled daily off-peak via the
+harness under the shared flock.
+
+**Run it from a git worktree with no flags.** The voice path needs the LIVE `services/zoe-data/.env`,
+which is gitignored and therefore absent in a worktree. `--service-dir` now auto-resolves: explicit
+flag (always wins) → this repo's `services/zoe-data` if it has a `.env` → the **main worktree's**
+(found via git's `--git-common-dir`, not a hardcoded host path). If no `.env` resolves anywhere it
+falls back to the in-tree path so the **loud error still fires** (`status=error`, exit 2) — a skip is
+never quietly upgraded to a pass. Pinned by `tests/unit/test_probe_dsn_resolution.py`. The lower-level
+`scripts/perf/measure_voice.py` does NOT auto-resolve; from a worktree still pass it
+`--service-dir /home/zoe/assistant/services/zoe-data` by hand. Scheduled daily off-peak via the
 `scripts/setup/systemd/zoe-voice-regression.{service,timer}` templates (operator installs to
 `~/.config/systemd/user/`). Numbers are RELATIVE (warm harness) — used for *drift vs baseline*, not
 as live performance.
