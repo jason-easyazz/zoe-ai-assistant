@@ -51,8 +51,13 @@ async def log_music_event(
                 source, query, volume_level, session_id, _time.time(),
                 percent_played, duration_seconds,
             )
-    except Exception:
-        pass  # logging must never crash a music command
+    except Exception as exc:
+        # Never re-raise: logging must never crash a music command. But a lost
+        # event silently degrades the taste seed / discovery attribution, so say so.
+        import logging as _log
+        _log.getLogger(__name__).warning(
+            "log_music_event failed for user=%s type=%s — play event NOT "
+            "journalled (taste seed will drift): %s", user_id, event_type, exc)
 
 
 async def init_db():
@@ -94,8 +99,11 @@ async def init_db():
                        VALUES ($1, $2) ON CONFLICT DO NOTHING""",
                     _role, json.dumps(_matrix),
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            import logging as _log
+            _log.getLogger(__name__).warning(
+                "init_db: role_capability_matrix seeding failed — roles fall back "
+                "to code defaults: %s", exc)
 
         default_fields = [
             ("nickname", "Nickname", "text", 0, None, "person", 10, "family"),
