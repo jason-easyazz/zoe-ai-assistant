@@ -1,13 +1,23 @@
 # Extensibility Architecture
 
-Zoe uses a **two-layer extensibility model**: Modules (heavy) and Skills (lightweight).
+> **Corrected.** An earlier version of this document described a skills
+> enforcement layer (`api_only` rejection at load time, an `allowed_endpoints`
+> executor whitelist, `skills.lock` integrity checking, a `~/.zoe/skills/` →
+> `modules/*/skills/` → `skills/` precedence chain). **None of it exists in
+> code.** Everything below is verified against the runtime.
 
-## Layer 1: Modules (Heavy Infrastructure)
+Zoe has two extensibility surfaces, and they are less symmetrical than the old
+"two-layer model" framing suggested: **modules** ship real code; **skills** ship
+descriptions.
 
-Modules provide Docker services, intents, widgets, and MCP tools. They are Zoe's
-heavy-weight extensibility layer for complex integrations.
+## Layer 1: Modules (real infrastructure)
 
-**Directory structure:**
+Modules are add-on services served under `/modules/`. They ship actual code —
+Docker services, intents, widgets, MCP tools. See [modules/AGENTS.md](../../modules/AGENTS.md).
+
+Live modules today: `omnigent`, `zoe-music`.
+
+**Directory structure (as actually used):**
 ```
 modules/{module-name}/
 ├── docker-compose.module.yml   # Docker services
@@ -15,13 +25,14 @@ modules/{module-name}/
 ├── intents/                    # HassIL intent YAML + handlers
 │   ├── {name}.yaml
 │   └── handlers.py
-├── skills/                     # Module-shipped skills (auto-loaded)
-│   └── {skill-name}/SKILL.md
 ├── widget/                     # Optional dashboard widgets
 │   ├── manifest.json
 │   └── index.html
 └── README.md
 ```
+
+There is **no `modules/{name}/skills/` convention**. No module ships skills, and
+no code would auto-load them if one did.
 
 **When to create a module:**
 - Needs its own Docker service (API, database, etc.)
@@ -29,63 +40,74 @@ modules/{module-name}/
 - Requires significant compute (ML model, browser automation)
 - Has complex state management
 
-**Example:** Agent Zero module provides research, planning, and comparison via
-its own Docker container with GPU access.
+## Layer 2: Skills (descriptions advertised to the model)
 
-## Layer 2: Skills (Lightweight Instructions)
+A skill is a Markdown file whose **description** is parsed and handed to the
+brain so it knows a capability exists. That is all a skill is.
 
-Skills are Markdown files with YAML frontmatter that tell the LLM how to handle
-specific request types. They complement modules by providing quick instruction sets.
+`services/zoe-data/skill_discovery.py` parses `SKILL.md` files from exactly two
+directories — `~/.openclaw/workspace/skills/` and `~/.hermes/skills/` — into A2A
+v1.0 `AgentSkill` dicts (`id` / `name` / `description` / `inputModes` /
+`outputModes`). `zoe_agent.py` surfaces that list via the `list_openclaw_skills`
+tool. `skills_watcher.py` watches both directories and invalidates the cache.
 
-**Skill format:**
-```yaml
----
-name: skill-name
-description: What this skill does
-version: 1.0.0
-author: zoe-team
-api_only: true          # MANDATORY
-triggers:
-  - "keyword1"
-  - "keyword2"
-allowed_endpoints:
-  - "POST /api/endpoint"
-  - "GET /api/other"
----
-# Skill Title
+**Zoe does not load, sandbox, or execute skills.** There is no executor, so there
+is nothing to whitelist. When a skill's capability is actually invoked, it is
+invoked by the peer agent (OpenClaw / Hermes) that owns it, under that agent's
+own privileges.
 
-## When to Use
-Instructions for the LLM...
-```
+**There is no precedence chain.** `~/.zoe/skills/` is not read by anything.
+`modules/*/skills/` is not read by anything. The repo's own `skills/` directory
+is **not read by anything** — see below.
 
-**When to create a skill:**
-- Adds LLM instructions without infrastructure
-- Defines API call patterns for a use case
-- Can be written in 5 minutes
-- Doesn't need its own Docker service
+**When to write a skill:**
+- You want the brain to know a capability exists and mention it when relevant
+- The capability is implemented by OpenClaw or Hermes, not by zoe-data
 
-**Skill precedence (highest to lowest):**
-1. User skills (`~/.zoe/skills/`)
-2. Module skills (`modules/{name}/skills/`)
-3. Core skills (`skills/`)
+Format and the real endpoints: [../guides/CREATING_SKILLS.md](../guides/CREATING_SKILLS.md).
 
-## How They Work Together
+## Open decision: the repo `skills/` directory
 
-```
-User says "Research the best solar panels":
-  Tier 0-2: No HassIL/keyword match
-  Tier 3: Skill trigger "research" matches research/SKILL.md
-  Tier 4: LLM reads skill instructions, calls Agent Zero API
-  Result returned to user
-```
+The repo's `skills/` tree is **disconnected from runtime discovery**. Nothing
+reads it; no sync, copy, symlink, or install step feeds it into
+`~/.openclaw/workspace/skills/` or `~/.hermes/skills/`. 9 of its 11 skills do not
+exist in the discovery directories at all; `self-improvement` and `touch-panel`
+share only a *name* with independently maintained copies under `~/.openclaw`.
 
-The intent system catches exact patterns fast (Tier 0-2). The skills layer
-catches broader patterns (Tier 3-4). Both can route to the same module backend.
+Today the tree functions as documentation for humans and agents — a real role
+(`skills/autoresearch-engineer/SKILL.md` documents the `autoresearch_bridge.py`
+promotion contract), just not a runtime one.
+
+Two coherent resolutions, **both requiring an operator decision**:
+
+1. **Build the loader** — make repo `skills/` a genuine discovery source (or
+   install it into the discovery dirs at deploy). This makes the docs' original
+   promise true and puts skills under version control and review.
+2. **Move them out** — relocate the tree to `~/.openclaw/workspace/skills/` (or
+   accept it as docs-only and say so in its `AGENTS.md`), leaving one home for
+   skills instead of two that silently drift.
+
+Until that is decided, the honest position is the one documented here: repo
+`skills/` is not wired to runtime.
 
 ## Security
 
-All skills enforce:
-- `api_only: true` -- mandatory, no command execution
-- `allowed_endpoints` whitelist -- skills can only call declared APIs
-- `skills.lock` integrity -- modified skills are deactivated until approved
-- Localhost/Docker network only -- no external calls
+The old version of this section listed five enforcement guarantees. **None are
+implemented.** No code rejects a skill for missing `api_only`, no executor
+enforces `allowed_endpoints`, and no `skills.lock` file is written, read, or
+verified anywhere in the repo. Relying on those guarantees would be unsafe.
+
+The real security posture:
+
+- **Skills are untrusted input, not sandboxed code.** A skill file influences
+  what the model believes it can do. Treat a malicious skill as a
+  prompt-injection and capability-confusion vector.
+- **Execution happens in the peer agent** (OpenClaw / Hermes), with that agent's
+  privileges. Zoe's process does not sandbox it.
+- **Scan before installing.** Root `AGENTS.md` → "Skill & extension safety":
+  `skillspector scan <dir|file|git-url>`, and record the outcome or a deliberate
+  waiver.
+- **Cache reload is admin-gated** — `POST /api/agent/peers/{name}/skills/reload`
+  requires admin.
+
+See [../governance/SECURITY_POLICY_SKILLS.md](../governance/SECURITY_POLICY_SKILLS.md).
