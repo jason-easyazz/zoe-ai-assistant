@@ -1061,3 +1061,49 @@ def test_now_playing_survives_a_queueless_player(monkeypatch):
     np = asyncio.get_event_loop().run_until_complete(music_service.now_playing())
     assert np["queue_item_id"] == ""
     assert np["queue_index"] is None
+
+
+# ── queue item title/artist: the Cover Flow's meta lines ─────────────────────
+
+def test_queue_item_artist_resolves_from_media_item():
+    """Regression: queue items have NO `artist` key — the panel read `it.artist`,
+    got undefined, and every browsed cover's artist line was silently blank.
+    The real value is nested at media_item.artists[].name. Payload from live MA."""
+    from routers.music import _queue_item_artist
+    item = {"name": "Livingston - Shadow",
+            "media_item": {"name": "Shadow", "artists": [{"name": "Livingston"}]}}
+    assert _queue_item_artist(item) == "Livingston"
+
+
+def test_queue_item_title_drops_the_concatenated_artist():
+    """A queue item's `name` is a composite ("Livingston - Shadow"). Rendering it
+    as the title next to a resolved artist reads "Livingston - Shadow" above
+    "Livingston". media_item.name carries the clean title — use it rather than
+    splitting on " - ", which breaks on any title containing a dash."""
+    from routers.music import _queue_item_title
+    item = {"name": "Livingston - Shadow",
+            "media_item": {"name": "Shadow", "artists": [{"name": "Livingston"}]}}
+    assert _queue_item_title(item) == "Shadow"
+
+
+def test_queue_item_title_keeps_a_dash_that_belongs_to_the_title():
+    """Exactly what a " - " split would have destroyed."""
+    from routers.music import _queue_item_title
+    item = {"name": "Artist - Some - Song", "media_item": {"name": "Some - Song"}}
+    assert _queue_item_title(item) == "Some - Song"
+
+
+def test_queue_item_artist_joins_collaborations():
+    from routers.music import _queue_item_artist
+    item = {"media_item": {"name": "Die With A Smile",
+                           "artists": [{"name": "Lady Gaga"}, {"name": "Bruno Mars"}]}}
+    assert _queue_item_artist(item) == "Lady Gaga, Bruno Mars"
+
+
+def test_queue_item_meta_degrades_without_a_media_item():
+    """Radio / providers with no media_item → fall back to `name`, empty artist,
+    never a crash and never an "undefined" on screen."""
+    from routers.music import _queue_item_title, _queue_item_artist
+    item = {"name": "Some Radio Stream", "media_item": None}
+    assert _queue_item_title(item) == "Some Radio Stream"
+    assert _queue_item_artist(item) == ""

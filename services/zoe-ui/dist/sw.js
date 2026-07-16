@@ -12,7 +12,7 @@
 importScripts('/workbox/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.63.58'; // music card: 3D Cover Flow queue (browse/tap/flick-up/hold-reorder)
+const SW_VERSION = '4.64.2'; // music: queue art/title/artist at the seam; uniform transport
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
