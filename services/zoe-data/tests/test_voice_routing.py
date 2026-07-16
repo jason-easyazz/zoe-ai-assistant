@@ -14,8 +14,6 @@ import os
 
 import pytest
 
-pytestmark = pytest.mark.ci_safe
-
 # expert_dispatch imports lightly (re/os/time + lazy intent_router); skip cleanly
 # if the service package can't be imported in this environment.
 xd = pytest.importorskip("expert_dispatch")
