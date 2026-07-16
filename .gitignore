@@ -313,3 +313,21 @@ services/zoe-data/data/router_head_shadow.jsonl
 # artifacts. See labs/router-selftrain/README.md and
 # docs/knowledge/router-selftrain-loop.md.
 data/router_selftrain/
+
+# Live-tree runtime artifacts that were polluting `git status` on the live
+# checkout and (before deploy_live.sh's require_clean_tree was hardened) blocked
+# the blessed deploy. None are load-bearing; all are regenerated at run time.
+# ChromaDB vector store (memory embeddings)
+data/chroma/
+# Music Assistant runtime state (auth.db/library.db are already tracked; these
+# are the runtime sidecars/backups/generated playlists that must never be)
+data/music-assistant/*.db-shm
+data/music-assistant/*.bak.*
+data/music-assistant/playlists/
+# Music discovery batch working dir (weekly "Zoe Discovery" run output)
+services/zoe-data/data/music_discovery/
+# HACS — Home Assistant Community Store, installed into the live HA runtime
+homeassistant/custom_components/hacs/
+# router-90-campaign: the *.json negation above force-tracks committed
+# measurement artifacts; gen1-lineage.json is a runtime lineage journal, not one.
+labs/router-90-campaign/results/gen1-lineage.json

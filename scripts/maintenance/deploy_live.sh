@@ -17,12 +17,21 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 require_clean_tree() {
     local phase="$1"
     git -C "$LIVE" update-index -q --refresh
-    if [[ -n "$(git -C "$LIVE" status --porcelain)" ]]; then
+    # Block only on TRACKED modifications — an uncommitted tracked change would be
+    # clobbered by the fast-forward below, so it must stop the deploy. Untracked
+    # files are runtime artifacts on the live checkout (data/chroma/,
+    # data/music-assistant/ sidecars, HACS, music_discovery/, …); most are
+    # gitignored, but a plain `status --porcelain` still counts any that aren't,
+    # which made this gate refuse EVERY normal deploy. The sibling rollback guard
+    # require_no_tracked_dirt already encodes this intent (tracked-only). Match it
+    # so the blessed path is actually runnable instead of always bypassed.
+    if ! git -C "$LIVE" diff --quiet || ! git -C "$LIVE" diff --cached --quiet; then
         cat >&2 <<EOF
-✗ REFUSING TO DEPLOY: live tree $LIVE has uncommitted changes during $phase.
-  Commit, stash, or move those changes before running deploy_live.sh.
+✗ REFUSING TO DEPLOY: live tree $LIVE has uncommitted tracked changes during $phase.
+  A fast-forward pull would overwrite them. Commit, stash, or move those changes
+  before running deploy_live.sh. (Untracked runtime artifacts do not block.)
 EOF
-        git -C "$LIVE" status --short >&2
+        git -C "$LIVE" status --short --untracked-files=no >&2
         exit 1
     fi
 }
