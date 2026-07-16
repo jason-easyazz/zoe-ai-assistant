@@ -1,11 +1,42 @@
 # Skybridge Cutover Plan — retiring the legacy touch stack
 
-**Status:** proposed (no code applied)
+**Status:** **PARTIALLY EXECUTED — but the consolidation landed the *other way*.**
 **Owner:** jason
-**Context:** The touch panel currently runs two overlapping UI stacks. This document
-is the master plan for consolidating onto Skybridge and disabling the legacy
-surfaces, pages, and live-sync plumbing. Each phase below maps to a separate,
-independently reviewable PR.
+
+> **Read this before following any phase below.** The problem statement (two
+> overlapping stacks) was real and *has been resolved* — but not by the plan
+> below. This document proposed consolidating **onto `skybridge.html`**. What
+> actually shipped consolidated onto the **estate (`touch/home.html`)** and
+> retired the Skybridge front-end instead.
+>
+> **What landed — [#1345](https://github.com/jason-easyazz/zoe-ai-assistant/pull/1345)
+> (merged 2026-07-15), "retire the Skybridge front-end (estate is the panel chrome)":**
+> - `skybridge.html` (~5.6k lines) + `touch/js/skybridge{,-capabilities,-renderer,-voice}.js`
+>   + `touch/css/skybridge-{data-widgets,stage}.css` — **removed**. `skybridge.html`
+>   is now only a compat redirect stub → `/touch/home.html`.
+> - `dashboard.html` — superseded by the estate.
+> - **Kept:** the server-side `/api/skybridge/*` resolve/timers engine
+>   (`skybridge_service.py`, `routers/skybridge.py`) that the estate depends on,
+>   and the shared design-system trio (`skybridge-ds.css` / `skybridge-type.css` /
+>   `skybridge-theme.js`) still loaded by the login page.
+>
+> So "Skybridge" now names a **server-side resolver engine + design system**, not
+> a front-end surface. The phased PRs below are written against the old
+> front-end-consolidation direction and are **obsolete as written** — in
+> particular PR 1 (point the kiosk at Skybridge), PR 2 (`ZOE_SKYBRIDGE_ONLY`),
+> and PR 4 (screen-wake on Skybridge) target a surface that no longer exists.
+>
+> **Still open** (tracked from [`docs/PLANS.md`](../PLANS.md) → Consolidation):
+> converge the 4 card producers onto the one validated component contract, and
+> tame the z-index/CSS sprawl. The legacy per-domain pages
+> (`calendar/lists/people/notes/journal/...html`) do still exist, so PR 3
+> (retire legacy live-sync WebSockets) and PR 5 (remove legacy pages) remain
+> directionally valid — re-scope them against the estate before acting.
+
+**Context (historical):** The touch panel ran two overlapping UI stacks. This
+document was the master plan for consolidating onto Skybridge and disabling the
+legacy surfaces, pages, and live-sync plumbing. Each phase below maps to a
+separate, independently reviewable PR.
 
 ## Problem: two complete stacks are both live
 
