@@ -104,9 +104,13 @@ async def _ma_response(command: str, timeout_s: float = _TIMEOUT_S, **args: Any)
 
 def _first_image(item: dict[str, Any]) -> str:
     """Best square art for a media item — its own image else the album's; only
-    trusts absolute http(s) urls (never a relative/opaque path). MA library
-    items (playlists, tracks, search hits) carry their real art under
-    metadata.images[].path — NOT a top-level image/images field — so scan both
+    trusts absolute http(s) urls (never a relative/opaque path). MA is
+    inconsistent about where art lives, so scan every shape it emits:
+      • str                       — radio, some now-playing shapes
+      • list[{path}]              — full library items
+      • {"type","path"}           — MA's *brief* shape (recently-played, search
+                                    hits): one image dict, `metadata` empty
+      • metadata.images[{path}]   — full library items (playlists, albums)
     (the builtin `logo.png` placeholder is relative → dropped by the http guard)."""
     for src in (item, item.get("album") if isinstance(item.get("album"), dict) else None):
         if not isinstance(src, dict):
@@ -115,7 +119,12 @@ def _first_image(item: dict[str, Any]) -> str:
         imgs = src.get("image") or src.get("images")
         if isinstance(imgs, str) and imgs.startswith(("http://", "https://")):
             return imgs
-        candidates = list(imgs) if isinstance(imgs, list) else []
+        if isinstance(imgs, list):
+            candidates = list(imgs)
+        elif isinstance(imgs, dict):
+            candidates = [imgs]
+        else:
+            candidates = []
         # metadata.images[] — where MA nests library-item art
         md_imgs = (src.get("metadata") or {}).get("images")
         if isinstance(md_imgs, list):
