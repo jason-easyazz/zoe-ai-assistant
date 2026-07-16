@@ -39,6 +39,16 @@ and the manual path aborts mid-op. Both now take a shared **`flock /tmp/zoe-depl
 pull/reset step; script: across its whole mutating section) so they take turns instead of colliding.
 The `production` concurrency group does **not** cover this — it only serializes runner-vs-runner.
 
+**Lock scope is deliberately the git tree mutation, not the whole deploy.** The runner holds the lock
+only across its pull/reset step (the tree mutation that caused the ref-lock abort), then releases it
+before its migrate/restart steps — wrapping the whole multi-step job would mean restructuring the
+production CD workflow, which is out of scope. Edge case for operators: if you run `deploy_live.sh` by
+hand at the exact moment a merge is auto-deploying, the manual path can win the lock in the gap after
+the runner's reset and restart `zoe-data` while the runner is also restarting it — worst case is one
+redundant restart and a brief, self-correcting rollback on the manual path (both converge to the same
+`main` SHA, so nothing diverges). Prefer **either** the manual path **or** letting CD run, not both at
+once. A full-span lock (or an autostash before the runner's `reset --hard`) is a possible follow-up.
+
 `deploy_live.sh`'s pre-pull gate blocks only on **uncommitted TRACKED** changes (a fast-forward would
 clobber them); untracked runtime artifacts on the live tree (`data/chroma/`, `data/music-assistant/`
 sidecars, HACS, …) do **not** block and are gitignored. The runner's `reset --hard` intentionally has

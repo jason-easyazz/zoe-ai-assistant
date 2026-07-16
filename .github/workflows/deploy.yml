@@ -28,6 +28,9 @@ jobs:
           # this SAME shared .git/worktree. Without a shared lock the two race on the
           # ref-lock and the manual path aborts. deploy_live.sh takes the same lock.
           # (The `production` concurrency group only serializes runner-vs-runner.)
+          # Scope is deliberately this tree-mutation step, not the whole job — the
+          # lock releases when this step's shell exits, before migrate/restart.
+          # See docs/knowledge/merge-and-deploy.md "Lock scope is deliberately…".
           exec 9>/tmp/zoe-deploy.lock
           flock -w 300 9 || { echo "could not acquire /tmp/zoe-deploy.lock within 300s"; exit 1; }
           git remote set-url origin https://github.com/jason-easyazz/zoe-ai-assistant.git

@@ -29,16 +29,20 @@ REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "maintenance" / "deploy_live.sh"
 
 
-def _extract_function(name: str) -> str:
-    """Slice `name() { ... }` out of the script by its column-0 braces.
+def _script_prelude() -> str:
+    """Return the shippable definitions block: everything BEFORE the first
+    top-level executable statement (`cur="$(git …`).
 
-    Relies on the repo style: the opening `name() {` and the closing `}` both
-    start at column 0. This tests the shipped source, not a re-implementation.
+    That prelude is only the shebang, comments, `set -euo pipefail`, a few
+    var-default assignments, and the guard-function definitions — all safe to
+    source — and it contains the REAL require_clean_tree body, not a copy. This
+    avoids brace-matching a single function (fragile if the body ever grows a
+    column-0 `}` or the script is reformatted): we source the actual functions
+    exactly as they ship, then call one.
     """
     lines = SCRIPT.read_text().splitlines()
-    start = next(i for i, ln in enumerate(lines) if ln.startswith(f"{name}() {{"))
-    end = next(i for i in range(start + 1, len(lines)) if lines[i] == "}")
-    return "\n".join(lines[start : end + 1])
+    end = next(i for i, ln in enumerate(lines) if ln.startswith("cur="))
+    return "\n".join(lines[:end])
 
 
 def _git(tree: Path, *args: str) -> None:
@@ -56,8 +60,9 @@ def _init_tree(tree: Path) -> None:
 
 
 def _run_require_clean_tree(tree: Path) -> subprocess.CompletedProcess:
-    body = _extract_function("require_clean_tree")
-    snippet = f'{body}\nLIVE="{tree}"\nrequire_clean_tree pre-pull\n'
+    # Source the real definitions, override LIVE to the throwaway tree (the
+    # prelude sets a default we replace), then call the shipped function.
+    snippet = f'{_script_prelude()}\nLIVE="{tree}"\nrequire_clean_tree pre-pull\n'
     return subprocess.run(["bash", "-c", snippet], capture_output=True, text=True)
 
 
