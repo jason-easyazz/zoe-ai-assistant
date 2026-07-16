@@ -21,6 +21,8 @@ import pytest
 
 import proactive.session_utils as su
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _future() -> str:
     return (datetime.now(timezone.utc) + timedelta(hours=4)).strftime("%Y-%m-%dT%H:%M:%SZ")
