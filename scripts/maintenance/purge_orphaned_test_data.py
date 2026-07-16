@@ -33,7 +33,13 @@ import os
 import sys
 from urllib.parse import urlsplit
 
-import asyncpg
+# asyncpg is imported lazily inside main(), not here: the predicate constants
+# below are safety-critical and pinned by tests/unit/test_purge_predicates.py,
+# which must be able to import this module and assert on them WITHOUT a
+# PostgreSQL driver present. A module-level driver import would couple that test
+# to the CI dep list and force it to importorskip — and a predicate test that
+# silently skips is exactly the "a skip is not a pass" trap this repo bans.
+# Side benefit: --help works without asyncpg installed.
 
 # Owner ids the retired ad-hoc smoke scripts (tests/{integration,e2e}/
 # test_comprehensive.py, test_simple.py — removed; see git history) TRIED to mint,
@@ -132,6 +138,8 @@ def _redacted_target(dsn: str) -> str:
 
 
 async def main(execute: bool, assume_yes: bool, expect_db: str, expect_host: str) -> int:
+    import asyncpg  # deferred: see the module-level note above
+
     dsn = _resolve_dsn()
     if not dsn:
         print(

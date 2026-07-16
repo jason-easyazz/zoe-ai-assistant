@@ -12,6 +12,7 @@ they are slim-dep-green and run in the fast GitHub lane.
 """
 import importlib.util
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -27,8 +28,13 @@ _SCRIPT = (
 def _load():
     """Import the purge script by path (scripts/ is not an importable package).
 
-    Safe at import time: the module guards all I/O behind `if __name__ ==
-    "__main__"`, so importing it neither connects to a database nor parses argv.
+    Safe at import time: the module performs no I/O at import (argv parsing and
+    the database connection are both behind `if __name__ == "__main__"`), and it
+    imports asyncpg lazily inside main(), so this test needs no PostgreSQL
+    driver. That decoupling is deliberate and pinned by
+    test_module_imports_without_a_db_driver below: it keeps these
+    safety-critical assertions running unconditionally rather than
+    importorskip-ing themselves into a silent pass.
     """
     spec = importlib.util.spec_from_file_location("purge_orphaned_test_data", _SCRIPT)
     mod = importlib.util.module_from_spec(spec)
@@ -111,6 +117,35 @@ def test_legacy_scopes_still_covered():
     pred = purge.owner_pred()
     assert "'guest'" in pred
     assert "test-sec-b-%" in pred
+
+
+def test_module_imports_without_a_db_driver():
+    """The predicate constants must be importable with no PostgreSQL driver.
+
+    If asyncpg (a C-extension) ever regains a module-level import, this file
+    could only survive CI by importorskip-ing -- i.e. silently skipping the
+    checks that stop the purge tool eating real household data. Pin the
+    decoupling instead: hide asyncpg and re-import from scratch.
+    """
+    import builtins
+
+    real_import = builtins.__import__
+
+    def no_asyncpg(name, *a, **kw):
+        if name == "asyncpg" or name.startswith("asyncpg."):
+            raise ModuleNotFoundError("No module named 'asyncpg'")
+        return real_import(name, *a, **kw)
+
+    saved = sys.modules.pop("asyncpg", None)
+    builtins.__import__ = no_asyncpg
+    try:
+        mod = _load()
+        assert mod.TEST_OWNER_RE == purge.TEST_OWNER_RE
+        assert mod.owner_pred("user_id") == purge.owner_pred("user_id")
+    finally:
+        builtins.__import__ = real_import
+        if saved is not None:
+            sys.modules["asyncpg"] = saved
 
 
 def test_pred_is_a_single_or_group():
