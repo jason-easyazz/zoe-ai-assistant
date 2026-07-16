@@ -785,7 +785,7 @@
   // recreated on every music show(), so query it per event, never capture it).
   full.addEventListener('click',function(e){
     var qd=document.getElementById('mQueue');
-    if(qd&&qd.classList.contains('open')&&!e.target.closest('.mqueue')&&!e.target.closest('#mQBtn')){qd.classList.remove('open');var hb=document.getElementById('home');if(hb)hb.classList.remove('hide');}
+    if(qd&&qd.classList.contains('open')&&!e.target.closest('.mqueue')&&!e.target.closest('#mQBtn')){_qOpen(false);}
   });
 
   // ---- Ambient return -------------------------------------------------------
@@ -898,6 +898,17 @@
     }
   }
 
+  // Queue/playlist overlay state. Shared by every open/close path so the dock
+  // control (which takes over while the overlay hides #mTransport) can't be
+  // left stale — the toggle and the repaint are one operation, not two.
+  function _qIsOpen(){var q=document.getElementById('mQueue');return !!(q&&q.classList.contains('open'));}
+  function _qOpen(o){
+    var q=document.getElementById('mQueue');if(!q)return;
+    q.classList.toggle('open',o);
+    var hb=document.getElementById('home');if(hb)hb.classList.toggle('hide',o);
+    paintDockMusic();
+  }
+
   // Dock now-playing control — a compact pill (art + title + play/pause) that
   // appears while music is playing/paused; tapping the art/title opens the
   // Music surface. Refreshed by renderDock, polled every 5s while it's up.
@@ -909,7 +920,12 @@
       var np=d&&d.now_playing,live=np&&(np.state==='playing'||np.state==='paused')&&np.title;
       var old=dbody.querySelector('.pc.dnp');if(old)old.remove();
       if(_dockMusicT){clearTimeout(_dockMusicT);_dockMusicT=null;}
+      // The music card carries its own transport (#mTransport), so a dock chip
+      // there would just duplicate it — every OTHER surface gets the controls.
+      // Exception: the queue/playlist overlay covers that transport, so the
+      // dock takes over while it's open (that's why it's up on the playlist).
       if(!live||dbody.querySelector('.dheard'))return;
+      if(_cur==='music'&&!_qIsOpen())return;
       _music.player_id=np.player_id;
       var playing=np.state==='playing';
       var art=(np.image&&/^https?:/.test(np.image))?'<img alt="" src="'+esc(np.image)+'">':'<span class="ph"></span>';
@@ -1235,7 +1251,6 @@
     // Open/close also toggles the global home button: the overlay's own back
     // button owns the top-left corner while open (else #home, z60, overlaps it
     // and steals the tap — sending you home instead of back to now-playing).
-    function _qOpen(o){qd.classList.toggle('open',o);var hb=document.getElementById('home');if(hb)hb.classList.toggle('hide',o);}
     if(qb&&qd)qb.onclick=function(e){e.stopPropagation();_qOpen(true);loadQueue();};
     var qback=document.getElementById('mQBack');
     if(qback&&qd)qback.onclick=function(e){e.stopPropagation();_qOpen(false);};
