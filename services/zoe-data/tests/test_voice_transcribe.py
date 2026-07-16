@@ -17,7 +17,7 @@ if str(ROOT) not in sys.path:
 
 
 @pytest.fixture(autouse=True)
-def _clear_voice_module_state():
+def _clear_voice_module_state(monkeypatch):
     """Reset voice_tts' module-level caches around every test in this file.
 
     `_panel_idle_cache` memoises the panel idle-logout window for 30s so it
@@ -33,14 +33,9 @@ def _clear_voice_module_state():
     """
     from routers import voice_tts
 
-    def _reset():
-        voice_tts._VOICE_SESSIONS.clear()
-        voice_tts._panel_idle_cache["value"] = None
-        voice_tts._panel_idle_cache["expires"] = 0.0
-
-    _reset()
+    monkeypatch.setattr(voice_tts, "_VOICE_SESSIONS", {})
+    monkeypatch.setattr(voice_tts, "_panel_idle_cache", {"value": None, "expires": 0.0})
     yield
-    _reset()
 
 
 @pytest.fixture
