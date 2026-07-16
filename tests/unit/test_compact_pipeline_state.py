@@ -365,3 +365,62 @@ def test_concurrent_writer_record_survives_compaction(store: Path):
     # Whoever won the lock, the writer's record must be in the live store —
     # never stranded on an orphaned inode.
     assert _latest_state_from_file(store, "multica:late") is not None
+
+
+# ── blank lines vs the "already compacted" no-op guarantee ───────────────────
+# scan() counts EVERY line in `records` (and indexes it in all_spans) but skips
+# blank lines when building latest_by_ref — so a blank outside the tail window is
+# counted yet not kept. Review of #1391 read that as: len(keep) < records forever,
+# so the sentinel never fires and every timer run rewrites + re-backs-up the store.
+#
+# It does not: the sentinel fires iff compaction would be a byte-for-byte no-op.
+# An out-of-tail blank means compaction genuinely DOES change the file (it drops
+# the blank), so the FIRST run compacts — correctly — and every run after is a
+# no-op. These cases pin that convergence so the guarantee cannot silently rot.
+
+
+@pytest.mark.parametrize(
+    "lines,keep_tail",
+    [
+        pytest.param(["A1", "", "A2", "B1", "B2", "C1"], 2, id="blank-outside-tail"),
+        pytest.param(["A1", "A2", "", "B1"], 2, id="blank-inside-tail"),
+        pytest.param(["A1", "", "", "A2", "", "B1", "", "B2"], 2, id="scattered-blanks"),
+        pytest.param(["A1", "A2", "B1", ""], 2, id="blank-is-newest"),
+        pytest.param(["", "", "A1"], 1, id="only-blanks-plus-one"),
+        pytest.param(["A1", "", "A2", "B1"], 0, id="keep-tail-0-latest-only"),
+    ],
+)
+def test_compaction_converges_despite_blank_lines(tmp_path: Path, lines: list[str], keep_tail: int):
+    """A store containing blank lines still reaches a fixed point after ONE pass."""
+    coded = {
+        "A1": _record("multica:aaa", revision=1),
+        "A2": _record("multica:aaa", revision=2),
+        "B1": _record("multica:bbb", revision=1),
+        "B2": _record("multica:bbb", revision=2),
+        "C1": _record("multica:ccc", revision=1),
+        "": "",
+    }
+    path = tmp_path / "runs.jsonl"
+    _write_store(path, [coded[token] for token in lines])
+
+    def _compact_once() -> tuple[bytes, bool]:
+        with path.open("rb") as handle:
+            result = mod.scan(handle)
+            keep = result.keep_spans(keep_tail)
+            handle.seek(0)
+            raw = handle.read()
+        compacted = b"".join(raw[off:off + length] for off, length in keep)
+        return compacted, len(keep) == result.records
+
+    first, _fired_first = _compact_once()
+    path.write_bytes(first)
+
+    second, fired_second = _compact_once()
+
+    # The already-compacted store is a fixed point: the sentinel fires and a
+    # second pass would change nothing — no fresh backup, no rewrite on a timer.
+    assert fired_second, (
+        "sentinel did not fire on an already-compacted store — it would rewrite "
+        "and re-backup on every timer run"
+    )
+    assert second == first, "compaction is not idempotent — a second pass changed bytes"
