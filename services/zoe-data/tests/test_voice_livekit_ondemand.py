@@ -11,6 +11,8 @@ if str(ROOT) not in sys.path:
 
 from routers import voice_livekit
 
+pytestmark = pytest.mark.ci_safe
+
 
 @pytest.fixture(autouse=True)
 def _reset_lifecycle(monkeypatch):

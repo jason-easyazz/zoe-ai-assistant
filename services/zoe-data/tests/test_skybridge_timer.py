@@ -23,6 +23,8 @@ from skybridge_service import (  # noqa: E402
     resolve_skybridge_request,
 )
 
+pytestmark = pytest.mark.ci_safe
+
 
 @pytest.fixture(autouse=True)
 def _isolate_timer_store():

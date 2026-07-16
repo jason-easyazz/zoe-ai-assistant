@@ -13,6 +13,8 @@ import pytest
 
 import routers.voice_tts as v
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _run(coro):
     return asyncio.run(coro)
