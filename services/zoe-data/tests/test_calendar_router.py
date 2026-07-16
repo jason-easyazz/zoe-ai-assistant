@@ -13,6 +13,8 @@ if str(ROOT) not in sys.path:
 
 from routers import calendar as calendar_router
 
+pytestmark = pytest.mark.ci_safe
+
 
 class FakeCursor:
     def __init__(self, rows: list[dict]):

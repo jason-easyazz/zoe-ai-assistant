@@ -1,8 +1,11 @@
 """Tests for safe production backlog admission."""
 
+import pytest
 import multica_admission
 from multica_admission import select_next_approved_issue, ticket_is_dispatch_approved
 from multica_ticket_contract import describe_ticket, parse_ticket_block, write_ticket_block
+
+pytestmark = pytest.mark.ci_safe
 
 
 HERMES = "hermes-agent"

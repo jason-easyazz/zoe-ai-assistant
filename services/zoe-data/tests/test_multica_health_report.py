@@ -1,9 +1,12 @@
+import pytest
 import asyncio
 import importlib.util
 import os
 from pathlib import Path
 
 import runtime_env
+
+pytestmark = pytest.mark.ci_safe
 
 
 def _module():
