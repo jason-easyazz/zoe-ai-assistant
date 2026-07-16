@@ -1504,14 +1504,101 @@ async def _resolve_panel_default_user(panel_id: str, db) -> Optional[str]:
     return None
 
 
+async def _touch_panel_session(panel_id: str, user_id: str) -> None:
+    """Refresh the panel's ui_panel_sessions heartbeat for user_id (last_seen_at=NOW()).
+
+    The session row is otherwise only written on touch login / UI actions, so a
+    VOICE-only session silently expired after the trust window (~15 min) even while
+    the user was still talking — dropping their identity to guest and blocking
+    user-scoped actions. Calling this on each voice turn keeps an actively-used
+    login alive (it only lapses after real inactivity). Best-effort on a dedicated
+    connection (the request db is released on the detached streaming path); never
+    raises. Does NOT create a session for guest/None.
+    """
+    if not panel_id or not user_id or user_id in _GUEST_SENTINEL_USERS:
+        return
+    try:
+        from db_pool import get_db_ctx as _get_db_ctx
+        async with _get_db_ctx() as _conn:
+            await _conn.execute(
+                """INSERT INTO ui_panel_sessions (panel_id, user_id, last_seen_at, updated_at)
+                   VALUES (?, ?, NOW(), NOW())
+                   ON CONFLICT(panel_id) DO UPDATE SET
+                     user_id=excluded.user_id,
+                     last_seen_at=NOW(),
+                     updated_at=NOW()""",
+                (panel_id, user_id),
+            )
+            await _conn.commit()
+    except Exception as exc:
+        logger.debug("voice: panel session heartbeat failed for panel=%s (non-fatal): %s", panel_id, exc)
+
+
+_PANEL_IDLE_LOGOUT_KEY = "panel_idle_logout_s"
+_PANEL_IDLE_MAX_S = 24 * 60 * 60
+_panel_idle_cache: dict = {"value": None, "expires": 0.0}
+
+
+def _clamp_idle_s(value: int) -> int:
+    return max(0, min(int(value), _PANEL_IDLE_MAX_S))
+
+
 def _panel_session_trust_window_s() -> int:
-    """Seconds that an active panel session is trusted for voice scope gating."""
+    """Env/default fallback for the idle-logout window (used when nothing is
+    persisted in app_settings). The panel setting overrides this — see
+    _panel_idle_logout_s()."""
     raw = str(os.environ.get("ZOE_PANEL_SESSION_TRUST_WINDOW_S", "900")).strip()
     try:
-        value = int(raw)
+        return _clamp_idle_s(int(raw))
     except Exception:
         return 900
-    return max(0, min(value, 24 * 60 * 60))
+
+
+async def _read_persisted_idle_logout_s() -> Optional[int]:
+    """Panel idle-logout window persisted in system_preferences (settable from the
+    panel settings screen) or None; never raises (fail-open to the env default)."""
+    try:
+        from database import get_db_ctx
+        async with get_db_ctx() as db:
+            cur = await db.execute(
+                "SELECT value FROM system_preferences WHERE key = ?", (_PANEL_IDLE_LOGOUT_KEY,)
+            )
+            row = await cur.fetchone()
+        if row and str(row["value"]).strip():
+            return _clamp_idle_s(int(str(row["value"]).strip()))
+    except Exception as exc:
+        logger.debug("panel idle-logout read failed (fail-open to env): %s", exc)
+    return None
+
+
+async def _panel_idle_logout_s() -> int:
+    """Effective idle-logout window: persisted panel setting → env → default,
+    cached in-process (30s) so it isn't a DB read on every voice turn."""
+    import time as _t
+    if _panel_idle_cache["value"] is not None and _t.monotonic() < _panel_idle_cache["expires"]:
+        return _panel_idle_cache["value"]
+    persisted = await _read_persisted_idle_logout_s()
+    value = persisted if persisted is not None else _panel_session_trust_window_s()
+    _panel_idle_cache["value"] = value
+    _panel_idle_cache["expires"] = _t.monotonic() + 30.0
+    return value
+
+
+async def _set_panel_idle_logout_s(seconds: int, updated_by: str = "panel-settings") -> int:
+    """Persist the panel idle-logout window to system_preferences; invalidate cache."""
+    seconds = _clamp_idle_s(seconds)
+    from database import get_db_ctx
+    async with get_db_ctx() as db:
+        await db.execute(
+            """INSERT INTO system_preferences (key, value, updated_by, updated_at)
+               VALUES (?, ?, ?, NOW()::text)
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                 updated_by = excluded.updated_by, updated_at = NOW()::text""",
+            (_PANEL_IDLE_LOGOUT_KEY, str(seconds), updated_by),
+        )
+        await db.commit()
+    _panel_idle_cache["value"] = None
+    return seconds
 
 
 async def _resolve_recent_panel_session_user(panel_id: str, db) -> Optional[str]:
@@ -1519,7 +1606,7 @@ async def _resolve_recent_panel_session_user(panel_id: str, db) -> Optional[str]
     Resolve panel user only when the panel session heartbeat is fresh enough
     to be considered actively authenticated.
     """
-    trust_window_s = _panel_session_trust_window_s()
+    trust_window_s = await _panel_idle_logout_s()
     if trust_window_s <= 0:
         return None
     try:
@@ -2524,6 +2611,18 @@ async def voice_command(
         except Exception:
             _panel_recent_user = None
             _panel_default_user = None
+    # Keep the panel's login alive while it's actively in use. The session is meant
+    # to track "whoever is logged into the panel" and lapse only after real
+    # inactivity — but ui_panel_sessions is written only on touch/login, so a
+    # VOICE-only session expired mid-conversation (~15 min trust window), dropping
+    # the user to guest and blocking their scoped commands. If the panel is bound to
+    # a real user but the session lapsed, treat active voice as that user (the panel
+    # binding is the operator's "this panel belongs to X"); either way, refresh the
+    # heartbeat so continued use keeps the login fresh.
+    if not _panel_recent_user and _panel_default_user and _panel_default_user not in _GUEST_SENTINEL_USERS:
+        _panel_recent_user = _panel_default_user
+    if _panel_recent_user and _panel_recent_user not in _GUEST_SENTINEL_USERS:
+        await _touch_panel_session(panel_id, _panel_recent_user)
     if not _bound_user and _panel_recent_user:
         _ses = _VOICE_SESSIONS.get(panel_id)
         if _ses is not None:
