@@ -3276,6 +3276,8 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
                 "contract_schema": "zoe_evolution_proposal",
             }
         except Exception as exc:
+            _mcp_log.warning(
+                "create_evolution_proposal failed — proposal NOT stored: %s", exc)
             return {"error": f"create_evolution_proposal failed: {exc}"}
 
     elif name == "flag_needs_human_review":

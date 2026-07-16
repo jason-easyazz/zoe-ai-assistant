@@ -161,7 +161,9 @@ async def load_for_prompt(user_id: str, session_id: str, *, limit: int = 3) -> s
                 )
                 lines.append(f"- {row['offer_phrase']}")
     except Exception as exc:
-        logger.debug("pending_suggestions.load failed: %s", exc)
+        logger.warning(
+            "pending_suggestions.load_for_prompt failed for user=%s — offers "
+            "not surfaced and turns_elapsed NOT aged: %s", user_id, exc)
     if not lines:
         return ""
     return "\n".join(lines)
@@ -283,7 +285,9 @@ async def surface_pending_contacts_for_prompt(user_id: str, *, limit: int = 3) -
                     "offer_phrase": row["offer_phrase"],
                 })
     except Exception as exc:
-        logger.debug("pending_suggestions.surface_pending_contacts_for_prompt failed: %s", exc)
+        logger.warning(
+            "pending_suggestions.surface_pending_contacts_for_prompt failed for "
+            "user=%s — contact offers NOT surfaced: %s", user_id, exc)
     return out
 
 
@@ -316,7 +320,9 @@ async def age_person_offers_on_user_turn(user_id: str) -> int:
             )
             return len(expired)
     except Exception as exc:
-        logger.debug("pending_suggestions.age_person_offers_on_user_turn failed: %s", exc)
+        logger.warning(
+            "pending_suggestions.age_person_offers_on_user_turn failed for "
+            "user=%s — offers will not expire on schedule: %s", user_id, exc)
         return 0
 
 
@@ -478,7 +484,10 @@ async def resolve_person_offers_by_name(user_id: str, name: str) -> int:
                     resolved += 1
             return resolved
     except Exception as exc:
-        logger.debug("pending_suggestions.resolve_person_offers_by_name failed: %s", exc)
+        logger.warning(
+            "pending_suggestions.resolve_person_offers_by_name failed for "
+            "user=%s name=%r — offers stay unresolved and may re-ask: %s",
+            user_id, name, exc)
         return 0
 
 

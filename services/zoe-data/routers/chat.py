@@ -3316,8 +3316,10 @@ async def _iter_hermes_stream_events(
                         0.0,
                         _time.time(),
                     )
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.warning(
+                    "chat: hermes llm_call_log insert failed for session=%s — "
+                    "call NOT accounted: %s", session_id, _exc)
 
         asyncio.ensure_future(_log_hermes_call())
 
