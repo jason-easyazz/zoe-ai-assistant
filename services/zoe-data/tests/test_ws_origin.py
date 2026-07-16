@@ -31,6 +31,8 @@ sys.path.insert(0, str(_ZOE_DATA))
 sys.modules.pop("main", None)
 import main  # noqa: E402
 
+pytestmark = pytest.mark.ci_safe
+
 
 class _FakeWS:
     """Minimal stand-in for starlette WebSocket for unit-testing the guard."""

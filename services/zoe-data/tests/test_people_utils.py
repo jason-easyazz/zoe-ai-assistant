@@ -16,9 +16,12 @@ The helper is intentionally pure — it takes a dict-like row, performs no I/O,
 and returns a fresh dict. The tests below pin each branch independently.
 """
 
+import pytest
 import collections.abc
 
 from people_utils import row_to_person
+
+pytestmark = pytest.mark.ci_safe
 
 
 # ---------------------------------------------------------------------------

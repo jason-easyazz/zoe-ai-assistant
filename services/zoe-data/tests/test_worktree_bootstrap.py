@@ -9,6 +9,8 @@ import pytest
 
 import worktree_bootstrap as wb
 
+pytestmark = pytest.mark.ci_safe
+
 
 @pytest.fixture
 def git_repo(tmp_path, monkeypatch):
