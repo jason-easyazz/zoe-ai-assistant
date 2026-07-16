@@ -2018,7 +2018,11 @@
       }).then(function(d){
         if(!d||!d.token||!d.url)throw new Error('token payload incomplete');
         if(d.livekit_available===false)throw new Error('livekit unavailable');
-        var room=new LK.Room({adaptiveStream:true,dynacast:true});
+        // stopMicTrackOnMute: without it, setMicrophoneEnabled(false) only MUTES
+        // the mic — the MediaStreamTrack (and the recording indicator) stays
+        // live. With it, muting stops the track outright, so the mic is really
+        // released even if disconnect() never lands.
+        var room=new LK.Room({adaptiveStream:true,dynacast:true,publishDefaults:{stopMicTrackOnMute:true}});
         _convRoom=room;
         room.on(LK.RoomEvent.DataReceived,function(data){
           try{convEvent(JSON.parse(dec.decode(data)));}catch(e){}
@@ -2041,8 +2045,10 @@
   }
 
   // Idempotent, and safe to call from any exit path. NEVER leave a hot mic on a
-  // kiosk: release the mic explicitly before disconnecting, in case disconnect()
-  // is slow or throws.
+  // kiosk: stop the mic track FIRST (via the stopMicTrackOnMute publish default
+  // above, so this really releases the device rather than just muting it), then
+  // disconnect(true) — which also stops local tracks — as the second line of
+  // defence in case the first is slow or throws.
   function convStop(reason){
     if(!_convLive&&!_convRoom)return;
     _convLive=false;
