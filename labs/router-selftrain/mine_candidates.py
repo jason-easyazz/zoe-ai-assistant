@@ -59,6 +59,11 @@ sys.path.insert(0, os.path.join(REPO, "services", "zoe-data"))
 # The router's own static policy — never fork it, import it.
 from router_two_stage import DOMAIN_TOOLS, TOOL_ARGS, TOOL_DOMAIN  # noqa: E402
 
+# The router owns the shadow-log rotation scheme; import its segment contract
+# rather than re-deriving the `.1`/`.2` naming here (a fork would silently stop
+# matching the writer the day the scheme changes).
+from semantic_router import shadow_log_segments  # noqa: E402
+
 # ── Paths ───────────────────────────────────────────────────────────────────
 # Same env var the router writes through, so a miner run in a worktree can point
 # at the LIVE checkout's shadow log (the log is runtime data, never committed).
@@ -154,20 +159,27 @@ def assert_held_out(candidates: Iterable[Candidate], holdout: set[str]) -> None:
 
 # ── Sources ─────────────────────────────────────────────────────────────────
 def load_shadow(path: str = SHADOW_LOG, since_ts: float = 0.0) -> list[dict]:
+    """Load shadow records across ALL rotated segments, oldest first.
+
+    The router rotates the shadow log once it hits its size cap, moving history
+    into `<log>.1`, `<log>.2`, … Reading only `<log>` would silently mine just
+    the newest slice and quietly shrink the training window — so walk every
+    segment. `shadow_log_segments` is the router's own contract for this, so the
+    reader can't drift from the writer's rotation scheme.
+    """
     recs: list[dict] = []
-    if not os.path.exists(path):
-        return recs
-    with open(path, encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except ValueError:
-                continue
-            if float(rec.get("ts") or 0.0) >= since_ts:
-                recs.append(rec)
+    for segment in shadow_log_segments(path):
+        with open(segment, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if float(rec.get("ts") or 0.0) >= since_ts:
+                    recs.append(rec)
     return recs
 
 
