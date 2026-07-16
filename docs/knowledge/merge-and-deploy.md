@@ -12,13 +12,47 @@ The non-obvious rules for getting a change reviewed, merged, and actually live. 
 prose lives in the root `AGENTS.md` (Greptile PR loop, Branching policy); this records *what is true*
 so an agent doesn't relearn it the hard way. Runtime/deploy context: [runtime-topology.md](runtime-topology.md).
 
-## Merged ≠ live
+## Continuous deployment — merge to `main` AUTO-DEPLOYS
 
-There is **no deploy pipeline.** Live `zoe-data` runs uvicorn from the `/home/zoe/assistant` checkout,
-which is usually on a **feature branch** (e.g. `feat/people-card-7in-panel` as of 2026-06-26) — **not
-`main`**. So **landing a PR on `main` does not deploy it.** To deploy: get the change into that
-checkout, then `systemctl --user restart zoe-data.service`. Always run a focused local check / voice
-replay before calling something live-verified — never treat a green PR as "shipped."
+A **self-hosted GitHub Actions runner** on the Jetson runs `.github/workflows/deploy.yml` on **every
+push to `main`**. It deploys straight into the live `/home/zoe/assistant` checkout:
+
+    cd /home/zoe/assistant
+    git fetch origin main   # 5 retries — the .git is shared, ref-lock races happen
+    git reset --hard FETCH_HEAD
+    scripts/deploy/migrate.sh
+    docker compose up -d --build zoe-auth
+    systemctl --user restart zoe-data.service
+    # + rebuild/restart flue-zoe-brain & flue-zoe-telegram sidecars IF their source changed
+
+So **merging a PR to `main` ships it** — the runner's `reset --hard` is the intended CD contract (live
+tree == main), and the live checkout is pinned to `main`, not a feature branch. Runs are serialized
+runner-vs-runner by the `production` concurrency group (`cancel-in-progress: false`). Still run a
+focused local check / voice replay **before** merge — a green PR auto-deploys, so a bad merge is live.
+
+### Manual deploy + the shared lock
+
+`scripts/maintenance/deploy_live.sh` is the blessed **manual** path (fetch main → voice-gate → `merge
+--ff-only` → restart → health/rollback). It **double-drives the same `.git`/worktree** as the CD
+runner. Both fetch+advance `main` on a merge event, so without coordination they lose the ref-lock race
+and the manual path aborts mid-op. Both now take a shared **`flock /tmp/zoe-deploy.lock`** (runner: its
+pull/reset step; script: across its whole mutating section) so they take turns instead of colliding.
+The `production` concurrency group does **not** cover this — it only serializes runner-vs-runner.
+
+**Lock scope is deliberately the git tree mutation, not the whole deploy.** The runner holds the lock
+only across its pull/reset step (the tree mutation that caused the ref-lock abort), then releases it
+before its migrate/restart steps — wrapping the whole multi-step job would mean restructuring the
+production CD workflow, which is out of scope. Edge case for operators: if you run `deploy_live.sh` by
+hand at the exact moment a merge is auto-deploying, the manual path can win the lock in the gap after
+the runner's reset and restart `zoe-data` while the runner is also restarting it — worst case is one
+redundant restart and a brief, self-correcting rollback on the manual path (both converge to the same
+`main` SHA, so nothing diverges). Prefer **either** the manual path **or** letting CD run, not both at
+once. A full-span lock (or an autostash before the runner's `reset --hard`) is a possible follow-up.
+
+`deploy_live.sh`'s pre-pull gate blocks only on **uncommitted TRACKED** changes (a fast-forward would
+clobber them); untracked runtime artifacts on the live tree (`data/chroma/`, `data/music-assistant/`
+sidecars, HACS, …) do **not** block and are gitignored. The runner's `reset --hard` intentionally has
+**no** clean-tree refuse — CD overwrites the tree to match `main` by contract.
 
 ## Protected `main` — the merge gates (verified live 2026-06-26)
 
