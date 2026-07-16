@@ -25,6 +25,8 @@ from conversation_opener import (
     opener_ack_phrases,
 )
 
+pytestmark = pytest.mark.ci_safe
+
 _ENABLED_ENV = {"ZOE_CONVERSATION_OPENER_ENABLED": "1"}
 
 
