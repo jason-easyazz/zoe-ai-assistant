@@ -2,6 +2,8 @@ import pytest
 
 from routers import chat as chat_router
 
+pytestmark = pytest.mark.ci_safe
+
 
 class _FakeDb:
     def __init__(self, title="New Chat"):

@@ -4,6 +4,8 @@ import pytest
 import music_service
 from skybridge_service import classify_skybridge_intent, skybridge_intent_requires_identity
 
+pytestmark = pytest.mark.ci_safe
+
 
 # ── classifier (no MA needed) ────────────────────────────────────────────────
 
