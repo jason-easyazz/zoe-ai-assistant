@@ -60,6 +60,22 @@ EOF
     exit 1
 fi
 
+# Serialize against the CONTINUOUS-DEPLOY runner. `.github/workflows/deploy.yml`
+# runs on every push to main and does `git fetch origin main` + `git reset --hard
+# FETCH_HEAD` on THIS same shared .git/worktree. If a merge lands while this
+# script runs, both paths advance main at once and lose the ref-lock race
+# ("cannot lock ref …") — the runner has 5 fetch retries, this manual path had
+# zero coordination and aborted mid-op. Hold a shared flock across the whole
+# mutating section (fetch → merge → restart → any rollback) so the two paths
+# take turns. The runner takes the SAME lock in its pull/reset step. The GH
+# `production` concurrency group only serializes runner-vs-runner, not this.
+DEPLOY_LOCK="${ZOE_DEPLOY_LOCK:-/tmp/zoe-deploy.lock}"
+exec 9>"$DEPLOY_LOCK"
+if ! flock -w "${ZOE_DEPLOY_LOCK_WAIT:-300}" 9; then
+    echo "✗ REFUSING TO DEPLOY: could not acquire $DEPLOY_LOCK within ${ZOE_DEPLOY_LOCK_WAIT:-300}s (another deploy in progress?)." >&2
+    exit 1
+fi
+
 require_clean_tree "pre-pull"
 
 echo "▶ live tree on main — pulling latest…"
