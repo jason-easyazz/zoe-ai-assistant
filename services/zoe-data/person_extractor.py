@@ -279,7 +279,9 @@ async def _create_partial_person(name: str, user_id: str, db) -> Optional[str]:
         await db.commit()
         return pid
     except Exception as exc:
-        logger.debug("_create_partial_person failed for %r: %s", name, exc)
+        logger.warning(
+            "person_extractor: _create_partial_person failed for name=%r user=%s "
+            "— birthday has no person row to land on: %s", name, user_id, exc)
         return None
 
 
@@ -595,7 +597,10 @@ async def _write_activity(
                 (row_id, person_id, user_id, activity_type, description, source, venue, session_id, mem_id),
             )
     except Exception as exc:
-        logger.debug("_write_activity failed: %s", exc)
+        logger.warning(
+            "person_extractor: _write_activity failed for person=%s user=%s "
+            "type=%s — activity NOT stored: %s",
+            person_id, user_id, activity_type, exc)
 
 
 async def _write_date(
@@ -618,7 +623,9 @@ async def _write_date(
                 (row_id, person_id, user_id, label, month, day, year, mem_id),
             )
     except Exception as exc:
-        logger.debug("_write_date failed: %s", exc)
+        logger.warning(
+            "person_extractor: _write_date failed for person=%s user=%s "
+            "label=%r — date NOT stored: %s", person_id, user_id, label, exc)
 
 
 async def _write_gift(
@@ -640,7 +647,9 @@ async def _write_gift(
                 (row_id, person_id, user_id, description, status, source, mem_id),
             )
     except Exception as exc:
-        logger.debug("_write_gift failed: %s", exc)
+        logger.warning(
+            "person_extractor: _write_gift failed for person=%s user=%s "
+            "— gift idea NOT stored: %s", person_id, user_id, exc)
 
 
 async def _write_bucket(
@@ -662,7 +671,9 @@ async def _write_bucket(
                 (row_id, person_id, user_id, description, mem_id),
             )
     except Exception as exc:
-        logger.debug("_write_bucket failed: %s", exc)
+        logger.warning(
+            "person_extractor: _write_bucket failed for person=%s user=%s "
+            "— bucket-list item NOT stored: %s", person_id, user_id, exc)
 
 
 async def _current_edge_for_pair(db, user_id: str, pid_a: str, pid_b: str):
@@ -788,7 +799,10 @@ async def _write_relationship(
                 )
             await db.commit()
         except Exception as exc:
-            logger.debug("_write_relationship: stub for %r failed: %s", name_a, exc)
+            logger.warning(
+                "person_extractor: _write_relationship stub insert for name_a=%r "
+                "user=%s failed — edge %r NOT stored: %s",
+                name_a, user_id, rel_type, exc)
             return
 
     # Resolve or create person_b
@@ -810,7 +824,10 @@ async def _write_relationship(
                 )
             await db.commit()
         except Exception as exc:
-            logger.debug("_write_relationship: stub for %r failed: %s", name_b, exc)
+            logger.warning(
+                "person_extractor: _write_relationship stub insert for name_b=%r "
+                "user=%s failed — edge %r NOT stored: %s",
+                name_b, user_id, rel_type, exc)
             return
 
     if pid_a == pid_b:
@@ -878,7 +895,10 @@ async def _write_relationship(
                             "may lack a current edge until re-mentioned: %s / %s",
                             exc2, exc3)
                 else:
-                    logger.debug("_write_relationship: insert failed: %s", exc2)
+                    logger.warning(
+                        "person_extractor: _write_relationship insert failed for "
+                        "user=%s %r -[%s]- %r — edge NOT stored: %s",
+                        user_id, name_a, rel_type, name_b, exc2)
                 return
         await db.commit()
         # Update context for both people
@@ -896,7 +916,10 @@ async def _write_relationship(
         await db.commit()
         logger.debug("_write_relationship: %s -[%s]- %s", name_a, rel_type, name_b)
     except Exception as exc:
-        logger.debug("_write_relationship: error: %s", exc)
+        logger.warning(
+            "person_extractor: _write_relationship failed for user=%s "
+            "%r -[%s]- %r — edge NOT stored: %s",
+            user_id, name_a, rel_type, name_b, exc)
 
 
 async def _post_write_hooks(
@@ -917,7 +940,10 @@ async def _post_write_hooks(
                 (datetime.utcnow().isoformat() + "Z", person_id, user_id),
             )
     except Exception as exc:
-        logger.debug("_post_write_hooks: contact update failed: %s", exc)
+        logger.warning(
+            "person_extractor: _post_write_hooks contact update failed for "
+            "person=%s user=%s — last_contacted_at/notification_count stale: %s",
+            person_id, user_id, exc)
 
     try:
         from person_health import recalc_and_save
