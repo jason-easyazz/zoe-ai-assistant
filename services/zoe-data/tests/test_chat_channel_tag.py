@@ -21,6 +21,8 @@ import types
 
 import pytest
 
+pytestmark = pytest.mark.ci_safe
+
 chat_router = pytest.importorskip("routers.chat", reason="needs service modules")
 fast_tiers = pytest.importorskip("fast_tiers")
 expert_dispatch = pytest.importorskip("expert_dispatch")

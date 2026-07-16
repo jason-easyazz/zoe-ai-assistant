@@ -1,9 +1,12 @@
 """Tests for shopping/list intent canonical card emission."""
 
+import pytest
 import builtins
 
 from intent_router import Intent
 from routers.chat import _intent_action_form_payload, _intent_card_data, _normalized_list_items
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_list_show_payload_keeps_compat_shape_and_adds_contract():
