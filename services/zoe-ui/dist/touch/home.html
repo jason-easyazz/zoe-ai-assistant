@@ -1201,11 +1201,18 @@
   var CF_UNDO_MS=5000;   // removal is deferred, so Undo is local + truthful
   var _cf={items:[],cur:-1,focus:0,key:'',homeT:null,undo:null,drag:null,loading:false};
 
-  function cfClear(){_cf.items=[];_cf.cur=-1;_cf.focus=0;_cf.key='';
-    // Drop any in-flight gesture too: the card it points at is about to be
+  function cfClear(){
+    // A pending removal is the user's INSTRUCTION, not a maybe — the deferral
+    // only exists to make Undo possible, so flush it rather than silently drop
+    // it (they were told "Removed"). Quietly: the card is being emptied, not
+    // repainted, so no reload and no stale Undo left live to paint a phantom
+    // queue onto a stopped player.
+    if(_cf.undo)cfCommitRemove(true);
+    // Same for an in-flight gesture: the card it points at is about to be
     // detached, and a surviving _cf.drag would leave the lift class + inline
     // zIndex stranded on it (and run the next pointerup against an empty queue).
     if(_cf.drag){clearTimeout(_cf.drag.hold);_cf.drag=null;}
+    _cf.items=[];_cf.cur=-1;_cf.focus=0;_cf.key='';
     var t=document.getElementById('mCFT');if(t)t.innerHTML='';}
 
   // Reload the queue only when the playing track actually changes (a skip, a
@@ -1353,10 +1360,15 @@
       cfIndex();cfRender();
     });
   }
-  function cfCommitRemove(){
+  function cfCommitRemove(quiet){
+    // `quiet` = the card is going away (playback stopped, or we're re-entering
+    // the screen): send the write, but don't repaint a card that no longer has
+    // a queue, and take the now-meaningless Undo away with it.
     var u=_cf.undo;if(!u)return;_cf.undo=null;clearTimeout(u.t);
+    if(quiet)toastHide();
     _qpost('queue/remove',{queue_id:_music.player_id,item_id:String(u.item.queue_item_id)})
-      .then(function(){cfLoad();}).catch(function(){toast('Couldn’t remove that');cfLoad();});
+      .then(function(){if(!quiet)cfLoad();})
+      .catch(function(){if(!quiet){toast('Couldn’t remove that');cfLoad();}});
   }
   // Hold to lift, then drag left/right to reorder (left = sooner).
   function cfCommitMove(i,to){
@@ -2106,6 +2118,7 @@
   // A toast that can be acted on. Used for undoing a queue removal — the
   // removal itself is deferred for exactly this window, so Undo is a local
   // restore, not a second write racing the first.
+  function toastHide(){if(!toastEl)return;if(_toastT)clearTimeout(_toastT);toastEl.classList.remove('on','act');}
   function toastUndo(msg,onUndo){
     if(!toastEl)return;
     toastEl.innerHTML=esc(msg)+'<button class="ub" type="button">Undo</button>';
