@@ -686,9 +686,12 @@
   var COG='<button class="cog" title="Settings">'+GEAR+'</button>';
   // The Ask surface is re-rendered from FULL.ask.html on every ask, so build it
   // from ONE shell — otherwise the talk control vanishes the moment Zoe answers.
+  // `cog` is opt-in because the answer re-renders have never carried the settings
+  // cog (only the idle surface does); keeping that as-is holds this PR to the
+  // conversation feature.
   // (Hoisted: FULL's literal calls this, and GEAR is assigned above it.)
-  function askShell(inner){
-    return '<div class="fcog">'+GEAR+'</div><div class="askf">'+inner+'</div>'
+  function askShell(inner,cog){
+    return (cog?'<div class="fcog">'+GEAR+'</div>':'')+'<div class="askf">'+inner+'</div>'
       +'<button class="talkbtn" id="talkBtn" type="button" aria-pressed="false">Talk</button>';
   }
   var QICON='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>';
@@ -715,7 +718,7 @@
         +'<div class="today"><div class="thk">Your Day</div><div id="hToday"></div></div>'
         +'</div>'},
     ask:{home:true, bg:GROUND, canvas:false,
-      html:askShell('<div class="aa" id="askOut" style="opacity:.55">Just ask — I’ll answer here.</div>')},
+      html:askShell('<div class="aa" id="askOut" style="opacity:.55">Just ask — I’ll answer here.</div>',true)},
     weather:{home:true, bg:DUSK, canvas:true,
       html:'<div class="fcog">'+GEAR+'</div><div class="wloc" id="wxLoc"></div><div class="wbig"><div class="t" id="wxTemp">—°</div><div class="c" id="wxCond"></div></div><div class="whours" id="wxHours"></div>'},
     music:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,
