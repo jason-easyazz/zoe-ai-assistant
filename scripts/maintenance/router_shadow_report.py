@@ -20,10 +20,16 @@ import os
 import sys
 from collections import Counter
 
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEFAULT_LOG = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "services", "zoe-data", "data", "router_head_shadow.jsonl",
+    REPO, "services", "zoe-data", "data", "router_head_shadow.jsonl",
 )
+
+# The router rotates the shadow log into `<log>.1`, `<log>.2`, … once it hits its
+# size cap. Import the router's own segment contract rather than re-deriving the
+# naming here, so this report can't drift from the writer.
+sys.path.insert(0, os.path.join(REPO, "services", "zoe-data"))
+from semantic_router import shadow_log_segments  # noqa: E402
 
 
 def _pctl(values: list[float], p: float) -> float:
@@ -35,18 +41,20 @@ def _pctl(values: list[float], p: float) -> float:
 
 
 def load(path: str) -> list[dict]:
+    """Read every rotated segment, oldest first — not just the live file."""
     recs = []
-    with open(path, encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(rec, dict) and "head_pred" in rec:
-                recs.append(rec)
+    for segment in shadow_log_segments(path):
+        with open(segment, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(rec, dict) and "head_pred" in rec:
+                    recs.append(rec)
     return recs
 
 
