@@ -17,6 +17,8 @@ memory_extractor = pytest.importorskip("memory_extractor")
 
 from memory_quality import is_storable_fact, classify_against_existing
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _run(coro):
     return asyncio.run(coro)
