@@ -69,7 +69,12 @@ fi
 # mutating section (fetch → merge → restart → any rollback) so the two paths
 # take turns. The runner takes the SAME lock in its pull/reset step. The GH
 # `production` concurrency group only serializes runner-vs-runner, not this.
-DEPLOY_LOCK="${ZOE_DEPLOY_LOCK:-/tmp/zoe-deploy.lock}"
+#
+# The lock PATH is hardcoded (NOT an env override) and MUST stay byte-identical
+# to the path in .github/workflows/deploy.yml — two processes on different lock
+# files each acquire uncontended and the ref-lock race silently returns. If this
+# path ever changes, change deploy.yml in the same commit.
+DEPLOY_LOCK="/tmp/zoe-deploy.lock"
 exec 9>"$DEPLOY_LOCK"
 if ! flock -w "${ZOE_DEPLOY_LOCK_WAIT:-300}" 9; then
     echo "✗ REFUSING TO DEPLOY: could not acquire $DEPLOY_LOCK within ${ZOE_DEPLOY_LOCK_WAIT:-300}s (another deploy in progress?)." >&2
