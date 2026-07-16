@@ -1202,6 +1202,10 @@
   var _cf={items:[],cur:-1,focus:0,key:'',homeT:null,undo:null,drag:null,loading:false};
 
   function cfClear(){_cf.items=[];_cf.cur=-1;_cf.focus=0;_cf.key='';
+    // Drop any in-flight gesture too: the card it points at is about to be
+    // detached, and a surviving _cf.drag would leave the lift class + inline
+    // zIndex stranded on it (and run the next pointerup against an empty queue).
+    if(_cf.drag){clearTimeout(_cf.drag.hold);_cf.drag=null;}
     var t=document.getElementById('mCFT');if(t)t.innerHTML='';}
 
   // Reload the queue only when the playing track actually changes (a skip, a
@@ -1223,7 +1227,18 @@
     _cf.loading=true;
     apiGet('/api/music/queue/'+encodeURIComponent(_music.player_id)).then(function(d){
       _cf.loading=false;if(_cur!=='music')return;
-      _cf.items=(d&&d.items)||[];
+      var its=(d&&d.items)||[];
+      // A pending removal hasn't been sent yet (that's what makes Undo honest),
+      // so the server still lists it. Any reload inside the undo window — e.g.
+      // the one cfPlay schedules 700ms after a tap — would fan it straight back
+      // in and contradict the affordance. Keep it out locally, and refresh the
+      // undo snapshot so restoring it still lands you on current data.
+      if(_cf.undo){
+        var pid=String(_cf.undo.item.queue_item_id);
+        _cf.undo.items=its;
+        its=its.filter(function(x){return String(x.queue_item_id)!==pid;});
+      }
+      _cf.items=its;
       var hadFocus=_cf.cur>=0?(_cf.focus-_cf.cur):0;   // keep your browsed offset across a track change
       cfIndex();
       if(_cf.cur>=0)_cf.focus=Math.max(0,Math.min(_cf.items.length-1,_cf.cur+(_cf.homeT?hadFocus:0)));
@@ -1330,7 +1345,11 @@
     toastUndo('Removed “'+(it.name||'track')+'”',function(){
       if(!_cf.undo)return;
       clearTimeout(_cf.undo.t);
-      _cf.items=_cf.undo.items;_cf.focus=_cf.undo.focus;_cf.undo=null;
+      // the snapshot is refreshed by any reload during the window, so clamp
+      // rather than trusting the old focus to still be in range
+      _cf.items=_cf.undo.items;
+      _cf.focus=Math.max(0,Math.min(_cf.items.length-1,_cf.undo.focus));
+      _cf.undo=null;
       cfIndex();cfRender();
     });
   }
