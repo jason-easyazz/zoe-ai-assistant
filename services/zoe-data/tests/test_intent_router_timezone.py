@@ -1,3 +1,4 @@
+import pytest
 import os
 import sys
 from datetime import date
@@ -6,6 +7,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import intent_router
 from intent_router import Intent
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_calendar_show_fallback_date_arithmetic_uses_zoe_today(monkeypatch):

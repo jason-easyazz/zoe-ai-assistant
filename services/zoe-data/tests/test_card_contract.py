@@ -19,6 +19,8 @@ from card_contract import (
     validate_card_contract,
 )
 
+pytestmark = pytest.mark.ci_safe
+
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
