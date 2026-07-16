@@ -1,4 +1,5 @@
 """Music Assistant bridge — classifier + music_service (mocked MA) + card shape."""
+import asyncio
 import pytest
 
 import music_service
@@ -1008,3 +1009,55 @@ def test_queue_item_art_never_leaks_a_dict():
                  {"name": "x", "image": None, "media_item": None}):
         art = _queue_item_art(item)
         assert isinstance(art, str) and (art == "" or art.startswith("http"))
+
+
+# ── now-playing must locate the track IN THE QUEUE (the Cover Flow contract) ──
+
+def _fake_ma_for_queue(monkeypatch, current_index, current_item):
+    async def fake_players():
+        return [{"player_id": "P1", "display_name": "Bedroom", "playback_state": "playing",
+                 "volume_level": 12}]
+    async def fake_ma(command, **args):
+        if command == "player_queues/all":
+            return [{"queue_id": "P1", "current_index": current_index,
+                     "current_item": current_item, "elapsed_time": 30,
+                     "shuffle_enabled": False, "repeat_mode": "off"}]
+        return None
+    monkeypatch.setattr(music_service, "get_players", fake_players)
+    monkeypatch.setattr(music_service, "_ma", fake_ma)
+
+
+def test_now_playing_exposes_queue_item_id_and_index(monkeypatch):
+    """Regression: the panel reads np.queue_item_id / np.queue_index to find "Now"
+    among the covers AND as its change-key for noticing a track change. The API
+    sent NEITHER, so the Cover Flow could not centre or advance — it was broken
+    at the contract level while the UI tests passed against mocks that invented
+    these fields."""
+    _fake_ma_for_queue(monkeypatch, 3, {"queue_item_id": "abc123", "name": "Track",
+                                        "duration": 200, "media_item": {"name": "Track"}})
+    np = asyncio.get_event_loop().run_until_complete(music_service.now_playing())
+    assert np["queue_item_id"] == "abc123"
+    assert np["queue_index"] == 3
+
+
+def test_now_playing_index_is_the_queues_not_the_items(monkeypatch):
+    """Live MA had current_index=2 while current_item.index=0 on the SAME track —
+    they are different things. Using the item's own index would centre the wrong
+    cover, so queue_index must come from the QUEUE."""
+    _fake_ma_for_queue(monkeypatch, 2, {"queue_item_id": "xyz", "name": "Track",
+                                        "index": 0, "media_item": {"name": "Track"}})
+    np = asyncio.get_event_loop().run_until_complete(music_service.now_playing())
+    assert np["queue_index"] == 2, "must be the queue's current_index, not current_item.index"
+
+
+def test_now_playing_survives_a_queueless_player(monkeypatch):
+    """Radio / no queue → the fields degrade to empty rather than exploding."""
+    async def fake_players():
+        return [{"player_id": "P1", "display_name": "Bedroom", "playback_state": "playing"}]
+    async def fake_ma(command, **args):
+        return [] if command == "player_queues/all" else None
+    monkeypatch.setattr(music_service, "get_players", fake_players)
+    monkeypatch.setattr(music_service, "_ma", fake_ma)
+    np = asyncio.get_event_loop().run_until_complete(music_service.now_playing())
+    assert np["queue_item_id"] == ""
+    assert np["queue_index"] is None
