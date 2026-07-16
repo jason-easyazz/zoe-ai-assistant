@@ -11,7 +11,6 @@ in. These tests pin both halves: the cap actually bounds the live file, AND ever
 record written survives a rotation and is still readable in append order.
 """
 
-import importlib
 import json
 
 import pytest
@@ -23,17 +22,23 @@ numpy = pytest.importorskip("numpy")  # semantic_router imports numpy at module 
 
 @pytest.fixture()
 def router(tmp_path, monkeypatch):
-    """semantic_router bound to a tmp shadow log with a tiny rotation cap."""
+    """semantic_router bound to a tmp shadow log with a tiny rotation cap.
+
+    Patch the module CONSTANTS, never setenv+reload. The env vars are only read
+    at import time, so a reload-based fixture has to reload again on teardown to
+    undo itself — and pytest tears fixtures down in reverse setup order, so that
+    second reload runs while monkeypatch's env is STILL patched. It would bake
+    the test values permanently into the module globals (verified: the rest of
+    the session then saw _SHADOW_MAX_BYTES=1024 and a _HEAD_LOG_PATH pointing at
+    a deleted tmp dir). monkeypatch.setattr restores in the right order for free.
+    """
     log = tmp_path / "data" / "router_head_shadow.jsonl"
-    monkeypatch.setenv("ZOE_ROUTER_HEAD_LOG", str(log))
-    monkeypatch.setenv("ZOE_ROUTER_SHADOW_MAX_BYTES", "1024")
-    monkeypatch.setenv("ZOE_ROUTER_SHADOW_KEEP", "3")
     import semantic_router
 
-    importlib.reload(semantic_router)
+    monkeypatch.setattr(semantic_router, "_HEAD_LOG_PATH", str(log))
+    monkeypatch.setattr(semantic_router, "_SHADOW_MAX_BYTES", 1024)
+    monkeypatch.setattr(semantic_router, "_SHADOW_KEEP", 3)
     yield semantic_router, log
-    # leave the module bound to the real env for any later test
-    importlib.reload(semantic_router)
 
 
 def _write(sr, log, count):

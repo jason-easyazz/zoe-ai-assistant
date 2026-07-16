@@ -191,7 +191,7 @@ def _append_shadow_line(path: str, line: str) -> None:
             fh.write(line + "\n")
 
 
-def shadow_log_segments(path: str = None) -> list[str]:
+def shadow_log_segments(path: str | None = None) -> list[str]:
     """Every existing shadow-log segment, OLDEST first.
 
     THE contract for readers. Rotation moves history into `<log>.1`, `<log>.2`,
