@@ -139,5 +139,8 @@ async def save_intelligence_settings(
         )
         await db.commit()
     except Exception as exc:
+        logger.warning(
+            "save_intelligence_settings failed for user=%s — settings NOT "
+            "persisted: %s", user_id, exc)
         return {"status": "error", "detail": str(exc)}
     return {"status": "ok", "settings": filtered}
