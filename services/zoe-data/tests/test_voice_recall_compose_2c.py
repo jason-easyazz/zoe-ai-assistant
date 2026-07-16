@@ -26,6 +26,8 @@ import memory_service
 import routers.voice_tts as v
 import zoe_memory_compose as compose_mod
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _run(coro):
     return asyncio.run(coro)
