@@ -1,10 +1,13 @@
 """The wake word must warm Moonshine STT (not just the brain), so the FIRST command
 after idle isn't decoded on a cold/swapped-out STT. See _prewarm_stt_on_wake."""
+import pytest
 import asyncio
 import sys
 from types import SimpleNamespace
 
 from routers import voice_tts
+
+pytestmark = pytest.mark.ci_safe
 
 
 def _install_fake_numpy(monkeypatch):

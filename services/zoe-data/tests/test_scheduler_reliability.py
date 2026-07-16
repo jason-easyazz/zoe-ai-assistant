@@ -32,6 +32,8 @@ import proactive.scheduler as scheduler
 import proactive.triggers.reminder_scan as scan
 import proactive.triggers.reminders as reminders
 
+pytestmark = pytest.mark.ci_safe
+
 
 # --------------------------------------------------------------------------- #
 # Dual-mode cursor/exec (supports `await db.execute()` and `async with ...`).

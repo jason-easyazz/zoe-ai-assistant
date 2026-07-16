@@ -12,6 +12,8 @@ import pytest
 import memory_service
 from memory_service import MemoryService
 
+pytestmark = pytest.mark.ci_safe
+
 
 class _FakeCollection:
     def __init__(self, *, query_result=None):

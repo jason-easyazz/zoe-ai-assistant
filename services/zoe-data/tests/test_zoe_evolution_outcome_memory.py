@@ -13,6 +13,8 @@ from zoe_evolution_proposal import (
 from zoe_memory_contract import MemoryEventType, RelationshipType
 from zoe_observation_trace import ObservationOutcome, ObservationTrace, ObservationTraceType
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _candidate():
     return CandidateEvaluation(

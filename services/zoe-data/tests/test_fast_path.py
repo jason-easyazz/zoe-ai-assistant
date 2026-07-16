@@ -6,6 +6,8 @@ import asyncio
 
 import pytest
 
+pytestmark = pytest.mark.ci_safe
+
 fast_path = pytest.importorskip("fast_path")
 expert_dispatch = pytest.importorskip("expert_dispatch")
 semantic_router = pytest.importorskip("semantic_router")

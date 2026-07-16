@@ -4,6 +4,8 @@ import pytest
 
 from intent_router import detect_intent, execute_intent
 
+pytestmark = pytest.mark.ci_safe
+
 
 @pytest.mark.parametrize("text", ["Tell me a joke.", "Tell me a joke", "Tell me another joke.", "make me laugh", "do you have any jokes?", "have you got any jokes?", "know any good jokes?"])
 def test_joke_requests_route_to_open_domain_agent(text: str):

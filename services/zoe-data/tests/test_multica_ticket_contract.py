@@ -1,3 +1,4 @@
+import pytest
 from multica_ticket_contract import (
     append_child_id,
     describe_ticket,
@@ -8,6 +9,8 @@ from multica_ticket_contract import (
     validate_ticket_contract,
     write_ticket_block,
 )
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_ticket_block_preserves_human_description():

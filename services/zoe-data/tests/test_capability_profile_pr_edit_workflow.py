@@ -14,6 +14,8 @@ from zoe_capability_profile_ticket_writer import create_capability_profile_hando
 from zoe_capability_trust_review import review_capability_trust_update_plan
 from zoe_capability_trust_update import CapabilityTrustUpdateCandidate, CapabilityTrustUpdatePlan
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _load_runner():
     root = Path(__file__).resolve().parents[3]

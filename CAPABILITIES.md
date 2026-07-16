@@ -5,9 +5,9 @@
 | Tier | Agent | Model | Endpoint | Notes |
 |------|-------|-------|----------|-------|
 | 0 | intent_router | regex | — | <10ms fast path |
-| 1 | Zoe Agent | Gemma 4 E2B | :11434 | tool loop, escalation |
+| 1 | Zoe Agent | Gemma 4 E4B-QAT | :11434 | tool loop, escalation |
 | 1.5 | Hermes | GPT-5.4 | :8642 | default engineering, planning, review, repair |
-| 2 | OpenClaw | Gemma 4 E2B + browser | :18789 | available fallback, not default route |
+| 2 | OpenClaw | Gemma 4 E4B-QAT + browser | :18789 | available fallback, not default route |
 
 ## MCP Tools
 - `a2a_delegate`
@@ -133,6 +133,7 @@
 - [games](/dist/games.html)
 - [index](/dist/index.html)
 - [journal](/dist/journal.html)
+- [jukebox](/dist/jukebox.html)
 - [lists](/dist/lists.html)
 - [memories](/dist/memories.html)
 - [music](/dist/music.html)
@@ -140,6 +141,8 @@
 - [offline](/dist/offline.html)
 - [people](/dist/people.html)
 - [settings](/dist/settings.html)
+- [setup-device](/dist/setup-device.html)
+- [setup-music](/dist/setup-music.html)
 - [smart-home](/dist/smart-home.html)
 - [updates](/dist/updates.html)
 - [voice](/dist/voice.html)
