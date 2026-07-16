@@ -8,6 +8,8 @@ from zoe_candidate_scoring import (
     rank_candidates,
 )
 
+pytestmark = pytest.mark.ci_safe
+
 
 def test_candidate_score_validates_range_and_normalizes():
     score = CandidateScore(fit=5, activity=4, license=3, offline=5, security=4, footprint=3, tests=4, maintainability=4, overlap=5)
