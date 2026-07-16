@@ -1,10 +1,13 @@
 """Tests for Kanban handoff → pipeline evidence parsing."""
 
+import pytest
 from pipeline_handoff import (
     evidence_from_handoff,
     implementation_required_from_handoff,
     infer_outcome,
 )
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_evidence_from_implement_handoff_parses_tools_and_tests():
