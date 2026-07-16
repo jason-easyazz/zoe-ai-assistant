@@ -215,8 +215,9 @@ def main(argv: list[str] | None = None) -> int:
           "  Run the replay gate against the current baseline before deploying a "
           "voice-path change:\n"
           "    flock /tmp/zoe-voice-harness.lock \\\n"
-          "      python3 scripts/maintenance/voice_regression_probe.py "
-          "--service-dir /home/zoe/assistant/services/zoe-data",
+          "      python3 scripts/maintenance/voice_regression_probe.py\n"
+          "  (--service-dir auto-resolves to the live services/zoe-data, incl. "
+          "from a git worktree)",
           file=sys.stderr)
     return 1
 
