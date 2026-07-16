@@ -5,6 +5,8 @@ from unittest.mock import Mock
 from card_service import CardService, card_service, list_items
 from card_contract import CardContractError, CardType
 
+pytestmark = pytest.mark.ci_safe
+
 
 def test_card_service_build_valid_card():
     """Test building a valid card contract."""

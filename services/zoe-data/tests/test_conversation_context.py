@@ -13,9 +13,12 @@ rather than sleeping.
 
 from __future__ import annotations
 
+import pytest
 import time
 
 from conversation_context import ConversationContext
+
+pytestmark = pytest.mark.ci_safe
 
 
 # ---------------------------------------------------------------------------
