@@ -10,6 +10,8 @@ from zoe_evolution_proposal import (
     build_evolution_proposal,
 )
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _candidate(**overrides):
     defaults = {

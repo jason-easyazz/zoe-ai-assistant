@@ -1,3 +1,4 @@
+import pytest
 from zoe_memory_layers import (
     ASYNC_ENRICHMENT_LAYERS,
     FAST_CHAT_LAYERS,
@@ -6,6 +7,8 @@ from zoe_memory_layers import (
     layer_policy,
 )
 from zoe_memory_router import MemoryBackend, route_memory_query
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_fast_chat_layers_are_boring_hot_path_only():
