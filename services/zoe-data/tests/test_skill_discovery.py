@@ -21,6 +21,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import skill_discovery as sd  # noqa: E402
 
+pytestmark = pytest.mark.ci_safe
+
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 

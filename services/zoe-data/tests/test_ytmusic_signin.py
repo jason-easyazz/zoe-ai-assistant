@@ -8,6 +8,8 @@ import music_setup
 import ytmusic_signin as ys
 from routers import music_setup as ms_router
 
+pytestmark = pytest.mark.ci_safe
+
 
 GOOD_COOKIES = [
     {"name": "__Secure-3PAPISID", "value": "secretval", "domain": ".youtube.com"},

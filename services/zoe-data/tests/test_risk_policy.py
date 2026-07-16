@@ -1,5 +1,8 @@
+import pytest
 from risk_policy import classify_request, is_whatsapp_connect_request
 from routers.chat import _extract_approval_token
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_high_risk_requires_confirmation():
