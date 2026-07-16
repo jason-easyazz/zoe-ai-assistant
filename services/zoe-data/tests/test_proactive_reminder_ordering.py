@@ -24,6 +24,8 @@ import proactive.scheduler as scheduler
 import proactive.triggers.reminders as reminders
 from proactive.scheduler import CancelResult
 
+pytestmark = pytest.mark.ci_safe
+
 
 # --------------------------------------------------------------------------- #
 # cancel_job tri-state (scheduler.py)
