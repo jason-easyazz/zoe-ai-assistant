@@ -4,6 +4,8 @@ import pytest
 
 import nlu_extractor
 
+pytestmark = pytest.mark.ci_safe
+
 
 class _FixedDate(datetime.date):
     @classmethod
