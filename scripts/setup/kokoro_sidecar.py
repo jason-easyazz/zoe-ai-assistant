@@ -497,6 +497,20 @@ def _load_pipeline():
         pipeline = Kokoro(_ONNX_MODEL, _ONNX_VOICES)
         _device = "cpu (onnx)"
         logger.info("Kokoro ONNX pipeline ready (CPU) — same af_sky weights, ~600MB, no GPU.")
+        # Loud footgun guard: onnx/CPU is the default, but CPU synthesis is SLOWER
+        # THAN REAL TIME (RTF ~1.0–1.8x), so the sentence-streamed voice pipe starves
+        # and replies play back in pieces. Production runs ZOE_KOKORO_BACKEND=pytorch
+        # (CUDA, ~150ms, RTF ~0.08) via the kokoro-tts.service override; anyone running
+        # this script directly (fresh install, debugging, worktree test) gets the slow
+        # path with no other signal — so say it loudly. See docs/knowledge/voice-pipeline.md.
+        if not os.environ.get("ZOE_KOKORO_BACKEND"):
+            logger.warning(
+                "⚠ Kokoro is on the ONNX/CPU backend by DEFAULT — synthesis is slower "
+                "than real time (RTF ~1.0–1.8x) and streamed replies will play in pieces. "
+                "Production sets ZOE_KOKORO_BACKEND=pytorch (CUDA, ~150ms) via the "
+                "kokoro-tts.service unit. Set ZOE_KOKORO_BACKEND=pytorch for real-time TTS "
+                "(needs the CUDA torch build + ~2.3GB GPU). See docs/knowledge/voice-pipeline.md."
+            )
         return pipeline
 
     # ── PyTorch / CUDA (ZOE_KOKORO_BACKEND=pytorch) ───────────────────────────
