@@ -55,7 +55,8 @@ Deliberately out of scope (keep this scan narrow enough to stay enabled)
   share a helper.
 * **Branch granularity.** A handler needs ≥1 WARNING+ call; the scan does not
   prove every ``if``/``else`` path inside it logs. Whole-handler is the
-  cheap, unambiguous rule.
+  cheap, unambiguous rule. (A log in a *nested* handler does not count —
+  that fires for the inner failure, not the write; see ``_iter_own_nodes``.)
 * **Dynamic SQL** (f-strings/variables). Only literal SQL is classified, so a
   computed statement is invisible here. Every write in the scanned modules is
   a literal today; keep it that way.
@@ -174,11 +175,26 @@ def _reraises(handler: ast.ExceptHandler) -> bool:
     return any(isinstance(stmt, ast.Raise) for stmt in handler.body)
 
 
+def _iter_own_nodes(stmt: ast.AST):
+    """Yield `stmt` and its descendants, pruning nested except-handler bodies.
+
+    A log inside a *nested* handler fires for that inner failure, not the outer
+    write failure, so it must not exempt the outer handler. The nested `try`'s
+    own body IS still walked — a log there runs on the outer handler's own path.
+    """
+    if isinstance(stmt, ast.ExceptHandler):
+        return
+    yield stmt
+    for child in ast.iter_child_nodes(stmt):
+        yield from _iter_own_nodes(child)
+
+
 def _logs_loudly(handler: ast.ExceptHandler) -> bool:
-    """True if the handler body calls a logger at WARNING or above."""
-    for node in ast.walk(handler):
-        if isinstance(node, ast.Call) and getattr(node.func, "attr", "") in _LOUD_LEVELS:
-            return True
+    """True if the handler itself calls a logger at WARNING or above."""
+    for stmt in handler.body:
+        for node in _iter_own_nodes(stmt):
+            if isinstance(node, ast.Call) and getattr(node.func, "attr", "") in _LOUD_LEVELS:
+                return True
     return False
 
 
@@ -342,6 +358,42 @@ async def _write_thing(db):
             raise HTTPException(status_code=409)
 '''
     assert find_silent_write_handlers(partial), "conditional raise must not exempt"
+
+
+def test_nested_handler_log_does_not_exempt_outer_write_handler():
+    """A log in a nested handler fires for the INNER failure, not the write.
+
+    Letting it exempt the outer handler would mask exactly the swallow this
+    scan exists to catch (Greptile review, PR #1373).
+    """
+    masked = '''
+async def _write_thing(db):
+    try:
+        await db.execute("INSERT INTO t (a) VALUES ($1)", a)
+    except Exception:
+        try:
+            _cleanup()
+        except Exception as inner:
+            logger.warning("cleanup failed: %s", inner)
+'''
+    assert find_silent_write_handlers(masked), (
+        "nested handler's log must not exempt the outer write handler"
+    )
+
+
+def test_log_in_nested_try_body_does_exempt():
+    """A log in a nested `try` BODY does run on the outer handler's own path."""
+    ok = '''
+async def _write_thing(db):
+    try:
+        await db.execute("INSERT INTO t (a) VALUES ($1)", a)
+    except Exception as exc:
+        try:
+            logger.warning("_write_thing failed: %s", exc)
+        except Exception:
+            pass
+'''
+    assert find_silent_write_handlers(ok) == []
 
 
 def test_scan_ignores_read_only_handler():
