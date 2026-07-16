@@ -18,6 +18,8 @@ from zoe_memory_router_runtime import (
 )
 from zoe_observation_trace import ObservationOutcome, ObservationTrace, ObservationTraceType
 
+pytestmark = pytest.mark.ci_safe
+
 
 def test_memory_router_runtime_is_disabled_by_default(monkeypatch):
     monkeypatch.delenv(FEATURE_FLAG, raising=False)

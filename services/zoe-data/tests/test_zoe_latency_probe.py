@@ -4,9 +4,12 @@ Covers the bucketing fix (distinct endpoints must not collapse) and the
 regression-compare logic. The probe lives under scripts/maintenance, so it's
 loaded by path.
 """
+import pytest
 import importlib.util
 import sys
 from pathlib import Path
+
+pytestmark = pytest.mark.ci_safe
 
 _PROBE_PATH = Path(__file__).resolve().parents[3] / "scripts" / "maintenance" / "zoe_latency_probe.py"
 

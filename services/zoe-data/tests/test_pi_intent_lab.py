@@ -13,6 +13,8 @@ from routers.pi_intent_lab import require_lab_operator
 from pi_intent_lab import _await_speculative_safe_fulfillment, compare_pi_intent_lab
 from routers.pi_intent_lab import router as pi_intent_lab_router
 
+pytestmark = pytest.mark.ci_safe
+
 
 @pytest.fixture(autouse=True)
 def _neutralize_pi_lab_resource_guard(monkeypatch):
