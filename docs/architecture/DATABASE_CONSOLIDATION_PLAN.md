@@ -1,6 +1,26 @@
 # Database Consolidation Plan
-**Created**: October 9, 2025  
-**Status**: Ready for Execution  
+
+> **STATUS: ARCHIVED PROPOSAL — NEVER EXECUTED, AND NOW OBSOLETE.**
+> **Do not follow the steps in this document.**
+>
+> This was a 2025 plan to consolidate 19 **SQLite** files into two
+> (`zoe.db` + `memory.db`). Phases 2–6 were never run. It was overtaken by the
+> **Postgres migration**: per [`docs/CANONICAL.md`](../CANONICAL.md), Zoe's
+> database is now **`zoe-database` — PostgreSQL (asyncpg, `$1` placeholders)**,
+> which resolves the split-brain problem below by a different route entirely.
+>
+> It is also full of retired references: the `services/zoe-core` *Python* routers
+> it lists no longer exist (zoe-core is TypeScript now), and the
+> `data/backup/pre-consolidation-20251009_150213/` backup it cites is long gone.
+>
+> Kept as a record of the historical SQLite-era architecture and the
+> duplicate-user problem that motivated the Postgres move — per the
+> [2026-07-07 issue register](../reviews/issue-register-2026-07-07.md), which
+> called for a status header rather than deletion. Everything below this line is
+> **historical**.
+
+**Created**: October 9, 2025
+**Original status (superseded)**: Ready for Execution
 **Safety**: Full backups created at `data/backup/pre-consolidation-20251009_150213/`
 
 ## 📊 Current State Analysis
