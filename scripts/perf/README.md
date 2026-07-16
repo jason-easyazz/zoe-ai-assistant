@@ -72,6 +72,13 @@ warm vs cold and small vs large prefill are not comparable.
 
 ## Baseline — captured 2026-06-25 (Jetson Orin NX, Gemma 4 E4B QAT Q4_K_XL, GPU)
 
+> **These numbers predate the July latency work and are kept as a dated snapshot, not current
+> performance.** Since then: the two-stage router went ACTIVE (#1322), Kokoro moved to CUDA, and the
+> voice regression baseline (`voice_regression_probe.py`) was ratcheted 2026-07-16 to brain ~1868 ms /
+> e2e ~1896 ms / STT ~580 ms (warm-harness, relative). The **TTS** table below is especially stale —
+> the live sidecar now runs **CUDA (pytorch), RTF ~0.08**, not the CPU/onnx path measured here. See
+> `docs/knowledge/voice-pipeline.md` for the current path + the "Latency wins since 2026-07-02" section.
+
 Brain (`measure_speed.py`):
 
 | Scenario | TTFT median | gen tok/s median | total median |
@@ -107,9 +114,12 @@ af_sky, first speakable clause):
 | First unit, **cache MISS** (a *novel* brain clause) | **~1734 ms** | 1289–2294 ms | 1026–3681 ms |
 
 The sidecar phrase-caches af_sky/speed-1.0/<=240-char text, so a recurring opener
-is instant but a fresh clause pays full CPU synth — and synth is ~linear in
-characters (13-char clause ≈ 1.0 s, ~60-char clause ≈ 2–3.7 s). The default
-`ZOE_KOKORO_BACKEND=onnx` runs on CPU to save the ~2.3 GB the PyTorch/CUDA build
-holds; the "~150 ms warm GPU" in code comments is the non-default `pytorch`
-backend. See `docs/architecture/tts-first-chunk-latency.md` for the full analysis
-and safe optimization seams (warm the openers, not just whole phrases).
+is instant but a fresh clause pays full synth. **The numbers above are the old
+CPU/onnx cost and no longer reflect the live sidecar:** the shipped
+`kokoro-tts.service` sets `ZOE_KOKORO_BACKEND=pytorch` (CUDA, ~2.3 GB), which runs
+at **RTF ~0.08** — a fresh full-sentence synth is ~0.3 s with zero internal gaps.
+The *code* default in `scripts/setup/kokoro_sidecar.py` is still `onnx`/CPU, so the
+CUDA win comes from the systemd unit forcing `pytorch`, not the code default. See
+`docs/knowledge/voice-pipeline.md` (current path) and
+`docs/architecture/tts-first-chunk-latency.md` for the analysis and safe
+optimization seams (warm the openers, not just whole phrases).
