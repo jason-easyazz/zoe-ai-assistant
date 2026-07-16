@@ -147,16 +147,41 @@ Key properties:
 
 ---
 
-## 7. Open questions (resolve before PR-1a)
+## 7. Decisions + open questions
 
-- **The LiveKit agent loop's brain wiring** — confirm `_agent_loop()` still routes to the Gemma
-  brain and what it expects of the client (it drove voice.html).
-- **Immersive or inline?** Conversation mode as the normal Ask card, or a fullscreen state.
-  Recommendation: inline first (cheapest, consistent), fullscreen later if it feels cramped.
-- **Wake-word interplay** — the panel voice daemon owns wake today; decide whether a live session
-  suspends it to avoid double-listening.
+**✅ RESOLVED — the agent already does the whole turn server-side (2026-07-16).** `_agent_loop()`
+in `voice_livekit.py` connects to the room, runs VAD per participant, and routes the utterance
+through the **existing rocks**: STT via `voice_tts._transcribe_audio` (Moonshine) → brain via
+`zoe_core_client` (with `_prewarm_brain` on VAD IDLE→LISTENING so it's warm; **brain-first is the
+conversation-mode default**, with a sub-second fast-tier that returns `None` to defer to the
+brain) → TTS via `voice_tts.synthesize` (Kokoro). It pushes transcript/reply payloads to
+participants with `publish_data(..., reliable=True)`. Backend transport: `livekit-ffi` with an
+automatic **aiortc** fallback — **the Jetson requires it and `ZOE_LK_USE_AIORTC=1` is already set
+in the live `.env`** (native WebRTC can't init a PeerConnection on the Tegra kernel).
+
+**⇒ This makes the estate client THIN.** PR-1a does not implement a turn — it only has to:
+join the room with a `/livekit-token`, publish the mic track, subscribe/play Zoe's audio track,
+and read the `publish_data` payloads to render the transcript (and, in Phase 2, the tiles).
+
+**✅ DECIDED — inline, not fullscreen (Jason, 2026-07-16).** Conversation mode is a *state of the
+Ask card*: the dock (speakers / now-playing / timer chips), home button and orb all stay put, and
+the transcript + tiles render in the Ask card's content area. Rationale: hiding the dock
+mid-conversation would remove music/timer controls exactly when they're wanted, and it's the
+smaller build. **Cheap to reverse** — the LiveKit session, transcript and tile rendering are
+identical either way, so promoting to fullscreen (or a hybrid that keeps the dock but enlarges
+the orb) is a later chrome-toggle, not an architecture change.
+
+**⬜ OPEN — wake-word interplay.** The panel-side voice daemon owns wake today. Decide whether a
+live LiveKit session suspends it to avoid double-listening (the daemon and the room both holding
+the mic). Resolve during PR-1a.
+
+**Required either way (both designs):** a live session must suppress the **ambient-return** drift
+(no bouncing home mid-sentence) and the **idle→sleep** timer. The timer-finish alarm (z85) still
+surfaces above the conversation — correct.
 
 ## 8. NEXT ACTION
 
-**PR-1a** — Ask-card conversation mode (lazy LiveKit client + token + join + transcript), after
-resolving §7's agent-loop question. Phase 1 must land before `voice.html` retires.
+**PR-1a** — Ask-card conversation mode: lazy-load the LiveKit client on entry → `/livekit-token` →
+join → publish mic → play Zoe's track → render the `publish_data` transcript; suppress
+ambient-return + idle-sleep while live; release the mic on every exit. Resolve the wake-word
+question (§7) as part of it. Phase 1 must land before `voice.html` retires.
