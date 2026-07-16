@@ -4,6 +4,8 @@ import pytest
 
 from zoe_capability_utils import merge_string_refs
 
+pytestmark = pytest.mark.ci_safe
+
 
 def test_module_exports_merge_string_refs():
     # __all__ is the module's public contract; downstream capability modules

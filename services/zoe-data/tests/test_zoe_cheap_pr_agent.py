@@ -7,6 +7,8 @@ import pytest
 
 import runtime_env  # noqa: F401  (ensures repo sys.path is set up like siblings)
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _module():
     path = (
