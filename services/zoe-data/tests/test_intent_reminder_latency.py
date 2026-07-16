@@ -5,6 +5,8 @@ from datetime import datetime
 
 import pytest
 
+pytestmark = pytest.mark.ci_safe
+
 
 @pytest.mark.asyncio
 async def test_simple_reminder_slots_skip_llm_extractor(monkeypatch):
