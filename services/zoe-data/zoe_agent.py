@@ -3342,11 +3342,15 @@ async def _llm_call(
                         0.0,  # local LLM — always $0
                         _time.time(),
                     )
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.warning(
+                    "zoe_agent: llm_call_log insert failed — call NOT accounted: %s",
+                    _exc)
         _asyncio.ensure_future(_log_call())
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.warning(
+            "zoe_agent: could not schedule llm_call_log write — call NOT "
+            "accounted: %s", _exc)
 
     choice = data["choices"][0]["message"]
 
