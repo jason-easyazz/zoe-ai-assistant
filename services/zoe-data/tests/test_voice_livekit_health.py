@@ -15,6 +15,8 @@ if str(ROOT) not in sys.path:
 import voice_presence
 from routers import voice_livekit
 
+pytestmark = pytest.mark.ci_safe
+
 
 @pytest.fixture(autouse=True)
 def _reset_health(monkeypatch):

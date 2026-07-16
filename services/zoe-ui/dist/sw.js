@@ -4,20 +4,41 @@
  * Version: 1.0.0
  */
 
-// Import Workbox from CDN (no build step needed)
-importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
+// Import Workbox from the LOCAL vendored copy in dist/workbox/.
+// Provenance + refresh procedure: services/zoe-ui/AGENTS.md.
+// Zoe is local-first: she runs on a LAN box that may be offline, so the service
+// worker must not depend on a third-party CDN. Loading workbox-sw from Google
+// also pinged Google from every client on every SW boot — a privacy leak.
+importScripts('/workbox/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.63.56'; // music: brief-shape album art + dock control off the music card
+const SW_VERSION = '4.63.58'; // music card: 3D Cover Flow queue (browse/tap/flick-up/hold-reorder)
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
 if (workbox) {
     console.log(`🚀 Zoe Service Worker ${SW_VERSION} - Workbox loaded`);
 
-    // Configure Workbox
+    // Configure Workbox.
+    //
+    // modulePathPrefix is LOAD-BEARING for the local-first guarantee: workbox-sw.js
+    // is only a lazy LOADER — on first access of workbox.core / workbox.routing /…
+    // it importScripts()es each module, and its built-in default base URL is
+    // Google's CDN. Vendoring workbox-sw.js alone would NOT remove the CDN
+    // dependency; this prefix is what redirects those module loads to
+    // /workbox/workbox-<module>.prod.js on our own origin.
+    //
+    // debug:false pins the 'prod' build variant, which is what dist/workbox/ ships
+    // (the .dev.js variants are deliberately not vendored). Flipping debug to true
+    // would make Workbox request .dev.js files that do not exist locally.
+    //
+    // setConfig must run BEFORE any workbox.<module> access — Workbox throws
+    // "Config must be set before accessing workbox.* modules" otherwise. The
+    // `if (workbox)` guard above does not touch a module namespace, so this is
+    // still the first access.
     workbox.setConfig({
-        debug: false
+        debug: false,
+        modulePathPrefix: '/workbox/'
     });
 
     // Set cache name prefix

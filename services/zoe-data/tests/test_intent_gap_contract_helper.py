@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import pytest
 import importlib.util
 from pathlib import Path
+
+pytestmark = pytest.mark.ci_safe
 
 
 def _load_helper():

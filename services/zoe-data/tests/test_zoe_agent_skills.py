@@ -13,6 +13,8 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import zoe_agent as zoe_agent
 
+pytestmark = pytest.mark.ci_safe
+
 
 # ── _select_skills ────────────────────────────────────────────────────────────
 
