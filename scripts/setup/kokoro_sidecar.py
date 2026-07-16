@@ -66,6 +66,10 @@ _SAMPLE_RATE = 24000  # Kokoro outputs 24 kHz
 # CUDA, ~2.3GB, ~150ms). ONNX is the default; set ZOE_KOKORO_BACKEND=pytorch to
 # fall back instantly with no other change.
 _BACKEND = (os.environ.get("ZOE_KOKORO_BACKEND") or "onnx").strip().lower()
+# True when the backend was NOT explicitly chosen (env unset) — i.e. we fell through
+# to the onnx/CPU default. Drives the loud footgun warning in _load_pipeline; kept a
+# module-level flag so the check is consistent and patchable in tests.
+_BACKEND_IS_DEFAULT = not (os.environ.get("ZOE_KOKORO_BACKEND") or "").strip()
 _ONNX_MODEL = os.environ.get("ZOE_KOKORO_MODEL", "/home/zoe/models/kokoro-v1.0.onnx")
 _ONNX_VOICES = os.environ.get("ZOE_KOKORO_VOICES", "/home/zoe/models/voices-v1.0.bin")
 
@@ -497,6 +501,20 @@ def _load_pipeline():
         pipeline = Kokoro(_ONNX_MODEL, _ONNX_VOICES)
         _device = "cpu (onnx)"
         logger.info("Kokoro ONNX pipeline ready (CPU) — same af_sky weights, ~600MB, no GPU.")
+        # Loud footgun guard: onnx/CPU is the default, but CPU synthesis is SLOWER
+        # THAN REAL TIME (RTF ~1.0–1.8x), so the sentence-streamed voice pipe starves
+        # and replies play back in pieces. Production runs ZOE_KOKORO_BACKEND=pytorch
+        # (CUDA, ~150ms, RTF ~0.08) via the kokoro-tts.service override; anyone running
+        # this script directly (fresh install, debugging, worktree test) gets the slow
+        # path with no other signal — so say it loudly. See docs/knowledge/voice-pipeline.md.
+        if _BACKEND_IS_DEFAULT:
+            logger.warning(
+                "⚠ Kokoro is on the ONNX/CPU backend by DEFAULT — synthesis is slower "
+                "than real time (RTF ~1.0–1.8x) and streamed replies will play in pieces. "
+                "Production sets ZOE_KOKORO_BACKEND=pytorch (CUDA, ~150ms) via the "
+                "kokoro-tts.service unit. Set ZOE_KOKORO_BACKEND=pytorch for real-time TTS "
+                "(needs the CUDA torch build + ~2.3GB GPU). See docs/knowledge/voice-pipeline.md."
+            )
         return pipeline
 
     # ── PyTorch / CUDA (ZOE_KOKORO_BACKEND=pytorch) ───────────────────────────
