@@ -7,6 +7,8 @@ import pytest
 
 import memory_idle_consolidation as mic
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _run(c):
     return asyncio.run(c)

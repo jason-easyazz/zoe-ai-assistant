@@ -1,8 +1,11 @@
 """Tests for harness-run repo validators."""
 
+import pytest
 from unittest.mock import patch
 
 from pipeline_validators import run_repo_validators, validator_evidence_item
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_run_repo_validators_success():

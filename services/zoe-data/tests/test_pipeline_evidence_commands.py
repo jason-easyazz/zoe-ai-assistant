@@ -1,3 +1,4 @@
+import pytest
 import json
 import sys
 import types
@@ -5,6 +6,8 @@ import types
 import pipeline_evidence_commands as commands
 from pipeline_evidence_commands import main
 from pipeline_store import PipelineStateConflict, bootstrap_state, load_latest_state
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_mark_tested_records_hashed_evidence(tmp_path, monkeypatch, capsys):

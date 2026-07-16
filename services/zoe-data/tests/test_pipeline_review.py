@@ -5,10 +5,13 @@ deliberately NOT gated here (owned by the closeout greploop merge gate), so a
 fresh PR with open Greptile threads can still be review-approved.
 """
 
+import pytest
 import json
 
 import pipeline_review as pr
 from pipeline_review import _checks_all_green
+
+pytestmark = pytest.mark.ci_safe
 
 
 def _patch_pr_view(monkeypatch, payload: dict):

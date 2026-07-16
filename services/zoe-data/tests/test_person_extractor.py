@@ -29,6 +29,8 @@ from person_extractor import (
     _parse_birthday,
 )
 
+pytestmark = pytest.mark.ci_safe
+
 
 # ── __all__ public contract ──────────────────────────────────────────────────
 
