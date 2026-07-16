@@ -15,9 +15,13 @@ artifact is missing, stale, from a different baseline, or status != "pass", it
 fails LOUDLY (non-zero exit + a clear message) so a voice-path deploy cannot
 proceed on an unproven voice path.
 
-Deploy wiring: scripts/maintenance/deploy_live.sh calls this with the incoming
-git range; if that range changes no voice-path files the check is a no-op pass
-(so ordinary non-voice deploys are frictionless). See
+Deploy wiring: BOTH deploy paths call this with the incoming git range, between
+the fetch and the tree-advance — the manual scripts/maintenance/deploy_live.sh
+AND the continuous-deploy runner (.github/workflows/deploy.yml), which is how
+changes actually reach the box. If that range changes no voice-path files the
+check is a no-op pass (so ordinary non-voice deploys are frictionless). A block
+on the CD path is fail-closed and keeps blocking until the probe is re-run; the
+unwedge procedure is in docs/knowledge/merge-and-deploy.md. See
 docs/knowledge/voice-pipeline.md for the artifact contract.
 
 Exit codes: 0 = allowed (fresh pass, or no voice-path change); 1 = blocked.

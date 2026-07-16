@@ -14,6 +14,7 @@ from agent_safety import SSRFBlocked, assert_panel_host, is_allowed_panel_host
 from auth import (
     get_current_user,
     require_admin,
+    require_signed_in,
     get_a2a_caller,
     require_intent_dispatch_auth,
     require_internal_token,
@@ -2271,14 +2272,10 @@ async def get_panel_idle_logout():
 @router.put("/panel/idle-logout")
 async def put_panel_idle_logout(
     request: Request,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_signed_in),
 ):
     """Set the panel idle-logout window (seconds, clamped 0..24h). Requires a
     signed-in, non-guest user — it governs how long a login stays trusted."""
-    role = (user or {}).get("role")
-    uid = (user or {}).get("user_id")
-    if role in (None, "guest") or uid in (None, "guest"):
-        raise HTTPException(status_code=403, detail="Sign in to change this setting")
     body = await request.json()
     try:
         seconds = int((body or {}).get("seconds"))
