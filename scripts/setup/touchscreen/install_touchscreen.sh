@@ -53,7 +53,7 @@ trap 'rm -rf "${TMP_DIR}"' EXIT
 CONFIG_SRC="${ROOT_DIR}/config.json"
 CONFIG_TMP="${TMP_DIR}/config.json"
 
-KIOSK_URL="${SERVER_URL}/touch/skybridge.html?panel_id=${PANEL_ID}&kiosk=1"
+KIOSK_URL="${SERVER_URL}/touch/home.html?panel_id=${PANEL_ID}&kiosk=1"
 
 python3 - <<PY
 import json

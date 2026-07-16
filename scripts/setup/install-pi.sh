@@ -133,5 +133,5 @@ fi
 
 step "Done"
 ok "Touch panel provisioned: ${REMOTE}"
-printf '%b\n' "  kiosk URL: ${SERVER_URL}/touch/skybridge.html?panel_id=${PANEL_ID}&kiosk=1"
+printf '%b\n' "  kiosk URL: ${SERVER_URL}/touch/home.html?panel_id=${PANEL_ID}&kiosk=1"
 printf '%b\n' "  ${C_DIM}voice logs: ssh ${REMOTE} 'journalctl --user -u zoe-voice -f'${C_NC}"
