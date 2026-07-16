@@ -19,6 +19,28 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ui", tags=["ui"])
 
+# A guest kiosk may RECLAIM a panel whose registered non-guest owner has gone
+# silent. If that owner's ``ui_panel_sessions.last_seen_at`` is older than this
+# many seconds, the session is treated as abandoned (e.g. the user signed out /
+# their session dropped, so their executor stopped refreshing the row). A live
+# panel binds/syncs every ~5s while a real owner is present, so this 300s window
+# is ~60× that cadence — an actively-present owner is never falsely reclaimed,
+# and a brief network blip cannot hand a live owner's panel to a guest. Used by
+# BOTH the read-side gate (``_authorize_panel``) and the atomic upsert guard
+# (``_guest_conflict_guard``) so the check and the write agree on "stale".
+_PANEL_RECLAIM_STALE_AFTER_S = 300
+
+# SQL predicate (Postgres): the panel's registered owner has gone stale.
+# ``last_seen_at`` is stored as TEXT (``NOW()::TEXT`` ISO string, see the
+# 0001 schema), so it MUST be cast to timestamptz before arithmetic — a bare
+# ``NOW() - last_seen_at`` raises "timestamp - text". Mirrors the existing
+# ``created_at::timestamptz < CURRENT_TIMESTAMP - INTERVAL '1 hour'`` idiom in
+# this module. The interpolated value is an int constant, never user input.
+_OWNER_STALE_SQL = (
+    "ui_panel_sessions.last_seen_at::timestamptz"
+    f" < CURRENT_TIMESTAMP - INTERVAL '{int(_PANEL_RECLAIM_STALE_AFTER_S)} seconds'"
+)
+
 
 def _guest_conflict_guard(user: dict) -> str:
     """SQL fragment appended to the ``ui_panel_sessions`` upsert for guests.
@@ -32,8 +54,18 @@ def _guest_conflict_guard(user: dict) -> str:
     closes the race structurally: in Postgres a conflicting real-user row simply
     fails the WHERE and is left untouched (no error, no overwrite). Empty for
     non-guest callers (device-token / bound-user), whose upserts are unrestricted.
+
+    A guest may ALSO reclaim a panel whose non-guest owner has gone stale
+    (``_OWNER_STALE_SQL``) — the same condition ``_authorize_panel`` allows on the
+    read side. This stays TOCTOU-safe: the WHERE is evaluated against the row's
+    CURRENT state at upsert time, so if a fresh non-guest owner races in between
+    the authorize check and the upsert, its just-written ``last_seen_at`` is not
+    stale and ``user_id != 'guest'``, the WHERE is false, and the live owner's
+    row is left untouched.
     """
-    return " WHERE ui_panel_sessions.user_id = 'guest'" if is_guest_user(user) else ""
+    if not is_guest_user(user):
+        return ""
+    return f" WHERE ui_panel_sessions.user_id = 'guest' OR {_OWNER_STALE_SQL}"
 
 
 async def _authorize_panel(db, user: dict, panel_id: str) -> None:
@@ -46,8 +78,9 @@ async def _authorize_panel(db, user: dict, panel_id: str) -> None:
         / ``_resolve_device_token_user``). It may act ONLY on its own panel.
       * A **human session user explicitly bound to the panel** via
         ``panel_user_bindings`` (``binding_type`` 'default' or 'allowed').
-      * The **kiosk auto-guest** — but ONLY for a panel that is unclaimed or
-        already guest-owned (see the guest branch below).
+      * The **kiosk auto-guest** — but ONLY for a panel that is unclaimed,
+        already guest-owned, or owned by a non-guest whose session has gone
+        stale (see the guest branch below).
 
     Any other authenticated user is rejected with 403. Without this gate a
     normal session could bind/sync an arbitrary ``panel_id`` (the
@@ -79,22 +112,29 @@ async def _authorize_panel(db, user: dict, panel_id: str) -> None:
     # Kiosk auto-guest. The touch panel deliberately runs UI-action bind/sync/poll
     # as a bare guest (no device token / session) — see touch-ui-executor's
     # getDataApiSession(), which sends no X-Session-ID for guest so Data treats it
-    # as guest. A guest may act on a panel ONLY when that panel is unclaimed
-    # (no session row yet) or already guest-owned. This lets the kiosk RECEIVE
-    # actions pushed to its OWN panel_id while still blocking the panel-hijack
-    # class this gate guards against: a guest cannot bind/sync/drain a panel that
-    # a real (non-guest) user owns, because the upsert would rewrite that panel's
-    # user_id and the poll would return the real user's queued actions.
+    # as guest. A guest may act on a panel when that panel is unclaimed (no session
+    # row yet), already guest-owned, OR owned by a non-guest whose session has gone
+    # stale (last_seen_at older than _PANEL_RECLAIM_STALE_AFTER_S — the owner
+    # signed out / dropped and stopped refreshing the row, so the kiosk reclaims
+    # it). This lets the kiosk RECEIVE actions pushed to its OWN panel_id while
+    # still blocking the panel-hijack class this gate guards against: a guest
+    # cannot bind/sync/drain a panel a real (non-guest) user is ACTIVELY on (fresh
+    # last_seen_at), because the upsert would rewrite that panel's user_id and the
+    # poll would return the real user's queued actions.
     # Action-TYPE limits are enforced separately by can_use_ui_action, so a guest
     # still cannot ENQUEUE sensitive_ui actions via POST /actions.
     if is_guest_user(user):
         session_row = await (
             await db.execute(
-                "SELECT user_id FROM ui_panel_sessions WHERE panel_id = ? LIMIT 1",
+                f"""SELECT user_id, ({_OWNER_STALE_SQL}) AS owner_stale
+                    FROM ui_panel_sessions WHERE panel_id = ? LIMIT 1""",
                 (panel_id,),
             )
         ).fetchone()
         if session_row is None or str(session_row["user_id"]) == "guest":
+            return
+        # Non-guest owner: allow reclaim only if their session has gone stale.
+        if session_row["owner_stale"]:
             return
         raise HTTPException(status_code=403, detail="Panel is owned by another user")
 
@@ -199,6 +239,14 @@ async def get_pending_ui_actions(
     panel_row = await panel_cursor.fetchone()
     # Fall back to the caller's user_id if the panel has no registered session yet.
     panel_user_id = panel_row["user_id"] if panel_row else user["user_id"]
+
+    # A guest may reach here for a panel whose non-guest owner is stale but not yet
+    # reclaimed (bind normally reclaims first, but a direct poll can precede it). A
+    # guest must never READ a real user's queued actions, so serve only the guest
+    # queue for that panel — the owner's queue is off-limits until a bind reclaim
+    # rewrites the row to guest-owned. Post-reclaim this is a no-op (owner=guest).
+    if is_guest_user(user) and panel_user_id != "guest":
+        panel_user_id = "guest"
 
     # Auto-expire queued actions older than 1 hour — these are stale (e.g. ack
     # was lost during page navigation) and should not be re-delivered on boot.
