@@ -486,9 +486,12 @@ def _should_supersede_voice_weather_action(row, nav_key: str, card_key: str) -> 
         payload = json.loads(row["payload"] or "{}")
     except Exception:
         payload = {}
+    url = str(payload.get("url") or "")
     return (
         row["action_type"] == "panel_navigate"
-        and payload.get("url") == "/touch/weather.html"
+        # Legacy /touch/weather.html (retired) or the estate equivalent the weather
+        # helper now navigates to (/touch/home.html?domain=weather).
+        and (url.split("?", 1)[0] == "/touch/weather.html" or "domain=weather" in url)
     ) or (
         row["action_type"] == "show_card"
         and payload.get("type") == "weather"
@@ -507,13 +510,22 @@ def _should_supersede_voice_skybridge_action(row, nav_key: str, card_key: str) -
     if source == "voice:skybridge":
         return True
     if action_type == "panel_navigate":
-        url = str(payload.get("url") or "").split("?", 1)[0]
-        return url in {
+        url = str(payload.get("url") or "")
+        base = url.split("?", 1)[0]
+        # Legacy per-domain pages (retired) plus the estate equivalents the voice
+        # helpers now navigate to (/touch/home.html?domain=<domain>).
+        if base in {
             "/touch/calendar.html",
             "/touch/weather.html",
             "/touch/lists.html",
             "/touch/chat.html",
-        }
+        }:
+            return True
+        if base == "/touch/home.html":
+            return any(
+                f"domain={d}" in url
+                for d in ("calendar", "weather", "lists", "chat", "reminders", "person")
+            )
     if action_type == "show_card":
         return str(payload.get("type") or "").lower() in {
             "calendar",
@@ -764,7 +776,12 @@ async def _broadcast_weather_ui(
         "id": f"voice_weather_nav_{panel_id}_{delivery_key}",
         "action_type": "panel_navigate",
         "payload": {
-            "url": "/touch/weather.html",
+            # Estate is the sole kiosk: land on home.html and let the estate open
+            # the weather surface (DOMAIN_SCREEN['weather']). ?say= shows the spoken
+            # summary in the dock, mirroring _broadcast_skybridge_ui.
+            "url": "/touch/home.html?domain=weather" + (
+                f"&say={quote_plus(str(summary or '')[:300])}" if summary else ""
+            ),
             "label": "Opening weather",
             "panel_id": panel_id,
         },
@@ -867,7 +884,11 @@ async def _broadcast_calendar_ui(
         "id": f"voice_calendar_nav_{panel_id}_{delivery_key}",
         "action_type": "panel_navigate",
         "payload": {
-            "url": "/touch/calendar.html",
+            # Estate is the sole kiosk: land on home.html; the estate opens the
+            # calendar surface (DOMAIN_SCREEN['calendar'] -> 'day').
+            "url": "/touch/home.html?domain=calendar" + (
+                f"&say={quote_plus(str(summary or '')[:300])}" if summary else ""
+            ),
             "label": "Opening calendar",
             "panel_id": panel_id,
         },
@@ -1269,7 +1290,11 @@ async def _broadcast_reminder_ui(
         "id": f"voice_reminder_nav_{panel_id}_{delivery_key}",
         "action_type": "panel_navigate",
         "payload": {
-            "url": "/touch/dashboard.html",
+            # Estate is the sole kiosk: land on home.html; the estate opens the
+            # reminder surface (DOMAIN_SCREEN['reminders'] -> 'reminder').
+            "url": "/touch/home.html?domain=reminders" + (
+                f"&say={quote_plus(str(summary or '')[:300])}" if summary else ""
+            ),
             "label": "Opening reminders",
             "panel_id": panel_id,
         },
@@ -2338,7 +2363,9 @@ async def _handle_introduce_intent(
         await _bc_intro.broadcast("all", "ui_action", {
             "action": {
                 "action": "panel_navigate",
-                "url": f"/touch/people.html?person={person_id}&intro=1",
+                # Estate is the sole kiosk: land on home.html; the estate opens the
+                # person surface (DOMAIN_SCREEN falls through to FULL['person']).
+                "url": f"/touch/home.html?domain=person&person={person_id}&intro=1",
             },
             "panel_id": panel_id,
             "turn_key": turn_key,
