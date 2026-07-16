@@ -51,6 +51,24 @@ def _sw_source() -> str:
     return SW.read_text(encoding="utf-8")
 
 
+def _strip_js_comments(src: str) -> str:
+    """Drop JS comments so prose can't be mistaken for code.
+
+    `sw.js` documents the vendoring in comments that legitimately name
+    namespaces ("workbox-sw.js importScripts()es workbox.core / workbox.routing
+    ..."). Scanning raw source for `workbox.<ns>` therefore reads those mentions
+    as real usage: harmless while every named namespace happens to be vendored,
+    but a future comment like "// workbox.backgroundSync is NOT vendored" would
+    fail the suite over a namespace the code never touches.
+
+    The line-comment pattern deliberately ignores a `//` preceded by `:` so that
+    URLs inside string literals (https://...) are not treated as comments, which
+    would swallow the rest of a real line of code.
+    """
+    src = re.sub(r"/\*.*?\*/", "", src, flags=re.DOTALL)  # block comments
+    return re.sub(r"(?<!:)//[^\n]*", "", src)  # line comments, but not https://
+
+
 def test_sw_does_not_import_scripts_from_any_external_origin():
     """No importScripts('https://...') - the CDN bootstrap must stay gone."""
     external = re.findall(
@@ -84,7 +102,7 @@ def test_sw_pins_the_prod_build_variant():
 
 def test_every_workbox_namespace_used_by_sw_is_vendored_locally():
     """Using a namespace we haven't vendored = a silent runtime CDN fetch / 404."""
-    src = _sw_source()
+    src = _strip_js_comments(_sw_source())
     used = set(re.findall(r"workbox\.([a-zA-Z]+)", src))
     used &= set(NAMESPACE_TO_MODULE)  # ignore setConfig/loadModule/etc.
     assert used, "expected sw.js to use at least one workbox module namespace"
