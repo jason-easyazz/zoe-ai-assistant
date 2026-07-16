@@ -53,6 +53,13 @@ import time
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+from service_dir import (  # noqa: E402 — sibling-import convention, scripts/ is not a package
+    resolve_service_dir as _resolve_service_dir,
+    service_dir_candidates as _service_dir_candidates,
+    SERVICE_DIR_HELP,
+)
+
 REPO = Path(__file__).resolve().parents[2]
 MEASURE = REPO / "scripts" / "perf" / "measure_voice.py"
 LOCK = "/tmp/zoe-voice-harness.lock"  # shared with all voice harness runs — no concurrent Kokoro OOM
@@ -217,62 +224,6 @@ def emit_result(args, *, status: str, summary: dict[str, Any],
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-def _main_worktree_root() -> Path | None:
-    """The MAIN checkout of this repo, or None when it can't be determined.
-
-    Resolved via git's COMMON dir (shared by every linked worktree) rather than a
-    hardcoded host path: from any worktree, `--git-common-dir` points at the main
-    checkout's `.git`, so its parent is the main checkout itself. In the main
-    checkout it resolves to that same checkout, making this a no-op there."""
-    try:
-        proc = subprocess.run(
-            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-            cwd=str(REPO), capture_output=True, text=True, timeout=10,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if proc.returncode != 0 or not proc.stdout.strip():
-        return None
-    return Path(proc.stdout.strip()).parent
-
-
-def _service_dir_candidates() -> list[Path]:
-    """Service dirs that may hold the LIVE `.env`, in resolution order:
-
-    1. ``REPO/services/zoe-data`` — the in-tree run (and the live checkout itself);
-    2. ``<main worktree>/services/zoe-data`` — the documented agent workflow runs
-       this probe from a git WORKTREE, where `services/zoe-data/.env` is
-       gitignored and therefore absent.
-    """
-    candidates = [REPO / "services" / "zoe-data"]
-    main_root = _main_worktree_root()
-    if main_root is not None:
-        main_service_dir = main_root / "services" / "zoe-data"
-        if main_service_dir not in candidates:
-            candidates.append(main_service_dir)
-    return candidates
-
-
-def _resolve_service_dir(explicit: str | None) -> Path:
-    """Resolve --service-dir: the dir whose `.env` reaches the LIVE service.
-
-    Ladder: an explicit ``--service-dir`` ALWAYS wins; otherwise the first
-    candidate (see `_service_dir_candidates`) that actually has a `.env`.
-
-    When nothing resolves we deliberately return the in-tree default so the
-    EXISTING loud error still fires downstream (measure_voice skips without
-    results -> the probe reports status=error / exit 2). A skip must never be
-    mistaken for a pass — that is the doctrine this gate exists to enforce, and
-    this resolver must not paper over a genuinely missing env."""
-    if explicit:
-        return Path(explicit)
-    candidates = _service_dir_candidates()
-    for candidate in candidates:
-        if (candidate / ".env").is_file():
-            return candidate
-    return candidates[0]
 
 
 def _dsn_from_env_file(env_file: Path) -> str:
@@ -446,10 +397,7 @@ def main() -> int:
     ap.add_argument("--samples", type=int, default=int(os.environ.get("ZOE_VOICE_PROBE_SAMPLES", "20")),
                     help="newest N corpus samples to replay")
     ap.add_argument("--user", default=os.environ.get("ZOE_VOICE_PROBE_USER", "jason"))
-    ap.add_argument("--service-dir", default=None,
-                    help="services/zoe-data dir holding the LIVE .env. Default: this repo's "
-                         "services/zoe-data if it has a .env, else the MAIN worktree's "
-                         "(so a run from a git worktree needs no flag).")
+    ap.add_argument("--service-dir", default=None, help=SERVICE_DIR_HELP)
     ap.add_argument("--timeout", type=int, default=int(os.environ.get("ZOE_VOICE_PROBE_TIMEOUT_S", "900")))
     ap.add_argument("--baseline", type=Path, default=Path(os.environ.get("ZOE_VOICE_BASELINE", DEFAULT_BASELINE)))
     ap.add_argument("--results", type=Path, default=Path(os.environ.get("ZOE_VOICE_RESULTS", DEFAULT_RESULTS)))

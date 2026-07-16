@@ -19,7 +19,8 @@ push to `main`**. It deploys straight into the live `/home/zoe/assistant` checko
 
     cd /home/zoe/assistant
     git fetch origin main   # 5 retries — the .git is shared, ref-lock races happen
-    git reset --hard FETCH_HEAD
+    voice_gate_check.py --diff HEAD..FETCH_HEAD   # BLOCKS an ungated voice-path change
+    git reset --hard "$target"                    # the gate-checked SHA, not a re-read FETCH_HEAD
     scripts/deploy/migrate.sh
     docker compose up -d --build zoe-auth
     systemctl --user restart zoe-data.service
@@ -28,7 +29,38 @@ push to `main`**. It deploys straight into the live `/home/zoe/assistant` checko
 So **merging a PR to `main` ships it** — the runner's `reset --hard` is the intended CD contract (live
 tree == main), and the live checkout is pinned to `main`, not a feature branch. Runs are serialized
 runner-vs-runner by the `production` concurrency group (`cancel-in-progress: false`). Still run a
-focused local check / voice replay **before** merge — a green PR auto-deploys, so a bad merge is live.
+focused local check **before** merge — a green PR auto-deploys, so a bad merge is live.
+
+### The CD path enforces the voice replay-gate
+
+CD is how changes actually reach the box, so the **voice replay-gate runs on the runner**, not only on
+the manual `deploy_live.sh` path. Its pull step runs `scripts/maintenance/voice_gate_check.py --repo
+/home/zoe/assistant --diff "${prev}..${target}"` **after** the fetch and **before** the `reset --hard`,
+inside the same `flock /tmp/zoe-deploy.lock`. (Before this, merging a voice-path change auto-deployed it
+with the mandatory gate never running — a gate that can silently not-run is not a gate.)
+
+- **What blocks:** an incoming diff that touches the voice runtime path (STT/brain/TTS — see
+  `VOICE_PATH_PATTERNS` in `voice_gate_check.py`, incl. `*kokoro*`/`*moonshine*`) **without** a fresh
+  (<24h), passing, current-baseline artifact at `~/.cache/zoe/voice_regression_last.json`. Missing,
+  stale, skipped or failed all block — a skip is not a pass. **Non-voice diffs are a no-op pass**, so
+  ordinary deploys are frictionless. The check only *reads* the artifact; it never runs the ~2.3 GB
+  Kokoro harness on the runner.
+- **Blocking happens before the reset**, so the live tree stays at `prev` — nothing is migrated or
+  restarted, and a retry re-evaluates the *same* change instead of fast-forwarding past it.
+- **Fail-closed has a cost, and it is intended.** Once a voice-path change is on `main`, *every*
+  subsequent push carries that diff in `prev..target`, so **all deploys stay blocked** until someone
+  produces a fresh passing artifact. Unwedge on the Jetson as user `zoe`:
+
+      flock /tmp/zoe-voice-harness.lock \
+        python3 scripts/maintenance/voice_regression_probe.py --samples 20
+
+  (no `--service-dir` needed — it auto-resolves to the live `services/zoe-data/.env`, from a git
+  worktree too; see [voice-pipeline.md](voice-pipeline.md)) then **re-run the deploy workflow** (`gh run rerun <id>` or push). The `flock` is mandatory — two
+  concurrent Kokoro loads OOM the box. The right move is to run the gate **before** merging a voice
+  change, not after CD blocks. Detail: [voice-pipeline.md](voice-pipeline.md).
+- The runner resets to the **gate-checked `$target`**, not a re-read `FETCH_HEAD` — a concurrent fetch
+  on the shared `.git` could otherwise advance the tree to a commit pushed *after* the gate ran, a
+  silent bypass. (Same fix as #1344 on the manual path.)
 
 ### Manual deploy + the shared lock
 
