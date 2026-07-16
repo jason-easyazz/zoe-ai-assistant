@@ -54,6 +54,7 @@
   #home svg{width:26px;height:26px}
   #home.hide{opacity:0;pointer-events:none}
   #orb{position:absolute;left:44px;bottom:44px;width:68px;height:68px;border-radius:50%;background:radial-gradient(circle at 34% 30%,#a9d4ff,#5b74ff 58%,#7a53ff 100%);box-shadow:0 0 30px rgba(107,138,255,.5),inset 0 2px 8px rgba(255,255,255,.4);z-index:50;animation:breathe 5s ease-in-out infinite;cursor:pointer}
+  #orb.hide{opacity:0;pointer-events:none;transition:opacity .4s}
   #orb.busy{animation:breathe 1.1s ease-in-out infinite;box-shadow:0 0 44px rgba(107,138,255,.85),inset 0 2px 8px rgba(255,255,255,.4)}
   #orb.listening{animation:breathe .9s ease-in-out infinite;box-shadow:0 0 64px rgba(123,150,255,.95),0 0 120px rgba(123,150,255,.4),inset 0 2px 8px rgba(255,255,255,.5)}
   /* ask-Zoe command bar (orb tap) */
@@ -438,7 +439,7 @@
   .hdock .hpc .tl{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.55);margin-top:2px}
 
   /* SLEEP — a dim night clock, orb, and big easy named controls to wake to */
-  .slp .sclock{position:absolute;top:50%;left:50%;transform:translate(-50%,-64%);display:flex;gap:64px;color:rgba(255,255,255,.7);font-weight:200;font-size:230px;letter-spacing:-.04em;line-height:1;font-variant-numeric:tabular-nums;text-shadow:0 0 40px rgba(120,150,220,.15)}
+  .slp .sclock{position:absolute;top:50%;left:50%;transform:translate(-50%,-60%);display:flex;gap:48px;color:rgba(255,255,255,.72);font-weight:200;font-size:300px;letter-spacing:-.04em;line-height:1;font-variant-numeric:tabular-nums;text-shadow:0 0 40px rgba(120,150,220,.15)}
   .slp .sdate{position:absolute;top:50%;left:50%;transform:translate(-50%,120px);color:rgba(255,255,255,.34);font-size:26px;letter-spacing:.04em}
   .slp .sdock{position:absolute;left:50%;bottom:52px;transform:translateX(-50%);display:flex;gap:16px}
   .slp .sc{display:flex;flex-direction:row;align-items:center;gap:14px;padding:18px 26px;border-radius:22px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);color:rgba(255,255,255,.62);min-width:132px;cursor:pointer;transition:.3s}
@@ -756,7 +757,7 @@
   var _autoHomeT=null,_voiceScreen=false,_userTookOver=false;
   function cancelAutoHome(){if(_autoHomeT){clearTimeout(_autoHomeT);_autoHomeT=null;}}
   function armAutoHome(){
-    cancelAutoHome();
+    cancelAutoHome();armIdleSleep();   // voice activity keeps the panel awake
     // A touch mid-turn TAKES the screen: Zoe finishing her sentence (done())
     // must not hand it back. The takeover lifts on the next navigation or the
     // next voice turn.
@@ -777,8 +778,24 @@
       show('home');
     },ms);
   }
+  // Idle → dimmed sleep screen (the panel-agent dims the backlight; this shows
+  // the designed sleep clock). After IDLE_SLEEP_MS of no touch/voice the estate
+  // drifts to the 'sleep' surface; any touch/voice/navigation resets it. The
+  // backlight NEVER fully powers off (panel-agent off_enabled=false) — it stays
+  // a dim, visible sleep screen.
+  // IDLE_SLEEP_MS / _sleepEnabled are overridden from the display-preferences
+  // endpoint at boot (sleep_seconds / sleep_enabled) so an operator can tune the
+  // active-display window without a redeploy, like idle_seconds/off_seconds.
+  var _idleSleepT=null, IDLE_SLEEP_MS=180000, _sleepEnabled=true, IDLE_SLEEP_RETRY_MS=30000;
+  function armIdleSleep(ms){if(_idleSleepT){clearTimeout(_idleSleepT);_idleSleepT=null;}
+    if(_cur==='sleep'||!_sleepEnabled)return;
+    _idleSleepT=setTimeout(function(){_idleSleepT=null;
+      var m=document.getElementById('estModal'),cb=document.getElementById('cmdbar');
+      if((m&&m.classList.contains('on'))||(cb&&cb.classList.contains('on'))){armIdleSleep(IDLE_SLEEP_RETRY_MS);return;}  // mid-interaction — re-check in 30s, not a full window
+      if(_cur!=='sleep')show('sleep');
+    },ms||IDLE_SLEEP_MS);}
   // Any touch on the panel means the user took over — the screen is theirs.
-  document.addEventListener('pointerdown',function(){_userTookOver=true;_voiceScreen=false;cancelAutoHome();},true);
+  document.addEventListener('pointerdown',function(){_userTookOver=true;_voiceScreen=false;cancelAutoHome();armIdleSleep();},true);
 
   function show(id){
     var f=FULL[id], c=CARD[id];
@@ -788,7 +805,8 @@
     if(typeof _askFallT!=='undefined'&&_askFallT){clearTimeout(_askFallT);_askFallT=null;}
     // Navigating supersedes any pending drift; voice paths re-arm after this.
     cancelAutoHome();_voiceScreen=false;_userTookOver=false;
-    _cur=id; clearScreenTimers();
+    _cur=id; clearScreenTimers(); armIdleSleep();
+    var _orb=document.getElementById('orb');if(_orb)_orb.classList.toggle('hide',id==='sleep');  // the orb is distracting on the sleep clock
     var cb=document.getElementById('cmdbar');if(cb)cb.classList.remove('on');
     stage.classList.remove('wxlight');
     [].forEach.call(pick.querySelectorAll('button'),function(b){b.classList.toggle('sel',b.dataset.id===id);});
@@ -1958,6 +1976,15 @@
   })();
 
   if(!window.__voiceArrived)show('home');
+  // Tune the idle→sleep window from server display-prefs (falls back to the
+  // hardcoded 3-min default if unreachable), so it's operator-adjustable like
+  // idle_seconds/off_seconds without a redeploy.
+  try{var _dev=(localStorage.getItem('zoe_panel_id')||'default');
+    apiGet('/api/system/display/preferences?device_id='+encodeURIComponent(_dev)).then(function(d){var p=(d&&d.preferences)||{};
+      if(p.sleep_enabled===false)_sleepEnabled=false;
+      var s=+p.sleep_seconds; if(s>0)IDLE_SLEEP_MS=s*1000;
+      armIdleSleep();
+    }).catch(function(){});}catch(e){}
 })();
 </script>
 <script src="/js/touch-ui-executor.js?v=estate-2"></script>
