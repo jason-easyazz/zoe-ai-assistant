@@ -15,6 +15,8 @@ if str(ROOT) not in sys.path:
 from models import ListItemCreate, ListItemUpdate
 from routers import lists, notifications, openclaw, stubs
 
+pytestmark = pytest.mark.ci_safe
+
 
 class FakeCursor:
     def __init__(self, rows: list[dict[str, Any]] | None = None, rowcount: int | None = None):
