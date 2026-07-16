@@ -10,6 +10,8 @@ import importlib
 
 import pytest
 
+pytestmark = pytest.mark.ci_safe
+
 
 @pytest.fixture()
 def mm():
