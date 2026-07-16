@@ -180,6 +180,7 @@
   .srow2 .sw.on{background:var(--accent)}
   .srow2 .sw.on::after{left:28px}
   .srow2 input[type=range]{flex:1;max-width:280px;accent-color:var(--accent);height:34px}
+  .srow2 .sset{margin-left:auto;background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.14);color:var(--ink);border-radius:12px;padding:10px 14px;font-size:19px;min-height:44px;cursor:pointer}
   .srow2 .sv{min-width:56px;text-align:right;color:var(--ink-soft);font-variant-numeric:tabular-nums}
   .srow2 .stat{width:12px;height:12px;border-radius:50%;flex:none}
   .srow2 .stat.ok{background:#66d6a3;box-shadow:0 0 10px rgba(102,214,163,.6)}
@@ -1559,7 +1560,7 @@
     var u=null;try{u=JSON.parse(localStorage.getItem('zoe_session')||'null');}catch(e){}
     var who=(u&&(u.username||u.user_id))||'Guest';
     host.innerHTML=[
-      {t:'Account',b:'<div class="srow2"><span>Signed in as <b>'+esc(who)+'</b></span></div><div class="srow2" data-act="switch"><span>Switch user</span><span class="chev2">›</span></div><button class="sout" id="setOut">Sign out</button>'},
+      {t:'Account',b:'<div class="srow2"><span>Signed in as <b>'+esc(who)+'</b></span></div><div class="srow2"><span>Log out when idle</span><select id="setIdleLogout" class="sset"><option value="">…</option></select></div><div class="srow2" data-act="switch"><span>Switch user</span><span class="chev2">›</span></div><button class="sout" id="setOut">Sign out</button>'},
       {t:'Display',b:'<div id="setDisp"><div class="srow2"><span style="color:var(--ink-faint)">Loading…</span></div></div>'},
       {t:'System',b:'<div id="setSys"><div class="srow2"><span style="color:var(--ink-faint)">Checking…</span></div></div>'},
       {t:'Household',b:'<div class="srow2" data-act="contacts"><span>Contacts</span><span class="chev2">›</span></div><div class="srow2" data-act="rooms"><span>Rooms & devices</span><span class="chev2">›</span></div><div class="srow2" data-act="pair"><span>Link a device</span><span class="chev2">›</span></div>'}
@@ -1595,6 +1596,21 @@
       fetch('/sw.js',{cache:'no-store'}).then(function(r){return r.text();}).then(function(t){
         var m=/SW_VERSION = '([^']+)'/.exec(t);var v=document.querySelector('#setVer .sv');if(v&&m)v.textContent='v'+m[1];}).catch(function(){});
     }).catch(function(){var el=document.getElementById('setSys');if(el)el.innerHTML='<div class="srow2"><span style="color:var(--ink-faint)">Status unavailable</span></div>';});
+
+    // Idle-logout: how long with no voice/touch before the panel session lapses.
+    (function(){
+      var sel=document.getElementById('setIdleLogout');if(!sel)return;
+      var OPTS=[[900,'15 min'],[1800,'30 min'],[3600,'1 hour'],[14400,'4 hours'],[43200,'12 hours']];
+      apiGet('/api/system/panel/idle-logout').then(function(d){
+        if(_cur!=='settings')return;var cur=+((d&&d.seconds));if(isNaN(cur))cur=1800;
+        if(!OPTS.some(function(o){return o[0]===cur;})){OPTS.push([cur,Math.round(cur/60)+' min']);}
+        OPTS.sort(function(a,b){return a[0]-b[0];});
+        sel.innerHTML=OPTS.map(function(o){return '<option value="'+o[0]+'"'+(o[0]===cur?' selected':'')+'>'+o[1]+'</option>';}).join('');
+        sel.onchange=function(){apiJson('PUT','/api/system/panel/idle-logout',{seconds:+sel.value})
+          .then(function(){toast('Idle logout set to '+sel.options[sel.selectedIndex].text);})
+          .catch(function(){toast('Couldn’t save that setting');});};
+      }).catch(function(){sel.innerHTML='<option value="">unavailable</option>';});
+    })();
 
     host.onclick=function(e){
       var sh=e.target.closest('.sh');
