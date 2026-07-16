@@ -722,113 +722,6 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
         showBar: function (_text) { /* no-op */ },
     };
 
-    function sanitizeSkybridgeHtml(html) {
-        const template = document.createElement('template');
-        template.innerHTML = String(html || '');
-        template.content.querySelectorAll('script, iframe, object, embed, link, meta, style').forEach((node) => {
-            node.remove();
-        });
-        template.content.querySelectorAll('*').forEach((node) => {
-            Array.from(node.attributes || []).forEach((attr) => {
-                const name = String(attr.name || '').toLowerCase();
-                const value = String(attr.value || '').trim().toLowerCase();
-                if (name.startsWith('on')) {
-                    node.removeAttribute(attr.name);
-                    return;
-                }
-                if ((name === 'href' || name === 'src' || name === 'xlink:href') && /^(javascript|data):/.test(value)) {
-                    node.removeAttribute(attr.name);
-                }
-            });
-        });
-        return template.innerHTML;
-    }
-
-    function buildTouchLoginRoute(panelId) {
-        return '/touch/index.html' + (panelId ? '?panel_id=' + encodeURIComponent(panelId) : '');
-    }
-
-    function renderSkybridgeAuthChallenge(payload) {
-        const cardRoot = document.getElementById('skyCards');
-        if (!cardRoot || !window.SkybridgeRenderer || typeof window.SkybridgeRenderer.render !== 'function') {
-            return false;
-        }
-        const challengeId = String(payload.challenge_id || '').trim();
-        if (!challengeId) return false;
-        const panelId = payload.panel_id || state.panelId || getPanelId();
-        const actionContext = payload.action_context || payload.reason || 'Enter PIN';
-        try {
-            sessionStorage.setItem('zoe_panel_auth_challenge', JSON.stringify({
-                challenge_id: challengeId,
-                panel_id: panelId,
-                action_context: actionContext,
-            }));
-            sessionStorage.setItem('zoe_redirect_after_login', window.location.pathname + window.location.search);
-        } catch (_) {
-            // Non-fatal: the Continue action will still open the login page.
-        }
-        const card = {
-            component: 'auth_challenge',
-            props: {
-                id: 'auth-' + challengeId,
-                title: payload.title || 'Confirm it is you',
-                body: payload.message || payload.body || 'Zoe needs to know who is speaking before showing or changing personal data.',
-                domain: payload.domain || 'Private data',
-                action: payload.intent_action || payload.action || 'Continue',
-                actions: [{
-                    type: 'auth',
-                    label: payload.cta || 'Continue',
-                    route: buildTouchLoginRoute(panelId),
-                    challenge_id: challengeId,
-                    action_context: actionContext,
-                }],
-            },
-        };
-        return renderSkybridgeCardPayload({
-            cards: [card],
-            data: { summary: payload.summary || 'Please authenticate on the touch panel to continue.' },
-        });
-    }
-
-    function renderSkybridgeCardPayload(payload) {
-        const result = payload && payload.result;
-        const cards = (
-            result && Array.isArray(result.cards) ? result.cards :
-            Array.isArray(payload && payload.cards) ? payload.cards :
-            payload && payload.card ? [payload.card] : []
-        ).filter(Boolean);
-        const cardRoot = document.getElementById('skyCards');
-        if (!cardRoot || !window.SkybridgeRenderer || typeof window.SkybridgeRenderer.render !== 'function' || !cards.length) {
-            return false;
-        }
-        cardRoot.innerHTML = '';
-        cards.forEach((card, index) => {
-            const wrap = document.createElement('div');
-            wrap.className = 'sky-card-shell';
-            wrap.style.animationDelay = `${Math.min(index * 90, 360)}ms`;
-            wrap.innerHTML = sanitizeSkybridgeHtml(window.SkybridgeRenderer.render(card));
-            cardRoot.appendChild(wrap);
-            try {
-                const node = wrap.firstElementChild;
-                if (window.SkybridgeHydrateAuthCard && node) window.SkybridgeHydrateAuthCard(node, card);
-            } catch (_) {}
-        });
-        try {
-            document.body.classList.remove('sky-empty');
-            document.body.classList.add('sky-has-cards');
-            const copy = document.getElementById('skyListeningCopy');
-            const summary = (result && result.spoken_summary) || (payload && payload.data && payload.data.summary) || '';
-            if (copy && summary) copy.textContent = summary;
-            const title = document.getElementById('skyContextTitle');
-            if (title) title.textContent = 'Skybridge';
-            const detail = document.getElementById('skyContextDetail');
-            if (detail && summary) detail.textContent = summary;
-        } catch (_) {
-            // Non-fatal; the cards are already rendered.
-        }
-        return true;
-    }
-
     function setOrbMode(mode) {
         // Drive the floating orb (orb-loader.js) if present
         const orb = document.getElementById('zoeOrb') || document.querySelector('.zoe-orb');
@@ -1380,9 +1273,6 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                         return { status: 'skipped', error_code: 'duplicate_challenge' };
                     }
                     rememberAuthChallenge(challengeId);
-                    if (renderSkybridgeAuthChallenge(payload)) {
-                        return { status: 'success' };
-                    }
                     redirectToTouchLogin({
                         challenge_id: challengeId,
                         action_context: payload.action_context || payload.reason || 'Enter PIN'
@@ -1458,9 +1348,6 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                 // Ignore cards targeting a different panel.
                 if (!panelMatches(payload.panel_id)) {
                     return { status: 'skipped', error_code: 'wrong_panel' };
-                }
-                if (renderSkybridgeCardPayload(payload)) {
-                    return { status: 'success' };
                 }
                 const cardType = payload.type || 'answer';
                 const cardData = payload.data || {};

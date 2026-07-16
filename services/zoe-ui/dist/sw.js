@@ -8,7 +8,7 @@
 importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.63.45'; // estate: settings → "Log out when idle" control (panel idle-logout window)
+const SW_VERSION = '4.63.49'; // estate: settings → "Log out when idle" control (panel idle-logout window)
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
@@ -103,10 +103,11 @@ if (workbox) {
 
     // ===== CACHING STRATEGIES =====
 
-    // The estate home + skybridge are live voice/data surfaces. Never serve
-    // stale HTML, auth, or runtime JS for them.
+    // The estate home is a live voice/data surface. Never serve stale HTML,
+    // auth, or runtime JS for it. (The /touch/js/skybridge* prefix still covers
+    // the shared design-system theme script loaded by the login page.)
     workbox.routing.registerRoute(
-        ({ url }) => url.pathname === '/touch/home.html' || url.pathname === '/touch/skybridge.html' || url.pathname === '/js/auth.js' || url.pathname.startsWith('/touch/js/skybridge'),
+        ({ url }) => url.pathname === '/touch/home.html' || url.pathname === '/js/auth.js' || url.pathname.startsWith('/touch/js/skybridge'),
         new workbox.strategies.NetworkOnly()
     );
 
