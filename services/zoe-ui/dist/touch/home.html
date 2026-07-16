@@ -495,6 +495,20 @@
   .askf .ah{font-size:27px;color:var(--ink-faint)}.askf .ah b{color:var(--ink-soft);font-weight:500}
   .askf .aa{font-size:46px;line-height:1.4;font-weight:300;max-width:920px}
   .askf .aa em{font-style:normal;font-weight:500;color:#fff}
+  /* Live conversation is a STATE of the Ask card — the dock, home button and orb
+     all stay put (inline, never fullscreen). The talk control sits bottom-centre,
+     clear of the cog (top-right) and the home button. */
+  .talkbtn{position:absolute;left:50%;transform:translateX(-50%);bottom:44px;z-index:30;
+    padding:14px 34px;border-radius:999px;font-size:22px;font-weight:500;cursor:pointer;
+    background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.22);color:#fff}
+  .talkbtn[aria-pressed="true"]{background:rgba(255,90,120,.28);border-color:rgba(255,120,145,.5)}
+  .talkbtn[disabled]{opacity:.5;cursor:default}
+  /* Conversation transcript: latest exchange, sized down from the single-answer
+     display so a back-and-forth fits without scrolling. */
+  .cvf{display:flex;flex-direction:column;gap:18px;max-width:920px;width:100%}
+  .cvf .cvl{font-size:30px;line-height:1.36;font-weight:300}
+  .cvf .cvl.u{color:var(--ink-faint);font-size:24px}
+  .cvf .cvs{font-size:22px;color:var(--ink-faint)}
 
   /* full-screen weather: location moves left so the top-right is free for the cog */
   .wloc{position:absolute;left:74px;top:150px;font-size:20px;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.82);text-shadow:0 2px 14px rgba(0,0,0,.4)}
@@ -670,6 +684,13 @@
   var GEAR='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-7M6 7H4M20 17h-2M11 17H4"/><circle cx="9" cy="7" r="2.4"/><circle cx="15" cy="17" r="2.4"/></svg>';
   var SPKR='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2.5" width="14" height="19" rx="3"/><circle cx="12" cy="14" r="3.4"/><circle cx="12" cy="6.5" r="1"/></svg>';
   var COG='<button class="cog" title="Settings">'+GEAR+'</button>';
+  // The Ask surface is re-rendered from FULL.ask.html on every ask, so build it
+  // from ONE shell — otherwise the talk control vanishes the moment Zoe answers.
+  // (Hoisted: FULL's literal calls this, and GEAR is assigned above it.)
+  function askShell(inner){
+    return '<div class="fcog">'+GEAR+'</div><div class="askf">'+inner+'</div>'
+      +'<button class="talkbtn" id="talkBtn" type="button" aria-pressed="false">Talk</button>';
+  }
   var QICON='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>';
   var SAVE_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>';
   var TRASH_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>';
@@ -694,7 +715,7 @@
         +'<div class="today"><div class="thk">Your Day</div><div id="hToday"></div></div>'
         +'</div>'},
     ask:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="askf"><div class="aa" id="askOut" style="opacity:.55">Just ask — I’ll answer here.</div></div>'},
+      html:askShell('<div class="aa" id="askOut" style="opacity:.55">Just ask — I’ll answer here.</div>')},
     weather:{home:true, bg:DUSK, canvas:true,
       html:'<div class="fcog">'+GEAR+'</div><div class="wloc" id="wxLoc"></div><div class="wbig"><div class="t" id="wxTemp">—°</div><div class="c" id="wxCond"></div></div><div class="whours" id="wxHours"></div>'},
     music:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,
@@ -740,6 +761,15 @@
   var full=document.getElementById('full'),cardwrap=document.getElementById('cardwrap'),host=document.getElementById('host'),dock=document.getElementById('dock'),dbody=document.getElementById('dbody'),home=document.getElementById('home'),glow=document.getElementById('glow'),pick=document.getElementById('pick');
 
   full.addEventListener('click',function(e){if(e.target.closest('.fcog'))show('settings');});
+  // Delegated: the Ask surface re-renders on every answer, so the talk control is
+  // a fresh element each time and cannot hold its own listener.
+  full.addEventListener('click',function(e){
+    if(!e.target.closest('#talkBtn'))return;
+    if(_convLive)convStop('user');else convStart();
+  });
+  // Never leave a hot mic behind if the kiosk reloads or the page is hidden.
+  window.addEventListener('pagehide',function(){convStop('pagehide');});
+  window.addEventListener('beforeunload',function(){convStop('unload');});
   // Queue-drawer outside-tap dismiss — ONE delegated listener (the drawer is
   // recreated on every music show(), so query it per event, never capture it).
   full.addEventListener('click',function(e){
@@ -757,7 +787,11 @@
   var _autoHomeT=null,_voiceScreen=false,_userTookOver=false;
   function cancelAutoHome(){if(_autoHomeT){clearTimeout(_autoHomeT);_autoHomeT=null;}}
   function armAutoHome(){
-    cancelAutoHome();armIdleSleep();   // voice activity keeps the panel awake
+    cancelAutoHome();
+    // A LIVE conversation is a destination, not a glance: never drift home
+    // mid-sentence. convStop() re-arms the normal drift on exit.
+    if(_convLive)return;
+    armIdleSleep();   // voice activity keeps the panel awake
     // A touch mid-turn TAKES the screen: Zoe finishing her sentence (done())
     // must not hand it back. The takeover lifts on the next navigation or the
     // next voice turn.
@@ -788,6 +822,9 @@
   // active-display window without a redeploy, like idle_seconds/off_seconds.
   var _idleSleepT=null, IDLE_SLEEP_MS=180000, _sleepEnabled=true, IDLE_SLEEP_RETRY_MS=30000;
   function armIdleSleep(ms){if(_idleSleepT){clearTimeout(_idleSleepT);_idleSleepT=null;}
+    // Talking to Zoe is activity even with nobody touching the panel — a live
+    // session must never fall asleep mid-conversation. Re-armed by convStop().
+    if(_convLive)return;
     if(_cur==='sleep'||!_sleepEnabled)return;
     _idleSleepT=setTimeout(function(){_idleSleepT=null;
       var m=document.getElementById('estModal'),cb=document.getElementById('cmdbar');
@@ -799,6 +836,10 @@
 
   function show(id){
     var f=FULL[id], c=CARD[id];
+    // Leaving the Ask surface ends a live conversation — this is the choke point
+    // that covers navigation, the home drift, and idle/explicit sleep. Runs
+    // BEFORE the timers below re-arm, so convStop's re-arm can't race them.
+    if(_convLive&&id!=='ask')convStop('navigate');
     // Any navigation cancels a pending chat-fallback jump to Ask — the user
     // (or a domain arrival) choosing a screen always wins over the deferred
     // answer display.
@@ -1843,7 +1884,7 @@
   var _askGen=0;
   function askZoe(q){
     var gen=++_askGen;_sending=true;   // stays true until THIS stream finishes
-    FULL.ask.html='<div class="askf"><div class="aa" id="askOut">…</div></div>';
+    FULL.ask.html=askShell('<div class="aa" id="askOut">…</div>');
     show('ask');dockHeard(q);orb.classList.add('busy');
     fetch('/api/chat/',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({message:q})})
       .then(function(r){if(!r.ok||!r.body)throw new Error('http '+r.status);
@@ -1862,9 +1903,165 @@
       }).catch(function(){if(gen!==_askGen)return;orb.classList.remove('busy');_sending=false;var o=document.getElementById('askOut');if(o)o.textContent='Sorry — I couldn’t reach Zoe just then.';});
   }
 
+  // ---- Ask-card live conversation (LiveKit) ---------------------------------
+  // "Stay talking to Zoe" as a STATE of the Ask card — INLINE: the dock, home
+  // button and orb all stay put. The client is deliberately THIN: the server
+  // agent (voice_livekit.py::_agent_loop) does the whole turn — it subscribes to
+  // the mic track we publish, runs VAD, then STT (Moonshine) → brain → TTS
+  // (Kokoro), and pushes results back over the LiveKit DATA channel.
+  //
+  // The agent NEVER publishes an audio track: Zoe's speech arrives as
+  // {type:'audio',audio_base64} data payloads, so there is nothing to attach —
+  // we decode and play them ourselves. Upstream is the published mic track (the
+  // agent VADs it server-side); the /livekit-audio HTTP upload that voice.html
+  // uses is a browser-VAD path we deliberately do not take.
+  var LK_SRC='/lib/livekit/livekit-client.umd.min.js';
+  var _lkLoad=null,_convLive=false,_convRoom=null,_convLines=[];
+  var _convQ=[],_convAudio=null,_convPlaying=false;
+
+  // Lazy-load: the LiveKit client is fetched ONLY on entry, never on estate boot
+  // — the box is memory-tight and asking for a token also spins up the on-demand
+  // LiveKit container (which self-reaps when the room empties).
+  function loadLiveKit(){
+    if(window.LivekitClient)return Promise.resolve(window.LivekitClient);
+    if(_lkLoad)return _lkLoad;
+    _lkLoad=new Promise(function(res,rej){
+      var s=document.createElement('script');s.src=LK_SRC;s.async=true;
+      s.onload=function(){window.LivekitClient?res(window.LivekitClient):rej(new Error('livekit global missing'));};
+      s.onerror=function(){_lkLoad=null;rej(new Error('livekit bundle failed to load'));};
+      document.head.appendChild(s);
+    });
+    return _lkLoad;
+  }
+
+  function convBody(status){
+    var b='<div class="cvf" id="convOut">';
+    _convLines.slice(-4).forEach(function(l){
+      b+='<div class="cvl'+(l.role==='user'?' u':'')+'">'+esc(l.text)+'</div>';
+    });
+    if(status)b+='<div class="cvs">'+esc(status)+'</div>';
+    return b+'</div>';
+  }
+  // The Ask surface renders from FULL.ask.html, so paint BOTH (the stored html
+  // survives a later show('ask'); the live DOM updates now).
+  function convPaint(status){
+    FULL.ask.html=askShell(convBody(status));
+    if(_cur==='ask')full.innerHTML=FULL.ask.html;
+    convSyncBtn();
+  }
+  function convSyncBtn(dis){
+    var b=document.getElementById('talkBtn');if(!b)return;
+    b.setAttribute('aria-pressed',_convLive?'true':'false');
+    b.textContent=_convLive?'End':'Talk';
+    b.disabled=!!dis;
+  }
+
+  // Zoe's audio arrives as base64 payloads; play them in order.
+  function convEnqueue(b64,ct){
+    if(!b64)return;
+    _convQ.push({b64:b64,ct:ct||'audio/wav'});
+    if(!_convPlaying)convDrain();
+  }
+  function convDrain(){
+    if(!_convQ.length){_convPlaying=false;_convAudio=null;orb.classList.remove('busy');return;}
+    _convPlaying=true;
+    var it=_convQ.shift();
+    try{
+      var a=new Audio('data:'+it.ct+';base64,'+it.b64);
+      _convAudio=a;
+      a.onended=convDrain;a.onerror=convDrain;
+      var p=a.play();if(p&&p.catch)p.catch(function(){convDrain();});
+    }catch(e){convDrain();}
+  }
+  function convStopAudio(){
+    _convQ.length=0;
+    if(_convAudio){try{_convAudio.pause();}catch(e){}_convAudio=null;}
+    _convPlaying=false;
+  }
+
+  function convEvent(msg){
+    var t=msg.type||msg.event,s=msg.state;
+    if(t==='state'){
+      if(s==='listening'||s==='wake'){orb.classList.remove('busy');orb.classList.add('listening');convPaint('Listening…');}
+      else if(s==='thinking'||s==='processing'){orb.classList.remove('listening');orb.classList.add('busy');convPaint('Thinking…');}
+      else if(s==='responding'||s==='speaking'){orb.classList.remove('listening');orb.classList.add('busy');convPaint('');}
+      else{orb.classList.remove('listening');if(!_convPlaying)orb.classList.remove('busy');convPaint('');}
+    }else if(t==='transcript'){
+      if(msg.text){
+        _convLines.push({role:msg.role||'zoe',text:msg.text});
+        convPaint('');
+        if((msg.role||'')==='user')dockHeard(msg.text);
+      }
+    }else if(t==='audio'){convEnqueue(msg.audio_base64,msg.content_type);}
+    else if(t==='stop_playback'){convStopAudio();}   // barge-in: Zoe was interrupted
+    else if(t==='done'){if(!_convPlaying)orb.classList.remove('busy');}
+  }
+
+  function convStart(){
+    if(_convLive)return Promise.resolve();
+    if(_cur!=='ask')show('ask');   // navigate FIRST — show() tears a session down
+    _convLive=true;                // set before the await: suppress drift/sleep for the WHOLE connect
+    // show('ask') above armed the normal idle-sleep timer while _convLive was
+    // still false — it would fire mid-conversation and sleep the panel. Both
+    // calls now CLEAR their timer and the guard stops them re-arming.
+    cancelAutoHome();armIdleSleep();
+    _convLines=[];
+    convPaint('Connecting…');convSyncBtn(true);
+    var dec=new TextDecoder();
+    return loadLiveKit().then(function(LK){
+      return fetch('/api/voice/livekit-token',{credentials:'include'}).then(function(r){
+        if(!r.ok)throw new Error('token http '+r.status);
+        return r.json();
+      }).then(function(d){
+        if(!d||!d.token||!d.url)throw new Error('token payload incomplete');
+        if(d.livekit_available===false)throw new Error('livekit unavailable');
+        var room=new LK.Room({adaptiveStream:true,dynacast:true});
+        _convRoom=room;
+        room.on(LK.RoomEvent.DataReceived,function(data){
+          try{convEvent(JSON.parse(dec.decode(data)));}catch(e){}
+        });
+        room.on(LK.RoomEvent.Disconnected,function(){if(_convLive)convStop('disconnected');});
+        return room.connect(d.url,d.token).then(function(){
+          if(!_convLive){room.disconnect(true);return;}   // stopped while connecting
+          return room.localParticipant.setMicrophoneEnabled(true);
+        });
+      });
+    }).then(function(){
+      if(!_convLive)return;
+      orb.classList.add('listening');convPaint('Listening…');convSyncBtn(false);
+    }).catch(function(e){
+      convStop('error');
+      FULL.ask.html=askShell('<div class="aa" id="askOut">Sorry — I couldn’t start a conversation just then.</div>');
+      if(_cur==='ask')full.innerHTML=FULL.ask.html;
+      convSyncBtn(false);
+    });
+  }
+
+  // Idempotent, and safe to call from any exit path. NEVER leave a hot mic on a
+  // kiosk: release the mic explicitly before disconnecting, in case disconnect()
+  // is slow or throws.
+  function convStop(reason){
+    if(!_convLive&&!_convRoom)return;
+    _convLive=false;
+    convStopAudio();
+    orb.classList.remove('listening');orb.classList.remove('busy');
+    var room=_convRoom;_convRoom=null;
+    if(room){
+      try{
+        var lp=room.localParticipant;
+        if(lp&&lp.setMicrophoneEnabled)Promise.resolve(lp.setMicrophoneEnabled(false)).catch(function(){});
+      }catch(e){}
+      try{Promise.resolve(room.disconnect(true)).catch(function(){});}catch(e){}
+    }
+    if(reason!=='navigate')convPaint('');
+    convSyncBtn(false);
+    armIdleSleep();   // the panel's normal idle clock resumes
+  }
+  window.__zoeConv={start:convStart,stop:convStop,live:function(){return _convLive;}};
+
   // Voice answer display on the Ask surface (used by URL-arrival + live voice events)
   function askShowAnswer(q,a){
-    FULL.ask.html='<div class="askf"><div class="aa" id="askOut"></div></div>';
+    FULL.ask.html=askShell('<div class="aa" id="askOut"></div>');
     if(_cur!=='ask')show('ask');   // show() clears the drift flags…
     var o=document.getElementById('askOut');if(o)o.textContent=a||'';
     if(q)dockHeard(q);
@@ -1953,6 +2150,12 @@
   })();}
   if(window.__needAuth)initAuthCard();
 
+  // ?conv=1 — arrive straight into conversation mode. Captured BEFORE the
+  // arrival block below, which rewrites the URL down to panel_id/kiosk.
+  // (The server-side "let's talk" repoint that sends it here is PR-1b.)
+  var _wantConv=false;
+  try{_wantConv=new URLSearchParams(location.search).get('conv')==='1';}catch(e){}
+
   // Voice-pushed arrival: display-only params from the voice pipeline
   // (?heard=&say=&domain=) — show the transcript + summary and open the
   // matching screen WITHOUT re-executing the command.
@@ -1976,6 +2179,13 @@
   })();
 
   if(!window.__voiceArrived)show('home');
+  if(_wantConv){
+    // Drop conv=1 first so a kiosk reload can't silently re-open the mic.
+    try{var _cs=new URLSearchParams(location.search);
+      if(_cs.get('conv')!==null){_cs.delete('conv');
+        history.replaceState(null,'',location.pathname+(_cs.toString()?('?'+_cs.toString()):''));}}catch(e){}
+    convStart();   // convStart() navigates to the Ask surface itself
+  }
   // Tune the idle→sleep window from server display-prefs (falls back to the
   // hardcoded 3-min default if unreachable), so it's operator-adjustable like
   // idle_seconds/off_seconds without a redeploy.

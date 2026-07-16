@@ -268,7 +268,13 @@ data/.encryption_key
 data/**/*.key
 
 # Vendor/Library files (large, versioned separately)
-services/zoe-ui/dist/lib/livekit/
+services/zoe-ui/dist/lib/livekit/*
+# ...except the LiveKit client the touch UI actually loads at runtime. Nothing
+# fetched or versioned it — it survived only as an untracked file on one box, so
+# a fresh clone served a 404. It is pinned vendor source (livekit-client 2.5.0,
+# Apache-2.0, jsDelivr /npm/livekit-client@2.5.0/dist/livekit-client.umd.js),
+# like dist/lib/gridstack/ which is tracked for the same reason.
+!services/zoe-ui/dist/lib/livekit/livekit-client.umd.min.js
 
 # Game / pub modules — keep local only; omit from GitHub pushes
 modules/jag-board/
