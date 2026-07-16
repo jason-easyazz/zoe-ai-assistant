@@ -182,6 +182,8 @@
   .srow2 .sw.on::after{left:28px}
   .srow2 input[type=range]{flex:1;max-width:280px;accent-color:var(--accent);height:34px}
   .srow2 .sset{margin-left:auto;background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.14);color:var(--ink);border-radius:12px;padding:10px 14px;font-size:19px;min-height:44px;cursor:pointer}
+  .srow2 .sbtn{margin-left:auto;background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.14);color:var(--ink);border-radius:12px;padding:10px 18px;font:inherit;font-size:18px;min-height:44px;cursor:pointer}
+  .srow2 .sbtn:disabled{opacity:.5}
   .srow2 .sv{min-width:56px;text-align:right;color:var(--ink-soft);font-variant-numeric:tabular-nums}
   .srow2 .stat{width:12px;height:12px;border-radius:50%;flex:none}
   .srow2 .stat.ok{background:#66d6a3;box-shadow:0 0 10px rgba(102,214,163,.6)}
@@ -1580,6 +1582,7 @@
     host.innerHTML=[
       {t:'Account',b:'<div class="srow2"><span>Signed in as <b>'+esc(who)+'</b></span></div><div class="srow2"><span>Log out when idle</span><select id="setIdleLogout" class="sset"><option value="">…</option></select></div><div class="srow2" data-act="switch"><span>Switch user</span><span class="chev2">›</span></div><button class="sout" id="setOut">Sign out</button>'},
       {t:'Display',b:'<div id="setDisp"><div class="srow2"><span style="color:var(--ink-faint)">Loading…</span></div></div>'},
+      {t:'Voice',b:'<div id="setVoice"><div class="srow2"><span style="color:var(--ink-faint)">Loading…</span></div></div>'},
       {t:'System',b:'<div id="setSys"><div class="srow2"><span style="color:var(--ink-faint)">Checking…</span></div></div>'},
       {t:'Household',b:'<div class="srow2" data-act="contacts"><span>Contacts</span><span class="chev2">›</span></div><div class="srow2" data-act="rooms"><span>Rooms & devices</span><span class="chev2">›</span></div><div class="srow2" data-act="pair"><span>Link a device</span><span class="chev2">›</span></div>'}
     ].map(function(sec,i){return '<div class="setsec"><div class="sh">'+esc(sec.t)+'<span class="caret">›</span></div><div class="sbody"><div class="inner">'+sec.b+'</div></div></div>';}).join('');
@@ -1614,6 +1617,38 @@
       fetch('/sw.js',{cache:'no-store'}).then(function(r){return r.text();}).then(function(t){
         var m=/SW_VERSION = '([^']+)'/.exec(t);var v=document.querySelector('#setVer .sv');if(v&&m)v.textContent='v'+m[1];}).catch(function(){});
     }).catch(function(){var el=document.getElementById('setSys');if(el)el.innerHTML='<div class="srow2"><span style="color:var(--ink-faint)">Status unavailable</span></div>';});
+
+    // Voice: the voice Zoe speaks with (household-wide). Same endpoints as the
+    // "change your voice" card — this just makes it reachable from Settings, which
+    // is where people look for it.
+    (function(){
+      var vhost=document.getElementById('setVoice');if(!vhost)return;
+      function unavailable(msg){vhost.innerHTML='<div class="srow2"><span style="color:var(--ink-faint)">'+esc(msg)+'</span></div>';}
+      apiGet('/api/voice/voices').then(function(d){
+        if(_cur!=='settings')return;
+        var voices=(d&&d.voices)||[],cur=(d&&d.current)||'';
+        if(!voices.length){unavailable('No voices available');return;}
+        vhost.innerHTML=
+          '<div class="srow2"><span>Zoe’s voice</span><select id="setVoiceSel" class="sset">'
+          +voices.map(function(v){return '<option value="'+esc(v.id)+'"'+(v.id===cur?' selected':'')+'>'+esc(v.label||v.id)+'</option>';}).join('')
+          +'</select></div>'
+          +'<div class="srow2"><span style="color:var(--ink-faint);font-size:17px">Hear a sample before you keep it</span><button class="sbtn" id="setVoicePrev">Preview</button></div>';
+        var sel=document.getElementById('setVoiceSel');
+        sel.onchange=function(){
+          apiJson('PUT','/api/voice/voice',{voice:sel.value})
+            .then(function(){toast('Zoe’s voice set to '+sel.options[sel.selectedIndex].text);})
+            .catch(function(){toast('Couldn’t save that voice');});
+        };
+        var pv=document.getElementById('setVoicePrev');
+        pv.onclick=function(){
+          pv.disabled=true;
+          apiJson('POST','/api/voice/preview',{voice:sel.value}).then(function(r){
+            if(r&&r.audio_base64){try{new Audio('data:'+(r.content_type||'audio/wav')+';base64,'+r.audio_base64).play();}catch(e){}}
+          }).catch(function(){toast('Preview unavailable');})
+            .then(function(){pv.disabled=false;},function(){pv.disabled=false;});
+        };
+      }).catch(function(){unavailable('Voice settings unavailable');});
+    })();
 
     // Idle-logout: how long with no voice/touch before the panel session lapses.
     (function(){
