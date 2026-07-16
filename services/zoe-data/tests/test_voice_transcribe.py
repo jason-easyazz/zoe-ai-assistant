@@ -17,12 +17,30 @@ if str(ROOT) not in sys.path:
 
 
 @pytest.fixture(autouse=True)
-def _clear_voice_sessions():
+def _clear_voice_module_state():
+    """Reset voice_tts' module-level caches around every test in this file.
+
+    `_panel_idle_cache` memoises the panel idle-logout window for 30s so it
+    isn't a DB read on every voice turn. That cache is keyed on nothing, so it
+    outlives the test that populated it: a test that ran earlier and resolved
+    the window (e.g. the 900s "fresh session is trusted" case) leaves 900
+    cached, and a later test's `monkeypatch.setenv(ZOE_PANEL_SESSION_TRUST_
+    WINDOW_S, ...)` is then silently ignored — the cache short-circuits before
+    the env is ever read. That made `test_recent_panel_session_user_stale_is_
+    not_trusted` pass alone but fail in file order, i.e. a real staleness
+    assertion was only ever green by accident of ordering. Clearing the cache
+    makes each test observe the window it actually sets.
+    """
     from routers import voice_tts
 
-    voice_tts._VOICE_SESSIONS.clear()
+    def _reset():
+        voice_tts._VOICE_SESSIONS.clear()
+        voice_tts._panel_idle_cache["value"] = None
+        voice_tts._panel_idle_cache["expires"] = 0.0
+
+    _reset()
     yield
-    voice_tts._VOICE_SESSIONS.clear()
+    _reset()
 
 
 @pytest.fixture
@@ -148,6 +166,11 @@ def test_stt_audit_log_rotates_when_capped(monkeypatch, tmp_path):
     assert record["panel_id"] == "p-rotate"
 
 
+# Panel-session trust tests are pure logic (fake DB objects, no STT/Jetson deps),
+# so they opt into validate.yml's slim `-m ci_safe` lane and gate every PR — not
+# just the post-merge Jetson catch-all. The rest of this file exercises the
+# Moonshine STT contract and stays Jetson-only. See tests/AGENTS.md.
+@pytest.mark.ci_safe
 def test_recent_panel_session_user_is_trusted(monkeypatch):
     from routers import voice_tts
 
@@ -177,6 +200,7 @@ def test_recent_panel_session_user_is_trusted(monkeypatch):
     assert resolved == "alice"
 
 
+@pytest.mark.ci_safe
 def test_recent_panel_session_user_stale_is_not_trusted(monkeypatch):
     from routers import voice_tts
 
@@ -223,6 +247,7 @@ def test_voice_session_rollover_preserves_bound_user():
         voice_tts._VOICE_SESSIONS.pop("p1", None)
 
 
+@pytest.mark.ci_safe
 def test_panel_session_trust_window_parsing(monkeypatch):
     from routers import voice_tts
 
