@@ -756,7 +756,7 @@
   var _autoHomeT=null,_voiceScreen=false,_userTookOver=false;
   function cancelAutoHome(){if(_autoHomeT){clearTimeout(_autoHomeT);_autoHomeT=null;}}
   function armAutoHome(){
-    cancelAutoHome();
+    cancelAutoHome();armIdleSleep();   // voice activity keeps the panel awake
     // A touch mid-turn TAKES the screen: Zoe finishing her sentence (done())
     // must not hand it back. The takeover lifts on the next navigation or the
     // next voice turn.
@@ -777,8 +777,21 @@
       show('home');
     },ms);
   }
+  // Idle → dimmed sleep screen (the panel-agent dims the backlight; this shows
+  // the designed sleep clock). After IDLE_SLEEP_MS of no touch/voice the estate
+  // drifts to the 'sleep' surface; any touch/voice/navigation resets it. The
+  // backlight NEVER fully powers off (panel-agent off_enabled=false) — it stays
+  // a dim, visible sleep screen.
+  var _idleSleepT=null, IDLE_SLEEP_MS=180000;
+  function armIdleSleep(){if(_idleSleepT){clearTimeout(_idleSleepT);_idleSleepT=null;}
+    if(_cur==='sleep')return;
+    _idleSleepT=setTimeout(function(){_idleSleepT=null;
+      var m=document.getElementById('estModal'),cb=document.getElementById('cmdbar');
+      if((m&&m.classList.contains('on'))||(cb&&cb.classList.contains('on'))){armIdleSleep();return;}  // mid-interaction — check again shortly
+      if(_cur!=='sleep')show('sleep');
+    },IDLE_SLEEP_MS);}
   // Any touch on the panel means the user took over — the screen is theirs.
-  document.addEventListener('pointerdown',function(){_userTookOver=true;_voiceScreen=false;cancelAutoHome();},true);
+  document.addEventListener('pointerdown',function(){_userTookOver=true;_voiceScreen=false;cancelAutoHome();armIdleSleep();},true);
 
   function show(id){
     var f=FULL[id], c=CARD[id];
@@ -788,7 +801,7 @@
     if(typeof _askFallT!=='undefined'&&_askFallT){clearTimeout(_askFallT);_askFallT=null;}
     // Navigating supersedes any pending drift; voice paths re-arm after this.
     cancelAutoHome();_voiceScreen=false;_userTookOver=false;
-    _cur=id; clearScreenTimers();
+    _cur=id; clearScreenTimers(); armIdleSleep();
     var cb=document.getElementById('cmdbar');if(cb)cb.classList.remove('on');
     stage.classList.remove('wxlight');
     [].forEach.call(pick.querySelectorAll('button'),function(b){b.classList.toggle('sel',b.dataset.id===id);});

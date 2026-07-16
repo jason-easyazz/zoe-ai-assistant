@@ -2203,7 +2203,11 @@ _DEFAULT_DISPLAY_PREFS = {
     "idle_enabled": True,
     "idle_seconds": 120,
     "idle_brightness": 30,
-    "off_enabled": True,
+    # The panel must never power the screen fully OFF — it drifts to a DIMMED
+    # sleep screen instead (idle_brightness + the estate's 'sleep' surface).
+    # off_enabled stays a togglable pref, but defaults OFF so the screen stays a
+    # dim, visible clock rather than going black.
+    "off_enabled": False,
     "off_seconds": 900,
 }
 
