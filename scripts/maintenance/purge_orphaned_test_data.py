@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """Soft-delete orphaned test/junk data left in the calendar + lists by earlier
-testing (the kiosk `guest` account and throwaway `test-sec-b-*` security-test
-users). These rows are family-visible so they show on the panel, but no API
-session authenticates as their owner, so they can't be cleared via the UI.
+testing (the kiosk `guest` account, throwaway `test-sec-b-*` security-test users,
+plus — defensively — the timestamped throwaway owners the retired ad-hoc smoke
+scripts tried to mint). These rows are family-visible so they show on the panel,
+but no API session authenticates as their owner, so they can't be cleared via
+the UI.
 
 Scope (deliberately narrow — never touches a real household user's data):
-  * events    : user_id = 'guest'  OR  user_id LIKE 'test-sec-b-%'
-  * list_items: rows whose owning list has user_id = 'guest'
-                OR user_id LIKE 'test-sec-b-%'
+  * events    : owner matches TEST_OWNER_PRED
+  * list_items: rows whose owning list's owner matches TEST_OWNER_PRED
+
+See `owner_pred()` for the exact predicate and its safety argument. The patterns
+are pinned by tests/unit/test_purge_predicates.py so they cannot silently drift.
 
 It only sets deleted = 1 (reversible; the panel already hides deleted rows) and
 bumps updated_at so audit/sync paths that key off it don't miss the change.
@@ -31,8 +35,59 @@ from urllib.parse import urlsplit
 
 import asyncpg
 
-EVENT_PRED = "(user_id = 'guest' OR user_id LIKE 'test-sec-b-%')"
-LIST_OWNER_PRED = "(user_id = 'guest' OR user_id LIKE 'test-sec-b-%')"
+# Owner ids the retired ad-hoc smoke scripts (tests/{integration,e2e}/
+# test_comprehensive.py, test_simple.py — removed; see git history) TRIED to mint,
+# as f"<prefix>_{int(time.time())}" passed via `?user_id=`.
+#
+# DEFENCE-IN-DEPTH, not a live cleanup: as of 2026-07-16 zero rows in the
+# household DB carry these owners, because zoe-data ignores the unauthenticated
+# `?user_id=` override (token-gated, #1054) and attributes the writes to `guest`
+# instead — which the 'guest' arm below already covers. These patterns exist so
+# that any row that ever DID land under a timestamped throwaway owner (an older
+# build, or a run holding an override token) is still sweepable. If you are
+# adding a new pattern here, verify against the DB first: the last audit's
+# premise that `test_calendar_*` rows existed did not survive contact with it.
+#
+# SAFETY — why no real household user can match:
+#   * fully anchored (^...$): no substring/prefix matches;
+#   * the prefix comes from a CLOSED enumerated set of 6 literals, each one a
+#     dead script's local variable name (test_calendar / test_shopping /
+#     test_memory / test_isolation_a|b / final_test[_2]) — not a name shape any
+#     human account uses;
+#   * the suffix must be `_` + >=9 PURE digits (a unix timestamp). Real owners
+#     ('jason', family names, 'zoe-touch-pi') carry no digit-timestamp suffix.
+# A real user would have to be literally named e.g. "test_memory_1752624000" to
+# match. Regex, not LIKE, precisely so the digit suffix is enforced — LIKE
+# 'test_memory_%' would also match a hypothetical "test_memory_notes" list owner.
+#
+# Kept identical in Python `re` and PostgreSQL `~` syntax (plain anchors, a
+# non-capturing-equivalent alternation and a bounded digit class are portable
+# across both), so tests/unit/test_purge_predicates.py can assert on it directly.
+TEST_OWNER_RE = (
+    r"^(test_calendar|test_shopping|test_memory|test_isolation_[ab]|final_test(_2)?)_[0-9]{9,}$"
+)
+
+
+def owner_pred(col: str = "user_id") -> str:
+    """The owner-scoping predicate, bound to `col` (e.g. 'user_id', 'l.user_id').
+
+    Parameterised by column rather than string-replaced at the call site. The
+    previous `LIST_OWNER_PRED.replace('user_id', 'l.user_id')` did blind string
+    surgery on SQL: it rewrites every occurrence of the substring, including any
+    inside a quoted VALUE. Today's literals happen not to contain 'user_id', so
+    it produced correct SQL by luck — a future owner pattern that did (say an id
+    like 'user_id_backfill') would be silently corrupted into a predicate that
+    matches something else. Binding the column explicitly removes the trap.
+    """
+    return (
+        f"({col} = 'guest' "
+        f"OR {col} LIKE 'test-sec-b-%' "
+        f"OR {col} ~ '{TEST_OWNER_RE}')"
+    )
+
+
+EVENT_PRED = owner_pred("user_id")
+LIST_OWNER_PRED = owner_pred("user_id")
 
 # Sibling PostgreSQL tooling reads the same service env file.
 # Candidate .env locations: this checkout's, then the LIVE checkout's. The CI
@@ -142,7 +197,7 @@ async def main(execute: bool, assume_yes: bool, expect_db: str, expect_host: str
         )
         li_n = await conn.fetchval(
             "SELECT count(*) FROM list_items i JOIN lists l ON i.list_id = l.id "
-            f"WHERE {LIST_OWNER_PRED.replace('user_id', 'l.user_id')} AND i.deleted = 0"
+            f"WHERE {owner_pred('l.user_id')} AND i.deleted = 0"
         )
         print(f"events to soft-delete : {ev_n}")
         for r in rows:
