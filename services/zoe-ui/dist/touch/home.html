@@ -1632,7 +1632,7 @@
           '<div class="srow2"><span>Zoe’s voice</span><select id="setVoiceSel" class="sset">'
           +voices.map(function(v){return '<option value="'+esc(v.id)+'"'+(v.id===cur?' selected':'')+'>'+esc(v.label||v.id)+'</option>';}).join('')
           +'</select></div>'
-          +'<div class="srow2"><span style="color:var(--ink-faint);font-size:17px">Hear a sample before you keep it</span><button class="sbtn" id="setVoicePrev">Preview</button></div>';
+          +'<div class="srow2"><span style="color:var(--ink-faint);font-size:17px">Applies straight away · Preview plays a sample</span><button class="sbtn" id="setVoicePrev">Preview</button></div>';
         var sel=document.getElementById('setVoiceSel');
         sel.onchange=function(){
           apiJson('PUT','/api/voice/voice',{voice:sel.value})
@@ -1643,7 +1643,16 @@
         pv.onclick=function(){
           pv.disabled=true;
           apiJson('POST','/api/voice/preview',{voice:sel.value}).then(function(r){
-            if(r&&r.audio_base64){try{new Audio('data:'+(r.content_type||'audio/wav')+';base64,'+r.audio_base64).play();}catch(e){}}
+            if(!r||!r.audio_base64)return;
+            // play() returns a PROMISE. We're inside a fetch .then(), not the click
+            // handler's synchronous frame, so tablet/kiosk autoplay policy rejects it
+            // async with NotAllowedError — a bare try/catch only sees constructor
+            // errors and the preview would fail silently. Catch the rejection and say so.
+            var a;
+            try{a=new Audio('data:'+(r.content_type||'audio/wav')+';base64,'+r.audio_base64);}
+            catch(e){toast('Couldn’t play preview');return;}
+            var p=a.play();
+            if(p&&typeof p.catch==='function')p.catch(function(){toast('Couldn’t play preview — tap Preview again');});
           }).catch(function(){toast('Preview unavailable');})
             .then(function(){pv.disabled=false;},function(){pv.disabled=false;});
         };
