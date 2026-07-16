@@ -7,6 +7,7 @@ the table with an idempotent CREATE TABLE IF NOT EXISTS. These tests apply the R
 migration against a SQLite DB in exactly that broken shape (table absent) and assert
 it heals — and that a rerun is a no-op that keeps existing rows.
 """
+import pytest
 import importlib.util
 import sys
 from pathlib import Path
@@ -16,6 +17,8 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, text
+
+pytestmark = pytest.mark.ci_safe
 
 SVC = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SVC))

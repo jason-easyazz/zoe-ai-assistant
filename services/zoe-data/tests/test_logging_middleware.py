@@ -7,11 +7,14 @@ context helpers must behave regardless of formatter availability.
 
 from __future__ import annotations
 
+import pytest
 import logging
 
 from starlette.requests import Request
 
 import middleware.logging as mw
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_module_imports_without_optional_dependency():

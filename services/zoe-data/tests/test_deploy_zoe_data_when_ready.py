@@ -1,8 +1,11 @@
+import pytest
 import os
 import shlex
 import shutil
 import subprocess
 from pathlib import Path
+
+pytestmark = pytest.mark.ci_safe
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]

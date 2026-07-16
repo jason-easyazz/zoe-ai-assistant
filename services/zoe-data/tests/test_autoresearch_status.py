@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 import sys
 from pathlib import Path
 
@@ -13,6 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from routers.autoresearch import router  # noqa: E402
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_autoresearch_status_reports_idle_when_no_runs(tmp_path, monkeypatch):

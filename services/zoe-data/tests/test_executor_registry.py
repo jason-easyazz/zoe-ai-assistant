@@ -3,6 +3,8 @@ import pytest
 
 import executor_registry as reg
 
+pytestmark = pytest.mark.ci_safe
+
 
 @pytest.mark.asyncio
 async def test_routes_hermes_assignee_to_kanban(monkeypatch):

@@ -7,6 +7,8 @@ from card_contract import (
     validate_component_action,
 )
 
+pytestmark = pytest.mark.ci_safe
+
 
 def test_minimal_component_normalizes():
     out = validate_component({"component": "status", "props": {"title": "Hi"}})

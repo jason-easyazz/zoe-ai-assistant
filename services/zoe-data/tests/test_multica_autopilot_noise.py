@@ -9,6 +9,8 @@ import pytest
 
 import multica_autopilot_sync as mas
 
+pytestmark = pytest.mark.ci_safe
+
 
 @pytest.mark.asyncio
 async def test_sync_autopilots_prefers_execution_mode(monkeypatch):
