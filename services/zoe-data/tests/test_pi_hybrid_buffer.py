@@ -1,3 +1,4 @@
+import pytest
 import sys
 from pathlib import Path
 
@@ -11,6 +12,8 @@ from pi_hybrid_buffer import (
     _presence_gate,
     _presence_latency_warnings,
 )
+
+pytestmark = pytest.mark.ci_safe
 
 
 def _path_report(*, configured: bool = True, p95: float | int | str | None = 40.0) -> dict[str, object]:

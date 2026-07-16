@@ -16,6 +16,8 @@ from pi_intent_evidence import (
     sanitize_evidence_text,
 )
 
+pytestmark = pytest.mark.ci_safe
+
 
 def test_record_intent_miss_evidence_disabled_does_not_write(tmp_path):
     path = tmp_path / "misses.jsonl"

@@ -9,6 +9,8 @@ import pytest
 
 import zoe_core_client as zc
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _run(coro):
     return asyncio.run(coro)
