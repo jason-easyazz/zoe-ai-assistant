@@ -8,14 +8,19 @@ This guide replaces the old recent-changes workflow. Use the current context sou
 
 Use these sources before broad or risky work:
 
-- `graphify-out/GRAPH_REPORT.md` for a map of Zoe's codebase.
+- The **codebase-memory** and **Serena** MCP servers (see `.mcp.json`) for a map of
+  Zoe's codebase — codebase-memory for who-calls-what / architecture / seams,
+  Serena for symbol read + symbolic edits.
 - `AGENTS.md` for repo-level agent instructions.
 - `.cursor/rules/*.mdc` for Cursor-specific rules.
 - `.zoe/AI_ASSISTANT_CHECKLIST.md` and `.zoe/manifest.json` before file changes.
 - `git status --short --branch` and recent commits for branch state.
 - Focused source reads and `rg` searches for the actual files involved.
 
-For architecture or cross-module questions, start with Graphify. If the graph is stale, treat it as a rough map and verify against source.
+For architecture or cross-module questions, start with codebase-memory. If the graph looks stale, treat it as a rough map and verify against source.
+
+> graphify is **retired** — there is no committed `graphify-out/` graph and no
+> `graphify query`/`path`/`explain` workflow. Do not resurrect it. See `AGENTS.md`.
 
 ## Development Loop
 
@@ -47,7 +52,7 @@ When source context informs an implementation, name the package files, examples,
 
 ## Hermes And Skills
 
-Hermes is the default escalation agent for Zoe engineering, planning, review, repair, Greptile loops, Graphify-guided work, and board repair.
+Hermes is the default escalation agent for Zoe engineering, planning, review, repair, Greptile loops, codebase-memory/Serena-guided codebase work, and board repair.
 
 Useful local Hermes skills live under `~/.hermes/skills`:
 
@@ -55,7 +60,6 @@ Useful local Hermes skills live under `~/.hermes/skills`:
 - `source-code-context`
 - `code-structure-cleanup`
 - `github-greptile-loop`
-- `zoe-graphify`
 - `zoe-status-refresh`
 
 These are operator-level Hermes skills. Do not copy them into Zoe runtime `skills/` unless the goal is to expose them as user-facing Zoe capabilities.
@@ -103,7 +107,7 @@ curl -sf http://127.0.0.1:8000/api/system/status
 
 ## Anti-Patterns
 
-- Starting from memory when Graphify or source files should be checked.
+- Starting from memory when codebase-memory/Serena or source files should be checked.
 - Creating `*_new`, `*_fixed`, `_v2`, backup, or duplicate router files.
 - Adding broad hardcoded language branches to `services/zoe-data/routers/chat.py`.
 - Treating Greptile as a replacement for local verification.
