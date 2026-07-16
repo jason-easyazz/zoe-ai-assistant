@@ -204,6 +204,41 @@ def test_unparseable_line_is_never_silently_dropped(tmp_path: Path):
     assert "{not json" in path.read_text(encoding="utf-8")
 
 
+def test_final_record_without_a_trailing_newline_is_not_concatenated(tmp_path: Path):
+    """A crashed append can leave the last line without its newline.
+
+    Only the LAST line can lack one, and keep_spans sorts by offset, so a kept
+    newline-less span is always last and cannot run into a following record. Pinned
+    because a future reordering of the keep set would corrupt the store here.
+    """
+    path = tmp_path / "runs.jsonl"
+    path.write_text(
+        _record("multica:aaa", revision=1) + "\n" + _record("multica:bbb", revision=1),
+        encoding="utf-8",
+    )
+
+    mod.compact(path, execute=True, keep_tail=0, log=lambda *_: None)
+
+    # both are latest-for-their-ref, so both survive and must stay separable
+    assert len(_read_records(path)) == 2
+    assert _latest_state_from_file(path, "multica:aaa")["journal_revision"] == 1
+    assert _latest_state_from_file(path, "multica:bbb")["journal_revision"] == 1
+
+
+def test_superseded_final_record_without_trailing_newline(tmp_path: Path):
+    path = tmp_path / "runs.jsonl"
+    path.write_text(
+        _record("multica:aaa", revision=1) + "\n" + _record("multica:aaa", revision=2),
+        encoding="utf-8",
+    )
+
+    mod.compact(path, execute=True, keep_tail=0, log=lambda *_: None)
+
+    records = _read_records(path)
+    assert len(records) == 1
+    assert records[0]["state"]["journal_revision"] == 2
+
+
 def test_records_without_state_do_not_create_a_task_ref(tmp_path: Path):
     path = tmp_path / "runs.jsonl"
     # `effect_requested` style rows carry a task_ref but no state
