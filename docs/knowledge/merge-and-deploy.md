@@ -52,10 +52,10 @@ with the mandatory gate never running — a gate that can silently not-run is no
   produces a fresh passing artifact. Unwedge on the Jetson as user `zoe`:
 
       flock /tmp/zoe-voice-harness.lock \
-        python3 scripts/maintenance/voice_regression_probe.py \
-          --samples 20 --service-dir /home/zoe/assistant/services/zoe-data
+        python3 scripts/maintenance/voice_regression_probe.py --samples 20
 
-  then **re-run the deploy workflow** (`gh run rerun <id>` or push). The `flock` is mandatory — two
+  (no `--service-dir` needed — it auto-resolves to the live `services/zoe-data/.env`, from a git
+  worktree too; see [voice-pipeline.md](voice-pipeline.md)) then **re-run the deploy workflow** (`gh run rerun <id>` or push). The `flock` is mandatory — two
   concurrent Kokoro loads OOM the box. The right move is to run the gate **before** merging a voice
   change, not after CD blocks. Detail: [voice-pipeline.md](voice-pipeline.md).
 - The runner resets to the **gate-checked `$target`**, not a re-read `FETCH_HEAD` — a concurrent fetch
