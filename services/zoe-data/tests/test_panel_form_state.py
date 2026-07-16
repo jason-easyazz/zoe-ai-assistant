@@ -26,6 +26,8 @@ import pytest
 
 import panel_form_state
 
+pytestmark = pytest.mark.ci_safe
+
 
 @pytest.fixture(autouse=True)
 def _reset_active_forms(monkeypatch):

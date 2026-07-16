@@ -11,6 +11,8 @@ import pytest
 import fast_tiers
 from routers import voice_livekit as vlk
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _run(coro):
     return asyncio.run(coro)
