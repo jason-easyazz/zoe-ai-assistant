@@ -15,6 +15,8 @@ sys.path.insert(0, str(ROOT))
 
 import system_updates  # noqa: E402
 
+pytestmark = pytest.mark.ci_safe
+
 
 class _Cursor:
     def __init__(self, row=None):
