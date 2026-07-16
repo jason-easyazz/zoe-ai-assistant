@@ -46,6 +46,51 @@ def _fake_sidecar(monkeypatch, raw):
     return calls
 
 
+def _wait_until_truthy(predicate, *, timeout_s=2.5, interval_s=0.05):
+    """Poll predicate() until it returns a TRUTHY value; None on timeout.
+
+    Truthiness IS the ready signal — a falsy result means "not yet". Both callers
+    wait for a value to appear (a dict entry, a non-empty list), so that reads
+    naturally; a predicate whose valid answer is falsy (0/False/"") would need a
+    different helper. Named for the contract so that isn't a surprise.
+
+    Budget matches the original 50 x 0.05s waits.
+    """
+    deadline = time.monotonic() + timeout_s
+    while True:
+        val = predicate()
+        if val:
+            return val
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(interval_s)
+
+
+def _wait_for_log_lines(path, *, timeout_s=2.5):
+    """Wait for the shadow log to have CONTENT — not merely to exist.
+
+    The shadow log is written by a BACKGROUND thread that creates the file and
+    only THEN writes to it. Polling `exists()` alone races that gap: the path is
+    already there while the file is still empty, so `splitlines()[0]` raises
+    IndexError (a CI flake — the line was emitted, just not flushed yet). Poll
+    for non-empty content instead, and fail loudly if it never lands so a real
+    regression can't hide behind a timeout.
+    """
+    def _lines():
+        try:
+            text = path.read_text()
+        except OSError:  # not created yet
+            return None
+        return text.splitlines() if text.strip() else None
+
+    lines = _wait_until_truthy(_lines, timeout_s=timeout_s)
+    assert lines, (
+        f"shadow log {path} received no line within {timeout_s}s — the "
+        "background writer never flushed one"
+    )
+    return lines
+
+
 VEC = np.ones(4, dtype=np.float32)
 
 
@@ -246,16 +291,13 @@ def test_shadow2_never_changes_routing(monkeypatch, tmp_path):
     rr = semantic_router.route("anything")
     assert rr["routed"] == baseline["routed"]  # shadow2 never routes
     assert "two_stage" not in rr
-    for _ in range(50):  # background thread → wait for the log line
-        if seen:
-            break
-        time.sleep(0.05)
-    assert seen.get("text") == "anything"
-    for _ in range(50):
-        if (tmp_path / "log.jsonl").exists():
-            break
-        time.sleep(0.05)
-    rec = json.loads((tmp_path / "log.jsonl").read_text().splitlines()[0])
+    # Both waits below poll for CONTENT, never for mere file existence — the
+    # shadow work happens on a background thread (see _wait_for_log_lines).
+    assert _wait_until_truthy(lambda: seen.get("text")) == "anything", (
+        "shadow2 background thread never called router_two_stage.decide() "
+        "with the utterance within 2.5s"
+    )
+    rec = json.loads(_wait_for_log_lines(tmp_path / "log.jsonl")[0])
     assert rec["mode"] == "shadow2" and rec["two_stage_tool"] == "show_list"
     assert "anything" not in json.dumps(rec)  # hash only, never raw text
 
