@@ -33,10 +33,16 @@ import os
 import sys
 from collections import Counter
 
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEFAULT_LOG = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "services", "zoe-data", "data", "router_head_shadow.jsonl",
+    REPO, "services", "zoe-data", "data", "router_head_shadow.jsonl",
 )
+
+# The router rotates the shadow log into `<log>.1`, `<log>.2`, … once it hits its
+# size cap. Import the router's own segment contract rather than re-deriving the
+# naming here, so this report can't drift from the writer.
+sys.path.insert(0, os.path.join(REPO, "services", "zoe-data"))
+from semantic_router import shadow_log_segments  # noqa: E402
 
 # `two_stage_domain` is the field the live router (semantic_router.py) actually
 # writes for the would-be shadow2/active decision; the others are tolerated for
@@ -78,9 +84,9 @@ def shadow_route(rec: dict) -> str | None:
     return None
 
 
-def load(path: str) -> list[dict]:
+def _load_segment(segment: str) -> list[dict]:
     recs = []
-    with open(path, encoding="utf-8") as fh:
+    with open(segment, encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
             if not line:
@@ -98,6 +104,14 @@ def load(path: str) -> list[dict]:
                     and "two_stage_domain" in rec
                     and rec.get("mode", "shadow2") in ("shadow2", "active")):
                 recs.append(rec)
+    return recs
+
+
+def load(path: str) -> list[dict]:
+    """Read every rotated segment, oldest first — not just the live file."""
+    recs: list[dict] = []
+    for segment in shadow_log_segments(path):
+        recs.extend(_load_segment(segment))
     return recs
 
 
