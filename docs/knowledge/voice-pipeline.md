@@ -3,7 +3,7 @@ type: Reference
 title: Zoe Voice Pipeline
 description: The end-to-end voice path (STT → brain → TTS), how it's measured, and the regression corpus — plus the load-bearing caveat that the warm replay harness understates real live latency.
 tags: [voice, stt, tts, performance, testing]
-timestamp: 2026-06-26T00:00:00Z
+timestamp: 2026-07-16T00:00:00Z
 ---
 
 # Zoe Voice Pipeline
@@ -21,16 +21,26 @@ How a spoken turn flows through Zoe, and how we measure it without regressing. T
    helpers remain defined for offline tooling but never run on a live turn. `_run_moonshine` also runs
    a `_strip_wake_word` pass removing the "Hey Zoe" wake bleed (Moonshine emits the wake on its own
    line; greeting-prefixed homophones like "hey joey" strip, bare real names like "Joe" are kept).
-2. **Brain — Gemma 4 E4B-QAT + MTP**, host-native `llama-server` on `:11434`.
-3. **TTS — Kokoro**, sidecar on `127.0.0.1:10201`, via a waterfall in `routers/voice_tts.py`:
-   **Kokoro → Edge TTS → espeak-ng** (each falls back to the next).
+2. **Brain — Gemma 4 E4B-QAT + MTP**, host-native `llama-server` on `:11434`. Since **#1322 a
+   two-stage router runs as a fast-tier FRONT** for the brain (`ZOE_ROUTER_HEAD=active`, live-verified):
+   a SetFit/MLP head (`models/router_head_mlp.joblib`) shortlists the top-3 domains + a chat gate,
+   then a resident FunctionGemma sidecar (`:11436`, CPU, ~600 MB) does a shortlist-restricted GBNF
+   decode (strict 1.5 s timeout). The Gemma brain stays the rock and the fallback for every
+   gate-abstain, shortlist miss, sidecar failure, timeout, or malformed decode — never an error to
+   the user (~14.8% of turns fall through to the brain; router decision p50 ~393 ms). This front is
+   the biggest single contributor to the post-2026-07-02 median drop (see *Latency wins* below).
+3. **TTS — Kokoro on CUDA** (`ZOE_KOKORO_BACKEND=pytorch`, set by `kokoro-tts.service`; RTF ~0.08,
+   live-verified `device":"cuda"` on `:10201/health`), sidecar on `127.0.0.1:10201`, via a waterfall
+   in `routers/voice_tts.py`: **Kokoro → Edge TTS → espeak-ng** (each falls back to the next). NB the
+   *code* default in `scripts/setup/kokoro_sidecar.py` is still `onnx`/CPU — the live speedup comes
+   from the systemd unit forcing `pytorch`, not from the code default.
 
 Per-stage timings are exported to Prometheus as `zoe_voice_stage_seconds`
 (`services/zoe-data/voice_metrics.py`), scraped at `:8000/metrics`.
 
 ## Measuring it — the replay harness
 
-Jason's saved WAVs at **`~/.zoe-voice-samples`** (~313 clips and growing) are a **permanent
+Jason's saved WAVs at **`~/.zoe-voice-samples`** (~790 clips and growing) are a **permanent
 regression corpus** — `ZOE_VOICE_SAVE_AUDIO=1` auto-captures real turns, so the corpus (and the bar)
 **evolves with real use**. Replay-gating **every** voice change is MANDATORY (root `AGENTS.md`); the
 said-vs-did mapping must not regress — "can't do it" on a sample is a bug, not an excuse.
@@ -96,12 +106,50 @@ generalized lesson is a **result artifact + a checker**, mirroring the router se
 ## The caveat that bites (read this)
 
 The replay harness uses **warm models and stops *before* TTS**, so **its numbers UNDERSTATE real live
-latency** — sometimes by a lot. Don't quote harness timings as live performance. As measured live
-(2026-06-26, will drift — re-measure, don't cite as fixed): STT ~1.9 s (p90 ~8 s), brain ~4.8 s,
-first-audio ~5 s p50 / ~12 s p90. Two live-only effects the warm harness misses: **memory-starved
-cold STT** (warmup skipped under pressure) and **wake-word bleed** on the first command. Honest
-*measurement* over guessing (`VISION.md` principle 4) — when you change the path, measure live, not
-just the harness.
+latency** — sometimes by a lot. Don't quote harness timings as live performance. Two live-only
+effects the warm harness misses: **memory-starved cold STT** (warmup skipped under pressure) and
+**wake-word bleed** on the first command. Honest *measurement* over guessing (`VISION.md` principle
+4) — when you change the path, measure live, not just the harness.
+
+> **STALE live numbers, kept only as a marker.** An older live snapshot (2026-06-26) read STT ~1.9 s
+> (p90 ~8 s), brain ~4.8 s, first-audio ~5 s p50 / ~12 s p90. **These predate the July latency work
+> (two-stage router, Kokoro→CUDA, filler racing, greeting cache) and are no longer representative** —
+> the warm-harness brain median alone fell ~1.75× over the same window (see *Latency wins* below). No
+> fresh full-path *live* re-measure has been captured yet; **re-measure live before quoting any live
+> figure**, and do not treat the 2026-06-26 numbers as current.
+
+## Latency wins since 2026-07-02 (what moved the bar)
+
+A batch of latency work landed after the July-2 baseline was set. The warm regression harness
+(relative, drift-only) shows the aggregate: brain median **3294 → 1868 ms (~1.76× faster)**, e2e
+**2842 → 1896 ms (~1.50× faster)**, STT ~flat (587 → 579 ms), OK-rate unchanged at 19/20. The harness
+can't attribute per-commit, but the landed work that drove it:
+
+- **Two-stage router ACTIVE — #1322** (`ZOE_ROUTER_HEAD=active`): SetFit/MLP shortlist + FunctionGemma
+  sidecar resolves ~85% of turns off a fast tier so the full Gemma generation runs on only ~14.8% of
+  turns — the single biggest measured contributor to the brain/e2e drop.
+- **Kokoro on CUDA + per-sentence silence trim — #1330** (plus the earlier CPU→CUDA flip): RTF
+  ~1.0–1.8× (CPU, pipe-starving) → **~0.08× (CUDA)**, and `_feed_pcm_chunk` trims each chunk's baked-in
+  ~0.4–0.5 s silence so multi-sentence replies stop playing "in pieces".
+- **Thinking / tool filler racing — #1106 / #1113 / #1116** (+ panel live-activity strip #1103): the
+  spoken filler races the *first audio frame* of the real reply (not just any frame / the already-done
+  stream), cutting perceived dead air on brain turns.
+- **First-turn-of-day greeting cache — #1228**: a pre-warmed, instant greeting clip is prepended as its
+  own leading sentence (flag-gated `ZOE_VOICE_GREETING_ENABLED`, default OFF), covering first-audio
+  latency on the day's first turn.
+- **Segment-stitch audio caching — #1232, documented #1340**: built to assemble common time/weather
+  replies from cached word segments. **It is currently DISABLED on purpose** (`ZOE_VOICE_STITCH_ENABLED=0`,
+  live-verified) — obsolete once Kokoro moved to GPU, where a fresh full-sentence synth is ~0.3 s with
+  zero internal gaps and stitch only *added* 600–840 ms inter-word pauses (see failure mode #4). Listed
+  here for provenance, not as a live win; the audio-caching win that stuck is the sidecar phrase cache +
+  greeting cache, not stitch.
+
+**Regression baseline refreshed 2026-07-16.** The gate baseline
+(`~/.cache/zoe/voice_regression_baseline.json`) was ratcheted from the stale 2026-07-02 numbers (brain
+3294 ms, e2e 2842 ms, STT 587 ms) to the post-speedwork reality (**brain 1868 ms, e2e 1896 ms, STT
+579.5 ms**, OK 19/20) via `voice_regression_probe.py --samples 20 --update-baseline`. Why: left on the
+July-2 bar the gate compared against an easy, ~1.75× slower target, so a silent brain slowdown could
+regress most of the July wins and still "pass". The new bar holds the gains.
 
 ## Failure modes that are easy to misdiagnose (2026-07-14 / -15)
 
