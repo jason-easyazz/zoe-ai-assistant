@@ -487,11 +487,15 @@ def _should_supersede_voice_weather_action(row, nav_key: str, card_key: str) -> 
     except Exception:
         payload = {}
     url = str(payload.get("url") or "")
+    base = url.split("?", 1)[0]
+    # Legacy /touch/weather.html (retired) or the estate equivalent the weather
+    # helper now navigates to (/touch/home.html?domain=weather). Anchor the base
+    # path before testing the domain param, matching the skybridge superseder.
+    nav_matches = base == "/touch/weather.html" or (
+        base == "/touch/home.html" and "domain=weather" in url
+    )
     return (
-        row["action_type"] == "panel_navigate"
-        # Legacy /touch/weather.html (retired) or the estate equivalent the weather
-        # helper now navigates to (/touch/home.html?domain=weather).
-        and (url.split("?", 1)[0] == "/touch/weather.html" or "domain=weather" in url)
+        row["action_type"] == "panel_navigate" and nav_matches
     ) or (
         row["action_type"] == "show_card"
         and payload.get("type") == "weather"
