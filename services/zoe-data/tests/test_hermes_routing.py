@@ -12,6 +12,8 @@ import mcp_server
 import zoe_agent
 from routers import chat as chat_router, system, voice_tts
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _decode_agui_events(blocks):
     events = []

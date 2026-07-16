@@ -10,6 +10,8 @@ import asyncio
 
 import pytest
 
+pytestmark = pytest.mark.ci_safe
+
 expert_dispatch = pytest.importorskip("expert_dispatch")
 memory_service = pytest.importorskip("memory_service")
 

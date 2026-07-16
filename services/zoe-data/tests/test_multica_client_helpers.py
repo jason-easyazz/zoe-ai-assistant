@@ -3,6 +3,8 @@ import pytest
 from multica_client import MULClient
 from multica_ticket_contract import describe_ticket, parse_ticket_block, update_ticket_progress
 
+pytestmark = pytest.mark.ci_safe
+
 
 class GuardedClient(MULClient):
     def is_configured(self):

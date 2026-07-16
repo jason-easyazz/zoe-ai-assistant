@@ -8,6 +8,8 @@ import pytest
 import executors.kanban_adapter as ka
 import kanban_phase_budget as kb
 
+pytestmark = pytest.mark.ci_safe
+
 
 @pytest.fixture(autouse=True)
 def _mock_ensure_worktree(monkeypatch):
