@@ -268,6 +268,18 @@ async def now_playing(player_id: str = "") -> Optional[dict[str, Any]]:
         "image": _hi_res_art(safe_image),
         "volume": player.get("volume_level"),
         "queue_id": pid,
+        # Where the playing track sits in the queue. The panel's Cover Flow needs
+        # this to find "Now" among the covers AND to notice a track change at all
+        # (its reload key is the item id) — without it the flow can't centre or
+        # advance. queue_item_id is the reliable key; queue_index is the fallback
+        # for shapes that lack one.
+        #
+        # NOTE: this is the QUEUE's current_index, deliberately NOT the current
+        # item's own `index` field — they are different things. Live MA had
+        # current_index=2 while current_item.index=0 on the same track, so
+        # matching on the item's index silently points at the wrong cover.
+        "queue_item_id": cur.get("queue_item_id") or "" if isinstance(cur, dict) else "",
+        "queue_index": (queue or {}).get("current_index"),
         "shuffle": bool((queue or {}).get("shuffle_enabled")),
         "repeat": str((queue or {}).get("repeat_mode") or "off"),
         "elapsed": elapsed,

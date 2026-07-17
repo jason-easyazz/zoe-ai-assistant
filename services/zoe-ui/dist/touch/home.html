@@ -374,7 +374,7 @@
   .mfull .mknob{position:absolute;top:50%;left:38%;transform:translate(-50%,-50%);width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.4)}
   .mfull .mtimes{display:flex;justify-content:space-between;margin-top:12px;font-size:18px;color:rgba(255,255,255,.6);font-variant-numeric:tabular-nums}
   .mfull .mtransport{position:absolute;left:0;right:0;bottom:120px;display:flex;justify-content:center;align-items:center;gap:44px}
-  .mfull .mtransport .sml{opacity:.55;background:none;border:0;color:#fff;cursor:pointer;width:56px;height:56px;border-radius:50%;display:grid;place-items:center}
+  .mfull .mtransport .sml{opacity:.55;background:none;border:0;color:#fff;cursor:pointer;width:68px;height:68px;border-radius:50%;display:grid;place-items:center}
   .mfull .mtransport .sml svg{width:26px;height:26px}
   .mfull .mtransport button svg{width:28px;height:28px}
   .mfull .mtransport .pp svg{width:32px;height:32px;color:#0a0d18}
@@ -434,7 +434,9 @@
   .mqr .qrbox img,.mqr .qrbox canvas{width:100%;height:100%}
   .mqr .qrlab{font-size:11px;color:var(--ink-faint);text-align:center;line-height:1.25}
   .mfull .mtransport button{width:68px;height:68px;border-radius:50%;border:0;background:rgba(255,255,255,.16);color:#fff;font-size:24px;cursor:pointer}
-  .mfull .mtransport .pp{width:84px;height:84px;background:#fff;color:#10131c;font-size:28px}
+  .mfull /* One size for every transport button (was 56/68/84). Play/pause still leads —
+     via its white fill, not by being bigger. */
+  .mtransport .pp{width:68px;height:68px;background:#fff;color:#10131c;font-size:24px}
 
   /* timer full */
   .tfull{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;padding:100px 40px 150px}
@@ -481,7 +483,9 @@
   .hdock .hpc .tl{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.55);margin-top:2px}
 
   /* SLEEP — a dim night clock, orb, and big easy named controls to wake to */
-  .slp .sclock{position:absolute;top:50%;left:50%;transform:translate(-50%,-60%);display:flex;gap:48px;color:rgba(255,255,255,.72);font-weight:200;font-size:300px;letter-spacing:-.04em;line-height:1;font-variant-numeric:tabular-nums;text-shadow:0 0 40px rgba(120,150,220,.15)}
+  .slp .sclock{position:absolute;top:50%;left:50%;transform:translate(-50%,-60%);display:flex;gap:14px;color:rgba(255,255,255,.72);font-weight:200;font-size:300px;letter-spacing:-.04em;line-height:1;font-variant-numeric:tabular-nums;text-shadow:0 0 40px rgba(120,150,220,.15)}
+  /* The clock read "7 31" — a 48px flex gap with no separator in it. */
+  .slp .sclock .cln{opacity:.38;font-weight:150}
   .slp .sdate{position:absolute;top:50%;left:50%;transform:translate(-50%,120px);color:rgba(255,255,255,.34);font-size:26px;letter-spacing:.04em}
   .slp .sdock{position:absolute;left:50%;bottom:52px;transform:translateX(-50%);display:flex;gap:16px}
   .slp .sc{display:flex;flex-direction:row;align-items:center;gap:14px;padding:18px 26px;border-radius:22px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);color:rgba(255,255,255,.62);min-width:132px;cursor:pointer;transition:.3s}
@@ -778,7 +782,7 @@
     day:{home:true, bg:GROUND, canvas:false,
       html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Your Day</div><div class="chmeta" id="dayMeta"></div><div class="dayf"><div class="dc1"><div class="dsec"><h4>Calendar</h4><div id="dayEvents"></div></div></div><div class="dc2"><div class="dsec"><h4>Reminders</h4><div id="dayRems"></div></div><div class="dsec" id="dayComms" style="display:none"><h4>Messages</h4><div id="dayCommsList"></div></div></div></div>'},
     sleep:{home:false, bg:'radial-gradient(120% 90% at 50% 46%,#0a0e18,#02030a 72%)', canvas:false,
-      html:'<div class="slp"><div class="sclock" id="slClock"><span>--</span><span>--</span></div><div class="sdate" id="slDate"></div>'
+      html:'<div class="slp"><div class="sclock" id="slClock"><span>--</span><span class="cln">:</span><span>--</span></div><div class="sdate" id="slDate"></div>'
         +'<div class="sdock" id="slDock"></div></div>'},
     reminder:{home:true, bg:GROUND, canvas:false,
       html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Reminders</div><div class="chmeta" id="remMeta"></div><div class="remf"><div id="remList" class="remlist"></div></div>'},
@@ -874,6 +878,11 @@
     _idleSleepT=setTimeout(function(){_idleSleepT=null;
       var m=document.getElementById('estModal'),cb=document.getElementById('cmdbar');
       if((m&&m.classList.contains('on'))||(cb&&cb.classList.contains('on'))){armIdleSleep(IDLE_SLEEP_RETRY_MS);return;}  // mid-interaction — re-check in 30s, not a full window
+      // Music playing means the panel is IN USE even with nobody touching it —
+      // drifting to the night clock mid-song reads as the screen giving up on
+      // you. Freshness-guarded (30s): if whichever poller owns this surface has
+      // died, fail toward sleeping rather than a permanently lit panel.
+      if(_music.playing&&(Date.now()-(_music.playingAt||0))<30000){armIdleSleep(IDLE_SLEEP_RETRY_MS);return;}
       if(_cur!=='sleep')show('sleep');
     },ms||IDLE_SLEEP_MS);}
   // Any touch on the panel means the user took over — the screen is theirs.
@@ -954,6 +963,11 @@
       var np=d&&d.now_playing,live=np&&(np.state==='playing'||np.state==='paused')&&np.title;
       var old=dbody.querySelector('.pc.dnp');if(old)old.remove();
       if(_dockMusicT){clearTimeout(_dockMusicT);_dockMusicT=null;}
+      // Record playback state BEFORE any early return: this poller is the only
+      // one running while you're off the music card, so the idle-sleep guard
+      // depends on it. Note it even when nothing is playing — that's what lets
+      // the panel sleep again once the music stops.
+      noteNP(np);
       // The music card carries its own transport (#mTransport), so a dock chip
       // there would just duplicate it — every OTHER surface gets the controls.
       // Exception: the queue/playlist overlay covers that transport, so the
@@ -1166,12 +1180,21 @@
   // ---- Music screen (real now-playing + transport) ----
   function fmtDur(s){s=Math.max(0,Math.round(s||0));return Math.floor(s/60)+':'+two(s%60);}
   var _music={player_id:null};
+  // "Is music playing right now", written by BOTH now-playing pollers — the music
+  // surface's loadMusic and the dock's paintDockMusic — so it stays fresh on every
+  // surface. The idle-sleep guard can't use _music.np: only loadMusic writes that,
+  // and it only polls while _cur==='music', so it goes stale the moment you
+  // navigate away — the panel would still sleep on you while music played.
+  // Timestamped so a stopped poller fails toward sleeping rather than toward a
+  // permanently lit panel.
+  function noteNP(np){_music.playing=!!(np&&np.state==='playing');_music.playingAt=Date.now();}
   function loadMusic(){
     apiGet('/api/music/now-playing').then(function(d){if(_cur!=='music')return;
       var np=d&&d.now_playing;
       var spk=document.getElementById('mSpk'),ti=document.getElementById('mTitle'),ar=document.getElementById('mArtist'),fill=document.getElementById('mFill'),te=document.getElementById('mElapsed'),td=document.getElementById('mDur'),pp=document.getElementById('mPP');
       var idle=!d||!d.available||!np||!(np.title||np.state==='playing'||np.state==='paused');
       var scrub=document.querySelector('.mfull .mscrub'),tp=document.getElementById('mTransport');
+      noteNP(np);   // before the idle return, so stopping the music lets sleep arm again
       if(idle){
         // Idle is a real state, not a broken card: say so, keep the speaker
         // choice (it targets the NEXT play), point at the voice path, and
@@ -1366,7 +1389,9 @@
     else if(_cf.focus>_cf.cur)kick='Up next · #'+(_cf.focus-_cf.cur);
     else kick='Played';
     if(ki)ki.textContent=kick;
-    if(ti)ti.textContent=it.name||'';
+    // `title`/`artist` are resolved at the queue seam; `name` is MA's composite
+    // ("Livingston - Shadow") kept only as a fallback for shapes with no media_item.
+    if(ti)ti.textContent=it.title||it.name||'';
     if(ar)ar.textContent=it.artist||'';
   }
   function cfArmHome(){   // browse, then drift back to Now — like ambient return
@@ -1601,7 +1626,7 @@
   // ---- Sleep screen (real night clock + big easy toggles) ----
   function wireSleep(){
     function tick(){var c=document.getElementById('slClock');if(!c)return;var d=new Date(),h=d.getHours()%12;if(h===0)h=12;
-      c.innerHTML='<span>'+h+'</span><span>'+two(d.getMinutes())+'</span>';
+      c.innerHTML='<span>'+h+'</span><span class="cln">:</span><span>'+two(d.getMinutes())+'</span>';
       var dt=document.getElementById('slDate');if(dt)dt.textContent=d.toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long'}).replace(/,/,' ·');}
     tick();_homeTick=setInterval(tick,15000);
     // Wake: home + dock are hidden on the night clock, so tapping anywhere that
