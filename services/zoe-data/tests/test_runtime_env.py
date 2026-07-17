@@ -1,6 +1,9 @@
+import pytest
 import os
 
 import runtime_env
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_bootstrap_runtime_env_loads_hermes_key_from_service_env(monkeypatch, tmp_path):

@@ -8,6 +8,8 @@ from zoe_capability_profile import (
     validate_capability_profiles,
 )
 
+pytestmark = pytest.mark.ci_safe
+
 
 def test_default_capability_profiles_validate_and_cover_core_surfaces():
     serialized = validate_capability_profiles()

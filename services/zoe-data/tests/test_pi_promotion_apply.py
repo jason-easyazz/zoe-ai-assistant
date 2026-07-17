@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _load_module():
     path = Path(__file__).resolve().parents[3] / "scripts" / "maintenance" / "pi_promotion_apply.py"

@@ -12,6 +12,8 @@ import pytest
 
 import routers.voice_tts as v
 
+pytestmark = pytest.mark.ci_safe
+
 
 def test_facts_cache_ttl_default_survives_wake_to_turn():
     # Check the SOURCE default, not the import-time value — a stray

@@ -10,11 +10,19 @@ The Zoe web frontend. `dist/` is the nginx docroot (hand-maintained HTML/CSS/JS,
 - `dist/css/**`, `dist/js/**` (including `js/widgets/core/**`), `dist/components/**` — ALL critical files; never delete without the cleanup safety process.
 - `dist/sw.js` — service worker with Workbox precache.
 - `dist/lib/**` — pinned third-party vendor source, served straight to the browser and **tracked in git** (`gridstack/`, and `livekit/livekit-client.umd.min.js` — livekit-client 2.5.0, Apache-2.0, from jsDelivr `/npm/livekit-client@2.5.0/dist/`). Nothing fetches or builds these: if it is not committed, a fresh clone serves a 404. `.gitignore` ignores the rest of `dist/lib/livekit/` (source maps etc.), so add a negation when vendoring a new file there.
+- `dist/workbox/` — VENDORED Workbox 7.0.0 runtime (`workbox-sw.js` + the `.prod.js` modules the SW uses). Third-party code: refresh it, don't hand-edit it.
 - `nginx.conf` — CRITICAL FILE; routes static content, API proxies, module routes, and security headers across three server blocks (80, 443 static; 18790 proxy).
 
 ## Local Contracts
 
 - ALWAYS bump `SW_VERSION` in `dist/sw.js` when editing ANY file in the Workbox `precacheAndRoute([...])` array (currently `chat.html`, `/`, and other precached HTML/JS/CSS). Skipping this is the #1 cause of "my changes aren't showing up" on mobile.
+- **Workbox is served LOCALLY from `dist/workbox/`, never from a CDN** (Zoe is local-first: the box may be offline, and a CDN import pings Google from every client on every SW boot). Two settings hold this together and BOTH are load-bearing:
+  - `importScripts('/workbox/workbox-sw.js')`, and
+  - `workbox.setConfig({ modulePathPrefix: '/workbox/' })` — `workbox-sw.js` is only a lazy *loader*; on first access of `workbox.core` / `workbox.routing` / … it `importScripts`es that module, defaulting to Google's CDN. Vendoring the loader alone does NOT remove the CDN dependency.
+  - `debug: false` pins the `prod` variant; only `.prod.js` files are vendored, so `debug: true` would request non-existent `.dev.js`.
+  - Using a NEW `workbox.<namespace>` means vendoring that module too, or it 404s at runtime.
+  - `tests/unit/test_sw_workbox_local.py` enforces all of the above, plus that the nginx CSP keeps `storage.googleapis.com` out of `script-src`.
+- Refresh/upgrade Workbox with `npx workbox-cli@<version> copyLibraries <tmp>`, then copy `workbox-sw.js` + the needed `.prod.js` modules into `dist/workbox/` (the `sourceMappingURL` trailer is stripped because `.map` files are not vendored).
 - Web push: never re-save an existing browser subscription; `existing.unsubscribe()` before re-subscribing (FCM endpoints expire with HTTP 410). After VAPID rotation, clear stale `push_subscriptions` rows.
 - The estate (`dist/touch/home.html`) may load the LiveKit client **only on entry to Ask-card conversation mode**, never on boot: requesting `/api/voice/livekit-token` starts the on-demand ~560MB LiveKit container, and the box is memory-tight. Every exit path (stop, navigate, sleep, idle, pagehide/unload, error) must release the mic and disconnect — a live session also suppresses ambient-return and idle→sleep, so nothing else will tear it down for you.
 - NEVER place an `AGENTS.md` (or any agent/internal doc) inside `dist/` — it is the public docroot. nginx denies `/AGENTS.md` as defense in depth; this doc deliberately sits one level above.

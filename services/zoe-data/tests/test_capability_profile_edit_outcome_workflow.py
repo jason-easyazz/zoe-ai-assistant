@@ -6,6 +6,8 @@ import httpx
 import pytest
 from pathlib import Path
 
+pytestmark = pytest.mark.ci_safe
+
 
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "scripts" / "maintenance" / "capability_profile_edit_outcome_workflow.py"

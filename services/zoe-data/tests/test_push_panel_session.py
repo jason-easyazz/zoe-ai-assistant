@@ -26,6 +26,8 @@ sys.path.insert(0, str(ROOT))
 
 import main  # noqa: E402
 
+pytestmark = pytest.mark.ci_safe
+
 
 class _Cursor:
     def __init__(self, row=None, rows=None):

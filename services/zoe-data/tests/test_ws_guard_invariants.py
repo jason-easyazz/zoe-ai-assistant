@@ -8,8 +8,11 @@ Two production failures shipped together in the CSWSH/panel-guard batch:
 These tests pin both at the source level (main.py's import graph is too heavy
 for a unit import here; the leak pattern is a structural property of the code).
 """
+import pytest
 import os
 import re
+
+pytestmark = pytest.mark.ci_safe
 
 DATA = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MAIN = os.path.join(DATA, "main.py")

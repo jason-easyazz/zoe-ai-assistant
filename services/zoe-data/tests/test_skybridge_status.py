@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 import sys
 from pathlib import Path
 
@@ -13,6 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from routers.skybridge import router  # noqa: E402
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_skybridge_status_endpoint_returns_runtime_contract():

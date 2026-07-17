@@ -9,6 +9,8 @@ from zoe_observation_trace import (
     summarize_observation_traces,
 )
 
+pytestmark = pytest.mark.ci_safe
+
 
 def test_recall_trace_allows_lightweight_no_evidence_path():
     trace = ObservationTrace(

@@ -12,6 +12,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from models import NoteCreate
 from routers import memories, notes
 
+pytestmark = pytest.mark.ci_safe
+
 
 class _Cursor:
     def __init__(self, rows):

@@ -14,6 +14,8 @@ import skybridge_service  # noqa: E402
 from card_contract import validate_component  # noqa: E402
 from skybridge_service import classify_skybridge_intent, resolve_skybridge_request  # noqa: E402
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _freeze_today(monkeypatch, frozen: date = date(2026, 6, 11)) -> None:
     """Freeze the service's clock seam.

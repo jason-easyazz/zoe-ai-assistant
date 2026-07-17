@@ -1,8 +1,11 @@
 """Static contract tests for the Zoe Multica bootstrap script."""
 from __future__ import annotations
 
+import pytest
 import ast
 from pathlib import Path
+
+pytestmark = pytest.mark.ci_safe
 
 
 def _source() -> str:
