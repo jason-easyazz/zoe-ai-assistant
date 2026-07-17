@@ -325,23 +325,45 @@
      CF_K (see layoutCF): card, x, z and perspective all scale together, so the
      projection — and the deliberate slight overlap that reads as a stack — is
      the prototype exactly, just sized to clear the dock (top 605) at 720px. */
-  .mfull .cf{position:absolute;top:74px;left:0;right:0;height:260px;
+  /* touch-action:none on the CONTAINER, not only on the covers: the browse
+     gesture holds its pointer capture here, so this is the element whose
+     touch-action decides whether the browser claims the gesture for itself.
+     Without it a mostly-vertical drag is read as a scroll and the pointer is
+     CANCELLED mid-gesture — which silently kills flick-up-to-remove. */
+  .mfull .cf{position:absolute;top:74px;left:0;right:0;height:260px;touch-action:none;
              perspective:1214px;perspective-origin:50% 46%}
   .mfull .cf-track{position:absolute;inset:0;transform-style:preserve-3d}
   .mfull .cfc{position:absolute;top:0;left:50%;width:260px;height:260px;margin-left:-130px;
               border-radius:14px;overflow:hidden;transform-style:preserve-3d;cursor:pointer;
               box-shadow:0 26px 60px rgba(0,0,0,.62);
               transition:transform .42s cubic-bezier(.22,.75,.28,1),opacity .42s,filter .42s;
-              will-change:transform;touch-action:none}
-  .mfull .cfc img{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
+              will-change:transform;touch-action:none;
+              /* A cover is a picture, so the browser offers to drag it away as an
+                 image — which starts a native drag and CANCELS the pointer
+                 mid-gesture, taking browse and flick-up-to-remove with it. Only
+                 reachable with a mouse, which is why the touch panel never showed
+                 it, but the harness drives a mouse and it is a real bug. */
+              user-select:none;-webkit-user-drag:none}
+  .mfull .cfc img{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none;
+                  -webkit-user-drag:none}
   .mfull .cfc .ph{width:100%;height:100%;display:grid;place-items:center;font-size:60px;
                   background:linear-gradient(150deg,#c77bff,#8a53e8)}
-  /* the shade that turns a flat cover into a receding one */
-  .mfull .cfc::after{content:'';position:absolute;inset:0;pointer-events:none;
+  /* The shade that turns a flat cover into a receding one. Its strength rides
+     --cfshade (0 at the centre, 1 from one slot out), set per-frame by cfLayout.
+     It used to switch off via `.cfc.on::after{background:none}` — an on/off at
+     the centre. That was invisible while focus could only be an integer, but a
+     cover now passes THROUGH the centre under your finger, and a hard on/off
+     mid-drag reads as a flicker. Identical at every integer slot, continuous
+     between them. */
+  .mfull .cfc::after{content:'';position:absolute;inset:0;pointer-events:none;opacity:var(--cfshade,1);
     background:linear-gradient(to right,rgba(5,7,15,.55),rgba(5,7,15,0) 60%)}
   .mfull .cfc.right::after{background:linear-gradient(to left,rgba(5,7,15,.55),rgba(5,7,15,0) 60%)}
-  .mfull .cfc.on::after{background:none}
   .mfull .cfc.on{box-shadow:0 34px 90px rgba(0,0,0,.72),0 0 0 1px rgba(255,255,255,.10)}
+  /* While a gesture or the settle spring is driving the transform per-frame the
+     CSS transition must be OFF, or it eases toward each frame's value and the
+     flow lags a finger it is supposed to be pinned to. `.gone` keeps its
+     transition: that's the removal animation, which is still a CSS ease. */
+  .mfull .cf-track.cfanim .cfc:not(.gone){transition:none}
   /* lifted by a long-press: it's out of the flow and follows your finger */
   .mfull .cfc.lift{transition:none;box-shadow:0 44px 100px rgba(0,0,0,.8),0 0 0 2px rgba(167,139,250,.9)}
   .mfull .cfc.gone{opacity:0 !important;transform:translateY(-220px) scale(.7) !important}
@@ -1212,7 +1234,36 @@
   var CF_HOME_MS=8000;   // browse, then drift back to Now — the estate's instinct
   var CF_HOLD_MS=320;    // long-press to lift a cover for reorder
   var CF_UNDO_MS=5000;   // removal is deferred, so Undo is local + truthful
-  var _cf={items:[],cur:-1,focus:0,key:'',homeT:null,undo:null,drag:null,loading:false};
+
+  // ---- direct manipulation --------------------------------------------------
+  // `focus` is FRACTIONAL. A drag writes it straight from the finger; a release
+  // hands it to a spring that settles on a whole number. It is deliberately NOT
+  // a CSS transition: an ease always starts from rest, so catching a moving
+  // cover would stutter, and easing between two integer slots is a slideshow —
+  // which is what this replaces.
+  var CF_SLOT=238*CF_K;  // px of finger travel per queue position. This is the
+                         // first neighbour's x-offset, so the cover you grabbed
+                         // travels roughly under your finger. Derived from CF_K
+                         // (it used to hardcode 0.867) so the covers still track
+                         // the finger if CF_K changes.
+  var CF_SPRING_K=272;   // ω=√272≈16.5 rad/s
+  var CF_SPRING_D=33;    // =2√K → critically damped: no overshoot, no wobble.
+                         // Settles in ~400ms, which is the .42s ease it replaces
+                         // — the approved feel, now reachable at any velocity.
+  var CF_RUBBER=0.35;    // resistance past the ends
+  var CF_FLING=0.16;     // seconds of momentum projected into the target: a
+                         // normal flick (~1px/ms) lands exactly one cover on.
+  var CF_FLING_MAX=5;    // a flick can't outrun the window rendered for it
+  var CF_VMIN=0.6;       // slower than this (covers/s) = snap to the nearest
+  var CF_VWIN=80;        // ms of history the release velocity is measured over
+  var CF_WIN_DRAG=8;     // covers each side rendered for a gesture: enough for a
+                         // full-width drag (1280/206≈6.2) plus a capped fling,
+                         // so nothing rebuilds mid-drag (an innerHTML rebuild
+                         // re-decodes the art and flashes).
+  var _cf={items:[],cur:-1,focus:0,key:'',homeT:null,undo:null,drag:null,loading:false,
+           vel:0,anim:0,raf:0,target:null};
+  // focus is fractional; anything indexing items[] needs the whole number.
+  function cfF(){return Math.max(0,Math.min(_cf.items.length-1,Math.round(_cf.focus)));}
 
   function cfClear(){
     // A pending removal is the user's INSTRUCTION, not a maybe — the deferral
@@ -1225,7 +1276,10 @@
     // detached, and a surviving _cf.drag would leave the lift class + inline
     // zIndex stranded on it (and run the next pointerup against an empty queue).
     if(_cf.drag){clearTimeout(_cf.drag.hold);_cf.drag=null;}
-    _cf.items=[];_cf.cur=-1;_cf.focus=0;_cf.key='';
+    // A settle spring outlives the card it was animating — it would keep
+    // writing transforms onto detached nodes (and hold a rAF open) forever.
+    cfStopAnim();if(_cf.raf){cancelAnimationFrame(_cf.raf);_cf.raf=0;}
+    _cf.items=[];_cf.cur=-1;_cf.focus=0;_cf.vel=0;_cf.target=null;_cf.key='';
     var t=document.getElementById('mCFT');if(t)t.innerHTML='';}
 
   // Reload the queue only when the playing track actually changes (a skip, a
@@ -1259,16 +1313,22 @@
         its=its.filter(function(x){return String(x.queue_item_id)!==pid;});
       }
       _cf.items=its;
-      var hadFocus=_cf.cur>=0?(_cf.focus-_cf.cur):0;   // keep your browsed offset across a track change
+      var hadFocus=_cf.cur>=0?(cfF()-_cf.cur):0;   // keep your browsed offset across a track change
       cfIndex();
       if(_cf.cur>=0)_cf.focus=Math.max(0,Math.min(_cf.items.length-1,_cf.cur+(_cf.homeT?hadFocus:0)));
       cfRender();
     }).catch(function(){_cf.loading=false;toast('Couldn’t load the queue.');});
   }
   // Build only the window; reuse nothing (≤11 nodes, cheap on the Pi's GPU).
-  function cfRender(){
+  function cfRender(){cfBuild(Math.round(_cf.focus)-CF_WIN,Math.round(_cf.focus)+CF_WIN);}
+  // Cover both ends of a glide, so a spring travelling several covers doesn't
+  // animate into empty space.
+  function cfRenderSpan(a,b){
+    cfBuild(Math.floor(Math.min(a,b))-CF_WIN,Math.ceil(Math.max(a,b))+CF_WIN);
+  }
+  function cfBuild(lo,hi){
     var track=document.getElementById('mCFT');if(!track)return;
-    var lo=Math.max(0,_cf.focus-CF_WIN),hi=Math.min(_cf.items.length-1,_cf.focus+CF_WIN);
+    lo=Math.max(0,lo);hi=Math.min(_cf.items.length-1,hi);
     var html='';
     for(var i=lo;i<=hi;i++){
       var it=_cf.items[i],n=(_cf.cur>=0)?(i-_cf.cur):null;
@@ -1280,46 +1340,95 @@
     track.innerHTML=html;
     cfLayout();cfPaintMeta();
   }
+  // The geometry, CONTINUOUS in d. At d = 0,±1,±2,±3,±4 these are algebraically
+  // identical to the discrete slots they replace — the approved look is
+  // untouched; what's new is that the space BETWEEN slots now exists, which is
+  // what lets a cover sit under your finger instead of teleporting between
+  // positions. (tests/e2e/music asserts both halves of that claim.)
+  function cfGeom(d){
+    var t=Math.min(Math.abs(d),4),dir=Math.sign(d),
+        n=Math.min(t,1),      // the centre→first-neighbour leg
+        f=Math.max(0,t-1);    // the flat fan beyond it
+    return {t:t,
+      x:  dir*(238*n + 96*f)*CF_K,        // t=0:0  t=1:238K  t=2:334K
+      z:  (140 - 220*n - 55*f)*CF_K,      // t=0:140K t=1:-80K t=2:-135K
+      ry: dir*-54*n,                      // t=0:0  t>=1:∓54
+      sc: t<=1 ? 1.12+(0.95-1.12)*t : 0.95-0.05*f,
+      op: t>=4 ? 0 : (t<=1 ? 1 : Math.max(0,1-f*0.14))};
+  }
   function cfLayout(){
     var track=document.getElementById('mCFT');if(!track)return;
     var cards=track.children;
     for(var k=0;k<cards.length;k++){
       var card=cards[k],i=+card.getAttribute('data-i'),d=i-_cf.focus;
       if(card===(_cf.drag&&_cf.drag.el)&&_cf.drag.lifted)continue;   // the lifted card follows the finger
-      var dir=Math.sign(d),ax=Math.min(Math.abs(d),4),x,z,ry,sc,op;
-      if(d===0){x=0;z=140*CF_K;ry=0;sc=1.12;op=1;}
-      else{
-        x=dir*(238+(ax-1)*96)*CF_K;      // fan out
-        z=(-80-(ax-1)*55)*CF_K;          // recede
-        ry=dir*-54;                      // turn to face the centre
-        sc=1-ax*0.05;
-        op=ax>=4?0:1-(ax-1)*0.14;
-      }
-      card.style.transform='translateX('+x+'px) translateZ('+z+'px) rotateY('+ry+'deg) scale('+sc+')';
-      card.style.opacity=op;
-      card.classList.toggle('on',d===0);
+      var g=cfGeom(d);
+      card.style.transform='translateX('+g.x+'px) translateZ('+g.z+'px) rotateY('+g.ry+'deg) scale('+g.sc+')';
+      card.style.opacity=g.op;
+      card.classList.toggle('on',Math.abs(d)<0.5);
       card.classList.toggle('right',d>0);
-      card.style.zIndex=50-ax;
+      card.style.zIndex=Math.round(50-g.t);
+      card.style.setProperty('--cfshade',String(Math.min(g.t,1)));
       // The past reads as past: dimmed but still legible art (the prototype's
       // saturate(.42) brightness(.82) rendered too ghostly/pale to read).
+      // Keyed off `cur` — what's PLAYING — and never off focus: browsing past a
+      // cover must not re-grade it under your finger.
       card.style.filter=(_cf.cur>=0&&i<_cf.cur)?'saturate(.72) brightness(.94)':'none';
     }
+  }
+  function cfStopAnim(){if(_cf.anim){cancelAnimationFrame(_cf.anim);_cf.anim=0;}}
+  function cfAnim(on){var t=document.getElementById('mCFT');if(t)t.classList.toggle('cfanim',!!on);}
+  // Past the ends the flow resists instead of running off — you can see there's
+  // nothing there — and springs back on release.
+  function cfRubber(f){
+    var max=Math.max(0,_cf.items.length-1);
+    if(f<0)return f*CF_RUBBER;
+    if(f>max)return max+(f-max)*CF_RUBBER;
+    return f;
+  }
+  // Settle on a whole number, carrying whatever velocity the finger left behind.
+  function cfGlide(target,v0){
+    var max=Math.max(0,_cf.items.length-1);
+    target=Math.max(0,Math.min(max,target));
+    // A long jump isn't a gesture continuation — the 8s drift home from deep in
+    // a 200-track queue would otherwise fly through 100 covers and have to
+    // render every one. Land it, exactly as it always has.
+    if(Math.abs(target-_cf.focus)>CF_WIN_DRAG){
+      cfStopAnim();_cf.vel=0;cfAnim(false);_cf.focus=target;cfRender();return;
+    }
+    _cf.target=target;if(v0!=null)_cf.vel=v0;
+    cfRenderSpan(_cf.focus,target);
+    cfStopAnim();cfAnim(true);
+    var last=performance.now();
+    _cf.anim=requestAnimationFrame(function step(now){
+      // Clamp dt: a backgrounded tab hands you a multi-second frame and an
+      // unclamped spring integrates straight to infinity.
+      var dt=Math.min((now-last)/1000,1/30);last=now;
+      _cf.vel += (-CF_SPRING_K*(_cf.focus-_cf.target) - CF_SPRING_D*_cf.vel)*dt;
+      _cf.focus += _cf.vel*dt;
+      if(Math.abs(_cf.focus-_cf.target)<0.002&&Math.abs(_cf.vel)<0.02){
+        _cf.focus=_cf.target;_cf.vel=0;_cf.anim=0;
+        cfAnim(false);cfRender();return;      // re-window + repaint at rest
+      }
+      cfLayout();cfPaintMeta();
+      _cf.anim=requestAnimationFrame(step);
+    });
   }
   // The meta follows the FOCUS, not playback — browsing tells you what you're
   // looking at. Only the kick line says whether it's the playing track.
   function cfPaintMeta(){
     var ti=document.getElementById('mTitle'),ar=document.getElementById('mArtist'),
         ki=document.getElementById('mKick');
-    var it=_cf.items[_cf.focus],np=_music.np;
+    var f=cfF(),it=_cf.items[f],np=_music.np;
     if(!it){if(np&&ti){ti.textContent=np.title||'';if(ar)ar.textContent=np.artist||'';}return;}
     // Say where the focused cover sits relative to what's playing. `cur` is -1
     // when the playing row isn't in the queue (it was just removed, or MA hasn't
     // caught up), so that case gets its own honest label instead of a nonsense
     // composite like "Up next · Played".
-    var isNow=(_cf.focus===_cf.cur),kick;
+    var isNow=(f===_cf.cur),kick;
     if(isNow)kick='Now Playing';
     else if(_cf.cur<0)kick='In the queue';
-    else if(_cf.focus>_cf.cur)kick='Up next · #'+(_cf.focus-_cf.cur);
+    else if(f>_cf.cur)kick='Up next · #'+(f-_cf.cur);
     else kick='Played';
     if(ki)ki.textContent=kick;
     if(ti)ti.textContent=it.name||'';
@@ -1332,12 +1441,12 @@
   function cfHome(){
     if(_cf.homeT){clearTimeout(_cf.homeT);_cf.homeT=null;}
     if(_cf.cur<0||_cf.focus===_cf.cur)return;
-    _cf.focus=_cf.cur;cfRender();
+    cfGlide(_cf.cur);          // drift, don't cut
   }
   function cfFocus(i){
     i=Math.max(0,Math.min(_cf.items.length-1,i));
     if(i===_cf.focus)return;
-    _cf.focus=i;cfRender();cfArmHome();
+    cfGlide(i);cfArmHome();
   }
   // Tap a cover → jump the music to it. This is the ONLY gesture that plays.
   function cfPlay(i){
@@ -1355,7 +1464,8 @@
     if(_cf.undo)cfCommitRemove();          // one pending removal at a time
     var card=document.querySelector('.cfc[data-i="'+i+'"]');
     if(card)card.classList.add('gone');
-    var snapshot=_cf.items.slice(),wasFocus=_cf.focus;
+    var snapshot=_cf.items.slice(),wasFocus=cfF();
+    cfStopAnim();_cf.vel=0;cfAnim(false);   // the flow is about to be re-indexed
     _cf.items.splice(i,1);
     cfIndex();
     _cf.focus=Math.max(0,Math.min(_cf.items.length-1,wasFocus));
@@ -1393,29 +1503,68 @@
     _qpost('queue/move',{queue_id:_music.player_id,item_id:String(it.queue_item_id),to_index:to})
       .then(function(){setTimeout(cfLoad,500);}).catch(function(){toast('Couldn’t reorder');cfLoad();});
   }
-  var CF_SLOT=238*0.867;   // one fanned slot's worth of travel = one position
+  // Project the momentum onto a target, then let the spring carry it there.
+  function cfRelease(d,e){
+    var now=performance.now(),s=d.samp[0],
+        vpx=(e.clientX-s.x)/Math.max(1,now-s.t),   // px/ms over the last ~80ms
+        v=-(vpx*1000)/CF_SLOT,                     // → covers/s (drag right = go back)
+        here=Math.round(_cf.focus),t;
+    if(Math.abs(v)<CF_VMIN)t=here;                 // a slow drag just snaps to the nearest
+    else t=Math.max(here-CF_FLING_MAX,Math.min(here+CF_FLING_MAX,Math.round(_cf.focus+v*CF_FLING)));
+    cfGlide(t,v);cfArmHome();
+  }
   function wireCF(){
     var cf=document.getElementById('mCF');if(!cf||cf.dataset.wired)return;cf.dataset.wired='1';
     cf.addEventListener('pointerdown',function(e){
       var card=e.target.closest('.cfc');if(!card)return;
+      // Catching a moving flow must feel like catching the object, not queueing
+      // behind it: kill the settle where it stands and browse on from there.
+      cfStopAnim();_cf.vel=0;
       // Capture the origin HERE, on pointerdown — not inside the hold timer.
       // (Capturing it in the timer is exactly the bug that shipped in #1332 and
       // armed the drag with a null origin every time.)
       var d={el:card,i:+card.getAttribute('data-i'),x0:e.clientX,y0:e.clientY,
-             t0:Date.now(),lifted:false,moved:false,x:e.clientX,onX:e.target.closest('.cfx')?true:false};
+             t0:Date.now(),lifted:false,moved:false,browsing:false,
+             f0:_cf.focus,dx:0,x:e.clientX,
+             samp:[{t:performance.now(),x:e.clientX}],
+             onX:e.target.closest('.cfx')?true:false};
       d.hold=setTimeout(function(){
-        if(d.moved||d.onX)return;
+        if(d.moved||d.onX||d.browsing)return;
         d.lifted=true;card.classList.add('lift');
         if(navigator.vibrate)try{navigator.vibrate(12);}catch(_e){}
       },CF_HOLD_MS);
       _cf.drag=d;
-      try{card.setPointerCapture(e.pointerId);}catch(_e){}
+      // Capture on the CONTAINER, not the card: browsing re-windows the flow and
+      // a card-held capture would be torn off with its node mid-gesture.
+      try{cf.setPointerCapture(e.pointerId);}catch(_e){}
       if(_cf.homeT){clearTimeout(_cf.homeT);_cf.homeT=null;}   // you're touching it
     });
     cf.addEventListener('pointermove',function(e){
       var d=_cf.drag;if(!d)return;
-      var dx=e.clientX-d.x0,dy=e.clientY-d.y0;
+      var dx=e.clientX-d.x0,dy=e.clientY-d.y0,now=performance.now();
       if(Math.abs(dx)>8||Math.abs(dy)>8)d.moved=true;
+      // Velocity from the last CF_VWIN ms only. Total-distance/total-time would
+      // score a slow drag that ends in a flick as "slow" and refuse to fling it.
+      d.samp.push({t:now,x:e.clientX});
+      while(d.samp.length>2&&now-d.samp[0].t>CF_VWIN)d.samp.shift();
+      // Arm BROWSE on horizontal intent, and only before a lift. A mostly-
+      // vertical move is reserved for flick-up-to-remove; and once you ARE
+      // browsing, yanking upward must not delete the cover under your finger.
+      if(!d.lifted&&!d.browsing&&!d.onX&&Math.abs(dx)>8&&Math.abs(dx)>Math.abs(dy)){
+        d.browsing=true;clearTimeout(d.hold);
+        cfAnim(true);cfRenderSpan(_cf.focus-CF_WIN_DRAG,_cf.focus+CF_WIN_DRAG);
+      }
+      if(d.browsing){
+        d.dx=dx;
+        // No layout in the move handler: pointermove can fire several times per
+        // frame, so coalesce to exactly one cfLayout per frame.
+        if(!_cf.raf)_cf.raf=requestAnimationFrame(function(){
+          _cf.raf=0;var g=_cf.drag;if(!g||!g.browsing)return;
+          _cf.focus=cfRubber(g.f0-g.dx/CF_SLOT);   // 1:1 under the finger
+          cfLayout();cfPaintMeta();
+        });
+        return;
+      }
       if(!d.lifted)return;
       d.x=e.clientX;
       var slots=Math.round(dx/CF_SLOT);
@@ -1425,20 +1574,26 @@
     });
     function end(e){
       var d=_cf.drag;if(!d)return;_cf.drag=null;clearTimeout(d.hold);
+      if(_cf.raf){cancelAnimationFrame(_cf.raf);_cf.raf=0;}
+      try{cf.releasePointerCapture(e.pointerId);}catch(_e){}
       var dx=e.clientX-d.x0,dy=e.clientY-d.y0,dt=Date.now()-d.t0;
       if(d.lifted){
         d.el.classList.remove('lift');d.el.style.zIndex='';
         cfCommitMove(d.i,(d.to==null?d.i:d.to));return;
       }
       if(d.onX){cfRemove(d.i);return;}                            // the visible affordance
+      if(d.browsing){cfRelease(d,e);return;}                      // BROWSE only — never plays
       if(dy<-60&&Math.abs(dy)>Math.abs(dx)){cfRemove(d.i);return;} // flick up = remove
-      if(Math.abs(dx)>40){cfFocus(_cf.focus+(dx<0?1:-1));return;}  // flick = BROWSE only
       if(dt<600&&!d.moved){cfPlay(d.i);return;}                    // tap = play it
       cfArmHome();
     }
     cf.addEventListener('pointerup',end);
     cf.addEventListener('pointercancel',function(){var d=_cf.drag;if(!d)return;_cf.drag=null;
-      clearTimeout(d.hold);if(d.lifted){d.el.classList.remove('lift');d.el.style.zIndex='';}cfLayout();});
+      clearTimeout(d.hold);if(_cf.raf){cancelAnimationFrame(_cf.raf);_cf.raf=0;}
+      if(d.lifted){d.el.classList.remove('lift');d.el.style.zIndex='';}
+      // A cancelled browse (a system gesture, a stray touch) must not leave the
+      // flow parked between two covers.
+      if(d.browsing){cfGlide(Math.round(_cf.focus));cfArmHome();}else cfLayout();});
   }
   function musicControl(action){if(!_music.player_id)return;
     fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({action:action,player_id:_music.player_id})}).then(function(){setTimeout(loadMusic,350);}).catch(function(){});}

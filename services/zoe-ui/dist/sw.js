@@ -12,7 +12,7 @@
 importScripts('/workbox/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.64.3'; // dock: stop resizing per track; 48px controls; one-word light names
+const SW_VERSION = '4.64.4'; // Cover Flow follows the finger: fractional focus + spring settle
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
