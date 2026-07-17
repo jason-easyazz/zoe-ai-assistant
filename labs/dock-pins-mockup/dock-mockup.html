@@ -1,0 +1,198 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Dock pin mockups — throwaway, NOT production</title>
+<!--
+  THROWAWAY MOCKUP. Not production. Do not deploy.
+  CSS below is lifted VERBATIM from services/zoe-ui/dist/touch/home.html
+  (#dock, .pc, .pc.light, .pc.temp + .tpop, .pc.dnp, .pc.apps, .ddiv)
+  so the pins are judged in the estate's real visual language.
+  Only .pc.scene is new. Entity ids + friendly names are REAL, from
+  `curl localhost:8000/api/ha/entities` on 2026-07-17.
+-->
+<style>
+  :root{
+    --font:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Inter,sans-serif;
+    --ink:#F4F6FA; --ink-soft:rgba(244,246,250,.74); --ink-faint:rgba(244,246,250,.48);
+    --line:rgba(255,255,255,.09); --amber:#ffbf5e; --accent:#7b96ff;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:var(--font);color:var(--ink);background:#05070d;overflow:hidden;display:grid;place-items:center;-webkit-font-smoothing:antialiased}
+  #stage{position:relative;width:1280px;height:720px;overflow:hidden;background:
+      radial-gradient(1100px 700px at 22% 18%, rgba(90,80,190,.30), transparent 62%),
+      radial-gradient(900px 640px at 82% 78%, rgba(200,110,80,.20), transparent 60%),
+      #05070d}
+
+  .clock{position:absolute;left:50%;top:186px;transform:translateX(-50%);text-align:center}
+  .clock .t{font-size:118px;font-weight:200;letter-spacing:-.03em;line-height:1;font-variant-numeric:tabular-nums}
+  .clock .d{margin-top:12px;font-size:21px;color:var(--ink-soft);font-weight:300}
+  .clock .w{margin-top:6px;font-size:17px;color:var(--ink-faint)}
+
+  /* ==== VERBATIM from home.html ==== */
+  #dock{position:absolute;left:50%;bottom:41px;transform:translateX(-50%);background:rgba(14,16,26,.5);border:1px solid rgba(255,255,255,.12);border-radius:20px;backdrop-filter:blur(18px);box-shadow:0 20px 48px rgba(0,0,0,.42);padding:9px 14px;display:flex;align-items:center;gap:10px;z-index:46;transition:opacity .4s}
+  #dbody{display:flex;align-items:center;gap:10px;height:54px}
+  #dock .pc{height:54px;border-radius:15px;display:flex;align-items:center;gap:11px;padding:0 22px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.16);color:rgba(255,255,255,.82);cursor:pointer;transition:.25s}
+  #dock .pc svg{width:25px;height:25px}
+  #dock .pc .nm{font-size:20px;font-weight:500;white-space:nowrap}
+  #dock .pc.on{background:radial-gradient(circle at 30% 30%,rgba(255,214,140,.9),rgba(255,180,90,.28));color:#3a2a10;border-color:rgba(255,205,125,.5);box-shadow:0 0 26px rgba(255,190,100,.45)}
+  #dock .ddiv{width:1px;height:34px;background:rgba(255,255,255,.14);margin:0 2px;flex:none}
+  #dock .pc.apps{width:54px;padding:0;justify-content:center}
+  #dock .pc.apps .g{display:grid;grid-template-columns:1fr 1fr;gap:4px}
+  #dock .pc.apps .g i{width:9px;height:9px;border-radius:3px;background:currentColor;display:block}
+
+  #dock .pc.dnp{display:flex;align-items:center;gap:8px;max-width:380px;padding:6px 10px 6px 6px}
+  #dock .pc.dnp .da{width:38px;height:38px;border-radius:8px;overflow:hidden;flex:none;background:rgba(255,255,255,.1)}
+  #dock .pc.dnp .da .ph{display:block;width:100%;height:100%;background:linear-gradient(135deg,#5b4bb8,#c46a52)}
+  #dock .pc.dnp .dnm{font-size:17px;max-width:132px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #dock .pc.dnp .dprev,#dock .pc.dnp .dnext{width:34px;height:34px;border-radius:50%;border:0;background:transparent;color:rgba(255,255,255,.82);display:grid;place-items:center;cursor:pointer;flex:none}
+  #dock .pc.dnp .dprev svg,#dock .pc.dnp .dnext svg{width:20px;height:20px}
+  #dock .pc.dnp .dpp{width:38px;height:38px;border-radius:50%;border:0;background:rgba(255,255,255,.14);color:#fff;display:grid;place-items:center;cursor:pointer;flex:none}
+  #dock .pc.dnp .dpp svg{width:18px;height:18px}
+
+  #dock .pc.temp{position:relative;flex-direction:column;justify-content:center;gap:2px;padding:0 20px}
+  #dock .pc.temp .tv{font-size:19px;font-weight:600;line-height:1;font-variant-numeric:tabular-nums}
+  #dock .pc.temp .tl{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.55);line-height:1}
+  #dock .pc.temp .tpop{position:absolute;bottom:64px;left:50%;transform:translateX(-50%) translateY(10px);width:112px;height:200px;padding:16px 0 14px;border-radius:18px;background:rgba(18,16,30,.74);border:1px solid rgba(255,255,255,.14);backdrop-filter:blur(16px);box-shadow:0 20px 50px rgba(0,0,0,.5);opacity:0;pointer-events:none;transition:.28s;display:flex;flex-direction:column;align-items:center;gap:12px;z-index:50}
+  #dock .pc.temp.open .tpop{opacity:1;transform:translateX(-50%);pointer-events:auto}
+  #dock .pc.temp .tpv{font-size:22px;font-weight:700;color:#ff9d6e;font-variant-numeric:tabular-nums}
+  #dock .pc.temp .tpl{font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.6)}
+  #dock .pc.temp .tsl{position:relative;width:15px;flex:1;border-radius:999px;background:rgba(255,255,255,.18);cursor:pointer;touch-action:none}
+  #dock .pc.temp .tff{position:absolute;left:0;right:0;bottom:0;border-radius:999px;background:linear-gradient(180deg,#ffb07a,#ff8a5a)}
+  #dock .pc.temp .tkn{position:absolute;left:50%;transform:translate(-50%,50%);width:30px;height:30px;border-radius:50%;background:#fff;box-shadow:0 3px 10px rgba(0,0,0,.4)}
+
+  /* ==== NEW: .pc.scene — the only genuinely missing tile.
+     Borrows the rooms-card .rchip language: text-led, no state,
+     momentary accent flash on fire (rooms card uses .on for 900ms). ==== */
+  #dock .pc.scene{padding:0 18px;gap:9px}
+  #dock .pc.scene svg{width:22px;height:22px;color:rgba(255,255,255,.55)}
+  #dock .pc.scene.fire{background:rgba(123,150,255,.9);border-color:rgba(123,150,255,.6);color:#fff;box-shadow:0 0 24px rgba(123,150,255,.5)}
+  #dock .pc.scene.fire svg{color:#fff}
+
+  .meas{position:absolute;left:50%;transform:translateX(-50%);bottom:12px;font-size:11.5px;color:rgba(255,255,255,.5);font-variant-numeric:tabular-nums;letter-spacing:.03em;z-index:60;white-space:nowrap}
+  .meas b{color:#ff9d6e;font-weight:600}
+  .meas i{color:#7effa8;font-style:normal;font-weight:600}
+  .cap{position:absolute;left:50%;transform:translateX(-50%);top:24px;font-size:13px;letter-spacing:.15em;text-transform:uppercase;color:rgba(255,255,255,.4);white-space:nowrap}
+  .sub{position:absolute;left:50%;transform:translateX(-50%);top:48px;font-size:13px;color:rgba(255,255,255,.28);white-space:nowrap}
+  /* overflow marker */
+  .edge{position:absolute;top:0;bottom:0;width:1px;background:rgba(255,90,90,.5);z-index:70;display:none}
+  body[data-over="1"] .edge{display:block}
+</style>
+
+<div id="stage">
+  <div class="cap" id="cap"></div>
+  <div class="sub" id="sub"></div>
+  <div class="clock"><div class="t">7:42</div><div class="d">Friday, 17 July</div><div class="w">21° · Clear</div></div>
+  <div class="edge" style="left:0"></div><div class="edge" style="right:0"></div>
+  <div id="dock">
+    <div class="pc apps" title="All screens"><span class="g"><i></i><i></i><i></i><i></i></span></div>
+    <div class="ddiv"></div>
+    <div id="dbody"></div>
+  </div>
+  <div class="meas" id="meas"></div>
+</div>
+
+<script>
+var BULB='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.2 20h5.6"/><path d="M10 22.5h4"/><path d="M12 2.5a6.5 6.5 0 0 0-4.2 11.4c.8.7 1.2 1.4 1.2 2.6h6c0-1.2.4-1.9 1.2-2.6A6.5 6.5 0 0 0 12 2.5z"/></svg>';
+var SPARK='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 4.6L18.5 9l-4.6 1.4L12 15l-1.9-4.6L5.5 9l4.6-1.4z"/><path d="M18 15.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></svg>';
+var FAN='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2.2"/><path d="M12 9.8c0-3 .6-5.4 2.6-5.4 1.7 0 2.4 2.4-.4 4.2"/><path d="M14.2 12c3 0 5.4.6 5.4 2.6 0 1.7-2.4 2.4-4.2-.4"/><path d="M12 14.2c0 3-.6 5.4-2.6 5.4-1.7 0-2.4-2.4.4-4.2"/><path d="M9.8 12c-3 0-5.4-.6-5.4-2.6 0-1.7 2.4-2.4 4.2.4"/></svg>';
+var PREV='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h2v14H6zM20 5v14l-10-7z"/></svg>';
+var NEXT='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 5h2v14h-2zM4 5v14l10-7z"/></svg>';
+var PAUSE='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h3.4v14H7zM13.6 5H17v14h-3.4z"/></svg>';
+
+// REAL live range from input_number.thermostat_temperature (min 16, max 30, step .5)
+var MIN=16, MAX=30;
+
+function lightTile(p){
+  return '<div class="pc light'+(p.on?' on':'')+'" data-eid="'+p.eid+'">'+(p.icon||BULB)+'<span class="nm">'+p.label+'</span></div>';
+}
+function sceneTile(p){
+  return '<div class="pc scene'+(p.fire?' fire':'')+'" data-eid="'+p.eid+'">'+SPARK+'<span class="nm">'+p.label+'</span></div>';
+}
+function tempTile(p){
+  var pct=Math.max(0,Math.min(100,(p.target-MIN)/(MAX-MIN)*100));
+  return '<div class="pc temp'+(p.open?' open':'')+'" data-eid="'+p.eid+'" data-tgt="'+p.target+'">'
+    +'<div class="tv">'+p.current+'°</div><div class="tl">'+p.label+'</div>'
+    +'<div class="tpop"><div class="tpv">'+p.target+'°</div>'
+    +'<div class="tsl"><div class="tff" style="height:'+pct+'%"></div><div class="tkn" style="bottom:'+pct+'%"></div></div>'
+    +'<div class="tpl">'+p.label+'</div></div></div>';
+}
+function npChip(){
+  return '<div class="pc dnp"><span class="da"><span class="ph"></span></span>'
+    +'<span class="dnm">Nightcall</span>'
+    +'<button class="dprev">'+PREV+'</button><button class="dpp">'+PAUSE+'</button><button class="dnext">'+NEXT+'</button></div>';
+}
+
+var SCENES={
+  // Operator: "for me in the bedroom it would be one light and the temp control for the room"
+  bedroom_music:{cap:'A — Bedroom: 1 light + temp · music playing',
+    sub:'input_boolean.bedroom_light + input_number.thermostat_temperature / sensor.current_temperature',
+    tiles:[lightTile({eid:'input_boolean.bedroom_light',label:'Bed',on:true}),
+           tempTile({eid:'input_number.thermostat_temperature',label:'Bed',current:21,target:22}),
+           npChip()]},
+
+  bedroom_nomusic:{cap:'B — Bedroom: 1 light + temp · no music',
+    sub:'the everyday state — dock shrinks to what is pinned',
+    tiles:[lightTile({eid:'input_boolean.bedroom_light',label:'Bed',on:true}),
+           tempTile({eid:'input_number.thermostat_temperature',label:'Bed',current:21,target:22})]},
+
+  temp_open:{cap:'C — Temp engaged: tap → .tpop popover + vertical slider',
+    sub:'EXISTING .pc.temp.open pattern, retargeted to input_number (16–30°, step .5)',
+    tiles:[lightTile({eid:'input_boolean.bedroom_light',label:'Bed',on:true}),
+           tempTile({eid:'input_number.thermostat_temperature',label:'Bed',current:21,target:22,open:true}),
+           npChip()]},
+
+  // "in the lounge it might be two scenes"
+  lounge:{cap:'D — Lounge: 2 scenes · music playing',
+    sub:'scene.movie_time + scene.good_night — the genuinely NEW tile',
+    tiles:[sceneTile({eid:'scene.movie_time',label:'Movie'}),
+           sceneTile({eid:'scene.good_night',label:'Night'}),
+           npChip()]},
+
+  // "in the kitchen it would be two lights"
+  kitchen:{cap:'E — Kitchen: 2 lights · music playing',
+    sub:'input_boolean.kitchen_light + input_boolean.living_room_light → one-word labels',
+    tiles:[lightTile({eid:'input_boolean.kitchen_light',label:'Kitchen',on:true}),
+           lightTile({eid:'input_boolean.living_room_light',label:'Living',on:false}),
+           npChip()]},
+
+  // the stress test: 4 pins + music
+  max4:{cap:'F — STRESS: 4 pins + music (the width question)',
+    sub:'2 lights + fan + temp + now-playing — does the operator’s max fit?',
+    tiles:[lightTile({eid:'input_boolean.kitchen_light',label:'Kitchen',on:true}),
+           lightTile({eid:'input_boolean.living_room_light',label:'Living',on:false}),
+           lightTile({eid:'input_boolean.fan',label:'Fan',on:true,icon:FAN}),
+           tempTile({eid:'input_number.thermostat_temperature',label:'Bed',current:21,target:22}),
+           npChip()]},
+
+  // today's reality, for comparison
+  today:{cap:'G — TODAY (unpinned): _ha.lights.slice(0,3)',
+    sub:'nobody chose these — and note the two-word “Living Room” label',
+    tiles:[lightTile({eid:'input_boolean.living_room_light',label:'Living Room',on:false}),
+           lightTile({eid:'input_boolean.kitchen_light',label:'Kitchen',on:false}),
+           lightTile({eid:'input_boolean.bedroom_light',label:'Bedroom',on:false}),
+           npChip()]}
+};
+
+function render(key){
+  var s=SCENES[key];
+  document.getElementById('dbody').innerHTML=s.tiles.join('');
+  document.getElementById('cap').textContent=s.cap;
+  document.getElementById('sub').textContent=s.sub;
+  measure();
+}
+function measure(){
+  var dock=document.getElementById('dock'), r=dock.getBoundingClientRect();
+  var w=Math.round(r.width), h=Math.round(r.height), parts=[];
+  dock.querySelectorAll('.pc').forEach(function(el){
+    var cls=el.classList;
+    var k=cls.contains('apps')?'apps':cls.contains('dnp')?'now-playing':cls.contains('temp')?'temp':cls.contains('scene')?'scene':'light';
+    var nm=el.querySelector('.nm')||el.querySelector('.tl');
+    parts.push((nm?nm.textContent+'(':'')+k+(nm?')':'')+' '+Math.round(el.getBoundingClientRect().width));
+  });
+  var free=1280-w, over=w>1280;
+  document.body.dataset.over=over?'1':'0';
+  document.getElementById('meas').innerHTML='dock <b>'+w+'</b>×'+h+'px of 1280 · '+parts.join('  ·  ')
+    +' · margin '+(over?'<b>OVERFLOW '+(-free)+'px</b>':'<i>'+free+'px</i>');
+}
+window.__render=render; window.__measure=measure;
+render(new URLSearchParams(location.search).get('s')||'bedroom_music');
+</script>
