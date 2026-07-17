@@ -342,11 +342,18 @@ async def _broadcast_intent_nav(intent, panel_id: str | None = None) -> None:
 from openclaw_ws import openclaw_cli, chat_inject, discover_openclaw_capabilities, _zoe_context_prefix
 from zoe_acp_client import openclaw_acp_stream as _acp_stream
 from zoe_agent import (
-    run_zoe_agent, run_zoe_agent_streaming,
     _mempalace_load_user_facts, _mempalace_add, _fire_memory_capture,
     _build_memory_context,
 )
-from zoe_core_client import run_zoe_core, run_zoe_core_streaming
+# Brain-lane selection has ONE source of truth (brain_dispatch.py) — every voice
+# path already routes through it. Aliased so every internal call site and every
+# test target name in this module stays unchanged.
+from brain_dispatch import (
+    use_core_brain,
+    use_flue_brain as _use_flue_brain,
+    brain_streaming as _brain_streaming,
+    brain_oneshot as _brain_oneshot,
+)
 from auth import get_current_user, resolve_acting_user
 from database import get_db
 from db_pool import get_db_ctx
@@ -501,7 +508,11 @@ _USE_ZOE_AGENT = _ZOE_AGENT_MODE or _JETSON_AGENT_MODE
 # Production cutover: the brain is now zoe-core (Pi full-agent on local Gemma).
 # Defaults ON. ZOE_USE_CORE_BRAIN=false falls back to the legacy zoe_agent brain
 # during the validation window (removed once every avenue is proven).
-_USE_ZOE_CORE = os.environ.get("ZOE_USE_CORE_BRAIN", "true").lower() == "true"
+# Import-time SNAPSHOT of the canonical parser: this must stay a module constant
+# (it feeds the _USE_LOCAL_BRAIN lane-entry gate below, which tests monkeypatch
+# as a constant), but it now shares use_core_brain()'s parse so the lane gate and
+# the dispatch functions can never disagree on what the env means.
+_USE_ZOE_CORE = use_core_brain()
 # "Use a local brain" = either the new zoe-core (Pi) or the legacy zoe_agent.
 # When set, the local brain takes the slot that would otherwise fall to OpenClaw.
 _USE_LOCAL_BRAIN = _USE_ZOE_AGENT or _USE_ZOE_CORE
@@ -625,17 +636,6 @@ async def brain_tool_card_events(sentinel, *, user_id, tool_names, emitted_domai
         )
 
 
-def _use_flue_brain() -> bool:
-    """True ONLY when ``ZOE_BRAIN_BACKEND == 'flue'`` (default ``'core'``).
-
-    Additive, default-OFF cutover seam to the Flue brain sidecar. Read lazily
-    (not a module constant) so the live brain path is byte-identical to today
-    unless an operator explicitly opts in. The flip is gated on voice-corpus
-    parity — do not change the default.
-    """
-    return (os.environ.get("ZOE_BRAIN_BACKEND", "core") or "").strip().lower() == "flue"
-
-
 # Hard wall-clock budget for the flag-gated compose step inside the chat
 # stream. compose_card has its own HTTP timeout, but that can still hold the
 # stream's RUN_FINISHED for many seconds when the model server is slow — this
@@ -671,34 +671,6 @@ async def maybe_compose_event(user_message, answer_text, *, user_id, emitted_dom
         return None
 
 
-def _brain_streaming(message, session_id, user_id="", **kwargs):
-    """Brain streaming dispatch — Flue (opt-in) > zoe-core (Pi, default) > legacy.
-
-    user_id defaults to "" (not a real identity) to preserve the fail-closed
-    multi-user guarantee (#692): an omitted user must never inherit another
-    user's identity/memory. All call sites pass it explicitly.
-    """
-    if _use_flue_brain():
-        from zoe_flue_client import run_flue_brain_streaming
-
-        return run_flue_brain_streaming(message, session_id, user_id, **kwargs)
-    if _USE_ZOE_CORE:
-        return run_zoe_core_streaming(message, session_id, user_id, **kwargs)
-    return run_zoe_agent_streaming(message, session_id, user_id, **kwargs)
-
-
-async def _brain_oneshot(message, session_id, user_id="", **kwargs):
-    """Brain non-streaming dispatch — Flue (opt-in) > zoe-core (Pi, default) > legacy.
-
-    See _brain_streaming on the fail-closed user_id default.
-    """
-    if _use_flue_brain():
-        from zoe_flue_client import run_flue_brain
-
-        return await run_flue_brain(message, session_id, user_id, **kwargs)
-    if _USE_ZOE_CORE:
-        return await run_zoe_core(message, session_id, user_id, **kwargs)
-    return await run_zoe_agent(message, session_id, user_id, **kwargs)
 _GUARDED_AUTO = (
     os.environ.get("OPENCLAW_GUARDED_AUTO", "true").lower() == "true"
     and not _USE_ZOE_AGENT
