@@ -29,13 +29,7 @@ Zoe can now understand relationships:
 - Knowledge networks
 - Suggested connections
 
-### 4. **Model Management** (Active Now!)
-CLI tool to manage models and training:
-```bash
-/home/zoe/assistant/tools/model-manager.py list
-```
-
-### 5. **Training Dashboard** (Active Now!)
+### 4. **Training Dashboard** (Active Now!)
 Settings → AI Training & Learning shows:
 - Examples collected today
 - Training history
@@ -252,11 +246,6 @@ curl "http://localhost:8000/api/chat/training-stats?user_id=default" | jq
 ### View Today's Data
 ```bash
 sqlite3 /app/data/training.db "SELECT COUNT(*) FROM training_examples WHERE date(timestamp) = date('now');"
-```
-
-### List Models
-```bash
-/home/zoe/assistant/tools/model-manager.py list
 ```
 
 ### Check Graph Stats
