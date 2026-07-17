@@ -52,6 +52,41 @@ def test_issue_id_token_uses_user_email_verified_claim(monkeypatch):
     assert claims["nonce"] == "nonce-1"
 
 
+@pytest.mark.parametrize("role", ["admin", "user"])
+def test_issue_id_token_emits_groups_as_list(monkeypatch, role):
+    """`groups` must be a LIST, not a bare string.
+
+    Relying parties (Home Assistant's auth_oidc) drop a non-list groups claim
+    silently and fall back to a non-admin role, so the list shape is a contract.
+    """
+    key = generate_rsa_key()
+    monkeypatch.setattr(tokens, "ensure_signing_key", lambda: key)
+
+    token = tokens.issue_id_token(
+        issuer="https://zoe.example",
+        subject="user-1",
+        audience="client-1",
+        user_info={
+            "username": "jason",
+            "email": "j@example.test",
+            "email_verified": True,
+            "role": role,
+        },
+        nonce=None,
+    )
+
+    claims = jwt.decode(
+        token,
+        key["public_key_pem"],
+        algorithms=["RS256"],
+        audience="client-1",
+        issuer="https://zoe.example",
+    )
+    assert claims["role"] == role
+    assert claims["groups"] == [role]
+    assert isinstance(claims["groups"], list)
+
+
 def test_issue_and_verify_access_token(monkeypatch):
     key = generate_rsa_key()
     monkeypatch.setattr(tokens, "ensure_signing_key", lambda: key)

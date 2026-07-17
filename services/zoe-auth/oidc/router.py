@@ -93,7 +93,7 @@ async def discovery(request: Request):
         "end_session_endpoint": f"{base}/application/o/end-session/",
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code"],
-        "scopes_supported": ["openid", "email", "profile"],
+        "scopes_supported": ["openid", "email", "profile", "groups"],
         "token_endpoint_auth_methods_supported": [
             "client_secret_post",
             "client_secret_basic",
@@ -103,7 +103,8 @@ async def discovery(request: Request):
         "code_challenge_methods_supported": ["S256"],
         "claims_supported": [
             "sub", "iss", "aud", "exp", "iat", "auth_time", "nonce",
-            "email", "email_verified", "name", "preferred_username", "role", "zoe_user_id",
+            "email", "email_verified", "name", "preferred_username", "role", "groups",
+            "zoe_user_id",
         ],
     })
 
@@ -499,13 +500,15 @@ async def userinfo(
     if user_info is None:
         raise HTTPException(404, "User not found")
 
+    role = user_info.get("role", "user")
     return JSONResponse({
         "sub": user_id,
         "name": user_info.get("username", ""),
         "email": user_info.get("email", ""),
         "email_verified": True,
         "preferred_username": user_info.get("username", ""),
-        "role": user_info.get("role", "user"),
+        "role": role,
+        "groups": [role],
         "zoe_user_id": user_id,
     })
 
