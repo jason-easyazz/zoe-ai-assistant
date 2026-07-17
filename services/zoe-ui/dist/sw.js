@@ -12,7 +12,7 @@
 importScripts('/workbox/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.64.4'; // music: queue art/title/artist at the seam; uniform transport
+const SW_VERSION = '4.64.5'; // sleep: don't drift while music plays; clock separator
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
