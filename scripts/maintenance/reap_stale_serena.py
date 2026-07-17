@@ -38,6 +38,18 @@ from dataclasses import dataclass
 
 SERENA_MARKER = "serena start-mcp-server"
 
+# The SHARED server (scripts/setup/systemd/serena-mcp.service) is a long-lived
+# systemd user unit, not a per-session leftover: systemd owns its lifecycle and
+# its unit carries the MemoryHigh/MemoryMax caps. It must be exempt from both
+# reap rules. The ORPHAN rule would not fire on it today (a service main process
+# is parented to `systemd --user`, not PID 1), but the COLD rule absolutely
+# would — a legitimately idle shared server on this swap-heavy box drifts past
+# the swap threshold, and reaping it would kill code-intel for the whole fleet
+# and throw away the warm index that this server exists to share. Match on the
+# cgroup rather than the cmdline: the cgroup is set by systemd and cannot be
+# spoofed by a stray hand-launched process copying the same flags.
+SHARED_SERVICE_MARKER = "serena-mcp.service"
+
 
 @dataclass
 class SerenaProc:
@@ -48,6 +60,7 @@ class SerenaProc:
     swap_kb: int
     rss_kb: int
     cmdline: str
+    cgroup: str = ""
 
 
 def _clock_ticks() -> float:
@@ -85,6 +98,11 @@ def scan(now: float | None = None) -> list[SerenaProc]:
             ppid = int(after[1])
             start_ticks = float(after[19])
             age_s = now - (boot + start_ticks / ticks)
+            try:
+                with open(f"/proc/{pid}/cgroup") as fh:
+                    cgroup = fh.read().strip()
+            except (FileNotFoundError, PermissionError):
+                cgroup = ""  # unreadable -> treated as unmanaged, i.e. reapable
             swap_kb = rss_kb = 0
             uid = -1
             with open(f"/proc/{pid}/status") as fh:
@@ -97,12 +115,14 @@ def scan(now: float | None = None) -> list[SerenaProc]:
                         uid = int(line.split()[1])
         except (FileNotFoundError, ProcessLookupError, PermissionError, IndexError, ValueError):
             continue  # raced a process exit or unreadable entry — skip
-        found.append(SerenaProc(pid, ppid, uid, age_s, swap_kb, rss_kb, cmdline))
+        found.append(SerenaProc(pid, ppid, uid, age_s, swap_kb, rss_kb, cmdline, cgroup))
     return found
 
 
 def classify(p: SerenaProc, *, swap_mb: int, grace_min: int) -> str | None:
     """Return a reap reason, or None to keep the process."""
+    if SHARED_SERVICE_MARKER in p.cgroup:
+        return None  # the shared server — systemd owns it; see SHARED_SERVICE_MARKER
     if p.age_s < grace_min * 60:
         return None  # fresh session still indexing — never touch
     if p.ppid == 1:
