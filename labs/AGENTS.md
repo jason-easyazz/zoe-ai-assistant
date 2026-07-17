@@ -54,6 +54,14 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
 
 ## Child DOX Index
 
+- `dock-pins-mockup/` — design spec + reproducible mockup for **user-pinned dock
+  controls** on the touch panel (`SPEC-dock-pinned-controls.md`, `dock-mockup.html`,
+  `shoot.js`). Research only; nothing here is wired to production. Verified against
+  live HA 2026-07-17: the estate has **no `light.*` and no `climate.*` entities** —
+  its "lights" are `input_boolean.*` (including a fan and a TV, both drawn as bulbs)
+  and the thermostat is a `sensor` + `input_number` pair, so `.pc.temp` is dead code.
+  Screenshots are build artifacts — regenerate with `node shoot.js`, don't commit them.
+
 - `kokoro-voice-blend/` — custom "Zoe" persona voice spike: pure-numpy blends
   (linear + slerp) of Kokoro style tensors from the stock voices bin, committed
   candidate tensors (`voices/*.npy`, float16) + reproducible generator
