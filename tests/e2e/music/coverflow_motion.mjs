@@ -169,6 +169,34 @@ async function pgesture(page, { dxCards, steps, stepMs }) {
   }, { dxCards, steps, stepMs, SLOT: CF_SLOT });
 }
 
+// Aim, pause, then flick — how people actually throw things. The pause fires no
+// pointermove at all (a still finger generates none), so a velocity window that
+// keeps a pre-pause sample as its baseline measures the flick across the whole
+// hesitation and reports a stop.
+async function aimPauseFlick(page, { aimCards, pauseMs, flickPx, flickSteps = 4, flickStepMs = 3, holdAfterMs = 0 }) {
+  return page.evaluate(async (a) => {
+    const cf = document.getElementById('mCF');
+    const r = cf.getBoundingClientRect();
+    const x0 = r.left + r.width / 2, y = r.top + r.height / 2;
+    const mk = (type, x) => new PointerEvent(type, {
+      pointerId: 3, isPrimary: true, bubbles: true, cancelable: true,
+      clientX: x, clientY: y, pointerType: 'touch',
+    });
+    const nap = (ms) => new Promise((r2) => setTimeout(r2, ms));
+    const aim = -a.aimCards * a.SLOT;
+    document.elementFromPoint(x0, y).dispatchEvent(mk('pointerdown', x0));
+    for (let s = 1; s <= 6; s++) { await nap(25); cf.dispatchEvent(mk('pointermove', x0 + (aim * s) / 6)); }
+    await nap(a.pauseMs);                        // hold still: no pointermove fires
+    for (let s = 1; s <= a.flickSteps; s++) {
+      await nap(a.flickStepMs);
+      cf.dispatchEvent(mk('pointermove', x0 + aim - (a.flickPx * s) / a.flickSteps));
+    }
+    if (a.holdAfterMs) await nap(a.holdAfterMs); // rest the finger, then lift
+    cf.dispatchEvent(mk('pointerup', x0 + aim - a.flickPx));
+    await new Promise((r2) => requestAnimationFrame(() => r2()));
+  }, { aimCards, pauseMs, flickPx, flickSteps, flickStepMs, holdAfterMs, SLOT: CF_SLOT });
+}
+
 async function main() {
   const srv = await serve();
   const base = `http://127.0.0.1:${srv.address().port}`;
@@ -270,6 +298,32 @@ async function main() {
   }
 
   // ------------------------------------------------------------ 5. rubber band
+  // ------------------------------------------------- 4b. aim, pause, flick
+  console.log('\n[4b] aim → pause → flick, and its mirror');
+  {
+    // Aim, hesitate, THEN throw — how people actually throw things. These are
+    // REGRESSION GUARDS, not proof of a fix: both already passed before the
+    // strict-pruning change, because a flick of 2+ pointermoves evicts the
+    // stale baseline on its second move. The case that does NOT self-heal is a
+    // flick short enough to fire a single pointermove; see the PR for why that
+    // one can't be fixed from the coalesced event stream.
+    const a = await focusOf(page);
+    await aimPauseFlick(page, { aimCards: 0.45, pauseMs: 150, flickPx: 40, flickSteps: 4, flickStepMs: 3 });
+    await page.waitForTimeout(1000);
+    const travel = (await focusOf(page)) - a;
+    ok(travel > 1, `a 40px flick after a 150ms pause still flings (travelled ${travel}; a snap would be 1)`);
+
+    // The mirror of the same mistake: flick, then rest your finger, then lift.
+    // The flick is over, so it is history rather than a throw — this must settle
+    // where it is. It used to pass only by accident (the long gap diluted the
+    // velocity below the threshold); cfRelease now says so explicitly.
+    const b = await focusOf(page);
+    await aimPauseFlick(page, { aimCards: 0.45, pauseMs: 20, flickPx: 40, flickSteps: 4, flickStepMs: 3, holdAfterMs: 260 });
+    await page.waitForTimeout(1000);
+    const held = (await focusOf(page)) - b;
+    ok(held <= 1, `flick → rest 260ms → lift does NOT fling (travelled ${held}, want <=1)`);
+  }
+
   console.log('\n[5] the ends resist, and spring back');
   {
     // walk to the very front of the queue

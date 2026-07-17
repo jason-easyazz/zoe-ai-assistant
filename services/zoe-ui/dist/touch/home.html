@@ -1530,10 +1530,13 @@
   }
   // Project the momentum onto a target, then let the spring carry it there.
   function cfRelease(d,e){
-    var now=performance.now(),s=d.samp[0],
-        vpx=(e.clientX-s.x)/Math.max(1,now-s.t),   // px/ms over the last ~80ms
-        v=-(vpx*1000)/CF_SLOT,                     // → covers/s (drag right = go back)
-        here=Math.round(_cf.focus),t;
+    var now=performance.now(),s=d.samp[0],last=d.samp[d.samp.length-1],v=0;
+    // The mirror of the stale-baseline mistake, pointing the other way: if your
+    // finger had already come to rest before you lifted, its last movement is
+    // history, not a throw. Flick → rest → lift must settle where it is.
+    if(s&&last&&now-last.t<=CF_VWIN)
+      v=-(((e.clientX-s.x)/Math.max(1,now-s.t))*1000)/CF_SLOT;  // → covers/s (drag right = go back)
+    var here=Math.round(_cf.focus),t;
     if(Math.abs(v)<CF_VMIN)t=here;                 // a slow drag just snaps to the nearest
     else t=Math.max(here-CF_FLING_MAX,Math.min(here+CF_FLING_MAX,Math.round(_cf.focus+v*CF_FLING)));
     cfGlide(t,v);cfArmHome();
@@ -1571,7 +1574,12 @@
       // Velocity from the last CF_VWIN ms only. Total-distance/total-time would
       // score a slow drag that ends in a flick as "slow" and refuse to fling it.
       d.samp.push({t:now,x:e.clientX});
-      while(d.samp.length>2&&now-d.samp[0].t>CF_VWIN)d.samp.shift();
+      // Prune STRICTLY by time — a sample older than the window is not evidence
+      // about how fast you are moving NOW. The floor is 1, not 2: a `length>2`
+      // floor pinned samp[0] to a pre-pause baseline when you aim, hesitate,
+      // then flick, and charged the flick across the whole hesitation. The
+      // newest sample is always in-window, so this can never empty the array.
+      while(d.samp.length>1&&now-d.samp[0].t>CF_VWIN)d.samp.shift();
       // Arm BROWSE on horizontal intent, and only before a lift. A mostly-
       // vertical move is reserved for flick-up-to-remove; and once you ARE
       // browsing, yanking upward must not delete the cover under your finger.
