@@ -2347,8 +2347,9 @@ async def put_display_preferences(
                 device_id, enabled, day_brightness,
                 night_enabled, night_start, night_end, night_brightness,
                 idle_enabled, idle_seconds, idle_brightness,
-                off_enabled, off_seconds, pi_host, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                off_enabled, off_seconds,
+                sleep_enabled, sleep_seconds, pi_host, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
            ON CONFLICT(device_id) DO UPDATE SET
                 enabled=excluded.enabled,
                 day_brightness=excluded.day_brightness,
@@ -2361,6 +2362,8 @@ async def put_display_preferences(
                 idle_brightness=excluded.idle_brightness,
                 off_enabled=excluded.off_enabled,
                 off_seconds=excluded.off_seconds,
+                sleep_enabled=excluded.sleep_enabled,
+                sleep_seconds=excluded.sleep_seconds,
                 pi_host=excluded.pi_host,
                 updated_at=NOW()""",
         (
@@ -2376,6 +2379,8 @@ async def put_display_preferences(
             int(merged["idle_brightness"]),
             1 if merged["off_enabled"] else 0,
             int(merged["off_seconds"]),
+            1 if merged["sleep_enabled"] else 0,
+            int(merged["sleep_seconds"]),
             pi_host,
         ),
     )
