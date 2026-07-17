@@ -93,7 +93,7 @@ async def discovery(request: Request):
         "end_session_endpoint": f"{base}/application/o/end-session/",
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code"],
-        "scopes_supported": ["openid", "email", "profile", "groups"],
+        "scopes_supported": ["openid", "email", "profile"],
         "token_endpoint_auth_methods_supported": [
             "client_secret_post",
             "client_secret_basic",
@@ -101,6 +101,10 @@ async def discovery(request: Request):
         ],
         "id_token_signing_alg_values_supported": ["RS256"],
         "code_challenge_methods_supported": ["S256"],
+        # `groups` is listed here but deliberately NOT in scopes_supported: like
+        # `role`/`zoe_user_id`, it is emitted unconditionally rather than gated on a
+        # requested scope. Advertising a scope this provider does not enforce would
+        # promise a contract that does not exist.
         "claims_supported": [
             "sub", "iss", "aud", "exp", "iat", "auth_time", "nonce",
             "email", "email_verified", "name", "preferred_username", "role", "groups",

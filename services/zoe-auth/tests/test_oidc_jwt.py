@@ -87,6 +87,36 @@ def test_issue_id_token_emits_groups_as_list(monkeypatch, role):
     assert isinstance(claims["groups"], list)
 
 
+@pytest.mark.parametrize("role", ["admin", "user"])
+def test_userinfo_emits_groups_as_list(monkeypatch, role):
+    """userinfo builds `groups` independently of issue_id_token.
+
+    A relying party may read the claim from either surface, so both must agree
+    on the list shape; this covers the userinfo copy.
+    """
+    app = FastAPI()
+    app.include_router(oidc_router.router)
+
+    monkeypatch.setattr(oidc_router, "get_jwks", lambda: {"keys": []})
+    monkeypatch.setattr(
+        oidc_router, "verify_access_token", lambda token, issuer, jwks: {"sub": "user-1"}
+    )
+    monkeypatch.setattr(
+        oidc_router, "_get_user_info",
+        lambda uid: {"username": "jason", "email": "j@x", "email_verified": True, "role": role},
+    )
+
+    response = TestClient(app).get(
+        "/application/o/userinfo/", headers={"Authorization": "Bearer access-token"}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["role"] == role
+    assert body["groups"] == [role]
+    assert isinstance(body["groups"], list)
+
+
 def test_issue_and_verify_access_token(monkeypatch):
     key = generate_rsa_key()
     monkeypatch.setattr(tokens, "ensure_signing_key", lambda: key)
