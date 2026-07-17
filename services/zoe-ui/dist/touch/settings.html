@@ -2984,8 +2984,17 @@
                     });
                     if(res.ok){
                         alert('Saved');
+                    }else{
+                        // fetch() only rejects on network failure, so an HTTP error
+                        // lands here, not in the catch. Say so — silence after a
+                        // failed save reads as success to the user.
+                        console.warn('Save intelligence settings failed', res.status);
+                        alert("Couldn't save settings — please try again.");
                     }
-                }catch(e){console.warn('Save intelligence settings failed', e)}
+                }catch(e){
+                    console.warn('Save intelligence settings failed', e);
+                    alert("Couldn't save settings — please try again.");
+                }
             }
             async function triggerRelationshipCheck(){
                 try{ await fetch('/api/proactive/relationship-check', {method:'POST'}); }catch(e){}
