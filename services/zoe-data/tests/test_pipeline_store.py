@@ -1746,3 +1746,107 @@ def test_pipeline_summary_ignores_non_retro_followup_metadata(isolated_store):
     summary = store.pipeline_summary(state)
 
     assert summary["retro_followup"] is None
+
+
+# ── streaming reads ──────────────────────────────────────────────────────────
+# This is an event-sourced store: save_state re-appends a FULL state snapshot on
+# every write, so it grows without bound (1.59 GB before a compactor existed).
+# Reading it whole pulls all of that into RAM on a memory-tight Jetson.
+#
+# These tests pin the MECHANISM, not the outcome: a caller that materialises the
+# file still returns the correct state, so asserting on the return value alone
+# would let a future edit silently reintroduce the whole-file load with every
+# test still green.
+
+
+class _NoReadHandle:
+    """An iterable file handle that EXPLODES on read()/readlines().
+
+    A streaming caller iterates and never trips it; a caller that materialises
+    the file fails loudly. Everything else delegates to the real handle.
+    """
+
+    def __init__(self, handle):
+        self._handle = handle
+
+    def __iter__(self):
+        return iter(self._handle)
+
+    def read(self, *_a, **_k):
+        raise AssertionError(
+            "read() called — the pipeline store must be STREAMED, never "
+            "materialised (it grows unbounded; 1.59 GB before compaction)"
+        )
+
+    def readlines(self, *_a, **_k):
+        raise AssertionError("readlines() called — iterate the handle instead")
+
+    def __getattr__(self, name):  # seek / fileno / write / flush / close
+        return getattr(self._handle, name)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        self._handle.close()
+        return False
+
+
+@pytest.fixture
+def no_read_store(isolated_store, monkeypatch):
+    """Make every open() of the store return a handle that bans read()."""
+    from pathlib import Path
+
+    real_open = Path.open
+
+    def _open(self, *a, **k):
+        handle = real_open(self, *a, **k)
+        if self == isolated_store:
+            return _NoReadHandle(handle)
+        return handle
+
+    monkeypatch.setattr(Path, "open", _open)
+    return isolated_store
+
+
+def test_latest_state_from_lines_accepts_any_iterable(isolated_store):
+    """The helper takes an ITERABLE of lines, not just a list — that is what lets
+    the callers hand it an open handle and stream."""
+    import asyncio
+
+    asyncio.run(store.bootstrap_state("multica:iter"))
+    raw = isolated_store.read_text(encoding="utf-8").splitlines()
+
+    latest = store._latest_state_from_lines(iter(raw), "multica:iter")
+
+    assert latest is not None
+    assert latest.task_ref == "multica:iter"
+
+
+def test_load_latest_state_streams_never_materialises(no_read_store):
+    import asyncio
+
+    asyncio.run(store.bootstrap_state("multica:stream"))
+
+    loaded = store.load_latest_state("multica:stream")
+
+    assert loaded is not None
+    assert loaded.task_ref == "multica:stream"
+
+
+def test_save_state_streams_and_its_append_still_lands(no_read_store):
+    """save_state's read-back sits inside its LOCK_EX critical section, so it must
+    stream there too — and its append must still land (it re-seeks to SEEK_END
+    after the scan leaves the position at EOF)."""
+    import asyncio
+
+    asyncio.run(store.bootstrap_state("multica:savestream"))
+    state = store.load_latest_state("multica:savestream")
+    assert state is not None
+
+    saved = store.save_state(state, event="streamed")
+    assert saved.journal_revision > state.journal_revision
+
+    reloaded = store.load_latest_state("multica:savestream")
+    assert reloaded is not None
+    assert reloaded.journal_revision == saved.journal_revision
