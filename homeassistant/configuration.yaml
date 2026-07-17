@@ -11,13 +11,36 @@ homeassistant:
   country: AU
   time_zone: Australia/Perth
   auth_providers:
+    # Local accounts. Keep this: it is the fallback login if zoe-auth is
+    # unreachable, and the only way back in if SSO misconfigures.
     - type: homeassistant
-    # OIDC auth provider not yet available in HA core (as of 2026.5).
-    # Config retained below for when HA ships the oidc provider:
-    # - type: oidc
-    #   client_id: !secret ha_oidc_client_id
-    #   client_secret: !secret ha_oidc_client_secret
-    #   discovery_url: http://zoe.local/.well-known/openid-configuration
+
+# Zoe SSO against zoe-auth. HA core still ships no native `oidc` auth provider,
+# so this is the `auth_oidc` custom component, which registers the provider itself
+# rather than via an auth_providers entry.
+#
+# Reachability: the component derives redirect_uri from the URL in the browser's
+# address bar, and zoe-auth matches redirect URIs exactly. Only the hosts seeded in
+# zoe-auth's oidc/startup.py work — reaching HA by raw LAN IP will fail the match.
+auth_oidc:
+  client_id: !secret ha_oidc_client_id
+  client_secret: !secret ha_oidc_client_secret
+  discovery_url: "http://zoe.local/.well-known/openid-configuration"
+  display_name: "Zoe SSO"
+  claims:
+    username: preferred_username
+    display_name: name
+  roles:
+    # zoe-auth emits groups: [role]; its admin role is literally "admin".
+    admin: admin
+  features:
+    # zoe-auth emits `groups` in the id_token unconditionally, and the seeded
+    # home-assistant client is not registered for a `groups` scope — so read the
+    # claim without requesting the scope.
+    include_groups_scope: false
+    automatic_person_creation: true
+    # LAN-only plain HTTP; zoe-auth is not served over TLS.
+    force_https: false
 
 http:
   use_x_forwarded_for: true
