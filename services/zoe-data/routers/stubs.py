@@ -5,7 +5,7 @@ Returns empty/default data so the frontend doesn't get 404 errors.
 import json
 import logging
 import os
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from auth import get_current_user
 from db_pool import get_db
 
@@ -142,5 +142,15 @@ async def save_intelligence_settings(
         logger.warning(
             "save_intelligence_settings failed for user=%s — settings NOT "
             "persisted: %s", user_id, exc)
-        return {"status": "error", "detail": str(exc)}
+        # A write either persisted or it didn't — never answer 200 for a failed
+        # save. The old body ({"status": "error"} with HTTP 200) made the panel's
+        # `if (res.ok) alert('Saved')` tell the user their settings were saved
+        # when nothing was written. The read path's "degraded" shape is right for
+        # GETs; it has no honest meaning for a write.
+        # `detail` stays generic: the raw exception can carry DB schema/connection
+        # detail and this endpoint is reachable by any signed-in user.
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to save intelligence settings",
+        ) from exc
     return {"status": "ok", "settings": filtered}
