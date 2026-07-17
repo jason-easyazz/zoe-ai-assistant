@@ -100,6 +100,10 @@ _DEFAULT_ICON = {
 
 _UNUSABLE_STATES = (None, "unavailable", "unknown")
 
+# The panel-config columns on the `panels` row. A fixed whitelist: PUT builds its
+# ON CONFLICT SET list from this, never from request-body keys.
+_WRITABLE = ("location", "default_player", "pinned")
+
 
 # ── validation / normalisation (pure — unit-tested without a DB) ──────────────
 
@@ -530,27 +534,29 @@ async def put_panel_config(
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Expected JSON object")
 
-    row = await _load_panel_row(db, device_id)
-    location = _row_value(row, "location")
-    default_player = _row_value(row, "default_player")
-    pinned_raw = _row_value(row, "pinned")
+    # Only the columns the caller actually SUPPLIED are written. This is what
+    # makes the update atomic: a concurrent PUT saving `location` cannot clobber
+    # this one's `pinned`, because each statement's DO UPDATE SET touches only
+    # its own fields. (A read-merge-write would race — the later writer would
+    # overwrite all three columns from its own stale snapshot.)
+    updates: dict[str, Any] = {}
 
     if "location" in body:
         try:
-            location = normalize_location(body["location"])
+            updates["location"] = normalize_location(body["location"])
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
     if "default_player" in body:
         raw_player = body["default_player"]
         if raw_player is None:
-            default_player = None
+            updates["default_player"] = None
         elif not isinstance(raw_player, str):
             raise HTTPException(status_code=400, detail="default_player must be a string")
         else:
             candidate = raw_player.strip()
             if not candidate:
-                default_player = None
+                updates["default_player"] = None
             else:
                 # Match the existing global setter: reject unknown ids against
                 # the live list — but only when that list is actually
@@ -559,36 +565,51 @@ async def put_panel_config(
                 known = await _known_player_ids()
                 if known is not None and candidate not in known:
                     raise HTTPException(status_code=400, detail="unknown player_id")
-                default_player = candidate
+                updates["default_player"] = candidate
 
     if "pinned" in body:
         raw_pins = body["pinned"]
         if raw_pins is None:
-            pinned_raw = None
+            updates["pinned"] = None
         else:
             try:
-                pinned_raw = json.dumps(validate_pins(raw_pins))
+                updates["pinned"] = json.dumps(validate_pins(raw_pins))
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc))
 
-    await db.execute(
-        """INSERT INTO panels (panel_id, name, location, default_player, pinned, updated_at)
-           VALUES (?, ?, ?, ?, ?, NOW())
-           ON CONFLICT(panel_id) DO UPDATE SET
-                location=excluded.location,
-                default_player=excluded.default_player,
-                pinned=excluded.pinned,
-                updated_at=NOW()""",
-        (device_id, device_id, location, default_player, pinned_raw),
+    # Column names come from this fixed whitelist, never from the request body.
+    set_clause = ", ".join(f"{col}=excluded.{col}" for col in _WRITABLE if col in updates)
+    if set_clause:
+        set_clause += ", "
+    # On INSERT (a panel that was never registered) an unsupplied column lands
+    # NULL — i.e. "not configured" — which is the right default. On CONFLICT it
+    # is simply absent from the SET list and stays untouched.
+    # CURRENT_TIMESTAMP (not NOW()) is SQL-standard and identical on PostgreSQL.
+    # RETURNING gives the post-write row, so the response reflects what is
+    # actually stored without a second read.
+    cursor = await db.execute(
+        f"""INSERT INTO panels (panel_id, name, location, default_player, pinned, updated_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(panel_id) DO UPDATE SET
+                 {set_clause}updated_at=CURRENT_TIMESTAMP
+            RETURNING location, default_player, pinned""",
+        (
+            device_id,
+            device_id,
+            updates.get("location"),
+            updates.get("default_player"),
+            updates.get("pinned"),
+        ),
     )
+    row = await cursor.fetchone()
     await db.commit()
 
     entity_index = await _entity_index()
     return build_config_payload(
         device_id=device_id,
-        location=location,
-        stored_default_player=default_player,
+        location=_row_value(row, "location"),
+        stored_default_player=_row_value(row, "default_player"),
         global_default_player=_global_default_player(),
-        stored_pins=_stored_pins(pinned_raw),
+        stored_pins=_stored_pins(_row_value(row, "pinned")),
         entity_index=entity_index,
     )

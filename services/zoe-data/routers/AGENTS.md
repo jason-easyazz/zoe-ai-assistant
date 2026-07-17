@@ -24,6 +24,7 @@ FastAPI routers for every Zoe API domain: chat, calendar, lists, memories, remin
   - **`kind` and `icon` resolve server-side, never from the domain.** `input_boolean.fan`/`.tv` share the lights' domain; HA's own `attributes.icon` is the truth.
   - **`pinned` NULL != `[]`.** NULL = never configured (dock falls back to its own default); `[]` = the operator explicitly pinned nothing. `pins_configured` carries the distinction.
   - **An empty MA player list means "cannot validate", not "no players".** `music_service._ma` never raises — it returns None on transport failure, which `get_players()` turns into `[]`. Treating `[]` as an empty set rejects every id and locks the operator out during an MA outage.
+  - **PUT writes ONLY the columns the request supplied** (`ON CONFLICT DO UPDATE SET` built from the fixed `_WRITABLE` whitelist, never from body keys) and returns the post-write row via `RETURNING`. Do not "simplify" this back to a read-merge-write that always writes all three columns — concurrent PUTs of different fields would clobber each other.
 - Per-panel `default_player` OVERRIDES the household-global `/api/music/preferred-player`, which remains the fallback and an unchanged public contract.
 
 ## Work Guidance

@@ -526,3 +526,208 @@ def test_unregistered_panel_gets_safe_defaults():
     assert payload["location"] is None
     assert payload["pins_configured"] is False
     assert payload["max_pins"] == MAX_PINS
+
+
+# ── route-level contract (HTTP layer) ─────────────────────────────────────────
+#
+# A mini app mounting ONLY this router with `get_db`/`get_current_user`
+# overridden — NOT `TestClient(app)`, which starts the full FastAPI lifespan and
+# is Jetson-only (see tests/AGENTS.md). This keeps the lane slim-dep-green while
+# still exercising status codes, the auth dependency, the UPSERT parameters and
+# the partial-update semantics that the pure-function tests can't reach.
+
+import json
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from auth import get_current_user
+from database import get_db
+from routers import panel_config as pc
+
+
+class _FakeCursor:
+    def __init__(self, row):
+        self._row = row
+
+    async def fetchone(self):
+        return self._row
+
+
+class _FakeRow(dict):
+    """Stands in for an asyncpg Record: dict-like with .keys()."""
+
+
+class _FakeDB:
+    """Records the SQL it is handed and replays a canned post-write row."""
+
+    def __init__(self, row=None):
+        self.row = row
+        self.calls = []
+        self.committed = False
+
+    def execute(self, sql, params=()):
+        self.calls.append((" ".join(sql.split()), params))
+
+        async def _run():
+            return _FakeCursor(self.row)
+
+        return _run()
+
+    async def commit(self):
+        self.committed = True
+
+
+def _client(db, monkeypatch, user=None):
+    monkeypatch.setattr(pc, "_global_default_player", lambda: "living")
+
+    async def _fake_index():
+        return LIVE_ENTITIES
+
+    async def _fake_players():
+        return {"up286412cf6eb7"}
+
+    monkeypatch.setattr(pc, "_entity_index", _fake_index)
+    monkeypatch.setattr(pc, "_known_player_ids", _fake_players)
+
+    app = FastAPI()
+    app.include_router(pc.router)
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_current_user] = lambda: user or {"user_id": "jason"}
+    return TestClient(app)
+
+
+def test_route_get_is_reachable_without_auth_headers():
+    # The kiosk runs as a guest and polls this at boot — same posture as
+    # GET /api/system/display/preferences. A GET that needed a session would
+    # silently blank the dock on the panel.
+    assert get_current_user not in _route_dependencies(pc.get_panel_config)
+
+
+def _route_dependencies(endpoint):
+    """The dependency callables declared on a route handler."""
+    import inspect
+
+    return {
+        p.default.dependency
+        for p in inspect.signature(endpoint).parameters.values()
+        if hasattr(p.default, "dependency")
+    }
+
+
+def test_route_put_requires_the_same_auth_dependency_as_display_prefs():
+    # PUT is a write: it must go through get_current_user, matching
+    # PUT /api/system/display/preferences.
+    assert get_current_user in _route_dependencies(pc.put_panel_config)
+
+
+def test_route_get_returns_resolved_payload(monkeypatch):
+    db = _FakeDB(_FakeRow({
+        "location": "kitchen",
+        "default_player": None,
+        "pinned": json.dumps([{
+            "read_eid": "input_boolean.fan",
+            "write_eid": "input_boolean.fan",
+            "name": "Fan",
+        }]),
+    }))
+    r = _client(db, monkeypatch).get("/api/panels/zoe-touch-pi/config")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["location"] == "kitchen"
+    assert body["default_player_source"] == "global"  # falls back
+    assert body["pinned"][0]["icon"] == "mdi:fan"
+
+
+def test_route_get_unregistered_panel_is_not_an_error(monkeypatch):
+    r = _client(_FakeDB(None), monkeypatch).get("/api/panels/never-seen/config")
+    assert r.status_code == 200
+    assert r.json()["pins_configured"] is False
+
+
+def test_route_put_writes_only_supplied_columns(monkeypatch):
+    # The atomicity contract: a location-only PUT must not name `pinned` or
+    # `default_player` in its SET list, or a concurrent write is clobbered.
+    db = _FakeDB(_FakeRow({"location": "Lounge", "default_player": None, "pinned": None}))
+    r = _client(db, monkeypatch).put("/api/panels/p1/config", json={"location": "Lounge"})
+    assert r.status_code == 200
+    sql, params = db.calls[0]
+    assert "location=excluded.location" in sql
+    assert "pinned=excluded.pinned" not in sql
+    assert "default_player=excluded.default_player" not in sql
+    assert db.committed
+
+
+def test_route_put_uses_portable_timestamp_not_now(monkeypatch):
+    db = _FakeDB(_FakeRow({"location": "Lounge", "default_player": None, "pinned": None}))
+    _client(db, monkeypatch).put("/api/panels/p1/config", json={"location": "Lounge"})
+    sql, _ = db.calls[0]
+    assert "CURRENT_TIMESTAMP" in sql
+    assert "NOW()" not in sql
+
+
+def test_route_put_returns_the_stored_row_not_the_request(monkeypatch):
+    # RETURNING is what makes the response reflect what's actually stored.
+    db = _FakeDB(_FakeRow({
+        "location": "Bedroom", "default_player": "up286412cf6eb7", "pinned": None,
+    }))
+    r = _client(db, monkeypatch).put("/api/panels/p1/config", json={"location": "Bedroom"})
+    assert r.json()["location"] == "Bedroom"
+    assert r.json()["default_player"] == "up286412cf6eb7"
+    assert r.json()["default_player_source"] == "panel"
+
+
+def test_route_put_empty_body_touches_no_config_column(monkeypatch):
+    db = _FakeDB(_FakeRow({"location": "kitchen", "default_player": None, "pinned": None}))
+    r = _client(db, monkeypatch).put("/api/panels/p1/config", json={})
+    assert r.status_code == 200
+    sql, _ = db.calls[0]
+    assert "excluded" not in sql  # only updated_at is set
+    assert "updated_at=CURRENT_TIMESTAMP" in sql
+
+
+@pytest.mark.parametrize(
+    "payload,detail",
+    [
+        ({"pinned": [{"entity_id": "input_boolean.fan", "name": "Living Room"}]},
+         "single word"),
+        ({"pinned": [{"entity_id": "input_boolean.fan", "name": "WayTooLongLabel"}]},
+         "at most"),
+        ({"default_player": "not-a-real-speaker"}, "unknown player_id"),
+        ({"default_player": 42}, "must be a string"),
+    ],
+)
+def test_route_put_rejects_bad_input_with_400(monkeypatch, payload, detail):
+    db = _FakeDB(_FakeRow({"location": None, "default_player": None, "pinned": None}))
+    r = _client(db, monkeypatch).put("/api/panels/p1/config", json=payload)
+    assert r.status_code == 400
+    assert detail in r.json()["detail"]
+    assert db.calls == []  # rejected before touching the DB
+
+
+def test_route_put_rejects_a_non_object_body(monkeypatch):
+    db = _FakeDB(None)
+    r = _client(db, monkeypatch).put("/api/panels/p1/config", json=["not", "an", "object"])
+    assert r.status_code == 400
+
+
+def test_route_put_accepts_the_temp_pair_and_stores_the_canonical_pair(monkeypatch):
+    stored = json.dumps([{
+        "read_eid": "sensor.current_temperature",
+        "write_eid": "input_number.thermostat_temperature",
+        "name": "Temp",
+    }])
+    db = _FakeDB(_FakeRow({"location": None, "default_player": None, "pinned": stored}))
+    r = _client(db, monkeypatch).put("/api/panels/p1/config", json={"pinned": [TEMP_PIN]})
+    assert r.status_code == 200
+    # What got written is the canonical pair.
+    _, params = db.calls[0]
+    assert json.loads(params[4]) == [{
+        "read_eid": "sensor.current_temperature",
+        "write_eid": "input_number.thermostat_temperature",
+        "name": "Temp",
+    }]
+    pin = r.json()["pinned"][0]
+    assert (pin["kind"], pin["write_action"], pin["min"], pin["max"]) == (
+        "temp", "set_value", 16.0, 30.0,
+    )
