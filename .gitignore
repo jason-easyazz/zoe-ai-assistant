@@ -328,6 +328,9 @@ data/music-assistant/playlists/
 services/zoe-data/data/music_discovery/
 # HACS — Home Assistant Community Store, installed into the live HA runtime
 homeassistant/custom_components/hacs/
+# auth_oidc — HACS-installed OIDC auth provider (christiaangoossens/hass-oidc-auth).
+# Third-party runtime code like hacs/ above: configured by configuration.yaml, not vendored.
+homeassistant/custom_components/auth_oidc/
 # router-90-campaign: the *.json negation above force-tracks committed
 # measurement artifacts; gen1-lineage.json is a runtime lineage journal, not one.
 labs/router-90-campaign/results/gen1-lineage.json

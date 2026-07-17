@@ -16,7 +16,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from collections import Counter
+from collections import Counter, deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -123,9 +123,13 @@ def parse_pipeline_findings(*, tail_lines: int = DEFAULT_PIPELINE_TAIL) -> list[
     if not path.is_file():
         return [{"kind": "pipeline_store_missing", "path": str(path)}]
 
+    # Stream into a bounded deque: only the last `tail_lines` are ever wanted, and
+    # read() would pull the whole event-sourced store into RAM to throw nearly all
+    # of it away (it reached 1.59 GB before the compactor existed). Memory here is
+    # now O(tail_lines) regardless of file size.
     with path.open("r", encoding="utf-8") as handle:
-        lines = handle.read().splitlines()
-    recent = [ln for ln in lines[-tail_lines:] if ln.strip()]
+        tail = deque(handle, maxlen=tail_lines)
+    recent = [ln for ln in (line.rstrip("\n") for line in tail) if ln.strip()]
 
     findings: list[dict[str, Any]] = []
     gate_counter: Counter[tuple[str, str]] = Counter()

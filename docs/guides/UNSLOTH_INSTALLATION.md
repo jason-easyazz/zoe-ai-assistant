@@ -102,13 +102,10 @@ ls -lh /app/data/training.db
 # 2. Feedback endpoints work
 curl -X GET "http://localhost:8000/api/chat/training-stats?user_id=default"
 
-# 3. Model manager works
-/home/zoe/assistant/tools/model-manager.py list
-
-# 4. Graph engine loaded
+# 3. Graph engine loaded
 python3 -c "from graph_engine import graph_engine; print(f'Nodes: {graph_engine.get_stats()}')"
 
-# 5. Enhanced prompts active
+# 4. Enhanced prompts active
 curl -X POST "http://localhost:8000/api/chat" \
   -H "Content-Type: application/json" \
   -d '{"message":"test","user_id":"default"}' | jq '.interaction_id'
