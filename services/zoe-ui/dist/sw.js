@@ -12,7 +12,7 @@
 importScripts('/workbox/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.64.6'; // ask card: inline live-conversation mode
+const SW_VERSION = '4.64.7'; // ask card: inline live-conversation mode
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
