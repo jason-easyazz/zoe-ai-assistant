@@ -150,8 +150,15 @@ def test_chat_uses_intelligent_systems():
     
     required_systems = {
         "intent router": "from intent_router import",
-        "zoe agent": "run_zoe_agent",
-        "zoe core brain": "run_zoe_core",
+        # Brain-lane selection (flue > zoe-core > legacy zoe_agent) has ONE source
+        # of truth: brain_dispatch.py. W4-C1 deleted chat's private copies of
+        # _use_flue_brain/_brain_streaming/_brain_oneshot, so the old
+        # "run_zoe_core"/"run_zoe_agent" markers no longer appear — the integration
+        # is stronger, not absent. Pin the seam itself: if a future change
+        # reintroduces a per-router brain copy, this marker goes with it.
+        # (The old "run_zoe_agent" marker had also been passing on a stray COMMENT
+        # rather than any real call — a substring grep can't tell the difference.)
+        "brain dispatch": "from brain_dispatch import",
         "mempalace memory": "_mempalace_load_user_facts",
         "brain tool sentinel": "brain_tool_sentinel_events",
         "ui orchestrator": "enqueue_ui_action",
