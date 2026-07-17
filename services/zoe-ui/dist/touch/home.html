@@ -374,7 +374,7 @@
   .mfull .mknob{position:absolute;top:50%;left:38%;transform:translate(-50%,-50%);width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.4)}
   .mfull .mtimes{display:flex;justify-content:space-between;margin-top:12px;font-size:18px;color:rgba(255,255,255,.6);font-variant-numeric:tabular-nums}
   .mfull .mtransport{position:absolute;left:0;right:0;bottom:120px;display:flex;justify-content:center;align-items:center;gap:44px}
-  .mfull .mtransport .sml{opacity:.55;background:none;border:0;color:#fff;cursor:pointer;width:56px;height:56px;border-radius:50%;display:grid;place-items:center}
+  .mfull .mtransport .sml{opacity:.55;background:none;border:0;color:#fff;cursor:pointer;width:68px;height:68px;border-radius:50%;display:grid;place-items:center}
   .mfull .mtransport .sml svg{width:26px;height:26px}
   .mfull .mtransport button svg{width:28px;height:28px}
   .mfull .mtransport .pp svg{width:32px;height:32px;color:#0a0d18}
@@ -434,7 +434,9 @@
   .mqr .qrbox img,.mqr .qrbox canvas{width:100%;height:100%}
   .mqr .qrlab{font-size:11px;color:var(--ink-faint);text-align:center;line-height:1.25}
   .mfull .mtransport button{width:68px;height:68px;border-radius:50%;border:0;background:rgba(255,255,255,.16);color:#fff;font-size:24px;cursor:pointer}
-  .mfull .mtransport .pp{width:84px;height:84px;background:#fff;color:#10131c;font-size:28px}
+  .mfull /* One size for every transport button (was 56/68/84). Play/pause still leads —
+     via its white fill, not by being bigger. */
+  .mtransport .pp{width:68px;height:68px;background:#fff;color:#10131c;font-size:24px}
 
   /* timer full */
   .tfull{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;padding:100px 40px 150px}
@@ -1322,7 +1324,9 @@
     else if(_cf.focus>_cf.cur)kick='Up next · #'+(_cf.focus-_cf.cur);
     else kick='Played';
     if(ki)ki.textContent=kick;
-    if(ti)ti.textContent=it.name||'';
+    // `title`/`artist` are resolved at the queue seam; `name` is MA's composite
+    // ("Livingston - Shadow") kept only as a fallback for shapes with no media_item.
+    if(ti)ti.textContent=it.title||it.name||'';
     if(ar)ar.textContent=it.artist||'';
   }
   function cfArmHome(){   // browse, then drift back to Now — like ambient return
