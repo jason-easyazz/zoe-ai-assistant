@@ -67,11 +67,18 @@ def test_every_advertised_pref_is_persisted_by_the_put():
     )
 
 
-def test_put_updates_sleep_on_conflict_not_just_insert():
-    """The INSERT is an upsert: a device that already has a row takes the
-    ON CONFLICT path. Listing a column in the INSERT but not the DO UPDATE set-list
-    means the FIRST write persists and every later change is silently ignored —
-    a nastier version of the same bug.
+def test_every_advertised_pref_is_refreshed_on_conflict():
+    """Same invariant as the INSERT test, applied to the upsert's set-list.
+
+    The INSERT is an upsert, so a device that already has a row takes the
+    ON CONFLICT path. A column listed in the INSERT but missing from the DO UPDATE
+    set-list persists the FIRST write and silently ignores every later edit — a
+    nastier variant of the bug this PR fixes, because it looks like it works once.
+
+    Asserting the invariant (everything advertised must be refreshed) rather than
+    naming sleep_enabled/sleep_seconds: hardcoding the two columns would be exactly
+    the narrowness that let the original bug through, and would pass unchanged the
+    day someone adds the next pref.
     """
     import inspect
     import re
@@ -79,10 +86,13 @@ def test_put_updates_sleep_on_conflict_not_just_insert():
 
     src = inspect.getsource(system.put_display_preferences)
     m = re.search(r"ON CONFLICT\(device_id\) DO UPDATE SET(.*?)\"\"\"", src, re.S)
-    assert m, "couldn't find the ON CONFLICT set-list"
-    updated = m.group(1)
-    for key in ("sleep_enabled", "sleep_seconds"):
-        assert f"{key}=excluded.{key}" in updated, (
-            f"{key} is inserted but not refreshed on conflict — the first write "
-            f"would stick and later edits would be dropped"
-        )
+    assert m, "couldn't find the ON CONFLICT set-list — did the writer move?"
+    refreshed = {mm.group(1) for mm in re.finditer(r"(\w+)\s*=\s*excluded\.", m.group(1))}
+
+    advertised = set(system._DEFAULT_DISPLAY_PREFS)
+    missing = advertised - refreshed
+    assert not missing, (
+        f"advertised in _DEFAULT_DISPLAY_PREFS but not refreshed on conflict: "
+        f"{sorted(missing)} — the first write would stick and every later edit "
+        f"would be silently dropped for any device that already has a row"
+    )
