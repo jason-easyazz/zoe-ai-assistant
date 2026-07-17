@@ -987,9 +987,19 @@
     if(!_ha.loaded){dbody.innerHTML='<div class="pc light">'+BULB+'<span class="nm">…</span></div>';loadHA(function(){if(dbody.querySelector('.dheard'))return;renderDock();});return;}
     var cl=_ha.climate,lights=_ha.lights.slice(0,cl?2:3),html='';
     // Dock pills carry a ONE-WORD name: the dock is a glance surface and
-    // "Living Room" crowds it. First word only ("Living"). Operator-set
-    // short names are the eventual answer — see the pinned-controls work.
-    html+=lights.map(function(e){var on=String(e.state).toLowerCase()==='on';var nm=(e.attributes&&e.attributes.friendly_name)||e.entity_id;nm=nm.replace(/\s+light$/i,'');nm=nm.split(/\s+/)[0]||nm;return '<div class="pc light'+(on?' on':'')+'" data-eid="'+esc(e.entity_id)+'">'+BULB+'<span class="nm">'+esc(nm)+'</span></div>';}).join('');
+    // "Living Room" crowds it. First word only ("Living"). Operator-set short
+    // names are the eventual answer — see the pinned-controls work.
+    //
+    // But shorten only where it stays UNAMBIGUOUS: "Kitchen Light" + "Kitchen
+    // Lamp" both collapse to "Kitchen", which renders two identical pills that
+    // toggle different lights — you'd have no way to know which one you hit.
+    // A colliding name keeps its full text (wider, but honest); everything else
+    // still gets the one-word win. Numbering them ("Kitchen", "Kitchen2") would
+    // be unambiguous to the code and meaningless to a person.
+    var _dnames=lights.map(function(e){return String((e.attributes&&e.attributes.friendly_name)||e.entity_id).replace(/\s+light$/i,'');});
+    var _dfirst=_dnames.map(function(n){return n.split(/\s+/)[0]||n;});
+    var _dcount={};_dfirst.forEach(function(f){_dcount[f]=(_dcount[f]||0)+1;});
+    html+=lights.map(function(e,i){var on=String(e.state).toLowerCase()==='on';var nm=_dcount[_dfirst[i]]>1?_dnames[i]:_dfirst[i];return '<div class="pc light'+(on?' on':'')+'" data-eid="'+esc(e.entity_id)+'">'+BULB+'<span class="nm">'+esc(nm)+'</span></div>';}).join('');
     // "No lights" only after a SUCCESSFUL fetch with zero entities; a failed
     // fetch renders no pills (quiet) and the 30s refresh keeps retrying.
     if(!lights.length&&_ha.ok)html+='<div class="pc light"><span class="nm" style="opacity:.6">No lights</span></div>';
