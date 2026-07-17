@@ -2083,6 +2083,11 @@ app.include_router(push_router)
 app.include_router(proactive_router)
 app.include_router(panel_auth_router)
 app.include_router(panel_provision_router)
+# Registered AFTER panel_provision on purpose: that router's more specific
+# /api/panels/provision/{code} must win over /api/panels/{device_id}/config
+# (FastAPI matches routes in registration order).
+from routers.panel_config import router as panel_config_router
+app.include_router(panel_config_router)
 app.include_router(capability_matrix_router)
 app.include_router(music_router)
 from routers.music_setup import router as music_setup_router
