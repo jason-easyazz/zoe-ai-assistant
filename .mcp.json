@@ -1,14 +1,8 @@
 {
   "mcpServers": {
     "serena": {
-      "command": "/home/zoe/assistant/scripts/maintenance/serena_mcp_capped.sh",
-      "args": [
-        "start-mcp-server",
-        "--context", "claude-code",
-        "--project", "/home/zoe/assistant",
-        "--transport", "stdio",
-        "--enable-web-dashboard", "false"
-      ]
+      "type": "http",
+      "url": "http://127.0.0.1:9121/mcp"
     },
     "codebase-memory": {
       "command": "/home/zoe/.local/bin/codebase-memory-mcp"
