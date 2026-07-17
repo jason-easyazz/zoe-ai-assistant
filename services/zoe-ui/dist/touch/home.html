@@ -424,10 +424,10 @@
   #dock .pc.dnp .da{width:38px;height:38px;border-radius:8px;overflow:hidden;flex:none;background:rgba(255,255,255,.1)}
   #dock .pc.dnp .da img{width:100%;height:100%;object-fit:cover}
   #dock .pc.dnp .da .ph{display:block;width:100%;height:100%}
-  #dock .pc.dnp .dnm{font-size:17px;max-width:132px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  #dock .pc.dnp .dprev,#dock .pc.dnp .dnext{width:34px;height:34px;border-radius:50%;border:0;background:transparent;color:rgba(255,255,255,.82);display:grid;place-items:center;cursor:pointer;flex:none}
+  #dock .pc.dnp .dnm{font-size:17px;width:124px;flex:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #dock .pc.dnp .dprev,#dock .pc.dnp .dnext{width:48px;height:48px;border-radius:50%;border:0;background:rgba(255,255,255,.10);color:#fff;display:grid;place-items:center;cursor:pointer;flex:none}
   #dock .pc.dnp .dprev svg,#dock .pc.dnp .dnext svg{width:20px;height:20px}
-  #dock .pc.dnp .dpp{width:38px;height:38px;border-radius:50%;border:0;background:rgba(255,255,255,.14);color:#fff;display:grid;place-items:center;cursor:pointer;flex:none}
+  #dock .pc.dnp .dpp{width:48px;height:48px;border-radius:50%;border:0;background:#fff;color:#10131c;display:grid;place-items:center;cursor:pointer;flex:none}
   #dock .pc.dnp .dpp svg{width:18px;height:18px}
   .mqr{position:absolute;right:36px;bottom:44px;display:flex;flex-direction:column;align-items:center;gap:6px;z-index:25}
   .mqr .qrbox{width:86px;height:86px;background:#fff;border-radius:10px;padding:6px;display:grid;place-items:center}
@@ -1030,7 +1030,20 @@
   function renderDock(){
     if(!_ha.loaded){dbody.innerHTML='<div class="pc light">'+BULB+'<span class="nm">…</span></div>';loadHA(function(){if(dbody.querySelector('.dheard'))return;renderDock();});return;}
     var cl=_ha.climate,lights=_ha.lights.slice(0,cl?2:3),html='';
-    html+=lights.map(function(e){var on=String(e.state).toLowerCase()==='on';var nm=(e.attributes&&e.attributes.friendly_name)||e.entity_id;nm=nm.replace(/\s+light$/i,'');return '<div class="pc light'+(on?' on':'')+'" data-eid="'+esc(e.entity_id)+'">'+BULB+'<span class="nm">'+esc(nm)+'</span></div>';}).join('');
+    // Dock pills carry a ONE-WORD name: the dock is a glance surface and
+    // "Living Room" crowds it. First word only ("Living"). Operator-set short
+    // names are the eventual answer — see the pinned-controls work.
+    //
+    // But shorten only where it stays UNAMBIGUOUS: "Kitchen Light" + "Kitchen
+    // Lamp" both collapse to "Kitchen", which renders two identical pills that
+    // toggle different lights — you'd have no way to know which one you hit.
+    // A colliding name keeps its full text (wider, but honest); everything else
+    // still gets the one-word win. Numbering them ("Kitchen", "Kitchen2") would
+    // be unambiguous to the code and meaningless to a person.
+    var _dnames=lights.map(function(e){return String((e.attributes&&e.attributes.friendly_name)||e.entity_id).replace(/\s+light$/i,'');});
+    var _dfirst=_dnames.map(function(n){return n.split(/\s+/)[0]||n;});
+    var _dcount={};_dfirst.forEach(function(f){_dcount[f]=(_dcount[f]||0)+1;});
+    html+=lights.map(function(e,i){var on=String(e.state).toLowerCase()==='on';var nm=_dcount[_dfirst[i]]>1?_dnames[i]:_dfirst[i];return '<div class="pc light'+(on?' on':'')+'" data-eid="'+esc(e.entity_id)+'">'+BULB+'<span class="nm">'+esc(nm)+'</span></div>';}).join('');
     // "No lights" only after a SUCCESSFUL fetch with zero entities; a failed
     // fetch renders no pills (quiet) and the 30s refresh keeps retrying.
     if(!lights.length&&_ha.ok)html+='<div class="pc light"><span class="nm" style="opacity:.6">No lights</span></div>';
