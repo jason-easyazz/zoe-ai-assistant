@@ -8,6 +8,7 @@ FastAPI routers for every Zoe API domain: chat, calendar, lists, memories, remin
 
 - `chat.py` — THE ONLY production chat router (intent fast path + OpenClaw/Hermes agent path via `intent_router`, `openclaw_ws`, `ag_ui_stream`). CRITICAL FILE.
 - `system.py` — system/status endpoints. CRITICAL FILE.
+- `panel_config.py` — per-panel config (`GET`/`PUT /api/panels/{device_id}/config`): the panel's room, its default speaker, and its pinned dock controls. Storage is the `panels` row (`location` + `default_player` + `pinned`), keyed by `panel_id` == the panel's `device_id`.
 - One router module per domain (`calendar.py`, `lists.py`, `memories.py`, `journal.py`, `music.py`, `push.py`, `skybridge.py`, ...).
 
 ## Local Contracts
@@ -16,6 +17,14 @@ FastAPI routers for every Zoe API domain: chat, calendar, lists, memories, remin
 - No hardcoded NLU command detection (if "add" in message and "shopping" in message...) in `chat.py` or any router; natural-language understanding goes through `intent_router.py` patterns, Zoe Agent, Hermes, or OpenClaw.
 - Validate user input at the API boundary; parameterized queries only.
 - Routers hold domain policy; reusable mechanics (provider calls, parsing, payload transforms) belong in service-layer helpers, not duplicated across routers.
+- **Panel-scoped settings live in ONE place per concern — do not add a second store.** `panels.location` is THE panel location (it predates `panel_config.py`); `display_preferences` (`system.py`) stays the *display* store (brightness/idle/off). A new panel-scoped fact goes in the `panels` row.
+- `panel_config.py` invariants (each is load-bearing and non-obvious — a "cleanup" that flattens one reintroduces a shipped bug):
+  - **A pin is a read/write PAIR.** The thermostat is two entities (`sensor.current_temperature` read + `input_number.thermostat_temperature` write); a single `entity_id` cannot express it. The `{entity_id}` input form is sugar that canonicalises to an equal pair — the response is ALWAYS the pair.
+  - **Never validate `entity_id` against a domain allow-list.** This house has zero `light.*`/`climate.*`; its controls are `input_boolean.*`/`input_number.*`/`scene.*`. Shape (`domain.object_id`) only.
+  - **`kind` and `icon` resolve server-side, never from the domain.** `input_boolean.fan`/`.tv` share the lights' domain; HA's own `attributes.icon` is the truth.
+  - **`pinned` NULL != `[]`.** NULL = never configured (dock falls back to its own default); `[]` = the operator explicitly pinned nothing. `pins_configured` carries the distinction.
+  - **An empty MA player list means "cannot validate", not "no players".** `music_service._ma` never raises — it returns None on transport failure, which `get_players()` turns into `[]`. Treating `[]` as an empty set rejects every id and locks the operator out during an MA outage.
+- Per-panel `default_player` OVERRIDES the household-global `/api/music/preferred-player`, which remains the fallback and an unchanged public contract.
 
 ## Work Guidance
 
