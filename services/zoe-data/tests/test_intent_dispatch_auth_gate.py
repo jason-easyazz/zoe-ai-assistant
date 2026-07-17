@@ -112,6 +112,45 @@ async def test_flag_on_but_token_unconfigured_denies_everything(monkeypatch):
         await require_intent_dispatch_auth(_Req(host="127.0.0.1", token="anything"))
 
 
+# ── flag PARSING: the documented enable + rollback words must actually work ──
+
+@pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes", "on", " 1 "])
+@pytest.mark.asyncio
+async def test_enable_words_engage_the_gate(monkeypatch, value):
+    """Every value .env.example tells an operator they may enable with MUST engage
+    the gate. If one silently didn't, the operator would believe the hole is closed
+    while loopback impersonation stayed wide open — a false sense of security."""
+    monkeypatch.setenv("ZOE_INTENT_DISPATCH_REQUIRE_TOKEN", value)
+    _set_token(monkeypatch, "sekrit")
+    with pytest.raises(HTTPException):
+        await require_intent_dispatch_auth(_Req(host="127.0.0.1"))
+
+
+@pytest.mark.parametrize("value", ["0", "false", "no", "off", ""])
+@pytest.mark.asyncio
+async def test_rollback_words_disengage_the_gate(monkeypatch, value):
+    """ROLLBACK path. The documented rollback is 'unset the flag', but an operator
+    under pressure may instead set =0/false. Those MUST disable the gate: if they
+    didn't, rollback would appear applied while every caller kept 403ing — i.e. the
+    outage would survive its own remedy."""
+    monkeypatch.setenv("ZOE_INTENT_DISPATCH_REQUIRE_TOKEN", value)
+    _set_token(monkeypatch, "sekrit")
+    await require_intent_dispatch_auth(_Req(host="127.0.0.1"))  # loopback trusted again
+
+
+@pytest.mark.asyncio
+async def test_flag_read_lazily_not_cached_at_import(monkeypatch):
+    """The flip is delivered by .env + restart, but the rollback story assumes no
+    import-time caching of the flag. Pin that flipping the env alone changes
+    behaviour with no re-import."""
+    _set_token(monkeypatch, "sekrit")
+    monkeypatch.setenv("ZOE_INTENT_DISPATCH_REQUIRE_TOKEN", "1")
+    with pytest.raises(HTTPException):
+        await require_intent_dispatch_auth(_Req(host="127.0.0.1"))
+    monkeypatch.delenv("ZOE_INTENT_DISPATCH_REQUIRE_TOKEN")
+    await require_intent_dispatch_auth(_Req(host="127.0.0.1"))  # same process, now open
+
+
 # ── the same gate covers BOTH actor-asserting endpoints ──────────────────────
 
 def test_delegate_sync_uses_the_same_gate():
