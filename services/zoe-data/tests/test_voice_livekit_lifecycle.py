@@ -25,6 +25,8 @@ import pytest
 
 import routers.voice_livekit as v
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _run(coro):
     """Drive a coroutine on a fresh loop — keeps each case isolated and avoids

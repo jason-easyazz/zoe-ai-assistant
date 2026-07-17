@@ -10,6 +10,8 @@ from research_evidence import (
     package_needs_web_fallback,
 )
 
+pytestmark = pytest.mark.ci_safe
+
 
 @pytest.mark.parametrize(
     ("message", "expected"),

@@ -6,6 +6,8 @@ import pytest
 import intent_router
 from intent_router import Intent
 
+pytestmark = pytest.mark.ci_safe
+
 
 _REAL_MUSIC_DB_HELPERS = (
     intent_router._music_top_recent_genre,

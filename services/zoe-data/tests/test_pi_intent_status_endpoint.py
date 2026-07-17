@@ -1,9 +1,12 @@
+import pytest
 import json
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from auth import require_admin
 from routers.system import _pi_hybrid_production_public_status, router as system_router
+
+pytestmark = pytest.mark.ci_safe
 
 
 def _write_exe(path, body):

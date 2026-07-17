@@ -1,6 +1,9 @@
+import pytest
 import json
 
 from pi_readiness_report import pi_readiness_report
+
+pytestmark = pytest.mark.ci_safe
 
 
 def _env(tmp_path, shadow_path):

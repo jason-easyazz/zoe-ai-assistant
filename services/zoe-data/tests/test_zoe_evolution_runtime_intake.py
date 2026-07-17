@@ -15,6 +15,8 @@ from zoe_evolution_runtime_intake import (
 from zoe_observation_trace import ObservationTraceType
 from zoe_observation_trace_collector import ObservationTraceCollectorPolicy
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _signal(**overrides):
     defaults = {

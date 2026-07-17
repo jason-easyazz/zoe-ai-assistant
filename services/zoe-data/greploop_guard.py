@@ -11,6 +11,7 @@ import asyncio
 import fcntl
 import hashlib
 import json
+import logging
 import os
 import re
 import shlex
@@ -576,7 +577,10 @@ async def _record_cost_event(task_id: str | None, estimated_cost_usd: float) -> 
                 estimated_cost_usd,
                 time.time(),
             )
-    except Exception:
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "greploop_guard: failed to record cost event for task=%s ($%.4f) — "
+            "spend under-reported: %s", task_id, estimated_cost_usd, exc)
         return
 
 

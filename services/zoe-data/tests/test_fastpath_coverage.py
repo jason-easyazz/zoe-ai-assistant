@@ -9,6 +9,8 @@ import pytest
 
 from intent_router import Intent, detect_intent, execute_intent
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _name(text: str) -> str | None:
     i = detect_intent(text, log_miss=False)

@@ -14,6 +14,8 @@ import memory_service
 import proactive.triggers.emotional_followup as efu
 from proactive.triggers.emotional_followup import EmotionalFollowUpTrigger
 
+pytestmark = pytest.mark.ci_safe
+
 # A fixed "now" in a waking hour (14:00 local).
 _NOW = datetime(2026, 7, 5, 14, 0, tzinfo=efu._ZOE_TZ)
 

@@ -1,5 +1,6 @@
 """Tests for the autoresearch -> governed-pipeline promotion bridge."""
 
+import pytest
 from autoresearch_bridge import (
     _to_float,
     build_audit_ticket,
@@ -12,6 +13,8 @@ from autoresearch_bridge import (
 )
 from multica_admission import ticket_is_dispatch_approved
 from multica_ticket_contract import parse_ticket_block
+
+pytestmark = pytest.mark.ci_safe
 
 
 PROGRAM = """# Auto Research Run: demo

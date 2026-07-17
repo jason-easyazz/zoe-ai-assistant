@@ -239,6 +239,23 @@ async def require_admin(user: dict = Depends(get_current_user)) -> dict:
     return user
 
 
+async def require_signed_in(user: dict = Depends(get_current_user)) -> dict:
+    """A real, signed-in user — not a guest.
+
+    ``get_current_user`` RESOLVES an identity but never enforces one: an
+    unauthenticated caller comes back as GUEST (least privilege) rather than a
+    401/403. So `Depends(get_current_user)` alone lets any LAN client through —
+    fine for reads, wrong for household-wide writes (e.g. changing the voice Zoe
+    speaks with for everyone). Depend on THIS instead for those.
+
+    Not the same as require_admin: any signed-in household member qualifies —
+    this only excludes guest/unauthenticated.
+    """
+    if user.get("role") in (None, "guest") or user.get("user_id") in (None, GUEST_USER_ID):
+        raise HTTPException(status_code=403, detail="Sign in to change this setting")
+    return user
+
+
 _ZOE_A2A_TOKEN = os.environ.get("ZOE_A2A_TOKEN", "")
 
 

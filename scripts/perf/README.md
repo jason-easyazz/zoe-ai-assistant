@@ -38,14 +38,18 @@ ZOE_PERF=1 python3 scripts/perf/measure_voice.py --last 10 --json /tmp/voice.jso
 # lock so it can't OOM against a sibling replay loading a second Kokoro model:
 flock /tmp/zoe-voice-harness.lock -c \
   'ZOE_PERF=1 python3 scripts/perf/measure_tts.py --replies-file replies.txt --cold \
-     --service-dir services/zoe-data --json /tmp/tts.json'
+     --json /tmp/tts.json'
 # or source replies live from the corpus (needs a reachable brain):
 #   ... measure_tts.py --run-replay --last 10 ...
 ```
 
-`measure_voice.py` defaults to `services/zoe-data` under the repo root. From a
-git **worktree** (where `.env` is gitignored and absent) point it at the live
-checkout: `--service-dir /home/zoe/assistant/services/zoe-data`.
+`measure_voice.py` and `measure_tts.py` need the live `services/zoe-data/.env`,
+which is gitignored and therefore absent in a git **worktree**. `--service-dir`
+auto-resolves, so a worktree run needs no flag: explicit flag (always wins) →
+this repo's `services/zoe-data` if it has a `.env` → the **main worktree's**
+(via git's `--git-common-dir`). One shared ladder in `scripts/lib/service_dir.py`
+backs this and `voice_regression_probe.py` alike. With no `.env` anywhere they
+still skip **loudly** — the ladder fixes the default, not the failure mode.
 
 ## Before/after workflow (how to prove a speed change)
 
