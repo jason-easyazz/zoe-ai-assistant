@@ -18,6 +18,7 @@ def issue_id_token(
 ) -> str:
     key = ensure_signing_key()
     now = int(time.time())
+    role = user_info.get("role", "user")
     claims = {
         "iss": issuer,
         "sub": subject,
@@ -29,7 +30,11 @@ def issue_id_token(
         "email": user_info.get("email", ""),
         "email_verified": bool(user_info.get("email_verified", False)),
         "preferred_username": user_info.get("username", ""),
-        "role": user_info.get("role", "user"),
+        "role": role,
+        # Array form of `role`. Relying parties map roles from a list claim and
+        # discard a bare string (Home Assistant's auth_oidc does so silently),
+        # so `role` alone cannot drive an RP's admin mapping.
+        "groups": [role],
         "zoe_user_id": subject,
     }
     if nonce:
