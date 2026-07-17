@@ -14,8 +14,12 @@ Two halves, and the second is the load-bearing one:
   what ``localhost:8000`` actually returns.
 
 NOT marked ``ci_safe``: needs node, a real Chromium, and (for the contract half)
-the live music stack — none of which exist on a slim GitHub runner. Both run
+the live music stack — none of which exist on a slim GitHub runner. It runs
 unmarked in the Jetson's full-directory catch-all lane.
+
+The contract half is additionally opt-in behind ``ZOE_LIVE_MUSIC_CONTRACT=1``
+(see ``requires_live_music`` below for why, and for what that gate deliberately
+does NOT do).
 """
 
 import json
@@ -37,6 +41,31 @@ FIXTURE = json.loads((HERE / "fixtures" / "music_api.json").read_text())
 CHROME = Path("/home/zoe/.cache/ms-playwright/chromium-1148/chrome-linux/chrome")
 PW = Path("/home/zoe/.openclaw/npm/node_modules/playwright-core")
 API = os.environ.get("ZOE_API", "http://localhost:8000")
+
+# The live-contract probe is OPT-IN, following the repo's `requires_env` shape
+# (services/zoe-data/tests/test_zoe_core_client.py) — but with the probe itself
+# deferred into the tests, because tests/AGENTS.md forbids live I/O at import.
+#
+# Why gated rather than always-on: these assert the REAL endpoint's shape, and
+# that shape only exists once PR #1393 is merged AND zoe-data has been restarted
+# from the live checkout (a merge to main is not a deploy). GitHub runners can't
+# reach localhost:8000 so they would skip regardless — but the self-hosted Jetson
+# CAN, and this suite would sit red there for a reason that has nothing to do
+# with the carousel.
+#
+# What this is NOT: weakened. The assertions below are unchanged and still fail
+# loudly when run. The one thing that must never happen is making them pass by
+# teaching the mock to agree with itself — that is exactly how a carousel shipped
+# green and dead on the panel. Run them against a live box with:
+#     ZOE_LIVE_MUSIC_CONTRACT=1 pytest tests/e2e/music/test_coverflow_motion.py
+_LIVE_FLAG = "ZOE_LIVE_MUSIC_CONTRACT"
+requires_live_music = pytest.mark.skipif(
+    not os.environ.get(_LIVE_FLAG),
+    reason=(
+        f"live music-API contract probe — opt in with {_LIVE_FLAG}=1 against a box "
+        "whose zoe-data includes PR #1393 (merge != deploy; restart it first)"
+    ),
+)
 
 
 def _live(path, timeout=8):
@@ -65,6 +94,7 @@ def test_coverflow_motion():
     assert p.returncode == 0, f"cover flow motion harness failed:\n{p.stdout}\n{p.stderr}"
 
 
+@requires_live_music
 def test_fixture_matches_the_live_contract():
     """The mock's shape must be the REAL endpoint's shape.
 
@@ -94,6 +124,7 @@ def test_fixture_matches_the_live_contract():
         )
 
 
+@requires_live_music
 def test_queue_fixture_matches_the_live_contract():
     """Queue items: same rule, plus `image` must already be a flat url."""
     np = _live("/api/music/now-playing")
