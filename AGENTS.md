@@ -30,6 +30,31 @@ graphify is **retired**: there is no committed `graphify-out/` graph and no `gra
 
 Reach for raw `grep`/`Read` only when the MCP bus genuinely can't answer.
 
+### Serena is ONE shared server — read via Serena, EDIT in your own worktree
+
+`.mcp.json` points every agent at a **single long-lived** Serena server
+(`http://127.0.0.1:9121/mcp`, unit `scripts/setup/systemd/serena-mcp.service`).
+It is not spawned per agent. Two consequences are load-bearing:
+
+- **It is pinned to `--project /home/zoe/assistant` — the LIVE checkout.** So
+  **navigation/read is correct** (agents branch off fresh `origin/main`, so the
+  live checkout on `main` *is* their baseline), but **symbolic EDITS would
+  target the live checkout, not your worktree.** Do your Read/Edit **in your own
+  worktree** with the normal file tools. Two agents hit this on 2026-07-16 via
+  absolute paths. This pinning is not new — the old stdio config had the same
+  `--project` — but one shared server makes it fleet-wide instead of incidental.
+- **Serena serialises the fleet.** All tool calls run through one
+  `SerenaAgent` TaskExecutor queue (one worker, strict FIFO), so concurrent
+  calls queue rather than interleave, and every agent waits for the whole queue
+  to drain. Measured: 6 concurrent cold calls = 6.15s wall for 4.53s of work.
+  That tax is deliberate — 6 separate servers (up to 2G each) do not fit in
+  15.6G and OOMed the live voice brain on 2026-07-16. Keep Serena calls
+  purposeful; it is a shared single-lane resource, not free parallelism.
+
+If code-intel tools vanish, the server is down — Claude Code does **not**
+auto-start a URL-based MCP server. Check
+`scripts/maintenance/serena_mcp_health.sh`.
+
 ## opensrc
 
 Use `opensrc` for third-party library source before guessing API behavior.

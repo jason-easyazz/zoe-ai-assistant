@@ -5,6 +5,7 @@ swap-exhaustion outage; a wrong REAP degrades a live dev session. scan()/reap()
 are thin /proc + signal wrappers exercised by the script's dry-run mode.
 """
 import importlib.util
+import os
 import pathlib
 import sys
 
@@ -29,9 +30,14 @@ DEFAULTS = dict(swap_mb=1500, grace_min=30)
 
 def proc(**kw):
     base = dict(pid=4242, ppid=1000, uid=1000, age_s=3 * 3600,
-                swap_kb=0, rss_kb=500_000, cmdline="serena start-mcp-server")
+                swap_kb=0, rss_kb=500_000, cmdline="serena start-mcp-server",
+                cgroup="0::/user.slice/user-1000.slice/session-1.scope")
     base.update(kw)
     return reaper.SerenaProc(**base)
+
+
+SHARED_CGROUP = ("0::/user.slice/user-1000.slice/user@1000.service"
+                 "/app.slice/serena-mcp.service")
 
 
 def test_fresh_process_is_never_touched_even_if_orphaned_and_swapped():
@@ -63,10 +69,81 @@ def test_swap_threshold_boundary_is_exclusive():
     assert reaper.classify(p, **DEFAULTS) is not None
 
 
-def test_scan_finds_only_serena_processes():
-    # Live smoke: scan() must not crash and must only match the marker.
-    for p in reaper.scan():
-        assert reaper.SERENA_MARKER in p.cmdline
+def test_shared_service_is_never_reaped_when_cold():
+    # The shared server (serena-mcp.service) is long-lived and systemd-managed.
+    # An idle one on this swap-heavy box WILL drift past the swap threshold;
+    # reaping it would kill code-intel for the whole fleet and discard the warm
+    # index the shared server exists to provide.
+    p = proc(cgroup=SHARED_CGROUP, swap_kb=4_500_000)
+    assert reaper.classify(p, **DEFAULTS) is None
+
+
+def test_shared_service_is_never_reaped_even_if_reparented():
+    # Belt-and-braces: the ORPHAN rule must not fire on the shared server even
+    # if it somehow shows ppid=1 (e.g. relaunched through the scope wrapper).
+    p = proc(cgroup=SHARED_CGROUP, ppid=1, swap_kb=4_500_000)
+    assert reaper.classify(p, **DEFAULTS) is None
+
+
+def test_per_session_server_still_reaped_despite_similar_cgroup_text():
+    # The exemption must key on the real unit cgroup, not any stray path that
+    # merely mentions serena — a per-session leftover stays reapable.
+    p = proc(cgroup="0::/user.slice/user-1000.slice/app.slice/run-serena-xyz.scope",
+             ppid=1)
+    assert "orphan" in reaper.classify(p, **DEFAULTS)
+
+
+def test_unreadable_cgroup_defaults_to_reapable():
+    # scan() records "" when /proc/<pid>/cgroup cannot be read. Fail-safe here
+    # means staying reapable: a missed reap can take down the live brain.
+    p = proc(cgroup="", swap_kb=4_500_000)
+    assert reaper.classify(p, **DEFAULTS) is not None
+
+
+def _own_cmdline() -> str:
+    """This process's cmdline, normalised exactly the way scan() reads /proc."""
+    with open("/proc/self/cmdline", "rb") as fh:
+        return fh.read().replace(b"\0", b" ").decode(errors="replace").strip()
+
+
+def test_scan_populates_cgroup_field(monkeypatch):
+    # The exemption is worthless if scan() silently omits the field classify()
+    # reads. Iterating scan() as-is would be VACUOUS: CI runs no Serena server,
+    # so the loop body would never execute and the test would go green having
+    # proven nothing. Instead point the marker at THIS process — using the full
+    # cmdline, which nothing else can contain — so scan() is guaranteed exactly
+    # one hit, then assert the cgroup it recorded matches the kernel's view.
+    monkeypatch.setattr(reaper, "SERENA_MARKER", _own_cmdline())
+    with open("/proc/self/cgroup") as fh:
+        own_cgroup = fh.read().strip()
+
+    hits = [p for p in reaper.scan() if p.pid == os.getpid()]
+    assert hits, "scan() failed to find this process despite a matching marker"
+    assert hits[0].cgroup == own_cgroup
+    assert hits[0].cgroup != ""
+
+
+def test_scan_excludes_processes_not_matching_the_marker(monkeypatch):
+    # The other half of the filter: scan() must not return processes that do
+    # NOT carry the marker. Without this, a scan() that returned every process
+    # on the box would still satisfy the test above.
+    monkeypatch.setattr(reaper, "SERENA_MARKER", "zzz-no-process-can-contain-this-marker-zzz")
+    assert reaper.scan() == []
+
+
+def test_scan_finds_only_serena_processes(monkeypatch):
+    # Was the same vacuous shape as the cgroup test: on a box with no Serena
+    # running, scan() returns [] and the loop asserts nothing. Pin the marker to
+    # this process so there is guaranteed to be exactly one hit to assert on.
+    own = _own_cmdline()
+    monkeypatch.setattr(reaper, "SERENA_MARKER", own)
+    procs = reaper.scan()
+
+    assert procs, "scan() found nothing despite a marker matching this process"
+    assert any(p.pid == os.getpid() for p in procs)
+    for p in procs:
+        assert own in p.cmdline  # the marker is what selects them — nothing else
+        assert p.rss_kb > 0      # /proc/<pid>/status was really parsed
 
 
 def test_reap_bails_on_pid_reuse(monkeypatch):

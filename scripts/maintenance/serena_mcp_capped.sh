@@ -5,8 +5,19 @@
 # language-server children it spawns. Falls back to an uncapped launch if the
 # systemd user manager is unreachable (e.g. no session bus in the spawn env).
 #
+# NOTE: the scope wrapper exists because a stdio-spawned Serena has no unit of
+# its own to carry limits. When Serena runs AS a systemd unit
+# (scripts/setup/systemd/serena-mcp.service, the shared server), the unit
+# carries MemoryHigh/MemoryMax natively and the scope must be skipped — set
+# SERENA_NO_SCOPE=1. Nesting a scope inside a service reparents Serena to PID 1
+# and moves it into app.slice, escaping the service cgroup: Restart= tracking
+# breaks and reap_stale_serena.py sees a PID-1 "orphan". This script's other
+# jobs (resolving the serena binary, self-provisioning jedi-language-server)
+# still apply in both modes.
+#
 # Tunables (env): SERENA_MEM_HIGH (default 1G, throttle/reclaim threshold),
-# SERENA_MEM_MAX (default 2G, hard OOM-kill limit), SERENA_BIN.
+# SERENA_MEM_MAX (default 2G, hard OOM-kill limit), SERENA_BIN,
+# SERENA_NO_SCOPE (1 = launch directly, for use under a systemd unit).
 set -euo pipefail
 
 # Resolve the serena binary: explicit SERENA_BIN, then the canonical Zoe
@@ -47,6 +58,12 @@ fi
 if ! command -v jedi-language-server >/dev/null 2>&1; then
     echo "serena_mcp_capped: jedi-language-server not found and auto-install failed; refusing to start Serena without a Python LS (install with: uv tool install jedi-language-server)" >&2
     exit 1
+fi
+
+# Running under a systemd unit that already carries the caps: launch directly.
+# Wrapping in a scope here would escape that unit's cgroup (see header).
+if [ "${SERENA_NO_SCOPE:-0}" = "1" ]; then
+    exec "$SERENA_BIN" "$@"
 fi
 
 if systemd-run --user --scope --quiet --collect true 2>/dev/null; then
