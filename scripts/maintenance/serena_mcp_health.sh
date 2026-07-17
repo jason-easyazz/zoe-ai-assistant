@@ -22,10 +22,19 @@ if ! ss -lnt "sport = :${PORT}" 2>/dev/null | grep -q LISTEN; then
 fi
 
 # 2. Refuse to pass if it is exposed beyond loopback. A code-intel server can
-#    read the whole repo; a 0.0.0.0 bind is a real exposure, not a nitpick.
-if ss -lnt "sport = :${PORT}" 2>/dev/null | grep -qE '0\.0\.0\.0:'"${PORT}"'|\[::\]:'"${PORT}"; then
-    fail "port ${PORT} is bound beyond loopback (must be 127.0.0.1 only)"
-fi
+#    read the whole repo; a non-loopback bind is a real exposure, not a nitpick.
+#    ALLOW-LIST, not a deny-list: matching known-bad wildcards (0.0.0.0, [::])
+#    would silently pass a specific non-loopback bind such as
+#    `--host 192.168.1.218`. Anything that is not loopback fails.
+while read -r local_addr; do
+    [ -n "$local_addr" ] || continue
+    case "${local_addr%:*}" in           # strip the :port -> 127.0.0.1 | [::1] | 0.0.0.0 | *
+        127.*|"[::1]"|"::1") ;;          # loopback: fine
+        *) fail "port ${PORT} is bound to '${local_addr%:*}', beyond loopback (must be 127.0.0.1 only)" ;;
+    esac
+done <<EOF
+$(ss -lnt "sport = :${PORT}" 2>/dev/null | awk 'NR > 1 {print $4}')
+EOF
 
 # 3. Real MCP initialize handshake. Streamable HTTP requires BOTH content types
 #    in Accept; omitting text/event-stream gets a 406 from the MCP SDK.

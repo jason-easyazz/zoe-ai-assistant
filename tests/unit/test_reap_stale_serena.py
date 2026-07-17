@@ -5,6 +5,7 @@ swap-exhaustion outage; a wrong REAP degrades a live dev session. scan()/reap()
 are thin /proc + signal wrappers exercised by the script's dry-run mode.
 """
 import importlib.util
+import os
 import pathlib
 import sys
 
@@ -99,16 +100,50 @@ def test_unreadable_cgroup_defaults_to_reapable():
     assert reaper.classify(p, **DEFAULTS) is not None
 
 
-def test_scan_populates_cgroup_field():
-    # The exemption is worthless if scan() never fills the field it reads.
-    for p in reaper.scan():
-        assert isinstance(p.cgroup, str)
+def _own_cmdline() -> str:
+    """This process's cmdline, normalised exactly the way scan() reads /proc."""
+    with open("/proc/self/cmdline", "rb") as fh:
+        return fh.read().replace(b"\0", b" ").decode(errors="replace").strip()
 
 
-def test_scan_finds_only_serena_processes():
-    # Live smoke: scan() must not crash and must only match the marker.
-    for p in reaper.scan():
-        assert reaper.SERENA_MARKER in p.cmdline
+def test_scan_populates_cgroup_field(monkeypatch):
+    # The exemption is worthless if scan() silently omits the field classify()
+    # reads. Iterating scan() as-is would be VACUOUS: CI runs no Serena server,
+    # so the loop body would never execute and the test would go green having
+    # proven nothing. Instead point the marker at THIS process — using the full
+    # cmdline, which nothing else can contain — so scan() is guaranteed exactly
+    # one hit, then assert the cgroup it recorded matches the kernel's view.
+    monkeypatch.setattr(reaper, "SERENA_MARKER", _own_cmdline())
+    with open("/proc/self/cgroup") as fh:
+        own_cgroup = fh.read().strip()
+
+    hits = [p for p in reaper.scan() if p.pid == os.getpid()]
+    assert hits, "scan() failed to find this process despite a matching marker"
+    assert hits[0].cgroup == own_cgroup
+    assert hits[0].cgroup != ""
+
+
+def test_scan_excludes_processes_not_matching_the_marker(monkeypatch):
+    # The other half of the filter: scan() must not return processes that do
+    # NOT carry the marker. Without this, a scan() that returned every process
+    # on the box would still satisfy the test above.
+    monkeypatch.setattr(reaper, "SERENA_MARKER", "zzz-no-process-can-contain-this-marker-zzz")
+    assert reaper.scan() == []
+
+
+def test_scan_finds_only_serena_processes(monkeypatch):
+    # Was the same vacuous shape as the cgroup test: on a box with no Serena
+    # running, scan() returns [] and the loop asserts nothing. Pin the marker to
+    # this process so there is guaranteed to be exactly one hit to assert on.
+    own = _own_cmdline()
+    monkeypatch.setattr(reaper, "SERENA_MARKER", own)
+    procs = reaper.scan()
+
+    assert procs, "scan() found nothing despite a marker matching this process"
+    assert any(p.pid == os.getpid() for p in procs)
+    for p in procs:
+        assert own in p.cmdline  # the marker is what selects them — nothing else
+        assert p.rss_kb > 0      # /proc/<pid>/status was really parsed
 
 
 def test_reap_bails_on_pid_reuse(monkeypatch):
