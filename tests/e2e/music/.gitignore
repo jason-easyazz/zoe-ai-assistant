@@ -1,0 +1,7 @@
+# Harness screenshots — look at them, don't commit them.
+coverflow-*.png
+
+# The repo-root .gitignore blanket-ignores *.json. These fixtures are captured
+# from the live music API and are asserted against it by test_coverflow_motion.py;
+# without them the harness has no contract to test and cannot boot the page.
+!fixtures/*.json
