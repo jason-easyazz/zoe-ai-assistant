@@ -226,6 +226,7 @@
   .estmc .spkopt{display:block;width:100%;text-align:left;padding:15px 18px;border-radius:14px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:#fff;font:inherit;font-size:20px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .estmc .btns button{flex:1;height:54px;border-radius:14px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:var(--ink);font:inherit;font-size:19px;cursor:pointer}
   .estmc .btns .save{background:var(--accent);border-color:transparent;color:#fff;font-weight:600}
+  .estmc .btns button:disabled{opacity:.4;cursor:default}
   .estmc .btns .del{background:rgba(255,122,144,.16);border-color:rgba(255,122,144,.4);color:#ff9db0}
   /* touch date+time stepper (replaces native <input type=date> on the kiosk) */
   .estmc .dtp{display:flex;gap:12px;align-items:flex-start;margin-top:4px;flex-wrap:wrap}
@@ -1102,8 +1103,17 @@
   var _pcfg=null,_pcfgLoaded=false;
   function loadPanelCfg(cb){
     apiGet('/api/panels/'+encodeURIComponent(_panelDevId())+'/config').then(function(d){
-      _pcfg=(d&&Array.isArray(d.pinned))?d:null;_pcfgLoaded=true;cb&&cb();
-    }).catch(function(){_pcfg=null;_pcfgLoaded=true;cb&&cb();});
+      // Keep the last known-good config on a malformed response.
+      if(d&&Array.isArray(d.pinned))_pcfg=d;
+      _pcfgLoaded=true;cb&&cb();
+    }).catch(function(){
+      // A failed REFRESH must not revert a pinned dock to the fallback: that
+      // would swap the operator's chosen controls for unrelated lights — still
+      // tappable — over a momentary network/auth blip. Keep the last known-good
+      // config and let the next poll recover. Only a panel that has NEVER
+      // loaded one stays null, which is the honest "we know nothing" state.
+      _pcfgLoaded=true;cb&&cb();
+    });
   }
   var _ha={loaded:false,ok:false,lights:[],climate:null,scenes:[]};
   function haControl(body){return fetch('/api/ha/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify(body)});}
@@ -2329,9 +2339,13 @@
   }
 
   function _pcPins(){
-    // Edit a working copy of the RESOLVED pins. The server drops pins whose
-    // entity has vanished, so a stale pin quietly disappears here — which is
-    // the self-healing behaviour we want, but say so when it happens.
+    // Edit a working copy of the RESOLVED pins. Pins whose entity HA did not
+    // return are absent from this list (they come back in `unresolved`), so
+    // saving while any are missing would silently delete controls the operator
+    // cannot even see — over what may be a temporary HA hiccup. `unresolved`
+    // carries only entity ids, not the stored names, so we cannot faithfully
+    // round-trip them either: the editor therefore refuses to SAVE while any
+    // pin is unresolved, rather than writing a truncated list.
     _pcWork=(_pcfg&&_pcfg.pinned||[]).map(function(p){
       return {read_eid:p.read_eid,write_eid:p.write_eid,name:p.name};});
     _pcPinsPaint();
@@ -2348,10 +2362,11 @@
     estOpen('<h3>Dock controls</h3>'
       +rows
       +'<button class="padd"'+(_pcWork.length>=max?' disabled':'')+' data-x="add">+ Pin a control'+(_pcWork.length>=max?' (max '+max+')':'')+'</button>'
-      +'<div class="phint">These are the controls on the dock, in this order. One-word names keep them readable at a glance.'
-      +(stale?' '+stale+' pinned control'+(stale>1?'s are':' is')+' no longer in Home Assistant and will be dropped.':'')+'</div>'
-      +'<div class="perr"></div>'
-      +'<div class="btns"><button data-x="cancel">Cancel</button><button class="save" data-x="save">Save</button></div>');
+      +'<div class="phint">These are the controls on the dock, in this order. One-word names keep them readable at a glance.</div>'
+      +'<div class="perr">'+(stale?(stale>1
+          ?stale+' pinned controls aren’t readable from Home Assistant right now, so they aren’t shown here. Saving would delete them — try again once Home Assistant is back.'
+          :'1 pinned control isn’t readable from Home Assistant right now, so it isn’t shown here. Saving would delete it — try again once Home Assistant is back.'):'')+'</div>'
+      +'<div class="btns"><button data-x="cancel">Cancel</button><button class="save" data-x="save"'+(stale?' disabled':'')+'>Save</button></div>');
     var m=document.getElementById('estModal');
     m.querySelectorAll('[data-mv]').forEach(function(b){b.onclick=function(){
       var a=b.getAttribute('data-mv').split(','),i=+a[0],j=i+(+a[1]);
@@ -2362,6 +2377,7 @@
     m.querySelector('[data-x="add"]').onclick=function(){if(_pcWork.length<max)_pcPickEntity();};
     m.querySelector('[data-x="cancel"]').onclick=estClose;
     m.querySelector('[data-x="save"]').onclick=function(){
+      if(stale)return;   // never write a list that is missing unresolved pins
       // pinned:[] is a real choice ("show nothing"), distinct from never having
       // configured pins — so an empty list is saved as [], not null.
       _pcSave({pinned:_pcWork},estClose).catch(function(){});};

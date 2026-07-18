@@ -35,15 +35,56 @@
  * shipped dead UI before, so the fixtures are checked, not trusted.
  *
  * Run:  node services/zoe-ui/dist/test_touch_dock_pins.js
+ * Overrides: PLAYWRIGHT_CORE=<dir>  CHROME_PATH=<binary>  DOCK_PIN_SHOTS=<dir>
  * (Not in CI — the repo has no JS lane. This is a local verification gate.)
  */
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
-const { chromium } = require('/home/zoe/.openclaw/npm/node_modules/playwright-core');
+// Resolve Playwright and Chromium without hardcoding one machine's cache.
+// Order: env override -> normal node resolution (node_modules) -> the Zoe
+// box's known-good paths. A missing browser exits with an actionable message
+// rather than a stack trace, so this stays runnable on a fresh clone.
+const PW_CANDIDATES = [
+  process.env.PLAYWRIGHT_CORE,
+  'playwright-core',
+  'playwright',
+  '/home/zoe/.openclaw/npm/node_modules/playwright-core',
+].filter(Boolean);
 
-const CHROME = '/home/zoe/.cache/ms-playwright/chromium-1148/chrome-linux/chrome';
+function loadChromium() {
+  for (const c of PW_CANDIDATES) {
+    try { return require(c).chromium; } catch (_) { /* try the next one */ }
+  }
+  return null;
+}
+
+function findChrome(chromium) {
+  const explicit = process.env.CHROME_PATH || process.env.PLAYWRIGHT_CHROMIUM;
+  if (explicit && fs.existsSync(explicit)) return explicit;
+  // Playwright knows where it installed its own browser.
+  try { const p = chromium.executablePath(); if (p && fs.existsSync(p)) return p; } catch (_) {}
+  const known = [
+    '/home/zoe/.cache/ms-playwright/chromium-1148/chrome-linux/chrome',
+    '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome',
+  ];
+  return known.find((p) => fs.existsSync(p)) || null;
+}
+
+const chromium = loadChromium();
+if (!chromium) {
+  console.error('playwright-core not found. Install it (npm i -D playwright-core) or set\n'
+    + 'PLAYWRIGHT_CORE=/path/to/playwright-core. On the Zoe box it lives at\n'
+    + '/home/zoe/.openclaw/npm/node_modules/playwright-core.');
+  process.exit(2);
+}
+const CHROME = findChrome(chromium);
+if (!CHROME) {
+  console.error('No Chromium binary found. Run `npx playwright install chromium`,\n'
+    + 'or set CHROME_PATH=/path/to/chrome.');
+  process.exit(2);
+}
 const DIST = __dirname;
 const SHOTS = process.env.DOCK_PIN_SHOTS || '/tmp/dock-pins-shots';
 
@@ -158,6 +199,11 @@ async function stub(page, ctx, opts) {
 async function open(browser, ctx, opts) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   page.on('pageerror', (e) => { throw new Error('page error: ' + e.message); });
+  // The dock refreshes on a 30s setInterval and NOTHING else triggers it —
+  // there is no focus/visibilitychange listener. Any test claiming to exercise
+  // a refresh must drive that timer, or it asserts against a page that never
+  // re-rendered and passes for the wrong reason.
+  if (opts && opts.clock) await page.clock.install();
   await stub(page, ctx, opts);
   await page.goto((opts && opts.base) + '/touch/home.html', { waitUntil: 'domcontentloaded' });
   // #authov ("Who's here?") covers the screen and swallows clicks in a harness.
@@ -368,19 +414,20 @@ async function t(name, fn) {
     await page.close();
   });
 
-  // 6. a poll must not destroy the popover mid-drag
-  await t('refreshHA does not re-render while the temp popover is open', async () => {
+  // 6. a REAL 30s poll must not destroy the popover mid-drag
+  await t('a 30s refresh does not re-render while the temp popover is open', async () => {
     const ctx = newCtx();
-    const page = await open(browser, ctx, { base, cfg: cfg({ pinned: [PIN_TEMP] }) });
+    const page = await open(browser, ctx, { base, clock: true, cfg: cfg({ pinned: [PIN_TEMP] }) });
     await page.click('#dbody .pc.temp');
     await page.waitForTimeout(300);
-    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-    const survived = await page.evaluate(async () => {
-      const before = document.querySelector('#dbody .pc.temp');
-      await new Promise((r) => setTimeout(r, 400));
-      return document.querySelector('#dbody .pc.temp') === before;
-    });
-    assert.ok(survived, 'the open popover element was replaced');
+    await page.evaluate(() => { window.__tile = document.querySelector('#dbody .pc.temp'); });
+    // Drive the real interval, twice over, and let its fetches settle.
+    await page.clock.runFor(31000);
+    await page.waitForTimeout(600);
+    await page.clock.runFor(31000);
+    await page.waitForTimeout(600);
+    assert.ok(await page.evaluate(() => window.__tile === document.querySelector('#dbody .pc.temp')),
+      'the open popover element was replaced by a poll');
     assert.ok(await page.$eval('#dbody .pc.temp', (e) => e.classList.contains('open')), 'still open');
     await page.close();
   });
@@ -562,6 +609,44 @@ async function t(name, fn) {
     await page.waitForTimeout(400);
     const names = ctx.puts[0].pinned.map((p) => p.name);
     assert.deepStrictEqual(names, ['Fan', 'Bed'], 'reorder+remove should yield Fan,Bed; got ' + names);
+    await page.close();
+  });
+
+  // 16. an unresolved pin must not be silently deleted by pressing Save
+  await t('Save is blocked while a pin is unresolved (no silent deletion)', async () => {
+    const ctx = newCtx();
+    // The operator has 2 pins stored; HA is only returning one of them.
+    const page = await open(browser, ctx, {
+      base, cfg: cfg({ pinned: [PIN_BED], unresolved: ['input_boolean.kitchen_light'] }),
+    });
+    await openPanelSettings(page);
+    await page.click('#setPanel .srow2[data-p="pins"]');
+    await page.waitForTimeout(300);
+    const disabled = await page.$eval('#estModal [data-x="save"]', (e) => e.disabled);
+    assert.ok(disabled, 'Save must be disabled while a pin is unresolved');
+    const msg = await page.$eval('#estModal .perr', (e) => e.textContent);
+    assert.ok(/Saving would delete (it|them)/.test(msg), 'must explain why: ' + msg);
+    assert.ok(/1 pinned control isn’t/.test(msg), 'singular copy for one stale pin: ' + msg);
+    await page.click('#estModal [data-x="save"]', { force: true }).catch(() => {});
+    await page.waitForTimeout(300);
+    assert.strictEqual(ctx.puts.length, 0, 'a truncated pin list must never be PUT');
+    await shoot(page, '16_unresolved_guard');
+    await page.close();
+  });
+
+  // 17. a failed config REFRESH must not revert a pinned dock to the fallback
+  await t('a failed config refresh keeps the pinned dock (no fallback flip)', async () => {
+    const ctx = newCtx();
+    const page = await open(browser, ctx, { base, clock: true, cfg: cfg({ pinned: [PIN_BED, PIN_NIGHT] }) });
+    assert.strictEqual((await tiles(page)).length, 2, 'starts pinned');
+    // Break the panel-config endpoint, then drive the REAL 30s refresh.
+    await page.route('**/api/panels/**', (route) => route.fulfill({ status: 503, body: 'down' }));
+    await page.clock.runFor(31000);
+    await page.waitForTimeout(800);
+    const after = await tiles(page);
+    assert.strictEqual(after.length, 2, 'pins must survive a failed refresh, got ' + after.length);
+    assert.strictEqual(await page.$$eval('#dbody .pc.light:not(.pin)', (e) => e.length), 0,
+      'must NOT fall back to unrelated HA lights on a transient failure');
     await page.close();
   });
 
