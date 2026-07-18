@@ -12,7 +12,9 @@
 importScripts('/workbox/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.64.8'; // sw: stop blocking remote album art (cross-origin images)
+// Both sides of this merge landed on 4.64.8 — bumped rather than picking one,
+// or two different bundles would ship under a single cache key.
+const SW_VERSION = '4.64.9'; // dock: user-pinned controls + remote album art
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
