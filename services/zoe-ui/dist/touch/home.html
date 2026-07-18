@@ -1101,17 +1101,40 @@
   // this is null OR pins_configured is false. Those two are NOT the same as
   // pins_configured:true with an empty list — that means "show nothing".
   var _pcfg=null,_pcfgLoaded=false;
+  // Last known-good config, per device. Persisted because the failure that
+  // matters most is at BOOT: the panel powers on while the backend is still
+  // starting, the config fetch fails, and without a cache the dock would fall
+  // back to unrelated — and tappable — HA lights on a panel that has pins.
+  // In-memory state alone cannot cover that; nothing has loaded yet.
+  function _pcCacheKey(){return 'zoe_panel_cfg_'+_panelDevId();}
+  function _pcCacheRead(){
+    try{var v=JSON.parse(localStorage.getItem(_pcCacheKey())||'null');
+      if(!v||!Array.isArray(v.pinned))return null;
+      // Pins are durable; their STATE is not. Hand back the cached pins in the
+      // exact shape the backend already uses when HA is unreachable — state
+      // null, available false, ha_available false — so the dock shows the
+      // operator's chosen controls without asserting a stale on/off. The next
+      // successful poll fills the real state in.
+      v.ha_available=false;
+      v.pinned=v.pinned.map(function(p){
+        return Object.assign({},p,{state:null,setpoint:null,available:false});});
+      return v;
+    }catch(e){return null;}
+  }
+  function _pcCacheWrite(d){try{localStorage.setItem(_pcCacheKey(),JSON.stringify(d));}catch(e){}}
   function loadPanelCfg(cb){
     apiGet('/api/panels/'+encodeURIComponent(_panelDevId())+'/config').then(function(d){
       // Keep the last known-good config on a malformed response.
-      if(d&&Array.isArray(d.pinned))_pcfg=d;
+      if(d&&Array.isArray(d.pinned)){_pcfg=d;_pcCacheWrite(d);}
       _pcfgLoaded=true;cb&&cb();
     }).catch(function(){
-      // A failed REFRESH must not revert a pinned dock to the fallback: that
-      // would swap the operator's chosen controls for unrelated lights — still
-      // tappable — over a momentary network/auth blip. Keep the last known-good
-      // config and let the next poll recover. Only a panel that has NEVER
-      // loaded one stays null, which is the honest "we know nothing" state.
+      // A failed fetch must not revert a pinned dock to the fallback: that
+      // would swap the operator's chosen controls for unrelated lights over a
+      // momentary backend/auth/network blip. Keep whatever we already had; on
+      // a cold boot fall back to the cached config rather than to the wrong
+      // devices. Only a panel that has genuinely never loaded one stays null,
+      // which is the honest "we know nothing yet" state.
+      if(!_pcfg)_pcfg=_pcCacheRead();
       _pcfgLoaded=true;cb&&cb();
     });
   }

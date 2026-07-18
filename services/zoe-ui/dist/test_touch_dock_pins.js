@@ -650,6 +650,46 @@ async function t(name, fn) {
     await page.close();
   });
 
+  // 18. BOOT-time config failure: the cached pins render, not the wrong devices
+  await t('a config failure at BOOT renders cached pins, not the fallback', async () => {
+    const ctx = newCtx();
+    // First boot succeeds and warms the cache.
+    let page = await open(browser, ctx, { base, cfg: cfg({ pinned: [PIN_BED, PIN_NIGHT] }) });
+    assert.strictEqual((await tiles(page)).length, 2, 'warm-up boot should be pinned');
+    // The cache is keyed by _panelDevId(), which the panel GENERATES on first
+    // boot (zoe_touch_panel_id) — it is not 'default'. Read back whatever key
+    // it actually used, and re-seed the same device identity next boot.
+    const saved = await page.evaluate(() => {
+      const k = Object.keys(localStorage).find((x) => x.indexOf('zoe_panel_cfg_') === 0);
+      return { key: k, val: k ? localStorage.getItem(k) : null,
+        devId: localStorage.getItem('zoe_touch_panel_id') };
+    });
+    assert.ok(saved.key && saved.val, 'config should be cached under a device-scoped key');
+    assert.strictEqual(JSON.parse(saved.val).pinned.length, 2, 'both pins cached');
+    await page.close();
+
+    // Second boot: the config endpoint is down from the very first request.
+    page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    await stub(page, ctx, { cfg: cfg() });
+    await page.route('**/api/panels/**', (route) => route.fulfill({ status: 503, body: 'down' }));
+    await page.addInitScript((s) => {
+      if (s.devId) localStorage.setItem('zoe_touch_panel_id', s.devId);
+      localStorage.setItem(s.key, s.val);
+    }, saved);
+    await page.goto(base + '/touch/home.html', { waitUntil: 'domcontentloaded' });
+    await page.addStyleTag({ content: '#authov{display:none !important}' });
+    await page.waitForTimeout(1500);
+
+    const pins = await tiles(page);
+    assert.strictEqual(pins.length, 2, 'cached pins must render at boot, got ' + pins.length);
+    assert.strictEqual(await page.$$eval('#dbody .pc.light:not(.pin)', (e) => e.length), 0,
+      'must NOT render unrelated fallback lights when the operator has saved pins');
+    // Cached pins must not assert a stale on/off — state is not durable.
+    assert.ok(pins.every((p) => /unavail/.test(p.cls)), 'cached pins render state-less');
+    await shoot(page, '18_boot_cached');
+    await page.close();
+  });
+
   await browser.close();
   srv.close();
 
