@@ -134,6 +134,40 @@ def _worktree_registered(repo: Path, wt_path: Path) -> bool:
     return False
 
 
+def _branch_is_shared(repo: Path, branch: str) -> bool:
+    """True when MORE THAN ONE worktree has ``branch`` checked out.
+
+    Removing such a worktree deletes the shared branch out from under the other
+    one — which may be a live agent session. Merged-ness says nothing about
+    whether someone is still standing on a branch, so callers must check this
+    independently of :func:`_branch_merged`.
+
+    Git refuses a double-checkout without ``--force``, but the forced state does
+    occur in practice (2026-07-18: an agent worktree and the session driving it
+    shared one merged branch; every other guard passed and the pruner offered to
+    remove it).
+
+    Fails CLOSED: if ``git worktree list`` cannot be read we report True, because
+    an unverifiable state must not authorise a destructive ``--force`` removal.
+    """
+    if not branch:
+        return False
+    listed = _run_git(
+        ["git", "worktree", "list", "--porcelain"],
+        cwd=str(repo),
+        timeout=30,
+    )
+    if listed.returncode != 0:
+        logger.warning(
+            "worktree_bootstrap: cannot list worktrees to check whether %s is shared; "
+            "treating as shared (fail-closed)",
+            branch,
+        )
+        return True
+    target = f"branch refs/heads/{branch}"
+    return sum(1 for line in listed.stdout.splitlines() if line.strip() == target) > 1
+
+
 def _current_branch(path: Path) -> str:
     result = _run_git(
         ["git", "branch", "--show-current"],
@@ -349,6 +383,17 @@ def remove_task_worktree(
         logger.info("worktree_bootstrap: keeping %s — uncommitted changes", wt_path)
         return False
 
+    if _branch_is_shared(repo, branch):
+        # Another worktree holds this same branch; removing this one would delete
+        # the branch out from under it (possibly a live agent session). Merged-ness
+        # is irrelevant here, so this is checked before the merge test below.
+        logger.info(
+            "worktree_bootstrap: keeping %s — branch %s checked out by another worktree",
+            wt_path,
+            branch,
+        )
+        return False
+
     if require_merged:
         base_ref = base_ref or _base_ref(repo, base_branch)
         if not _branch_merged(repo, branch, base_ref, consult_pr=consult_pr):
@@ -419,6 +464,23 @@ def prune_merged_worktrees(
             f"git worktree list failed: {(listed.stderr or '').strip() or 'unknown error'}"
         )
 
+    # Branches held by MORE THAN ONE worktree. Removing one of them deletes the
+    # shared branch out from under the other — which may be a LIVE agent session.
+    # Merged-ness says nothing about whether someone is still standing on a
+    # branch, so this is checked independently of _branch_merged. Git refuses a
+    # double-checkout without --force, but the forced state does occur in
+    # practice (seen 2026-07-18: an agent worktree and the session driving it
+    # shared one merged branch, and every other guard passed).
+    #
+    # Derived from the SAME --porcelain output already fetched above, so this
+    # costs no extra git call.
+    _branch_counts: dict[str, int] = {}
+    for _line in listed.stdout.splitlines():
+        if _line.startswith("branch refs/heads/"):
+            _br = _line.removeprefix("branch refs/heads/").strip()
+            _branch_counts[_br] = _branch_counts.get(_br, 0) + 1
+    shared_branches = {b for b, n in _branch_counts.items() if n > 1}
+
     results: list[dict[str, str]] = []
     path = ""
     branch = ""
@@ -438,6 +500,10 @@ def prune_merged_worktrees(
             # Classify detached HEADs before touching the tree — a missing/half-
             # removed path would otherwise read as "dirty" and hide the real state.
             reason = "detached HEAD"
+        elif branch in shared_branches:
+            # Checked BEFORE the merge test: a shared branch is unsafe to remove
+            # regardless of whether it merged.
+            reason = "branch checked out by another worktree"
         elif _worktree_is_dirty(Path(path)):
             reason = "dirty"
         else:

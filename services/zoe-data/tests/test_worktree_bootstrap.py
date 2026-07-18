@@ -397,3 +397,75 @@ def test_pin_kanban_workspace_falls_back_without_worktree_kind(tmp_path, monkeyp
     ).fetchone()
     conn.close()
     assert row[0] == str(wt.resolve())
+
+
+# ── shared-branch guard ──────────────────────────────────────────────────────
+# Removing a worktree whose branch ANOTHER worktree also holds deletes that
+# branch out from under the other one — which may be a live agent session.
+# Merged-ness says nothing about whether someone is still standing on a branch.
+#
+# Seen 2026-07-18: an agent worktree and the session driving it shared one merged
+# branch; every other guard (live/locked/dirty/merged/age) passed, and the pruner
+# offered to remove it. The manual shell tool and this in-process pruner mirror
+# each other, so both need the guard (Greptile review, PR #1406).
+
+
+def _force_second_checkout(repo, wt_path, branch):
+    """Put `branch` in a SECOND worktree. git needs --force for a double-checkout;
+    the real incident got there exactly this way."""
+    subprocess.run(
+        ["git", "worktree", "add", "--force", str(wt_path), branch],
+        cwd=repo, check=True, capture_output=True,
+    )
+
+
+def test_remove_task_worktree_keeps_a_shared_branch(git_repo, tmp_path):
+    """THE REGRESSION: a branch held by two worktrees is never removed."""
+    wt = wb.ensure_worktree("t_shared01")
+    branch = wb.worktree_branch("t_shared01")
+    _force_second_checkout(git_repo, tmp_path / "second", branch)
+
+    removed = wb.remove_task_worktree("t_shared01", require_merged=False, consult_pr=False)
+
+    assert removed is False, "removed a worktree whose branch another worktree holds"
+    assert wt.exists(), "worktree was deleted despite the shared branch"
+
+
+def test_remove_task_worktree_still_removes_an_unshared_branch(git_repo):
+    """The guard must not over-block — otherwise 'never remove' would pass the
+    test above and silently turn the pruner into a no-op."""
+    wt = wb.ensure_worktree("t_solo001")
+
+    removed = wb.remove_task_worktree("t_solo001", require_merged=False, consult_pr=False)
+
+    assert removed is True, "a lone worktree should still be removable"
+    assert not wt.exists()
+
+
+def test_branch_is_shared_fails_closed_when_git_fails(git_repo, monkeypatch):
+    """An unverifiable state must not authorise a --force removal."""
+    def _boom(*_a, **_k):
+        class R:
+            returncode = 1
+            stdout = ""
+            stderr = "boom"
+        return R()
+
+    monkeypatch.setattr(wb, "_run_git", _boom)
+    assert wb._branch_is_shared(git_repo, "wt/t_whatever") is True
+
+
+def test_prune_merged_worktrees_skips_a_shared_branch(git_repo, tmp_path):
+    """The scheduled sweep honours the same guard as the per-task path."""
+    wb.ensure_worktree("t_shared02")
+    branch = wb.worktree_branch("t_shared02")
+    _force_second_checkout(git_repo, tmp_path / "second2", branch)
+
+    results = wb.prune_merged_worktrees(min_age_days=0, execute=False, consult_pr=False)
+
+    decisions = {r["worktree"]: r.get("decision", "") for r in results}
+    shared = [d for d in decisions.values() if "another worktree" in d]
+    assert shared, f"expected a shared-branch skip, got: {decisions}"
+    assert not [d for d in decisions.values() if d in ("removed", "would-remove")], (
+        f"offered to remove a worktree on a shared branch: {decisions}"
+    )
