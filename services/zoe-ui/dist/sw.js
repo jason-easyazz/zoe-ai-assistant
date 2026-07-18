@@ -12,7 +12,9 @@
 importScripts('/workbox/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.64.8'; // dock: user-pinned controls (toggle/scene/temp)
+// Both sides of this merge landed on 4.64.8 — bumped rather than picking one,
+// or two different bundles would ship under a single cache key.
+const SW_VERSION = '4.64.9'; // dock: user-pinned controls + remote album art
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
@@ -230,9 +232,23 @@ if (workbox) {
         })
     );
 
-    // 4. Images - Cache First with expiration
+    // 4. Images - Cache First with expiration. SAME-ORIGIN ONLY.
+    //
+    // An `<img>` to another origin is a no-cors request, so the response is
+    // OPAQUE — CacheFirst cannot read or validate it and the fetch fails with
+    // net::ERR_FAILED. That silently broke every remote album cover on the panel:
+    // Music Assistant serves art from i.ytimg.com / yt3.googleusercontent.com, so
+    // the Cover Flow rendered broken-image glyphs even though the API returned
+    // perfectly good urls and the panel could curl them (HTTP 200). Diagnosed by
+    // the same url loading fine in about:blank — no SW, no route, no failure.
+    //
+    // Leaving cross-origin images UNROUTED is the fix: workbox doesn't handle
+    // them, so they go straight to the network like any normal browser request.
+    // We lose nothing — opaque responses are near-useless to cache anyway (they
+    // count as ~7MB each against quota and can't be validated).
     workbox.routing.registerRoute(
-        ({ request }) => request.destination === 'image',
+        ({ request, url }) => request.destination === 'image'
+                              && url.origin === self.location.origin,
         new workbox.strategies.CacheFirst({
             cacheName: 'zoe-images',
             plugins: [
