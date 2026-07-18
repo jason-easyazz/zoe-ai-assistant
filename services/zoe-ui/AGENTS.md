@@ -25,6 +25,15 @@ The Zoe web frontend. `dist/` is the nginx docroot (hand-maintained HTML/CSS/JS,
 - Refresh/upgrade Workbox with `npx workbox-cli@<version> copyLibraries <tmp>`, then copy `workbox-sw.js` + the needed `.prod.js` modules into `dist/workbox/` (the `sourceMappingURL` trailer is stripped because `.map` files are not vendored).
 - Web push: never re-save an existing browser subscription; `existing.unsubscribe()` before re-subscribing (FCM endpoints expire with HTTP 410). After VAPID rotation, clear stale `push_subscriptions` rows.
 - The estate (`dist/touch/home.html`) may load the LiveKit client **only on entry to Ask-card conversation mode**, never on boot: requesting `/api/voice/livekit-token` starts the on-demand ~560MB LiveKit container, and the box is memory-tight. Every exit path (stop, navigate, sleep, idle, pagehide/unload, error) must release the mic and disconnect — a live session also suppresses ambient-return and idle→sleep, so nothing else will tear it down for you.
+- The estate dock renders **operator-pinned controls** from `GET /api/panels/{device_id}/config` (`device_id` = `_panelDevId()`). Rules that are load-bearing and easy to break:
+  - **Branch on `kind`** (`toggle` | `scene` | `temp`), never on key existence — every pin carries the full key set, with `min`/`max`/`step`/`unit`/`setpoint` null on non-temp pins.
+  - **Render the server's `icon`**; never derive one from the entity domain. `input_boolean.fan` and `input_boolean.tv` share a domain with the lights, so a domain-derived icon draws a lightbulb on a fan.
+  - `pins_configured:false` keeps the legacy `slice(0,3)` fallback; `true` with an empty list means **show nothing**. They are not the same state.
+  - `ha_available:false` still returns pins (with `state:null`) — render them muted, never blank the dock.
+  - A **scene never shows state** (its HA state is `unknown` or a last-fired timestamp) and flashes accent blue, not the light pill's amber.
+  - Temp bounds come from the pin (`min`/`max`/`step`, live 16/30/0.5) and arrive as strings — parse with `parseFloat`; writes use the pin's `write_action`.
+  - `refreshHA()` must keep skipping re-render while `.pc.temp.open` exists, or a poll destroys the popover mid-drag. Pins are polled through the same path, so this guard covers them too.
+  - Verify with `node dist/test_touch_dock_pins.js` (headless 1280×720; asserts its fixtures against the live API and writes screenshots). There is no JS lane in CI — this is a local gate.
 - NEVER place an `AGENTS.md` (or any agent/internal doc) inside `dist/` — it is the public docroot. nginx denies `/AGENTS.md` as defense in depth; this doc deliberately sits one level above.
 - After editing `nginx.conf`, reload nginx and verify both static server blocks; module routes (`/modules/...`) live here too.
 

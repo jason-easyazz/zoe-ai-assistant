@@ -237,6 +237,23 @@
   .estmc label.dtall{display:flex;align-items:center;gap:10px;font-size:16px;color:var(--ink);margin-top:14px}
   .estmc label.dtall input{width:22px;height:22px;flex:none}
   .estmc .btns .del{background:rgba(255,122,144,.14);border-color:rgba(255,122,144,.4);color:#ff9db0}
+  /* pinned-dock-control editor (Settings › This panel). Every tap target is
+     >=48px — this is driven with a finger on a 1280x720 kiosk. */
+  .estmc .pinrow{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid rgba(255,255,255,.08)}
+  .estmc .pinrow .pnm{font-size:20px;font-weight:600;min-width:92px}
+  .estmc .pinrow .pfn{font-size:15px;color:var(--ink-faint);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .estmc .pinrow button{width:48px;height:48px;border-radius:12px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:#fff;font:inherit;font-size:17px;cursor:pointer;flex:none;padding:0}
+  .estmc .pinrow button.del{color:#ff9db0;border-color:rgba(255,122,144,.4)}
+  .estmc .pinrow button:disabled{opacity:.28}
+  .estmc .padd{width:100%;height:52px;margin-top:14px;border-radius:13px;border:1px dashed rgba(255,255,255,.28);background:rgba(255,255,255,.05);color:var(--ink);font:inherit;font-size:19px;cursor:pointer}
+  .estmc .padd:disabled{opacity:.4;cursor:default}
+  .estmc .perr{color:#ff9db0;font-size:16px;margin-top:10px;min-height:22px;line-height:1.3}
+  .estmc .phint{color:var(--ink-faint);font-size:15px;margin-top:8px;line-height:1.35}
+  .estmc .elist{max-height:340px;overflow-y:auto;margin-top:12px;display:flex;flex-direction:column;gap:8px}
+  .estmc .eopt{display:flex;align-items:center;gap:13px;width:100%;text-align:left;padding:12px 16px;border-radius:14px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:#fff;font:inherit;font-size:19px;cursor:pointer;min-height:48px}
+  .estmc .eopt svg{width:24px;height:24px;flex:none;color:rgba(255,255,255,.72)}
+  .estmc .eopt .et{flex:1;overflow:hidden}
+  .estmc .eopt .et small{display:block;color:var(--ink-faint);font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .ctcard .ctacts{display:flex;gap:12px;margin-top:20px;flex-wrap:wrap}
   .ctchips{display:flex;flex-wrap:wrap;gap:8px}
   .ctchip{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;background:rgba(123,150,255,.14);border:1px solid rgba(123,150,255,.3);font-size:17px;cursor:pointer}
@@ -619,6 +636,20 @@
   #dock .pc.temp .tsl{position:relative;width:15px;flex:1;border-radius:999px;background:rgba(255,255,255,.18);cursor:pointer;touch-action:none}
   #dock .pc.temp .tff{position:absolute;left:0;right:0;bottom:0;border-radius:999px;background:linear-gradient(180deg,#ffb07a,#ff8a5a)}
   #dock .pc.temp .tkn{position:absolute;left:50%;transform:translate(-50%,50%);width:30px;height:30px;border-radius:50%;background:#fff;box-shadow:0 3px 10px rgba(0,0,0,.4)}
+  /* scene pin: fire-and-forget, so it NEVER carries .on. The flash is the
+     launcher accent, deliberately not the light amber — a scene firing is an
+     event, and must not read as a light turning on. */
+  #dock .pc.scene{padding:0 18px;gap:9px}
+  #dock .pc.scene svg{width:22px;height:22px;color:rgba(255,255,255,.55)}
+  #dock .pc.scene.fire{background:rgba(123,150,255,.9);border-color:rgba(123,150,255,.6);color:#fff;box-shadow:0 0 24px rgba(123,150,255,.5)}
+  #dock .pc.scene.fire svg{color:#fff}
+  /* a pin whose entity is unreachable still renders (the operator chose it) —
+     just visibly muted, so a dead control never masquerades as a live one */
+  #dock .pc.unavail{opacity:.42}
+  /* defensive: the one-word rule is enforced server-side, but a long single
+     word must never be able to push the dock past its width budget. Scoped to
+     pinned tiles — the unpinned fallback still renders HA's full names. */
+  #dock .pc.pin .nm{max-width:110px;overflow:hidden;text-overflow:ellipsis}
   #dock .dheard{font-size:23px;color:rgba(255,255,255,.6);padding:6px 12px}
   #dock .dheard b{color:#fff;font-weight:500}
 
@@ -1045,6 +1076,35 @@
   }
 
   // ---- dock: real Home Assistant pinned controls (lights + thermostat) ----
+  // Icons for pinned tiles come from the SERVER (`pin.icon`, resolved from HA's
+  // own attributes.icon) — never derived from the domain here. That is what
+  // stops input_boolean.fan and input_boolean.tv drawing a lightbulb, which is
+  // exactly what today's unpinned dock does and only slice(0,3) hides.
+  // Line-art to match the existing dock glyphs (24px box, 1.8 stroke).
+  var MDI={
+    'mdi:ceiling-light':'<path d="M12 2.5v3.2"/><path d="M6.2 14.5 12 5.7l5.8 8.8z"/><path d="M9.4 18.2a2.6 2.6 0 0 0 5.2 0"/>',
+    'mdi:outdoor-lamp':'<path d="M4 3h7"/><path d="M7.5 3v7"/><path d="M11.5 21H21"/><path d="M16.2 10.5V21"/><path d="M12.4 10.5h7.6l-1.6-4.2h-4.4z"/>',
+    'mdi:fan':'<circle cx="12" cy="12" r="2.2"/><path d="M12 9.8c0-3.4 1-5.8 3-5.8 1.6 0 2.4 1.4 1.8 3-.6 1.7-2.4 2.8-4.8 2.8"/><path d="M14.2 12c3.4 0 5.8 1 5.8 3 0 1.6-1.4 2.4-3 1.8-1.7-.6-2.8-2.4-2.8-4.8"/><path d="M12 14.2c0 3.4-1 5.8-3 5.8-1.6 0-2.4-1.4-1.8-3 .6-1.7 2.4-2.8 4.8-2.8"/><path d="M9.8 12c-3.4 0-5.8-1-5.8-3 0-1.6 1.4-2.4 3-1.8 1.7.6 2.8 2.4 2.8 4.8"/>',
+    'mdi:television':'<rect x="2.5" y="4" width="19" height="12.5" rx="1.8"/><path d="M8 20.5h8"/>',
+    'mdi:thermostat':'<circle cx="12" cy="12" r="8.6"/><path d="M12 7.4V12l3 2"/>',
+    'mdi:thermometer':'<path d="M13.8 13.6V4.6a1.8 1.8 0 0 0-3.6 0v9a3.6 3.6 0 1 0 3.6 0z"/>',
+    'mdi:palette-outline':'<path d="M12 3.2a8.8 8.8 0 0 0 0 17.6c1.2 0 1.9-.8 1.9-1.7 0-.9-.7-1.4-.7-2.1 0-.8.6-1.4 1.5-1.4h1.6a4.4 4.4 0 0 0 4.5-4.5c0-4.3-4-7.9-8.8-7.9z"/><circle cx="7.4" cy="11.4" r="1.1"/><circle cx="10.2" cy="7.2" r="1.1"/><circle cx="15.2" cy="8" r="1.1"/>',
+    'mdi:toggle-switch-outline':'<rect x="2.5" y="7" width="19" height="10" rx="5"/><circle cx="16.4" cy="12" r="2.6"/>',
+    'mdi:lightbulb-outline':'<path d="M9.2 20h5.6"/><path d="M10 22.5h4"/><path d="M12 2.5a6.5 6.5 0 0 0-4.2 11.4c.8.7 1.2 1.4 1.2 2.6h6c0-1.2.4-1.9 1.2-2.6A6.5 6.5 0 0 0 12 2.5z"/>',
+    '_':'<circle cx="12" cy="12" r="8.6"/><path d="M12 8.4v4.2"/><path d="M12 15.8h.01"/>'
+  };
+  function mdi(name){return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'+(MDI[name]||MDI['_'])+'</svg>';}
+
+  // Operator-chosen dock pins. null until the first load succeeds; the dock
+  // falls back to its old "first few lights HA returned" behaviour whenever
+  // this is null OR pins_configured is false. Those two are NOT the same as
+  // pins_configured:true with an empty list — that means "show nothing".
+  var _pcfg=null,_pcfgLoaded=false;
+  function loadPanelCfg(cb){
+    apiGet('/api/panels/'+encodeURIComponent(_panelDevId())+'/config').then(function(d){
+      _pcfg=(d&&Array.isArray(d.pinned))?d:null;_pcfgLoaded=true;cb&&cb();
+    }).catch(function(){_pcfg=null;_pcfgLoaded=true;cb&&cb();});
+  }
   var _ha={loaded:false,ok:false,lights:[],climate:null,scenes:[]};
   function haControl(body){return fetch('/api/ha/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify(body)});}
   function loadHA(cb){apiGet('/api/ha/entities').then(function(s){
@@ -1062,9 +1122,111 @@
     }).catch(function(){_ha.loaded=true;_ha.ok=false;cb&&cb();});}
   // Re-pull HA state and refresh the dock — recovers from a failed first load and
   // keeps light/temp state fresh. Skips while heard/hidden/mid-interaction.
-  function refreshHA(){loadHA(function(){if(!dbody||dbody.querySelector('.dheard')||dock.classList.contains('hide')||dbody.querySelector('.pc.temp.open'))return;renderDock();});}
+  function refreshHA(){
+    // Pinned tiles carry SERVER-resolved state, so a poll has to re-read the
+    // panel config too — refreshing HA entities alone would leave a pinned
+    // light's amber glow frozen at whatever it was on first paint.
+    function done(){if(!dbody||dbody.querySelector('.dheard')||dock.classList.contains('hide')||dbody.querySelector('.pc.temp.open'))return;renderDock();}
+    loadHA(function(){loadPanelCfg(done);});
+  }
+
+  // ---- pinned tiles: parse/format/bounds -----------------------------------
+  // `state`, `setpoint`, `min`, `max` and `step` all arrive as STRINGS or
+  // numbers depending on the entity (live: state "21.0", min 16.0, step 0.5),
+  // so everything numeric goes through parseFloat, never parseInt — parseInt
+  // is what silently ate the half-steps in the old hardcoded slider.
+  function _tnum(v){var n=parseFloat(v);return isNaN(n)?null:n;}
+  function _tsnap(v,mn,mx,st){st=(st>0)?st:1;var n=mn+Math.round((v-mn)/st)*st;
+    n=Math.max(mn,Math.min(mx,n));return Math.round(n*1000)/1000;}
+  function _tfmt(v,st){return (st>0&&st<1)?v.toFixed(1):String(Math.round(v));}
+  // Bounds come from the pin (live thermostat: 16–30 step 0.5). The old code
+  // hardcoded 15–28/step 1, so the knob misreported its position on any other
+  // range; these fallbacks apply only when the entity exposes no bounds.
+  function _tbounds(p){var mn=_tnum(p.min),mx=_tnum(p.max),st=_tnum(p.step);
+    if(mn==null)mn=15;if(mx==null||mx<=mn)mx=mn+13;if(st==null||st<=0)st=1;
+    return {mn:mn,mx:mx,st:st};}
+
+  function dockPinHtml(p){
+    var nm=esc(p.name||''),dead=(p.available===false?' unavail':'');
+    if(p.kind==='temp'){
+      var b=_tbounds(p),cur=_tnum(p.state),sp=_tnum(p.setpoint);
+      if(sp==null)sp=(cur!=null?cur:b.mn);
+      sp=_tsnap(sp,b.mn,b.mx,b.st);
+      return '<div class="pc pin temp'+dead+'" data-k="temp" data-eid="'+esc(p.write_eid)+'"'
+        +' data-act="'+esc(p.write_action||'set_value')+'" data-tgt="'+esc(String(sp))+'"'
+        +' data-mn="'+b.mn+'" data-mx="'+b.mx+'" data-st="'+b.st+'">'
+        +'<div class="tv">'+(cur!=null?Math.round(cur):'—')+'°</div><div class="tl">'+nm+'</div>'
+        +'<div class="tpop"><div class="tpv">'+_tfmt(sp,b.st)+'°</div>'
+        +'<div class="tsl"><div class="tff"></div><div class="tkn"></div></div>'
+        +'<div class="tpl">'+nm+'</div></div></div>';
+    }
+    if(p.kind==='scene'){
+      // A scene's state is `unknown` or a last-fired timestamp — neither is
+      // glanceable, so it renders NO state and never gets .on.
+      return '<div class="pc pin scene'+dead+'" data-k="scene" data-eid="'+esc(p.write_eid)+'"'
+        +' data-act="'+esc(p.write_action||'turn_on')+'">'+mdi(p.icon)+'<span class="nm">'+nm+'</span></div>';
+    }
+    return '<div class="pc pin light'+(String(p.state).toLowerCase()==='on'?' on':'')+dead+'"'
+      +' data-k="toggle" data-eid="'+esc(p.write_eid)+'">'+mdi(p.icon)+'<span class="nm">'+nm+'</span></div>';
+  }
+
+  function wireTempTile(tb){
+    var eid=tb.getAttribute('data-eid'),act=tb.getAttribute('data-act')||'set_value',
+        mn=+tb.getAttribute('data-mn'),mx=+tb.getAttribute('data-mx'),st=+tb.getAttribute('data-st'),
+        tsl=tb.querySelector('.tsl'),tff=tb.querySelector('.tff'),tkn=tb.querySelector('.tkn'),
+        tpv=tb.querySelector('.tpv');
+    if(!tsl||!(mx>mn))return;
+    var tv=_tsnap(_tnum(tb.getAttribute('data-tgt'))||mn,mn,mx,st);
+    function pt(){var p=Math.max(0,Math.min(100,(tv-mn)/(mx-mn)*100));
+      tff.style.height=p+'%';tkn.style.bottom=p+'%';tpv.textContent=_tfmt(tv,st)+'°';}
+    pt();
+    tb.onclick=function(e){if(e.target.closest('.tpop'))return;tb.classList.toggle('open');};
+    var d=false;
+    function at(y){var r=tsl.getBoundingClientRect();
+      tv=_tsnap(mn+Math.max(0,Math.min(1,1-(y-r.top)/r.height))*(mx-mn),mn,mx,st);pt();}
+    tsl.addEventListener('pointerdown',function(e){d=true;tsl.setPointerCapture(e.pointerId);at(e.clientY);});
+    tsl.addEventListener('pointermove',function(e){if(d)at(e.clientY);});
+    tsl.addEventListener('pointerup',function(){d=false;
+      // Param key follows the service: an input_number takes `set_value {value}`
+      // (the pin's write_action), a climate entity takes `set_temperature
+      // {temperature}`. The old code sent set_temperature unconditionally.
+      var params=(act==='set_temperature')?{temperature:tv}:{value:tv};
+      haControl({entity_id:eid,action:act,params:params})
+        .then(function(r){if(!r.ok)refreshHA();}).catch(function(){refreshHA();});});
+  }
+
+  function wireDock(){
+    // Covers BOTH pinned toggles and the unpinned fallback pills — both are
+    // state-bearing, so both send the explicit turn_on/turn_off matching what
+    // the operator just saw. A blind `toggle` against a stale read flips the
+    // wrong way; this is self-correcting. write_action is honoured where the
+    // service genuinely varies (scene, temp).
+    dbody.querySelectorAll('.pc.light[data-eid]').forEach(function(el){el.onclick=function(){
+      var on=el.classList.toggle('on');
+      haControl({entity_id:el.getAttribute('data-eid'),action:on?'turn_on':'turn_off'})
+        .then(function(r){if(!r.ok)throw new Error('http '+r.status);})
+        .catch(function(){el.classList.toggle('on');});};});
+    dbody.querySelectorAll('.pc.scene[data-eid]').forEach(function(el){el.onclick=function(){
+      // Fire-and-forget: flash regardless of outcome. There is no state to
+      // revert to, and a silently-failed scene is indistinguishable from a
+      // working one — acceptable, and better than faking reconciliation.
+      el.classList.add('fire');setTimeout(function(){el.classList.remove('fire');},900);
+      haControl({entity_id:el.getAttribute('data-eid'),action:el.getAttribute('data-act')||'turn_on'}).catch(function(){});};});
+    dbody.querySelectorAll('.pc.temp').forEach(wireTempTile);
+  }
+
   function renderDock(){
+    if(!_pcfgLoaded){dbody.innerHTML='<div class="pc light">'+BULB+'<span class="nm">…</span></div>';
+      loadPanelCfg(function(){if(dbody.querySelector('.dheard'))return;renderDock();});return;}
     if(!_ha.loaded){dbody.innerHTML='<div class="pc light">'+BULB+'<span class="nm">…</span></div>';loadHA(function(){if(dbody.querySelector('.dheard'))return;renderDock();});return;}
+    // Operator-chosen pins win. pins_configured:false => nobody has chosen yet
+    // => keep the old "first few lights HA returned" fallback so a fresh panel
+    // is never empty. pins_configured:true with an empty list is a real choice
+    // ("show nothing") and must NOT fall back.
+    if(_pcfg&&_pcfg.pins_configured){
+      dbody.innerHTML=(_pcfg.pinned||[]).map(dockPinHtml).join('');
+      paintDockTimer();paintDockMusic();wireDock();return;
+    }
     var cl=_ha.climate,lights=_ha.lights.slice(0,cl?2:3),html='';
     // Dock pills carry a ONE-WORD name: the dock is a glance surface and
     // "Living Room" crowds it. First word only ("Living"). Operator-set short
@@ -1083,20 +1245,19 @@
     // "No lights" only after a SUCCESSFUL fetch with zero entities; a failed
     // fetch renders no pills (quiet) and the 30s refresh keeps retrying.
     if(!lights.length&&_ha.ok)html+='<div class="pc light"><span class="nm" style="opacity:.6">No lights</span></div>';
+    // Unpinned fallback thermostat. A climate.* entity publishes its own bounds
+    // (min_temp/max_temp/target_temp_step) — carry them on the tile so the
+    // shared slider reads a real range instead of the old hardcoded 15–28.
     if(cl){var a=cl.attributes||{};var cur=(a.current_temperature!=null?a.current_temperature:a.temperature);var tgt=(a.temperature!=null?a.temperature:cur);if(tgt==null)tgt=21;
-      html+='<div class="pc temp" data-eid="'+esc(cl.entity_id)+'" data-tgt="'+esc(String(Math.round(tgt)))+'"><div class="tv">'+(cur!=null?Math.round(cur):'—')+'°</div><div class="tl">Temp</div><div class="tpop"><div class="tpv">'+Math.round(tgt)+'°</div><div class="tsl"><div class="tff"></div><div class="tkn"></div></div><div class="tpl">Thermostat</div></div></div>';}
+      var cb=_tbounds({min:a.min_temp,max:a.max_temp,step:a.target_temp_step});
+      var ctgt=_tsnap(_tnum(tgt)||cb.mn,cb.mn,cb.mx,cb.st);
+      html+='<div class="pc temp" data-eid="'+esc(cl.entity_id)+'" data-act="set_temperature" data-tgt="'+esc(String(ctgt))+'"'
+        +' data-mn="'+cb.mn+'" data-mx="'+cb.mx+'" data-st="'+cb.st+'"><div class="tv">'+(cur!=null?Math.round(cur):'—')+'°</div><div class="tl">Temp</div>'
+        +'<div class="tpop"><div class="tpv">'+_tfmt(ctgt,cb.st)+'°</div><div class="tsl"><div class="tff"></div><div class="tkn"></div></div><div class="tpl">Thermostat</div></div></div>';}
     dbody.innerHTML=html;
     paintDockTimer();
     paintDockMusic();
-    dbody.querySelectorAll('.pc.light[data-eid]').forEach(function(el){el.onclick=function(){var on=el.classList.toggle('on');haControl({entity_id:el.getAttribute('data-eid'),action:on?'turn_on':'turn_off'}).then(function(r){if(!r.ok)throw new Error('http '+r.status);}).catch(function(){el.classList.toggle('on');});};});
-    (function(){var tb=dbody.querySelector('.pc.temp');if(!tb)return;var eid=tb.getAttribute('data-eid'),tsl=tb.querySelector('.tsl'),tff=tb.querySelector('.tff'),tkn=tb.querySelector('.tkn'),tpv=tb.querySelector('.tpv'),tv=parseInt(tb.getAttribute('data-tgt'),10)||21;
-      function pt(){var p=Math.max(0,Math.min(100,(tv-15)/13*100));tff.style.height=p+'%';tkn.style.bottom=p+'%';tpv.textContent=tv+'°';}pt();
-      tb.onclick=function(e){if(e.target.closest('.tpop'))return;tb.classList.toggle('open');};
-      var d=false;function at(y){var r=tsl.getBoundingClientRect();tv=Math.round(15+Math.max(0,Math.min(1,1-(y-r.top)/r.height))*13);pt();}
-      tsl.addEventListener('pointerdown',function(e){d=true;tsl.setPointerCapture(e.pointerId);at(e.clientY);});
-      tsl.addEventListener('pointermove',function(e){if(d)at(e.clientY);});
-      tsl.addEventListener('pointerup',function(){d=false;haControl({entity_id:eid,action:'set_temperature',params:{temperature:tv}}).then(function(r){if(!r.ok)refreshHA();}).catch(function(){refreshHA();});});
-    })();
+    wireDock();
   }
 
   // ---- launcher overlay (opened from the dock grid button) ----
@@ -2082,17 +2243,213 @@
         .catch(function(){toast('Couldn’t save display settings');});
     },500);   // debounce slider drags into one write
   }
+  // ---- Settings › This panel: location, default speaker, pinned controls ----
+  // "where is this panel located, then also the ability to link it to the
+  // controls you want in home assistant, what speaker is your default."
+  var _pcWork=[];        // pin list being edited (survives the modal hand-offs)
+  var _pcEnts=null;      // cached HA entity list for the picker
+
+  // Mirrors panel_config.normalize_pin_name so the operator reads a sentence
+  // instead of hitting a raw 400 from the server.
+  function _pinNameErr(n){
+    n=String(n==null?'':n).trim();
+    if(!n)return 'Give it a name.';
+    if(/\s/.test(n))return 'One word only — “Living Room” is too wide for the dock. Try “Living”.';
+    if(n.length>12)return 'Keep it to 12 characters or fewer.';
+    return '';
+  }
+  function _oneWord(s){return String(s||'').trim().split(/\s+/)[0].slice(0,12);}
+  function _pcErr(m){var e=document.querySelector('#estModal .perr');if(e)e.textContent=m||'';}
+  function _pcMax(){return (_pcfg&&_pcfg.max_pins)||4;}
+
+  function _pcSave(patch,then){
+    return apiJson('PUT','/api/panels/'+encodeURIComponent(_panelDevId())+'/config',patch)
+      .then(function(d){
+        if(d&&Array.isArray(d.pinned)){_pcfg=d;_pcfgLoaded=true;}
+        wirePanelSettings();renderDock();then&&then();})
+      .catch(function(e){
+        toast(String(e&&e.message)==='auth'?'Sign in to change panel settings':'Couldn’t save panel settings');
+        throw e;});
+  }
+
+  function wirePanelSettings(){
+    var el=document.getElementById('setPanel');if(!el)return;
+    function paint(){
+      var el=document.getElementById('setPanel');if(!el)return;
+      if(!_pcfg){el.innerHTML='<div class="srow2"><span style="color:var(--ink-faint)">Panel settings unavailable</span></div>';return;}
+      var loc=_pcfg.location||'Not set';
+      var spk=_pcfg.default_player||'Not set';
+      // default_player_source says whether this panel chose its own speaker or
+      // is riding the household default — surface it rather than making the
+      // operator guess why a speaker they never picked is showing.
+      var src=_pcfg.default_player_source==='global'?' <small style="color:var(--ink-faint)">(household default)</small>'
+             :_pcfg.default_player_source==='panel'?' <small style="color:var(--ink-faint)">(this panel)</small>':'';
+      var n=(_pcfg.pinned||[]).length;
+      var pins=_pcfg.pins_configured?(n+' of '+_pcMax()):'Not set — showing whatever HA lists first';
+      el.innerHTML=
+         '<div class="srow2" data-p="loc"><span>Location</span><span class="chev2" style="margin-left:auto;color:var(--ink-soft)">'+esc(loc)+' ›</span></div>'
+        +'<div class="srow2" data-p="spk"><span>Default speaker</span><span class="chev2" style="margin-left:auto;color:var(--ink-soft)">'+esc(spk)+src+' ›</span></div>'
+        +'<div class="srow2" data-p="pins"><span>Dock controls</span><span class="chev2" style="margin-left:auto;color:var(--ink-soft)">'+esc(pins)+' ›</span></div>';
+      el.querySelector('[data-p="loc"]').onclick=_pcLocation;
+      el.querySelector('[data-p="spk"]').onclick=_pcSpeaker;
+      el.querySelector('[data-p="pins"]').onclick=_pcPins;
+    }
+    if(_pcfgLoaded)paint();else loadPanelCfg(paint);
+  }
+
+  function _pcLocation(){
+    estOpen('<h3>Where is this panel?</h3>'
+      +'<label>Room</label><input data-f="loc" maxlength="64" placeholder="Bedroom">'
+      +'<div class="phint">Used to give Zoe context about this screen. Free text — it isn’t a dock label.</div>'
+      +'<div class="perr"></div>'
+      +'<div class="btns"><button data-x="cancel">Cancel</button><button class="save" data-x="save">Save</button></div>');
+    var m=document.getElementById('estModal'),f=m.querySelector('[data-f="loc"]');
+    f.value=_pcfg&&_pcfg.location||'';f.focus();
+    m.querySelector('[data-x="cancel"]').onclick=estClose;
+    m.querySelector('[data-x="save"]').onclick=function(){
+      _pcSave({location:f.value.trim()||null},estClose).catch(function(){});};
+  }
+
+  function _pcSpeaker(){
+    estOpen('<h3>Default speaker</h3><div class="elist"><div style="color:var(--ink-faint);font-size:18px">Loading…</div></div>'
+      +'<div class="btns"><button data-x="cancel">Cancel</button><button data-x="clear">Use household default</button></div>');
+    var m=document.getElementById('estModal');
+    m.querySelector('[data-x="cancel"]').onclick=estClose;
+    m.querySelector('[data-x="clear"]').onclick=function(){_pcSave({default_player:null},estClose).catch(function(){});};
+    apiGet('/api/music/players').then(function(d){
+      var ps=(d&&d.players)||[],list=m.querySelector('.elist');if(!list)return;
+      if(!ps.length){list.innerHTML='<div style="color:var(--ink-faint);font-size:18px">No speakers found.</div>';return;}
+      list.innerHTML=ps.map(function(p){
+        var cur=_pcfg&&_pcfg.default_player===p.player_id;
+        return '<button class="eopt" data-id="'+esc(p.player_id)+'">'+mdi('mdi:toggle-switch-outline')
+          +'<span class="et">'+esc(p.name||p.player_id)+'<small>'+esc(p.provider||'')+(cur?' · current':'')+'</small></span></button>';}).join('');
+      list.querySelectorAll('.eopt').forEach(function(b){b.onclick=function(){
+        _pcSave({default_player:b.getAttribute('data-id')},estClose).catch(function(){});};});
+    }).catch(function(){var l=m.querySelector('.elist');if(l)l.innerHTML='<div style="color:var(--ink-faint);font-size:18px">Couldn’t reach Music Assistant.</div>';});
+  }
+
+  function _pcPins(){
+    // Edit a working copy of the RESOLVED pins. The server drops pins whose
+    // entity has vanished, so a stale pin quietly disappears here — which is
+    // the self-healing behaviour we want, but say so when it happens.
+    _pcWork=(_pcfg&&_pcfg.pinned||[]).map(function(p){
+      return {read_eid:p.read_eid,write_eid:p.write_eid,name:p.name};});
+    _pcPinsPaint();
+  }
+  function _pcPinsPaint(){
+    var max=_pcMax(),stale=(_pcfg&&_pcfg.unresolved||[]).length;
+    var rows=_pcWork.length?_pcWork.map(function(p,i){
+      return '<div class="pinrow"><span class="pnm">'+esc(p.name)+'</span>'
+        +'<span class="pfn">'+esc(p.write_eid)+'</span>'
+        +'<button data-mv="'+i+',-1"'+(i===0?' disabled':'')+'>▲</button>'
+        +'<button data-mv="'+i+',1"'+(i===_pcWork.length-1?' disabled':'')+'>▼</button>'
+        +'<button class="del" data-rm="'+i+'">✕</button></div>';}).join('')
+      :'<div class="phint" style="margin:14px 0">Nothing pinned yet. The dock is showing whatever Home Assistant lists first.</div>';
+    estOpen('<h3>Dock controls</h3>'
+      +rows
+      +'<button class="padd"'+(_pcWork.length>=max?' disabled':'')+' data-x="add">+ Pin a control'+(_pcWork.length>=max?' (max '+max+')':'')+'</button>'
+      +'<div class="phint">These are the controls on the dock, in this order. One-word names keep them readable at a glance.'
+      +(stale?' '+stale+' pinned control'+(stale>1?'s are':' is')+' no longer in Home Assistant and will be dropped.':'')+'</div>'
+      +'<div class="perr"></div>'
+      +'<div class="btns"><button data-x="cancel">Cancel</button><button class="save" data-x="save">Save</button></div>');
+    var m=document.getElementById('estModal');
+    m.querySelectorAll('[data-mv]').forEach(function(b){b.onclick=function(){
+      var a=b.getAttribute('data-mv').split(','),i=+a[0],j=i+(+a[1]);
+      if(j<0||j>=_pcWork.length)return;
+      var t=_pcWork[i];_pcWork[i]=_pcWork[j];_pcWork[j]=t;_pcPinsPaint();};});
+    m.querySelectorAll('[data-rm]').forEach(function(b){b.onclick=function(){
+      _pcWork.splice(+b.getAttribute('data-rm'),1);_pcPinsPaint();};});
+    m.querySelector('[data-x="add"]').onclick=function(){if(_pcWork.length<max)_pcPickEntity();};
+    m.querySelector('[data-x="cancel"]').onclick=estClose;
+    m.querySelector('[data-x="save"]').onclick=function(){
+      // pinned:[] is a real choice ("show nothing"), distinct from never having
+      // configured pins — so an empty list is saved as [], not null.
+      _pcSave({pinned:_pcWork},estClose).catch(function(){});};
+  }
+
+  // Domains worth pinning. Sensors are read-only (they pair INTO a temp tile,
+  // they are not a control); automations/scripts look like a light but mean
+  // something else entirely, which is dangerous on a glance surface.
+  var _PINNABLE={light:1,input_boolean:1,switch:1,scene:1,input_number:1,number:1};
+  function _pcPickEntity(){
+    estOpen('<h3>Pin a control</h3><div class="elist"><div style="color:var(--ink-faint);font-size:18px">Loading…</div></div>'
+      +'<div class="perr"></div><div class="btns"><button data-x="back">Back</button></div>');
+    var m=document.getElementById('estModal');
+    m.querySelector('[data-x="back"]').onclick=_pcPinsPaint;
+    function paint(ents){
+      var list=m.querySelector('.elist');if(!list)return;
+      var taken={};_pcWork.forEach(function(p){taken[p.write_eid]=1;});
+      var cands=ents.filter(function(e){
+        var d=String(e.entity_id||'').split('.')[0];
+        return _PINNABLE[d]&&!taken[e.entity_id];});
+      if(!cands.length){list.innerHTML='<div style="color:var(--ink-faint);font-size:18px">No more controls available to pin.</div>';return;}
+      list.innerHTML=cands.map(function(e){var a=e.attributes||{};
+        return '<button class="eopt" data-eid="'+esc(e.entity_id)+'">'+mdi(a.icon)
+          +'<span class="et">'+esc(a.friendly_name||e.entity_id)+'<small>'+esc(e.entity_id)+'</small></span></button>';}).join('');
+      list.querySelectorAll('.eopt').forEach(function(b){b.onclick=function(){
+        var eid=b.getAttribute('data-eid'),ent=null;
+        cands.forEach(function(e){if(e.entity_id===eid)ent=e;});
+        var d=eid.split('.')[0];
+        // A setpoint needs a READ half: the number entity holds the target, and
+        // the room's actual reading usually lives on a separate sensor.
+        if(d==='input_number'||d==='number')_pcPickRead(ent,ents);
+        else _pcName(ent,eid);};});
+    }
+    if(_pcEnts)paint(_pcEnts);
+    else apiGet('/api/ha/entities').then(function(s){
+      _pcEnts=Array.isArray(s)?s:((s&&s.entities)||(s&&s.states)||[]);paint(_pcEnts);
+    }).catch(function(){var l=m.querySelector('.elist');if(l)l.innerHTML='<div style="color:var(--ink-faint);font-size:18px">Couldn’t reach Home Assistant.</div>';});
+  }
+
+  function _pcPickRead(ent,ents){
+    var wid=ent.entity_id;
+    estOpen('<h3>Which reading does it show?</h3>'
+      +'<div class="phint">“'+esc((ent.attributes||{}).friendly_name||wid)+'” sets the target. Pick the sensor showing what the room actually is.</div>'
+      +'<div class="elist"></div>'
+      +'<div class="btns"><button data-x="back">Back</button></div>');
+    var m=document.getElementById('estModal');
+    m.querySelector('[data-x="back"]').onclick=_pcPickEntity;
+    var sensors=ents.filter(function(e){return String(e.entity_id||'').split('.')[0]==='sensor';});
+    m.querySelector('.elist').innerHTML=
+      '<button class="eopt" data-eid="'+esc(wid)+'">'+mdi('mdi:thermostat')+'<span class="et">Just show the target<small>'+esc(wid)+'</small></span></button>'
+      +sensors.map(function(e){var a=e.attributes||{};
+        return '<button class="eopt" data-eid="'+esc(e.entity_id)+'">'+mdi(a.icon)
+          +'<span class="et">'+esc(a.friendly_name||e.entity_id)+'<small>'+esc(e.entity_id)+' · '+esc(String(e.state))+'</small></span></button>';}).join('');
+    m.querySelectorAll('.eopt').forEach(function(b){b.onclick=function(){
+      _pcName(ent,b.getAttribute('data-eid'));};});
+  }
+
+  function _pcName(ent,readEid){
+    var wid=ent.entity_id,fn=(ent.attributes||{}).friendly_name||wid;
+    estOpen('<h3>Name it</h3>'
+      +'<div class="phint">One word — it sits on the dock, so “'+esc(fn)+'” becomes something like “'+esc(_oneWord(fn)||'Bed')+'”.</div>'
+      +'<label>Dock label</label><input data-f="nm" maxlength="12" placeholder="Bed">'
+      +'<div class="perr"></div>'
+      +'<div class="btns"><button data-x="back">Back</button><button class="save" data-x="add">Add</button></div>');
+    var m=document.getElementById('estModal'),f=m.querySelector('[data-f="nm"]');
+    f.value=_oneWord(fn);f.focus();f.select();
+    m.querySelector('[data-x="back"]').onclick=_pcPickEntity;
+    m.querySelector('[data-x="add"]').onclick=function(){
+      var err=_pinNameErr(f.value);
+      if(err){_pcErr(err);return;}
+      _pcWork.push({read_eid:readEid||wid,write_eid:wid,name:f.value.trim()});
+      _pcPinsPaint();};
+  }
+
   function wireSettings(){
     var host=document.getElementById('setSecs');if(!host)return;
     var u=null;try{u=JSON.parse(localStorage.getItem('zoe_session')||'null');}catch(e){}
     var who=(u&&(u.username||u.user_id))||'Guest';
     host.innerHTML=[
       {t:'Account',b:'<div class="srow2"><span>Signed in as <b>'+esc(who)+'</b></span></div><div class="srow2"><span>Log out when idle</span><select id="setIdleLogout" class="sset"><option value="">…</option></select></div><div class="srow2" data-act="switch"><span>Switch user</span><span class="chev2">›</span></div><button class="sout" id="setOut">Sign out</button>'},
+      {t:'This panel',b:'<div id="setPanel"><div class="srow2"><span style="color:var(--ink-faint)">Loading…</span></div></div>'},
       {t:'Display',b:'<div id="setDisp"><div class="srow2"><span style="color:var(--ink-faint)">Loading…</span></div></div>'},
       {t:'Voice',b:'<div id="setVoice"><div class="srow2"><span style="color:var(--ink-faint)">Loading…</span></div></div>'},
       {t:'System',b:'<div id="setSys"><div class="srow2"><span style="color:var(--ink-faint)">Checking…</span></div></div>'},
       {t:'Household',b:'<div class="srow2" data-act="contacts"><span>Contacts</span><span class="chev2">›</span></div><div class="srow2" data-act="rooms"><span>Rooms & devices</span><span class="chev2">›</span></div><div class="srow2" data-act="pair"><span>Link a device</span><span class="chev2">›</span></div>'}
     ].map(function(sec,i){return '<div class="setsec"><div class="sh">'+esc(sec.t)+'<span class="caret">›</span></div><div class="sbody"><div class="inner">'+sec.b+'</div></div></div>';}).join('');
+
+    wirePanelSettings();
 
     // Display: the panel's real brightness/night/idle prefs, live-wired.
     apiGet('/api/system/display/preferences?device_id='+encodeURIComponent(_panelDevId())).then(function(d){
