@@ -1123,20 +1123,18 @@
   }
   function _pcCacheWrite(d){try{localStorage.setItem(_pcCacheKey(),JSON.stringify(d));}catch(e){}}
   function loadPanelCfg(cb){
+    // A malformed 200 and a failed request are the SAME situation — we did not
+    // learn this panel's config — so they share one recovery path. Keep
+    // whatever we already had; on a cold boot fall back to the cached config
+    // rather than to the wrong devices. A pinned dock must never revert to
+    // unrelated (and tappable) fallback lights over a momentary blip or a bad
+    // response. Only a panel that has genuinely never loaded a config stays
+    // null, which is the honest "we know nothing yet" state.
+    function unknown(){if(!_pcfg)_pcfg=_pcCacheRead();_pcfgLoaded=true;cb&&cb();}
     apiGet('/api/panels/'+encodeURIComponent(_panelDevId())+'/config').then(function(d){
-      // Keep the last known-good config on a malformed response.
-      if(d&&Array.isArray(d.pinned)){_pcfg=d;_pcCacheWrite(d);}
-      _pcfgLoaded=true;cb&&cb();
-    }).catch(function(){
-      // A failed fetch must not revert a pinned dock to the fallback: that
-      // would swap the operator's chosen controls for unrelated lights over a
-      // momentary backend/auth/network blip. Keep whatever we already had; on
-      // a cold boot fall back to the cached config rather than to the wrong
-      // devices. Only a panel that has genuinely never loaded one stays null,
-      // which is the honest "we know nothing yet" state.
-      if(!_pcfg)_pcfg=_pcCacheRead();
-      _pcfgLoaded=true;cb&&cb();
-    });
+      if(!d||!Array.isArray(d.pinned)){unknown();return;}
+      _pcfg=d;_pcCacheWrite(d);_pcfgLoaded=true;cb&&cb();
+    }).catch(unknown);
   }
   var _ha={loaded:false,ok:false,lights:[],climate:null,scenes:[]};
   function haControl(body){return fetch('/api/ha/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify(body)});}
@@ -2400,7 +2398,12 @@
     m.querySelector('[data-x="add"]').onclick=function(){if(_pcWork.length<max)_pcPickEntity();};
     m.querySelector('[data-x="cancel"]').onclick=estClose;
     m.querySelector('[data-x="save"]').onclick=function(){
-      if(stale)return;   // never write a list that is missing unresolved pins
+      // Re-read `unresolved` at CLICK time, not paint time: the 30s config
+      // refresh runs while this modal is open, so HA can drop an entity after
+      // the editor was painted. Trusting the painted value would let exactly
+      // the deletion this guard exists to prevent slip through.
+      var nowStale=(_pcfg&&_pcfg.unresolved||[]).length;
+      if(nowStale){_pcPinsPaint();return;}   // repaint to show the warning + disable Save
       // pinned:[] is a real choice ("show nothing"), distinct from never having
       // configured pins — so an empty list is saved as [], not null.
       _pcSave({pinned:_pcWork},estClose).catch(function(){});};

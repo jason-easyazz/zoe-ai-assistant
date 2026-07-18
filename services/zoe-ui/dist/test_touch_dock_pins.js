@@ -690,6 +690,71 @@ async function t(name, fn) {
     await page.close();
   });
 
+  // 19. a malformed 200 is "we didn't learn the config", not "no pins"
+  await t('a malformed 200 at boot falls back to the cache, not to HA lights', async () => {
+    const ctx = newCtx();
+    let page = await open(browser, ctx, { base, cfg: cfg({ pinned: [PIN_BED, PIN_NIGHT] }) });
+    const saved = await page.evaluate(() => {
+      const k = Object.keys(localStorage).find((x) => x.indexOf('zoe_panel_cfg_') === 0);
+      return { key: k, val: k ? localStorage.getItem(k) : null,
+        devId: localStorage.getItem('zoe_touch_panel_id') };
+    });
+    await page.close();
+
+    page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    await stub(page, ctx, { cfg: cfg() });
+    // 200 OK, but not the documented shape (e.g. a sick proxy returning a blob).
+    await page.route('**/api/panels/**', (route) => route.fulfill({
+      status: 200, contentType: 'application/json', body: JSON.stringify({ error: 'nope' }),
+    }));
+    await page.addInitScript((s) => {
+      if (s.devId) localStorage.setItem('zoe_touch_panel_id', s.devId);
+      localStorage.setItem(s.key, s.val);
+    }, saved);
+    await page.goto(base + '/touch/home.html', { waitUntil: 'domcontentloaded' });
+    await page.addStyleTag({ content: '#authov{display:none !important}' });
+    await page.waitForTimeout(1500);
+
+    assert.strictEqual((await tiles(page)).length, 2, 'cached pins must render on a malformed 200');
+    assert.strictEqual(await page.$$eval('#dbody .pc.light:not(.pin)', (e) => e.length), 0,
+      'a bad response must not put unrelated controls on a pinned dock');
+    await page.close();
+  });
+
+  // 20. a pin going unresolved WHILE the editor is open must still block Save
+  await t('Save re-checks unresolved at click time, not paint time', async () => {
+    const ctx = newCtx();
+    const page = await open(browser, ctx, {
+      base, clock: true, cfg: cfg({ pinned: [PIN_BED, PIN_FAN] }),
+    });
+    await openPanelSettings(page);
+    await page.click('#setPanel .srow2[data-p="pins"]');
+    await page.waitForTimeout(300);
+    // Editor opened with everything resolved: Save is live.
+    assert.ok(!(await page.$eval('#estModal [data-x="save"]', (e) => e.disabled)),
+      'Save should start enabled when all pins resolve');
+
+    // Now HA drops one, and the 30s refresh picks that up while the modal sits open.
+    await page.route('**/api/panels/**', (route) => {
+      if (route.request().method() === 'PUT') {
+        ctx.puts.push(JSON.parse(route.request().postData() || '{}'));
+        return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+      }
+      return route.fulfill({ status: 200, contentType: 'application/json',
+        body: JSON.stringify(cfg({ pinned: [PIN_BED], unresolved: ['input_boolean.fan'] })) });
+    });
+    await page.clock.runFor(31000);
+    await page.waitForTimeout(700);
+
+    await page.click('#estModal [data-x="save"]', { force: true });
+    await page.waitForTimeout(400);
+    assert.strictEqual(ctx.puts.length, 0,
+      'Save must not PUT a list that would delete the newly-unresolved pin');
+    assert.ok(await page.$eval('#estModal [data-x="save"]', (e) => e.disabled),
+      'the repaint should disable Save and explain');
+    await page.close();
+  });
+
   await browser.close();
   srv.close();
 
