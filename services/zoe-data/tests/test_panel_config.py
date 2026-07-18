@@ -731,3 +731,43 @@ def test_route_put_accepts_the_temp_pair_and_stores_the_canonical_pair(monkeypat
     assert (pin["kind"], pin["write_action"], pin["min"], pin["max"]) == (
         "temp", "set_value", 16.0, 30.0,
     )
+
+
+# ── scenes are fireable even when they've never been fired ───────────────────
+
+def _one(pin, idx):
+    resolved, _ = resolve_pins(validate_pins([pin]), idx)
+    return resolved[0]
+
+
+def test_scene_pin_is_available_when_state_is_unknown():
+    """Regression, found on the live panel: a pinned scene rendered DIMMED.
+
+    HA gives a scene no on/off state — its state is the last-activated timestamp,
+    or "unknown" if the household has never fired it. The state-based
+    availability test is right for a toggle or a sensor and wrong here: it dimmed
+    every unused scene, which is exactly the scenes a user most wants pinned.
+    """
+    idx = {"scene.movie_time": {"entity_id": "scene.movie_time", "state": "unknown",
+                                "attributes": {"friendly_name": "Movie Time"}}}
+    pin = _one({"entity_id": "scene.movie_time", "name": "Movie"}, idx)
+    assert pin["kind"] == KIND_SCENE
+    assert pin["available"] is True, "an unfired scene must still be fireable"
+
+
+def test_scene_pin_is_unavailable_when_integration_is_down():
+    """The guard still means something: an explicit "unavailable" is a real
+    outage, not merely an unused scene."""
+    idx = {"scene.movie_time": {"entity_id": "scene.movie_time", "state": "unavailable",
+                                "attributes": {"friendly_name": "Movie Time"}}}
+    pin = _one({"entity_id": "scene.movie_time", "name": "Movie"}, idx)
+    assert pin["available"] is False
+
+
+def test_toggle_pin_still_dims_on_unknown():
+    """Scenes are the exception — a toggle reporting "unknown" is genuinely not
+    actionable and must keep dimming."""
+    idx = {"input_boolean.fan": {"entity_id": "input_boolean.fan", "state": "unknown",
+                                 "attributes": {"friendly_name": "Ceiling Fan"}}}
+    pin = _one({"entity_id": "input_boolean.fan", "name": "Fan"}, idx)
+    assert pin["available"] is False

@@ -299,7 +299,16 @@ def _resolve_one(
 
     base["state"] = state
     base["friendly_name"] = read_attrs.get("friendly_name")
-    base["available"] = state not in _UNUSABLE_STATES
+    # A scene has no on/off state: HA reports the last-activated timestamp, or
+    # "unknown" if it has never been fired. That says nothing about whether it
+    # can BE fired, so the state-based availability test — correct for a toggle
+    # or a sensor — dims every scene the household hasn't used yet. A scene the
+    # entity index knows about is fireable; only an explicit "unavailable"
+    # (the integration is down) makes it not.
+    if kind == "scene":
+        base["available"] = state != "unavailable"
+    else:
+        base["available"] = state not in _UNUSABLE_STATES
     # Icon from the entity being DISPLAYED (read), falling back to the written
     # one, then to the per-kind default. Scenes carry no icon in HA today.
     base["icon"] = read_attrs.get("icon") or write_attrs.get("icon") or _DEFAULT_ICON[kind]
