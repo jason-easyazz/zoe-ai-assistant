@@ -786,6 +786,103 @@ async function t(name, fn) {
     await page.close();
   });
 
+  // ── the night screen renders the SAME pins ──────────────────────────────────
+  // It used to render `_ha.lights.slice(0,4)` with a hardcoded BULB: it ignored
+  // the operator's pins entirely and drew a light bulb on the fan — the exact
+  // domain-derived-icon bug the dock resolves server-side. These cases pin the
+  // SOURCE and SEMANTICS, not the sizing: sleep tiles stay large deliberately,
+  // because that surface is hit in the dark.
+
+  const sleepTiles = (page) => page.$$eval('#slDock .sc', (els) => els.map((e) => ({
+    name: (e.querySelector('.nm') || {}).textContent || '',
+    on: e.classList.contains('on'),
+    kind: e.getAttribute('data-k'),
+    eid: e.getAttribute('data-eid'),
+    unavail: e.classList.contains('unavail'),
+    icon: (e.querySelector('svg') || {}).innerHTML || '',
+  })));
+
+  // The real route in: no touch for IDLE_SLEEP_MS (180s). `show()` is scoped
+  // inside the estate's IIFE, so a test cannot call it — and a window hook
+  // added for the harness would prove less than driving the actual timer.
+  async function toSleep(page) {
+    await page.clock.runFor(181000);
+    await page.waitForSelector('.slp', { timeout: 5000 });
+    await page.waitForTimeout(400);
+  }
+
+  await t('sleep renders the operator pins, in order, with the server icon', async () => {
+    const ctx = newCtx();
+    const page = await open(browser, ctx, {
+      base, clock: true, cfg: cfg({ pinned: [PIN_BED, PIN_FAN] }),
+    });
+    await toSleep(page);
+    const st = await sleepTiles(page);
+    assert.deepStrictEqual(st.map((s) => s.name), ['Bed', 'Fan'],
+      'sleep must show the pins in the operator order, not HA friendly names');
+    assert.deepStrictEqual(st.map((s) => s.eid),
+      ['input_boolean.bedroom_light', 'input_boolean.fan'],
+      'sleep tiles must act on the pinned WRITE entities');
+    // The bug this whole change exists to kill: every tile drew the same bulb.
+    assert.notStrictEqual(st[0].icon, st[1].icon,
+      'the fan must not draw the light icon — sleep hardcoded BULB for every tile');
+    await page.close();
+  });
+
+  await t('sleep keeps the legacy fallback when nobody has pinned anything', async () => {
+    const ctx = newCtx();
+    const page = await open(browser, ctx, {
+      base, clock: true, cfg: cfg({ pins_configured: false, pinned: [] }),
+    });
+    await toSleep(page);
+    assert.ok((await sleepTiles(page)).length > 0,
+      'pins_configured:false must not leave a fresh panel with an empty night screen');
+    await page.close();
+  });
+
+  await t('sleep shows nothing when the operator pinned nothing', async () => {
+    const ctx = newCtx();
+    const page = await open(browser, ctx, {
+      base, clock: true, cfg: cfg({ pins_configured: true, pinned: [] }),
+    });
+    await toSleep(page);
+    assert.strictEqual((await sleepTiles(page)).length, 0,
+      'pins_configured:true with an empty list is a real choice and must NOT fall back');
+    await page.close();
+  });
+
+  await t('sleep temp tile is adjustable and survives the 30s refresh', async () => {
+    const ctx = newCtx();
+    const page = await open(browser, ctx, {
+      base, clock: true, cfg: cfg({ pinned: [PIN_TEMP] }),
+    });
+    await toSleep(page);
+    await page.click('#slDock .sc.temp');
+    await page.waitForTimeout(250);
+    assert.ok(await page.$('#slDock .sc.temp.open'),
+      'tapping the night temp tile must open its popover');
+    // Same trap as the dock: the poll would wipe the popover out from under a
+    // drag. Driving the timer is the only way to prove the guard holds.
+    await page.clock.runFor(31000);
+    await page.waitForTimeout(500);
+    assert.ok(await page.$('#slDock .sc.temp.open'),
+      'the 30s refresh must not destroy an open popover mid-drag');
+    await page.close();
+  });
+
+  await t('an unreachable pin renders muted on sleep, never blank', async () => {
+    const ctx = newCtx();
+    const page = await open(browser, ctx, {
+      base, clock: true,
+      cfg: cfg({ pinned: [Object.assign({}, PIN_BED, { available: false })] }),
+    });
+    await toSleep(page);
+    const st = await sleepTiles(page);
+    assert.strictEqual(st.length, 1, 'an unavailable pin must still render — the operator chose it');
+    assert.ok(st[0].unavail, 'it must be visibly muted so a dead control cannot pass as live');
+    await page.close();
+  });
+
   await browser.close();
   srv.close();
 
