@@ -820,7 +820,12 @@ async function t(name, fn) {
     await page.clock.runFor(181000);   // the idle window elapses
     await page.waitForTimeout(400);    // let the now-playing request settle
     await page.clock.runFor(5000);     // …or let the 4s fallback decide
-    await page.waitForSelector('.slp', { state: 'visible', timeout: 8000 });
+    // Wait on the CLOCK, not `.slp`: the surface wrapper has no CSS rule of its
+    // own and every child is position:absolute, so `.slp` collapses to a
+    // zero-size box that Playwright will always call hidden. Waiting on it was
+    // an unsatisfiable condition — the night screen was rendering correctly the
+    // whole time.
+    await page.waitForSelector('#slClock', { state: 'visible', timeout: 8000 });
     await page.waitForTimeout(400);
   }
 
