@@ -176,7 +176,7 @@ async def send_push_to_user(
             logger.warning(f"Push failed for {row['endpoint'][:40]}...: {e}")
             # Self-prune PERMANENTLY dead subscriptions. Two classes:
             #   * 410/404 — the push service says the subscription is gone.
-            #   * malformed crypto keys ("Invalid p256dh key" / invalid auth) —
+            #   * malformed crypto keys ("Invalid p256dh key" / "Invalid auth key") —
             #     raised client-side BEFORE any HTTP status, so the old
             #     410/404-only check never matched and the row was retried on
             #     EVERY send forever (a test.example.com junk sub did exactly
@@ -187,7 +187,7 @@ async def send_push_to_user(
                 "410" in msg
                 or "404" in msg
                 or "invalid p256dh" in msg
-                or "invalid auth" in msg
+                or "invalid auth key" in msg
             ):
                 dead_endpoints.append(row["endpoint"])
 
