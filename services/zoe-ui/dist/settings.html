@@ -1401,16 +1401,36 @@ let enrollSampleRate = 16000;
 let isRecording = false;
 let enrollSamples = 0;
 
-function encodeWav(float32Chunks, sampleRate) {
+function resampleLinear(float32Chunks, fromRate, toRate) {
   let length = 0;
   for (const c of float32Chunks) length += c.length;
-  const pcm = new Int16Array(length);
+  const src = new Float32Array(length);
   let off = 0;
-  for (const c of float32Chunks) {
-    for (let i = 0; i < c.length; i++) {
-      const s = Math.max(-1, Math.min(1, c[i]));
-      pcm[off++] = s < 0 ? s * 0x8000 : s * 0x7fff;
-    }
+  for (const c of float32Chunks) { src.set(c, off); off += c.length; }
+  if (fromRate === toRate) return src;
+  const outLen = Math.floor(src.length * toRate / fromRate);
+  const out = new Float32Array(outLen);
+  const ratio = fromRate / toRate;
+  for (let i = 0; i < outLen; i++) {
+    const pos = i * ratio;
+    const i0 = Math.floor(pos);
+    const i1 = Math.min(i0 + 1, src.length - 1);
+    out[i] = src[i0] + (src[i1] - src[i0]) * (pos - i0);
+  }
+  return out;
+}
+
+function encodeWav(float32Chunks, sampleRate) {
+  /* Downsample to 16 kHz before encoding: browsers capture at 44.1/48 kHz,
+     which would push a 10s enrollment past nginx's 1 MB default body limit.
+     Resemblyzer resamples to 16 kHz server-side anyway — no fidelity lost. */
+  const targetRate = 16000;
+  const mono = resampleLinear(float32Chunks, sampleRate, targetRate);
+  sampleRate = targetRate;
+  const pcm = new Int16Array(mono.length);
+  for (let i = 0; i < mono.length; i++) {
+    const s = Math.max(-1, Math.min(1, mono[i]));
+    pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
   }
   const buf = new ArrayBuffer(44 + pcm.length * 2);
   const v = new DataView(buf);

@@ -32,7 +32,7 @@ HTML = _SETTINGS.read_text(encoding="utf-8")
 
 
 def _enroll_fetch_block() -> str:
-    m = re.search(r"async function uploadEnrollment\(\).*?\n}", HTML, re.S)
+    m = re.search(r"async function uploadEnrollment\(\).*\n}", HTML, re.S)
     assert m, "uploadEnrollment() missing from settings.html"
     return m.group(0)
 
