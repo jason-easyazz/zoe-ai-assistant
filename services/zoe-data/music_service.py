@@ -282,6 +282,11 @@ async def now_playing(player_id: str = "") -> Optional[dict[str, Any]]:
         "queue_index": (queue or {}).get("current_index"),
         "shuffle": bool((queue or {}).get("shuffle_enabled")),
         "repeat": str((queue or {}).get("repeat_mode") or "off"),
+        # "Don't stop the music" read-back. It rides the now-playing poll for the
+        # same reason shuffle/repeat do: the panel already refreshes this every
+        # 5s, and the flag lives on the same queue object that is already in
+        # scope — so the toggle renders TRUE state on load instead of guessing.
+        "dont_stop": bool((queue or {}).get("dont_stop_the_music_enabled")),
         "elapsed": elapsed,
         "duration": duration,
     }
@@ -790,6 +795,40 @@ async def favorite_add(uri: str) -> bool:
     if not uri:
         return False
     return await _ma_ok("music/favorites/add_item", item=uri)
+
+
+async def favorite_remove(uri: str) -> bool:
+    """Un-favorite a media item by uri — the other half of `favorite_add`.
+
+    The two MA commands are NOT symmetric, which is the whole reason this needs
+    a resolve step: `favorites/add_item` takes a **uri**, but
+    `favorites/remove_item` takes **(media_type, library_item_id)**. Adding a
+    favourite forces the item into the library (MA's `add_item_to_favorites`
+    calls `add_item_to_library` first), so a favourited provider uri resolves
+    through `music/item_by_uri` to the LIBRARY row that carries that id.
+
+    Verified live against MA 2.8.7 with a ytmusic track (state restored after):
+        before favourite -> provider=ytmusic--…  item_id=lahBKZIkLDM  favorite=False
+        after  favourite -> provider=library     item_id=2            favorite=True
+
+    An item that was never favourited has no library row, so there is nothing
+    to remove — that is success, not failure (the heart is already off).
+    """
+    if not uri:
+        return False
+    item = await _ma("music/item_by_uri", uri=uri)
+    if not isinstance(item, dict):
+        return False
+    # Only a library row has an id `remove_item` accepts. A provider-owned item
+    # is by definition not in the library, hence not a favourite.
+    if str(item.get("provider") or "") != "library":
+        return True
+    library_item_id = item.get("item_id")
+    media_type = str(item.get("media_type") or "")
+    if library_item_id is None or not media_type:
+        return False
+    return await _ma_ok("music/favorites/remove_item",
+                        media_type=media_type, library_item_id=library_item_id)
 
 
 # ── Browse: structured search + play-by-URI (the "use your music" surface) ────

@@ -553,6 +553,14 @@ async def music_favorite(payload: dict) -> dict[str, Any]:
     return {"ok": await music_service.favorite_add(str((payload or {}).get("uri") or ""))}
 
 
+@router.post("/unfavorite")
+async def music_unfavorite(payload: dict) -> dict[str, Any]:
+    """Un-favorite a media item. body: {uri}. The other half of /favorite —
+    without it the panel's heart could only ever be turned ON."""
+    import music_service
+    return {"ok": await music_service.favorite_remove(str((payload or {}).get("uri") or ""))}
+
+
 @router.get("/recommendations")
 async def music_recommendations() -> dict[str, Any]:
     """MA's native recommendation shelves ("Listen again", "Mixed for you", …),
