@@ -957,11 +957,25 @@
         if((m2&&m2.classList.contains('on'))||(cb2&&cb2.classList.contains('on'))){armIdleSleep(IDLE_SLEEP_RETRY_MS);return;}
         show('sleep');
       }
+      // The decision must happen even if the request never resolves. apiGet is a
+      // bare fetch with no AbortController, so a server that accepts the socket
+      // and then goes quiet leaves the promise pending forever — neither .then
+      // nor .catch runs, and the panel latches awake. (The first version of this
+      // claimed "a failed request falls through to sleeping"; a HUNG one isn't a
+      // failed one, and that gap made the claim untrue.) Race a timer so exactly
+      // one decision is taken, whichever arrives first.
+      var _decided=false,_decideT=null;
+      function _decide(playing){
+        if(_decided)return;_decided=true;
+        if(_decideT){clearTimeout(_decideT);_decideT=null;}
+        if(playing){armIdleSleep(IDLE_SLEEP_RETRY_MS);return;}
+        _sleepNow();
+      }
+      _decideT=setTimeout(function(){_decide(false);},4000);
       apiGet('/api/music/now-playing').then(function(d){
         var np=d&&d.now_playing;
-        if(np&&np.state==='playing'){armIdleSleep(IDLE_SLEEP_RETRY_MS);return;}
-        _sleepNow();
-      }).catch(function(){_sleepNow();});
+        _decide(!!(np&&np.state==='playing'));
+      }).catch(function(){_decide(false);});
     },ms||IDLE_SLEEP_MS);}
   // Any touch on the panel means the user took over — the screen is theirs.
   document.addEventListener('pointerdown',function(){_userTookOver=true;_voiceScreen=false;cancelAutoHome();armIdleSleep();},true);
