@@ -333,8 +333,13 @@ async def set_preferred_player(payload: dict) -> dict[str, Any]:
     import music_service
     pid = str((payload or {}).get("player_id") or "")
     if pid:
+        # An empty player list means "cannot validate", NOT "no players".
+        # music_service._ma never raises — a transport failure returns None and
+        # get_players() turns that into []. Treating [] as an empty set rejected
+        # every id, so a brief MA outage locked the operator out of setting their
+        # own default speaker. Validate only when the list was actually visible.
         players = await music_service.get_players()
-        if not any(p.get("player_id") == pid for p in players):
+        if players and not any(p.get("player_id") == pid for p in players):
             return {"ok": False, "reason": "unknown player_id"}
     music_service.set_preferred_player_id(pid)
     return {"ok": True, "player_id": pid}
