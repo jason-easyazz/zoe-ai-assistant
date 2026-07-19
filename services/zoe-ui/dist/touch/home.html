@@ -1667,6 +1667,11 @@
       },250);};
   }
   function wireSeek(){
+    // The card is rebuilt on every show('music'), so a drag left in flight by a
+    // navigation would strand `_seek` set — and BOTH repainters bail while it
+    // is, freezing the bar for the rest of the session. Same hazard cfClear()
+    // handles for `_cf.drag`.
+    _seek=null;
     var sc=document.getElementById('mScrub');if(!sc||sc.dataset.wired)return;
     sc.dataset.wired='1';
     sc.addEventListener('pointerdown',function(e){

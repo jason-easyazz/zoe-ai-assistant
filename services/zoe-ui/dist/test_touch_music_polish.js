@@ -367,6 +367,33 @@ test('a poll mid-drag does not yank the bar back', async (browser, base) => {
   await page.close();
 });
 
+test('navigating away mid-drag does not freeze the bar forever', async (browser, base) => {
+  // _seek gates BOTH repainters. If a drag is abandoned by a navigation with it
+  // still set, the scrub never repaints again for the rest of the session.
+  const ctx = newCtx();
+  const page = await openMusic(browser, ctx, { base });
+  const tr = await (await page.$('.mfull .mtrack')).boundingBox();
+  await page.mouse.move(tr.x + tr.width * 0.8, tr.y + tr.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(tr.x + tr.width * 0.9, tr.y + tr.height / 2, { steps: 4 });
+  // Leave WITHOUT ever releasing, and never release — a pointerup (even on the
+  // detached element) would clear _seek by itself and hide the bug.
+  await page.evaluate(() => document.getElementById('home').click());
+  await page.waitForTimeout(500);
+  await page.click('#apps');
+  await page.waitForTimeout(400);
+  await page.click('.ltile[data-id="music"]');
+  await page.waitForSelector('#mTransport', { timeout: 8000 });
+  const polls = ctx.polls;
+  await page.waitForTimeout(6200);
+  assert.ok(ctx.polls > polls, 'no poll during the window — test proves nothing');
+  // elapsed is 30/100 -> the poll must have repainted the bar to ~30%.
+  const w = await page.$eval('#mFill', (e) => parseFloat(e.style.width));
+  assert.ok(Math.abs(w - 30) <= 3,
+    'the bar is stuck at ' + w + '% — a stranded _seek is still blocking repaints');
+  await page.close();
+});
+
 test('dont-stop toggles, reads back, and reverts on refusal', async (browser, base) => {
   // read-back
   let ctx = newCtx();
