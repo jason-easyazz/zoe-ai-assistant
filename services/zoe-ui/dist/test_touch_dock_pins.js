@@ -124,6 +124,12 @@ const PIN_TEMP = {
 function cfg(over) {
   return Object.assign({
     device_id: 'zoe-touch-pi', location: 'bedroom',
+    // The panel's Zoe room, added by the rooms work. Present-but-null is the
+    // real shape for a panel in no room — the client must never branch on key
+    // existence, so these are always sent. assertLiveContract() compares this
+    // key set against the live endpoint and caught their absence the moment
+    // the API shipped them.
+    room_id: null, room_name: null, room_slug: null,
     default_player: 'living', default_player_source: 'global',
     pins_configured: true, pinned: [], unresolved: [],
     ha_available: true, max_pins: 4,
