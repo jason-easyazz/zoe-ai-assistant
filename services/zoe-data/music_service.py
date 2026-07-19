@@ -611,7 +611,13 @@ async def group_players(target_player_id: str,
         player_ids_to_add=to_add or None,
         player_ids_to_remove=to_remove or None,
     )
-    return {"ok": ok, "target_player_id": target, "added": to_add, "removed": to_remove}
+    result = {"ok": ok, "target_player_id": target, "added": to_add, "removed": to_remove}
+    if not ok:
+        # EVERY failure carries `reason` — a caller that reads it on ok:false
+        # must never hit a KeyError just because the failure came from MA
+        # rejecting the command rather than from local validation.
+        result["reason"] = "music assistant rejected the group command"
+    return result
 
 
 async def ungroup_player(player_id: str) -> dict[str, Any]:
@@ -629,7 +635,10 @@ async def ungroup_player(player_id: str) -> dict[str, Any]:
     if not pid:
         return {"ok": False, "reason": "missing player_id"}
     ok = await _ma_ok("players/cmd/ungroup", player_id=pid)
-    return {"ok": ok, "player_id": pid}
+    if not ok:
+        return {"ok": False, "player_id": pid,
+                "reason": "music assistant rejected the ungroup command"}
+    return {"ok": True, "player_id": pid}
 
 
 async def search_and_play(query: str, player_id: str = "",

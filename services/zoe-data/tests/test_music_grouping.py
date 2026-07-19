@@ -400,6 +400,34 @@ async def test_group_reports_failure_when_ma_rejects(monkeypatch):
     result = await music_service.group_players("RINCON_347E5C9BEC8F01400",
                                                add=["up286412cf6eb7"])
     assert result["ok"] is False
+    # An MA rejection is still a failure, so it must carry `reason` like every
+    # other one — a caller reading result["reason"] must never KeyError.
+    assert result["reason"]
+
+
+@pytest.mark.asyncio
+async def test_every_failure_carries_a_reason(monkeypatch):
+    """The failure contract is `{ok: false, reason}` with NO exceptions.
+
+    Covers both origins of failure — local validation AND an MA rejection —
+    across both write endpoints, so a third response shape cannot creep back in.
+    """
+    fake = _FakeMA(accept=False)
+    monkeypatch.setattr(music_service, "_ma", fake.ma)
+    monkeypatch.setattr(music_service, "_ma_ok", fake.ma_ok)
+
+    failures = [
+        await music_service.group_players(""),                       # validation
+        await music_service.group_players("RINCON_347E5C9BEC8F01400"),
+        await music_service.group_players("upe0036b3da273", add=["up286412cf6eb7"]),
+        await music_service.group_players("RINCON_347E5C9BEC8F01400",  # MA rejected
+                                          add=["up286412cf6eb7"]),
+        await music_service.ungroup_player(""),                      # validation
+        await music_service.ungroup_player("up286412cf6eb7"),        # MA rejected
+    ]
+    for result in failures:
+        assert result["ok"] is False
+        assert isinstance(result.get("reason"), str) and result["reason"], result
 
 
 @pytest.mark.asyncio
