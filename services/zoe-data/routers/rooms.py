@@ -180,6 +180,35 @@ async def _entity_index() -> dict[str, dict] | None:
     return await panel_entity_index()
 
 
+async def room_entity_ids_for_panel(db, panel_id: str) -> set[str]:
+    """The entity ids in the room a panel is standing in — "in here".
+
+    Used by the voice path to break an otherwise-ambiguous bare command. Returns
+    an EMPTY set for every "we don't know" case (no panel id, panel not in a
+    room, room deleted, lookup failed), because the caller treats empty as "no
+    room context" and behaves exactly as it did before rooms existed. A partial
+    or wrong answer here would silently act on the wrong room's light, so
+    "unknown" must never be approximated.
+    """
+    if not panel_id:
+        return set()
+    try:
+        cursor = await db.execute(
+            "SELECT room_id FROM panels WHERE panel_id = ?", (panel_id,)
+        )
+        row = await cursor.fetchone()
+        room_id = row["room_id"] if row is not None else None
+        if not room_id:
+            return set()
+        cursor = await db.execute(
+            "SELECT entity_id FROM room_devices WHERE room_id = ?", (str(room_id),)
+        )
+        return {str(r["entity_id"]) for r in await cursor.fetchall()}
+    except Exception:  # noqa: BLE001 — a lookup failure must not break the turn
+        logger.warning("room lookup failed for panel %s", panel_id, exc_info=True)
+        return set()
+
+
 async def _room_row(db, room_id: str):
     cursor = await db.execute(
         "SELECT id, name, slug, ha_area_id FROM rooms WHERE id = ?", (room_id,)
