@@ -1,4 +1,4 @@
-"""0023 — voice_announcements: the daemon-facing spoken-announcement queue (P-W2.3).
+"""0025 — voice_announcements: the daemon-facing spoken-announcement queue (P-W2.3).
 
 W2's spoken morning brief (#1412/#1414) "succeeded" twice while producing no
 audio: the kiosk BROWSER was the speaker (`panel_announce` → fire-and-forget
@@ -24,8 +24,8 @@ convention).
 
 from alembic import op
 
-revision = "0023"
-down_revision = "0022"
+revision = "0025"
+down_revision = "0024"
 branch_labels = None
 depends_on = None
 

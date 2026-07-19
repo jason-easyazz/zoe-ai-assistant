@@ -276,9 +276,9 @@ def test_endpoint_is_wired_through_require_voice_auth():
     assert getattr(dep, "dependency", None) is voice_tts._require_voice_auth
 
 
-# ── migration 0023: extends the chain and creates the shape this module uses ─
+# ── migration 0025: extends the chain and creates the shape this module uses ─
 
-def test_0023_extends_the_migration_chain_single_head():
+def test_0025_extends_the_migration_chain_single_head():
     from pathlib import Path
 
     from alembic.config import Config
@@ -290,11 +290,11 @@ def test_0023_extends_the_migration_chain_single_head():
     cfg.set_main_option("sqlalchemy.url", "postgresql+psycopg2://u:p@localhost/db")
     script = ScriptDirectory.from_config(cfg)
     heads = list(script.get_heads())
-    assert heads == ["0023"], f"migration graph must stay linear — heads: {heads}"
-    assert script.get_revision("0023").down_revision == "0022"
+    assert heads == ["0025"], f"migration graph must stay linear — heads: {heads}"
+    assert script.get_revision("0025").down_revision == "0024"
 
 
-def test_migration_0023_creates_the_columns_this_module_queries():
+def test_migration_0025_creates_the_columns_this_module_queries():
     import importlib.util
     from pathlib import Path
 
@@ -304,7 +304,7 @@ def test_migration_0023_creates_the_columns_this_module_queries():
 
     svc = Path(voice_announce.__file__).resolve().parent
     spec = importlib.util.spec_from_file_location(
-        "mig_0023", svc / "alembic" / "versions" / "0023_voice_announcements.py"
+        "mig_0025", svc / "alembic" / "versions" / "0025_voice_announcements.py"
     )
     migration = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(migration)
