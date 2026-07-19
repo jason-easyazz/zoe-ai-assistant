@@ -118,3 +118,31 @@ async def test_transient_failure_is_NOT_pruned(monkeypatch):
     await push.send_push_to_user("jason", message="hi")
 
     assert db.deletes == [], "a transient failure must never prune a subscription"
+
+
+@pytest.mark.asyncio
+async def test_http_auth_rejection_is_NOT_pruned(monkeypatch):
+    """Greptile (PR #1419): "invalid auth" substring-matches "invalid
+    authorization" — a phrase a proxy/CDN can return in a transient 401 body.
+    If pywebpush surfaces the response body in the exception, a VAPID hiccup
+    must NOT permanently prune a healthy subscription. The marker is therefore
+    the exact client-side error, "invalid auth key"."""
+    db = _wire(
+        monkeypatch,
+        rows=[dict(_ROW)],
+        exc_message="401 Unauthorized: invalid authorization header",
+    )
+
+    await push.send_push_to_user("jason", message="hi")
+
+    assert db.deletes == [], "a transient VAPID auth rejection must never prune"
+
+
+@pytest.mark.asyncio
+async def test_invalid_auth_key_subscription_is_pruned(monkeypatch):
+    db = _wire(monkeypatch, rows=[dict(_ROW)], exc_message="Invalid auth key specified")
+
+    await push.send_push_to_user("jason", message="hi")
+
+    assert db.deletes == [("jason", _ROW["endpoint"])]
+    assert db.committed, "prune must COMMIT — enqueued-but-uncommitted deletes leave the row"
