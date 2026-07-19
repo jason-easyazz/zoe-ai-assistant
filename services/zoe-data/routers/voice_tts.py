@@ -2559,8 +2559,9 @@ async def voice_command(
     identified_user_id: Optional[str] = (payload or {}).get("identified_user_id") or None
     if not identified_user_id:
         # Panels that match speaker profiles locally send a claim + score; the
-        # threshold decision stays server-side so a panel can never lower it.
-        identified_user_id = _accept_panel_voice_claim(payload)
+        # threshold decision stays server-side so a panel can never lower it,
+        # and only device-token callers may claim at all.
+        identified_user_id = _accept_panel_voice_claim(payload, caller)
     # Forwarded by /voice/turn so end-to-end total can be recorded from the
     # true start of the request (audio upload). Falls back to command start.
     _t_turn_start = (payload or {}).get("_t_turn_start")
@@ -5097,15 +5098,19 @@ def _speaker_id_threshold() -> float:
         return 0.82
 
 
-def _accept_panel_voice_claim(payload: dict) -> Optional[str]:
+def _accept_panel_voice_claim(payload: dict, caller: dict) -> Optional[str]:
     """Gate a panel-computed speaker-ID claim (voice_user_id + voice_score).
 
     The panel matches embeddings against its synced profile cache and sends
     only a claim; acceptance is decided HERE against the server's threshold,
-    so a panel cannot make itself more trusted than the server allows. A
-    missing/unparseable score or a below-threshold claim is ignored (the turn
+    so a panel cannot make itself more trusted than the server allows. Claims
+    are honoured from DEVICE-TOKEN callers only — a logged-in browser session
+    must not be able to assert an arbitrary speaker identity. A missing/
+    unparseable score or a below-threshold claim is ignored (the turn
     proceeds with the panel-binding fallbacks, exactly as with no claim).
     """
+    if (caller or {}).get("source") != "device":
+        return None
     payload = payload or {}
     user = str(payload.get("voice_user_id") or "").strip()
     if not user:
@@ -5156,7 +5161,10 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
     # Biometric enrollment is opt-in (W6): the enroll UI sends consent=true after
     # an explicit checkbox. Without recorded consent the profile is stored but
     # never matched against or synced to a panel (identify/sync filter on it).
-    consent = bool((payload or {}).get("consent"))
+    # Tri-state: True stamps consent_at, False REVOKES it (SET NULL — the user
+    # changed their mind), absent leaves the existing consent untouched.
+    _consent_raw = (payload or {}).get("consent")
+    consent: Optional[bool] = None if _consent_raw is None else bool(_consent_raw)
 
     if not b64:
         raise HTTPException(status_code=400, detail="audio_base64 is required")
@@ -5204,9 +5212,15 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
                        display_name=? WHERE id=?""",
                     (averaged_norm.astype(np.float32).tobytes(), display_name, old_id),
                 )
-                if consent:
+                if consent is True:
                     await db.execute(
                         "UPDATE speaker_profiles SET consent_at=CURRENT_TIMESTAMP WHERE id=?",
+                        (old_id,),
+                    )
+                elif consent is False:
+                    # Explicit revocation: drop out of the match pool + sync feed.
+                    await db.execute(
+                        "UPDATE speaker_profiles SET consent_at=NULL WHERE id=?",
                         (old_id,),
                     )
                 profile_id = old_id

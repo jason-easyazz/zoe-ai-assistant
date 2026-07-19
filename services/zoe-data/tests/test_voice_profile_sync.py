@@ -35,23 +35,39 @@ from routers.voice_tts import _accept_panel_voice_claim, voice_profiles_sync
 
 # ── 1. claim gate ──────────────────────────────────────────────────────────
 
+DEVICE_CALLER = {"source": "device", "panel_id": "zoe-touch-pi", "user_id": "voice-daemon"}
+
+
 def test_claim_accepted_at_threshold(monkeypatch):
     monkeypatch.setenv("ZOE_SPEAKER_ID_THRESHOLD", "0.82")
-    assert _accept_panel_voice_claim({"voice_user_id": "jason", "voice_score": 0.82}) == "jason"
-    assert _accept_panel_voice_claim({"voice_user_id": "jason", "voice_score": 0.99}) == "jason"
+    assert _accept_panel_voice_claim({"voice_user_id": "jason", "voice_score": 0.82}, DEVICE_CALLER) == "jason"
+    assert _accept_panel_voice_claim({"voice_user_id": "jason", "voice_score": 0.99}, DEVICE_CALLER) == "jason"
 
 
 def test_claim_rejected_below_threshold(monkeypatch):
     monkeypatch.setenv("ZOE_SPEAKER_ID_THRESHOLD", "0.82")
-    assert _accept_panel_voice_claim({"voice_user_id": "jason", "voice_score": 0.8199}) is None
+    assert _accept_panel_voice_claim({"voice_user_id": "jason", "voice_score": 0.8199}, DEVICE_CALLER) is None
+
+
+@pytest.mark.parametrize("caller", [
+    None,
+    {},
+    {"source": "session", "user_id": "jason", "role": "admin"},  # logged-in browser
+    {"source": "session", "user_id": "mallory", "role": "member"},
+])
+def test_claim_rejected_for_non_device_callers(monkeypatch, caller):
+    # Security invariant: only device-token callers may claim a speaker
+    # identity — a browser session with a perfect score is still ignored.
+    monkeypatch.setenv("ZOE_SPEAKER_ID_THRESHOLD", "0.0")
+    assert _accept_panel_voice_claim({"voice_user_id": "admin", "voice_score": 0.99}, caller) is None
 
 
 def test_claim_threshold_is_read_per_call(monkeypatch):
     payload = {"voice_user_id": "jason", "voice_score": 0.85}
     monkeypatch.setenv("ZOE_SPEAKER_ID_THRESHOLD", "0.9")
-    assert _accept_panel_voice_claim(payload) is None
+    assert _accept_panel_voice_claim(payload, DEVICE_CALLER) is None
     monkeypatch.setenv("ZOE_SPEAKER_ID_THRESHOLD", "0.8")
-    assert _accept_panel_voice_claim(payload) == "jason"
+    assert _accept_panel_voice_claim(payload, DEVICE_CALLER) == "jason"
 
 
 @pytest.mark.parametrize("payload", [
@@ -65,13 +81,13 @@ def test_claim_threshold_is_read_per_call(monkeypatch):
 def test_claim_ignored_without_valid_score(payload, monkeypatch):
     monkeypatch.setenv("ZOE_SPEAKER_ID_THRESHOLD", "0.0")
     # Even a zero threshold must not accept a claim that carries no real score.
-    assert _accept_panel_voice_claim(payload) is None
+    assert _accept_panel_voice_claim(payload, DEVICE_CALLER) is None
 
 
 def test_unparseable_threshold_falls_back_to_default(monkeypatch):
     monkeypatch.setenv("ZOE_SPEAKER_ID_THRESHOLD", "not-a-float")
-    assert _accept_panel_voice_claim({"voice_user_id": "jason", "voice_score": 0.83}) == "jason"
-    assert _accept_panel_voice_claim({"voice_user_id": "jason", "voice_score": 0.81}) is None
+    assert _accept_panel_voice_claim({"voice_user_id": "jason", "voice_score": 0.83}, DEVICE_CALLER) == "jason"
+    assert _accept_panel_voice_claim({"voice_user_id": "jason", "voice_score": 0.81}, DEVICE_CALLER) is None
 
 
 # ── 2. profile sync ────────────────────────────────────────────────────────
@@ -150,19 +166,25 @@ async def test_sync_returns_consented_profiles_and_threshold(monkeypatch):
 # ── 3. enroll consent plumbing ─────────────────────────────────────────────
 
 class _WriteDB(_FakeDB):
-    """Execute double for the enroll path: no existing profile, records writes."""
+    """Execute double for the enroll path.
 
-    def __init__(self):
+    ``existing_row`` selects the branch: None → INSERT (new profile);
+    a (id, embedding_blob, sample_count) tuple → the UPDATE/re-enroll path.
+    """
+
+    def __init__(self, existing_row=None):
         super().__init__(rows=[])
         self.params: list[tuple] = []
+        self.existing_row = existing_row
 
     def execute(self, sql, params=()):
         self.queries.append(sql)
         self.params.append(tuple(params))
+        existing = self.existing_row
 
         class _Cur(_FakeCursor):
             async def fetchone(self):
-                return None  # no existing profile → INSERT branch
+                return existing
 
             # Write sites do `await db.execute(...)`; read sites use
             # `async with db.execute(...)`. Support both shapes.
@@ -177,11 +199,7 @@ class _WriteDB(_FakeDB):
         return None
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("consent,expect_stamp", [(True, True), (False, False)])
-async def test_enroll_stamps_consent_only_when_given(monkeypatch, consent, expect_stamp):
-    db = _WriteDB()
-
+def _wire_enroll(monkeypatch, db):
     @contextlib.asynccontextmanager
     async def fake_ctx():
         yield db
@@ -191,15 +209,54 @@ async def test_enroll_stamps_consent_only_when_given(monkeypatch, consent, expec
     monkeypatch.setitem(sys.modules, "db_compat", mod)
     monkeypatch.setattr(voice_tts, "_compute_resemblyzer_embedding", lambda _p: EMB_JASON)
 
-    payload = {
+
+def _enroll_payload(consent):
+    p = {
         "audio_base64": base64.b64encode(b"RIFF-fake-wav").decode(),
         "user_id": "jason",
         "display_name": "Jason",
-        "consent": consent,
     }
-    out = await voice_tts.voice_enroll(payload, caller={"source": "device", "user_id": "voice-daemon"})
+    if consent is not None:
+        p["consent"] = consent
+    return p
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("consent,expect_stamp", [(True, True), (False, False), (None, False)])
+async def test_enroll_insert_stamps_consent_only_when_given(monkeypatch, consent, expect_stamp):
+    db = _WriteDB(existing_row=None)
+    _wire_enroll(monkeypatch, db)
+
+    out = await voice_tts.voice_enroll(
+        _enroll_payload(consent), caller={"source": "device", "user_id": "voice-daemon"})
 
     assert out["ok"] is True
     inserts = [q for q in db.queries if "INSERT INTO speaker_profiles" in q]
     assert len(inserts) == 1
     assert ("consent_at" in inserts[0]) is expect_stamp
+
+
+EXISTING = ("pid-old", EMB_JASON, 2)  # (id, embedding_blob, sample_count)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("consent,expect", [
+    (True, "stamp"),    # re-consent stamps CURRENT_TIMESTAMP
+    (False, "revoke"),  # explicit revocation clears consent_at → out of match pool
+    (None, "untouched"),  # absent field leaves existing consent as-is
+])
+async def test_reenroll_consent_stamp_revoke_untouched(monkeypatch, consent, expect):
+    db = _WriteDB(existing_row=EXISTING)
+    _wire_enroll(monkeypatch, db)
+
+    out = await voice_tts.voice_enroll(
+        _enroll_payload(consent), caller={"source": "device", "user_id": "voice-daemon"})
+
+    assert out["ok"] is True and out["profile_id"] == "pid-old"
+    consent_updates = [q for q in db.queries if "SET consent_at" in q]
+    if expect == "stamp":
+        assert len(consent_updates) == 1 and "CURRENT_TIMESTAMP" in consent_updates[0]
+    elif expect == "revoke":
+        assert len(consent_updates) == 1 and "consent_at=NULL" in consent_updates[0]
+    else:
+        assert consent_updates == []
