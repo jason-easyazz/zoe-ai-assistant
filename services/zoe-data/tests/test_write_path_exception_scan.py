@@ -60,9 +60,10 @@ Deliberately out of scope (keep this scan narrow enough to stay enabled)
 * **Dynamic SQL** (f-strings/variables). Only literal SQL is classified, so a
   computed statement is invisible here. Every write in the scanned modules is
   a literal today; keep it that way.
-* **The voice runtime** (``voice_tts.py``, ``zoe_core_client.py``,
-  ``fast_tiers.py``, ``kokoro_sidecar.py``) — changes there need the voice
-  replay gate, so they are not in ``WRITE_PATH_MODULES`` yet.
+* **The rest of the voice runtime** (``zoe_core_client.py``, ``fast_tiers.py``,
+  ``kokoro_sidecar.py``) — no literal-SQL writes there today.
+  ``routers/voice_tts.py`` IS listed: its 4 handlers were promoted (replay-gated)
+  in the follow-up to #1373.
 
 Modules are added to ``WRITE_PATH_MODULES`` as they are burned down, exactly
 like ``CLEANED_FILES`` in ``test_get_db_leak_scan.py``.
@@ -83,10 +84,6 @@ pytestmark = pytest.mark.ci_safe
 _SERVICE_DIR = Path(__file__).resolve().parents[1]
 
 # Burned-down modules — append per sweep PR.
-#
-# NOT yet listed: routers/voice_tts.py (4 handlers). It is on the voice runtime
-# path, so promoting its handlers requires the voice replay gate (see the root
-# AGENTS.md) — it lands in a separate, gated PR.
 WRITE_PATH_MODULES = [
     "person_extractor.py",
     "pending_suggestions.py",
@@ -98,6 +95,7 @@ WRITE_PATH_MODULES = [
     "zoe_agent.py",
     "routers/chat.py",
     "routers/panel_auth.py",
+    "routers/voice_tts.py",
     "routers/people.py",
     "routers/stubs.py",
 ]

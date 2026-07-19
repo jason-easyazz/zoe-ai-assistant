@@ -872,7 +872,10 @@ async def _broadcast_weather_ui(
                 logger.debug("voice weather ui broadcast failed (non-fatal): %s", exc)
             break
     except Exception as exc:
-        logger.debug("voice weather ui enqueue failed (non-fatal): %s", exc)
+        logger.warning(
+            "voice weather ui_actions enqueue failed for panel=%s — weather card/navigate dropped (non-fatal): %s",
+            panel_id, exc,
+        )
 
 
 async def _broadcast_calendar_ui(
@@ -1053,7 +1056,10 @@ async def _broadcast_skybridge_ui(
                         (_superseded_at, _row["id"]),
                     )
             except Exception as _sup_exc:
-                logger.debug("voice skybridge stale-action cleanup failed (non-fatal): %s", _sup_exc)
+                logger.warning(
+                    "voice skybridge stale ui_actions supersede UPDATE failed for panel=%s user=%s — old queued actions may replay (non-fatal): %s",
+                    panel_id, _panel_user_id, _sup_exc,
+                )
             await _db.commit()
             nav_delivered = await broadcaster.broadcast_to_panel(
                 panel_id,
@@ -1077,7 +1083,10 @@ async def _broadcast_skybridge_ui(
                 await _db.commit()
             break
     except Exception as exc:
-        logger.debug("voice skybridge ui enqueue failed (non-fatal): %s", exc)
+        logger.warning(
+            "voice skybridge ui_actions enqueue failed for panel=%s — skybridge card/navigate dropped (non-fatal): %s",
+            panel_id, exc,
+        )
 
 
 async def _broadcast_lets_talk_ui(panel_id: str, turn_key: Optional[str] = None) -> None:
@@ -1560,7 +1569,10 @@ async def _touch_panel_session(panel_id: str, user_id: str) -> None:
             )
             await _conn.commit()
     except Exception as exc:
-        logger.debug("voice: panel session heartbeat failed for panel=%s (non-fatal): %s", panel_id, exc)
+        logger.warning(
+            "voice: ui_panel_sessions heartbeat UPSERT failed for panel=%s user=%s — session may lapse to guest (non-fatal): %s",
+            panel_id, user_id, exc,
+        )
 
 
 _PANEL_IDLE_LOGOUT_KEY = "panel_idle_logout_s"
