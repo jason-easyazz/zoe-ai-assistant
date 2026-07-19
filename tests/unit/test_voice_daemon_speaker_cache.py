@@ -96,8 +96,12 @@ def test_match_empty_cache_and_bad_rows(daemon):
     with daemon._profile_cache_lock:
         daemon._profile_cache["profiles"] = [
             {"user_id": "junk", "embedding_base64": "!!not-base64!!"},
+            _profile("wrongdim", [1.0, 0.0]),        # dim mismatch vs 3-dim query
+            {"user_id": "", "embedding_base64": _profile("x", [1.0, 0.0, 0.0])["embedding_base64"]},
             _profile("jason", [1.0, 0.0, 0.0]),
         ]
+    # One bad row (junk base64 / wrong dim / empty user) must cost only that
+    # row, never the whole turn's speaker ID.
     user, _ = daemon._match_speaker_local(np.asarray([1.0, 0.0, 0.0], dtype=np.float32))
     assert user == "jason"
 

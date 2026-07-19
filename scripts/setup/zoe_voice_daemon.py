@@ -962,17 +962,22 @@ def _match_speaker_local(embedding) -> tuple[str, float] | None:
         return None
     best_user, best_score = None, -1.0
     for p in profiles:
+        uid = p.get("user_id")
+        if not uid:
+            continue
         try:
             ref = _np.frombuffer(_b64.b64decode(p["embedding_base64"]), dtype=_np.float32)
+            if ref.shape != _np.shape(embedding):
+                continue  # model-version mismatch — skip this row, keep the rest
+            denom = float(_np.linalg.norm(embedding) * _np.linalg.norm(ref))
+            if denom <= 0:
+                continue
+            score = float(_np.dot(embedding, ref) / denom)
         except Exception:
-            continue
-        denom = float(_np.linalg.norm(embedding) * _np.linalg.norm(ref))
-        if denom <= 0:
-            continue
-        score = float(_np.dot(embedding, ref) / denom)
+            continue  # one bad row must never cost the whole turn's speaker ID
         if score > best_score:
-            best_user, best_score = p.get("user_id"), score
-    if not best_user:
+            best_user, best_score = uid, score
+    if best_user is None:
         return None
     return best_user, best_score
 
