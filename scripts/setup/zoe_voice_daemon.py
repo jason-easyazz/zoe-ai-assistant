@@ -1657,6 +1657,108 @@ def voice_command(pa: pyaudio.PyAudio, oww, wake_stream=None) -> None:
             log.debug("openWakeWord reset: %s", exc)
 
 
+# ── Server-pushed spoken announcements (P-W2.3) ─────────────────────────────
+# The daemon is the household SPEAKER: proactive spoken deliveries (the morning
+# brief) are enqueued server-side and claimed here via GET /api/voice/announcements
+# (device-token auth — the same DEVICE_TOKEN/_headers every other call uses).
+# The kiosk browser was never a real audio path (guest session → /speak 401'd
+# silently); this poll lane plays announces through the SAME playback machinery
+# as replies, so barge-in, echo-suppression cooldown, and wake re-arm behave
+# identically. Decision logic lives in zoe_voice_announce.py (same dir, pure
+# stdlib) so it is unit-testable off-Pi; deploy both files together.
+ANNOUNCE_POLL_ENABLED = os.environ.get("ZOE_ANNOUNCE_POLL_ENABLED", "true").lower() in ("1", "true", "yes")
+ANNOUNCE_POLL_S = float(os.environ.get("ZOE_ANNOUNCE_POLL_S", "5.0"))
+# While an announce is playing, hold wake detection closed (same reason as the
+# post-reply cooldown: the speakerphone hears its own TTS). Ceiling only —
+# playback normally ends well before this and resets the guard to the normal
+# POST_PLAY_COOLDOWN_S.
+_ANNOUNCE_WAKE_GUARD_MAX_S = 600.0
+
+try:
+    import zoe_voice_announce as _announce_logic
+except ImportError:
+    _announce_logic = None  # partial deploy: polling disabled, never a crash
+
+
+def _daemon_busy() -> bool:
+    """True while speaking an announce would overlap live voice activity:
+    a wake→record→STT cycle, a reply's TTS playback, or the post-play cooldown
+    (the tail of a turn, where follow-up windows may still open)."""
+    if _recording_active.is_set():
+        return True
+    with _tts_process_lock:
+        if _tts_process is not None and _tts_process.poll() is None:
+            return True
+    return time.monotonic() < _ignore_wake_until
+
+
+def _fetch_announcements() -> list[dict]:
+    """Claim pending announcements (device-token auth). Raises on transport
+    failure so the poller's backoff sees it — a restarting zoe-data (every
+    deploy) must quiet the poll, not crash the daemon."""
+    r = requests.get(
+        f"{ZOE_URL}/api/voice/announcements",
+        headers=_headers,
+        timeout=10,
+        verify=VERIFY_SSL,
+    )
+    r.raise_for_status()
+    data = r.json()
+    return list(data.get("announcements") or [])
+
+
+def _speak_announcement(ann: dict) -> bool:
+    """Synthesize + play one claimed announcement through the reply path.
+
+    /api/voice/speak (device token) → play_audio_b64: the barge-in VAD thread
+    watches _tts_process exactly as it does for replies, so the user can talk
+    over an announce to stop it; wake stays suppressed while it plays and the
+    normal post-play cooldown re-arms it afterwards.
+    """
+    global _ignore_wake_until
+    text = str(ann.get("text") or "").strip()
+    if not text:
+        return False
+    resp = _api_post("/api/voice/speak", {"text": text[:1200], "panel_id": PANEL_ID}, timeout=30)
+    audio_b64 = resp.get("audio_base64")
+    if not audio_b64:
+        log.warning("announce %s: TTS fetch failed (%s)", ann.get("id", "?"), resp.get("error", "no audio"))
+        return False
+    log.info("announce %s: speaking (%d chars, trigger=%s)",
+             ann.get("id", "?"), len(text), ann.get("trigger_type", ""))
+    _recording_active.set()  # pause ambient capture, as during a reply
+    _ignore_wake_until = time.monotonic() + _ANNOUNCE_WAKE_GUARD_MAX_S
+    try:
+        play_audio_b64(audio_b64, resp.get("content_type", "audio/wav"))
+    finally:
+        _recording_active.clear()
+        _ignore_wake_until = time.monotonic() + POST_PLAY_COOLDOWN_S
+    return True
+
+
+def _announce_poll_thread():
+    """Background thread: poll/claim/speak server announcements (P-W2.3)."""
+    if not ANNOUNCE_POLL_ENABLED:
+        log.info("Announce polling disabled (ZOE_ANNOUNCE_POLL_ENABLED=false)")
+        return
+    if _announce_logic is None:
+        log.warning(
+            "zoe_voice_announce.py not found next to the daemon — server-pushed "
+            "announcements will NOT be spoken. Deploy it to the same directory."
+        )
+        return
+    poller = _announce_logic.AnnouncePoller(
+        fetch=_fetch_announcements,
+        speak=_speak_announcement,
+        is_busy=_daemon_busy,
+        poll_interval_s=ANNOUNCE_POLL_S,
+        logger=log,
+    )
+    log.info("Announce poll thread started (interval=%.1fs)", ANNOUNCE_POLL_S)
+    poller.run(_shutdown.wait)
+    log.info("Announce poll thread stopped.")
+
+
 _daemon_started_at = time.time()
 
 
@@ -1829,6 +1931,11 @@ def main():
         target=_ambient_capture_thread, daemon=True, name="ambient-capture"
     )
     _ambient_thread.start()
+
+    # P-W2.3: server-pushed spoken announcements (morning brief etc.).
+    threading.Thread(
+        target=_announce_poll_thread, daemon=True, name="announce-poll"
+    ).start()
 
     stream_kw: dict = dict(
         format=pyaudio.paInt16,

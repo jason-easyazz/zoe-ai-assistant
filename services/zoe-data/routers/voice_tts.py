@@ -1804,6 +1804,27 @@ async def speak(payload: dict, caller: dict = Depends(_require_voice_auth)):
     }
 
 
+@router.get("/announcements")
+async def voice_announcements(caller: dict = Depends(_require_voice_auth), db=Depends(get_db)):
+    """P-W2.3: claim-and-return pending spoken announcements for the voice daemon.
+
+    Device-token ONLY: `_require_voice_auth` already rejects guests, but a
+    non-guest browser session must not be able to drain the speaker queue
+    either — the daemon (the proven audio path) is the sole consumer, and it
+    authenticates with the panel device token. Claims are atomic server-side
+    (voice_announce.claim_announcements), so overlapping polls never
+    double-speak; TTL-expired rows are marked expired and never returned.
+    """
+    if caller.get("source") != "device":
+        raise HTTPException(status_code=403, detail="Announcement claim requires a device token")
+    import voice_announce
+
+    items = await voice_announce.claim_announcements(
+        db, panel_id=str(caller.get("panel_id") or "")
+    )
+    return {"ok": True, "announcements": items}
+
+
 _STREAM_TEXT_MAX = 2000  # character cap for streaming TTS to prevent runaway requests
 
 

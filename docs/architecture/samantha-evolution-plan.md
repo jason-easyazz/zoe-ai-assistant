@@ -367,8 +367,18 @@ regression, ever (replay harness is the enforcement).
   interrupts; Smart Turn beats energy VAD on false-cutoffs + false-waits over 15 utterances
   incl. mid-thought pauses; end-of-speech → first TTS audio median-of-10 ≤ the prior path;
   full replay corpus green
-- [ ] **W2.1** presence-check primitive — NOT STARTED
-- [ ] **W2.2** spoken-delivery adapter (morning brief only) — NOT STARTED
+- [x] **W2.1** presence-check primitive — **DONE** (#1412, `proactive/presence.py::panel_presence`)
+- [x] **W2.2** spoken-delivery adapter (morning brief only) — **DONE-BUT-SILENT** (#1414
+  landed the adapter + `panel_announce` lane, flag `ZOE_PROACTIVE_SPOKEN` default OFF —
+  but live 2026-07-19 it "succeeded" twice with NO audio: the kiosk browser is a guest
+  session, its fire-and-forget `/api/voice/speak` 401'd, and the handler swallowed it and
+  acked success. The browser was never the proven speaker.)
+- [~] **W2.3** daemon-as-speaker announce queue — **IN FLIGHT (2026-07-19)**: server→daemon
+  lane (`voice_announcements` table + device-token-only `GET /api/voice/announcements`,
+  atomic claim, ~120 s TTL so a stale brief is never spoken), Pi daemon poll/defer/speak
+  through the SAME playback path as replies (barge-in/cooldowns intact), and the
+  `panel_announce` ack made honest (`event_data.result.tts`). After merge + Pi deploy, the
+  operator lab-DoD from §7 finally has a speaker to come out of.
 - [x] **W3.1** ccd-cli fleet cleanup — **DONE** (measured 2026-07-19: **2 ccd-cli procs / 55 MB swap** vs the profile's 19 / 3.59 GB — one of the two was the measuring session itself. The fleet drained via session turnover, and the STRUCTURAL causes are fixed so it cannot rebuild the same way: per-session Serena spawn replaced by one shared `serena-mcp.service` (#1400, the fleet's ~1 GB-per-session multiplier), voice stack made unswappable (#1409, `MemorySwapMax=0` — total swap 6.6→3.4 GB), stale-Serena reaper live. Residual honesty: nothing caps ccd-cli session *count* itself; if a pileup recurs it now degrades agents, not the voice path)
 - [x] **W3.2** audit-row embedding stop — **DONE** (#1084: `_AUDIT_NULL_EMBEDDING`, executed from the profile's candidate list)
 - [ ] **W3.3** reap generalization (HA / music-assistant) — NOT STARTED
