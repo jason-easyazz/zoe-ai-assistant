@@ -1189,6 +1189,32 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
     return None
 
 
+async def _room_eids_for_context(
+    context: dict[str, Any] | None, db: Any | None
+) -> set[str]:
+    """Entity ids of the room the speaking panel is in, or an empty set.
+
+    Every failure mode collapses to EMPTY on purpose: no panel_id (a phone or
+    the web chat has no room), no db handle, the panel is in no room, or the
+    lookup raised. The resolver treats empty as "no room context" and decides
+    exactly as it did before rooms existed, so a bad lookup can never act on the
+    wrong room — it can only decline to help.
+    """
+    panel_id = str((context or {}).get("panel_id") or "").strip()
+    if not panel_id:
+        return set()
+    try:
+        from routers.rooms import room_entity_ids_for_panel
+
+        if db is not None:
+            return await room_entity_ids_for_panel(db, panel_id)
+        async with get_db_ctx() as ctx_db:
+            return await room_entity_ids_for_panel(ctx_db, panel_id)
+    except Exception:  # noqa: BLE001 — never break a turn over room context
+        logger.warning("room context lookup failed for panel %s", panel_id, exc_info=True)
+        return set()
+
+
 async def resolve_skybridge_request(
     message: str,
     user_id: str,
@@ -1227,7 +1253,13 @@ async def resolve_skybridge_request(
 
     if intent.domain == "smart_home":
         from smart_home_service import resolve_smart_home
-        return _attach_skybridge_context(await resolve_smart_home(intent))
+        # "the light" said on a panel means the light in THAT panel's room. The
+        # panel already sends context.panel_id; resolve it to the room's device
+        # ids so the resolver can break a tie it would otherwise have to ask
+        # about. Empty set = no room context = unchanged behaviour, which is
+        # every install that has not created a room.
+        room_eids = await _room_eids_for_context(context, db)
+        return _attach_skybridge_context(await resolve_smart_home(intent, room_eids))
 
     if db is not None:
         return _attach_skybridge_context(await _resolve_with_db(intent, user_id, db, context=context))

@@ -334,8 +334,22 @@ def _tokens(text: str) -> list[str]:
     return [t for t in re.split(r"[^a-z0-9]+", (text or "").lower()) if t and t not in _MATCH_STOPWORDS]
 
 
+def _room_subset(
+    pool: list[dict[str, Any]], room_eids: set[str] | None
+) -> list[dict[str, Any]]:
+    """The devices in ``pool`` that belong to the speaker's room.
+
+    Empty when no room is known — which is the state of every install that has
+    not created a room, and the reason this whole feature is inert by default.
+    """
+    if not room_eids:
+        return []
+    return [d for d in pool if d.get("entity_id") in room_eids]
+
+
 def _select_targets(
-    devices: list[dict[str, Any]], query: str, action: str
+    devices: list[dict[str, Any]], query: str, action: str,
+    room_eids: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
     """Resolve a control query to (targets, ambiguous).
 
@@ -345,6 +359,21 @@ def _select_targets(
     - a bare PLURAL/all class word ("the lights") sweeps that class (not ambiguous);
       a bare SINGULAR ("the lamp") names one device and disambiguates when several
       tie. set_brightness only ever targets dimmable devices.
+
+    ``room_eids`` is the set of entity ids in the room the SPEAKER is in (from
+    the panel's Zoe room). It is used ONLY to break a tie that would otherwise
+    be answered with "which one?", and only for a bare SINGULAR class command —
+    "turn off the light" said in the bedroom. Deliberately narrow:
+
+      * A query that NAMES a room or device never reaches here (it takes the
+        scored branch below), so an explicit "kitchen light" always wins over
+        the room you happen to be standing in.
+      * A PLURAL sweep ("turn off the lights") is left alone. It already
+        succeeds house-wide today, and quietly shrinking it to one room would
+        change a working command's meaning — the opposite of this fix, which
+        only rescues a command that currently FAILS with a question.
+      * With no rooms configured ``room_eids`` is empty/None and every path
+        below behaves exactly as before.
     """
     want = _tokens(query)
     if not want:
@@ -385,6 +414,14 @@ def _select_targets(
         pool = _dimmable_only(pool)
         if is_plural or len(pool) <= 1:
             return pool, False
+        # Several match a bare SINGULAR ("the light") — today that is always a
+        # question. If the speaker's room owns exactly one of them, that is the
+        # non-arbitrary answer "in here" was asking for. Anything else (the room
+        # owns none, or owns several) falls through to the same question as
+        # before, which is the operator's stated preference over guessing.
+        in_room = _room_subset(pool, room_eids)
+        if len(in_room) == 1:
+            return in_room, False
         return pool, True  # one singular device implied but several match → ask
 
     # A name/room was given — score by token overlap within the named class.
@@ -546,9 +583,16 @@ def _summarize(devices: list[dict[str, Any]]) -> str:
 
 # ── Skybridge resolver ────────────────────────────────────────────────────────
 
-async def resolve_smart_home(intent: Any) -> dict[str, Any]:
+async def resolve_smart_home(
+    intent: Any, room_eids: set[str] | None = None
+) -> dict[str, Any]:
     """The Skybridge smart_home domain resolver. `intent` has .action, .query,
-    and (for brightness) .duration_seconds carrying the target percent."""
+    and (for brightness) .duration_seconds carrying the target percent.
+
+    ``room_eids`` is the entity ids of the room the speaker is standing in, used
+    only to break an otherwise-ambiguous bare singular ("the light") — see
+    `_select_targets`. None/empty leaves every decision exactly as it was.
+    """
     action = getattr(intent, "action", "status")
     query = (getattr(intent, "query", "") or "").strip()
     entity_id = (getattr(intent, "entity_id", "") or "").strip()
@@ -601,7 +645,7 @@ async def resolve_smart_home(intent: Any) -> dict[str, Any]:
                 )
             targets, ambiguous = [dev], False
         else:
-            targets, ambiguous = _select_targets(devices, query, action)
+            targets, ambiguous = _select_targets(devices, query, action, room_eids)
         # A SPECIFIC command tied across several devices — ask rather than toggle
         # unintended ones. (Bare plural "the lights" sweeps and is not ambiguous.)
         if ambiguous:
