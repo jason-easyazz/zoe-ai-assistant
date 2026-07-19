@@ -16,7 +16,8 @@ importScripts('/workbox/workbox-sw.js');
 // just pick a side, and bump even when both sides are equal, or two different
 // bundles ship under a single cache key.
 // (4.65.0 music-card-breathe vs 4.64.10 sleep-playing-flag -> 4.65.1.)
-const SW_VERSION = '4.65.1'; // music card breathes: condensed dock, Browse card, full-size covers
+// (4.66.0 calendar-anchor vs 4.65.2 music-card-polish -> 4.66.1.)
+const SW_VERSION = '4.66.1'; // music card: seekable scrub, working heart, don't-stop, play-next, volume
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
