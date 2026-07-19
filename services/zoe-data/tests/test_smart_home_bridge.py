@@ -597,3 +597,53 @@ async def test_internal_filter_does_not_hide_real_lookalike_devices(monkeypatch)
 def test_add_device_classifier(q):
     i = classify_skybridge_intent(q, None)
     assert i is not None and i.domain == "smart_home" and i.action == "add_device", q
+
+
+# ── a REAL switch.* entity is classified by what it IS, not its HA domain ────
+# Home Assistant's `switch` domain is a wiring fact, not a product one: a smart
+# LIGHT switch lands there, and so do plugs and relays. `_device_from_switch`
+# used to pin domain="switch", so a real wall light could never answer to "the
+# light" however it was named — while the simulated input_boolean helpers, which
+# go through _entity_domain, always could. The live house exposed it the moment
+# real hardware arrived (a Grid Connect switch renamed "Bedroom Light" still
+# resolved as a switch, so "turn off the light" kept asking).
+
+@pytest.mark.parametrize(
+    "name,entity_id,icon,expected",
+    [
+        # The real device that exposed this.
+        ("Bedroom Light", "switch.bedroom_1_switch_1", "", "light"),
+        # Icon alone is enough — an operator who renames nothing but sets a glyph.
+        ("Bedroom 1 Switch 1", "switch.bedroom_1_switch_1", "mdi:ceiling-light", "light"),
+        # Things that are genuinely NOT lights must stay put.
+        ("Coffee Plug", "switch.plug", "", "switch"),
+        ("Bedroom Switch", "switch.bedroom", "", "switch"),
+        ("Hallway Switch", "switch.hall", "", "switch"),
+        # A switch that drives a fan is a fan, not a light — fan is matched first.
+        ("Bathroom Fan", "switch.bathroom_fan", "", "fan"),
+        # …even when the name mentions a light, because "fan" wins by design.
+        ("Fan Light", "switch.fan_light", "", "fan"),
+    ],
+)
+def test_real_switch_is_classified_by_name_and_icon(name, entity_id, icon, expected):
+    got = smart_home_service._device_from_switch(
+        {"entity_id": entity_id, "name": name, "state": "on", "icon": icon}
+    )
+    assert got["domain"] == expected
+    # Whatever it is called, a switch has no brightness channel.
+    assert got["dimmable"] is False
+
+
+def test_a_renamed_wall_light_answers_to_the_light():
+    """The end-to-end point of the fix: with the real switch classified as a
+    light, a bare "the light" in its room resolves to it instead of asking."""
+    devices = [
+        {"entity_id": "switch.bedroom_1_switch_1", "name": "Bedroom Light", "domain": "light",
+         "state": "on", "on": True, "available": True, "dimmable": False},
+        {"entity_id": "input_boolean.kitchen_light", "name": "Kitchen Light", "domain": "light",
+         "state": "off", "on": False, "available": True, "dimmable": False},
+    ]
+    targets, ambiguous = smart_home_service._select_targets(
+        devices, "the light", "turn_off", {"switch.bedroom_1_switch_1"})
+    assert [d["entity_id"] for d in targets] == ["switch.bedroom_1_switch_1"]
+    assert ambiguous is False
