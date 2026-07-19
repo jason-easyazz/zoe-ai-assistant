@@ -1,0 +1,280 @@
+---
+type: architecture-plan
+status: proposed (audit complete, waves not started)
+owner: jason
+date: 2026-07-19
+---
+
+# Desktop UI Overhaul — audit + executable plan
+
+**What this is:** the full deep-dive over the desktop web UI (`services/zoe-ui/dist/` root
+pages + `js/` + `css/` + `sw.js` + nginx) — what's live, what's broken, what's dead — and the
+sequenced plan to get it up to scratch. This is the re-scope the
+[skybridge cutover plan](skybridge-cutover-plan.md) left open (its PR 3/PR 5 "retire legacy
+pages/live-sync" items were "directionally valid — re-scope against the estate before acting").
+
+**How it was produced (2026-07-19):** 145-agent audit workflow on branch
+`claude/desktop-ui-overhaul-a512f5` — 10 parallel area audits (every page + js/css/sw/nginx),
+**329 client-called endpoints verified against zoe-data source** (negative-controlled),
+every P1/P2 finding adversarially re-verified (6 refuted, 105 confirmed), a live logged-out
+smoke pass against the running nginx (curl all 26 pages + headless-chromium console capture
+on 6), and a 3-stance direction panel with a judge.
+
+## The verdict in three sentences
+
+The desktop surface splits into a **live core with real value** (chat.html — the invested
+DeerFlow surface; settings.html — a genuinely live admin console; calendar — the richest
+desktop page; notes/lists/jukebox/setup-* — working), a **broken-but-alive tier** (24
+confirmed P1s: 8 XSS sink areas, calendar data-loss on drag/resize, dead people.html,
+placebo controls, a PWA manifest that doesn't exist in git), and a **large verified-dead
+tier** (~30k+ lines: the widget dashboard stack, dist/developer/, the browser-streaming
+music era, 6 orphan pages, orphan js/css). 61 of 329 client-called endpoints are MISSING
+or MOVED server-side — the honest measure of the rot. Direction (judge-picked, evidence
+over stance): **desktop is Zoe's keyboard-first deep-work power surface** — invest in chat,
+PIM depth, and the admin console on the shared skybridge token foundation; retire everything
+the estate already owns or that never worked.
+
+## Direction
+
+- **Desktop = the deep-work face** (chat workspace, bulk PIM editing, fleet/admin console).
+  The estate panel stays the ambient face. PLANS.md already names chat.html the
+  DeerFlow-grade target — this plan is on-plan.
+- **One foundation, two faces:** the touch `skybridge-ds.css` token layer becomes THE token
+  layer for both surfaces; auth, nav, theme, and landing page consolidate to one of each.
+  No page keeps a private design dialect (6 exist today).
+- **Honesty-by-removal is the default** for any UI without a backend. Never build a backend
+  to save placebo UI without a deliberate product decision pinned to IDEAS.md.
+- **Ownership reversals vs. a pure power-surface play** (judge grafts): `music.html` becomes
+  a redirect stub to `/touch/music.html` (the proven `/api/music/*` surface — jukebox +
+  touch already prove it); desktop `updates.html` retires (notifications panel deep-links
+  exclusively to the touch copy); the calendar fork converges to a single source *later*,
+  after the desktop data-loss fix is ported INTO the touch fork (port direction matters —
+  the touch fork still calls removed attendee endpoints).
+- **Installable Zoe:** ships as **PWA polish inside this overhaul** (manifest/SW are ~80%
+  there once committed to git). A thin **Tauri native shell** (global hotkey summon,
+  tray/autostart, later computer-use) is a **parked separate arc** — pinned in
+  [IDEAS.md](../IDEAS.md); the shell wraps the same served UI and never grows its own screens.
+
+## Page verdicts (audit-confirmed)
+
+| Page | Verdict | Why (one line) |
+|---|---|---|
+| `chat.html` | **keep-fix** | The flagship; AG-UI dispatcher + compose bridge are good; needs 6 P1 fixes, ~700 dead lines excised, module split |
+| `settings.html` | **keep-fix** | Real admin console, ~44/46 calls live; 2 dead features (placebo Display card, `/api/tools/call` buttons); owns fleet admin |
+| `calendar.html` | **keep-fix** | Richest desktop page; P1 metadata data-loss + zero escaping; ~87% fork of touch calendar — converge later, desktop fix ports in |
+| `notes.html` | **keep-fix** | Healthiest PIM page; one stored-XSS pattern to fix, then tokens |
+| `lists.html` | **keep-fix** | Works for core lists; strip dead Projects/Marketplace/AI-Generate wings + broken library widgets |
+| `people.html` | **redo (fix-by-deletion)** | Dead on arrival since 2026-05-18 (null-canvas crash); healthy CRM backend + salvageable card-grid code underneath |
+| `memories.html` | **redo (descope)** | Flagship collections/tiles canvas has NO backend (stubs); rebuild around MemPalace review-queue + search which are live |
+| `journal.html` | **redo (slim)** | Photo upload targets nonexistent route, tags silently dropped, Journeys tab is hardcoded fiction, CDN/Unsplash externals |
+| `music.html` | **redirect → `/touch/music.html`** | Transport POSTs to never-existed `/api/ha/service`; now-playing reads wrong MA shape; touch page proves the right surface |
+| `index.html` | **keep-fix (the ONE auth surface)** | It's the nginx entry + SPA fallback; fix XSS/demo-bypass/"Welcome, undefined"; absorb auth.html's flows |
+| `auth.html` | **fold into index.html → stub** | Second drifted login with reflected DOM XSS via `?setup=` |
+| `dashboard.html` | **retire** | Already "superseded" in PLANS; grid only renders via an untracked gitignored manifest; ~half the widgets broken/fake |
+| `updates.html` | **retire (touch copy wins)** | Notifications panel deep-links only to `/touch/updates.html`; backend stays |
+| `voice.html` (+ `touch/voice.html`) | **retire** | Zero inbound links; Confirm posts to nonexistent `/api/chat/confirm`; PLANS Phase 1c already slates it |
+| `jukebox.html`, `setup-music.html`, `setup-device.html` | **keep-polish** | Recent, QR-linked, verified against live routes — already at the estate bar |
+| `offline.html` | **keep-fix** | Live SW fallback; probes wrong `/api/health` (real: `/health`) and never checks `res.ok` |
+| `clear-cache.html` / `-v2` / `clear-session.html` | **consolidate to ONE** | Orphan near-triplicates; `_v2` violates repo rules; keep v2's session-preserving behavior under the v1 name |
+| `games.html` + `touch/games.html` | **retire** | Whole chain dead-ends in a 26-line placeholder |
+| `cooking.html`, `smart-home.html` | **stubs, delete after nav repoint** | Nav-linked meta-refreshes to /touch/ |
+| `week_planner_widget.html`, `dist/developer/`, `dist/_preview/*` | **retire** | Orphan mock / 4,406-line dead prototype (nonexistent APIs, hardcoded localhost:8000) / stale artifacts behind a hard-404 |
+| Widget stack (`widget-system.js`, `dashboard.js`, `lists-dashboard.js`, `js/widgets/**`, gridstack) | **retire desktop page; coordinate shared JS** | Touch dashboard/lists load the SAME stack — keep alive until touch layout-v2 absorbs them, then delete the lineage |
+| Orphan js/css set | **retire** | `navigation.js` (5-line stub), `js/lib/{module-widget-loader,widget-registry}.js`, `js/voice/*`, 4 unloaded music widgets, `mini-player.js` (+6 tags), `chat-sessions.js`, `ai-processor.js`, `components/zoe-orb.html`, `css/{glass,memories-enhanced,widgets-enhanced}.css` |
+
+## The triage register (all adversarially confirmed; 23 P1 entries + item 11, a P2
+promoted into Wave-1 triage — scripted P1 sweeps should include it)
+
+**Deploy integrity**
+1. `.gitignore:155` blanket `*.json` — `widget-manifest.json` AND the PWA `manifest.json`
+   exist ONLY untracked on the live box; every fresh clone/deploy gets an empty widget grid
+   (4 pages, incl. the live touch kiosk) and serves index.html AS the manifest.
+2. SW cross-origin kill (smoke-confirmed, reproduced): `sw.js:183-236` NetworkFirst on
+   no-cors strips all 9 CDN libs from chat.html on every repeat visit — markdown,
+   DOMPurify, highlighting, charts, maps gone in production.
+
+**Security (XSS + auth)**
+3. `auth.html:1207` reflected DOM XSS via `?setup=`.
+4. `chat.html:3768` stored XSS via session titles (derived from raw user messages).
+5. `chat.html:7410` stored XSS via reminder notification text (in both duplicate copies).
+6. `notes.html:700/:769` stored XSS via JSON.stringify-in-onclick + unescaped `'` in tags
+   (family-visible notes = cross-user blast radius).
+7. `journal-api.js:365` stored XSS on the LIVE render path (#895 patched only the
+   deprecated renderer).
+8. `memories.html:2312` stored XSS in review-queue/search render.
+9. `calendar.html:2539` zero HTML escaping page-wide.
+10. `index.html:1043` + `auth.html:889` demo-mode client-side auth bypass (admin/admin
+    mints a fake session when zoe-auth is unreachable).
+11. `orb-loader.js:60` logout purge listens on `window`, auth.js dispatches on
+    `document` — orb transcripts survive logout. (Severity P2, deliberately promoted
+    into this register: privacy blast radius on shared machines.)
+
+**Data loss**
+12. `calendar.html:3582` drag/resize/task-link PUTs send `metadata:{linked_tasks}` only;
+    server replaces metadata wholesale → silently destroys description/prep/attendees/
+    reminders. Plus `:3925` attendees/reminders re-loaded from two nonexistent routes →
+    wiped on every re-save.
+
+**Broken user-facing features**
+13. `people.html:880` page dead on arrival (null-canvas crash kills all init).
+14. `music.html:1327/:1064` every transport button a silent no-op; now-playing can never populate.
+15. `agent-activity.js:145` Agent Activity feed destroyed by `loadSessions()` innerHTML wipe.
+16. `chat.html:5628` action_menu buttons syntactically invalid onclick + zero-arg sendMessage.
+17. `chat.html:7488` proactive push-tap lands on blank chat (no listener, `?session=` never read).
+18. `chat.html:6176` builder preview iframe always 404s (nginx hard-404s `/_preview/` while
+    the server still synthesizes those URLs); sandbox `allow-scripts+allow-same-origin` is
+    self-nullifying.
+19. `chat.html:2598` compose cards render white-ink-on-white in light theme (loads
+    compose.css without skybridge-ds.css).
+20. `push-notifications.js:132` strict-mode ReferenceError kills every push subscribe on 13 pages.
+21. `settings.html:2230` Restart-Kiosk/Logs POST nonexistent `/api/tools/call`; `:1338`
+    Display card reads/writes a schema that never existed — "Save" is a placebo.
+22. `dark-mode-shared.css:145` white-on-white dark mode on calendar/journal/lists/memories.
+23. Widgets: tasks.js always "All tasks completed!", home.js dead toggles, system.js
+    Math.random() stats, week-planner/project/journal-photo → nonexistent routes.
+24. `index.html:1175` "Welcome, undefined!" on every real login (wrong response shape).
+
+**Endpoint truth:** 329 checked → **51 MISSING + 10 MOVED**. Biggest dead families:
+`/api/projects/*` (8), `/api/developer*` + `/api/docker/*` (5), collections/tiles (6),
+journeys (3), retired music-streaming era (7), `/api/media/upload`, `/api/tools/call`,
+`/api/chat/confirm`, `/api/chat/warm`, `/api/ha/service`, `/api/health` (real: `/health`).
+
+**Logged-out smoke:** dashboard/calendar/lists half-render and error-storm (7 failed API
+calls with literal `user_id=undefined` + ~20 failed WS handshakes in 10s on calendar);
+only settings.html redirects properly.
+
+## Execution waves (each item ≈ one small PR)
+
+Ordering follows [foundation-before-features]. Waves 0–1 are pure triage (no strategy
+dependency); 2 is the foundation; 3 the funeral; 4–6 the product investment.
+
+### Wave 0 — Deploy integrity (land first, tiny)
+- Commit `manifest.json` + `js/widgets/widget-manifest.json` with negated `.gitignore`
+  rules (the `!package.json` exception pattern already exists); register both in
+  `validate_critical_files.py`; drop the manifest's stale `/dashboard.html` shortcut.
+- Fix the SW cross-origin kill (`sw.js:183-236`) using the same pattern as the documented
+  image-route fix at `sw.js:238-251`; SW_VERSION bump.
+
+### Wave 1 — Security + data-loss triage (single-finding PRs)
+- XSS: auth.html `?setup=`; chat session-titles + reminder-messages (delete the duplicate
+  7357–7469 function set in the same PR); notes DOM-built items/chips; journal live render
+  path; calendar page-wide escapeHtml; memories review/search.
+- Kill the demo-mode auth bypass on both login pages → honest "auth service offline" error.
+- Calendar data-loss: spread `{...event.metadata}` into all four PUT bodies; read
+  attendees/reminders/description from `event.metadata`; delete the two guaranteed-404 fetches.
+- One-liners: `const subscription` (push-notifications.js:132) + orb-loader logout listener
+  on `document`; then verify one real end-to-end push.
+- Vendor chat's 7 CDN libs under `/js/lib/` (fixes local-first violation AND pairs with the
+  Wave-0 SW fix); SW_VERSION bump; CSP CI stays green.
+
+### Wave 2 — One foundation (tokens, theme, auth, nav, landing)
+- Land `skybridge-ds.css` as THE token layer on desktop, before page styles; rename the
+  colliding `--text-primary/-secondary/-tertiary` on the 4 pages defining them with
+  opposite values; one-line `common.js` bridge setting `data-theme` alongside the
+  dark-mode class; converge settings.html off its inverted third theme mechanism; early
+  anti-flash snippet on calendar/dashboard/journal.
+- Move `widgets-premium.css` + `widgets-fluid.css` under shared-token ownership and
+  tokenize their off-brand gradients (inverts the fragile live-kiosk-depends-on-desktop-CSS
+  arrangement: touch/lists.html:37 etc.).
+- ONE auth surface: fold auth.html's unique flows (register, password-setup, remember-me,
+  panel-bind, server session validation) into index.html; auth.html → redirect stub (the
+  proven skybridge.html pattern); fix "Welcome, undefined"; consume the stored-but-never-read
+  `zoe_redirect_after_login`.
+- **Repoint post-login landing → `chat.html`** (Jason to confirm) and prune dashboard.html
+  from the SW precache — the hard unblock for dashboard retirement.
+- ONE shared nav (JS-injected via common.js): kills per-page drift, points cooking/smart-home
+  at `/touch/` directly, drops Developer/Games entries; standardize `auth.js` + enforceAuth
+  on every authed page (ends the logged-out 401/WS-churn half-render).
+
+### Wave 3 — Retire the dead tier (retire-by-removing; each PR: critical-files manifest
+update + SW_VERSION bump where precached + touch-consumer grep + panel smoke)
+- Orphan pages: voice.html + touch/voice.html (keep shared `/ws/voice/` + livekit routes),
+  week_planner_widget.html, games.html + touch/games.html + nav entries.
+- Recovery pages → ONE clear-cache.html (v2 behavior, v1 name, absorbs clear-session).
+- `dist/developer/` (4,406 lines) + both nginx `/developer/` blocks (separate PR — nginx/CSP is CI-audited) + More-menu entries.
+- Orphan js/css set (see verdict table) + the 4 stale `dist/_preview/` dirs.
+- Music-era zombies: mini-player.js + 6 script tags; music widget stack + MCPMusicStateManager
+  alias block from BOTH dashboard.html AND touch/dashboard.html.
+- Chat dead weight: chat-sessions.js (port escapeHtml-on-title + warm-on-open first),
+  legacy pre-AG-UI SSE alias block, ai-processor.js + its memories.html tag.
+- dashboard.html retirement (after the Wave-2 landing repoint). KEEP widget-system.js /
+  lists-dashboard.js lineage + js/widgets/core alive — touch dashboard/lists still load them.
+- music.html → redirect stub to `/touch/music.html` (Jason to confirm); repoint
+  touch-ui-executor.js:762 "show music" + settings "Go to Music".
+- updates.html → retire (backend stays; notifications already deep-link to the touch copy).
+
+### Wave 4 — Chat as the deep-work workspace
+- Revive Agent Activity (reattach on `container.isConnected===false` / move out of
+  `#sessionsList`).
+- Session persistence (URL/localStorage) + honour `?session=` on cold load + make
+  proactive push-tap `loadSession()` — one persistence fix closes both P1s.
+- action_menu via the action-registry pattern chat already uses (`:4742-4746`).
+- Compose-card legibility on light theme (with the Wave-2 token PR).
+- Gate touch-ui-executor init on touch context (desktop stops registering as a PANEL with
+  2s/5s polling + duplicate `/ws/push`).
+- Preview decision — **404-is-truth**: delete the iframe path + server `_detect_preview_urls`
+  synthesis + the self-nullifying sandbox; resolve the `openclaw_ws.py:40` staging wording.
+  (A real auth-gated preview route is a pinned deferred decision.)
+- Module split: carve the 4,430-line inline script into `/js/chat/*.js` along the proven
+  seams (SSE dispatcher / render catalog / sessions / notifications) — the node harness
+  already proves no-build-step extraction.
+- Orb decision on chat: handle `zoe.ui_orb_prompt` inline or load the orb (today the only
+  dispatching page never loads the listener).
+
+### Wave 5 — PIM depth on tokens (bulk editing is what keyboards are for)
+- people.html fix-by-deletion: remove canvas/polar/legacy-detail code; keep the
+  card-grid/dp-tab CRM code that matches the live backend; tokens.
+- memories.html descope to MemPalace review-queue + search; delete the dead
+  collections/tiles canvas + its server stubs. (Collections-as-a-real-feature → IDEAS.)
+- journal.html slim: one publish path with tags; wire Edit to the PUT route that already
+  exists server-side; delete Journeys fiction, Unsplash demo entries, CDN FilePond, dead
+  enhancement layer; photo UI returns only when `/api/media/upload` exists.
+- lists.html: strip Projects/Marketplace/AI-Generate wings + the 115-line dead
+  script-with-src block; fix or drop broken library widgets (tasks loader, home instance,
+  system fake stats, week-planner).
+- notes.html: tokens + wire-or-drop the color picker. Calendar: tokenize; single-source
+  convergence with the touch fork recorded as a deferred, port-direction-aware step.
+
+### Wave 6 — The admin console (settings) + closeout
+- Real endpoints for Restart-Kiosk/Logs (e.g. `POST /api/panels/{id}/restart` + `/logs`
+  over panel_ssh_exec) or drop the buttons; rebuild the Display card on the real
+  preferences schema or delegate to touch Display settings.
+- Close the rooms gap: panel→room assignment in desktop Touch Panels (the W2a/W2b backend
+  landed touch-only — fleet admin is what the desktop console is FOR).
+- Settings ownership split: desktop keeps admin (users, AI profiles, panel provisioning,
+  rooms); device-local concerns delegate to touch; delete duplicated drifting sections;
+  fix the Push section SW-registration hang; give settings the shared nav.
+- Platform hygiene: offline.html probes `/health` + checks `res.ok`; sw-registration stale
+  `v=` param + cargo-cult gtag removal; prune remaining superseded precache entries.
+- **PWA polish (installable Zoe):** committed manifest verified installable, correct icons
+  + shortcuts, install prompt surfaced; logged-out smoke gate green.
+- DOX/PLANS closeout: update PLANS.md statuses, services/zoe-ui/AGENTS.md, critical-files
+  manifest deltas; pin every deferred decision.
+
+## Execution guardrails (all learned the hard way)
+
+- Every dist file is a **critical file** — deletions go through the cleanup safety process
+  + `validate_critical_files.py` manifest updates per PR.
+- **SW_VERSION bump** whenever any precached file changes.
+- **Touch-consumer grep before touching shared files** — the live kiosk loads desktop CSS/JS
+  (`widgets-premium.css`, `widget-system.js`, `dashboard.js`, `js/widgets/core/**`).
+  Panel smoke after every shared-file PR.
+- nginx/CSP changes are CI-audited (`ensure_nginx_security_headers.py`) — pair audit+test
+  updates in the same PR; keep nginx-only PRs isolated.
+- Keep every PR under the Greptile ~50-file silent-skip threshold.
+- Promote the audit's logged-out smoke run to a per-wave gate (curl statuses + console
+  capture on the 6 key pages).
+- Voice-path files are replay-gated; this plan deliberately touches none of the voice path
+  (`voice.html` deletion removes only an orphan client page — `/ws/voice/`, livekit routes
+  and the daemon path stay).
+
+## Deferred decisions (pinned, not forgotten)
+
+- Desktop landing page = chat.html — **needs Jason's nod** (Wave 2).
+- music.html redirect to touch — **needs Jason's nod** (Wave 3).
+- Real `/​_preview/` route (auth-gated, distinct origin) vs. permanent 404 — deferred; 404
+  chosen for now (Wave 4).
+- Calendar single-source collapse (desktop↔touch fork) — after tokens + compose mature;
+  desktop metadata fix must port INTO the touch fork first.
+- Memory collections as a real backed feature — product decision → IDEAS.md.
+- Thin Tauri desktop shell (hotkey/tray/computer-use) — parked arc → IDEAS.md.

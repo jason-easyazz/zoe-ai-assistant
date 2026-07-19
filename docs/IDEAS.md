@@ -49,4 +49,8 @@ Detail/AI notes go under each entry. Move the status as it progresses.
 ### The orb on the music card could react to what's playing — or be how you ask about it — 💡 pinned
 - **Core:** the Zoe orb just sits there on the music card. It could react to what's playing, or be how you ask Zoe about the current track — rather than just being present. Parked for later exploration, not scoped. Source: Jason, 2026-07-16.
 
+### Thin Tauri desktop shell — Zoe summonable anywhere on your computer — 🗄️ parked
+- **Core:** a *thin* native wrapper (Tauri, not Electron) around the existing served web UI that adds only what the browser can't: **global hotkey summon** (push-to-talk/quick-ask from any app), **tray/menu-bar residence + autostart**, and later the **"Zoe can see/act on this computer"** computer-use companion. UI stays single-source — the shell never grows its own screens (no second UI codebase). Source: Jason, 2026-07-19 (desktop UI deep-dive chat).
+- **Sequencing:** the installable-desktop path starts as **PWA polish inside the desktop-ui overhaul** (manifest/SW already ~80% there); the native shell is a separate later arc because per-OS packaging/signing (macOS needs a Mac; Jetson is ARM Linux) is a permanent maintenance tax. Detail will live in the desktop-ui overhaul plan (in progress on `claude/desktop-ui-overhaul-a512f5`).
+
 <!-- New ideas: copy an entry above. One line of plain English first. -->
