@@ -342,16 +342,22 @@
      upcoming fan RIGHT. Geometry is the proven prototype scaled uniformly by
      CF_K (see layoutCF): card, x, z and perspective all scale together, so the
      projection — and the deliberate slight overlap that reads as a stack — is
-     the prototype exactly, just sized to clear the dock (top 605) at 720px. */
+     the prototype exactly.
+     The card size and the perspective are the CSS half of that scaling, so they
+     are NOT literals here: cfApplyScale() writes --cfcard/--cfpersp from the one
+     CF_K in the script. They used to be hand-derived literals (260px/1214px),
+     which meant "the single knob" silently wasn't one — changing CF_K moved x
+     and z but left the card at its old size, shearing the projection. */
   /* touch-action:none on the CONTAINER, not only on the covers: the browse
      gesture holds its pointer capture here, so this is the element whose
      touch-action decides whether the browser claims the gesture for itself.
      Without it a mostly-vertical drag is read as a scroll and the pointer is
      CANCELLED mid-gesture — which silently kills flick-up-to-remove. */
-  .mfull .cf{position:absolute;top:74px;left:0;right:0;height:260px;touch-action:none;
-             perspective:1214px;perspective-origin:50% 46%}
+  .mfull .cf{position:absolute;top:74px;left:0;right:0;height:var(--cfcard,300px);touch-action:none;
+             perspective:var(--cfpersp,1400px);perspective-origin:50% 46%}
   .mfull .cf-track{position:absolute;inset:0;transform-style:preserve-3d}
-  .mfull .cfc{position:absolute;top:0;left:50%;width:260px;height:260px;margin-left:-130px;
+  .mfull .cfc{position:absolute;top:0;left:50%;width:var(--cfcard,300px);height:var(--cfcard,300px);
+              margin-left:calc(var(--cfcard,300px) / -2);
               border-radius:14px;overflow:hidden;transform-style:preserve-3d;cursor:pointer;
               box-shadow:0 26px 60px rgba(0,0,0,.62);
               transition:transform .42s cubic-bezier(.22,.75,.28,1),opacity .42s,filter .42s;
@@ -402,18 +408,24 @@
      display:none;place-items:center;cursor:pointer;right:8px}
   .mfull .cfc.right .cfx{right:auto;left:8px}
   .mfull .cfc.on .cfx{display:grid}
-  .mfull .cfmeta{position:absolute;left:0;right:0;top:373px;text-align:center}
+  /* The meta/scrub/transport stack sits BELOW the flow, so its top edge is what
+     caps CF_K — not the dock, despite what the old comment claimed. The music
+     card's dock is condensed to the launcher button beside the orb (#dock.solo),
+     which frees the whole 605→679 band the centred dock used to own; the stack
+     drops into it and the covers get the room back. Transport bottom:44 puts it
+     on the orb's row (orb is bottom:44, 68px), which is the real floor. */
+  .mfull .cfmeta{position:absolute;left:0;right:0;top:430px;text-align:center}
   .mfull .mkick{font-size:14px;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.5)}
   .mfull .mtitle{font-size:34px;font-weight:700;letter-spacing:-.02em;margin-top:8px;line-height:1.08;
                  max-width:760px;margin-left:auto;margin-right:auto;
                  display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
   .mfull .martist{font-size:20px;color:rgba(255,255,255,.72);margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .mfull .mscrub{position:absolute;left:50%;width:560px;margin-left:-280px;bottom:210px}
+  .mfull .mscrub{position:absolute;left:50%;width:560px;margin-left:-280px;bottom:148px}
   .mfull .mtrack{position:relative;height:7px;border-radius:999px;background:rgba(255,255,255,.22)}
   .mfull .mfill{position:absolute;left:0;top:0;bottom:0;width:38%;border-radius:999px;background:#fff}
   .mfull .mknob{position:absolute;top:50%;left:38%;transform:translate(-50%,-50%);width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.4)}
   .mfull .mtimes{display:flex;justify-content:space-between;margin-top:12px;font-size:18px;color:rgba(255,255,255,.6);font-variant-numeric:tabular-nums}
-  .mfull .mtransport{position:absolute;left:0;right:0;bottom:120px;display:flex;justify-content:center;align-items:center;gap:44px}
+  .mfull .mtransport{position:absolute;left:0;right:0;bottom:44px;display:flex;justify-content:center;align-items:center;gap:44px}
   .mfull .mtransport .sml{opacity:.55;background:none;border:0;color:#fff;cursor:pointer;width:68px;height:68px;border-radius:50%;display:grid;place-items:center}
   .mfull .mtransport .sml svg{width:26px;height:26px}
   .mfull .mtransport button svg{width:28px;height:28px}
@@ -421,24 +433,20 @@
   .mfull .mtransport .sml.on{opacity:1;background:rgba(123,150,255,.25);box-shadow:0 0 16px rgba(123,150,255,.35)}
   .mqbtn{width:48px;height:48px;flex:none;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.2);color:#fff;cursor:pointer}
   .mqbtn svg{width:22px;height:22px}
-  /* Full-card queue/playlist overlay (was a narrow right drawer). Sits below
-     the dock (z46) so the speaker/now-playing dock stays visible on top. */
-  .mqueue{position:absolute;inset:0;z-index:44;background:radial-gradient(120% 115% at 22% 14%,rgba(74,74,147,.97),rgba(11,14,28,.98) 60%);backdrop-filter:blur(26px);display:flex;flex-direction:column;padding:30px 56px 124px;opacity:0;transform:translateY(18px);pointer-events:none;transition:opacity .3s ease,transform .32s cubic-bezier(.2,.8,.3,1)}
-  .mqueue.open{opacity:1;transform:none;pointer-events:auto}
-  .mqtop{display:flex;align-items:center;gap:18px;margin-bottom:18px;flex:none}
-  .mqback{width:56px;height:56px;border-radius:50%;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.1);color:#fff;display:grid;place-items:center;cursor:pointer;flex:none}
-  .mqback svg{width:26px;height:26px}
-  .mqtop h3{flex:1;font-size:30px;font-weight:600;letter-spacing:-.01em;color:#fff}
-  .mqacts{display:flex;gap:10px}
-  .mqacts button{width:52px;height:52px;border-radius:16px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.07);color:var(--ink-soft);display:grid;place-items:center;cursor:pointer}
-  .mqacts button svg{width:23px;height:23px}
-  /* Music control lives in the dock (now-playing pill) — no in-overlay strip,
+  /* Browse (Recent + Playlists) is a real SURFACE, not an overlay on the music
+     card. It used to be `.mqueue` — a z44 sheet that covered #mTransport, which
+     is the entire reason the dock's now-playing chip needed a "…except while the
+     overlay is open" exception. As a card it gets the standard header (.chttl by
+     #home, .chmeta by .fcog), the normal full dock, and the normal chip, and
+     nothing overlays the music card any more. */
+  .brf{position:absolute;left:56px;right:56px;top:106px;bottom:126px;display:flex;flex-direction:column}
+  /* Music control lives in the dock (now-playing pill) — no in-card strip,
      so the content gets the full card height. */
   .mqtabs{display:flex;gap:8px;margin-bottom:14px;flex:none}
   .mqtabs button{flex:1;height:48px;border-radius:14px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.05);color:var(--ink-soft);font:inherit;font-size:19px;cursor:pointer}
   .mqtabs button.on{background:rgba(123,150,255,.22);border-color:rgba(123,150,255,.4);color:#fff}
   .mqlist{flex:1;overflow-y:auto;min-height:0}
-  .mqueue .qthumb.ph{display:block}
+  .brf .qthumb.ph{display:block}
   /* ---- Recent tab: a grid of rectangle tiles (fits more) ---- */
   .mqlist.recent{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;align-content:start}
   .rtile{display:flex;align-items:center;gap:14px;padding:10px 12px;border-radius:16px;background:rgba(255,255,255,.05);cursor:pointer}
@@ -660,6 +668,24 @@
   #dock .pc.apps .g i{width:9px;height:9px;border-radius:3px;background:currentColor;display:block}
   #dock .pc.apps.active{background:rgba(123,150,255,.9);border-color:rgba(123,150,255,.6);color:#fff;box-shadow:0 0 24px rgba(123,150,255,.5)}
   #dock .ddiv{width:1px;height:34px;background:rgba(255,255,255,.14);margin:0 2px;flex:none}
+  /* CONDENSED DOCK — the music card only. The music card IS a music control
+     surface (Cover Flow queue + full transport + scrub + speaker), so a centred
+     bar of light/temp pins competing for the bottom of the screen is noise, and
+     it was eating the vertical band the covers want. So on music the dock drops
+     everything but the launcher and moves beside the orb: one round button, the
+     same #apps that opens the full-screen launcher, which IS "press the menu and
+     it will appear". No new mechanism, and no control is LOST — every pin is one
+     tap away through that launcher, and comes straight back on any other surface
+     (show() toggles .solo, renderDock still runs, so #dbody is never stale).
+     Deliberately music-only: nowhere else has its own controls to defer to. */
+  #dock.solo{left:124px;bottom:44px;transform:none;background:none;border:0;
+             box-shadow:none;backdrop-filter:none;padding:0;border-radius:50%}
+  #dock.solo .ddiv,#dock.solo #dbody{display:none}
+  /* matches #orb's 68px so the two read as one row, not a button next to a ball */
+  #dock.solo .pc.apps{width:68px;height:68px;border-radius:50%;
+                      background:rgba(14,16,26,.5);border:1px solid rgba(255,255,255,.12);
+                      backdrop-filter:blur(18px);box-shadow:0 20px 48px rgba(0,0,0,.42)}
+  #dock.solo .pc.apps .g i{width:11px;height:11px}
   #stage.lopen #full,#stage.lopen #cardwrap,#stage.lopen #cv,#stage.lopen #glow{filter:blur(24px) brightness(.62);opacity:.7 !important}
   .launch{position:absolute;inset:0;z-index:40;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:44px 90px 158px;opacity:0;pointer-events:none;transition:opacity .35s;background:rgba(7,10,22,.42);backdrop-filter:blur(3px)}
   #stage.lopen .launch{opacity:1;pointer-events:auto}
@@ -822,7 +848,15 @@
     weather:{home:true, bg:DUSK, canvas:true,
       html:'<div class="fcog">'+GEAR+'</div><div class="wloc" id="wxLoc"></div><div class="wbig"><div class="t" id="wxTemp">—°</div><div class="c" id="wxCond"></div></div><div class="whours" id="wxHours"></div>'},
     music:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="mtop"><button class="spk" id="mSpk">'+SPKR+' <span class="spkname">Speaker</span> <span class="cx">▾</span></button><button class="mqbtn" id="mQBtn" title="Browse music">'+QICON+'</button></div><div class="mfull"><div class="cf" id="mCF"><div class="cf-track" id="mCFT"></div></div><div class="cfmeta"><div class="mkick" id="mKick">Now Playing</div><div class="mtitle" id="mTitle">—</div><div class="martist" id="mArtist"></div><button class="mfav" id="mFav" title="Favourite">'+HEART_I+'</button></div><div class="mscrub"><div class="mtrack"><div class="mfill" id="mFill" style="width:0%"></div></div><div class="mtimes"><span id="mElapsed">0:00</span><span id="mDur">0:00</span></div></div><div class="mtransport" id="mTransport"><button class="sml" id="mShuf" data-a="shuffle" title="Shuffle">'+SHUF_I+'</button><button data-a="previous">'+PREV_I+'</button><button class="pp" id="mPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button><button class="sml" id="mRep" data-a="repeat" title="Repeat">'+REP_I+'</button></div></div><aside class="mqueue" id="mQueue"><div class="mqtop"><button class="mqback" id="mQBack" title="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button><h3 id="mQTitle">Recently played</h3><div class="mqacts"><button id="mQSave" title="Save queue as playlist">'+SAVE_I+'</button><button id="mQClear" title="Clear queue">'+TRASH_I+'</button></div></div><div class="mqtabs"><button class="on" data-qt="recent">Recent</button><button data-qt="playlists">Playlists</button></div><div id="mQList" class="mqlist"></div></aside><div class="mqr" id="mQR"><div class="qrbox" id="mQRCode"></div><div class="qrlab">Scan to queue</div></div>'},
+      html:'<div class="fcog">'+GEAR+'</div><div class="mtop"><button class="spk" id="mSpk">'+SPKR+' <span class="spkname">Speaker</span> <span class="cx">▾</span></button><button class="mqbtn" id="mQBtn" title="Browse music">'+QICON+'</button></div><div class="mfull"><div class="cf" id="mCF"><div class="cf-track" id="mCFT"></div></div><div class="cfmeta"><div class="mkick" id="mKick">Now Playing</div><div class="mtitle" id="mTitle">—</div><div class="martist" id="mArtist"></div><button class="mfav" id="mFav" title="Favourite">'+HEART_I+'</button></div><div class="mscrub"><div class="mtrack"><div class="mfill" id="mFill" style="width:0%"></div></div><div class="mtimes"><span id="mElapsed">0:00</span><span id="mDur">0:00</span></div></div><div class="mtransport" id="mTransport"><button class="sml" id="mShuf" data-a="shuffle" title="Shuffle">'+SHUF_I+'</button><button data-a="previous">'+PREV_I+'</button><button class="pp" id="mPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button><button class="sml" id="mRep" data-a="repeat" title="Repeat">'+REP_I+'</button></div></div><div class="mqr" id="mQR"><div class="qrbox" id="mQRCode"></div><div class="qrlab">Scan to queue</div></div>'},
+    // Browse — Recent + Playlists. Same background as music (it is the music
+    // card's other face), standard card header: title by #home, actions by .fcog.
+    browse:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,
+      html:'<div class="fcog">'+GEAR+'</div><div class="chttl" id="mQTitle">Recently played</div>'
+        +'<div class="chmeta"><button class="chbtn" id="mQSave" title="Save queue as playlist">'+SAVE_I+'</button>'
+        +'<button class="chbtn" id="mQClear" title="Clear queue">'+TRASH_I+'</button></div>'
+        +'<div class="brf"><div class="mqtabs"><button class="on" data-qt="recent">Recent</button><button data-qt="playlists">Playlists</button></div>'
+        +'<div id="mQList" class="mqlist"></div></div>'},
     timer:{home:true, bg:'radial-gradient(120% 100% at 50% 44%,#122447,#080b12 62%)', canvas:false, glow:'radial-gradient(closest-side at 50% 44%,rgba(123,150,255,.35),transparent 70%)',
       html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Timers</div><div class="tfull"><div class="trings" id="tmRings"></div><div class="tmore" id="tmMore"></div></div>'},
     list:{home:true, bg:GROUND, canvas:false,
@@ -873,13 +907,6 @@
   // Never leave a hot mic behind if the kiosk reloads or the page is hidden.
   window.addEventListener('pagehide',function(){convStop('pagehide');});
   window.addEventListener('beforeunload',function(){convStop('unload');});
-  // Queue-drawer outside-tap dismiss — ONE delegated listener (the drawer is
-  // recreated on every music show(), so query it per event, never capture it).
-  full.addEventListener('click',function(e){
-    var qd=document.getElementById('mQueue');
-    if(qd&&qd.classList.contains('open')&&!e.target.closest('.mqueue')&&!e.target.closest('#mQBtn')){_qOpen(false);}
-  });
-
   // ---- Ambient return -------------------------------------------------------
   // A screen Zoe opened BY VOICE is a glance, not a destination: when the turn
   // is over it drifts back home so the panel is always the ambient home face.
@@ -1006,6 +1033,7 @@
       if(id==='home')initHome();
       if(id==='weather')wireWeather();
       if(id==='music')wireMusic();
+      if(id==='browse')wireBrowse();
       if(id==='rooms')wireRooms();
       if(id==='sleep')wireSleep();
       if(id==='list')wireListsFull();
@@ -1024,6 +1052,10 @@
       host.innerHTML=c.html; var card=host.querySelector('.card'); if(card&&c.wash)card.style.setProperty('--wash',c.wash);
     }
     // persistent dock: hidden on sleep; shows what was heard for a direct answer, else your pinned controls
+    // Condensed to the launcher button beside the orb on music ONLY (see #dock.solo).
+    // #dbody keeps rendering underneath so leaving music restores the real dock
+    // with fresh state, rather than a stale one built at some earlier navigation.
+    dock.classList.toggle('solo',id==='music');
     if(id==='sleep'){ dock.classList.add('hide'); }
     else {
       dock.classList.remove('hide');
@@ -1031,17 +1063,6 @@
       if(hd){ dbody.innerHTML='<div class="dheard">Heard: <b>'+hd+'</b></div>'; }
       else { renderDock(); }
     }
-  }
-
-  // Queue/playlist overlay state. Shared by every open/close path so the dock
-  // control (which takes over while the overlay hides #mTransport) can't be
-  // left stale — the toggle and the repaint are one operation, not two.
-  function _qIsOpen(){var q=document.getElementById('mQueue');return !!(q&&q.classList.contains('open'));}
-  function _qOpen(o){
-    var q=document.getElementById('mQueue');if(!q)return;
-    q.classList.toggle('open',o);
-    var hb=document.getElementById('home');if(hb)hb.classList.toggle('hide',o);
-    paintDockMusic();
   }
 
   // Dock now-playing control — a compact pill (art + title + play/pause) that
@@ -1068,10 +1089,12 @@
       _dockMusicT=setTimeout(paintDockMusic,5000);
       // The music card carries its own transport (#mTransport), so a dock chip
       // there would just duplicate it — every OTHER surface gets the controls.
-      // Exception: the queue/playlist overlay covers that transport, so the
-      // dock takes over while it's open (that's why it's up on the playlist).
+      // This used to need an "…unless the Browse overlay is covering that
+      // transport" exception; Browse is its own surface now, so nothing overlays
+      // the music card and the rule is just the one line. (Browse is an "other
+      // surface", so it gets the chip — which is also how you get back to music.)
       if(!live||dbody.querySelector('.dheard'))return;
-      if(_cur==='music'&&!_qIsOpen())return;
+      if(_cur==='music')return;
       _music.player_id=np.player_id;
       var playing=np.state==='playing';
       var art=(np.image&&/^https?:/.test(np.image))?'<img alt="" src="'+esc(np.image)+'">':'<span class="ph"></span>';
@@ -1505,12 +1528,12 @@
     host.classList.remove('grid','recent');
     if(_qtab==='recent'){host.classList.add('recent');if(ttl)ttl.textContent='Recently played';
       host.innerHTML=_qmsg('Loading…');
-      apiGet('/api/music/recently-played').then(function(d){if(_cur!=='music')return;var its=(d&&d.items)||[];
+      apiGet('/api/music/recently-played').then(function(d){if(_cur!=='browse')return;var its=(d&&d.items)||[];
         host.innerHTML=its.slice(0,40).map(_rtile).join('')||_qempty('Nothing played yet.');
         _wireBrowseRow(host);}).catch(function(){host.innerHTML=_qempty('Couldn’t load.');});return;}
     if(_qtab==='playlists'){host.classList.add('grid');if(ttl)ttl.textContent='Your playlists';
       host.innerHTML=_qmsg('Loading…');
-      apiGet('/api/music/playlists').then(function(d){if(_cur!=='music')return;var pls=(d&&d.playlists)||[];
+      apiGet('/api/music/playlists').then(function(d){if(_cur!=='browse')return;var pls=(d&&d.playlists)||[];
         host.innerHTML=pls.map(_pltile).join('')||_qempty('No playlists yet — build one with Save.');
         host.onclick=function(e){var r=e.target.closest('.qi.pl');if(!r)return;_qpost('play_media',{uri:r.getAttribute('data-uri'),player_id:_music.player_id||undefined,option:'replace'}).then(function(){toast('Playing playlist');setTimeout(loadMusic,600);}).catch(function(){toast('Couldn’t play');});};
       }).catch(function(){host.innerHTML=_qempty('Couldn’t load playlists.');});return;}
@@ -1530,13 +1553,29 @@
   // Played covers recede LEFT, now-playing flat in the CENTRE, upcoming fan
   // RIGHT. `cur` is what's actually playing; `focus` is what you've browsed to
   // — they're only the same until you flick. Browsing NEVER touches playback.
-  var CF_K=0.867;        // uniform scale of the proven prototype geometry (card
-                         // 300→260, perspective 1400→1214). x, z, the card and
-                         // the perspective all scale together, so the projection
-                         // — including the deliberate slight overlap that reads
-                         // as a stack — is the prototype exactly, just sized to
-                         // clear the dock (top 605) inside 720px. rotateY/scale/
-                         // opacity are dimensionless and stay verbatim.
+  var CF_K=1;            // uniform scale of the proven prototype geometry. x, z,
+                         // the card (300K) and the perspective (1400K) all scale
+                         // together, so the projection — including the deliberate
+                         // slight overlap that reads as a stack — is the prototype
+                         // exactly. rotateY/scale/opacity are dimensionless and
+                         // stay verbatim.
+                         //
+                         // It was 0.867 ONLY because the flow had to shrink to fit
+                         // above the centred dock's stack. The music dock is one
+                         // button beside the orb now (#dock.solo), the meta/scrub/
+                         // transport stack moved down into that freed band, and the
+                         // covers go back to full prototype size. The cap is
+                         // .cfmeta's top (430): the centre cover's projected bottom
+                         // is cf.top + 336.67*K, so K<=1.057 — 1 is the prototype
+                         // and it fits with ~19px to spare. Measured, not assumed:
+                         // test_touch_music_breathe.js reads real bounding boxes.
+  // The CSS half of that same scale. Kept next to CF_K so the two can't drift:
+  // every consumer of the card size reads --cfcard, and nothing hardcodes a px.
+  function cfApplyScale(){
+    var cf=document.getElementById('mCF');if(!cf)return;
+    cf.style.setProperty('--cfcard',(300*CF_K)+'px');
+    cf.style.setProperty('--cfpersp',(1400*CF_K)+'px');
+  }
   var CF_WIN=5;          // render a WINDOW of ±5 covers: a 200-track queue must
                          // not put 200 cards in the DOM.
   var CF_HOME_MS=8000;   // browse, then drift back to Now — the estate's instinct
@@ -1915,39 +1954,54 @@
   }
   function musicControl(action){if(!_music.player_id)return;
     fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({action:action,player_id:_music.player_id})}).then(function(){setTimeout(loadMusic,350);}).catch(function(){});}
+  // Browse surface: Recent + Playlists, plus the two queue actions that used to
+  // be crammed into the overlay's header (they act on the PLAYER's queue, which
+  // outlives this surface — _music.player_id is kept fresh by whichever
+  // now-playing poller is running, loadMusic here or paintDockMusic elsewhere).
+  function wireBrowse(){
+    _qtab='recent';   // DOM rebuilds to the Recent tab each show(); keep state in sync
+    loadQueue();
+    var tabs=document.querySelector('.mqtabs');
+    if(tabs)tabs.onclick=function(e){var b=e.target.closest('button[data-qt]');if(!b)return;
+      _qtab=b.getAttribute('data-qt');tabs.querySelectorAll('button').forEach(function(x){x.classList.toggle('on',x===b);});loadQueue();};
+    var qs=document.getElementById('mQSave');
+    if(qs)qs.onclick=function(){if(!_qHasPlayer())return;
+      estOpen('<h3>Save queue as playlist</h3><label>Name</label><input data-f="nm" placeholder="My playlist"><div class="btns"><button data-x="cancel">Cancel</button><button class="save" data-x="save">Save</button></div>');
+      var m=document.getElementById('estModal');m.querySelector('[data-x="cancel"]').onclick=estClose;
+      m.querySelector('[data-x="save"]').onclick=function(){var nm=m.querySelector('[data-f="nm"]').value.trim();if(!nm){toast('Give it a name');return;}
+        _qpost('queue/save',{queue_id:_music.player_id,name:nm}).then(function(r){estClose();toast(r&&r.ok?'Saved “'+nm+'”':'Couldn’t save');}).catch(function(){toast('Couldn’t save');});};};
+    var qc=document.getElementById('mQClear');
+    if(qc)qc.onclick=function(){if(!_qHasPlayer())return;
+      estConfirm('Clear the whole queue?',function(){_qpost('queue/clear',{queue_id:_music.player_id}).then(function(){loadQueue();setTimeout(loadMusic,400);}).catch(function(){toast('Couldn’t clear');});});};
+  }
+  // Save/Clear act on a PLAYER's queue, so they need a player id. Today Browse
+  // is only reachable from the music card (#mQBtn), so loadMusic has always run
+  // and set one — but "nothing has ever played" still leaves it null, and the
+  // browse/play paths already degrade gracefully (`_music.player_id||undefined`)
+  // while these two would have posted `queue_id: null` and failed opaquely.
+  // Say so instead, rather than firing a request that cannot mean anything.
+  function _qHasPlayer(){
+    if(_music.player_id)return true;
+    toast('No speaker playing yet');
+    return false;
+  }
   function wireMusic(){
     // Revisits: seed the play/pause button from the cached snapshot so the
     // pre-poll icon (and a fast tap) match the last-known real state.
     if(_music.np){var pp0=document.getElementById('mPP');
       if(pp0){pp0.dataset.playing=_music.np.playing?'1':'0';pp0.innerHTML=_music.np.playing?PAUSE_I:PLAY_I;}}
-    _qtab='recent';   // DOM rebuilds to the Recent tab each show(); keep state in sync
     // The flow is rebuilt with the card, so its state can't survive a show().
-    cfClear();wireCF();
+    cfApplyScale();cfClear();wireCF();
     loadMusic();_wxTick=setInterval(function(){if(_cur==='music')loadMusic();},5000);
     if(_homeTick){clearInterval(_homeTick);}_homeTick=setInterval(tickMusic,1000);
     var t=document.getElementById('mTransport');if(t)t.addEventListener('click',function(e){var btn=e.target.closest('button');if(!btn)return;var a=btn.getAttribute('data-a');
       if(a==='shuffle'){musicSet('shuffle_set',!_music.shuffle);return;}
       if(a==='repeat'){var nxt={off:'all',all:'one',one:'off'}[_music.repeat||'off'];musicSet('repeat_set',nxt);return;}
       musicControl(a==='playpause'?(document.getElementById('mPP').dataset.playing==='1'?'pause':'play'):a);});
-    // Queue/playlist manager: full-card overlay. Burger opens it, back closes.
-    var qb=document.getElementById('mQBtn'),qd=document.getElementById('mQueue');
-    // Open/close also toggles the global home button: the overlay's own back
-    // button owns the top-left corner while open (else #home, z60, overlaps it
-    // and steals the tap — sending you home instead of back to now-playing).
-    if(qb&&qd)qb.onclick=function(e){e.stopPropagation();_qOpen(true);loadQueue();};
-    var qback=document.getElementById('mQBack');
-    if(qback&&qd)qback.onclick=function(e){e.stopPropagation();_qOpen(false);};
-    // Playlist-manager: tab switch, save-as-playlist, clear, favourite.
-    var tabs=document.querySelector('.mqtabs');
-    if(tabs)tabs.onclick=function(e){var b=e.target.closest('button[data-qt]');if(!b)return;
-      _qtab=b.getAttribute('data-qt');tabs.querySelectorAll('button').forEach(function(x){x.classList.toggle('on',x===b);});loadQueue();};
-    var qs=document.getElementById('mQSave');
-    if(qs)qs.onclick=function(){estOpen('<h3>Save queue as playlist</h3><label>Name</label><input data-f="nm" placeholder="My playlist"><div class="btns"><button data-x="cancel">Cancel</button><button class="save" data-x="save">Save</button></div>');
-      var m=document.getElementById('estModal');m.querySelector('[data-x="cancel"]').onclick=estClose;
-      m.querySelector('[data-x="save"]').onclick=function(){var nm=m.querySelector('[data-f="nm"]').value.trim();if(!nm){toast('Give it a name');return;}
-        _qpost('queue/save',{queue_id:_music.player_id,name:nm}).then(function(r){estClose();toast(r&&r.ok?'Saved “'+nm+'”':'Couldn’t save');}).catch(function(){toast('Couldn’t save');});};};
-    var qc=document.getElementById('mQClear');
-    if(qc)qc.onclick=function(){estConfirm('Clear the whole queue?',function(){_qpost('queue/clear',{queue_id:_music.player_id}).then(function(){loadQueue();setTimeout(loadMusic,400);}).catch(function(){toast('Couldn’t clear');});});};
+    // Browse is a surface now, so this is plain navigation — no toggle, no
+    // overlay state, and #home keeps its corner because nothing covers it.
+    var qb=document.getElementById('mQBtn');
+    if(qb)qb.onclick=function(e){e.stopPropagation();show('browse');};
     var fav=document.getElementById('mFav');
     if(fav)fav.onclick=function(){if(!_music.np||!_music.np.uri){toast('Nothing playing');return;}
       _qpost('favorite',{uri:_music.np.uri}).then(function(r){if(r&&r.ok){fav.classList.add('on');toast('Added to favourites');}else toast('Couldn’t favourite');}).catch(function(){toast('Couldn’t favourite');});};
