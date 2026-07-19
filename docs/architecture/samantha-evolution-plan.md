@@ -368,12 +368,12 @@ regression, ever (replay harness is the enforcement).
   incl. mid-thought pauses; end-of-speech → first TTS audio median-of-10 ≤ the prior path;
   full replay corpus green
 - [x] **W2.1** presence-check primitive — **DONE** (#1412, `proactive/presence.py::panel_presence`)
-- [x] **W2.2** spoken-delivery adapter (morning brief only) — **DONE-BUT-SILENT** (#1414
+- [x] **W2.2** spoken-delivery adapter (morning brief only) — **DONE — EAR-VERIFIED via W2.3** (2026-07-19; the operator heard the brief from the panel's Jabra). (#1414
   landed the adapter + `panel_announce` lane, flag `ZOE_PROACTIVE_SPOKEN` default OFF —
   but live 2026-07-19 it "succeeded" twice with NO audio: the kiosk browser is a guest
   session, its fire-and-forget `/api/voice/speak` 401'd, and the handler swallowed it and
   acked success. The browser was never the proven speaker.)
-- [~] **W2.3** daemon-as-speaker announce queue — **IN FLIGHT (2026-07-19)**: server→daemon
+- [x] **W2.3** daemon-as-speaker announce queue — **DONE (2026-07-19, #1423)**: deployed to the panel, poll confirmed (device-token 200s), announcement claimed + played (daemon log `speaking→spoken`), operator HEARD it: server→daemon
   lane (`voice_announcements` table + device-token-only `GET /api/voice/announcements`,
   atomic claim, ~120 s TTL so a stale brief is never spoken), Pi daemon poll/defer/speak
   through the SAME playback path as replies (barge-in/cooldowns intact), and the
@@ -393,14 +393,7 @@ regression, ever (replay harness is the enforcement).
 
 ## 7. NEXT ACTION (always exactly one)
 
-→ **W2.1 + W2.2 (Zoe speaks first) — IN FLIGHT (2026-07-19).** Packets P-W2.1
-(presence primitive) and P-W2.2 (spoken morning brief, flag `ZOE_PROACTIVE_SPOKEN`
-default OFF) are being executed as two sequential PRs. After both merge, the operator
-lab-DoD is: force a morning brief with a fresh foreground panel session → the kiosk
-speaks it (push still sent). Next after W2: **W1.3** (streamed TTS in conversation
-mode, packet P-W1.3) + the **M3/M4** measurements (packet P-W1.4, bars in §6), then
-**W4.1** SER bake-off (RAM now allows it: voice stack unswappable per #1409, ~2.1 GB
-available steady-state).
+→ **W1.3 (streamed TTS in conversation mode, packet P-W1.3) + M3/M4 measurements (packet P-W1.4, bars in §6).** W2 is **DONE and ear-verified** (2026-07-19, see §6 — including the W2.3 lesson: the kiosk browser was never a speaker; spoken delivery rides the Pi daemon's audio path via the `voice_announcements` queue). The 7:30am scheduled brief now speaks to whoever is present; watch-week running. After W1.3: **W4.1** SER bake-off (RAM allows it — voice stack unswappable per #1409, ~2 GB steady-state).
 
 Closed en route: **W0** fully (2026-07-13 — P-F6 #1160, organic chat/Telegram capture,
 spoken-panel positive control after #1282) and **W3.1** (2026-07-19, measured: the

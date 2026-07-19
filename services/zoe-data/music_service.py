@@ -926,9 +926,19 @@ async def play_media(uri: str, player_id: str = "", option: str = "replace",
         return {"ok": False, "reason": "empty uri"}
     players = await get_players()
     if player_id:
+        # Same rule as set_preferred_player / group_players: [] means we could
+        # not see the roster, not that the id is bogus. Rejecting on an empty
+        # list turns an MA blip into "unknown player" for a speaker that exists.
+        # When we cannot validate, forward and let MA arbitrate.
         player = next((p for p in players if p.get("player_id") == player_id), None)
-        if player is None:
+        if players and player is None:
             return {"ok": False, "reason": "unknown player"}
+        if player is None:
+            # Roster invisible. Skipping the rejection is not enough on its own —
+            # `player` would stay None and fall through to "no player available",
+            # which is the same lockout wearing a different label. Trust the
+            # caller's explicit id and let MA arbitrate.
+            player = {"player_id": player_id}
     else:
         player = _pick_player(players)
     if player is None:
