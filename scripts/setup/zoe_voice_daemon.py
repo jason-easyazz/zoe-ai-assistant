@@ -1016,7 +1016,10 @@ def _identify_speaker_from_wav(wav_bytes: bytes) -> tuple[str, float] | None:
         emb_b64 = _b64.b64encode(emb_bytes).decode()
         resp = _api_post("/api/voice/identify", {"embedding_base64": emb_b64}, timeout=5)
         if resp.get("identified"):
-            return resp.get("user_id"), float(resp.get("confidence") or 1.0)
+            uid = resp.get("user_id")
+            if not uid:
+                return None  # legacy server echoed identified without a user
+            return uid, float(resp.get("confidence") or 1.0)
         return None
     except ImportError:
         return None
