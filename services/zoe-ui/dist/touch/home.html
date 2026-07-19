@@ -157,19 +157,52 @@
   .calviews button{font:inherit;font-size:16px;color:var(--ink-soft);background:transparent;border:0;border-radius:999px;padding:8px 18px;cursor:pointer}
   .calviews button.on{background:#fff;color:#0a0d14;font-weight:600}
   .calbody{flex:1;min-height:0;overflow-y:auto}
-  .calmonth{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));grid-auto-rows:minmax(0,1fr);gap:6px;width:100%;height:100%;grid-template-rows:auto}
-  .calmonth .cmh{font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);text-align:center;padding:4px 0}
+  /* Week and month are TODAY-ANCHORED and scroll; the calendar no longer spends
+     the panel's 1208x476 on days that have already happened. Both scrollers are
+     NATIVE (momentum, fling, rubber-band come free and match the OS).
+     touch-action is deliberately left at its default here. The Cover Flow's
+     comment above is the same trap seen from the other side: the CONTAINER's
+     touch-action decides who owns the gesture, and these containers WANT the
+     browser to own it. Setting touch-action:none on .calweek/.calmonth would
+     hand the pan to a JS handler that does not exist and the view would simply
+     not scroll. overscroll-behavior contains the fling so reaching the end of a
+     row never chains out into the surface behind it. */
+  .calmonth{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;width:100%;height:100%;
+            /* A FIXED row height, never minmax(0,...): with a definite grid
+               height minmax lets every row shrink to fit instead of
+               overflowing, which silently collapsed the cells to 39px and made
+               the month scroll not exist. Fixed rows are what make it scroll. */
+            grid-template-rows:auto;grid-auto-rows:var(--calrow,144px);
+            /* scroll-padding-top = weekday strip (25px) + row gap (6px). Snap
+               aligns a row's start edge to the container's start edge, which is
+               UNDERNEATH the sticky strip — without this padding, snapping drags
+               today's row back under the header and hides its date numbers,
+               undoing the anchor. Keep in step with CAL_GRID_GAP. */
+            scroll-padding-top:31px;
+            overflow-y:auto;overscroll-behavior-y:contain;scroll-snap-type:y proximity}
+  .calmonth::-webkit-scrollbar{width:0}
+  /* The weekday strip stays put while the weeks scroll under it — without it a
+     scrolled month is seven unlabelled columns. */
+  .calmonth .cmh{position:sticky;top:0;z-index:2;background:#0a0d14;font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);text-align:center;padding:4px 0 6px}
   .cmd{min-width:0;min-height:0;overflow:hidden;border-radius:14px;background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.07);padding:7px 9px;font-size:15px;box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
   .cmd.dim{opacity:.3}
   .cmd.today{border-color:rgba(123,150,255,.65);background:linear-gradient(180deg,rgba(123,150,255,.18),rgba(123,150,255,.08));box-shadow:0 0 22px rgba(123,150,255,.18),inset 0 1px 0 rgba(255,255,255,.1)}
   .cmd.today .dn{color:#fff;font-weight:600}
+  .cmd{scroll-snap-align:start}
   .cmd .dn{font-size:14px;color:var(--ink-soft)}
   .cmd .cev{font-size:12px;color:var(--ink);border-left:3px solid var(--c,var(--accent));background:color-mix(in srgb,var(--c,var(--accent)) 20%,transparent);border-radius:5px;padding:2px 7px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .calweek{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:10px;width:100%}
-  .cwc{min-width:0;background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.07);border-radius:16px;padding:12px 10px;min-height:300px;box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
-  .cwc h5{font-size:14px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;text-align:center}
+  /* Once today is no longer implied by "leftmost"/"first row", it has to SAY so:
+     scroll two weeks out and the accent alone reads as just another tinted cell. */
+  .cmd.today .dn::after,.cwc.today h5::after{content:'TODAY';margin-left:7px;font-size:10px;letter-spacing:.12em;font-weight:700;color:#0a0d14;background:#7b96ff;border-radius:4px;padding:1px 5px;vertical-align:middle}
+  .calweek{display:grid;grid-auto-flow:column;grid-auto-columns:calc((100% - 30px)/4);gap:10px;height:100%;
+           overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x proximity}
+  .calweek::-webkit-scrollbar{height:0}
+  .cwc{min-width:0;background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.07);border-radius:16px;padding:12px 10px;overflow-y:auto;scroll-snap-align:start;box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
+  .cwc h5{font-size:16px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px;text-align:center}
   .cwc.today{border-color:rgba(123,150,255,.6);background:linear-gradient(180deg,rgba(123,150,255,.15),rgba(123,150,255,.05));box-shadow:0 0 22px rgba(123,150,255,.15)}
-  .cwe{font-size:14px;border-left:3px solid var(--c,var(--accent));background:color-mix(in srgb,var(--c,var(--accent)) 18%,transparent);border-radius:7px;padding:5px 9px;margin-bottom:6px}
+  .cwc.past{opacity:.55}
+  /* 48px minimum: these are finger targets, and the wider column finally affords it. */
+  .cwe{font-size:15px;border-left:3px solid var(--c,var(--accent));background:color-mix(in srgb,var(--c,var(--accent)) 18%,transparent);border-radius:7px;padding:7px 10px;margin-bottom:7px;min-height:48px;box-sizing:border-box}
   .cwe small{display:block;color:var(--ink-soft);opacity:.8;margin-top:1px;font-variant-numeric:tabular-nums}
   .caldaylist .dev{display:flex;align-items:center;gap:16px;padding:15px 0;border-top:1px solid rgba(255,255,255,.08)}
   /* Settings — expanding sections */
@@ -2710,8 +2743,108 @@
   }
 
   // ---- Calendar: day / week / month on real events ----
-  var _cal={view:'week',gen:0};var _calEvents={};
+  // Week and month are TODAY-ANCHORED and SCROLL. The old layout started the
+  // week on Monday and the month on the 1st, so on a Friday four of seven
+  // columns — and on the 19th, eighteen day cells — were spent on days you can
+  // no longer act on. That starved the grid badly enough that a six-week month
+  // could only fit ONE chip per day before clipping. Anchoring on today buys
+  // the space back: week columns go 164px -> 294px, month cells ~70px -> ~144px.
+  // The past is DE-EMPHASISED, NOT AMPUTATED: both views scroll backwards to
+  // CAL_BACK_DAYS, so yesterday is always one nudge away.
+  var CAL_BACK_DAYS=7;      // scrollable (and fetched) history
+  var CAL_FWD_DAYS=56;      // scrollable (and fetched) future — 8 weeks
+  var CAL_WEEK_COLS=4;      // day columns visible at once in week view
+  var CAL_MONTH_WEEKS=3;    // week rows visible at once in month view
+  // Rolling weeks are always uniform, so the old `weeks>5?1:2` six-week squeeze
+  // is gone: every cell is the same ~144px and fits four chips.
+  var CAL_MONTH_CHIPS=4;
+  var _cal={view:'week',gen:0,raf:0};var _calEvents={};
   function isoD(d){return d.getFullYear()+'-'+two(d.getMonth()+1)+'-'+two(d.getDate());}
+  // Chips for one month cell, with the counter TAKING the last slot when it
+  // overflows (never adding a row, so nothing can clip).
+  function calChips(es,max){
+    function chip(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';
+      return '<div class="cev" data-eid="'+esc(String(e.id))+'" style="--c:'+c+'">'+esc(e.title||'')+'</div>';}
+    if(es.length<=max)return es.map(chip).join('');
+    var showN=max-1;
+    return es.slice(0,showN).map(chip).join('')
+      +'<div class="cev" style="opacity:.6">'+(showN?('+'+(es.length-showN)+' more'):(es.length+' events'))+'</div>';
+  }
+  function calFromIso(s){var p=String(s).split('-');return new Date(+p[0],+p[1]-1,+p[2]);}
+  function calAdd(d,n){var x=new Date(d.getFullYear(),d.getMonth(),d.getDate());x.setDate(x.getDate()+n);return x;}
+  function calMonday(d){return calAdd(d,-((d.getDay()+6)%7));}
+  // ONE window drives both views AND the fetch. The month grid is the widest of
+  // the two (it rounds out to whole Mon..Sun rows), so fetching that range
+  // covers the week strip as well — which is what lets scrolling stay silent
+  // instead of firing a request per scroll event.
+  function calWindow(now){
+    var last=calAdd(now,CAL_FWD_DAYS);
+    return {gridStart:calMonday(calAdd(now,-CAL_BACK_DAYS)),gridEnd:calAdd(calMonday(last),6),
+            weekStart:calAdd(now,-CAL_BACK_DAYS),weekEnd:last};
+  }
+  // Honest about what is ON SCREEN. "This week" and "July 2026" both lie the
+  // moment a rolling window straddles a month or year boundary.
+  function calHeaderText(view,a,b,now){
+    if(view==='day')return now.toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long'});
+    var sameY=a.getFullYear()===b.getFullYear(),sameM=sameY&&a.getMonth()===b.getMonth();
+    var oa=!sameY?{day:'numeric',month:'short',year:'numeric'}:(sameM?{day:'numeric'}:{day:'numeric',month:'short'});
+    var ob=!sameY?{day:'numeric',month:'short',year:'numeric'}:(sameM?{day:'numeric',month:'long'}:{day:'numeric',month:'short'});
+    return a.toLocaleDateString(undefined,oa)+' – '+b.toLocaleDateString(undefined,ob);
+  }
+  function calScroller(){return document.querySelector('#calBody .calweek,#calBody .calmonth');}
+  // Read the visible days off REAL geometry rather than recomputing scroll
+  // arithmetic, so the header can never disagree with what is drawn.
+  // A day counts as on-screen only when at least HALF of it is — a 1px sliver of
+  // the next row peeking under the fold is not something the header should
+  // claim you can see (it made a 3-week view announce four weeks).
+  function calVisibleDays(sc){
+    if(!sc)return [];
+    var sr=sc.getBoundingClientRect(),cmh=sc.querySelector('.cmh');
+    var top=sr.top+(cmh?cmh.getBoundingClientRect().height:0),out=[];
+    [].forEach.call(sc.querySelectorAll('[data-d]'),function(el){
+      var r=el.getBoundingClientRect();
+      var w=Math.min(r.right,sr.right)-Math.max(r.left,sr.left);
+      var h=Math.min(r.bottom,sr.bottom)-Math.max(r.top,top);
+      if(w>0&&h>0&&(w*h)/(r.width*r.height)>=.5)out.push(el.getAttribute('data-d'));
+    });
+    return out;
+  }
+  function calSyncHeader(){
+    var ttl=document.getElementById('calTtl');if(!ttl||_cal.view==='day')return;
+    var vis=calVisibleDays(calScroller());if(!vis.length)return;
+    ttl.textContent=calHeaderText(_cal.view,calFromIso(vis[0]),calFromIso(vis[vis.length-1]),new Date());
+  }
+  // Put today at the leading edge (leftmost column / top row). Measured from
+  // live rects: offsetLeft/offsetTop would be read against .calf, not the
+  // scroller, because .calf is the positioned ancestor.
+  var CAL_GRID_GAP=6;   // must track the gap on .calmonth
+  function calAnchorToday(){
+    var sc=calScroller();if(!sc)return;
+    var el=sc.querySelector('.today');if(!el)return;
+    if(_cal.view==='week'){sc.scrollLeft+=(el.getBoundingClientRect().left-sc.getBoundingClientRect().left);}
+    else{
+      // TWO passes. The weekday strip is position:sticky, so where it actually
+      // comes to rest is only knowable AFTER a scroll has happened; a
+      // single-pass anchor computed against its pre-scroll box left today's row
+      // tucked UNDER the strip with its date numbers invisible. Every assertion
+      // still passed — the row was ">=50% visible" — which is exactly why this
+      // is corrected by measurement rather than arithmetic.
+      for(var i=0;i<2;i++){
+        var cmh=sc.querySelector('.cmh');
+        var hb=cmh?cmh.getBoundingClientRect().bottom:sc.getBoundingClientRect().top;
+        var d=el.getBoundingClientRect().top-hb-CAL_GRID_GAP;
+        if(Math.abs(d)<1)break;
+        sc.scrollTop+=d;
+      }
+    }
+    calSyncHeader();
+  }
+  // Test seam. The harness asserts against THESE functions — the ones the panel
+  // actually runs — because a suite that re-implements the date maths inline
+  // passes just as happily against broken production code.
+  window._calTest={window:calWindow,headerText:calHeaderText,visibleDays:calVisibleDays,
+                   chips:calChips,iso:isoD,fromIso:calFromIso,add:calAdd,monday:calMonday,
+                   K:{back:CAL_BACK_DAYS,fwd:CAL_FWD_DAYS,cols:CAL_WEEK_COLS,weeks:CAL_MONTH_WEEKS,chips:CAL_MONTH_CHIPS}};
   function wireCalendar(){
     var vs=document.getElementById('calViews');
     if(vs)vs.onclick=function(e){var b=e.target.closest('button');if(!b)return;_cal.view=b.getAttribute('data-v');
@@ -2723,40 +2856,46 @@
   function paintCal(){
     var body=document.getElementById('calBody'),ttl=document.getElementById('calTtl');if(!body)return;
     var gen=++_cal.gen;   // rapid view switches: only the newest request may paint
-    var now=new Date(),start,end;
-    if(_cal.view==='day'){start=new Date(now);end=new Date(now);}
-    else if(_cal.view==='week'){start=new Date(now);start.setDate(now.getDate()-((now.getDay()+6)%7));end=new Date(start);end.setDate(start.getDate()+6);}
-    else{start=new Date(now.getFullYear(),now.getMonth(),1);end=new Date(now.getFullYear(),now.getMonth()+1,0);}
-    if(ttl)ttl.textContent=_cal.view==='month'?now.toLocaleDateString(undefined,{month:'long',year:'numeric'}):(_cal.view==='week'?'This week':now.toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long'}));
+    var now=new Date(),win=calWindow(now);
+    // ONE request spanning everything either view can scroll to. Scrolling then
+    // needs no network at all, which is why it cannot feel laggy and cannot
+    // hammer the API — the alternative (fetch-on-scroll) buys nothing here,
+    // since the whole window is ~9 weeks of a personal calendar.
+    var start=_cal.view==='day'?new Date(now):win.gridStart,
+        end  =_cal.view==='day'?new Date(now):win.gridEnd;
+    if(ttl&&_cal.view==='day')ttl.textContent=calHeaderText('day',start,end,now);
     apiGet('/api/calendar/events?start_date='+isoD(start)+'&end_date='+isoD(end)).then(function(d){if(_cur!=='calendar'||gen!==_cal.gen)return;
       var evs=((d&&d.events)||[]).filter(function(e){return !e.deleted;});
       _calEvents={};evs.forEach(function(e){if(e.id!=null)_calEvents[e.id]=e;});
       var byDay={};evs.forEach(function(e){var k=e.start_date;(byDay[k]=byDay[k]||[]).push(e);});
       Object.keys(byDay).forEach(function(k){byDay[k].sort(function(a,b){return (a.start_time||'').localeCompare(b.start_time||'');});});
+      var tk=isoD(now);
       if(_cal.view==='month'){
-        var first=new Date(start),lead=(first.getDay()+6)%7,days=end.getDate();
-        // six-week months have shorter cells — show one chip + counter so "+N more" never clips
-        var weeks=Math.ceil((lead+days)/7),maxChips=weeks>5?1:2;
+        // Rolling Mon..Sun rows from a week before today — NOT the calendar
+        // month, so the grid never wastes rows on days already gone and never
+        // degenerates into the six-row month the old squeeze existed for.
         var html='<div class="calmonth">'+['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(function(h){return '<div class="cmh">'+h+'</div>';}).join('');
-        for(var i=0;i<lead;i++)html+='<div class="cmd dim"></div>';
-        for(var dnum=1;dnum<=days;dnum++){var dd=new Date(now.getFullYear(),now.getMonth(),dnum),k=isoD(dd),es=byDay[k]||[];
-          html+='<div class="cmd'+(k===isoD(now)?' today':'')+'"><div class="dn">'+dnum+'</div>'+(function(){
-            // Rows never exceed maxChips: when overflowing, the counter TAKES the
-            // last slot instead of adding a row (so nothing can clip).
-            if(es.length<=maxChips)return es.map(function(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="cev" data-eid="'+esc(String(e.id))+'" style="--c:'+c+'">'+esc(e.title||'')+'</div>';}).join('');
-            var showN=maxChips-1;
-            return es.slice(0,showN).map(function(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="cev" data-eid="'+esc(String(e.id))+'" style="--c:'+c+'">'+esc(e.title||'')+'</div>';}).join('')
-              +'<div class="cev" style="opacity:.6">'+(showN?('+'+(es.length-showN)+' more'):(es.length+' events'))+'</div>';
-          })()+'</div>';}
+        for(var c=new Date(win.gridStart);c<=win.gridEnd;c=calAdd(c,1)){var k=isoD(c),es=byDay[k]||[];
+          html+='<div class="cmd'+(k===tk?' today':(k<tk?' dim':''))+'" data-d="'+k+'"><div class="dn">'+c.getDate()+'</div>'+calChips(es,CAL_MONTH_CHIPS)+'</div>';}
         body.innerHTML=html+'</div>';
       } else if(_cal.view==='week'){
         var html2='<div class="calweek">';
-        for(var i2=0;i2<7;i2++){var d2=new Date(start);d2.setDate(start.getDate()+i2);var k2=isoD(d2),es2=byDay[k2]||[];
-          html2+='<div class="cwc'+(k2===isoD(now)?' today':'')+'"><h5>'+d2.toLocaleDateString(undefined,{weekday:'short'})+' '+d2.getDate()+'</h5>'+(es2.map(function(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="cwe" data-eid="'+esc(String(e.id))+'" style="--c:'+c+'">'+esc(e.title||'')+'<small>'+(e.all_day?'All day':esc(fmt12(e.start_time)))+'</small></div>';}).join('')||'<div style="color:var(--ink-faint);font-size:13px;text-align:center;padding-top:12px">—</div>')+'</div>';}
+        for(var c2=new Date(win.weekStart);c2<=win.weekEnd;c2=calAdd(c2,1)){var k2=isoD(c2),es2=byDay[k2]||[];
+          html2+='<div class="cwc'+(k2===tk?' today':(k2<tk?' past':''))+'" data-d="'+k2+'"><h5>'+c2.toLocaleDateString(undefined,{weekday:'short'})+' '+c2.getDate()+'</h5>'+(es2.map(function(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="cwe" data-eid="'+esc(String(e.id))+'" style="--c:'+c+'">'+esc(e.title||'')+'<small>'+(e.all_day?'All day':esc(fmt12(e.start_time)))+'</small></div>';}).join('')||'<div style="color:var(--ink-faint);font-size:13px;text-align:center;padding-top:12px">—</div>')+'</div>';}
         body.innerHTML=html2+'</div>';
       } else {
         var es3=byDay[isoD(now)]||[];
         body.innerHTML='<div class="caldaylist">'+(es3.map(function(e){var cat=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="dev" data-eid="'+esc(String(e.id))+'"><div class="t" style="width:96px;flex:none;font-size:21px;color:var(--ink-soft)">'+esc(e.all_day?'All day':fmt12(e.start_time))+'</div><span class="dot" style="--c:'+cat+';width:12px;height:12px;border-radius:50%;background:var(--c);box-shadow:0 0 10px var(--c);flex:none"></span><div><div class="en" style="font-size:23px;font-weight:500">'+esc(e.title||'Event')+'</div>'+(e.location?'<div class="es" style="font-size:16px;color:var(--ink-faint)">'+esc(e.location)+'</div>':'')+'</div></div>';}).join('')||'<div style="color:var(--ink-faint);font-size:20px;padding-top:20px">Nothing scheduled today.</div>')+'</div>';
+      }
+      if(_cal.view!=='day'){
+        var sc=calScroller();
+        // passive: this listener only reads geometry to retitle the header, so
+        // it must never be able to delay the scroll it is watching.
+        if(sc)sc.addEventListener('scroll',function(){
+          if(_cal.raf)return;
+          _cal.raf=requestAnimationFrame(function(){_cal.raf=0;calSyncHeader();});
+        },{passive:true});
+        calAnchorToday();
       }
     }).catch(function(){if(_cur!=='calendar'||gen!==_cal.gen)return;body.innerHTML='<div style="color:var(--ink-faint);font-size:20px">Couldn’t load the calendar.</div>';});
   }
