@@ -2557,6 +2557,10 @@ async def voice_command(
     text = str((payload or {}).get("text", "")).strip()
     panel_id = str((payload or {}).get("panel_id", caller.get("panel_id") or "unknown"))
     identified_user_id: Optional[str] = (payload or {}).get("identified_user_id") or None
+    if not identified_user_id:
+        # Panels that match speaker profiles locally send a claim + score; the
+        # threshold decision stays server-side so a panel can never lower it.
+        identified_user_id = _accept_panel_voice_claim(payload)
     # Forwarded by /voice/turn so end-to-end total can be recorded from the
     # true start of the request (audio upload). Falls back to command start.
     _t_turn_start = (payload or {}).get("_t_turn_start")
@@ -5079,6 +5083,40 @@ def _compute_resemblyzer_embedding(wav_path: str) -> Optional[bytes]:
         return None
 
 
+def _speaker_id_threshold() -> float:
+    """Resemblyzer cosine acceptance threshold, read per call so .env flips apply."""
+    try:
+        return float(os.environ.get("ZOE_SPEAKER_ID_THRESHOLD", "0.82"))
+    except ValueError:
+        return 0.82
+
+
+def _accept_panel_voice_claim(payload: dict) -> Optional[str]:
+    """Gate a panel-computed speaker-ID claim (voice_user_id + voice_score).
+
+    The panel matches embeddings against its synced profile cache and sends
+    only a claim; acceptance is decided HERE against the server's threshold,
+    so a panel cannot make itself more trusted than the server allows. A
+    missing/unparseable score or a below-threshold claim is ignored (the turn
+    proceeds with the panel-binding fallbacks, exactly as with no claim).
+    """
+    payload = payload or {}
+    user = str(payload.get("voice_user_id") or "").strip()
+    if not user:
+        return None
+    try:
+        score = float(payload.get("voice_score"))
+    except (TypeError, ValueError):
+        return None
+    threshold = _speaker_id_threshold()
+    if score >= threshold:
+        return user
+    logger.info(
+        "voice claim rejected: user=%s score=%.4f < threshold=%.2f", user, score, threshold
+    )
+    return None
+
+
 def _cosine_similarity(a: bytes, b: bytes) -> float:
     """Cosine similarity between two float32 byte blobs."""
     try:
@@ -5109,6 +5147,10 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
     user_id = str((payload or {}).get("user_id", caller.get("user_id", "unknown")))
     display_name = str((payload or {}).get("display_name", user_id)).strip() or user_id
     panel_id = str((payload or {}).get("panel_id", caller.get("panel_id") or ""))
+    # Biometric enrollment is opt-in (W6): the enroll UI sends consent=true after
+    # an explicit checkbox. Without recorded consent the profile is stored but
+    # never matched against or synced to a panel (identify/sync filter on it).
+    consent = bool((payload or {}).get("consent"))
 
     if not b64:
         raise HTTPException(status_code=400, detail="audio_base64 is required")
@@ -5156,13 +5198,25 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
                        display_name=? WHERE id=?""",
                     (averaged_norm.astype(np.float32).tobytes(), display_name, old_id),
                 )
+                if consent:
+                    await db.execute(
+                        "UPDATE speaker_profiles SET consent_at=CURRENT_TIMESTAMP WHERE id=?",
+                        (old_id,),
+                    )
                 profile_id = old_id
             else:
-                await db.execute(
-                    """INSERT INTO speaker_profiles (id, user_id, display_name, embedding_blob, panel_id)
-                       VALUES (?, ?, ?, ?, ?)""",
-                    (profile_id, user_id, display_name, embedding_bytes, panel_id or None),
-                )
+                if consent:
+                    await db.execute(
+                        """INSERT INTO speaker_profiles (id, user_id, display_name, embedding_blob, panel_id, consent_at)
+                           VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+                        (profile_id, user_id, display_name, embedding_bytes, panel_id or None),
+                    )
+                else:
+                    await db.execute(
+                        """INSERT INTO speaker_profiles (id, user_id, display_name, embedding_blob, panel_id)
+                           VALUES (?, ?, ?, ?, ?)""",
+                        (profile_id, user_id, display_name, embedding_bytes, panel_id or None),
+                    )
             await db.commit()
     except Exception as exc:
         logger.error("voice/enroll DB error: %s", exc)
@@ -5221,7 +5275,8 @@ async def voice_identify(payload: dict, caller: dict = Depends(_require_voice_au
     try:
         async with _get_compat_db() as db:
             async with db.execute(
-                "SELECT id, user_id, display_name, embedding_blob FROM speaker_profiles"
+                "SELECT id, user_id, display_name, embedding_blob FROM speaker_profiles "
+                "WHERE consent_at IS NOT NULL"
             ) as cur:
                 profiles = await cur.fetchall()
     except Exception as exc:
@@ -5244,7 +5299,7 @@ async def voice_identify(payload: dict, caller: dict = Depends(_require_voice_au
             best_name = dname
 
     # Resemblyzer cosine similarity > 0.82 is typically a match.
-    threshold = float(os.environ.get("ZOE_SPEAKER_ID_THRESHOLD", "0.82"))
+    threshold = _speaker_id_threshold()
     if best_score >= threshold:
         return {
             "ok": True,
@@ -5262,6 +5317,46 @@ async def voice_identify(payload: dict, caller: dict = Depends(_require_voice_au
     }
 
 
+@router.get("/profiles/sync")
+async def voice_profiles_sync(caller: dict = Depends(_require_voice_auth)):
+    """Panel-facing profile feed for ON-DEVICE speaker matching.
+
+    Returns consented profiles (embedding + user_id) plus the server's
+    acceptance threshold so the panel daemon can cosine-match locally and
+    send back only {voice_user_id, voice_score} per turn. Device-token
+    callers only: this hands out biometric embeddings and must never be
+    reachable from a browser session.
+    """
+    if caller.get("source") != "device":
+        raise HTTPException(status_code=403, detail="device token required")
+    from db_compat import get_compat_db as _get_compat_db
+
+    try:
+        async with _get_compat_db() as db:
+            async with db.execute(
+                "SELECT user_id, display_name, embedding_blob, sample_count FROM speaker_profiles "
+                "WHERE consent_at IS NOT NULL ORDER BY user_id"
+            ) as cur:
+                rows = await cur.fetchall()
+    except Exception as exc:
+        logger.error("voice/profiles/sync DB error: %s", exc)
+        raise HTTPException(status_code=500, detail="DB error") from exc
+
+    return {
+        "ok": True,
+        "threshold": _speaker_id_threshold(),
+        "profiles": [
+            {
+                "user_id": r[0],
+                "display_name": r[1],
+                "embedding_base64": base64.b64encode(bytes(r[2])).decode("ascii"),
+                "sample_count": r[3] or 1,
+            }
+            for r in rows
+        ],
+    }
+
+
 @router.get("/profiles")
 async def voice_profiles(caller: dict = Depends(_require_voice_auth)):
     """List enrolled speaker profiles (id, user_id, display_name, sample_count).
@@ -5273,14 +5368,16 @@ async def voice_profiles(caller: dict = Depends(_require_voice_auth)):
     try:
         async with _get_compat_db() as db:
             async with db.execute(
-                "SELECT id, user_id, display_name, sample_count, panel_id FROM speaker_profiles ORDER BY display_name"
+                "SELECT id, user_id, display_name, sample_count, panel_id, consent_at "
+                "FROM speaker_profiles ORDER BY display_name"
             ) as cur:
                 rows = await cur.fetchall()
         return {
             "ok": True,
             "profiles": [
                 {"id": r[0], "user_id": r[1], "display_name": r[2],
-                 "sample_count": r[3] or 1, "panel_id": r[4]}
+                 "sample_count": r[3] or 1, "panel_id": r[4],
+                 "consented": r[5] is not None}
                 for r in rows
             ]
         }
