@@ -40,3 +40,7 @@ No child AGENTS.md files yet.
 OKF knowledge bundles (records, not contracts — see root "Knowledge vs. Records (OKF)"):
 - [knowledge/](knowledge/index.md) — curated Zoe reference knowledge (tool stack, topology); agent-curatable.
 - [knowledge/autopilots/](knowledge/autopilots/index.md) — Loop-Engineering contracts for the live Multica autopilots (Job/Inputs/Allowed/Forbidden/Output/Evaluation); agent-curatable.
+- [audits/](audits/) — point-in-time capability + gap audits against live systems.
+  Dated snapshots, NOT contracts: each records what was measured on that day, so a
+  stale one is history rather than a wrong rule. Re-measure before acting on an old
+  audit.
