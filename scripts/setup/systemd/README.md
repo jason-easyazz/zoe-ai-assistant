@@ -74,7 +74,7 @@ reply after idle) rather than a resource one.
 | Unit | `MemorySwapMax` | `MemoryLow` | `MemoryMax` |
 |------|-----------------|-------------|-------------|
 | `llama-server` | `0` | `6G` | *(none — see below)* |
-| `kokoro-tts`   | `0` | `2G` | `4G` |
+| `kokoro-tts`   | `0` | `3G` | `4G` |
 | `serena-mcp`   | `2G` | — | `2G` (dev tooling, deliberately yields) |
 
 Measured on the live box 2026-07-18, **before** these directives existed:
@@ -89,6 +89,11 @@ Two things worth knowing before changing these:
   covers the mapped model, not every CUDA/unified allocation around it.
   `MemorySwapMax=0` is what closes the gap. `MemoryLow` is *soft* (reclaim
   resistance, not swap immunity) and alone did not stop the eviction.
+- **Size `MemoryLow` from measurement, not from the doc comment.** kokoro's note
+  says "~2.3 GB CUDA-resident"; the live cgroup after 20 voice turns read
+  `memory.current` 2,309 MB and `VmHWM` 2,465 MB. A 2G floor would leave part of
+  the working set outside the protected zone — unswappable, but still
+  reclaimable, and on unified memory those are GPU-accessible pages.
 - **llama-server has no `MemoryMax` on purpose.** A hard ceiling *plus* no swap
   turns a transient spike into an OOM kill. Kokoro can take one because it is
   bounded (~2.3 GB CUDA-resident, does not grow with load).

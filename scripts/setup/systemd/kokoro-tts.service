@@ -33,12 +33,20 @@ Environment=LD_LIBRARY_PATH=%h/.local/lib:/usr/local/cuda-12.6/lib64:/usr/lib/aa
 # starvation the ZOE_KOKORO_BACKEND note above already guards against.
 #
 # MemorySwapMax=0 is the load-bearing line: the voice path must never be paged
-# out. It is safe here because this sidecar is BOUNDED (~2.3 GB CUDA-resident;
-# it does not grow with load) and MemoryMax gives a hard ceiling, so refusing
-# swap cannot turn into unbounded pressure. MemoryLow keeps the kernel
-# reclaiming elsewhere first — the brain uses the same mechanism at 6G.
+# out. It is safe here because this sidecar is BOUNDED (it does not grow with
+# load) and MemoryMax gives a hard ceiling, so refusing swap cannot turn into
+# unbounded pressure. MemoryLow keeps the kernel reclaiming elsewhere first —
+# the brain uses the same mechanism at 6G.
+#
+# MemoryLow=3G is sized from MEASUREMENT, not from the "~2.3 GB" figure in the
+# note above. On the live box after 20 real voice turns: memory.current 2,309 MB,
+# VmHWM 2,465 MB. A 2G floor would have left ~260-420 MB of the working set
+# OUTSIDE the protected zone — MemorySwapMax=0 stops that remainder being
+# swapped, but the kernel may still RECLAIM it, and on unified-memory Tegra those
+# are GPU-accessible pages. 3G covers the measured peak with headroom for cache
+# warmth while staying under MemoryMax. (Greptile review, PR #1409.)
 MemorySwapMax=0
-MemoryLow=2G
+MemoryLow=3G
 MemoryMax=4G
 
 # NOTE — do NOT add Nice=-N / OOMScoreAdjust=-N here. Verified on this box
