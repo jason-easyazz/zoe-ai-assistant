@@ -982,6 +982,41 @@ def _match_speaker_local(embedding) -> tuple[str, float] | None:
     return best_user, best_score
 
 
+def _speaker_id_warmup() -> None:
+    """Warm the FULL speaker-ID pipeline (encoder load + preprocess + embed).
+
+    The first preprocess_wav call pays ~2.5s of librosa/numba JIT on the Pi,
+    which otherwise lands on the user's first spoken turn. Runs one embed on
+    1s of low-amplitude noise — not silence, which preprocess_wav VAD-trims
+    to nothing so embed_utterance would raise before the embed JIT runs.
+    Best-effort: never raises, never leaves a temp file behind.
+    """
+    encoder = _get_voice_encoder()
+    if encoder is None:
+        return
+    warm_path = None
+    try:
+        import tempfile as _tmp, wave as _wave
+        from resemblyzer import preprocess_wav  # type: ignore
+
+        with _tmp.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            warm_path = f.name
+        with _wave.open(warm_path, "wb") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+            rng = np.random.default_rng(0)
+            w.writeframes((rng.standard_normal(16000) * 300).astype(np.int16).tobytes())
+        encoder.embed_utterance(preprocess_wav(warm_path))
+        log.info("Speaker-ID pipeline warmed (JIT done).")
+    except Exception as exc:
+        log.debug("speaker-ID warmup embed failed: %s", exc)
+    finally:
+        if warm_path is not None:
+            try:
+                os.unlink(warm_path)
+            except OSError:
+                pass
+
+
 def _identify_speaker_from_wav(wav_bytes: bytes) -> tuple[str, float] | None:
     """Compute a resemblyzer embedding and identify the speaker.
 
@@ -1817,39 +1852,7 @@ def main():
     # delayed, and pull the speaker-profile cache (disk copy first so a server
     # outage doesn't blind local matching, then a fresh sync).
     if SPEAKER_ID_ENABLED:
-
-        def _encoder_warmup() -> None:
-            encoder = _get_voice_encoder()
-            if encoder is None:
-                return
-            # Run one full preprocess+embed on a second of silence: the first
-            # preprocess_wav call pays ~2.5s of librosa/numba JIT on the Pi,
-            # which otherwise lands on the user's FIRST spoken turn.
-            try:
-                import tempfile as _tmp, os as _os, wave as _wave
-                with _tmp.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-                    warm_path = f.name
-                with _wave.open(warm_path, "wb") as w:
-                    w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
-                    # Low-amplitude noise, not silence: preprocess_wav VAD-trims
-                    # silence to nothing and embed_utterance would then raise
-                    # before the embed JIT is exercised.
-                    rng = np.random.default_rng(0)
-                    noise = (rng.standard_normal(16000) * 300).astype(np.int16)
-                    w.writeframes(noise.tobytes())
-                try:
-                    from resemblyzer import preprocess_wav  # type: ignore
-                    encoder.embed_utterance(preprocess_wav(warm_path))
-                    log.info("Speaker-ID pipeline warmed (JIT done).")
-                finally:
-                    try:
-                        _os.unlink(warm_path)
-                    except OSError:
-                        pass
-            except Exception as exc:
-                log.debug("speaker-ID warmup embed failed: %s", exc)
-
-        threading.Thread(target=_encoder_warmup, daemon=True, name="resemblyzer-warmup").start()
+        threading.Thread(target=_speaker_id_warmup, daemon=True, name="resemblyzer-warmup").start()
 
         def _profile_warmup() -> None:
             _load_profile_cache_from_disk()
