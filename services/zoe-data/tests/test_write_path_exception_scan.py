@@ -97,6 +97,7 @@ WRITE_PATH_MODULES = [
     "ui_layouts.py",
     "zoe_agent.py",
     "routers/chat.py",
+    "chat_stream_protocol.py",  # W4-C2: protocol mechanics moved out of chat.py — keep scanned
     "routers/panel_auth.py",
     "routers/people.py",
     "routers/stubs.py",
