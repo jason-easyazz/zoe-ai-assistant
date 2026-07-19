@@ -145,3 +145,4 @@ async def test_invalid_auth_key_subscription_is_pruned(monkeypatch):
     await push.send_push_to_user("jason", message="hi")
 
     assert db.deletes == [("jason", _ROW["endpoint"])]
+    assert db.committed, "prune must COMMIT — enqueued-but-uncommitted deletes leave the row"
