@@ -194,7 +194,7 @@ function coverSvg(url) {
     + `<circle cx="150" cy="130" r="62" fill="hsl(${(hue + 40) % 360},70%,68%)"/>`
     + `<rect x="40" y="228" width="220" height="16" rx="8" fill="rgba(255,255,255,.55)"/></svg>`);
 }
-function newCtx() { return { posts: [], cfgGets: 0 }; }
+function newCtx() { return { posts: [], cfgGets: 0, npGets: 0 }; }
 async function stub(page, base, ctx, opts) {
   const o = opts || {};
   await page.route((url) => !String(url).startsWith(base), (route) =>
@@ -214,6 +214,7 @@ async function stub(page, base, ctx, opts) {
     if (url.includes('/api/panels/')) { ctx.cfgGets++; return json(o.cfg || panelCfg()); }
     if (url.includes('/api/ha/entities')) return json(o.ha || HA_ENTITIES);
     if (url.includes('/api/music/now-playing')) {
+      ctx.npGets++;
       return json(o.np === null ? { available: false, now_playing: null }
         : { available: true, now_playing: Object.assign({}, NOW_PLAYING, o.np || {}) });
     }
@@ -408,10 +409,15 @@ async function t(name, fn) {
       e.value = '88';
       e.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    const before = ctx.posts.length;
+    // Count the POLL, not writes: loadMusic GETs now-playing, so ctx.posts
+    // (which records non-GETs only) never moves and asserting on it would be
+    // both vacuous and wrong. If no poll lands during the drag there is no
+    // repaint to survive and the two assertions below prove nothing.
+    const pollsBefore = ctx.npGets;
     // Let the real 5s loadMusic poll land mid-"drag" — it answers volume 34.
     await page.waitForTimeout(6200);
-    assert.ok(ctx.posts.length > before || true, '');
+    assert.ok(ctx.npGets > pollsBefore,
+      'no now-playing poll landed during the drag — this test proves nothing');
     assert.strictEqual(await page.$eval('#mVol', (e) => e.value), '88',
       'the poll snapped the knob back to 34 mid-drag');
     assert.ok(await page.$eval('#mVolT', (e) => e.classList.contains('open')),
