@@ -52,9 +52,12 @@ async def panel_presence(user_id: str, within_s: int | None = None) -> str | Non
     seconds. When several qualify, the most recently seen panel wins.
 
     ``within_s`` defaults to ``ZOE_PRESENCE_WINDOW_S`` (900 s) when not
-    passed explicitly.
+    passed explicitly. A non-positive ``within_s`` falls back the same way:
+    0 makes the window zero-width and a negative value inverts the SQL
+    arithmetic — both would silently always return ``None``, which is the
+    same validation the env path already applies (Greptile, PR #1412).
     """
-    if within_s is None:
+    if within_s is None or within_s <= 0:
         within_s = _presence_window_s()
     try:
         async with _get_compat_db() as db:

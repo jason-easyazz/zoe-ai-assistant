@@ -148,6 +148,16 @@ async def test_explicit_within_s_overrides_default(monkeypatch):
     assert await presence.panel_presence("jason", within_s=300) == "panel-kitchen"
 
 
+async def test_non_positive_within_s_falls_back_to_default(monkeypatch):
+    """within_s=0 is a zero-width window and a negative value inverts the SQL
+    arithmetic — both silently always-None. They must fall back to the default
+    window, exactly as the env path already validates (Greptile, PR #1412)."""
+    db = SemanticPanelDB([_row("panel-kitchen", "jason", age_s=120)])
+    _patch_db(monkeypatch, db)
+    assert await presence.panel_presence("jason", within_s=0) == "panel-kitchen"
+    assert await presence.panel_presence("jason", within_s=-5) == "panel-kitchen"
+
+
 async def test_env_window_shrinks_default(monkeypatch):
     monkeypatch.setenv("ZOE_PRESENCE_WINDOW_S", "30")
     db = SemanticPanelDB([_row("panel-kitchen", "jason", age_s=120)])
