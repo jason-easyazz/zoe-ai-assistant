@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-396 flags; 396 not documented in `.env.example`.
+392 flags; 392 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -143,7 +143,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_HEALTH_CHECK_SCRIPT` | `dynamic` | no | NO | `services/zoe-data/multica_autopilot_sync.py` |
 | `ZOE_HEALTH_CHECK_TIMEOUT_S` | `'120'` | no | NO | `services/zoe-data/multica_autopilot_sync.py` |
 | `ZOE_HERMES_AUTO_ESCALATE` | `'true'` | no | NO | `services/zoe-data/zoe_agent.py` |
-| `ZOE_HOME_SETUP_SECRET` | `(required)`, `-` | no | NO | `services/zoe-data/smart_home_setup.py` |
+| `ZOE_HOME_SETUP_SECRET` | `-` | no | NO | `services/zoe-data/smart_home_setup.py` |
 | `ZOE_HOME_SETUP_TTL_S` | `'900'` | no | NO | `services/zoe-data/smart_home_setup.py` |
 | `ZOE_HOST_LAN_IP` | `'192.168.1.218'`, `-` | yes | NO | `services/zoe-data/main.py`<br>`services/zoe-data/zoe_agent.py` |
 | `ZOE_HYBRID_RETRIEVAL_ENABLED` | `''` | no | NO | `services/zoe-data/memory_service.py` |
@@ -257,7 +257,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_MUSIC_OBSERVE_ATTRIB_MIN` | `'30'` | no | NO | `services/zoe-data/music_history.py` |
 | `ZOE_MUSIC_OBSERVE_DEDUP_H` | `'12'` | no | NO | `services/zoe-data/music_history.py` |
 | `ZOE_MUSIC_SERVICE_TOKEN` | `''` | no | NO | `modules/zoe-music/intents/handlers.py`<br>`modules/zoe-music/main.py` |
-| `ZOE_MUSIC_SETUP_SECRET` | `(required)`, `-` | no | NO | `services/zoe-data/music_setup.py` |
+| `ZOE_MUSIC_SETUP_SECRET` | `-` | no | NO | `services/zoe-data/music_setup.py` |
 | `ZOE_MUSIC_SETUP_TTL_S` | `'900'` | no | NO | `services/zoe-data/music_setup.py` |
 | `ZOE_NVM_NODE_BIN` | `-` | no | NO | `services/zoe-data/pi_intent_classifier.py` |
 | `ZOE_OPENCLAW_GW` | `'http://127.0.0.1:18789'`, `dynamic` | no | NO | `services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/chat.py` |
@@ -282,7 +282,6 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PIPELINE_HARNESS_VERIFY_TESTS` | `'true'` | no | NO | `services/zoe-data/pipeline_store.py` |
 | `ZOE_PIPELINE_STORE_PATH` | `''` | no | NO | `scripts/maintenance/compact_pipeline_state.py`<br>`scripts/maintenance/engineering_harness_loop.py`<br>`services/zoe-data/pipeline_store.py` |
 | `ZOE_PIPELINE_VERIFY_EVIDENCE_RETRY_LIMIT` | `'1'` | no | NO | `services/zoe-data/pipeline_store.py` |
-| `ZOE_PI_ALLOW_EXECUTION` | `(required)` | no | NO | `scripts/maintenance/pi_intent_probe.py` |
 | `ZOE_PI_EXECUTOR_COMMAND` | `-` | no | NO | `services/zoe-data/pi_executor.py` |
 | `ZOE_PI_EXECUTOR_MODE` | `-` | no | NO | `services/zoe-data/pi_executor.py` |
 | `ZOE_PI_EXECUTOR_MODEL` | `-` | no | NO | `services/zoe-data/pi_executor.py` |
@@ -291,13 +290,10 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PI_HOST` | `'192.168.1.61'` | no | NO | `services/zoe-data/routers/system.py` |
 | `ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH` | `-` | no | NO | `services/zoe-data/routers/system.py` |
 | `ZOE_PI_HYBRID_PRODUCTION_LABELS_PATH` | `-` | no | NO | `services/zoe-data/routers/system.py` |
-| `ZOE_PI_INTENT_ENABLED` | `(required)` | no | NO | `scripts/maintenance/pi_intent_probe.py` |
-| `ZOE_PI_INTENT_MODEL` | `(required)`, `-` | no | NO | `scripts/maintenance/pi_intent_probe.py` |
+| `ZOE_PI_INTENT_MODEL` | `-` | no | NO | `scripts/maintenance/pi_intent_probe.py` |
 | `ZOE_PI_INTENT_PREFILTER_ENABLED` | `'true'` | no | NO | `scripts/maintenance/pi_promotion_eval.py` |
 | `ZOE_PI_INTENT_PROMOTED_GROUPS` | `-` | no | NO | `services/zoe-data/intent_router.py` |
-| `ZOE_PI_INTENT_TIMEOUT_SECONDS` | `(required)`, `-` | no | NO | `scripts/maintenance/pi_intent_probe.py`<br>`scripts/maintenance/pi_promotion_eval.py` |
-| `ZOE_PI_INTENT_TRANSPORT` | `(required)` | no | NO | `scripts/maintenance/pi_intent_probe.py` |
-| `ZOE_PI_LOCAL_MODEL_CONFIGURED` | `(required)` | no | NO | `scripts/maintenance/pi_intent_probe.py` |
+| `ZOE_PI_INTENT_TIMEOUT_SECONDS` | `-` | no | NO | `scripts/maintenance/pi_promotion_eval.py` |
 | `ZOE_PRESENCE_WINDOW_S` | `''` | no | NO | `services/zoe-data/proactive/presence.py` |
 | `ZOE_PROACTIVE_SLOW_LOOP_S` | `'300'` | no | NO | `services/zoe-data/proactive/engine.py` |
 | `ZOE_PROACTIVE_SPOKEN` | `''` | no | NO | `services/zoe-data/proactive/engine.py` |

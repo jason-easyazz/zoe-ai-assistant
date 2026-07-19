@@ -12,6 +12,10 @@ default expression is not a plain literal, ``(required)`` for bare
 ``os.environ[...]`` subscripts), reader modules, whether any reader goes
 through ``typed_env``, and whether the flag is documented in ``.env.example``.
 
+Best-effort matching: calls are matched by NAME (``getenv``, the typed_env
+accessor names), not by originating module — a local helper or mock that
+happens to share a name is counted too, so the scanner can over-report.
+
 Scope: files under ``labs/`` are inventoried in a separate LAB section; test
 files (any path containing a ``tests`` directory or ``test_*.py``) are
 excluded — they set flags rather than define runtime behaviour. Everything
@@ -96,7 +100,13 @@ class _FlagVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Subscript(self, node: ast.Subscript) -> None:
-        # os.environ["ZOE_X"]
+        # os.environ["ZOE_X"] — reads only. Store/Del contexts are WRITES
+        # (`os.environ["ZOE_X"] = v`, `del os.environ["ZOE_X"]`); recording
+        # them as (required) reads told operators the process crashes
+        # without a flag it actually sets itself.
+        if not isinstance(node.ctx, ast.Load):
+            self.generic_visit(node)
+            return
         v = node.value
         if isinstance(v, ast.Attribute) and v.attr == "environ":
             sl = node.slice
@@ -119,9 +129,15 @@ def _section(rel: str) -> str | None:
 def scan_repo(repo: Path, files: list[str] | None = None) -> dict:
     """Scan Python files; return {section: {flag: info}} plus env-example set."""
     if files is None:
-        out = subprocess.run(
-            ["git", "ls-files", "*.py"], cwd=repo, capture_output=True, text=True, check=True
-        )
+        try:
+            out = subprocess.run(
+                ["git", "ls-files", "*.py"], cwd=repo, capture_output=True, text=True, check=True
+            )
+        except subprocess.CalledProcessError as exc:
+            raise SystemExit(
+                f"git ls-files failed in {repo} (not a git worktree?): "
+                f"{exc.stderr.strip() or exc} — run from the repo root or pass files explicitly"
+            ) from exc
         files = [f for f in out.stdout.splitlines() if f]
 
     env_example = repo / ".env.example"

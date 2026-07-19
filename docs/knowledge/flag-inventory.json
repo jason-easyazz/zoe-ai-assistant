@@ -1266,7 +1266,6 @@
       },
       "ZOE_HOME_SETUP_SECRET": {
         "defaults": [
-          "(required)",
           "-"
         ],
         "in_env_example": false,
@@ -2434,7 +2433,6 @@
       },
       "ZOE_MUSIC_SETUP_SECRET": {
         "defaults": [
-          "(required)",
           "-"
         ],
         "in_env_example": false,
@@ -2691,16 +2689,6 @@
         ],
         "typed_env": false
       },
-      "ZOE_PI_ALLOW_EXECUTION": {
-        "defaults": [
-          "(required)"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "scripts/maintenance/pi_intent_probe.py"
-        ],
-        "typed_env": false
-      },
       "ZOE_PI_EXECUTOR_COMMAND": {
         "defaults": [
           "-"
@@ -2781,19 +2769,8 @@
         ],
         "typed_env": false
       },
-      "ZOE_PI_INTENT_ENABLED": {
-        "defaults": [
-          "(required)"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "scripts/maintenance/pi_intent_probe.py"
-        ],
-        "typed_env": false
-      },
       "ZOE_PI_INTENT_MODEL": {
         "defaults": [
-          "(required)",
           "-"
         ],
         "in_env_example": false,
@@ -2824,33 +2801,11 @@
       },
       "ZOE_PI_INTENT_TIMEOUT_SECONDS": {
         "defaults": [
-          "(required)",
           "-"
         ],
         "in_env_example": false,
         "readers": [
-          "scripts/maintenance/pi_intent_probe.py",
           "scripts/maintenance/pi_promotion_eval.py"
-        ],
-        "typed_env": false
-      },
-      "ZOE_PI_INTENT_TRANSPORT": {
-        "defaults": [
-          "(required)"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "scripts/maintenance/pi_intent_probe.py"
-        ],
-        "typed_env": false
-      },
-      "ZOE_PI_LOCAL_MODEL_CONFIGURED": {
-        "defaults": [
-          "(required)"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "scripts/maintenance/pi_intent_probe.py"
         ],
         "typed_env": false
       },

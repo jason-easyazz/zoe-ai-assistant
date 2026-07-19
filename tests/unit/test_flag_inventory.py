@@ -28,12 +28,17 @@ def fixture_repo(tmp_path: Path) -> Path:
     (tmp_path / "services").mkdir()
     (tmp_path / "services" / "svc.py").write_text(
         "import os\n"
-        "from typed_env import env_bool, env_int\n"
+        "from typed_env import env_bool, env_int, env_str, env_float, env_list\n"
         'A = os.environ.get("ZOE_ALPHA", "on")\n'
         'B = os.getenv("ZOE_BETA")\n'
         'C = os.environ["ZOE_GAMMA"]\n'
         'D = env_bool("ZOE_DELTA", default=True)\n'
         'E = env_int("ZOE_EPSILON", 42)\n'
+        'S = env_str("ZOE_ZETA", "v")\n'
+        'FL = env_float("ZOE_ETA", 1.5)\n'
+        'L = env_list("ZOE_THETA", [])\n'
+        'os.environ["ZOE_WRITTEN"] = "set-not-read"\n'
+        'del os.environ["ZOE_DELETED"]\n'
         'F = os.environ.get("ZOE_DYN", compute_default())\n'
         'G = os.environ.get("NOT_ZOE_FLAG", "x")\n'
         'H = os.environ.get(variable_key, "x")\n'
@@ -53,7 +58,14 @@ def _scan(repo: Path) -> dict:
 
 def test_extraction_shapes_and_defaults(fixture_repo: Path) -> None:
     prod = _scan(fixture_repo)["flags"]["prod"]
-    assert set(prod) == {"ZOE_ALPHA", "ZOE_BETA", "ZOE_GAMMA", "ZOE_DELTA", "ZOE_EPSILON", "ZOE_DYN"}
+    assert set(prod) == {
+        "ZOE_ALPHA", "ZOE_BETA", "ZOE_GAMMA", "ZOE_DELTA", "ZOE_EPSILON",
+        "ZOE_ZETA", "ZOE_ETA", "ZOE_THETA", "ZOE_DYN",
+    }
+    # writes are NOT reads: assignment/deletion targets must not appear at
+    # all, let alone as (required) — Greptile P1, PR #1434
+    assert "ZOE_WRITTEN" not in prod
+    assert "ZOE_DELETED" not in prod
     assert prod["ZOE_ALPHA"]["defaults"] == ["'on'"]
     assert prod["ZOE_BETA"]["defaults"] == ["-"]  # no default arg
     assert prod["ZOE_GAMMA"]["defaults"] == ["(required)"]  # bare subscript
@@ -65,6 +77,9 @@ def test_extraction_shapes_and_defaults(fixture_repo: Path) -> None:
 def test_typed_env_and_env_example_flags(fixture_repo: Path) -> None:
     prod = _scan(fixture_repo)["flags"]["prod"]
     assert prod["ZOE_DELTA"]["typed_env"] is True
+    assert prod["ZOE_ZETA"]["typed_env"] is True   # env_str
+    assert prod["ZOE_ETA"]["typed_env"] is True    # env_float
+    assert prod["ZOE_THETA"]["typed_env"] is True  # env_list
     assert prod["ZOE_ALPHA"]["typed_env"] is False
     assert prod["ZOE_ALPHA"]["in_env_example"] is True
     assert prod["ZOE_BETA"]["in_env_example"] is True  # commented line still counts
