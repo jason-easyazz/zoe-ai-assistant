@@ -157,19 +157,52 @@
   .calviews button{font:inherit;font-size:16px;color:var(--ink-soft);background:transparent;border:0;border-radius:999px;padding:8px 18px;cursor:pointer}
   .calviews button.on{background:#fff;color:#0a0d14;font-weight:600}
   .calbody{flex:1;min-height:0;overflow-y:auto}
-  .calmonth{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));grid-auto-rows:minmax(0,1fr);gap:6px;width:100%;height:100%;grid-template-rows:auto}
-  .calmonth .cmh{font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);text-align:center;padding:4px 0}
+  /* Week and month are TODAY-ANCHORED and scroll; the calendar no longer spends
+     the panel's 1208x476 on days that have already happened. Both scrollers are
+     NATIVE (momentum, fling, rubber-band come free and match the OS).
+     touch-action is deliberately left at its default here. The Cover Flow's
+     comment above is the same trap seen from the other side: the CONTAINER's
+     touch-action decides who owns the gesture, and these containers WANT the
+     browser to own it. Setting touch-action:none on .calweek/.calmonth would
+     hand the pan to a JS handler that does not exist and the view would simply
+     not scroll. overscroll-behavior contains the fling so reaching the end of a
+     row never chains out into the surface behind it. */
+  .calmonth{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;width:100%;height:100%;
+            /* A FIXED row height, never minmax(0,...): with a definite grid
+               height minmax lets every row shrink to fit instead of
+               overflowing, which silently collapsed the cells to 39px and made
+               the month scroll not exist. Fixed rows are what make it scroll. */
+            grid-template-rows:auto;grid-auto-rows:var(--calrow,144px);
+            /* scroll-padding-top = weekday strip (25px) + row gap (6px). Snap
+               aligns a row's start edge to the container's start edge, which is
+               UNDERNEATH the sticky strip — without this padding, snapping drags
+               today's row back under the header and hides its date numbers,
+               undoing the anchor. Keep in step with CAL_GRID_GAP. */
+            scroll-padding-top:31px;
+            overflow-y:auto;overscroll-behavior-y:contain;scroll-snap-type:y proximity}
+  .calmonth::-webkit-scrollbar{width:0}
+  /* The weekday strip stays put while the weeks scroll under it — without it a
+     scrolled month is seven unlabelled columns. */
+  .calmonth .cmh{position:sticky;top:0;z-index:2;background:#0a0d14;font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);text-align:center;padding:4px 0 6px}
   .cmd{min-width:0;min-height:0;overflow:hidden;border-radius:14px;background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.07);padding:7px 9px;font-size:15px;box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
   .cmd.dim{opacity:.3}
   .cmd.today{border-color:rgba(123,150,255,.65);background:linear-gradient(180deg,rgba(123,150,255,.18),rgba(123,150,255,.08));box-shadow:0 0 22px rgba(123,150,255,.18),inset 0 1px 0 rgba(255,255,255,.1)}
   .cmd.today .dn{color:#fff;font-weight:600}
+  .cmd{scroll-snap-align:start}
   .cmd .dn{font-size:14px;color:var(--ink-soft)}
   .cmd .cev{font-size:12px;color:var(--ink);border-left:3px solid var(--c,var(--accent));background:color-mix(in srgb,var(--c,var(--accent)) 20%,transparent);border-radius:5px;padding:2px 7px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .calweek{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:10px;width:100%}
-  .cwc{min-width:0;background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.07);border-radius:16px;padding:12px 10px;min-height:300px;box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
-  .cwc h5{font-size:14px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;text-align:center}
+  /* Once today is no longer implied by "leftmost"/"first row", it has to SAY so:
+     scroll two weeks out and the accent alone reads as just another tinted cell. */
+  .cmd.today .dn::after,.cwc.today h5::after{content:'TODAY';margin-left:7px;font-size:10px;letter-spacing:.12em;font-weight:700;color:#0a0d14;background:#7b96ff;border-radius:4px;padding:1px 5px;vertical-align:middle}
+  .calweek{display:grid;grid-auto-flow:column;grid-auto-columns:calc((100% - 30px)/4);gap:10px;height:100%;
+           overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x proximity}
+  .calweek::-webkit-scrollbar{height:0}
+  .cwc{min-width:0;background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.07);border-radius:16px;padding:12px 10px;overflow-y:auto;scroll-snap-align:start;box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
+  .cwc h5{font-size:16px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px;text-align:center}
   .cwc.today{border-color:rgba(123,150,255,.6);background:linear-gradient(180deg,rgba(123,150,255,.15),rgba(123,150,255,.05));box-shadow:0 0 22px rgba(123,150,255,.15)}
-  .cwe{font-size:14px;border-left:3px solid var(--c,var(--accent));background:color-mix(in srgb,var(--c,var(--accent)) 18%,transparent);border-radius:7px;padding:5px 9px;margin-bottom:6px}
+  .cwc.past{opacity:.55}
+  /* 48px minimum: these are finger targets, and the wider column finally affords it. */
+  .cwe{font-size:15px;border-left:3px solid var(--c,var(--accent));background:color-mix(in srgb,var(--c,var(--accent)) 18%,transparent);border-radius:7px;padding:7px 10px;margin-bottom:7px;min-height:48px;box-sizing:border-box}
   .cwe small{display:block;color:var(--ink-soft);opacity:.8;margin-top:1px;font-variant-numeric:tabular-nums}
   .caldaylist .dev{display:flex;align-items:center;gap:16px;padding:15px 0;border-top:1px solid rgba(255,255,255,.08)}
   /* Settings — expanding sections */
@@ -420,10 +453,17 @@
                  max-width:760px;margin-left:auto;margin-right:auto;
                  display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
   .mfull .martist{font-size:20px;color:rgba(255,255,255,.72);margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .mfull .mscrub{position:absolute;left:50%;width:560px;margin-left:-280px;bottom:148px}
+  /* bottom 132 + 16px padding keeps the BAR exactly where it was (132+16=148)
+     while giving the drag a 39px-tall finger target instead of a 7px one.
+     touch-action:none so a vertical finger drag scrubs instead of being stolen
+     as a page gesture — same reason the Cover Flow sets it. */
+  .mfull .mscrub{position:absolute;left:50%;width:560px;margin-left:-280px;bottom:132px;
+                 padding:16px 0;touch-action:none;cursor:pointer}
   .mfull .mtrack{position:relative;height:7px;border-radius:999px;background:rgba(255,255,255,.22)}
   .mfull .mfill{position:absolute;left:0;top:0;bottom:0;width:38%;border-radius:999px;background:#fff}
-  .mfull .mknob{position:absolute;top:50%;left:38%;transform:translate(-50%,-50%);width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.4)}
+  .mfull .mknob{position:absolute;top:50%;left:38%;transform:translate(-50%,-50%);width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.4);transition:transform .12s}
+  /* Grows under the finger so a drag is visibly grabbed, not just repainted. */
+  .mfull .mscrub.drag .mknob{transform:translate(-50%,-50%) scale(1.5)}
   .mfull .mtimes{display:flex;justify-content:space-between;margin-top:12px;font-size:18px;color:rgba(255,255,255,.6);font-variant-numeric:tabular-nums}
   .mfull .mtransport{position:absolute;left:0;right:0;bottom:44px;display:flex;justify-content:center;align-items:center;gap:44px}
   .mfull .mtransport .sml{opacity:.55;background:none;border:0;color:#fff;cursor:pointer;width:68px;height:68px;border-radius:50%;display:grid;place-items:center}
@@ -431,6 +471,12 @@
   .mfull .mtransport button svg{width:28px;height:28px}
   .mfull .mtransport .pp svg{width:32px;height:32px;color:#0a0d18}
   .mfull .mtransport .sml.on{opacity:1;background:rgba(123,150,255,.25);box-shadow:0 0 16px rgba(123,150,255,.35)}
+  /* Don't-stop is a 6th button, and 6 buttons in a centred row would push
+     play/pause 56px off-centre — undoing the centring the card was just
+     rebuilt around. An inert 68px spacer on the left restores the 3-a-side
+     balance (spacer,shuffle,prev | pp | next,repeat,dont-stop) without
+     restructuring the stack. */
+  .mfull .mtransport .tsp{width:68px;height:68px;flex:none;pointer-events:none}
   .mqbtn{width:48px;height:48px;flex:none;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.2);color:#fff;cursor:pointer}
   .mqbtn svg{width:22px;height:22px}
   /* Browse (Recent + Playlists) is a real SURFACE, not an overlay on the music
@@ -454,7 +500,8 @@
   .rtile .rti{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center}
   .rtile .rti .qn{font-size:18px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .rtile .rti .ra{font-size:14px;color:var(--ink-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px}
-  .rtile .qadd{flex:none;width:38px;height:38px;border-radius:50%;border:0;background:rgba(255,255,255,.08);color:var(--accent);font-size:18px;cursor:pointer}
+  .rtile .qadd,.rtile .qnext{flex:none;width:38px;height:38px;border-radius:50%;border:0;background:rgba(255,255,255,.08);color:var(--accent);font-size:18px;cursor:pointer;display:grid;place-items:center}
+  .rtile .qnext svg{width:19px;height:19px}
   /* ---- Playlists tab: compact album-art grid (smaller tiles, more per row) ---- */
   .mqlist.grid{display:grid;grid-template-columns:repeat(5,1fr);gap:16px 14px;align-content:start;padding-top:2px}
   .mqlist.grid .qi.pl{display:flex;flex-direction:column;align-items:stretch;gap:0;padding:0;background:none;cursor:pointer;font-size:15px}
@@ -620,6 +667,27 @@
 
   /* speaker / cast selection on music */
   .mtop{position:absolute;top:40px;right:120px;display:flex;align-items:center;gap:12px;z-index:60}
+  /* Volume sits top-LEFT, beside #home. Not with the speaker chip on the right,
+     which is where it started: at CF_K=1 the centre cover spans x455-825 and
+     .mtop grows leftward, so the pill landed ON the artwork (caught by looking
+     at the screenshot, not by a test — hence the overlap assertion in
+     test_touch_music_polish.js). x112-386 is the one band that is clear of both
+     the centre cover and the fanned side covers, which start below y88.
+     Same native input as the Rooms hero (#rmVol), not a second component:
+     accent-color, 40px tall for a finger, debounced write, repaint-guarded. */
+  /* On the scrub's row, left flank. The top strip cannot host this: at CF_K=1
+     the covers fan from y39 (centre) up to y78 at x310 and y91 at x234, so any
+     48px control up there clips artwork — measured, after two tries. Below the
+     covers (they end y412) the row that carries the progress bar is clear out
+     to x360 where .mscrub starts, and it sits just above the orb, so volume
+     lands next to the two other things a finger reaches for down there.
+     48px tall to stay on the kiosk's finger-target floor. */
+  .mvol{position:absolute;left:44px;bottom:150px;z-index:60;
+        display:flex;align-items:center;gap:10px;padding:5px 16px;border-radius:999px;
+        background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.22);color:rgba(255,255,255,.7)}
+  .mvol svg{width:20px;height:20px;flex:none}
+  .mvol input[type=range]{width:160px;accent-color:#fff;height:36px}
+  .mvol .vv{min-width:42px;text-align:right;font-size:17px;font-variant-numeric:tabular-nums;color:#fff}
   .spk{display:flex;align-items:center;gap:11px;padding:13px 20px;border-radius:999px;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.22);color:#fff;font:inherit;font-size:19px;font-weight:500;cursor:pointer;max-width:340px}
   .spk .spkname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .spk svg{width:22px;height:22px}
@@ -825,6 +893,12 @@
   var TRASH_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>';
   var HEART_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1a5.5 5.5 0 1 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg>';
   var SHUF_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>';
+  // "Don't stop the music" — infinity: the queue keeps going with similar tracks.
+  var DS_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6.8 8.2a3.8 3.8 0 1 0 0 7.6c1.7 0 2.9-1.1 4-2.4l2.4-2.8c1.1-1.3 2.3-2.4 4-2.4a3.8 3.8 0 1 1 0 7.6c-1.7 0-2.9-1.1-4-2.4l-2.4-2.8c-1.1-1.3-2.3-2.4-4-2.4z"/></svg>';
+  // Volume pill (top strip) — a speaker cone; the level is the slider beside it.
+  var VOL_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6.5 9H3v6h3.5L11 19z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>';
+  // Play next — queue jumps in after the current track (arrow into a stack).
+  var NEXTQ_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h10M3 12h10M3 18h6"/><path d="m16 9 4 3-4 3z" fill="currentColor"/></svg>';
   var REP_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>';
   var PREV_I='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h2v14H6zM20 5v14l-10-7z"/></svg>';
   var NEXT_I='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 5h2v14h-2zM4 5v14l10-7z"/></svg>';
@@ -848,7 +922,7 @@
     weather:{home:true, bg:DUSK, canvas:true,
       html:'<div class="fcog">'+GEAR+'</div><div class="wloc" id="wxLoc"></div><div class="wbig"><div class="t" id="wxTemp">—°</div><div class="c" id="wxCond"></div></div><div class="whours" id="wxHours"></div>'},
     music:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="mtop"><button class="spk" id="mSpk">'+SPKR+' <span class="spkname">Speaker</span> <span class="cx">▾</span></button><button class="mqbtn" id="mQBtn" title="Browse music">'+QICON+'</button></div><div class="mfull"><div class="cf" id="mCF"><div class="cf-track" id="mCFT"></div></div><div class="cfmeta"><div class="mkick" id="mKick">Now Playing</div><div class="mtitle" id="mTitle">—</div><div class="martist" id="mArtist"></div><button class="mfav" id="mFav" title="Favourite">'+HEART_I+'</button></div><div class="mscrub"><div class="mtrack"><div class="mfill" id="mFill" style="width:0%"></div></div><div class="mtimes"><span id="mElapsed">0:00</span><span id="mDur">0:00</span></div></div><div class="mtransport" id="mTransport"><button class="sml" id="mShuf" data-a="shuffle" title="Shuffle">'+SHUF_I+'</button><button data-a="previous">'+PREV_I+'</button><button class="pp" id="mPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button><button class="sml" id="mRep" data-a="repeat" title="Repeat">'+REP_I+'</button></div></div><div class="mqr" id="mQR"><div class="qrbox" id="mQRCode"></div><div class="qrlab">Scan to queue</div></div>'},
+      html:'<div class="fcog">'+GEAR+'</div><div class="mvol" id="mVolWrap">'+VOL_I+'<input type="range" min="0" max="100" step="2" id="mVol" aria-label="Volume"><span class="vv" id="mVolV"></span></div><div class="mtop"><button class="spk" id="mSpk">'+SPKR+' <span class="spkname">Speaker</span> <span class="cx">▾</span></button><button class="mqbtn" id="mQBtn" title="Browse music">'+QICON+'</button></div><div class="mfull"><div class="cf" id="mCF"><div class="cf-track" id="mCFT"></div></div><div class="cfmeta"><div class="mkick" id="mKick">Now Playing</div><div class="mtitle" id="mTitle">—</div><div class="martist" id="mArtist"></div><button class="mfav" id="mFav" title="Favourite">'+HEART_I+'</button></div><div class="mscrub" id="mScrub"><div class="mtrack"><div class="mfill" id="mFill" style="width:0%"></div><div class="mknob" id="mKnob" style="left:0%"></div></div><div class="mtimes"><span id="mElapsed">0:00</span><span id="mDur">0:00</span></div></div><div class="mtransport" id="mTransport"><span class="tsp"></span><button class="sml" id="mShuf" data-a="shuffle" title="Shuffle">'+SHUF_I+'</button><button data-a="previous">'+PREV_I+'</button><button class="pp" id="mPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button><button class="sml" id="mRep" data-a="repeat" title="Repeat">'+REP_I+'</button><button class="sml" id="mDS" data-a="dontstop" title="Don&#39;t stop the music">'+DS_I+'</button></div></div><div class="mqr" id="mQR"><div class="qrbox" id="mQRCode"></div><div class="qrlab">Scan to queue</div></div>'},
     // Browse — Recent + Playlists. Same background as music (it is the music
     // card's other face), standard card header: title by #home, actions by .fcog.
     browse:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,
@@ -1499,24 +1573,136 @@
       _music.player_id=np.player_id;
       if(spk){var nm=spk.querySelector('.spkname');if(nm)nm.textContent=np.player_name||'';}
       var el=np.elapsed||0,du=np.duration||0;
-      _music.np={elapsed:el,duration:du,playing:np.state==='playing',active:(np.state==='playing'||np.state==='paused'),at:Date.now(),uri:np.uri||np.media_uri||'',queueItemId:np.queue_item_id||null,index:(np.queue_index!=null?np.queue_index:null),title:np.title||'',artist:np.artist||'',image:np.image||''};
+      _music.np={elapsed:el,duration:du,playing:np.state==='playing',active:(np.state==='playing'||np.state==='paused'),at:Date.now(),queueItemId:np.queue_item_id||null,index:(np.queue_index!=null?np.queue_index:null),title:np.title||'',artist:np.artist||'',image:np.image||''};
       cfSync();   // the flow owns the art + meta now (it may be showing a browsed cover)
-      if(fill)fill.style.width=(du?Math.min(100,el/du*100):0)+'%';
-      if(te)te.textContent=fmtDur(el);if(td)td.textContent=fmtDur(du);
+      // The 5s poll must not repaint the bar out from under a drag.
+      if(!_seek){
+        var fp=(du?Math.min(100,el/du*100):0)+'%';
+        if(fill)fill.style.width=fp;
+        var kn=document.getElementById('mKnob');if(kn)kn.style.left=fp;
+        if(te)te.textContent=fmtDur(el);
+      }
+      if(td)td.textContent=fmtDur(du);
       if(pp){var playing=(np.state==='playing');pp.dataset.playing=playing?'1':'0';pp.innerHTML=playing?PAUSE_I:PLAY_I;}
       var sh=document.getElementById('mShuf');if(sh)sh.classList.toggle('on',!!np.shuffle);
       var rp=document.getElementById('mRep');if(rp){var rm=np.repeat||'off';_music.repeat=rm;
         rp.classList.toggle('on',rm!=='off');rp.innerHTML=rm==='one'?REP1_I:REP_I;}
+      // "Don't stop the music" reads back off the same poll as shuffle/repeat.
+      var ds=document.getElementById('mDS');_music.dontStop=!!np.dont_stop;
+      if(ds)ds.classList.toggle('on',_music.dontStop);
+      // Volume: skip while the finger is on the slider, or the poll fights the
+      // drag — the same guard the Rooms hero slider uses.
+      var mv=document.getElementById('mVol'),mvv=document.getElementById('mVolV');
+      if(mv&&np.volume!=null&&document.activeElement!==mv&&!mv.dataset.drag){
+        mv.value=Math.round(np.volume);
+        if(mvv)mvv.textContent=Math.round(np.volume)+'%';
+      }
       _music.shuffle=!!np.shuffle;
     }).catch(function(){});
   }
   // Smooth elapsed between the 5s polls — the scrub advances every second
   // while something is playing instead of jumping on each poll.
   function tickMusic(){if(_cur!=='music'||!_music.np||!_music.np.playing)return;
+    if(_seek)return;   // a finger owns the bar — see seekPaint
     var el=_music.np.elapsed+(Date.now()-_music.np.at)/1000,du=_music.np.duration||0;
-    var fill=document.getElementById('mFill'),te=document.getElementById('mElapsed');
-    if(fill&&du)fill.style.width=Math.min(100,el/du*100)+'%';
+    var fill=document.getElementById('mFill'),te=document.getElementById('mElapsed'),
+        kn=document.getElementById('mKnob');
+    // The knob moves with the fill, every tick. Advancing only the fill leaves
+    // the two up to 5s apart between polls — they are one control.
+    if(du){var p=Math.min(100,el/du*100)+'%';
+      if(fill)fill.style.width=p;
+      if(kn)kn.style.left=p;}
     if(te)te.textContent=fmtDur(Math.min(el,du||el));}
+
+  // ---- Scrub: drag or tap the bar to seek ----------------------------------
+  // /api/music/seek existed and the bar was drawn, but nothing listened — a bar
+  // that looks draggable and isn't is a correctness bug, so this wires it.
+  // `_seek` is non-null for exactly as long as a finger owns the bar, and BOTH
+  // repainters (tickMusic every 1s, loadMusic every 5s) bail while it is set —
+  // the same shape as refreshHA's `.pc.temp.open` guard: a poll must never
+  // yank the control out from under a drag.
+  var _seek=null;
+  // Fraction 0..1 of the TRACK's box (not the padded hit area), so the value
+  // matches where the fill visually ends.
+  function seekPct(clientX){
+    var tr=document.querySelector('.mfull .mtrack');if(!tr)return null;
+    var r=tr.getBoundingClientRect();if(!r.width)return null;
+    return Math.max(0,Math.min(1,(clientX-r.left)/r.width));
+  }
+  function seekPaint(p){
+    var du=(_music.np&&_music.np.duration)||0;
+    var fill=document.getElementById('mFill'),kn=document.getElementById('mKnob'),
+        te=document.getElementById('mElapsed');
+    var pct=(p*100)+'%';
+    if(fill)fill.style.width=pct;
+    if(kn)kn.style.left=pct;
+    if(te)te.textContent=fmtDur(p*du);
+  }
+  function seekCommit(p){
+    var du=(_music.np&&_music.np.duration)||0;
+    if(!du||!_music.player_id)return;
+    var pos=Math.max(0,Math.min(du,Math.round(p*du)));
+    // Adopt the seeked position locally so tickMusic counts on from HERE while
+    // MA catches up; the next poll corrects it if the seek was refused.
+    _music.np.elapsed=pos;_music.np.at=Date.now();
+    _qpost('seek',{position_seconds:pos,player_id:_music.player_id})
+      .then(function(r){if(!r||!r.ok)toast('Couldn’t seek');})
+      .catch(function(){toast('Couldn’t seek');});
+  }
+  // ---- Volume: the Rooms hero slider, on the music card -------------------
+  // Same native input, same 250ms debounce, same volume_set action as #rmVol
+  // (see the rooms card) — deliberately not a second volume component. The
+  // extra `drag` flag closes a gap the Rooms one has: activeElement alone is
+  // false during a TOUCH drag on some builds, which would let the 5s poll
+  // snap the knob back mid-slide.
+  function wireVol(){
+    var v=document.getElementById('mVol'),vv=document.getElementById('mVolV');
+    if(!v||v.dataset.wired)return;
+    v.dataset.wired='1';
+    var vt=null;
+    v.addEventListener('pointerdown',function(){v.dataset.drag='1';});
+    ['pointerup','pointercancel'].forEach(function(ev){
+      v.addEventListener(ev,function(){delete v.dataset.drag;});});
+    v.oninput=function(){
+      if(vv)vv.textContent=v.value+'%';
+      if(vt)clearTimeout(vt);
+      vt=setTimeout(function(){
+        fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',
+          body:JSON.stringify({action:'volume_set',player_id:_music.player_id||'',value:+v.value})}).catch(function(){});
+      },250);};
+  }
+  function wireSeek(){
+    // The card is rebuilt on every show('music'), so a drag left in flight by a
+    // navigation would strand `_seek` set — and BOTH repainters bail while it
+    // is, freezing the bar for the rest of the session. Same hazard cfClear()
+    // handles for `_cf.drag`.
+    _seek=null;
+    var sc=document.getElementById('mScrub');if(!sc||sc.dataset.wired)return;
+    sc.dataset.wired='1';
+    sc.addEventListener('pointerdown',function(e){
+      if(!_music.np||!(_music.np.duration>0))return;   // radio: nothing to seek
+      // startX is read HERE, off the real event — never inside a timer, which
+      // is how a drag once shipped permanently disarmed (#1332).
+      var p=seekPct(e.clientX);if(p===null)return;
+      _seek={id:e.pointerId,p:p};
+      sc.classList.add('drag');
+      try{sc.setPointerCapture(e.pointerId);}catch(_){}
+      seekPaint(p);e.preventDefault();
+    });
+    sc.addEventListener('pointermove',function(e){
+      if(!_seek||e.pointerId!==_seek.id)return;
+      var p=seekPct(e.clientX);if(p===null)return;
+      _seek.p=p;seekPaint(p);
+    });
+    function release(e,commit){
+      if(!_seek||e.pointerId!==_seek.id)return;
+      var p=_seek.p;_seek=null;sc.classList.remove('drag');
+      try{sc.releasePointerCapture(e.pointerId);}catch(_){}
+      if(commit)seekCommit(p);   // a plain tap lands here too: down+up, no move
+    }
+    sc.addEventListener('pointerup',function(e){release(e,true);});
+    sc.addEventListener('pointercancel',function(e){release(e,false);});
+  }
   function musicSet(action,value){if(!_music.player_id)return;
     fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({action:action,player_id:_music.player_id,value:value})}).then(function(){setTimeout(loadMusic,350);}).catch(function(){});}
   var _qtab='recent';
@@ -1544,10 +1730,16 @@
   function _pltile(pl){var cov=(pl.image&&/^https?:/.test(pl.image))?'<img alt="" src="'+esc(pl.image)+'">':'<span class="pph">🎵</span>';
     var cnt=pl.count?'<span class="pcount">'+esc(String(pl.count))+'</span>':'';
     return '<div class="qi pl" data-uri="'+esc(pl.uri)+'"><div class="pcov">'+cov+cnt+'</div><span class="qn">'+esc(pl.name)+'</span></div>';}
-  function _rtile(t){return '<div class="rtile qi br" data-uri="'+esc(t.uri||'')+'">'+_thumb(t.image)+'<span class="rti"><span class="qn">'+esc(t.name||'')+'</span>'+(t.artist?'<span class="ra">'+esc(t.artist)+'</span>':'')+'</span><button class="qadd" title="Add to queue">＋</button></div>';}
+  function _rtile(t){return '<div class="rtile qi br" data-uri="'+esc(t.uri||'')+'">'+_thumb(t.image)+'<span class="rti"><span class="qn">'+esc(t.name||'')+'</span>'+(t.artist?'<span class="ra">'+esc(t.artist)+'</span>':'')+'</span><button class="qnext" title="Play next">'+NEXTQ_I+'</button><button class="qadd" title="Add to queue">＋</button></div>';}
+  // Three intents per row, all through the one `option` play_media already
+  // takes: tap the row = play now (replace), ⏭ = play next, ＋ = end of queue.
+  // "Play next" is offered exactly where "add to queue" is, since it is the
+  // same decision with a different urgency.
   function _wireBrowseRow(host){host.onclick=function(e){var r=e.target.closest('.qi.br');if(!r)return;var uri=r.getAttribute('data-uri');
-    var add=e.target.closest('.qadd');
-    _qpost('play_media',{uri:uri,player_id:_music.player_id||undefined,option:add?'add':'replace'}).then(function(){toast(add?'Added to queue':'Playing now');if(!add)setTimeout(loadMusic,600);else setTimeout(cfLoad,600);}).catch(function(){toast('Couldn’t do that');});};}
+    var add=e.target.closest('.qadd'),nxt=e.target.closest('.qnext');
+    var option=nxt?'next':(add?'add':'replace');
+    var said={next:'Playing next',add:'Added to queue',replace:'Playing now'}[option];
+    _qpost('play_media',{uri:uri,player_id:_music.player_id||undefined,option:option}).then(function(){toast(said);if(option==='replace')setTimeout(loadMusic,600);else setTimeout(cfLoad,600);}).catch(function(){toast('Couldn’t do that');});};}
 
   // ---- Cover Flow queue: the music card IS the queue -----------------------
   // Played covers recede LEFT, now-playing flat in the CENTRE, upcoming fan
@@ -1767,7 +1959,10 @@
     var ti=document.getElementById('mTitle'),ar=document.getElementById('mArtist'),
         ki=document.getElementById('mKick');
     var f=cfF(),it=_cf.items[f],np=_music.np;
-    if(!it){if(np&&ti){ti.textContent=np.title||'';if(ar)ar.textContent=np.artist||'';}return;}
+    // No focused row (empty/unloaded queue): fall back to the playing labels —
+    // and repaint the heart too, or it keeps whatever the LAST focused track
+    // set, which is the "stays lit across track changes" lie this PR removes.
+    if(!it){if(np&&ti){ti.textContent=np.title||'';if(ar)ar.textContent=np.artist||'';}cfPaintFav();return;}
     // Say where the focused cover sits relative to what's playing. `cur` is -1
     // when the playing row isn't in the queue (it was just removed, or MA hasn't
     // caught up), so that case gets its own honest label instead of a nonsense
@@ -1782,6 +1977,25 @@
     // ("Livingston - Shadow") kept only as a fallback for shapes with no media_item.
     if(ti)ti.textContent=it.title||it.name||'';
     if(ar)ar.textContent=it.artist||'';
+    cfPaintFav();   // painted HERE so the heart can never disagree with the label
+  }
+  // ---- Favourite: the heart follows the FOCUSED cover ----------------------
+  // It sits directly under the title/artist that cfPaintMeta just wrote, and
+  // those are the FOCUSED track's — so the heart must act on the same item or
+  // the card contradicts itself (flick to cover 5, tap, favourite cover 1).
+  // It also has to: `now-playing` carries NO uri/media_uri field at all (see
+  // music_service.now_playing), so the old `_music.np.uri` was permanently ''
+  // and the handler short-circuited to "Nothing playing" on EVERY tap — the
+  // heart never once reached the API. The queue item does carry the real
+  // thing: media_item.uri to write, media_item.favorite to read back.
+  function cfFavItem(){var it=_cf.items[cfF()];return (it&&it.media_item)||null;}
+  function cfPaintFav(){
+    var fav=document.getElementById('mFav');if(!fav)return;
+    var mi=cfFavItem();
+    // No uri = nothing that CAN be favourited (radio, a shape with no media
+    // item). Hide it rather than offer a button that can only fail.
+    fav.style.display=(mi&&mi.uri)?'':'none';
+    fav.classList.toggle('on',!!(mi&&mi.favorite));
   }
   function cfArmHome(){   // browse, then drift back to Now — like ambient return
     if(_cf.homeT)clearTimeout(_cf.homeT);
@@ -1991,20 +2205,42 @@
     if(_music.np){var pp0=document.getElementById('mPP');
       if(pp0){pp0.dataset.playing=_music.np.playing?'1':'0';pp0.innerHTML=_music.np.playing?PAUSE_I:PLAY_I;}}
     // The flow is rebuilt with the card, so its state can't survive a show().
-    cfApplyScale();cfClear();wireCF();
+    cfApplyScale();cfClear();wireCF();wireSeek();wireVol();
     loadMusic();_wxTick=setInterval(function(){if(_cur==='music')loadMusic();},5000);
     if(_homeTick){clearInterval(_homeTick);}_homeTick=setInterval(tickMusic,1000);
     var t=document.getElementById('mTransport');if(t)t.addEventListener('click',function(e){var btn=e.target.closest('button');if(!btn)return;var a=btn.getAttribute('data-a');
       if(a==='shuffle'){musicSet('shuffle_set',!_music.shuffle);return;}
       if(a==='repeat'){var nxt={off:'all',all:'one',one:'off'}[_music.repeat||'off'];musicSet('repeat_set',nxt);return;}
+      // Don't stop the music: MA auto-continues with similar tracks when the
+      // queue runs dry. Optimistic like the other two, but reverted on refusal
+      // — MA rejects the enable unless a provider offers similar_tracks.
+      if(a==='dontstop'){
+        var want=!_music.dontStop,dsb=btn;
+        _music.dontStop=want;dsb.classList.toggle('on',want);
+        _qpost('dont-stop',{enabled:want,player_id:_music.player_id||''}).then(function(r){
+          if(r&&r.ok){toast(want?'Keeping the music going':'Stopping when the queue ends');setTimeout(loadMusic,400);return;}
+          _music.dontStop=!want;dsb.classList.toggle('on',!want);
+          toast('Couldn’t change that');
+        }).catch(function(){_music.dontStop=!want;dsb.classList.toggle('on',!want);toast('Couldn’t change that');});
+        return;}
       musicControl(a==='playpause'?(document.getElementById('mPP').dataset.playing==='1'?'pause':'play'):a);});
     // Browse is a surface now, so this is plain navigation — no toggle, no
     // overlay state, and #home keeps its corner because nothing covers it.
     var qb=document.getElementById('mQBtn');
     if(qb)qb.onclick=function(e){e.stopPropagation();show('browse');};
     var fav=document.getElementById('mFav');
-    if(fav)fav.onclick=function(){if(!_music.np||!_music.np.uri){toast('Nothing playing');return;}
-      _qpost('favorite',{uri:_music.np.uri}).then(function(r){if(r&&r.ok){fav.classList.add('on');toast('Added to favourites');}else toast('Couldn’t favourite');}).catch(function(){toast('Couldn’t favourite');});};
+    if(fav)fav.onclick=function(){
+      var mi=cfFavItem();
+      if(!mi||!mi.uri){toast('Nothing to favourite');return;}
+      var wasOn=!!mi.favorite,uri=mi.uri;
+      // Write the new state onto the queue item itself, then repaint from it:
+      // the optimistic UI and the read-back share ONE source of truth, so a
+      // later cfPaintMeta (a glide, a poll) can't silently revert the heart.
+      mi.favorite=!wasOn;cfPaintFav();
+      _qpost(wasOn?'unfavorite':'favorite',{uri:uri}).then(function(r){
+        if(r&&r.ok){toast(wasOn?'Removed from favourites':'Added to favourites');return;}
+        mi.favorite=wasOn;cfPaintFav();toast(wasOn?'Couldn’t unfavourite':'Couldn’t favourite');
+      }).catch(function(){mi.favorite=wasOn;cfPaintFav();toast('Couldn’t favourite');});};
     // Jukebox QR: phones scan it to search + queue music (jukebox.html).
     var qr=document.getElementById('mQRCode');
     if(qr&&!qr.dataset.done){qr.dataset.done='1';
@@ -2710,8 +2946,108 @@
   }
 
   // ---- Calendar: day / week / month on real events ----
-  var _cal={view:'week',gen:0};var _calEvents={};
+  // Week and month are TODAY-ANCHORED and SCROLL. The old layout started the
+  // week on Monday and the month on the 1st, so on a Friday four of seven
+  // columns — and on the 19th, eighteen day cells — were spent on days you can
+  // no longer act on. That starved the grid badly enough that a six-week month
+  // could only fit ONE chip per day before clipping. Anchoring on today buys
+  // the space back: week columns go 164px -> 294px, month cells ~70px -> ~144px.
+  // The past is DE-EMPHASISED, NOT AMPUTATED: both views scroll backwards to
+  // CAL_BACK_DAYS, so yesterday is always one nudge away.
+  var CAL_BACK_DAYS=7;      // scrollable (and fetched) history
+  var CAL_FWD_DAYS=56;      // scrollable (and fetched) future — 8 weeks
+  var CAL_WEEK_COLS=4;      // day columns visible at once in week view
+  var CAL_MONTH_WEEKS=3;    // week rows visible at once in month view
+  // Rolling weeks are always uniform, so the old `weeks>5?1:2` six-week squeeze
+  // is gone: every cell is the same ~144px and fits four chips.
+  var CAL_MONTH_CHIPS=4;
+  var _cal={view:'week',gen:0,raf:0};var _calEvents={};
   function isoD(d){return d.getFullYear()+'-'+two(d.getMonth()+1)+'-'+two(d.getDate());}
+  // Chips for one month cell, with the counter TAKING the last slot when it
+  // overflows (never adding a row, so nothing can clip).
+  function calChips(es,max){
+    function chip(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';
+      return '<div class="cev" data-eid="'+esc(String(e.id))+'" style="--c:'+c+'">'+esc(e.title||'')+'</div>';}
+    if(es.length<=max)return es.map(chip).join('');
+    var showN=max-1;
+    return es.slice(0,showN).map(chip).join('')
+      +'<div class="cev" style="opacity:.6">'+(showN?('+'+(es.length-showN)+' more'):(es.length+' events'))+'</div>';
+  }
+  function calFromIso(s){var p=String(s).split('-');return new Date(+p[0],+p[1]-1,+p[2]);}
+  function calAdd(d,n){var x=new Date(d.getFullYear(),d.getMonth(),d.getDate());x.setDate(x.getDate()+n);return x;}
+  function calMonday(d){return calAdd(d,-((d.getDay()+6)%7));}
+  // ONE window drives both views AND the fetch. The month grid is the widest of
+  // the two (it rounds out to whole Mon..Sun rows), so fetching that range
+  // covers the week strip as well — which is what lets scrolling stay silent
+  // instead of firing a request per scroll event.
+  function calWindow(now){
+    var last=calAdd(now,CAL_FWD_DAYS);
+    return {gridStart:calMonday(calAdd(now,-CAL_BACK_DAYS)),gridEnd:calAdd(calMonday(last),6),
+            weekStart:calAdd(now,-CAL_BACK_DAYS),weekEnd:last};
+  }
+  // Honest about what is ON SCREEN. "This week" and "July 2026" both lie the
+  // moment a rolling window straddles a month or year boundary.
+  function calHeaderText(view,a,b,now){
+    if(view==='day')return now.toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long'});
+    var sameY=a.getFullYear()===b.getFullYear(),sameM=sameY&&a.getMonth()===b.getMonth();
+    var oa=!sameY?{day:'numeric',month:'short',year:'numeric'}:(sameM?{day:'numeric'}:{day:'numeric',month:'short'});
+    var ob=!sameY?{day:'numeric',month:'short',year:'numeric'}:(sameM?{day:'numeric',month:'long'}:{day:'numeric',month:'short'});
+    return a.toLocaleDateString(undefined,oa)+' – '+b.toLocaleDateString(undefined,ob);
+  }
+  function calScroller(){return document.querySelector('#calBody .calweek,#calBody .calmonth');}
+  // Read the visible days off REAL geometry rather than recomputing scroll
+  // arithmetic, so the header can never disagree with what is drawn.
+  // A day counts as on-screen only when at least HALF of it is — a 1px sliver of
+  // the next row peeking under the fold is not something the header should
+  // claim you can see (it made a 3-week view announce four weeks).
+  function calVisibleDays(sc){
+    if(!sc)return [];
+    var sr=sc.getBoundingClientRect(),cmh=sc.querySelector('.cmh');
+    var top=sr.top+(cmh?cmh.getBoundingClientRect().height:0),out=[];
+    [].forEach.call(sc.querySelectorAll('[data-d]'),function(el){
+      var r=el.getBoundingClientRect();
+      var w=Math.min(r.right,sr.right)-Math.max(r.left,sr.left);
+      var h=Math.min(r.bottom,sr.bottom)-Math.max(r.top,top);
+      if(w>0&&h>0&&(w*h)/(r.width*r.height)>=.5)out.push(el.getAttribute('data-d'));
+    });
+    return out;
+  }
+  function calSyncHeader(){
+    var ttl=document.getElementById('calTtl');if(!ttl||_cal.view==='day')return;
+    var vis=calVisibleDays(calScroller());if(!vis.length)return;
+    ttl.textContent=calHeaderText(_cal.view,calFromIso(vis[0]),calFromIso(vis[vis.length-1]),new Date());
+  }
+  // Put today at the leading edge (leftmost column / top row). Measured from
+  // live rects: offsetLeft/offsetTop would be read against .calf, not the
+  // scroller, because .calf is the positioned ancestor.
+  var CAL_GRID_GAP=6;   // must track the gap on .calmonth
+  function calAnchorToday(){
+    var sc=calScroller();if(!sc)return;
+    var el=sc.querySelector('.today');if(!el)return;
+    if(_cal.view==='week'){sc.scrollLeft+=(el.getBoundingClientRect().left-sc.getBoundingClientRect().left);}
+    else{
+      // TWO passes. The weekday strip is position:sticky, so where it actually
+      // comes to rest is only knowable AFTER a scroll has happened; a
+      // single-pass anchor computed against its pre-scroll box left today's row
+      // tucked UNDER the strip with its date numbers invisible. Every assertion
+      // still passed — the row was ">=50% visible" — which is exactly why this
+      // is corrected by measurement rather than arithmetic.
+      for(var i=0;i<2;i++){
+        var cmh=sc.querySelector('.cmh');
+        var hb=cmh?cmh.getBoundingClientRect().bottom:sc.getBoundingClientRect().top;
+        var d=el.getBoundingClientRect().top-hb-CAL_GRID_GAP;
+        if(Math.abs(d)<1)break;
+        sc.scrollTop+=d;
+      }
+    }
+    calSyncHeader();
+  }
+  // Test seam. The harness asserts against THESE functions — the ones the panel
+  // actually runs — because a suite that re-implements the date maths inline
+  // passes just as happily against broken production code.
+  window._calTest={window:calWindow,headerText:calHeaderText,visibleDays:calVisibleDays,
+                   chips:calChips,iso:isoD,fromIso:calFromIso,add:calAdd,monday:calMonday,
+                   K:{back:CAL_BACK_DAYS,fwd:CAL_FWD_DAYS,cols:CAL_WEEK_COLS,weeks:CAL_MONTH_WEEKS,chips:CAL_MONTH_CHIPS}};
   function wireCalendar(){
     var vs=document.getElementById('calViews');
     if(vs)vs.onclick=function(e){var b=e.target.closest('button');if(!b)return;_cal.view=b.getAttribute('data-v');
@@ -2723,40 +3059,46 @@
   function paintCal(){
     var body=document.getElementById('calBody'),ttl=document.getElementById('calTtl');if(!body)return;
     var gen=++_cal.gen;   // rapid view switches: only the newest request may paint
-    var now=new Date(),start,end;
-    if(_cal.view==='day'){start=new Date(now);end=new Date(now);}
-    else if(_cal.view==='week'){start=new Date(now);start.setDate(now.getDate()-((now.getDay()+6)%7));end=new Date(start);end.setDate(start.getDate()+6);}
-    else{start=new Date(now.getFullYear(),now.getMonth(),1);end=new Date(now.getFullYear(),now.getMonth()+1,0);}
-    if(ttl)ttl.textContent=_cal.view==='month'?now.toLocaleDateString(undefined,{month:'long',year:'numeric'}):(_cal.view==='week'?'This week':now.toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long'}));
+    var now=new Date(),win=calWindow(now);
+    // ONE request spanning everything either view can scroll to. Scrolling then
+    // needs no network at all, which is why it cannot feel laggy and cannot
+    // hammer the API — the alternative (fetch-on-scroll) buys nothing here,
+    // since the whole window is ~9 weeks of a personal calendar.
+    var start=_cal.view==='day'?new Date(now):win.gridStart,
+        end  =_cal.view==='day'?new Date(now):win.gridEnd;
+    if(ttl&&_cal.view==='day')ttl.textContent=calHeaderText('day',start,end,now);
     apiGet('/api/calendar/events?start_date='+isoD(start)+'&end_date='+isoD(end)).then(function(d){if(_cur!=='calendar'||gen!==_cal.gen)return;
       var evs=((d&&d.events)||[]).filter(function(e){return !e.deleted;});
       _calEvents={};evs.forEach(function(e){if(e.id!=null)_calEvents[e.id]=e;});
       var byDay={};evs.forEach(function(e){var k=e.start_date;(byDay[k]=byDay[k]||[]).push(e);});
       Object.keys(byDay).forEach(function(k){byDay[k].sort(function(a,b){return (a.start_time||'').localeCompare(b.start_time||'');});});
+      var tk=isoD(now);
       if(_cal.view==='month'){
-        var first=new Date(start),lead=(first.getDay()+6)%7,days=end.getDate();
-        // six-week months have shorter cells — show one chip + counter so "+N more" never clips
-        var weeks=Math.ceil((lead+days)/7),maxChips=weeks>5?1:2;
+        // Rolling Mon..Sun rows from a week before today — NOT the calendar
+        // month, so the grid never wastes rows on days already gone and never
+        // degenerates into the six-row month the old squeeze existed for.
         var html='<div class="calmonth">'+['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(function(h){return '<div class="cmh">'+h+'</div>';}).join('');
-        for(var i=0;i<lead;i++)html+='<div class="cmd dim"></div>';
-        for(var dnum=1;dnum<=days;dnum++){var dd=new Date(now.getFullYear(),now.getMonth(),dnum),k=isoD(dd),es=byDay[k]||[];
-          html+='<div class="cmd'+(k===isoD(now)?' today':'')+'"><div class="dn">'+dnum+'</div>'+(function(){
-            // Rows never exceed maxChips: when overflowing, the counter TAKES the
-            // last slot instead of adding a row (so nothing can clip).
-            if(es.length<=maxChips)return es.map(function(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="cev" data-eid="'+esc(String(e.id))+'" style="--c:'+c+'">'+esc(e.title||'')+'</div>';}).join('');
-            var showN=maxChips-1;
-            return es.slice(0,showN).map(function(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="cev" data-eid="'+esc(String(e.id))+'" style="--c:'+c+'">'+esc(e.title||'')+'</div>';}).join('')
-              +'<div class="cev" style="opacity:.6">'+(showN?('+'+(es.length-showN)+' more'):(es.length+' events'))+'</div>';
-          })()+'</div>';}
+        for(var c=new Date(win.gridStart);c<=win.gridEnd;c=calAdd(c,1)){var k=isoD(c),es=byDay[k]||[];
+          html+='<div class="cmd'+(k===tk?' today':(k<tk?' dim':''))+'" data-d="'+k+'"><div class="dn">'+c.getDate()+'</div>'+calChips(es,CAL_MONTH_CHIPS)+'</div>';}
         body.innerHTML=html+'</div>';
       } else if(_cal.view==='week'){
         var html2='<div class="calweek">';
-        for(var i2=0;i2<7;i2++){var d2=new Date(start);d2.setDate(start.getDate()+i2);var k2=isoD(d2),es2=byDay[k2]||[];
-          html2+='<div class="cwc'+(k2===isoD(now)?' today':'')+'"><h5>'+d2.toLocaleDateString(undefined,{weekday:'short'})+' '+d2.getDate()+'</h5>'+(es2.map(function(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="cwe" data-eid="'+esc(String(e.id))+'" style="--c:'+c+'">'+esc(e.title||'')+'<small>'+(e.all_day?'All day':esc(fmt12(e.start_time)))+'</small></div>';}).join('')||'<div style="color:var(--ink-faint);font-size:13px;text-align:center;padding-top:12px">—</div>')+'</div>';}
+        for(var c2=new Date(win.weekStart);c2<=win.weekEnd;c2=calAdd(c2,1)){var k2=isoD(c2),es2=byDay[k2]||[];
+          html2+='<div class="cwc'+(k2===tk?' today':(k2<tk?' past':''))+'" data-d="'+k2+'"><h5>'+c2.toLocaleDateString(undefined,{weekday:'short'})+' '+c2.getDate()+'</h5>'+(es2.map(function(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="cwe" data-eid="'+esc(String(e.id))+'" style="--c:'+c+'">'+esc(e.title||'')+'<small>'+(e.all_day?'All day':esc(fmt12(e.start_time)))+'</small></div>';}).join('')||'<div style="color:var(--ink-faint);font-size:13px;text-align:center;padding-top:12px">—</div>')+'</div>';}
         body.innerHTML=html2+'</div>';
       } else {
         var es3=byDay[isoD(now)]||[];
         body.innerHTML='<div class="caldaylist">'+(es3.map(function(e){var cat=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="dev" data-eid="'+esc(String(e.id))+'"><div class="t" style="width:96px;flex:none;font-size:21px;color:var(--ink-soft)">'+esc(e.all_day?'All day':fmt12(e.start_time))+'</div><span class="dot" style="--c:'+cat+';width:12px;height:12px;border-radius:50%;background:var(--c);box-shadow:0 0 10px var(--c);flex:none"></span><div><div class="en" style="font-size:23px;font-weight:500">'+esc(e.title||'Event')+'</div>'+(e.location?'<div class="es" style="font-size:16px;color:var(--ink-faint)">'+esc(e.location)+'</div>':'')+'</div></div>';}).join('')||'<div style="color:var(--ink-faint);font-size:20px;padding-top:20px">Nothing scheduled today.</div>')+'</div>';
+      }
+      if(_cal.view!=='day'){
+        var sc=calScroller();
+        // passive: this listener only reads geometry to retitle the header, so
+        // it must never be able to delay the scroll it is watching.
+        if(sc)sc.addEventListener('scroll',function(){
+          if(_cal.raf)return;
+          _cal.raf=requestAnimationFrame(function(){_cal.raf=0;calSyncHeader();});
+        },{passive:true});
+        calAnchorToday();
       }
     }).catch(function(){if(_cur!=='calendar'||gen!==_cal.gen)return;body.innerHTML='<div style="color:var(--ink-faint);font-size:20px">Couldn’t load the calendar.</div>';});
   }
