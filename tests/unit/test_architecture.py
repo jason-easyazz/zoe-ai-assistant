@@ -160,7 +160,10 @@ def test_chat_uses_intelligent_systems():
         # rather than any real call — a substring grep can't tell the difference.)
         "brain dispatch": "from brain_dispatch import",
         "mempalace memory": "_mempalace_load_user_facts",
-        "brain tool sentinel": "brain_tool_sentinel_events",
+        # W4-C2 moved the sentinel mapper to chat_stream_protocol.py behind a
+        # permanent re-export shim in chat.py — pin the seam (the shim import),
+        # not the def, which no longer lives in chat.py.
+        "brain tool sentinel": "from chat_stream_protocol import",
         "ui orchestrator": "enqueue_ui_action",
     }
     missing_systems = [

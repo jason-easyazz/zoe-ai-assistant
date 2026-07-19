@@ -58,12 +58,17 @@ def test_mcp_stdio_lists_tools():
 
 
 def test_chat_router_maps_core_brain_tool_sentinels_to_ag_ui_events():
+    # W4-C2 moved the sentinel→AG-UI mapper verbatim to chat_stream_protocol.py;
+    # chat.py re-imports it (permanent re-export shim) and its streaming path
+    # still calls it. Pin both the new home and the seam.
     chat_source = (ZOE_DATA / "routers" / "chat.py").read_text()
+    protocol_source = (ZOE_DATA / "chat_stream_protocol.py").read_text()
 
-    assert "def brain_tool_sentinel_events" in chat_source
-    assert "ToolCallStartEvent" in chat_source
-    assert "ToolCallArgsEvent" in chat_source
-    assert "ToolCallResultEvent" in chat_source
+    assert "def brain_tool_sentinel_events" in protocol_source
+    assert "ToolCallStartEvent" in protocol_source
+    assert "ToolCallArgsEvent" in protocol_source
+    assert "ToolCallResultEvent" in protocol_source
+    assert "from chat_stream_protocol import" in chat_source
     assert "for _tool_ev in brain_tool_sentinel_events(" in chat_source
 
 

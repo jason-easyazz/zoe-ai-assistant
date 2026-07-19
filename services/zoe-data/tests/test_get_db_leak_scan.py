@@ -23,6 +23,7 @@ DATA = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # conversion lands.
 CLEANED_FILES = [
     "routers/chat.py",
+    "chat_stream_protocol.py",  # W4-C2: protocol mechanics moved out of chat.py — keep scanned
     "routers/dashboard.py",
     "routers/panel_auth.py",
     "routers/system.py",
