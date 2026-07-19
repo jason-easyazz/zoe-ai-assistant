@@ -178,8 +178,12 @@ function serve() {
   const types = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.json': 'application/json' };
   const srv = http.createServer((req, res) => {
     const rel = decodeURIComponent(req.url.split('?')[0]);
-    const file = path.join(DIST, rel);
-    if (!file.startsWith(DIST) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
+    // Resolve, then anchor the containment check at a separator: a bare
+    // startsWith(DIST) also accepts a SIBLING whose name merely begins with it
+    // (dist2, dist-legacy), because the prefix matches with no path boundary.
+    const file = path.resolve(DIST, '.' + path.sep + rel);
+    if ((file !== DIST && !file.startsWith(DIST + path.sep))
+        || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
       res.writeHead(404); res.end('nope'); return;
     }
     res.writeHead(200, { 'Content-Type': types[path.extname(file)] || 'text/plain' });
