@@ -149,6 +149,11 @@ async def fire_notification(
         context=ctx,
     )
 
+    # P-W2.2 spoken delivery — ADDITIVE, never a replacement: the push below is
+    # always sent regardless of what happens in here, and the adapter never
+    # raises (any spoken-path failure must not block the push).
+    await _maybe_speak_notification(user_id=user_id, message=message, trigger_type=trigger_type)
+
     deep_link = f"/chat.html?p={pid}"
     subscribers_reached = await _send_push(user_id=user_id, message=message, extra={"url": deep_link})
     in_app_fallback_ok = False
@@ -195,6 +200,64 @@ async def fire_notification(
                 pending_id,
                 user_id,
             )
+
+
+def _spoken_enabled() -> bool:
+    """P-W2.2 flag: ZOE_PROACTIVE_SPOKEN, default OFF. Read at call time so an
+    .env flip + restart (or a test) needs no module reload."""
+    return os.environ.get("ZOE_PROACTIVE_SPOKEN", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _spoken_triggers() -> set[str]:
+    """Comma-separated trigger allowlist (ZOE_PROACTIVE_SPOKEN_TRIGGERS),
+    default morning_checkin only."""
+    raw = os.environ.get("ZOE_PROACTIVE_SPOKEN_TRIGGERS", "morning_checkin")
+    return {t.strip() for t in raw.split(",") if t.strip()}
+
+
+async def _maybe_speak_notification(user_id: str, message: str, trigger_type: str) -> None:
+    """P-W2.2 spoken-delivery adapter: if the flag is ON, the trigger is
+    allowlisted, and the user has a fresh foreground panel session
+    (proactive.presence.panel_presence), enqueue a ``panel_announce`` UI action
+    so the kiosk speaks the composed message.
+
+    Contract (binding, see services/zoe-data/AGENTS.md):
+      * ADDITIVE — the push in fire_notification is always still sent; this
+        never replaces it.
+      * NEVER raises — any failure here is logged (the PROACTIVE_SPOKEN line)
+        and swallowed so the mandatory push path is untouched.
+      * Flag OFF is byte-identical behaviour: immediate return, no DB access,
+        no imports.
+    """
+    try:
+        if not _spoken_enabled():
+            return
+        if trigger_type not in _spoken_triggers():
+            return
+        # Deferred imports: keep flag-OFF free of them and avoid import cycles
+        # (ui_orchestrator pulls in push.broadcaster, same reason _send_push
+        # defers routers.push).
+        import proactive.presence as _presence
+        panel_id = await _presence.panel_presence(user_id)
+        if not panel_id:
+            log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=none outcome=absent",
+                     trigger_type, user_id)
+            return
+        import ui_orchestrator as _ui_orchestrator
+        async with _get_compat_db() as db:
+            await _ui_orchestrator.enqueue_ui_action(
+                db,
+                user_id=user_id,
+                action_type="panel_announce",
+                payload={"message": message},
+                requested_by="proactive",
+                panel_id=panel_id,
+            )
+        log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=%s outcome=enqueued",
+                 trigger_type, user_id, panel_id)
+    except Exception as exc:
+        log.warning("PROACTIVE_SPOKEN trigger=%s user=%s outcome=error err=%s",
+                    trigger_type, user_id, exc)
 
 
 async def _send_push(user_id: str, message: str, extra: dict | None = None) -> int:
