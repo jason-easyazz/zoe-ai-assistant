@@ -82,7 +82,8 @@ the estate already owns or that never worked.
 | Widget stack (`widget-system.js`, `dashboard.js`, `lists-dashboard.js`, `js/widgets/**`, gridstack) | **retire desktop page; coordinate shared JS** | Touch dashboard/lists load the SAME stack — keep alive until touch layout-v2 absorbs them, then delete the lineage |
 | Orphan js/css set | **retire** | `navigation.js` (5-line stub), `js/lib/{module-widget-loader,widget-registry}.js`, `js/voice/*`, 4 unloaded music widgets, `mini-player.js` (+6 tags), `chat-sessions.js`, `ai-processor.js`, `components/zoe-orb.html`, `css/{glass,memories-enhanced,widgets-enhanced}.css` |
 
-## The P1 register (all adversarially confirmed)
+## The triage register (all adversarially confirmed; 23 P1 entries + item 11, a P2
+promoted into Wave-1 triage — scripted P1 sweeps should include it)
 
 **Deploy integrity**
 1. `.gitignore:155` blanket `*.json` — `widget-manifest.json` AND the PWA `manifest.json`
@@ -104,8 +105,9 @@ the estate already owns or that never worked.
 9. `calendar.html:2539` zero HTML escaping page-wide.
 10. `index.html:1043` + `auth.html:889` demo-mode client-side auth bypass (admin/admin
     mints a fake session when zoe-auth is unreachable).
-11. (P2 but privacy) `orb-loader.js:60` logout purge listens on `window`, auth.js
-    dispatches on `document` — orb transcripts survive logout.
+11. `orb-loader.js:60` logout purge listens on `window`, auth.js dispatches on
+    `document` — orb transcripts survive logout. (Severity P2, deliberately promoted
+    into this register: privacy blast radius on shared machines.)
 
 **Data loss**
 12. `calendar.html:3582` drag/resize/task-link PUTs send `metadata:{linked_tasks}` only;
