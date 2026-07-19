@@ -332,6 +332,84 @@ async def music_transfer(payload: dict) -> dict[str, Any]:
     return {"ok": ok, "target_player_id": target}
 
 
+@router.get("/groups")
+async def music_groups() -> dict[str, Any]:
+    """Multi-room grouping state: who is grouped with whom, and who CAN group.
+
+    Companion to `/transfer` (which moves playback to one speaker) — this is the
+    read side of spreading it across several. Every field is flat and already
+    resolved: the panel renders the picker straight from this and must never
+    reach into MA's payload shape.
+
+    {
+      "available": bool,          # false == MA unreachable, NOT "no speakers"
+      "players": [{
+        "player_id", "name",      # `name` is always non-empty
+        "provider",               # disambiguates two speakers of the same name
+        "available", "powered", "state",
+        "is_group_player":  bool, # a virtual group player, not a real speaker
+        "is_static_group":  bool, # provider-fixed membership — not editable
+        "can_lead":         bool, # supports set_members => may be a target
+        "can_group_with":   [player_id, ...],   # resolved real ids only
+        "role":  "solo" | "leader" | "follower",
+        "grouped":          bool,
+        "leader_id":        str,  # "" when solo; the player that OWNS THE QUEUE
+        "group_member_ids": [player_id, ...]    # whole set, leader first
+      }],
+      "groups": [{"leader_id", "leader_name", "is_virtual_leader", "is_static",
+                  "member_ids": [...], "member_names": [...]}]
+    }
+
+    Unavailable players are still listed (with `available: false`) so an offline
+    or flapping speaker never silently disappears from the picker.
+    """
+    import music_service
+    view = await music_service.get_speaker_groups()
+    if view is None:
+        return {"available": False, "players": [], "groups": []}
+    return {"available": True, **view}
+
+
+@router.post("/group")
+async def music_group(payload: dict) -> dict[str, Any]:
+    """Join and/or unjoin speakers to a target in one atomic call.
+
+    body: {target_player_id, add: [player_id, ...], remove: [player_id, ...]}
+    -> {ok, target_player_id, added, removed} | {ok: false, reason}
+
+    `target_player_id` becomes (or stays) the group LEADER — the player that
+    owns the queue. Both lists are optional but at least one must be non-empty.
+    Taking them together mirrors MA's own `set_members` and lets a multi-select
+    picker apply its whole selection at once, instead of firing one call per
+    speaker and racing them against each other.
+    """
+    import music_service
+    b = payload or {}
+    add = b.get("add") or []
+    remove = b.get("remove") or []
+    if not isinstance(add, list) or not isinstance(remove, list):
+        return {"ok": False, "reason": "add and remove must be lists"}
+    return await music_service.group_players(
+        str(b.get("target_player_id") or ""), add=add, remove=remove,
+    )
+
+
+@router.post("/ungroup")
+async def music_ungroup(payload: dict) -> dict[str, Any]:
+    """Remove one speaker from whatever group it is in.
+
+    body: {player_id} -> {ok, player_id} | {ok: false, reason}
+
+    Separate from `/group` because the caller does not know which target to
+    remove FROM: a sync member leaves its leader, a permanent-group member
+    leaves its group player, and a LEADER dissolves its group entirely. MA owns
+    that disambiguation, so this stays a one-argument call rather than making
+    the panel work out the topology first.
+    """
+    import music_service
+    return await music_service.ungroup_player(str((payload or {}).get("player_id") or ""))
+
+
 @router.post("/play")
 async def music_play(payload: dict) -> dict[str, Any]:
     """Search MA and play the top hit. body: {query, player_id?, radio?}.
