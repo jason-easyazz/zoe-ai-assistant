@@ -160,6 +160,8 @@ credentials/
 !.greptile/config.json
 !.greptile/files.json
 !.mcp.json
+# generated flag inventory (tools/audit/flag_inventory.py) — no secrets, names+defaults only
+!docs/knowledge/flag-inventory.json
 !services/zoe-litellm/minimal_config.yaml
 # needle-benchmark lab: committed measurement artifacts (labs/needle-benchmark/README.md)
 !labs/needle-benchmark/zoe_tools.json

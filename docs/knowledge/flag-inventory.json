@@ -1,0 +1,4123 @@
+{
+  "flags": {
+    "lab": {
+      "ZOE_KOKORO_MODEL": {
+        "defaults": [
+          "'/home/zoe/models/kokoro-v1.0.onnx'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "labs/kokoro-voice-blend/blend_zoe_voices.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KOKORO_VOICES": {
+        "defaults": [
+          "'/home/zoe/models/voices-v1.0.bin'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "labs/kokoro-voice-blend/blend_zoe_voices.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LIVE_ROOT": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "labs/flue-zoe-brain/parity/gatelib.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PGU_SID": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "labs/flue-zoe-brain/parity/tool_breadth_gate.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_HEAD_LOG": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "labs/router-selftrain/mine_candidates.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_SIDECAR_PORT": {
+        "defaults": [
+          "'11436'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "labs/router-90-campaign/prod_path_eval.py"
+        ],
+        "typed_env": false
+      }
+    },
+    "prod": {
+      "ZOE_A2A_CLIENT_TIMEOUT_S": {
+        "defaults": [
+          "'30'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/a2a_client.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_A2A_TOKEN": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/auth.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ACP_DELIVERY_MODE": {
+        "defaults": [
+          "'live'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_acp_client.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_AGENT_LLM_TIMEOUT": {
+        "defaults": [
+          "'120.0'",
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_AGENT_MAX_TOOL_ITERS": {
+        "defaults": [
+          "'5'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_AGENT_TOOL_TIMEOUT": {
+        "defaults": [
+          "'10.0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_AGENT_VOICE_LLM_TIMEOUT": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ALLOWED_WS_ORIGINS": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_ANNOUNCE_POLL_ENABLED": {
+        "defaults": [
+          "'true'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/zoe_voice_daemon.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ANNOUNCE_POLL_S": {
+        "defaults": [
+          "'5.0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/zoe_voice_daemon.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ANNOUNCE_STRICT_PANEL": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_announce.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ANNOUNCE_TTL_S": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_announce.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ASSISTANT_ROOT": {
+        "defaults": [
+          "-",
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_cheap_pr_agent.py",
+          "services/zoe-data/greploop_guard.py",
+          "services/zoe-data/multica_ticket_contract.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_AUTH_ALLOWED_ORIGINS": {
+        "defaults": [
+          "'http://localhost,http://localhost:3000,http://localhost:8000,http://127.0.0.1,http://127.0.0.1:8000,https://zoe.the411.life,http://zoe.local'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-auth/main.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_AUTH_FAIL_CLOSED": {
+        "defaults": [
+          "'true'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/auth.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_AUTH_SETUP_TOKEN": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-auth/core/account_setup.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_AUTH_URL": {
+        "defaults": [
+          "'http://localhost:8002'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-auth/touch_panel/quick_auth.py",
+          "services/zoe-data/auth.py",
+          "services/zoe-data/main.py",
+          "services/zoe-data/routers/auth.py",
+          "services/zoe-data/routers/panel_auth.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_AUTORESEARCH_RUN_ROOT": {
+        "defaults": [
+          "'data/autoresearch'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/autoresearch.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_AUTO_APPROVE_THRESHOLD": {
+        "defaults": [
+          "'0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/evolution_notice.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_BARGE_MIN_MS": {
+        "defaults": [
+          "'192'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_livekit.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_BARGE_SPEECH_THRESHOLD": {
+        "defaults": [
+          "'0.30'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_livekit.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_BASE_URL": {
+        "defaults": [
+          "'http://localhost:8000'",
+          "'http://zoe.local'",
+          "'https://192.168.1.218'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-auth/oidc/startup.py",
+          "services/zoe-data/routers/panel_provision.py",
+          "services/zoe-data/routers/system.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_BENCHMARK_OUTPUT": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/utilities/gemma4_trial_benchmark.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_BENCH_REPEATS": {
+        "defaults": [
+          "'3'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-core/bench/pi_brain_latency.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_BOARD_REVIEW_AUTOPILOT_ENABLED": {
+        "defaults": [
+          "'false'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/multica_autopilot_sync.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_BRAIN_BACKEND": {
+        "defaults": [
+          "'core'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/brain_dispatch.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_BRAIN_PREWARM_ON_WAKE": {
+        "defaults": [
+          "'1'",
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_livekit.py",
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_BRAIN_TOKEN": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_flue_client.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_BRAIN_UNIT": {
+        "defaults": [
+          "'llama-server.service'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/router_selftrain.py",
+          "services/zoe-data/main.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_BRAIN_URL": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/music_discovery_batch.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_BUFFER_DELAY_S": {
+        "defaults": [
+          "'0.8'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/zoe_voice_daemon.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_BUFFER_PHRASES": {
+        "defaults": [
+          "'1'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/zoe_voice_daemon.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CAP_A2A_DELEGATE": {
+        "defaults": [
+          "'3000'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CAP_AMBIENT_ROWS": {
+        "defaults": [
+          "'10'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CAP_AMBIENT_SEARCH": {
+        "defaults": [
+          "'0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CAP_AMBIENT_TRANSCRIPT": {
+        "defaults": [
+          "'150'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CAP_MEMORY_LIST": {
+        "defaults": [
+          "'0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CAP_MEMORY_LIST_ROWS": {
+        "defaults": [
+          "'25'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CAP_SELF_CAPS": {
+        "defaults": [
+          "'2000'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CAP_WEB_RESEARCH": {
+        "defaults": [
+          "'6000'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CHAT_CONTEXT_MAX_SESSIONS": {
+        "defaults": [
+          "'2000'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/chat.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CHAT_INJECT_DB_MEMORY": {
+        "defaults": [
+          "'0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/chat.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CHAT_URL": {
+        "defaults": [
+          "'http://localhost:8000'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CHEAP_PR_AGENT_API_URL": {
+        "defaults": [
+          "'https://openrouter.ai/api/v1/chat/completions'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_cheap_pr_agent.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CHEAP_PR_AGENT_CMD": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/greploop_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CHEAP_PR_AGENT_ESTIMATED_COST_USD": {
+        "defaults": [
+          "'0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/greploop_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CHEAP_PR_AGENT_MODEL": {
+        "defaults": [
+          "'cheap-pr-agent'",
+          "'deepseek/deepseek-chat-v3.1'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_cheap_pr_agent.py",
+          "services/zoe-data/greploop_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CHEAP_PR_AGENT_URL": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/greploop_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_COMPOSE_MAX_TOKENS": {
+        "defaults": [
+          "'700'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/ui_compose.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_COMPOSE_STREAM_BUDGET_S": {
+        "defaults": [
+          "'6'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/chat.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_COMPOSE_TIMEOUT_S": {
+        "defaults": [
+          "'14'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/ui_compose.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_COMPOSE_UI": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/ui_compose.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_COMPOSE_VOICE_BUDGET_S": {
+        "defaults": [
+          "'8'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CONTACT_BACKFILL_ENABLED": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/contact_backfill.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CONTEXT_TOKEN_BUDGET": {
+        "defaults": [
+          "'5500'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CONVERSATION_ENDER_ACKS": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/conversation_opener.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CORE_DATA_URL": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_core_client.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CORE_IDLE_TIMEOUT_S": {
+        "defaults": [
+          "'20'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_core_client.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CORE_MAX_CONCURRENCY": {
+        "defaults": [
+          "'2'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_core_client.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CORE_MAX_WORKERS": {
+        "defaults": [
+          "'4'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_core_client.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CORE_MODEL_ID": {
+        "defaults": [
+          "'gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-core/bench/pi_brain_latency.py",
+          "services/zoe-data/zoe_core_client.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CORE_MODEL_URL": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-core/bench/pi_brain_latency.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CORE_PI_COMMAND": {
+        "defaults": [
+          "'pi'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_core_client.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CORE_PROVIDER": {
+        "defaults": [
+          "'local-gemma'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_core_client.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CORE_TIMEOUT_S": {
+        "defaults": [
+          "'180'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_core_client.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CORE_VOICE_MODEL_MAXTOKENS": {
+        "defaults": [
+          "'512'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_core_client.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DAILY_BRIEFING_CACHE_MAX_USERS": {
+        "defaults": [
+          "'64'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/intent_router.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DAILY_BRIEFING_CACHE_TTL_SECONDS": {
+        "defaults": [
+          "'120'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/intent_router.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DATA_DB": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/database.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DATA_URL": {
+        "defaults": [
+          "'http://127.0.0.1:8000'",
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/check_emotional_thread.py",
+          "services/zoe-data/zoe_core_client.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DB_ACQUIRE_TIMEOUT_S": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/db_pool.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DEFAULT_LIGHT_ENTITY": {
+        "defaults": [
+          "'light.all'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/intent_router.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DEFAULT_MEDIA_PLAYER": {
+        "defaults": [
+          "'media_player.all'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "modules/zoe-music/main.py",
+          "services/zoe-data/intent_router.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DEVICE_TOKEN": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_latency_probe.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DIGARR_AI_BASE_URL": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/music_discovery_batch.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DIGARR_AI_MODEL": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/music_discovery_batch.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DIGARR_AI_TIMEOUT_S": {
+        "defaults": [
+          "'300'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/music_discovery_batch.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DIGARR_IMAGE": {
+        "defaults": [
+          "'docker.io/iuliandita/digarr:latest'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/music_discovery_batch.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DIGARR_PASSWORD": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/music_discovery_batch.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DIGARR_PORT": {
+        "defaults": [
+          "'3199'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/music_discovery_batch.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DIGARR_USER": {
+        "defaults": [
+          "'zoe'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/music_discovery_batch.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DISCOVERY_DEFAULT_MOOD": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/music_discovery_batch.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DISCOVERY_MAX_USERS": {
+        "defaults": [
+          "'4'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/music_discovery_batch.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DISCOVERY_MIN_FREE_MB": {
+        "defaults": [
+          "'1500'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/music_discovery_batch.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DISCOVERY_MIN_PLAYS": {
+        "defaults": [
+          "'10'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/music_discovery_batch.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_EDGE_TTS_TIMEOUT_S": {
+        "defaults": [
+          "'5'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/tts_waterfall.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_EDGE_TTS_VOICE": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_EMBEDDING_MODEL_VERSION": {
+        "defaults": [
+          "'minilm-v1'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_service.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_EMOTIONAL_FOLLOWUP_ENABLED": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/triggers/emotional_followup.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_EMOTIONAL_RECALL_ENABLED": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/memories.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ENABLE_OPENCLAW_BROWSER_FALLBACK": {
+        "defaults": [
+          "'false'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/browser_broker.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ENABLE_OPENCLAW_EXECUTION": {
+        "defaults": [
+          "'false'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ENGINEERING_MODE": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/executors/kanban_adapter.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ESPEAK_PITCH": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ESPEAK_SPEED": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ESPEAK_VOLUME": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_EXPERT_ACTIVE_DOMAINS": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/expert_dispatch.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_EXPERT_ALLOW_WRITES": {
+        "defaults": [
+          "'0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/expert_dispatch.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_EXPERT_ENABLED": {
+        "defaults": [
+          "'1'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/expert_dispatch.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_EXPERT_MODE": {
+        "defaults": [
+          "'shadow'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/expert_dispatch.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_FACE_ID_ENABLED": {
+        "defaults": [
+          "'false'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/face_id.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_FACE_ID_THRESHOLD": {
+        "defaults": [
+          "'0.45'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/face_id.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_FLUE_BRAIN_TIMEOUT_S": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_flue_client.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_FLUE_BRAIN_URL": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_flue_client.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_FLUE_STREAM_ENABLED": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_flue_client.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_FRUSTRATION_MAX_SESSIONS": {
+        "defaults": [
+          "'2000'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/chat.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_GITHUB_DEFAULT_BRANCH": {
+        "defaults": [
+          "'main'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/greploop_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_GITHUB_REPO": {
+        "defaults": [
+          "'jason-easyazz/zoe-ai-assistant'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/greploop_guard.py",
+          "services/zoe-data/greptile_client.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_GRAPH_RECALL_BOOST": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_service.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_GRAPH_RECALL_WEIGHT": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_service.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_HA_BRIDGE_URL": {
+        "defaults": [
+          "''",
+          "'http://127.0.0.1:8007'",
+          "'http://localhost:8007'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "modules/zoe-music/main.py",
+          "services/zoe-data/intent_router.py",
+          "services/zoe-data/mcp_server.py",
+          "services/zoe-data/routers/ha_control.py",
+          "services/zoe-data/routers/stubs.py",
+          "services/zoe-data/routers/system.py",
+          "services/zoe-data/smart_home_service.py",
+          "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_HA_URL": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/stubs.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_HA_VOICE_INGRESS_URL": {
+        "defaults": [
+          "'http://host.docker.internal:8000'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/homeassistant-mcp-bridge/main.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_HA_VOICE_TOKEN": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/homeassistant-mcp-bridge/main.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_HEALTH_CHECK_SCRIPT": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/multica_autopilot_sync.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_HEALTH_CHECK_TIMEOUT_S": {
+        "defaults": [
+          "'120'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/multica_autopilot_sync.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_HERMES_AUTO_ESCALATE": {
+        "defaults": [
+          "'true'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_HOME_SETUP_SECRET": {
+        "defaults": [
+          "(required)",
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/smart_home_setup.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_HOME_SETUP_TTL_S": {
+        "defaults": [
+          "'900'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/smart_home_setup.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_HOST_LAN_IP": {
+        "defaults": [
+          "'192.168.1.218'",
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py",
+          "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_HYBRID_RETRIEVAL_ENABLED": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_service.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_IDLE_CONSOLIDATION_ENABLED": {
+        "defaults": [
+          "'0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_idle_consolidation.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_INTENT_DISPATCH_REQUIRE_TOKEN": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/auth.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_INTERNAL_TOKEN": {
+        "defaults": [
+          "''",
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/check_emotional_thread.py",
+          "services/zoe-data/auth.py",
+          "services/zoe-data/mcp_server.py",
+          "services/zoe-data/music_setup.py",
+          "services/zoe-data/smart_home_setup.py",
+          "services/zoe-data/zoe_core_client.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_KANBAN_BOARD": {
+        "defaults": [
+          "'default'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/executors/kanban_adapter.py",
+          "services/zoe-data/worktree_bootstrap.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KANBAN_CODE_AUDIT_POST_PATCH_EXPLORE_BUDGET": {
+        "defaults": [
+          "'2'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/kanban_phase_budget.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KANBAN_CONVERGE_NOOP_IMPLEMENT": {
+        "defaults": [
+          "'true'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/executors/kanban_adapter.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KANBAN_DB_PATH": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/worktree_bootstrap.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KANBAN_DEAD_WORKER_GRACE_S": {
+        "defaults": [
+          "'180'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/kanban_phase_budget.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KANBAN_ESCALATION_MAX_RUNTIME": {
+        "defaults": [
+          "'90m'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/executors/kanban_adapter.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KANBAN_IMPLEMENT_POST_FOCUS_FOCUSED_TEST_READ_BUDGET": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/kanban_phase_budget.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KANBAN_IMPLEMENT_POST_FOCUS_GREP_BUDGET": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/kanban_phase_budget.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KANBAN_IMPLEMENT_POST_FOCUS_READ_BUDGET": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/kanban_phase_budget.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KANBAN_IMPLEMENT_POST_PATCH_FILE_READ_BUDGET": {
+        "defaults": [
+          "'2'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/kanban_phase_budget.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KANBAN_IMPLEMENT_PRE_EDIT_EXPLORE_BUDGET": {
+        "defaults": [
+          "'12'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/kanban_phase_budget.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KANBAN_IMPLEMENT_PRE_EDIT_REPEAT_READ_BUDGET": {
+        "defaults": [
+          "'6'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/kanban_phase_budget.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KANBAN_INTENT_GAP_PRE_EDIT_EXPLORE_BUDGET": {
+        "defaults": [
+          "'6'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/kanban_phase_budget.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KANBAN_INTENT_GAP_REPEAT_READ_BUDGET": {
+        "defaults": [
+          "'2'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/kanban_phase_budget.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KANBAN_MAX_RUNTIME": {
+        "defaults": [
+          "'45m'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/executors/kanban_adapter.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KANBAN_OVERNIGHT_MAX_RUNTIME": {
+        "defaults": [
+          "'6h'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/executors/kanban_adapter.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KANBAN_PROTOCOL_VIOLATION_LIMIT": {
+        "defaults": [
+          "'2'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/executors/kanban_adapter.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KANBAN_REAP_DEAD_WORKERS": {
+        "defaults": [
+          "'true'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/executors/kanban_adapter.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KANBAN_REVIEW_WRAPUP_TOOL_GRACE": {
+        "defaults": [
+          "'3'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/kanban_phase_budget.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KANBAN_SKIP_SCOUT": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/executors/kanban_adapter.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KANBAN_TERMINAL_TOOL_GRACE": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/kanban_phase_budget.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KOKORO_BACKEND": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/kokoro_sidecar.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KOKORO_BRAIN_HEALTH_URL": {
+        "defaults": [
+          "'http://127.0.0.1:11434/health'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/kokoro_sidecar.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KOKORO_BRAIN_POLL_S": {
+        "defaults": [
+          "'2'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/kokoro_sidecar.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KOKORO_BRAIN_WAIT_S": {
+        "defaults": [
+          "'180'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/kokoro_sidecar.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KOKORO_CACHE_DIR": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/kokoro_sidecar.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KOKORO_CUDA_ATTEMPTS": {
+        "defaults": [
+          "'3'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/kokoro_sidecar.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KOKORO_CUDA_RETRY_DELAY_S": {
+        "defaults": [
+          "'6'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/kokoro_sidecar.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KOKORO_MODEL": {
+        "defaults": [
+          "''",
+          "'/home/zoe/models/kokoro-v1.0.onnx'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/kokoro_sidecar.py",
+          "services/zoe-data/tts_waterfall.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KOKORO_SIDECAR_URL": {
+        "defaults": [
+          "'http://127.0.0.1:10201'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/perf/measure_tts.py",
+          "services/zoe-data/main.py",
+          "services/zoe-data/tts_waterfall.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KOKORO_SPEED": {
+        "defaults": [
+          "'1.15'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/tts_waterfall.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KOKORO_VOICE": {
+        "defaults": [
+          "''",
+          "'af_sky'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/perf/measure_tts.py",
+          "services/zoe-data/voice_settings.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KOKORO_VOICES": {
+        "defaults": [
+          "''",
+          "'/home/zoe/models/voices-v1.0.bin'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/kokoro_sidecar.py",
+          "services/zoe-data/tts_waterfall.py",
+          "services/zoe-data/voice_settings.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LATENCY_BASELINE": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_latency_probe.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LATENCY_RESULTS": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_latency_probe.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LATENCY_SAMPLES": {
+        "defaults": [
+          "'2'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_latency_probe.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LATENCY_SESSION_ID": {
+        "defaults": [
+          "'zoe-latency-probe'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_latency_probe.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LATENCY_TIMEOUT_S": {
+        "defaults": [
+          "'30'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_latency_probe.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LATENCY_WARN_MS": {
+        "defaults": [
+          "'500'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_latency_probe.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LATENCY_WARN_RATIO": {
+        "defaults": [
+          "'1.5'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_latency_probe.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LAYOUT_MEMORY": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/ui_layouts.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LIVEKIT_BRAIN_TIMEOUT_S": {
+        "defaults": [
+          "'20'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_livekit.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LIVEKIT_CONTAINER": {
+        "defaults": [
+          "'livekit'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_livekit.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LIVEKIT_FAST_TIERS": {
+        "defaults": [
+          "'0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_livekit.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LIVEKIT_IDLE_TIMEOUT_S": {
+        "defaults": [
+          "'300'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_livekit.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LIVEKIT_ONDEMAND": {
+        "defaults": [
+          "'true'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_livekit.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LIVE_REPO_ROOT": {
+        "defaults": [
+          "'/home/zoe/assistant'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_apply_intent_gap_contract.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LIVE_SERVICE_DIR": {
+        "defaults": [
+          "'/home/zoe/assistant/services/zoe-data'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/router_selftrain.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LK_COOLDOWN_TIMEOUT_S": {
+        "defaults": [
+          "'4.0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_livekit.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LK_ENERGY_THRESHOLD": {
+        "defaults": [
+          "'400'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_livekit.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LK_MIN_SPEECH_FRAMES": {
+        "defaults": [
+          "'5'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_livekit.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LK_SILENCE_FRAMES": {
+        "defaults": [
+          "'20'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_livekit.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LK_USE_AIORTC": {
+        "defaults": [
+          "'0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_livekit.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LLAMA_URL": {
+        "defaults": [
+          "'http://127.0.0.1:11434'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/system.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LLM_MODEL": {
+        "defaults": [
+          "'gemma'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_digest.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LOCAL_MODEL": {
+        "defaults": [
+          "'Gemma 4 E4B-QAT'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/system.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LOCAL_TTS_URL": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LOCATION_CITY": {
+        "defaults": [
+          "'Geraldton'",
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/mcp_server.py",
+          "services/zoe-data/routers/weather.py",
+          "services/zoe-data/voice_stitch.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LOCATION_COUNTRY": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/weather.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LOCATION_LAT": {
+        "defaults": [
+          "'-28.7774'",
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/mcp_server.py",
+          "services/zoe-data/routers/weather.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LOCATION_LON": {
+        "defaults": [
+          "'114.6158'",
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/mcp_server.py",
+          "services/zoe-data/routers/weather.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MAX_BROWSER_TABS": {
+        "defaults": [
+          "'5'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MCP_ACTOR_ROLE": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/mcp_server.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MCP_ACTOR_USER_ID": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/mcp_server.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MCP_STRICT_USER_ID": {
+        "defaults": [
+          "'false'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/mcp_server.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MCP_USER_ID": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/mcp_server.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MCP_USER_ROLE": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/mcp_server.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MEMORY_AUDIT_COLLECTION": {
+        "defaults": [
+          "'mempalace_audit'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_service.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MEMORY_COMPOSE_ENABLED": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_memory_compose.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MEMORY_LINK_RESOLVER_ENABLED": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_digest.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MEMORY_LINT_IN_DREAMING": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_lint.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MEMORY_LINT_NEAR_DUP_RATIO": {
+        "defaults": [
+          "'0.92'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_lint.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MEMORY_LINT_STALE_DAYS": {
+        "defaults": [
+          "'365'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_lint.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MEMORY_LOOP_LOG_PATH": {
+        "defaults": [
+          "'~/.zoe/zoe-data-memory-loops.log'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/system.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MEMORY_STARTUP_STRICT": {
+        "defaults": [
+          "'false'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MERGE_QUEUE_ENABLED": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/greploop_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MERGE_QUEUE_LABEL": {
+        "defaults": [
+          "'auto-merge'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/greploop_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MERGE_QUEUE_MAX_CANDIDATES": {
+        "defaults": [
+          "'50'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/greploop_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MIRROR_INTENTS_TO_OPENCLAW": {
+        "defaults": [
+          "'false'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/chat.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MOONSHINE_ARCH": {
+        "defaults": [
+          "'MEDIUM_STREAMING'",
+          "'v2'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_MULTICA": {
+        "defaults": [
+          "'false'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MULTICA_AUTOPILOT_CREATE_ISSUES": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/multica_autopilot_sync.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MULTICA_AUTOPILOT_CREATE_ISSUES_FOR": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/multica_autopilot_sync.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MULTICA_AUTOPILOT_STALE_HOURS": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/multica_autopilot_sync.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MULTICA_AUTOPIOT_CREATE_ISSUES": {
+        "defaults": [
+          "'false'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/multica_autopilot_sync.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MULTICA_AUTOPIOT_CREATE_ISSUES_FOR": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/multica_autopilot_sync.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MULTICA_AUTOPIOT_STALE_HOURS": {
+        "defaults": [
+          "'2'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/multica_autopilot_sync.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MULTICA_AUTO_ADMIT": {
+        "defaults": [
+          "'false'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MULTICA_BLOCKED_RESUME_BUDGET": {
+        "defaults": [
+          "4"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_MULTICA_DISPATCH_PAUSE_FILE": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/multica_dispatch_control.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MULTICA_NATIVE_COMMENT_GUARD": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/multica_health_report.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MULTICA_PAUSED_POLL_S": {
+        "defaults": [
+          "300.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_MULTICA_POLL_DISPATCH_LIMIT": {
+        "defaults": [
+          "1"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_MULTICA_POLL_REF_TIMEOUT_S": {
+        "defaults": [
+          "20.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_MULTICA_STALE_IN_PROGRESS_HOURS": {
+        "defaults": [
+          "6.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_MUSIC_BIND_HOST": {
+        "defaults": [
+          "'0.0.0.0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "modules/zoe-music/main.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MUSIC_DISCOVERY": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MUSIC_DISCOVERY_DOW": {
+        "defaults": [
+          "'sun'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MUSIC_DISCOVERY_HOUR": {
+        "defaults": [
+          "'3'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MUSIC_DISCOVERY_JSON": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/music_discovery.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MUSIC_HISTORY": {
+        "defaults": [
+          "'on'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MUSIC_HISTORY_INTERVAL_S": {
+        "defaults": [
+          "'300'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MUSIC_MODULE_URL": {
+        "defaults": [
+          "'http://zoe-music:8100'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "modules/zoe-music/intents/handlers.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MUSIC_OAUTH_TTL_S": {
+        "defaults": [
+          "'150'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/music_oauth.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MUSIC_OBSERVE_ATTRIB_MIN": {
+        "defaults": [
+          "'30'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/music_history.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MUSIC_OBSERVE_DEDUP_H": {
+        "defaults": [
+          "'12'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/music_history.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MUSIC_SERVICE_TOKEN": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "modules/zoe-music/intents/handlers.py",
+          "modules/zoe-music/main.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MUSIC_SETUP_SECRET": {
+        "defaults": [
+          "(required)",
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/music_setup.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MUSIC_SETUP_TTL_S": {
+        "defaults": [
+          "'900'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/music_setup.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_NVM_NODE_BIN": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/pi_intent_classifier.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_OPENCLAW_GW": {
+        "defaults": [
+          "'http://127.0.0.1:18789'",
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/mcp_server.py",
+          "services/zoe-data/routers/chat.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_OTEL_ENABLED": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PANEL_AGENT_PORT": {
+        "defaults": [
+          "'8765'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/system.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PANEL_ALLOWED_HOSTS": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/agent_safety.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PANEL_ID": {
+        "defaults": [
+          "'post-merge-probe'",
+          "'zoe-touch-pi'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_latency_probe.py",
+          "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PANEL_SESSION_TRUST_WINDOW_S": {
+        "defaults": [
+          "'900'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PERF": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/perf/measure_speed.py",
+          "scripts/perf/measure_tts.py",
+          "scripts/perf/measure_voice.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PERSON_BIRTHDAY_CAPTURE_ENABLED": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/person_extractor.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PERSON_DOSSIER_ENABLED": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_memory_compose.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PERSON_LLM_CONFIDENCE_GATE": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/person_extractor_llm.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PERSON_LLM_CONFIDENCE_MIN": {
+        "defaults": [
+          "'0.4'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/person_extractor_llm.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PERSON_LLM_PREFILTER": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/person_extractor_llm.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PERSON_MERGE_ENABLED": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/person_merge.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PERSON_SUGGEST_ENABLED": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/pending_suggestions.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PIN_CHALLENGE_TTL_S": {
+        "defaults": [
+          "'120'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/panel_auth.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PIN_LOCKOUT_S": {
+        "defaults": [
+          "'300'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/panel_auth.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PIN_MAX_ATTEMPTS": {
+        "defaults": [
+          "'5'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/panel_auth.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PIPELINE_HARNESS_CLOSEOUT_MERGE": {
+        "defaults": [
+          "'true'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/pipeline_store.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PIPELINE_HARNESS_REVIEW_APPROVE": {
+        "defaults": [
+          "'true'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/pipeline_store.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PIPELINE_HARNESS_VERIFY_TESTS": {
+        "defaults": [
+          "'true'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/pipeline_store.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PIPELINE_STORE_PATH": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/compact_pipeline_state.py",
+          "scripts/maintenance/engineering_harness_loop.py",
+          "services/zoe-data/pipeline_store.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PIPELINE_VERIFY_EVIDENCE_RETRY_LIMIT": {
+        "defaults": [
+          "'1'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/pipeline_store.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PI_ALLOW_EXECUTION": {
+        "defaults": [
+          "(required)"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/pi_intent_probe.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PI_EXECUTOR_COMMAND": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/pi_executor.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PI_EXECUTOR_MODE": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/pi_executor.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PI_EXECUTOR_MODEL": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/pi_executor.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PI_EXECUTOR_PROVIDER": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/pi_executor.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PI_EXECUTOR_TIMEOUT_S": {
+        "defaults": [
+          "'900'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/pi_executor.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PI_HOST": {
+        "defaults": [
+          "'192.168.1.61'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/system.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/system.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PI_HYBRID_PRODUCTION_LABELS_PATH": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/system.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PI_INTENT_ENABLED": {
+        "defaults": [
+          "(required)"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/pi_intent_probe.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PI_INTENT_MODEL": {
+        "defaults": [
+          "(required)",
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/pi_intent_probe.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PI_INTENT_PREFILTER_ENABLED": {
+        "defaults": [
+          "'true'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/pi_promotion_eval.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PI_INTENT_PROMOTED_GROUPS": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/intent_router.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PI_INTENT_TIMEOUT_SECONDS": {
+        "defaults": [
+          "(required)",
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/pi_intent_probe.py",
+          "scripts/maintenance/pi_promotion_eval.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PI_INTENT_TRANSPORT": {
+        "defaults": [
+          "(required)"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/pi_intent_probe.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PI_LOCAL_MODEL_CONFIGURED": {
+        "defaults": [
+          "(required)"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/pi_intent_probe.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PRESENCE_WINDOW_S": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/presence.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PROACTIVE_SLOW_LOOP_S": {
+        "defaults": [
+          "'300'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/engine.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PROACTIVE_SPOKEN": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/engine.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PROACTIVE_SPOKEN_TRIGGERS": {
+        "defaults": [
+          "'morning_checkin'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/engine.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PROVISION_CODE_TTL_S": {
+        "defaults": [
+          "'300'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/panel_provision.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PR_GUARD_ACTIVE_GREPTILE_STALE_SECONDS": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/greploop_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PR_GUARD_GREPTILE_WAIT_POLL_SECONDS": {
+        "defaults": [
+          "'120'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/greploop_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PR_GUARD_GREPTILE_WAIT_TIMEOUT_SECONDS": {
+        "defaults": [
+          "'1800'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/greploop_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PR_GUARD_HEAD_STABILITY_SECONDS": {
+        "defaults": [
+          "'90'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/greploop_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PR_GUARD_MAX_ACTIVE_GREPTILE_REVIEWS": {
+        "defaults": [
+          "'1'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/greploop_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PR_GUARD_MAX_COST_USD": {
+        "defaults": [
+          "'0.25'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/greploop_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PR_GUARD_MAX_ITERATIONS": {
+        "defaults": [
+          "'5'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/greploop_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PR_GUARD_MAX_OUTPUT_CHARS": {
+        "defaults": [
+          "'12000'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/greploop_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PR_GUARD_NO_FINDINGS_RETRIGGER_LIMIT": {
+        "defaults": [
+          "'3'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/greploop_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PR_GUARD_NO_PROGRESS_LIMIT": {
+        "defaults": [
+          "'3'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/greploop_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PR_GUARD_SAME_ERROR_LIMIT": {
+        "defaults": [
+          "'3'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/greploop_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PR_GUARD_STATE_DIR": {
+        "defaults": [
+          "'/home/zoe/assistant/.cursor/tmp/pr_guard'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/greploop_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PR_GUARD_TRIGGER_COOLDOWN_SECONDS": {
+        "defaults": [
+          "'900'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/greploop_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PUBLIC_URL": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/music_setup.py",
+          "services/zoe-data/routers/smart_home_setup.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_QUIET_END_HOUR": {
+        "defaults": [
+          "'7'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/engine.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_QUIET_START_HOUR": {
+        "defaults": [
+          "'22'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/engine.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_RELATIONSHIP_GRAPH_ENABLED": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/relationship_graph.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_REMINDER_MAX_ATTEMPTS": {
+        "defaults": [
+          "'5'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/engine.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_REMINDER_STUCK_CLAIM_S": {
+        "defaults": [
+          "'600'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/triggers/reminders.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_REPO_ROOT": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/hermes_http.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_RIG_BIND": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/ytmusic_signin.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_RIG_DISPLAY": {
+        "defaults": [
+          "':99'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/ytmusic_signin.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_RIG_GEOMETRY": {
+        "defaults": [
+          "'1280x800x24'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/ytmusic_signin.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_RIG_LOGIN_URL": {
+        "defaults": [
+          "'https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fmusic.youtube.com%2F'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/ytmusic_signin.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_RIG_NOVNC_PORT": {
+        "defaults": [
+          "'6080'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/ytmusic_signin.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_RIG_USER_AGENT": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/ytmusic_signin.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_RIG_VNC_PORT": {
+        "defaults": [
+          "'5900'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/ytmusic_signin.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_ARCHIVE_KEEP": {
+        "defaults": [
+          "'3'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/router_selftrain.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_BASE_HF": {
+        "defaults": [
+          "'/home/zoe/models/lab/functiongemma-270m-it-hf'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/router_selftrain.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_ENABLED": {
+        "defaults": [
+          "'1'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/semantic_router.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_HEAD": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/semantic_router.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_HEAD_LOG": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/semantic_router.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_HEAD_MLP_PATH": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/router_two_stage.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_HEAD_PATH": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/semantic_router.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_HEAD_THRESHOLD": {
+        "defaults": [
+          "'0.4'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/semantic_router.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_MARGIN": {
+        "defaults": [
+          "'0.05'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/fast_tiers.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_MODE": {
+        "defaults": [
+          "'shadow'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/semantic_router.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_MODEL": {
+        "defaults": [
+          "'BAAI/bge-small-en-v1.5'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/semantic_router.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_MODEL_DIR": {
+        "defaults": [
+          "'/home/zoe/models/functiongemma-router'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/router_selftrain.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_SCRATCH_PORT": {
+        "defaults": [
+          "'11437'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/router_selftrain.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_SELFTRAIN": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_SELFTRAIN_DOW": {
+        "defaults": [
+          "'sat'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_SELFTRAIN_HOUR": {
+        "defaults": [
+          "'1'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_SELFTRAIN_TIMEOUT_S": {
+        "defaults": [
+          "'28800'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_SHADOW_KEEP": {
+        "defaults": [
+          "4"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/semantic_router.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_SHADOW_MAX_BYTES": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/semantic_router.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_SHADOW_TEXT": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/semantic_router.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_SIDECAR_URL": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/router_two_stage.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_THRESHOLD": {
+        "defaults": [
+          "'0.62'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/semantic_router.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_TWO_STAGE_GATE": {
+        "defaults": [
+          "'0.5'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/router_two_stage.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_TWO_STAGE_TIMEOUT_S": {
+        "defaults": [
+          "'1.5'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/router_two_stage.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_WARM_START": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/router_selftrain.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_SEARCH_HOTNESS_WEIGHT": {
+        "defaults": [
+          "'0.05'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_service.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_SESSION_LOCK_TIMEOUT_S": {
+        "defaults": [
+          "'5'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/chat.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_SILERO_VAD_MODEL": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_vad.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_SKYBRIDGE_ONLY": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_SKYBRIDGE_TIMEZONE": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/skybridge_service.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_SMART_TURN_ENABLED": {
+        "defaults": [
+          "'0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_livekit.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_SMART_TURN_MAX_CHECKS": {
+        "defaults": [
+          "'2'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_livekit.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_SMART_TURN_THREADS": {
+        "defaults": [
+          "'1'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_turn.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_SMART_TURN_THRESHOLD": {
+        "defaults": [
+          "'0.5'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_livekit.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_SPEAKER_ID_THRESHOLD": {
+        "defaults": [
+          "'0.82'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_STT_BACKEND": {
+        "defaults": [
+          "'moonshine'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_STT_PREWARM_ON_WAKE": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_TASK_TIMEOUT_S": {
+        "defaults": [
+          "'900'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/background_runner.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_TELEGRAM_BOT_USERNAME": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/telegram_link.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_TELEGRAM_LINK_SECRET": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/telegram_link.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_TEMPORAL_RELATIONSHIPS_ENABLED": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/person_extractor.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_TIMEZONE": {
+        "defaults": [
+          "'Australia/Perth'",
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/mcp_server.py",
+          "services/zoe-data/memory_digest.py",
+          "services/zoe-data/multica_autopilot_sync.py",
+          "services/zoe-data/proactive/engine.py",
+          "services/zoe-data/proactive/triggers/emotional_followup.py",
+          "services/zoe-data/proactive/triggers/evening_windown.py",
+          "services/zoe-data/proactive/triggers/evolution_weekly_digest.py",
+          "services/zoe-data/proactive/triggers/morning_checkin.py",
+          "services/zoe-data/proactive/triggers/people_birthday.py",
+          "services/zoe-data/proactive/triggers/people_health.py",
+          "services/zoe-data/proactive/triggers/reminder_scan.py",
+          "services/zoe-data/routers/weather.py",
+          "services/zoe-data/time_utils.py",
+          "services/zoe-data/voice_greeting.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_TOUCH_PROBE_DEVICE_TOKEN": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/pi_touch_hybrid_production_probe.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_TOUCH_PROBE_PANEL_ID": {
+        "defaults": [
+          "'zoe-touch-pi'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/pi_touch_hybrid_production_probe.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_TTS_MODE": {
+        "defaults": [
+          "'hybrid'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py",
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_TTS_TRIM_SILENCE": {
+        "defaults": [
+          "'true'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/zoe_voice_daemon.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_UNAUTHENTICATED_ROLE": {
+        "defaults": [
+          "'guest'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/auth.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_UPDATE_CHECK_ENABLED": {
+        "defaults": [
+          "'true'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/system_updates.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_URL": {
+        "defaults": [
+          "'http://127.0.0.1:8000'",
+          "'https://zoe.local'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe_latency_probe.py",
+          "scripts/setup/zoe_face_id.py",
+          "scripts/setup/zoe_voice_daemon.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_USE_CORE_BRAIN": {
+        "defaults": [
+          "'true'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/brain_dispatch.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_USE_PI_EXECUTOR": {
+        "defaults": [
+          "'false'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/pi_executor.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VAD_SPEECH_THRESHOLD": {
+        "defaults": [
+          "'0.5'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_vad.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_BARGE_IN": {
+        "defaults": [
+          "'0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_livekit.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_BASELINE": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/voice_gate_check.py",
+          "scripts/maintenance/voice_regression_probe.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_CHAT_TIMEOUT_S": {
+        "defaults": [
+          "'20'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py",
+          "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_FAST_FIRST_AUDIO": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_VOICE_FILLER_AFTER_S": {
+        "defaults": [
+          "'1.6'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_FILLER_ENABLED": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_VOICE_FILLER_PHRASES": {
+        "defaults": [
+          "'Let me check.|One sec.|Hmm, let me look.'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_GATE_MAX_AGE_H": {
+        "defaults": [
+          "'24'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/voice_gate_check.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_GATE_PATHS": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/voice_gate_check.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_GREETING_ENABLED": {
+        "defaults": [
+          "'0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_greeting.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_GREETING_STATE_PATH": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_greeting.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_HERMES_TIMEOUT_S": {
+        "defaults": [
+          "'45'",
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_IDENT": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_LOG": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/zoe_voice_daemon.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_PROBE_MIN_MEM_MB": {
+        "defaults": [
+          "'1500'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/voice_regression_probe.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_PROBE_SAMPLES": {
+        "defaults": [
+          "'20'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/voice_regression_probe.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_PROBE_TIMEOUT_S": {
+        "defaults": [
+          "'900'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/voice_regression_probe.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_PROBE_USER": {
+        "defaults": [
+          "'jason'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/voice_regression_probe.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_PROFILE": {
+        "defaults": [
+          "'zoe_au_natural_v1'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_RESULTS": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/voice_gate_check.py",
+          "scripts/maintenance/voice_regression_probe.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_SAMPLE_DIR": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_SAVE_AUDIO": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_VOICE_STITCH_ENABLED": {
+        "defaults": [
+          "'0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py",
+          "services/zoe-data/voice_stitch.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_STREAM": {
+        "defaults": [
+          "'1'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/zoe_voice_daemon.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_STT_LOG": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_VOICE_TOOL_FILLER": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_VOICE_TREND": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/voice_regression_probe.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_WARN_MS": {
+        "defaults": [
+          "'1500'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/voice_regression_probe.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_WARN_RATIO": {
+        "defaults": [
+          "'1.5'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/voice_regression_probe.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_WAKE_ACK_PHRASE": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_WEATHER_CACHE_TTL_S": {
+        "defaults": [
+          "'600'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/weather.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_WORKTREE_PRUNE_INTERVAL_S": {
+        "defaults": [
+          "86400.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_WORKTREE_ROOT": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/worktree_bootstrap.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_WS_IDLE_TIMEOUT_SECONDS": {
+        "defaults": [
+          "120.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_YTMUSIC_POLL_S": {
+        "defaults": [
+          "'2.0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/ytmusic_signin.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_YTMUSIC_POTOKEN_URL": {
+        "defaults": [
+          "'http://localhost:4416'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/music_service.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_YTMUSIC_REFRESH_ENABLED": {
+        "defaults": [
+          "'false'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_YTMUSIC_REFRESH_HOURS": {
+        "defaults": [
+          "'12'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_YTMUSIC_SECRET_DIR": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/ytmusic_signin.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_YTMUSIC_SESSION_TIMEOUT_S": {
+        "defaults": [
+          "'300'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/ytmusic_signin.py"
+        ],
+        "typed_env": false
+      }
+    }
+  }
+}
