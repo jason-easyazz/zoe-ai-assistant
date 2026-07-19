@@ -17,6 +17,12 @@ a link to the detail + where it's up to. Mark ✅ when done so nothing lingers h
 
 ## 🔨 Active
 
+### Panel multi-signal identity (voice + camera + presence) — W5 in flight
+- **Goal:** the touch panel learns household voices AND faces, plus device/room presence, fusing them into a live per-user confidence rating (personalization always; PIN-equivalent step-up only on agreeing signals; PIN stays the root credential). **Pi-heavy by design:** every panel does its own embedding + matching (multi-panel scales at zero Jetson cost); the Jetson stores profiles + applies policy only — no vision models on the Orin.
+- **Detail / executable plan:** [`docs/architecture/panel-identity-plan.md`](architecture/panel-identity-plan.md) (phases, fusion math, presence continuity, research grounding, consent gates).
+- **Now (2026-07-19):** Phase 1 voice (server sync+consent+claim gate #1415, daemon local matching #1416) and Phase 2 face (server storage — this PR; on-Pi SCRFD+MobileFaceNet module #1417) in the merge queue, all flag-dark (`SPEAKER_ID_ENABLED` / `ZOE_FACE_ID_ENABLED` off).
+- **Next:** daemon face hook (parallel with STT) + enrollment UX; then ops-enable voice speaker-ID (enroll Jason → replay gate → flip flag on the panel); Phase 2.5 HA device presence; Phase 3 confidence model + step-up.
+
 ### 📝 Ask-card live conversation + generative answer tiles
 - **Goal:** a pathway to **stay talking to Zoe**, and an Ask Zoe card that is where **Zoe creates tiles to show answers and results** — both built INTO the estate's Ask card (`touch/home.html`), not a separate page.
 - **Decision (2026-07-16):** the conversation lives in the Ask card, not a new `voice.html`-style surface — one experience, one front door, and LiveKit is transport (lazy-loaded on entry), not a surface. This is the blocker `voice.html` retirement is waiting on (operator's call: build this first, then retire it).
