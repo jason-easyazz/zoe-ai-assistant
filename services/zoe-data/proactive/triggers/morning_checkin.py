@@ -98,22 +98,38 @@ async def _build_morning_context(db, user_id: str, today: str) -> dict:
     except Exception as exc:
         log.debug("morning_checkin: portrait load failed (non-fatal): %s", exc)
 
-    # Multica board summary: pending proposals + flagged review items
+    # Multica board summary: pending proposals + flagged review items.
+    # ADMIN-ONLY: the engineering board is operator state, not companion
+    # content. Before this gate the brief told ANY user — the kiosk guest
+    # included — "there are N open items on the board; agents will triage
+    # automatically", which both leaks household engineering state to
+    # non-admins and opens a companion good-morning with dev-console noise
+    # (heard on the first live spoken brief, 2026-07-19). Doctrine: hide the
+    # engines (docs/VISION.md; the HA/MA embed-don't-expose rule). Role lookup
+    # failures fail CLOSED — no role proof, no board line.
+    caller_is_admin = False
     try:
-        from multica_client import get_multica_client  # type: ignore[import]
-        mc = get_multica_client()
-        if mc.is_configured():
-            todo_issues = await mc.list_issues(status="todo")
-            in_prog = await mc.list_issues(status="in_progress")
-            pending_count = len(todo_issues)
-            in_prog_count = len(in_prog)
-            if pending_count + in_prog_count > 0:
-                ctx["board_summary"] = {
-                    "pending": pending_count,
-                    "in_progress": in_prog_count,
-                }
+        cursor = await db.execute("SELECT role FROM users WHERE id = ?", (user_id,))
+        role_row = await cursor.fetchone()
+        caller_is_admin = bool(role_row) and str(role_row["role"] or "").lower() == "admin"
     except Exception as exc:
-        log.debug("morning_checkin: board summary load failed (non-fatal): %s", exc)
+        log.debug("morning_checkin: role lookup failed (non-fatal, board hidden): %s", exc)
+    if caller_is_admin:
+        try:
+            from multica_client import get_multica_client  # type: ignore[import]
+            mc = get_multica_client()
+            if mc.is_configured():
+                todo_issues = await mc.list_issues(status="todo")
+                in_prog = await mc.list_issues(status="in_progress")
+                pending_count = len(todo_issues)
+                in_prog_count = len(in_prog)
+                if pending_count + in_prog_count > 0:
+                    ctx["board_summary"] = {
+                        "pending": pending_count,
+                        "in_progress": in_prog_count,
+                    }
+        except Exception as exc:
+            log.debug("morning_checkin: board summary load failed (non-fatal): %s", exc)
 
     return ctx
 
