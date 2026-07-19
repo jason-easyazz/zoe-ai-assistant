@@ -4421,6 +4421,9 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
     }
     if (payload or {}).get("identified_user_id"):
         command_payload["identified_user_id"] = payload["identified_user_id"]
+    for _claim_key in ("voice_user_id", "voice_score"):
+        if (payload or {}).get(_claim_key) is not None:
+            command_payload[_claim_key] = payload[_claim_key]
 
     result = await voice_command(command_payload, caller=caller, stream=False, db=db)
     result["text"] = transcript
@@ -4586,6 +4589,9 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     }
     if (payload or {}).get("identified_user_id"):
         command_payload["identified_user_id"] = payload["identified_user_id"]
+    for _claim_key in ("voice_user_id", "voice_score"):
+        if (payload or {}).get(_claim_key) is not None:
+            command_payload[_claim_key] = payload[_claim_key]
 
     # Delegate LLM + per-sentence TTS to the existing streaming pipeline.
     # (voice_command's stream generator records the downstream llm_first_token /
