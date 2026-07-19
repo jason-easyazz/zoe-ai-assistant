@@ -588,6 +588,25 @@
   .slp .sc .nm{font-size:20px;font-weight:500}
   .slp .sc .bt{font-size:32px;font-weight:600;line-height:1}
   .slp .sc.on{background:radial-gradient(circle at 40% 28%,rgba(255,214,140,.8),rgba(255,180,90,.22));color:#3a2a10;border-color:rgba(255,205,125,.4);box-shadow:0 0 34px rgba(255,190,100,.35)}
+  /* Pinned controls on the night screen. Same pins as the dock, same kinds and
+     server-resolved icons — but the dock's pill styling is deliberately NOT
+     reused: this surface is hit in the dark, so the tiles stay large. The
+     popover geometry below is the dock's, scaled up for the same reason. */
+  .slp .sc.unavail{opacity:.42}
+  /* a scene is an event, not a state: it never carries .on, and flashes the
+     launcher accent rather than the light amber (matches the dock's rule) */
+  .slp .sc.scene.fire{background:rgba(123,150,255,.9);border-color:rgba(123,150,255,.6);color:#fff;box-shadow:0 0 34px rgba(123,150,255,.5)}
+  .slp .sc.scene.fire svg{color:#fff}
+  .slp .sc.temp{position:relative;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:16px 26px}
+  .slp .sc.temp .nm{font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.5)}
+  .slp .sc.temp .tpop{position:absolute;bottom:100%;margin-bottom:18px;left:50%;transform:translateX(-50%) translateY(10px);width:140px;height:250px;padding:20px 0 18px;border-radius:22px;background:rgba(18,16,30,.82);border:1px solid rgba(255,255,255,.14);backdrop-filter:blur(16px);box-shadow:0 20px 50px rgba(0,0,0,.6);opacity:0;pointer-events:none;transition:.28s;display:flex;flex-direction:column;align-items:center;gap:14px;z-index:50}
+  .slp .sc.temp.open .tpop{opacity:1;transform:translateX(-50%);pointer-events:auto}
+  .slp .sc.temp .tpv{font-size:27px;font-weight:700;color:#ff9d6e;font-variant-numeric:tabular-nums}
+  .slp .sc.temp .tpl{font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.6)}
+  /* wider than the dock's 15px: this is dragged half-asleep in the dark */
+  .slp .sc.temp .tsl{position:relative;width:20px;flex:1;border-radius:999px;background:rgba(255,255,255,.18);cursor:pointer;touch-action:none}
+  .slp .sc.temp .tff{position:absolute;left:0;right:0;bottom:0;border-radius:999px;background:linear-gradient(180deg,#ffb07a,#ff8a5a)}
+  .slp .sc.temp .tkn{position:absolute;left:50%;transform:translate(-50%,50%);width:36px;height:36px;border-radius:50%;background:#fff;box-shadow:0 3px 10px rgba(0,0,0,.4)}
 
   /* ROOMS — a control panel for everything in a room */
   .rm .rchips{position:absolute;top:46px;right:122px;display:flex;gap:8px}
@@ -2328,10 +2347,69 @@
     // isn't a light control returns to home.
     var slp=full.querySelector('.slp');
     if(slp)slp.addEventListener('click',function(e){if(!e.target.closest('.sc'))show('home');});
+    // The night screen shows the SAME controls as the dock. It renders from
+    // `_pcfg.pinned` — the operator's pins — not from `_ha.lights.slice(0,4)`,
+    // which is the pre-pins fallback and ignores their choice entirely. The
+    // dock's own tile markup is not reused: its CSS is `#dock`-scoped and its
+    // pills are sized for a glance at a lit screen, whereas these are hit in
+    // the dark. So the SOURCE and SEMANTICS are mirrored, the sizing is not.
+    function sleepPinHtml(p){
+      var nm=esc(p.name||''),dead=(p.available===false?' unavail':'');
+      if(p.kind==='temp'){
+        // Same data-* contract as the dock tile, so wireTempTile drives this
+        // unchanged. `min`/`max`/`step` arrive as strings — _tbounds parses.
+        var b=_tbounds(p),cur=_tnum(p.state),sp=_tnum(p.setpoint);
+        if(sp==null)sp=(cur!=null?cur:b.mn);
+        sp=_tsnap(sp,b.mn,b.mx,b.st);
+        return '<div class="sc temp'+dead+'" data-k="temp" data-eid="'+esc(p.write_eid)+'"'
+          +' data-act="'+esc(p.write_action||'set_value')+'" data-tgt="'+esc(String(sp))+'"'
+          +' data-mn="'+b.mn+'" data-mx="'+b.mx+'" data-st="'+b.st+'">'
+          +'<div class="bt">'+(cur!=null?Math.round(cur):'—')+'°</div><div class="nm">'+nm+'</div>'
+          +'<div class="tpop"><div class="tpv">'+_tfmt(sp,b.st)+'°</div>'
+          +'<div class="tsl"><div class="tff"></div><div class="tkn"></div></div>'
+          +'<div class="tpl">'+nm+'</div></div></div>';
+      }
+      if(p.kind==='scene'){
+        return '<div class="sc scene'+dead+'" data-k="scene" data-eid="'+esc(p.write_eid)+'"'
+          +' data-act="'+esc(p.write_action||'turn_on')+'">'+mdi(p.icon)+'<div class="nm">'+nm+'</div></div>';
+      }
+      // Render the server's icon. Deriving one from the domain is what drew a
+      // bulb on the fan and the TV — the same bug this screen had, since it
+      // hardcoded BULB for every tile.
+      return '<div class="sc'+(String(p.state).toLowerCase()==='on'?' on':'')+dead+'"'
+        +' data-k="toggle" data-eid="'+esc(p.write_eid)+'">'+mdi(p.icon)+'<div class="nm">'+nm+'</div></div>';
+    }
+    function wireSleepTiles(host){
+      // Explicit turn_on/turn_off from what the operator just saw, matching the
+      // dock: a blind `toggle` against a stale read flips the wrong way.
+      host.querySelectorAll('.sc[data-k="toggle"][data-eid]').forEach(function(el){el.onclick=function(){
+        var on=el.classList.toggle('on');
+        haControl({entity_id:el.getAttribute('data-eid'),action:on?'turn_on':'turn_off'})
+          .then(function(r){if(!r.ok)throw new Error('http '+r.status);})
+          .catch(function(){el.classList.toggle('on');});};});
+      host.querySelectorAll('.sc.scene[data-eid]').forEach(function(el){el.onclick=function(){
+        el.classList.add('fire');setTimeout(function(){el.classList.remove('fire');},420);
+        haControl({entity_id:el.getAttribute('data-eid'),action:el.getAttribute('data-act')||'turn_on'})
+          .catch(function(){});};});
+      host.querySelectorAll('.sc.temp').forEach(wireTempTile);
+    }
     function paint(){if(_cur!=='sleep')return;var host=document.getElementById('slDock');if(!host)return;
+      // The 30s refresh must not destroy an open temp popover mid-drag — the
+      // same guard the dock's refresh carries.
+      if(host.querySelector('.sc.temp.open'))return;
+      // pins_configured:false => nobody has chosen => keep the legacy "first
+      // few lights" fallback so a fresh panel is never empty. true with an
+      // empty list is a real choice ("show nothing") and must NOT fall back.
+      if(_pcfg&&_pcfg.pins_configured){
+        host.innerHTML=(_pcfg.pinned||[]).map(sleepPinHtml).join('');
+        wireSleepTiles(host);return;
+      }
       host.innerHTML=_ha.lights.slice(0,4).map(function(e){return '<div class="sc'+(isOn(e)?' on':'')+'" data-eid="'+esc(e.entity_id)+'">'+BULB+'<div class="nm">'+esc(friendly(e))+'</div></div>';}).join('');
       host.querySelectorAll('.sc[data-eid]').forEach(function(el){el.onclick=function(){var on=el.classList.toggle('on');haControl({entity_id:el.getAttribute('data-eid'),action:on?'turn_on':'turn_off'}).then(function(r){if(!r.ok)throw 0;}).catch(function(){el.classList.toggle('on');});};});}
-    if(_ha.loaded)paint();else loadHA(paint);
+    // Pins decide WHAT renders, so the config must be loaded before the first
+    // paint or the night screen flashes the fallback lights and then swaps.
+    function paintWhenReady(){if(_ha.loaded)paint();else loadHA(paint);}
+    if(_pcfgLoaded)paintWhenReady();else loadPanelCfg(paintWhenReady);
     // Overnight automations change lights — keep the wake toggles truthful.
     _wxTick=setInterval(function(){if(_cur==='sleep')loadHA(paint);},30000);
   }
