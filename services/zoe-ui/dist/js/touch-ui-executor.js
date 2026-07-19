@@ -1226,30 +1226,44 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             if (actionType === 'panel_announce') {
                 const text = payload.message || payload.text;
                 if (!text) return { status: 'failed', error_code: 'missing_message', error_message: 'Missing message for announce' };
-                // Always show visual toast — TTS audio is a bonus, not required for success.
+                // Visual contract unchanged: toast shown = status success. Browser
+                // TTS stays a best-effort bonus (the real speaker is the Pi voice
+                // daemon's announcement queue, P-W2.3) — but the ack's event_data
+                // now carries the TRUE audio outcome so the ledger can't report
+                // "success" for a silent announce again (the W2 false-success bug:
+                // the kiosk guest's /api/voice/speak 401 was swallowed here).
                 showToast(String(text).slice(0, 160));
                 if (payload.mode) setOrbMode(payload.mode === 'listening' ? 'listening' : 'ambient');
-                // Attempt TTS audio asynchronously — failure is non-fatal.
-                (async () => {
-                    try {
-                        const r = await api('/api/voice/speak', {
-                            method: 'POST',
-                            body: JSON.stringify({ text: String(text).slice(0, 1200) }),
-                        });
-                        if (!r.ok) return;
+                let tts = 'no_audio';
+                try {
+                    const r = await api('/api/voice/speak', {
+                        method: 'POST',
+                        body: JSON.stringify({ text: String(text).slice(0, 1200) }),
+                    });
+                    if (!r.ok) {
+                        tts = `http_${r.status}`;
+                    } else {
                         const j = await r.json();
                         const b64 = j.audio_base64;
-                        if (!b64) return;
-                        const ct = j.content_type || 'audio/wav';
-                        const bin = atob(b64);
-                        const bytes = new Uint8Array(bin.length);
-                        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-                        const blob = new Blob([bytes], { type: ct });
-                        const audio = new Audio(URL.createObjectURL(blob));
-                        audio.play().catch(() => {});
-                    } catch (_) { /* TTS optional */ }
-                })();
-                return { status: 'success' };
+                        if (b64) {
+                            const ct = j.content_type || 'audio/wav';
+                            const bin = atob(b64);
+                            const bytes = new Uint8Array(bin.length);
+                            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+                            const blob = new Blob([bytes], { type: ct });
+                            const audio = new Audio(URL.createObjectURL(blob));
+                            try {
+                                await audio.play();
+                                tts = 'played';
+                            } catch (_) {
+                                tts = 'autoplay_blocked';
+                            }
+                        }
+                    }
+                } catch (_) {
+                    tts = 'error';
+                }
+                return { status: 'success', event_data: { tts } };
             }
 
             if (actionType === 'panel_set_mode') {
@@ -1442,6 +1456,9 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             status: result.status,
             error_code: result.error_code || null,
             error_message: result.error_message || null,
+            // Handler-reported real outcome (e.g. panel_announce's TTS truth,
+            // P-W2.3) — lands in the ledger's event_data as `result`.
+            event_data: result.event_data || undefined,
             ui_context: buildContext(),
             panel_id: state.panelId,
         });
