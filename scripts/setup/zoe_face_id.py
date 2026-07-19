@@ -313,6 +313,9 @@ def match_embedding(emb: np.ndarray) -> tuple[str, float] | None:
         return None
     best_user, best_score = None, -1.0
     for p in profiles:
+        uid = p.get("user_id")
+        if not uid:
+            continue  # a row without a user can never be a claim — don't let it shadow one
         try:
             ref = np.frombuffer(base64.b64decode(p["embedding_base64"]), dtype=np.float32)
         except Exception:
@@ -324,8 +327,8 @@ def match_embedding(emb: np.ndarray) -> tuple[str, float] | None:
             continue
         score = float(np.dot(emb, ref) / denom)
         if score > best_score:
-            best_user, best_score = p.get("user_id"), score
-    if not best_user:
+            best_user, best_score = uid, score
+    if best_user is None:
         return None
     return best_user, best_score
 

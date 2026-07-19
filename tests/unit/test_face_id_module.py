@@ -37,9 +37,8 @@ spec.loader.exec_module(face)
 
 
 @pytest.fixture(autouse=True)
-def clean_cache():
-    with face._cache_lock:
-        face._cache.update({"fetched_at": 0.0, "profiles": [], "syncing": False})
+def clean_cache(monkeypatch):
+    monkeypatch.setattr(face, "_cache", {"fetched_at": 0.0, "profiles": [], "syncing": False})
     yield
 
 
