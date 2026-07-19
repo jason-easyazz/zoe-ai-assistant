@@ -2833,11 +2833,17 @@
         // was added from another panel in between: a lost update, written by us,
         // that the operator never sees. Re-read first, then append.
         return apiGet('/api/rooms').then(function(d){
-          var fresh=((d&&d.rooms)||[]).filter(function(x){return x.id===rid;})[0];
+          // Adopt the fresh read as the cache BEFORE rendering from it. Every
+          // screen below (_rmRoom, _rmList) paints from `_rooms`, so fetching
+          // fresh data and leaving the stale copy in place would show the very
+          // list this re-read exists to correct.
+          if(d&&Array.isArray(d.rooms))_rooms=d.rooms;
+          var fresh=(_rooms||[]).filter(function(x){return x.id===rid;})[0];
           if(!fresh){toast('That room no longer exists');return _rmList();}
           var next=(fresh.devices||[]).map(function(x){return {entity_id:x.entity_id};});
           // Already there (added elsewhere while this picker sat open) — the
-          // desired end state already holds, so don't write a duplicate.
+          // desired end state already holds, so don't write a duplicate. The
+          // cache is fresh now, so the detail screen shows it correctly.
           if(next.some(function(x){return x.entity_id===eid;})){return _rmRoom(rid);}
           next.push({entity_id:eid});
           return _rmSave('PUT','/api/rooms/'+encodeURIComponent(rid)+'/devices',{devices:next},
