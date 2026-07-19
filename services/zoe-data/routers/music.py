@@ -132,6 +132,28 @@ def _queue_item_artist(item: dict) -> str:
     return artist.strip() if isinstance(artist, str) else ""
 
 
+def normalize_queue_items(items: list) -> list[dict]:
+    """MA queue items -> the flat shape the panel renders and can act on.
+
+    Everything the client needs is resolved HERE so it never has to know MA's
+    payload shape. In particular `index`: MA carries TWO index-ish fields and the
+    obvious one is a trap — live MA returns ``index: 0`` for EVERY item while
+    ``sort_index`` holds the real queue position. The panel sent ``index`` to
+    play-index, so tapping any cover in the Cover Flow restarted track 1.
+    """
+    out: list[dict] = []
+    for pos, item in enumerate(i for i in items if isinstance(i, dict)):
+        sort_index = item.get("sort_index")
+        out.append({
+            **item,
+            "index": sort_index if isinstance(sort_index, int) else pos,
+            "image": _queue_item_art(item),
+            "title": _queue_item_title(item),
+            "artist": _queue_item_artist(item),
+        })
+    return out
+
+
 async def _get_queue_items(queue_id: str, limit: int = 50) -> list | None:
     try:
         async with httpx.AsyncClient(timeout=5.0) as c:
@@ -147,14 +169,13 @@ async def _get_queue_items(queue_id: str, limit: int = 50) -> list | None:
                 # renders as "[object Object]" — this endpoint used to pass MA's
                 # payload through verbatim, which is how it dodged the shared
                 # extractor that already fixed the same bug on the other paths.
-                return [
-                    {**it,
-                     "image": _queue_item_art(it),
-                     "title": _queue_item_title(it),
-                     "artist": _queue_item_artist(it)}
-                    for it in items
-                    if isinstance(it, dict)
-                ]
+                # `index` is NOT the queue position — live MA returns 0 for EVERY
+                # item while `sort_index` carries the real position. The panel
+                # sent `index` to play-index, so tapping any cover in the Cover
+                # Flow restarted track 1. Resolve the true position here (falling
+                # back to enumeration order) so the client never has to know which
+                # of MA's two index-ish fields to trust.
+                return normalize_queue_items(items)
     except Exception as exc:
         logger.debug("MA player_queues/items unreachable: %s", exc)
     return None
