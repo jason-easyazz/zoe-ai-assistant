@@ -1916,12 +1916,25 @@
     if(tabs)tabs.onclick=function(e){var b=e.target.closest('button[data-qt]');if(!b)return;
       _qtab=b.getAttribute('data-qt');tabs.querySelectorAll('button').forEach(function(x){x.classList.toggle('on',x===b);});loadQueue();};
     var qs=document.getElementById('mQSave');
-    if(qs)qs.onclick=function(){estOpen('<h3>Save queue as playlist</h3><label>Name</label><input data-f="nm" placeholder="My playlist"><div class="btns"><button data-x="cancel">Cancel</button><button class="save" data-x="save">Save</button></div>');
+    if(qs)qs.onclick=function(){if(!_qHasPlayer())return;
+      estOpen('<h3>Save queue as playlist</h3><label>Name</label><input data-f="nm" placeholder="My playlist"><div class="btns"><button data-x="cancel">Cancel</button><button class="save" data-x="save">Save</button></div>');
       var m=document.getElementById('estModal');m.querySelector('[data-x="cancel"]').onclick=estClose;
       m.querySelector('[data-x="save"]').onclick=function(){var nm=m.querySelector('[data-f="nm"]').value.trim();if(!nm){toast('Give it a name');return;}
         _qpost('queue/save',{queue_id:_music.player_id,name:nm}).then(function(r){estClose();toast(r&&r.ok?'Saved “'+nm+'”':'Couldn’t save');}).catch(function(){toast('Couldn’t save');});};};
     var qc=document.getElementById('mQClear');
-    if(qc)qc.onclick=function(){estConfirm('Clear the whole queue?',function(){_qpost('queue/clear',{queue_id:_music.player_id}).then(function(){loadQueue();setTimeout(loadMusic,400);}).catch(function(){toast('Couldn’t clear');});});};
+    if(qc)qc.onclick=function(){if(!_qHasPlayer())return;
+      estConfirm('Clear the whole queue?',function(){_qpost('queue/clear',{queue_id:_music.player_id}).then(function(){loadQueue();setTimeout(loadMusic,400);}).catch(function(){toast('Couldn’t clear');});});};
+  }
+  // Save/Clear act on a PLAYER's queue, so they need a player id. Today Browse
+  // is only reachable from the music card (#mQBtn), so loadMusic has always run
+  // and set one — but "nothing has ever played" still leaves it null, and the
+  // browse/play paths already degrade gracefully (`_music.player_id||undefined`)
+  // while these two would have posted `queue_id: null` and failed opaquely.
+  // Say so instead, rather than firing a request that cannot mean anything.
+  function _qHasPlayer(){
+    if(_music.player_id)return true;
+    toast('No speaker playing yet');
+    return false;
   }
   function wireMusic(){
     // Revisits: seed the play/pause button from the cached snapshot so the

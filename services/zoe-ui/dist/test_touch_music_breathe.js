@@ -208,7 +208,7 @@ function coverSvg(url) {
 
 function newCtx() { return { posts: [] }; }
 
-async function stub(page, ctx, base) {
+async function stub(page, ctx, base, idle) {
   // Everything OFF-ORIGIN is cover art — matched by origin, not by file
   // extension, because the real art URLs (ytimg, googleusercontent) frequently
   // have no extension at all. An extension-only matcher let those through to a
@@ -223,8 +223,8 @@ async function stub(page, ctx, base) {
     if (req.method() === 'POST') { ctx.posts.push({ url, body: JSON.parse(req.postData() || '{}') }); return json({ ok: true }); }
     if (url.includes('/api/panels/')) return json(PANEL_CFG);
     if (url.includes('/api/ha/entities')) return json(HA_ENTITIES);
-    if (url.includes('/api/music/now-playing')) return json({ available: true, now_playing: NOW_PLAYING });
-    if (url.includes('/api/music/queue/')) return json({ available: true, items: QUEUE });
+    if (url.includes('/api/music/now-playing')) return json(idle ? { available: true, now_playing: null } : { available: true, now_playing: NOW_PLAYING });
+    if (url.includes('/api/music/queue/')) return json({ available: true, items: idle ? [] : QUEUE });
     if (url.includes('/api/music/recently-played')) return json({ available: true, items: RECENT });
     if (url.includes('/api/music/playlists')) return json({ playlists: PLAYLISTS });
     if (url.includes('/api/music/players')) return json({ available: true, players: [{ player_id: PLAYER, name: 'Bedroom' }] });
@@ -234,10 +234,10 @@ async function stub(page, ctx, base) {
   });
 }
 
-async function open(browser, ctx, base) {
+async function open(browser, ctx, base, idle) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   page.on('pageerror', (e) => { throw new Error('page error: ' + e.message); });
-  await stub(page, ctx, base);
+  await stub(page, ctx, base, idle);
   await page.goto(base + '/touch/home.html', { waitUntil: 'domcontentloaded' });
   // #authov ("Who's here?") covers the screen and swallows clicks in a harness.
   await page.addStyleTag({ content: '#authov{display:none !important}' });
@@ -451,6 +451,46 @@ async function t(name, fn) {
     const clear = ctx.posts.find((p) => p.url.includes('/api/music/queue/clear'));
     assert.ok(clear, 'no queue/clear POST was made');
     assert.strictEqual(clear.body.queue_id, PLAYER);
+  });
+
+  await t('browse: Save/Clear refuse to post a null queue_id (nothing ever played)', async () => {
+    // Greptile #1429: Save and Clear lacked the `||undefined` guard the play
+    // paths have. Its stated premise was wrong (Browse is NOT a launcher tile —
+    // #mQBtn on the music card is the only route, so loadMusic always runs
+    // first), but "nothing has ever played" genuinely leaves player_id null and
+    // a POST with queue_id:null fails opaquely.
+    // Driven with a SECOND page whose now-playing is idle — the real null state,
+    // reached the real way. A test hook in production code would prove less and
+    // cost more.
+    const idleCtx = newCtx();
+    const idlePage = await open(browser, idleCtx, base, true);
+    await idlePage.click('#apps');
+    await idlePage.waitForSelector('#stage.lopen');
+    await idlePage.click('.ltile[data-id="music"]');
+    await idlePage.waitForTimeout(900);
+    await idlePage.click('#mQBtn');
+    await idlePage.waitForSelector('.brf', { timeout: 4000 });
+    await idlePage.waitForTimeout(400);
+    assert.strictEqual(await idlePage.evaluate(() => document.querySelector('#dock .pc.dnp')), null,
+      'fixture is not actually idle — a chip appeared');
+    // Check each button independently and assert BEFORE clicking the next one.
+    // Clicking both first and asserting after reads as a 30s click timeout when
+    // it fails (the unguarded first click opens a modal that eats the second
+    // click) — a real red, but an unreadable one.
+    const bad = [];
+    for (const sel of ['#mQClear', '#mQSave']) {
+      idleCtx.posts.length = 0;
+      await idlePage.click(sel);
+      await idlePage.waitForTimeout(350);
+      const modal = await idlePage.$('#estModal.on');
+      const posted = idleCtx.posts.filter((p) => /queue\/(clear|save)/.test(p.url)).map((p) => p.body);
+      if (modal) bad.push(`${sel} opened a dialog for an action that cannot run`);
+      if (posted.length) bad.push(`${sel} posted ${JSON.stringify(posted)} with no player id`);
+      if (modal) await idlePage.keyboard.press('Escape').catch(() => {});
+      await idlePage.evaluate(() => { const m = document.getElementById('estModal'); if (m) m.classList.remove('on'); });
+    }
+    assert.deepStrictEqual(bad, []);
+    await idlePage.close();
   });
 
   // ── 4. leaving music restores the dock everywhere else ───────────────────
