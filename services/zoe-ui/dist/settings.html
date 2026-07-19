@@ -805,6 +805,10 @@ function buildSections() {
         <p style="color:var(--text2);font-size:14px;margin-bottom:16px;">
           Hold the button and say a natural phrase (5–10 seconds). Repeat 3 times for best results.
         </p>
+        <label style="display:flex;align-items:center;gap:8px;justify-content:center;color:var(--text2);font-size:13px;margin-bottom:14px;cursor:pointer;">
+          <input type="checkbox" id="enroll-consent">
+          I consent to Zoe storing a voice signature (an embedding, never audio) to identify me
+        </label>
         <button class="record-btn" id="record-btn" onclick="toggleRecording()">🎙️</button>
         <div class="enroll-status" id="enroll-status" style="justify-content:center;margin-top:12px;">
           Ready to enroll
@@ -1385,10 +1389,45 @@ async function saveDisplayPrefs() {
 }
 
 /* ── Voice ────────────────────────────────────────────────── */
-let mediaRecorder = null;
-let audioChunks = [];
+/* The enroll endpoint (POST /api/voice/enroll) takes JSON
+   {"audio_base64": <16-bit PCM WAV>, "consent": bool} — resemblyzer
+   server-side needs real WAV, so we capture PCM via WebAudio and build
+   the WAV in the browser instead of MediaRecorder's webm/opus. */
+let enrollStream = null;
+let enrollCtx = null;
+let enrollProc = null;
+let enrollBuffers = [];
+let enrollSampleRate = 16000;
 let isRecording = false;
 let enrollSamples = 0;
+
+function encodeWav(float32Chunks, sampleRate) {
+  let length = 0;
+  for (const c of float32Chunks) length += c.length;
+  const pcm = new Int16Array(length);
+  let off = 0;
+  for (const c of float32Chunks) {
+    for (let i = 0; i < c.length; i++) {
+      const s = Math.max(-1, Math.min(1, c[i]));
+      pcm[off++] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    }
+  }
+  const buf = new ArrayBuffer(44 + pcm.length * 2);
+  const v = new DataView(buf);
+  const writeStr = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  writeStr(0, 'RIFF'); v.setUint32(4, 36 + pcm.length * 2, true); writeStr(8, 'WAVE');
+  writeStr(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * 2, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  writeStr(36, 'data'); v.setUint32(40, pcm.length * 2, true);
+  new Int16Array(buf, 44).set(pcm);
+  let bin = '';
+  const bytes = new Uint8Array(buf);
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(bin);
+}
 
 async function loadVoiceProfiles() {
   const el = document.getElementById('voice-profiles-list');
@@ -1402,10 +1441,10 @@ async function loadVoiceProfiles() {
     el.innerHTML = profiles.map(p => `
       <div class="session-item">
         <div>
-          <div class="session-device">${escHtml(p.label || p.profile_id || 'Profile')}</div>
-          <div class="session-meta">${p.created_at ? 'Enrolled ' + new Date(p.created_at).toLocaleDateString() : ''}</div>
+          <div class="session-device">${escHtml(p.display_name || p.user_id || 'Profile')}</div>
+          <div class="session-meta">${p.sample_count || 1} sample${(p.sample_count || 1) > 1 ? 's' : ''}${p.consented === false ? ' — consent pending' : ''}</div>
         </div>
-        <button class="btn btn-danger btn-sm" onclick="deleteVoiceProfile('${p.profile_id}')">Delete</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteVoiceProfile('${p.id}')">Delete</button>
       </div>`).join('');
   } catch {
     el.innerHTML = '<div class="empty">Could not load voice profiles</div>';
@@ -1421,13 +1460,23 @@ async function toggleRecording() {
 }
 
 async function startRecording() {
+  if (!document.getElementById('enroll-consent').checked) {
+    toast('Please tick the consent box first', 'error');
+    document.getElementById('enroll-status').textContent = 'Consent is required to enroll';
+    return;
+  }
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    audioChunks = [];
-    mediaRecorder = new MediaRecorder(stream);
-    mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
-    mediaRecorder.onstop = uploadEnrollment;
-    mediaRecorder.start();
+    enrollStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    enrollCtx = new (window.AudioContext || window.webkitAudioContext)();
+    enrollSampleRate = enrollCtx.sampleRate;
+    const source = enrollCtx.createMediaStreamSource(enrollStream);
+    enrollBuffers = [];
+    enrollProc = enrollCtx.createScriptProcessor(4096, 1, 1);
+    enrollProc.onaudioprocess = e => {
+      if (isRecording) enrollBuffers.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+    };
+    source.connect(enrollProc);
+    enrollProc.connect(enrollCtx.destination);
     isRecording = true;
     document.getElementById('record-btn').classList.add('recording');
     document.getElementById('record-btn').textContent = '⏹';
@@ -1438,27 +1487,34 @@ async function startRecording() {
 }
 
 function stopRecording() {
-  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-    mediaRecorder.stop();
-    mediaRecorder.stream.getTracks().forEach(t => t.stop());
-  }
   isRecording = false;
+  try {
+    if (enrollProc) enrollProc.disconnect();
+    if (enrollStream) enrollStream.getTracks().forEach(t => t.stop());
+    if (enrollCtx) enrollCtx.close();
+  } catch (e) { /* teardown is best-effort */ }
   document.getElementById('record-btn').classList.remove('recording');
   document.getElementById('record-btn').textContent = '🎙️';
   document.getElementById('enroll-status').textContent = 'Processing…';
+  uploadEnrollment();
 }
 
 async function uploadEnrollment() {
-  const blob = new Blob(audioChunks, { type: 'audio/webm' });
-  const fd = new FormData();
-  fd.append('audio', blob, 'enroll.webm');
+  if (!enrollBuffers.length) {
+    document.getElementById('enroll-status').textContent = 'No audio captured — please try again';
+    return;
+  }
+  const audioBase64 = encodeWav(enrollBuffers, enrollSampleRate);
+  enrollBuffers = [];
   enrollSamples++;
-  fd.append('sample_index', enrollSamples);
   try {
     const r = await fetch('/api/voice/enroll', {
       method: 'POST',
-      headers: { 'X-Session-ID': SESSION_ID || '' },
-      body: fd,
+      headers: { 'Content-Type': 'application/json', 'X-Session-ID': SESSION_ID || '' },
+      body: JSON.stringify({
+        audio_base64: audioBase64,
+        consent: document.getElementById('enroll-consent').checked,
+      }),
     });
     if (!r.ok) throw new Error('Enroll failed');
     const data = await r.json();
