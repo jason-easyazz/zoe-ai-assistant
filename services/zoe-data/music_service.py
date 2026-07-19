@@ -383,6 +383,264 @@ async def transfer(target_player_id: str, source_player_id: str = "") -> bool:
     return True
 
 
+# ── Multi-room: speaker grouping ─────────────────────────────────────────────
+# Grouping is ADDITIVE to `transfer`: transfer MOVES playback to one speaker,
+# grouping SPREADS it across several. Both stay available.
+#
+# MA's grouping state is spread over five fields with non-obvious semantics
+# (verified live against MA 2.8.7 schema 29 + the pinned source at
+# music_assistant/models/player.py):
+#   - `group_members`  — for a normal sync LEADER this includes the leader's OWN
+#     id as the FIRST entry (`__final_group_members`, player.py:1837), and is []
+#     when the player leads nobody. For a `type == "group"` player it is the
+#     child list and does NOT contain the group player itself.
+#   - `synced_to`      — set on a FOLLOWER: the id of its sync leader.
+#   - `active_group`   — set on a member of a permanent/virtual group player.
+#   - `group_childs`   — the children of a group player (mirrors group_members
+#     there). Not authoritative for sync groups; we read `group_members`.
+#   - `static_group_members` — non-empty => a provider-defined FIXED group (the
+#     Chromecast "House" group here). Its membership is not editable via MA, so
+#     the panel must not offer a member picker for it.
+#
+# The panel gets flat, already-resolved fields — it must never re-derive any of
+# the above from MA's payload shape.
+
+_GROUP_FEATURE = "set_members"
+
+
+def _player_name(player: dict[str, Any]) -> str:
+    """A human display name, never empty (falls back to the opaque id)."""
+    for key in ("display_name", "name"):
+        value = player.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return str(player.get("player_id") or "")
+
+
+def _supports_grouping(player: dict[str, Any]) -> bool:
+    features = player.get("supported_features") or []
+    return isinstance(features, list) and _GROUP_FEATURE in features
+
+
+def _is_static_group(player: dict[str, Any]) -> bool:
+    """A provider-defined fixed group (e.g. a Chromecast speaker group)."""
+    return bool(player.get("static_group_members"))
+
+
+def resolve_can_group_with(player: dict[str, Any],
+                           players: list[dict[str, Any]]) -> list[str]:
+    """The real player ids `player` can group with.
+
+    MA documents TWO shapes for `can_group_with` (player.py:307-315): a set of
+    player_ids, OR "just the provider's instance_id if all players can group
+    with each other". This house returns the player-id form (verified live: no
+    unresolvable ids across all 14 players), but the provider form is a
+    supported payload, so an id matching a PROVIDER expands to that provider's
+    players. Unknown ids are dropped rather than passed to the panel as ghost
+    entries; the player's own id is never included.
+    """
+    raw = player.get("can_group_with") or []
+    if not isinstance(raw, (list, set, tuple)):
+        return []
+    self_id = player.get("player_id")
+    by_id = {p.get("player_id") for p in players}
+    resolved: list[str] = []
+    for entry in raw:
+        if not isinstance(entry, str) or not entry:
+            continue
+        if entry in by_id:
+            candidates = [entry]
+        else:
+            # provider-instance form: every player of that provider
+            candidates = [str(p.get("player_id")) for p in players
+                          if p.get("provider") == entry and p.get("player_id")]
+        for candidate in candidates:
+            if candidate != self_id and candidate not in resolved:
+                resolved.append(candidate)
+    return resolved
+
+
+def resolve_group_role(player: dict[str, Any]) -> tuple[str, str]:
+    """(role, leader_id) for one player. role ∈ solo | leader | follower.
+
+    Follower wins over leader: MA sets `synced_to`/`active_group` on a member,
+    and a member never carries members of its own (`__final_group_members`
+    returns [] when synced, player.py:1808-1810). `active_group` is checked
+    first because a permanent group player owns the queue for its members.
+    """
+    for key in ("active_group", "synced_to"):
+        value = player.get(key)
+        if isinstance(value, str) and value:
+            return "follower", value
+    if player.get("group_members"):
+        return "leader", str(player.get("player_id") or "")
+    return "solo", ""
+
+
+def build_group_view(players: list[dict[str, Any]]) -> dict[str, Any]:
+    """Flatten MA's player list into the panel's grouping view.
+
+    Pure + directly callable so the tests exercise THIS function rather than a
+    re-implementation of it. Returns the `players` + `groups` payload described
+    in `routers/music.py::music_groups`.
+    """
+    valid = [p for p in players if isinstance(p, dict) and p.get("player_id")]
+    rows: list[dict[str, Any]] = []
+    for player in valid:
+        role, leader_id = resolve_group_role(player)
+        rows.append({
+            "player_id": str(player.get("player_id")),
+            "name": _player_name(player),
+            # Two speakers here are both named "Bedroom" (a Sonos zone and an
+            # AirPlay endpoint) — the panel needs `provider` to disambiguate
+            # them in the picker, so it is resolved rather than left to MA.
+            "provider": str(player.get("provider") or ""),
+            "available": bool(player.get("available")),
+            "powered": bool(player.get("powered")),
+            "state": str(player.get("playback_state") or player.get("state") or ""),
+            "is_group_player": player.get("type") == "group",
+            "is_static_group": _is_static_group(player),
+            "can_lead": _supports_grouping(player),
+            "can_group_with": resolve_can_group_with(player, valid),
+            "role": role,
+            "grouped": role != "solo",
+            "leader_id": leader_id,
+        })
+
+    by_id = {r["player_id"]: r for r in rows}
+
+    # Members per leader. A sync leader already lists itself first; a group
+    # player does not, so the leader is prepended only when it is a real
+    # speaker in its own right.
+    members: dict[str, list[str]] = {}
+    for player in valid:
+        pid = str(player.get("player_id"))
+        role, _ = resolve_group_role(player)
+        if role != "leader":
+            continue
+        listed = [str(m) for m in (player.get("group_members") or [])
+                  if isinstance(m, str) and m]
+        ordered = [m for m in listed if m != pid]
+        members[pid] = ordered if player.get("type") == "group" else [pid, *ordered]
+
+    # Followers whose leader did not advertise them (provider lag) still belong
+    # to the group — otherwise a speaker vanishes from the UI mid-regroup.
+    for row in rows:
+        if row["role"] == "follower" and row["leader_id"]:
+            members.setdefault(row["leader_id"], [])
+            if row["player_id"] not in members[row["leader_id"]]:
+                members[row["leader_id"]].append(row["player_id"])
+
+    for row in rows:
+        source = row["player_id"] if row["role"] == "leader" else row["leader_id"]
+        row["group_member_ids"] = list(members.get(source, []))
+
+    groups = []
+    for leader_id, member_ids in members.items():
+        leader = by_id.get(leader_id)
+        groups.append({
+            "leader_id": leader_id,
+            "leader_name": leader["name"] if leader else leader_id,
+            "is_virtual_leader": bool(leader and leader["is_group_player"]),
+            "is_static": bool(leader and leader["is_static_group"]),
+            "member_ids": list(member_ids),
+            "member_names": [by_id[m]["name"] if m in by_id else m for m in member_ids],
+        })
+    groups.sort(key=lambda g: g["leader_name"].lower())
+    return {"players": rows, "groups": groups}
+
+
+async def get_speaker_groups() -> Optional[dict[str, Any]]:
+    """The grouping view, or None when MA is unreachable.
+
+    None (not {}) distinguishes "MA is down" from "MA has no players", so the
+    router can say `available: false` instead of implying an empty house.
+    """
+    raw = await _ma("players/all")
+    if raw is None:
+        return None
+    return build_group_view(_as_list(raw))
+
+
+async def group_players(target_player_id: str,
+                        add: Optional[list[str]] = None,
+                        remove: Optional[list[str]] = None) -> dict[str, Any]:
+    """Join and/or unjoin players to/from `target_player_id` in ONE call.
+
+    Maps to MA's `players/cmd/set_members`, which takes both lists together so a
+    multi-select picker applies its whole selection atomically instead of
+    emitting a burst of per-speaker calls that race each other.
+
+    Best-effort, never raises. Unknown ids are only rejected when we could
+    actually SEE the player list: `_ma` returns None on transport failure, and
+    treating that as "no such player" would lock the operator out of their own
+    speakers during an MA outage (the same class of bug already documented in
+    `routers/AGENTS.md`). When the list is unavailable we forward the command
+    and let MA arbitrate.
+    """
+    target = str(target_player_id or "")
+    if not target:
+        return {"ok": False, "reason": "missing target_player_id"}
+    to_add = [str(p) for p in (add or []) if p]
+    to_remove = [str(p) for p in (remove or []) if p]
+    if not to_add and not to_remove:
+        return {"ok": False, "reason": "nothing to add or remove"}
+    if target in to_add:
+        return {"ok": False, "reason": "target cannot join itself"}
+
+    raw = await _ma("players/all")
+    if raw is not None:
+        players = _as_list(raw)
+        by_id = {p.get("player_id"): p for p in players if isinstance(p, dict)}
+        if players and target not in by_id:
+            return {"ok": False, "reason": "unknown target_player_id"}
+        leader = by_id.get(target)
+        # Static first: a fixed provider group also lacks `set_members`, and
+        # "membership is fixed" is the reason the panel can actually act on.
+        if leader is not None and _is_static_group(leader):
+            return {"ok": False, "reason": "target is a fixed provider group"}
+        if leader is not None and not _supports_grouping(leader):
+            return {"ok": False, "reason": "target player does not support grouping"}
+        unknown = [p for p in (*to_add, *to_remove) if players and p not in by_id]
+        if unknown:
+            return {"ok": False, "reason": f"unknown player_id: {unknown[0]}"}
+
+    ok = await _ma_ok(
+        "players/cmd/set_members",
+        target_player=target,
+        player_ids_to_add=to_add or None,
+        player_ids_to_remove=to_remove or None,
+    )
+    result = {"ok": ok, "target_player_id": target, "added": to_add, "removed": to_remove}
+    if not ok:
+        # EVERY failure carries `reason` — a caller that reads it on ok:false
+        # must never hit a KeyError just because the failure came from MA
+        # rejecting the command rather than from local validation.
+        result["reason"] = "music assistant rejected the group command"
+    return result
+
+
+async def ungroup_player(player_id: str) -> dict[str, Any]:
+    """Remove one player from whatever group it is in.
+
+    Deliberately NOT expressed as `group_players(remove=[id])`: the caller does
+    not know which target to remove FROM, and the answer differs by topology —
+    a permanent-group member unjoins from `active_group`, a sync member from
+    `synced_to`, and a LEADER dissolves its whole group. MA's
+    `players/cmd/ungroup` already owns that disambiguation
+    (controller.py:1211-1240); re-deriving it here would be a second, drifting
+    copy of provider logic Zoe does not own.
+    """
+    pid = str(player_id or "")
+    if not pid:
+        return {"ok": False, "reason": "missing player_id"}
+    ok = await _ma_ok("players/cmd/ungroup", player_id=pid)
+    if not ok:
+        return {"ok": False, "player_id": pid,
+                "reason": "music assistant rejected the ungroup command"}
+    return {"ok": True, "player_id": pid}
+
+
 async def search_and_play(query: str, player_id: str = "",
                           radio_mode: bool = False,
                           zoe_user_id: str = "") -> Optional[dict[str, Any]]:

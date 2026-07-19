@@ -878,12 +878,118 @@ def _espeak_local(text: str) -> None:
         log.debug("espeak-ng fallback failed: %s", exc)
 
 
-def _identify_speaker_from_wav(wav_bytes: bytes) -> str | None:
-    """Compute resemblyzer embedding and POST to Jetson /api/voice/identify.
+# ── Speaker-ID profile cache (local matching) ────────────────────────────────
+# The Jetson stays storage+policy only: this daemon pulls consented profile
+# embeddings from GET /api/voice/profiles/sync, cosine-matches locally, and
+# sends only a {voice_user_id, voice_score} CLAIM per turn — the server applies
+# its own threshold (a panel can claim, never decide). Cache persists to disk
+# (0600 — it holds biometric embeddings) so a server outage doesn't blind us.
+_PROFILE_CACHE_PATH = os.path.expanduser("~/.zoe-voice/speaker_profiles.json")
+_PROFILE_SYNC_TTL_S = float(os.environ.get("SPEAKER_ID_SYNC_TTL_S", "3600"))
+_profile_cache: dict = {"fetched_at": 0.0, "profiles": [], "syncing": False}
+_profile_cache_lock = threading.Lock()
 
-    Returns the identified user_id string, or None if identification fails or
-    resemblyzer is unavailable. Uses a module-level cached VoiceEncoder to
-    avoid the ~60s reload cost on Pi hardware.
+
+def _load_profile_cache_from_disk() -> None:
+    try:
+        with open(_PROFILE_CACHE_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data.get("profiles"), list):
+            with _profile_cache_lock:
+                # fetched_at stays 0 so the first sync still refreshes.
+                _profile_cache["profiles"] = data["profiles"]
+            log.info("Speaker profiles loaded from disk: %d", len(data["profiles"]))
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        log.debug("speaker profile cache load failed: %s", exc)
+
+
+def _sync_speaker_profiles(force: bool = False) -> None:
+    """Refresh the local profile cache from the server (TTL-gated).
+
+    The `syncing` flag makes TTL expiry single-flight: when many concurrent
+    turns cross the TTL together, only the first fetches — the rest keep
+    matching against the (still valid) cached profiles.
+    """
+    with _profile_cache_lock:
+        fresh = (time.time() - _profile_cache["fetched_at"]) < _PROFILE_SYNC_TTL_S
+        if (fresh and not force) or _profile_cache["syncing"]:
+            return
+        _profile_cache["syncing"] = True
+    try:
+        r = requests.get(
+            f"{ZOE_URL}/api/voice/profiles/sync",
+            headers=_headers, timeout=10, verify=VERIFY_SSL,
+        )
+        r.raise_for_status()
+        data = r.json()
+        profiles = data.get("profiles") or []
+        with _profile_cache_lock:
+            _profile_cache["fetched_at"] = time.time()
+            _profile_cache["profiles"] = profiles
+        try:
+            os.makedirs(os.path.dirname(_PROFILE_CACHE_PATH), mode=0o700, exist_ok=True)
+            fd = os.open(_PROFILE_CACHE_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump({"profiles": profiles}, f)
+        except Exception as exc:
+            log.debug("speaker profile cache persist failed: %s", exc)
+        log.info("Speaker profiles synced: %d", len(profiles))
+    except Exception as exc:
+        with _profile_cache_lock:
+            cached_count = len(_profile_cache["profiles"])
+        log.debug("speaker profile sync failed (keeping cached %d): %s",
+                  cached_count, exc)
+    finally:
+        with _profile_cache_lock:
+            _profile_cache["syncing"] = False
+
+
+def _match_speaker_local(embedding) -> tuple[str, float] | None:
+    """Cosine-match an embedding against the cached profiles.
+
+    Returns (user_id, score) for the best match, or None when no profiles are
+    cached. The ACCEPTANCE decision is the server's — we always send the best
+    claim with its raw score.
+    """
+    import base64 as _b64
+    import numpy as _np
+
+    with _profile_cache_lock:
+        profiles = list(_profile_cache["profiles"])
+    if not profiles:
+        return None
+    best_user, best_score = None, -1.0
+    for p in profiles:
+        uid = p.get("user_id")
+        if not uid:
+            continue
+        try:
+            ref = _np.frombuffer(_b64.b64decode(p["embedding_base64"]), dtype=_np.float32)
+            if ref.shape != _np.shape(embedding):
+                continue  # model-version mismatch — skip this row, keep the rest
+            denom = float(_np.linalg.norm(embedding) * _np.linalg.norm(ref))
+            if denom <= 0:
+                continue
+            score = float(_np.dot(embedding, ref) / denom)
+        except Exception:
+            continue  # one bad row must never cost the whole turn's speaker ID
+        if score > best_score:
+            best_user, best_score = uid, score
+    if best_user is None:
+        return None
+    return best_user, best_score
+
+
+def _identify_speaker_from_wav(wav_bytes: bytes) -> tuple[str, float] | None:
+    """Compute a resemblyzer embedding and identify the speaker.
+
+    Matches locally against the synced profile cache (preferred — keeps the
+    Jetson model-free) and falls back to POST /api/voice/identify when no
+    profiles are cached (older server / first run). Returns (user_id, score);
+    the remote fallback reports the server's confidence. None when speaker ID
+    is disabled, resemblyzer is unavailable, or nothing matched.
     """
     if not SPEAKER_ID_ENABLED:
         return None
@@ -906,11 +1012,19 @@ def _identify_speaker_from_wav(wav_bytes: bytes) -> str | None:
             except OSError:
                 pass
 
+        _sync_speaker_profiles()
+        local = _match_speaker_local(embedding)
+        if local is not None:
+            return local
+
         emb_bytes = embedding.astype(_np.float32).tobytes()
         emb_b64 = _b64.b64encode(emb_bytes).decode()
         resp = _api_post("/api/voice/identify", {"embedding_base64": emb_b64}, timeout=5)
         if resp.get("identified"):
-            return resp.get("user_id")
+            uid = resp.get("user_id")
+            if not uid:
+                return None  # legacy server echoed identified without a user
+            return uid, float(resp.get("confidence") or 1.0)
         return None
     except ImportError:
         return None
@@ -1044,11 +1158,11 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     import time as _time
 
     audio_b64_wav = base64.b64encode(wav).decode()
-    identified_user_id = None
+    voice_claim: tuple[str, float] | None = None
     try:
-        identified_user_id = _identify_speaker_from_wav(wav)
-        if identified_user_id:
-            log.info("Speaker identified: %s", identified_user_id)
+        voice_claim = _identify_speaker_from_wav(wav)
+        if voice_claim:
+            log.info("Speaker claim: %s (%.3f)", voice_claim[0], voice_claim[1])
     except Exception:
         pass
     _last_turn_flags.clear()
@@ -1057,8 +1171,9 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
         # Tell the server we're inside an open conversation so ender phrases
         # ("that's all", "goodbye") are honoured; outside one they never fire.
         payload["conversation"] = True
-    if identified_user_id:
-        payload["identified_user_id"] = identified_user_id
+    if voice_claim:
+        # A claim + raw score; the server applies its own threshold.
+        payload["voice_user_id"], payload["voice_score"] = voice_claim
 
     url = f"{ZOE_URL}/api/voice/turn_stream"
     _barge_in_requested.clear()
@@ -1225,19 +1340,20 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
     audio_b64_wav = base64.b64encode(wav).decode()
     _t_encode = _time.monotonic() - _t_pi_start
 
-    identified_user_id: str | None = None
+    voice_claim: tuple[str, float] | None = None
     _t_vid_start = _time.monotonic()
     try:
-        identified_user_id = _identify_speaker_from_wav(wav)
-        if identified_user_id:
-            log.info("Speaker identified: %s", identified_user_id)
+        voice_claim = _identify_speaker_from_wav(wav)
+        if voice_claim:
+            log.info("Speaker claim: %s (%.3f)", voice_claim[0], voice_claim[1])
     except Exception:
         pass
     _t_vid = _time.monotonic() - _t_vid_start
 
     turn_payload: dict = {"audio_base64": audio_b64_wav, "panel_id": PANEL_ID}
-    if identified_user_id:
-        turn_payload["identified_user_id"] = identified_user_id
+    if voice_claim:
+        # A claim + raw score; the server applies its own threshold.
+        turn_payload["voice_user_id"], turn_payload["voice_score"] = voice_claim
 
     # Run the turn in a thread so we can play a buffer phrase ONLY when the
     # answer is actually slow. Fast/cached turns (~0.5s) return before the delay
@@ -1697,9 +1813,17 @@ def main():
     else:
         log.info("Barge-in disabled (BARGE_IN_ENABLED=false).")
 
-    # Pre-warm resemblyzer encoder in background so first command isn't delayed.
+    # Pre-warm resemblyzer encoder in background so first command isn't delayed,
+    # and pull the speaker-profile cache (disk copy first so a server outage
+    # doesn't blind local matching, then a fresh sync).
     if SPEAKER_ID_ENABLED:
         threading.Thread(target=_get_voice_encoder, daemon=True, name="resemblyzer-warmup").start()
+
+        def _profile_warmup() -> None:
+            _load_profile_cache_from_disk()
+            _sync_speaker_profiles(force=True)
+
+        threading.Thread(target=_profile_warmup, daemon=True, name="speaker-profile-sync").start()
 
     _ambient_thread = threading.Thread(
         target=_ambient_capture_thread, daemon=True, name="ambient-capture"
