@@ -459,13 +459,36 @@ def _payload(**overrides):
 def test_payload_is_flat_and_resolved():
     payload = _payload(stored_pins=validate_pins([TEMP_PIN]))
     # Flat: no nested "preferences"/"config" envelope for the client to unwrap.
+    # The room is carried as three flat fields for the same reason — the client
+    # gets the id to write back and the name to show without unwrapping an
+    # object or making a second call.
     assert set(payload) == {
         "device_id", "location", "default_player", "default_player_source",
         "pins_configured", "pinned", "unresolved", "ha_available", "max_pins",
+        "room_id", "room_name", "room_slug",
     }
     assert payload["location"] == "kitchen"
     # Already-resolved: the dock knows what it renders without a 2nd round-trip.
     assert payload["pinned"][0]["friendly_name"] == "Current Temperature"
+
+
+def test_room_fields_are_null_when_the_panel_is_in_no_room():
+    """Every room field is present-but-null, never absent: the client must not
+    have to branch on key existence (the same rule the pins carry)."""
+    payload = _payload(stored_pins=None)
+    assert payload["room_id"] is None
+    assert payload["room_name"] is None
+    assert payload["room_slug"] is None
+
+
+def test_room_is_resolved_to_id_name_and_slug():
+    payload = _payload(
+        stored_pins=None,
+        room={"id": "r-1", "name": "Bedroom", "slug": "bedroom"},
+    )
+    assert payload["room_id"] == "r-1"
+    assert payload["room_name"] == "Bedroom", "the panel shows the name, not the id"
+    assert payload["room_slug"] == "bedroom"
 
 
 def test_every_pin_has_a_stable_key_set_regardless_of_kind():
@@ -595,6 +618,143 @@ def _client(db, monkeypatch, user=None):
     app.dependency_overrides[get_db] = lambda: db
     app.dependency_overrides[get_current_user] = lambda: user or {"user_id": "jason"}
     return TestClient(app)
+
+
+# ── real-SQL round trip for the panel's room ─────────────────────────────────
+# The rest of this file drives a FAKE db, which is right for the pure resolution
+# rules but cannot see the shape of the statements. The room work added a column
+# to an INSERT ... ON CONFLICT ... RETURNING, and getting that column list wrong
+# fails SILENTLY on the insert path (a panel that was never registered): the
+# write reports 200 and the value is simply dropped. Only real SQL catches it.
+
+
+class _SqliteCursor:
+    """Await-able wrapper over a real sqlite3 cursor."""
+
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    async def fetchone(self):
+        return self._cursor.fetchone()
+
+    async def fetchall(self):
+        return self._cursor.fetchall()
+
+
+class _SqliteDb:
+    """The router's async db interface backed by REAL sqlite3.
+
+    Deliberately NOT aiosqlite: that binds the connection to the loop it was
+    created on, and TestClient drives the app on its own loop — which made these
+    tests pass alone and error inside the full suite. sqlite3 is synchronous, so
+    these coroutines are loop-agnostic while still executing the actual SQL,
+    which is the whole point (a fake cursor cannot see a column missing from an
+    INSERT).
+    """
+
+    def __init__(self, path):
+        import sqlite3
+
+        self._conn = sqlite3.connect(path, check_same_thread=False)
+        self._conn.row_factory = sqlite3.Row
+
+    async def execute(self, sql, params=()):
+        return _SqliteCursor(self._conn.execute(sql, params))
+
+    async def commit(self):
+        self._conn.commit()
+
+    def close(self):
+        self._conn.close()
+
+
+@pytest.fixture
+def sqlite_db(tmp_path):
+    db = _SqliteDb(str(tmp_path / "panels.db"))
+    db._conn.execute(
+        "CREATE TABLE panels (panel_id TEXT PRIMARY KEY, name TEXT, location TEXT,"
+        " default_player TEXT, pinned TEXT, room_id TEXT, updated_at TIMESTAMP)"
+    )
+    db._conn.execute(
+        "CREATE TABLE rooms (id TEXT PRIMARY KEY, name TEXT NOT NULL,"
+        " slug TEXT NOT NULL UNIQUE, ha_area_id TEXT)"
+    )
+    db._conn.execute("INSERT INTO rooms (id, name, slug) VALUES ('r-bed', 'Bedroom', 'bedroom')")
+    db._conn.commit()
+    yield db
+    db.close()
+
+
+def test_room_survives_the_insert_path_for_an_unregistered_panel(sqlite_db, monkeypatch):
+    """A panel with no `panels` row yet must still get its room stored.
+
+    This is the insert branch of ON CONFLICT. If `room_id` is missing from the
+    INSERT column list the request still returns 200 and the room silently
+    vanishes — which is exactly the bug this test exists to hold down.
+    """
+    client = _client(sqlite_db, monkeypatch)
+    response = client.put("/api/panels/brand-new-panel/config", json={"room_id": "r-bed"})
+    assert response.status_code == 200
+    assert response.json()["room_id"] == "r-bed"
+    assert response.json()["room_name"] == "Bedroom"
+
+    # And it is actually persisted, not just echoed back.
+    fresh = client.get("/api/panels/brand-new-panel/config")
+    assert fresh.json()["room_id"] == "r-bed"
+    assert fresh.json()["room_name"] == "Bedroom"
+
+
+def test_room_survives_the_conflict_path_for_an_existing_panel(sqlite_db, monkeypatch):
+    client = _client(sqlite_db, monkeypatch)
+    client.put("/api/panels/zoe-touch-pi/config", json={"location": "bedroom"})
+    response = client.put("/api/panels/zoe-touch-pi/config", json={"room_id": "r-bed"})
+    assert response.status_code == 200
+    assert response.json()["room_id"] == "r-bed"
+    # A partial write must not clobber the field it did not mention.
+    assert response.json()["location"] == "bedroom"
+
+
+def test_setting_a_room_does_not_disturb_the_pins(sqlite_db, monkeypatch):
+    """Partial-write independence, now across four columns rather than three."""
+    client = _client(sqlite_db, monkeypatch)
+    client.put("/api/panels/zoe-touch-pi/config", json={
+        "pinned": [{"entity_id": "input_boolean.fan", "name": "Fan"}]})
+    response = client.put("/api/panels/zoe-touch-pi/config", json={"room_id": "r-bed"})
+    assert [p["name"] for p in response.json()["pinned"]] == ["Fan"]
+    assert response.json()["room_id"] == "r-bed"
+
+
+def test_unknown_room_is_rejected(sqlite_db, monkeypatch):
+    """The rooms table is LOCAL, so an empty lookup genuinely means "no such
+    room" — unlike the MA player list, where empty means "cannot validate"."""
+    client = _client(sqlite_db, monkeypatch)
+    response = client.put("/api/panels/zoe-touch-pi/config", json={"room_id": "r-nope"})
+    assert response.status_code == 400
+    assert "room" in response.json()["detail"].lower()
+
+
+def test_room_can_be_cleared(sqlite_db, monkeypatch):
+    client = _client(sqlite_db, monkeypatch)
+    client.put("/api/panels/zoe-touch-pi/config", json={"room_id": "r-bed"})
+    response = client.put("/api/panels/zoe-touch-pi/config", json={"room_id": None})
+    assert response.status_code == 200
+    assert response.json()["room_id"] is None
+
+
+def test_a_deleted_room_degrades_to_no_room_rather_than_breaking_boot(sqlite_db, monkeypatch):
+    """The room is deleted out from under a panel. Its config GET must still
+    succeed — a panel that cannot boot because of a dangling id is worse than
+    one that reports having no room."""
+    client = _client(sqlite_db, monkeypatch)
+    client.put("/api/panels/zoe-touch-pi/config", json={"room_id": "r-bed"})
+
+    sqlite_db._conn.execute("DELETE FROM rooms WHERE id = 'r-bed'")
+    sqlite_db._conn.commit()
+
+    response = client.get("/api/panels/zoe-touch-pi/config")
+    assert response.status_code == 200
+    assert response.json()["room_id"] is None
+    assert response.json()["room_name"] is None
 
 
 def test_route_get_is_reachable_without_auth_headers():
