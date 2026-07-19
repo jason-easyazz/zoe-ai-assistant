@@ -1650,7 +1650,14 @@ def voice_command(pa: pyaudio.PyAudio, oww, wake_stream=None) -> None:
             time.sleep(POST_PLAY_TAIL_S)
     finally:
         _recording_active.clear()
-        _ignore_wake_until = time.monotonic() + POST_PLAY_COOLDOWN_S
+        # NEVER SHORTEN an active wake guard (Greptile, PR #1423): an orb-tap
+        # voice_command that completes while _speak_announcement's playback is
+        # still pumping would otherwise cut the announcement's 600s guard down
+        # to 1.5s — re-arming wake mid-announcement and inviting the echo
+        # false-wake loop these cooldowns exist to prevent. max() keeps the
+        # later deadline; the announcement's own finally releases it when
+        # playback actually ends.
+        _ignore_wake_until = max(_ignore_wake_until, time.monotonic() + POST_PLAY_COOLDOWN_S)
         try:
             oww.reset()
         except Exception as exc:
