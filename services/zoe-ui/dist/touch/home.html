@@ -1234,6 +1234,7 @@
     'mdi:palette-outline':'<path d="M12 3.2a8.8 8.8 0 0 0 0 17.6c1.2 0 1.9-.8 1.9-1.7 0-.9-.7-1.4-.7-2.1 0-.8.6-1.4 1.5-1.4h1.6a4.4 4.4 0 0 0 4.5-4.5c0-4.3-4-7.9-8.8-7.9z"/><circle cx="7.4" cy="11.4" r="1.1"/><circle cx="10.2" cy="7.2" r="1.1"/><circle cx="15.2" cy="8" r="1.1"/>',
     'mdi:toggle-switch-outline':'<rect x="2.5" y="7" width="19" height="10" rx="5"/><circle cx="16.4" cy="12" r="2.6"/>',
     'mdi:lightbulb-outline':'<path d="M9.2 20h5.6"/><path d="M10 22.5h4"/><path d="M12 2.5a6.5 6.5 0 0 0-4.2 11.4c.8.7 1.2 1.4 1.2 2.6h6c0-1.2.4-1.9 1.2-2.6A6.5 6.5 0 0 0 12 2.5z"/>',
+    'mdi:door':'<path d="M3.5 21h17"/><path d="M6 21V4.2a1.2 1.2 0 0 1 1.4-1.2l9 1.3a1.2 1.2 0 0 1 1.1 1.2V21"/><circle cx="14.8" cy="12.4" r="1"/>',
     '_':'<circle cx="12" cy="12" r="8.6"/><path d="M12 8.4v4.2"/><path d="M12 15.8h.01"/>'
   };
   function mdi(name){return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'+(MDI[name]||MDI['_'])+'</svg>';}
@@ -2656,15 +2657,201 @@
              :_pcfg.default_player_source==='panel'?' <small style="color:var(--ink-faint)">(this panel)</small>':'';
       var n=(_pcfg.pinned||[]).length;
       var pins=_pcfg.pins_configured?(n+' of '+_pcMax()):'Not set — showing whatever HA lists first';
+      // The panel's ROOM is the structured "where am I" — it is what will let
+      // "turn off the light" mean the light in HERE. `location` is the older
+      // free-text label and stays below it, unlinked, rather than being
+      // silently mirrored (nothing reads it for behaviour).
+      var room=_pcfg.room_name||'Not set';
       el.innerHTML=
-         '<div class="srow2" data-p="loc"><span>Location</span><span class="chev2" style="margin-left:auto;color:var(--ink-soft)">'+esc(loc)+' ›</span></div>'
+         '<div class="srow2" data-p="room"><span>Room</span><span class="chev2" style="margin-left:auto;color:var(--ink-soft)">'+esc(room)+' ›</span></div>'
+        +'<div class="srow2" data-p="rooms"><span>Manage rooms</span><span class="chev2" style="margin-left:auto;color:var(--ink-soft)">Rooms &amp; devices ›</span></div>'
+        +'<div class="srow2" data-p="loc"><span>Location label</span><span class="chev2" style="margin-left:auto;color:var(--ink-soft)">'+esc(loc)+' ›</span></div>'
         +'<div class="srow2" data-p="spk"><span>Default speaker</span><span class="chev2" style="margin-left:auto;color:var(--ink-soft)">'+esc(spk)+src+' ›</span></div>'
         +'<div class="srow2" data-p="pins"><span>Dock controls</span><span class="chev2" style="margin-left:auto;color:var(--ink-soft)">'+esc(pins)+' ›</span></div>';
+      el.querySelector('[data-p="room"]').onclick=_pcRoom;
+      el.querySelector('[data-p="rooms"]').onclick=_rmList;
       el.querySelector('[data-p="loc"]').onclick=_pcLocation;
       el.querySelector('[data-p="spk"]').onclick=_pcSpeaker;
       el.querySelector('[data-p="pins"]').onclick=_pcPins;
     }
     if(_pcfgLoaded)paint();else loadPanelCfg(paint);
+  }
+
+  // ── Rooms (Zoe's own; HA areas are an optional link, never the source) ──────
+  // The API is /api/rooms: GET is open (the kiosk reads it as a guest), writes
+  // need a session — the same posture as panel config, so the same `apiJson`
+  // 'auth' error path applies and surfaces the same "sign in" toast.
+  var _rooms=null;
+
+  function _rmLoad(then){
+    apiGet('/api/rooms').then(function(d){
+      _rooms=(d&&d.rooms)||[];then&&then();
+    }).catch(function(){_rooms=null;then&&then();});
+  }
+
+  function _rmSave(method,path,body,then){
+    return apiJson(method,path,body)
+      .then(function(){_rmLoad(then);})
+      .catch(function(e){
+        toast(String(e&&e.message)==='auth'?'Sign in to manage rooms':'Couldn’t save rooms');
+        throw e;});
+  }
+
+  // A touch panel makes a double-tap trivially easy, and every write here is
+  // non-idempotent: two taps on Create make two rooms, two on Delete make the
+  // second one 404. Disable the button for the life of the request rather than
+  // relying on the user being precise on a glass screen.
+  function _rmOnce(btn, run){
+    if(!btn)return;
+    btn.onclick=function(){
+      if(btn.disabled)return;
+      btn.disabled=true;
+      var done=function(){ if(btn&&btn.isConnected)btn.disabled=false; };
+      var p;
+      try{ p=run(); }catch(e){ done(); throw e; }
+      // A handler that returns nothing still gets re-enabled, so this is safe
+      // for the non-async callers too.
+      if(p&&typeof p.then==='function')p.then(done,done);else done();
+    };
+  }
+
+  // Pick which room THIS panel is in. Writes panels.room_id via panel config,
+  // so it round-trips through the same _pcSave that the other panel rows use.
+  function _pcRoom(){
+    estOpen('<h3>Which room is this panel in?</h3>'
+      +'<div class="elist"><div style="color:var(--ink-faint);font-size:18px">Loading…</div></div>'
+      +'<div class="phint">This is how Zoe knows what “in here” means — “turn off the light” will mean the light in this room.</div>'
+      +'<div class="perr"></div>'
+      +'<div class="btns"><button data-x="cancel">Cancel</button><button data-x="clear">No room</button></div>');
+    var m=document.getElementById('estModal');
+    m.querySelector('[data-x="cancel"]').onclick=estClose;
+    m.querySelector('[data-x="clear"]').onclick=function(){
+      _pcSave({room_id:null},estClose).catch(function(){});};
+    _rmLoad(function(){
+      var list=m.querySelector('.elist');if(!list)return;
+      if(_rooms===null){list.innerHTML='<div style="color:var(--ink-faint);font-size:18px">Couldn’t load rooms.</div>';return;}
+      if(!_rooms.length){
+        list.innerHTML='<div class="phint" style="margin:0">No rooms yet. Create one in “Manage rooms” first.</div>';return;}
+      var cur=_pcfg&&_pcfg.room_id;
+      list.innerHTML=_rooms.map(function(r){
+        return '<button class="eopt" data-rid="'+esc(r.id)+'">'+mdi('mdi:door')
+          +'<span class="et">'+esc(r.name)+'<small>'+(r.devices||[]).length+' device'+((r.devices||[]).length===1?'':'s')
+          +(r.id===cur?' · this panel':'')+'</small></span></button>';}).join('');
+      list.querySelectorAll('.eopt').forEach(function(b){b.onclick=function(){
+        _pcSave({room_id:b.getAttribute('data-rid')},estClose).catch(function(){});};});
+    });
+  }
+
+  function _rmList(){
+    estOpen('<h3>Rooms</h3><div class="elist"><div style="color:var(--ink-faint);font-size:18px">Loading…</div></div>'
+      +'<button class="padd" data-x="add">+ Create a room</button>'
+      +'<div class="phint">A room is Zoe’s own — you don’t need Home Assistant for it. Put devices in a room and Zoe can act on “the light in here”.</div>'
+      +'<div class="perr"></div>'
+      +'<div class="btns"><button data-x="cancel">Done</button></div>');
+    var m=document.getElementById('estModal');
+    m.querySelector('[data-x="cancel"]').onclick=estClose;
+    m.querySelector('[data-x="add"]').onclick=_rmCreate;
+    function paint(){
+      var list=m.querySelector('.elist');if(!list)return;
+      if(_rooms===null){list.innerHTML='<div style="color:var(--ink-faint);font-size:18px">Couldn’t load rooms.</div>';return;}
+      if(!_rooms.length){
+        list.innerHTML='<div class="phint" style="margin:0">No rooms yet.</div>';return;}
+      list.innerHTML=_rooms.map(function(r){
+        var n=(r.devices||[]).length;
+        return '<button class="eopt" data-rid="'+esc(r.id)+'">'+mdi('mdi:door')
+          +'<span class="et">'+esc(r.name)+'<small>'+n+' device'+(n===1?'':'s')
+          +(r.linked_to_ha?' · linked to HA':'')+'</small></span></button>';}).join('');
+      list.querySelectorAll('.eopt').forEach(function(b){b.onclick=function(){
+        _rmRoom(b.getAttribute('data-rid'));};});
+    }
+    if(_rooms!==null)paint();else _rmLoad(paint);
+  }
+
+  function _rmCreate(){
+    estOpen('<h3>Create a room</h3>'
+      +'<label>Name</label><input data-f="rn" maxlength="40" placeholder="Bedroom">'
+      +'<div class="phint">Spaces are fine — “Living Room” is a normal name.</div>'
+      +'<div class="perr"></div>'
+      +'<div class="btns"><button data-x="back">Back</button><button class="save" data-x="save">Create</button></div>');
+    var m=document.getElementById('estModal'),f=m.querySelector('[data-f="rn"]');
+    f.focus();
+    m.querySelector('[data-x="back"]').onclick=_rmList;
+    _rmOnce(m.querySelector('[data-x="save"]'), function(){
+      var name=f.value.trim();
+      if(!name){_pcErr('Give the room a name.');return;}
+      return _rmSave('POST','/api/rooms',{name:name},_rmList).catch(function(){});});
+  }
+
+  function _rmRoom(rid){
+    var r=(_rooms||[]).filter(function(x){return x.id===rid;})[0];
+    if(!r){_rmList();return;}
+    var devs=(r.devices||[]).map(function(d){
+      return '<div class="pinrow"><span class="pnm">'+esc(d.name||d.entity_id)+'</span>'
+        +'<span class="pfn">'+esc(d.entity_id)+(d.available===false?' · unavailable':'')+'</span>'
+        +'<button class="del" data-rm="'+esc(d.entity_id)+'">✕</button></div>';}).join('')
+      ||'<div class="phint" style="margin:14px 0">No devices in this room yet.</div>';
+    estOpen('<h3>'+esc(r.name)+'</h3>'
+      +devs
+      +'<button class="padd" data-x="add">+ Add a device</button>'
+      +'<div class="phint">Devices here are what “in this room” means. A device lives in one room — adding it here moves it.</div>'
+      +'<div class="perr"></div>'
+      +'<div class="btns"><button data-x="back">Back</button><button data-x="del" style="margin-left:auto">Delete room</button></div>');
+    var m=document.getElementById('estModal');
+    m.querySelector('[data-x="back"]').onclick=_rmList;
+    m.querySelector('[data-x="add"]').onclick=function(){_rmPickDevice(rid);};
+    _rmOnce(m.querySelector('[data-x="del"]'), function(){
+      // Deleting a room does NOT delete its devices — they just become
+      // unassigned — so this needs no scarier confirmation than saying so.
+      return _rmSave('DELETE','/api/rooms/'+encodeURIComponent(rid),null,_rmList).catch(function(){});});
+    m.querySelectorAll('[data-rm]').forEach(function(b){b.onclick=function(){
+      _rmSave('DELETE','/api/rooms/'+encodeURIComponent(rid)+'/devices/'
+        +encodeURIComponent(b.getAttribute('data-rm')),null,function(){_rmRoom(rid);})
+        .catch(function(){});};});
+  }
+
+  function _rmPickDevice(rid){
+    estOpen('<h3>Add a device</h3><div class="elist"><div style="color:var(--ink-faint);font-size:18px">Loading…</div></div>'
+      +'<div class="perr"></div><div class="btns"><button data-x="back">Back</button></div>');
+    var m=document.getElementById('estModal');
+    m.querySelector('[data-x="back"]').onclick=function(){_rmRoom(rid);};
+    apiGet('/api/rooms/unassigned').then(function(d){
+      var list=m.querySelector('.elist');if(!list)return;
+      var cands=(d&&d.devices)||[];
+      if(!(d&&d.ha_available)){
+        list.innerHTML='<div style="color:var(--ink-faint);font-size:18px">Home Assistant isn’t reachable, so there’s nothing to pick from yet.</div>';return;}
+      if(!cands.length){
+        list.innerHTML='<div style="color:var(--ink-faint);font-size:18px">Every device is already in a room.</div>';return;}
+      list.innerHTML=cands.map(function(e){
+        return '<button class="eopt" data-eid="'+esc(e.entity_id)+'">'+mdi(e.icon)
+          +'<span class="et">'+esc(e.name||e.entity_id)+'<small>'+esc(e.entity_id)+'</small></span></button>';}).join('');
+      list.querySelectorAll('.eopt').forEach(function(b){_rmOnce(b, function(){
+        var eid=b.getAttribute('data-eid');
+        // The devices endpoint REPLACES the room's list, so the payload must be
+        // built from the room as it is NOW — not from the `_rooms` snapshot this
+        // picker was painted from. That snapshot can be minutes old (the picker
+        // is a second screen away), and a stale one silently deletes whatever
+        // was added from another panel in between: a lost update, written by us,
+        // that the operator never sees. Re-read first, then append.
+        return apiGet('/api/rooms').then(function(d){
+          // Adopt the fresh read as the cache BEFORE rendering from it. Every
+          // screen below (_rmRoom, _rmList) paints from `_rooms`, so fetching
+          // fresh data and leaving the stale copy in place would show the very
+          // list this re-read exists to correct.
+          if(d&&Array.isArray(d.rooms))_rooms=d.rooms;
+          var fresh=(_rooms||[]).filter(function(x){return x.id===rid;})[0];
+          if(!fresh){toast('That room no longer exists');return _rmList();}
+          var next=(fresh.devices||[]).map(function(x){return {entity_id:x.entity_id};});
+          // Already there (added elsewhere while this picker sat open) — the
+          // desired end state already holds, so don't write a duplicate. The
+          // cache is fresh now, so the detail screen shows it correctly.
+          if(next.some(function(x){return x.entity_id===eid;})){return _rmRoom(rid);}
+          next.push({entity_id:eid});
+          return _rmSave('PUT','/api/rooms/'+encodeURIComponent(rid)+'/devices',{devices:next},
+            function(){_rmRoom(rid);});
+        }).catch(function(){toast('Couldn’t add the device');});});});
+    }).catch(function(){
+      var list=m.querySelector('.elist');
+      if(list)list.innerHTML='<div style="color:var(--ink-faint);font-size:18px">Couldn’t load devices.</div>';});
   }
 
   function _pcLocation(){
