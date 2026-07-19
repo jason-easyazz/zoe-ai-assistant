@@ -481,34 +481,37 @@ test('layout: play/pause stays centred and nothing collides', async (browser, ba
   assert.ok(Math.abs((pp.x + pp.w / 2) - 640) <= 2,
     'play/pause is off-centre at ' + (pp.x + pp.w / 2) + 'px (the 6th transport button unbalanced the row)');
   // The transport must not run under the launcher or the QR.
-  const ds = await box('#mDS');
+  const vt = await box('#mVolT');
   const qr = await box('#mQR');
-  assert.ok(ds.x + ds.w <= qr.x, 'dont-stop overlaps the jukebox QR');
+  assert.ok(vt.x + vt.w <= qr.x, 'the volume button overlaps the jukebox QR');
   const apps = await box('#apps');
   const shuf = await box('#mShuf');
   assert.ok(shuf.x >= apps.x + apps.w, 'the transport runs into the launcher button');
   // Everything on screen.
-  for (const s of ['#mVolWrap', '#mDS', '#mScrub', '#mFav']) {
+  for (const s of ['#mVolT', '#mDS', '#mScrub', '#mFav']) {
     const b = await box(s);
     assert.ok(b.x >= 0 && b.y >= 0 && b.x + b.w <= 1280 && b.y + b.h <= 720, s + ' is off-screen');
   }
-  // The volume pill must not sit ON the artwork. This assertion exists because
-  // the first placement (in .mtop, beside the speaker chip) did exactly that,
-  // and every other test still passed — only the screenshot showed it.
-  const vol = await box('#mVolWrap');
+  // Whatever holds the scrub's left flank must not sit ON the artwork. This
+  // assertion exists because the volume pill's first placement (in .mtop,
+  // beside the speaker chip) did exactly that, and every other test still
+  // passed — only the screenshot showed it. "Keep playing" (∞) inherited that
+  // slot when volume moved behind the transport's speaker icon, so it
+  // inherits the guard.
+  const vol = await box('#mDS');
   const covers = await page.$$eval('.mfull .cfc', (es) => es.map((e) => {
     const r = e.getBoundingClientRect();
     return { x: r.x, y: r.y, w: r.width, h: r.height };
   }));
   const hits = (a, b2) => !(a.x + a.w <= b2.x || b2.x + b2.w <= a.x || a.y + a.h <= b2.y || b2.y + b2.h <= a.y);
   const clash = covers.find((c) => hits(vol, c));
-  assert.ok(!clash, 'the volume pill overlaps cover art at x' + (clash && Math.round(clash.x)));
+  assert.ok(!clash, 'the ∞ pill overlaps cover art at x' + (clash && Math.round(clash.x)));
   // ...nor the scrub it shares a row with, nor the transport below it. (It also
   // must not cover the focused cover's ✕ remove affordance — that is what the
   // cover-overlap check above really protects.)
   for (const [sel, what] of [['#mScrub', 'the scrub bar'], ['#mTransport', 'the transport'], ['#orb', 'the orb']]) {
     const b = await box(sel);
-    assert.ok(!hits(vol, b), 'the volume pill overlaps ' + what);
+    assert.ok(!hits(vol, b), 'the ∞ pill overlaps ' + what);
   }
   // Finger-target floor for the kiosk.
   assert.ok(vol.h >= 48, 'volume pill is only ' + vol.h + 'px tall (kiosk floor is 48)');

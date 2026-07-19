@@ -83,6 +83,7 @@ const NOW_PLAYING = {
   image: 'https://i.ytimg.com/vi/x4fR5RhwyoM/maxresdefault.jpg',
   volume: 18, queue_id: PLAYER, queue_item_id: '731cd09f879c4d69a85c984f11763b59',
   queue_index: 3, shuffle: false, repeat: 'off', elapsed: 70.72586054039002, duration: 105.0,
+  dont_stop: false,
 };
 const QUEUE = [
   ['0ef566db08f146b1afb75664d2ee5ec5', 'Yes', 'lahBKZIkLDM', 126],
@@ -117,6 +118,7 @@ const PLAYLISTS = [
 // GONE on music and BACK everywhere else.
 const PANEL_CFG = {
   device_id: 'zoe-touch-pi', location: 'bedroom',
+  room_id: null, room_name: null, room_slug: null,
   default_player: PLAYER, default_player_source: 'global',
   pins_configured: true,
   pinned: [
@@ -404,15 +406,19 @@ async function t(name, fn) {
     assert.ok(await box(page, '.brf'), 'the Browse card body is not visible');
     assert.strictEqual(await page.$('#mCF'), null, 'the music card is still mounted underneath — Browse is not its own surface');
   });
-  await t('browse: standard card header — title by #home, actions by .fcog', async () => {
+  await t('browse: standard card header — title by #home, actions by .chmeta', async () => {
     const ttl = await box(page, '.chttl'), home = await box(page, '#home');
-    const meta = await box(page, '.chmeta'), cog = await box(page, '.fcog');
-    assert.ok(ttl && home && meta && cog, 'header parts missing');
+    const meta = await box(page, '.chmeta');
+    assert.ok(ttl && home && meta, 'header parts missing');
     assert.ok(ttl.x > home.r, 'title must sit beside the home button');
-    assert.ok(meta.r < cog.x, 'actions must sit beside the cog');
+    // The settings cog was removed from every card — all settings live in the
+    // Settings card, reached from the launcher. The header actions now own the
+    // top-right corner outright.
+    assert.strictEqual(await page.$('.fcog'), null, 'a per-card settings cog came back');
+    assert.ok(meta.x > ttl.x, 'actions must sit to the right of the title');
     assert.ok(await box(page, '#mQSave'), 'Save-as-playlist missing from the header');
     assert.ok(await box(page, '#mQClear'), 'Clear-queue missing from the header');
-    assert.strictEqual(overlap(meta, cog), 0, 'header actions collide with the cog');
+    assert.strictEqual(overlap(meta, ttl), 0, 'header actions collide with the title');
   });
   await t('browse: Recent tab rendered the live-shaped rows', async () => {
     const n = await page.$$eval('.mqlist.recent .rtile', (e) => e.length);

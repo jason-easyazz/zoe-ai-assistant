@@ -483,7 +483,7 @@
      card. It used to be `.mqueue` — a z44 sheet that covered #mTransport, which
      is the entire reason the dock's now-playing chip needed a "…except while the
      overlay is open" exception. As a card it gets the standard header (.chttl by
-     #home, .chmeta by .fcog), the normal full dock, and the normal chip, and
+     #home, .chmeta), the normal full dock, and the normal chip, and
      nothing overlays the music card any more. */
   .brf{position:absolute;left:56px;right:56px;top:106px;bottom:126px;display:flex;flex-direction:column}
   /* Music control lives in the dock (now-playing pill) — no in-card strip,
@@ -511,7 +511,7 @@
   .mqlist.grid .qi.pl .pcov .pcount{position:absolute;right:6px;bottom:6px;background:rgba(0,0,0,.55);border-radius:999px;padding:2px 8px;font-size:12px}
   .mqlist.grid .qi.pl .qn{margin-top:8px;white-space:normal;line-height:1.2;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   /* Favourite: the meta block is centred now, so pin it to the card's right
-     margin on the title's line (clear of .fcog at top:38 and the flow itself). */
+     margin on the title's line, clear of the flow itself. */
   .mfull .mfav{position:absolute;top:6px;right:56px;width:52px;height:52px;border-radius:50%;border:0;background:rgba(255,255,255,.08);color:rgba(255,255,255,.6);display:grid;place-items:center;cursor:pointer}
   .mfull .mfav.on{color:var(--cat-health);background:rgba(255,122,144,.16)}
   .mfull .mfav svg{width:26px;height:26px}
@@ -588,6 +588,25 @@
   .slp .sc .nm{font-size:20px;font-weight:500}
   .slp .sc .bt{font-size:32px;font-weight:600;line-height:1}
   .slp .sc.on{background:radial-gradient(circle at 40% 28%,rgba(255,214,140,.8),rgba(255,180,90,.22));color:#3a2a10;border-color:rgba(255,205,125,.4);box-shadow:0 0 34px rgba(255,190,100,.35)}
+  /* Pinned controls on the night screen. Same pins as the dock, same kinds and
+     server-resolved icons — but the dock's pill styling is deliberately NOT
+     reused: this surface is hit in the dark, so the tiles stay large. The
+     popover geometry below is the dock's, scaled up for the same reason. */
+  .slp .sc.unavail{opacity:.42}
+  /* a scene is an event, not a state: it never carries .on, and flashes the
+     launcher accent rather than the light amber (matches the dock's rule) */
+  .slp .sc.scene.fire{background:rgba(123,150,255,.9);border-color:rgba(123,150,255,.6);color:#fff;box-shadow:0 0 34px rgba(123,150,255,.5)}
+  .slp .sc.scene.fire svg{color:#fff}
+  .slp .sc.temp{position:relative;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:16px 26px}
+  .slp .sc.temp .nm{font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.5)}
+  .slp .sc.temp .tpop{position:absolute;bottom:100%;margin-bottom:18px;left:50%;transform:translateX(-50%) translateY(10px);width:140px;height:250px;padding:20px 0 18px;border-radius:22px;background:rgba(18,16,30,.82);border:1px solid rgba(255,255,255,.14);backdrop-filter:blur(16px);box-shadow:0 20px 50px rgba(0,0,0,.6);opacity:0;pointer-events:none;transition:.28s;display:flex;flex-direction:column;align-items:center;gap:14px;z-index:50}
+  .slp .sc.temp.open .tpop{opacity:1;transform:translateX(-50%);pointer-events:auto}
+  .slp .sc.temp .tpv{font-size:27px;font-weight:700;color:#ff9d6e;font-variant-numeric:tabular-nums}
+  .slp .sc.temp .tpl{font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.6)}
+  /* wider than the dock's 15px: this is dragged half-asleep in the dark */
+  .slp .sc.temp .tsl{position:relative;width:20px;flex:1;border-radius:999px;background:rgba(255,255,255,.18);cursor:pointer;touch-action:none}
+  .slp .sc.temp .tff{position:absolute;left:0;right:0;bottom:0;border-radius:999px;background:linear-gradient(180deg,#ffb07a,#ff8a5a)}
+  .slp .sc.temp .tkn{position:absolute;left:50%;transform:translate(-50%,50%);width:36px;height:36px;border-radius:50%;background:#fff;box-shadow:0 3px 10px rgba(0,0,0,.4)}
 
   /* ROOMS — a control panel for everything in a room */
   .rm .rchips{position:absolute;top:46px;right:122px;display:flex;gap:8px}
@@ -655,14 +674,11 @@
   .wloc{position:absolute;left:74px;top:150px;font-size:20px;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.82);text-shadow:0 2px 14px rgba(0,0,0,.4)}
 
   /* settings cog — per card, and per full-screen */
-  .card .cog{position:absolute;top:22px;right:22px;width:44px;height:44px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);color:var(--ink-soft);cursor:pointer;z-index:6}
   .card .cog svg{width:22px;height:22px}
   .chttl{position:absolute;top:38px;left:110px;height:48px;display:flex;align-items:center;font-size:30px;font-weight:600;letter-spacing:-.01em;z-index:30}
   .chmeta{position:absolute;top:38px;right:122px;height:48px;display:flex;align-items:center;gap:10px;font-size:20px;color:var(--ink-soft);z-index:30}
   .chmeta .chbtn{width:48px;height:48px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.2);color:#fff;cursor:pointer}
   .chmeta .chbtn svg{width:24px;height:24px}
-  .fcog{position:absolute;top:38px;right:56px;width:48px;height:48px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.2);color:#fff;cursor:pointer;z-index:30}
-  .fcog svg{width:24px;height:24px}
   .hfull .htemp{right:120px} /* clear the home cog */
 
   /* speaker / cast selection on music */
@@ -675,19 +691,47 @@
      the centre cover and the fanned side covers, which start below y88.
      Same native input as the Rooms hero (#rmVol), not a second component:
      accent-color, 40px tall for a finger, debounced write, repaint-guarded. */
-  /* On the scrub's row, left flank. The top strip cannot host this: at CF_K=1
-     the covers fan from y39 (centre) up to y78 at x310 and y91 at x234, so any
-     48px control up there clips artwork — measured, after two tries. Below the
-     covers (they end y412) the row that carries the progress bar is clear out
-     to x360 where .mscrub starts, and it sits just above the orb, so volume
-     lands next to the two other things a finger reaches for down there.
-     48px tall to stay on the kiosk's finger-target floor. */
-  .mvol{position:absolute;left:44px;bottom:150px;z-index:60;
-        display:flex;align-items:center;gap:10px;padding:5px 16px;border-radius:999px;
-        background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.22);color:rgba(255,255,255,.7)}
-  .mvol svg{width:20px;height:20px;flex:none}
-  .mvol input[type=range]{width:160px;accent-color:#fff;height:36px}
-  .mvol .vv{min-width:42px;text-align:right;font-size:17px;font-variant-numeric:tabular-nums;color:#fff}
+  /* "Keep playing" (∞) holds the scrub's left flank — the slot the volume
+     slider used to occupy, and the same measured box. The top strip cannot
+     host this: at CF_K=1 the covers fan from y39 (centre) up to y78 at x310
+     and y91 at x234, so any 48px control up there clips artwork — measured,
+     after two tries. Below the covers (they end y412) the row that carries the
+     progress bar is clear out to x360 where .mscrub starts, and it sits just
+     above the orb. 52px tall, over the kiosk's 48px finger-target floor.
+     Volume moved into the transport behind a speaker icon (see .mvolt): it is
+     a set-and-forget control and did not earn permanent screen space. */
+  .mkeep{position:absolute;left:44px;bottom:150px;z-index:60;
+         display:flex;align-items:center;gap:12px;height:52px;padding:0 20px;border-radius:999px;
+         background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.22);
+         color:rgba(255,255,255,.7);font:inherit;cursor:pointer;transition:.25s}
+  .mkeep svg{width:24px;height:24px;flex:none}
+  .mkeep .nm{font-size:17px;font-weight:500;white-space:nowrap}
+  .mkeep.on{background:rgba(123,150,255,.28);border-color:rgba(123,150,255,.45);color:#fff;
+            box-shadow:0 0 18px rgba(123,150,255,.35)}
+  /* Volume: a speaker icon in the transport (the slot ∞ vacated) opening a
+     popover, built on `.pc.temp`/`.tpop`'s pattern rather than a second one.
+     It is a DIV, not a button, for two reasons that are both load-bearing:
+     #mTransport's delegated handler matches `closest('button')`, so a div is
+     invisible to it and cannot fall through to musicControl(); and a native
+     range input inside a <button> is invalid interactive content. */
+  .mfull .mtransport .mvolt{position:relative;flex:none;width:68px;height:68px;border-radius:50%;
+        display:grid;place-items:center;color:#fff;opacity:.55;cursor:pointer;transition:.25s}
+  .mfull .mtransport .mvolt svg{width:26px;height:26px}
+  .mfull .mtransport .mvolt.open{opacity:1;background:rgba(255,255,255,.16)}
+  /* Cleared over .mscrub, not merely "above the button". At bottom:80px the
+     popover sat across the seek bar and hid the duration — it passed every
+     assertion, and only the screenshot showed it. This lands its bottom edge
+     above the scrub's top, in the band between the covers (they end y412 at
+     CF_K=1) and the progress row. Re-measure if either of those moves. */
+  .mfull .mtransport .mvolt .vpop{position:absolute;bottom:168px;left:50%;
+        transform:translateX(-50%) translateY(10px);padding:16px 20px;border-radius:20px;
+        background:rgba(18,16,30,.74);border:1px solid rgba(255,255,255,.14);backdrop-filter:blur(16px);
+        box-shadow:0 20px 50px rgba(0,0,0,.5);opacity:0;pointer-events:none;transition:.28s;
+        display:flex;align-items:center;gap:14px;cursor:default;z-index:70}
+  .mfull .mtransport .mvolt.open .vpop{opacity:1;transform:translateX(-50%);pointer-events:auto}
+  .mfull .mtransport .mvolt .vpop input[type=range]{width:200px;accent-color:#fff;height:36px;flex:none}
+  .mfull .mtransport .mvolt .vpop .vv{min-width:46px;text-align:right;font-size:17px;
+        font-variant-numeric:tabular-nums;color:#fff}
   .spk{display:flex;align-items:center;gap:11px;padding:13px 20px;border-radius:999px;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.22);color:#fff;font:inherit;font-size:19px;font-weight:500;cursor:pointer;max-width:340px}
   .spk .spkname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .spk svg{width:22px;height:22px}
@@ -875,17 +919,12 @@
   };
   function hrs(list){return list.map(function(h){return '<div class="hh"><div class="lab">'+h[0]+'</div><div class="ic" style="color:'+(h[1]==='sun'?'#ffce7a':(h[1]==='moon'?'#c7d4ff':'#e2ebf4'))+'">'+IC[h[1]]+'</div><div class="d">'+h[2]+'</div></div>';}).join('');}
 
-  var GEAR='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-7M6 7H4M20 17h-2M11 17H4"/><circle cx="9" cy="7" r="2.4"/><circle cx="15" cy="17" r="2.4"/></svg>';
   var SPKR='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2.5" width="14" height="19" rx="3"/><circle cx="12" cy="14" r="3.4"/><circle cx="12" cy="6.5" r="1"/></svg>';
-  var COG='<button class="cog" title="Settings">'+GEAR+'</button>';
   // The Ask surface is re-rendered from FULL.ask.html on every ask, so build it
   // from ONE shell — otherwise the talk control vanishes the moment Zoe answers.
-  // `cog` is opt-in because the answer re-renders have never carried the settings
-  // cog (only the idle surface does); keeping that as-is holds this PR to the
-  // conversation feature.
-  // (Hoisted: FULL's literal calls this, and GEAR is assigned above it.)
-  function askShell(inner,cog){
-    return (cog?'<div class="fcog">'+GEAR+'</div>':'')+'<div class="askf">'+inner+'</div>'
+  // (Hoisted: FULL's literal calls this.)
+  function askShell(inner){
+    return '<div class="askf">'+inner+'</div>'
       +'<button class="talkbtn" id="talkBtn" type="button" aria-pressed="false">Talk</button>';
   }
   var QICON='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>';
@@ -912,44 +951,44 @@
   var BULB='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.2 20h5.6"/><path d="M10 22.5h4"/><path d="M12 2.5a6.5 6.5 0 0 0-4.2 11.4c.8.7 1.2 1.4 1.2 2.6h6c0-1.2.4-1.9 1.2-2.6A6.5 6.5 0 0 0 12 2.5z"/></svg>';
   var FULL={
     home:{home:false, bg:DUSK, canvas:true,
-      html:'<div class="fcog">'+GEAR+'</div><div class="hfull">'
+      html:'<div class="hfull">'
         +'<div class="htemp" id="hTemp"><div class="n">—°</div><div class="c"></div></div>'
         +'<div class="hclock"><div class="ht" id="hClock">--:--</div><div class="hd" id="hDate"></div></div>'
         +'<div class="today"><div class="thk">Your Day</div><div id="hToday"></div></div>'
         +'</div>'},
     ask:{home:true, bg:GROUND, canvas:false,
-      html:askShell('<div class="aa" id="askOut" style="opacity:.55">Just ask — I’ll answer here.</div>',true)},
+      html:askShell('<div class="aa" id="askOut" style="opacity:.55">Just ask — I’ll answer here.</div>')},
     weather:{home:true, bg:DUSK, canvas:true,
-      html:'<div class="fcog">'+GEAR+'</div><div class="wloc" id="wxLoc"></div><div class="wbig"><div class="t" id="wxTemp">—°</div><div class="c" id="wxCond"></div></div><div class="whours" id="wxHours"></div>'},
+      html:'<div class="wloc" id="wxLoc"></div><div class="wbig"><div class="t" id="wxTemp">—°</div><div class="c" id="wxCond"></div></div><div class="whours" id="wxHours"></div>'},
     music:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="mvol" id="mVolWrap">'+VOL_I+'<input type="range" min="0" max="100" step="2" id="mVol" aria-label="Volume"><span class="vv" id="mVolV"></span></div><div class="mtop"><button class="spk" id="mSpk">'+SPKR+' <span class="spkname">Speaker</span> <span class="cx">▾</span></button><button class="mqbtn" id="mQBtn" title="Browse music">'+QICON+'</button></div><div class="mfull"><div class="cf" id="mCF"><div class="cf-track" id="mCFT"></div></div><div class="cfmeta"><div class="mkick" id="mKick">Now Playing</div><div class="mtitle" id="mTitle">—</div><div class="martist" id="mArtist"></div><button class="mfav" id="mFav" title="Favourite">'+HEART_I+'</button></div><div class="mscrub" id="mScrub"><div class="mtrack"><div class="mfill" id="mFill" style="width:0%"></div><div class="mknob" id="mKnob" style="left:0%"></div></div><div class="mtimes"><span id="mElapsed">0:00</span><span id="mDur">0:00</span></div></div><div class="mtransport" id="mTransport"><span class="tsp"></span><button class="sml" id="mShuf" data-a="shuffle" title="Shuffle">'+SHUF_I+'</button><button data-a="previous">'+PREV_I+'</button><button class="pp" id="mPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button><button class="sml" id="mRep" data-a="repeat" title="Repeat">'+REP_I+'</button><button class="sml" id="mDS" data-a="dontstop" title="Don&#39;t stop the music">'+DS_I+'</button></div></div><div class="mqr" id="mQR"><div class="qrbox" id="mQRCode"></div><div class="qrlab">Scan to queue</div></div>'},
+      html:'<button class="mkeep" id="mDS" type="button" title="Keep the music playing" aria-pressed="false">'+DS_I+'<span class="nm">Keep playing</span></button><div class="mtop"><button class="spk" id="mSpk">'+SPKR+' <span class="spkname">Speaker</span> <span class="cx">▾</span></button><button class="mqbtn" id="mQBtn" title="Browse music">'+QICON+'</button></div><div class="mfull"><div class="cf" id="mCF"><div class="cf-track" id="mCFT"></div></div><div class="cfmeta"><div class="mkick" id="mKick">Now Playing</div><div class="mtitle" id="mTitle">—</div><div class="martist" id="mArtist"></div><button class="mfav" id="mFav" title="Favourite">'+HEART_I+'</button></div><div class="mscrub" id="mScrub"><div class="mtrack"><div class="mfill" id="mFill" style="width:0%"></div><div class="mknob" id="mKnob" style="left:0%"></div></div><div class="mtimes"><span id="mElapsed">0:00</span><span id="mDur">0:00</span></div></div><div class="mtransport" id="mTransport"><span class="tsp"></span><button class="sml" id="mShuf" data-a="shuffle" title="Shuffle">'+SHUF_I+'</button><button data-a="previous">'+PREV_I+'</button><button class="pp" id="mPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button><button class="sml" id="mRep" data-a="repeat" title="Repeat">'+REP_I+'</button><div class="mvolt" id="mVolT" role="button" tabindex="0" aria-label="Volume" title="Volume">'+VOL_I+'<div class="vpop"><input type="range" min="0" max="100" step="2" id="mVol" aria-label="Volume"><span class="vv" id="mVolV"></span></div></div></div></div><div class="mqr" id="mQR"><div class="qrbox" id="mQRCode"></div><div class="qrlab">Scan to queue</div></div>'},
     // Browse — Recent + Playlists. Same background as music (it is the music
-    // card's other face), standard card header: title by #home, actions by .fcog.
+    // card's other face), standard card header: title by #home.
     browse:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="chttl" id="mQTitle">Recently played</div>'
+      html:'<div class="chttl" id="mQTitle">Recently played</div>'
         +'<div class="chmeta"><button class="chbtn" id="mQSave" title="Save queue as playlist">'+SAVE_I+'</button>'
         +'<button class="chbtn" id="mQClear" title="Clear queue">'+TRASH_I+'</button></div>'
         +'<div class="brf"><div class="mqtabs"><button class="on" data-qt="recent">Recent</button><button data-qt="playlists">Playlists</button></div>'
         +'<div id="mQList" class="mqlist"></div></div>'},
     timer:{home:true, bg:'radial-gradient(120% 100% at 50% 44%,#122447,#080b12 62%)', canvas:false, glow:'radial-gradient(closest-side at 50% 44%,rgba(123,150,255,.35),transparent 70%)',
-      html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Timers</div><div class="tfull"><div class="trings" id="tmRings"></div><div class="tmore" id="tmMore"></div></div>'},
+      html:'<div class="chttl">Timers</div><div class="tfull"><div class="trings" id="tmRings"></div><div class="tmore" id="tmMore"></div></div>'},
     list:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="lhdr"><div class="lcount" id="lstCount"></div><div class="ltabs" id="lstTabs"></div></div><div class="lstf2"><div class="lcols" id="lstItems"></div></div>'},
+      html:'<div class="lhdr"><div class="lcount" id="lstCount"></div><div class="ltabs" id="lstTabs"></div></div><div class="lstf2"><div class="lcols" id="lstItems"></div></div>'},
     calendar:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="calf"><div class="calhead"><h1 id="calTtl"></h1><div class="calviews" id="calViews"><button data-v="day">Day</button><button data-v="week" class="on">Week</button><button data-v="month">Month</button></div></div><div class="calbody" id="calBody"></div></div>'},
+      html:'<div class="calf"><div class="calhead"><h1 id="calTtl"></h1><div class="calviews" id="calViews"><button data-v="day">Day</button><button data-v="week" class="on">Week</button><button data-v="month">Month</button></div></div><div class="calbody" id="calBody"></div></div>'},
     person:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Contacts</div><div class="chmeta"><button class="chbtn" id="ctSearch" title="Search by voice"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button></div><div class="ctf"><div class="ctwrap"><div class="ctgrid" id="ctGrid"></div><div class="ctaz" id="ctAZ"></div></div></div><div class="ctdetail" id="ctDetail"></div>'},
+      html:'<div class="chttl">Contacts</div><div class="chmeta"><button class="chbtn" id="ctSearch" title="Search by voice"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button></div><div class="ctf"><div class="ctwrap"><div class="ctgrid" id="ctGrid"></div><div class="ctaz" id="ctAZ"></div></div></div><div class="ctdetail" id="ctDetail"></div>'},
     settings:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="setf"><div class="dk" style="margin-bottom:14px">Settings</div><div id="setSecs"></div></div>'},
+      html:'<div class="setf"><div class="dk" style="margin-bottom:14px">Settings</div><div id="setSecs"></div></div>'},
     day:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Your Day</div><div class="chmeta" id="dayMeta"></div><div class="dayf"><div class="dc1"><div class="dsec"><h4>Calendar</h4><div id="dayEvents"></div></div></div><div class="dc2"><div class="dsec"><h4>Reminders</h4><div id="dayRems"></div></div><div class="dsec" id="dayComms" style="display:none"><h4>Messages</h4><div id="dayCommsList"></div></div></div></div>'},
+      html:'<div class="chttl">Your Day</div><div class="chmeta" id="dayMeta"></div><div class="dayf"><div class="dc1"><div class="dsec"><h4>Calendar</h4><div id="dayEvents"></div></div></div><div class="dc2"><div class="dsec"><h4>Reminders</h4><div id="dayRems"></div></div><div class="dsec" id="dayComms" style="display:none"><h4>Messages</h4><div id="dayCommsList"></div></div></div></div>'},
     sleep:{home:false, bg:'radial-gradient(120% 90% at 50% 46%,#0a0e18,#02030a 72%)', canvas:false,
       html:'<div class="slp"><div class="sclock" id="slClock"><span>--</span><span class="cln">:</span><span>--</span></div><div class="sdate" id="slDate"></div>'
         +'<div class="sdock" id="slDock"></div></div>'},
     reminder:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Reminders</div><div class="chmeta" id="remMeta"></div><div class="remf"><div id="remList" class="remlist"></div></div>'},
+      html:'<div class="chttl">Reminders</div><div class="chmeta" id="remMeta"></div><div class="remf"><div id="remList" class="remlist"></div></div>'},
     rooms:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="rm"><div class="rchips" id="rmScenes"></div>'
+      html:'<div class="rm"><div class="rchips" id="rmScenes"></div>'
         +'<div class="rhero" id="rmHero" style="display:none"><div class="cover"></div><div class="rhead"><div class="rart" id="rmArt">🎵</div><div><div class="rk">Now Playing</div><div class="rt" id="rmT"></div><div class="ra" id="rmA"></div></div></div><div class="rscrub"><div class="f" id="rmF" style="width:0%"></div></div><div class="rtp"><button data-a="previous">'+PREV_I+'</button><button class="pp" id="rmPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button></div><div class="rvol"><span class="vlab">Vol</span><input type="range" min="0" max="100" step="2" id="rmVol"><span class="vv" id="rmVolV"></span></div></div>'
         +'<div class="rlights" id="rmLights"></div></div>'}
   };
@@ -971,7 +1010,6 @@
 
   var full=document.getElementById('full'),cardwrap=document.getElementById('cardwrap'),host=document.getElementById('host'),dock=document.getElementById('dock'),dbody=document.getElementById('dbody'),home=document.getElementById('home'),glow=document.getElementById('glow'),pick=document.getElementById('pick');
 
-  full.addEventListener('click',function(e){if(e.target.closest('.fcog'))show('settings');});
   // Delegated: the Ask surface re-renders on every answer, so the talk control is
   // a fresh element each time and cannot hold its own listener.
   full.addEventListener('click',function(e){
@@ -1590,7 +1628,8 @@
         rp.classList.toggle('on',rm!=='off');rp.innerHTML=rm==='one'?REP1_I:REP_I;}
       // "Don't stop the music" reads back off the same poll as shuffle/repeat.
       var ds=document.getElementById('mDS');_music.dontStop=!!np.dont_stop;
-      if(ds)ds.classList.toggle('on',_music.dontStop);
+      if(ds){ds.classList.toggle('on',_music.dontStop);
+        ds.setAttribute('aria-pressed',_music.dontStop?'true':'false');}
       // Volume: skip while the finger is on the slider, or the poll fights the
       // drag — the same guard the Rooms hero slider uses.
       var mv=document.getElementById('mVol'),mvv=document.getElementById('mVolV');
@@ -1671,6 +1710,53 @@
         fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',
           body:JSON.stringify({action:'volume_set',player_id:_music.player_id||'',value:+v.value})}).catch(function(){});
       },250);};
+  }
+  // ---- Volume popover: the thermostat pill's pattern, on the transport -----
+  // The slider is no longer permanently on screen — a speaker icon opens it.
+  // Same shape as `.pc.temp`/`.tpop`: a tap on the tile toggles `.open`, and a
+  // click that lands INSIDE the popover is ignored, so dragging the slider
+  // cannot dismiss the thing you are dragging.
+  //
+  // It survives a repaint mid-drag for two reasons, and BOTH already hold:
+  //  1. Neither repainter rebuilds this DOM. tickMusic (1s) and loadMusic (5s)
+  //     patch text and values in place; only show('music') rebuilds the card.
+  //     So there is no `.open` state for a poll to destroy — unlike the dock,
+  //     where renderDock() replaces innerHTML and refreshHA() therefore needs
+  //     its explicit `.pc.temp.open` guard.
+  //  2. loadMusic's volume write is already gated on `document.activeElement`
+  //     PLUS `dataset.drag` (activeElement alone is false during a touch drag),
+  //     so the poll cannot snap the knob back mid-slide either.
+  // Keeping the popover's own state out of the repainters is what makes (1)
+  // true — do not move `.open` onto an element a repainter rewrites.
+  function wireVolPop(){
+    var t=document.getElementById('mVolT');
+    if(!t||t.dataset.wired)return;
+    t.dataset.wired='1';
+    t.addEventListener('click',function(e){
+      if(e.target.closest('.vpop'))return;   // the slider lives in there
+      t.classList.toggle('open');
+    });
+  }
+  // ---- "Keep playing" (∞), now on the scrub's left flank -------------------
+  // It moved out of #mTransport, so it can no longer ride that element's
+  // delegated click handler and is wired directly.
+  // MA auto-continues with similar tracks when the queue runs dry. Optimistic
+  // like shuffle/repeat, but reverted on refusal — MA rejects the enable
+  // unless a provider offers similar_tracks.
+  function wireKeep(){
+    var b=document.getElementById('mDS');
+    if(!b||b.dataset.wired)return;
+    b.dataset.wired='1';
+    b.addEventListener('click',function(){
+      var want=!_music.dontStop;
+      _music.dontStop=want;b.classList.toggle('on',want);b.setAttribute('aria-pressed',want?'true':'false');
+      function revert(){_music.dontStop=!want;b.classList.toggle('on',!want);
+        b.setAttribute('aria-pressed',want?'false':'true');toast('Couldn’t change that');}
+      _qpost('dont-stop',{enabled:want,player_id:_music.player_id||''}).then(function(r){
+        if(r&&r.ok){toast(want?'Keeping the music going':'Stopping when the queue ends');setTimeout(loadMusic,400);return;}
+        revert();
+      }).catch(revert);
+    });
   }
   function wireSeek(){
     // The card is rebuilt on every show('music'), so a drag left in flight by a
@@ -2206,24 +2292,12 @@
     if(_music.np){var pp0=document.getElementById('mPP');
       if(pp0){pp0.dataset.playing=_music.np.playing?'1':'0';pp0.innerHTML=_music.np.playing?PAUSE_I:PLAY_I;}}
     // The flow is rebuilt with the card, so its state can't survive a show().
-    cfApplyScale();cfClear();wireCF();wireSeek();wireVol();
+    cfApplyScale();cfClear();wireCF();wireSeek();wireVol();wireVolPop();wireKeep();
     loadMusic();_wxTick=setInterval(function(){if(_cur==='music')loadMusic();},5000);
     if(_homeTick){clearInterval(_homeTick);}_homeTick=setInterval(tickMusic,1000);
     var t=document.getElementById('mTransport');if(t)t.addEventListener('click',function(e){var btn=e.target.closest('button');if(!btn)return;var a=btn.getAttribute('data-a');
       if(a==='shuffle'){musicSet('shuffle_set',!_music.shuffle);return;}
       if(a==='repeat'){var nxt={off:'all',all:'one',one:'off'}[_music.repeat||'off'];musicSet('repeat_set',nxt);return;}
-      // Don't stop the music: MA auto-continues with similar tracks when the
-      // queue runs dry. Optimistic like the other two, but reverted on refusal
-      // — MA rejects the enable unless a provider offers similar_tracks.
-      if(a==='dontstop'){
-        var want=!_music.dontStop,dsb=btn;
-        _music.dontStop=want;dsb.classList.toggle('on',want);
-        _qpost('dont-stop',{enabled:want,player_id:_music.player_id||''}).then(function(r){
-          if(r&&r.ok){toast(want?'Keeping the music going':'Stopping when the queue ends');setTimeout(loadMusic,400);return;}
-          _music.dontStop=!want;dsb.classList.toggle('on',!want);
-          toast('Couldn’t change that');
-        }).catch(function(){_music.dontStop=!want;dsb.classList.toggle('on',!want);toast('Couldn’t change that');});
-        return;}
       musicControl(a==='playpause'?(document.getElementById('mPP').dataset.playing==='1'?'pause':'play'):a);});
     // Browse is a surface now, so this is plain navigation — no toggle, no
     // overlay state, and #home keeps its corner because nothing covers it.
@@ -2328,10 +2402,69 @@
     // isn't a light control returns to home.
     var slp=full.querySelector('.slp');
     if(slp)slp.addEventListener('click',function(e){if(!e.target.closest('.sc'))show('home');});
+    // The night screen shows the SAME controls as the dock. It renders from
+    // `_pcfg.pinned` — the operator's pins — not from `_ha.lights.slice(0,4)`,
+    // which is the pre-pins fallback and ignores their choice entirely. The
+    // dock's own tile markup is not reused: its CSS is `#dock`-scoped and its
+    // pills are sized for a glance at a lit screen, whereas these are hit in
+    // the dark. So the SOURCE and SEMANTICS are mirrored, the sizing is not.
+    function sleepPinHtml(p){
+      var nm=esc(p.name||''),dead=(p.available===false?' unavail':'');
+      if(p.kind==='temp'){
+        // Same data-* contract as the dock tile, so wireTempTile drives this
+        // unchanged. `min`/`max`/`step` arrive as strings — _tbounds parses.
+        var b=_tbounds(p),cur=_tnum(p.state),sp=_tnum(p.setpoint);
+        if(sp==null)sp=(cur!=null?cur:b.mn);
+        sp=_tsnap(sp,b.mn,b.mx,b.st);
+        return '<div class="sc temp'+dead+'" data-k="temp" data-eid="'+esc(p.write_eid)+'"'
+          +' data-act="'+esc(p.write_action||'set_value')+'" data-tgt="'+esc(String(sp))+'"'
+          +' data-mn="'+b.mn+'" data-mx="'+b.mx+'" data-st="'+b.st+'">'
+          +'<div class="bt">'+(cur!=null?Math.round(cur):'—')+'°</div><div class="nm">'+nm+'</div>'
+          +'<div class="tpop"><div class="tpv">'+_tfmt(sp,b.st)+'°</div>'
+          +'<div class="tsl"><div class="tff"></div><div class="tkn"></div></div>'
+          +'<div class="tpl">'+nm+'</div></div></div>';
+      }
+      if(p.kind==='scene'){
+        return '<div class="sc scene'+dead+'" data-k="scene" data-eid="'+esc(p.write_eid)+'"'
+          +' data-act="'+esc(p.write_action||'turn_on')+'">'+mdi(p.icon)+'<div class="nm">'+nm+'</div></div>';
+      }
+      // Render the server's icon. Deriving one from the domain is what drew a
+      // bulb on the fan and the TV — the same bug this screen had, since it
+      // hardcoded BULB for every tile.
+      return '<div class="sc'+(String(p.state).toLowerCase()==='on'?' on':'')+dead+'"'
+        +' data-k="toggle" data-eid="'+esc(p.write_eid)+'">'+mdi(p.icon)+'<div class="nm">'+nm+'</div></div>';
+    }
+    function wireSleepTiles(host){
+      // Explicit turn_on/turn_off from what the operator just saw, matching the
+      // dock: a blind `toggle` against a stale read flips the wrong way.
+      host.querySelectorAll('.sc[data-k="toggle"][data-eid]').forEach(function(el){el.onclick=function(){
+        var on=el.classList.toggle('on');
+        haControl({entity_id:el.getAttribute('data-eid'),action:on?'turn_on':'turn_off'})
+          .then(function(r){if(!r.ok)throw new Error('http '+r.status);})
+          .catch(function(){el.classList.toggle('on');});};});
+      host.querySelectorAll('.sc.scene[data-eid]').forEach(function(el){el.onclick=function(){
+        el.classList.add('fire');setTimeout(function(){el.classList.remove('fire');},420);
+        haControl({entity_id:el.getAttribute('data-eid'),action:el.getAttribute('data-act')||'turn_on'})
+          .catch(function(){});};});
+      host.querySelectorAll('.sc.temp').forEach(wireTempTile);
+    }
     function paint(){if(_cur!=='sleep')return;var host=document.getElementById('slDock');if(!host)return;
+      // The 30s refresh must not destroy an open temp popover mid-drag — the
+      // same guard the dock's refresh carries.
+      if(host.querySelector('.sc.temp.open'))return;
+      // pins_configured:false => nobody has chosen => keep the legacy "first
+      // few lights" fallback so a fresh panel is never empty. true with an
+      // empty list is a real choice ("show nothing") and must NOT fall back.
+      if(_pcfg&&_pcfg.pins_configured){
+        host.innerHTML=(_pcfg.pinned||[]).map(sleepPinHtml).join('');
+        wireSleepTiles(host);return;
+      }
       host.innerHTML=_ha.lights.slice(0,4).map(function(e){return '<div class="sc'+(isOn(e)?' on':'')+'" data-eid="'+esc(e.entity_id)+'">'+BULB+'<div class="nm">'+esc(friendly(e))+'</div></div>';}).join('');
       host.querySelectorAll('.sc[data-eid]').forEach(function(el){el.onclick=function(){var on=el.classList.toggle('on');haControl({entity_id:el.getAttribute('data-eid'),action:on?'turn_on':'turn_off'}).then(function(r){if(!r.ok)throw 0;}).catch(function(){el.classList.toggle('on');});};});}
-    if(_ha.loaded)paint();else loadHA(paint);
+    // Pins decide WHAT renders, so the config must be loaded before the first
+    // paint or the night screen flashes the fallback lights and then swaps.
+    function paintWhenReady(){if(_ha.loaded)paint();else loadHA(paint);}
+    if(_pcfgLoaded)paintWhenReady();else loadPanelCfg(paintWhenReady);
     // Overnight automations change lights — keep the wake toggles truthful.
     _wxTick=setInterval(function(){if(_cur==='sleep')loadHA(paint);},30000);
   }

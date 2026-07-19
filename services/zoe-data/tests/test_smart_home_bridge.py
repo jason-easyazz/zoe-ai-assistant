@@ -211,6 +211,101 @@ async def test_bare_plural_class_sweeps(bridge):
     assert all(c["action"] == "turn_off" for c in bridge.controls)
 
 
+# ── W3: "the light" means the light in the room you are standing in ──────────
+# The fixture house has TWO lights (Living Room Lamp + Bedroom Lamp), so a bare
+# singular "the light" is genuinely ambiguous and today always asks. Room
+# context breaks that tie — and ONLY that tie.
+
+BEDROOM = {"light.bedroom", "switch.bedroom"}
+
+
+@pytest.mark.asyncio
+async def test_bare_singular_still_asks_when_no_room_is_known(bridge):
+    """The inert-by-default guarantee: with no rooms configured, behaviour is
+    byte-identical to before this feature existed. This is what makes the change
+    safe to put on the voice path at all."""
+    i = classify_skybridge_intent("turn off the light", None)
+    r = await smart_home_service.resolve_smart_home(i)
+    assert bridge.controls == [], "must not guess a light when the room is unknown"
+    assert "which" in r["spoken_summary"].lower()
+
+
+@pytest.mark.asyncio
+async def test_room_context_resolves_the_light_in_here(bridge):
+    """The whole point: said on the bedroom panel, "turn off the light" turns off
+    the bedroom light instead of asking."""
+    i = classify_skybridge_intent("turn off the light", None)
+    await smart_home_service.resolve_smart_home(i, BEDROOM)
+    assert bridge.controls == [{"entity_id": "light.bedroom", "action": "turn_off"}]
+
+
+@pytest.mark.asyncio
+async def test_an_explicitly_named_room_beats_the_room_you_are_in(bridge):
+    """Standing in the bedroom and naming the living room must reach the living
+    room. A named target never takes the room-context path."""
+    i = classify_skybridge_intent("turn off the living room lamp", None)
+    await smart_home_service.resolve_smart_home(i, BEDROOM)
+    assert bridge.controls == [{"entity_id": "light.lamp", "action": "turn_off"}]
+
+
+def test_room_context_never_reaches_the_named_target_branch():
+    """A NAMED target is resolved by name alone — room context must not silently
+    pick among its matches.
+
+    "the bedroom" ties the Bedroom Lamp and the Bedroom Switch. Even standing in
+    a room that owns exactly one of them, that tie must stay a question: the
+    speaker named something specific, and resolving it by where they happen to
+    be standing would act on a device they did not ask for.
+
+    Asserted directly on `_select_targets` rather than end-to-end because the
+    CLASSIFIER does not turn "turn off the bedroom" into a control command at
+    all (it falls through to status) — an end-to-end version of this test passed
+    for the wrong reason, which is exactly the failure mode this file warns
+    about elsewhere.
+    """
+    devices = [
+        {"entity_id": "light.lamp", "name": "Living Room Lamp", "domain": "light",
+         "state": "on", "on": True, "available": True, "dimmable": True},
+        {"entity_id": "light.bedroom", "name": "Bedroom Lamp", "domain": "light",
+         "state": "on", "on": True, "available": True, "dimmable": True},
+        {"entity_id": "switch.bedroom", "name": "Bedroom Switch", "domain": "switch",
+         "state": "off", "on": False, "available": True, "dimmable": False},
+    ]
+    without = smart_home_service._select_targets(devices, "the bedroom", "turn_off")
+    with_room = smart_home_service._select_targets(
+        devices, "the bedroom", "turn_off", {"light.bedroom"})
+    assert without[1] is True, "a named tie is ambiguous to begin with"
+    assert with_room == without, "room context must not resolve a NAMED tie"
+
+
+@pytest.mark.asyncio
+async def test_plural_sweep_is_not_narrowed_to_the_room(bridge):
+    """"Turn off the lights" already works house-wide. Quietly shrinking a
+    WORKING command to one room would be a regression; this fix only rescues a
+    command that currently fails with a question."""
+    i = classify_skybridge_intent("turn off the lights", None)
+    await smart_home_service.resolve_smart_home(i, BEDROOM)
+    assert {c["entity_id"] for c in bridge.controls} == {"light.lamp", "light.bedroom"}
+
+
+@pytest.mark.asyncio
+async def test_room_owning_no_light_still_asks(bridge):
+    """The operator's stated preference: ask rather than reach into another room."""
+    i = classify_skybridge_intent("turn off the light", None)
+    r = await smart_home_service.resolve_smart_home(i, {"switch.plug"})
+    assert bridge.controls == []
+    assert "which" in r["spoken_summary"].lower()
+
+
+@pytest.mark.asyncio
+async def test_room_owning_several_lights_still_asks(bridge):
+    """A room with two lights has no single non-arbitrary answer either."""
+    i = classify_skybridge_intent("turn off the light", None)
+    r = await smart_home_service.resolve_smart_home(i, {"light.lamp", "light.bedroom"})
+    assert bridge.controls == []
+    assert "which" in r["spoken_summary"].lower()
+
+
 @pytest.mark.asyncio
 async def test_offline_device_is_not_controlled(bridge):
     r = await smart_home_service.resolve_smart_home(_Intent("turn_on", query="hallway"))
@@ -502,3 +597,53 @@ async def test_internal_filter_does_not_hide_real_lookalike_devices(monkeypatch)
 def test_add_device_classifier(q):
     i = classify_skybridge_intent(q, None)
     assert i is not None and i.domain == "smart_home" and i.action == "add_device", q
+
+
+# ── a REAL switch.* entity is classified by what it IS, not its HA domain ────
+# Home Assistant's `switch` domain is a wiring fact, not a product one: a smart
+# LIGHT switch lands there, and so do plugs and relays. `_device_from_switch`
+# used to pin domain="switch", so a real wall light could never answer to "the
+# light" however it was named — while the simulated input_boolean helpers, which
+# go through _entity_domain, always could. The live house exposed it the moment
+# real hardware arrived (a Grid Connect switch renamed "Bedroom Light" still
+# resolved as a switch, so "turn off the light" kept asking).
+
+@pytest.mark.parametrize(
+    "name,entity_id,icon,expected",
+    [
+        # The real device that exposed this.
+        ("Bedroom Light", "switch.bedroom_1_switch_1", "", "light"),
+        # Icon alone is enough — an operator who renames nothing but sets a glyph.
+        ("Bedroom 1 Switch 1", "switch.bedroom_1_switch_1", "mdi:ceiling-light", "light"),
+        # Things that are genuinely NOT lights must stay put.
+        ("Coffee Plug", "switch.plug", "", "switch"),
+        ("Bedroom Switch", "switch.bedroom", "", "switch"),
+        ("Hallway Switch", "switch.hall", "", "switch"),
+        # A switch that drives a fan is a fan, not a light — fan is matched first.
+        ("Bathroom Fan", "switch.bathroom_fan", "", "fan"),
+        # …even when the name mentions a light, because "fan" wins by design.
+        ("Fan Light", "switch.fan_light", "", "fan"),
+    ],
+)
+def test_real_switch_is_classified_by_name_and_icon(name, entity_id, icon, expected):
+    got = smart_home_service._device_from_switch(
+        {"entity_id": entity_id, "name": name, "state": "on", "icon": icon}
+    )
+    assert got["domain"] == expected
+    # Whatever it is called, a switch has no brightness channel.
+    assert got["dimmable"] is False
+
+
+def test_a_renamed_wall_light_answers_to_the_light():
+    """The end-to-end point of the fix: with the real switch classified as a
+    light, a bare "the light" in its room resolves to it instead of asking."""
+    devices = [
+        {"entity_id": "switch.bedroom_1_switch_1", "name": "Bedroom Light", "domain": "light",
+         "state": "on", "on": True, "available": True, "dimmable": False},
+        {"entity_id": "input_boolean.kitchen_light", "name": "Kitchen Light", "domain": "light",
+         "state": "off", "on": False, "available": True, "dimmable": False},
+    ]
+    targets, ambiguous = smart_home_service._select_targets(
+        devices, "the light", "turn_off", {"switch.bedroom_1_switch_1"})
+    assert [d["entity_id"] for d in targets] == ["switch.bedroom_1_switch_1"]
+    assert ambiguous is False
