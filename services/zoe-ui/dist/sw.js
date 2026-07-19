@@ -12,9 +12,11 @@
 importScripts('/workbox/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-// Both sides of this merge landed on 4.64.8 — bumped rather than picking one,
-// or two different bundles would ship under a single cache key.
-const SW_VERSION = '4.64.10'; // sleep: ask the server, don't trust a cached playing flag
+// On a merge conflict here, take the HIGHEST of the two and bump it — never
+// just pick a side, and bump even when both sides are equal, or two different
+// bundles ship under a single cache key.
+// (4.65.0 music-card-breathe vs 4.64.10 sleep-playing-flag -> 4.65.1.)
+const SW_VERSION = '4.65.1'; // music card breathes: condensed dock, Browse card, full-size covers
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
