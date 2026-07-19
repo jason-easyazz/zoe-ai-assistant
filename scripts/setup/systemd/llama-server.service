@@ -21,6 +21,38 @@ After=network.target
 [Service]
 Type=simple
 LimitMEMLOCK=infinity
+
+# ── Keep the brain rock resident ─────────────────────────────────────────────
+# `--mlock` below asks llama.cpp to lock the weights; LimitMEMLOCK=infinity lets
+# it. That is necessary but NOT sufficient — measured 2026-07-18 on the live
+# Orin, VmLck held only 1.95 GB of a 5.6 GB RSS and 1,457 MB had still been
+# swapped out (mlock covers the mapped model, not every CUDA/unified-memory
+# allocation around it on Tegra).
+#
+# MemoryLow is soft (reclaim-resistant, not swap-proof), which is why it alone
+# did not stop the eviction. MemorySwapMax=0 is the hard line for the pages
+# mlock does not reach.
+#
+# MemoryLow was previously a LOCAL drop-in only (~/.config/systemd/user/
+# llama-server.service.d/memory.conf) — real protection that existed on one box
+# and in no template, so a rebuild or a second host silently lost it. Tracked
+# here now. Same story for CPUWeight/IOWeight from priority.conf.
+#
+# NOTE: this is a ~5.6 GB RSS process. MemorySwapMax=0 removes its release
+# valve, so pressure surfaces as an OOM kill instead of silent slow paging —
+# which is the intended trade for the brain rock (a swapped brain is a broken
+# brain), but it is why no MemoryMax is set here: a hard ceiling plus no swap
+# would turn a transient spike into a kill. See docs/knowledge/voice-pipeline.md.
+#
+# No Nice=-N / OOMScoreAdjust=-N: a --user unit cannot raise priority on this
+# box (`ulimit -e` is 0) and systemd SILENTLY DROPS the value while reporting
+# success — verified 2026-07-18 (Nice=-5 applied as 0). Dev tooling
+# de-prioritises itself instead (serena-mcp.service: Nice=10), which works
+# because positive values need no privilege.
+MemorySwapMax=0
+MemoryLow=6G
+CPUWeight=400
+IOWeight=400
 # The ExecStartPost health probe waits up to 120s for model+draft load; raise the
 # start timeout above it so systemd doesn't kill the unit at the 90s default first.
 TimeoutStartSec=180
