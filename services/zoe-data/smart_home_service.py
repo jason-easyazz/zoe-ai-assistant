@@ -92,15 +92,35 @@ def _device_from_light(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _device_from_switch(row: dict[str, Any]) -> dict[str, Any]:
+    """A real ``switch.*`` entity from the hub.
+
+    The display class is RESOLVED from the name/icon, not pinned to "switch".
+    Home Assistant's ``switch`` domain is a wiring fact, not a product one: a
+    smart LIGHT switch — the single most common thing anyone puts on a wall —
+    lands there, and so do plugs, kettles and relays. Hardcoding "switch" here
+    meant a real wall light could never answer to "the light" no matter what it
+    was called, while the simulated ``input_boolean`` helpers (which DO go
+    through ``_entity_domain``) always could. That asymmetry only stayed hidden
+    while this house had no real hardware; the first Grid Connect light switch
+    ("Bedroom Light", ``switch.bedroom_1_switch_1``) exposed it immediately.
+
+    Control is unaffected — the bridge maps the service from the entity's OWN
+    HA domain, so this changes what Zoe CALLS the device, never how she drives
+    it.
+    """
     state = _norm_state(row.get("state"))
+    name = _friendly_name(row)
+    entity_id = str(row.get("entity_id") or "")
+    attrs = row.get("attributes") if isinstance(row.get("attributes"), dict) else {}
+    icon = str(row.get("icon") or attrs.get("icon") or "")
     return {
-        "entity_id": row.get("entity_id", ""),
-        "name": _friendly_name(row),
-        "domain": "switch",
+        "entity_id": entity_id,
+        "name": name,
+        "domain": _entity_domain(name, entity_id, icon),
         "state": state,
         "on": state == "on",
         "available": state not in ("", "unavailable", "unknown"),
-        "dimmable": False,
+        "dimmable": False,  # a switch has no brightness channel, whatever it drives
         "brightness": None,
     }
 
