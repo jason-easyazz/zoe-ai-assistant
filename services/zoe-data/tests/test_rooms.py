@@ -12,15 +12,17 @@ facts from it drive the shapes under test:
     validated for SHAPE only — a domain allow-list would reject every real
     device.
 
-These cover the pure layer (validation + payload resolution). The DB routes are
-exercised by the live round-trip in the PR's verification, not mocked here: a
-mocked cursor would assert against my own stub rather than the schema.
+These cover the pure layer (validation, payload resolution, picker filtering).
+The DB-backed routes are exercised against real SQLite in
+``test_panel_config.py`` — a fake cursor asserts against a stub rather than the
+schema, and would not have caught the room column missing from an INSERT.
 """
 
 import pytest
 
 from routers.rooms import (
     MAX_ROOM_NAME_LEN,
+    is_pickable,
     build_room_payload,
     normalize_entity_id,
     normalize_ha_area_id,
@@ -183,6 +185,48 @@ def test_device_order_is_preserved():
     ids = ["input_boolean.fan", "switch.bedroom_1_switch_1", "input_boolean.bedroom_light"]
     payload = build_room_payload(_room_row(), ids, LIVE_ENTITIES)
     assert [d["entity_id"] for d in payload["devices"]] == ids
+
+
+@pytest.mark.parametrize(
+    "entity_id",
+    [
+        "switch.bedroom_1_switch_1",     # the real Grid Connect switch
+        "input_boolean.bedroom_light",
+        "light.anything",
+        "scene.good_night",
+        "input_number.thermostat_temperature",
+        "media_player.lounge",
+        "cover.garage",
+    ],
+)
+def test_picker_suggests_controllable_devices(entity_id):
+    assert is_pickable(entity_id) is True
+
+
+@pytest.mark.parametrize(
+    "entity_id",
+    [
+        # Real noise from the live house's 48 entities — offering these in a
+        # "put a device in this room" picker is what made it unusable.
+        "event.backup_automatic_backup",
+        "sensor.backup_backup_manager_state",
+        "sensor.backup_last_attempted_automatic_backup",
+        "assist_satellite.zoe_touch_pi_assist_satellite",
+        "update.home_assistant_core_update",
+        "binary_sensor.rpi_power_status",
+    ],
+)
+def test_picker_hides_diagnostic_and_plumbing_entities(entity_id):
+    assert is_pickable(entity_id) is False
+
+
+def test_picker_filter_never_narrows_what_can_be_STORED():
+    """The picker is a suggestion filter, not a storage rule — an entity the
+    picker hides must still be storable, or an importer (or a power user with an
+    odd device) is locked out."""
+    hidden = "sensor.backup_backup_manager_state"
+    assert is_pickable(hidden) is False
+    assert normalize_entity_id(hidden) == hidden
 
 
 def test_linked_to_ha_reflects_the_area_link():
