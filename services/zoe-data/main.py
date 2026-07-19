@@ -2090,6 +2090,8 @@ app.include_router(panel_provision_router)
 # (FastAPI matches routes in registration order).
 from routers.panel_config import router as panel_config_router
 app.include_router(panel_config_router)
+from routers.rooms import router as rooms_router
+app.include_router(rooms_router)
 app.include_router(capability_matrix_router)
 app.include_router(music_router)
 from routers.music_setup import router as music_setup_router
