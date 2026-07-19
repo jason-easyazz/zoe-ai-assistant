@@ -337,6 +337,10 @@ homeassistant/custom_components/hacs/
 # auth_oidc — HACS-installed OIDC auth provider (christiaangoossens/hass-oidc-auth).
 # Third-party runtime code like hacs/ above: configured by configuration.yaml, not vendored.
 homeassistant/custom_components/auth_oidc/
+# localtuya — local control of Tuya/Grid Connect devices (xZetsubou/hass-localtuya).
+# Same class as the two above: third-party runtime code, configured via its UI
+# config flow (device ids + local keys are per-install secrets), not vendored.
+homeassistant/custom_components/localtuya/
 # router-90-campaign: the *.json negation above force-tracks committed
 # measurement artifacts; gen1-lineage.json is a runtime lineage journal, not one.
 labs/router-90-campaign/results/gen1-lineage.json
