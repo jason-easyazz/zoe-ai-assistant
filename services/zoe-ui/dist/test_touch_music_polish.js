@@ -284,6 +284,26 @@ test('heart un-favourites (and does not just add again)', async (browser, base) 
   await page.close();
 });
 
+test('heart hides when there is no focused row to act on', async (browser, base) => {
+  // An empty queue has nothing focusable, so the heart must not keep whatever
+  // the last focused track set — that is the "stays lit across track changes"
+  // lie in a different costume.
+  const ctx = newCtx();
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  page.on('pageerror', (e) => { throw new Error('page error: ' + e.message); });
+  await stub(page, ctx, { queue: [] });
+  await page.goto(base + '/touch/home.html', { waitUntil: 'domcontentloaded' });
+  await page.addStyleTag({ content: '#authov{display:none !important}' });
+  await page.click('#apps');
+  await page.waitForTimeout(400);
+  await page.click('.ltile[data-id="music"]');
+  await page.waitForSelector('#mTransport', { timeout: 8000 });
+  await page.waitForTimeout(700);
+  assert.strictEqual((await favState(page)).shown, false,
+    'the heart is offered with no focused track behind it');
+  await page.close();
+});
+
 test('heart reverts when the write fails', async (browser, base) => {
   const ctx = newCtx();
   const page = await openMusic(browser, ctx, { base, fail: (p) => p === 'music/favorite' });

@@ -1916,7 +1916,10 @@
     var ti=document.getElementById('mTitle'),ar=document.getElementById('mArtist'),
         ki=document.getElementById('mKick');
     var f=cfF(),it=_cf.items[f],np=_music.np;
-    if(!it){if(np&&ti){ti.textContent=np.title||'';if(ar)ar.textContent=np.artist||'';}return;}
+    // No focused row (empty/unloaded queue): fall back to the playing labels —
+    // and repaint the heart too, or it keeps whatever the LAST focused track
+    // set, which is the "stays lit across track changes" lie this PR removes.
+    if(!it){if(np&&ti){ti.textContent=np.title||'';if(ar)ar.textContent=np.artist||'';}cfPaintFav();return;}
     // Say where the focused cover sits relative to what's playing. `cur` is -1
     // when the playing row isn't in the queue (it was just removed, or MA hasn't
     // caught up), so that case gets its own honest label instead of a nonsense
