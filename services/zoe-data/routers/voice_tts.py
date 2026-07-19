@@ -2560,8 +2560,12 @@ async def voice_command(
     if not identified_user_id:
         # Panels that match speaker profiles locally send a claim + score; the
         # threshold decision stays server-side so a panel can never lower it,
-        # and only device-token callers may claim at all.
-        identified_user_id = _accept_panel_voice_claim(payload, caller)
+        # and only device-token callers may claim at all. The claimed user must
+        # STILL hold consent in the DB — a panel whose profile cache predates a
+        # revocation must not keep identifying that user (fail closed).
+        _claimed = _accept_panel_voice_claim(payload, caller)
+        if _claimed and await _voice_claim_consented(_claimed):
+            identified_user_id = _claimed
     # Forwarded by /voice/turn so end-to-end total can be recorded from the
     # true start of the request (audio upload). Falls back to command start.
     _t_turn_start = (payload or {}).get("_t_turn_start")
@@ -5126,6 +5130,29 @@ def _accept_panel_voice_claim(payload: dict, caller: dict) -> Optional[str]:
         "voice claim rejected: user=%s score=%.4f < threshold=%.2f", user, score, threshold
     )
     return None
+
+
+async def _voice_claim_consented(user_id: str) -> bool:
+    """True iff the user still has a consented speaker profile.
+
+    Guards the panel-claim path against a stale panel cache: consent
+    revocation drops the row from /profiles/sync and /identify, and this
+    check closes the third door. Fails CLOSED — if the DB can't answer,
+    the claim is dropped (the turn falls back to panel-binding identity,
+    which is the same outcome as no claim).
+    """
+    try:
+        from db_compat import get_compat_db as _get_compat_db
+        async with _get_compat_db() as db:
+            async with db.execute(
+                "SELECT 1 FROM speaker_profiles WHERE user_id=? AND consent_at IS NOT NULL LIMIT 1",
+                (user_id,),
+            ) as cur:
+                row = await cur.fetchone()
+        return row is not None
+    except Exception as exc:
+        logger.warning("voice claim consent check failed for %s (dropping claim): %s", user_id, exc)
+        return False
 
 
 def _cosine_similarity(a: bytes, b: bytes) -> float:

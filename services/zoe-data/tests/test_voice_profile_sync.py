@@ -90,6 +90,73 @@ def test_unparseable_threshold_falls_back_to_default(monkeypatch):
     assert _accept_panel_voice_claim({"voice_user_id": "jason", "voice_score": 0.81}, DEVICE_CALLER) is None
 
 
+# ── 1b. consent re-check on the claim path ─────────────────────────────────
+# A panel whose profile cache predates a consent revocation keeps sending
+# passing-score claims; the server re-checks consent_at in the DB and fails
+# CLOSED on any DB error (dropping the claim == the no-claim outcome).
+
+class _ConsentDB:
+    def __init__(self, has_row):
+        self.has_row = has_row
+        self.queries = []
+
+    def execute(self, sql, params=()):
+        self.queries.append((sql, tuple(params)))
+        has_row = self.has_row
+
+        class _Cur:
+            async def fetchone(self):
+                return (1,) if has_row else None
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+        return _Cur()
+
+
+def _install_consent_db(monkeypatch, has_row):
+    db = _ConsentDB(has_row)
+
+    @contextlib.asynccontextmanager
+    async def fake_ctx():
+        yield db
+
+    mod = types.ModuleType("db_compat")
+    mod.get_compat_db = fake_ctx
+    monkeypatch.setitem(sys.modules, "db_compat", mod)
+    return db
+
+
+@pytest.mark.asyncio
+async def test_claim_consent_check_true_when_consented(monkeypatch):
+    db = _install_consent_db(monkeypatch, has_row=True)
+    assert await voice_tts._voice_claim_consented("jason") is True
+    assert "consent_at IS NOT NULL" in db.queries[0][0]
+    assert db.queries[0][1] == ("jason",)
+
+
+@pytest.mark.asyncio
+async def test_claim_consent_check_false_after_revocation(monkeypatch):
+    _install_consent_db(monkeypatch, has_row=False)
+    assert await voice_tts._voice_claim_consented("jason") is False
+
+
+@pytest.mark.asyncio
+async def test_claim_consent_check_fails_closed_on_db_error(monkeypatch):
+    @contextlib.asynccontextmanager
+    async def broken_ctx():
+        raise RuntimeError("pool exhausted")
+        yield
+
+    mod = types.ModuleType("db_compat")
+    mod.get_compat_db = broken_ctx
+    monkeypatch.setitem(sys.modules, "db_compat", mod)
+    assert await voice_tts._voice_claim_consented("jason") is False
+
+
 # ── 2. profile sync ────────────────────────────────────────────────────────
 
 EMB_JASON = b"\x01\x02\x03\x04" * 4
