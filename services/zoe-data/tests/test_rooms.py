@@ -28,6 +28,7 @@ from routers.rooms import (
     normalize_ha_area_id,
     normalize_room_name,
     resolve_device,
+    room_entity_ids_for_panel,
     slugify,
 )
 
@@ -234,3 +235,103 @@ def test_linked_to_ha_reflects_the_area_link():
     linked = build_room_payload(_room_row(ha_area_id="area_bedroom"), [], LIVE_ENTITIES)
     assert linked["linked_to_ha"] is True
     assert linked["ha_area_id"] == "area_bedroom"
+
+
+# ── the DB lookup the voice path actually uses ───────────────────────────────
+# Everything above is pure. `room_entity_ids_for_panel` is NOT: it is the real
+# panel_id -> panels.room_id -> room_devices chain that W3's voice resolution
+# depends on, and the W3 suite exercises the resolver with a hand-built set —
+# so a wrong column name or Row-key error in here would be invisible and every
+# test would pass for the wrong reason. Driven against real sqlite3 for the
+# same reason panel_config's room tests are: a fake cursor asserts against a
+# stub, not the schema.
+
+
+class _Cur:
+    def __init__(self, cursor):
+        self._c = cursor
+
+    async def fetchone(self):
+        return self._c.fetchone()
+
+    async def fetchall(self):
+        return self._c.fetchall()
+
+
+class _Db:
+    """The router's async db surface over synchronous sqlite3 — loop-agnostic."""
+
+    def __init__(self, path):
+        import sqlite3
+
+        self._conn = sqlite3.connect(path, check_same_thread=False)
+        self._conn.row_factory = sqlite3.Row
+
+    async def execute(self, sql, params=()):
+        return _Cur(self._conn.execute(sql, params))
+
+    async def commit(self):
+        self._conn.commit()
+
+
+@pytest.fixture
+def rooms_db(tmp_path):
+    db = _Db(str(tmp_path / "rooms.db"))
+    db._conn.executescript(
+        """
+        CREATE TABLE panels (panel_id TEXT PRIMARY KEY, room_id TEXT);
+        CREATE TABLE room_devices (room_id TEXT NOT NULL, entity_id TEXT NOT NULL UNIQUE);
+        INSERT INTO panels (panel_id, room_id) VALUES ('zoe-touch-pi', 'r-bed');
+        INSERT INTO panels (panel_id, room_id) VALUES ('kitchen-panel', NULL);
+        INSERT INTO panels (panel_id, room_id) VALUES ('ghost-panel', 'r-deleted');
+        INSERT INTO room_devices (room_id, entity_id)
+             VALUES ('r-bed', 'switch.bedroom_1_switch_1');
+        INSERT INTO room_devices (room_id, entity_id)
+             VALUES ('r-bed', 'input_boolean.bedroom_light');
+        INSERT INTO room_devices (room_id, entity_id) VALUES ('r-kitchen', 'switch.kettle');
+        """
+    )
+    db._conn.commit()
+    return db
+
+
+def _run(coro):
+    import asyncio
+
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
+def test_panel_in_a_room_returns_that_rooms_devices(rooms_db):
+    got = _run(room_entity_ids_for_panel(rooms_db, "zoe-touch-pi"))
+    assert got == {"switch.bedroom_1_switch_1", "input_boolean.bedroom_light"}
+    assert "switch.kettle" not in got, "another room's device must never leak in"
+
+
+@pytest.mark.parametrize(
+    "panel_id,why",
+    [
+        ("kitchen-panel", "panel exists but is in no room"),
+        ("ghost-panel", "room_id points at a room that no longer exists"),
+        ("never-registered", "panel has no row at all"),
+        ("", "no panel id — a phone or web chat has no room"),
+    ],
+)
+def test_every_unknown_case_is_an_empty_set(rooms_db, panel_id, why):
+    """Empty means "no room context", and the resolver then behaves exactly as it
+    did before rooms existed. Approximating any of these would act on the WRONG
+    room's light, which is worse than declining to help."""
+    assert _run(room_entity_ids_for_panel(rooms_db, panel_id)) == set(), why
+
+
+def test_a_broken_lookup_degrades_to_empty_rather_than_breaking_the_turn():
+    """A voice turn must never fail because the room lookup did."""
+
+    class _Exploding:
+        async def execute(self, *a, **k):
+            raise RuntimeError("db is on fire")
+
+    assert _run(room_entity_ids_for_panel(_Exploding(), "zoe-touch-pi")) == set()
