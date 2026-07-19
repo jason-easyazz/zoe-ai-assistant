@@ -934,10 +934,48 @@
       if((m&&m.classList.contains('on'))||(cb&&cb.classList.contains('on'))){armIdleSleep(IDLE_SLEEP_RETRY_MS);return;}  // mid-interaction — re-check in 30s, not a full window
       // Music playing means the panel is IN USE even with nobody touching it —
       // drifting to the night clock mid-song reads as the screen giving up on
-      // you. Freshness-guarded (30s): if whichever poller owns this surface has
-      // died, fail toward sleeping rather than a permanently lit panel.
-      if(_music.playing&&(Date.now()-(_music.playingAt||0))<30000){armIdleSleep(IDLE_SLEEP_RETRY_MS);return;}
-      if(_cur!=='sleep')show('sleep');
+      // you.
+      //
+      // ASK THE SERVER, don't trust a cached flag. The first version tested a
+      // value written by the dock poller, with a freshness window in case that
+      // poller died. It kept sleeping mid-song anyway, because the poller stops
+      // for several ordinary reasons — a dock rebuild detaches its chip, a
+      // "heard" chip takes the dock (which also makes refreshHA skip, so nothing
+      // restarts it), the music surface suppresses the chip. Any cached signal
+      // inherits every one of those failure modes.
+      //
+      // This runs at most once per idle window (3 min), so the cost is nothing,
+      // and it cannot go stale. A failed request falls through to sleeping —
+      // the panel must never latch awake because a request hung.
+      // Everything above was decided synchronously; this request opens a window
+      // in which the world can change — most importantly the user can tap Talk
+      // and start a live conversation while it is in flight. Re-check on resolve
+      // or we would sleep on someone mid-sentence.
+      function _sleepNow(){
+        if(_convLive||_cur==='sleep'||!_sleepEnabled){armIdleSleep(IDLE_SLEEP_RETRY_MS);return;}
+        var m2=document.getElementById('estModal'),cb2=document.getElementById('cmdbar');
+        if((m2&&m2.classList.contains('on'))||(cb2&&cb2.classList.contains('on'))){armIdleSleep(IDLE_SLEEP_RETRY_MS);return;}
+        show('sleep');
+      }
+      // The decision must happen even if the request never resolves. apiGet is a
+      // bare fetch with no AbortController, so a server that accepts the socket
+      // and then goes quiet leaves the promise pending forever — neither .then
+      // nor .catch runs, and the panel latches awake. (The first version of this
+      // claimed "a failed request falls through to sleeping"; a HUNG one isn't a
+      // failed one, and that gap made the claim untrue.) Race a timer so exactly
+      // one decision is taken, whichever arrives first.
+      var _decided=false,_decideT=null;
+      function _decide(playing){
+        if(_decided)return;_decided=true;
+        if(_decideT){clearTimeout(_decideT);_decideT=null;}
+        if(playing){armIdleSleep(IDLE_SLEEP_RETRY_MS);return;}
+        _sleepNow();
+      }
+      _decideT=setTimeout(function(){_decide(false);},4000);
+      apiGet('/api/music/now-playing').then(function(d){
+        var np=d&&d.now_playing;
+        _decide(!!(np&&np.state==='playing'));
+      }).catch(function(){_decide(false);});
     },ms||IDLE_SLEEP_MS);}
   // Any touch on the panel means the user took over — the screen is theirs.
   document.addEventListener('pointerdown',function(){_userTookOver=true;_voiceScreen=false;cancelAutoHome();armIdleSleep();},true);
@@ -1022,6 +1060,12 @@
       // depends on it. Note it even when nothing is playing — that's what lets
       // the panel sleep again once the music stops.
       noteNP(np);
+      // Keep polling even when we draw nothing. The reschedule used to sit at
+      // the very end, AFTER the early returns below, so on any surface that
+      // suppresses the chip the poll chain simply died — taking the heartbeat
+      // with it. Re-arm here, before any return can skip it.
+      if(_dockMusicT){clearTimeout(_dockMusicT);_dockMusicT=null;}
+      _dockMusicT=setTimeout(paintDockMusic,5000);
       // The music card carries its own transport (#mTransport), so a dock chip
       // there would just duplicate it — every OTHER surface gets the controls.
       // Exception: the queue/playlist overlay covers that transport, so the
@@ -1044,7 +1088,8 @@
       chip.querySelector('.dnext').onclick=function(e){e.stopPropagation();_dockCtl('next');};
       chip.onclick=function(e){if(e.target.closest('button'))return;show('music');};
       // keep it fresh while it's visible (title/art/state change on skip)
-      _dockMusicT=setTimeout(function(){if(dbody.contains(chip)&&!dbody.querySelector('.dheard'))paintDockMusic();},5000);
+      // (reschedule already armed above, before the early returns — arming it
+      //  again here would leak the first timer and double the poll rate)
     }).catch(function(){});
   }
   // Dock timer chip — a small live countdown pinned in the dock while any
@@ -1401,7 +1446,11 @@
   // navigate away — the panel would still sleep on you while music played.
   // Timestamped so a stopped poller fails toward sleeping rather than toward a
   // permanently lit panel.
+  // Records playback state for the UI. NOT load-bearing for idle-sleep any
+  // more — that asks the server directly, because any cached flag inherits
+  // the failure modes of whichever poller writes it.
   function noteNP(np){_music.playing=!!(np&&np.state==='playing');_music.playingAt=Date.now();}
+
   function loadMusic(){
     apiGet('/api/music/now-playing').then(function(d){if(_cur!=='music')return;
       var np=d&&d.now_playing;
