@@ -13,6 +13,8 @@ from routers.memories import (
     _is_near_duplicate,
 )
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _ref(rid, text, status="approved"):
     return SimpleNamespace(id=rid, text=text, metadata={"status": status, "memory_type": "fact"})

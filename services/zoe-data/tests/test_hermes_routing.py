@@ -12,6 +12,8 @@ import mcp_server
 import zoe_agent
 from routers import chat as chat_router, system, voice_tts
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _decode_agui_events(blocks):
     events = []
@@ -388,7 +390,14 @@ async def test_zoe_agent_hermes_escalation_stays_in_parent_agui_run(monkeypatch)
     monkeypatch.setattr(chat_router, "classify_query", lambda *_: "general")
     monkeypatch.setattr(chat_router, "_mempalace_load_user_facts", fake_empty)
     monkeypatch.setattr(chat_router, "_safe_load_portrait", fake_empty)
-    monkeypatch.setattr(chat_router, "run_zoe_agent_streaming", fake_zoe_stream)
+    # chat's _brain_streaming IS brain_dispatch.brain_streaming (W4-C1), which
+    # resolves the legacy brain via a lazy `from zoe_agent import ...` at CALL
+    # time — so the fake must be patched on zoe_agent; a chat-module patch no
+    # longer intercepts it. Dispatch also re-reads ZOE_USE_CORE_BRAIN at call
+    # time, so pin the env too. The _USE_ZOE_CORE/_USE_LOCAL_BRAIN patches above
+    # are still required: they gate lane ENTRY inside chat.py.
+    monkeypatch.setenv("ZOE_USE_CORE_BRAIN", "false")
+    monkeypatch.setattr(zoe_agent, "run_zoe_agent_streaming", fake_zoe_stream)
     monkeypatch.setattr(chat_router, "_iter_hermes_stream_events", fake_hermes_events)
     monkeypatch.setattr(chat_router, "_record_run_state", fake_record_run_state)
     monkeypatch.setattr(chat_router, "_persist_ag_ui_run", fake_persist_agui)

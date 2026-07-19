@@ -14,6 +14,7 @@ from agent_safety import SSRFBlocked, assert_panel_host, is_allowed_panel_host
 from auth import (
     get_current_user,
     require_admin,
+    require_signed_in,
     get_a2a_caller,
     require_intent_dispatch_auth,
     require_internal_token,
@@ -2203,8 +2204,16 @@ _DEFAULT_DISPLAY_PREFS = {
     "idle_enabled": True,
     "idle_seconds": 120,
     "idle_brightness": 30,
-    "off_enabled": True,
+    # The panel must never power the screen fully OFF — it drifts to a DIMMED
+    # sleep screen instead (idle_brightness + the estate's 'sleep' surface).
+    # off_enabled stays a togglable pref, but defaults OFF so the screen stays a
+    # dim, visible clock rather than going black.
+    "off_enabled": False,
     "off_seconds": 900,
+    # Estate idle→dimmed-sleep drift (the touch UI reads these): after
+    # sleep_seconds of no touch/voice the panel shows the dim 'sleep' clock.
+    "sleep_enabled": True,
+    "sleep_seconds": 180,
 }
 
 _DEFAULT_PI_HOST = os.environ.get("ZOE_PI_HOST", "192.168.1.61")
@@ -2247,6 +2256,34 @@ async def get_display_preferences(
         "pi_host": pi_host,
         "preferences": prefs,
     }
+
+
+@router.get("/panel/idle-logout")
+async def get_panel_idle_logout():
+    """The panel idle-logout window in seconds (no interaction → session lapses).
+
+    Deliberately unauthenticated so the panel settings screen can display it
+    without a token — it's not sensitive.
+    """
+    from routers.voice_tts import _panel_idle_logout_s
+    return {"seconds": await _panel_idle_logout_s()}
+
+
+@router.put("/panel/idle-logout")
+async def put_panel_idle_logout(
+    request: Request,
+    user: dict = Depends(require_signed_in),
+):
+    """Set the panel idle-logout window (seconds, clamped 0..24h). Requires a
+    signed-in, non-guest user — it governs how long a login stays trusted."""
+    body = await request.json()
+    try:
+        seconds = int((body or {}).get("seconds"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="seconds must be an integer")
+    from routers.voice_tts import _set_panel_idle_logout_s
+    saved = await _set_panel_idle_logout_s(seconds)
+    return {"seconds": saved}
 
 
 async def _proxy_reload_to_pi(pi_host: str) -> None:
@@ -2310,8 +2347,9 @@ async def put_display_preferences(
                 device_id, enabled, day_brightness,
                 night_enabled, night_start, night_end, night_brightness,
                 idle_enabled, idle_seconds, idle_brightness,
-                off_enabled, off_seconds, pi_host, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                off_enabled, off_seconds,
+                sleep_enabled, sleep_seconds, pi_host, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
            ON CONFLICT(device_id) DO UPDATE SET
                 enabled=excluded.enabled,
                 day_brightness=excluded.day_brightness,
@@ -2324,6 +2362,8 @@ async def put_display_preferences(
                 idle_brightness=excluded.idle_brightness,
                 off_enabled=excluded.off_enabled,
                 off_seconds=excluded.off_seconds,
+                sleep_enabled=excluded.sleep_enabled,
+                sleep_seconds=excluded.sleep_seconds,
                 pi_host=excluded.pi_host,
                 updated_at=NOW()""",
         (
@@ -2339,6 +2379,8 @@ async def put_display_preferences(
             int(merged["idle_brightness"]),
             1 if merged["off_enabled"] else 0,
             int(merged["off_seconds"]),
+            1 if merged["sleep_enabled"] else 0,
+            int(merged["sleep_seconds"]),
             pi_host,
         ),
     )

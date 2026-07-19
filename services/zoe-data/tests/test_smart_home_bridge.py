@@ -11,6 +11,8 @@ import pytest
 import smart_home_service
 from skybridge_service import classify_skybridge_intent, skybridge_intent_requires_identity
 
+pytestmark = pytest.mark.ci_safe
+
 
 # ── classifier (no bridge needed) ────────────────────────────────────────────
 

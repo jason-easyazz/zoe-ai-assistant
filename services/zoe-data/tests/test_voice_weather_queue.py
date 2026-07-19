@@ -37,6 +37,12 @@ def test_supersedes_old_voice_weather_actions() -> None:
         "new-nav",
         "new-card",
     )
+    # Estate-repointed nav (home.html?domain=weather) is superseded too.
+    assert _should_supersede_voice_weather_action(
+        _row("panel_navigate", {"url": "/touch/home.html?domain=weather&say=Rain"}),
+        "new-nav",
+        "new-card",
+    )
     assert _should_supersede_voice_weather_action(
         _row("show_card", {"type": "weather"}),
         "new-nav",
@@ -88,6 +94,18 @@ def test_supersedes_stale_voice_actions_for_skybridge_surface() -> None:
     )
     assert _should_supersede_voice_skybridge_action(
         _row("show_card", {"source": "voice:skybridge"}),
+        "new-nav",
+        "new-card",
+    )
+    # Estate-repointed per-domain navs (home.html?domain=<domain>) are superseded.
+    assert _should_supersede_voice_skybridge_action(
+        _row("panel_navigate", {"url": "/touch/home.html?domain=calendar&say=x"}),
+        "new-nav",
+        "new-card",
+    )
+    # A bare estate-home nav (no migrated domain) is left alone.
+    assert not _should_supersede_voice_skybridge_action(
+        _row("panel_navigate", {"url": "/touch/home.html"}),
         "new-nav",
         "new-card",
     )

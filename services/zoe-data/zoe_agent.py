@@ -2765,12 +2765,14 @@ async def _dispatch_tool(tool_name: str, args: dict, user_id: str = "guest") -> 
         page = str((args or {}).get("page", "")).strip().lower()
         panel_id = str((args or {}).get("panel_id") or os.environ.get("ZOE_PANEL_ID", "zoe-touch-pi")).strip()
         base_url = _zoe_base_url()
+        # Estate (home.html) is the sole kiosk surface: navigate there with a
+        # ?domain= hint and let the estate open the matching screen (its
+        # DOMAIN_SCREEN map), mirroring the voice/chat panel-nav paths.
         page_map = {
-            "weather": f"{base_url}/touch/weather.html",
-            "calendar": f"{base_url}/touch/calendar.html",
-            # There is no dedicated reminders touch page in this build; calendar hosts reminder UX.
-            "reminders": f"{base_url}/touch/calendar.html",
-            "lists": f"{base_url}/touch/lists.html",
+            "weather": f"{base_url}/touch/home.html?domain=weather",
+            "calendar": f"{base_url}/touch/home.html?domain=calendar",
+            "reminders": f"{base_url}/touch/home.html?domain=reminders",
+            "lists": f"{base_url}/touch/home.html?domain=lists",
         }
         url = page_map.get(page)
         if not url:
@@ -3340,11 +3342,15 @@ async def _llm_call(
                         0.0,  # local LLM — always $0
                         _time.time(),
                     )
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.warning(
+                    "zoe_agent: llm_call_log insert failed — call NOT accounted: %s",
+                    _exc)
         _asyncio.ensure_future(_log_call())
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.warning(
+            "zoe_agent: could not schedule llm_call_log write — call NOT "
+            "accounted: %s", _exc)
 
     choice = data["choices"][0]["message"]
 

@@ -1,4 +1,5 @@
 """Lightweight ordering checks for AG-UI chat SSE (no live OpenClaw)."""
+import pytest
 import asyncio
 import uuid
 
@@ -16,6 +17,8 @@ from ag_ui.core import (
     ToolCallStartEvent,
 )
 from ag_ui.encoder import EventEncoder
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_text_stream_start_chunk_end():

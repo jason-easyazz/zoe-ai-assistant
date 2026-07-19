@@ -1,11 +1,14 @@
 """Tests for /api/system/delegate-sync (Phase 2.5 — zoe-core brain delegation)."""
 from __future__ import annotations
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import auth
 from routers.system import router as system_router
+
+pytestmark = pytest.mark.ci_safe
 
 
 def _app() -> FastAPI:

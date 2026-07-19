@@ -17,12 +17,21 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 require_clean_tree() {
     local phase="$1"
     git -C "$LIVE" update-index -q --refresh
-    if [[ -n "$(git -C "$LIVE" status --porcelain)" ]]; then
+    # Block only on TRACKED modifications — an uncommitted tracked change would be
+    # clobbered by the fast-forward below, so it must stop the deploy. Untracked
+    # files are runtime artifacts on the live checkout (data/chroma/,
+    # data/music-assistant/ sidecars, HACS, music_discovery/, …); most are
+    # gitignored, but a plain `status --porcelain` still counts any that aren't,
+    # which made this gate refuse EVERY normal deploy. The sibling rollback guard
+    # require_no_tracked_dirt already encodes this intent (tracked-only). Match it
+    # so the blessed path is actually runnable instead of always bypassed.
+    if ! git -C "$LIVE" diff --quiet || ! git -C "$LIVE" diff --cached --quiet; then
         cat >&2 <<EOF
-✗ REFUSING TO DEPLOY: live tree $LIVE has uncommitted changes during $phase.
-  Commit, stash, or move those changes before running deploy_live.sh.
+✗ REFUSING TO DEPLOY: live tree $LIVE has uncommitted tracked changes during $phase.
+  A fast-forward pull would overwrite them. Commit, stash, or move those changes
+  before running deploy_live.sh. (Untracked runtime artifacts do not block.)
 EOF
-        git -C "$LIVE" status --short >&2
+        git -C "$LIVE" status --short --untracked-files=no >&2
         exit 1
     fi
 }
@@ -48,6 +57,27 @@ if [[ "$cur" != "main" ]]; then
   merge the PR, then re-run this script. To re-pin the live tree:
       git -C $LIVE checkout main
 EOF
+    exit 1
+fi
+
+# Serialize against the CONTINUOUS-DEPLOY runner. `.github/workflows/deploy.yml`
+# runs on every push to main and does `git fetch origin main` + `git reset --hard
+# FETCH_HEAD` on THIS same shared .git/worktree. If a merge lands while this
+# script runs, both paths advance main at once and lose the ref-lock race
+# ("cannot lock ref …") — the runner has 5 fetch retries, this manual path had
+# zero coordination and aborted mid-op. Hold a shared flock across the whole
+# mutating section (fetch → merge → restart → any rollback) so the two paths
+# take turns. The runner takes the SAME lock in its pull/reset step. The GH
+# `production` concurrency group only serializes runner-vs-runner, not this.
+#
+# The lock PATH is hardcoded (NOT an env override) and MUST stay byte-identical
+# to the path in .github/workflows/deploy.yml — two processes on different lock
+# files each acquire uncontended and the ref-lock race silently returns. If this
+# path ever changes, change deploy.yml in the same commit.
+DEPLOY_LOCK="/tmp/zoe-deploy.lock"
+exec 9>"$DEPLOY_LOCK"
+if ! flock -w "${ZOE_DEPLOY_LOCK_WAIT:-300}" 9; then
+    echo "✗ REFUSING TO DEPLOY: could not acquire $DEPLOY_LOCK within ${ZOE_DEPLOY_LOCK_WAIT:-300}s (another deploy in progress?)." >&2
     exit 1
 fi
 

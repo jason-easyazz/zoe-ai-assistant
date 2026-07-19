@@ -38,14 +38,18 @@ ZOE_PERF=1 python3 scripts/perf/measure_voice.py --last 10 --json /tmp/voice.jso
 # lock so it can't OOM against a sibling replay loading a second Kokoro model:
 flock /tmp/zoe-voice-harness.lock -c \
   'ZOE_PERF=1 python3 scripts/perf/measure_tts.py --replies-file replies.txt --cold \
-     --service-dir services/zoe-data --json /tmp/tts.json'
+     --json /tmp/tts.json'
 # or source replies live from the corpus (needs a reachable brain):
 #   ... measure_tts.py --run-replay --last 10 ...
 ```
 
-`measure_voice.py` defaults to `services/zoe-data` under the repo root. From a
-git **worktree** (where `.env` is gitignored and absent) point it at the live
-checkout: `--service-dir /home/zoe/assistant/services/zoe-data`.
+`measure_voice.py` and `measure_tts.py` need the live `services/zoe-data/.env`,
+which is gitignored and therefore absent in a git **worktree**. `--service-dir`
+auto-resolves, so a worktree run needs no flag: explicit flag (always wins) →
+this repo's `services/zoe-data` if it has a `.env` → the **main worktree's**
+(via git's `--git-common-dir`). One shared ladder in `scripts/lib/service_dir.py`
+backs this and `voice_regression_probe.py` alike. With no `.env` anywhere they
+still skip **loudly** — the ladder fixes the default, not the failure mode.
 
 ## Before/after workflow (how to prove a speed change)
 
@@ -71,6 +75,13 @@ warm vs cold and small vs large prefill are not comparable.
 - Generation is capped (`--max-tokens`, default 64) to keep probes light.
 
 ## Baseline — captured 2026-06-25 (Jetson Orin NX, Gemma 4 E4B QAT Q4_K_XL, GPU)
+
+> **These numbers predate the July latency work and are kept as a dated snapshot, not current
+> performance.** Since then: the two-stage router went ACTIVE (#1322), Kokoro moved to CUDA, and the
+> voice regression baseline (`voice_regression_probe.py`) was ratcheted 2026-07-16 to brain ~1868 ms /
+> e2e ~1896 ms / STT ~580 ms (warm-harness, relative). The **TTS** table below is especially stale —
+> the live sidecar now runs **CUDA (pytorch), RTF ~0.08**, not the CPU/onnx path measured here. See
+> `docs/knowledge/voice-pipeline.md` for the current path + the "Latency wins since 2026-07-02" section.
 
 Brain (`measure_speed.py`):
 
@@ -107,9 +118,12 @@ af_sky, first speakable clause):
 | First unit, **cache MISS** (a *novel* brain clause) | **~1734 ms** | 1289–2294 ms | 1026–3681 ms |
 
 The sidecar phrase-caches af_sky/speed-1.0/<=240-char text, so a recurring opener
-is instant but a fresh clause pays full CPU synth — and synth is ~linear in
-characters (13-char clause ≈ 1.0 s, ~60-char clause ≈ 2–3.7 s). The default
-`ZOE_KOKORO_BACKEND=onnx` runs on CPU to save the ~2.3 GB the PyTorch/CUDA build
-holds; the "~150 ms warm GPU" in code comments is the non-default `pytorch`
-backend. See `docs/architecture/tts-first-chunk-latency.md` for the full analysis
-and safe optimization seams (warm the openers, not just whole phrases).
+is instant but a fresh clause pays full synth. **The numbers above are the old
+CPU/onnx cost and no longer reflect the live sidecar:** the shipped
+`kokoro-tts.service` sets `ZOE_KOKORO_BACKEND=pytorch` (CUDA, ~2.3 GB), which runs
+at **RTF ~0.08** — a fresh full-sentence synth is ~0.3 s with zero internal gaps.
+The *code* default in `scripts/setup/kokoro_sidecar.py` is still `onnx`/CPU, so the
+CUDA win comes from the systemd unit forcing `pytorch`, not the code default. See
+`docs/knowledge/voice-pipeline.md` (current path) and
+`docs/architecture/tts-first-chunk-latency.md` for the analysis and safe
+optimization seams (warm the openers, not just whole phrases).

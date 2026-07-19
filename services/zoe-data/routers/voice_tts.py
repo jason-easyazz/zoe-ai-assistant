@@ -486,9 +486,16 @@ def _should_supersede_voice_weather_action(row, nav_key: str, card_key: str) -> 
         payload = json.loads(row["payload"] or "{}")
     except Exception:
         payload = {}
+    url = str(payload.get("url") or "")
+    base = url.split("?", 1)[0]
+    # Legacy /touch/weather.html (retired) or the estate equivalent the weather
+    # helper now navigates to (/touch/home.html?domain=weather). Anchor the base
+    # path before testing the domain param, matching the skybridge superseder.
+    nav_matches = base == "/touch/weather.html" or (
+        base == "/touch/home.html" and "domain=weather" in url
+    )
     return (
-        row["action_type"] == "panel_navigate"
-        and payload.get("url") == "/touch/weather.html"
+        row["action_type"] == "panel_navigate" and nav_matches
     ) or (
         row["action_type"] == "show_card"
         and payload.get("type") == "weather"
@@ -507,13 +514,22 @@ def _should_supersede_voice_skybridge_action(row, nav_key: str, card_key: str) -
     if source == "voice:skybridge":
         return True
     if action_type == "panel_navigate":
-        url = str(payload.get("url") or "").split("?", 1)[0]
-        return url in {
+        url = str(payload.get("url") or "")
+        base = url.split("?", 1)[0]
+        # Legacy per-domain pages (retired) plus the estate equivalents the voice
+        # helpers now navigate to (/touch/home.html?domain=<domain>).
+        if base in {
             "/touch/calendar.html",
             "/touch/weather.html",
             "/touch/lists.html",
             "/touch/chat.html",
-        }
+        }:
+            return True
+        if base == "/touch/home.html":
+            return any(
+                f"domain={d}" in url
+                for d in ("calendar", "weather", "lists", "chat", "reminders", "person")
+            )
     if action_type == "show_card":
         return str(payload.get("type") or "").lower() in {
             "calendar",
@@ -764,7 +780,12 @@ async def _broadcast_weather_ui(
         "id": f"voice_weather_nav_{panel_id}_{delivery_key}",
         "action_type": "panel_navigate",
         "payload": {
-            "url": "/touch/weather.html",
+            # Estate is the sole kiosk: land on home.html and let the estate open
+            # the weather surface (DOMAIN_SCREEN['weather']). ?say= shows the spoken
+            # summary in the dock, mirroring _broadcast_skybridge_ui.
+            "url": "/touch/home.html?domain=weather" + (
+                f"&say={quote_plus(str(summary or '')[:300])}" if summary else ""
+            ),
             "label": "Opening weather",
             "panel_id": panel_id,
         },
@@ -867,7 +888,11 @@ async def _broadcast_calendar_ui(
         "id": f"voice_calendar_nav_{panel_id}_{delivery_key}",
         "action_type": "panel_navigate",
         "payload": {
-            "url": "/touch/calendar.html",
+            # Estate is the sole kiosk: land on home.html; the estate opens the
+            # calendar surface (DOMAIN_SCREEN['calendar'] -> 'day').
+            "url": "/touch/home.html?domain=calendar" + (
+                f"&say={quote_plus(str(summary or '')[:300])}" if summary else ""
+            ),
             "label": "Opening calendar",
             "panel_id": panel_id,
         },
@@ -1269,7 +1294,11 @@ async def _broadcast_reminder_ui(
         "id": f"voice_reminder_nav_{panel_id}_{delivery_key}",
         "action_type": "panel_navigate",
         "payload": {
-            "url": "/touch/dashboard.html",
+            # Estate is the sole kiosk: land on home.html; the estate opens the
+            # reminder surface (DOMAIN_SCREEN['reminders'] -> 'reminder').
+            "url": "/touch/home.html?domain=reminders" + (
+                f"&say={quote_plus(str(summary or '')[:300])}" if summary else ""
+            ),
             "label": "Opening reminders",
             "panel_id": panel_id,
         },
@@ -1504,14 +1533,101 @@ async def _resolve_panel_default_user(panel_id: str, db) -> Optional[str]:
     return None
 
 
+async def _touch_panel_session(panel_id: str, user_id: str) -> None:
+    """Refresh the panel's ui_panel_sessions heartbeat for user_id (last_seen_at=NOW()).
+
+    The session row is otherwise only written on touch login / UI actions, so a
+    VOICE-only session silently expired after the trust window (~15 min) even while
+    the user was still talking — dropping their identity to guest and blocking
+    user-scoped actions. Calling this on each voice turn keeps an actively-used
+    login alive (it only lapses after real inactivity). Best-effort on a dedicated
+    connection (the request db is released on the detached streaming path); never
+    raises. Does NOT create a session for guest/None.
+    """
+    if not panel_id or not user_id or user_id in _GUEST_SENTINEL_USERS:
+        return
+    try:
+        from db_pool import get_db_ctx as _get_db_ctx
+        async with _get_db_ctx() as _conn:
+            await _conn.execute(
+                """INSERT INTO ui_panel_sessions (panel_id, user_id, last_seen_at, updated_at)
+                   VALUES (?, ?, NOW(), NOW())
+                   ON CONFLICT(panel_id) DO UPDATE SET
+                     user_id=excluded.user_id,
+                     last_seen_at=NOW(),
+                     updated_at=NOW()""",
+                (panel_id, user_id),
+            )
+            await _conn.commit()
+    except Exception as exc:
+        logger.debug("voice: panel session heartbeat failed for panel=%s (non-fatal): %s", panel_id, exc)
+
+
+_PANEL_IDLE_LOGOUT_KEY = "panel_idle_logout_s"
+_PANEL_IDLE_MAX_S = 24 * 60 * 60
+_panel_idle_cache: dict = {"value": None, "expires": 0.0}
+
+
+def _clamp_idle_s(value: int) -> int:
+    return max(0, min(int(value), _PANEL_IDLE_MAX_S))
+
+
 def _panel_session_trust_window_s() -> int:
-    """Seconds that an active panel session is trusted for voice scope gating."""
+    """Env/default fallback for the idle-logout window (used when nothing is
+    persisted in app_settings). The panel setting overrides this — see
+    _panel_idle_logout_s()."""
     raw = str(os.environ.get("ZOE_PANEL_SESSION_TRUST_WINDOW_S", "900")).strip()
     try:
-        value = int(raw)
+        return _clamp_idle_s(int(raw))
     except Exception:
         return 900
-    return max(0, min(value, 24 * 60 * 60))
+
+
+async def _read_persisted_idle_logout_s() -> Optional[int]:
+    """Panel idle-logout window persisted in system_preferences (settable from the
+    panel settings screen) or None; never raises (fail-open to the env default)."""
+    try:
+        from database import get_db_ctx
+        async with get_db_ctx() as db:
+            cur = await db.execute(
+                "SELECT value FROM system_preferences WHERE key = ?", (_PANEL_IDLE_LOGOUT_KEY,)
+            )
+            row = await cur.fetchone()
+        if row and str(row["value"]).strip():
+            return _clamp_idle_s(int(str(row["value"]).strip()))
+    except Exception as exc:
+        logger.debug("panel idle-logout read failed (fail-open to env): %s", exc)
+    return None
+
+
+async def _panel_idle_logout_s() -> int:
+    """Effective idle-logout window: persisted panel setting → env → default,
+    cached in-process (30s) so it isn't a DB read on every voice turn."""
+    import time as _t
+    if _panel_idle_cache["value"] is not None and _t.monotonic() < _panel_idle_cache["expires"]:
+        return _panel_idle_cache["value"]
+    persisted = await _read_persisted_idle_logout_s()
+    value = persisted if persisted is not None else _panel_session_trust_window_s()
+    _panel_idle_cache["value"] = value
+    _panel_idle_cache["expires"] = _t.monotonic() + 30.0
+    return value
+
+
+async def _set_panel_idle_logout_s(seconds: int, updated_by: str = "panel-settings") -> int:
+    """Persist the panel idle-logout window to system_preferences; invalidate cache."""
+    seconds = _clamp_idle_s(seconds)
+    from database import get_db_ctx
+    async with get_db_ctx() as db:
+        await db.execute(
+            """INSERT INTO system_preferences (key, value, updated_by, updated_at)
+               VALUES (?, ?, ?, NOW()::text)
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                 updated_by = excluded.updated_by, updated_at = NOW()::text""",
+            (_PANEL_IDLE_LOGOUT_KEY, str(seconds), updated_by),
+        )
+        await db.commit()
+    _panel_idle_cache["value"] = None
+    return seconds
 
 
 async def _resolve_recent_panel_session_user(panel_id: str, db) -> Optional[str]:
@@ -1519,7 +1635,7 @@ async def _resolve_recent_panel_session_user(panel_id: str, db) -> Optional[str]
     Resolve panel user only when the panel session heartbeat is fresh enough
     to be considered actively authenticated.
     """
-    trust_window_s = _panel_session_trust_window_s()
+    trust_window_s = await _panel_idle_logout_s()
     if trust_window_s <= 0:
         return None
     try:
@@ -2251,7 +2367,9 @@ async def _handle_introduce_intent(
         await _bc_intro.broadcast("all", "ui_action", {
             "action": {
                 "action": "panel_navigate",
-                "url": f"/touch/people.html?person={person_id}&intro=1",
+                # Estate is the sole kiosk: land on home.html; the estate opens the
+                # person surface (DOMAIN_SCREEN falls through to FULL['person']).
+                "url": f"/touch/home.html?domain=person&person={person_id}&intro=1",
             },
             "panel_id": panel_id,
             "turn_key": turn_key,
@@ -2439,6 +2557,15 @@ async def voice_command(
     text = str((payload or {}).get("text", "")).strip()
     panel_id = str((payload or {}).get("panel_id", caller.get("panel_id") or "unknown"))
     identified_user_id: Optional[str] = (payload or {}).get("identified_user_id") or None
+    if not identified_user_id:
+        # Panels that match speaker profiles locally send a claim + score; the
+        # threshold decision stays server-side so a panel can never lower it,
+        # and only device-token callers may claim at all. The claimed user must
+        # STILL hold consent in the DB — a panel whose profile cache predates a
+        # revocation must not keep identifying that user (fail closed).
+        _claimed = _accept_panel_voice_claim(payload, caller)
+        if _claimed and await _voice_claim_consented(_claimed):
+            identified_user_id = _claimed
     # Forwarded by /voice/turn so end-to-end total can be recorded from the
     # true start of the request (audio upload). Falls back to command start.
     _t_turn_start = (payload or {}).get("_t_turn_start")
@@ -2524,6 +2651,27 @@ async def voice_command(
         except Exception:
             _panel_recent_user = None
             _panel_default_user = None
+    # Keep the panel's login alive while it's actively in use. The session tracks
+    # "whoever is logged into the panel" and should lapse only after real inactivity
+    # — but ui_panel_sessions is written only on touch/login, so a VOICE-only session
+    # expired mid-conversation (~15 min trust window), dropping the user to guest and
+    # blocking their scoped commands. The heartbeat below is that fix (#1349): a user
+    # whose session is STILL FRESH keeps it fresh by talking.
+    #
+    # A lapsed session must NOT be revived here. `_panel_recent_user` is the
+    # freshness-gated signal, and it feeds `_scope_identity_user` → the skybridge
+    # user and every `user_scoped` PIN gate. `_resolve_panel_default_user` has NO
+    # freshness filter — it returns the newest `ui_panel_sessions` row, i.e. "whoever
+    # last signed in here", not an operator-declared owner. Promoting it into
+    # `_panel_recent_user` therefore re-trusts a logged-OUT user indefinitely, so
+    # anyone at the panel reads their lists/calendar/reminders with no PIN. It is
+    # also self-perpetuating: the heartbeat would refresh that expired session on
+    # every turn — including a guest's — so idle logout could never fire and #1348's
+    # stale-owner reclaim could never arm. Freshness confers trust (#1348); a stale
+    # owner is reclaimable. Attribution is unaffected: `_panel_default_user` is
+    # already the last resort in `effective_user` below.
+    if _panel_recent_user and _panel_recent_user not in _GUEST_SENTINEL_USERS:
+        await _touch_panel_session(panel_id, _panel_recent_user)
     if not _bound_user and _panel_recent_user:
         _ses = _VOICE_SESSIONS.get(panel_id)
         if _ses is not None:
@@ -4278,6 +4426,9 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
     }
     if (payload or {}).get("identified_user_id"):
         command_payload["identified_user_id"] = payload["identified_user_id"]
+    for _claim_key in ("voice_user_id", "voice_score"):
+        if (payload or {}).get(_claim_key) is not None:
+            command_payload[_claim_key] = payload[_claim_key]
 
     result = await voice_command(command_payload, caller=caller, stream=False, db=db)
     result["text"] = transcript
@@ -4443,6 +4594,9 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     }
     if (payload or {}).get("identified_user_id"):
         command_payload["identified_user_id"] = payload["identified_user_id"]
+    for _claim_key in ("voice_user_id", "voice_score"):
+        if (payload or {}).get(_claim_key) is not None:
+            command_payload[_claim_key] = payload[_claim_key]
 
     # Delegate LLM + per-sentence TTS to the existing streaming pipeline.
     # (voice_command's stream generator records the downstream llm_first_token /
@@ -4940,6 +5094,67 @@ def _compute_resemblyzer_embedding(wav_path: str) -> Optional[bytes]:
         return None
 
 
+def _speaker_id_threshold() -> float:
+    """Resemblyzer cosine acceptance threshold, read per call so .env flips apply."""
+    try:
+        return float(os.environ.get("ZOE_SPEAKER_ID_THRESHOLD", "0.82"))
+    except ValueError:
+        return 0.82
+
+
+def _accept_panel_voice_claim(payload: dict, caller: dict) -> Optional[str]:
+    """Gate a panel-computed speaker-ID claim (voice_user_id + voice_score).
+
+    The panel matches embeddings against its synced profile cache and sends
+    only a claim; acceptance is decided HERE against the server's threshold,
+    so a panel cannot make itself more trusted than the server allows. Claims
+    are honoured from DEVICE-TOKEN callers only — a logged-in browser session
+    must not be able to assert an arbitrary speaker identity. A missing/
+    unparseable score or a below-threshold claim is ignored (the turn
+    proceeds with the panel-binding fallbacks, exactly as with no claim).
+    """
+    if (caller or {}).get("source") != "device":
+        return None
+    payload = payload or {}
+    user = str(payload.get("voice_user_id") or "").strip()
+    if not user:
+        return None
+    try:
+        score = float(payload.get("voice_score"))
+    except (TypeError, ValueError):
+        return None
+    threshold = _speaker_id_threshold()
+    if score >= threshold:
+        return user
+    logger.info(
+        "voice claim rejected: user=%s score=%.4f < threshold=%.2f", user, score, threshold
+    )
+    return None
+
+
+async def _voice_claim_consented(user_id: str) -> bool:
+    """True iff the user still has a consented speaker profile.
+
+    Guards the panel-claim path against a stale panel cache: consent
+    revocation drops the row from /profiles/sync and /identify, and this
+    check closes the third door. Fails CLOSED — if the DB can't answer,
+    the claim is dropped (the turn falls back to panel-binding identity,
+    which is the same outcome as no claim).
+    """
+    try:
+        from db_compat import get_compat_db as _get_compat_db
+        async with _get_compat_db() as db:
+            async with db.execute(
+                "SELECT 1 FROM speaker_profiles WHERE user_id=? AND consent_at IS NOT NULL LIMIT 1",
+                (user_id,),
+            ) as cur:
+                row = await cur.fetchone()
+        return row is not None
+    except Exception as exc:
+        logger.warning("voice claim consent check failed for %s (dropping claim): %s", user_id, exc)
+        return False
+
+
 def _cosine_similarity(a: bytes, b: bytes) -> float:
     """Cosine similarity between two float32 byte blobs."""
     try:
@@ -4970,6 +5185,13 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
     user_id = str((payload or {}).get("user_id", caller.get("user_id", "unknown")))
     display_name = str((payload or {}).get("display_name", user_id)).strip() or user_id
     panel_id = str((payload or {}).get("panel_id", caller.get("panel_id") or ""))
+    # Biometric enrollment is opt-in (W6): the enroll UI sends consent=true after
+    # an explicit checkbox. Without recorded consent the profile is stored but
+    # never matched against or synced to a panel (identify/sync filter on it).
+    # Tri-state: True stamps consent_at, False REVOKES it (SET NULL — the user
+    # changed their mind), absent leaves the existing consent untouched.
+    _consent_raw = (payload or {}).get("consent")
+    consent: Optional[bool] = None if _consent_raw is None else bool(_consent_raw)
 
     if not b64:
         raise HTTPException(status_code=400, detail="audio_base64 is required")
@@ -5017,13 +5239,31 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
                        display_name=? WHERE id=?""",
                     (averaged_norm.astype(np.float32).tobytes(), display_name, old_id),
                 )
+                if consent is True:
+                    await db.execute(
+                        "UPDATE speaker_profiles SET consent_at=CURRENT_TIMESTAMP WHERE id=?",
+                        (old_id,),
+                    )
+                elif consent is False:
+                    # Explicit revocation: drop out of the match pool + sync feed.
+                    await db.execute(
+                        "UPDATE speaker_profiles SET consent_at=NULL WHERE id=?",
+                        (old_id,),
+                    )
                 profile_id = old_id
             else:
-                await db.execute(
-                    """INSERT INTO speaker_profiles (id, user_id, display_name, embedding_blob, panel_id)
-                       VALUES (?, ?, ?, ?, ?)""",
-                    (profile_id, user_id, display_name, embedding_bytes, panel_id or None),
-                )
+                if consent:
+                    await db.execute(
+                        """INSERT INTO speaker_profiles (id, user_id, display_name, embedding_blob, panel_id, consent_at)
+                           VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+                        (profile_id, user_id, display_name, embedding_bytes, panel_id or None),
+                    )
+                else:
+                    await db.execute(
+                        """INSERT INTO speaker_profiles (id, user_id, display_name, embedding_blob, panel_id)
+                           VALUES (?, ?, ?, ?, ?)""",
+                        (profile_id, user_id, display_name, embedding_bytes, panel_id or None),
+                    )
             await db.commit()
     except Exception as exc:
         logger.error("voice/enroll DB error: %s", exc)
@@ -5082,7 +5322,8 @@ async def voice_identify(payload: dict, caller: dict = Depends(_require_voice_au
     try:
         async with _get_compat_db() as db:
             async with db.execute(
-                "SELECT id, user_id, display_name, embedding_blob FROM speaker_profiles"
+                "SELECT id, user_id, display_name, embedding_blob FROM speaker_profiles "
+                "WHERE consent_at IS NOT NULL"
             ) as cur:
                 profiles = await cur.fetchall()
     except Exception as exc:
@@ -5105,7 +5346,7 @@ async def voice_identify(payload: dict, caller: dict = Depends(_require_voice_au
             best_name = dname
 
     # Resemblyzer cosine similarity > 0.82 is typically a match.
-    threshold = float(os.environ.get("ZOE_SPEAKER_ID_THRESHOLD", "0.82"))
+    threshold = _speaker_id_threshold()
     if best_score >= threshold:
         return {
             "ok": True,
@@ -5123,6 +5364,46 @@ async def voice_identify(payload: dict, caller: dict = Depends(_require_voice_au
     }
 
 
+@router.get("/profiles/sync")
+async def voice_profiles_sync(caller: dict = Depends(_require_voice_auth)):
+    """Panel-facing profile feed for ON-DEVICE speaker matching.
+
+    Returns consented profiles (embedding + user_id) plus the server's
+    acceptance threshold so the panel daemon can cosine-match locally and
+    send back only {voice_user_id, voice_score} per turn. Device-token
+    callers only: this hands out biometric embeddings and must never be
+    reachable from a browser session.
+    """
+    if caller.get("source") != "device":
+        raise HTTPException(status_code=403, detail="device token required")
+    from db_compat import get_compat_db as _get_compat_db
+
+    try:
+        async with _get_compat_db() as db:
+            async with db.execute(
+                "SELECT user_id, display_name, embedding_blob, sample_count FROM speaker_profiles "
+                "WHERE consent_at IS NOT NULL ORDER BY user_id"
+            ) as cur:
+                rows = await cur.fetchall()
+    except Exception as exc:
+        logger.error("voice/profiles/sync DB error: %s", exc)
+        raise HTTPException(status_code=500, detail="DB error") from exc
+
+    return {
+        "ok": True,
+        "threshold": _speaker_id_threshold(),
+        "profiles": [
+            {
+                "user_id": r[0],
+                "display_name": r[1],
+                "embedding_base64": base64.b64encode(bytes(r[2])).decode("ascii"),
+                "sample_count": r[3] or 1,
+            }
+            for r in rows
+        ],
+    }
+
+
 @router.get("/profiles")
 async def voice_profiles(caller: dict = Depends(_require_voice_auth)):
     """List enrolled speaker profiles (id, user_id, display_name, sample_count).
@@ -5134,14 +5415,16 @@ async def voice_profiles(caller: dict = Depends(_require_voice_auth)):
     try:
         async with _get_compat_db() as db:
             async with db.execute(
-                "SELECT id, user_id, display_name, sample_count, panel_id FROM speaker_profiles ORDER BY display_name"
+                "SELECT id, user_id, display_name, sample_count, panel_id, consent_at "
+                "FROM speaker_profiles ORDER BY display_name"
             ) as cur:
                 rows = await cur.fetchall()
         return {
             "ok": True,
             "profiles": [
                 {"id": r[0], "user_id": r[1], "display_name": r[2],
-                 "sample_count": r[3] or 1, "panel_id": r[4]}
+                 "sample_count": r[3] or 1, "panel_id": r[4],
+                 "consented": r[5] is not None}
                 for r in rows
             ]
         }

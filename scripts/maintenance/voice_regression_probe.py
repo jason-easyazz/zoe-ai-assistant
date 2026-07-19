@@ -53,6 +53,13 @@ import time
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+from service_dir import (  # noqa: E402 — sibling-import convention, scripts/ is not a package
+    resolve_service_dir as _resolve_service_dir,
+    service_dir_candidates as _service_dir_candidates,
+    SERVICE_DIR_HELP,
+)
+
 REPO = Path(__file__).resolve().parents[2]
 MEASURE = REPO / "scripts" / "perf" / "measure_voice.py"
 LOCK = "/tmp/zoe-voice-harness.lock"  # shared with all voice harness runs — no concurrent Kokoro OOM
@@ -99,11 +106,12 @@ def run_measure(samples: int, service_dir: str, user: str, timeout: int) -> dict
         if not os.path.getsize(out_json):
             # measure_voice exits 0 on its skip paths (no .env in --service-dir,
             # missing replay harness) without writing JSON — surface that
-            # instead of a cryptic JSONDecodeError. Worktree runs must point
-            # --service-dir at the LIVE services/zoe-data (env lives there).
+            # instead of a cryptic JSONDecodeError. --service-dir auto-resolves
+            # to the live env (see _resolve_service_dir); reaching here means it
+            # found none anywhere, which is a loud error, never a pass.
             raise RuntimeError(
-                "measure_voice skipped without results — likely no .env in "
-                f"--service-dir; stderr: {proc.stderr[-300:]}"
+                "measure_voice skipped without results — no .env in resolved "
+                f"--service-dir {service_dir!r}; stderr: {proc.stderr[-300:]}"
             )
         with open(out_json) as fh:
             return json.load(fh)
@@ -218,6 +226,45 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _dsn_from_env_file(env_file: Path) -> str:
+    """Parse POSTGRES_URL out of a services `.env` file; "" if absent/unreadable."""
+    try:
+        with open(env_file) as fh:
+            for line in fh:
+                if line.startswith("POSTGRES_URL="):
+                    return line[len("POSTGRES_URL="):].strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return ""
+
+
+def _resolve_dsn(args) -> str:
+    """Resolve the Postgres DSN for the cleanup sweep. Precedence:
+
+    1. an explicit ``POSTGRES_URL`` in the environment;
+    2. ``--service-dir/.env`` — the SAME directory measure_voice.py uses to reach
+       the live service (already resolved by `_resolve_service_dir`, so a probe
+       run from a git WORKTREE lands on the live services/zoe-data);
+    3. each `_service_dir_candidates()` entry's `.env` — the same ladder the
+       service-dir resolution walks, so the two can't drift apart.
+
+    Returns "" when the DSN is genuinely unresolvable (caller must fail loudly,
+    not hide a real failure behind a silent success)."""
+    env_dsn = os.environ.get("POSTGRES_URL", "")
+    if env_dsn:
+        return env_dsn
+    service_dir = getattr(args, "service_dir", None)
+    if service_dir:
+        dsn = _dsn_from_env_file(Path(service_dir) / ".env")
+        if dsn:
+            return dsn
+    for candidate in _service_dir_candidates():
+        dsn = _dsn_from_env_file(candidate / ".env")
+        if dsn:
+            return dsn
+    return ""
+
+
 def cleanup_replay_artifacts(run_started_utc: str, args) -> bool:
     """Soft-delete replay artifacts: rows created during the probe window and
     owned by the replay identities only.
@@ -241,19 +288,11 @@ def cleanup_replay_artifacts(run_started_utc: str, args) -> bool:
     except ImportError as exc:
         print(f"cleanup: FAILED — asyncpg unavailable in the probe environment: {exc}", file=sys.stderr)
         return False
-    dsn = os.environ.get("POSTGRES_URL", "")
+    dsn = _resolve_dsn(args)
     if not dsn:
-        env_file = REPO / "services" / "zoe-data" / ".env"
-        try:
-            with open(env_file) as fh:
-                for line in fh:
-                    if line.startswith("POSTGRES_URL="):
-                        dsn = line[len("POSTGRES_URL="):].strip().strip('"').strip("'")
-                        break
-        except OSError:
-            pass
-    if not dsn:
-        print("cleanup: FAILED — POSTGRES_URL unavailable; replay artifacts were NOT swept", file=sys.stderr)
+        print("cleanup: FAILED — POSTGRES_URL unavailable (checked env, "
+              "--service-dir/.env, and REPO/services/zoe-data/.env); replay "
+              "artifacts were NOT swept", file=sys.stderr)
         return False
     replay_users = [getattr(args, "user", "jason") or "jason", "guest"]
     try:
@@ -358,7 +397,7 @@ def main() -> int:
     ap.add_argument("--samples", type=int, default=int(os.environ.get("ZOE_VOICE_PROBE_SAMPLES", "20")),
                     help="newest N corpus samples to replay")
     ap.add_argument("--user", default=os.environ.get("ZOE_VOICE_PROBE_USER", "jason"))
-    ap.add_argument("--service-dir", default=str(REPO / "services" / "zoe-data"))
+    ap.add_argument("--service-dir", default=None, help=SERVICE_DIR_HELP)
     ap.add_argument("--timeout", type=int, default=int(os.environ.get("ZOE_VOICE_PROBE_TIMEOUT_S", "900")))
     ap.add_argument("--baseline", type=Path, default=Path(os.environ.get("ZOE_VOICE_BASELINE", DEFAULT_BASELINE)))
     ap.add_argument("--results", type=Path, default=Path(os.environ.get("ZOE_VOICE_RESULTS", DEFAULT_RESULTS)))
@@ -371,6 +410,9 @@ def main() -> int:
     ap.add_argument("--no-cleanup", action="store_true",
                     help="skip the post-run replay-artifact cleanup (soft-delete of rows created during the replay window)")
     args = ap.parse_args()
+    # Resolve BEFORE anything reads it: _resolve_dsn and run_measure both consume
+    # args.service_dir, and both must see the same live dir.
+    args.service_dir = str(_resolve_service_dir(args.service_dir))
 
     _lock_fd = _acquire_harness_lock()  # noqa: F841 — held for process lifetime
 

@@ -6,6 +6,8 @@ import pytest
 
 from routers import chat
 
+pytestmark = pytest.mark.ci_safe
+
 
 @pytest.mark.asyncio
 async def test_chat_pi_hybrid_action_form_broadcasts_without_tool_memory_side_effects(monkeypatch):

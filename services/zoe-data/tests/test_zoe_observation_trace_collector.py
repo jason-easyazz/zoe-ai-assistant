@@ -3,6 +3,8 @@ import pytest
 from zoe_observation_trace import ObservationOutcome, ObservationTrace, ObservationTraceType
 from zoe_observation_trace_collector import ObservationTraceCollectorPolicy, collect_observation_traces
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _trace(
     trace_id: str,

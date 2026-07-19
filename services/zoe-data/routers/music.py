@@ -13,6 +13,8 @@ from typing import Any
 import httpx
 from fastapi import APIRouter
 
+from music_service import _first_image, _hi_res_art
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/music", tags=["music"])
@@ -76,6 +78,60 @@ async def _get_players() -> list | None:
     return None
 
 
+def _queue_item_art(item: dict) -> str:
+    """Resolve one queue item's cover to a real http(s) url.
+
+    MA hands a queue item its art as a single dict — {"type","path"} — and hangs
+    a richer `media_item` off it. Prefer the media_item's art: it's the same
+    i.ytimg maxres source `now-playing` reports, so the centre cover of the flow
+    matches the now-playing art instead of a lower-res yt3 thumb. Fall back to
+    the item's own thumb. `_first_image` understands both shapes and drops
+    anything non-http, so a missing cover degrades to the placeholder.
+    """
+    media_item = item.get("media_item")
+    art = _first_image(media_item) if isinstance(media_item, dict) else ""
+    return _hi_res_art(art or _first_image(item))
+
+
+def _queue_item_title(item: dict) -> str:
+    """The track title, WITHOUT the artist glued on.
+
+    A queue item's own `name` is a concatenation — live MA returns
+    "Livingston - Shadow" — while `media_item.name` carries the clean title
+    ("Shadow") and `media_item.artists[]` the artist. Splitting the composite on
+    " - " would be guesswork that breaks on any title containing a dash, so take
+    the clean field MA already gives us and fall back to `name` only when there
+    is no media_item (radio, some providers).
+    """
+    media_item = item.get("media_item")
+    if isinstance(media_item, dict):
+        name = media_item.get("name")
+        if isinstance(name, str) and name.strip():
+            return name
+    return item.get("name") or ""
+
+
+def _queue_item_artist(item: dict) -> str:
+    """The performing artist(s), flat.
+
+    Queue items have NO `artist` key at all — the panel read `it.artist` and got
+    undefined, so the artist line under every browsed cover was silently blank.
+    The real value is nested at media_item.artists[].name; resolve it here so the
+    panel keeps receiving a flat, already-resolved field instead of reaching into
+    MA's payload shape (the same reason `image` is resolved at this seam).
+    """
+    media_item = item.get("media_item")
+    if not isinstance(media_item, dict):
+        return ""
+    artists = media_item.get("artists") or []
+    names = [a.get("name", "").strip() for a in artists
+             if isinstance(a, dict) and isinstance(a.get("name"), str) and a.get("name").strip()]
+    if names:
+        return ", ".join(names)
+    artist = media_item.get("artist")
+    return artist.strip() if isinstance(artist, str) else ""
+
+
 async def _get_queue_items(queue_id: str, limit: int = 50) -> list | None:
     try:
         async with httpx.AsyncClient(timeout=5.0) as c:
@@ -86,7 +142,19 @@ async def _get_queue_items(queue_id: str, limit: int = 50) -> list | None:
             )
             if r.status_code == 200:
                 data = r.json()
-                return data if isinstance(data, list) else (data.get("items") or [])
+                items = data if isinstance(data, list) else (data.get("items") or [])
+                # Normalize art HERE or it reaches the panel as MA's raw dict and
+                # renders as "[object Object]" — this endpoint used to pass MA's
+                # payload through verbatim, which is how it dodged the shared
+                # extractor that already fixed the same bug on the other paths.
+                return [
+                    {**it,
+                     "image": _queue_item_art(it),
+                     "title": _queue_item_title(it),
+                     "artist": _queue_item_artist(it)}
+                    for it in items
+                    if isinstance(it, dict)
+                ]
     except Exception as exc:
         logger.debug("MA player_queues/items unreachable: %s", exc)
     return None

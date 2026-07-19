@@ -9,6 +9,8 @@ import auth
 import intent_router
 from routers.system import router as system_router
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _app() -> FastAPI:
     app = FastAPI()

@@ -131,3 +131,44 @@ new fail-open branch in `reconcile_for_ingest` must call
 `memory_metrics.record_reconcile_failopen(cause)` so it stays counted and
 alertable — a mandatory gate that fails silently is the pattern this entry
 exists to prevent.
+
+## 4. Voice slow / "in pieces" — the voice stack got swapped out (2026-07-19)
+
+**Signature.** Replies arrive chopped, the first turn after idle is slow, and a
+`/health` curl can exceed a 6s timeout — while every service reports healthy and
+nothing in the logs looks wrong. It reads as a product bug; it is a resource one.
+
+**Confirm in one command** (non-zero on either process = the guards are missing
+or a unit was restarted without them):
+
+```bash
+for p in $(pgrep -f 'llama-server --model'; pgrep -f kokoro_sidecar); do
+  awk -v p=$p '/^VmSwap:/{printf "  pid %s swap %.0f MB\n", p, $2/1024}' /proc/$p/status
+done
+```
+
+Measured before the fix: llama-server **1,457 MB** and kokoro-tts **1,489 MB**
+paged out — 3 GB of the voice path on disk. `kokoro-tts` had *no* memory
+directives at all, so its cgroup `memory.low` was `0`: zero reclaim protection,
+so the kernel evicted it first.
+
+**Fix.** cgroup guards on both units — values, rationale and the apply procedure
+in [`scripts/setup/systemd/README.md`](../../scripts/setup/systemd/README.md)
+("Memory protection"). Three things that cost time:
+
+- **`--mlock` is not sufficient on Tegra.** `VmLck` held only 1.95 GB of a 5.6 GB
+  RSS. `MemorySwapMax=0` is what actually keeps the brain resident.
+- **Apply via a drop-in, never `cp` the template** over a live unit — the tracked
+  template binds `--host 127.0.0.1` while the live brain binds `0.0.0.0`, so a
+  copy silently changes the bind address alongside the memory fix.
+- **Never add `Nice=-N` / `OOMScoreAdjust=-N` to a `--user` unit.** systemd
+  accepts it, the service starts, status is success — and the value is *silently
+  dropped* (`ulimit -e` is 0). It documents a guarantee that does not exist.
+
+**Amplifier.** Per-session Serena spawns (~1 GB each, one per MCP client at
+*connect* time) can push the box back under pressure; the shared
+`serena-mcp.service` is the fix. See `scripts/setup/systemd/README.md`.
+
+**Caution — one failed `/health` poll is not an outage.** Under swap thrash a 6s
+timeout returns `000` while the service is fine. Poll three times before
+declaring anything down; `systemctl is-active` is not evidence either way.

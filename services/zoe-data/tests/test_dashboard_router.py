@@ -10,6 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from routers import dashboard  # noqa: E402
 
+pytestmark = pytest.mark.ci_safe
+
 
 class _Request:
     def __init__(self, body):

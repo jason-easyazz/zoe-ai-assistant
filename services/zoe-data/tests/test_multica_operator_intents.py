@@ -4,6 +4,8 @@ from intent_router import Intent, detect_intent, execute_intent
 import multica_client
 import multica_operator
 
+pytestmark = pytest.mark.ci_safe
+
 
 def test_detects_multica_operator_commands():
     assert detect_intent("pause engineering dispatch").name == "engineering_dispatch_pause"

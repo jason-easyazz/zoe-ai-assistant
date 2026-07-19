@@ -369,7 +369,7 @@ regression, ever (replay harness is the enforcement).
   full replay corpus green
 - [ ] **W2.1** presence-check primitive — NOT STARTED
 - [ ] **W2.2** spoken-delivery adapter (morning brief only) — NOT STARTED
-- [ ] **W3.1** ccd-cli fleet cleanup (operational) — NOT STARTED
+- [x] **W3.1** ccd-cli fleet cleanup — **DONE** (measured 2026-07-19: **2 ccd-cli procs / 55 MB swap** vs the profile's 19 / 3.59 GB — one of the two was the measuring session itself. The fleet drained via session turnover, and the STRUCTURAL causes are fixed so it cannot rebuild the same way: per-session Serena spawn replaced by one shared `serena-mcp.service` (#1400, the fleet's ~1 GB-per-session multiplier), voice stack made unswappable (#1409, `MemorySwapMax=0` — total swap 6.6→3.4 GB), stale-Serena reaper live. Residual honesty: nothing caps ccd-cli session *count* itself; if a pileup recurs it now degrades agents, not the voice path)
 - [x] **W3.2** audit-row embedding stop — **DONE** (#1084: `_AUDIT_NULL_EMBEDDING`, executed from the profile's candidate list)
 - [ ] **W3.3** reap generalization (HA / music-assistant) — NOT STARTED
 - [ ] **W3.4** zram rebalance (measure-first) — NOT STARTED
@@ -383,15 +383,25 @@ regression, ever (replay harness is the enforcement).
 
 ## 7. NEXT ACTION (always exactly one)
 
-→ **W3.1 (RAM).** W0 is **fully closed** (2026-07-13): P-F6 merged (#1160), chat/Telegram
-capture verified on organic traffic, and the spoken-panel positive control passed after
-#1282 — live spoken turn → stamped user+assistant `chat_messages` rows under the
-panel-bound user. Next is **W3.1** (18 ccd-cli processes hold ~3.6 GB swap — the sized
-candidate in memory-pressure-profile.md). W1.1/W1.2 are already **live**
-(#1051/#1081/#1082 — do NOT redo); the remaining W1 work is **W1.3** (packet P-W1.3) +
-the **M3/M4** measurements (packet P-W1.4, bars in §6). The #1056 migration-plan doc was
-retired as overtaken by #1051; its surviving pieces (Pipecat re-open triggers → §2, A3
-gate bars → W1.4) are folded here.
+→ **W2.1 + W2.2 (Zoe speaks first) — IN FLIGHT (2026-07-19).** Packets P-W2.1
+(presence primitive) and P-W2.2 (spoken morning brief, flag `ZOE_PROACTIVE_SPOKEN`
+default OFF) are being executed as two sequential PRs. After both merge, the operator
+lab-DoD is: force a morning brief with a fresh foreground panel session → the kiosk
+speaks it (push still sent). Next after W2: **W1.3** (streamed TTS in conversation
+mode, packet P-W1.3) + the **M3/M4** measurements (packet P-W1.4, bars in §6), then
+**W4.1** SER bake-off (RAM now allows it: voice stack unswappable per #1409, ~2.1 GB
+available steady-state).
+
+Closed en route: **W0** fully (2026-07-13 — P-F6 #1160, organic chat/Telegram capture,
+spoken-panel positive control after #1282) and **W3.1** (2026-07-19, measured: the
+3.6 GB ccd-cli swap fleet no longer exists; structural fixes #1400/#1409 prevent the
+recurrence mode that mattered). W1.1/W1.2 are already **live** (#1051/#1081/#1082 — do
+NOT redo). The #1056 migration-plan doc was retired as overtaken by #1051; its
+surviving pieces (Pipecat re-open triggers → §2, A3 gate bars → W1.4) are folded here.
+
+⚠️ Packet-doc staleness (2026-07-08 vintage): P-W2.1 says "add to validate.yml" — CI
+is **marker-based** now (`pytestmark = pytest.mark.ci_safe`, see tests/AGENTS.md);
+do not resurrect enumeration from any packet.
 
 ## 8. Prior art & external grounding (researched 2026-07-06/07)
 

@@ -4,6 +4,8 @@ import pytest
 import music_service
 from skybridge_service import classify_skybridge_intent, skybridge_intent_requires_identity
 
+pytestmark = pytest.mark.ci_safe
+
 
 # ── classifier (no MA needed) ────────────────────────────────────────────────
 
@@ -921,6 +923,39 @@ def test_first_image_falls_back_to_album_metadata():
     assert music_service._first_image(item) == "https://img/album.jpg"
 
 
+def test_first_image_reads_brief_single_image_dict():
+    """Regression: MA's *brief* item shape — what music/recently_played_items and
+    search hits return — carries ONE image dict with an empty metadata{} and no
+    album. That dict matched neither the str nor the list branch, so every
+    recently-played tile rendered art-less while playlists (full library items,
+    metadata.images[]) looked fine. Payload copied from the live MA."""
+    item = {"name": "Golden", "media_type": "track", "uri": "ytmusic://track/x",
+            "image": {"type": "thumb", "path": "https://yt3.googleusercontent.com/1U=s120",
+                      "provider": "ytmusic", "remotely_accessible": True},
+            "metadata": {}, "album": None}
+    assert music_service._first_image(item) == "https://yt3.googleusercontent.com/1U=s120"
+
+
+def test_first_image_brief_dict_still_honours_http_guard():
+    """The single-dict branch is not a bypass: a relative placeholder path is
+    dropped exactly like the list branch drops it."""
+    item = {"name": "Local track",
+            "image": {"type": "thumb", "path": "logo.png", "provider": "builtin"},
+            "metadata": {}}
+    assert music_service._first_image(item) == ""
+
+
+def test_recently_played_hits_carry_art_end_to_end():
+    """The whole point: a brief hit normalizes WITH art (and gets the hi-res
+    rewrite), so the Recent tiles aren't blank."""
+    hit = {"name": "Cruel Summer", "uri": "ytmusic://track/y", "media_type": "track",
+           "image": {"type": "thumb", "path": "https://lh3.googleusercontent.com/x=w60-h60"},
+           "metadata": {}}
+    norm = music_service._normalize_hit(hit, "track")
+    assert norm["image"].startswith("https://")
+    assert norm["image"].endswith("=w544-h544")  # _hi_res_art upgraded the thumb
+
+
 @pytest.mark.asyncio
 async def test_list_playlists_maps_metadata_art(monkeypatch):
     async def fake_ma(command, **args):
@@ -930,3 +965,147 @@ async def test_list_playlists_maps_metadata_art(monkeypatch):
     monkeypatch.setattr(music_service, "_ma", fake_ma)
     pls = await music_service.list_playlists()
     assert pls and pls[0]["image"].startswith("https://yt3.ggpht.com/")
+
+
+# ── queue item art: the endpoint the Cover Flow reads ────────────────────────
+
+def test_queue_item_art_prefers_media_item_maxres():
+    """Regression: /api/music/queue/{id} passed MA's payload through VERBATIM, so
+    `image` reached the panel as a raw dict and rendered "[object Object]" — the
+    Cover Flow covers were blank on the live panel. It also dodged the shared
+    extractor that had already fixed this on the other paths.
+
+    media_item carries the i.ytimg maxres art that now-playing reports, so
+    preferring it keeps the centre cover consistent with the now-playing image.
+    Payload copied from the live MA queue.
+    """
+    from routers.music import _queue_item_art
+    item = {
+        "name": "Livingston - Shadow", "index": 0, "queue_item_id": "6c70e504",
+        "image": {"type": "thumb", "path": "https://yt3.googleusercontent.com/cXo=s120"},
+        "media_item": {"name": "Shadow", "image": {
+            "type": "thumb", "path": "https://i.ytimg.com/vi/h3_9NEQPUBg/maxresdefault.jpg"}},
+    }
+    assert _queue_item_art(item) == "https://i.ytimg.com/vi/h3_9NEQPUBg/maxresdefault.jpg"
+
+
+def test_queue_item_art_falls_back_to_item_thumb():
+    """No media_item art (MA leaves it null on some providers) → the item's own
+    thumb still resolves rather than leaking the dict."""
+    from routers.music import _queue_item_art
+    item = {"name": "PEGGY - ALICE",
+            "image": {"type": "thumb", "path": "https://yt3.googleusercontent.com/sa0=s120"},
+            "media_item": {"name": "ALICE", "image": None}}
+    assert _queue_item_art(item) == "https://yt3.googleusercontent.com/sa0=s120"
+
+
+def test_queue_item_art_never_leaks_a_dict():
+    """The actual panel symptom: anything unresolvable must be "" (→ placeholder),
+    never a dict that stringifies to "[object Object]" in an <img src>."""
+    from routers.music import _queue_item_art
+    for item in ({"name": "x"},
+                 {"name": "x", "image": {"type": "thumb", "path": "logo.png"}},
+                 {"name": "x", "image": None, "media_item": None}):
+        art = _queue_item_art(item)
+        assert isinstance(art, str) and (art == "" or art.startswith("http"))
+
+
+# ── now-playing must locate the track IN THE QUEUE (the Cover Flow contract) ──
+
+def _fake_ma_for_queue(monkeypatch, current_index, current_item):
+    async def fake_players():
+        return [{"player_id": "P1", "display_name": "Bedroom", "playback_state": "playing",
+                 "volume_level": 12}]
+    async def fake_ma(command, **args):
+        if command == "player_queues/all":
+            return [{"queue_id": "P1", "current_index": current_index,
+                     "current_item": current_item, "elapsed_time": 30,
+                     "shuffle_enabled": False, "repeat_mode": "off"}]
+        return None
+    monkeypatch.setattr(music_service, "get_players", fake_players)
+    monkeypatch.setattr(music_service, "_ma", fake_ma)
+
+
+@pytest.mark.asyncio
+async def test_now_playing_exposes_queue_item_id_and_index(monkeypatch):
+    """Regression: the panel reads np.queue_item_id / np.queue_index to find "Now"
+    among the covers AND as its change-key for noticing a track change. The API
+    sent NEITHER, so the Cover Flow could not centre or advance — it was broken
+    at the contract level while the UI tests passed against mocks that invented
+    these fields."""
+    _fake_ma_for_queue(monkeypatch, 3, {"queue_item_id": "abc123", "name": "Track",
+                                        "duration": 200, "media_item": {"name": "Track"}})
+    np = await music_service.now_playing()
+    assert np["queue_item_id"] == "abc123"
+    assert np["queue_index"] == 3
+
+
+@pytest.mark.asyncio
+async def test_now_playing_index_is_the_queues_not_the_items(monkeypatch):
+    """Live MA had current_index=2 while current_item.index=0 on the SAME track —
+    they are different things. Using the item's own index would centre the wrong
+    cover, so queue_index must come from the QUEUE."""
+    _fake_ma_for_queue(monkeypatch, 2, {"queue_item_id": "xyz", "name": "Track",
+                                        "index": 0, "media_item": {"name": "Track"}})
+    np = await music_service.now_playing()
+    assert np["queue_index"] == 2, "must be the queue's current_index, not current_item.index"
+
+
+@pytest.mark.asyncio
+async def test_now_playing_survives_a_queueless_player(monkeypatch):
+    """Radio / no queue → the fields degrade to empty rather than exploding."""
+    async def fake_players():
+        return [{"player_id": "P1", "display_name": "Bedroom", "playback_state": "playing"}]
+    async def fake_ma(command, **args):
+        return [] if command == "player_queues/all" else None
+    monkeypatch.setattr(music_service, "get_players", fake_players)
+    monkeypatch.setattr(music_service, "_ma", fake_ma)
+    np = await music_service.now_playing()
+    assert np["queue_item_id"] == ""
+    assert np["queue_index"] is None
+
+
+# ── queue item title/artist: the Cover Flow's meta lines ─────────────────────
+
+def test_queue_item_artist_resolves_from_media_item():
+    """Regression: queue items have NO `artist` key — the panel read `it.artist`,
+    got undefined, and every browsed cover's artist line was silently blank.
+    The real value is nested at media_item.artists[].name. Payload from live MA."""
+    from routers.music import _queue_item_artist
+    item = {"name": "Livingston - Shadow",
+            "media_item": {"name": "Shadow", "artists": [{"name": "Livingston"}]}}
+    assert _queue_item_artist(item) == "Livingston"
+
+
+def test_queue_item_title_drops_the_concatenated_artist():
+    """A queue item's `name` is a composite ("Livingston - Shadow"). Rendering it
+    as the title next to a resolved artist reads "Livingston - Shadow" above
+    "Livingston". media_item.name carries the clean title — use it rather than
+    splitting on " - ", which breaks on any title containing a dash."""
+    from routers.music import _queue_item_title
+    item = {"name": "Livingston - Shadow",
+            "media_item": {"name": "Shadow", "artists": [{"name": "Livingston"}]}}
+    assert _queue_item_title(item) == "Shadow"
+
+
+def test_queue_item_title_keeps_a_dash_that_belongs_to_the_title():
+    """Exactly what a " - " split would have destroyed."""
+    from routers.music import _queue_item_title
+    item = {"name": "Artist - Some - Song", "media_item": {"name": "Some - Song"}}
+    assert _queue_item_title(item) == "Some - Song"
+
+
+def test_queue_item_artist_joins_collaborations():
+    from routers.music import _queue_item_artist
+    item = {"media_item": {"name": "Die With A Smile",
+                           "artists": [{"name": "Lady Gaga"}, {"name": "Bruno Mars"}]}}
+    assert _queue_item_artist(item) == "Lady Gaga, Bruno Mars"
+
+
+def test_queue_item_meta_degrades_without_a_media_item():
+    """Radio / providers with no media_item → fall back to `name`, empty artist,
+    never a crash and never an "undefined" on screen."""
+    from routers.music import _queue_item_title, _queue_item_artist
+    item = {"name": "Some Radio Stream", "media_item": None}
+    assert _queue_item_title(item) == "Some Radio Stream"
+    assert _queue_item_artist(item) == ""

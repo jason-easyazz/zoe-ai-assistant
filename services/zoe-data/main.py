@@ -2074,8 +2074,10 @@ app.include_router(ui_router)
 app.include_router(openclaw_router)
 app.include_router(voice_tts_router)
 from routers.voice_settings import router as voice_settings_router  # noqa: E402
+from routers.face_id import router as face_id_router  # noqa: E402
 
 app.include_router(voice_settings_router)
+app.include_router(face_id_router)
 app.include_router(user_profile_router)
 app.include_router(dashboard_router)
 app.include_router(stubs_router)
@@ -2083,6 +2085,11 @@ app.include_router(push_router)
 app.include_router(proactive_router)
 app.include_router(panel_auth_router)
 app.include_router(panel_provision_router)
+# Registered AFTER panel_provision on purpose: that router's more specific
+# /api/panels/provision/{code} must win over /api/panels/{device_id}/config
+# (FastAPI matches routes in registration order).
+from routers.panel_config import router as panel_config_router
+app.include_router(panel_config_router)
 app.include_router(capability_matrix_router)
 app.include_router(music_router)
 from routers.music_setup import router as music_setup_router

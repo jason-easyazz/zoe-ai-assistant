@@ -23,6 +23,16 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           cd /home/zoe/assistant
+          # Serialize the tree mutation (fetch + reset --hard) against a concurrent
+          # manual `scripts/maintenance/deploy_live.sh`, which fetch+advances main on
+          # this SAME shared .git/worktree. Without a shared lock the two race on the
+          # ref-lock and the manual path aborts. deploy_live.sh takes the same lock.
+          # (The `production` concurrency group only serializes runner-vs-runner.)
+          # Scope is deliberately this tree-mutation step, not the whole job — the
+          # lock releases when this step's shell exits, before migrate/restart.
+          # See docs/knowledge/merge-and-deploy.md "Lock scope is deliberately…".
+          exec 9>/tmp/zoe-deploy.lock
+          flock -w 300 9 || { echo "could not acquire /tmp/zoe-deploy.lock within 300s"; exit 1; }
           git remote set-url origin https://github.com/jason-easyazz/zoe-ai-assistant.git
           python3 - <<'PY'
           import re
@@ -64,7 +74,38 @@ jobs:
             sleep 5
           done
           unset AUTH_HEADER GITHUB_TOKEN
-          git reset --hard FETCH_HEAD
+          # Voice replay-gate heartbeat ("a gate that can silently not-run is not
+          # a gate"). CD is how changes actually reach the box, so the gate MUST
+          # run here — not only on the manual scripts/maintenance/deploy_live.sh
+          # path humans rarely use. Mirrors that script exactly: resolve what main
+          # is ABOUT to become, gate the incoming diff, and only then fast-forward.
+          # If the diff touches the voice runtime path (STT/brain/TTS), a FRESH,
+          # PASSING replay-gate artifact (~/.cache/zoe/voice_regression_last.json,
+          # written by voice_regression_probe.py) must already exist; missing,
+          # stale, skipped or failed BLOCKS. Non-voice diffs are a no-op pass.
+          # This never runs the heavy Kokoro harness — it only reads the artifact.
+          #
+          # Ordering is deliberate (same as #1344): blocking BEFORE the reset
+          # leaves the live tree at $prev, so a retry re-evaluates the SAME change
+          # instead of fast-forwarding past it and skipping the gate entirely.
+          prev="$(git rev-parse HEAD)" || exit 1
+          target="$(git rev-parse FETCH_HEAD)" || exit 1
+          if ! python3 scripts/maintenance/voice_gate_check.py \
+                 --repo /home/zoe/assistant --diff "${prev}..${target}"; then
+            echo "::error::REFUSING TO DEPLOY: ${prev:0:7}..${target:0:7} changes the voice runtime path without a fresh passing replay-gate result (see above)."
+            echo "Live tree stays at ${prev} — nothing was deployed or restarted."
+            echo "To unwedge, on the Jetson as user zoe:"
+            echo "  flock /tmp/zoe-voice-harness.lock \\"
+            echo "    python3 scripts/maintenance/voice_regression_probe.py \\"
+            echo "      --samples 20 --service-dir /home/zoe/assistant/services/zoe-data"
+            echo "then re-run this workflow. See docs/knowledge/merge-and-deploy.md"
+            echo "\"The CD path enforces the voice replay-gate\"."
+            exit 1
+          fi
+          # Reset to EXACTLY the gate-checked SHA — not FETCH_HEAD, which a
+          # concurrent fetch on this shared .git could have advanced to a commit
+          # pushed after the gate ran (a silent bypass of the gate above).
+          git reset --hard "$target"
 
       - name: Install / refresh Python deps
         run: |

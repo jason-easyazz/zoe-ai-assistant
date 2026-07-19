@@ -54,6 +54,7 @@
   #home svg{width:26px;height:26px}
   #home.hide{opacity:0;pointer-events:none}
   #orb{position:absolute;left:44px;bottom:44px;width:68px;height:68px;border-radius:50%;background:radial-gradient(circle at 34% 30%,#a9d4ff,#5b74ff 58%,#7a53ff 100%);box-shadow:0 0 30px rgba(107,138,255,.5),inset 0 2px 8px rgba(255,255,255,.4);z-index:50;animation:breathe 5s ease-in-out infinite;cursor:pointer}
+  #orb.hide{opacity:0;pointer-events:none;transition:opacity .4s}
   #orb.busy{animation:breathe 1.1s ease-in-out infinite;box-shadow:0 0 44px rgba(107,138,255,.85),inset 0 2px 8px rgba(255,255,255,.4)}
   #orb.listening{animation:breathe .9s ease-in-out infinite;box-shadow:0 0 64px rgba(123,150,255,.95),0 0 120px rgba(123,150,255,.4),inset 0 2px 8px rgba(255,255,255,.5)}
   /* ask-Zoe command bar (orb tap) */
@@ -66,6 +67,11 @@
   #cmdbar button:active{transform:scale(.94)}
   #saytoast{position:absolute;left:50%;top:54px;transform:translateX(-50%);max-width:820px;background:rgba(14,16,26,.72);border:1px solid rgba(255,255,255,.14);border-radius:16px;backdrop-filter:blur(16px);padding:14px 26px;font-size:22px;z-index:56;opacity:0;pointer-events:none;transition:opacity .3s}
   #saytoast.on{opacity:1}
+  /* the toast is pointer-transparent by default; an actionable one (Undo) has
+     to take taps, so it opts in. */
+  #saytoast.act{pointer-events:auto}
+  #saytoast .ub{margin-left:16px;border:0;border-radius:10px;padding:7px 16px;font:inherit;font-size:19px;
+    font-weight:600;background:rgba(167,139,250,.9);color:#12142b;cursor:pointer}
   /* Lists — full-screen multi-column */
   .lstf{position:absolute;inset:0;padding:104px 56px 150px;display:flex;gap:20px;overflow-x:auto;align-items:flex-start}
   .lcol{min-width:300px;max-width:350px;flex:1 0 300px;background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.09);border-radius:22px;padding:20px 20px 16px}
@@ -180,6 +186,15 @@
   .srow2 .sw.on{background:var(--accent)}
   .srow2 .sw.on::after{left:28px}
   .srow2 input[type=range]{flex:1;max-width:280px;accent-color:var(--accent);height:34px}
+  /* color-scheme:dark is load-bearing, not cosmetic: the OPEN dropdown is a NATIVE
+     popup the browser paints on a light background by default, while `color` above
+     is near-white (--ink) — so the option text rendered white-on-white and was
+     unreadable. It tells the browser to paint its own UI dark; the explicit option
+     rule below is the fallback for engines that don't honour color-scheme there. */
+  .srow2 .sset{margin-left:auto;background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.14);color:var(--ink);border-radius:12px;padding:10px 14px;font-size:19px;min-height:44px;cursor:pointer;color-scheme:dark}
+  .srow2 .sset option{background:#131a2b;color:var(--ink)}
+  .srow2 .sbtn{margin-left:auto;background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.14);color:var(--ink);border-radius:12px;padding:10px 18px;font:inherit;font-size:18px;min-height:44px;cursor:pointer}
+  .srow2 .sbtn:disabled{opacity:.5}
   .srow2 .sv{min-width:56px;text-align:right;color:var(--ink-soft);font-variant-numeric:tabular-nums}
   .srow2 .stat{width:12px;height:12px;border-radius:50%;flex:none}
   .srow2 .stat.ok{background:#66d6a3;box-shadow:0 0 10px rgba(102,214,163,.6)}
@@ -211,6 +226,7 @@
   .estmc .spkopt{display:block;width:100%;text-align:left;padding:15px 18px;border-radius:14px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:#fff;font:inherit;font-size:20px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .estmc .btns button{flex:1;height:54px;border-radius:14px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:var(--ink);font:inherit;font-size:19px;cursor:pointer}
   .estmc .btns .save{background:var(--accent);border-color:transparent;color:#fff;font-weight:600}
+  .estmc .btns button:disabled{opacity:.4;cursor:default}
   .estmc .btns .del{background:rgba(255,122,144,.16);border-color:rgba(255,122,144,.4);color:#ff9db0}
   /* touch date+time stepper (replaces native <input type=date> on the kiosk) */
   .estmc .dtp{display:flex;gap:12px;align-items:flex-start;margin-top:4px;flex-wrap:wrap}
@@ -222,6 +238,23 @@
   .estmc label.dtall{display:flex;align-items:center;gap:10px;font-size:16px;color:var(--ink);margin-top:14px}
   .estmc label.dtall input{width:22px;height:22px;flex:none}
   .estmc .btns .del{background:rgba(255,122,144,.14);border-color:rgba(255,122,144,.4);color:#ff9db0}
+  /* pinned-dock-control editor (Settings › This panel). Every tap target is
+     >=48px — this is driven with a finger on a 1280x720 kiosk. */
+  .estmc .pinrow{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid rgba(255,255,255,.08)}
+  .estmc .pinrow .pnm{font-size:20px;font-weight:600;min-width:92px}
+  .estmc .pinrow .pfn{font-size:15px;color:var(--ink-faint);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .estmc .pinrow button{width:48px;height:48px;border-radius:12px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:#fff;font:inherit;font-size:17px;cursor:pointer;flex:none;padding:0}
+  .estmc .pinrow button.del{color:#ff9db0;border-color:rgba(255,122,144,.4)}
+  .estmc .pinrow button:disabled{opacity:.28}
+  .estmc .padd{width:100%;height:52px;margin-top:14px;border-radius:13px;border:1px dashed rgba(255,255,255,.28);background:rgba(255,255,255,.05);color:var(--ink);font:inherit;font-size:19px;cursor:pointer}
+  .estmc .padd:disabled{opacity:.4;cursor:default}
+  .estmc .perr{color:#ff9db0;font-size:16px;margin-top:10px;min-height:22px;line-height:1.3}
+  .estmc .phint{color:var(--ink-faint);font-size:15px;margin-top:8px;line-height:1.35}
+  .estmc .elist{max-height:340px;overflow-y:auto;margin-top:12px;display:flex;flex-direction:column;gap:8px}
+  .estmc .eopt{display:flex;align-items:center;gap:13px;width:100%;text-align:left;padding:12px 16px;border-radius:14px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:#fff;font:inherit;font-size:19px;cursor:pointer;min-height:48px}
+  .estmc .eopt svg{width:24px;height:24px;flex:none;color:rgba(255,255,255,.72)}
+  .estmc .eopt .et{flex:1;overflow:hidden}
+  .estmc .eopt .et small{display:block;color:var(--ink-faint);font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .ctcard .ctacts{display:flex;gap:12px;margin-top:20px;flex-wrap:wrap}
   .ctchips{display:flex;flex-wrap:wrap;gap:8px}
   .ctchip{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;background:rgba(123,150,255,.14);border:1px solid rgba(123,150,255,.3);font-size:17px;cursor:pointer}
@@ -304,19 +337,84 @@
   #stage.wxlight .hfull .today .tt{color:rgba(27,39,64,.7)}
   #stage.wxlight .hfull .today .tn{color:#1b2740}
 
-  /* music full */
-  .mfull .mart{position:absolute;left:90px;top:150px;width:300px;height:300px;border-radius:28px;display:grid;place-items:center;font-size:120px;background:linear-gradient(140deg,#8ea6ff,#b49bff);box-shadow:0 34px 80px rgba(0,0,0,.5);background-size:cover;background-position:center}
-  .mfull .minfo{position:absolute;left:440px;top:214px;right:120px}
-  .mfull .mkick{font-size:16px;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.6)}
-  .mfull .mtitle{font-size:52px;font-weight:700;letter-spacing:-.02em;margin-top:14px;line-height:1.06;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
-  .mfull .martist{font-size:26px;color:rgba(255,255,255,.78);margin-top:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .mfull .mscrub{position:absolute;left:440px;right:120px;bottom:270px}
+  /* ── music full: the card IS the queue ───────────────────────────────────
+     Cover Flow — played covers recede LEFT, now-playing flat in the CENTRE,
+     upcoming fan RIGHT. Geometry is the proven prototype scaled uniformly by
+     CF_K (see layoutCF): card, x, z and perspective all scale together, so the
+     projection — and the deliberate slight overlap that reads as a stack — is
+     the prototype exactly, just sized to clear the dock (top 605) at 720px. */
+  /* touch-action:none on the CONTAINER, not only on the covers: the browse
+     gesture holds its pointer capture here, so this is the element whose
+     touch-action decides whether the browser claims the gesture for itself.
+     Without it a mostly-vertical drag is read as a scroll and the pointer is
+     CANCELLED mid-gesture — which silently kills flick-up-to-remove. */
+  .mfull .cf{position:absolute;top:74px;left:0;right:0;height:260px;touch-action:none;
+             perspective:1214px;perspective-origin:50% 46%}
+  .mfull .cf-track{position:absolute;inset:0;transform-style:preserve-3d}
+  .mfull .cfc{position:absolute;top:0;left:50%;width:260px;height:260px;margin-left:-130px;
+              border-radius:14px;overflow:hidden;transform-style:preserve-3d;cursor:pointer;
+              box-shadow:0 26px 60px rgba(0,0,0,.62);
+              transition:transform .42s cubic-bezier(.22,.75,.28,1),opacity .42s,filter .42s;
+              will-change:transform;touch-action:none;
+              /* A cover is a picture, so the browser offers to drag it away as an
+                 image — which starts a native drag and CANCELS the pointer
+                 mid-gesture, taking browse and flick-up-to-remove with it. Only
+                 reachable with a mouse, which is why the touch panel never showed
+                 it, but the harness drives a mouse and it is a real bug. */
+              user-select:none;-webkit-user-drag:none}
+  .mfull .cfc img{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none;
+                  -webkit-user-drag:none}
+  .mfull .cfc .ph{width:100%;height:100%;display:grid;place-items:center;font-size:60px;
+                  background:linear-gradient(150deg,#c77bff,#8a53e8)}
+  /* The shade that turns a flat cover into a receding one. Its strength rides
+     --cfshade (0 at the centre, 1 from one slot out), set per-frame by cfLayout.
+     It used to switch off via `.cfc.on::after{background:none}` — an on/off at
+     the centre. That was invisible while focus could only be an integer, but a
+     cover now passes THROUGH the centre under your finger, and a hard on/off
+     mid-drag reads as a flicker. Identical at every integer slot, continuous
+     between them. */
+  .mfull .cfc::after{content:'';position:absolute;inset:0;pointer-events:none;opacity:var(--cfshade,1);
+    background:linear-gradient(to right,rgba(5,7,15,.55),rgba(5,7,15,0) 60%)}
+  .mfull .cfc.right::after{background:linear-gradient(to left,rgba(5,7,15,.55),rgba(5,7,15,0) 60%)}
+  .mfull .cfc.on{box-shadow:0 34px 90px rgba(0,0,0,.72),0 0 0 1px rgba(255,255,255,.10)}
+  /* While a gesture or the settle spring is driving the transform per-frame the
+     CSS transition must be OFF, or it eases toward each frame's value and the
+     flow lags a finger it is supposed to be pinned to. `.gone` keeps its
+     transition: that's the removal animation, which is still a CSS ease. */
+  .mfull .cf-track.cfanim .cfc:not(.gone){transition:none}
+  /* lifted by a long-press: it's out of the flow and follows your finger */
+  .mfull .cfc.lift{transition:none;box-shadow:0 44px 100px rgba(0,0,0,.8),0 0 0 2px rgba(167,139,250,.9)}
+  .mfull .cfc.gone{opacity:0 !important;transform:translateY(-220px) scale(.7) !important}
+  /* Queue-number badge — pinned to the card's OUTER edge (upcoming → right,
+     played → left) so the centre card can never hide it, and to the BOTTOM
+     because the top strip is .mtop's (speaker + browse, z60, right:120) and it
+     sits straight over the right-hand fan. Outer+bottom is the only corner
+     that clears both. */
+  .mfull .cfc .qn{position:absolute;bottom:8px;left:8px;z-index:2;min-width:24px;height:24px;padding:0 7px;
+      border-radius:8px;background:rgba(6,9,20,.74);backdrop-filter:blur(8px);
+      color:#fff;font-size:13px;font-weight:650;display:grid;place-items:center;
+      font-variant-numeric:tabular-nums;pointer-events:none}
+  .mfull .cfc.right .qn{left:auto;right:8px}
+  .mfull .cfc .qn.now{background:rgba(124,92,255,.92)}
+  /* the visible remove affordance — removal must not be gesture-only */
+  .mfull .cfc .cfx{position:absolute;top:6px;z-index:3;width:34px;height:34px;border:0;border-radius:50%;
+     background:rgba(6,9,20,.7);backdrop-filter:blur(8px);color:#fff;font-size:16px;line-height:1;
+     display:none;place-items:center;cursor:pointer;right:8px}
+  .mfull .cfc.right .cfx{right:auto;left:8px}
+  .mfull .cfc.on .cfx{display:grid}
+  .mfull .cfmeta{position:absolute;left:0;right:0;top:373px;text-align:center}
+  .mfull .mkick{font-size:14px;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.5)}
+  .mfull .mtitle{font-size:34px;font-weight:700;letter-spacing:-.02em;margin-top:8px;line-height:1.08;
+                 max-width:760px;margin-left:auto;margin-right:auto;
+                 display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
+  .mfull .martist{font-size:20px;color:rgba(255,255,255,.72);margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .mfull .mscrub{position:absolute;left:50%;width:560px;margin-left:-280px;bottom:210px}
   .mfull .mtrack{position:relative;height:7px;border-radius:999px;background:rgba(255,255,255,.22)}
   .mfull .mfill{position:absolute;left:0;top:0;bottom:0;width:38%;border-radius:999px;background:#fff}
   .mfull .mknob{position:absolute;top:50%;left:38%;transform:translate(-50%,-50%);width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.4)}
   .mfull .mtimes{display:flex;justify-content:space-between;margin-top:12px;font-size:18px;color:rgba(255,255,255,.6);font-variant-numeric:tabular-nums}
-  .mfull .mtransport{position:absolute;left:0;right:0;bottom:172px;display:flex;justify-content:center;align-items:center;gap:44px}
-  .mfull .mtransport .sml{opacity:.55;background:none;border:0;color:#fff;cursor:pointer;width:56px;height:56px;border-radius:50%;display:grid;place-items:center}
+  .mfull .mtransport{position:absolute;left:0;right:0;bottom:120px;display:flex;justify-content:center;align-items:center;gap:44px}
+  .mfull .mtransport .sml{opacity:.55;background:none;border:0;color:#fff;cursor:pointer;width:68px;height:68px;border-radius:50%;display:grid;place-items:center}
   .mfull .mtransport .sml svg{width:26px;height:26px}
   .mfull .mtransport button svg{width:28px;height:28px}
   .mfull .mtransport .pp svg{width:32px;height:32px;color:#0a0d18}
@@ -341,22 +439,6 @@
   .mqtabs button.on{background:rgba(123,150,255,.22);border-color:rgba(123,150,255,.4);color:#fff}
   .mqlist{flex:1;overflow-y:auto;min-height:0}
   .mqueue .qthumb.ph{display:block}
-  /* ---- Queue tab: now-playing on the left, numbered up-next tiles on the right ---- */
-  .mqlist.queue{display:flex;gap:26px;overflow:hidden}
-  .mqnow{width:300px;flex:none;display:flex;flex-direction:column}
-  .mqnow .nowart{width:100%;aspect-ratio:1;border-radius:22px;overflow:hidden;background:linear-gradient(140deg,#8ea6ff,#b49bff);display:grid;place-items:center;font-size:74px;box-shadow:0 20px 44px rgba(0,0,0,.42)}
-  .mqnow .nowart img{width:100%;height:100%;object-fit:cover;display:block}
-  .mqnow .nowk{font-size:14px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint);margin-top:18px}
-  .mqnow .nowt{font-size:26px;font-weight:700;line-height:1.14;margin-top:6px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-  .mqnow .nowa{font-size:18px;color:var(--ink-soft);margin-top:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .mqup{flex:1;min-width:0;overflow-y:auto;display:grid;grid-template-columns:repeat(2,1fr);gap:12px;align-content:start}
-  .qslot{display:flex;align-items:center;gap:12px;padding:8px 12px 8px 8px;border-radius:14px;background:rgba(255,255,255,.05);cursor:pointer}
-  .qslot .qnum{flex:none;width:24px;text-align:center;font-size:16px;font-weight:600;color:var(--ink-faint);font-variant-numeric:tabular-nums}
-  .qslot .qthumb{width:48px;height:48px;border-radius:10px;object-fit:cover;flex:none;background:rgba(255,255,255,.08)}
-  .qslot .qsn{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center}
-  .qslot .qsn .qn{font-size:17px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .qslot .qsn .qsd{font-size:13px;color:var(--ink-faint);font-variant-numeric:tabular-nums;margin-top:2px}
-  .qslot .qx{flex:none;width:34px;height:34px;border-radius:50%;border:0;background:rgba(255,255,255,.08);color:var(--ink-faint);font-size:15px;cursor:pointer}
   /* ---- Recent tab: a grid of rectangle tiles (fits more) ---- */
   .mqlist.recent{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;align-content:start}
   .rtile{display:flex;align-items:center;gap:14px;padding:10px 12px;border-radius:16px;background:rgba(255,255,255,.05);cursor:pointer}
@@ -373,24 +455,28 @@
   .mqlist.grid .qi.pl .pcov .pph{font-size:34px;color:rgba(255,255,255,.55)}
   .mqlist.grid .qi.pl .pcov .pcount{position:absolute;right:6px;bottom:6px;background:rgba(0,0,0,.55);border-radius:999px;padding:2px 8px;font-size:12px}
   .mqlist.grid .qi.pl .qn{margin-top:8px;white-space:normal;line-height:1.2;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-  .mfull .mfav{position:absolute;top:0;right:0;width:52px;height:52px;border-radius:50%;border:0;background:rgba(255,255,255,.08);color:rgba(255,255,255,.6);display:grid;place-items:center;cursor:pointer}
+  /* Favourite: the meta block is centred now, so pin it to the card's right
+     margin on the title's line (clear of .fcog at top:38 and the flow itself). */
+  .mfull .mfav{position:absolute;top:6px;right:56px;width:52px;height:52px;border-radius:50%;border:0;background:rgba(255,255,255,.08);color:rgba(255,255,255,.6);display:grid;place-items:center;cursor:pointer}
   .mfull .mfav.on{color:var(--cat-health);background:rgba(255,122,144,.16)}
   .mfull .mfav svg{width:26px;height:26px}
   #dock .pc.dnp{display:flex;align-items:center;gap:8px;max-width:380px;padding:6px 10px 6px 6px}
   #dock .pc.dnp .da{width:38px;height:38px;border-radius:8px;overflow:hidden;flex:none;background:rgba(255,255,255,.1)}
   #dock .pc.dnp .da img{width:100%;height:100%;object-fit:cover}
   #dock .pc.dnp .da .ph{display:block;width:100%;height:100%}
-  #dock .pc.dnp .dnm{font-size:17px;max-width:132px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  #dock .pc.dnp .dprev,#dock .pc.dnp .dnext{width:34px;height:34px;border-radius:50%;border:0;background:transparent;color:rgba(255,255,255,.82);display:grid;place-items:center;cursor:pointer;flex:none}
+  #dock .pc.dnp .dnm{font-size:17px;width:124px;flex:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #dock .pc.dnp .dprev,#dock .pc.dnp .dnext{width:48px;height:48px;border-radius:50%;border:0;background:rgba(255,255,255,.10);color:#fff;display:grid;place-items:center;cursor:pointer;flex:none}
   #dock .pc.dnp .dprev svg,#dock .pc.dnp .dnext svg{width:20px;height:20px}
-  #dock .pc.dnp .dpp{width:38px;height:38px;border-radius:50%;border:0;background:rgba(255,255,255,.14);color:#fff;display:grid;place-items:center;cursor:pointer;flex:none}
+  #dock .pc.dnp .dpp{width:48px;height:48px;border-radius:50%;border:0;background:#fff;color:#10131c;display:grid;place-items:center;cursor:pointer;flex:none}
   #dock .pc.dnp .dpp svg{width:18px;height:18px}
   .mqr{position:absolute;right:36px;bottom:44px;display:flex;flex-direction:column;align-items:center;gap:6px;z-index:25}
   .mqr .qrbox{width:86px;height:86px;background:#fff;border-radius:10px;padding:6px;display:grid;place-items:center}
   .mqr .qrbox img,.mqr .qrbox canvas{width:100%;height:100%}
   .mqr .qrlab{font-size:11px;color:var(--ink-faint);text-align:center;line-height:1.25}
   .mfull .mtransport button{width:68px;height:68px;border-radius:50%;border:0;background:rgba(255,255,255,.16);color:#fff;font-size:24px;cursor:pointer}
-  .mfull .mtransport .pp{width:84px;height:84px;background:#fff;color:#10131c;font-size:28px}
+  .mfull /* One size for every transport button (was 56/68/84). Play/pause still leads —
+     via its white fill, not by being bigger. */
+  .mtransport .pp{width:68px;height:68px;background:#fff;color:#10131c;font-size:24px}
 
   /* timer full */
   .tfull{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;padding:100px 40px 150px}
@@ -437,7 +523,9 @@
   .hdock .hpc .tl{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.55);margin-top:2px}
 
   /* SLEEP — a dim night clock, orb, and big easy named controls to wake to */
-  .slp .sclock{position:absolute;top:50%;left:50%;transform:translate(-50%,-64%);display:flex;gap:64px;color:rgba(255,255,255,.7);font-weight:200;font-size:230px;letter-spacing:-.04em;line-height:1;font-variant-numeric:tabular-nums;text-shadow:0 0 40px rgba(120,150,220,.15)}
+  .slp .sclock{position:absolute;top:50%;left:50%;transform:translate(-50%,-60%);display:flex;gap:14px;color:rgba(255,255,255,.72);font-weight:200;font-size:300px;letter-spacing:-.04em;line-height:1;font-variant-numeric:tabular-nums;text-shadow:0 0 40px rgba(120,150,220,.15)}
+  /* The clock read "7 31" — a 48px flex gap with no separator in it. */
+  .slp .sclock .cln{opacity:.38;font-weight:150}
   .slp .sdate{position:absolute;top:50%;left:50%;transform:translate(-50%,120px);color:rgba(255,255,255,.34);font-size:26px;letter-spacing:.04em}
   .slp .sdock{position:absolute;left:50%;bottom:52px;transform:translateX(-50%);display:flex;gap:16px}
   .slp .sc{display:flex;flex-direction:row;align-items:center;gap:14px;padding:18px 26px;border-radius:22px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);color:rgba(255,255,255,.62);min-width:132px;cursor:pointer;transition:.3s}
@@ -493,6 +581,20 @@
   .askf .ah{font-size:27px;color:var(--ink-faint)}.askf .ah b{color:var(--ink-soft);font-weight:500}
   .askf .aa{font-size:46px;line-height:1.4;font-weight:300;max-width:920px}
   .askf .aa em{font-style:normal;font-weight:500;color:#fff}
+  /* Live conversation is a STATE of the Ask card — the dock, home button and orb
+     all stay put (inline, never fullscreen). The talk control sits bottom-centre,
+     clear of the cog (top-right) and the home button. */
+  .talkbtn{position:absolute;left:50%;transform:translateX(-50%);bottom:44px;z-index:30;
+    padding:14px 34px;border-radius:999px;font-size:22px;font-weight:500;cursor:pointer;
+    background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.22);color:#fff}
+  .talkbtn[aria-pressed="true"]{background:rgba(255,90,120,.28);border-color:rgba(255,120,145,.5)}
+  .talkbtn[disabled]{opacity:.5;cursor:default}
+  /* Conversation transcript: latest exchange, sized down from the single-answer
+     display so a back-and-forth fits without scrolling. */
+  .cvf{display:flex;flex-direction:column;gap:18px;max-width:920px;width:100%}
+  .cvf .cvl{font-size:30px;line-height:1.36;font-weight:300}
+  .cvf .cvl.u{color:var(--ink-faint);font-size:24px}
+  .cvf .cvs{font-size:22px;color:var(--ink-faint)}
 
   /* full-screen weather: location moves left so the top-right is free for the cog */
   .wloc{position:absolute;left:74px;top:150px;font-size:20px;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.82);text-shadow:0 2px 14px rgba(0,0,0,.4)}
@@ -535,6 +637,20 @@
   #dock .pc.temp .tsl{position:relative;width:15px;flex:1;border-radius:999px;background:rgba(255,255,255,.18);cursor:pointer;touch-action:none}
   #dock .pc.temp .tff{position:absolute;left:0;right:0;bottom:0;border-radius:999px;background:linear-gradient(180deg,#ffb07a,#ff8a5a)}
   #dock .pc.temp .tkn{position:absolute;left:50%;transform:translate(-50%,50%);width:30px;height:30px;border-radius:50%;background:#fff;box-shadow:0 3px 10px rgba(0,0,0,.4)}
+  /* scene pin: fire-and-forget, so it NEVER carries .on. The flash is the
+     launcher accent, deliberately not the light amber — a scene firing is an
+     event, and must not read as a light turning on. */
+  #dock .pc.scene{padding:0 18px;gap:9px}
+  #dock .pc.scene svg{width:22px;height:22px;color:rgba(255,255,255,.55)}
+  #dock .pc.scene.fire{background:rgba(123,150,255,.9);border-color:rgba(123,150,255,.6);color:#fff;box-shadow:0 0 24px rgba(123,150,255,.5)}
+  #dock .pc.scene.fire svg{color:#fff}
+  /* a pin whose entity is unreachable still renders (the operator chose it) —
+     just visibly muted, so a dead control never masquerades as a live one */
+  #dock .pc.unavail{opacity:.42}
+  /* defensive: the one-word rule is enforced server-side, but a long single
+     word must never be able to push the dock past its width budget. Scoped to
+     pinned tiles — the unpinned fallback still renders HA's full names. */
+  #dock .pc.pin .nm{max-width:110px;overflow:hidden;text-overflow:ellipsis}
   #dock .dheard{font-size:23px;color:rgba(255,255,255,.6);padding:6px 12px}
   #dock .dheard b{color:#fff;font-weight:500}
 
@@ -668,6 +784,16 @@
   var GEAR='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-7M6 7H4M20 17h-2M11 17H4"/><circle cx="9" cy="7" r="2.4"/><circle cx="15" cy="17" r="2.4"/></svg>';
   var SPKR='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2.5" width="14" height="19" rx="3"/><circle cx="12" cy="14" r="3.4"/><circle cx="12" cy="6.5" r="1"/></svg>';
   var COG='<button class="cog" title="Settings">'+GEAR+'</button>';
+  // The Ask surface is re-rendered from FULL.ask.html on every ask, so build it
+  // from ONE shell — otherwise the talk control vanishes the moment Zoe answers.
+  // `cog` is opt-in because the answer re-renders have never carried the settings
+  // cog (only the idle surface does); keeping that as-is holds this PR to the
+  // conversation feature.
+  // (Hoisted: FULL's literal calls this, and GEAR is assigned above it.)
+  function askShell(inner,cog){
+    return (cog?'<div class="fcog">'+GEAR+'</div>':'')+'<div class="askf">'+inner+'</div>'
+      +'<button class="talkbtn" id="talkBtn" type="button" aria-pressed="false">Talk</button>';
+  }
   var QICON='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>';
   var SAVE_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>';
   var TRASH_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>';
@@ -692,11 +818,11 @@
         +'<div class="today"><div class="thk">Your Day</div><div id="hToday"></div></div>'
         +'</div>'},
     ask:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="askf"><div class="aa" id="askOut" style="opacity:.55">Just ask — I’ll answer here.</div></div>'},
+      html:askShell('<div class="aa" id="askOut" style="opacity:.55">Just ask — I’ll answer here.</div>',true)},
     weather:{home:true, bg:DUSK, canvas:true,
       html:'<div class="fcog">'+GEAR+'</div><div class="wloc" id="wxLoc"></div><div class="wbig"><div class="t" id="wxTemp">—°</div><div class="c" id="wxCond"></div></div><div class="whours" id="wxHours"></div>'},
     music:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="mtop"><button class="spk" id="mSpk">'+SPKR+' <span class="spkname">Speaker</span> <span class="cx">▾</span></button><button class="mqbtn" id="mQBtn" title="Queue">'+QICON+'</button></div><div class="mfull"><div class="mart" id="mArt">🎵</div><div class="minfo"><div class="mkick">Now Playing</div><div class="mtitle" id="mTitle">—</div><div class="martist" id="mArtist"></div><button class="mfav" id="mFav" title="Favourite">'+HEART_I+'</button></div><div class="mscrub"><div class="mtrack"><div class="mfill" id="mFill" style="width:0%"></div></div><div class="mtimes"><span id="mElapsed">0:00</span><span id="mDur">0:00</span></div></div><div class="mtransport" id="mTransport"><button class="sml" id="mShuf" data-a="shuffle" title="Shuffle">'+SHUF_I+'</button><button data-a="previous">'+PREV_I+'</button><button class="pp" id="mPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button><button class="sml" id="mRep" data-a="repeat" title="Repeat">'+REP_I+'</button></div></div><aside class="mqueue" id="mQueue"><div class="mqtop"><button class="mqback" id="mQBack" title="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button><h3 id="mQTitle">Up Next</h3><div class="mqacts"><button id="mQSave" title="Save as playlist">'+SAVE_I+'</button><button id="mQClear" title="Clear queue">'+TRASH_I+'</button></div></div><div class="mqtabs"><button class="on" data-qt="queue">Queue</button><button data-qt="recent">Recent</button><button data-qt="playlists">Playlists</button></div><div id="mQList" class="mqlist"></div></aside><div class="mqr" id="mQR"><div class="qrbox" id="mQRCode"></div><div class="qrlab">Scan to queue</div></div>'},
+      html:'<div class="fcog">'+GEAR+'</div><div class="mtop"><button class="spk" id="mSpk">'+SPKR+' <span class="spkname">Speaker</span> <span class="cx">▾</span></button><button class="mqbtn" id="mQBtn" title="Browse music">'+QICON+'</button></div><div class="mfull"><div class="cf" id="mCF"><div class="cf-track" id="mCFT"></div></div><div class="cfmeta"><div class="mkick" id="mKick">Now Playing</div><div class="mtitle" id="mTitle">—</div><div class="martist" id="mArtist"></div><button class="mfav" id="mFav" title="Favourite">'+HEART_I+'</button></div><div class="mscrub"><div class="mtrack"><div class="mfill" id="mFill" style="width:0%"></div></div><div class="mtimes"><span id="mElapsed">0:00</span><span id="mDur">0:00</span></div></div><div class="mtransport" id="mTransport"><button class="sml" id="mShuf" data-a="shuffle" title="Shuffle">'+SHUF_I+'</button><button data-a="previous">'+PREV_I+'</button><button class="pp" id="mPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button><button class="sml" id="mRep" data-a="repeat" title="Repeat">'+REP_I+'</button></div></div><aside class="mqueue" id="mQueue"><div class="mqtop"><button class="mqback" id="mQBack" title="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button><h3 id="mQTitle">Recently played</h3><div class="mqacts"><button id="mQSave" title="Save queue as playlist">'+SAVE_I+'</button><button id="mQClear" title="Clear queue">'+TRASH_I+'</button></div></div><div class="mqtabs"><button class="on" data-qt="recent">Recent</button><button data-qt="playlists">Playlists</button></div><div id="mQList" class="mqlist"></div></aside><div class="mqr" id="mQR"><div class="qrbox" id="mQRCode"></div><div class="qrlab">Scan to queue</div></div>'},
     timer:{home:true, bg:'radial-gradient(120% 100% at 50% 44%,#122447,#080b12 62%)', canvas:false, glow:'radial-gradient(closest-side at 50% 44%,rgba(123,150,255,.35),transparent 70%)',
       html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Timers</div><div class="tfull"><div class="trings" id="tmRings"></div><div class="tmore" id="tmMore"></div></div>'},
     list:{home:true, bg:GROUND, canvas:false,
@@ -710,7 +836,7 @@
     day:{home:true, bg:GROUND, canvas:false,
       html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Your Day</div><div class="chmeta" id="dayMeta"></div><div class="dayf"><div class="dc1"><div class="dsec"><h4>Calendar</h4><div id="dayEvents"></div></div></div><div class="dc2"><div class="dsec"><h4>Reminders</h4><div id="dayRems"></div></div><div class="dsec" id="dayComms" style="display:none"><h4>Messages</h4><div id="dayCommsList"></div></div></div></div>'},
     sleep:{home:false, bg:'radial-gradient(120% 90% at 50% 46%,#0a0e18,#02030a 72%)', canvas:false,
-      html:'<div class="slp"><div class="sclock" id="slClock"><span>--</span><span>--</span></div><div class="sdate" id="slDate"></div>'
+      html:'<div class="slp"><div class="sclock" id="slClock"><span>--</span><span class="cln">:</span><span>--</span></div><div class="sdate" id="slDate"></div>'
         +'<div class="sdock" id="slDock"></div></div>'},
     reminder:{home:true, bg:GROUND, canvas:false,
       html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Reminders</div><div class="chmeta" id="remMeta"></div><div class="remf"><div id="remList" class="remlist"></div></div>'},
@@ -738,11 +864,20 @@
   var full=document.getElementById('full'),cardwrap=document.getElementById('cardwrap'),host=document.getElementById('host'),dock=document.getElementById('dock'),dbody=document.getElementById('dbody'),home=document.getElementById('home'),glow=document.getElementById('glow'),pick=document.getElementById('pick');
 
   full.addEventListener('click',function(e){if(e.target.closest('.fcog'))show('settings');});
+  // Delegated: the Ask surface re-renders on every answer, so the talk control is
+  // a fresh element each time and cannot hold its own listener.
+  full.addEventListener('click',function(e){
+    if(!e.target.closest('#talkBtn'))return;
+    if(_convLive)convStop('user');else convStart();
+  });
+  // Never leave a hot mic behind if the kiosk reloads or the page is hidden.
+  window.addEventListener('pagehide',function(){convStop('pagehide');});
+  window.addEventListener('beforeunload',function(){convStop('unload');});
   // Queue-drawer outside-tap dismiss — ONE delegated listener (the drawer is
   // recreated on every music show(), so query it per event, never capture it).
   full.addEventListener('click',function(e){
     var qd=document.getElementById('mQueue');
-    if(qd&&qd.classList.contains('open')&&!e.target.closest('.mqueue')&&!e.target.closest('#mQBtn')){qd.classList.remove('open');var hb=document.getElementById('home');if(hb)hb.classList.remove('hide');}
+    if(qd&&qd.classList.contains('open')&&!e.target.closest('.mqueue')&&!e.target.closest('#mQBtn')){_qOpen(false);}
   });
 
   // ---- Ambient return -------------------------------------------------------
@@ -756,6 +891,10 @@
   function cancelAutoHome(){if(_autoHomeT){clearTimeout(_autoHomeT);_autoHomeT=null;}}
   function armAutoHome(){
     cancelAutoHome();
+    // A LIVE conversation is a destination, not a glance: never drift home
+    // mid-sentence. convStop() re-arms the normal drift on exit.
+    if(_convLive)return;
+    armIdleSleep();   // voice activity keeps the panel awake
     // A touch mid-turn TAKES the screen: Zoe finishing her sentence (done())
     // must not hand it back. The takeover lifts on the next navigation or the
     // next voice turn.
@@ -776,18 +915,47 @@
       show('home');
     },ms);
   }
+  // Idle → dimmed sleep screen (the panel-agent dims the backlight; this shows
+  // the designed sleep clock). After IDLE_SLEEP_MS of no touch/voice the estate
+  // drifts to the 'sleep' surface; any touch/voice/navigation resets it. The
+  // backlight NEVER fully powers off (panel-agent off_enabled=false) — it stays
+  // a dim, visible sleep screen.
+  // IDLE_SLEEP_MS / _sleepEnabled are overridden from the display-preferences
+  // endpoint at boot (sleep_seconds / sleep_enabled) so an operator can tune the
+  // active-display window without a redeploy, like idle_seconds/off_seconds.
+  var _idleSleepT=null, IDLE_SLEEP_MS=180000, _sleepEnabled=true, IDLE_SLEEP_RETRY_MS=30000;
+  function armIdleSleep(ms){if(_idleSleepT){clearTimeout(_idleSleepT);_idleSleepT=null;}
+    // Talking to Zoe is activity even with nobody touching the panel — a live
+    // session must never fall asleep mid-conversation. Re-armed by convStop().
+    if(_convLive)return;
+    if(_cur==='sleep'||!_sleepEnabled)return;
+    _idleSleepT=setTimeout(function(){_idleSleepT=null;
+      var m=document.getElementById('estModal'),cb=document.getElementById('cmdbar');
+      if((m&&m.classList.contains('on'))||(cb&&cb.classList.contains('on'))){armIdleSleep(IDLE_SLEEP_RETRY_MS);return;}  // mid-interaction — re-check in 30s, not a full window
+      // Music playing means the panel is IN USE even with nobody touching it —
+      // drifting to the night clock mid-song reads as the screen giving up on
+      // you. Freshness-guarded (30s): if whichever poller owns this surface has
+      // died, fail toward sleeping rather than a permanently lit panel.
+      if(_music.playing&&(Date.now()-(_music.playingAt||0))<30000){armIdleSleep(IDLE_SLEEP_RETRY_MS);return;}
+      if(_cur!=='sleep')show('sleep');
+    },ms||IDLE_SLEEP_MS);}
   // Any touch on the panel means the user took over — the screen is theirs.
-  document.addEventListener('pointerdown',function(){_userTookOver=true;_voiceScreen=false;cancelAutoHome();},true);
+  document.addEventListener('pointerdown',function(){_userTookOver=true;_voiceScreen=false;cancelAutoHome();armIdleSleep();},true);
 
   function show(id){
     var f=FULL[id], c=CARD[id];
+    // Leaving the Ask surface ends a live conversation — this is the choke point
+    // that covers navigation, the home drift, and idle/explicit sleep. Runs
+    // BEFORE the timers below re-arm, so convStop's re-arm can't race them.
+    if(_convLive&&id!=='ask')convStop('navigate');
     // Any navigation cancels a pending chat-fallback jump to Ask — the user
     // (or a domain arrival) choosing a screen always wins over the deferred
     // answer display.
     if(typeof _askFallT!=='undefined'&&_askFallT){clearTimeout(_askFallT);_askFallT=null;}
     // Navigating supersedes any pending drift; voice paths re-arm after this.
     cancelAutoHome();_voiceScreen=false;_userTookOver=false;
-    _cur=id; clearScreenTimers();
+    _cur=id; clearScreenTimers(); armIdleSleep();
+    var _orb=document.getElementById('orb');if(_orb)_orb.classList.toggle('hide',id==='sleep');  // the orb is distracting on the sleep clock
     var cb=document.getElementById('cmdbar');if(cb)cb.classList.remove('on');
     stage.classList.remove('wxlight');
     [].forEach.call(pick.querySelectorAll('button'),function(b){b.classList.toggle('sel',b.dataset.id===id);});
@@ -827,6 +995,17 @@
     }
   }
 
+  // Queue/playlist overlay state. Shared by every open/close path so the dock
+  // control (which takes over while the overlay hides #mTransport) can't be
+  // left stale — the toggle and the repaint are one operation, not two.
+  function _qIsOpen(){var q=document.getElementById('mQueue');return !!(q&&q.classList.contains('open'));}
+  function _qOpen(o){
+    var q=document.getElementById('mQueue');if(!q)return;
+    q.classList.toggle('open',o);
+    var hb=document.getElementById('home');if(hb)hb.classList.toggle('hide',o);
+    paintDockMusic();
+  }
+
   // Dock now-playing control — a compact pill (art + title + play/pause) that
   // appears while music is playing/paused; tapping the art/title opens the
   // Music surface. Refreshed by renderDock, polled every 5s while it's up.
@@ -838,7 +1017,17 @@
       var np=d&&d.now_playing,live=np&&(np.state==='playing'||np.state==='paused')&&np.title;
       var old=dbody.querySelector('.pc.dnp');if(old)old.remove();
       if(_dockMusicT){clearTimeout(_dockMusicT);_dockMusicT=null;}
+      // Record playback state BEFORE any early return: this poller is the only
+      // one running while you're off the music card, so the idle-sleep guard
+      // depends on it. Note it even when nothing is playing — that's what lets
+      // the panel sleep again once the music stops.
+      noteNP(np);
+      // The music card carries its own transport (#mTransport), so a dock chip
+      // there would just duplicate it — every OTHER surface gets the controls.
+      // Exception: the queue/playlist overlay covers that transport, so the
+      // dock takes over while it's open (that's why it's up on the playlist).
       if(!live||dbody.querySelector('.dheard'))return;
+      if(_cur==='music'&&!_qIsOpen())return;
       _music.player_id=np.player_id;
       var playing=np.state==='playing';
       var art=(np.image&&/^https?:/.test(np.image))?'<img alt="" src="'+esc(np.image)+'">':'<span class="ph"></span>';
@@ -888,6 +1077,65 @@
   }
 
   // ---- dock: real Home Assistant pinned controls (lights + thermostat) ----
+  // Icons for pinned tiles come from the SERVER (`pin.icon`, resolved from HA's
+  // own attributes.icon) — never derived from the domain here. That is what
+  // stops input_boolean.fan and input_boolean.tv drawing a lightbulb, which is
+  // exactly what today's unpinned dock does and only slice(0,3) hides.
+  // Line-art to match the existing dock glyphs (24px box, 1.8 stroke).
+  var MDI={
+    'mdi:ceiling-light':'<path d="M12 2.5v3.2"/><path d="M6.2 14.5 12 5.7l5.8 8.8z"/><path d="M9.4 18.2a2.6 2.6 0 0 0 5.2 0"/>',
+    'mdi:outdoor-lamp':'<path d="M4 3h7"/><path d="M7.5 3v7"/><path d="M11.5 21H21"/><path d="M16.2 10.5V21"/><path d="M12.4 10.5h7.6l-1.6-4.2h-4.4z"/>',
+    'mdi:fan':'<circle cx="12" cy="12" r="2.2"/><path d="M12 9.8c0-3.4 1-5.8 3-5.8 1.6 0 2.4 1.4 1.8 3-.6 1.7-2.4 2.8-4.8 2.8"/><path d="M14.2 12c3.4 0 5.8 1 5.8 3 0 1.6-1.4 2.4-3 1.8-1.7-.6-2.8-2.4-2.8-4.8"/><path d="M12 14.2c0 3.4-1 5.8-3 5.8-1.6 0-2.4-1.4-1.8-3 .6-1.7 2.4-2.8 4.8-2.8"/><path d="M9.8 12c-3.4 0-5.8-1-5.8-3 0-1.6 1.4-2.4 3-1.8 1.7.6 2.8 2.4 2.8 4.8"/>',
+    'mdi:television':'<rect x="2.5" y="4" width="19" height="12.5" rx="1.8"/><path d="M8 20.5h8"/>',
+    'mdi:thermostat':'<circle cx="12" cy="12" r="8.6"/><path d="M12 7.4V12l3 2"/>',
+    'mdi:thermometer':'<path d="M13.8 13.6V4.6a1.8 1.8 0 0 0-3.6 0v9a3.6 3.6 0 1 0 3.6 0z"/>',
+    'mdi:palette-outline':'<path d="M12 3.2a8.8 8.8 0 0 0 0 17.6c1.2 0 1.9-.8 1.9-1.7 0-.9-.7-1.4-.7-2.1 0-.8.6-1.4 1.5-1.4h1.6a4.4 4.4 0 0 0 4.5-4.5c0-4.3-4-7.9-8.8-7.9z"/><circle cx="7.4" cy="11.4" r="1.1"/><circle cx="10.2" cy="7.2" r="1.1"/><circle cx="15.2" cy="8" r="1.1"/>',
+    'mdi:toggle-switch-outline':'<rect x="2.5" y="7" width="19" height="10" rx="5"/><circle cx="16.4" cy="12" r="2.6"/>',
+    'mdi:lightbulb-outline':'<path d="M9.2 20h5.6"/><path d="M10 22.5h4"/><path d="M12 2.5a6.5 6.5 0 0 0-4.2 11.4c.8.7 1.2 1.4 1.2 2.6h6c0-1.2.4-1.9 1.2-2.6A6.5 6.5 0 0 0 12 2.5z"/>',
+    '_':'<circle cx="12" cy="12" r="8.6"/><path d="M12 8.4v4.2"/><path d="M12 15.8h.01"/>'
+  };
+  function mdi(name){return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'+(MDI[name]||MDI['_'])+'</svg>';}
+
+  // Operator-chosen dock pins. null until the first load succeeds; the dock
+  // falls back to its old "first few lights HA returned" behaviour whenever
+  // this is null OR pins_configured is false. Those two are NOT the same as
+  // pins_configured:true with an empty list — that means "show nothing".
+  var _pcfg=null,_pcfgLoaded=false;
+  // Last known-good config, per device. Persisted because the failure that
+  // matters most is at BOOT: the panel powers on while the backend is still
+  // starting, the config fetch fails, and without a cache the dock would fall
+  // back to unrelated — and tappable — HA lights on a panel that has pins.
+  // In-memory state alone cannot cover that; nothing has loaded yet.
+  function _pcCacheKey(){return 'zoe_panel_cfg_'+_panelDevId();}
+  function _pcCacheRead(){
+    try{var v=JSON.parse(localStorage.getItem(_pcCacheKey())||'null');
+      if(!v||!Array.isArray(v.pinned))return null;
+      // Pins are durable; their STATE is not. Hand back the cached pins in the
+      // exact shape the backend already uses when HA is unreachable — state
+      // null, available false, ha_available false — so the dock shows the
+      // operator's chosen controls without asserting a stale on/off. The next
+      // successful poll fills the real state in.
+      v.ha_available=false;
+      v.pinned=v.pinned.map(function(p){
+        return Object.assign({},p,{state:null,setpoint:null,available:false});});
+      return v;
+    }catch(e){return null;}
+  }
+  function _pcCacheWrite(d){try{localStorage.setItem(_pcCacheKey(),JSON.stringify(d));}catch(e){}}
+  function loadPanelCfg(cb){
+    // A malformed 200 and a failed request are the SAME situation — we did not
+    // learn this panel's config — so they share one recovery path. Keep
+    // whatever we already had; on a cold boot fall back to the cached config
+    // rather than to the wrong devices. A pinned dock must never revert to
+    // unrelated (and tappable) fallback lights over a momentary blip or a bad
+    // response. Only a panel that has genuinely never loaded a config stays
+    // null, which is the honest "we know nothing yet" state.
+    function unknown(){if(!_pcfg)_pcfg=_pcCacheRead();_pcfgLoaded=true;cb&&cb();}
+    apiGet('/api/panels/'+encodeURIComponent(_panelDevId())+'/config').then(function(d){
+      if(!d||!Array.isArray(d.pinned)){unknown();return;}
+      _pcfg=d;_pcCacheWrite(d);_pcfgLoaded=true;cb&&cb();
+    }).catch(unknown);
+  }
   var _ha={loaded:false,ok:false,lights:[],climate:null,scenes:[]};
   function haControl(body){return fetch('/api/ha/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify(body)});}
   function loadHA(cb){apiGet('/api/ha/entities').then(function(s){
@@ -905,28 +1153,142 @@
     }).catch(function(){_ha.loaded=true;_ha.ok=false;cb&&cb();});}
   // Re-pull HA state and refresh the dock — recovers from a failed first load and
   // keeps light/temp state fresh. Skips while heard/hidden/mid-interaction.
-  function refreshHA(){loadHA(function(){if(!dbody||dbody.querySelector('.dheard')||dock.classList.contains('hide')||dbody.querySelector('.pc.temp.open'))return;renderDock();});}
+  function refreshHA(){
+    // Pinned tiles carry SERVER-resolved state, so a poll has to re-read the
+    // panel config too — refreshing HA entities alone would leave a pinned
+    // light's amber glow frozen at whatever it was on first paint.
+    function done(){if(!dbody||dbody.querySelector('.dheard')||dock.classList.contains('hide')||dbody.querySelector('.pc.temp.open'))return;renderDock();}
+    loadHA(function(){loadPanelCfg(done);});
+  }
+
+  // ---- pinned tiles: parse/format/bounds -----------------------------------
+  // `state`, `setpoint`, `min`, `max` and `step` all arrive as STRINGS or
+  // numbers depending on the entity (live: state "21.0", min 16.0, step 0.5),
+  // so everything numeric goes through parseFloat, never parseInt — parseInt
+  // is what silently ate the half-steps in the old hardcoded slider.
+  function _tnum(v){var n=parseFloat(v);return isNaN(n)?null:n;}
+  function _tsnap(v,mn,mx,st){st=(st>0)?st:1;var n=mn+Math.round((v-mn)/st)*st;
+    n=Math.max(mn,Math.min(mx,n));return Math.round(n*1000)/1000;}
+  function _tfmt(v,st){return (st>0&&st<1)?v.toFixed(1):String(Math.round(v));}
+  // Bounds come from the pin (live thermostat: 16–30 step 0.5). The old code
+  // hardcoded 15–28/step 1, so the knob misreported its position on any other
+  // range; these fallbacks apply only when the entity exposes no bounds.
+  function _tbounds(p){var mn=_tnum(p.min),mx=_tnum(p.max),st=_tnum(p.step);
+    if(mn==null)mn=15;if(mx==null||mx<=mn)mx=mn+13;if(st==null||st<=0)st=1;
+    return {mn:mn,mx:mx,st:st};}
+
+  function dockPinHtml(p){
+    var nm=esc(p.name||''),dead=(p.available===false?' unavail':'');
+    if(p.kind==='temp'){
+      var b=_tbounds(p),cur=_tnum(p.state),sp=_tnum(p.setpoint);
+      if(sp==null)sp=(cur!=null?cur:b.mn);
+      sp=_tsnap(sp,b.mn,b.mx,b.st);
+      return '<div class="pc pin temp'+dead+'" data-k="temp" data-eid="'+esc(p.write_eid)+'"'
+        +' data-act="'+esc(p.write_action||'set_value')+'" data-tgt="'+esc(String(sp))+'"'
+        +' data-mn="'+b.mn+'" data-mx="'+b.mx+'" data-st="'+b.st+'">'
+        +'<div class="tv">'+(cur!=null?Math.round(cur):'—')+'°</div><div class="tl">'+nm+'</div>'
+        +'<div class="tpop"><div class="tpv">'+_tfmt(sp,b.st)+'°</div>'
+        +'<div class="tsl"><div class="tff"></div><div class="tkn"></div></div>'
+        +'<div class="tpl">'+nm+'</div></div></div>';
+    }
+    if(p.kind==='scene'){
+      // A scene's state is `unknown` or a last-fired timestamp — neither is
+      // glanceable, so it renders NO state and never gets .on.
+      return '<div class="pc pin scene'+dead+'" data-k="scene" data-eid="'+esc(p.write_eid)+'"'
+        +' data-act="'+esc(p.write_action||'turn_on')+'">'+mdi(p.icon)+'<span class="nm">'+nm+'</span></div>';
+    }
+    return '<div class="pc pin light'+(String(p.state).toLowerCase()==='on'?' on':'')+dead+'"'
+      +' data-k="toggle" data-eid="'+esc(p.write_eid)+'">'+mdi(p.icon)+'<span class="nm">'+nm+'</span></div>';
+  }
+
+  function wireTempTile(tb){
+    var eid=tb.getAttribute('data-eid'),act=tb.getAttribute('data-act')||'set_value',
+        mn=+tb.getAttribute('data-mn'),mx=+tb.getAttribute('data-mx'),st=+tb.getAttribute('data-st'),
+        tsl=tb.querySelector('.tsl'),tff=tb.querySelector('.tff'),tkn=tb.querySelector('.tkn'),
+        tpv=tb.querySelector('.tpv');
+    if(!tsl||!(mx>mn))return;
+    var tv=_tsnap(_tnum(tb.getAttribute('data-tgt'))||mn,mn,mx,st);
+    function pt(){var p=Math.max(0,Math.min(100,(tv-mn)/(mx-mn)*100));
+      tff.style.height=p+'%';tkn.style.bottom=p+'%';tpv.textContent=_tfmt(tv,st)+'°';}
+    pt();
+    tb.onclick=function(e){if(e.target.closest('.tpop'))return;tb.classList.toggle('open');};
+    var d=false;
+    function at(y){var r=tsl.getBoundingClientRect();
+      tv=_tsnap(mn+Math.max(0,Math.min(1,1-(y-r.top)/r.height))*(mx-mn),mn,mx,st);pt();}
+    tsl.addEventListener('pointerdown',function(e){d=true;tsl.setPointerCapture(e.pointerId);at(e.clientY);});
+    tsl.addEventListener('pointermove',function(e){if(d)at(e.clientY);});
+    tsl.addEventListener('pointerup',function(){d=false;
+      // Param key follows the service: an input_number takes `set_value {value}`
+      // (the pin's write_action), a climate entity takes `set_temperature
+      // {temperature}`. The old code sent set_temperature unconditionally.
+      var params=(act==='set_temperature')?{temperature:tv}:{value:tv};
+      haControl({entity_id:eid,action:act,params:params})
+        .then(function(r){if(!r.ok)refreshHA();}).catch(function(){refreshHA();});});
+  }
+
+  function wireDock(){
+    // Covers BOTH pinned toggles and the unpinned fallback pills — both are
+    // state-bearing, so both send the explicit turn_on/turn_off matching what
+    // the operator just saw. A blind `toggle` against a stale read flips the
+    // wrong way; this is self-correcting. write_action is honoured where the
+    // service genuinely varies (scene, temp).
+    dbody.querySelectorAll('.pc.light[data-eid]').forEach(function(el){el.onclick=function(){
+      var on=el.classList.toggle('on');
+      haControl({entity_id:el.getAttribute('data-eid'),action:on?'turn_on':'turn_off'})
+        .then(function(r){if(!r.ok)throw new Error('http '+r.status);})
+        .catch(function(){el.classList.toggle('on');});};});
+    dbody.querySelectorAll('.pc.scene[data-eid]').forEach(function(el){el.onclick=function(){
+      // Fire-and-forget: flash regardless of outcome. There is no state to
+      // revert to, and a silently-failed scene is indistinguishable from a
+      // working one — acceptable, and better than faking reconciliation.
+      el.classList.add('fire');setTimeout(function(){el.classList.remove('fire');},900);
+      haControl({entity_id:el.getAttribute('data-eid'),action:el.getAttribute('data-act')||'turn_on'}).catch(function(){});};});
+    dbody.querySelectorAll('.pc.temp').forEach(wireTempTile);
+  }
+
   function renderDock(){
+    if(!_pcfgLoaded){dbody.innerHTML='<div class="pc light">'+BULB+'<span class="nm">…</span></div>';
+      loadPanelCfg(function(){if(dbody.querySelector('.dheard'))return;renderDock();});return;}
     if(!_ha.loaded){dbody.innerHTML='<div class="pc light">'+BULB+'<span class="nm">…</span></div>';loadHA(function(){if(dbody.querySelector('.dheard'))return;renderDock();});return;}
+    // Operator-chosen pins win. pins_configured:false => nobody has chosen yet
+    // => keep the old "first few lights HA returned" fallback so a fresh panel
+    // is never empty. pins_configured:true with an empty list is a real choice
+    // ("show nothing") and must NOT fall back.
+    if(_pcfg&&_pcfg.pins_configured){
+      dbody.innerHTML=(_pcfg.pinned||[]).map(dockPinHtml).join('');
+      paintDockTimer();paintDockMusic();wireDock();return;
+    }
     var cl=_ha.climate,lights=_ha.lights.slice(0,cl?2:3),html='';
-    html+=lights.map(function(e){var on=String(e.state).toLowerCase()==='on';var nm=(e.attributes&&e.attributes.friendly_name)||e.entity_id;nm=nm.replace(/\s+light$/i,'');return '<div class="pc light'+(on?' on':'')+'" data-eid="'+esc(e.entity_id)+'">'+BULB+'<span class="nm">'+esc(nm)+'</span></div>';}).join('');
+    // Dock pills carry a ONE-WORD name: the dock is a glance surface and
+    // "Living Room" crowds it. First word only ("Living"). Operator-set short
+    // names are the eventual answer — see the pinned-controls work.
+    //
+    // But shorten only where it stays UNAMBIGUOUS: "Kitchen Light" + "Kitchen
+    // Lamp" both collapse to "Kitchen", which renders two identical pills that
+    // toggle different lights — you'd have no way to know which one you hit.
+    // A colliding name keeps its full text (wider, but honest); everything else
+    // still gets the one-word win. Numbering them ("Kitchen", "Kitchen2") would
+    // be unambiguous to the code and meaningless to a person.
+    var _dnames=lights.map(function(e){return String((e.attributes&&e.attributes.friendly_name)||e.entity_id).replace(/\s+light$/i,'');});
+    var _dfirst=_dnames.map(function(n){return n.split(/\s+/)[0]||n;});
+    var _dcount={};_dfirst.forEach(function(f){_dcount[f]=(_dcount[f]||0)+1;});
+    html+=lights.map(function(e,i){var on=String(e.state).toLowerCase()==='on';var nm=_dcount[_dfirst[i]]>1?_dnames[i]:_dfirst[i];return '<div class="pc light'+(on?' on':'')+'" data-eid="'+esc(e.entity_id)+'">'+BULB+'<span class="nm">'+esc(nm)+'</span></div>';}).join('');
     // "No lights" only after a SUCCESSFUL fetch with zero entities; a failed
     // fetch renders no pills (quiet) and the 30s refresh keeps retrying.
     if(!lights.length&&_ha.ok)html+='<div class="pc light"><span class="nm" style="opacity:.6">No lights</span></div>';
+    // Unpinned fallback thermostat. A climate.* entity publishes its own bounds
+    // (min_temp/max_temp/target_temp_step) — carry them on the tile so the
+    // shared slider reads a real range instead of the old hardcoded 15–28.
     if(cl){var a=cl.attributes||{};var cur=(a.current_temperature!=null?a.current_temperature:a.temperature);var tgt=(a.temperature!=null?a.temperature:cur);if(tgt==null)tgt=21;
-      html+='<div class="pc temp" data-eid="'+esc(cl.entity_id)+'" data-tgt="'+esc(String(Math.round(tgt)))+'"><div class="tv">'+(cur!=null?Math.round(cur):'—')+'°</div><div class="tl">Temp</div><div class="tpop"><div class="tpv">'+Math.round(tgt)+'°</div><div class="tsl"><div class="tff"></div><div class="tkn"></div></div><div class="tpl">Thermostat</div></div></div>';}
+      var cb=_tbounds({min:a.min_temp,max:a.max_temp,step:a.target_temp_step});
+      var ctgt=_tsnap(_tnum(tgt)||cb.mn,cb.mn,cb.mx,cb.st);
+      html+='<div class="pc temp" data-eid="'+esc(cl.entity_id)+'" data-act="set_temperature" data-tgt="'+esc(String(ctgt))+'"'
+        +' data-mn="'+cb.mn+'" data-mx="'+cb.mx+'" data-st="'+cb.st+'"><div class="tv">'+(cur!=null?Math.round(cur):'—')+'°</div><div class="tl">Temp</div>'
+        +'<div class="tpop"><div class="tpv">'+_tfmt(ctgt,cb.st)+'°</div><div class="tsl"><div class="tff"></div><div class="tkn"></div></div><div class="tpl">Thermostat</div></div></div>';}
     dbody.innerHTML=html;
     paintDockTimer();
     paintDockMusic();
-    dbody.querySelectorAll('.pc.light[data-eid]').forEach(function(el){el.onclick=function(){var on=el.classList.toggle('on');haControl({entity_id:el.getAttribute('data-eid'),action:on?'turn_on':'turn_off'}).then(function(r){if(!r.ok)throw new Error('http '+r.status);}).catch(function(){el.classList.toggle('on');});};});
-    (function(){var tb=dbody.querySelector('.pc.temp');if(!tb)return;var eid=tb.getAttribute('data-eid'),tsl=tb.querySelector('.tsl'),tff=tb.querySelector('.tff'),tkn=tb.querySelector('.tkn'),tpv=tb.querySelector('.tpv'),tv=parseInt(tb.getAttribute('data-tgt'),10)||21;
-      function pt(){var p=Math.max(0,Math.min(100,(tv-15)/13*100));tff.style.height=p+'%';tkn.style.bottom=p+'%';tpv.textContent=tv+'°';}pt();
-      tb.onclick=function(e){if(e.target.closest('.tpop'))return;tb.classList.toggle('open');};
-      var d=false;function at(y){var r=tsl.getBoundingClientRect();tv=Math.round(15+Math.max(0,Math.min(1,1-(y-r.top)/r.height))*13);pt();}
-      tsl.addEventListener('pointerdown',function(e){d=true;tsl.setPointerCapture(e.pointerId);at(e.clientY);});
-      tsl.addEventListener('pointermove',function(e){if(d)at(e.clientY);});
-      tsl.addEventListener('pointerup',function(){d=false;haControl({entity_id:eid,action:'set_temperature',params:{temperature:tv}}).then(function(r){if(!r.ok)refreshHA();}).catch(function(){refreshHA();});});
-    })();
+    wireDock();
   }
 
   // ---- launcher overlay (opened from the dock grid button) ----
@@ -1032,12 +1394,21 @@
   // ---- Music screen (real now-playing + transport) ----
   function fmtDur(s){s=Math.max(0,Math.round(s||0));return Math.floor(s/60)+':'+two(s%60);}
   var _music={player_id:null};
+  // "Is music playing right now", written by BOTH now-playing pollers — the music
+  // surface's loadMusic and the dock's paintDockMusic — so it stays fresh on every
+  // surface. The idle-sleep guard can't use _music.np: only loadMusic writes that,
+  // and it only polls while _cur==='music', so it goes stale the moment you
+  // navigate away — the panel would still sleep on you while music played.
+  // Timestamped so a stopped poller fails toward sleeping rather than toward a
+  // permanently lit panel.
+  function noteNP(np){_music.playing=!!(np&&np.state==='playing');_music.playingAt=Date.now();}
   function loadMusic(){
     apiGet('/api/music/now-playing').then(function(d){if(_cur!=='music')return;
       var np=d&&d.now_playing;
-      var spk=document.getElementById('mSpk'),art=document.getElementById('mArt'),ti=document.getElementById('mTitle'),ar=document.getElementById('mArtist'),fill=document.getElementById('mFill'),te=document.getElementById('mElapsed'),td=document.getElementById('mDur'),pp=document.getElementById('mPP');
+      var spk=document.getElementById('mSpk'),ti=document.getElementById('mTitle'),ar=document.getElementById('mArtist'),fill=document.getElementById('mFill'),te=document.getElementById('mElapsed'),td=document.getElementById('mDur'),pp=document.getElementById('mPP');
       var idle=!d||!d.available||!np||!(np.title||np.state==='playing'||np.state==='paused');
       var scrub=document.querySelector('.mfull .mscrub'),tp=document.getElementById('mTransport');
+      noteNP(np);   // before the idle return, so stopping the music lets sleep arm again
       if(idle){
         // Idle is a real state, not a broken card: say so, keep the speaker
         // choice (it targets the NEXT play), point at the voice path, and
@@ -1047,21 +1418,17 @@
         if(ti)ti.textContent='Nothing playing';
         var pp0=document.getElementById('mPP');if(pp0){pp0.dataset.playing='0';pp0.innerHTML=PLAY_I;}
         if(ar)ar.innerHTML='Say <b style="color:var(--ink)">“Hey Zoe, play some music”</b> — or pick a speaker first.';
-        if(art)art.innerHTML='🎵';
         if(scrub)scrub.style.display='none';if(tp)tp.style.display='none';
         if(np&&spk){var nm0=spk.querySelector('.spkname');if(nm0&&np.player_name)nm0.textContent=np.player_name;}
-        _syncQueueOverlay();   // clear the stale now-playing/up-next when playback stops
+        cfClear();   // no queue to fan out when nothing is playing
         return;
       }
       if(scrub)scrub.style.display='';if(tp)tp.style.display='';
       _music.player_id=np.player_id;
       if(spk){var nm=spk.querySelector('.spkname');if(nm)nm.textContent=np.player_name||'';}
-      if(ti)ti.textContent=np.title||'';
-      if(ar)ar.textContent=np.artist||'';
-      if(art){if(np.image&&/^https?:\/\//i.test(np.image)){art.innerHTML='<img alt="" style="width:100%;height:100%;object-fit:cover;border-radius:28px;display:block" src="'+esc(np.image)+'">';}else{art.innerHTML='🎵';}}
       var el=np.elapsed||0,du=np.duration||0;
       _music.np={elapsed:el,duration:du,playing:np.state==='playing',active:(np.state==='playing'||np.state==='paused'),at:Date.now(),uri:np.uri||np.media_uri||'',queueItemId:np.queue_item_id||null,index:(np.queue_index!=null?np.queue_index:null),title:np.title||'',artist:np.artist||'',image:np.image||''};
-      _syncQueueOverlay();
+      cfSync();   // the flow owns the art + meta now (it may be showing a browsed cover)
       if(fill)fill.style.width=(du?Math.min(100,el/du*100):0)+'%';
       if(te)te.textContent=fmtDur(el);if(td)td.textContent=fmtDur(du);
       if(pp){var playing=(np.state==='playing');pp.dataset.playing=playing?'1':'0';pp.innerHTML=playing?PAUSE_I:PLAY_I;}
@@ -1080,12 +1447,13 @@
     if(te)te.textContent=fmtDur(Math.min(el,du||el));}
   function musicSet(action,value){if(!_music.player_id)return;
     fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({action:action,player_id:_music.player_id,value:value})}).then(function(){setTimeout(loadMusic,350);}).catch(function(){});}
-  function fmtQ(sec){sec=Math.max(0,Math.round(sec||0));return Math.floor(sec/60)+':'+two(sec%60);}
-  var _qtab='queue';
+  var _qtab='recent';
   function _qpost(path,body){return apiJson('POST','/api/music/'+path,body);}
+  // The overlay is pure BROWSING now — Recent + Playlists. The queue itself is
+  // the card (see the Cover Flow below), so there's no Queue tab to render.
   function loadQueue(){var host=document.getElementById('mQList');if(!host)return;
     var ttl=document.getElementById('mQTitle');
-    host.classList.remove('grid','recent','queue');
+    host.classList.remove('grid','recent');
     if(_qtab==='recent'){host.classList.add('recent');if(ttl)ttl.textContent='Recently played';
       host.innerHTML=_qmsg('Loading…');
       apiGet('/api/music/recently-played').then(function(d){if(_cur!=='music')return;var its=(d&&d.items)||[];
@@ -1097,38 +1465,7 @@
         host.innerHTML=pls.map(_pltile).join('')||_qempty('No playlists yet — build one with Save.');
         host.onclick=function(e){var r=e.target.closest('.qi.pl');if(!r)return;_qpost('play_media',{uri:r.getAttribute('data-uri'),player_id:_music.player_id||undefined,option:'replace'}).then(function(){toast('Playing playlist');setTimeout(loadMusic,600);}).catch(function(){toast('Couldn’t play');});};
       }).catch(function(){host.innerHTML=_qempty('Couldn’t load playlists.');});return;}
-    // ---- queue tab: now-playing on the left, numbered up-next tiles on the right ----
-    if(ttl)ttl.textContent='Up next';
-    if(!_music.player_id){host.innerHTML=_qempty('Nothing playing.');return;}
-    host.classList.add('queue');
-    _music._qKey=(_music.np&&_music.np.queueItemId)||'idle';   // track this render's song for _syncQueueOverlay
-    host.innerHTML='<div class="mqnow" id="mqNow"></div><div class="mqup" id="mqUp">'+_qmsg('Loading…')+'</div>';
-    paintQueueNow();
-    apiGet('/api/music/queue/'+encodeURIComponent(_music.player_id)).then(function(d){
-      if(_cur!=='music')return;var its=(d&&d.items)||[];
-      var curId=(_music.np&&_music.np.queueItemId)||null;
-      var curIdx=-1;
-      for(var j=0;j<its.length;j++){if(curId?String(its[j].queue_item_id)===String(curId):(its[j].index===(_music.np&&_music.np.index))){curIdx=j;break;}}
-      var base=curIdx>=0?curIdx+1:0, up=its.slice(base);
-      var upEl=document.getElementById('mqUp');if(!upEl)return;
-      upEl.innerHTML=up.slice(0,40).map(function(q,i){
-        return '<div class="qslot" data-idx="'+(base+i)+'" data-iid="'+esc(String(q.queue_item_id))+'"><span class="qnum">'+(i+1)+'</span>'+_thumb(q.image)+'<span class="qsn"><span class="qn">'+esc(q.name||'')+'</span>'+(q.duration?'<span class="qsd">'+fmtQ(q.duration)+'</span>':'')+'</span><button class="qx" title="Remove">✕</button></div>';
-      }).join('')||_qempty('Nothing up next.');
-      _wireUpNext(upEl);
-    }).catch(function(){var upEl=document.getElementById('mqUp');if(upEl)upEl.innerHTML=_qempty('Couldn’t load the queue.');});}
-  // Keep the open queue overlay in sync with playback: reload both panels
-  // (now-playing + numbered up-next) only when the current track actually
-  // changes — a skip/next or a stop — so the `base` offset for play-index
-  // stays correct and a stopped track doesn't linger. No per-poll flicker.
-  function _syncQueueOverlay(){
-    if(_cur!=='music'||_qtab!=='queue'||!document.querySelector('.mqueue.open'))return;
-    var key=(_music.np&&_music.np.queueItemId)||'idle';
-    if(key!==_music._qKey)loadQueue();
   }
-  // The now-playing card in the queue tab's left column (mirrors _music.np).
-  function paintQueueNow(){var el=document.getElementById('mqNow');if(!el)return;var np=_music.np;
-    var art=(np&&np.image&&/^https?:/.test(np.image))?'<img alt="" src="'+esc(np.image)+'">':'🎵';
-    el.innerHTML='<div class="nowart">'+art+'</div><div class="nowk">Now Playing</div><div class="nowt">'+esc((np&&np.title)||'Nothing playing')+'</div><div class="nowa">'+esc((np&&np.artist)||'')+'</div>';}
   function _qmsg(t){return '<div class="mqmsg" style="color:var(--ink-faint);padding:8px 4px">'+esc(t)+'</div>';}
   function _qempty(t){return '<div style="color:var(--ink-faint);padding:8px 4px">'+esc(t)+'</div>';}
   function _thumb(u){return (u&&/^https?:/.test(u))?'<img class="qthumb" alt="" src="'+esc(u)+'">':'<span class="qthumb ph"></span>';}
@@ -1138,12 +1475,394 @@
   function _rtile(t){return '<div class="rtile qi br" data-uri="'+esc(t.uri||'')+'">'+_thumb(t.image)+'<span class="rti"><span class="qn">'+esc(t.name||'')+'</span>'+(t.artist?'<span class="ra">'+esc(t.artist)+'</span>':'')+'</span><button class="qadd" title="Add to queue">＋</button></div>';}
   function _wireBrowseRow(host){host.onclick=function(e){var r=e.target.closest('.qi.br');if(!r)return;var uri=r.getAttribute('data-uri');
     var add=e.target.closest('.qadd');
-    _qpost('play_media',{uri:uri,player_id:_music.player_id||undefined,option:add?'add':'replace'}).then(function(){toast(add?'Added to queue':'Playing now');if(!add)setTimeout(loadMusic,600);else setTimeout(function(){if(_qtab==='queue')loadQueue();},600);}).catch(function(){toast('Couldn’t do that');});};}
-  function _wireUpNext(host){
-    // tap a slot = jump to it; ✕ = remove from queue.
-    host.onclick=function(e){var row=e.target.closest('.qslot');if(!row)return;
-      if(e.target.closest('.qx')){_qpost('queue/remove',{queue_id:_music.player_id,item_id:row.getAttribute('data-iid')}).then(function(){loadQueue();}).catch(function(){toast('Couldn’t remove');});return;}
-      _qpost('queue/play-index',{queue_id:_music.player_id,index:+row.getAttribute('data-idx')}).then(function(){setTimeout(loadMusic,400);setTimeout(loadQueue,600);}).catch(function(){});};
+    _qpost('play_media',{uri:uri,player_id:_music.player_id||undefined,option:add?'add':'replace'}).then(function(){toast(add?'Added to queue':'Playing now');if(!add)setTimeout(loadMusic,600);else setTimeout(cfLoad,600);}).catch(function(){toast('Couldn’t do that');});};}
+
+  // ---- Cover Flow queue: the music card IS the queue -----------------------
+  // Played covers recede LEFT, now-playing flat in the CENTRE, upcoming fan
+  // RIGHT. `cur` is what's actually playing; `focus` is what you've browsed to
+  // — they're only the same until you flick. Browsing NEVER touches playback.
+  var CF_K=0.867;        // uniform scale of the proven prototype geometry (card
+                         // 300→260, perspective 1400→1214). x, z, the card and
+                         // the perspective all scale together, so the projection
+                         // — including the deliberate slight overlap that reads
+                         // as a stack — is the prototype exactly, just sized to
+                         // clear the dock (top 605) inside 720px. rotateY/scale/
+                         // opacity are dimensionless and stay verbatim.
+  var CF_WIN=5;          // render a WINDOW of ±5 covers: a 200-track queue must
+                         // not put 200 cards in the DOM.
+  var CF_HOME_MS=8000;   // browse, then drift back to Now — the estate's instinct
+  var CF_HOLD_MS=320;    // long-press to lift a cover for reorder
+  var CF_UNDO_MS=5000;   // removal is deferred, so Undo is local + truthful
+
+  // ---- direct manipulation --------------------------------------------------
+  // `focus` is FRACTIONAL. A drag writes it straight from the finger; a release
+  // hands it to a spring that settles on a whole number. It is deliberately NOT
+  // a CSS transition: an ease always starts from rest, so catching a moving
+  // cover would stutter, and easing between two integer slots is a slideshow —
+  // which is what this replaces.
+  var CF_SLOT=238*CF_K;  // px of finger travel per queue position. This is the
+                         // first neighbour's x-offset, so the cover you grabbed
+                         // travels roughly under your finger. Derived from CF_K
+                         // (it used to hardcode 0.867) so the covers still track
+                         // the finger if CF_K changes.
+  var CF_SPRING_K=272;   // ω=√272≈16.5 rad/s
+  var CF_SPRING_D=33;    // =2√K → critically damped: no overshoot, no wobble.
+                         // Settles in ~400ms, which is the .42s ease it replaces
+                         // — the approved feel, now reachable at any velocity.
+  var CF_RUBBER=0.35;    // resistance past the ends
+  var CF_FLING=0.16;     // seconds of momentum projected into the target: a
+                         // normal flick (~1px/ms) lands exactly one cover on.
+  var CF_FLING_MAX=5;    // a flick can't outrun the window rendered for it
+  var CF_VMIN=0.6;       // slower than this (covers/s) = snap to the nearest
+  var CF_VWIN=80;        // ms of history the release velocity is measured over
+  var CF_WIN_DRAG=8;     // covers each side rendered for a gesture: enough for a
+                         // full-width drag (1280/206≈6.2) plus a capped fling,
+                         // so nothing rebuilds mid-drag (an innerHTML rebuild
+                         // re-decodes the art and flashes).
+  var _cf={items:[],cur:-1,focus:0,key:'',homeT:null,undo:null,drag:null,loading:false,
+           vel:0,anim:0,raf:0,target:null};
+  // focus is fractional; anything indexing items[] needs the whole number.
+  function cfF(){return Math.max(0,Math.min(_cf.items.length-1,Math.round(_cf.focus)));}
+
+  function cfClear(){
+    // A pending removal is the user's INSTRUCTION, not a maybe — the deferral
+    // only exists to make Undo possible, so flush it rather than silently drop
+    // it (they were told "Removed"). Quietly: the card is being emptied, not
+    // repainted, so no reload and no stale Undo left live to paint a phantom
+    // queue onto a stopped player.
+    if(_cf.undo)cfCommitRemove(true);
+    // Same for an in-flight gesture: the card it points at is about to be
+    // detached, and a surviving _cf.drag would leave the lift class + inline
+    // zIndex stranded on it (and run the next pointerup against an empty queue).
+    if(_cf.drag){clearTimeout(_cf.drag.hold);_cf.drag=null;}
+    // A settle spring outlives the card it was animating — it would keep
+    // writing transforms onto detached nodes (and hold a rAF open) forever.
+    cfStopAnim();if(_cf.raf){cancelAnimationFrame(_cf.raf);_cf.raf=0;}
+    _cf.items=[];_cf.cur=-1;_cf.focus=0;_cf.vel=0;_cf.target=null;_cf.key='';
+    var t=document.getElementById('mCFT');if(t)t.innerHTML='';}
+
+  // Reload the queue only when the playing track actually changes (a skip, a
+  // jump, a stop) — not on every 5s poll, which would fight your browsing.
+  function cfSync(){
+    var key=(_music.np&&_music.np.queueItemId)||'idle';
+    if(key!==_cf.key){_cf.key=key;cfLoad();return;}
+    cfIndex();cfPaintMeta();
+  }
+  function cfIndex(){   // re-find the playing row; its index moves as the queue edits
+    var curId=(_music.np&&_music.np.queueItemId)||null;
+    var was=_cf.cur;_cf.cur=-1;
+    for(var i=0;i<_cf.items.length;i++){
+      if(curId?String(_cf.items[i].queue_item_id)===String(curId):(_cf.items[i].index===(_music.np&&_music.np.index))){_cf.cur=i;break;}}
+    if(was<0&&_cf.cur>=0)_cf.focus=_cf.cur;   // first index: park the focus on Now
+  }
+  function cfLoad(){
+    if(!_music.player_id||_cf.loading)return;
+    _cf.loading=true;
+    apiGet('/api/music/queue/'+encodeURIComponent(_music.player_id)).then(function(d){
+      _cf.loading=false;if(_cur!=='music')return;
+      var its=(d&&d.items)||[];
+      // A pending removal hasn't been sent yet (that's what makes Undo honest),
+      // so the server still lists it. Any reload inside the undo window — e.g.
+      // the one cfPlay schedules 700ms after a tap — would fan it straight back
+      // in and contradict the affordance. Keep it out locally, and refresh the
+      // undo snapshot so restoring it still lands you on current data.
+      if(_cf.undo){
+        var pid=String(_cf.undo.item.queue_item_id);
+        _cf.undo.items=its;
+        its=its.filter(function(x){return String(x.queue_item_id)!==pid;});
+      }
+      _cf.items=its;
+      var hadFocus=_cf.cur>=0?(cfF()-_cf.cur):0;   // keep your browsed offset across a track change
+      cfIndex();
+      if(_cf.cur>=0)_cf.focus=Math.max(0,Math.min(_cf.items.length-1,_cf.cur+(_cf.homeT?hadFocus:0)));
+      cfRender();
+    }).catch(function(){_cf.loading=false;toast('Couldn’t load the queue.');});
+  }
+  // Build only the window; reuse nothing (≤11 nodes, cheap on the Pi's GPU).
+  function cfRender(){cfBuild(Math.round(_cf.focus)-CF_WIN,Math.round(_cf.focus)+CF_WIN);}
+  // Cover both ends of a glide, so a spring travelling several covers doesn't
+  // animate into empty space.
+  function cfRenderSpan(a,b){
+    cfBuild(Math.floor(Math.min(a,b))-CF_WIN,Math.ceil(Math.max(a,b))+CF_WIN);
+  }
+  function cfBuild(lo,hi){
+    var track=document.getElementById('mCFT');if(!track)return;
+    lo=Math.max(0,lo);hi=Math.min(_cf.items.length-1,hi);
+    var html='';
+    for(var i=lo;i<=hi;i++){
+      var it=_cf.items[i],n=(_cf.cur>=0)?(i-_cf.cur):null;
+      var badge=(n===0)?'<span class="qn now">Now</span>':(n>0?'<span class="qn">'+esc(String(n))+'</span>':'');
+      var art=(it.image&&/^https?:/.test(it.image))?'<img alt="" src="'+esc(it.image)+'">':'<div class="ph">🎵</div>';
+      html+='<div class="cfc" data-i="'+i+'" data-iid="'+esc(String(it.queue_item_id))+'">'+badge+art
+           +'<button class="cfx" title="Remove from queue">✕</button></div>';
+    }
+    track.innerHTML=html;
+    cfLayout();cfPaintMeta();
+  }
+  // The geometry, CONTINUOUS in d. At d = 0,±1,±2,±3,±4 these are algebraically
+  // identical to the discrete slots they replace — the approved look is
+  // untouched; what's new is that the space BETWEEN slots now exists, which is
+  // what lets a cover sit under your finger instead of teleporting between
+  // positions. (tests/e2e/music asserts both halves of that claim.)
+  function cfGeom(d){
+    var t=Math.min(Math.abs(d),4),dir=Math.sign(d),
+        n=Math.min(t,1),      // the centre→first-neighbour leg
+        f=Math.max(0,t-1);    // the flat fan beyond it
+    return {t:t,
+      x:  dir*(238*n + 96*f)*CF_K,        // t=0:0  t=1:238K  t=2:334K
+      z:  (140 - 220*n - 55*f)*CF_K,      // t=0:140K t=1:-80K t=2:-135K
+      ry: dir*-54*n,                      // t=0:0  t>=1:∓54
+      sc: t<=1 ? 1.12+(0.95-1.12)*t : 0.95-0.05*f,
+      op: t>=4 ? 0 : (t<=1 ? 1 : Math.max(0,1-f*0.14))};
+  }
+  function cfLayout(){
+    var track=document.getElementById('mCFT');if(!track)return;
+    var cards=track.children;
+    for(var k=0;k<cards.length;k++){
+      var card=cards[k],i=+card.getAttribute('data-i'),d=i-_cf.focus;
+      if(card===(_cf.drag&&_cf.drag.el)&&_cf.drag.lifted)continue;   // the lifted card follows the finger
+      var g=cfGeom(d);
+      card.style.transform='translateX('+g.x+'px) translateZ('+g.z+'px) rotateY('+g.ry+'deg) scale('+g.sc+')';
+      card.style.opacity=g.op;
+      card.classList.toggle('on',Math.abs(d)<0.5);
+      card.classList.toggle('right',d>0);
+      card.style.zIndex=Math.round(50-g.t);
+      card.style.setProperty('--cfshade',String(Math.min(g.t,1)));
+      // The past reads as past: dimmed but still legible art (the prototype's
+      // saturate(.42) brightness(.82) rendered too ghostly/pale to read).
+      // Keyed off `cur` — what's PLAYING — and never off focus: browsing past a
+      // cover must not re-grade it under your finger.
+      card.style.filter=(_cf.cur>=0&&i<_cf.cur)?'saturate(.72) brightness(.94)':'none';
+    }
+  }
+  function cfStopAnim(){if(_cf.anim){cancelAnimationFrame(_cf.anim);_cf.anim=0;}}
+  function cfAnim(on){var t=document.getElementById('mCFT');if(t)t.classList.toggle('cfanim',!!on);}
+  // Past the ends the flow resists instead of running off — you can see there's
+  // nothing there — and springs back on release.
+  function cfRubber(f){
+    var max=Math.max(0,_cf.items.length-1);
+    if(f<0)return f*CF_RUBBER;
+    if(f>max)return max+(f-max)*CF_RUBBER;
+    return f;
+  }
+  // Settle on a whole number, carrying whatever velocity the finger left behind.
+  function cfGlide(target,v0){
+    var max=Math.max(0,_cf.items.length-1);
+    target=Math.max(0,Math.min(max,target));
+    // A long jump isn't a gesture continuation — the 8s drift home from deep in
+    // a 200-track queue would otherwise fly through 100 covers and have to
+    // render every one. Land it, exactly as it always has.
+    if(Math.abs(target-_cf.focus)>CF_WIN_DRAG){
+      cfStopAnim();_cf.vel=0;cfAnim(false);_cf.focus=target;cfRender();return;
+    }
+    _cf.target=target;if(v0!=null)_cf.vel=v0;
+    cfRenderSpan(_cf.focus,target);
+    cfStopAnim();cfAnim(true);
+    var last=performance.now();
+    _cf.anim=requestAnimationFrame(function step(now){
+      // Clamp dt: a backgrounded tab hands you a multi-second frame and an
+      // unclamped spring integrates straight to infinity.
+      var dt=Math.min((now-last)/1000,1/30);last=now;
+      _cf.vel += (-CF_SPRING_K*(_cf.focus-_cf.target) - CF_SPRING_D*_cf.vel)*dt;
+      _cf.focus += _cf.vel*dt;
+      if(Math.abs(_cf.focus-_cf.target)<0.002&&Math.abs(_cf.vel)<0.02){
+        _cf.focus=_cf.target;_cf.vel=0;_cf.anim=0;
+        cfAnim(false);cfRender();return;      // re-window + repaint at rest
+      }
+      cfLayout();cfPaintMeta();
+      _cf.anim=requestAnimationFrame(step);
+    });
+  }
+  // The meta follows the FOCUS, not playback — browsing tells you what you're
+  // looking at. Only the kick line says whether it's the playing track.
+  function cfPaintMeta(){
+    var ti=document.getElementById('mTitle'),ar=document.getElementById('mArtist'),
+        ki=document.getElementById('mKick');
+    var f=cfF(),it=_cf.items[f],np=_music.np;
+    if(!it){if(np&&ti){ti.textContent=np.title||'';if(ar)ar.textContent=np.artist||'';}return;}
+    // Say where the focused cover sits relative to what's playing. `cur` is -1
+    // when the playing row isn't in the queue (it was just removed, or MA hasn't
+    // caught up), so that case gets its own honest label instead of a nonsense
+    // composite like "Up next · Played".
+    var isNow=(f===_cf.cur),kick;
+    if(isNow)kick='Now Playing';
+    else if(_cf.cur<0)kick='In the queue';
+    else if(f>_cf.cur)kick='Up next · #'+(f-_cf.cur);
+    else kick='Played';
+    if(ki)ki.textContent=kick;
+    // `title`/`artist` are resolved at the queue seam; `name` is MA's composite
+    // ("Livingston - Shadow") kept only as a fallback for shapes with no media_item.
+    if(ti)ti.textContent=it.title||it.name||'';
+    if(ar)ar.textContent=it.artist||'';
+  }
+  function cfArmHome(){   // browse, then drift back to Now — like ambient return
+    if(_cf.homeT)clearTimeout(_cf.homeT);
+    _cf.homeT=setTimeout(function(){_cf.homeT=null;cfHome();},CF_HOME_MS);
+  }
+  function cfHome(){
+    if(_cf.homeT){clearTimeout(_cf.homeT);_cf.homeT=null;}
+    if(_cf.cur<0||_cf.focus===_cf.cur)return;
+    cfGlide(_cf.cur);          // drift, don't cut
+  }
+  function cfFocus(i){
+    i=Math.max(0,Math.min(_cf.items.length-1,i));
+    if(i===_cf.focus)return;
+    cfGlide(i);cfArmHome();
+  }
+  // Tap a cover → jump the music to it. This is the ONLY gesture that plays.
+  function cfPlay(i){
+    var it=_cf.items[i];if(!it)return;
+    _cf.focus=i;cfRender();
+    if(_cf.homeT){clearTimeout(_cf.homeT);_cf.homeT=null;}
+    _qpost('queue/play-index',{queue_id:_music.player_id,index:(it.index!=null?it.index:i)})
+      .then(function(){setTimeout(loadMusic,400);setTimeout(cfLoad,700);})
+      .catch(function(){toast('Couldn’t play that');});
+  }
+  // Removal is DEFERRED, so Undo is honest: the row goes now, the API call only
+  // fires when the undo window closes. Tapping Undo just puts the row back.
+  function cfRemove(i){
+    var it=_cf.items[i];if(!it)return;
+    if(_cf.undo)cfCommitRemove();          // one pending removal at a time
+    var card=document.querySelector('.cfc[data-i="'+i+'"]');
+    if(card)card.classList.add('gone');
+    var snapshot=_cf.items.slice(),wasFocus=cfF();
+    cfStopAnim();_cf.vel=0;cfAnim(false);   // the flow is about to be re-indexed
+    _cf.items.splice(i,1);
+    cfIndex();
+    _cf.focus=Math.max(0,Math.min(_cf.items.length-1,wasFocus));
+    setTimeout(function(){cfRender();},180);
+    _cf.undo={item:it,items:snapshot,focus:wasFocus,
+      t:setTimeout(function(){cfCommitRemove();},CF_UNDO_MS)};
+    toastUndo('Removed “'+(it.name||'track')+'”',function(){
+      if(!_cf.undo)return;
+      clearTimeout(_cf.undo.t);
+      // the snapshot is refreshed by any reload during the window, so clamp
+      // rather than trusting the old focus to still be in range
+      _cf.items=_cf.undo.items;
+      _cf.focus=Math.max(0,Math.min(_cf.items.length-1,_cf.undo.focus));
+      _cf.undo=null;
+      cfIndex();cfRender();
+    });
+  }
+  function cfCommitRemove(quiet){
+    // `quiet` = the card is going away (playback stopped, or we're re-entering
+    // the screen): send the write, but don't repaint a card that no longer has
+    // a queue, and take the now-meaningless Undo away with it.
+    var u=_cf.undo;if(!u)return;_cf.undo=null;clearTimeout(u.t);
+    if(quiet)toastHide();
+    _qpost('queue/remove',{queue_id:_music.player_id,item_id:String(u.item.queue_item_id)})
+      .then(function(){if(!quiet)cfLoad();})
+      .catch(function(){if(!quiet){toast('Couldn’t remove that');cfLoad();}});
+  }
+  // Hold to lift, then drag left/right to reorder (left = sooner).
+  function cfCommitMove(i,to){
+    var it=_cf.items[i];if(!it||to===i){cfLayout();return;}
+    var moved=_cf.items.splice(i,1)[0];_cf.items.splice(to,0,moved);
+    cfIndex();_cf.focus=to;cfRender();
+    // to_index is a position in the queue's item list — the same list this card
+    // renders — and the server recomputes the signed shift from the LIVE queue.
+    _qpost('queue/move',{queue_id:_music.player_id,item_id:String(it.queue_item_id),to_index:to})
+      .then(function(){setTimeout(cfLoad,500);}).catch(function(){toast('Couldn’t reorder');cfLoad();});
+  }
+  // Project the momentum onto a target, then let the spring carry it there.
+  function cfRelease(d,e){
+    var now=performance.now(),s=d.samp[0],last=d.samp[d.samp.length-1],v=0;
+    // The mirror of the stale-baseline mistake, pointing the other way: if your
+    // finger had already come to rest before you lifted, its last movement is
+    // history, not a throw. Flick → rest → lift must settle where it is.
+    if(s&&last&&now-last.t<=CF_VWIN)
+      v=-(((e.clientX-s.x)/Math.max(1,now-s.t))*1000)/CF_SLOT;  // → covers/s (drag right = go back)
+    var here=Math.round(_cf.focus),t;
+    if(Math.abs(v)<CF_VMIN)t=here;                 // a slow drag just snaps to the nearest
+    else t=Math.max(here-CF_FLING_MAX,Math.min(here+CF_FLING_MAX,Math.round(_cf.focus+v*CF_FLING)));
+    cfGlide(t,v);cfArmHome();
+  }
+  function wireCF(){
+    var cf=document.getElementById('mCF');if(!cf||cf.dataset.wired)return;cf.dataset.wired='1';
+    cf.addEventListener('pointerdown',function(e){
+      var card=e.target.closest('.cfc');if(!card)return;
+      // Catching a moving flow must feel like catching the object, not queueing
+      // behind it: kill the settle where it stands and browse on from there.
+      cfStopAnim();_cf.vel=0;
+      // Capture the origin HERE, on pointerdown — not inside the hold timer.
+      // (Capturing it in the timer is exactly the bug that shipped in #1332 and
+      // armed the drag with a null origin every time.)
+      var d={el:card,i:+card.getAttribute('data-i'),x0:e.clientX,y0:e.clientY,
+             t0:Date.now(),lifted:false,moved:false,browsing:false,
+             f0:_cf.focus,dx:0,x:e.clientX,
+             samp:[{t:performance.now(),x:e.clientX}],
+             onX:e.target.closest('.cfx')?true:false};
+      d.hold=setTimeout(function(){
+        if(d.moved||d.onX||d.browsing)return;
+        d.lifted=true;card.classList.add('lift');
+        if(navigator.vibrate)try{navigator.vibrate(12);}catch(_e){}
+      },CF_HOLD_MS);
+      _cf.drag=d;
+      // Capture on the CONTAINER, not the card: browsing re-windows the flow and
+      // a card-held capture would be torn off with its node mid-gesture.
+      try{cf.setPointerCapture(e.pointerId);}catch(_e){}
+      if(_cf.homeT){clearTimeout(_cf.homeT);_cf.homeT=null;}   // you're touching it
+    });
+    cf.addEventListener('pointermove',function(e){
+      var d=_cf.drag;if(!d)return;
+      var dx=e.clientX-d.x0,dy=e.clientY-d.y0,now=performance.now();
+      if(Math.abs(dx)>8||Math.abs(dy)>8)d.moved=true;
+      // Velocity from the last CF_VWIN ms only. Total-distance/total-time would
+      // score a slow drag that ends in a flick as "slow" and refuse to fling it.
+      d.samp.push({t:now,x:e.clientX});
+      // Prune STRICTLY by time — a sample older than the window is not evidence
+      // about how fast you are moving NOW. The floor is 1, not 2: a `length>2`
+      // floor pinned samp[0] to a pre-pause baseline when you aim, hesitate,
+      // then flick, and charged the flick across the whole hesitation. The
+      // newest sample is always in-window, so this can never empty the array.
+      while(d.samp.length>1&&now-d.samp[0].t>CF_VWIN)d.samp.shift();
+      // Arm BROWSE on horizontal intent, and only before a lift. A mostly-
+      // vertical move is reserved for flick-up-to-remove; and once you ARE
+      // browsing, yanking upward must not delete the cover under your finger.
+      if(!d.lifted&&!d.browsing&&!d.onX&&Math.abs(dx)>8&&Math.abs(dx)>Math.abs(dy)){
+        d.browsing=true;clearTimeout(d.hold);
+        cfAnim(true);cfRenderSpan(_cf.focus-CF_WIN_DRAG,_cf.focus+CF_WIN_DRAG);
+      }
+      if(d.browsing){
+        d.dx=dx;
+        // No layout in the move handler: pointermove can fire several times per
+        // frame, so coalesce to exactly one cfLayout per frame.
+        if(!_cf.raf)_cf.raf=requestAnimationFrame(function(){
+          _cf.raf=0;var g=_cf.drag;if(!g||!g.browsing)return;
+          _cf.focus=cfRubber(g.f0-g.dx/CF_SLOT);   // 1:1 under the finger
+          cfLayout();cfPaintMeta();
+        });
+        return;
+      }
+      if(!d.lifted)return;
+      d.x=e.clientX;
+      var slots=Math.round(dx/CF_SLOT);
+      d.el.style.transform='translateX('+dx+'px) translateZ('+(190*CF_K)+'px) scale(1.16)';
+      d.el.style.opacity=1;d.el.style.zIndex=60;
+      d.to=Math.max(0,Math.min(_cf.items.length-1,d.i+slots));
+    });
+    function end(e){
+      var d=_cf.drag;if(!d)return;_cf.drag=null;clearTimeout(d.hold);
+      if(_cf.raf){cancelAnimationFrame(_cf.raf);_cf.raf=0;}
+      try{cf.releasePointerCapture(e.pointerId);}catch(_e){}
+      var dx=e.clientX-d.x0,dy=e.clientY-d.y0,dt=Date.now()-d.t0;
+      if(d.lifted){
+        d.el.classList.remove('lift');d.el.style.zIndex='';
+        cfCommitMove(d.i,(d.to==null?d.i:d.to));return;
+      }
+      if(d.onX){cfRemove(d.i);return;}                            // the visible affordance
+      if(d.browsing){cfRelease(d,e);return;}                      // BROWSE only — never plays
+      if(dy<-60&&Math.abs(dy)>Math.abs(dx)){cfRemove(d.i);return;} // flick up = remove
+      if(dt<600&&!d.moved){cfPlay(d.i);return;}                    // tap = play it
+      cfArmHome();
+    }
+    cf.addEventListener('pointerup',end);
+    cf.addEventListener('pointercancel',function(){var d=_cf.drag;if(!d)return;_cf.drag=null;
+      clearTimeout(d.hold);if(_cf.raf){cancelAnimationFrame(_cf.raf);_cf.raf=0;}
+      if(d.lifted){d.el.classList.remove('lift');d.el.style.zIndex='';}
+      // A cancelled browse (a system gesture, a stray touch) must not leave the
+      // flow parked between two covers.
+      if(d.browsing){cfGlide(Math.round(_cf.focus));cfArmHome();}else cfLayout();});
   }
   function musicControl(action){if(!_music.player_id)return;
     fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({action:action,player_id:_music.player_id})}).then(function(){setTimeout(loadMusic,350);}).catch(function(){});}
@@ -1152,7 +1871,9 @@
     // pre-poll icon (and a fast tap) match the last-known real state.
     if(_music.np){var pp0=document.getElementById('mPP');
       if(pp0){pp0.dataset.playing=_music.np.playing?'1':'0';pp0.innerHTML=_music.np.playing?PAUSE_I:PLAY_I;}}
-    _qtab='queue';   // DOM rebuilds to the Queue tab each show(); keep state in sync
+    _qtab='recent';   // DOM rebuilds to the Recent tab each show(); keep state in sync
+    // The flow is rebuilt with the card, so its state can't survive a show().
+    cfClear();wireCF();
     loadMusic();_wxTick=setInterval(function(){if(_cur==='music')loadMusic();},5000);
     if(_homeTick){clearInterval(_homeTick);}_homeTick=setInterval(tickMusic,1000);
     var t=document.getElementById('mTransport');if(t)t.addEventListener('click',function(e){var btn=e.target.closest('button');if(!btn)return;var a=btn.getAttribute('data-a');
@@ -1164,7 +1885,6 @@
     // Open/close also toggles the global home button: the overlay's own back
     // button owns the top-left corner while open (else #home, z60, overlaps it
     // and steals the tap — sending you home instead of back to now-playing).
-    function _qOpen(o){qd.classList.toggle('open',o);var hb=document.getElementById('home');if(hb)hb.classList.toggle('hide',o);}
     if(qb&&qd)qb.onclick=function(e){e.stopPropagation();_qOpen(true);loadQueue();};
     var qback=document.getElementById('mQBack');
     if(qback&&qd)qback.onclick=function(e){e.stopPropagation();_qOpen(false);};
@@ -1261,7 +1981,7 @@
   // ---- Sleep screen (real night clock + big easy toggles) ----
   function wireSleep(){
     function tick(){var c=document.getElementById('slClock');if(!c)return;var d=new Date(),h=d.getHours()%12;if(h===0)h=12;
-      c.innerHTML='<span>'+h+'</span><span>'+two(d.getMinutes())+'</span>';
+      c.innerHTML='<span>'+h+'</span><span class="cln">:</span><span>'+two(d.getMinutes())+'</span>';
       var dt=document.getElementById('slDate');if(dt)dt.textContent=d.toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long'}).replace(/,/,' ·');}
     tick();_homeTick=setInterval(tick,15000);
     // Wake: home + dock are hidden on the night clock, so tapping anywhere that
@@ -1554,16 +2274,224 @@
         .catch(function(){toast('Couldn’t save display settings');});
     },500);   // debounce slider drags into one write
   }
+  // ---- Settings › This panel: location, default speaker, pinned controls ----
+  // "where is this panel located, then also the ability to link it to the
+  // controls you want in home assistant, what speaker is your default."
+  var _pcWork=[];        // pin list being edited (survives the modal hand-offs)
+  var _pcEnts=null;      // cached HA entity list for the picker
+
+  // Mirrors panel_config.normalize_pin_name so the operator reads a sentence
+  // instead of hitting a raw 400 from the server.
+  function _pinNameErr(n){
+    n=String(n==null?'':n).trim();
+    if(!n)return 'Give it a name.';
+    if(/\s/.test(n))return 'One word only — “Living Room” is too wide for the dock. Try “Living”.';
+    if(n.length>12)return 'Keep it to 12 characters or fewer.';
+    return '';
+  }
+  function _oneWord(s){return String(s||'').trim().split(/\s+/)[0].slice(0,12);}
+  function _pcErr(m){var e=document.querySelector('#estModal .perr');if(e)e.textContent=m||'';}
+  function _pcMax(){return (_pcfg&&_pcfg.max_pins)||4;}
+
+  function _pcSave(patch,then){
+    return apiJson('PUT','/api/panels/'+encodeURIComponent(_panelDevId())+'/config',patch)
+      .then(function(d){
+        if(d&&Array.isArray(d.pinned)){_pcfg=d;_pcfgLoaded=true;}
+        wirePanelSettings();renderDock();then&&then();})
+      .catch(function(e){
+        toast(String(e&&e.message)==='auth'?'Sign in to change panel settings':'Couldn’t save panel settings');
+        throw e;});
+  }
+
+  function wirePanelSettings(){
+    var el=document.getElementById('setPanel');if(!el)return;
+    function paint(){
+      var el=document.getElementById('setPanel');if(!el)return;
+      if(!_pcfg){el.innerHTML='<div class="srow2"><span style="color:var(--ink-faint)">Panel settings unavailable</span></div>';return;}
+      var loc=_pcfg.location||'Not set';
+      var spk=_pcfg.default_player||'Not set';
+      // default_player_source says whether this panel chose its own speaker or
+      // is riding the household default — surface it rather than making the
+      // operator guess why a speaker they never picked is showing.
+      var src=_pcfg.default_player_source==='global'?' <small style="color:var(--ink-faint)">(household default)</small>'
+             :_pcfg.default_player_source==='panel'?' <small style="color:var(--ink-faint)">(this panel)</small>':'';
+      var n=(_pcfg.pinned||[]).length;
+      var pins=_pcfg.pins_configured?(n+' of '+_pcMax()):'Not set — showing whatever HA lists first';
+      el.innerHTML=
+         '<div class="srow2" data-p="loc"><span>Location</span><span class="chev2" style="margin-left:auto;color:var(--ink-soft)">'+esc(loc)+' ›</span></div>'
+        +'<div class="srow2" data-p="spk"><span>Default speaker</span><span class="chev2" style="margin-left:auto;color:var(--ink-soft)">'+esc(spk)+src+' ›</span></div>'
+        +'<div class="srow2" data-p="pins"><span>Dock controls</span><span class="chev2" style="margin-left:auto;color:var(--ink-soft)">'+esc(pins)+' ›</span></div>';
+      el.querySelector('[data-p="loc"]').onclick=_pcLocation;
+      el.querySelector('[data-p="spk"]').onclick=_pcSpeaker;
+      el.querySelector('[data-p="pins"]').onclick=_pcPins;
+    }
+    if(_pcfgLoaded)paint();else loadPanelCfg(paint);
+  }
+
+  function _pcLocation(){
+    estOpen('<h3>Where is this panel?</h3>'
+      +'<label>Room</label><input data-f="loc" maxlength="64" placeholder="Bedroom">'
+      +'<div class="phint">Used to give Zoe context about this screen. Free text — it isn’t a dock label.</div>'
+      +'<div class="perr"></div>'
+      +'<div class="btns"><button data-x="cancel">Cancel</button><button class="save" data-x="save">Save</button></div>');
+    var m=document.getElementById('estModal'),f=m.querySelector('[data-f="loc"]');
+    f.value=_pcfg&&_pcfg.location||'';f.focus();
+    m.querySelector('[data-x="cancel"]').onclick=estClose;
+    m.querySelector('[data-x="save"]').onclick=function(){
+      _pcSave({location:f.value.trim()||null},estClose).catch(function(){});};
+  }
+
+  function _pcSpeaker(){
+    estOpen('<h3>Default speaker</h3><div class="elist"><div style="color:var(--ink-faint);font-size:18px">Loading…</div></div>'
+      +'<div class="btns"><button data-x="cancel">Cancel</button><button data-x="clear">Use household default</button></div>');
+    var m=document.getElementById('estModal');
+    m.querySelector('[data-x="cancel"]').onclick=estClose;
+    m.querySelector('[data-x="clear"]').onclick=function(){_pcSave({default_player:null},estClose).catch(function(){});};
+    apiGet('/api/music/players').then(function(d){
+      var ps=(d&&d.players)||[],list=m.querySelector('.elist');if(!list)return;
+      if(!ps.length){list.innerHTML='<div style="color:var(--ink-faint);font-size:18px">No speakers found.</div>';return;}
+      list.innerHTML=ps.map(function(p){
+        var cur=_pcfg&&_pcfg.default_player===p.player_id;
+        return '<button class="eopt" data-id="'+esc(p.player_id)+'">'+mdi('mdi:toggle-switch-outline')
+          +'<span class="et">'+esc(p.name||p.player_id)+'<small>'+esc(p.provider||'')+(cur?' · current':'')+'</small></span></button>';}).join('');
+      list.querySelectorAll('.eopt').forEach(function(b){b.onclick=function(){
+        _pcSave({default_player:b.getAttribute('data-id')},estClose).catch(function(){});};});
+    }).catch(function(){var l=m.querySelector('.elist');if(l)l.innerHTML='<div style="color:var(--ink-faint);font-size:18px">Couldn’t reach Music Assistant.</div>';});
+  }
+
+  function _pcPins(){
+    // Edit a working copy of the RESOLVED pins. Pins whose entity HA did not
+    // return are absent from this list (they come back in `unresolved`), so
+    // saving while any are missing would silently delete controls the operator
+    // cannot even see — over what may be a temporary HA hiccup. `unresolved`
+    // carries only entity ids, not the stored names, so we cannot faithfully
+    // round-trip them either: the editor therefore refuses to SAVE while any
+    // pin is unresolved, rather than writing a truncated list.
+    _pcWork=(_pcfg&&_pcfg.pinned||[]).map(function(p){
+      return {read_eid:p.read_eid,write_eid:p.write_eid,name:p.name};});
+    _pcPinsPaint();
+  }
+  function _pcPinsPaint(){
+    var max=_pcMax(),stale=(_pcfg&&_pcfg.unresolved||[]).length;
+    var rows=_pcWork.length?_pcWork.map(function(p,i){
+      return '<div class="pinrow"><span class="pnm">'+esc(p.name)+'</span>'
+        +'<span class="pfn">'+esc(p.write_eid)+'</span>'
+        +'<button data-mv="'+i+',-1"'+(i===0?' disabled':'')+'>▲</button>'
+        +'<button data-mv="'+i+',1"'+(i===_pcWork.length-1?' disabled':'')+'>▼</button>'
+        +'<button class="del" data-rm="'+i+'">✕</button></div>';}).join('')
+      :'<div class="phint" style="margin:14px 0">Nothing pinned yet. The dock is showing whatever Home Assistant lists first.</div>';
+    estOpen('<h3>Dock controls</h3>'
+      +rows
+      +'<button class="padd"'+(_pcWork.length>=max?' disabled':'')+' data-x="add">+ Pin a control'+(_pcWork.length>=max?' (max '+max+')':'')+'</button>'
+      +'<div class="phint">These are the controls on the dock, in this order. One-word names keep them readable at a glance.</div>'
+      +'<div class="perr">'+(stale?(stale>1
+          ?stale+' pinned controls aren’t readable from Home Assistant right now, so they aren’t shown here. Saving would delete them — try again once Home Assistant is back.'
+          :'1 pinned control isn’t readable from Home Assistant right now, so it isn’t shown here. Saving would delete it — try again once Home Assistant is back.'):'')+'</div>'
+      +'<div class="btns"><button data-x="cancel">Cancel</button><button class="save" data-x="save"'+(stale?' disabled':'')+'>Save</button></div>');
+    var m=document.getElementById('estModal');
+    m.querySelectorAll('[data-mv]').forEach(function(b){b.onclick=function(){
+      var a=b.getAttribute('data-mv').split(','),i=+a[0],j=i+(+a[1]);
+      if(j<0||j>=_pcWork.length)return;
+      var t=_pcWork[i];_pcWork[i]=_pcWork[j];_pcWork[j]=t;_pcPinsPaint();};});
+    m.querySelectorAll('[data-rm]').forEach(function(b){b.onclick=function(){
+      _pcWork.splice(+b.getAttribute('data-rm'),1);_pcPinsPaint();};});
+    m.querySelector('[data-x="add"]').onclick=function(){if(_pcWork.length<max)_pcPickEntity();};
+    m.querySelector('[data-x="cancel"]').onclick=estClose;
+    m.querySelector('[data-x="save"]').onclick=function(){
+      // Re-read `unresolved` at CLICK time, not paint time: the 30s config
+      // refresh runs while this modal is open, so HA can drop an entity after
+      // the editor was painted. Trusting the painted value would let exactly
+      // the deletion this guard exists to prevent slip through.
+      var nowStale=(_pcfg&&_pcfg.unresolved||[]).length;
+      if(nowStale){_pcPinsPaint();return;}   // repaint to show the warning + disable Save
+      // pinned:[] is a real choice ("show nothing"), distinct from never having
+      // configured pins — so an empty list is saved as [], not null.
+      _pcSave({pinned:_pcWork},estClose).catch(function(){});};
+  }
+
+  // Domains worth pinning. Sensors are read-only (they pair INTO a temp tile,
+  // they are not a control); automations/scripts look like a light but mean
+  // something else entirely, which is dangerous on a glance surface.
+  var _PINNABLE={light:1,input_boolean:1,switch:1,scene:1,input_number:1,number:1};
+  function _pcPickEntity(){
+    estOpen('<h3>Pin a control</h3><div class="elist"><div style="color:var(--ink-faint);font-size:18px">Loading…</div></div>'
+      +'<div class="perr"></div><div class="btns"><button data-x="back">Back</button></div>');
+    var m=document.getElementById('estModal');
+    m.querySelector('[data-x="back"]').onclick=_pcPinsPaint;
+    function paint(ents){
+      var list=m.querySelector('.elist');if(!list)return;
+      var taken={};_pcWork.forEach(function(p){taken[p.write_eid]=1;});
+      var cands=ents.filter(function(e){
+        var d=String(e.entity_id||'').split('.')[0];
+        return _PINNABLE[d]&&!taken[e.entity_id];});
+      if(!cands.length){list.innerHTML='<div style="color:var(--ink-faint);font-size:18px">No more controls available to pin.</div>';return;}
+      list.innerHTML=cands.map(function(e){var a=e.attributes||{};
+        return '<button class="eopt" data-eid="'+esc(e.entity_id)+'">'+mdi(a.icon)
+          +'<span class="et">'+esc(a.friendly_name||e.entity_id)+'<small>'+esc(e.entity_id)+'</small></span></button>';}).join('');
+      list.querySelectorAll('.eopt').forEach(function(b){b.onclick=function(){
+        var eid=b.getAttribute('data-eid'),ent=null;
+        cands.forEach(function(e){if(e.entity_id===eid)ent=e;});
+        var d=eid.split('.')[0];
+        // A setpoint needs a READ half: the number entity holds the target, and
+        // the room's actual reading usually lives on a separate sensor.
+        if(d==='input_number'||d==='number')_pcPickRead(ent,ents);
+        else _pcName(ent,eid);};});
+    }
+    if(_pcEnts)paint(_pcEnts);
+    else apiGet('/api/ha/entities').then(function(s){
+      _pcEnts=Array.isArray(s)?s:((s&&s.entities)||(s&&s.states)||[]);paint(_pcEnts);
+    }).catch(function(){var l=m.querySelector('.elist');if(l)l.innerHTML='<div style="color:var(--ink-faint);font-size:18px">Couldn’t reach Home Assistant.</div>';});
+  }
+
+  function _pcPickRead(ent,ents){
+    var wid=ent.entity_id;
+    estOpen('<h3>Which reading does it show?</h3>'
+      +'<div class="phint">“'+esc((ent.attributes||{}).friendly_name||wid)+'” sets the target. Pick the sensor showing what the room actually is.</div>'
+      +'<div class="elist"></div>'
+      +'<div class="btns"><button data-x="back">Back</button></div>');
+    var m=document.getElementById('estModal');
+    m.querySelector('[data-x="back"]').onclick=_pcPickEntity;
+    var sensors=ents.filter(function(e){return String(e.entity_id||'').split('.')[0]==='sensor';});
+    m.querySelector('.elist').innerHTML=
+      '<button class="eopt" data-eid="'+esc(wid)+'">'+mdi('mdi:thermostat')+'<span class="et">Just show the target<small>'+esc(wid)+'</small></span></button>'
+      +sensors.map(function(e){var a=e.attributes||{};
+        return '<button class="eopt" data-eid="'+esc(e.entity_id)+'">'+mdi(a.icon)
+          +'<span class="et">'+esc(a.friendly_name||e.entity_id)+'<small>'+esc(e.entity_id)+' · '+esc(String(e.state))+'</small></span></button>';}).join('');
+    m.querySelectorAll('.eopt').forEach(function(b){b.onclick=function(){
+      _pcName(ent,b.getAttribute('data-eid'));};});
+  }
+
+  function _pcName(ent,readEid){
+    var wid=ent.entity_id,fn=(ent.attributes||{}).friendly_name||wid;
+    estOpen('<h3>Name it</h3>'
+      +'<div class="phint">One word — it sits on the dock, so “'+esc(fn)+'” becomes something like “'+esc(_oneWord(fn)||'Bed')+'”.</div>'
+      +'<label>Dock label</label><input data-f="nm" maxlength="12" placeholder="Bed">'
+      +'<div class="perr"></div>'
+      +'<div class="btns"><button data-x="back">Back</button><button class="save" data-x="add">Add</button></div>');
+    var m=document.getElementById('estModal'),f=m.querySelector('[data-f="nm"]');
+    f.value=_oneWord(fn);f.focus();f.select();
+    m.querySelector('[data-x="back"]').onclick=_pcPickEntity;
+    m.querySelector('[data-x="add"]').onclick=function(){
+      var err=_pinNameErr(f.value);
+      if(err){_pcErr(err);return;}
+      _pcWork.push({read_eid:readEid||wid,write_eid:wid,name:f.value.trim()});
+      _pcPinsPaint();};
+  }
+
   function wireSettings(){
     var host=document.getElementById('setSecs');if(!host)return;
     var u=null;try{u=JSON.parse(localStorage.getItem('zoe_session')||'null');}catch(e){}
     var who=(u&&(u.username||u.user_id))||'Guest';
     host.innerHTML=[
-      {t:'Account',b:'<div class="srow2"><span>Signed in as <b>'+esc(who)+'</b></span></div><div class="srow2" data-act="switch"><span>Switch user</span><span class="chev2">›</span></div><button class="sout" id="setOut">Sign out</button>'},
+      {t:'Account',b:'<div class="srow2"><span>Signed in as <b>'+esc(who)+'</b></span></div><div class="srow2"><span>Log out when idle</span><select id="setIdleLogout" class="sset"><option value="">…</option></select></div><div class="srow2" data-act="switch"><span>Switch user</span><span class="chev2">›</span></div><button class="sout" id="setOut">Sign out</button>'},
+      {t:'This panel',b:'<div id="setPanel"><div class="srow2"><span style="color:var(--ink-faint)">Loading…</span></div></div>'},
       {t:'Display',b:'<div id="setDisp"><div class="srow2"><span style="color:var(--ink-faint)">Loading…</span></div></div>'},
+      {t:'Voice',b:'<div id="setVoice"><div class="srow2"><span style="color:var(--ink-faint)">Loading…</span></div></div>'},
       {t:'System',b:'<div id="setSys"><div class="srow2"><span style="color:var(--ink-faint)">Checking…</span></div></div>'},
       {t:'Household',b:'<div class="srow2" data-act="contacts"><span>Contacts</span><span class="chev2">›</span></div><div class="srow2" data-act="rooms"><span>Rooms & devices</span><span class="chev2">›</span></div><div class="srow2" data-act="pair"><span>Link a device</span><span class="chev2">›</span></div>'}
     ].map(function(sec,i){return '<div class="setsec"><div class="sh">'+esc(sec.t)+'<span class="caret">›</span></div><div class="sbody"><div class="inner">'+sec.b+'</div></div></div>';}).join('');
+
+    wirePanelSettings();
 
     // Display: the panel's real brightness/night/idle prefs, live-wired.
     apiGet('/api/system/display/preferences?device_id='+encodeURIComponent(_panelDevId())).then(function(d){
@@ -1595,6 +2523,62 @@
       fetch('/sw.js',{cache:'no-store'}).then(function(r){return r.text();}).then(function(t){
         var m=/SW_VERSION = '([^']+)'/.exec(t);var v=document.querySelector('#setVer .sv');if(v&&m)v.textContent='v'+m[1];}).catch(function(){});
     }).catch(function(){var el=document.getElementById('setSys');if(el)el.innerHTML='<div class="srow2"><span style="color:var(--ink-faint)">Status unavailable</span></div>';});
+
+    // Voice: the voice Zoe speaks with (household-wide). Same endpoints as the
+    // "change your voice" card — this just makes it reachable from Settings, which
+    // is where people look for it.
+    (function(){
+      var vhost=document.getElementById('setVoice');if(!vhost)return;
+      function unavailable(msg){vhost.innerHTML='<div class="srow2"><span style="color:var(--ink-faint)">'+esc(msg)+'</span></div>';}
+      apiGet('/api/voice/voices').then(function(d){
+        if(_cur!=='settings')return;
+        var voices=(d&&d.voices)||[],cur=(d&&d.current)||'';
+        if(!voices.length){unavailable('No voices available');return;}
+        vhost.innerHTML=
+          '<div class="srow2"><span>Zoe’s voice</span><select id="setVoiceSel" class="sset">'
+          +voices.map(function(v){return '<option value="'+esc(v.id)+'"'+(v.id===cur?' selected':'')+'>'+esc(v.label||v.id)+'</option>';}).join('')
+          +'</select></div>'
+          +'<div class="srow2"><span style="color:var(--ink-faint);font-size:17px">Applies straight away · Preview plays a sample</span><button class="sbtn" id="setVoicePrev">Preview</button></div>';
+        var sel=document.getElementById('setVoiceSel');
+        sel.onchange=function(){
+          apiJson('PUT','/api/voice/voice',{voice:sel.value})
+            .then(function(){toast('Zoe’s voice set to '+sel.options[sel.selectedIndex].text);})
+            .catch(function(){toast('Couldn’t save that voice');});
+        };
+        var pv=document.getElementById('setVoicePrev');
+        pv.onclick=function(){
+          pv.disabled=true;
+          apiJson('POST','/api/voice/preview',{voice:sel.value}).then(function(r){
+            if(!r||!r.audio_base64)return;
+            // play() returns a PROMISE. We're inside a fetch .then(), not the click
+            // handler's synchronous frame, so tablet/kiosk autoplay policy rejects it
+            // async with NotAllowedError — a bare try/catch only sees constructor
+            // errors and the preview would fail silently. Catch the rejection and say so.
+            var a;
+            try{a=new Audio('data:'+(r.content_type||'audio/wav')+';base64,'+r.audio_base64);}
+            catch(e){toast('Couldn’t play preview');return;}
+            var p=a.play();
+            if(p&&typeof p.catch==='function')p.catch(function(){toast('Couldn’t play preview — tap Preview again');});
+          }).catch(function(){toast('Preview unavailable');})
+            .then(function(){pv.disabled=false;},function(){pv.disabled=false;});
+        };
+      }).catch(function(){unavailable('Voice settings unavailable');});
+    })();
+
+    // Idle-logout: how long with no voice/touch before the panel session lapses.
+    (function(){
+      var sel=document.getElementById('setIdleLogout');if(!sel)return;
+      var OPTS=[[900,'15 min'],[1800,'30 min'],[3600,'1 hour'],[14400,'4 hours'],[43200,'12 hours']];
+      apiGet('/api/system/panel/idle-logout').then(function(d){
+        if(_cur!=='settings')return;var cur=+((d&&d.seconds));if(isNaN(cur))cur=1800;
+        if(!OPTS.some(function(o){return o[0]===cur;})){OPTS.push([cur,Math.round(cur/60)+' min']);}
+        OPTS.sort(function(a,b){return a[0]-b[0];});
+        sel.innerHTML=OPTS.map(function(o){return '<option value="'+o[0]+'"'+(o[0]===cur?' selected':'')+'>'+o[1]+'</option>';}).join('');
+        sel.onchange=function(){apiJson('PUT','/api/system/panel/idle-logout',{seconds:+sel.value})
+          .then(function(){toast('Idle logout set to '+sel.options[sel.selectedIndex].text);})
+          .catch(function(){toast('Couldn’t save that setting');});};
+      }).catch(function(){sel.innerHTML='<option value="">unavailable</option>';});
+    })();
 
     host.onclick=function(e){
       var sh=e.target.closest('.sh');
@@ -1774,7 +2758,21 @@
   // identically; voice-pushed server actions are handled by touch-ui-executor.js.
   var DOMAIN_SCREEN={smart_home:'rooms',calendar:'day',lists:'list',weather:'weather',music:'music',reminders:'reminder',timers:'timer',chat:'ask'};
   var cmdbar=document.getElementById('cmdbar'),cmdin=document.getElementById('cmdin'),orb=document.getElementById('orb'),toastEl=document.getElementById('saytoast'),_toastT=null;
-  function toast(t){if(!t)return;toastEl.textContent=t;toastEl.classList.add('on');if(_toastT)clearTimeout(_toastT);_toastT=setTimeout(function(){toastEl.classList.remove('on');},6000);}
+  function toast(t){if(!t)return;toastEl.textContent=t;toastEl.classList.remove('act');toastEl.classList.add('on');if(_toastT)clearTimeout(_toastT);_toastT=setTimeout(function(){toastEl.classList.remove('on');},6000);}
+  // A toast that can be acted on. Used for undoing a queue removal — the
+  // removal itself is deferred for exactly this window, so Undo is a local
+  // restore, not a second write racing the first.
+  function toastHide(){if(!toastEl)return;if(_toastT)clearTimeout(_toastT);toastEl.classList.remove('on','act');}
+  function toastUndo(msg,onUndo){
+    if(!toastEl)return;
+    toastEl.innerHTML=esc(msg)+'<button class="ub" type="button">Undo</button>';
+    toastEl.classList.add('on','act');
+    if(_toastT)clearTimeout(_toastT);
+    function close(){toastEl.classList.remove('on','act');}
+    _toastT=setTimeout(close,CF_UNDO_MS);
+    var b=toastEl.querySelector('.ub');
+    if(b)b.onclick=function(e){e.stopPropagation();if(_toastT)clearTimeout(_toastT);close();onUndo();};
+  }
   var _heardT=null,_sending=false;
   function dockSaid(heard,say){
     dock.classList.remove('hide');
@@ -1809,7 +2807,7 @@
   var _askGen=0;
   function askZoe(q){
     var gen=++_askGen;_sending=true;   // stays true until THIS stream finishes
-    FULL.ask.html='<div class="askf"><div class="aa" id="askOut">…</div></div>';
+    FULL.ask.html=askShell('<div class="aa" id="askOut">…</div>');
     show('ask');dockHeard(q);orb.classList.add('busy');
     fetch('/api/chat/',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({message:q})})
       .then(function(r){if(!r.ok||!r.body)throw new Error('http '+r.status);
@@ -1828,9 +2826,177 @@
       }).catch(function(){if(gen!==_askGen)return;orb.classList.remove('busy');_sending=false;var o=document.getElementById('askOut');if(o)o.textContent='Sorry — I couldn’t reach Zoe just then.';});
   }
 
+  // ---- Ask-card live conversation (LiveKit) ---------------------------------
+  // "Stay talking to Zoe" as a STATE of the Ask card — INLINE: the dock, home
+  // button and orb all stay put. The client is deliberately THIN: the server
+  // agent (voice_livekit.py::_agent_loop) does the whole turn — it subscribes to
+  // the mic track we publish, runs VAD, then STT (Moonshine) → brain → TTS
+  // (Kokoro), and pushes results back over the LiveKit DATA channel.
+  //
+  // The agent NEVER publishes an audio track: Zoe's speech arrives as
+  // {type:'audio',audio_base64} data payloads, so there is nothing to attach —
+  // we decode and play them ourselves. Upstream is the published mic track (the
+  // agent VADs it server-side); the /livekit-audio HTTP upload that voice.html
+  // uses is a browser-VAD path we deliberately do not take.
+  var LK_SRC='/lib/livekit/livekit-client.umd.min.js';
+  var _lkLoad=null,_convLive=false,_convRoom=null,_convLines=[];
+  var _convQ=[],_convAudio=null,_convPlaying=false;
+
+  // Lazy-load: the LiveKit client is fetched ONLY on entry, never on estate boot
+  // — the box is memory-tight and asking for a token also spins up the on-demand
+  // LiveKit container (which self-reaps when the room empties).
+  function loadLiveKit(){
+    if(window.LivekitClient)return Promise.resolve(window.LivekitClient);
+    if(_lkLoad)return _lkLoad;
+    _lkLoad=new Promise(function(res,rej){
+      var s=document.createElement('script');s.src=LK_SRC;s.async=true;
+      // Both failure paths must clear _lkLoad, or the cache guard above hands
+      // every later attempt the same rejected promise and the Talk button is
+      // dead until the kiosk is reloaded.
+      s.onload=function(){
+        if(window.LivekitClient){res(window.LivekitClient);return;}
+        _lkLoad=null;rej(new Error('livekit global missing'));
+      };
+      s.onerror=function(){_lkLoad=null;rej(new Error('livekit bundle failed to load'));};
+      document.head.appendChild(s);
+    });
+    return _lkLoad;
+  }
+
+  function convBody(status){
+    var b='<div class="cvf" id="convOut">';
+    _convLines.slice(-4).forEach(function(l){
+      b+='<div class="cvl'+(l.role==='user'?' u':'')+'">'+esc(l.text)+'</div>';
+    });
+    if(status)b+='<div class="cvs">'+esc(status)+'</div>';
+    return b+'</div>';
+  }
+  // The Ask surface renders from FULL.ask.html, so paint BOTH (the stored html
+  // survives a later show('ask'); the live DOM updates now).
+  function convPaint(status){
+    FULL.ask.html=askShell(convBody(status));
+    if(_cur==='ask')full.innerHTML=FULL.ask.html;
+    convSyncBtn();
+  }
+  function convSyncBtn(dis){
+    var b=document.getElementById('talkBtn');if(!b)return;
+    b.setAttribute('aria-pressed',_convLive?'true':'false');
+    b.textContent=_convLive?'End':'Talk';
+    b.disabled=!!dis;
+  }
+
+  // Zoe's audio arrives as base64 payloads; play them in order.
+  function convEnqueue(b64,ct){
+    if(!b64)return;
+    _convQ.push({b64:b64,ct:ct||'audio/wav'});
+    if(!_convPlaying)convDrain();
+  }
+  function convDrain(){
+    if(!_convQ.length){_convPlaying=false;_convAudio=null;orb.classList.remove('busy');return;}
+    _convPlaying=true;
+    var it=_convQ.shift();
+    try{
+      var a=new Audio('data:'+it.ct+';base64,'+it.b64);
+      _convAudio=a;
+      a.onended=convDrain;a.onerror=convDrain;
+      var p=a.play();if(p&&p.catch)p.catch(function(){convDrain();});
+    }catch(e){convDrain();}
+  }
+  function convStopAudio(){
+    _convQ.length=0;
+    if(_convAudio){try{_convAudio.pause();}catch(e){}_convAudio=null;}
+    _convPlaying=false;
+  }
+
+  function convEvent(msg){
+    var t=msg.type||msg.event,s=msg.state;
+    if(t==='state'){
+      if(s==='listening'||s==='wake'){orb.classList.remove('busy');orb.classList.add('listening');convPaint('Listening…');}
+      else if(s==='thinking'||s==='processing'){orb.classList.remove('listening');orb.classList.add('busy');convPaint('Thinking…');}
+      else if(s==='responding'||s==='speaking'){orb.classList.remove('listening');orb.classList.add('busy');convPaint('');}
+      else{orb.classList.remove('listening');if(!_convPlaying)orb.classList.remove('busy');convPaint('');}
+    }else if(t==='transcript'){
+      if(msg.text){
+        _convLines.push({role:msg.role||'zoe',text:msg.text});
+        convPaint('');
+        if((msg.role||'')==='user')dockHeard(msg.text);
+      }
+    }else if(t==='audio'){convEnqueue(msg.audio_base64,msg.content_type);}
+    else if(t==='stop_playback'){convStopAudio();}   // barge-in: Zoe was interrupted
+    else if(t==='done'){if(!_convPlaying)orb.classList.remove('busy');}
+  }
+
+  function convStart(){
+    if(_convLive)return Promise.resolve();
+    if(_cur!=='ask')show('ask');   // navigate FIRST — show() tears a session down
+    _convLive=true;                // set before the await: suppress drift/sleep for the WHOLE connect
+    // show('ask') above armed the normal idle-sleep timer while _convLive was
+    // still false — it would fire mid-conversation and sleep the panel. Both
+    // calls now CLEAR their timer and the guard stops them re-arming.
+    cancelAutoHome();armIdleSleep();
+    _convLines=[];
+    convPaint('Connecting…');convSyncBtn(true);
+    var dec=new TextDecoder();
+    return loadLiveKit().then(function(LK){
+      return fetch('/api/voice/livekit-token',{credentials:'include'}).then(function(r){
+        if(!r.ok)throw new Error('token http '+r.status);
+        return r.json();
+      }).then(function(d){
+        if(!d||!d.token||!d.url)throw new Error('token payload incomplete');
+        if(d.livekit_available===false)throw new Error('livekit unavailable');
+        // stopMicTrackOnMute: without it, setMicrophoneEnabled(false) only MUTES
+        // the mic — the MediaStreamTrack (and the recording indicator) stays
+        // live. With it, muting stops the track outright, so the mic is really
+        // released even if disconnect() never lands.
+        var room=new LK.Room({adaptiveStream:true,dynacast:true,publishDefaults:{stopMicTrackOnMute:true}});
+        _convRoom=room;
+        room.on(LK.RoomEvent.DataReceived,function(data){
+          try{convEvent(JSON.parse(dec.decode(data)));}catch(e){}
+        });
+        room.on(LK.RoomEvent.Disconnected,function(){if(_convLive)convStop('disconnected');});
+        return room.connect(d.url,d.token).then(function(){
+          if(!_convLive){room.disconnect(true);return;}   // stopped while connecting
+          return room.localParticipant.setMicrophoneEnabled(true);
+        });
+      });
+    }).then(function(){
+      if(!_convLive)return;
+      orb.classList.add('listening');convPaint('Listening…');convSyncBtn(false);
+    }).catch(function(e){
+      convStop('error');
+      FULL.ask.html=askShell('<div class="aa" id="askOut">Sorry — I couldn’t start a conversation just then.</div>');
+      if(_cur==='ask')full.innerHTML=FULL.ask.html;
+      convSyncBtn(false);
+    });
+  }
+
+  // Idempotent, and safe to call from any exit path. NEVER leave a hot mic on a
+  // kiosk: stop the mic track FIRST (via the stopMicTrackOnMute publish default
+  // above, so this really releases the device rather than just muting it), then
+  // disconnect(true) — which also stops local tracks — as the second line of
+  // defence in case the first is slow or throws.
+  function convStop(reason){
+    if(!_convLive&&!_convRoom)return;
+    _convLive=false;
+    convStopAudio();
+    orb.classList.remove('listening');orb.classList.remove('busy');
+    var room=_convRoom;_convRoom=null;
+    if(room){
+      try{
+        var lp=room.localParticipant;
+        if(lp&&lp.setMicrophoneEnabled)Promise.resolve(lp.setMicrophoneEnabled(false)).catch(function(){});
+      }catch(e){}
+      try{Promise.resolve(room.disconnect(true)).catch(function(){});}catch(e){}
+    }
+    if(reason!=='navigate')convPaint('');
+    convSyncBtn(false);
+    armIdleSleep();   // the panel's normal idle clock resumes
+  }
+  window.__zoeConv={start:convStart,stop:convStop,live:function(){return _convLive;}};
+
   // Voice answer display on the Ask surface (used by URL-arrival + live voice events)
   function askShowAnswer(q,a){
-    FULL.ask.html='<div class="askf"><div class="aa" id="askOut"></div></div>';
+    FULL.ask.html=askShell('<div class="aa" id="askOut"></div>');
     if(_cur!=='ask')show('ask');   // show() clears the drift flags…
     var o=document.getElementById('askOut');if(o)o.textContent=a||'';
     if(q)dockHeard(q);
@@ -1919,6 +3085,12 @@
   })();}
   if(window.__needAuth)initAuthCard();
 
+  // ?conv=1 — arrive straight into conversation mode. Captured BEFORE the
+  // arrival block below, which rewrites the URL down to panel_id/kiosk.
+  // (The server-side "let's talk" repoint that sends it here is PR-1b.)
+  var _wantConv=false;
+  try{_wantConv=new URLSearchParams(location.search).get('conv')==='1';}catch(e){}
+
   // Voice-pushed arrival: display-only params from the voice pipeline
   // (?heard=&say=&domain=) — show the transcript + summary and open the
   // matching screen WITHOUT re-executing the command.
@@ -1942,6 +3114,22 @@
   })();
 
   if(!window.__voiceArrived)show('home');
+  if(_wantConv){
+    // Drop conv=1 first so a kiosk reload can't silently re-open the mic.
+    try{var _cs=new URLSearchParams(location.search);
+      if(_cs.get('conv')!==null){_cs.delete('conv');
+        history.replaceState(null,'',location.pathname+(_cs.toString()?('?'+_cs.toString()):''));}}catch(e){}
+    convStart();   // convStart() navigates to the Ask surface itself
+  }
+  // Tune the idle→sleep window from server display-prefs (falls back to the
+  // hardcoded 3-min default if unreachable), so it's operator-adjustable like
+  // idle_seconds/off_seconds without a redeploy.
+  try{var _dev=(localStorage.getItem('zoe_panel_id')||'default');
+    apiGet('/api/system/display/preferences?device_id='+encodeURIComponent(_dev)).then(function(d){var p=(d&&d.preferences)||{};
+      if(p.sleep_enabled===false)_sleepEnabled=false;
+      var s=+p.sleep_seconds; if(s>0)IDLE_SLEEP_MS=s*1000;
+      armIdleSleep();
+    }).catch(function(){});}catch(e){}
 })();
 </script>
 <script src="/js/touch-ui-executor.js?v=estate-2"></script>

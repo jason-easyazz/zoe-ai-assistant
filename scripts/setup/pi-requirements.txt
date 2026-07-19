@@ -23,5 +23,9 @@ silero-vad>=5.1
 # Speaker identification (resemblyzer — 256-dim embeddings, ARM CPU ~20ms)
 resemblyzer>=0.1.3
 
+# Face identification (zoe_face_id.py — SCRFD detect + MobileFaceNet embed,
+# buffalo_sc ONNX pack via fetch_face_models.sh; headless build, no GUI deps)
+opencv-python-headless>=4.9.0
+
 # HTTP client for Jetson API calls
 requests>=2.32.0
