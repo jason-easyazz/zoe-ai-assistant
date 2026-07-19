@@ -1813,11 +1813,43 @@ def main():
     else:
         log.info("Barge-in disabled (BARGE_IN_ENABLED=false).")
 
-    # Pre-warm resemblyzer encoder in background so first command isn't delayed,
-    # and pull the speaker-profile cache (disk copy first so a server outage
-    # doesn't blind local matching, then a fresh sync).
+    # Pre-warm resemblyzer end-to-end in background so first command isn't
+    # delayed, and pull the speaker-profile cache (disk copy first so a server
+    # outage doesn't blind local matching, then a fresh sync).
     if SPEAKER_ID_ENABLED:
-        threading.Thread(target=_get_voice_encoder, daemon=True, name="resemblyzer-warmup").start()
+
+        def _encoder_warmup() -> None:
+            encoder = _get_voice_encoder()
+            if encoder is None:
+                return
+            # Run one full preprocess+embed on a second of silence: the first
+            # preprocess_wav call pays ~2.5s of librosa/numba JIT on the Pi,
+            # which otherwise lands on the user's FIRST spoken turn.
+            try:
+                import tempfile as _tmp, os as _os, wave as _wave
+                with _tmp.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                    warm_path = f.name
+                with _wave.open(warm_path, "wb") as w:
+                    w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+                    # Low-amplitude noise, not silence: preprocess_wav VAD-trims
+                    # silence to nothing and embed_utterance would then raise
+                    # before the embed JIT is exercised.
+                    rng = np.random.default_rng(0)
+                    noise = (rng.standard_normal(16000) * 300).astype(np.int16)
+                    w.writeframes(noise.tobytes())
+                try:
+                    from resemblyzer import preprocess_wav  # type: ignore
+                    encoder.embed_utterance(preprocess_wav(warm_path))
+                    log.info("Speaker-ID pipeline warmed (JIT done).")
+                finally:
+                    try:
+                        _os.unlink(warm_path)
+                    except OSError:
+                        pass
+            except Exception as exc:
+                log.debug("speaker-ID warmup embed failed: %s", exc)
+
+        threading.Thread(target=_encoder_warmup, daemon=True, name="resemblyzer-warmup").start()
 
         def _profile_warmup() -> None:
             _load_profile_cache_from_disk()
