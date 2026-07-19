@@ -2697,6 +2697,24 @@
         throw e;});
   }
 
+  // A touch panel makes a double-tap trivially easy, and every write here is
+  // non-idempotent: two taps on Create make two rooms, two on Delete make the
+  // second one 404. Disable the button for the life of the request rather than
+  // relying on the user being precise on a glass screen.
+  function _rmOnce(btn, run){
+    if(!btn)return;
+    btn.onclick=function(){
+      if(btn.disabled)return;
+      btn.disabled=true;
+      var done=function(){ if(btn&&btn.isConnected)btn.disabled=false; };
+      var p;
+      try{ p=run(); }catch(e){ done(); throw e; }
+      // A handler that returns nothing still gets re-enabled, so this is safe
+      // for the non-async callers too.
+      if(p&&typeof p.then==='function')p.then(done,done);else done();
+    };
+  }
+
   // Pick which room THIS panel is in. Writes panels.room_id via panel config,
   // so it round-trips through the same _pcSave that the other panel rows use.
   function _pcRoom(){
@@ -2758,10 +2776,10 @@
     var m=document.getElementById('estModal'),f=m.querySelector('[data-f="rn"]');
     f.focus();
     m.querySelector('[data-x="back"]').onclick=_rmList;
-    m.querySelector('[data-x="save"]').onclick=function(){
+    _rmOnce(m.querySelector('[data-x="save"]'), function(){
       var name=f.value.trim();
       if(!name){_pcErr('Give the room a name.');return;}
-      _rmSave('POST','/api/rooms',{name:name},_rmList).catch(function(){});};
+      return _rmSave('POST','/api/rooms',{name:name},_rmList).catch(function(){});});
   }
 
   function _rmRoom(rid){
@@ -2781,10 +2799,10 @@
     var m=document.getElementById('estModal');
     m.querySelector('[data-x="back"]').onclick=_rmList;
     m.querySelector('[data-x="add"]').onclick=function(){_rmPickDevice(rid);};
-    m.querySelector('[data-x="del"]').onclick=function(){
+    _rmOnce(m.querySelector('[data-x="del"]'), function(){
       // Deleting a room does NOT delete its devices — they just become
       // unassigned — so this needs no scarier confirmation than saying so.
-      _rmSave('DELETE','/api/rooms/'+encodeURIComponent(rid),null,_rmList).catch(function(){});};
+      return _rmSave('DELETE','/api/rooms/'+encodeURIComponent(rid),null,_rmList).catch(function(){});});
     m.querySelectorAll('[data-rm]').forEach(function(b){b.onclick=function(){
       _rmSave('DELETE','/api/rooms/'+encodeURIComponent(rid)+'/devices/'
         +encodeURIComponent(b.getAttribute('data-rm')),null,function(){_rmRoom(rid);})
@@ -2806,12 +2824,25 @@
       list.innerHTML=cands.map(function(e){
         return '<button class="eopt" data-eid="'+esc(e.entity_id)+'">'+mdi(e.icon)
           +'<span class="et">'+esc(e.name||e.entity_id)+'<small>'+esc(e.entity_id)+'</small></span></button>';}).join('');
-      list.querySelectorAll('.eopt').forEach(function(b){b.onclick=function(){
-        var r=(_rooms||[]).filter(function(x){return x.id===rid;})[0];
-        var next=((r&&r.devices)||[]).map(function(d){return {entity_id:d.entity_id};});
-        next.push({entity_id:b.getAttribute('data-eid')});
-        _rmSave('PUT','/api/rooms/'+encodeURIComponent(rid)+'/devices',{devices:next},
-          function(){_rmRoom(rid);}).catch(function(){});};});
+      list.querySelectorAll('.eopt').forEach(function(b){_rmOnce(b, function(){
+        var eid=b.getAttribute('data-eid');
+        // The devices endpoint REPLACES the room's list, so the payload must be
+        // built from the room as it is NOW — not from the `_rooms` snapshot this
+        // picker was painted from. That snapshot can be minutes old (the picker
+        // is a second screen away), and a stale one silently deletes whatever
+        // was added from another panel in between: a lost update, written by us,
+        // that the operator never sees. Re-read first, then append.
+        return apiGet('/api/rooms').then(function(d){
+          var fresh=((d&&d.rooms)||[]).filter(function(x){return x.id===rid;})[0];
+          if(!fresh){toast('That room no longer exists');return _rmList();}
+          var next=(fresh.devices||[]).map(function(x){return {entity_id:x.entity_id};});
+          // Already there (added elsewhere while this picker sat open) — the
+          // desired end state already holds, so don't write a duplicate.
+          if(next.some(function(x){return x.entity_id===eid;})){return _rmRoom(rid);}
+          next.push({entity_id:eid});
+          return _rmSave('PUT','/api/rooms/'+encodeURIComponent(rid)+'/devices',{devices:next},
+            function(){_rmRoom(rid);});
+        }).catch(function(){toast('Couldn’t add the device');});});});
     }).catch(function(){
       var list=m.querySelector('.elist');
       if(list)list.innerHTML='<div style="color:var(--ink-faint);font-size:18px">Couldn’t load devices.</div>';});
