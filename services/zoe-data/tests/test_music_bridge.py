@@ -1109,3 +1109,47 @@ def test_queue_item_meta_degrades_without_a_media_item():
     item = {"name": "Some Radio Stream", "media_item": None}
     assert _queue_item_title(item) == "Some Radio Stream"
     assert _queue_item_artist(item) == ""
+
+
+# ── queue position: tapping a cover must play THAT track ─────────────────────
+
+def _norm(items):
+    """Call the REAL resolver — not a copy of it.
+
+    The first version of this helper re-implemented the logic inline, so the
+    mutation check passed with the bug restored: it was testing itself, which is
+    exactly the failure mode that let a dead Cover Flow ship green earlier.
+    """
+    from routers.music import normalize_queue_items
+    return normalize_queue_items(items)
+
+
+def test_queue_index_comes_from_sort_index_not_index():
+    """Regression: tapping any cover in the Cover Flow restarted track 1.
+
+    MA's queue items carry TWO index-ish fields and the obvious one is a trap —
+    live MA returns `index: 0` for EVERY item while `sort_index` holds the real
+    position. The panel sent `index` to play-index, so every tap asked for
+    position 0. Payload copied from the live Sonos queue.
+    """
+    items = _norm([
+        {"name": "Thomas Newman - Yes",                "index": 0, "sort_index": 0},
+        {"name": "Thomas Newman - Everywhere Freesia", "index": 0, "sort_index": 1},
+        {"name": "Thomas Newman - Walkaway",           "index": 0, "sort_index": 2},
+        {"name": "Thomas Newman - Meet Joe Black",     "index": 0, "sort_index": 3},
+    ])
+    assert [i["index"] for i in items] == [0, 1, 2, 3], (
+        "each item must carry its OWN queue position, not MA's always-zero `index`"
+    )
+
+
+def test_queue_index_falls_back_to_enumeration_order():
+    """A provider that omits sort_index still gets usable positions rather than
+    collapsing every tap onto one track."""
+    items = _norm([{"name": "a"}, {"name": "b"}, {"name": "c"}])
+    assert [i["index"] for i in items] == [0, 1, 2]
+
+
+def test_queue_index_ignores_a_non_integer_sort_index():
+    items = _norm([{"name": "a", "sort_index": None}, {"name": "b", "sort_index": "1"}])
+    assert [i["index"] for i in items] == [0, 1]
