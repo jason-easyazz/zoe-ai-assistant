@@ -177,11 +177,10 @@ def enroll_face(user: str, name: str) -> int:
             if not (lo <= t < hi):
                 continue
             dets, kps = face.detect_faces(fr)
-            picked = face._pick_best_face(dets, kps)
+            picked = face.pick_best_face(dets, kps)
             if picked is None:
                 continue
-            det, kp = picked
-            v = float((det[2] - det[0]) * (det[3] - det[1]) * det[4])
+            det, kp, v = picked
             if best is None or v > best[0]:
                 best = (v, det, kp, fr)
         if best is None:
@@ -247,10 +246,15 @@ def enroll_voice(user: str, name: str, daemon_service: str = "zoe-voice") -> int
                 if not _record_wav(6, wav_path):
                     say("I didn't catch that. Let's move on.")
                     continue
-                out = _api("/api/voice/enroll", {
-                    "audio_base64": base64.b64encode(open(wav_path, "rb").read()).decode(),
-                    "user_id": user, "display_name": name, "consent": True,
-                })
+                try:
+                    out = _api("/api/voice/enroll", {
+                        "audio_base64": base64.b64encode(open(wav_path, "rb").read()).decode(),
+                        "user_id": user, "display_name": name, "consent": True,
+                    })
+                except Exception as exc:
+                    print(f"phrase {i} upload failed: {exc}", file=sys.stderr)
+                    say("That one didn't save. Moving on.")
+                    continue
                 if out.get("ok"):
                     uploaded += 1
                     say("Got it.")
