@@ -806,8 +806,21 @@ async function t(name, fn) {
   // inside the estate's IIFE, so a test cannot call it — and a window hook
   // added for the harness would prove less than driving the actual timer.
   async function toSleep(page) {
-    await page.clock.runFor(181000);
-    await page.waitForSelector('.slp', { timeout: 5000 });
+    // Reaching the night clock is NOT just "advance past IDLE_SLEEP_MS". When
+    // the idle timer fires the estate asks the server whether music is playing
+    // (deliberately, rather than trusting a cached flag) and only then calls
+    // show('sleep'). That decision races the request against a 4s fallback
+    // timer, so two different clocks are involved:
+    //   * the request resolves in REAL time — a mocked-clock tick does not
+    //     advance it, so we have to yield actual time for the promise;
+    //   * the 4s fallback is a setTimeout, so it needs mocked time if the
+    //     request lost the race.
+    // Driving only one of them leaves `.slp` present-but-hidden, which is
+    // exactly how this helper failed its first run.
+    await page.clock.runFor(181000);   // the idle window elapses
+    await page.waitForTimeout(400);    // let the now-playing request settle
+    await page.clock.runFor(5000);     // …or let the 4s fallback decide
+    await page.waitForSelector('.slp', { state: 'visible', timeout: 8000 });
     await page.waitForTimeout(400);
   }
 
