@@ -1605,8 +1605,13 @@
   function tickMusic(){if(_cur!=='music'||!_music.np||!_music.np.playing)return;
     if(_seek)return;   // a finger owns the bar — see seekPaint
     var el=_music.np.elapsed+(Date.now()-_music.np.at)/1000,du=_music.np.duration||0;
-    var fill=document.getElementById('mFill'),te=document.getElementById('mElapsed');
-    if(fill&&du)fill.style.width=Math.min(100,el/du*100)+'%';
+    var fill=document.getElementById('mFill'),te=document.getElementById('mElapsed'),
+        kn=document.getElementById('mKnob');
+    // The knob moves with the fill, every tick. Advancing only the fill leaves
+    // the two up to 5s apart between polls — they are one control.
+    if(du){var p=Math.min(100,el/du*100)+'%';
+      if(fill)fill.style.width=p;
+      if(kn)kn.style.left=p;}
     if(te)te.textContent=fmtDur(Math.min(el,du||el));}
 
   // ---- Scrub: drag or tap the bar to seek ----------------------------------

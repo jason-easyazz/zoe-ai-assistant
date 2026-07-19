@@ -367,6 +367,24 @@ test('a poll mid-drag does not yank the bar back', async (browser, base) => {
   await page.close();
 });
 
+test('the knob tracks the fill between polls, not just on them', async (browser, base) => {
+  // tickMusic advances the bar every 1s; loadMusic repaints both every 5s. If
+  // the tick moves only the fill, the knob lags it by up to 5s. (Greptile P2.)
+  const ctx = newCtx();
+  const page = await openMusic(browser, ctx, { base });
+  const read = () => page.evaluate(() => ({
+    fill: parseFloat(document.getElementById('mFill').style.width),
+    knob: parseFloat(document.getElementById('mKnob').style.left),
+  }));
+  const a = await read();
+  await page.waitForTimeout(2600);   // ticks, but no 5s poll boundary crossed
+  const b = await read();
+  assert.ok(b.fill > a.fill, 'the fill did not advance — the tick never ran');
+  assert.ok(Math.abs(b.knob - b.fill) < 0.5,
+    'knob at ' + b.knob + '% but fill at ' + b.fill + '% — they drifted apart between polls');
+  await page.close();
+});
+
 test('navigating away mid-drag does not freeze the bar forever', async (browser, base) => {
   // _seek gates BOTH repainters. If a drag is abandoned by a navigation with it
   // still set, the scrub never repaints again for the rest of the session.
