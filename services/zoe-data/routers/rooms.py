@@ -46,6 +46,17 @@ router = APIRouter(prefix="/api/rooms", tags=["rooms"])
 
 MAX_ROOM_NAME_LEN = 40
 
+# Domains the PICKER suggests. This is a suggestion filter, NOT a storage rule:
+# `normalize_entity_id` still accepts any well-formed id, so an operator or a
+# future importer can put anything in a room. Without it the picker offers all
+# 48 live entities — `event.backup_automatic_backup`, every diagnostic
+# `sensor.backup_*`, the assist-satellite plumbing — none of which are things
+# anyone means by "a device in this room". Mirrors the dock's `_PINNABLE`.
+_PICKABLE_DOMAINS = {
+    "light", "switch", "input_boolean", "fan", "cover", "media_player",
+    "climate", "scene", "input_number", "number", "lock", "vacuum",
+}
+
 # A device is in exactly one room, so a move is an UPSERT that steals the row
 # from whatever room previously held it (see _link_device). Without that, the
 # UNIQUE(entity_id) constraint would turn an ordinary "move the lamp to the
@@ -200,9 +211,18 @@ async def list_rooms(db=Depends(get_db)) -> dict[str, Any]:
     return {"rooms": rooms, "ha_available": entity_index is not None}
 
 
+def is_pickable(entity_id: str) -> bool:
+    """Whether the PICKER should suggest this entity (see ``_PICKABLE_DOMAINS``)."""
+    return entity_id.partition(".")[0] in _PICKABLE_DOMAINS
+
+
 @router.get("/unassigned")
 async def unassigned_devices(db=Depends(get_db)) -> dict[str, Any]:
-    """Devices HA knows about that are not in any room yet — the picker's source.
+    """Controllable devices not yet in any room — the picker's source.
+
+    Filtered to `_PICKABLE_DOMAINS`: the live house exposes 48 entities, most of
+    which are backup/diagnostic sensors nobody would call "a device in this
+    room". Storage stays permissive; only the suggestion list is narrowed.
 
     Returns an empty list (with ``ha_available:false``) when HA is unreachable,
     never an error: a picker that cannot be populated should say so, not 500.
@@ -213,7 +233,9 @@ async def unassigned_devices(db=Depends(get_db)) -> dict[str, Any]:
     cursor = await db.execute("SELECT entity_id FROM room_devices")
     taken = {str(r["entity_id"]) for r in await cursor.fetchall()}
     devices = [
-        resolve_device(eid, entity_index) for eid in entity_index if eid not in taken
+        resolve_device(eid, entity_index)
+        for eid in entity_index
+        if eid not in taken and is_pickable(eid)
     ]
     devices.sort(key=lambda d: (d.get("name") or d["entity_id"]).lower())
     return {"devices": devices, "ha_available": True}
