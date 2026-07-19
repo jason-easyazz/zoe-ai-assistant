@@ -64,6 +64,47 @@ Enable it only when running the Flue brain — build + env steps are in
 
 Start order matters — see [OPERATOR_RUNBOOK.md](../../../docs/guides/OPERATOR_RUNBOOK.md).
 
+## Memory protection — the voice stack must never swap
+
+The Orin has 15.6 GB of **unified** memory (CPU+GPU share it). The latency-critical
+services must stay resident: a swapped brain or TTS engine does not fail, it just
+gets slow in a way that reads as a product bug ("voice in pieces", a long first
+reply after idle) rather than a resource one.
+
+| Unit | `MemorySwapMax` | `MemoryLow` | `MemoryMax` |
+|------|-----------------|-------------|-------------|
+| `llama-server` | `0` | `6G` | *(none — see below)* |
+| `kokoro-tts`   | `0` | `2G` | `4G` |
+| `serena-mcp`   | `2G` | — | `2G` (dev tooling, deliberately yields) |
+
+Measured on the live box 2026-07-18, **before** these directives existed:
+llama-server had **1,457 MB** and kokoro-tts **1,489 MB** paged out — ~3 GB of the
+voice path on disk. `kokoro-tts` had no memory directives at all (cgroup
+`memory.low` was `0`), so the kernel reclaimed it first.
+
+Two things worth knowing before changing these:
+
+- **`--mlock` is not sufficient on Tegra.** llama-server sets `--mlock` with
+  `LimitMEMLOCK=infinity`, yet `VmLck` held only 1.95 GB of a 5.6 GB RSS — mlock
+  covers the mapped model, not every CUDA/unified allocation around it.
+  `MemorySwapMax=0` is what closes the gap. `MemoryLow` is *soft* (reclaim
+  resistance, not swap immunity) and alone did not stop the eviction.
+- **llama-server has no `MemoryMax` on purpose.** A hard ceiling *plus* no swap
+  turns a transient spike into an OOM kill. Kokoro can take one because it is
+  bounded (~2.3 GB CUDA-resident, does not grow with load).
+
+Headroom check (why this fits): brain + kokoro fully resident ≈ **9.6 GB** of
+15.6 GB, leaving ~6 GB for zoe-data (~0.9 GB) and everything else.
+
+**Do not add `Nice=-N` or `OOMScoreAdjust=-N` to user units.** A `--user` unit
+cannot raise priority (`ulimit -e` is 0 here). systemd accepts the directive, the
+service starts, status is success — and the value is **silently dropped**
+(verified: `Nice=-5` applied as `0`, `OOMScoreAdjust=-500` applied as `0`, while
+`Nice=10` applied correctly). It documents a guarantee that does not exist.
+Priority ordering is achieved in reverse: dev tooling de-prioritises *itself*
+(`serena-mcp.service` runs `Nice=10` / `OOMScoreAdjust=500`), which works because
+positive values need no privilege.
+
 ## Verify
 
 ```bash
