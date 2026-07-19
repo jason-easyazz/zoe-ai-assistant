@@ -947,11 +947,21 @@
       // This runs at most once per idle window (3 min), so the cost is nothing,
       // and it cannot go stale. A failed request falls through to sleeping —
       // the panel must never latch awake because a request hung.
+      // Everything above was decided synchronously; this request opens a window
+      // in which the world can change — most importantly the user can tap Talk
+      // and start a live conversation while it is in flight. Re-check on resolve
+      // or we would sleep on someone mid-sentence.
+      function _sleepNow(){
+        if(_convLive||_cur==='sleep'||!_sleepEnabled){armIdleSleep(IDLE_SLEEP_RETRY_MS);return;}
+        var m2=document.getElementById('estModal'),cb2=document.getElementById('cmdbar');
+        if((m2&&m2.classList.contains('on'))||(cb2&&cb2.classList.contains('on'))){armIdleSleep(IDLE_SLEEP_RETRY_MS);return;}
+        show('sleep');
+      }
       apiGet('/api/music/now-playing').then(function(d){
         var np=d&&d.now_playing;
         if(np&&np.state==='playing'){armIdleSleep(IDLE_SLEEP_RETRY_MS);return;}
-        if(_cur!=='sleep')show('sleep');
-      }).catch(function(){if(_cur!=='sleep')show('sleep');});
+        _sleepNow();
+      }).catch(function(){_sleepNow();});
     },ms||IDLE_SLEEP_MS);}
   // Any touch on the panel means the user took over — the screen is theirs.
   document.addEventListener('pointerdown',function(){_userTookOver=true;_voiceScreen=false;cancelAutoHome();armIdleSleep();},true);
@@ -1064,7 +1074,8 @@
       chip.querySelector('.dnext').onclick=function(e){e.stopPropagation();_dockCtl('next');};
       chip.onclick=function(e){if(e.target.closest('button'))return;show('music');};
       // keep it fresh while it's visible (title/art/state change on skip)
-      _dockMusicT=setTimeout(paintDockMusic,5000);
+      // (reschedule already armed above, before the early returns — arming it
+      //  again here would leak the first timer and double the poll rate)
     }).catch(function(){});
   }
   // Dock timer chip — a small live countdown pinned in the dock while any
