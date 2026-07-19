@@ -545,17 +545,38 @@ async function t(name, fn) {
   });
 
   // 13. settings: the panel section renders its three rows from the live shape
-  await t('Settings › This panel renders location / speaker / dock controls', async () => {
+  await t('Settings › This panel renders room / rooms / location / speaker / dock controls', async () => {
     const ctx = newCtx();
     const page = await open(browser, ctx, { base, cfg: cfg({ pinned: [PIN_BED, PIN_TEMP] }) });
     await openPanelSettings(page);
     const rows = await page.$$eval('#setPanel .srow2', (els) => els.map((e) => e.textContent));
-    assert.strictEqual(rows.length, 3, 'expected 3 rows, got ' + JSON.stringify(rows));
-    assert.ok(/Location/.test(rows[0]) && /bedroom/.test(rows[0]), rows[0]);
-    assert.ok(/speaker/i.test(rows[1]) && /household default/.test(rows[1]),
-      'speaker row must surface default_player_source: ' + rows[1]);
-    assert.ok(/2 of 4/.test(rows[2]), 'pin count row: ' + rows[2]);
+    assert.strictEqual(rows.length, 5, 'expected 5 rows, got ' + JSON.stringify(rows));
+    // ROOM leads: it is the structured "where is this panel", and what makes
+    // "turn off the light" mean the light in here. Null room reads "Not set".
+    assert.ok(/Room/.test(rows[0]) && /Not set/.test(rows[0]), 'room row: ' + rows[0]);
+    assert.ok(/Manage rooms/.test(rows[1]), 'rooms management row: ' + rows[1]);
+    // The legacy free-text label keeps its own row, relabelled so it cannot be
+    // mistaken for the room — nothing reads it for behaviour.
+    assert.ok(/Location label/.test(rows[2]) && /bedroom/.test(rows[2]), rows[2]);
+    assert.ok(/speaker/i.test(rows[3]) && /household default/.test(rows[3]),
+      'speaker row must surface default_player_source: ' + rows[3]);
+    assert.ok(/2 of 4/.test(rows[4]), 'pin count row: ' + rows[4]);
     await shoot(page, '13_settings_panel');
+    await page.close();
+  });
+
+  // The room row must show the NAME, never the opaque id — the panel resolves
+  // it server-side precisely so the operator never sees a uuid.
+  await t('Settings › the room row shows the room NAME when the panel is in one', async () => {
+    const ctx = newCtx();
+    const page = await open(browser, ctx, {
+      base,
+      cfg: cfg({ room_id: 'r-bed', room_name: 'Bedroom', room_slug: 'bedroom' }),
+    });
+    await openPanelSettings(page);
+    const row = await page.$eval('#setPanel .srow2[data-p="room"]', (e) => e.textContent);
+    assert.ok(/Bedroom/.test(row), 'room row should name the room: ' + row);
+    assert.ok(!/r-bed/.test(row), 'room row must never show the raw id: ' + row);
     await page.close();
   });
 
