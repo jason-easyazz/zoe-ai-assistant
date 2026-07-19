@@ -886,7 +886,7 @@ def _espeak_local(text: str) -> None:
 # (0600 — it holds biometric embeddings) so a server outage doesn't blind us.
 _PROFILE_CACHE_PATH = os.path.expanduser("~/.zoe-voice/speaker_profiles.json")
 _PROFILE_SYNC_TTL_S = float(os.environ.get("SPEAKER_ID_SYNC_TTL_S", "3600"))
-_profile_cache: dict = {"fetched_at": 0.0, "profiles": []}
+_profile_cache: dict = {"fetched_at": 0.0, "profiles": [], "syncing": False}
 _profile_cache_lock = threading.Lock()
 
 
@@ -895,7 +895,9 @@ def _load_profile_cache_from_disk() -> None:
         with open(_PROFILE_CACHE_PATH, encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data.get("profiles"), list):
-            _profile_cache.update({"fetched_at": 0.0, "profiles": data["profiles"]})
+            with _profile_cache_lock:
+                # fetched_at stays 0 so the first sync still refreshes.
+                _profile_cache["profiles"] = data["profiles"]
             log.info("Speaker profiles loaded from disk: %d", len(data["profiles"]))
     except FileNotFoundError:
         pass
@@ -904,11 +906,17 @@ def _load_profile_cache_from_disk() -> None:
 
 
 def _sync_speaker_profiles(force: bool = False) -> None:
-    """Refresh the local profile cache from the server (TTL-gated)."""
+    """Refresh the local profile cache from the server (TTL-gated).
+
+    The `syncing` flag makes TTL expiry single-flight: when many concurrent
+    turns cross the TTL together, only the first fetches — the rest keep
+    matching against the (still valid) cached profiles.
+    """
     with _profile_cache_lock:
         fresh = (time.time() - _profile_cache["fetched_at"]) < _PROFILE_SYNC_TTL_S
-        if fresh and not force:
+        if (fresh and not force) or _profile_cache["syncing"]:
             return
+        _profile_cache["syncing"] = True
     try:
         r = requests.get(
             f"{ZOE_URL}/api/voice/profiles/sync",
@@ -921,6 +929,7 @@ def _sync_speaker_profiles(force: bool = False) -> None:
             _profile_cache["fetched_at"] = time.time()
             _profile_cache["profiles"] = profiles
         try:
+            os.makedirs(os.path.dirname(_PROFILE_CACHE_PATH), mode=0o700, exist_ok=True)
             fd = os.open(_PROFILE_CACHE_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump({"profiles": profiles}, f)
@@ -928,8 +937,13 @@ def _sync_speaker_profiles(force: bool = False) -> None:
             log.debug("speaker profile cache persist failed: %s", exc)
         log.info("Speaker profiles synced: %d", len(profiles))
     except Exception as exc:
+        with _profile_cache_lock:
+            cached_count = len(_profile_cache["profiles"])
         log.debug("speaker profile sync failed (keeping cached %d): %s",
-                  len(_profile_cache["profiles"]), exc)
+                  cached_count, exc)
+    finally:
+        with _profile_cache_lock:
+            _profile_cache["syncing"] = False
 
 
 def _match_speaker_local(embedding) -> tuple[str, float] | None:
