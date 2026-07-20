@@ -162,10 +162,26 @@ API calls with literal `user_id=undefined` + ~20 failed WS handshakes in 10s).
 ## Execution waves
 
 ### Wave 0 — Deploy integrity + the smoke harness
-- Commit `manifest.json` + `js/widgets/widget-manifest.json` via `.gitignore` **negation** rules
-  (they are gitignored — a plain `git add` is refused). Register in **both** manifests (see
-  guardrails). **The manifest's `/dashboard.html` shortcut is correct — leave it** (dashboard is
-  the landing page).
+- Commit `manifest.json` + `js/widgets/widget-manifest.json`.
+  **⚠ SOURCE THEM FROM THE LIVE CHECKOUT — they do not exist anywhere else.** Both files are
+  untracked *and* gitignored, so they are present ONLY in `/home/zoe/assistant` (verified
+  2026-07-20: `dist/manifest.json` 2652 B, `dist/js/widgets/widget-manifest.json` 7356 B, and
+  nginx serves the latter **200** today). A clean clone or worktree has nothing to stage — which
+  collides with this plan's own guardrail to work in a worktree. **These are the only copies in
+  existence; if the live box loses them there is no recovery.** Sequence:
+  1. `cp /home/zoe/assistant/services/zoe-ui/dist/manifest.json <worktree>/services/zoe-ui/dist/`
+     and the same for `dist/js/widgets/widget-manifest.json` (copy first — do not `git checkout`
+     over them, and never run a cleanup that deletes untracked files in the live checkout until
+     this has merged).
+  2. Add `.gitignore` **negation** rules (`!services/zoe-ui/dist/manifest.json`,
+     `!services/zoe-ui/dist/js/widgets/widget-manifest.json`) — a plain `git add` is *refused*
+     under `.gitignore:155`, and `git add -f` would stage them while leaving the ignore rule to
+     bite the next file.
+  3. Verify with `git ls-files --error-unmatch <both paths>` before pushing — existence checks
+     pass on the live box whether or not tracking actually worked.
+  4. Register in **both** critical-file manifests (see guardrails).
+
+  **The PWA manifest's `/dashboard.html` shortcut is correct — leave it** (dashboard is the landing page).
 - Fix the SW cross-origin kill: add `url.origin === self.location.origin` to the three
   script/style predicates (`sw.js:183/:201/:221`), the same **remedy** as the documented image-route
   fix at `:238-251`. (The mechanism differs — those routes permit opaque caching via
