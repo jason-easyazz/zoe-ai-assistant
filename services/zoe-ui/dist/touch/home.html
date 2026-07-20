@@ -1795,7 +1795,20 @@
     if(_qtab==='recent'){host.classList.add('recent');if(ttl)ttl.textContent='Recently played';
       host.innerHTML=_qmsg('Loading…');
       apiGet('/api/music/recently-played').then(function(d){if(_cur!=='browse')return;var its=(d&&d.items)||[];
-        host.innerHTML=its.slice(0,40).map(_rtile).join('')||_qempty('Nothing played yet.');
+        if(!its.length){
+          // Recent is empty on a fresh house (MA reports available:false with no
+          // history). Landing here is a dead end: the speaker picker only
+          // REMEMBERS a speaker, it never starts anything, so an empty Recent
+          // leaves no way to play a single thing from the panel. Fall through to
+          // Playlists, which is the tab that actually has content.
+          var tb=document.querySelector('.mqtabs button[data-qt="playlists"]');
+          if(tb&&_qtab==='recent'){_qtab='playlists';
+            document.querySelectorAll('.mqtabs button').forEach(function(x){x.classList.toggle('on',x===tb);});
+            loadQueue();return;}
+          host.innerHTML=_qempty('Nothing played yet — try Playlists.');
+          _wireBrowseRow(host);return;
+        }
+        host.innerHTML=its.slice(0,40).map(_rtile).join('');
         _wireBrowseRow(host);}).catch(function(){host.innerHTML=_qempty('Couldn’t load.');});return;}
     if(_qtab==='playlists'){host.classList.add('grid');if(ttl)ttl.textContent='Your playlists';
       host.innerHTML=_qmsg('Loading…');
