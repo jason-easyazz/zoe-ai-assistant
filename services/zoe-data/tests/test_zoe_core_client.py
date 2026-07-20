@@ -5,6 +5,29 @@ Gemma, with zoe-data stubbed (no live service, no real side effects). Skips
 cleanly when pi / the model server / the extensions aren't present.
 
     python -m pytest services/zoe-data/tests/test_zoe_core_client.py -v
+
+⚠️ THESE ASSERT LIVE MODEL BEHAVIOUR AND ARE THEREFORE NON-DETERMINISTIC.
+
+`_skip_reason()` skips the whole file unless `pi` is on PATH, the zoe-core
+extensions exist, AND the model server answers on :11434. In CI none of that
+holds, so these SKIP. On a dev box where the brain is up, they RUN — against
+the real Gemma 4 E4B.
+
+That asymmetry has a cost worth knowing before you go bisecting: a test like
+`test_tool_action_dispatches` asserts the model *chose* a particular tool for a
+particular prompt. A 4B model does not do that deterministically.
+
+Measured 2026-07-20 on the Orin: **2 failures in 14 runs (~14%)**, spread across
+full-suite and single-file runs, and 5/5 green when run as a single test. It also
+passed alone on both the branch and `main` while the full suite was red — a
+signature indistinguishable from a test-isolation leak, which is what makes it
+expensive. (It refused to fail during the runs where failure output was being
+captured, so the losing intent list was never recorded.)
+
+So if one of these fails intermittently on the Orin while CI stays green, the
+first hypothesis should be model nondeterminism, not your diff. Re-run before
+investigating. Genuinely deterministic behaviour belongs in a stubbed unit test,
+not here.
 """
 from __future__ import annotations
 
