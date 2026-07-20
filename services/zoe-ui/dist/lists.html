@@ -2154,62 +2154,36 @@
                     });
                 }
                 
-                // Fetch existing shopping lists
-                const shoppingResponse = await apiRequest('/api/lists/shopping');
-                if (shoppingResponse.lists) {
-                    shoppingResponse.lists.forEach(list => {
+                // Lists with their items. `GET /api/lists/{type}` returns rows
+                // WITHOUT items, so the old `list.items?.length || 0` read
+                // undefined and every card said "0 items" regardless of
+                // contents. zoeFetchListsWithItems (js/common.js) does the
+                // two-step and marks unloadable lists as null, so an outage
+                // reads "items unavailable" instead of a confident "0 items".
+                const LIST_KINDS = [
+                    { type: 'shopping',        widget: 'shopping', icon: '🛒', fallback: 'Shopping List' },
+                    { type: 'work_todos',      widget: 'work',     icon: '💼', fallback: 'Work Tasks' },
+                    { type: 'personal_todos',  widget: 'personal', icon: '📝', fallback: 'Personal' },
+                    { type: 'bucket',          widget: 'bucket',   icon: '🎯', fallback: 'Bucket List' }
+                ];
+
+                const kindResults = await Promise.all(
+                    LIST_KINDS.map(kind => window.zoeFetchListsWithItems(kind.type))
+                );
+
+                kindResults.forEach(({ lists }, i) => {
+                    const kind = LIST_KINDS[i];
+                    lists.forEach(list => {
                         widgets.push({
-                            type: 'shopping',
+                            type: kind.widget,
                             id: list.id,
-                            icon: '🛒',
-                            name: list.name || 'Shopping List',
-                            desc: `${list.items?.length || 0} items`
+                            icon: kind.icon,
+                            name: list.name || kind.fallback,
+                            desc: window.zoeListCountLabel(list)
                         });
                     });
-                }
-                
-                // Fetch work lists
-                const workResponse = await apiRequest('/api/lists/work_todos');
-                if (workResponse.lists) {
-                    workResponse.lists.forEach(list => {
-                        widgets.push({
-                            type: 'work',
-                            id: list.id,
-                            icon: '💼',
-                            name: list.name || 'Work Tasks',
-                            desc: `${list.items?.length || 0} items`
-                        });
-                    });
-                }
-                
-                // Fetch personal lists
-                const personalResponse = await apiRequest('/api/lists/personal_todos');
-                if (personalResponse.lists) {
-                    personalResponse.lists.forEach(list => {
-                        widgets.push({
-                            type: 'personal',
-                            id: list.id,
-                            icon: '📝',
-                            name: list.name || 'Personal',
-                            desc: `${list.items?.length || 0} items`
-                        });
-                    });
-                }
-                
-                // Fetch bucket lists
-                const bucketResponse = await apiRequest('/api/lists/bucket');
-                if (bucketResponse.lists) {
-                    bucketResponse.lists.forEach(list => {
-                        widgets.push({
-                            type: 'bucket',
-                            id: list.id,
-                            icon: '🎯',
-                            name: list.name || 'Bucket List',
-                            desc: `${list.items?.length || 0} items`
-                        });
-                    });
-                }
-                
+                });
+
             } catch (error) {
                 console.error('Failed to fetch existing widgets:', error);
             }

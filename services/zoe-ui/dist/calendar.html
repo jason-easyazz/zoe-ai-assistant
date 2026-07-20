@@ -2128,15 +2128,16 @@
         // Authenticated API request wrapper
         async function authedApiRequest(endpoint, options = {}) {
             const session = window.zoeAuth?.getCurrentSession();
-            const userId = session?.user_info?.user_id || session?.user_id;
-            
-            console.log('📅 Calendar API call for user:', userId, 'Endpoint:', endpoint);
-            
-            // ✅ FIX: Add user_id to query params for proper isolation
-            const separator = endpoint.includes('?') ? '&' : '?';
-            const endpointWithUser = `${endpoint}${separator}user_id=${userId}`;
-            
-            return apiRequest(endpointWithUser, {
+
+            // NOTE: this used to append `?user_id=<id>` "for proper isolation".
+            // It never did anything: every UI-facing route resolves identity
+            // from the session via Depends(get_current_user) (zoe-data/auth.py),
+            // and none of them declares a user_id query param, so FastAPI
+            // dropped it. Logged out it stringified to the literal
+            // "user_id=undefined" and filled the network tab with noise that
+            // looked like the bug but wasn't. Isolation comes from the session
+            // header below.
+            return apiRequest(endpoint, {
                 ...options,
                 headers: {
                     ...(session ? { 'X-Session-ID': session.session_id } : {}),
@@ -2225,9 +2226,13 @@
                 
                 for (const listType of listTypes) {
                     try {
-                        const response = await authedApiRequest(`/lists/${listType}`);
-                        if (response.lists && Array.isArray(response.lists)) {
-                            response.lists.forEach(list => {
+                        // Two-step: the collection route returns rows WITHOUT
+                        // items, so the task sidebar below (which reads
+                        // list.items) was permanently empty even though every
+                        // request returned 200. See js/common.js.
+                        const { lists } = await window.zoeFetchListsWithItems(listType);
+                        if (Array.isArray(lists)) {
+                            lists.forEach(list => {
                                 allLists.push({
                                     ...list,
                                     list_type: listType,
