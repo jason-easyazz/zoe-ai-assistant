@@ -63,3 +63,32 @@ def test_widget_manifest_flags_the_list_widgets_for_the_lists_page():
             f"{wid} is not flagged lists:true — the lists page will not offer it "
             "as a default widget"
         )
+
+
+def test_manifest_lists_flags_match_the_client_allowlist():
+    """Every widget flagged `lists: true` must also be in LIST_WIDGET_TYPES.
+
+    The two are consulted at different moments and disagreeing is a silent,
+    confusing bug rather than an error: createDefaultLayout() picks defaults via
+    the manifest flag, but loadFromData() filters the SAVED layout through
+    isListWidget(). A widget flagged in the manifest but absent from the
+    allowlist appears on first load, gets saved, and then vanishes on the next
+    reload. (Caught on Wave 0 when 'tasks' was flagged without being listed.)
+    """
+    import json
+    import re
+
+    m = json.loads((REPO / MANIFESTS[1]).read_text(encoding="utf-8"))
+    flagged = {w["id"] for w in m["widgets"] if w.get("lists") is True}
+
+    src = (REPO / "services/zoe-ui/dist/js/lists-dashboard.js").read_text(encoding="utf-8")
+    block = re.search(r"const LIST_WIDGET_TYPES = \[(.*?)\]", src, re.S)
+    assert block, "LIST_WIDGET_TYPES not found in lists-dashboard.js"
+    allowed = set(re.findall(r"'([^']+)'", block.group(1)))
+
+    drifted = flagged - allowed
+    assert not drifted, (
+        f"manifest flags {sorted(drifted)} for the lists page, but "
+        "LIST_WIDGET_TYPES does not allow them — they would appear on first "
+        "load and disappear after the layout is saved and reloaded"
+    )

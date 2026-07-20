@@ -59,8 +59,7 @@
       "minSize": {
         "w": 3,
         "h": 3
-      },
-      "lists": true
+      }
     },
     {
       "id": "home",
