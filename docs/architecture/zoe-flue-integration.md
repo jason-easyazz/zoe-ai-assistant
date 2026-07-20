@@ -204,21 +204,37 @@ per-process multi-user workaround in `zoe_core_client.py`.
 **Usage gate — apply BEFORE the recreation gate (added 2026-07-20).** The rule
 above exists to avoid *losing* capability, but you cannot lose what was never
 invoked. Applied literally to the 101 skills across both discovery directories it
-becomes a quarter of porting work for dead weight. Correct order:
+becomes a quarter of porting work for dead weight. Ask "was it used?" first, and
+recreate only what fired.
 
-1. Add skill-invocation telemetry. **None exists today** — verified against the
-   database (no skill/usage tables) and `~/.zoe-logs/`, with a negative control.
-2. Collect ~2 weeks of real traffic.
-3. Zero-invocation skills are **deleted outright** — no recreation, no gate.
-4. Only skills that actually fired go through the recreation gate above.
+**The measurement has now been done — both answers are zero-ish:**
+
+| | Ever invoked? | Evidence |
+|---|---|---|
+| **OpenClaw**, 31 ours | **Never.** | 18,433 tool calls, 0 skill reads; loader reproduces a 14-skill catalog with no `zoe-*` (§8.3) |
+| **Hermes**, 10 ours | **Yes — then stopped.** | `~/.hermes/skills/.usage.json`: zoe-engineering 206, zoe-board 167, github-greptile-loop 79. All last fired **2026-05-27 → 2026-06-18**. |
+
+Note the Hermes ledger *does* exist — an earlier revision of this section claimed
+no telemetry existed anywhere, which was true of the database and `~/.zoe-logs/`
+but wrong about `~/.hermes/`. Its flatline is real signal, not a dead writer:
+six other skills recorded through 2026-07-17 (negative control). The stop has a
+cause — the Multica kanban feed died 2026-06-18 09:29, and skill loads are
+bumped through `skill_bundles.py`, so no dispatch means no bump. Input stopped,
+not the instrument.
+
+**Zoe's own application logging was blacked out** for all of this (root logger
+had no handler — fixed separately), which is why these answers required database
+and session-corpus forensics rather than a log query.
 
 **Operator sign-off, 2026-07-20 (Jason):** full retirement of Hermes *and*
-OpenClaw authorised without the recreation gates being green, and without the
-usage telemetry above. Recorded here because §8 otherwise forbids it. Both skill
-sets are backed up under
+OpenClaw authorised without the recreation gates being green. Recorded here
+because §8 otherwise forbids it. Both skill sets are backed up under
 [`docs/knowledge/operator-skills/`](../knowledge/operator-skills/index.md), so the
-deletion is git-recoverable; the accepted risk is an **unmeasured capability
-regression** at deploy time, concentrated in OpenClaw (see §8.3).
+deletion is git-recoverable. **The risk originally attached to this sign-off has
+since been measured away**: there is no capability to regress, because none of
+these skills was executing. What remains at risk is narrow and specific — the
+live Hermes couplings in `background_runner`, `kanban_adapter`, `routers/system`,
+and the Multica pins — not the skills.
 
 ### 8.1 Multica — board-driven engineering orchestration
 
@@ -246,7 +262,7 @@ regression** at deploy time, concentrated in OpenClaw (see §8.3).
 | Capability today | Flue recreation | Retire-gate |
 |---|---|---|
 | Fallback agent runtime: `routers/openclaw.py`, `background_runner.py`, `executor_registry.py`, skills sandbox | Flue `local()` sandbox + subagent execution. | Flue runs the same background job classes; operator sign-off. |
-| **Skills — NOT low-risk. Corrected 2026-07-20.** This section previously called OpenClaw "last and lowest-risk" because AGENTS.md marks it manual-fallback-only. That is true of the *agent runtime* and false of the *skills*: of 34 skills in `~/.openclaw/workspace/skills/`, **31 are ours** (20 absent from stock `openclaw@2026.5.12` entirely, 11 stock-but-modified; only 3 untouched). They include `briefing`, `family-data`, `grocery-meal`, `ha-patterns`, `home-assistant`, `journal`, `memory-consolidation`, `proactive`, `touch-panel`, `transactions`, `weather`, `zoe-ui`, `dynamic-widgets`, and they call live endpoints (`/api/panels/`, `/api/voice/command`, `/api/states`, `localhost:8123`). Compare Hermes, where only 10 of 68 are ours. **OpenClaw is Zoe's capability surface, not a vendor pack.** | Each invoked skill needs a Flue equivalent before its capability is gone. | Usage telemetry, then per-skill. |
+| **Skills — ours, but never loaded. Verified twice, 2026-07-20.** Of 34 entries in `~/.openclaw/workspace/skills/`, **31 are ours** (20 absent from stock `openclaw@2026.5.12`, 11 stock-but-modified, 3 untouched) — `briefing`, `family-data`, `grocery-meal`, `ha-patterns`, `home-assistant`, `journal`, `memory-consolidation`, `proactive`, `touch-panel`, `transactions`, `weather`, `zoe-ui`, `dynamic-widgets`. Compare Hermes: 10 of 68. **But none has ever been invoked.** Session-corpus forensics: 18,433 tool calls, 17,042 `read`s, **17,040 of them `HEARTBEAT.md`, zero of any skill path**. Independently confirmed by running OpenClaw's shipped loader against the live config — it builds a 14-skill catalog with **zero `zoe-*`** entries. Cause is a **config bug, not a design gap**: the loader *does* scan `workspaceDir/skills` (merged last, highest precedence), but `workspaceDir` resolves from `agents.list[0].workspace` = `~/.openclaw/agents/main`, whose `skills/` does not exist. Point it at the right dir and 12 load immediately. Three builders additionally fail `symlink-escape` (no `skills.load` key configured); `zoe-verify`'s target is missing; `memory-consolidation` has lowercase `skill.md`. **Also: 12 workspace skills silently shadow bundled ones by name — the agent loads the STOCK version, so the catalog looks correct while the customization is inert.** Corroborated behaviourally: `journal_entries`, `transactions`, `open_loops`, `background_tasks`, `dashboard_layouts` all have **0 rows**. | Nothing to preserve — these are unproven intent, not live capability. Rebuild on Flue (which supports the same `SKILL.md` format natively) rather than repairing a platform being retired. | None. Delete freely; the ideas are worth revisiting, the wiring is not. |
 
 ### 8.4 Cross-cutting seams (re-pointed, not retired)
 

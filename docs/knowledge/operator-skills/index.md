@@ -21,10 +21,17 @@ ship with the upstream project and are re-pullable, so they are deliberately
 
 ## This is a backup, not an installation
 
-Runtime skill discovery (`services/zoe-data/skill_discovery.py`) parses exactly
-two directories — `~/.openclaw/workspace/skills/` and `~/.hermes/skills/`.
-This tree is read by **nothing**. Copying a skill here does not install it,
-enable it, or change what Zoe can do.
+`services/zoe-data/skill_discovery.py` parses exactly two directories —
+`~/.openclaw/workspace/skills/` and `~/.hermes/skills/`. This tree is read by
+**nothing**. Copying a skill here does not install it, enable it, or change what
+Zoe can do.
+
+Worth knowing before you trust that module's name: **`skill_discovery.py` is a
+dead-end catalogue.** Its only two outputs are `GET /api/agent/peers/{name}/card`
+(zero callers — verified across Python and JS including `dist/`) and
+`~/.openclaw/workspace/FEDERATION_SKILLS.md` (zero readers). It dispatches
+nothing. Four separate implementations parse these same directories, and the most
+sophisticated one is the only one feeding nothing.
 
 This bundle also sits outside `skills/` on purpose: `skills/AGENTS.md` states
 that operator-level Hermes skills "must not be mixed in here". That contract is
@@ -85,19 +92,46 @@ diffing all 34 against the stock `skills/` shipped with `openclaw@2026.5.12`:
 | Stock but locally modified | 11 | yes, minus the 4 symlinks below |
 | Stock, untouched | 3 | no — re-pullable from the npm package |
 
-**The inversion worth knowing: 31 of 34 OpenClaw skills are ours, versus 10 of 68
-for Hermes.** OpenClaw is Zoe's capability surface — `briefing`, `family-data`,
-`grocery-meal`, `ha-patterns`, `home-assistant`, `journal`,
-`memory-consolidation`, `proactive`, `touch-panel`, `transactions`, `weather`,
-`zoe-ui`, `dynamic-widgets` — calling live endpoints (`/api/panels/`,
-`/api/voice/command`, `/api/states`, `localhost:8123`). Do not reason about it as
-a vendor pack.
+**31 of 34 OpenClaw skills are ours, versus 10 of 68 for Hermes** —
+`briefing`, `family-data`, `grocery-meal`, `ha-patterns`, `home-assistant`,
+`journal`, `memory-consolidation`, `proactive`, `touch-panel`, `transactions`,
+`weather`, `zoe-ui`, `dynamic-widgets`. So this is not a vendor pack.
 
-**Four are symlinks into the repo, so they are already version-controlled and are
-NOT duplicated here:** `zoe-capability-extender`, `zoe-page-builder`, and
-`zoe-widget-builder` point at `skills/openclaw/*`. The fourth, `zoe-verify`, is a
-**dangling symlink** — its target was deleted from the repo, so a broken skill
-sits in the live discovery path. See [`../../../skills/AGENTS.md`](../../../skills/AGENTS.md).
+**But none of them has ever run.** Verified 2026-07-20 by two independent
+methods: session-corpus forensics (18,433 tool calls, 17,042 `read`s, **17,040 of
+them `HEARTBEAT.md`, zero of any skill path**), and executing OpenClaw's own
+shipped loader against the live config — it builds a 14-skill catalog containing
+**no `zoe-*` entries at all**. Corroborated behaviourally: `journal_entries`,
+`transactions`, `open_loops`, `background_tasks` and `dashboard_layouts` all hold
+**0 rows**.
+
+The cause is a **config bug, not a design gap.** The loader *does* scan
+`workspaceDir/skills`, merged last at highest precedence — but `workspaceDir`
+resolves from `agents.list[0].workspace` (which beats `agents.defaults.workspace`)
+to `~/.openclaw/agents/main`, and `~/.openclaw/agents/main/skills` does not exist.
+Repoint it and 12 load immediately. `agents/main` is also where `HEARTBEAT.md`
+lives, which is why the corpus is 17,040 heartbeat reads.
+
+These skills are therefore **unproven intent, not lost capability**. They are
+worth reading before rebuilding the same ideas on Flue — which supports this exact
+`SKILL.md` format natively — and worth nothing as a restore target.
+
+**Two traps that made this look wired-up:**
+
+- **Silent shadowing.** 12 workspace skills collide by name with bundled ones
+  (`github`, `healthcheck`, `taskflow`, `weather`, …). The agent loads the STOCK
+  version, so the catalog shows the skill "present" while the customization is inert.
+- **`list_openclaw_skills` reports them as installed.** `mcp_server.py` scans the
+  workspace directory directly and returns `builder_skills_installed`, so Zoe
+  claims the builders are installed while the agent cannot load one.
+
+**Four are symlinks into the repo and are NOT duplicated here** —
+`zoe-capability-extender`, `zoe-page-builder`, `zoe-widget-builder` point at
+`skills/openclaw/*` (already version-controlled), and `zoe-verify` dangles. All
+four are rejected at load time as `symlink-escape` regardless, because the config
+has no `skills.load.allowSymlinkTargets`. See
+[`../../../skills/AGENTS.md`](../../../skills/AGENTS.md). Also broken:
+`memory-consolidation` has a lowercase `skill.md` and could never load.
 
 ## Related
 

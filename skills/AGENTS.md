@@ -10,23 +10,39 @@ Runtime discovery (`services/zoe-data/skill_discovery.py`) parses exactly two
 directories: `~/.openclaw/workspace/skills/` and `~/.hermes/skills/`. Adding a
 directory *here* generally has **no runtime effect**.
 
-**The exception — verified 2026-07-20.** `~/.openclaw/workspace/skills/` contains
-four symlinks pointing back into `skills/openclaw/`, so those skills ARE live
-despite sitting in this tree:
+**`skills/openclaw/` is symlinked into the discovery dir — and still does not
+load. Verified 2026-07-20 by running OpenClaw's own shipped loader.**
+`~/.openclaw/workspace/skills/` contains four symlinks pointing back here:
 
-| Symlink in the discovery dir | Target here | State |
+| Symlink in the discovery dir | Target here | Loads? |
 |---|---|---|
-| `zoe-capability-extender` | `openclaw/zoe-capability-extender` | live |
-| `zoe-page-builder` | `openclaw/zoe-page-builder` | live |
-| `zoe-widget-builder` | `openclaw/zoe-widget-builder` | live |
-| `zoe-verify` | `openclaw/zoe-verify` | **DANGLING** — target deleted from the repo |
+| `zoe-capability-extender` | `openclaw/zoe-capability-extender` | **no** — symlink-escape |
+| `zoe-page-builder` | `openclaw/zoe-page-builder` | **no** — symlink-escape |
+| `zoe-widget-builder` | `openclaw/zoe-widget-builder` | **no** — symlink-escape |
+| `zoe-verify` | `openclaw/zoe-verify` | **no** — target does not exist |
 
-Editing `skills/openclaw/*` therefore **does** change live behaviour. Everything
-else in this tree remains documentation-only.
+Three independent reasons, any one sufficient:
 
-A prior version of this contract asserted "there is no sync, copy, symlink, or
-install step feeding this tree into either". That was false and misled agents
-into treating `skills/openclaw/` as inert. Do not restore that wording.
+1. OpenClaw resolves `workspaceDir` from `agents.list[0].workspace`, which wins
+   over `agents.defaults.workspace`. It points at `~/.openclaw/agents/main`, and
+   `~/.openclaw/agents/main/skills` **does not exist** — so the whole workspace
+   skills root is empty regardless of symlinks.
+2. Even from the correct root, the loader rejects these as
+   `reason=symlink-escape` unless `skills.load.allowSymlinkTargets` lists the
+   target. The live config has **no `skills.load` key at all**.
+3. `zoe-verify`'s target was deleted from the repo.
+
+Consequence: editing `skills/openclaw/*` changes **nothing** at runtime today.
+Do not treat it as a live surface — but do not treat the symlinks as harmless
+either, because they make the wiring *look* connected. `mcp_server.py`
+(`list_openclaw_skills`) scans the workspace dir directly and reports
+`builder_skills_installed`, so Zoe claims these are installed while the agent
+cannot load one.
+
+Two prior versions of this contract were wrong in opposite directions: first
+"there is no sync, copy, symlink, or install step feeding this tree" (false —
+the symlinks exist), then "those skills ARE live" (also false — they are
+rejected). Restore neither.
 
 What this tree really is today: version-controlled documentation for humans and
 agents. That is a genuine role — `autoresearch-engineer/SKILL.md` is the
