@@ -57,19 +57,31 @@ the estate already owns or that never worked.
     the touch copy); the calendar fork converges to a single source *later*, after the
     desktop data-loss fix is ported INTO the touch fork (port direction matters — the
     touch fork still calls removed attendee endpoints).
-- **The legacy touch island is orphaned — retire it (verified 2026-07-19).** `touch/home.html`
-  (the estate, and the kiosk's actual boot URL per `scripts/setup/touchscreen/config.json`)
-  has **zero outbound `.html` links**. The legacy per-domain touch pages
-  (`touch/{dashboard,lists,calendar,notes,people,timers,weather,memories,journal,chat,
-  voice,updates,cooking,smart-home,games}.html`) link only *each other* via
-  `touch/js/touch-menu.js` + `touch-nav.js`. The lone server reference
-  (`voice_tts.py:524` → `/touch/lists.html`) sits in a **supersede/cancel** list commented
-  "Legacy per-domain pages (retired)" — it cancels stale navigations, it does not navigate
-  there. This closes the skybridge cutover plan's open PR 5.
-  **Consequence:** the widget stack serves **desktop dashboard + desktop lists only** — the
-  "one repair fixes 4 pages" leverage assumed in the first draft of this plan does **not**
-  exist. **Loose thread:** `touch/settings.html` was touched 2026-07-17 (later than the rest
-  of the island) — verify how it is reached before including it in any deletion.
+- **The legacy touch pages are mostly orphaned — but NOT all of them (verified 2026-07-19,
+  corrected after review).** `touch/home.html` (the estate, and the kiosk's actual boot URL
+  per `scripts/setup/touchscreen/config.json`) has **zero outbound `.html` links**, and most
+  legacy per-domain touch pages link only *each other* via `touch/js/touch-menu.js` +
+  `touch-nav.js`. **Consequence that still holds:** the widget stack serves **desktop
+  dashboard + desktop lists only** — the "one repair fixes 4 pages" leverage assumed in the
+  first draft does **not** exist.
+  **But a blanket deletion is wrong — four pages have LIVE inbound paths:**
+
+  | Page | Live referrer | Rule |
+  |---|---|---|
+  | `touch/voice.html` | `chat.py:71` `lets_talk` → `/touch/voice.html?conv=1` ("phone-call voice mode — still its own surface") + `voice_tts.py:1111` | **DO NOT RETIRE HERE.** This is the live voice path and is **replay-gated**. It retires only with the Ask-card conversation cutover (PLANS Phase 1c), not in this overhaul |
+  | `touch/updates.html` | `notifications-panel.js:345/:358` (loaded on 10 desktop pages) | Repoint the deep-links **before** deleting; otherwise notification taps 404 |
+  | `touch/cooking.html`, `touch/smart-home.html` | desktop `cooking.html` / `smart-home.html` meta-refresh stubs, linked from the desktop nav | Repoint the nav (Wave 2) **before** deleting stub+target |
+  | `touch/settings.html` | loads `touch-menu.js` (`:6170`); touched 2026-07-17 | Resolve its fate **before** deleting the shared scripts |
+
+  Not nav sources (cleanup, not reachability): `auth.js:13` `TOUCH_PATH_TO_PAGE_ID` is a
+  reverse map; `orb-loader.js:11` is a skip-list; `sw.js:735` is a cache route;
+  `voice_tts.py:524` is a **supersede/cancel** list commented "Legacy per-domain pages
+  (retired)" — it cancels stale navigations rather than issuing them.
+  **Ordering rule for the whole retirement: repoint or delete every referrer FIRST, delete
+  the target SECOND, and delete the shared `touch-{menu,nav,widgets}.js` LAST — only once
+  no consumer remains.** This closes the skybridge cutover plan's open PR 5 for the pages
+  that are genuinely dead, and records the rest as sequenced work rather than pretending
+  they are dead.
 - **Installable Zoe:** ships as **PWA polish inside this overhaul** (manifest/SW are ~80%
   there once committed to git). A thin **Tauri native shell** (global hotkey summon,
   tray/autostart, later computer-use) is a **parked separate arc** — pinned in
@@ -100,7 +112,9 @@ the estate already owns or that never worked.
 | `cooking.html`, `smart-home.html` | **stubs, delete after nav repoint** | Nav-linked meta-refreshes to /touch/ |
 | `week_planner_widget.html`, `dist/developer/`, `dist/_preview/*` | **retire** | Orphan mock / 4,406-line dead prototype (nonexistent APIs, hardcoded localhost:8000) / stale artifacts behind a hard-404 |
 | Widget stack (`widget-system.js`, `dashboard.js`, `lists-dashboard.js`, `js/widgets/**`, gridstack) | **retire after the dashboard rebuild** | Serves desktop dashboard + desktop lists ONLY (the touch copies are orphaned — see Direction). No cross-surface coordination needed: rebuild the dashboard, migrate lists, then delete the lineage |
-| Legacy touch island (`touch/{dashboard,lists,calendar,notes,people,timers,weather,memories,journal,chat,voice,updates,cooking,smart-home,games}.html` + `touch/js/touch-{menu,nav,widgets}.js`) | **retire** | Verified orphaned: the estate `home.html` has zero outbound `.html` links and is the kiosk boot URL; these pages link only each other. Closes skybridge-cutover PR 5. Verify `touch/settings.html` separately |
+| Legacy touch pages (`touch/{dashboard,lists,calendar,notes,people,timers,weather,memories,journal,chat,games}.html`) | **retire** | No live inbound path: the estate `home.html` has zero outbound `.html` links and is the kiosk boot URL; these link only each other. Closes skybridge-cutover PR 5 |
+| `touch/{updates,cooking,smart-home,settings}.html` + `touch/js/touch-{menu,nav,widgets}.js` | **retire, but SEQUENCED** | Each has a live referrer (notifications deep-links, desktop nav stubs, settings loads touch-menu). Repoint referrers first; shared scripts die last. See the Direction table |
+| `touch/voice.html` | **keep — NOT this overhaul** | **Live** `lets_talk` server navigation (`chat.py:71`, `voice_tts.py:1111`); replay-gated voice path. Retires with the Ask-card cutover (PLANS Phase 1c) |
 | Orphan js/css set | **retire** | `navigation.js` (5-line stub), `js/lib/{module-widget-loader,widget-registry}.js`, `js/voice/*`, 4 unloaded music widgets, `mini-player.js` (+6 tags), `chat-sessions.js`, `ai-processor.js`, `components/zoe-orb.html`, `css/{glass,memories-enhanced,widgets-enhanced}.css` |
 
 ## The triage register (all adversarially confirmed; 23 P1 entries + item 11, a P2
@@ -219,12 +233,25 @@ update + SW_VERSION bump where precached + touch-consumer grep + panel smoke)
   alias block from BOTH dashboard.html AND touch/dashboard.html.
 - Chat dead weight: chat-sessions.js (port escapeHtml-on-title + warm-on-open first),
   legacy pre-AG-UI SSE alias block, ai-processor.js + its memories.html tag.
-- **Legacy touch island** (see Direction — verified orphaned): delete the 15 legacy
-  per-domain touch pages + `touch/js/touch-{menu,nav,widgets}.js`, after a
-  `touch/settings.html` reachability check and a panel smoke. Closes skybridge-cutover PR 5.
-- updates.html → retire (backend stays; notifications already deep-link to the touch copy).
-- NOT retired here: `dashboard.html` (rebuilt in Wave 4b) and `music.html` (rebuilt in
-  Wave 6) — both are Jason-designated desktop surfaces.
+- **Legacy touch pages — sequenced, NOT a blanket delete** (see the Direction table).
+  Order within this wave:
+  1. Delete the pages with no live inbound path: `touch/{dashboard,lists,calendar,notes,
+     people,timers,weather,memories,journal,chat,games}.html`.
+  2. Repoint `notifications-panel.js:345/:358` to the surviving updates surface, **then**
+     retire desktop `updates.html` + `touch/updates.html` together (backend
+     `/api/system/updates` stays). Neither dies before the deep-links move.
+  3. After the Wave-2 nav repoint lands, delete the desktop `cooking.html`/`smart-home.html`
+     stubs and their touch targets.
+  4. Decide `touch/settings.html` (reachability + whether desktop settings absorbs it).
+  5. **Last:** delete `touch/js/touch-{menu,nav,widgets}.js` once no consumer remains; then
+     prune the dead `auth.js` `TOUCH_PATH_TO_PAGE_ID` entries, the `orb-loader.js` skip-list
+     entries, and the `sw.js:735` cache route.
+  Panel smoke after each step. Closes skybridge-cutover PR 5 for the genuinely dead pages.
+- **NOT retired here** — carve-outs that a blanket sweep would have broken:
+  - `touch/voice.html` — **live** `lets_talk` voice navigation (`chat.py:71`); replay-gated;
+    retires with the Ask-card cutover (PLANS Phase 1c), not in this overhaul.
+  - `dashboard.html` (rebuilt in Wave 4b) and `music.html` (rebuilt in Wave 6) — Jason-designated
+    desktop surfaces.
 
 ### Wave 4 — Chat as the deep-work workspace
 - Revive Agent Activity (reattach on `container.isConnected===false` / move out of
