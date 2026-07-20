@@ -877,8 +877,6 @@
     <script src="js/common.js"></script>
     <script src="/js/notifications-panel.js"></script>
     <script>
-        const canvas = document.getElementById('peopleCanvas');
-        const ctx = canvas.getContext('2d');
         let width, height, centerX, centerY;
         let scale = 1, offsetX = 0, offsetY = 0;
         let isDragging = false, dragStartX = 0, dragStartY = 0;
@@ -902,6 +900,10 @@
                 activeFilters.push(category);
             }
             updateSidebar();
+            // The card grid is the primary surface now that the canvas is gone;
+            // setDesktopContext() already refreshes it, so a filter change that
+            // only touched the sidebar left the grid showing the old selection.
+            renderCardGrid();
         }
         let mouseDownTime = 0;
         let mouseDownItem = null;
@@ -968,20 +970,6 @@
             }
         }
         
-        function resizeCanvas() {
-            width = canvas.parentElement.clientWidth;
-            height = canvas.parentElement.clientHeight;
-            canvas.width = width * window.devicePixelRatio;
-            canvas.height = height * window.devicePixelRatio;
-            canvas.style.width = width + 'px';
-            canvas.style.height = height + 'px';
-            // Reset any previous transform before applying DPR scale so repeated
-            // resizes do not compound the scale.
-            ctx.setTransform(1, 0, 0, 1, 0, 0);
-            ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-            centerX = width / 2;
-            centerY = height / 2;
-        }
         
         function openAddPersonModal() {
             document.getElementById('addPersonModal').classList.add('show');
@@ -1065,7 +1053,7 @@
                     people.push(newPerson);
                     closeAddPersonModal();
                     updateSidebar();
-                    updateLegend();
+                    renderCardGrid();   // was updateLegend()
                     showNotification('Added ' + name + '!', 'success');
                 } else {
                     throw new Error('Invalid response from server');
@@ -1076,428 +1064,30 @@
             }
         }
         
-        function animate() {
-            breathePhase += 0.02;
-            draw();
-            animationFrame = requestAnimationFrame(animate);
-        }
         
-        function draw() {
-            const bgGradient = ctx.createLinearGradient(0, 0, width, height);
-            bgGradient.addColorStop(0, '#fafbfc');
-            bgGradient.addColorStop(1, '#f1f3f6');
-            ctx.fillStyle = bgGradient;
-            ctx.fillRect(0, 0, width, height);
-            
-            ctx.save();
-            ctx.translate(centerX + offsetX, centerY + offsetY);
-            ctx.scale(scale, scale);
-            
-            drawPeopleView();
-            
-            ctx.restore();
-        }
         
-        function drawPeopleView() {
-            const blendedGlow = ctx.createRadialGradient(0, 0, 0, 0, 0, 250);
-            blendedGlow.addColorStop(0, 'rgba(236, 72, 153, 0.15)');
-            blendedGlow.addColorStop(0.3, 'rgba(168, 85, 247, 0.12)');
-            blendedGlow.addColorStop(0.6, 'rgba(20, 184, 166, 0.12)');
-            blendedGlow.addColorStop(1, 'rgba(20, 184, 166, 0)');
-            ctx.fillStyle = blendedGlow;
-            ctx.beginPath();
-            ctx.arc(0, 0, 250, 0, Math.PI * 2);
-            ctx.fill();
-            
-            const visiblePeople = people.filter(p => activeFilters.includes(p.category));
-            visiblePeople.forEach(p => {
-                if (p.relationships) {
-                    p.relationships.forEach(relId => {
-                        const related = people.find(person => person.id === relId);
-                        if (related && activeFilters.includes(related.category)) {
-                            const pos1 = getPolarPosition(p);
-                            const pos2 = getPolarPosition(related);
-                            ctx.strokeStyle = 'rgba(124, 58, 237, 0.15)';
-                            ctx.lineWidth = 2;
-                            ctx.setLineDash([5, 5]);
-                            ctx.beginPath();
-                            ctx.moveTo(pos1.x, pos1.y);
-                            ctx.lineTo(pos2.x, pos2.y);
-                            ctx.stroke();
-                            ctx.setLineDash([]);
-                        }
-                    });
-                }
-            });
-            
-            visiblePeople.forEach(p => {
-                const pos = getPolarPosition(p);
-                const o = p.strength * 0.25;
-                const g = ctx.createLinearGradient(0, 0, pos.x, pos.y);
-                if (p.category === 'inner') {
-                    g.addColorStop(0, `rgba(124, 58, 237, ${o*0.8})`);
-                    g.addColorStop(1, `rgba(236, 72, 153, ${o})`);
-                    ctx.lineWidth = 1.5;
-                } else {
-                    g.addColorStop(0, `rgba(124, 58, 237, ${o*0.6})`);
-                    g.addColorStop(1, `rgba(20, 184, 166, ${o*0.8})`);
-                    ctx.lineWidth = 1;
-                    ctx.setLineDash([3, 3]);
-                }
-                ctx.strokeStyle = g;
-                ctx.beginPath();
-                ctx.moveTo(0, 0);
-                ctx.lineTo(pos.x, pos.y);
-                ctx.stroke();
-            });
-            ctx.setLineDash([]);
-            
-            visiblePeople.forEach(p => drawPerson(p));
-            drawYouNode();
-        }
         
-        function drawYouNode() {
-            const r = 48;
-            const breathe = 1 + Math.sin(breathePhase) * 0.02;
-            
-            // Draw completeness ring if available
-            if (userProfile && userProfile.profile_completeness > 0) {
-                const completeness = userProfile.profile_completeness || 0;
-                ctx.beginPath();
-                ctx.arc(0, 0, r + 8, 0, Math.PI * 2);
-                ctx.strokeStyle = 'rgba(124, 58, 237, 0.1)';
-                ctx.lineWidth = 4;
-                ctx.stroke();
-                
-                // Draw completeness arc
-                ctx.beginPath();
-                ctx.arc(0, 0, r + 8, -Math.PI/2, -Math.PI/2 + (completeness * 2 * Math.PI));
-                ctx.strokeStyle = '#10b981';
-                ctx.lineWidth = 4;
-                ctx.lineCap = 'round';
-                ctx.stroke();
-            }
-            
-            // Main node
-            ctx.beginPath();
-            ctx.arc(0, 0, r * breathe, 0, Math.PI * 2);
-            const g = ctx.createRadialGradient(-r*0.3, -r*0.3, 0, 0, 0, r);
-            g.addColorStop(0, '#a855f7');
-            g.addColorStop(0.5, '#8b5cf6');
-            g.addColorStop(1, '#7c3aed');
-            ctx.fillStyle = g;
-            ctx.fill();
-            
-            // Add glow effect
-            ctx.beginPath();
-            ctx.arc(0, 0, r * breathe * 1.3, 0, Math.PI * 2);
-            const glowGradient = ctx.createRadialGradient(0, 0, 0, 0, 0, r * breathe * 1.3);
-            glowGradient.addColorStop(0, 'rgba(168, 85, 247, 0.3)');
-            glowGradient.addColorStop(1, 'rgba(168, 85, 247, 0)');
-            ctx.fillStyle = glowGradient;
-            ctx.fill();
-            
-            ctx.fillStyle = 'white';
-            ctx.font = 'bold 16px var(--font-text)';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            
-            // Display user's name if available
-            const userName = (userProfile && userProfile.name) ? userProfile.name : 'You';
-            ctx.fillText(userName.length > 8 ? userName.substring(0, 8) + '...' : userName, 0, 0);
-        }
         
-        function drawPerson(p) {
-            const pos = getPolarPosition(p);
-            const floatOffset = !isDragging && !draggedItem ? Math.sin(breathePhase * 1.5 + p.angle) * 3 : 0;
-            pos.y += floatOffset;
-            
-            const r = 28;
-            const hov = hoveredItem?.id === p.id;
-            const ring = p.category === 'inner' ? '#ec4899' : 
-                         p.category === 'circle' ? '#14b8a6' : 
-                         p.category === 'acquaintance' ? '#9ca3af' :
-                         p.category === 'professional' ? '#3b82f6' :
-                         p.category === 'archive' ? '#6b7280' : '#9ca3af';
-            const needsAttention = p.lastContact > p.frequency * 1.5;
-            const pulseScale = needsAttention ? 1 + Math.sin(breathePhase * 2) * 0.05 : 1;
-            const hoverScale = hov ? 1.15 : 1;
-            const finalScale = pulseScale * hoverScale;
-            
-            if (needsAttention) {
-                const pulseSize = r * 2 * (1 + Math.sin(breathePhase * 2) * 0.1);
-                const og = ctx.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, pulseSize);
-                og.addColorStop(0, 'rgba(245, 158, 11, 0.3)');
-                og.addColorStop(1, 'rgba(245, 158, 11, 0)');
-                ctx.fillStyle = og;
-                ctx.beginPath();
-                ctx.arc(pos.x, pos.y, pulseSize, 0, Math.PI * 2);
-                ctx.fill();
-            }
-            
-            ctx.beginPath();
-            ctx.arc(pos.x, pos.y, r * finalScale, 0, Math.PI * 2);
-            ctx.fillStyle = 'white';
-            ctx.fill();
-            ctx.strokeStyle = ring;
-            ctx.lineWidth = hov ? 4 : 3.5;
-            ctx.stroke();
-            
-            ctx.fillStyle = '#1f2937';
-            ctx.font = '600 14px var(--font-text)';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.shadowColor = 'rgba(255, 255, 255, 0.9)';
-            ctx.shadowBlur = 4;
-            ctx.fillText(p.name, pos.x, pos.y + r * finalScale + 20);
-            ctx.shadowBlur = 0;
-        }
         
-        function getPolarPosition(item) {
-            const a = (item.angle * Math.PI) / 180;
-            return { x: Math.cos(a) * item.distance, y: Math.sin(a) * item.distance };
-        }
         
-        canvas.addEventListener('mousedown', e => {
-            const rect = canvas.getBoundingClientRect();
-            const mx = (e.clientX - rect.left - centerX - offsetX) / scale;
-            const my = (e.clientY - rect.top - centerY - offsetY) / scale;
-            const item = getItemAtPosition(mx, my);
-            
-            mouseDownTime = Date.now();
-            mouseDownItem = item;
-            
-            if (!item) {
-                isDragging = true;
-                dragStartX = e.clientX - offsetX;
-                dragStartY = e.clientY - offsetY;
-            }
-        });
         
-        canvas.addEventListener('mousemove', e => {
-            const rect = canvas.getBoundingClientRect();
-            const mx = (e.clientX - rect.left - centerX - offsetX) / scale;
-            const my = (e.clientY - rect.top - centerY - offsetY) / scale;
-            
-            if (isDragging) {
-                offsetX = e.clientX - dragStartX;
-                offsetY = e.clientY - dragStartY;
-            } else {
-                const item = getItemAtPosition(mx, my);
-                if (item !== hoveredItem) {
-                    hoveredItem = item;
-                    if (item) {
-                        showTooltip(e.clientX, e.clientY, item.name);
-                    } else hideTooltip();
-                }
-            }
-        });
         
-        canvas.addEventListener('mouseup', e => {
-            const rect = canvas.getBoundingClientRect();
-            const mx = (e.clientX - rect.left - centerX - offsetX) / scale;
-            const my = (e.clientY - rect.top - centerY - offsetY) / scale;
-            const distFromCenter = Math.sqrt(mx * mx + my * my);
-            const clickDuration = Date.now() - mouseDownTime;
-            
-            // Check if clicking on center "You" node
-            if (!mouseDownItem && distFromCenter < 48 && clickDuration < DRAG_THRESHOLD) {
-                showUserProfile();
-                return;
-            }
-            
-            if (mouseDownItem && clickDuration < DRAG_THRESHOLD) {
-                if (mouseDownItem.type === 'person') {
-                    console.log('Canvas click: showing person', mouseDownItem.name);
-                    showPersonDetail(mouseDownItem);
-                }
-            } else if (!mouseDownItem && clickDuration < DRAG_THRESHOLD) {
-                const panel = document.getElementById('detailPanel');
-                if (panel.classList.contains('open')) {
-                    closeDetail();
-                }
-            }
-            
-            isDragging = false;
-            mouseDownItem = null;
-        });
         
-        canvas.addEventListener('mouseleave', () => {
-            isDragging = false;
-            hoveredItem = null;
-            mouseDownItem = null;
-            hideTooltip();
-        });
         
-        function getItemAtPosition(mx, my) {
-            for (const p of people.filter(p => activeFilters.includes(p.category))) {
-                const pos = getPolarPosition(p);
-                const dist = Math.sqrt(Math.pow(mx - pos.x, 2) + Math.pow(my - pos.y, 2));
-                if (dist < 28) {
-                    console.log('Found person at position:', p.name, 'distance:', dist);
-                    return p;
-                }
-            }
-            return null;
-        }
         
         function showPersonById(personId) {
             const person = people.find(p => p.id === personId);
             if (person) {
-                showPersonDetail(person);
+                // was showPersonDetail(): that legacy path rendered into
+                // #detailContent, which does not exist in this page. dpOpenCard
+                // is the live detail path (#detailPanel + #dp-* tabs).
+                dpOpenCard(person.id);
             } else {
                 console.error('Person not found:', personId);
                 showNotification('⚠️ Person not found', 'error');
             }
         }
         
-        async function showPersonDetail(person) {
-            if (!person) {
-                console.error('showPersonDetail called with no person');
-                return;
-            }
-            
-            const panel = document.getElementById('detailPanel');
-            const icon = document.getElementById('detailIcon');
-            const name = document.getElementById('detailName');
-            const subtitle = document.getElementById('detailSubtitle');
-            const content = document.getElementById('detailContent');
-            const isEditing = panel.classList.contains('editing');
-            
-            icon.textContent = '👤';
-            
-            if (isEditing) {
-                name.innerHTML = `<input type="text" id="editPersonName" value="${escapeHtml(person.name)}" class="edit-field" placeholder="Full name">`;
-                const _editTier = normTier(person.circle || person.category || 'circle');
-                const _editCtx = person.context || 'personal';
-                subtitle.innerHTML = `
-                    <select id="editPersonCategory" class="edit-field">
-                        <option value="circle" ${_editTier === 'circle' ? 'selected' : ''}>○ Circle</option>
-                        <option value="inner" ${_editTier === 'inner' ? 'selected' : ''}>● Inner Circle</option>
-                        <option value="public" ${_editTier === 'public' ? 'selected' : ''}>□ Public</option>
-                    </select>
-                    <select id="editPersonContext" class="edit-field" style="margin-left:6px">
-                        <option value="personal" ${_editCtx === 'personal' ? 'selected' : ''}>👤 Personal</option>
-                        <option value="work" ${_editCtx === 'work' ? 'selected' : ''}>💼 Work</option>
-                    </select>`;
-            } else {
-                name.textContent = person.name;
-                subtitle.textContent = person.relationshipType || 'Friend';
-            }
-            
-            // Load enhanced person data
-            const personId = person.id.replace('p', '');
-            const enhancedPerson = await loadEnhancedPerson(personId);
-            if (enhancedPerson) {
-                person = enhancedPerson;
-            }
-            
-            let htmlSections = [];
-            
-            htmlSections.push(`
-                <div class="detail-section">
-                    <div class="section-title">Connection Health</div>
-                    <div class="connection-health">
-                        <div>Based on your usual pattern</div>
-                        <div class="health-bar"><div class="health-fill" style="width: ${Math.min(100, person.strength * 100)}%"></div></div>
-                        <div class="health-stats">
-                            <div class="stat-box"><div class="stat-label">Last Contact</div><div class="stat-value">${Math.floor(person.lastContact / 7)}w ago</div></div>
-                            <div class="stat-box"><div class="stat-label">Frequency</div><div class="stat-value">Every ${Math.floor(person.frequency / 7)}w</div></div>
-                            <div class="stat-box"><div class="stat-label">Strength</div><div class="stat-value">${Math.round(person.strength * 100)}%</div></div>
-                        </div>
-                        <div class="tags-container">
-                            <span class="tag">${{'inner':'● Inner Circle','circle':'○ Circle','public':'□ Public'}[normTier(person.circle||person.category||'circle')] || '○ Circle'}</span>
-                            <span class="tag">${(person.context||'personal') === 'work' ? '💼 Work' : '👤 Personal'}</span>
-                            ${person.birthday ? `<span class="tag">🎂 ${person.birthday}</span>` : ''}
-                        </div>
-                    </div>
-                    <div class="quick-actions">
-                        <div class="quick-action-btn" onclick="scheduleWithPerson('${person.id}')"><div class="quick-action-icon">📅</div><div class="quick-action-label">Schedule</div></div>
-                        <div class="quick-action-btn" onclick="createTodoForPerson('${person.id}')"><div class="quick-action-icon">✓</div><div class="quick-action-label">To-Do</div></div>
-                        <div class="quick-action-btn" onclick="addNoteToPerson('${person.id}')"><div class="quick-action-icon">📝</div><div class="quick-action-label">Note</div></div>
-                        <div class="quick-action-btn" onclick="setGoalWithPerson('${person.id}')"><div class="quick-action-icon">🎯</div><div class="quick-action-label">Goal</div></div>
-                        <div class="quick-action-btn" onclick="addGiftForPerson('${person.id}')"><div class="quick-action-icon">🎁</div><div class="quick-action-label">Gift</div></div>
-                        <div class="quick-action-btn" onclick="logConversationWithPerson('${person.id}')"><div class="quick-action-icon">💬</div><div class="quick-action-label">Log</div></div>
-                        <div class="quick-action-btn" onclick="trackDebtWithPerson('${person.id}')"><div class="quick-action-icon">💰</div><div class="quick-action-label">Debt</div></div>
-                        <div class="quick-action-btn" onclick="editPerson('${person.id}')"><div class="quick-action-icon">${isEditing ? '💾' : '✏️'}</div><div class="quick-action-label">${isEditing ? 'Save' : 'Edit'}</div></div>
-                    </div>
-                </div>
-            `);
-            
-            // Contact & Background section
-            htmlSections.push(`
-                <div class="detail-section">
-                    <div class="section-title">Contact & Background</div>
-                    <div class="info-grid">
-                        <div class="info-item">
-                            <div class="info-label">Phone</div>
-                            <div class="info-value">
-                                ${isEditing ? `<input type="tel" id="editPersonPhone" value="${escapeHtml(person.phone || '')}" class="edit-field" placeholder="Phone number">` : escapeHtml(person.phone || 'Not provided')}
-                            </div>
-                        </div>
-                        <div class="info-item">
-                            <div class="info-label">Email</div>
-                            <div class="info-value">
-                                ${isEditing ? `<input type="email" id="editPersonEmail" value="${escapeHtml(person.email || '')}" class="edit-field" placeholder="Email address">` : escapeHtml(person.email || 'Not provided')}
-                            </div>
-                        </div>
-                        <div class="info-item">
-                            <div class="info-label">Birthday</div>
-                            <div class="info-value">
-                                ${isEditing ? `<input type="date" id="editPersonBirthday" value="${escapeHtml(person.birthday || '')}" class="edit-field">` : escapeHtml(person.birthday || 'Not provided')}
-                            </div>
-                        </div>
-                        <div class="info-item">
-                            <div class="info-label">Address</div>
-                            <div class="info-value">
-                                ${isEditing ? `<input type="text" id="editPersonAddress" value="${escapeHtml(person.address || '')}" class="edit-field" placeholder="Address">` : escapeHtml(person.address || 'Not provided')}
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            `);
-            
-            // Notes section
-            htmlSections.push(`
-                <div class="detail-section">
-                    <div class="section-title">Notes & Preferences</div>
-                    <div class="notes-section">
-                        ${isEditing ? `
-                            <textarea id="editPersonNotes" class="edit-field notes-textarea" placeholder="Add notes about this person...">${escapeHtml(person.notes || '')}</textarea>
-                        ` : `
-                            <div class="note-item">
-                                <div class="timeline-title">${escapeHtml(person.notes || 'No notes yet')}</div>
-                            </div>
-                        `}
-                    </div>
-                </div>
-            `);
-
-            // Custom fields section
-            if (peopleFieldSchema && peopleFieldSchema.length) {
-                const custom = person.custom_fields || {};
-                htmlSections.push(`
-                    <div class="detail-section">
-                        <div class="section-title">Custom Fields</div>
-                        <div class="info-grid">
-                            ${peopleFieldSchema.map(field => `
-                                <div class="info-item">
-                                    <div class="info-label">${escapeHtml(field.label)}</div>
-                                    <div class="info-value">
-                                        ${isEditing
-                                            ? `<input type="text" class="edit-field" data-edit-field-key="${escapeHtml(field.field_key)}" value="${escapeHtml(custom[field.field_key] || '')}" placeholder="${escapeHtml(field.label)}">`
-                                            : escapeHtml(custom[field.field_key] || 'Not set')}
-                                    </div>
-                                </div>
-                            `).join('')}
-                        </div>
-                    </div>
-                `);
-            }
-            
-            content.innerHTML = htmlSections.join('');
-            panel.classList.add('open');
-        }
         
         // Person detail action functions
         async function scheduleWithPerson(personId) {
@@ -1636,7 +1226,8 @@
                 savePersonChanges(personId);
             } else {
                 panel.classList.add('editing');
-                showPersonDetail(person);
+                // was showPersonDetail() — see showPersonById
+                dpOpenCard(person.id);
             }
         }
         
@@ -1706,9 +1297,9 @@
                 // Exit edit mode and refresh display
                 const panel = document.getElementById('detailPanel');
                 panel.classList.remove('editing');
-                showPersonDetail(person);
+                dpOpenCard(person.id);
                 updateSidebar();
-                updateLegend();
+                renderCardGrid();   // was updateLegend() — the canvas legend is gone
                 
                 showNotification(`✅ Updated ${name}!`, 'success');
             } catch (error) {
@@ -1746,32 +1337,6 @@
             `).join("");
         }
         
-        function updateLegend() {
-            const legend = document.getElementById('canvasLegend');
-            legend.innerHTML = `
-                <div class="legend-title">Relationship Map</div>
-                <div class="legend-item">
-                    <div class="legend-circle" style="border-color: #ec4899; background: white;"></div>
-                    <span>Inner Circle</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-circle" style="border-color: #14b8a6; background: white;"></div>
-                    <span>Circle</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-circle" style="border-color: #9ca3af; background: white;"></div>
-                    <span>Acquaintances</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-circle" style="border-color: #3b82f6; background: white;"></div>
-                    <span>Professional</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-circle" style="border-color: #6b7280; background: white;"></div>
-                    <span>Archive</span>
-                </div>
-            `;
-        }
         
         function showUserProfile() {
             const panel = document.getElementById('detailPanel');
@@ -1892,7 +1457,8 @@
                 console.warn('selectPerson: id not found', personId);
                 return;
             }
-            showPersonDetail(person);
+            // was showPersonDetail() — see showPersonById
+            dpOpenCard(person.id);
         }
 
         function searchPeople(q) {
@@ -2078,7 +1644,7 @@
             await loadUserProfile();
             await loadPeopleAndRender();
             updateSidebar();
-            try { updateLegend(); } catch(e) {}
+            try { renderCardGrid(); } catch(e) {}   // was updateLegend()
             updateNavTime();
             setInterval(updateNavTime, 30000);
         });
