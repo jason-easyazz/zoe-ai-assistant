@@ -319,11 +319,26 @@ API calls with literal `user_id=undefined` + ~20 failed WS handshakes in 10s).
   resize/edit-mode UX, and the 8 working data-fetch paths.
 - Salvage the **8 verified-working** widget data-fetch paths: time, weather, events, notes,
   shopping/personal/work/bucket. **Re-evaluate `home.js` as a survivor** — its HA endpoints are live.
-- **MUST-FIX, and keeping drag-and-drop is what makes it mandatory: the singleton flaw**
-  (`widget-system.js:223`). `WidgetManager` registers ONE instance per type and `addWidget` re-`init()`s
-  it per grid item, so two widgets of the same type clobber each other's `this.element` and update
-  timers. A drag-and-drop dashboard with a widget library is precisely the surface where a user adds
-  two of the same card. Instantiate **per grid item**, not per type.
+- **MUST-FIX, and keeping drag-and-drop is what makes it mandatory: duplicate widgets break at THREE
+  layers, not one.** A drag-and-drop dashboard with a widget library is precisely the surface where a
+  user adds two of the same card, so all three must be fixed together or the bug just moves:
+  1. **Frontend singleton** (`widget-system.js:223`) — `WidgetManager` registers ONE instance per
+     type and `addWidget` re-`init()`s it per grid item, so two cards of the same type clobber each
+     other's `this.element` and update timers. Instantiate **per grid item**.
+  2. **Server dedupes by type** — `AVAILABLE_WIDGETS[].id` (`dashboard.py:13-30`) is a **type**
+     identifier (`"weather"`, `"events"`), and `_requested_widget_ids` (`:64-81`) drops repeats
+     (`if wid in valid_ids and wid not in seen`). So `POST /widgets/` silently discards the second
+     same-type card.
+  3. **The layout schema has no instance identity.** `PUT /layout/` (`:96`) does not dedupe — it
+     stores raw jsonb — but that does not rescue it: two weather cards both carry `id: "weather"`,
+     so any id-keyed restore collapses them. **Layout entries therefore need an instance key
+     separate from the type key** (e.g. `{uid, type, x, y, w, h}`). This supersedes the earlier
+     "emit `id` instead of `type`" instruction, which would have thrown away the only field
+     distinguishing instances. `LayoutProtection` validates on `item.type`, so keeping an explicit
+     `type` field also keeps that guard working.
+
+  Decide whether the enabled-widget set keeps flowing through `POST /widgets/` at all — if it does,
+  its type-dedupe has to be reconciled with instance identity too.
 - **KEEP and update `dashboard-protection.js` (`LayoutProtection`).** With drag-and-drop retained, a
   corrupt-layout guard is more valuable, not less — it validates shape before save/load. But note it
   validates on `item.type`, so it must change **in lockstep** with the schema reconciliation below.
@@ -331,9 +346,10 @@ API calls with literal `user_id=undefined` + ~20 failed WS handshakes in 10s).
 - **Wire layout persistence** — `GET/PUT /api/dashboard/layout/` (`dashboard.py:84/:96`) has **zero
   callers repo-wide**. Keeping gridstack makes this *easier*: `saveLayout()` (`dashboard.js:409-421`)
   already walks `grid.engine.nodes`, so the geometry is right at the source. The reconciliation is
-  narrow — emit the server's `id` key instead of `type`, and drop `order` (gridstack's `x`/`y` already
-  encode position, so it is redundant). Then extend `AVAILABLE_WIDGETS` (`:13-30`), a hardcoded 16-id
-  allowlist that silently drops unknown cards.
+  narrow — **keep `type` and add a unique instance key** (see the duplicate-widget item above; do NOT
+  collapse onto the server's type-level `id`, which is what makes two same-type cards indistinguishable),
+  and drop `order` (gridstack's `x`/`y` already encode position, so it is redundant). Then extend
+  `AVAILABLE_WIDGETS` (`:13-30`), a hardcoded 16-id allowlist that silently drops unknown cards.
 - Static card registration is **easier than it looks**: `widget-registry.js` is loaded by no page, so
   the 24 `WidgetRegistry.register()` calls are already dead code. Nothing to fight.
 - Keep the widget settings sheet — a customizable dashboard implies per-widget configuration.
