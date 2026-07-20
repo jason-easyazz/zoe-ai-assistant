@@ -9,7 +9,7 @@ import sqlite3  # operator-local Hermes Kanban DB (~/.hermes), not Zoe PostgreSQ
 import subprocess
 from pathlib import Path
 
-from hermes_http import zoe_repo_root
+from repo_paths import zoe_repo_root
 
 logger = logging.getLogger(__name__)
 
