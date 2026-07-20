@@ -25,7 +25,7 @@ import json
 import subprocess
 from dataclasses import dataclass
 
-from hermes_http import zoe_repo_root
+from repo_paths import zoe_repo_root
 
 _GH_TIMEOUT_S = 60
 _GREEN = {"SUCCESS", "NEUTRAL", "SKIPPED", "COMPLETED"}
