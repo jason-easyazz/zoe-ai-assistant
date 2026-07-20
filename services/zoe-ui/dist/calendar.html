@@ -2648,6 +2648,9 @@
                                data-add-to-list="${escapeHtml(selectedList)}">
                     </div>
                 `;
+                // This early return still emits a data-* input, so it must bind
+                // too -- otherwise "Add a new item" is dead on an empty list.
+                bindDataHandlers(container);
                 return;
             }
             

@@ -565,6 +565,28 @@ check('a quote-bearing id survives as inert data, not as JS source', () => {
         'bindDataHandlers must locate and wire the tagged element');
 });
 
+check('the empty-list render path binds its handlers too', () => {
+    // That branch returns early and still emits a data-add-to-list input; an
+    // unbound one leaves "Add a new item" silently dead on an empty list.
+    const container = makeEl();
+    const ctx = sandboxWith(['renderTasks', 'bindDataHandlers'], {
+        document: { getElementById: () => container, querySelectorAll: () => [] },
+        tasks: [],
+        selectedList: 'shopping',
+        selectedTasks: [],
+        tasksUnavailableLists: [],
+        renderRemindersInSidebar: () => {},
+        addTaskFromInput: () => {}, toggleTaskSelection: () => {},
+        handleTaskDragStart: () => {}, handleTaskDragEnd: () => {},
+        window: {}
+    });
+    ctx.renderTasks();
+    assert.ok(/data-add-to-list=/.test(container.innerHTML),
+        'the empty-list branch must render the add-item input');
+    assert.ok(container.found['data-add-to-list'],
+        'the empty-list branch must bind it as well as render it');
+});
+
 check('the notifications list escapes the notification message', () => {
     // Not in the original defect list, found while sweeping the file.
     const body = stripComments(extractFunction(script, 'displayNotifications'));
