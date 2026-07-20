@@ -232,10 +232,28 @@ window.ZoeWebSockets = {
         try {
             if (typeof loadEvents === 'function') loadEvents();
             if (typeof loadPeople === 'function') loadPeople();
-            if (typeof loadReminders === 'function') loadReminders();
+
+            // Reminders: calendar.html's loadReminders takes (startDate, endDate)
+            // and loadEvents() already re-runs it WITH the visible range
+            // (calendar.html:2360). Calling it bare here would re-fetch with
+            // undefined bounds and overwrite the ranged result -- reminders would
+            // vanish after a poll. So only refresh reminders standalone on pages
+            // that have no loadEvents to do it for them.
+            if (typeof loadReminders === 'function' && typeof loadEvents !== 'function') {
+                loadReminders();
+            }
+
             if (typeof loadNotes === 'function') loadNotes();
-            if (typeof loadJournalEntries === 'function') loadJournalEntries();
-            else if (typeof loadEntries === 'function') loadEntries();
+
+            // Journal: prefer the PAGE-LOCAL loader. touch/journal.html defines
+            // loadEntries AND stubs displayTimelineEntries to a no-op
+            // (touch/journal.html:665) -- so journal-api.js's loadJournalEntries
+            // would fetch and render into nothing there. Desktop journal.html is
+            // the mirror image: no loadEntries, and its live path IS
+            // loadJournalEntries. The two are mutually exclusive, so this order
+            // is correct on both.
+            if (typeof loadEntries === 'function') loadEntries();
+            else if (typeof loadJournalEntries === 'function') loadJournalEntries();
             this._refreshWidget('events');
             this._refreshWidget('reminders');
             if (typeof WidgetManager !== 'undefined' && WidgetManager.updateAll) {
