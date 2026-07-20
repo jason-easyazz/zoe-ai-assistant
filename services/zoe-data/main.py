@@ -920,6 +920,19 @@ async def _run_mempalace_migration_gate(get_db_ctx=None, migrate=None, flag_path
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _openclaw_bg_task, _digest_bg_task, _zoe_update_bg_task, _consolidation_bg_task, _runtime_health_task
+
+    # First thing at startup: without this the root logger has no handler, so
+    # every logger.info() in the service is discarded and WARNING+ falls through
+    # to logging.lastResort unformatted (hence undatable). See logging_setup.
+    #
+    # Deliberately here rather than at module import: 10+ test modules import
+    # `main`, and configuring at import time wrote test noise into the
+    # operator's real ~/.zoe-logs. uvicorn runs the lifespan before serving, so
+    # production still gets logging configured before the first request.
+    from logging_setup import configure_logging  # type: ignore[import]
+
+    configure_logging()
+
     try:
         from runtime_env import bootstrap_runtime_env  # type: ignore[import]
         from hermes_http import hermes_api_key  # type: ignore[import]
