@@ -6813,13 +6813,23 @@
                     // to POST /{list_type}/{list_id}/items (lists.py:285), which
                     // needs a list id first. Same two-step _fetchTodoItems uses.
                     const listType = 'tasks';
+                    const wantName = data.list_name || 'Tasks';
                     const listsResp = await apiRequest(`/api/lists/${listType}`);
-                    let listId = listsResp?.lists?.[0]?.id;
+                    const existing = listsResp?.lists || [];
+                    // Match the NAMED list first. Taking lists[0] (most recently
+                    // updated) would drop a "Work Tasks" item into whatever list
+                    // was touched last, while still reporting "Added!".
+                    let listId = existing.find(l =>
+                        (l.name || '').trim().toLowerCase() === wantName.trim().toLowerCase()
+                    )?.id;
+                    // Only fall back to an unnamed pick when the card named no
+                    // list at all; otherwise create the one it asked for.
+                    if (!listId && !data.list_name) listId = existing[0]?.id;
                     if (!listId) {
                         const created = await apiRequest(`/api/lists/${listType}`, {
                             method: 'POST',
                             body: JSON.stringify({
-                                name: data.list_name || 'Tasks',
+                                name: wantName,
                                 list_type: listType
                             })
                         });
@@ -7539,7 +7549,12 @@
         // init() never runs again.
         window.addEventListener('proactive_session', (ev) => {
             const sid = ev.detail && ev.detail.session_id;
-            if (sid) loadSessionMessages(sid);
+            // loadSession(), not loadSessionMessages(): the former sets
+            // currentSessionId (chat.html:3867) before delegating. Rendering the
+            // messages alone leaves the session inactive, so the user's next
+            // reply is sent against a stale or new id and the visible thread
+            // diverges from the persisted one.
+            if (sid) loadSession(sid);
         });
 
         // Handle cold-start tap.

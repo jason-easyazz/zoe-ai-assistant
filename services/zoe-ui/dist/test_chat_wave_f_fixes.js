@@ -75,23 +75,36 @@ check('NO component anywhere still interpolates into a sendMessage onclick', () 
 
 // ── 2 ────────────────────────────────────────────────────────────────────
 check('add_to_list posts an item to the items route, not the create-list route', () => {
-    const seg = html.match(/actionType === 'add_to_list'[\s\S]{0,1600}/);
+    const seg = html.match(/actionType === 'add_to_list'[\s\S]{0,2600}/);
     assert.ok(seg, 'add_to_list branch must exist');
     assert.ok(/\/items`, \{[\s\S]{0,120}method: 'POST'/.test(seg[0]),
         'the item must POST to .../items');
     assert.ok(!/apiRequest\(`\/api\/lists\/tasks\?user_id=/.test(html),
         'the old create-list POST (which 422d) must be gone');
-    assert.ok(/name: data\.list_name \|\| 'Tasks'/.test(seg[0]),
+    assert.ok(/name: wantName/.test(seg[0]),
         'creating the list must send ListCreate{name}, the shape the route expects');
+    // A named card must land in the NAMED list. Picking lists[0] (most recently
+    // updated) would drop a "Work Tasks" item into whatever list was touched
+    // last while still reporting success.
+    assert.ok(/const wantName = data\.list_name \|\| 'Tasks'/.test(seg[0]),
+        'the requested list name must be captured');
+    assert.ok(/\.find\(l =>[\s\S]{0,160}toLowerCase\(\)/.test(seg[0]),
+        'the existing lists must be searched BY NAME, not indexed at [0]');
+    assert.ok(/if \(!listId && !data\.list_name\) listId = existing\[0\]\?\.id;/.test(seg[0]),
+        'the unnamed fallback must apply only when the card named no list');
 });
 
 // ── 3 ────────────────────────────────────────────────────────────────────
 check('proactive_session has a listener that opens the session', () => {
     assert.ok(/addEventListener\('proactive_session'/.test(html),
         "nothing listened for the event the claim dispatches");
-    const seg = html.match(/addEventListener\('proactive_session'[\s\S]{0,300}/);
-    assert.ok(/loadSessionMessages\(/.test(seg[0]),
-        'the listener must actually open the claimed session');
+    // Strip comments: the prose below the listener mentions loadSessionMessages,
+    // so a naive match passed for the wrong reason.
+    const seg = stripComments(html.match(/addEventListener\('proactive_session'[\s\S]{0,600}/)[0]);
+    assert.ok(/loadSession\(sid\)/.test(seg),
+        'must call loadSession(), which sets currentSessionId before rendering');
+    assert.ok(!/loadSessionMessages\(sid\)/.test(seg),
+        'loadSessionMessages alone leaves the session inactive — the next reply would use a stale id');
 });
 
 // ── 4 — behavioural, not textual ─────────────────────────────────────────

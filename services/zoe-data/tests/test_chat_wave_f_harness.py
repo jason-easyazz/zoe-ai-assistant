@@ -7,6 +7,7 @@ this is not a synthetic guard. One assertion is deliberately file-wide — it
 found a SECOND live instance of the broken onclick pattern (renderPriceTable)
 that the audit had not flagged.
 """
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -21,6 +22,11 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_chat_wave_f_node_harness():
     node = shutil.which("node") or shutil.which("nodejs")
     if not node:
+        # A silent skip on CI means the action-menu / proactive-session /
+        # agent-activity regressions stop being covered while the build still
+        # goes green. Skip is acceptable on a dev box; on CI it is a failure.
+        if os.environ.get("CI"):
+            pytest.fail("node is required on CI to run the chat UI harness")
         pytest.skip("Node.js is not installed on this host")
     harness = ROOT / "zoe-ui" / "dist" / "test_chat_wave_f_fixes.js"
     proc = subprocess.run([node, str(harness)], capture_output=True, text=True)
