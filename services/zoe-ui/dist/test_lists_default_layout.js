@@ -38,17 +38,14 @@ function check(name, fn) {
 
 console.log('lists page defaults to real list widgets');
 
-check('the manifest genuinely lacks lists:true on the list widgets', () => {
-    // This is the upstream cause. If someone later fixes the manifest, this
-    // assertion tells them the client-side guard is now belt-and-braces rather
-    // than load-bearing — it should NOT be removed either way.
-    const mf = path.join(D, 'js', 'widgets', 'widget-manifest.json');
-    if (!fs.existsSync(mf)) return;   // untracked on fresh clones; not a failure
-    const m = JSON.parse(fs.readFileSync(mf, 'utf8'));
-    const flagged = m.widgets.filter(w => w.lists === true).map(w => w.id);
-    assert.ok(!flagged.includes('shopping'),
-        'manifest now flags shopping for lists — good, but keep the client filter');
-});
+// NOTE (deliberately not an assertion): the upstream cause was that
+// widget-manifest.json flagged only 'project' with `lists: true`. Wave 0 fixed
+// that. An earlier version of this file ASSERTED the manifest was still broken
+// ("!flagged.includes('shopping')"), which meant fixing the manifest turned the
+// test red — a test that fails when you repair the thing it is about. The real
+// invariant lives in test_ui_manifests_tracked.py: every widget flagged
+// lists:true must also be in LIST_WIDGET_TYPES. The client-side filter below
+// stays regardless, so a future bad manifest cannot blank the page again.
 
 check('createDefaultLayout filters to real list widgets', () => {
     // Anchor on the DEFINITION (4-space indent + brace), not the call site —

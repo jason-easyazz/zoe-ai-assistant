@@ -119,7 +119,8 @@
       "minSize": {
         "w": 2,
         "h": 2
-      }
+      },
+      "lists": true
     },
     {
       "id": "shopping",
@@ -243,7 +244,8 @@
       "minSize": {
         "w": 2,
         "h": 3
-      }
+      },
+      "lists": true
     },
     {
       "id": "project",
