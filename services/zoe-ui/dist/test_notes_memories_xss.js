@@ -417,8 +417,15 @@ check('memories.html sanitizeTileUrl(): rejects script-bearing URLs', () => {
     assert.strictEqual(call('  javascript:alert(1)'), '');
     assert.strictEqual(call('vbscript:msgbox(1)'), '');
     assert.strictEqual(call('data:text/html,<script>alert(1)</script>'), '');
+    // SVG is an active document format, not an inert raster image.
+    assert.strictEqual(call('data:image/svg+xml;base64,AAAA'), '',
+        'data:image/svg+xml must be rejected -- SVG can carry script');
+    assert.strictEqual(call('data:image/svg+xml,<svg onload=alert(1)>'), '');
     assert.strictEqual(call('https://example.com/a.png'), 'https://example.com/a.png');
     assert.strictEqual(call('data:image/png;base64,AAAA'), 'data:image/png;base64,AAAA');
+    // A data URL may carry no parameters at all -- must not be rejected.
+    assert.strictEqual(call('data:image/gif,AAAA'), 'data:image/gif,AAAA');
+    assert.strictEqual(call('data:image/jpeg;base64,AAAA'), 'data:image/jpeg;base64,AAAA');
     assert.strictEqual(call(null), '');
 });
 

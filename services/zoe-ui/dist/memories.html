@@ -1426,7 +1426,14 @@
             // scheme, so strip them before testing ("java\tscript:" bypasses).
             const collapsed = raw.replace(/[\u0000-\u0020]/g, '').toLowerCase();
             if (/^(javascript|vbscript|file):/.test(collapsed)) return '';
-            if (collapsed.startsWith('data:') && !/^data:image\//.test(collapsed)) return '';
+            // Allow only inert raster types. data:image/svg+xml is an ACTIVE
+            // document format: script in it stays dormant under <img>, but the
+            // URL persists in tile preview data and would execute if that data
+            // is ever rendered in a scripted context (object/iframe/direct
+            // navigation). The [;,] delimiter matters -- a data URL may carry
+            // no parameters at all ("data:image/png,<data>").
+            if (collapsed.startsWith('data:')
+                && !/^data:image\/(?:png|jpe?g|gif|webp|avif)[;,]/.test(collapsed)) return '';
             return raw;
         }
 
