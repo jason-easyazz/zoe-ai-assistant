@@ -29,7 +29,8 @@ sequenced plan to get it up to scratch. This is also the re-scope the
    is wired end-to-end, the per-page rewiring worklist, and the shared plumbing layer — after Jason
    reframed the goal as *"graphically it's not too bad, it just needs to work."* Produced the FUNCTION
    FIRST section below, and corrected two claims in this document (the music queue editor IS used by
-   the estate; `touch/smart-home.html` has 1 of 4 HA endpoints live, not 4).
+   the estate; `touch/smart-home.html` has 1 of 4 HA endpoints live, not 4 — and is now RETIRE,
+   not keep: the estate owns smart-home, corrected by Jason 2026-07-20).
 
 ## The verdict in three sentences
 
@@ -174,7 +175,7 @@ skip-list, `sw.js` cache routes, `voice_tts.py:526-530` supersede/cancel list.
 | `updates.html` | **retire desktop copy; KEEP `touch/updates.html`** | The panel deep-links only to the touch copy — it is the repoint target, so it must survive |
 | `voice.html` (desktop) | **retire** | True orphan. **`touch/voice.html` is NOT retired — see below** |
 | `touch/voice.html` | **KEEP — not this overhaul** | Live `lets_talk` target (`chat.py:71`, `voice_tts.py:1111`); replay-gated. Retires with the Ask-card cutover (PLANS Phase 1c) |
-| `touch/smart-home.html` | **KEEP + FIX — currently UNUSABLE, not "half-broken"** | The **only** smart-home UI in the product, with no estate replacement (`chat.py:58-60`) — that is why it is kept. **Escalated 2026-07-20 (Greptile P2, verified):** `loadStates()` (`:470-481`) fetches `/api/ha/states` FIRST and `throw`s → `showError()` on a non-OK response, so `renderDevices()` is **never reached** and the page shows only an error state for every visitor. `/api/ha/control` being live is irrelevant — you can never reach a device to control. `ha_control.py` serves only `/entities`, `/state/{id}`, `/control`; `/api/ha/states` (`:472`), `/api/ha/areas` (`:486`) and `/api/ha/scene` (`:744`) all 404. **Fix is small and mandatory, not deferrable:** `/api/ha/states` → `/api/ha/entities`; derive areas from entity attributes or drop the room grouping; fire scenes through `/control` with `{domain:"scene",service:"turn_on"}` |
+| `touch/smart-home.html` | **RETIRE — the estate owns smart-home** | **CORRECTED 2026-07-20 (Jason): all touch interfaces now live in `home.html`.** An earlier verdict kept this page as "the only smart-home UI, no estate replacement" — that was wrong. The estate calls `/api/ha/entities` and `/api/ha/control` directly (3 sites in `touch/home.html`), so it owns smart-home. The "no estate surface" line in `chat.py:58-60` is about NAVIGATION DOMAINS, not HA capability, and I over-read it. This page is legacy: do NOT fix its dead `/api/ha/{states,areas,scene}` calls — retire it with the rest of the legacy touch island |
 | `touch/cooking.html` | **KEEP (flag to IDEAS)** | 678 working lines, but `localStorage`-only with no backend. Keep-and-back vs retire is a product decision |
 | `touch/music.html` | **KEEP — decide its entry point** | Live, healthy, the panel's **only** search-and-play surface. Wave 3 step 5 would orphan it (see Wave 3) |
 | `jukebox.html`, `setup-music.html`, `setup-device.html` | **keep-polish** | QR-linked, verified against live routes |
@@ -440,7 +441,7 @@ collections/tiles canvas, `/api/music/similar`.
 12. **Leave `voice_tts.py:526-530`'s supersede list stale.** Editing it takes a replay gate; a
     cosmetic cleanup is not worth one.
 
-**NOT retired here:** `touch/voice.html`, `touch/smart-home.html`, `touch/cooking.html`,
+**NOT retired here:** `touch/voice.html`, `touch/cooking.html`,
 `touch/updates.html`, `touch/music.html`, `dashboard.html`, `music.html`.
 
 ### Wave 4 — Chat as the deep-work workspace
