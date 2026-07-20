@@ -1568,6 +1568,21 @@
   // ---- Music screen (real now-playing + transport) ----
   function fmtDur(s){s=Math.max(0,Math.round(s||0));return Math.floor(s/60)+':'+two(s%60);}
   var _music={player_id:null};
+  // Is there real playback to move? Title alone is too narrow — a radio stream
+  // or a transient inter-track moment can be genuinely playing with no title,
+  // and calling that idle would leave the audio behind on the old speaker.
+  // Check every axis MA gives us; the stuck case had NONE of them (title '',
+  // queue_item_id '', elapsed 0, duration null).
+  function _hasMedia(np){
+    if(!np)return false;
+    if((np.title||'').trim())return true;
+    if((np.queue_item_id||'').toString().trim())return true;
+    if(np.queue_index!=null)return true;
+    if(+np.elapsed>0)return true;
+    if(+np.duration>0)return true;
+    return false;
+  }
+
   // "Is music playing right now", written by BOTH now-playing pollers — the music
   // surface's loadMusic and the dock's paintDockMusic — so it stays fresh on every
   // surface. The idle-sleep guard can't use _music.np: only loadMusic writes that,
@@ -1616,11 +1631,11 @@
         // the title check a pick was overwritten within 5s by the very player the
         // operator was trying to move away from. That is the whole "I can't
         // change speaker" report.
-        var real=!!(np.title||'').trim();
+        var real=_hasMedia(np);
         if(real&&np.player_name)_music.chosenName='';
         if(nm)nm.textContent=(real?np.player_name:'')||_music.chosenName||np.player_name||'';}
       var el=np.elapsed||0,du=np.duration||0;
-      _music.np={elapsed:el,duration:du,playing:np.state==='playing',active:((np.state==='playing'||np.state==='paused')&&!!(np.title||'').trim())/* a paused player with no title has NOTHING to move: treating it as active sent every speaker tap down the transfer path, which then tried to move an empty queue and silently did nothing — so the speaker could never be changed at all. 'Active' must mean 'there is something playing to move'. */,at:Date.now(),queueItemId:np.queue_item_id||null,index:(np.queue_index!=null?np.queue_index:null),title:np.title||'',artist:np.artist||'',image:np.image||''};
+      _music.np={elapsed:el,duration:du,playing:np.state==='playing',active:((np.state==='playing'||np.state==='paused')&&_hasMedia(np))/* 'active' must mean THERE IS SOMETHING TO MOVE, not merely a paused transport. A stale paused player with an empty queue was counted as active, so every speaker tap took the transfer path, tried to move a queue that did not exist, and silently did nothing — the speaker could never be changed. */,at:Date.now(),queueItemId:np.queue_item_id||null,index:(np.queue_index!=null?np.queue_index:null),title:np.title||'',artist:np.artist||'',image:np.image||''};
       cfSync();   // the flow owns the art + meta now (it may be showing a browsed cover)
       // The 5s poll must not repaint the bar out from under a drag.
       if(!_seek){
