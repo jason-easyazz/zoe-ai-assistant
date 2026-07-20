@@ -369,7 +369,7 @@ Deletion candidates that are genuinely safe, in order of confidence:
 |---|---|
 | `skill_discovery.py`, `skills_watcher.py` | **DONE** (PR #1471) — zero consumers, no behaviour change |
 | The 58 stock Hermes skills + 3 stock OpenClaw skills | third-party, re-pullable upstream |
-| `hermes_http.py` | **NOT yet deletable.** PR #1473 cut it from 13 importers to 4 by moving `zoe_repo_root` out, but those 4 are live runtime files — `routers/voice_tts.py`, `routers/system.py`, `background_runner.py`, `executors/kanban_adapter.py`. Deleting the helper before they are rewired breaks them at **import time** on the next deploy. Order: remove/replace all four callers first, then the helper falls out on its own. |
+| `hermes_http.py` | **NOT yet deletable.** PR #1473 cut it from 13 importers to **6** by moving `zoe_repo_root` out. All six are live runtime files. **Five are module-level** — `routers/voice_tts.py:24`, `routers/system.py:23`, `background_runner.py:21`, `executors/kanban_adapter.py:32`, `proactive/triggers/openclaw_trigger.py:21` — so deleting the helper first breaks them at **import time** on the next deploy. The sixth, `main.py:938`, is a lazy in-function import, so it fails later, at lifespan startup, which is worse to diagnose. Order: rewire all six callers, then the helper falls out on its own. (Counted against the tree 2026-07-20; an earlier revision of this row said "4", repeating a figure instead of checking.) |
 | `routers/openclaw.py`, `openclaw_manager.py`, ACP path | **NOT dead** — 2,338 `openclaw_run_state` rows through 2026-07-16. Needs a decision, not a deletion PR. |
 | `kanban_adapter.py`, `pipeline_store.py`, harness | **DO NOT DELETE** — the working harness. See §8.1. |
 
