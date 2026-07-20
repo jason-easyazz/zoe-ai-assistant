@@ -647,3 +647,35 @@ def test_a_renamed_wall_light_answers_to_the_light():
         devices, "the light", "turn_off", {"switch.bedroom_1_switch_1"})
     assert [d["entity_id"] for d in targets] == ["switch.bedroom_1_switch_1"]
     assert ambiguous is False
+
+
+# ── STT punctuation must not defeat a command ────────────────────────────────
+# Moonshine punctuates its transcripts. The live logs carry "Turn the light
+# off." and "Please, Zoe. Turn off the light." — and 22 classifier patterns
+# anchor on end-of-string, so a trailing full stop silently defeated them. The
+# unpunctuated form classified; the punctuated one fell through to a fallback
+# that POSTed a fabricated entity id and still reported success.
+
+@pytest.mark.parametrize("q,action", [
+    ("turn the light off.", "turn_off"),
+    ("turn the light on.", "turn_on"),
+    ("turn the lights off.", "turn_off"),
+    ("lights off.", "turn_off"),
+    ("turn off the light!", "turn_off"),
+    ("Please, Zoe. Turn off the light.", "turn_off"),
+    # …and the unpunctuated forms keep working.
+    ("turn the light off", "turn_off"),
+    ("lights on", "turn_on"),
+])
+def test_trailing_punctuation_does_not_defeat_a_command(q, action):
+    i = classify_skybridge_intent(q, None)
+    assert i is not None, f"{q!r} must still classify with punctuation"
+    assert i.domain == "smart_home" and i.action == action, q
+
+
+def test_internal_punctuation_is_preserved():
+    """Only the TRAILING run is stripped — patterns that rely on internal
+    punctuation must be untouched."""
+    i = classify_skybridge_intent("dim the lights to 40%.", None)
+    assert i is not None and i.action == "set_brightness"
+    assert i.duration_seconds == 40, "the % value must survive the strip"
