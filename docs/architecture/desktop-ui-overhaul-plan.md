@@ -144,7 +144,9 @@ Each of these produced a P1 during review. This is the single most load-bearing 
 2. **Shared menu registries** — `touch-menu.js:17-39` (18 entries), `touch-nav.js:14-25`
    (12-path `PAGE_ORDER`), `touch-widgets.js:521` (a `smart-home.html` link *inside* a shared
    script). These **emit** links: they are referrers, not just consumers. Prune entries with
-   each page; delete the files only when no page loads them.
+   each page; delete the files only when no page loads them. **A registry file can carry more than
+   one site** — `touch-menu.js` also lists every page filename in its URL-sanitizer `allowed` set
+   (`:545`), which the registry entry at `:32` will not lead you to. Grep the whole file per page.
 3. **Server-driven navigation** — `chat.py:61-71` `PAGE_ROUTES`, `voice_tts.py` `panel_navigate`
    payloads. **Replay-gated when on the voice path.**
 4. **Client voice-intent map** — `touch-ui-executor.js:754-771` `_buildPageMap()`. See the
@@ -175,14 +177,15 @@ skip-list, `sw.js` cache routes, `voice_tts.py:526-530` supersede/cancel list.
 | `updates.html` | **retire desktop copy; KEEP `touch/updates.html`** | The panel deep-links only to the touch copy — it is the repoint target, so it must survive |
 | `voice.html` (desktop) | **retire** | True orphan. **`touch/voice.html` is NOT retired — see below** |
 | `touch/voice.html` | **KEEP — not this overhaul** | Live `lets_talk` target (`chat.py:71`, `voice_tts.py:1111`); replay-gated. Retires with the Ask-card cutover (PLANS Phase 1c) |
-| `touch/smart-home.html` | **RETIRE — the estate owns smart-home** | **CORRECTED 2026-07-20 (Jason): all touch interfaces now live in `home.html`.** An earlier verdict kept this page as "the only smart-home UI, no estate replacement" — that was wrong. The estate calls `/api/ha/entities` and `/api/ha/control` directly (3 sites in `touch/home.html`), so it owns smart-home. The "no estate surface" line in `chat.py:58-60` is about NAVIGATION DOMAINS, not HA capability, and I over-read it. This page is legacy: do NOT fix its dead `/api/ha/{states,areas,scene}` calls — retire it with the rest of the legacy touch island |
+| `touch/smart-home.html` | **RETIRE — the estate owns smart-home** | **CORRECTED 2026-07-20 (Jason): all touch interfaces now live in `home.html`.** An earlier verdict kept this page as "the only smart-home UI, no estate replacement" — that was wrong. The estate calls `/api/ha/entities` and `/api/ha/control` directly (3 sites in `touch/home.html`), so it owns smart-home. The "no estate surface" line in `chat.py:58-60` is about NAVIGATION DOMAINS, not HA capability, and I over-read it. This page is legacy: do NOT fix its dead `/api/ha/{states,areas,scene}` calls — retire it with the rest of the legacy touch island. **It is NOT an orphan — prune every referrer in the SAME PR as the deletion, or tap/voice paths 404. The full verified referrer list is Wave 3 step 3** |
 | `touch/cooking.html` | **KEEP (flag to IDEAS)** | 678 working lines, but `localStorage`-only with no backend. Keep-and-back vs retire is a product decision |
 | `touch/music.html` | **KEEP — decide its entry point** | Live, healthy, the panel's **only** search-and-play surface. Wave 3 step 5 would orphan it (see Wave 3) |
 | `jukebox.html`, `setup-music.html`, `setup-device.html` | **keep-polish** | QR-linked, verified against live routes |
 | `offline.html` | **keep-fix** | Probes `/api/health` (real route is `/health`) and never checks `res.ok` |
 | `clear-cache{,-v2}.html`, `clear-session.html` | **consolidate to ONE** | Orphan near-triplicates; `_v2` violates repo rules |
 | `games.html` + `touch/games.html` | **retire** | Chain dead-ends in a 26-line placeholder |
-| `cooking.html`, `smart-home.html` (desktop) | **retire the 11-line stubs only** | Meta-refreshes. Their touch targets **stay** |
+| `cooking.html` (desktop) | **retire the 11-line stub only** | Meta-refresh. Its touch target `touch/cooking.html` **stays** |
+| `smart-home.html` (desktop) | **retire the stub AND its target** | Meta-refresh to `/touch/smart-home.html`, which now RETIRES (row above) — the stub cannot outlive it. Goes in the same PR as the target, with all referrers (Wave 3 step 3) |
 | `week_planner_widget.html`, `dist/developer/`, `dist/_preview/*` | **retire / see Wave 4** | Orphan mock; 4,406-line dead prototype. `_preview` is NOT dead — see Wave 4 |
 | Legacy touch pages (11) | **retire** | `touch/{dashboard,lists,calendar,notes,people,timers,weather,memories,journal,chat,games}.html` — no live inbound path |
 | Widget stack (`widget-system.js`, `widget-base.js`, `dashboard.js`, `lists-dashboard.js`, `js/widgets/**`) | **retire after the Wave 4b rebuild** | Serves desktop dashboard + lists only once the touch copies go |
@@ -407,8 +410,10 @@ collections/tiles canvas, `/api/music/similar`.
   `auth.html` is a **critical file in both manifests**.
 - **One shared nav.** Specify the **complete post-Wave-3 entry list**, not a delta — and **delete the
   hardcoded per-page nav markup in the same PR** (13 pages carry their own More-menu + mobile-nav
-  blocks; adding a shared nav without removing them leaves ~40 links to 404). Keep cooking/smart-home
-  pointing at `/touch/` (those targets survive). Drop Developer/Games. Keep Updates pointing at
+  blocks; adding a shared nav without removing them leaves ~40 links to 404). Keep Cooking pointing
+  at `/touch/cooking.html` (that target survives). **Drop Smart Home entirely** — its target retires
+  (see the verdict table and Wave 3 step 3); the estate owns smart-home, and the panel reaches it
+  from `home.html`, not from desktop nav. Drop Developer/Games. Keep Updates pointing at
   `touch/updates.html`.
 - Add a `<script src>` to **settings.html** (it loads none) or it gets neither nav nor theme.
 - Standardize `auth.js` + enforceAuth on every authed page — ends the logged-out 401/WS churn.
@@ -419,8 +424,35 @@ collections/tiles canvas, `/api/music/similar`.
    entries and its `TOUCH_PAGES` voice-map entry in the SAME PR.**
 2. **Retire desktop `updates.html` only — `touch/updates.html` SURVIVES** as the deep-link target
    (`notifications-panel.js:345/:358`, loaded on 20 pages). No repoint needed.
-3. Delete **only** the two 11-line desktop `cooking.html`/`smart-home.html` stubs. **Their touch
-   targets stay.**
+3. **Smart-home retirement — one PR, target + stub + all six referrer sites.** Delete
+   `touch/smart-home.html` AND the 11-line desktop `smart-home.html` stub (it meta-refreshes to the
+   target, so it cannot survive it). `touch/cooking.html` is unaffected — delete the desktop
+   `cooking.html` stub only, its touch target **stays**.
+
+   Referrers to prune in the SAME PR (all verified against source 2026-07-20):
+   - `touch/js/touch-menu.js:32` — the `smarthome` entry in `ALL_PAGES`.
+   - `touch/js/touch-menu.js:545` — `'smart-home.html'` in the URL-sanitizer `allowed` set (a
+     second, easily-missed site in the same file; leaving it just permits a dead path).
+   - `touch/js/touch-nav.js:20` — `/touch/smart-home.html` in `PAGE_ORDER` (swipe navigation).
+   - `touch/js/touch-widgets.js:521` — the `Control` link in the Smart Home widget template.
+   - `js/touch-ui-executor.js:764-765` — **two** keys, `'smart home'` and `'smarthome'`, in
+     `_buildPageMap()`. `_page()` resolves them by context, so on the panel they point at
+     `/touch/smart-home.html`. This is the voice-navigation path.
+   - `js/auth.js:20` — `'/touch/smart-home.html': 'smarthome'` in `TOUCH_PATH_TO_PAGE_ID`
+     (cleanup, not reachability).
+   - Desktop nav markup: **20 hardcoded links across 10 pages** (`calendar`, `chat`, `dashboard`,
+     `journal`, `lists`, `memories`, `music`, `notes`, `people`, `updates` — each carries a
+     `navigateToPage('smart-home.html')` More-menu item *and* a `mobile-nav-item` anchor). These
+     point at the desktop stub; they die with it. If the Wave 2 shared nav has already landed,
+     these are already gone — check before duplicating the work.
+
+   **Not referrers** (verified, do not go looking for them): `touch/home.html` has **zero** links to
+   `smart-home.html` — the estate implements smart-home in-page against `/api/ha/entities` +
+   `/api/ha/control`, and routes the `smart_home` domain to its own `rooms` screen
+   (`DOMAIN_SCREEN`, `touch/home.html:3570`). `chat.py`'s `_INTENT_PANEL_NAV` has no smart-home
+   entry at all (`chat.py:1358` is an intent *display name*, not a route), and `sw.js` does not
+   precache the page. That absence is the evidence for the RETIRE verdict: the estate already owns
+   this surface.
 4. `dist/developer/` (4,406 lines) + both nginx `/developer/` blocks (separate nginx-only PR).
 5. Orphan js/css set — **split into a CSS PR and a JS PR** (~25 files together).
 6. Music-era zombies: `mini-player.js` + 6 tags; the dead music widget stack + `MCPMusicStateManager`
