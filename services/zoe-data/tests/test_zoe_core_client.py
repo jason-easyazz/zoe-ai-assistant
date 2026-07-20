@@ -28,6 +28,21 @@ So if one of these fails intermittently on the Orin while CI stays green, the
 first hypothesis should be model nondeterminism, not your diff. Re-run before
 investigating. Genuinely deterministic behaviour belongs in a stubbed unit test,
 not here.
+
+PRECEDENT + THE PREFERRED FIX. This is not new: see
+``test_web_query_delegates_and_synthesizes`` below, whose docstring records the
+same class — "the old weather-phrased prompt became ambiguous once the brain grew
+a weather tool — the live model validly picked either tool, flaking ~1-in-3".
+That was fixed properly, by **disambiguating the prompt** so only one tool can
+satisfy it, not by loosening the assertion. Do the same here once a failure is
+actually captured and the competing tool is known (it declined to fail while
+output was being recorded, so that is still unknown).
+
+WORTH KNOWING ANYWAY: in production this phrase never reaches the brain. With
+``ZOE_ROUTER_HEAD=active`` the two-stage router decides it at tier 1.5 —
+FunctionGemma-270M returns ``shopping_list_add`` at **0.9996** confidence in
+~300 ms warm (measured 2026-07-20). So a failure here is a real signal about the
+brain's tool-calling lane, but a poor proxy for user-visible behaviour.
 """
 from __future__ import annotations
 
