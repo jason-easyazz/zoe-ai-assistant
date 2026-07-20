@@ -11,6 +11,44 @@ if (typeof window.API_BASE === 'undefined') {
     window.API_BASE = '/api';
 }
 
+// XSS defence for the live journal renderers below.
+//
+// This helper is deliberately LOCAL to this file. journal-api.js is loaded by
+// BOTH services/zoe-ui/dist/journal.html and services/zoe-ui/dist/touch/journal.html.
+// Only the former defines a page-level escapeHtml(); referencing that would throw
+// ReferenceError on the touch panel and break journal rendering on the kiosk.
+// window.zoeEscapeHtml (js/common.js) is likewise not safe to depend on -- see the
+// API_BASE note above, this file is expected to survive pages that omit common.js.
+//
+// The name is journal-specific so that declaring it here never clobbers the
+// same-named global that journal.html defines for its own markup.
+//
+// Escapes the single quote as well as & < > " -- omitting ' is exactly how the
+// tag chips in notes.html became injectable.
+function escapeJournalHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, char => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+    })[char]);
+}
+
+// Attribute-safe URL sanitiser. Blocks javascript:/vbscript:/file: and non-image
+// data: URIs so a hostile photo URL cannot become a script sink, then
+// HTML-escapes whatever survives for use inside a quoted attribute.
+function sanitizeJournalUrl(value) {
+    const raw = String(value ?? '').trim();
+    if (!raw) return '';
+    // Browsers ignore control chars and whitespace when parsing the scheme,
+    // so strip them before testing (defeats "java\tscript:" style bypasses).
+    const collapsed = raw.replace(/[\u0000-\u0020]/g, '').toLowerCase();
+    if (/^(javascript|vbscript|file):/.test(collapsed)) return '';
+    if (collapsed.startsWith('data:') && !/^data:image\//.test(collapsed)) return '';
+    return escapeJournalHtml(raw);
+}
+
 // Resolve authenticated user id from Zoe Auth (fallback to undefined)
 function getUserId() {
     try {
@@ -321,7 +359,7 @@ function displayTimelineEntries(entries) {
     Object.keys(groupedEntries).forEach(month => {
         const separator = document.createElement('div');
         separator.className = 'timeline-month-separator';
-        separator.innerHTML = `<div class="month-label">${month}</div>`;
+        separator.innerHTML = `<div class="month-label">${escapeJournalHtml(month)}</div>`;
         timelineView.appendChild(separator);
         
         groupedEntries[month].forEach((entry, index) => {
@@ -341,20 +379,23 @@ function createTimelineEntry(entry, index) {
     const entryDiv = document.createElement('div');
     entryDiv.className = 'timeline-entry';
     
-    const imageHtml = entry.photos && entry.photos.length > 0
-        ? `<img src="${entry.photos[0]}" alt="${entry.title}" class="entry-image">`
+    const photoUrl = entry.photos && entry.photos.length > 0
+        ? sanitizeJournalUrl(entry.photos[0])
         : '';
-    
+    const imageHtml = photoUrl
+        ? `<img src="${photoUrl}" alt="${escapeJournalHtml(entry.title)}" class="entry-image">`
+        : '';
+
     const peopleHtml = entry.people && entry.people.length > 0
-        ? entry.people.map(p => `<span class="tag person-tag">👤 ${p.name}</span>`).join('')
+        ? entry.people.map(p => `<span class="tag person-tag">👤 ${escapeJournalHtml(p.name)}</span>`).join('')
         : '';
-    
+
     const placesHtml = entry.place_tags && entry.place_tags.length > 0
-        ? entry.place_tags.map(p => `<span class="tag place-tag">📍 ${p.name}</span>`).join('') 
+        ? entry.place_tags.map(p => `<span class="tag place-tag">📍 ${escapeJournalHtml(p.name)}</span>`).join('')
         : '';
-    
+
     const tagsHtml = entry.tags && entry.tags.length > 0
-        ? entry.tags.map(t => `<span class="tag">${t}</span>`).join('')
+        ? entry.tags.map(t => `<span class="tag">${escapeJournalHtml(t)}</span>`).join('')
         : '';
     
     const previewText = (entry.content || '').toString();
@@ -366,18 +407,18 @@ function createTimelineEntry(entry, index) {
         <div class="entry-spacer"></div>
         <div class="timeline-dot-container">
             <div class="timeline-dot"></div>
-            <div class="timeline-date">${dateStr}${isToday ? '<br>Today' : ''}</div>
+            <div class="timeline-date">${escapeJournalHtml(dateStr)}${isToday ? '<br>Today' : ''}</div>
         </div>
-        <div class="entry-card" onclick="openEntry('${String(entry.id).replace(/'/g, "\\'")}')">
+        <div class="entry-card" data-entry-id="${escapeJournalHtml(entry.id)}">
             ${imageHtml}
             <div class="entry-content">
                 <div class="entry-header">
                     <div>
-                        <div class="entry-title">${entry.title || 'Untitled'}</div>
-                        <div class="entry-time">${timeStr} · ${entry.read_time_minutes || 1} min read</div>
+                        <div class="entry-title">${escapeJournalHtml(entry.title || 'Untitled')}</div>
+                        <div class="entry-time">${escapeJournalHtml(timeStr)} · ${escapeJournalHtml(entry.read_time_minutes || 1)} min read</div>
                     </div>
                 </div>
-                <div class="entry-text">${preview}</div>
+                <div class="entry-text">${escapeJournalHtml(preview)}</div>
                 <div class="entry-footer">
                     <div class="entry-tags">
                         ${tagsHtml}
@@ -386,15 +427,24 @@ function createTimelineEntry(entry, index) {
                     </div>
                     <div class="privacy-badge">
                         <div class="privacy-icon">
-                            <div class="privacy-${entry.privacy_level || 'private'}"></div>
+                            <div class="privacy-${escapeJournalHtml(entry.privacy_level || 'private')}"></div>
                         </div>
-                        <span>${(entry.privacy_level || 'private').replace('_', ' ')}</span>
+                        <span>${escapeJournalHtml(String(entry.privacy_level || 'private').replace('_', ' '))}</span>
                     </div>
                 </div>
             </div>
         </div>
     `;
-    
+
+    // Bind the click in JS rather than an inline onclick= attribute: the old
+    // backslash-escaping of entry.id was not attribute-safe (HTML entity
+    // decoding runs before the JS parser), so a crafted id could break out
+    // into script context.
+    const card = entryDiv.querySelector('.entry-card');
+    if (card) {
+        card.addEventListener('click', () => openEntry(entry.id));
+    }
+
     return entryDiv;
 }
 
@@ -412,22 +462,27 @@ function displayOnThisDay(data) {
     section.style.cssText = 'background: linear-gradient(135deg, rgba(123,97,255,0.1), rgba(90,224,224,0.1)); padding: 30px; border-radius: 16px; margin-bottom: 40px;';
     
     const entriesHtml = data.entries.slice(0, 3).map(entry => `
-        <div style="background: rgba(255,255,255,0.8); padding: 20px; border-radius: 12px; margin-bottom: 15px; cursor: pointer;" onclick="openEntry('${String(entry.id).replace(/'/g, "\\'")}')">
+        <div style="background: rgba(255,255,255,0.8); padding: 20px; border-radius: 12px; margin-bottom: 15px; cursor: pointer;" data-entry-id="${escapeJournalHtml(entry.id)}">
             <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
-                <h3 style="font-size: 18px; font-weight: 600; color: #7B61FF;">${entry.title || 'Untitled'}</h3>
-                <span style="font-size: 12px; color: #666; font-weight: 500;">${entry.label || ''}</span>
+                <h3 style="font-size: 18px; font-weight: 600; color: #7B61FF;">${escapeJournalHtml(entry.title || 'Untitled')}</h3>
+                <span style="font-size: 12px; color: #666; font-weight: 500;">${escapeJournalHtml(entry.label || '')}</span>
             </div>
-            <p style="font-size: 14px; color: #666; line-height: 1.6;">${entry.content || ''}</p>
+            <p style="font-size: 14px; color: #666; line-height: 1.6;">${escapeJournalHtml(entry.content || '')}</p>
         </div>
     `).join('');
-    
+
     section.innerHTML = `
         <h2 style="font-size: 24px; font-weight: 600; margin-bottom: 20px; background: linear-gradient(135deg, #7B61FF, #5AE0E0); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
-            📅 On This Day - ${data.date}
+            📅 On This Day - ${escapeJournalHtml(data.date)}
         </h2>
         ${entriesHtml}
     `;
-    
+
+    // Inline onclick= replaced with bound listeners (see createTimelineEntry).
+    section.querySelectorAll('[data-entry-id]').forEach(el => {
+        el.addEventListener('click', () => openEntry(el.dataset.entryId));
+    });
+
     timelineView.insertBefore(section, timelineView.firstChild);
 }
 
@@ -456,7 +511,7 @@ function displayPrompts(prompts) {
         <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px;">
             <div>
                 <div style="font-size: 14px; opacity: 0.9; margin-bottom: 5px;">✨ Journal Prompt</div>
-                <div style="font-size: 18px; font-weight: 600;">${prompt.prompt_text || ''}</div>
+                <div style="font-size: 18px; font-weight: 600;">${escapeJournalHtml(prompt.prompt_text || '')}</div>
             </div>
             <button id="journalPromptBtn"
                     style="background: rgba(255,255,255,0.2); border: 2px solid white; padding: 12px 24px; border-radius: 12px; color: white; font-weight: 600; cursor: pointer; transition: all 0.3s; white-space: nowrap;">
@@ -484,7 +539,7 @@ function displayStreak(data) {
         const streakDiv = document.createElement('div');
         streakDiv.id = 'streakIndicator';
         streakDiv.style.cssText = 'background: rgba(255,165,0,0.1); color: #ff8c00; padding: 8px 16px; border-radius: 20px; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px;';
-        streakDiv.innerHTML = `🔥 ${data.current_streak} day streak!`;
+        streakDiv.innerHTML = `🔥 ${escapeJournalHtml(data.current_streak)} day streak!`;
         streakDiv.title = `Longest: ${data.longest_streak} days`;
         
         navRight.insertBefore(streakDiv, navRight.firstChild);
@@ -517,36 +572,45 @@ function displayJourneys(journeys) {
             '</div>';
         journeysView.insertAdjacentHTML('beforeend', gridHtml);
     }
+
+    // Inline onclick= replaced with bound listeners (see createTimelineEntry).
+    journeysView.querySelectorAll('[data-journey-checkin-id]').forEach(el => {
+        el.addEventListener('click', () => openJourneyCheckin(el.dataset.journeyCheckinId));
+    });
+    journeysView.querySelectorAll('[data-journey-view-id]').forEach(el => {
+        el.addEventListener('click', () => viewJourney(el.dataset.journeyViewId));
+    });
 }
 
 function createCurrentJourneyHtml(journey) {
-    const safeId = String(journey.id).replace(/'/g, "\\'");
+    const safeId = escapeJournalHtml(journey.id);
     return `
         <div class="current-journey">
             <div class="current-journey-header">
                 <div>
-                    <h2 class="journey-title">🧳 ${journey.title || ''}</h2>
-                    <p class="journey-subtitle">${journey.description || ''} · Started ${new Date(journey.start_date || journey.created_at).toLocaleDateString()}</p>
+                    <h2 class="journey-title">🧳 ${escapeJournalHtml(journey.title || '')}</h2>
+                    <p class="journey-subtitle">${escapeJournalHtml(journey.description || '')} · Started ${escapeJournalHtml(new Date(journey.start_date || journey.created_at).toLocaleDateString())}</p>
                 </div>
-                <button class="check-in-btn" onclick="openJourneyCheckin('${safeId}')">
+                <button class="check-in-btn" data-journey-checkin-id="${safeId}">
                     <span>📍</span>
                     <span>Check In</span>
                 </button>
             </div>
-            <div id="journeyStops${journey.id}"></div>
+            <div id="journeyStops${safeId}"></div>
         </div>
     `;
 }
 
 function createPastJourneyCard(journey) {
-    const safeId = String(journey.id).replace(/'/g, "\\'");
+    const safeId = escapeJournalHtml(journey.id);
+    const coverUrl = sanitizeJournalUrl(journey.cover_photo);
     return `
-        <div class="journey-card" onclick="viewJourney('${safeId}')">
-            ${journey.cover_photo ? `<img src="${journey.cover_photo}" class="journey-image">` : ''}
+        <div class="journey-card" data-journey-view-id="${safeId}">
+            ${coverUrl ? `<img src="${coverUrl}" class="journey-image">` : ''}
             <div class="journey-content">
-                <div class="journey-location">📍 ${journey.title}</div>
-                <div class="journey-dates">${new Date(journey.start_date || journey.created_at).toLocaleDateString()} - ${journey.end_date ? new Date(journey.end_date).toLocaleDateString() : 'Ongoing'}</div>
-                <div class="journey-entries">${journey.entry_count} entries · ${journey.stop_count} stops · ${journey.progress_percentage}% complete</div>
+                <div class="journey-location">📍 ${escapeJournalHtml(journey.title)}</div>
+                <div class="journey-dates">${escapeJournalHtml(new Date(journey.start_date || journey.created_at).toLocaleDateString())} - ${escapeJournalHtml(journey.end_date ? new Date(journey.end_date).toLocaleDateString() : 'Ongoing')}</div>
+                <div class="journey-entries">${escapeJournalHtml(journey.entry_count)} entries · ${escapeJournalHtml(journey.stop_count)} stops · ${escapeJournalHtml(journey.progress_percentage)}% complete</div>
             </div>
         </div>
     `;
