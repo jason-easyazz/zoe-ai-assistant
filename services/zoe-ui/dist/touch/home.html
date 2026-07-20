@@ -1789,20 +1789,39 @@
   function _qpost(path,body){return apiJson('POST','/api/music/'+path,body);}
   // The overlay is pure BROWSING now — Recent + Playlists. The queue itself is
   // the card (see the Cover Flow below), so there's no Queue tab to render.
+  var _qGen=0;
   function loadQueue(){var host=document.getElementById('mQList');if(!host)return;
+    // Overlapping loads: `_cur==='browse'` cannot tell WHICH visit a response
+    // belongs to, so leaving and re-entering Browse before the first request
+    // resolves lets the stale one land — and, with the fall-through below, flip
+    // a freshly-loading Recent over to Playlists. Only the newest load may act.
+    var gen=++_qGen;
     var ttl=document.getElementById('mQTitle');
     host.classList.remove('grid','recent');
     if(_qtab==='recent'){host.classList.add('recent');if(ttl)ttl.textContent='Recently played';
       host.innerHTML=_qmsg('Loading…');
-      apiGet('/api/music/recently-played').then(function(d){if(_cur!=='browse')return;var its=(d&&d.items)||[];
-        host.innerHTML=its.slice(0,40).map(_rtile).join('')||_qempty('Nothing played yet.');
-        _wireBrowseRow(host);}).catch(function(){host.innerHTML=_qempty('Couldn’t load.');});return;}
+      apiGet('/api/music/recently-played').then(function(d){if(_cur!=='browse'||gen!==_qGen)return;var its=(d&&d.items)||[];
+        if(!its.length){
+          // Recent is empty on a fresh house (MA reports available:false with no
+          // history). Landing here is a dead end: the speaker picker only
+          // REMEMBERS a speaker, it never starts anything, so an empty Recent
+          // leaves no way to play a single thing from the panel. Fall through to
+          // Playlists, which is the tab that actually has content.
+          var tb=document.querySelector('.mqtabs button[data-qt="playlists"]');
+          if(tb&&_qtab==='recent'){_qtab='playlists';
+            document.querySelectorAll('.mqtabs button').forEach(function(x){x.classList.toggle('on',x===tb);});
+            loadQueue();return;}
+          host.innerHTML=_qempty('Nothing played yet — try Playlists.');
+          _wireBrowseRow(host);return;
+        }
+        host.innerHTML=its.slice(0,40).map(_rtile).join('');
+        _wireBrowseRow(host);}).catch(function(){if(_cur!=='browse'||gen!==_qGen)return;host.innerHTML=_qempty('Couldn’t load.');});return;}
     if(_qtab==='playlists'){host.classList.add('grid');if(ttl)ttl.textContent='Your playlists';
       host.innerHTML=_qmsg('Loading…');
-      apiGet('/api/music/playlists').then(function(d){if(_cur!=='browse')return;var pls=(d&&d.playlists)||[];
+      apiGet('/api/music/playlists').then(function(d){if(_cur!=='browse'||gen!==_qGen)return;var pls=(d&&d.playlists)||[];
         host.innerHTML=pls.map(_pltile).join('')||_qempty('No playlists yet — build one with Save.');
         host.onclick=function(e){var r=e.target.closest('.qi.pl');if(!r)return;_qpost('play_media',{uri:r.getAttribute('data-uri'),player_id:_music.player_id||undefined,option:'replace'}).then(function(){toast('Playing playlist');setTimeout(loadMusic,600);}).catch(function(){toast('Couldn’t play');});};
-      }).catch(function(){host.innerHTML=_qempty('Couldn’t load playlists.');});return;}
+      }).catch(function(){if(_cur!=='browse'||gen!==_qGen)return;host.innerHTML=_qempty('Couldn’t load playlists.');});return;}
   }
   function _qmsg(t){return '<div class="mqmsg" style="color:var(--ink-faint);padding:8px 4px">'+esc(t)+'</div>';}
   function _qempty(t){return '<div style="color:var(--ink-faint);padding:8px 4px">'+esc(t)+'</div>';}
