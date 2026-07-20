@@ -23,7 +23,7 @@ logger**. Verify execution, not presence.
 
 | Decision | Basis |
 |---|---|
-| **KEEP Multica** — it is valuable *software*, not valuable *data* | Third-party product running on Zoe with its own DB; gives the human steering UI, a working integration, and agent-native primitives. Jason: the issues themselves "could all be erased". Scope: [`multica-executor-migration.md`](multica-executor-migration.md) |
+| **KEEP Multica** — it is valuable *software*, not valuable *data* | Third-party product running on Zoe with its own DB; gives the human steering UI, a working integration, and agent-native primitives. Jason: the issues themselves "could all be erased". Scope: [`multica-executor-migration.md`](multica-executor-migration.md) (lands with #1484) |
 | **KEEP the two-stage router; lock architecture, not checkpoint** | FunctionGemma-270M returns `shopping_list_add` at 0.9996 where the 4B brain is ~14% wrong. Self-train ratchet owns the weights. Locked in `CANONICAL.md` + `test_canonical_invariants.py` (PR #1479) |
 | **Do NOT retire Multica/the harness** | It reached true 100% hands-off idea→merged-PR autonomy 2026-06-17 (ZOE-5834 → PR #682, `merge_sha 2d3edaa9`). It is PAUSED, not broken |
 | **Retire the 101 skills; keep the runtime** | Skills never executed (two independent methods). The runtime couplings are separate and gated |
@@ -85,7 +85,8 @@ corpus now 916) and is waiting on 2GB to re-run. Confirm with one clean run unde
 
 ### 3.4 Multica → Pi/Flue executor migration
 
-Full scope in [`multica-executor-migration.md`](multica-executor-migration.md).
+Full scope in [`multica-executor-migration.md`](multica-executor-migration.md)
+**(lands with PR #1484 — if that link 404s, #1484 has not merged yet).**
 Phase 1 (the Zoe-native executor) is the only hard part and is deliberately
 uncosted — three unknowns must be answered first. **Do not rebuild
 `kanban_adapter`**: it encodes twelve PRs of discovered failure modes.
