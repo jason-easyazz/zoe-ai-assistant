@@ -100,9 +100,26 @@ Omnigent is down, the local lane still runs.
 
 ### Phase 4 — retire Hermes
 
-Only now. Per `zoe-flue-integration.md` §8.2 the gate is: durable board outside
-Hermes ✅ (Multica already is), executor without the gateway (Phase 1),
-both proven on ≥3 real tickets (Phase 2), operator sign-off.
+Only now, and **no part of the gate may be treated as pre-satisfied.**
+
+`zoe-flue-integration.md` §8.2 states the live board is `~/.hermes/kanban.db`.
+That wording was written before this document established the split, and is
+imprecise rather than wrong: **Multica is the board** (issues, activity log,
+inbox — its own DB), while **`~/.hermes/kanban.db` is the executor queue** that
+`kanban_adapter` writes tasks into. Both exist today.
+
+So the "durable board outside Hermes" gate is **NOT** ticked by Multica's mere
+existence. What must be true before Hermes is retired:
+
+- [ ] The **executor queue** no longer lives in Hermes (Phase 1) — this is the
+      piece §8.2 is really about
+- [ ] An executor runs phase workers without the Hermes gateway (Phase 1)
+- [ ] Both proven on ≥3 real tickets end to end (Phase 2)
+- [ ] Operator sign-off naming the `hermes-agent.service` row specifically
+
+Retiring Hermes on the strength of "Multica already exists" would remove the
+queue and workers while leaving the board — the exact failure §8.2's stop-block
+was added to prevent.
 
 ---
 
