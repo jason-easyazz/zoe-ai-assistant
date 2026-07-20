@@ -41,6 +41,21 @@ agents:
       - zoe_status_refresh
       - long_form
       - research
+    # Prose for the A2A agent card. Kept as a parallel map (not inlined into
+    # `skills:`) because four readers treat that list as bare strings —
+    # zoe_agent_registry.py:49 does ", ".join(...) on it.
+    skill_descriptions:
+      reasoning: "Multi-step reasoning over ambiguous or under-specified problems"
+      planning: "Break a goal into an ordered, dependency-aware implementation plan"
+      implementation_strategy: "Choose an approach and sequence the work before code is written"
+      code_review: "Review a diff for correctness, risk, and repo-convention fit"
+      development_repair: "Diagnose and fix failing builds, tests, and broken integrations"
+      greptile_pr_loop: "Drive a PR to merge: address findings, resolve threads, re-review"
+      graphify_codebase_navigation: "DEPRECATED — graphify is retired; navigation is codebase-memory + Serena"
+      multica_board_repair: "Unstick a stalled Multica ticket chain or phase"
+      zoe_status_refresh: "Regenerate the operator-facing status and knowledge snapshot"
+      long_form: "Produce extended prose: design docs, analyses, write-ups"
+      research: "Investigate a question across sources and synthesize a cited answer"
     skills_dir: "~/.hermes/skills"
     health_port: 8642
     multica_agent_id: "019ae0a7-62f1-47fe-9d46-75fd0ae5d570"
@@ -56,6 +71,11 @@ agents:
       - persistent_login_sessions
       - home_assistant_ui_flows
       - workflows_hermes_cannot_execute
+    skill_descriptions:
+      browser_automation: "Drive a real browser through the CloakBrowser broker"
+      persistent_login_sessions: "Hold authenticated browser sessions across runs"
+      home_assistant_ui_flows: "Operate Home Assistant through its UI where no API path exists"
+      workflows_hermes_cannot_execute: "Fallback lane for work outside the Hermes toolset"
     skills_dir: "~/.openclaw/workspace/skills"
     health_port: 18789
     multica_agent_id: "e2a566ab-613c-4a80-a299-965b7effaca8"

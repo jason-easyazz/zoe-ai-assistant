@@ -10,19 +10,23 @@
 
 Zoe has **skill discovery**, not a skill loader.
 
-`services/zoe-data/skill_discovery.py` walks two directories on disk and parses
-each skill's `SKILL.md` for a **name and description only**:
+`openclaw_manager.list_skills()` parses each `SKILL.md` under
+`~/.openclaw/workspace/skills/` for a **name and description only**, and
+`zoe_agent.py` exposes that list through the `list_openclaw_skills` tool so the
+brain can surface a capability gap ("I can't yet — the Discord skill would
+enable it").
 
-| Directory | Parsed by |
-|---|---|
-| `~/.openclaw/workspace/skills/` | `parse_openclaw_skills()` |
-| `~/.hermes/skills/` | `parse_hermes_skills()` |
-
-The parsed result is a list of A2A v1.0 `AgentSkill` dicts
-(`{"id", "name", "description", "inputModes", "outputModes"}`). That list is used
-to **tell the model what Zoe can do** — `zoe_agent.py` exposes it through the
-`list_openclaw_skills` tool so the brain can surface a capability gap
-("I can't yet — the Discord skill would enable it").
+> **Corrected 2026-07-20.** This guide previously credited
+> `skill_discovery.py` (`parse_openclaw_skills()` / `parse_hermes_skills()`).
+> That module produced an agent card with zero callers and a markdown file with
+> zero readers, fed no tool, and has been deleted. `~/.hermes/skills/` has no
+> parser at all now — Hermes skills were never surfaced to Zoe's brain.
+>
+> **A description being listed does not mean the skill can run.** OpenClaw
+> resolves its workspace-skills root from `agents.list[0].workspace`, which
+> points at a directory containing no `skills/`, so workspace skills are not in
+> the agent's catalog at all. Symlinked skills are additionally rejected
+> (`symlink-escape`) unless `skills.load.allowSymlinkTargets` is configured.
 
 That is the whole mechanism. A skill is a **description advertised to the model**.
 It is not code that Zoe loads, sandboxes, or executes.
@@ -50,25 +54,33 @@ useful in that role — e.g. `skills/autoresearch-engineer/SKILL.md` documents t
 
 ## Adding a skill the runtime will actually see
 
-Place the skill in a **discovery directory**, not in the repo:
+There is exactly **one** location Zoe reads:
 
 ```
 ~/.openclaw/workspace/skills/{skill-name}/SKILL.md
-# or
-~/.hermes/skills/{skill-name}/SKILL.md
 ```
 
-`services/zoe-data/skills_watcher.py` watches both directories for `*.md` changes
-and marks the discovery cache dirty, so a new skill is normally picked up without
-a restart. To force a cache flush:
+**Do not use `~/.hermes/skills/`.** It had a parser until 2026-07-20
+(`skill_discovery.py`), that parser fed nothing, and it is now gone — so Zoe has
+no reader for that directory at all. A skill installed there is invisible to her.
+It remains meaningful to the *Hermes agent*, which reads it for its own purposes,
+but that is a different consumer with a different catalogue.
 
-```bash
-# admin-only; name is "openclaw" or "hermes"
-curl -X POST /api/agent/peers/openclaw/skills/reload
-```
+**And placement alone is not sufficient.** OpenClaw resolves its workspace-skills
+root from `agents.list[0].workspace` in `~/.openclaw/openclaw.json`, which
+currently points at a directory with no `skills/` — so as of this writing the
+agent's catalog contains **no workspace skills at all**. Symlinked skills are
+additionally rejected (`symlink-escape`) unless `skills.load.allowSymlinkTargets`
+names the target. Verify with the endpoint below rather than assuming the file
+landing in the right directory is enough.
 
-**Note the real path.** It is `POST /api/agent/peers/{name}/skills/reload`.
-`POST /api/skills/reload` does not exist and never did.
+There is **no discovery cache and no watcher** — `skills_watcher.py` was deleted
+with `skill_discovery.py` on 2026-07-20. `openclaw_manager.list_skills()` reads
+the directory on each call, so a new skill is picked up with no restart and no
+flush step.
+
+`POST /api/agent/peers/{name}/skills/reload` has been removed; it existed only to
+flush the deleted cache. `POST /api/skills/reload` never existed.
 
 Before installing any third-party skill, scan it — see the root `AGENTS.md`
 "Skill & extension safety" section (`skillspector scan <dir|file|git-url>`).
@@ -127,9 +139,9 @@ prefix `/api/openclaw`) is the actual skills API:
 | `POST /api/openclaw/skills/{name}/install` | Install a skill |
 | `POST /api/openclaw/skills/{name}/update` | Update a skill |
 | `DELETE /api/openclaw/skills/{name}` | Remove a skill |
-| `POST /api/agent/peers/{name}/skills/reload` | Admin: flush the discovery cache |
 
-`GET /api/skills` and `GET /api/skills/audit/calls` do not exist.
+`GET /api/skills`, `GET /api/skills/audit/calls`, and
+`POST /api/agent/peers/{name}/skills/reload` do not exist.
 
 ## Testing your skill
 
