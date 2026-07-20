@@ -11,7 +11,7 @@ import pytest
 
 import background_runner
 import background_runner as br
-from hermes_http import zoe_repo_root
+from repo_paths import zoe_repo_root
 
 pytestmark = pytest.mark.ci_safe
 
