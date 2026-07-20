@@ -40,3 +40,4 @@ No child AGENTS.md files yet.
 OKF knowledge bundles (records, not contracts — see root "Knowledge vs. Records (OKF)"):
 - [knowledge/](knowledge/index.md) — curated Zoe reference knowledge (tool stack, topology); agent-curatable.
 - [knowledge/autopilots/](knowledge/autopilots/index.md) — Loop-Engineering contracts for the live Multica autopilots (Job/Inputs/Allowed/Forbidden/Output/Evaluation); agent-curatable.
+- [knowledge/operator-skills/](knowledge/operator-skills/index.md) — backup copies of the ten `author: Zoe` operator skills from `~/.hermes/skills`. Preservation only; read by no runtime, and NOT a substitute for `skills/` (whose contract forbids operator skills). Restore is manual.
