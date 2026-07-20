@@ -140,4 +140,23 @@ check('the main block executes against a DOM stub without throwing', () => {
     assert.strictEqual(typeof sandbox.loadPeopleAndRender, 'function');
 });
 
+check('edit mode renders the exact inputs savePersonChanges reads', () => {
+    // The deleted showPersonDetail() was what created these inputs. Repointing
+    // edit at the read-only card left savePersonChanges reading nothing, so
+    // every field fell back to its existing value and the save silently
+    // discarded the user's edits WHILE toasting success. Pin the contract:
+    // every id the save path reads must be produced by the form.
+    const reads = [...mainBlock.matchAll(/getElementById\('(editPerson[A-Za-z]+)'\)/g)]
+        .map(m => m[1]);
+    assert.ok(reads.length >= 6, `expected savePersonChanges to read several fields, saw ${reads.length}`);
+    const form = mainBlock.match(/function renderPersonEditForm[\s\S]*?\n {8}\}/);
+    assert.ok(form, 'renderPersonEditForm must exist');
+    for (const id of new Set(reads)) {
+        assert.ok(form[0].includes(`id="${id}"`),
+            `${id} is read on save but never rendered by the edit form — edits would be silently dropped`);
+    }
+    assert.ok(/dpOpenCard\(person\.id\)\.then\(\(\) => renderPersonEditForm/.test(mainBlock),
+        'entering edit mode must render the form after the card opens');
+});
+
 console.log(`\n${passed} checks passed`);

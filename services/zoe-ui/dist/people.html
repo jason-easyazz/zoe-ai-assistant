@@ -1226,11 +1226,47 @@
                 savePersonChanges(personId);
             } else {
                 panel.classList.add('editing');
-                // was showPersonDetail() — see showPersonById
-                dpOpenCard(person.id);
+                // The deleted showPersonDetail() was what CREATED the
+                // #editPerson* inputs that savePersonChanges() reads. Opening
+                // the read-only card alone would leave every field missing, so
+                // save would fall back to the existing values and silently
+                // discard the user's edits while toasting "Updated!". Render a
+                // real form instead, into #dp-timeline-content (which exists).
+                dpOpenCard(person.id).then(() => renderPersonEditForm(person));
             }
         }
         
+        /**
+         * Inline edit form for the desktop detail panel.
+         * Field ids are the contract savePersonChanges() reads — keep them in
+         * sync with that function or saves silently no-op.
+         */
+        function renderPersonEditForm(person) {
+            const host = document.getElementById('dp-timeline-content');
+            if (!host) return;
+            const md = person.metadata || {};
+            const tier = normTier(person.circle || person.category || 'circle');
+            const ctx = person.context || 'personal';
+            const v = (x) => escapeHtml(x == null ? '' : String(x));
+            const opt = (val, cur, label) =>
+                `<option value="${escapeHtml(val)}"${val === cur ? ' selected' : ''}>${escapeHtml(label)}</option>`;
+            host.innerHTML = `
+                <div class="dp-edit-form" style="display:flex;flex-direction:column;gap:10px;padding:4px 0;">
+                    <input type="text" id="editPersonName" class="edit-field" placeholder="Full name" value="${v(person.name)}">
+                    <select id="editPersonCategory" class="edit-field">
+                        ${opt('inner', tier, 'Inner circle')}${opt('circle', tier, 'Circle')}${opt('outer', tier, 'Outer')}
+                    </select>
+                    <select id="editPersonContext" class="edit-field">
+                        ${opt('personal', ctx, 'Personal')}${opt('work', ctx, 'Work')}
+                    </select>
+                    <input type="tel"   id="editPersonPhone"    class="edit-field" placeholder="Phone"    value="${v(person.phone || md.phone)}">
+                    <input type="email" id="editPersonEmail"    class="edit-field" placeholder="Email"    value="${v(person.email || md.email)}">
+                    <input type="date"  id="editPersonBirthday" class="edit-field" value="${v(person.birthday || md.birthday)}">
+                    <input type="text"  id="editPersonAddress"  class="edit-field" placeholder="Address"  value="${v(person.address || md.address)}">
+                    <textarea id="editPersonNotes" class="edit-field" rows="3" placeholder="Notes">${v(person.notes || md.notes)}</textarea>
+                </div>`;
+        }
+
         async function savePersonChanges(personId) {
             const person = people.find(p => p.id === personId);
             if (!person) {
