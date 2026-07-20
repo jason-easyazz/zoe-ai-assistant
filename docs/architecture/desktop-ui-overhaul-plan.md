@@ -97,7 +97,8 @@ skip-list, `sw.js` cache routes, `voice_tts.py:526-530` supersede/cancel list.
 | `cooking.html`, `smart-home.html` (desktop) | **retire the 11-line stubs only** | Meta-refreshes. Their touch targets **stay** |
 | `week_planner_widget.html`, `dist/developer/`, `dist/_preview/*` | **retire / see Wave 4** | Orphan mock; 4,406-line dead prototype. `_preview` is NOT dead — see Wave 4 |
 | Legacy touch pages (11) | **retire** | `touch/{dashboard,lists,calendar,notes,people,timers,weather,memories,journal,chat,games}.html` — no live inbound path |
-| Widget stack | **retire after the Wave 4b rebuild** | Serves desktop dashboard + lists only once the touch copies go |
+| Widget stack (`widget-system.js`, `widget-base.js`, `dashboard.js`, `lists-dashboard.js`, `js/widgets/**`) | **retire after the Wave 4b rebuild** | Serves desktop dashboard + lists only once the touch copies go |
+| `lib/gridstack`, `dashboard-protection.js` | **KEEP** | Drag-and-drop is retained (Jason, 2026-07-20), so the grid engine stays and the corrupt-layout guard matters more, not less |
 | Orphan js/css set | **retire** | `navigation.js`, `js/lib/{module-widget-loader,widget-registry}.js`, `js/voice/*`, 4 unloaded music widgets, `mini-player.js`, `chat-sessions.js`, `ai-processor.js`, `components/zoe-orb.html`, `css/{glass,memories-enhanced,widgets-enhanced}.css` |
 
 ## The triage register (23 P1 + item 11, a P2 promoted for privacy blast radius)
@@ -310,23 +311,57 @@ API calls with literal `user_id=undefined` + ~20 failed WS handshakes in 10s).
 - **Prerequisite: strip lists.html's dead code first** (Projects wing, Marketplace, AI-Generate, the
   114-line block at `:2377-2492` that never executes because its `<script>` has a `src`). Doing it
   after means re-editing a freshly migrated file.
+- **DECIDED (Jason, 2026-07-20): KEEP drag-and-drop.** So **`lib/gridstack` SURVIVES and is NOT in
+  the deletion set.** This is a **re-skin + re-wire on a kept engine**, not a layout rebuild — the
+  scope is materially smaller than "rebuild the dashboard" implies. What changes: rendering
+  (`innerHTML` templates → tokenized cards), registration (manifest-driven `window[className]` string
+  lookup → static), persistence (localStorage → the server API). What stays: gridstack, the drag/
+  resize/edit-mode UX, and the 8 working data-fetch paths.
 - Salvage the **8 verified-working** widget data-fetch paths: time, weather, events, notes,
   shopping/personal/work/bucket. **Re-evaluate `home.js` as a survivor** — its HA endpoints are live.
-  Discard the `innerHTML` rendering; rewrite the layout/persistence/registration layer.
+- **MUST-FIX, and keeping drag-and-drop is what makes it mandatory: duplicate widgets break at THREE
+  layers, not one.** A drag-and-drop dashboard with a widget library is precisely the surface where a
+  user adds two of the same card, so all three must be fixed together or the bug just moves:
+  1. **Frontend singleton** (`widget-system.js:223`) — `WidgetManager` registers ONE instance per
+     type and `addWidget` re-`init()`s it per grid item, so two cards of the same type clobber each
+     other's `this.element` and update timers. Instantiate **per grid item**.
+  2. **Server dedupes by type** — `AVAILABLE_WIDGETS[].id` (`dashboard.py:13-30`) is a **type**
+     identifier (`"weather"`, `"events"`), and `_requested_widget_ids` (`:64-81`) drops repeats
+     (`if wid in valid_ids and wid not in seen`). So `POST /widgets/` silently discards the second
+     same-type card.
+  3. **The layout schema has no instance identity.** `PUT /layout/` (`:96`) does not dedupe — it
+     stores raw jsonb — but that does not rescue it: two weather cards both carry `id: "weather"`,
+     so any id-keyed restore collapses them. **Layout entries therefore need an instance key
+     separate from the type key** (e.g. `{uid, type, x, y, w, h}`). This supersedes the earlier
+     "emit `id` instead of `type`" instruction, which would have thrown away the only field
+     distinguishing instances. `LayoutProtection` validates on `item.type`, so keeping an explicit
+     `type` field also keeps that guard working.
+
+  Decide whether the enabled-widget set keeps flowing through `POST /widgets/` at all — if it does,
+  its type-dedupe has to be reconciled with instance identity too.
+- **KEEP and update `dashboard-protection.js` (`LayoutProtection`).** With drag-and-drop retained, a
+  corrupt-layout guard is more valuable, not less — it validates shape before save/load. But note it
+  validates on `item.type`, so it must change **in lockstep** with the schema reconciliation below.
+  (It is currently loaded by lists.html only; the rebuilt dashboard should load it too.)
 - **Wire layout persistence** — `GET/PUT /api/dashboard/layout/` (`dashboard.py:84/:96`) has **zero
-  callers repo-wide**. Not a wiring job: server stores `{id,x,y,w,h}`, client writes
-  `{type,x,y,w,h,order}`, and `AVAILABLE_WIDGETS` (`:13-30`) is a hardcoded 16-id allowlist that
-  silently drops unknown cards. Reconcile the schema and extend the allowlist.
+  callers repo-wide**. Keeping gridstack makes this *easier*: `saveLayout()` (`dashboard.js:409-421`)
+  already walks `grid.engine.nodes`, so the geometry is right at the source. The reconciliation is
+  narrow — **keep `type` and add a unique instance key** (see the duplicate-widget item above; do NOT
+  collapse onto the server's type-level `id`, which is what makes two same-type cards indistinguishable),
+  and drop `order` (gridstack's `x`/`y` already encode position, so it is redundant). Then extend
+  `AVAILABLE_WIDGETS` (`:13-30`), a hardcoded 16-id allowlist that silently drops unknown cards.
 - Static card registration is **easier than it looks**: `widget-registry.js` is loaded by no page, so
   the 24 `WidgetRegistry.register()` calls are already dead code. Nothing to fight.
-- **OPEN DECISION — does the rebuilt dashboard keep drag-and-drop?** Dropping gridstack for a token
-  grid trades arbitrary drag-resize for fixed slots on the surface Jason sees every login. Decide
-  explicitly; do not settle by omission. Also decide the fate of the widget settings sheet and
-  `dashboard-protection.js`.
-- Then migrate `lists.html` off the stack and delete the lineage. **Split into ≥3 PRs** —
-  `js/widgets/**` alone is 28 files and the whole set exceeds the ~50-file Greptile silent-skip
-  threshold. Naming traps: **`dashboard-protection.js` belongs to lists.html; `mcp-client.js` belongs
-  to dashboard.html** — the opposite of what they sound like.
+- Keep the widget settings sheet — a customizable dashboard implies per-widget configuration.
+- Then migrate `lists.html` onto the rebuilt stack and delete the **superseded lineage only**:
+  `widget-system.js`, `widget-base.js`, `dashboard.js`, `lists-dashboard.js`, `js/widgets/**`,
+  `js/lib/{module-widget-loader,widget-registry}.js`. **`lib/gridstack` and `dashboard-protection.js`
+  are NOT in this set.** Consolidate the two divergent `Dashboard` classes onto the
+  **`lists-dashboard.js` lineage** — it is the maintained one (user-scoped storage keys,
+  `LayoutProtection`, deferred-widget fixes the desktop copy never received).
+  **Split into ≥3 PRs** — `js/widgets/**` alone is 28 files and the whole set exceeds the ~50-file
+  Greptile silent-skip threshold. Naming traps: **`dashboard-protection.js` belongs to lists.html;
+  `mcp-client.js` belongs to dashboard.html** — the opposite of what they sound like.
 - Remove the dead `generateWidgetWithAI` button from `dashboard.html:1918` too, or the rebuild inherits it.
 - **SW_VERSION bump** (dashboard.html).
 
@@ -434,8 +469,10 @@ API calls with literal `user_id=undefined` + ~20 failed WS handshakes in 10s).
 
 ## Open decisions
 
-1. **Dashboard drag-and-drop (Wave 4b)** — keep gridstack's arbitrary drag-resize, or accept fixed
-   token-grid slots? Affects the login surface. **Needs Jason.**
+1. ~~Dashboard drag-and-drop~~ — **DECIDED (Jason, 2026-07-20): keep it.** `lib/gridstack` survives;
+   Wave 4b is a re-skin + re-wire, not a layout rebuild. Consequences folded in: the singleton flaw
+   becomes must-fix, `LayoutProtection` is kept and updated with the schema, and the widget settings
+   sheet stays.
 2. **`touch/music.html` entry point (Wave 3 step 10)** — route home's Browse to it / fold search into
    home and retire it / accept losing panel search. **Recommend folding in.**
 3. **`/_preview/` revival (Wave 4)** — fix the two-line nginx block + sandbox, or delete a ~90%-built
