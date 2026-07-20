@@ -1597,15 +1597,30 @@
         var pp0=document.getElementById('mPP');if(pp0){pp0.dataset.playing='0';pp0.innerHTML=PLAY_I;}
         if(ar)ar.innerHTML='Say <b style="color:var(--ink)">“Hey Zoe, play some music”</b> — or pick a speaker first.';
         if(scrub)scrub.style.display='none';if(tp)tp.style.display='none';
-        if(np&&spk){var nm0=spk.querySelector('.spkname');if(nm0&&np.player_name)nm0.textContent=np.player_name;}
+        // Don't stomp the speaker the operator just chose. With nothing
+        // playing, now-playing still names whatever MA last had active, so
+        // refreshing from it made the label snap back a few seconds after
+        // every pick — which read as "I can't change speaker".
+        if(np&&spk){var nm0=spk.querySelector('.spkname');
+          var want0=_music.chosenName||np.player_name;
+          if(nm0&&want0)nm0.textContent=want0;}
         cfClear();   // no queue to fan out when nothing is playing
         return;
       }
       if(scrub)scrub.style.display='';if(tp)tp.style.display='';
       _music.player_id=np.player_id;
-      if(spk){var nm=spk.querySelector('.spkname');if(nm)nm.textContent=np.player_name||'';}
+      if(spk){var nm=spk.querySelector('.spkname');
+        // A REAL track playing somewhere is the truth — that player wins and any
+        // stale pick is dropped. But `paused with no title` is not a real track:
+        // this branch is reached whenever state is playing OR paused, so without
+        // the title check a pick was overwritten within 5s by the very player the
+        // operator was trying to move away from. That is the whole "I can't
+        // change speaker" report.
+        var real=!!(np.title||'').trim();
+        if(real&&np.player_name)_music.chosenName='';
+        if(nm)nm.textContent=(real?np.player_name:'')||_music.chosenName||np.player_name||'';}
       var el=np.elapsed||0,du=np.duration||0;
-      _music.np={elapsed:el,duration:du,playing:np.state==='playing',active:(np.state==='playing'||np.state==='paused'),at:Date.now(),queueItemId:np.queue_item_id||null,index:(np.queue_index!=null?np.queue_index:null),title:np.title||'',artist:np.artist||'',image:np.image||''};
+      _music.np={elapsed:el,duration:du,playing:np.state==='playing',active:((np.state==='playing'||np.state==='paused')&&!!(np.title||'').trim())/* a paused player with no title has NOTHING to move: treating it as active sent every speaker tap down the transfer path, which then tried to move an empty queue and silently did nothing — so the speaker could never be changed at all. 'Active' must mean 'there is something playing to move'. */,at:Date.now(),queueItemId:np.queue_item_id||null,index:(np.queue_index!=null?np.queue_index:null),title:np.title||'',artist:np.artist||'',image:np.image||''};
       cfSync();   // the flow owns the art + meta now (it may be showing a browsed cover)
       // The 5s poll must not repaint the bar out from under a drag.
       if(!_seek){
@@ -2353,14 +2368,16 @@
           if(!active){
             // Nothing to move — remember this speaker as the default for the
             // NEXT play (server-side, so voice plays land there too).
-            _music.player_id=pid;estClose();
-            var sn=spk.querySelector('.spkname');if(sn)sn.textContent=b.textContent;
+            _music.player_id=pid;_music.chosenName=b.textContent;estClose();
+            // Fresh lookup: the `spk` captured in wireMusic can be detached by a
+            // card rebuild, and writing to a detached node silently does nothing.
+            var sn=document.querySelector('#mSpk .spkname');if(sn)sn.textContent=b.textContent;
             apiJson('POST','/api/music/preferred-player',{player_id:pid}).catch(function(){});
             toast('Music will play on '+b.textContent);
             return;
           }
           apiJson('POST','/api/music/transfer',{target_player_id:pid,source_player_id:_music.player_id||undefined})
-            .then(function(){estClose();var sn=spk.querySelector('.spkname');if(sn)sn.textContent=b.textContent;loadMusic();})
+            .then(function(){estClose();var sn=document.querySelector('#mSpk .spkname');if(sn)sn.textContent=b.textContent;loadMusic();})
             .catch(function(){toast('Couldn’t switch speaker');});};});
       }).catch(function(){toast('Couldn’t load speakers');});
     };
