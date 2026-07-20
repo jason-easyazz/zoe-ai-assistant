@@ -161,7 +161,9 @@ async function setupLocationAutocomplete() {
         }
         
         try {
-            const response = await fetch(`/api/location/search?query=${encodeURIComponent(query)}&limit=5`);
+            // /api/location/search does not exist; the route lives under the weather
+            // router (weather.py:638, prefix /api/weather). Mis-prefixed, not missing.
+            const response = await fetch(`/api/weather/location/search?query=${encodeURIComponent(query)}&limit=5`);
             const data = await response.json();
             
             if (!data.results || data.results.length === 0) {
