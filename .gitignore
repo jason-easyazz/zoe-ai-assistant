@@ -160,6 +160,15 @@ credentials/
 !.greptile/config.json
 !.greptile/files.json
 !.mcp.json
+# The desktop UI's two load-bearing manifests. Both were caught by the blanket
+# *.json rule above and existed ONLY as untracked files on the live box: the PWA
+# manifest (linked by ~20 pages and precached by sw.js) and the widget manifest
+# (widget-system.js aborts with 0 widgets without it, blanking the grid on the
+# lists page and both touch dashboards). A `git clean` would have destroyed the
+# only copies. Negate rather than `git add -f`, so the next file added here is
+# not silently ignored too.
+!services/zoe-ui/dist/manifest.json
+!services/zoe-ui/dist/js/widgets/widget-manifest.json
 # generated flag inventory (tools/audit/flag_inventory.py) — no secrets, names+defaults only
 !docs/knowledge/flag-inventory.json
 !services/zoe-litellm/minimal_config.yaml
