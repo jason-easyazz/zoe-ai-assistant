@@ -846,6 +846,10 @@
     <script>
         let currentPin = '';
         let selectedUser = null;
+
+        // Shown whenever zoe-auth cannot be reached. Sign-in must fail closed:
+        // no session is ever created on the client.
+        const AUTH_UNAVAILABLE_MESSAGE = "Zoe's sign-in service is unavailable — try again in a moment";
         let userProfiles = [];
 
         async function showLoginForm() {
@@ -1038,26 +1042,11 @@
                     showMessage(data.error_message || 'Login failed', 'error');
                 }
             } catch (error) {
-                console.warn('Auth service unavailable, trying demo mode');
-                // Demo fallback
-                if ((username.toLowerCase() === 'admin' && password === 'admin') || 
-                    (username.toLowerCase() === 'user' && password === 'user')) {
-                    
-                    const demoSession = {
-                        success: true,
-                        user_id: username.toLowerCase(),
-                        username: username,
-                        role: username.toLowerCase(),
-                        session_id: 'demo_' + Date.now(),
-                        session_type: 'password',
-                        expires_at: new Date(Date.now() + 24*60*60*1000).toISOString(),
-                        demo_mode: true
-                    };
-                    
-                    handleSuccessfulLogin(demoSession);
-                } else {
-                    showMessage('Auth service offline. Try admin/admin or user/user', 'error');
-                }
+                // The sign-in service could not be reached. Fail closed: never
+                // fabricate a session client-side, because isAuthenticated() in
+                // js/auth.js trusts localStorage and would accept it.
+                console.error('Auth service unreachable:', error);
+                showMessage(AUTH_UNAVAILABLE_MESSAGE, 'error');
             } finally {
                 setLoading(btn, false);
             }
@@ -1101,27 +1090,11 @@
                     document.getElementById('pinInput').value = '';
                 }
             } catch (error) {
-                // Demo fallback
-                if ((username.toLowerCase() === 'admin' && currentPin === 'admin') || 
-                    (username.toLowerCase() === 'user' && currentPin === 'user')) {
-                    
-                    const demoSession = {
-                        success: true,
-                        user_id: username.toLowerCase(),
-                        username: username,
-                        role: username.toLowerCase(),
-                        session_id: 'demo_' + Date.now(),
-                        session_type: 'passcode',
-                        expires_at: new Date(Date.now() + 24*60*60*1000).toISOString(),
-                        demo_mode: true
-                    };
-                    
-                    handleSuccessfulLogin(demoSession);
-                } else {
-                    showMessage('Auth service offline. Try admin/admin or user/user', 'error');
-                    currentPin = '';
-                    document.getElementById('pinInput').value = '';
-                }
+                // Fail closed - see handlePasswordLogin.
+                console.error('Auth service unreachable:', error);
+                showMessage(AUTH_UNAVAILABLE_MESSAGE, 'error');
+                currentPin = '';
+                document.getElementById('pinInput').value = '';
             } finally {
                 setLoading(btn, false);
             }
@@ -1149,18 +1122,11 @@
                     showMessage('Guest access failed', 'error');
                 }
             } catch (error) {
-                // Demo guest mode
-                const guestSession = {
-                    success: true,
-                    user_id: 'guest',
-                    username: 'Guest',
-                    role: 'guest',
-                    session_id: 'demo_guest_' + Date.now(),
-                    session_type: 'guest',
-                    expires_at: new Date(Date.now() + 24*60*60*1000).toISOString(),
-                    demo_mode: true
-                };
-                handleSuccessfulLogin(guestSession);
+                // Fail closed. This path previously minted a role:'guest'
+                // session with NO credential check at all, so anyone able to
+                // make /api/auth/guest unreachable could sign themselves in.
+                console.error('Auth service unreachable:', error);
+                showMessage(AUTH_UNAVAILABLE_MESSAGE, 'error');
             }
         }
 
@@ -1172,7 +1138,10 @@
             }
             
             localStorage.setItem('zoe_session', JSON.stringify(data));
-            showMessage('Welcome, ' + data.username + '!', 'success');
+            // zoe-auth's AuthResponse carries identity under user_info, not at
+            // the top level; reading data.username rendered "Welcome, undefined!".
+            const displayName = (data.user_info && data.user_info.username) || data.username;
+            showMessage(displayName ? 'Welcome, ' + displayName + '!' : 'Welcome!', 'success');
             
             setTimeout(() => {
                 // If we were sent here from an OIDC authorize flow, complete it
@@ -1225,7 +1194,10 @@
             if (session) {
                 try {
                     const sessionData = JSON.parse(session);
-                    if (sessionData.user_id && sessionData.expires_at) {
+                    // Real AuthResponse sessions have no top-level user_id (it
+                    // lives under user_info), so gating on it rejected genuine
+                    // sessions and only ever admitted the fabricated demo ones.
+                    if (sessionData.session_id && sessionData.expires_at) {
                         const expiresAt = new Date(sessionData.expires_at);
                         const now = new Date();
                         
