@@ -265,6 +265,9 @@ window.ZoeWebSockets = {
     },
 
     disconnect() {
+        if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
+        // init() no longer creates these, but a caller may still hold a handle
+        // from a page load that predates this change.
         ['lists', 'calendar', 'people', 'reminders', 'notes', 'journal'].forEach(name => {
             if (this[name]) this[name].disconnect();
         });
