@@ -2128,15 +2128,16 @@
         // Authenticated API request wrapper
         async function authedApiRequest(endpoint, options = {}) {
             const session = window.zoeAuth?.getCurrentSession();
-            const userId = session?.user_info?.user_id || session?.user_id;
-            
-            console.log('📅 Calendar API call for user:', userId, 'Endpoint:', endpoint);
-            
-            // ✅ FIX: Add user_id to query params for proper isolation
-            const separator = endpoint.includes('?') ? '&' : '?';
-            const endpointWithUser = `${endpoint}${separator}user_id=${userId}`;
-            
-            return apiRequest(endpointWithUser, {
+
+            // NOTE: this used to append `?user_id=<id>` "for proper isolation".
+            // It never did anything: every UI-facing route resolves identity
+            // from the session via Depends(get_current_user) (zoe-data/auth.py),
+            // and none of them declares a user_id query param, so FastAPI
+            // dropped it. Logged out it stringified to the literal
+            // "user_id=undefined" and filled the network tab with noise that
+            // looked like the bug but wasn't. Isolation comes from the session
+            // header below.
+            return apiRequest(endpoint, {
                 ...options,
                 headers: {
                     ...(session ? { 'X-Session-ID': session.session_id } : {}),
@@ -2217,17 +2218,29 @@
             }
         }
         
+        // List TYPES whose collection fetch failed (distinct from individual
+        // lists whose items failed — see tasksUnavailableLists below).
+        let listsUnavailableTypes = [];
         // Load lists from API
         async function loadLists() {
             try {
                 const listTypes = ['personal_todos', 'work_todos', 'shopping', 'bucket'];
                 const allLists = [];
+                listsUnavailableTypes = [];
                 
                 for (const listType of listTypes) {
                     try {
-                        const response = await authedApiRequest(`/lists/${listType}`);
-                        if (response.lists && Array.isArray(response.lists)) {
-                            response.lists.forEach(list => {
+                        // Two-step: the collection route returns rows WITHOUT
+                        // items, so the task sidebar below (which reads
+                        // list.items) was permanently empty even though every
+                        // request returned 200. See js/common.js.
+                        const { lists, ok } = await window.zoeFetchListsWithItems(listType);
+                        // ok:false = the collection fetch for this whole TYPE
+                        // failed. Not the same as the type having no lists —
+                        // surface it, or the sidebar renders as if complete.
+                        if (!ok) { listsUnavailableTypes.push(listType); }
+                        if (Array.isArray(lists)) {
+                            lists.forEach(list => {
                                 allLists.push({
                                     ...list,
                                     list_type: listType,
@@ -2264,11 +2277,22 @@
         }
         
         // Load tasks from lists
+        // `items === null` means the items fetch FAILED for that list (see
+        // zoeFetchListsWithItems in js/common.js) — it does NOT mean the list
+        // is empty. Silently skipping those would make real tasks vanish and
+        // render an incomplete sidebar as if it were complete, which is the
+        // same lie this whole change set exists to remove. Track them and say so.
+        let tasksUnavailableLists = [];
         async function loadTasks() {
             try {
                 tasks = [];
-                
+                tasksUnavailableLists = listsUnavailableTypes.slice();
+
                 for (const list of availableLists) {
+                    if (list.items === null) {
+                        tasksUnavailableLists.push(list.name || list.list_type);
+                        continue;
+                    }
                     if (list.items && Array.isArray(list.items)) {
                         list.items.forEach((item, index) => {
                             if (!item.completed && typeof item === 'object') {
@@ -2285,7 +2309,7 @@
                         });
                     }
                 }
-                
+
                 renderTasks();
             } catch (error) {
                 console.error('Error loading tasks:', error);
@@ -2508,19 +2532,27 @@
         
         function renderTasks() {
             const container = document.getElementById('tasksContainer');
-            
+
             // Handle reminders filter
             if (selectedList === 'reminders') {
                 renderRemindersInSidebar();
                 return;
             }
-            
+
+            // Any list whose items could not be loaded is announced BEFORE the
+            // task rows, so a partial sidebar never reads as a complete one.
+            const unavailableNotice = tasksUnavailableLists.length
+                ? `<div class="task-item" style="opacity:.75;font-style:italic;">
+                       Couldn't load: ${tasksUnavailableLists.map(n => window.zoeEscapeHtml(n)).join(', ')}
+                   </div>`
+                : '';
+
             let filteredTasks = selectedList === 'all' 
                 ? tasks 
                 : tasks.filter(t => t.category === selectedList);
             
             if (filteredTasks.length === 0 && selectedList !== 'all') {
-                container.innerHTML = `
+                container.innerHTML = unavailableNotice + `
                     <div class="task-item add-new ${selectedList}">
                         <div class="task-bullet"></div>
                         <input type="text" class="task-input" placeholder="Add a new item..." 
@@ -2530,7 +2562,7 @@
                 return;
             }
             
-            container.innerHTML = filteredTasks.map(task => `
+            container.innerHTML = unavailableNotice + filteredTasks.map(task => `
                 <div class="task-item ${task.category} ${selectedTasks.includes(task.id) ? 'selected' : ''}" 
                      draggable="true" data-task-id="${task.id}">
                     <input type="checkbox" class="task-checkbox" 
@@ -4719,6 +4751,5 @@
     <!-- Mini Player for persistent music playback -->
     <script src="js/mini-player.js"></script>
     <!-- Touch panel action executor -->
-    <script src="/js/touch-ui-executor.js?v=20260405"></script>
 </body>
 </html>

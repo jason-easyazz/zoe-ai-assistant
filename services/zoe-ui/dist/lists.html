@@ -2118,11 +2118,16 @@
             const widgets = await fetchExistingWidgets();
             
             if (widgets.length === 0) {
-                grid.innerHTML = '<div style="text-align: center; padding: 40px; color: #999;"><p style="font-size: 18px; margin-bottom: 8px;">No lists yet</p><p style="font-size: 14px;">Create your first list from the "Core Widgets" tab</p></div>';
+                grid.innerHTML = widgetsUnavailableKinds.length
+                    ? `<div style="text-align: center; padding: 40px; color: #999;"><p style="font-size: 18px; margin-bottom: 8px;">Couldn't load your lists</p><p style="font-size: 14px;">${widgetsUnavailableKinds.map(k => window.zoeEscapeHtml(k)).join(', ')} unavailable — check back in a moment</p></div>`
+                    : '<div style="text-align: center; padding: 40px; color: #999;"><p style="font-size: 18px; margin-bottom: 8px;">No lists yet</p><p style="font-size: 14px;">Create your first list from the "Core Widgets" tab</p></div>';
                 return;
             }
             
-            let html = '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px;">';
+            let html = widgetsUnavailableKinds.length
+                ? `<div style="padding:8px 4px;color:#999;font-size:13px;font-style:italic;">Couldn't load: ${widgetsUnavailableKinds.map(k => window.zoeEscapeHtml(k)).join(', ')}</div>`
+                : '';
+            html += '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px;">';
             html += widgets.map(widget => `
                 <div class="widget-item" onclick="addExistingWidget('${widget.type}', ${widget.id})">
                     <div class="widget-icon">${widget.icon}</div>
@@ -2136,8 +2141,13 @@
         }
         
         // Fetch existing widgets (projects, lists, etc.)
+        // List types whose collection fetch failed. Tracked because
+        // "couldn't load" must never render as "No lists yet" — that
+        // invites the user to recreate lists they already have.
+        let widgetsUnavailableKinds = [];
         async function fetchExistingWidgets() {
             const widgets = [];
+            widgetsUnavailableKinds = [];
             
             try {
                 // Fetch existing projects
@@ -2154,62 +2164,40 @@
                     });
                 }
                 
-                // Fetch existing shopping lists
-                const shoppingResponse = await apiRequest('/api/lists/shopping');
-                if (shoppingResponse.lists) {
-                    shoppingResponse.lists.forEach(list => {
+                // Lists with their items. `GET /api/lists/{type}` returns rows
+                // WITHOUT items, so the old `list.items?.length || 0` read
+                // undefined and every card said "0 items" regardless of
+                // contents. zoeFetchListsWithItems (js/common.js) does the
+                // two-step and marks unloadable lists as null, so an outage
+                // reads "items unavailable" instead of a confident "0 items".
+                const LIST_KINDS = [
+                    { type: 'shopping',        widget: 'shopping', icon: '🛒', fallback: 'Shopping List' },
+                    { type: 'work_todos',      widget: 'work',     icon: '💼', fallback: 'Work Tasks' },
+                    { type: 'personal_todos',  widget: 'personal', icon: '📝', fallback: 'Personal' },
+                    { type: 'bucket',          widget: 'bucket',   icon: '🎯', fallback: 'Bucket List' }
+                ];
+
+                const kindResults = await Promise.all(
+                    LIST_KINDS.map(kind => window.zoeFetchListsWithItems(kind.type))
+                );
+
+                kindResults.forEach(({ lists, ok }, i) => {
+                    const kind = LIST_KINDS[i];
+                    // ok:false means the COLLECTION fetch failed for this type —
+                    // not that the type has no lists. Skipping it silently would
+                    // hide a whole category behind an empty-looking picker.
+                    if (!ok) { widgetsUnavailableKinds.push(kind.fallback); return; }
+                    lists.forEach(list => {
                         widgets.push({
-                            type: 'shopping',
+                            type: kind.widget,
                             id: list.id,
-                            icon: '🛒',
-                            name: list.name || 'Shopping List',
-                            desc: `${list.items?.length || 0} items`
+                            icon: kind.icon,
+                            name: list.name || kind.fallback,
+                            desc: window.zoeListCountLabel(list)
                         });
                     });
-                }
-                
-                // Fetch work lists
-                const workResponse = await apiRequest('/api/lists/work_todos');
-                if (workResponse.lists) {
-                    workResponse.lists.forEach(list => {
-                        widgets.push({
-                            type: 'work',
-                            id: list.id,
-                            icon: '💼',
-                            name: list.name || 'Work Tasks',
-                            desc: `${list.items?.length || 0} items`
-                        });
-                    });
-                }
-                
-                // Fetch personal lists
-                const personalResponse = await apiRequest('/api/lists/personal_todos');
-                if (personalResponse.lists) {
-                    personalResponse.lists.forEach(list => {
-                        widgets.push({
-                            type: 'personal',
-                            id: list.id,
-                            icon: '📝',
-                            name: list.name || 'Personal',
-                            desc: `${list.items?.length || 0} items`
-                        });
-                    });
-                }
-                
-                // Fetch bucket lists
-                const bucketResponse = await apiRequest('/api/lists/bucket');
-                if (bucketResponse.lists) {
-                    bucketResponse.lists.forEach(list => {
-                        widgets.push({
-                            type: 'bucket',
-                            id: list.id,
-                            icon: '🎯',
-                            name: list.name || 'Bucket List',
-                            desc: `${list.items?.length || 0} items`
-                        });
-                    });
-                }
-                
+                });
+
             } catch (error) {
                 console.error('Failed to fetch existing widgets:', error);
             }
@@ -2374,122 +2362,13 @@
     <!-- Mini Player for persistent music playback -->
     <script src="js/mini-player.js"></script>
     <!-- Touch panel action executor — allows Zoe to navigate/control this page remotely -->
-    <script src="/js/touch-ui-executor.js?v=20260405">
-
-        // Navigation helper functions
-        function openMoreOverlay() {
-            document.getElementById('moreOverlay').classList.add('active');
-        }
-        
-        function closeMoreOverlay() {
-            document.getElementById('moreOverlay').classList.remove('active');
-        }
-        
-        function navigateToPage(page) {
-            window.location.href = page;
-        }
-        
-        function openNotifications() {
-            document.getElementById('notificationsPanel').classList.add('open');
-            loadNotifications();
-            const notificationBtn = document.querySelector('.notifications-btn');
-            if (notificationBtn) notificationBtn.classList.remove('has-notifications');
-        }
-        
-        function closeNotifications() {
-            document.getElementById('notificationsPanel').classList.remove('open');
-        }
-        
-        async function loadNotifications() {
-            try {
-                const response = await apiRequest('/reminders/notifications/pending');
-                const notifications = response.notifications || [];
-                displayNotifications(notifications);
-            } catch (error) {
-                console.error('Failed to load notifications:', error);
-                displayNotifications([]);
-            }
-        }
-        
-        function displayNotifications(notifications) {
-            const notificationsContent = document.getElementById('notificationsContent');
-            const notificationBtn = document.querySelector('.notifications-btn');
-            
-            if (notifications.length > 0 && notificationBtn) {
-                notificationBtn.classList.add('has-notifications');
-            } else if (notificationBtn) {
-                notificationBtn.classList.remove('has-notifications');
-            }
-            
-            if (notifications.length === 0) {
-                notificationsContent.innerHTML = '<div class="no-notifications">No notifications</div>';
-                return;
-            }
-            
-            notificationsContent.innerHTML = notifications.map(notification => `
-                <div class="notification-item ${notification.is_delivered ? '' : 'unread'}" 
-                     onclick="handleNotificationClick(${notification.id})">
-                    <div class="notification-title">${notification.message}</div>
-                    <div class="notification-meta">
-                        <span class="notification-time">${formatNotificationTime(notification.notification_time)}</span>
-                    </div>
-                </div>
-            `).join('');
-        }
-        
-        function formatNotificationTime(timeStr) {
-            const date = new Date(timeStr);
-            const now = new Date();
-            const diff = now - date;
-            const minutes = Math.floor(diff / 60000);
-            const hours = Math.floor(minutes / 60);
-            const days = Math.floor(hours / 24);
-            
-            if (minutes < 1) return 'Just now';
-            if (minutes < 60) return `${minutes}m ago`;
-            if (hours < 24) return `${hours}h ago`;
-            return `${days}d ago`;
-        }
-        
-        async function handleNotificationClick(notificationId) {
-            try {
-                await apiRequest(`/reminders/notifications/${notificationId}/deliver`, {
-                    method: 'POST'
-                });
-                loadNotifications();
-            } catch (error) {
-                console.error('Failed to acknowledge notification:', error);
-            }
-            closeNotifications();
-        }
-        
-        // Update time/date display
-        function updateTimeDate() {
-            const now = new Date();
-            const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            const dateString = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
-            
-            const timeElement = document.getElementById('currentTime');
-            const dateElement = document.getElementById('currentDate');
-            
-            if (timeElement) timeElement.textContent = timeString;
-            if (dateElement) dateElement.textContent = dateString;
-        }
-        
-        // Initialize time/date updates
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', function() {
-                updateTimeDate();
-                setInterval(updateTimeDate, 60000);
-                loadNotifications();
-            });
-        } else {
-            updateTimeDate();
-            setInterval(updateTimeDate, 60000);
-            loadNotifications();
-        }
-
-    </script>
+    <!-- Removed: this <script src="/js/touch-ui-executor.js"> had NO same-line
+         close, so the 114 lines of inline JS that followed were swallowed and
+         never executed (openMoreOverlay/navigateToPage/loadNotifications/...).
+         The block also carried an unescaped notification-message innerHTML
+         sink, so ACTIVATING it would have shipped a live XSS. The shared
+         notifications-panel.js + common.js already cover this ground, and the
+         executor itself does not belong on a desktop page. -->
 </body>
 </html>
 

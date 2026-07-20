@@ -583,35 +583,10 @@
         }
         
         /* Journeys View */
-        .journeys-view { display: none; }
-        .journeys-view.active { display: block; }
         
-        .current-journey {
-            background: var(--glass-bg);
-            backdrop-filter: blur(40px);
-            border: 1px solid var(--glass-border);
-            border-radius: 16px;
-            padding: 24px;
-            margin-bottom: 30px;
-        }
         
-        .current-journey-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: start;
-            margin-bottom: 24px;
-        }
         
-        .journey-title {
-            font-size: 24px;
-            font-weight: 600;
-            margin-bottom: 4px;
-            background: var(--gradient);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
         
-        .journey-subtitle { font-size: 13px; color: var(--text-secondary); }
         
         .check-in-btn {
             display: flex;
@@ -633,66 +608,13 @@
             box-shadow: 0 6px 20px rgba(123, 97, 255, 0.3);
         }
         
-        .journey-stops-horizontal {
-            display: flex;
-            gap: 20px;
-            overflow-x: auto;
-            padding: 20px 0;
-            position: relative;
-        }
         
-        .journey-stops-horizontal::before {
-            content: '';
-            position: absolute;
-            top: 50%;
-            left: 0;
-            right: 0;
-            height: 3px;
-            background: linear-gradient(90deg, var(--primary-purple) 0%, var(--primary-teal) 100%);
-            opacity: 0.3;
-            z-index: 0;
-        }
         
-        .journey-stop-h {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 12px;
-            min-width: 150px;
-            position: relative;
-            z-index: 1;
-        }
         
-        .stop-marker-h {
-            width: 60px;
-            height: 60px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: white;
-            border-radius: 50%;
-            font-size: 28px;
-            flex-shrink: 0;
-            border: 3px solid rgba(0, 0, 0, 0.1);
-            transition: all 0.3s;
-            cursor: pointer;
-        }
         
-        .journey-stop-h:hover .stop-marker-h { transform: scale(1.1); }
         
-        .journey-stop-h.completed .stop-marker-h {
-            background: var(--gradient);
-            color: white;
-            border: none;
-        }
         
-        .journey-stop-h.current .stop-marker-h {
-            background: var(--primary-purple);
-            animation: pulse 2s infinite;
-            border: none;
-        }
         
-        .journey-stop-h.upcoming .stop-marker-h { opacity: 0.5; }
         
         @keyframes pulse {
             0%, 100% { box-shadow: 0 0 0 0 rgba(123, 97, 255, 0.4); }
@@ -717,42 +639,11 @@
             color: var(--text-primary);
         }
         
-        .past-journeys-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-            gap: 20px;
-        }
         
-        .journey-card {
-            background: var(--glass-bg);
-            backdrop-filter: blur(40px);
-            border: 1px solid var(--glass-border);
-            border-radius: 16px;
-            overflow: hidden;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
         
-        .journey-card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 12px 40px rgba(123, 97, 255, 0.15);
-        }
         
-        .journey-image { width: 100%; height: 180px; object-fit: cover; }
-        .journey-content { padding: 16px; }
         
-        .journey-location {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            font-size: 14px;
-            font-weight: 600;
-            color: var(--primary-purple);
-            margin-bottom: 8px;
-        }
         
-        .journey-dates { font-size: 12px; color: var(--text-tertiary); margin-bottom: 12px; }
-        .journey-entries { font-size: 13px; color: var(--text-secondary); }
         
         /* Entry Modals */
         .entry-modal {
@@ -1895,7 +1786,6 @@
 
             <div class="view-tabs">
                 <button class="view-tab active" data-view="timeline">Timeline</button>
-                <button class="view-tab" data-view="journeys">Journeys</button>
             </div>
             </div>
 
@@ -1979,82 +1869,9 @@
             </div>
 
         <!-- Journeys View -->
-        <div class="journeys-view" id="journeysView">
-            <div class="current-journey">
-                <div class="current-journey-header">
-                    <div>
-                        <h2 class="journey-title">🧳 Current Journey</h2>
-                        <p class="journey-subtitle">Southeast Asia Adventure · Started Sep 1, 2025</p>
-        </div>
-                    <button class="check-in-btn">
-                        <span>📍</span>
-                        <span>Check In</span>
-                    </button>
-    </div>
-
-                <div class="journey-stops-horizontal">
-                    <div class="journey-stop-h completed">
-                        <div class="stop-marker-h">✓</div>
-                        <div class="stop-info-h">
-                            <div class="stop-name-h">Bangkok</div>
-                            <div class="stop-dates-h">Sep 1-5</div>
-        </div>
-    </div>
-                    <div class="journey-stop-h completed">
-                        <div class="stop-marker-h">✓</div>
-                        <div class="stop-info-h">
-                            <div class="stop-name-h">Chiang Mai</div>
-                            <div class="stop-dates-h">Sep 6-10</div>
-                </div>
-            </div>
-                    <div class="journey-stop-h current">
-                        <div class="stop-marker-h">📍</div>
-                        <div class="stop-info-h">
-                            <div class="stop-name-h">Hanoi</div>
-                            <div class="stop-dates-h">Present</div>
-        </div>
-    </div>
-                    <div class="journey-stop-h upcoming">
-                        <div class="stop-marker-h">○</div>
-                        <div class="stop-info-h">
-                            <div class="stop-name-h">Ho Chi Minh</div>
-                            <div class="stop-dates-h">Upcoming</div>
-            </div>
-        </div>
-    </div>
-            </div>
-            
-            <h3 class="section-header">Past Journeys</h3>
-            
-            <div class="past-journeys-grid">
-                <div class="journey-card">
-                    <img src="https://images.unsplash.com/photo-1540959733332-eab4deabeeaf?w=400&fit=crop" alt="Tokyo" class="journey-image">
-                    <div class="journey-content">
-                        <div class="journey-location">📍 Tokyo, Japan</div>
-                        <div class="journey-dates">Aug 15-22, 2025</div>
-                        <div class="journey-entries">8 entries · 2,341 words</div>
-                    </div>
-                    </div>
-                
-                <div class="journey-card">
-                    <img src="https://images.unsplash.com/photo-1502602898657-3e91760cbb34?w=400&fit=crop" alt="Paris" class="journey-image">
-                    <div class="journey-content">
-                        <div class="journey-location">📍 Paris, France</div>
-                        <div class="journey-dates">Jul 1-10, 2025</div>
-                        <div class="journey-entries">12 entries · 3,892 words</div>
-                    </div>
-                        </div>
-                
-                <div class="journey-card">
-                    <img src="https://images.unsplash.com/photo-1537996194471-e657df975ab4?w=400&fit=crop" alt="Bali" class="journey-image">
-                    <div class="journey-content">
-                        <div class="journey-location">📍 Bali, Indonesia</div>
-                        <div class="journey-dates">Jun 5-18, 2025</div>
-                        <div class="journey-entries">15 entries · 4,521 words</div>
-                        </div>
-                    </div>
-                    </div>
-                            </div>
+        <!-- Journeys view removed: it rendered hardcoded Tokyo/Paris/Bali
+             cards with Unsplash photos as if they were the user's own
+             entries, and no /api/journeys route exists in zoe-data. -->
                             </div>
 
     <!-- Read Entry Modal -->
@@ -2082,8 +1899,10 @@
                 <div class="read-modal-tags"></div>
                 
                 <div class="read-modal-actions">
-                    <!-- Edit is a stub on zoe-data (no PUT /journal/{id}); hidden until backend is ready. -->
-                    <button class="btn-edit" onclick="editCurrentEntry()" style="display:none;">
+                    <!-- Edit wired to PUT /api/journal/{entry_id} (journal.py:360).
+                         The old comment claimed zoe-data had no such route; it named
+                         the path without its /api/journal prefix and was simply wrong. -->
+                    <button class="btn-edit" onclick="editCurrentEntry()">
                         <span>✏️</span>
                         <span>Edit</span>
                     </button>
@@ -2781,16 +2600,31 @@
         
         function editCurrentEntry() {
             if (!window.currentEntry) return;
-            
-            // Close read modal
+            const entry = window.currentEntry;
             closeReadEntry();
-            
-            // TODO: Implement edit functionality
-            // For now, just show alert
-            alert(`Edit functionality coming soon!\n\nEntry ID: ${window.currentEntry.id}\nTitle: ${window.currentEntry.title}`);
-            
-            // Later: Open edit modal with pre-filled data
-            // openEditEntry(currentEntry);
+
+            // PUT /api/journal/{entry_id} has existed all along (journal.py:360).
+            // The comment at :2085 claimed zoe-data had no such route because it
+            // named the path WITHOUT its /api/journal prefix -- delete, wired
+            // fifteen lines below, uses the same prefix and always worked.
+            const title = prompt('Title', entry.title || '');
+            if (title === null) return;
+            const content = prompt('Entry', entry.content || '');
+            if (content === null) return;
+
+            (async () => {
+                try {
+                    await apiRequest(`/api/journal/${entry.id}`, {
+                        method: 'PUT',
+                        body: JSON.stringify({ title, content })
+                    });
+                    showNotification('Entry updated', 'success');
+                    if (typeof loadJournalEntries === 'function') loadJournalEntries();
+                } catch (err) {
+                    console.error('Failed to update entry:', err);
+                    showNotification("Couldn't update that entry", 'error');
+                }
+            })();
         }
         
         async function deleteCurrentEntry() {
@@ -3136,6 +2970,5 @@
     <!-- Mini Player for persistent music playback -->
     <script src="js/mini-player.js"></script>
     <!-- Touch panel action executor -->
-    <script src="/js/touch-ui-executor.js?v=20260405"></script>
 </body>
 </html>

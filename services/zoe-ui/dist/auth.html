@@ -1061,8 +1061,10 @@
                 localStorage.setItem('zoe_session', JSON.stringify(data));
 
                 // Eagerly register the authenticated panel session in zoe-data so the
-                // voice scope-gate can trust this identity before the dashboard page
-                // loads and touch-ui-executor.js calls bindPanel().  Without this,
+                // voice scope-gate can trust this identity.  (This used to add
+                // "before the dashboard page loads and touch-ui-executor.js calls
+                // bindPanel()" -- the executor no longer loads on any desktop page,
+                // so this is the only binder on this path.)  Without this,
                 // the first voice command after login hits a stale/missing
                 // ui_panel_sessions row and triggers a redundant PIN challenge.
                 this.bindPanelSession(data.session_id);
