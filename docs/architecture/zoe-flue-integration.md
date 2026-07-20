@@ -282,6 +282,12 @@ normal gate.
 > requires a real `merge_sha`. Reuse this shape for any future autonomy work:
 > **agents propose, the harness verifies.**
 
+> **Migration scope (2026-07-20):**
+> [`multica-executor-migration.md`](multica-executor-migration.md) — decision of
+> record that Multica is KEPT (it is a third-party product running on Zoe with
+> its own DB, not a Hermes component), and that what moves is *execution*, not
+> the board. Phases, non-negotiables, and the open decisions live there.
+>
 > Executable packet: [`multica-retirement-gates.md`](multica-retirement-gates.md)
 > — code-verified inventory, per-capability proof gates, rollback, sequencing,
 > Forbidden list. The table below is the summary; the packet is normative.
