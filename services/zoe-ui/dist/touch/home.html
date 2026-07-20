@@ -1815,13 +1815,13 @@
           _wireBrowseRow(host);return;
         }
         host.innerHTML=its.slice(0,40).map(_rtile).join('');
-        _wireBrowseRow(host);}).catch(function(){host.innerHTML=_qempty('Couldn’t load.');});return;}
+        _wireBrowseRow(host);}).catch(function(){if(_cur!=='browse'||gen!==_qGen)return;host.innerHTML=_qempty('Couldn’t load.');});return;}
     if(_qtab==='playlists'){host.classList.add('grid');if(ttl)ttl.textContent='Your playlists';
       host.innerHTML=_qmsg('Loading…');
       apiGet('/api/music/playlists').then(function(d){if(_cur!=='browse'||gen!==_qGen)return;var pls=(d&&d.playlists)||[];
         host.innerHTML=pls.map(_pltile).join('')||_qempty('No playlists yet — build one with Save.');
         host.onclick=function(e){var r=e.target.closest('.qi.pl');if(!r)return;_qpost('play_media',{uri:r.getAttribute('data-uri'),player_id:_music.player_id||undefined,option:'replace'}).then(function(){toast('Playing playlist');setTimeout(loadMusic,600);}).catch(function(){toast('Couldn’t play');});};
-      }).catch(function(){host.innerHTML=_qempty('Couldn’t load playlists.');});return;}
+      }).catch(function(){if(_cur!=='browse'||gen!==_qGen)return;host.innerHTML=_qempty('Couldn’t load playlists.');});return;}
   }
   function _qmsg(t){return '<div class="mqmsg" style="color:var(--ink-faint);padding:8px 4px">'+esc(t)+'</div>';}
   function _qempty(t){return '<div style="color:var(--ink-faint);padding:8px 4px">'+esc(t)+'</div>';}
