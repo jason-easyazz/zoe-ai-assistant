@@ -3765,7 +3765,7 @@
                     sessionsList.innerHTML = sessions.map((s, idx) => `
                         <div class="session-item ${s.id === currentSessionId ? 'active' : ''}" onclick="loadSession('${s.id}', event)">
                             <div style="display:flex;justify-content:space-between;align-items:start;">
-                                <div class="session-title" style="flex:1;min-width:0;">${s.title}</div>
+                                <div class="session-title" style="flex:1;min-width:0;">${escapeHtml(String(s.title == null ? '' : s.title))}</div>
                                 <button class="session-delete-btn" onclick="event.stopPropagation();deleteSession('${s.id}')" title="Delete">×</button>
                             </div>
                             <div class="session-meta">
@@ -7154,7 +7154,7 @@
             notificationsContent.innerHTML = notifications.map(notification => `
                 <div class="notification-item ${notification.is_delivered ? '' : 'unread'}" 
                      onclick="handleNotificationClick(${notification.id})">
-                    <div class="notification-title">${notification.message}</div>
+                    <div class="notification-title">${escapeHtml(String(notification.message == null ? '' : notification.message))}</div>
                     <div class="notification-meta">
                         <span class="notification-time">${formatNotificationTime(notification.notification_time)}</span>
                     </div>
@@ -7454,7 +7454,7 @@
             notificationsContent.innerHTML = notifications.map(notification => `
                 <div class="notification-item ${notification.is_delivered ? '' : 'unread'}" 
                      onclick="handleNotificationClick(${notification.id})">
-                    <div class="notification-title">${notification.message}</div>
+                    <div class="notification-title">${escapeHtml(String(notification.message == null ? '' : notification.message))}</div>
                     <div class="notification-meta">
                         <span class="notification-time">${formatNotificationTime(notification.notification_time)}</span>
                     </div>
