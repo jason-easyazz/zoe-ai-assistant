@@ -201,6 +201,25 @@ per-process multi-user workaround in `zoe_core_client.py`.
 > list is deleted because it's old — it's deleted because Flue now does it.**
 > This is the concrete checklist behind "retire Multica/Hermes/OpenClaw."
 
+**Usage gate — apply BEFORE the recreation gate (added 2026-07-20).** The rule
+above exists to avoid *losing* capability, but you cannot lose what was never
+invoked. Applied literally to the 101 skills across both discovery directories it
+becomes a quarter of porting work for dead weight. Correct order:
+
+1. Add skill-invocation telemetry. **None exists today** — verified against the
+   database (no skill/usage tables) and `~/.zoe-logs/`, with a negative control.
+2. Collect ~2 weeks of real traffic.
+3. Zero-invocation skills are **deleted outright** — no recreation, no gate.
+4. Only skills that actually fired go through the recreation gate above.
+
+**Operator sign-off, 2026-07-20 (Jason):** full retirement of Hermes *and*
+OpenClaw authorised without the recreation gates being green, and without the
+usage telemetry above. Recorded here because §8 otherwise forbids it. Both skill
+sets are backed up under
+[`docs/knowledge/operator-skills/`](../knowledge/operator-skills/index.md), so the
+deletion is git-recoverable; the accepted risk is an **unmeasured capability
+regression** at deploy time, concentrated in OpenClaw (see §8.3).
+
 ### 8.1 Multica — board-driven engineering orchestration
 
 > Executable packet: [`multica-retirement-gates.md`](multica-retirement-gates.md)
@@ -217,16 +236,17 @@ per-process multi-user workaround in `zoe_core_client.py`.
 
 | Capability today | Flue recreation | Retire-gate |
 |---|---|---|
-| Engineering delegation: `hermes_http.py`, `~/.hermes/skills` (`zoe-engineering`, `github-greptile-loop`, `source-code-context`, `code-structure-cleanup`) | Flue **agents + subagents** with `defineTool`/MCP over the same zoe-data endpoints; each Hermes skill becomes a Flue agent definition (prompts are largely reusable). | Per-skill: the Flue agent completes the same task class the skill handled. |
+| Engineering delegation: `hermes_http.py`, `~/.hermes/skills` — **68 skills, not the 4 this row used to name.** Only **10 carry `author: Zoe`** (`zoe-engineering`, `github-greptile-loop`, `source-code-context`, `code-structure-cleanup`, `agentic-engineering-workflow`, `grep-loop-review-workflow`, `zoe-board`, `zoe-cloakbrowser`, `zoe-status-refresh`, `zoe-graphify`); the other 58 are the stock `NousResearch/Hermes-Agent` pack and are re-pullable, not recreation targets. | Flue **agents + subagents** with `defineTool`/MCP over the same zoe-data endpoints. Recreate only skills that are actually invoked — see the usage-gate note below. | Per-skill: the Flue agent completes the same task class the skill handled. |
 | Browser work: `browser_broker.py` + `zoe-cloakbrowser` skill | CloakBrowser tools exposed to Flue via MCP (Seam B). | Flue agent completes a real browser task through the broker. |
 | Knowledge refresh: `zoe-status-refresh` skill | A scheduled Flue workflow writing OKF records under `docs/knowledge/` (records only — never AGENTS.md contracts). | One full refresh cycle produced by Flue and lint-clean. |
-| `hermes-agent.service` (PAUSED since 2026-06-21: enabled but inactive) | Superseded by the Flue runtime unit. | Disable + remove the unit only when 8.1's PR loop gate passes. |
+| `hermes-agent.service` — **ACTIVE, not paused.** This row claimed "PAUSED since 2026-06-21: enabled but inactive"; verified 2026-07-20 as `active` and running (~156 MB). A month of nobody noticing it running is itself evidence of low engagement, but do not plan against the stale claim. | Superseded by the Flue runtime unit. | Disable + remove the unit only when 8.1's PR loop gate passes. |
 
 ### 8.3 OpenClaw — fallback agent execution
 
 | Capability today | Flue recreation | Retire-gate |
 |---|---|---|
-| Fallback agent runtime: `routers/openclaw.py`, `background_runner.py`, `executor_registry.py`, skills sandbox | Flue `local()` sandbox + subagent execution; OpenClaw is already manual-fallback-only (AGENTS.md), so this is last and lowest-risk. | Flue runs the same background job classes; operator sign-off. |
+| Fallback agent runtime: `routers/openclaw.py`, `background_runner.py`, `executor_registry.py`, skills sandbox | Flue `local()` sandbox + subagent execution. | Flue runs the same background job classes; operator sign-off. |
+| **Skills — NOT low-risk. Corrected 2026-07-20.** This section previously called OpenClaw "last and lowest-risk" because AGENTS.md marks it manual-fallback-only. That is true of the *agent runtime* and false of the *skills*: of 34 skills in `~/.openclaw/workspace/skills/`, **31 are ours** (20 absent from stock `openclaw@2026.5.12` entirely, 11 stock-but-modified; only 3 untouched). They include `briefing`, `family-data`, `grocery-meal`, `ha-patterns`, `home-assistant`, `journal`, `memory-consolidation`, `proactive`, `touch-panel`, `transactions`, `weather`, `zoe-ui`, `dynamic-widgets`, and they call live endpoints (`/api/panels/`, `/api/voice/command`, `/api/states`, `localhost:8123`). Compare Hermes, where only 10 of 68 are ours. **OpenClaw is Zoe's capability surface, not a vendor pack.** | Each invoked skill needs a Flue equivalent before its capability is gone. | Usage telemetry, then per-skill. |
 
 ### 8.4 Cross-cutting seams (re-pointed, not retired)
 

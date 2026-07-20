@@ -5,12 +5,28 @@
 Skill definitions for the Zoe assistant, one subfolder per skill, each described
 by a `SKILL.md`.
 
-**This directory is not read by any runtime code.** An earlier version of this
-contract claimed each skill was "discovered by the router at runtime". That is
-false. Runtime discovery (`services/zoe-data/skill_discovery.py`) parses exactly
-two directories — `~/.openclaw/workspace/skills/` and `~/.hermes/skills/` — and
-there is no sync, copy, symlink, or install step feeding this tree into either.
-Adding a directory here has **no runtime effect**.
+**Most of this directory is not read by any runtime code — but `openclaw/` is.**
+Runtime discovery (`services/zoe-data/skill_discovery.py`) parses exactly two
+directories: `~/.openclaw/workspace/skills/` and `~/.hermes/skills/`. Adding a
+directory *here* generally has **no runtime effect**.
+
+**The exception — verified 2026-07-20.** `~/.openclaw/workspace/skills/` contains
+four symlinks pointing back into `skills/openclaw/`, so those skills ARE live
+despite sitting in this tree:
+
+| Symlink in the discovery dir | Target here | State |
+|---|---|---|
+| `zoe-capability-extender` | `openclaw/zoe-capability-extender` | live |
+| `zoe-page-builder` | `openclaw/zoe-page-builder` | live |
+| `zoe-widget-builder` | `openclaw/zoe-widget-builder` | live |
+| `zoe-verify` | `openclaw/zoe-verify` | **DANGLING** — target deleted from the repo |
+
+Editing `skills/openclaw/*` therefore **does** change live behaviour. Everything
+else in this tree remains documentation-only.
+
+A prior version of this contract asserted "there is no sync, copy, symlink, or
+install step feeding this tree into either". That was false and misled agents
+into treating `skills/openclaw/` as inert. Do not restore that wording.
 
 What this tree really is today: version-controlled documentation for humans and
 agents. That is a genuine role — `autoresearch-engineer/SKILL.md` is the
