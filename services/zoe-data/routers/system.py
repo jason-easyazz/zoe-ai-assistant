@@ -1542,7 +1542,21 @@ async def get_peer_agent_card(name: str):
     # used to call skill_discovery.py, which was deleted: it parsed the two
     # skill directories into a catalogue whose only consumers were this field
     # and an unread markdown file, and nothing dispatched on it.
-    skills = [{"id": s, "name": s, "description": s} for s in agent_info.get("skills", [])]
+    #
+    # Entries keep the full A2A v1.0 AgentSkill shape (inputModes/outputModes
+    # included) so card consumers can still negotiate modes. Descriptions are
+    # thinner than the parsed ones were — the registry stores skill ids, not
+    # prose — but the contract is intact rather than silently reshaped.
+    skills = [
+        {
+            "id": s,
+            "name": s,
+            "description": s,
+            "inputModes": ["text"],
+            "outputModes": ["text"],
+        }
+        for s in agent_info.get("skills", [])
+    ]
 
     return {
         "a2aVersion": "1.0",

@@ -27,8 +27,13 @@ via the `list_openclaw_skills` tool, so it knows a capability exists.
 > is not evidence a skill is usable.
 
 Zoe **parses descriptions**. She does not load, sandbox, gate, or execute skills.
-Discovery reads exactly two directories — `~/.openclaw/workspace/skills/` and
-`~/.hermes/skills/` — and produces A2A `AgentSkill` dicts. Nothing else happens.
+Exactly one directory is parsed — `~/.openclaw/workspace/skills/`, by
+`openclaw_manager.list_skills()`. Nothing else happens.
+
+**`~/.hermes/skills/` is not parsed by anything.** It was previously read by
+`skill_discovery.py`, whose output reached no tool and no dispatcher; with that
+module deleted, Hermes skill files have no reader in this codebase at all. Do not
+place a skill there expecting Zoe to know about it.
 
 See [../architecture/EXTENSIBILITY.md](../architecture/EXTENSIBILITY.md) and
 [../guides/CREATING_SKILLS.md](../guides/CREATING_SKILLS.md).
@@ -47,9 +52,10 @@ Because there is no enforcement layer, the trust boundary sits **outside** Zoe:
    whatever access that agent has. Zoe's process provides no confinement, so a
    skill is exactly as dangerous as the agent that owns it.
 
-3. **Write access to `~/.openclaw/workspace/skills/` or `~/.hermes/skills/` is
-   privileged.** Anything that can drop a file there can change what Zoe believes
-   she can do. Treat those directories as sensitive.
+3. **Write access to `~/.openclaw/workspace/skills/` is privileged.** Anything
+   that can drop a file there can change what Zoe believes she can do. Treat that
+   directory as sensitive. (`~/.hermes/skills/` is no longer parsed by Zoe, but
+   remains privileged with respect to the Hermes agent itself, which reads it.)
 
 ## Actual controls
 
