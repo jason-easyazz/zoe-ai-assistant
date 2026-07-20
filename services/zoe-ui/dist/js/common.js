@@ -463,6 +463,25 @@ async function zoeFetchListsWithItems(listType) {
 }
 window.zoeFetchListsWithItems = zoeFetchListsWithItems;
 
+/**
+ * Escape a value for interpolation into HTML TEXT content.
+ * Shared because several desktop pages (calendar.html among them) define no
+ * escaper at all and interpolate user-authored strings — list names, task text —
+ * straight into innerHTML. Escapes the single quote too: `escHtml` in notes.html
+ * does not, which is exactly how its tag chips became injectable.
+ * NOTE: text-context only. Do NOT use for a value inside a JS string in an
+ * on* attribute — build those with DOM APIs instead.
+ */
+function zoeEscapeHtml(value) {
+    return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+window.zoeEscapeHtml = zoeEscapeHtml;
+
 /** Render-safe count for a list from zoeFetchListsWithItems. */
 function zoeListCountLabel(list) {
     if (!list || list.items == null) return 'items unavailable';

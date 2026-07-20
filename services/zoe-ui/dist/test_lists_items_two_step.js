@@ -177,7 +177,36 @@ function makeFetch(opts = {}) {
         assert.strictEqual(res.lists.length, 0, 'lists must be empty on collection failure');
     });
 
-    // ——— e) NEGATIVE CONTROL ————————————————————————————————————————
+    // ——— e) escaping, because list names are user-authored ——————————
+    await acheck('zoeEscapeHtml neutralises markup and quotes', async () => {
+        const sb = makeSandbox(makeFetch());
+        assert.strictEqual(typeof sb.zoeEscapeHtml, 'function');
+        const out = sb.zoeEscapeHtml(`<img src=x onerror="alert(1)">`);
+        assert.ok(!out.includes('<'), 'angle brackets must not survive');
+        assert.ok(!out.includes('"'), 'double quotes must not survive');
+        assert.strictEqual(sb.zoeEscapeHtml(`it's`), 'it&#39;s', 'single quote must be escaped too');
+        assert.strictEqual(sb.zoeEscapeHtml(null), '');
+    });
+
+    // ——— f) the CALLER contract: unknown must be surfaced, not skipped ——
+    // calendar.html's task sidebar must announce lists it could not load.
+    // Skipping them silently would make real tasks vanish and render a
+    // partial sidebar as if it were complete — the same lie in a new place.
+    check('calendar.html surfaces unloadable lists instead of skipping them', () => {
+        const cal = fs.readFileSync(path.join(__dirname, 'calendar.html'), 'utf8');
+        assert.ok(/list\.items === null/.test(cal),
+            'loadTasks must branch on items === null (unknown), not just truthiness');
+        assert.ok(/tasksUnavailableLists\.push/.test(cal),
+            'unloadable lists must be collected');
+        // and the notice must actually reach the DOM in BOTH render branches
+        const emitted = (cal.match(/container\.innerHTML = unavailableNotice/g) || []).length;
+        assert.strictEqual(emitted, 2,
+            `unavailableNotice must be emitted in both render branches, saw ${emitted}`);
+        assert.ok(/zoeEscapeHtml\(n\)/.test(cal),
+            'list names are user-authored — they must be escaped');
+    });
+
+    // ——— g) NEGATIVE CONTROL ————————————————————————————————————————
     // Prove these assertions would have caught the pre-fix code: the old
     // single-step read of the collection response yields undefined items.
     check('negative control: single-step read yields undefined items (the old bug)', () => {

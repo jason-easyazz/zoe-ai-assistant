@@ -2269,11 +2269,22 @@
         }
         
         // Load tasks from lists
+        // `items === null` means the items fetch FAILED for that list (see
+        // zoeFetchListsWithItems in js/common.js) — it does NOT mean the list
+        // is empty. Silently skipping those would make real tasks vanish and
+        // render an incomplete sidebar as if it were complete, which is the
+        // same lie this whole change set exists to remove. Track them and say so.
+        let tasksUnavailableLists = [];
         async function loadTasks() {
             try {
                 tasks = [];
-                
+                tasksUnavailableLists = [];
+
                 for (const list of availableLists) {
+                    if (list.items === null) {
+                        tasksUnavailableLists.push(list.name || list.list_type);
+                        continue;
+                    }
                     if (list.items && Array.isArray(list.items)) {
                         list.items.forEach((item, index) => {
                             if (!item.completed && typeof item === 'object') {
@@ -2290,7 +2301,7 @@
                         });
                     }
                 }
-                
+
                 renderTasks();
             } catch (error) {
                 console.error('Error loading tasks:', error);
@@ -2513,19 +2524,27 @@
         
         function renderTasks() {
             const container = document.getElementById('tasksContainer');
-            
+
             // Handle reminders filter
             if (selectedList === 'reminders') {
                 renderRemindersInSidebar();
                 return;
             }
-            
+
+            // Any list whose items could not be loaded is announced BEFORE the
+            // task rows, so a partial sidebar never reads as a complete one.
+            const unavailableNotice = tasksUnavailableLists.length
+                ? `<div class="task-item" style="opacity:.75;font-style:italic;">
+                       Couldn't load: ${tasksUnavailableLists.map(n => window.zoeEscapeHtml(n)).join(', ')}
+                   </div>`
+                : '';
+
             let filteredTasks = selectedList === 'all' 
                 ? tasks 
                 : tasks.filter(t => t.category === selectedList);
             
             if (filteredTasks.length === 0 && selectedList !== 'all') {
-                container.innerHTML = `
+                container.innerHTML = unavailableNotice + `
                     <div class="task-item add-new ${selectedList}">
                         <div class="task-bullet"></div>
                         <input type="text" class="task-input" placeholder="Add a new item..." 
@@ -2535,7 +2554,7 @@
                 return;
             }
             
-            container.innerHTML = filteredTasks.map(task => `
+            container.innerHTML = unavailableNotice + filteredTasks.map(task => `
                 <div class="task-item ${task.category} ${selectedTasks.includes(task.id) ? 'selected' : ''}" 
                      draggable="true" data-task-id="${task.id}">
                     <input type="checkbox" class="task-checkbox" 
