@@ -38,7 +38,16 @@ def test_journal_render_escaping_node_harness():
             pytest.fail("node is required on CI to run the journal XSS harness")
         pytest.skip("Node.js is not installed on this host")
     assert HARNESS.is_file(), f"harness missing: {HARNESS}"
-    proc = subprocess.run([node, str(HARNESS)], capture_output=True, text=True)
+    try:
+        # The harness executes journal-api.js in a vm. Bound it so a runaway
+        # loop fails here with a useful message instead of burning the whole CI
+        # job against the runner-level timeout. It normally runs in well under
+        # a second.
+        proc = subprocess.run(
+            [node, str(HARNESS)], capture_output=True, text=True, timeout=60
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(f"journal XSS harness did not finish within 60s: {HARNESS}")
     assert proc.returncode == 0, f"harness failed:\n{proc.stdout}\n{proc.stderr}"
     assert "checks passed" in proc.stdout
 
