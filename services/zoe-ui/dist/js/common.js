@@ -412,6 +412,84 @@ async function apiRequest(endpoint, options = {}) {
     }
 }
 
+/**
+ * Fetch every list of a type WITH its items attached.
+ *
+ * WHY THIS EXISTS: `GET /api/lists/{type}` deliberately returns list ROWS only —
+ * it selects 8 columns and none of them is `items` (routers/lists.py:76-89).
+ * Items live behind `GET /api/lists/{type}/{id}/items` (lists.py:341).
+ * Callers that read `list.items` off the collection response silently get
+ * `undefined`, and because the request itself returns 200 the failure is
+ * invisible: that is why the calendar task sidebar was permanently empty,
+ * every list card read "0 items", and the tasks widget always announced
+ * "All tasks completed!". This is the same two-step the estate uses
+ * (touch/home.html:2586 for the lists, :2606 for the items).
+ *
+ * FAILURE SEMANTICS (deliberate): a list whose items could not be fetched gets
+ * `items: null` — "unknown" — never `[]`. `[]` means genuinely empty. Callers
+ * MUST distinguish the two, or a backend hiccup renders as "your list is empty",
+ * which is the exact class of lie this helper was written to remove.
+ *
+ * @param {string} listType  one of the server's VALID_LIST_TYPES
+ * @returns {Promise<{lists: Array, ok: boolean}>} ok=false if the collection
+ *          fetch itself failed (lists will be []).
+ */
+async function zoeFetchListsWithItems(listType) {
+    let lists;
+    try {
+        const data = await apiRequest(`/api/lists/${listType}`);
+        lists = (data && Array.isArray(data.lists)) ? data.lists : [];
+    } catch (err) {
+        console.error(`zoeFetchListsWithItems: could not load ${listType} lists`, err);
+        return { lists: [], ok: false };
+    }
+
+    // One items request per list. N is small (a household has a handful of
+    // lists per type) and this needs no server change; if that stops being
+    // true, add an include_items param to the collection route rather than
+    // guessing counts client-side.
+    await Promise.all(lists.map(async (list) => {
+        list.list_type = list.list_type || listType;
+        try {
+            const res = await apiRequest(`/api/lists/${list.list_type}/${list.id}/items`);
+            list.items = (res && Array.isArray(res.items)) ? res.items : [];
+        } catch (err) {
+            console.error(`zoeFetchListsWithItems: items failed for list ${list.id}`, err);
+            list.items = null;   // unknown, NOT empty
+        }
+    }));
+
+    return { lists, ok: true };
+}
+window.zoeFetchListsWithItems = zoeFetchListsWithItems;
+
+/**
+ * Escape a value for interpolation into HTML TEXT content.
+ * Shared because several desktop pages (calendar.html among them) define no
+ * escaper at all and interpolate user-authored strings — list names, task text —
+ * straight into innerHTML. Escapes the single quote too: `escHtml` in notes.html
+ * does not, which is exactly how its tag chips became injectable.
+ * NOTE: text-context only. Do NOT use for a value inside a JS string in an
+ * on* attribute — build those with DOM APIs instead.
+ */
+function zoeEscapeHtml(value) {
+    return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+window.zoeEscapeHtml = zoeEscapeHtml;
+
+/** Render-safe count for a list from zoeFetchListsWithItems. */
+function zoeListCountLabel(list) {
+    if (!list || list.items == null) return 'items unavailable';
+    const n = list.items.length;
+    return `${n} item${n === 1 ? '' : 's'}`;
+}
+window.zoeListCountLabel = zoeListCountLabel;
+
 // Manual test function for debugging (available in console)
 window.testApiConnection = async function() {
     console.log('=== API Connection Test ===');
