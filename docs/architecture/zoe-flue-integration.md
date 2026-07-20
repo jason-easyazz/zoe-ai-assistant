@@ -226,15 +226,29 @@ not the instrument.
 had no handler — fixed separately), which is why these answers required database
 and session-corpus forensics rather than a log query.
 
-**Operator sign-off, 2026-07-20 (Jason):** full retirement of Hermes *and*
-OpenClaw authorised without the recreation gates being green. Recorded here
-because §8 otherwise forbids it. Both skill sets are backed up under
-[`docs/knowledge/operator-skills/`](../knowledge/operator-skills/index.md), so the
-deletion is git-recoverable. **The risk originally attached to this sign-off has
-since been measured away**: there is no capability to regress, because none of
-these skills was executing. What remains at risk is narrow and specific — the
-live Hermes couplings in `background_runner`, `kanban_adapter`, `routers/system`,
-and the Multica pins — not the skills.
+**Operator sign-off, 2026-07-20 (Jason) — NARROWED, read the scope line.**
+
+> **SCOPE: this sign-off authorises retiring the SKILLS ONLY.** It does **not**
+> authorise removing `hermes-agent.service`, the Hermes gateway, or
+> `~/.hermes/kanban.db`. Those are the queue and executor of a working
+> autonomous harness (§8.1, §8.2) and are gated separately on a proven
+> replacement. An earlier revision of this block read as blanket authorisation
+> for "full retirement of Hermes and OpenClaw"; that wording predates the
+> discovery that the board and workers live inside Hermes, and it is withdrawn.
+
+Authorised without the recreation gates being green: deletion of the 101
+Hermes/OpenClaw **skill files** and the dead discovery machinery. Recorded here
+because §8 otherwise forbids acting without green gates. Both skill sets are
+backed up under
+[`docs/knowledge/operator-skills/`](../knowledge/operator-skills/index.md), so
+the deletion is git-recoverable.
+
+**The risk originally attached to this sign-off has been measured away** for the
+skills: there is no capability to regress, because none of them was ever
+executing (§8.3). It has **not** been measured away for the runtime — the live
+Hermes couplings in `background_runner`, `kanban_adapter`, `routers/system`, the
+Multica skill pins, and above all the gateway/board pair, remain in scope of the
+normal gate.
 
 ### 8.1 Multica — board-driven engineering orchestration
 
