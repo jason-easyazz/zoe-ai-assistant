@@ -480,6 +480,42 @@ def _livekit_fast_tiers_enabled() -> bool:
     return os.environ.get("ZOE_LIVEKIT_FAST_TIERS", "0").strip().lower() in ("1", "true", "yes", "on")
 
 
+def _livekit_stream_tts_enabled() -> bool:
+    """P-W1.3 sentence-streamed TTS — OFF unless explicitly enabled.
+
+    When ON, the reply is split into sentences and each is synthesized and sent
+    as its own data message (same payload shape as today plus ``seq``/``final``)
+    so the browser gets first-audio at first-sentence, like the /ws/voice/ lane.
+    """
+    return os.environ.get("ZOE_LIVEKIT_STREAM_TTS", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+async def _stream_sentence_audio(local_participant, text: str, user_id: str) -> None:
+    """Synthesize `text` sentence-by-sentence and send one audio data message
+    per sentence, tagged with ``seq`` (0-based) and ``final``.
+
+    Cancellation (#1051 barge-in cancels the pipeline task) is honoured BETWEEN
+    sentences: the explicit ``asyncio.sleep(0)`` checkpoint at the top of each
+    iteration guarantees a pending cancel lands before the next synthesis even
+    if ``_synth`` itself never suspends. Raises on synthesis failure so the
+    caller's existing text-fallback path handles it.
+    """
+    from routers.voice_tts import _split_sentences, synthesize as _synth
+
+    sentences = _split_sentences(text)
+    last = len(sentences) - 1
+    for seq, sentence in enumerate(sentences):
+        await asyncio.sleep(0)  # cancel-token checkpoint between sentences
+        tts_resp = await _synth({"text": sentence}, caller={"source": "livekit", "user_id": user_id})
+        await _send_data(local_participant, {
+            "type": "audio",
+            "audio_base64": base64.b64encode(tts_resp.body).decode("ascii"),
+            "content_type": tts_resp.media_type,
+            "seq": seq,
+            "final": seq == last,
+        })
+
+
 async def _maybe_fast_tier(transcript: str, user_id: str, session_id: str) -> Optional[str]:
     """Return a sub-second fast-tier reply for `transcript`, or None → the brain.
 
@@ -640,13 +676,16 @@ async def _run_pipeline(local_participant, frames: list[bytes], user_id: str, se
     stage_started = time.monotonic()
     _health_update(last_stage="tts")
     try:
-        from routers.voice_tts import synthesize as _synth
-        tts_resp = await _synth({"text": response}, caller={"source": "livekit", "user_id": user_id})
-        await _send_data(local_participant, {
-            "type": "audio",
-            "audio_base64": base64.b64encode(tts_resp.body).decode("ascii"),
-            "content_type": tts_resp.media_type,
-        })
+        if _livekit_stream_tts_enabled():
+            await _stream_sentence_audio(local_participant, response, user_id)
+        else:
+            from routers.voice_tts import synthesize as _synth
+            tts_resp = await _synth({"text": response}, caller={"source": "livekit", "user_id": user_id})
+            await _send_data(local_participant, {
+                "type": "audio",
+                "audio_base64": base64.b64encode(tts_resp.body).decode("ascii"),
+                "content_type": tts_resp.media_type,
+            })
     except Exception as exc:
         _VOICE_HEALTH["pipeline_failures"] += 1
         _health_update(last_stage="tts_failed", last_error=str(exc)[:240])
@@ -699,13 +738,16 @@ async def _run_text_pipeline(local_participant, message: str, user_id: str, sess
     stage_started = time.monotonic()
     _health_update(last_stage="tts")
     try:
-        from routers.voice_tts import synthesize as _synth
-        tts_resp = await _synth({"text": response}, caller={"source": "livekit", "user_id": user_id})
-        await _send_data(local_participant, {
-            "type": "audio",
-            "audio_base64": base64.b64encode(tts_resp.body).decode("ascii"),
-            "content_type": tts_resp.media_type,
-        })
+        if _livekit_stream_tts_enabled():
+            await _stream_sentence_audio(local_participant, response, user_id)
+        else:
+            from routers.voice_tts import synthesize as _synth
+            tts_resp = await _synth({"text": response}, caller={"source": "livekit", "user_id": user_id})
+            await _send_data(local_participant, {
+                "type": "audio",
+                "audio_base64": base64.b64encode(tts_resp.body).decode("ascii"),
+                "content_type": tts_resp.media_type,
+            })
     except Exception as exc:
         _VOICE_HEALTH["pipeline_failures"] += 1
         _health_update(last_stage="tts_failed", last_error=str(exc)[:240])

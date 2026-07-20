@@ -480,7 +480,18 @@ function handleVoiceEvent(msg) {
       setTimeout(endCall, 2000);
     }
   } else if (type === 'audio') {
+    // P-W1.3: streamed-sentence messages (seq/final) arrive in order over the
+    // reliable data channel; the existing queue already plays them sequentially.
     enqueueAudio(msg.audio_base64, msg.content_type || 'audio/wav');
+  } else if (type === 'stop_playback') {
+    // Barge-in (#1051): server saw the user talking over Zoe — stop playback
+    // now and drop any queued streamed sentences.
+    audioQueue = [];
+    if (currentAudio) { try { currentAudio.pause(); } catch(e) {} }
+    audioPlaying = false;
+    speaking = false;
+    currentAudio = null;
+    setOrbState('listening');
   } else if (type === 'text') {
     if (!audioPlaying) setOrbState('ambient');
   } else if (type === 'agui' || type === 'ui_component') {
