@@ -54,13 +54,25 @@ useful in that role — e.g. `skills/autoresearch-engineer/SKILL.md` documents t
 
 ## Adding a skill the runtime will actually see
 
-Place the skill in a **discovery directory**, not in the repo:
+There is exactly **one** location Zoe reads:
 
 ```
 ~/.openclaw/workspace/skills/{skill-name}/SKILL.md
-# or
-~/.hermes/skills/{skill-name}/SKILL.md
 ```
+
+**Do not use `~/.hermes/skills/`.** It had a parser until 2026-07-20
+(`skill_discovery.py`), that parser fed nothing, and it is now gone — so Zoe has
+no reader for that directory at all. A skill installed there is invisible to her.
+It remains meaningful to the *Hermes agent*, which reads it for its own purposes,
+but that is a different consumer with a different catalogue.
+
+**And placement alone is not sufficient.** OpenClaw resolves its workspace-skills
+root from `agents.list[0].workspace` in `~/.openclaw/openclaw.json`, which
+currently points at a directory with no `skills/` — so as of this writing the
+agent's catalog contains **no workspace skills at all**. Symlinked skills are
+additionally rejected (`symlink-escape`) unless `skills.load.allowSymlinkTargets`
+names the target. Verify with the endpoint below rather than assuming the file
+landing in the right directory is enough.
 
 There is **no discovery cache and no watcher** — `skills_watcher.py` was deleted
 with `skill_discovery.py` on 2026-07-20. `openclaw_manager.list_skills()` reads

@@ -1543,15 +1543,18 @@ async def get_peer_agent_card(name: str):
     # skill directories into a catalogue whose only consumers were this field
     # and an unread markdown file, and nothing dispatched on it.
     #
-    # Entries keep the full A2A v1.0 AgentSkill shape (inputModes/outputModes
-    # included) so card consumers can still negotiate modes. Descriptions are
-    # thinner than the parsed ones were — the registry stores skill ids, not
-    # prose — but the contract is intact rather than silently reshaped.
+    # Entries keep the full A2A v1.0 AgentSkill shape so card consumers can
+    # still negotiate modes and distinguish capabilities. Prose comes from the
+    # registry's `skill_descriptions` map (a parallel map rather than inlined
+    # objects, because four readers treat `skills:` as bare strings — e.g.
+    # zoe_agent_registry.py does ", ".join(...) on it). Falls back to the id
+    # only when a description is genuinely missing.
+    descriptions = agent_info.get("skill_descriptions") or {}
     skills = [
         {
             "id": s,
             "name": s,
-            "description": s,
+            "description": descriptions.get(s, s),
             "inputModes": ["text"],
             "outputModes": ["text"],
         }
