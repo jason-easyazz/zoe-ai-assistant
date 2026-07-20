@@ -17,7 +17,7 @@ importScripts('/workbox/workbox-sw.js');
 // bundles ship under a single cache key.
 // (4.65.0 music-card-breathe vs 4.64.10 sleep-playing-flag -> 4.65.1.)
 // (4.66.0 calendar-anchor vs 4.65.2 music-card-polish -> 4.66.1.)
-const SW_VERSION = '4.68.3'; // lists page defaults to real list widgets (lists-dashboard.js)
+const SW_VERSION = '4.68.4'; // lists page defaults to real list widgets (lists-dashboard.js); chat.html XSS escaping + cross-origin script/CSS routes left unrouted
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
@@ -179,9 +179,20 @@ if (workbox) {
         })
     );
 
-    // Other JavaScript - Network First (ensures auth/executor fixes deploy instantly)
+    // Other JavaScript - Network First (ensures auth/executor fixes deploy instantly).
+    // SAME-ORIGIN ONLY — see the image-route note below for the mechanism. A
+    // <script src> to a CDN is a no-cors request, so NetworkFirst gets an opaque
+    // response it cannot read; on every SW-controlled reload chat.html lost all 9
+    // of its cross-origin assets with net::ERR_FAILED (marked, DOMPurify, Prism +
+    // autoloader, Chart.js, QRCode, Leaflet), killing markdown rendering, HTML
+    // sanitization, code highlighting, charts and maps. Unlike the image route,
+    // CacheableResponsePlugin({statuses:[0,200]}) here means opaque responses ARE
+    // cacheable — so the failure is on the read side, not the cache-write side —
+    // but the remedy is the same: leave cross-origin UNROUTED so the browser
+    // fetches it normally. Same-origin caching is unchanged.
     workbox.routing.registerRoute(
-        ({ request }) => request.destination === 'script',
+        ({ request, url }) => request.destination === 'script'
+                              && url.origin === self.location.origin,
         new workbox.strategies.NetworkFirst({
             cacheName: 'zoe-js',
             networkTimeoutSeconds: 3,
@@ -197,10 +208,13 @@ if (workbox) {
         })
     );
 
-    // 3. CSS - Network First for widget CSS, Cache First for others
+    // 3. CSS - Network First for widget CSS, Cache First for others. SAME-ORIGIN ONLY
+    // (same opaque-response mechanism as the script route above).
     workbox.routing.registerRoute(
-        ({ request }) => {
-            return request.destination === 'style' && request.url.includes('/widgets/');
+        ({ request, url }) => {
+            return request.destination === 'style'
+                   && url.origin === self.location.origin
+                   && request.url.includes('/widgets/');
         },
         new workbox.strategies.NetworkFirst({
             cacheName: 'zoe-widgets-css',
@@ -217,9 +231,12 @@ if (workbox) {
         })
     );
 
-    // Other CSS - Network First (ensures style fixes deploy instantly)
+    // Other CSS - Network First (ensures style fixes deploy instantly). SAME-ORIGIN
+    // ONLY — this route was stripping chat.html's Prism theme and Leaflet CSS on
+    // every reload (same opaque-response mechanism as the script route above).
     workbox.routing.registerRoute(
-        ({ request }) => request.destination === 'style',
+        ({ request, url }) => request.destination === 'style'
+                              && url.origin === self.location.origin,
         new workbox.strategies.NetworkFirst({
             cacheName: 'zoe-css',
             networkTimeoutSeconds: 3,
