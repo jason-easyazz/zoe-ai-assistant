@@ -940,35 +940,42 @@ async def _run_mempalace_migration_gate(get_db_ctx=None, migrate=None, flag_path
 # ytmusic_signin.refresh_now — are module-level references for this same reason.
 
 async def _run_music_discovery_batch() -> None:
-    import asyncio as _aio
+    """Weekly digarr batch. Spawns OFF the event loop.
+
+    asyncio.create_subprocess_exec forks ON the loop thread, which in this
+    large multi-threaded process can deadlock pre-exec and freeze the whole
+    API — the 2026-06-29 outage (see services/zoe-data/AGENTS.md). This job
+    was never registered until the closure-serialization fix, so the
+    dangerous spawn had never actually run; it must not start now.
+    run_to_completion does the whole spawn+communicate+timeout+kill inside a
+    worker thread.
+    """
+    import subprocess as _sp
     import sys as _sys
+
+    from async_subprocess import run_to_completion as _run_off_loop
+
     _script = os.path.normpath(os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         "..", "..", "scripts", "maintenance", "music_discovery_batch.py"))
-    proc = await _aio.create_subprocess_exec(
-        _sys.executable, _script,
-        stdout=_aio.subprocess.PIPE, stderr=_aio.subprocess.STDOUT)
     try:
-        out, _ = await _aio.wait_for(proc.communicate(), timeout=2400)
-    except _aio.TimeoutError:
-        # SIGTERM first so the script's `finally` can stop+remove
-        # the digarr container; SIGKILL only if it hangs. Then
-        # force-remove the container regardless — a leaked 768MB
-        # container on this memory-tight box is an incident.
-        proc.terminate()
+        proc = await _run_off_loop([_sys.executable, _script], timeout=2400)
+    except _sp.TimeoutExpired:
+        # run_to_completion already killed the child. Force-remove the
+        # container regardless — a leaked 768MB digarr container on this
+        # memory-tight box is an incident, and the script's `finally` may not
+        # have run.
+        logger.error("music discovery batch timed out (killed); removing digarr container")
         try:
-            await _aio.wait_for(proc.communicate(), timeout=60)
-            logger.error("music discovery batch timed out (terminated; script cleanup ran)")
-        except _aio.TimeoutError:
-            proc.kill()
-            logger.error("music discovery batch timed out (killed)")
-        _rm = await _aio.create_subprocess_exec(
-            "docker", "rm", "-f", "zoe-digarr-batch",
-            stdout=_aio.subprocess.DEVNULL,
-            stderr=_aio.subprocess.DEVNULL)
-        await _rm.wait()
+            await _run_off_loop(["docker", "rm", "-f", "zoe-digarr-batch"], timeout=120)
+        except Exception as _rm_exc:
+            logger.error("could not remove zoe-digarr-batch after timeout: %s", _rm_exc)
         return
-    tail = (out or b"").decode(errors="replace")[-2000:]
+    except Exception as _exc:
+        logger.error("music discovery batch failed to run: %s", _exc)
+        return
+
+    tail = (proc.stdout or b"").decode(errors="replace")[-2000:]
     if proc.returncode == 0:
         logger.info("music discovery batch ok:\n%s", tail)
     else:

@@ -82,3 +82,33 @@ def test_no_add_job_target_is_defined_inside_lifespan():
         f"these add_job targets are defined inside lifespan() and cannot be "
         f"serialized by the job store: {offenders}"
     )
+
+
+def test_scheduled_jobs_do_not_fork_on_the_event_loop():
+    """Scheduled callables must spawn OFF the loop.
+
+    asyncio.create_subprocess_exec forks ON the loop thread; in this large
+    multi-threaded process that can deadlock pre-exec and freeze the whole API
+    — the 2026-06-29 outage (see services/zoe-data/AGENTS.md). These jobs are
+    especially exposed because they run unattended on a cron trigger, and
+    music_discovery_weekly only became reachable at all once the closure
+    serialization bug was fixed. async_subprocess.run_to_completion does the
+    whole spawn inside a worker thread.
+    """
+    tree = ast.parse(_MAIN.read_text(encoding="utf-8"))
+
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.name not in SCHEDULED_CALLABLES:
+            continue
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Attribute) \
+                    and inner.func.attr == "create_subprocess_exec":
+                offenders.append(f"{node.name}:{inner.lineno}")
+
+    assert not offenders, (
+        f"these scheduled jobs fork on the event loop: {offenders} — use "
+        f"async_subprocess.run_to_completion instead"
+    )
