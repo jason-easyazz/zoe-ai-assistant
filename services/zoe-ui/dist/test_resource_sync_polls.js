@@ -79,6 +79,24 @@ check('_refreshAll only calls page functions that exist', () => {
             `${fn} must be existence-guarded — this module loads on pages that lack it`);
     }
     assert.ok(/catch \(err\)/.test(body), 'a failing refresh must not kill the poll loop');
+
+    // calendar.html's loadReminders takes (startDate,endDate) and loadEvents()
+    // already re-runs it with the visible range. A bare call here re-fetches
+    // with undefined bounds and wipes the ranged result.
+    assert.ok(/typeof loadReminders === 'function' && typeof loadEvents !== 'function'/.test(body),
+        'reminders must only refresh standalone where loadEvents is absent');
+
+    // touch/journal.html stubs displayTimelineEntries to a no-op, so
+    // loadJournalEntries fetches into nothing there; prefer the page-local loader.
+    // Strip comments first: the explanation above names both functions, and a
+    // raw indexOf matches the prose instead of the code. (Third time this trap
+    // has appeared in this wave -- assertions must read CODE, not commentary.)
+    const codeOnly = body.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    const li = codeOnly.indexOf("typeof loadEntries === 'function'");
+    const lj = codeOnly.indexOf("typeof loadJournalEntries === 'function'");
+    assert.ok(li !== -1 && lj !== -1, 'both journal loaders must be referenced');
+    assert.ok(li < lj,
+        'loadEntries (page-local) must be preferred: touch stubs the renderer loadJournalEntries uses');
 });
 
 // Behavioural: drive the real module against a stubbed DOM and prove a tick refreshes.
