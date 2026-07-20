@@ -2125,6 +2125,24 @@
     <script src="/js/notifications-panel.js"></script>
     <script src="js/websocket-sync.js"></script>
     <script>
+        // HTML-escape helper for every innerHTML interpolation on this page.
+        // js/common.js (loaded above) exports window.zoeEscapeHtml; the inline
+        // fallback keeps rendering safe if that script ever fails to load, so a
+        // missing dependency can never silently degrade back to raw
+        // interpolation. Escapes the single quote too, which is what contains
+        // payloads inside single-quoted inline handlers and attributes.
+        function escapeHtml(value) {
+            if (typeof window.zoeEscapeHtml === 'function') {
+                return window.zoeEscapeHtml(value);
+            }
+            return String(value == null ? '' : value)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
         // Authenticated API request wrapper
         async function authedApiRequest(endpoint, options = {}) {
             const session = window.zoeAuth?.getCurrentSession();
@@ -2553,28 +2571,28 @@
             
             if (filteredTasks.length === 0 && selectedList !== 'all') {
                 container.innerHTML = unavailableNotice + `
-                    <div class="task-item add-new ${selectedList}">
+                    <div class="task-item add-new ${escapeHtml(selectedList)}">
                         <div class="task-bullet"></div>
-                        <input type="text" class="task-input" placeholder="Add a new item..." 
-                               onkeypress="if(event.key==='Enter') addTaskFromInput(this, '${selectedList}')">
+                        <input type="text" class="task-input" placeholder="Add a new item..."
+                               onkeypress="if(event.key==='Enter') addTaskFromInput(this, '${escapeHtml(selectedList)}')">
                     </div>
                 `;
                 return;
             }
             
             container.innerHTML = unavailableNotice + filteredTasks.map(task => `
-                <div class="task-item ${task.category} ${selectedTasks.includes(task.id) ? 'selected' : ''}" 
-                     draggable="true" data-task-id="${task.id}">
-                    <input type="checkbox" class="task-checkbox" 
+                <div class="task-item ${escapeHtml(task.category)} ${selectedTasks.includes(task.id) ? 'selected' : ''}"
+                     draggable="true" data-task-id="${escapeHtml(task.id)}">
+                    <input type="checkbox" class="task-checkbox"
                            ${selectedTasks.includes(task.id) ? 'checked' : ''}
-                           onclick="toggleTaskSelection('${task.id}', event)">
-                    <div class="task-text">${task.text}</div>
+                           onclick="toggleTaskSelection('${escapeHtml(task.id)}', event)">
+                    <div class="task-text">${escapeHtml(task.text)}</div>
                         </div>
             `).join('') + (selectedList !== 'all' ? `
-                <div class="task-item add-new ${selectedList}">
+                <div class="task-item add-new ${escapeHtml(selectedList)}">
                     <div class="task-bullet"></div>
-                    <input type="text" class="task-input" placeholder="Add a new item..." 
-                           onkeypress="if(event.key==='Enter') addTaskFromInput(this, '${selectedList}')">
+                    <input type="text" class="task-input" placeholder="Add a new item..."
+                           onkeypress="if(event.key==='Enter') addTaskFromInput(this, '${escapeHtml(selectedList)}')">
                     </div>
             ` : '');
             
@@ -2610,14 +2628,14 @@
                     const timeDisplay = reminder.due_time ? reminder.due_time.substring(0, 5) : 'No time';
                     
                     return `
-                        <div class="task-item reminders priority-${reminder.priority}" 
-                             draggable="true" data-reminder-id="${reminder.id}">
+                        <div class="task-item reminders priority-${escapeHtml(reminder.priority)}"
+                             draggable="true" data-reminder-id="${escapeHtml(reminder.id)}">
                             <div class="task-bullet"></div>
                             <div class="task-content">
-                                <div class="task-text">${reminder.title}</div>
+                                <div class="task-text">${escapeHtml(reminder.title)}</div>
                                 <div class="task-meta">
-                                    <span class="task-time">${timeDisplay}</span>
-                                    <span class="task-category">${reminder.category}</span>
+                                    <span class="task-time">${escapeHtml(timeDisplay)}</span>
+                                    <span class="task-category">${escapeHtml(reminder.category)}</span>
                                 </div>
                             </div>
                         </div>
@@ -3362,25 +3380,25 @@
             content.innerHTML = `
                 <div class="event-detail">
                     <label>Time:</label>
-                    <span>${reminder.time}</span>
+                    <span>${escapeHtml(reminder.time)}</span>
                 </div>
                 <div class="event-detail">
                     <label>Priority:</label>
-                    <span class="priority-${reminder.priority}">${reminder.priority.toUpperCase()}</span>
+                    <span class="priority-${escapeHtml(reminder.priority)}">${escapeHtml(String(reminder.priority || '').toUpperCase())}</span>
                 </div>
                 <div class="event-detail">
                     <label>Category:</label>
-                    <span>${reminder.category}</span>
+                    <span>${escapeHtml(reminder.category)}</span>
                 </div>
                 ${reminder.description ? `
                 <div class="event-detail">
                     <label>Description:</label>
-                    <span>${reminder.description}</span>
+                    <span>${escapeHtml(reminder.description)}</span>
                 </div>
                 ` : ''}
                 <div class="event-actions">
-                    <button class="btn btn-primary" onclick="completeReminder(${reminder.reminderId})">Mark Complete</button>
-                    <button class="btn btn-secondary" onclick="snoozeReminder(${reminder.reminderId})">Snooze</button>
+                    <button class="btn btn-primary" onclick="completeReminder('${escapeHtml(reminder.reminderId)}')">Mark Complete</button>
+                    <button class="btn btn-secondary" onclick="snoozeReminder('${escapeHtml(reminder.reminderId)}')">Snooze</button>
                     <button class="btn btn-secondary" onclick="closeEventPanel()">Close</button>
                 </div>
             `;
@@ -3530,9 +3548,11 @@
             const icon = isReminder ? '🔔' : '';
             const indicators = event.indicatorsHtml || '';
             
+            // `indicators` is emoji markup this file builds itself, not user
+            // content, so it stays raw; everything else here is user-supplied.
             eventEl.innerHTML = `
-                <div class="event-title">${icon} ${event.title} ${indicators}</div>
-                <div class="event-time">${timeDisplay}</div>
+                <div class="event-title">${icon} ${escapeHtml(event.title)} ${indicators}</div>
+                <div class="event-time">${escapeHtml(timeDisplay)}</div>
                 ${taskCountHtml}
                 ${!isReminder ? '<div class="resize-handle bottom"></div>' : ''}
             `;
@@ -3611,7 +3631,13 @@
                 start_time: newTime,
                 duration: event.duration,
                 category: event.category,
+                // PUT /calendar/events/{id} REPLACES the metadata column wholesale
+                // (routers/calendar.py: `metadata = ?` with the payload value), so a
+                // partial metadata object silently destroys description, prep_items,
+                // get_ready_time, travel_time, attendees and reminders. Spread the
+                // event's existing metadata into every PUT.
                 metadata: {
+                    ...(event.metadata || {}),
                     linked_tasks: JSON.stringify(event.linkedTasks || [])
                 }
             };
@@ -3651,7 +3677,9 @@
                 start_time: event.time,
                 duration,
                 category: event.category,
+                // Preserve the rest of metadata -- the server replaces the column.
                 metadata: {
+                    ...(event.metadata || {}),
                     linked_tasks: JSON.stringify(event.linkedTasks)
                 }
             };
@@ -3731,7 +3759,9 @@
                 start_time: event.time,
                 duration: event.duration,
                 category: event.category,
+                // Preserve the rest of metadata -- the server replaces the column.
                 metadata: {
+                    ...(event.metadata || {}),
                     linked_tasks: JSON.stringify(event.linkedTasks || [])
                 }
             };
@@ -3801,9 +3831,12 @@
         }
         
         function toggleTaskCompletion(eventId, taskId) {
-            const event = events.find(e => e.id === eventId);
+            // The inline handler now passes both ids as escaped strings (an
+            // unquoted ${event.id} was an injection point), so compare by string
+            // rather than strictly against a numeric id from the API.
+            const event = events.find(e => String(e.id) === String(eventId));
             if (event) {
-                const task = event.linkedTasks.find(t => t.id === taskId);
+                const task = event.linkedTasks.find(t => String(t.id) === String(taskId));
                 if (task) {
                     task.completed = !task.completed;
                     renderLinkedTasks(event);
@@ -3819,7 +3852,9 @@
                 start_time: event.time,
                 duration: event.duration,
                 category: event.category,
+                // Preserve the rest of metadata -- the server replaces the column.
                 metadata: {
+                    ...(event.metadata || {}),
                     linked_tasks: JSON.stringify(event.linkedTasks)
                 }
             };
@@ -3857,10 +3892,10 @@
             
             linkedTasksList.innerHTML = event.linkedTasks.map(task => `
                 <div class="linked-task-item ${task.completed ? 'completed' : ''}">
-                    <input type="checkbox" class="task-complete-checkbox" 
+                    <input type="checkbox" class="task-complete-checkbox"
                            ${task.completed ? 'checked' : ''}
-                           onchange="toggleTaskCompletion(${event.id}, '${task.id}')">
-                    ${task.text}
+                           onchange="toggleTaskCompletion('${escapeHtml(event.id)}', '${escapeHtml(task.id)}')">
+                    ${escapeHtml(task.text)}
                 </div>
             `).join('');
         }
@@ -3952,39 +3987,24 @@
             currentPrepItems = metadata.prep_items || [];
             renderPrepItemsList();
             
-            // Load attendees
-            try {
-                const data = await authedApiRequest(`/calendar/events/${event.id}/attendees`);
-                currentAttendees = data.attendees || [];
-                renderAttendeesList();
-            } catch (error) {
-                if (String(error?.message || error).includes('404')) {
-                    console.info('Attendees endpoint not available; continuing without attendees.');
-                } else {
-                    console.error('Error loading attendees:', error);
-                }
-                currentAttendees = [];
-                renderAttendeesList();
-            }
-            
-            // Load reminders
-            try {
-                const data = await authedApiRequest(`/calendar/events/${event.id}/reminders`);
-                currentReminders = (data.reminders || []).map(r => ({
-                    id: r.id,
-                    offset_minutes: calculateReminderOffset(event, r),
-                    message: r.title
-                }));
-                renderRemindersList();
-            } catch (error) {
-                if (String(error?.message || error).includes('404')) {
-                    console.info('Event reminders endpoint not available; continuing without event reminders.');
-                } else {
-                    console.error('Error loading reminders:', error);
-                }
-                currentReminders = [];
-                renderRemindersList();
-            }
+            // Load attendees and reminders from the event's own metadata.
+            // There is no GET /calendar/events/{id}/attendees or .../reminders on
+            // zoe-data (see the note by saveEvent) -- those fetches 404'd every
+            // time and reset both lists to empty, which is the read half of the
+            // same wipe: saveEvent() then persisted the emptied lists.
+            currentAttendees = (metadata.attendees || []).map(a => ({
+                person_id: a.person_id,
+                name: a.name || '',
+                role: a.role || 'participant'
+            }));
+            renderAttendeesList();
+
+            currentReminders = (metadata.reminders || []).map((r, index) => ({
+                id: r.id != null ? r.id : `meta-${index}`,
+                offset_minutes: r.offset_minutes,
+                message: r.message || ''
+            }));
+            renderRemindersList();
             
             // Reset advanced section
             document.getElementById('advancedSection').style.display = 'none';
@@ -4010,18 +4030,6 @@
             
             document.getElementById('eventPanel').classList.add('open');
             document.getElementById('overlay').classList.add('active');
-        }
-        
-        function calculateReminderOffset(event, reminder) {
-            // Calculate offset from event start time
-            try {
-                const eventTime = new Date(`${formatDateISO(event.date)} ${event.time}`);
-                const reminderTime = new Date(`${reminder.due_date} ${reminder.due_time}`);
-                const diffMinutes = Math.floor((eventTime - reminderTime) / 1000 / 60);
-                return diffMinutes;
-            } catch {
-                return 15; // Default to 15 minutes
-            }
         }
         
         function closeEventPanel() {
@@ -4156,10 +4164,10 @@
             suggestions.innerHTML = limitedSuggestions.map((person, index) => `
                 <div class="attendee-suggestion-item ${index === selectedSuggestionIndex ? 'selected' : ''}" 
                      data-index="${index}"
-                     onclick="selectAttendeeFromSuggestion(${person.id})"
+                     onclick="selectAttendeeFromSuggestion('${escapeHtml(person.id)}')"
                      onmouseenter="highlightSuggestion(${index})">
-                    <div class="attendee-suggestion-name">${person.name}</div>
-                    <div class="attendee-suggestion-details">${person.email || person.phone || ''}</div>
+                    <div class="attendee-suggestion-name">${escapeHtml(person.name)}</div>
+                    <div class="attendee-suggestion-details">${escapeHtml(person.email || person.phone || '')}</div>
                 </div>
             `).join('');
             
@@ -4249,11 +4257,13 @@
         }
         
         function selectAttendeeFromSuggestion(personId) {
-            const person = peopleList.find(p => p.id === personId);
+            // The suggestion list passes the id as an escaped string (an unquoted
+            // ${person.id} was an injection point), so compare by string.
+            const person = peopleList.find(p => String(p.id) === String(personId));
             if (!person) return;
-            
+
             // Check if already added
-            if (currentAttendees.some(a => a.person_id === personId)) {
+            if (currentAttendees.some(a => String(a.person_id) === String(personId))) {
                 showNotification('Person already added as attendee', 'error');
                 return;
             }
@@ -4277,7 +4287,7 @@
         }
         
         function removeAttendee(personId) {
-            currentAttendees = currentAttendees.filter(a => a.person_id !== personId);
+            currentAttendees = currentAttendees.filter(a => String(a.person_id) !== String(personId));
             renderAttendeesList();
         }
         
@@ -4292,10 +4302,10 @@
             container.innerHTML = currentAttendees.map(attendee => `
                 <div class="attendee-item">
                     <div class="attendee-info">
-                        <div class="attendee-name">${attendee.name}</div>
-                        <div class="attendee-details">${attendee.email || attendee.phone || 'No contact info'}</div>
+                        <div class="attendee-name">${escapeHtml(attendee.name)}</div>
+                        <div class="attendee-details">${escapeHtml(attendee.email || attendee.phone || 'No contact info')}</div>
                     </div>
-                    <button class="btn-remove" onclick="removeAttendee(${attendee.person_id})">Remove</button>
+                    <button class="btn-remove" onclick="removeAttendee('${escapeHtml(attendee.person_id)}')">Remove</button>
                 </div>
             `).join('');
         }
@@ -4314,12 +4324,12 @@
         }
         
         function removeReminderRow(reminderId) {
-            currentReminders = currentReminders.filter(r => r.id !== reminderId);
+            currentReminders = currentReminders.filter(r => String(r.id) !== String(reminderId));
             renderRemindersList();
         }
         
         function updateReminder(reminderId, field, value) {
-            const reminder = currentReminders.find(r => r.id === reminderId);
+            const reminder = currentReminders.find(r => String(r.id) === String(reminderId));
             if (reminder) {
                 reminder[field] = value;
             }
@@ -4336,7 +4346,7 @@
             container.innerHTML = currentReminders.map(reminder => `
                 <div class="reminder-item">
                     <div class="reminder-info">
-                        <select class="form-select" style="margin-bottom: 5px;" onchange="updateReminder(${reminder.id}, 'offset_minutes', parseInt(this.value))">
+                        <select class="form-select" style="margin-bottom: 5px;" onchange="updateReminder('${escapeHtml(reminder.id)}', 'offset_minutes', parseInt(this.value))">
                             <option value="15" ${reminder.offset_minutes === 15 ? 'selected' : ''}>15 minutes before</option>
                             <option value="30" ${reminder.offset_minutes === 30 ? 'selected' : ''}>30 minutes before</option>
                             <option value="60" ${reminder.offset_minutes === 60 ? 'selected' : ''}>1 hour before</option>
@@ -4344,13 +4354,20 @@
                             <option value="1440" ${reminder.offset_minutes === 1440 ? 'selected' : ''}>1 day before</option>
                             <option value="2880" ${reminder.offset_minutes === 2880 ? 'selected' : ''}>2 days before</option>
                         </select>
-                        <input type="text" class="form-input" placeholder="Custom message (optional)" 
-                               value="${reminder.message}" 
-                               onchange="updateReminder(${reminder.id}, 'message', this.value)">
+                        <input type="text" class="form-input" placeholder="Custom message (optional)"
+                               data-reminder-message
+                               onchange="updateReminder('${escapeHtml(reminder.id)}', 'message', this.value)">
                     </div>
-                    <button class="btn-remove" onclick="removeReminderRow(${reminder.id})">Remove</button>
+                    <button class="btn-remove" onclick="removeReminderRow('${escapeHtml(reminder.id)}')">Remove</button>
                 </div>
             `).join('');
+
+            // The message is user content going into an input's value. Set it
+            // through the DOM instead of interpolating into a value="..."
+            // attribute, so no escaping subtlety can reopen the injection.
+            container.querySelectorAll('[data-reminder-message]').forEach((input, index) => {
+                input.value = currentReminders[index]?.message || '';
+            });
         }
         
         // Prep Items Management
@@ -4371,19 +4388,19 @@
         }
         
         function removePrepItemRow(itemId) {
-            currentPrepItems = currentPrepItems.filter(item => item.id !== itemId);
+            currentPrepItems = currentPrepItems.filter(item => String(item.id) !== String(itemId));
             renderPrepItemsList();
         }
         
         function updatePrepItem(itemId, field, value) {
-            const item = currentPrepItems.find(i => i.id === itemId);
+            const item = currentPrepItems.find(i => String(i.id) === String(itemId));
             if (item) {
                 item[field] = value;
             }
         }
         
         function togglePrepItemComplete(itemId) {
-            const item = currentPrepItems.find(i => i.id === itemId);
+            const item = currentPrepItems.find(i => String(i.id) === String(itemId));
             if (item) {
                 item.completed = !item.completed;
                 renderPrepItemsList();
@@ -4401,21 +4418,21 @@
             container.innerHTML = currentPrepItems.map(item => `
                 <div class="prep-item ${item.completed ? 'completed' : ''}">
                     <div class="prep-info" style="flex: 1;">
-                        <input type="text" class="form-input" placeholder="Prep item description" 
-                               value="${item.text}" 
-                               onchange="updatePrepItem(${item.id}, 'text', this.value)"
+                        <input type="text" class="form-input" placeholder="Prep item description"
+                               data-prep-text
+                               onchange="updatePrepItem('${escapeHtml(item.id)}', 'text', this.value)"
                                style="margin-bottom: 5px;">
                         <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px;">
-                            <input type="number" class="form-input" min="1" value="${item.deadline_offset}" 
-                                   onchange="updatePrepItem(${item.id}, 'deadline_offset', parseInt(this.value))"
+                            <input type="number" class="form-input" min="1" value="${escapeHtml(item.deadline_offset)}" 
+                                   onchange="updatePrepItem('${escapeHtml(item.id)}', 'deadline_offset', parseInt(this.value))"
                                    style="padding: 6px;">
-                            <select class="form-select" onchange="updatePrepItem(${item.id}, 'deadline_unit', this.value)"
+                            <select class="form-select" onchange="updatePrepItem('${escapeHtml(item.id)}', 'deadline_unit', this.value)"
                                     style="padding: 6px;">
                                 <option value="hours" ${item.deadline_unit === 'hours' ? 'selected' : ''}>hours</option>
                                 <option value="days" ${item.deadline_unit === 'days' ? 'selected' : ''}>days</option>
                                 <option value="weeks" ${item.deadline_unit === 'weeks' ? 'selected' : ''}>weeks</option>
                             </select>
-                            <select class="form-select" onchange="updatePrepItem(${item.id}, 'list_type', this.value)"
+                            <select class="form-select" onchange="updatePrepItem('${escapeHtml(item.id)}', 'list_type', this.value)"
                                     style="padding: 6px;">
                                 <option value="personal" ${item.list_type === 'personal' ? 'selected' : ''}>Personal</option>
                                 <option value="work" ${item.list_type === 'work' ? 'selected' : ''}>Work</option>
@@ -4425,17 +4442,24 @@
                         </div>
                         <label style="display: flex; align-items: center; gap: 5px; margin-top: 5px; font-size: 11px;">
                             <input type="checkbox" ${item.auto_add_to_list ? 'checked' : ''} 
-                                   onchange="updatePrepItem(${item.id}, 'auto_add_to_list', this.checked)">
+                                   onchange="updatePrepItem('${escapeHtml(item.id)}', 'auto_add_to_list', this.checked)">
                             Auto-add to list
                         </label>
                     </div>
                     <div style="display: flex; flex-direction: column; gap: 5px;">
-                        <button class="btn-remove" onclick="removePrepItemRow(${item.id})">Remove</button>
+                        <button class="btn-remove" onclick="removePrepItemRow('${escapeHtml(item.id)}')">Remove</button>
                         <button class="btn-remove" style="background: rgba(16, 185, 129, 0.1); color: #10B981; border-color: rgba(16, 185, 129, 0.2);" 
-                                onclick="togglePrepItemComplete(${item.id})">${item.completed ? 'Undo' : 'Done'}</button>
+                                onclick="togglePrepItemComplete('${escapeHtml(item.id)}')">${item.completed ? 'Undo' : 'Done'}</button>
                     </div>
                 </div>
             `).join('');
+
+            // Prep item text is user content going into an input's value. Set it
+            // through the DOM instead of interpolating into a value="..."
+            // attribute, so no escaping subtlety can reopen the injection.
+            container.querySelectorAll('[data-prep-text]').forEach((input, index) => {
+                input.value = currentPrepItems[index]?.text || '';
+            });
         }
         
         async function saveEvent() {
@@ -4489,6 +4513,10 @@
                 // Update existing event
                 const event = events.find(e => e.id === editingEventId);
                 if (!event) return;
+
+                // The server replaces the metadata column wholesale, so carry over
+                // any key this form does not model; the form's own fields win.
+                eventData.metadata = { ...(event.metadata || {}), ...eventData.metadata };
 
                 // Preserve existing linked tasks in metadata.
                 if (event.linkedTasks && event.linkedTasks.length > 0) {
@@ -4631,11 +4659,11 @@
             }
             
             notificationsContent.innerHTML = notifications.map(notification => `
-                <div class="notification-item ${notification.is_delivered ? '' : 'unread'}" 
-                     onclick="handleNotificationClick(${notification.id})">
-                    <div class="notification-title">${notification.message}</div>
+                <div class="notification-item ${notification.is_delivered ? '' : 'unread'}"
+                     onclick="handleNotificationClick('${escapeHtml(notification.id)}')">
+                    <div class="notification-title">${escapeHtml(notification.message)}</div>
                     <div class="notification-meta">
-                        <span class="notification-time">${formatNotificationTime(notification.notification_time)}</span>
+                        <span class="notification-time">${escapeHtml(formatNotificationTime(notification.notification_time))}</span>
                     </div>
                 </div>
             `).join('');
