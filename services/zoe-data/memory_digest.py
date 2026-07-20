@@ -43,6 +43,45 @@ def _normalize_gemma_base(raw: str) -> str:
 
 _GEMMA_URL = _normalize_gemma_base(os.environ.get("GEMMA_SERVER_URL", "http://127.0.0.1:11434"))
 _ZOE_TIMEZONE = os.environ.get("ZOE_TIMEZONE", "Australia/Perth")
+
+# Rolling lookback for the nightly digest, in hours. 30h (not 24h) so a 03:00
+# run covers the whole previous calendar day plus the 3h offset, with slack for
+# a late or retried run. Overlap between nights is harmless — the extractor
+# dedupes (skipped_duplicates in the effects counters).
+_DIGEST_LOOKBACK_DEFAULT = 30
+#: A 03:00 run needs more than 27h to reach the whole previous calendar day.
+_DIGEST_LOOKBACK_MIN = 27
+
+
+def _digest_lookback_hours() -> int:
+    """Parse the lookback, refusing values that would silently break the digest.
+
+    A bare int() has two quiet failure modes, both of which are exactly the
+    class of bug this constant was introduced to fix: a typo ("30h") raises at
+    IMPORT time and takes the module down when the scheduled loop reaches it,
+    and 0 (or anything under the floor) silently recreates the empty window that
+    processed nobody for ten consecutive nights.
+    """
+    raw = (os.environ.get("ZOE_MEMORY_DIGEST_LOOKBACK_HOURS") or "").strip()
+    if not raw:
+        return _DIGEST_LOOKBACK_DEFAULT
+    try:
+        hours = int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "memory_digest: ZOE_MEMORY_DIGEST_LOOKBACK_HOURS=%r is not an integer; "
+            "using %dh", raw, _DIGEST_LOOKBACK_DEFAULT)
+        return _DIGEST_LOOKBACK_DEFAULT
+    if hours < _DIGEST_LOOKBACK_MIN:
+        logger.warning(
+            "memory_digest: ZOE_MEMORY_DIGEST_LOOKBACK_HOURS=%d is below the %dh floor "
+            "(a 03:00 run needs the whole previous day); using %dh",
+            hours, _DIGEST_LOOKBACK_MIN, _DIGEST_LOOKBACK_DEFAULT)
+        return _DIGEST_LOOKBACK_DEFAULT
+    return hours
+
+
+_DIGEST_LOOKBACK_HOURS = _digest_lookback_hours()
 _GUEST_USERS = ("guest", "anonymous", "voice-guest", "voice-daemon", "")
 
 _LINK_RESOLVER_TRUTHY = frozenset({"1", "true", "yes", "on"})
@@ -178,10 +217,32 @@ def _message_owner_expr() -> str:
     )
 
 
-def _message_owner_users_sql(*, today_only: bool) -> str:
+def _message_owner_users_sql(*, today_only: bool, lookback_hours: int | None = None) -> str:
+    """Users with chat activity, optionally windowed.
+
+    ``lookback_hours`` selects a ROLLING window ending now and takes precedence
+    over ``today_only``.
+
+    It exists because ``today_only`` is calendar-day based and the nightly
+    digest fires at 03:00: "today" was therefore a three-hour-old window
+    (00:00-03:00), while the conversations the job exists to digest happened the
+    previous day and fell on the far side of midnight. Measured effect: 10
+    consecutive nightly runs (2026-07-11..07-20) each completed cleanly and
+    reported 0 users processed with all-zero effects.
+    """
     owner_expr = _message_owner_expr()
     date_clause = ""
-    if today_only:
+    if lookback_hours is not None:
+        # Same cast discipline as the calendar clause below: through the
+        # positional-compat layer an uncast placeholder binds as "unknown" and
+        # overload resolution fails, silently zeroing the result rather than
+        # erroring. (Keep this SQL free of literal question marks, including in
+        # comments — the compat layer counts them as placeholders.)
+        date_clause = """
+          AND cm.created_at::timestamptz >=
+              (now()::timestamptz - make_interval(hours => ?::int))
+        """
+    elif today_only:
         # Casts are load-bearing. Through the asyncpg positional-compat layer, an
         # uncast timezone placeholder binds as "unknown" and the timestamp operand
         # collapses to text, so overload resolution fails ("function
@@ -707,12 +768,12 @@ async def _load_todays_messages(user_id: str, db=None) -> str:
               -- without them the query errors and silently drops every message.
               -- (No literal question marks in this SQL — the compat layer would
               -- miscount them as bind placeholders.)
-              AND (cm.created_at::timestamptz AT TIME ZONE ?::text)::date =
-                  (now()::timestamptz AT TIME ZONE ?::text)::date
+              AND cm.created_at::timestamptz >=
+                  (now()::timestamptz - make_interval(hours => ?::int))
             ORDER BY cm.created_at ASC
             LIMIT 200
             """
-    params = (user_id, _ZOE_TIMEZONE, _ZOE_TIMEZONE)
+    params = (user_id, _DIGEST_LOOKBACK_HOURS)
     try:
         from db_pool import get_db_ctx  # type: ignore[import]
         if db is not None:
@@ -1014,12 +1075,16 @@ async def run_weekly_consolidation_for_all(db=None) -> list[dict]:
 
 
 async def run_digest_for_all_active_users(db=None) -> list[dict]:
-    """Run memory digest for all users who had chat activity today."""
+    """Run memory digest for users active within the rolling lookback window.
+
+    A rolling window, NOT calendar-today — see _message_owner_users_sql. Asking
+    for "today" at 03:00 selected a three-hour dead window and processed nobody.
+    """
     results = []
     try:
         user_ids = await _list_user_ids(
-            _message_owner_users_sql(today_only=True),
-            (_ZOE_TIMEZONE, _ZOE_TIMEZONE),
+            _message_owner_users_sql(today_only=False, lookback_hours=_DIGEST_LOOKBACK_HOURS),
+            (_DIGEST_LOOKBACK_HOURS,),
             db=db,
         )
     except Exception as exc:
