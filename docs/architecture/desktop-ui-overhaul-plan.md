@@ -174,7 +174,7 @@ skip-list, `sw.js` cache routes, `voice_tts.py:526-530` supersede/cancel list.
 | `updates.html` | **retire desktop copy; KEEP `touch/updates.html`** | The panel deep-links only to the touch copy — it is the repoint target, so it must survive |
 | `voice.html` (desktop) | **retire** | True orphan. **`touch/voice.html` is NOT retired — see below** |
 | `touch/voice.html` | **KEEP — not this overhaul** | Live `lets_talk` target (`chat.py:71`, `voice_tts.py:1111`); replay-gated. Retires with the Ask-card cutover (PLANS Phase 1c) |
-| `touch/smart-home.html` | **KEEP — but it is itself half-broken** | The **only** smart-home UI in the product, with no estate replacement (`chat.py:58-60`) — that is why it is kept. **Correction (2026-07-20): only 1 of its 4 HA endpoints exists.** `ha_control.py` serves `/entities`, `/state/{id}`, `/control` only; its calls to `/api/ha/states` (`:472`), `/api/ha/areas` (`:486`) and `/api/ha/scene` (`:744`) all 404. Scenes fire through `/control` with `{domain:"scene",service:"turn_on"}` |
+| `touch/smart-home.html` | **KEEP + FIX — currently UNUSABLE, not "half-broken"** | The **only** smart-home UI in the product, with no estate replacement (`chat.py:58-60`) — that is why it is kept. **Escalated 2026-07-20 (Greptile P2, verified):** `loadStates()` (`:470-481`) fetches `/api/ha/states` FIRST and `throw`s → `showError()` on a non-OK response, so `renderDevices()` is **never reached** and the page shows only an error state for every visitor. `/api/ha/control` being live is irrelevant — you can never reach a device to control. `ha_control.py` serves only `/entities`, `/state/{id}`, `/control`; `/api/ha/states` (`:472`), `/api/ha/areas` (`:486`) and `/api/ha/scene` (`:744`) all 404. **Fix is small and mandatory, not deferrable:** `/api/ha/states` → `/api/ha/entities`; derive areas from entity attributes or drop the room grouping; fire scenes through `/control` with `{domain:"scene",service:"turn_on"}` |
 | `touch/cooking.html` | **KEEP (flag to IDEAS)** | 678 working lines, but `localStorage`-only with no backend. Keep-and-back vs retire is a product decision |
 | `touch/music.html` | **KEEP — decide its entry point** | Live, healthy, the panel's **only** search-and-play surface. Wave 3 step 5 would orphan it (see Wave 3) |
 | `jukebox.html`, `setup-music.html`, `setup-device.html` | **keep-polish** | QR-linked, verified against live routes |
@@ -277,10 +277,12 @@ Wave 2's auth/nav/plumbing items move into Wave F; only its token/theme work is 
   `notifications-panel.js:208-210` deleting page-supplied panels.
 
 **F2 — Tier-1 fixes: trivial change, large visible effect.**
-- **`openNotificationsSafe()` is called on 8 pages but defined on 2** → hard `ReferenceError` on the
-  other 6, so the notification bell is dead there. All 8 already load the module exporting
-  `window.openNotifications` (`notifications-panel.js:507`). Rename the call. *(calendar:1765,
-  lists:1877, chat:2621, journal:1780, music:697, updates:292)*
+- ~~`openNotificationsSafe()` ReferenceError~~ — **RETRACTED 2026-07-20 (Greptile P2, verified).**
+  There is no bug. `common.js:213-222` defines a guarded `window.openNotificationsSafe` that
+  delegates to `window.zoeNotifications.toggle()` (or a page-local `openNotifications`), and **all 10
+  calling pages load both `common.js` and `notifications-panel.js`** — so the fallback always
+  resolves. The original claim conflated `openNotifications` with `openNotificationsSafe`. **Do not
+  "fix" this, and do not remove the shared fallback.**
 - **`lists.html:2377`** — a `<script src=…>` swallows 114 lines of inline JS, killing 9 functions
   incl. the More menu. Correct form at `calendar.html:4722`.
 - **`people.html:880`** — null-canvas crash aborts the whole 1,500-line block. Delete it (and repoint
