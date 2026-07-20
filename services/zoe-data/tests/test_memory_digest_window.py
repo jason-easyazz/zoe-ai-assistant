@@ -89,3 +89,51 @@ async def test_nightly_job_actually_issues_the_rolling_window(monkeypatch):
     assert captured["args"] == (md._DIGEST_LOOKBACK_HOURS,), (
         f"bound args {captured['args']!r} do not match the single interval placeholder"
     )
+
+
+@pytest.mark.asyncio
+async def test_extraction_path_uses_the_same_window_as_discovery(monkeypatch):
+    """The gap Greptile caught, pinned.
+
+    Widening only the DISCOVERY query is not a fix: the job then selects a user
+    with previous-day activity and _load_todays_messages still loads
+    calendar-today, so extraction finds nothing and the run skips with
+    insufficient activity. Both halves must use the same window.
+
+    Every earlier test in this file passed with that bug present, because they
+    asserted the helper and the discovery call and never the extraction path.
+    """
+    captured: dict = {}
+
+    class _Db:
+        async def execute(self, sql, params=None):
+            captured["sql"] = sql
+            captured["params"] = params
+
+            class _R:
+                async def fetchall(self_inner):
+                    return []
+            return _R()
+
+    await md._load_todays_messages("user-1", _Db())
+
+    assert captured, "_load_todays_messages issued no query"
+    assert "make_interval" in captured["sql"], (
+        "EXTRACTION still uses a calendar-day window while discovery uses a "
+        "rolling one — the job will select a user and then extract nothing"
+    )
+    assert "::date =" not in captured["sql"]
+    assert captured["params"] == ("user-1", md._DIGEST_LOOKBACK_HOURS)
+
+
+@pytest.mark.parametrize(
+    "raw,expected_is_default",
+    [("30h", True), ("0", True), ("5", True), ("", True), ("48", False)],
+)
+def test_lookback_env_cannot_silently_break_the_digest(monkeypatch, raw, expected_is_default):
+    """A typo must not raise at import; a too-small value must not recreate the
+    empty window. Both were silent failure modes with a bare int()."""
+    monkeypatch.setenv("ZOE_MEMORY_DIGEST_LOOKBACK_HOURS", raw)
+    hours = md._digest_lookback_hours()
+    assert hours >= md._DIGEST_LOOKBACK_MIN
+    assert (hours == md._DIGEST_LOOKBACK_DEFAULT) is expected_is_default

@@ -48,7 +48,40 @@ _ZOE_TIMEZONE = os.environ.get("ZOE_TIMEZONE", "Australia/Perth")
 # run covers the whole previous calendar day plus the 3h offset, with slack for
 # a late or retried run. Overlap between nights is harmless — the extractor
 # dedupes (skipped_duplicates in the effects counters).
-_DIGEST_LOOKBACK_HOURS = int(os.environ.get("ZOE_MEMORY_DIGEST_LOOKBACK_HOURS", "30") or 30)
+_DIGEST_LOOKBACK_DEFAULT = 30
+#: A 03:00 run needs more than 27h to reach the whole previous calendar day.
+_DIGEST_LOOKBACK_MIN = 27
+
+
+def _digest_lookback_hours() -> int:
+    """Parse the lookback, refusing values that would silently break the digest.
+
+    A bare int() has two quiet failure modes, both of which are exactly the
+    class of bug this constant was introduced to fix: a typo ("30h") raises at
+    IMPORT time and takes the module down when the scheduled loop reaches it,
+    and 0 (or anything under the floor) silently recreates the empty window that
+    processed nobody for ten consecutive nights.
+    """
+    raw = (os.environ.get("ZOE_MEMORY_DIGEST_LOOKBACK_HOURS") or "").strip()
+    if not raw:
+        return _DIGEST_LOOKBACK_DEFAULT
+    try:
+        hours = int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "memory_digest: ZOE_MEMORY_DIGEST_LOOKBACK_HOURS=%r is not an integer; "
+            "using %dh", raw, _DIGEST_LOOKBACK_DEFAULT)
+        return _DIGEST_LOOKBACK_DEFAULT
+    if hours < _DIGEST_LOOKBACK_MIN:
+        logger.warning(
+            "memory_digest: ZOE_MEMORY_DIGEST_LOOKBACK_HOURS=%d is below the %dh floor "
+            "(a 03:00 run needs the whole previous day); using %dh",
+            hours, _DIGEST_LOOKBACK_MIN, _DIGEST_LOOKBACK_DEFAULT)
+        return _DIGEST_LOOKBACK_DEFAULT
+    return hours
+
+
+_DIGEST_LOOKBACK_HOURS = _digest_lookback_hours()
 _GUEST_USERS = ("guest", "anonymous", "voice-guest", "voice-daemon", "")
 
 _LINK_RESOLVER_TRUTHY = frozenset({"1", "true", "yes", "on"})
@@ -735,12 +768,12 @@ async def _load_todays_messages(user_id: str, db=None) -> str:
               -- without them the query errors and silently drops every message.
               -- (No literal question marks in this SQL — the compat layer would
               -- miscount them as bind placeholders.)
-              AND (cm.created_at::timestamptz AT TIME ZONE ?::text)::date =
-                  (now()::timestamptz AT TIME ZONE ?::text)::date
+              AND cm.created_at::timestamptz >=
+                  (now()::timestamptz - make_interval(hours => ?::int))
             ORDER BY cm.created_at ASC
             LIMIT 200
             """
-    params = (user_id, _ZOE_TIMEZONE, _ZOE_TIMEZONE)
+    params = (user_id, _DIGEST_LOOKBACK_HOURS)
     try:
         from db_pool import get_db_ctx  # type: ignore[import]
         if db is not None:

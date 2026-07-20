@@ -91,12 +91,20 @@ async def test_load_todays_messages_uses_postgres_timestamp_cast():
     text = await memory_digest._load_todays_messages("user-1", db=db)
 
     assert text == "I like quiet mornings\nI prefer tea"
-    assert "(cm.created_at::timestamptz AT TIME ZONE ?::text)::date" in db.sql[0]
-    assert "(now()::timestamptz AT TIME ZONE ?::text)::date" in db.sql[0]
+    # UPDATED 2026-07-20: extraction moved from a calendar-today clause to the
+    # SAME rolling lookback discovery uses. Widening only discovery was not a
+    # fix — the job would select a user with previous-day activity and then
+    # extract nothing, skipping for insufficient activity. The cast discipline
+    # this test protects is unchanged in intent (an uncast placeholder still
+    # binds as "unknown" and silently zeroes the query), so it is re-asserted
+    # against the new clause rather than dropped.
+    assert "make_interval(hours => ?::int)" in db.sql[0]
+    assert "now()::timestamptz -" in db.sql[0]
+    assert "::date =" not in db.sql[0], "calendar-day clause came back on the extraction path"
     # Placeholder-count guard: the asyncpg positional-compat layer maps every
     # literal `?` (comments included) to a bind slot, so a stray `?` anywhere in
     # the SQL silently shifts params ("could not determine data type of $N").
-    assert db.sql[0].count("?") == len(db.params[0]) == 3
+    assert db.sql[0].count("?") == len(db.params[0]) == 2
     assert "cm.metadata ~ '^\\s*\\{'" in db.sql[0]
     assert "substring(cm.metadata from" in db.sql[0]
     assert "::jsonb" not in db.sql[0]
