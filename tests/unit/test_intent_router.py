@@ -60,7 +60,7 @@ def _setup_stubs():
     _stub_module("multica_client", MULClient=mock.MagicMock())
     _stub_module("background_runner", enqueue_background_task=mock.AsyncMock())
     for mod in [
-        "agents_registry", "a2a_client", "skill_discovery", "skills_watcher",
+        "agents_registry", "a2a_client",
         "evolution_notice", "memory_digest", "agent_sync",
     ]:
         _stub_module(mod)

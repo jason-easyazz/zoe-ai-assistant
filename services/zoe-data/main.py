@@ -1328,15 +1328,6 @@ async def lifespan(app: FastAPI):
         except Exception as _rst_exc:
             logger.warning("Router self-train not scheduled (non-fatal): %s", _rst_exc)
 
-    # Skills filesystem watcher (live cache invalidation for peer agent cards)
-    try:
-        from skills_watcher import start_skills_watcher  # type: ignore[import]
-        _skills_observer = start_skills_watcher()
-        logger.info("Skills watcher started")
-    except Exception as _sw_exc:
-        _skills_observer = None
-        logger.warning("Skills watcher not started (non-fatal): %s", _sw_exc)
-
     # Multica board polling loop (30s interval, no-op if ZOE_MULTICA=false)
     async def _multica_poll_loop():
         import time as _t
