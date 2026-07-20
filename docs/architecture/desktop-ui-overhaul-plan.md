@@ -44,12 +44,55 @@ the estate already owns or that never worked.
   No page keeps a private design dialect (6 exist today).
 - **Honesty-by-removal is the default** for any UI without a backend. Never build a backend
   to save placebo UI without a deliberate product decision pinned to IDEAS.md.
-- **Ownership reversals vs. a pure power-surface play** (judge grafts): `music.html` becomes
-  a redirect stub to `/touch/music.html` (the proven `/api/music/*` surface — jukebox +
-  touch already prove it); desktop `updates.html` retires (notifications panel deep-links
-  exclusively to the touch copy); the calendar fork converges to a single source *later*,
-  after the desktop data-loss fix is ported INTO the touch fork (port direction matters —
-  the touch fork still calls removed attendee endpoints).
+- **Desktop keeps its own surfaces (Jason, 2026-07-19).** Two audit recommendations were
+  overruled, and a verification pass proved the overrule correct:
+  - **Landing page = the dashboard**, not chat.html. So `dashboard.html` is **rebuilt, not
+    retired** — it is the surface seen on every login. (Today's logins already land there;
+    no repoint needed.)
+  - **`music.html` is rebuilt to touch parity**, not redirected. Target surface is the
+    proven one: `POST /api/music/control` + `/seek` (music.py:292/:304),
+    `GET /api/music/now-playing` (normalized title/artist/image/state/volume/elapsed/
+    duration, music_service.py:228-270), queue re-fetch on `queue_updated`.
+  - Desktop `updates.html` still retires (notifications panel deep-links exclusively to
+    the touch copy); the calendar fork converges to a single source *later*, after the
+    desktop data-loss fix is ported INTO the touch fork (port direction matters — the
+    touch fork still calls removed attendee endpoints).
+- **The legacy touch pages are mostly orphaned — but NOT all of them (verified 2026-07-19,
+  corrected after review).** `touch/home.html` (the estate, and the kiosk's actual boot URL
+  per `scripts/setup/touchscreen/config.json`) has **zero outbound `.html` links**, and most
+  legacy per-domain touch pages link only *each other* via `touch/js/touch-menu.js` +
+  `touch-nav.js`. **Consequence that still holds:** the widget stack serves **desktop
+  dashboard + desktop lists only** — the "one repair fixes 4 pages" leverage assumed in the
+  first draft does **not** exist.
+  **But a blanket deletion is wrong — four pages have LIVE inbound paths:**
+
+  | Page | Live referrer | Rule |
+  |---|---|---|
+  | `touch/voice.html` | `chat.py:71` `lets_talk` → `/touch/voice.html?conv=1` ("phone-call voice mode — still its own surface") + `voice_tts.py:1111` | **DO NOT RETIRE HERE.** This is the live voice path and is **replay-gated**. It retires only with the Ask-card conversation cutover (PLANS Phase 1c), not in this overhaul |
+  | `touch/updates.html` | `notifications-panel.js:345/:358` (loaded on 10 desktop pages) | Repoint the deep-links **before** deleting; otherwise notification taps 404 |
+  | `touch/cooking.html`, `touch/smart-home.html` | desktop `cooking.html` / `smart-home.html` meta-refresh stubs (desktop nav) **AND** the voice-intent map `touch-ui-executor.js:764-770` | Repoint the nav (Wave 2) **and** the voice map **before** deleting stub+target |
+  | `touch/settings.html` | loads `touch-menu.js` (`:6170`); touched 2026-07-17 | Resolve its fate **before** deleting the shared scripts |
+  | **Nearly the whole set, on BOTH surfaces** | `touch-ui-executor.js` `_buildPageMap()` (`:754-771`) — a 15-entry voice-intent→page map whose `_page()` helper (`:751`) resolves `/touch/<name>` in touch context and `/<name>` otherwise | Prune each entry in lockstep with its page, on both surfaces. `_attemptVoiceNavigation` (`:773`) fires it whenever a reply sounds like a navigation confirmation |
+
+  **Referrer classes — check ALL FOUR before deleting any page** (each of these was missed
+  once during review; the list exists so the executor does not rediscover them):
+  1. **Page links** — `href`/`location.href` in other pages and the desktop meta-refresh stubs.
+  2. **Shared menu registries** — `touch-menu.js:17-39` (18 entries), `touch-nav.js:14-25`
+     (12-path `PAGE_ORDER`). These are referrers, not just consumers.
+  3. **Server-driven navigation** — `chat.py` `PAGE_ROUTES`-style maps (e.g. `:71` `lets_talk`),
+     `voice_tts.py` `panel_navigate` payloads. **Replay-gated if on the voice path.**
+  4. **Client voice-intent maps** — `touch-ui-executor.js:754-771` `_buildPageMap()`,
+     context-resolved across both surfaces.
+
+  Not nav sources (cleanup, not reachability): `auth.js:13` `TOUCH_PATH_TO_PAGE_ID` is a
+  reverse map; `orb-loader.js:11` is a skip-list; `sw.js:735` is a cache route;
+  `voice_tts.py:524` is a **supersede/cancel** list commented "Legacy per-domain pages
+  (retired)" — it cancels stale navigations rather than issuing them.
+  **Ordering rule for the whole retirement: repoint or delete every referrer FIRST, delete
+  the target SECOND, and delete the shared `touch-{menu,nav,widgets}.js` LAST — only once
+  no consumer remains.** This closes the skybridge cutover plan's open PR 5 for the pages
+  that are genuinely dead, and records the rest as sequenced work rather than pretending
+  they are dead.
 - **Installable Zoe:** ships as **PWA polish inside this overhaul** (manifest/SW are ~80%
   there once committed to git). A thin **Tauri native shell** (global hotkey summon,
   tray/autostart, later computer-use) is a **parked separate arc** — pinned in
@@ -67,10 +110,10 @@ the estate already owns or that never worked.
 | `people.html` | **redo (fix-by-deletion)** | Dead on arrival since 2026-05-18 (null-canvas crash); healthy CRM backend + salvageable card-grid code underneath |
 | `memories.html` | **redo (descope)** | Flagship collections/tiles canvas has NO backend (stubs); rebuild around MemPalace review-queue + search which are live |
 | `journal.html` | **redo (slim)** | Photo upload targets nonexistent route, tags silently dropped, Journeys tab is hardcoded fiction, CDN/Unsplash externals |
-| `music.html` | **redirect → `/touch/music.html`** | Transport POSTs to never-existed `/api/ha/service`; now-playing reads wrong MA shape; touch page proves the right surface |
+| `music.html` | **redo (rebuild to touch parity)** | Transport POSTs to never-existed `/api/ha/service`; now-playing reads wrong MA shape. Rebuild on `/api/music/control` + `/now-playing` + queue — same functionality as the touch music card |
 | `index.html` | **keep-fix (the ONE auth surface)** | It's the nginx entry + SPA fallback; fix XSS/demo-bypass/"Welcome, undefined"; absorb auth.html's flows |
 | `auth.html` | **fold into index.html → stub** | Second drifted login with reflected DOM XSS via `?setup=` |
-| `dashboard.html` | **retire** | Already "superseded" in PLANS; grid only renders via an untracked gitignored manifest; ~half the widgets broken/fake |
+| `dashboard.html` | **redo (rebuild as THE landing page)** | Jason's call: desktop lands on the dashboard. Rebuild on the token layer, salvaging the widget bindings that work (time, weather, events, notes, 4 list types); drop the singleton-flawed widget-system/gridstack lineage and the broken/fake widgets |
 | `updates.html` | **retire (touch copy wins)** | Notifications panel deep-links only to `/touch/updates.html`; backend stays |
 | `voice.html` (+ `touch/voice.html`) | **retire** | Zero inbound links; Confirm posts to nonexistent `/api/chat/confirm`; PLANS Phase 1c already slates it |
 | `jukebox.html`, `setup-music.html`, `setup-device.html` | **keep-polish** | Recent, QR-linked, verified against live routes — already at the estate bar |
@@ -79,7 +122,10 @@ the estate already owns or that never worked.
 | `games.html` + `touch/games.html` | **retire** | Whole chain dead-ends in a 26-line placeholder |
 | `cooking.html`, `smart-home.html` | **stubs, delete after nav repoint** | Nav-linked meta-refreshes to /touch/ |
 | `week_planner_widget.html`, `dist/developer/`, `dist/_preview/*` | **retire** | Orphan mock / 4,406-line dead prototype (nonexistent APIs, hardcoded localhost:8000) / stale artifacts behind a hard-404 |
-| Widget stack (`widget-system.js`, `dashboard.js`, `lists-dashboard.js`, `js/widgets/**`, gridstack) | **retire desktop page; coordinate shared JS** | Touch dashboard/lists load the SAME stack — keep alive until touch layout-v2 absorbs them, then delete the lineage |
+| Widget stack (`widget-system.js`, `dashboard.js`, `lists-dashboard.js`, `js/widgets/**`, gridstack) | **retire after the dashboard rebuild** | Serves desktop dashboard + desktop lists ONLY (the touch copies are orphaned — see Direction). No cross-surface coordination needed: rebuild the dashboard, migrate lists, then delete the lineage |
+| Legacy touch pages (`touch/{dashboard,lists,calendar,notes,people,timers,weather,memories,journal,chat,games}.html`) | **retire** | No live inbound path: the estate `home.html` has zero outbound `.html` links and is the kiosk boot URL; these link only each other. Closes skybridge-cutover PR 5 |
+| `touch/{updates,cooking,smart-home,settings}.html` + `touch/js/touch-{menu,nav,widgets}.js` | **retire, but SEQUENCED** | Each has a live referrer (notifications deep-links, desktop nav stubs, settings loads touch-menu). Repoint referrers first; shared scripts die last. See the Direction table |
+| `touch/voice.html` | **keep — NOT this overhaul** | **Live** `lets_talk` server navigation (`chat.py:71`, `voice_tts.py:1111`); replay-gated voice path. Retires with the Ask-card cutover (PLANS Phase 1c) |
 | Orphan js/css set | **retire** | `navigation.js` (5-line stub), `js/lib/{module-widget-loader,widget-registry}.js`, `js/voice/*`, 4 unloaded music widgets, `mini-player.js` (+6 tags), `chat-sessions.js`, `ai-processor.js`, `components/zoe-orb.html`, `css/{glass,memories-enhanced,widgets-enhanced}.css` |
 
 ## The triage register (all adversarially confirmed; 23 P1 entries + item 11, a P2
@@ -180,8 +226,9 @@ dependency); 2 is the foundation; 3 the funeral; 4–6 the product investment.
   panel-bind, server session validation) into index.html; auth.html → redirect stub (the
   proven skybridge.html pattern); fix "Welcome, undefined"; consume the stored-but-never-read
   `zoe_redirect_after_login`.
-- **Repoint post-login landing → `chat.html`** (Jason to confirm) and prune dashboard.html
-  from the SW precache — the hard unblock for dashboard retirement.
+- Landing page: **no repoint** — logins already land on `dashboard.html`, which is Jason's
+  chosen landing surface. `dashboard.html` **stays in the SW precache**; fix the
+  offline.html / clear-cache references to it rather than removing them.
 - ONE shared nav (JS-injected via common.js): kills per-page drift, points cooking/smart-home
   at `/touch/` directly, drops Developer/Games entries; standardize `auth.js` + enforceAuth
   on every authed page (ends the logged-out 401/WS-churn half-render).
@@ -197,11 +244,44 @@ update + SW_VERSION bump where precached + touch-consumer grep + panel smoke)
   alias block from BOTH dashboard.html AND touch/dashboard.html.
 - Chat dead weight: chat-sessions.js (port escapeHtml-on-title + warm-on-open first),
   legacy pre-AG-UI SSE alias block, ai-processor.js + its memories.html tag.
-- dashboard.html retirement (after the Wave-2 landing repoint). KEEP widget-system.js /
-  lists-dashboard.js lineage + js/widgets/core alive — touch dashboard/lists still load them.
-- music.html → redirect stub to `/touch/music.html` (Jason to confirm); repoint
-  touch-ui-executor.js:762 "show music" + settings "Go to Music".
-- updates.html → retire (backend stays; notifications already deep-link to the touch copy).
+- **Legacy touch pages — sequenced, NOT a blanket delete** (see the Direction table).
+  Order within this wave:
+  1. Delete the pages with no live inbound path: `touch/{dashboard,lists,calendar,notes,
+     people,timers,weather,memories,journal,chat,games}.html`.
+  2. Repoint `notifications-panel.js:345/:358` to the surviving updates surface, **then**
+     retire desktop `updates.html` + `touch/updates.html` together (backend
+     `/api/system/updates` stays). Neither dies before the deep-links move.
+  3. After the Wave-2 nav repoint lands, delete the desktop `cooking.html`/`smart-home.html`
+     stubs and their touch targets.
+  4. Decide `touch/settings.html` (reachability + whether desktop settings absorbs it).
+  5. **Last:** delete the `touch/js/touch-{menu,nav,widgets}.js` **files** once no page loads
+     them; then prune the dead `auth.js` `TOUCH_PATH_TO_PAGE_ID` entries, the
+     `orb-loader.js` skip-list entries, and the `sw.js:735` cache route.
+
+  **The shared scripts are BOTH referrer and consumer — treat the entries and the file
+  separately.** `touch-menu.js` carries an 18-entry link registry (`:17-39`, incl.
+  `updates` at `:38`) and `touch-nav.js` a 12-path `PAGE_ORDER` swipe array (`:14-25`),
+  each pointing at pages in this deletion set. So **every step above must prune that page's
+  menu + nav entries in the SAME PR that deletes the page** — otherwise any page still
+  loading the shared menu (settings/cooking/smart-home, live until steps 3-4) renders a tile
+  that navigates to a deleted page. The step-5 "delete last" rule applies to the **files**,
+  not their entries. Note the `_nav` allowlist (`touch-menu.js:540-558`) does **not** save
+  you here: a deleted-but-still-listed path is still in `allowed`, so it navigates to a 404
+  rather than falling back to home.
+
+  **Every step also prunes that page's entry in the `touch-ui-executor.js` `_buildPageMap()`
+  voice map (`:754-771`) — on both surfaces**, since `_page()` resolves desktop or touch by
+  context. A voice "open cooking" that lands on a deleted page is the same bug as a menu tile
+  that does.
+
+  Panel smoke after each step, **including one voice-nav command per retired domain** — a
+  visual smoke will not catch class-3/class-4 referrers.
+  Closes skybridge-cutover PR 5 for the genuinely dead pages.
+- **NOT retired here** — carve-outs that a blanket sweep would have broken:
+  - `touch/voice.html` — **live** `lets_talk` voice navigation (`chat.py:71`); replay-gated;
+    retires with the Ask-card cutover (PLANS Phase 1c), not in this overhaul.
+  - `dashboard.html` (rebuilt in Wave 4b) and `music.html` (rebuilt in Wave 6) — Jason-designated
+    desktop surfaces.
 
 ### Wave 4 — Chat as the deep-work workspace
 - Revive Agent Activity (reattach on `container.isConnected===false` / move out of
@@ -220,6 +300,27 @@ update + SW_VERSION bump where precached + touch-consumer grep + panel smoke)
   already proves no-build-step extraction.
 - Orb decision on chat: handle `zoe.ui_orb_prompt` inline or load the orb (today the only
   dispatching page never loads the listener).
+
+### Wave 4b — The dashboard: rebuild the landing page
+The surface seen on every login. Rebuilt, not patched — the existing stack is
+singleton-flawed, half-fake, and (post-island-retirement) serves only two desktop pages.
+- Audit what survives: the verified-working widget data-bindings are **time, weather,
+  events, notes (v2), and the four list types** (shopping/personal/work/bucket). Everything
+  else in the library is broken or fabricated (project → 8 missing routes; week-planner →
+  `/api/calendar/week` missing; system → `Math.random()` stats; tasks → wrong response
+  shape, permanent "All tasks completed!"; home → dead instance ref; music widgets → dead).
+- Rebuild the dashboard on the skybridge token layer as a real desktop home: those working
+  bindings as tokenized cards, honest empty/error states, no fabricated data.
+- Layout persistence: `routers/dashboard.py` already implements full per-user layout
+  storage that the old client never called (`dashboard.js:424` was a `TODO`) — wire the
+  rebuild to it instead of device-local `localStorage`.
+- Migrate `lists.html` off the old stack, then delete the lineage: `widget-system.js`,
+  `widget-base.js`, `dashboard.js`, `lists-dashboard.js`, `js/widgets/**`,
+  `dashboard-protection.js`, `js/lib/{module-widget-loader,widget-registry}.js`, and the
+  vendored gridstack.
+- Wave-0's `widget-manifest.json` commit is a **stopgap** for the current stack; the rebuild
+  should register its cards statically so no untracked runtime file can ever empty the
+  landing page again.
 
 ### Wave 5 — PIM depth on tokens (bulk editing is what keyboards are for)
 - people.html fix-by-deletion: remove canvas/polar/legacy-detail code; keep the
@@ -244,8 +345,23 @@ update + SW_VERSION bump where precached + touch-consumer grep + panel smoke)
 - Settings ownership split: desktop keeps admin (users, AI profiles, panel provisioning,
   rooms); device-local concerns delegate to touch; delete duplicated drifting sections;
   fix the Push section SW-registration hang; give settings the shared nav.
+- **music.html rebuilt to touch parity** (Jason's call — a real desktop music surface, not
+  a redirect). Target the proven API the touch card and jukebox already use: transport via
+  `POST /api/music/control` ({action, player_id, value}) + `/api/music/seek`
+  (music.py:292/:304); now-playing via `GET /api/music/now-playing` (normalized —
+  title/artist/image/state/volume/elapsed/duration, music_service.py:228-270); queue via
+  `GET /api/music/queue/{queue_id}` **re-fetched on `queue_updated`** (the MA event payload
+  carries no items — trusting it is what wipes the list today). Replace the dead
+  `/api/ha/service` transport, the never-populating now-playing card, and the
+  ReferenceError-throwing nav. Search box → real `GET /api/music/search` +
+  `POST /api/music/play_media` (jukebox.html:75-99 is the working reference), not a
+  fire-and-forget chat turn. Feature parity target = the touch music card's contracts
+  documented in services/zoe-ui/AGENTS.md (favourite-follows-focused-cover, poll-never-
+  repaints-a-held-control). Then repoint `touch-ui-executor.js:762` "show music" and
+  settings' "Go to Music" at it.
 - Platform hygiene: offline.html probes `/health` + checks `res.ok`; sw-registration stale
-  `v=` param + cargo-cult gtag removal; prune remaining superseded precache entries.
+  `v=` param + cargo-cult gtag removal; prune remaining superseded precache entries
+  (dashboard.html **stays** — it is the landing page).
 - **PWA polish (installable Zoe):** committed manifest verified installable, correct icons
   + shortcuts, install prompt surfaced; logged-out smoke gate green.
 - DOX/PLANS closeout: update PLANS.md statuses, services/zoe-ui/AGENTS.md, critical-files
@@ -270,8 +386,12 @@ update + SW_VERSION bump where precached + touch-consumer grep + panel smoke)
 
 ## Deferred decisions (pinned, not forgotten)
 
-- Desktop landing page = chat.html — **needs Jason's nod** (Wave 2).
-- music.html redirect to touch — **needs Jason's nod** (Wave 3).
+- ~~Desktop landing page~~ — **DECIDED (Jason, 2026-07-19): the dashboard.** Rebuilt as the
+  landing surface in Wave 4b; not retired.
+- ~~music.html redirect~~ — **DECIDED (Jason, 2026-07-19): rebuild to touch parity** on
+  `/api/music/*` (Wave 6); not a redirect.
+- ~~Legacy touch pages~~ — **RESOLVED by verification (2026-07-19): orphaned, retire them**
+  (Wave 3). Open sub-question: `touch/settings.html` reachability.
 - Real `/​_preview/` route (auth-gated, distinct origin) vs. permanent 404 — deferred; 404
   chosen for now (Wave 4).
 - Calendar single-source collapse (desktop↔touch fork) — after tokens + compose mature;
