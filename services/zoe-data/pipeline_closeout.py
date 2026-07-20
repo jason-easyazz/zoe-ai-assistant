@@ -22,7 +22,7 @@ import os
 import subprocess
 from dataclasses import dataclass
 
-from hermes_http import zoe_repo_root
+from repo_paths import zoe_repo_root
 
 _GUARD_REL = "scripts/maintenance/run_greploop_guard.sh"
 _GUARD_TIMEOUT_S = 900

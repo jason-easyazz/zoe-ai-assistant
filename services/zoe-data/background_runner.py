@@ -18,7 +18,8 @@ import time
 import uuid
 from datetime import datetime, timezone
 
-from hermes_http import hermes_auth_headers, hermes_bin, zoe_repo_root
+from hermes_http import hermes_auth_headers, hermes_bin
+from repo_paths import zoe_repo_root
 
 logger = logging.getLogger(__name__)
 
