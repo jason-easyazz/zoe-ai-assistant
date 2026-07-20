@@ -1,9 +1,9 @@
 ---
 type: Reference
 title: Production Incident Runbook
-description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active) and root-owned lab-container files silently blocking every deploy at the git pull step. Diagnose-fast patterns plus the prevention rules.
-tags: [incident, runbook, deploy, zoe-data, systemd, docker, permissions]
-timestamp: 2026-07-03T00:00:00Z
+description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, and MemoryMax-without-MemorySwapMax being no cap at all. Diagnose-fast patterns plus the prevention rules.
+tags: [incident, runbook, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap]
+timestamp: 2026-07-20T00:00:00Z
 ---
 
 # Production Incident Runbook
@@ -172,3 +172,74 @@ in [`scripts/setup/systemd/README.md`](../../scripts/setup/systemd/README.md)
 **Caution — one failed `/health` poll is not an outage.** Under swap thrash a 6s
 timeout returns `000` while the service is fine. Poll three times before
 declaring anything down; `systemctl is-active` is not evidence either way.
+
+## 5. Brain CUDA-OOM crash-loop under unified-memory pressure (2026-07-19)
+
+**Signature.** The voice replay gate collapses (e.g. **3/20**) with ERROR
+verdicts and `brain_ms` medians around **~100 ms** — that is an *instant
+connection-refused*, not slow inference; a genuinely slow brain shows seconds.
+Meanwhile tier0 paths (weather/time/calendar) keep passing — **fast-tier OK +
+brain fast-fail is the fingerprint**. Confirm:
+
+```bash
+curl -m 3 http://127.0.0.1:11434/health          # fails
+systemctl --user is-active llama-server          # "activating" — restart loop
+```
+
+A manual run of the llama-server command line shows the smoking gun:
+
+```
+NvMapMemAllocInternalTagged: error 12
+cudaMalloc failed: out of memory
+```
+
+**Diagnosis.** Tegra is **unified memory**: CUDA allocations come from the same
+physical RAM as everything else. Burst RAM from other workloads — CI validate +
+playwright runs, the replay harness's own in-process Moonshine (~1.5 GB
+transient), deploy warmups — starves the *running* brain's next CUDA
+allocation. The cgroup guards (`MemoryLow`, `MemorySwapMax=0`) protect **CPU
+pages only** — they do nothing for NvMap/CUDA allocations, so a "protected"
+brain still OOMs on the GPU side. Once it dies, `Restart=` loops it in
+`activating` until enough RAM drains to reload (**~6.3 GB availMB needed**);
+it self-heals when the pressure source finishes.
+
+**Fix.** Usually none needed — stop/finish the competing workload and the
+restart loop succeeds on its own. Verify recovery with `curl :11434/health`
+then a replay-gate re-run.
+
+**Prevention (the actual rule).**
+- **Never run the replay gate — or any ~1.5 GB-transient job — with
+  < 2 GB availMB, or concurrently with CI runs or deploys.**
+- The probe's 1500 MB free-RAM guard protects **the probe**, not the brain: the
+  probe can pass its own guard and still be the allocation that kills the
+  brain's next `cudaMalloc`.
+- When triaging a "brain down" replay collapse, check `brain_ms` first: ~100 ms
+  medians mean connection-refused (this incident), not a model problem.
+
+## 6. systemd `MemoryMax` without `MemorySwapMax=0` is not a cap (2026-07-20)
+
+**Signature.** A service with `MemoryHigh=1G` / `MemoryMax=2G` (the shared
+`serena-mcp.service`) sitting at **1.0 G RSS + 2.1 G swap ≈ 3.1 G real
+footprint**. The "cap" held RSS exactly at MemoryHigh — by pushing everything
+else to swap.
+
+**Diagnosis.** `MemoryHigh` pressure causes reclaim, and reclaim's outlet is
+swap, which is **unbounded** unless `MemorySwapMax` is set. So
+`MemoryHigh`/`MemoryMax` alone converts a RAM hog into a swap hog of arbitrary
+size — worse on this box, where swap thrash is the voice-latency killer (§4).
+
+**Fix.** Add a `MemorySwapMax=0` drop-in (drop-in, never template-copy — §4).
+A real breach then OOM-kills the service and `Restart=always` brings it back —
+acceptable for rebuildable-cache services like Serena. The voice-stack units
+already carry `MemorySwapMax=0` (#1409); this extends the same rule to every
+capped unit.
+
+**Amplifier — stale per-worktree stdio Serena configs.** ~91 pre-#1400
+worktrees carried stale stdio `serena` entries in their `.mcp.json`, each
+spawning a **~1 GB per-session Serena at MCP connect time** (bypassing the
+shared server entirely). Swept 2026-07-20 — but **recheck `.mcp.json` when
+resurrecting an old worktree**; a stale config silently re-creates the fleet.
+
+**Prevention (the actual rule).** A memory cap on this box is
+`MemoryHigh` + `MemoryMax` + **`MemorySwapMax=0`** — all three, via drop-in.
+Two out of three is not a cap.
