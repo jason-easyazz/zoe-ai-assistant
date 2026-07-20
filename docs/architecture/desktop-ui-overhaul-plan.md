@@ -1,6 +1,6 @@
 ---
 type: architecture-plan
-status: proposed (audit complete + verification pass complete; waves not started)
+status: proposed (audit + verification + function-first rework complete; waves not started)
 owner: jason
 date: 2026-07-20
 ---
@@ -12,7 +12,7 @@ pages + `js/` + `css/` + `sw.js` + nginx) — what's live, what's broken, what's
 sequenced plan to get it up to scratch. This is also the re-scope the
 [skybridge cutover plan](skybridge-cutover-plan.md) left open (its PR 3/PR 5).
 
-**Provenance — two passes, and the second one matters:**
+**Provenance — three passes:**
 1. **Audit (2026-07-19):** 145-agent workflow — 10 area audits, **329 client-called endpoints
    verified against zoe-data source** (negative-controlled), every P1/P2 adversarially
    re-verified (6 refuted, 105 confirmed), a live logged-out smoke pass, a 3-stance direction panel.
@@ -25,6 +25,12 @@ sequenced plan to get it up to scratch. This is also the re-scope the
 > when adding a new one, verify it the same way — especially "just call the existing helper"
 > and "delete the duplicate", which produced the two worst errors in the first draft.
 
+3. **Function-first rework (2026-07-20):** 4 agents mapped how the project changed, how the estate
+   is wired end-to-end, the per-page rewiring worklist, and the shared plumbing layer — after Jason
+   reframed the goal as *"graphically it's not too bad, it just needs to work."* Produced the FUNCTION
+   FIRST section below, and corrected two claims in this document (the music queue editor IS used by
+   the estate; `touch/smart-home.html` has 1 of 4 HA endpoints live, not 4).
+
 ## The verdict in three sentences
 
 The desktop surface splits into a **live core with real value** (chat.html, settings.html,
@@ -34,11 +40,92 @@ isn't in git), and a **verified-dead tier** (~30k+ lines). 61 of 329 client-call
 are MISSING or MOVED — the honest measure of the rot. Direction: **desktop is Zoe's
 keyboard-first deep-work power surface**; the estate panel stays the ambient face.
 
+## FUNCTION FIRST — Jason's reframe (2026-07-20)
+
+> **"Graphically it's not too bad, it just needs to work."**
+
+This **reorders the whole plan**. Design-token convergence was Wave 2 "foundation"; it is now
+**optional polish deferred to the end**. The desktop pages *predate the current backend* —
+`services/zoe-data` only entered git on **2026-04-03** (`cd8834fc`), and **11 routers landed after
+`music.html`/`memories.html` were last touched**, of which desktop calls none. This is not drift;
+the desktop is wired to a previous generation of the system. "Link up" therefore means: **point
+desktop at the endpoints the estate already proves, and adopt the estate's behavioural patterns.**
+
+### The five root causes (fixing these fixes symptoms on 9 of 12 pages)
+
+1. **`GET /api/lists/{type}` returns no `items`.** `lists.py:78-89` selects 8 columns, none of them
+   items; only the single-list route attaches them (`:164-175`). Three surfaces misread it and all
+   get **200**, which is why it survived: calendar's task sidebar is permanently empty
+   (`calendar.html:2270`), lists.html shows "0 items" on every list (`:2165/:2179/:2193/:2207`), and
+   `tasks.js:57` reads `data.tasks` off a `{lists:[…]}` body → permanent "All tasks completed!".
+   **Fix: one shared two-step helper** using `GET /api/lists/{type}/{id}/items` (`lists.py:341`),
+   proven at `touch/home.html:2606`.
+2. **`?user_id=` is vestigial everywhere.** Every UI-facing route resolves identity from
+   `Depends(get_current_user)` (`auth.py:175`); the only `user_id: str = Query(...)` routes are
+   internal token-gated ones. 25 client sites interpolate it; 7 have no fallback → literal
+   `user_id=undefined`. **Delete the param — do not fix the value.**
+3. **`stubs.py` fakes success.** `/api/collections`, `/api/projects`, `/api/user/layout` return
+   **200 with empty bodies** (`stubs.py:16-46`), and `POST /api/user/layout` returns `{"status":"ok"}`
+   while persisting nothing. Clients cannot distinguish "no data" from "never built" — this is how
+   memories.html grew ~1,200 lines of UI over a void. **Worse than a 404.**
+4. **Pydantic silently drops unknown fields.** No model in `models.py` sets `extra=`, so v2's
+   `ignore` default applies: notes' colour, journal's `people_ids`/`place_tags`, and settings'
+   display fields all 200-OK into nothing, toasting success.
+5. **Logged out, the server returns `guest`, not 401** (`auth.py:199-212`) — so pages half-render
+   instead of redirecting. **No desktop page awaits `window.zoeAuthReady`** (`auth.js:541` exposes
+   it; zero consumers), so init races `enforceAuth`'s redirect.
+
+### The realtime gap — the failure Jason will actually notice
+
+**The desktop has no working data-change signal at all.** Two independent faults:
+- All six per-resource sockets have **never worked, for any user**: `websocket-sync.js:27` puts
+  `userId` in the path and sends no `session_id`, and browsers cannot set `X-Session-ID` on a
+  WebSocket, so the server closes every one `1008`. The polling fallback is **unreachable dead
+  code** (`maxReconnectAttempts = 0` means unlimited, so the retry guard never yields). That is the
+  ~20 handshakes/10s the smoke run saw.
+- Even the working `/ws/push` carries the wrong traffic: domain mutations broadcast to **named**
+  channels (`calendar`, `lists`, `notes`, `journal`, `people`) while desktop subscribes to `all`,
+  which only carries `ui_action`, `notification_created`, `panel:announce`.
+
+⇒ Say *"Zoe, add dinner Friday"* and the calendar page stays stale until manual reload.
+**Fix: drop the six sockets and poll like the estate** (`touch/home.html` uses **zero** WebSockets —
+15s clock, 30s HA, 5s music, 600s weather) with a `visibilitychange` refetch. Fanning domain events
+onto `all` is a later optimisation, not the fix.
+
+### What the estate actually is (do not mis-copy it)
+
+`touch/home.html` is **one self-contained file plus one script** (`touch-ui-executor.js`): zero
+`<link>` tags, all CSS inline, and it loads **none** of the 13 files in `touch/js/` — nor `auth.js`,
+`common.js`, `websocket-sync.js`, `orb-loader.js`. It owns its auth, fetch, routing and realtime.
+**Server-driven cards are NOT an estate pattern** — the estate is hand-authored screens fed by plain
+REST and it *ignores* the `cards[]` returned by `/api/skybridge/resolve`. Compose has exactly one
+consumer, `chat.html`. Copy the estate's **patterns**, not its architecture: 11 existing desktop
+pages keep the shared script stack (fixed), because self-containment is a kiosk choice for a surface
+that must never break.
+
+### Estate patterns to adopt (each has a scar behind it)
+
+- **One auth-aware fetch pair with a shared 401 choke point** (`home.html:1520`, `:2576`), explicit
+  headers per call, `throw new Error('auth')` so call sites can say "Sign in to manage rooms".
+  Not an interceptor — the interceptor hides auth failures from call sites.
+- **Re-check the current screen INSIDE every `.then`** so a late response cannot repaint a page the
+  user has left (~30 sites, e.g. `home.html:1554`). Add **generation counters** for overlapping
+  loads (`_qGen`, `_cal.gen`, `_askGen`).
+- **Never repaint a held control**: `activeElement` gate **plus** a `dataset.drag` flag (set on
+  pointerdown) **plus** keeping transient state off any element a repainter rewrites.
+- **Refresh-after-write with the right settle delay** (lists immediate; music `setTimeout(…, 350-600)`
+  because MA needs to settle; HA 800ms after a voice command).
+- **Optimistic writes that actually roll back** (`home.html:2624-2627`).
+- **Distinguish empty / failed / unknown.** `_ha.ok` is true only on a *documented* response shape
+  (`:1322`) — a malformed 200 from a sick bridge must never render as "you have no devices".
+- **Human, specific failure text** — "Couldn't load your day", "Sign in to manage rooms".
+- **A single navigation choke point** that clears every screen timer centrally (`show()`, `:1115`).
+
 ## Direction
 
 - **Desktop = the deep-work face** (chat workspace, bulk PIM editing, fleet/admin console).
-- **One foundation, two faces:** the touch `skybridge-ds.css` token layer becomes THE token
-  layer for both surfaces; auth, nav, theme consolidate to one of each.
+- **Design work is deferred** (see FUNCTION FIRST). The `skybridge-ds.css` token layer remains the
+  eventual target for both surfaces, but no wave blocks on it.
 - **Honesty-by-removal** is the default for UI with no backend — but only after verifying the
   backend is really absent *and* that the UI is really unreferenced (see Referrer classes).
 - **Decisions (Jason, 2026-07-19):**
@@ -87,7 +174,7 @@ skip-list, `sw.js` cache routes, `voice_tts.py:526-530` supersede/cancel list.
 | `updates.html` | **retire desktop copy; KEEP `touch/updates.html`** | The panel deep-links only to the touch copy — it is the repoint target, so it must survive |
 | `voice.html` (desktop) | **retire** | True orphan. **`touch/voice.html` is NOT retired — see below** |
 | `touch/voice.html` | **KEEP — not this overhaul** | Live `lets_talk` target (`chat.py:71`, `voice_tts.py:1111`); replay-gated. Retires with the Ask-card cutover (PLANS Phase 1c) |
-| `touch/smart-home.html` | **KEEP** | **780 lines of live HA control** (`/api/ha/{states,areas,control,scene}`) — the only smart-home UI in the product. No estate replacement exists (`chat.py:58-60`) |
+| `touch/smart-home.html` | **KEEP — but it is itself half-broken** | The **only** smart-home UI in the product, with no estate replacement (`chat.py:58-60`) — that is why it is kept. **Correction (2026-07-20): only 1 of its 4 HA endpoints exists.** `ha_control.py` serves `/entities`, `/state/{id}`, `/control` only; its calls to `/api/ha/states` (`:472`), `/api/ha/areas` (`:486`) and `/api/ha/scene` (`:744`) all 404. Scenes fire through `/control` with `{domain:"scene",service:"turn_on"}` |
 | `touch/cooking.html` | **KEEP (flag to IDEAS)** | 678 working lines, but `localStorage`-only with no backend. Keep-and-back vs retire is a product decision |
 | `touch/music.html` | **KEEP — decide its entry point** | Live, healthy, the panel's **only** search-and-play surface. Wave 3 step 5 would orphan it (see Wave 3) |
 | `jukebox.html`, `setup-music.html`, `setup-device.html` | **keep-polish** | QR-linked, verified against live routes |
@@ -162,6 +249,83 @@ API calls with literal `user_id=undefined` + ~20 failed WS handshakes in 10s).
 
 ## Execution waves
 
+**Order under the function-first reframe:** Wave 0 → **Wave F** (new, the bulk of "make it work") →
+Wave 1 (security) → Wave 3 (retirement) → 4/4b/5/6 → **Wave 2 (design) LAST, optional.**
+Wave 2's auth/nav/plumbing items move into Wave F; only its token/theme work is deferred.
+
+### Wave F — Make it work (NEW; the function-first core)
+
+**F1 — Shared plumbing (fix once, unbreaks every page).**
+- **Delete the six per-resource WebSockets** and `websocket-sync.js` from desktop; replace with a
+  shared poll helper (interval + `visibilitychange` refetch + post-mutation refetch). Keep `/ws/push`.
+  This closes the realtime gap AND kills the handshake storm.
+- **Remove `touch-ui-executor.js` from every desktop page — including `auth.html`.** It has no
+  pathname guard, so on each desktop page it mints a fake `panel_<random>` id, `POST`s
+  `/api/ui/panel/bind`, starts 2s+5s timers and a **service-worker poll that outlives the page**
+  (`sw.js:552,596,666`), and redirects auth failures to `/touch/index.html` — bouncing a desktop user
+  into the kiosk login. Logged out, its 5s sync timer is never cleared. **Also stop the SW poll for
+  already-poisoned browsers.**
+- **One auth client.** `settings.html:541-556` already has the correct explicit-header helper;
+  promote it as the shared client and retire the `window.fetch` monkey-patch. `music.html` currently
+  has **neither** auth.js nor its own helper.
+- **Gate page init on `await window.zoeAuthReady`** (`auth.js:541`, currently zero consumers) — kills
+  the logged-out request storm at source.
+- **Delete `?user_id=` from all 25 sites.**
+- Fix `common.js:309-310` (maps to `/api/homeassistant/*`, which does not exist — live is `/api/ha/*`).
+- Fix trailing-slash 307s (`chat.html:5080/:5420`, `notes.html:666/:804`, `people.html:918`).
+- Collapse the three `/ws/push` connections to one; resolve the `_zoeSetOrbMode` collision; stop
+  `notifications-panel.js:208-210` deleting page-supplied panels.
+
+**F2 — Tier-1 fixes: trivial change, large visible effect.**
+- **`openNotificationsSafe()` is called on 8 pages but defined on 2** → hard `ReferenceError` on the
+  other 6, so the notification bell is dead there. All 8 already load the module exporting
+  `window.openNotifications` (`notifications-panel.js:507`). Rename the call. *(calendar:1765,
+  lists:1877, chat:2621, journal:1780, music:697, updates:292)*
+- **`lists.html:2377`** — a `<script src=…>` swallows 114 lines of inline JS, killing 9 functions
+  incl. the More menu. Correct form at `calendar.html:4722`.
+- **`people.html:880`** — null-canvas crash aborts the whole 1,500-line block. Delete it (and repoint
+  `showPersonById`/`selectPerson` to `dpOpenCard` — see Wave 5).
+- **Calendar metadata wipe** — 4 PUTs send `metadata:{linked_tasks}` only; `calendar.py:177-180`
+  overwrites wholesale.
+- **Journal location autocomplete** — `/api/location/search` → **`/api/weather/location/search`**
+  (`weather.py:638`). Mis-prefixed, not missing.
+- **Journal Edit** — wire to `PUT /api/journal/{entry_id}` (`journal.py:360`); it exists, and working
+  Delete sits 15 lines below the `alert('coming soon')`.
+- **chat `action_menu`** options are all no-ops (`chat.html:5628`).
+- **chat `add_to_list`** POSTs an item body to the *create-list* route → 422 (`chat.html:6789` vs
+  `lists.py:92`); the correct two-step already exists 70 lines below at `:6863/:6866`.
+- **chat proactive push-tap** dispatches `proactive_session` with **zero listeners** — call
+  `loadSessionMessages` directly.
+- **chat agent-activity feed** wiped at three sites (`:3758/:3765/:3788`); `agent-activity.js:151`
+  only rebuilds when the node is falsy, never when detached. Data source is live (`system.py:1173`).
+- **SW CDN kill** — add the origin guard the image route already has (`sw.js:184`, `:222`; pattern at `:253`).
+
+**F3 — The lists-items shape fix** (root cause 1): one shared two-step helper, applied to
+calendar's task sidebar, lists.html, and `tasks.js`.
+
+**F4 — Free wins (live backend, zero UI, small effort).**
+- **Reminders are write-only on desktop.** Nine routes exist (`reminders.py:96/130/151/220/252/317`);
+  desktop only POSTs and polls pending. **Nobody can see, edit, snooze or delete a reminder anywhere.**
+  Highest user-visible value on this list.
+- `GET/PUT /api/dashboard/layout/` — zero callers; pairs with Wave 4b (schema caveats there).
+- `GET /api/dashboard/widgets/available` (`dashboard.py:183`) — a ready-made widget-picker catalogue.
+- Journal `search` / `mood` / date filters (`journal.py:124-128`) — built, unexposed.
+- People `/search`, `/graph`, `/relationship-types`, relationship CRUD, merge — all live, unsurfaced.
+- Memory `opt-out` GET/PUT, `export`, `forget` (`memories.py:835/852/908/920`).
+- `/api/settings/intelligence` GET+PUT — 7 toggles, touch-only today.
+- `GET /api/lists/types`, `GET /api/calendar/events/today`, `GET /api/transactions/summary/week`.
+- **Rooms** — the newest system in the repo (2026-07-19) and desktop has **no room concept at all**,
+  though #1442 made "turn off the light" room-scoped. Reference: `touch/home.html:2863-2886`.
+- **Multi-room speaker grouping** (`/api/music/{groups,group,ungroup}`, #1425) — zero callers anywhere.
+- **`portrait.py` and `proactive.py` are entire routers with no UI** — portrait/emotional-moments and
+  proactive suggestions accept/dismiss. Evaluate as product, not just wiring.
+
+**F5 — Honesty-by-removal.** Delete UI whose backend never existed: `/api/mcp` (never existed —
+`mcp_server.py` is stdio JSON-RPC with no FastAPI app, so `mcp-client.js` + `module-widget-loader.js`
+call a fiction), `/api/tools/call` (settings' Restart-Kiosk/Logs are **placebo controls that have
+never worked**), `/api/media/upload` (**3** call sites), `/api/projects` sub-paths, the memories
+collections/tiles canvas, `/api/music/similar`.
+
 ### Wave 0 — Deploy integrity + the smoke harness
 - Commit `manifest.json` + `js/widgets/widget-manifest.json`.
   **⚠ SOURCE THEM FROM THE LIVE CHECKOUT — they do not exist anywhere else.** Both files are
@@ -205,7 +369,13 @@ API calls with literal `user_id=undefined` + ~20 failed WS handshakes in 10s).
 - **SW_VERSION bump** — `chat.html`, `calendar.html`, `index.html`, `push-notifications.js` are all
   precached. Without it these security fixes never reach existing clients.
 
-### Wave 2 — One foundation (tokens, theme, auth, nav)
+### Wave 2 — Design convergence (DEFERRED / OPTIONAL under the function-first reframe)
+
+> **Jason 2026-07-20: "graphically it's not too bad".** The auth / nav / plumbing items from this
+> wave have MOVED INTO WAVE F, which is where they belong — they are function, not design. What
+> remains here is token/theme convergence, and **no other wave blocks on it.** Run it last, or not
+> at all. Its `_buildPageMap()` split prerequisite stays a hard prerequisite for Wave 3 and is
+> tracked there too.
 - **PREREQUISITE — split `_buildPageMap()` before any Wave-3 deletion.** It is ONE map resolved by
   `_page()` context (`touch-ui-executor.js:751-771`); pruning "the touch entries" also kills desktop
   voice-nav to 8 pages we keep. Split into `DESKTOP_PAGES` / `TOUCH_PAGES`. Fold in the pre-existing
@@ -396,7 +566,9 @@ API calls with literal `user_id=undefined` + ~20 failed WS handshakes in 10s).
   (`touch/home.html`) and `touch/music.html` are **two different surfaces**; neither alone is "the
   touch music experience". Desktop owns transport/scrub/volume/favourite/speaker **plus** the
   keyboard-native things the panel lacks: full search and a **real queue editor**
-  (`/queue/move|remove|clear|play-index|save` are live and used by **no** surface today). Drop Cover
+  (`/queue/move|remove|clear|play-index|save` — **correction 2026-07-20:** these ARE in use, by the
+  estate at `touch/home.html:2118,2154,2165,2285` since #1332. Still absent from desktop, so still a
+  desktop win — but **copy the estate's implementation**, do not treat it as greenfield). Drop Cover
   Flow, gestures, dock condensation.
   - `POST /control` `{action, player_id?, value?}` — `play|resume|pause|play_pause|stop|next|previous`,
     `volume_up|volume_down|mute`, `volume_set`, `shuffle_set`, `repeat_set`. The router docstring
