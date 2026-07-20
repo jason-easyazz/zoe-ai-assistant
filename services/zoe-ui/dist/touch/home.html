@@ -682,7 +682,7 @@
   .hfull .htemp{right:120px} /* clear the home cog */
 
   /* speaker / cast selection on music */
-  .mtop{position:absolute;top:40px;right:120px;display:flex;align-items:center;gap:12px;z-index:60}
+  .mtop{position:absolute;top:40px;right:44px;display:flex;align-items:center;gap:12px;z-index:60}
   /* Volume sits top-LEFT, beside #home. Not with the speaker chip on the right,
      which is where it started: at CF_K=1 the centre cover spans x455-825 and
      .mtop grows leftward, so the pill landed ON the artwork (caught by looking
@@ -700,13 +700,10 @@
      above the orb. 52px tall, over the kiosk's 48px finger-target floor.
      Volume moved into the transport behind a speaker icon (see .mvolt): it is
      a set-and-forget control and did not earn permanent screen space. */
-  .mkeep{position:absolute;left:44px;bottom:150px;z-index:60;
-         display:flex;align-items:center;gap:12px;height:52px;padding:0 20px;border-radius:999px;
-         background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.22);
-         color:rgba(255,255,255,.7);font:inherit;cursor:pointer;transition:.25s}
-  .mkeep svg{width:24px;height:24px;flex:none}
-  .mkeep .nm{font-size:17px;font-weight:500;white-space:nowrap}
-  .mkeep.on{background:rgba(123,150,255,.28);border-color:rgba(123,150,255,.45);color:#fff;
+  
+  
+  
+  #mDS.on{background:rgba(123,150,255,.28);border-color:rgba(123,150,255,.45);color:#fff;
             box-shadow:0 0 18px rgba(123,150,255,.35)}
   /* Volume: a speaker icon in the transport (the slot ∞ vacated) opening a
      popover, built on `.pc.temp`/`.tpop`'s pattern rather than a second one.
@@ -723,13 +720,9 @@
      assertion, and only the screenshot showed it. This lands its bottom edge
      above the scrub's top, in the band between the covers (they end y412 at
      CF_K=1) and the progress row. Re-measure if either of those moves. */
-  .mfull .mtransport .mvolt .vpop{position:absolute;bottom:168px;left:50%;
-        transform:translateX(-50%) translateY(10px);padding:16px 20px;border-radius:20px;
-        background:rgba(18,16,30,.74);border:1px solid rgba(255,255,255,.14);backdrop-filter:blur(16px);
-        box-shadow:0 20px 50px rgba(0,0,0,.5);opacity:0;pointer-events:none;transition:.28s;
-        display:flex;align-items:center;gap:14px;cursor:default;z-index:70}
-  .mfull .mtransport .mvolt.open .vpop{opacity:1;transform:translateX(-50%);pointer-events:auto}
-  .mfull .mtransport .mvolt .vpop input[type=range]{width:200px;accent-color:#fff;height:36px;flex:none}
+  .mfull .mtransport .mvolt .vpop{position:fixed;right:24px;top:50%;transform:translateY(-50%) translateX(16px);width:104px;height:260px;padding:18px 0 16px;border-radius:22px;background:rgba(18,16,30,.78);border:1px solid rgba(255,255,255,.14);backdrop-filter:blur(18px);box-shadow:0 20px 50px rgba(0,0,0,.5);opacity:0;pointer-events:none;transition:opacity .26s ease,transform .28s cubic-bezier(.2,.8,.3,1);display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:14px;z-index:70}
+  .mfull .mtransport .mvolt.open .vpop{opacity:1;transform:translateY(-50%) translateX(0);pointer-events:auto}
+  .mfull .mtransport .mvolt .vpop input[type=range]{-webkit-appearance:slider-vertical;appearance:slider-vertical;writing-mode:vertical-lr;direction:rtl;width:44px;height:176px;accent-color:#fff;flex:none;margin:0;background:transparent;cursor:pointer;touch-action:none}
   .mfull .mtransport .mvolt .vpop .vv{min-width:46px;text-align:right;font-size:17px;
         font-variant-numeric:tabular-nums;color:#fff}
   .spk{display:flex;align-items:center;gap:11px;padding:13px 20px;border-radius:999px;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.22);color:#fff;font:inherit;font-size:19px;font-weight:500;cursor:pointer;max-width:340px}
@@ -961,7 +954,7 @@
     weather:{home:true, bg:DUSK, canvas:true,
       html:'<div class="wloc" id="wxLoc"></div><div class="wbig"><div class="t" id="wxTemp">—°</div><div class="c" id="wxCond"></div></div><div class="whours" id="wxHours"></div>'},
     music:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,
-      html:'<button class="mkeep" id="mDS" type="button" title="Keep the music playing" aria-pressed="false">'+DS_I+'<span class="nm">Keep playing</span></button><div class="mtop"><button class="spk" id="mSpk">'+SPKR+' <span class="spkname">Speaker</span> <span class="cx">▾</span></button><button class="mqbtn" id="mQBtn" title="Browse music">'+QICON+'</button></div><div class="mfull"><div class="cf" id="mCF"><div class="cf-track" id="mCFT"></div></div><div class="cfmeta"><div class="mkick" id="mKick">Now Playing</div><div class="mtitle" id="mTitle">—</div><div class="martist" id="mArtist"></div><button class="mfav" id="mFav" title="Favourite">'+HEART_I+'</button></div><div class="mscrub" id="mScrub"><div class="mtrack"><div class="mfill" id="mFill" style="width:0%"></div><div class="mknob" id="mKnob" style="left:0%"></div></div><div class="mtimes"><span id="mElapsed">0:00</span><span id="mDur">0:00</span></div></div><div class="mtransport" id="mTransport"><span class="tsp"></span><button class="sml" id="mShuf" data-a="shuffle" title="Shuffle">'+SHUF_I+'</button><button data-a="previous">'+PREV_I+'</button><button class="pp" id="mPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button><button class="sml" id="mRep" data-a="repeat" title="Repeat">'+REP_I+'</button><div class="mvolt" id="mVolT" role="button" tabindex="0" aria-label="Volume" title="Volume">'+VOL_I+'<div class="vpop"><input type="range" min="0" max="100" step="2" id="mVol" aria-label="Volume"><span class="vv" id="mVolV"></span></div></div></div></div><div class="mqr" id="mQR"><div class="qrbox" id="mQRCode"></div><div class="qrlab">Scan to queue</div></div>'},
+      html:'<div class="mtop"><button class="spk" id="mSpk">'+SPKR+' <span class="spkname">Speaker</span> <span class="cx">▾</span></button><button class="mqbtn" id="mQBtn" title="Browse music">'+QICON+'</button></div><div class="mfull"><div class="cf" id="mCF"><div class="cf-track" id="mCFT"></div></div><div class="cfmeta"><div class="mkick" id="mKick">Now Playing</div><div class="mtitle" id="mTitle">—</div><div class="martist" id="mArtist"></div><button class="mfav" id="mFav" title="Favourite">'+HEART_I+'</button></div><div class="mscrub" id="mScrub"><div class="mtrack"><div class="mfill" id="mFill" style="width:0%"></div><div class="mknob" id="mKnob" style="left:0%"></div></div><div class="mtimes"><span id="mElapsed">0:00</span><span id="mDur">0:00</span></div></div><div class="mtransport" id="mTransport"><span class="tsp"></span><button class="sml" id="mDS" type="button" title="Keep the music playing" aria-pressed="false">'+DS_I+'</button><button class="sml" id="mShuf" data-a="shuffle" title="Shuffle">'+SHUF_I+'</button><button data-a="previous">'+PREV_I+'</button><button class="pp" id="mPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button><button class="sml" id="mRep" data-a="repeat" title="Repeat">'+REP_I+'</button><div class="mvolt" id="mVolT" role="button" tabindex="0" aria-label="Volume" title="Volume">'+VOL_I+'<div class="vpop"><input type="range" min="0" max="100" step="2" id="mVol" aria-label="Volume"><span class="vv" id="mVolV"></span></div></div><div class="tsp"></div></div></div><div class="mqr" id="mQR"><div class="qrbox" id="mQRCode"></div><div class="qrlab">Scan to queue</div></div>'},
     // Browse — Recent + Playlists. Same background as music (it is the music
     // card's other face), standard card header: title by #home.
     browse:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,

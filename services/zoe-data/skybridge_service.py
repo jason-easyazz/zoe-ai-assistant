@@ -1030,7 +1030,18 @@ _VOICE_SHOW_RE = re.compile(
 def classify_skybridge_intent(message: str, context: dict[str, Any] | None = None) -> SkybridgeIntent | None:
     """Classify only domains that Skybridge can resolve to real data cards."""
     raw_message = message or ""
-    text = f" {raw_message.lower()} "
+    # Strip TRAILING sentence punctuation before matching. Moonshine punctuates
+    # its transcripts — the live logs carry "Turn the light off." and "Please,
+    # Zoe. Turn off the light." — and 22 patterns below anchor on end-of-string,
+    # so a full stop silently defeats them. "turn the light off" classified as a
+    # command while "turn the light off." fell through to a fallback that POSTed
+    # to a non-existent entity and still said "Lights off."
+    #
+    # Only the trailing run is removed, so internal punctuation that patterns
+    # genuinely rely on ("40%", "5:30", "dr. smith") is untouched. Two patterns
+    # already carried a local `[.!]*` workaround for this — fixing it at the
+    # source is what makes the other twenty safe.
+    text = f" {re.sub(r'[.!?,;:]+$', '', raw_message.lower().strip())} "
     person_fact = _people_fact_from_text(raw_message)
     if person_fact:
         name, fact, birthday = person_fact
