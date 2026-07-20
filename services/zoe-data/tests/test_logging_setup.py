@@ -57,6 +57,17 @@ def restore_root_logger():
     try:
         yield root
     finally:
+        # Close handlers this test created before dropping them. Removing a
+        # RotatingFileHandler from the list does not release its file
+        # descriptor, and each test opens one against a tmp_path log that
+        # pytest then deletes — leaked fds accumulate across the suite and
+        # surface later as tmpdir-cleanup or too-many-open-files errors.
+        # Handlers present in saved_handlers are someone else's and are
+        # restored by identity, never closed.
+        for handler in list(root.handlers):
+            if handler not in saved_handlers:
+                root.removeHandler(handler)
+                handler.close()
         root.handlers[:] = saved_handlers
         root.setLevel(saved_level)
 
