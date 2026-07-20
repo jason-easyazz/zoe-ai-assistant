@@ -549,16 +549,24 @@ class Dashboard {
 
         // A layout saved by the BROKEN default contains only 'project' (see
         // createDefaultLayout). Users who loaded this page before the fix have
-        // that persisted in localStorage, so fixing the default alone would not
-        // help them — their saved layout wins. Treat a layout with no real list
-        // widget as unusable and rebuild, backing up first so nothing is lost.
+        // that persisted, so fixing the default alone would not help them —
+        // their saved layout wins.
+        //
+        // But a project-only layout is ALSO what a user who deliberately kept
+        // just that widget would have, and the two are indistinguishable from
+        // storage alone. So this ADDS the missing list widgets rather than
+        // replacing the layout: the broken-default user gets their lists, and
+        // the deliberate user keeps everything they chose. Nothing is discarded.
         if (layout && Array.isArray(layout) && layout.length > 0
             && !layout.some(it => it && isListWidget(it.type) && it.type !== 'project')) {
-            console.warn('📐 Saved layout has no list widgets (legacy project-only default) — rebuilding');
+            console.warn('📐 Saved layout has no list widgets — appending defaults (existing widgets kept)');
             try {
-                localStorage.setItem(this.storageKey + '.prefix.bak', JSON.stringify(layout));
+                localStorage.setItem(this.storageKey + '.prelists.bak', JSON.stringify(layout));
             } catch (_) { /* quota: ignore */ }
-            layout = null;
+            const have = new Set(layout.map(it => it && it.type));
+            ['shopping', 'work', 'personal', 'reminders', 'bucket']
+                .filter(t => !have.has(t))
+                .forEach(t => layout.push({ type: t }));
         }
 
         if (layout && Array.isArray(layout) && layout.length > 0) {

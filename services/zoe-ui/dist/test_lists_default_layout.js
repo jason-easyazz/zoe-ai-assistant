@@ -63,11 +63,31 @@ check('createDefaultLayout filters to real list widgets', () => {
         'the fallback list must remain');
 });
 
-check('a project-only saved layout is migrated, not honoured', () => {
+check('a project-only saved layout gains lists WITHOUT losing anything', () => {
     assert.ok(/!layout\.some\(it => it && isListWidget\(it\.type\) && it\.type !== 'project'\)/.test(code),
-        'a saved layout with no real list widget must be treated as unusable');
-    assert.ok(/\.prefix\.bak/.test(code),
-        'the old layout must be backed up before rebuilding — never destroy user data silently');
+        'a saved layout with no real list widget must be detected');
+    // Must APPEND, not replace: a project-only layout is indistinguishable from
+    // a deliberate customisation, so discarding it would destroy a valid choice.
+    assert.ok(/layout\.push\(\{ type: t \}\)/.test(code),
+        'the migration must APPEND defaults, never replace the saved layout');
+    // Scope to the migration block itself: `let layout = null;` at the top of
+    // loadLayout() is a legitimate declaration, and a file-wide match flagged it.
+    const mig = code.match(/!layout\.some\(it =>[\s\S]*?\n {8}\}/);
+    assert.ok(mig, 'migration block must be matched');
+    assert.ok(!/layout = null/.test(mig[0]),
+        'the saved layout must not be nulled out inside the migration — that discards user data');
+    assert.ok(/\.prelists\.bak/.test(code),
+        'back the old layout up regardless, as a recovery route');
+});
+
+check('the lists-dashboard script URL is cache-busted', () => {
+    // lists-dashboard.js is served from the `zoe-js` NetworkFirst runtime cache
+    // (sw.js), which SW_VERSION does NOT invalidate. Without a fresh URL an
+    // existing client on a slow network keeps the stale script and the migration
+    // never runs at all.
+    const html = fs.readFileSync(path.join(D, 'lists.html'), 'utf8');
+    assert.ok(/js\/lists-dashboard\.js\?v=/.test(html),
+        'lists-dashboard.js must carry a ?v= or the runtime cache can serve the old copy');
 });
 
 // Behavioural: simulate the exact manifest shape and prove the outcome flips.
