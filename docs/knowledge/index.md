@@ -31,3 +31,4 @@ This is **knowledge / records** (descriptive facts), not a DOX contract. See the
 ## Bundles
 
 - [Multica autopilot loop contracts](autopilots/index.md) — Loop-Engineering contracts (Job / Inputs / Allowed / Forbidden / Output / Evaluation) for the three live Multica autopilots.
+- [Operator Hermes skills — backup copies](operator-skills/index.md) — version-controlled backup of the ten `author: Zoe` skills from `~/.hermes/skills` (which is not a git repo and has no remote, so they existed in exactly one place). **Backup only — read by no runtime**; restoring into `~/.hermes/skills` is a deliberate manual step. The other 58 skills there are third-party and re-pullable from `NousResearch/Hermes-Agent`, so they are not copied. Read before retiring Hermes (`zoe-flue-integration.md` §8.2).
