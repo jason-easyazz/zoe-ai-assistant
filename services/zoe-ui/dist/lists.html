@@ -2335,7 +2335,12 @@
     <script src="js/dashboard-protection.js"></script>
     
     <!-- Clean Dashboard Implementation (Native Gridstack) -->
-    <script src="js/lists-dashboard.js"></script>
+    <!-- ?v= is load-bearing, not decoration: lists-dashboard.js is served from
+         the `zoe-js` NetworkFirst runtime cache (sw.js:184, 3s timeout, 1-day
+         expiry). SW_VERSION only refreshes PREcached entries, so without a new
+         URL an existing client on a slow network keeps the stale script and the
+         layout migration below never runs. Bump this whenever that file changes. -->
+    <script src="js/lists-dashboard.js?v=20260720-listdefaults"></script>
     
     <!-- Register all widgets AFTER lists-dashboard.js has set up its listener -->
     <script>
