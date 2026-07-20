@@ -503,8 +503,13 @@ window.zoeListCountLabel = zoeListCountLabel;
         if (!('serviceWorker' in navigator)) return;
         navigator.serviceWorker.ready
             .then((reg) => {
-                const sw = (reg && reg.active) || navigator.serviceWorker.controller;
-                if (sw) sw.postMessage({ type: 'STOP_PANEL_POLL' });
+                // During an SW update reg.active can be the NEWLY activated worker
+                // while navigator.serviceWorker.controller is still the old one --
+                // and the old one owns the running poll timer. Message both, so the
+                // stale poll actually stops instead of waiting to be retired.
+                const targets = [navigator.serviceWorker.controller, reg && reg.active]
+                    .filter((sw, i, arr) => sw && arr.indexOf(sw) === i);
+                targets.forEach((sw) => sw.postMessage({ type: 'STOP_PANEL_POLL' }));
             })
             .catch(() => {});
     } catch (_) { /* never let cleanup break page boot */ }
