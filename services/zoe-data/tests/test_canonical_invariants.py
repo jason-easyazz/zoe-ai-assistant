@@ -301,13 +301,37 @@ def test_router_stage1_artifact_is_committed():
 
 def test_router_sidecar_seam_is_intact():
     """The sidecar contract: a dedicated unit on its own port, reached by URL.
-    zoe-data must not grow an in-process copy of stage 2."""
+    zoe-data must not grow an in-process copy of stage 2.
+
+    Asserts against the ExecStart command line specifically, NOT the whole unit
+    file. The port string also appears in a comment, the Description, and the
+    ExecStartPost health check — so a substring search over the file would stay
+    green while ExecStart bound a different port, which is exactly the drift
+    this test exists to catch.
+    """
     router = _rocks()["router"]
-    unit = os.path.join(REPO, "scripts", "setup", "systemd", router["sidecar_service"])
-    assert os.path.exists(unit), f"router sidecar unit missing: {unit}"
-    assert router["sidecar_port"] in _read_repo(
-        os.path.join("scripts", "setup", "systemd", router["sidecar_service"])
-    ), f"sidecar unit no longer binds {router['sidecar_port']}"
+    rel = os.path.join("scripts", "setup", "systemd", router["sidecar_service"])
+    unit_path = os.path.join(REPO, rel)
+    assert os.path.exists(unit_path), f"router sidecar unit missing: {unit_path}"
+
+    # ExecStart is a multi-line continuation; join it back into one command.
+    lines, exec_start, collecting = _read_repo(rel).splitlines(), [], False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("ExecStart="):
+            collecting = True
+        elif collecting and not stripped.endswith("\\") and exec_start:
+            exec_start.append(stripped)
+            break
+        if collecting:
+            exec_start.append(stripped.rstrip("\\").strip())
+            if not stripped.endswith("\\"):
+                break
+    cmd = " ".join(exec_start)
+    assert cmd, "could not locate ExecStart in the router sidecar unit"
+    assert f"--port {router['sidecar_port']}" in cmd, (
+        f"router sidecar ExecStart no longer binds --port {router['sidecar_port']}: {cmd!r}"
+    )
 
 
 def test_router_flag_keeps_its_four_stage_rollout():
