@@ -132,19 +132,20 @@ function makeEl() {
         appendChild() {}, remove() {}, insertBefore() {},
         addEventListener() {},
         querySelector: () => null,
-        // Parse just enough of innerHTML to find tagged inputs, so the
-        // DOM-assigned .value path can be exercised.
+        // Parse just enough of innerHTML to find tagged elements, so both the
+        // DOM-assigned .value path and the data-attribute handler binding can be
+        // exercised. Located elements are recorded per attribute in `found`.
         querySelectorAll(sel) {
             const attr = (sel.match(/^\[([\w-]+)\]$/) || [])[1];
             if (!attr) return [];
-            const count = (el.innerHTML.match(new RegExp(attr, 'g')) || []).length;
-            return Array.from({ length: count }, () => {
-                const input = makeEl();
-                el.inputs.push(input);
-                return input;
-            });
+            // Match the attribute as a whole token, valued (attr="x") or bare (attr).
+            const re = new RegExp('\\b' + attr + '(?=[\\s=>])', 'g');
+            const count = (el.innerHTML.match(re) || []).length;
+            const hits = Array.from({ length: count }, () => makeEl());
+            el.found[attr] = (el.found[attr] || []).concat(hits);
+            return hits;
         },
-        inputs: []
+        found: {}
     };
     return el;
 }
@@ -361,15 +362,17 @@ check('escapeHtml still works if common.js failed to load (inline fallback)', ()
         'the fallback must escape, not pass through raw');
 });
 
-check('renderTasks escapes task text and the task id in its inline handler', () => {
+check('renderTasks escapes task text and keeps the task id out of JS source', () => {
     const container = makeEl();
-    const ctx = sandboxWith(['renderTasks'], {
+    const ctx = sandboxWith(['renderTasks', 'bindDataHandlers'], {
         document: { getElementById: () => container, querySelectorAll: () => [] },
         tasks: [{ id: `'),alert(1)//`, text: XSS, category: 'personal' }],
         selectedList: 'all',
         selectedTasks: [],
         tasksUnavailableLists: [],
         renderRemindersInSidebar: () => {},
+        addTaskFromInput: () => {}, toggleTaskSelection: () => {},
+        handleTaskDragStart: () => {}, handleTaskDragEnd: () => {},
         window: {}
     });
     ctx.renderTasks();
@@ -382,12 +385,12 @@ check('renderTasks escapes task text and the task id in its inline handler', () 
         'a crafted task id must not close the onclick string');
 });
 
-check('renderLinkedTasks escapes task text and both ids', () => {
+check('renderLinkedTasks escapes task text and keeps both ids out of JS source', () => {
     const list = makeEl();
     const summary = makeEl();
     const btn = makeEl();
     const byId = { linkedTasksList: list, completionSummary: summary, completeBtn: btn };
-    const ctx = sandboxWith(['renderLinkedTasks'], {
+    const ctx = sandboxWith(['renderLinkedTasks', 'bindDataHandlers'], {
         document: { getElementById: id => byId[id] || makeEl() },
         window: {}
     });
@@ -430,7 +433,7 @@ check('showAttendeeSuggestions escapes person name and email', () => {
     const input = makeEl();
     input.value = 'a';
     const byId = { attendeeSuggestions: suggestions, addAttendeeInput: input };
-    const ctx = sandboxWith(['showAttendeeSuggestions'], {
+    const ctx = sandboxWith(['showAttendeeSuggestions', 'bindDataHandlers'], {
         document: { getElementById: id => byId[id] || makeEl() },
         filterPeople: () => [{ id: 1, name: XSS, email: `evil${QUOTE_BREAK}` }],
         filteredSuggestions: [],
@@ -447,7 +450,7 @@ check('showAttendeeSuggestions escapes person name and email', () => {
 
 check('renderRemindersList sets the message via the DOM, not a value= attribute', () => {
     const container = makeEl();
-    const ctx = sandboxWith(['renderRemindersList'], {
+    const ctx = sandboxWith(['renderRemindersList', 'bindDataHandlers'], {
         document: { getElementById: () => container },
         currentReminders: [{ id: 1, offset_minutes: 15, message: `x${QUOTE_BREAK}` }],
         window: {}
@@ -457,14 +460,15 @@ check('renderRemindersList sets the message via the DOM, not a value= attribute'
         'the user-controlled message must not be interpolated into a value= attribute');
     assert.ok(!container.innerHTML.includes(QUOTE_BREAK),
         'a quote-bearing reminder message must never reach the markup');
-    assert.strictEqual(container.inputs.length, 1, 'the message input must be located');
-    assert.strictEqual(container.inputs[0].value, `x${QUOTE_BREAK}`,
+    const inputs = container.found['data-reminder-message'] || [];
+    assert.strictEqual(inputs.length, 1, 'the message input must be located');
+    assert.strictEqual(inputs[0].value, `x${QUOTE_BREAK}`,
         'the message must still be displayed -- set through the DOM');
 });
 
 check('renderPrepItemsList sets the item text via the DOM, not a value= attribute', () => {
     const container = makeEl();
-    const ctx = sandboxWith(['renderPrepItemsList'], {
+    const ctx = sandboxWith(['renderPrepItemsList', 'bindDataHandlers'], {
         document: { getElementById: () => container },
         currentPrepItems: [{
             id: 1, text: `x${QUOTE_BREAK}`, deadline_offset: 1,
@@ -476,8 +480,9 @@ check('renderPrepItemsList sets the item text via the DOM, not a value= attribut
     ctx.renderPrepItemsList();
     assert.ok(!container.innerHTML.includes(QUOTE_BREAK),
         'a quote-bearing prep item must never reach the markup');
-    assert.strictEqual(container.inputs.length, 1, 'the text input must be located');
-    assert.strictEqual(container.inputs[0].value, `x${QUOTE_BREAK}`,
+    const inputs = container.found['data-prep-text'] || [];
+    assert.strictEqual(inputs.length, 1, 'the text input must be located');
+    assert.strictEqual(inputs[0].value, `x${QUOTE_BREAK}`,
         'the prep text must still be displayed -- set through the DOM');
 });
 
@@ -486,7 +491,7 @@ check('openReminderPanel escapes title, category and description', () => {
     const title = makeEl();
     const content = makeEl();
     const byId = { eventPanel: panel, eventTitle: title, eventContent: content };
-    const ctx = sandboxWith(['openReminderPanel'], {
+    const ctx = sandboxWith(['openReminderPanel', 'bindDataHandlers'], {
         document: { getElementById: id => byId[id] || makeEl() },
         window: {}
     });
@@ -500,6 +505,64 @@ check('openReminderPanel escapes title, category and description', () => {
     // The title goes through textContent, which is inherently safe.
     assert.strictEqual(title.textContent, `🔔 ${XSS}`,
         'the panel title uses textContent, so it stays raw but inert');
+});
+
+check('NO render template interpolates into an inline on* handler attribute', () => {
+    // Greptile P1 on #1488, and it is correct: the browser HTML-DECODES an
+    // event-handler attribute before compiling it as JavaScript, so an
+    // HTML-escaped quote (&#39;) becomes a real quote at compile time and breaks
+    // out of the JS string argument. HTML escaping CANNOT secure an inline
+    // handler argument -- the value has to stay out of the JS source entirely.
+    // Ids therefore travel in data-* attributes and are read back via dataset.
+    const offenders = code
+        .split('\n')
+        .filter(l => /\bon[a-z]+\s*=\s*"[^"]*\$\{/.test(l))
+        .map(l => l.trim().slice(0, 80));
+    assert.deepStrictEqual(offenders, [],
+        'inline handler attribute with an interpolated value: ' + offenders.join(' | '));
+});
+
+check('bindDataHandlers exists and every renderer calls it', () => {
+    assert.ok(/function\s+bindDataHandlers\s*\(/.test(code),
+        'the data-attribute handler binder must exist');
+    const renderers = [
+        'renderTasks', 'renderLinkedTasks', 'showAttendeeSuggestions',
+        'renderAttendeesList', 'renderRemindersList', 'renderPrepItemsList',
+        'displayNotifications', 'openReminderPanel'
+    ];
+    const missing = renderers.filter(
+        n => !/bindDataHandlers\(/.test(stripComments(extractFunction(script, n))));
+    assert.deepStrictEqual(missing, [],
+        'renderer(s) emit data-* handlers but never bind them: ' + missing.join(', '));
+});
+
+check('a quote-bearing id survives as inert data, not as JS source', () => {
+    // The exact payload that defeats HTML escaping inside an inline handler.
+    const HOSTILE = `x'),alert(1)//`;
+    const container = makeEl();
+    const ctx = sandboxWith(['renderTasks', 'bindDataHandlers'], {
+        document: { getElementById: () => container, querySelectorAll: () => [] },
+        tasks: [{ id: HOSTILE, text: 'ok', category: 'personal' }],
+        selectedList: 'all',
+        selectedTasks: [],
+        tasksUnavailableLists: [],
+        renderRemindersInSidebar: () => {},
+        addTaskFromInput: () => {},
+        toggleTaskSelection: () => {},
+        handleTaskDragStart: () => {},
+        handleTaskDragEnd: () => {},
+        window: {}
+    });
+    ctx.renderTasks();
+    const out = container.innerHTML;
+    assert.ok(!/\bon[a-z]+\s*=/.test(out),
+        'no inline event-handler attribute may be emitted for a task row');
+    assert.ok(!out.includes(HOSTILE),
+        'the raw quote must not reach the markup');
+    assert.ok(/data-toggle-task-id=/.test(out),
+        'the id must travel in a data attribute instead');
+    assert.ok(container.found['data-toggle-task-id'],
+        'bindDataHandlers must locate and wire the tagged element');
 });
 
 check('the notifications list escapes the notification message', () => {
