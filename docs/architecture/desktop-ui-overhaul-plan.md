@@ -70,8 +70,19 @@ the estate already owns or that never worked.
   |---|---|---|
   | `touch/voice.html` | `chat.py:71` `lets_talk` → `/touch/voice.html?conv=1` ("phone-call voice mode — still its own surface") + `voice_tts.py:1111` | **DO NOT RETIRE HERE.** This is the live voice path and is **replay-gated**. It retires only with the Ask-card conversation cutover (PLANS Phase 1c), not in this overhaul |
   | `touch/updates.html` | `notifications-panel.js:345/:358` (loaded on 10 desktop pages) | Repoint the deep-links **before** deleting; otherwise notification taps 404 |
-  | `touch/cooking.html`, `touch/smart-home.html` | desktop `cooking.html` / `smart-home.html` meta-refresh stubs, linked from the desktop nav | Repoint the nav (Wave 2) **before** deleting stub+target |
+  | `touch/cooking.html`, `touch/smart-home.html` | desktop `cooking.html` / `smart-home.html` meta-refresh stubs (desktop nav) **AND** the voice-intent map `touch-ui-executor.js:764-770` | Repoint the nav (Wave 2) **and** the voice map **before** deleting stub+target |
   | `touch/settings.html` | loads `touch-menu.js` (`:6170`); touched 2026-07-17 | Resolve its fate **before** deleting the shared scripts |
+  | **Nearly the whole set, on BOTH surfaces** | `touch-ui-executor.js` `_buildPageMap()` (`:754-771`) — a 15-entry voice-intent→page map whose `_page()` helper (`:751`) resolves `/touch/<name>` in touch context and `/<name>` otherwise | Prune each entry in lockstep with its page, on both surfaces. `_attemptVoiceNavigation` (`:773`) fires it whenever a reply sounds like a navigation confirmation |
+
+  **Referrer classes — check ALL FOUR before deleting any page** (each of these was missed
+  once during review; the list exists so the executor does not rediscover them):
+  1. **Page links** — `href`/`location.href` in other pages and the desktop meta-refresh stubs.
+  2. **Shared menu registries** — `touch-menu.js:17-39` (18 entries), `touch-nav.js:14-25`
+     (12-path `PAGE_ORDER`). These are referrers, not just consumers.
+  3. **Server-driven navigation** — `chat.py` `PAGE_ROUTES`-style maps (e.g. `:71` `lets_talk`),
+     `voice_tts.py` `panel_navigate` payloads. **Replay-gated if on the voice path.**
+  4. **Client voice-intent maps** — `touch-ui-executor.js:754-771` `_buildPageMap()`,
+     context-resolved across both surfaces.
 
   Not nav sources (cleanup, not reachability): `auth.js:13` `TOUCH_PATH_TO_PAGE_ID` is a
   reverse map; `orb-loader.js:11` is a skip-list; `sw.js:735` is a cache route;
@@ -258,7 +269,14 @@ update + SW_VERSION bump where precached + touch-consumer grep + panel smoke)
   you here: a deleted-but-still-listed path is still in `allowed`, so it navigates to a 404
   rather than falling back to home.
 
-  Panel smoke after each step. Closes skybridge-cutover PR 5 for the genuinely dead pages.
+  **Every step also prunes that page's entry in the `touch-ui-executor.js` `_buildPageMap()`
+  voice map (`:754-771`) — on both surfaces**, since `_page()` resolves desktop or touch by
+  context. A voice "open cooking" that lands on a deleted page is the same bug as a menu tile
+  that does.
+
+  Panel smoke after each step, **including one voice-nav command per retired domain** — a
+  visual smoke will not catch class-3/class-4 referrers.
+  Closes skybridge-cutover PR 5 for the genuinely dead pages.
 - **NOT retired here** — carve-outs that a blanket sweep would have broken:
   - `touch/voice.html` — **live** `lets_talk` voice navigation (`chat.py:71`); replay-gated;
     retires with the Ask-card cutover (PLANS Phase 1c), not in this overhaul.
