@@ -504,9 +504,29 @@ async def _stream_sentence_audio(local_participant, text: str, user_id: str) -> 
 
     sentences = _split_sentences(text)
     last = len(sentences) - 1
+    sent_any = False
     for seq, sentence in enumerate(sentences):
         await asyncio.sleep(0)  # cancel-token checkpoint between sentences
-        tts_resp = await _synth({"text": sentence}, caller={"source": "livekit", "user_id": user_id})
+        try:
+            tts_resp = await _synth({"text": sentence}, caller={"source": "livekit", "user_id": user_id})
+        except Exception:
+            if not sent_any:
+                raise  # nothing spoken yet — caller's existing text fallback handles it
+            # Mid-stream failure with audio already played: do NOT let the
+            # caller re-send the whole reply as text (it would duplicate what
+            # was heard). Send only the unspoken remainder as text, plus an
+            # empty final-flagged marker so the client reconciles the turn.
+            logger.warning(
+                "LiveKit streamed TTS failed mid-reply (sentence %d/%d)", seq + 1, last + 1
+            )
+            await _send_data(local_participant, {
+                "type": "text", "content": " ".join(sentences[seq:]),
+            })
+            await _send_data(local_participant, {
+                "type": "audio", "audio_base64": "", "content_type": "audio/wav",
+                "seq": seq, "final": True,
+            })
+            return
         await _send_data(local_participant, {
             "type": "audio",
             "audio_base64": base64.b64encode(tts_resp.body).decode("ascii"),
@@ -514,6 +534,7 @@ async def _stream_sentence_audio(local_participant, text: str, user_id: str) -> 
             "seq": seq,
             "final": seq == last,
         })
+        sent_any = True
 
 
 async def _maybe_fast_tier(transcript: str, user_id: str, session_id: str) -> Optional[str]:

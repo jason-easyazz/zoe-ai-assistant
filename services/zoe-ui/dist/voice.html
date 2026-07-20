@@ -542,7 +542,15 @@ function handleVoiceEvent(msg) {
 // this ordered queue (reliable data channel preserves arrival order).
 let seqAudioQueue = [];
 let seqAudioPlaying = false;
+// After a barge-in (stop_playback) the server restarts seq at 0 for the next
+// reply; a late in-flight sentence from the CANCELLED turn (seq > 0, no turn
+// id on the wire) must be dropped, not played into the new turn.
+let seqAwaitRestart = false;
 function enqueueSeqAudio(msg) {
+  if (seqAwaitRestart) {
+    if (msg.seq !== 0) return;   // stale sentence from the interrupted turn
+    seqAwaitRestart = false;     // seq 0 = a fresh reply begins
+  }
   seqAudioQueue.push(msg);
   if (!seqAudioPlaying) drainSeqAudio();
 }
@@ -550,7 +558,7 @@ function drainSeqAudio() {
   const next = seqAudioQueue.shift();
   if (!next) { seqAudioPlaying = false; return; }
   seqAudioPlaying = true;
-  playAudioBase64(next.audio_base64, next.content_type || 'audio/wav', () => {
+  const onSegmentDone = () => {
     if (seqAudioQueue.length) { drainSeqAudio(); return; }
     seqAudioPlaying = false;
     if (next.final !== true) return;  // more sentences still in flight
@@ -564,13 +572,19 @@ function drainSeqAudio() {
     } else if (convMode) {
       scheduleAutoListen();
     }
-  });
+  };
+  // An empty audio_base64 is the server's mid-stream-failure terminal marker
+  // (final:true, nothing to play) — reconcile the turn without playback.
+  if (!next.audio_base64) { onSegmentDone(); return; }
+  playAudioBase64(next.audio_base64, next.content_type || 'audio/wav', onSegmentDone);
 }
 let currentPlaybackAudio = null;   // handle for barge-in stop_playback
 function stopCurrentPlayback() {
-  // Barge-in must also drop any queued streamed sentences (P-W1.3).
+  // Barge-in must also drop any queued streamed sentences (P-W1.3), and any
+  // late-arriving sentence of the cancelled turn until a fresh seq 0 shows up.
   seqAudioQueue = [];
   seqAudioPlaying = false;
+  seqAwaitRestart = true;
   if (currentPlaybackAudio) {
     try { currentPlaybackAudio.pause(); } catch(_e) {}
     if (currentPlaybackAudio._zoeUrl) {

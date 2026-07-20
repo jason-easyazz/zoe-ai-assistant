@@ -167,5 +167,53 @@ def test_cancel_between_sentences_stops_stream(monkeypatch):
     assert len(synth_calls) <= 2                # and no further synthesis ran on
 
 
+def test_midstream_synth_failure_no_duplicate_reply(monkeypatch):
+    """If a LATER sentence fails after audio was already streamed, the caller's
+    full-reply text fallback must NOT fire (it would duplicate what was heard):
+    only the unspoken remainder goes out as text, plus a final-flagged empty
+    audio marker so the client reconciles the turn."""
+    monkeypatch.setenv("ZOE_LIVEKIT_STREAM_TTS", "1")
+    sent, _ = _install_fakes(monkeypatch, reply=_THREE_SENTENCES)
+
+    calls = {"n": 0}
+
+    async def _flaky_synth(payload, caller=None):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise RuntimeError("kokoro fell over")
+        return _FakeTTSResponse()
+
+    sys.modules["routers.voice_tts"].synthesize = _flaky_synth
+    _run(v._run_pipeline(object(), _frames(), "jason", "sess"))
+
+    audio = _audio_msgs(sent)
+    assert len(audio) == 2
+    assert audio[0]["seq"] == 0 and audio[0]["final"] is False
+    assert audio[1] == {  # terminal marker: empty, final-flagged
+        "type": "audio", "audio_base64": "", "content_type": "audio/wav",
+        "seq": 1, "final": True,
+    }
+    texts = [m for m in sent if m.get("type") == "text"]
+    assert len(texts) == 1
+    assert texts[0]["content"] == "Second thing Third thing."  # remainder only (fake splitter strips dots)
+
+
+def test_first_sentence_failure_uses_existing_text_fallback(monkeypatch):
+    """Nothing streamed yet -> behave exactly like today's failure path: the
+    whole reply goes out once via the caller's {type:text} fallback."""
+    monkeypatch.setenv("ZOE_LIVEKIT_STREAM_TTS", "1")
+    sent, _ = _install_fakes(monkeypatch, reply=_THREE_SENTENCES)
+
+    async def _broken_synth(payload, caller=None):
+        raise RuntimeError("kokoro never started")
+
+    sys.modules["routers.voice_tts"].synthesize = _broken_synth
+    _run(v._run_pipeline(object(), _frames(), "jason", "sess"))
+
+    assert _audio_msgs(sent) == []
+    texts = [m for m in sent if m.get("type") == "text"]
+    assert texts == [{"type": "text", "content": _THREE_SENTENCES}]
+
+
 def test_flag_off_default_is_off():
     assert v._livekit_stream_tts_enabled() is False

@@ -487,11 +487,17 @@ function handleVoiceEvent(msg) {
     // Barge-in (#1051): server saw the user talking over Zoe — stop playback
     // now and drop any queued streamed sentences.
     audioQueue = [];
-    if (currentAudio) { try { currentAudio.pause(); } catch(e) {} }
+    if (currentAudio) {
+      try { currentAudio.pause(); } catch(e) {}
+      if (currentAudio._zoeUrl) { try { URL.revokeObjectURL(currentAudio._zoeUrl); } catch(e) {} }
+    }
     audioPlaying = false;
     speaking = false;
     currentAudio = null;
     setOrbState('listening');
+    // The server already moved to LISTENING; make the client actually capture
+    // again instead of just painting the orb (livekit mode records per turn).
+    if (convMode) scheduleAutoListen();
   } else if (type === 'text') {
     if (!audioPlaying) setOrbState('ambient');
   } else if (type === 'agui' || type === 'ui_component') {
@@ -535,6 +541,7 @@ function drainAudioQueue() {
     const blob = new Blob([bytes], { type: contentType });
     const url = URL.createObjectURL(blob);
     const audio = new Audio(url);
+    audio._zoeUrl = url;   // so a server-driven stop can revoke it (pause fires no 'ended')
     currentAudio = audio;
     audio.onended = () => { URL.revokeObjectURL(url); drainAudioQueue(); };
     audio.onerror = () => { URL.revokeObjectURL(url); drainAudioQueue(); };
