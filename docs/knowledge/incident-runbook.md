@@ -204,8 +204,8 @@ brain still OOMs on the GPU side. Once it dies, `Restart=` loops it in
 it self-heals when the pressure source finishes.
 
 **Fix.** Usually none needed — stop/finish the competing workload and the
-restart loop succeeds on its own. Verify recovery with `curl :11434/health`
-then a replay-gate re-run.
+restart loop succeeds on its own. Verify recovery with
+`curl -m 3 http://127.0.0.1:11434/health` then a replay-gate re-run.
 
 **Prevention (the actual rule).**
 - **Never run the replay gate — or any ~1.5 GB-transient job — with
