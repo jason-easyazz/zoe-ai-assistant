@@ -547,9 +547,31 @@ class Dashboard {
             }
         }
 
+        // A layout saved by the BROKEN default contains only 'project' (see
+        // createDefaultLayout). Users who loaded this page before the fix have
+        // that persisted, so fixing the default alone would not help them —
+        // their saved layout wins.
+        //
+        // But a project-only layout is ALSO what a user who deliberately kept
+        // just that widget would have, and the two are indistinguishable from
+        // storage alone. So this ADDS the missing list widgets rather than
+        // replacing the layout: the broken-default user gets their lists, and
+        // the deliberate user keeps everything they chose. Nothing is discarded.
+        if (layout && Array.isArray(layout) && layout.length > 0
+            && !layout.some(it => it && isListWidget(it.type) && it.type !== 'project')) {
+            console.warn('📐 Saved layout has no list widgets — appending defaults (existing widgets kept)');
+            try {
+                localStorage.setItem(this.storageKey + '.prelists.bak', JSON.stringify(layout));
+            } catch (_) { /* quota: ignore */ }
+            const have = new Set(layout.map(it => it && it.type));
+            ['shopping', 'work', 'personal', 'reminders', 'bucket']
+                .filter(t => !have.has(t))
+                .forEach(t => layout.push({ type: t }));
+        }
+
         if (layout && Array.isArray(layout) && layout.length > 0) {
             this.loadFromData(layout);
-        } else if (rawSaved) {
+        } else if (rawSaved && layout !== null) {
             // Had data but it didn't validate; don't create defaults (which would overwrite the
             // backup we just made once the user interacts). Start empty and let the user add
             // widgets back — their .bak is recoverable if they need it.
@@ -683,13 +705,23 @@ class Dashboard {
     
     createDefaultLayout() {
         console.log('📐 Creating default lists layout');
-        
-        // Get lists-specific widgets from manifest
-        const availableWidgets = WidgetManager.getAvailableWidgets('lists');
+
+        // getAvailableWidgets('lists') filters on `w.lists === true`, and in the
+        // manifest ONLY 'project' carries that flag — shopping/personal/work/
+        // bucket/tasks have no `lists` key at all. So this returned exactly
+        // [project]: the dead wing whose backend is a stub returning [], and
+        // whose presence made `defaults.length === 0` false so the sensible
+        // fallback below never fired. Net effect: the lists page defaulted to a
+        // single empty "Project" tile and never called /api/lists at all.
+        //
+        // Filter to widgets that are actually LISTS, and treat "no real list
+        // widgets" as empty so the fallback can do its job.
+        const availableWidgets = (WidgetManager.getAvailableWidgets('lists') || [])
+            .filter(w => w && isListWidget(w.id) && w.id !== 'project');
         const defaults = availableWidgets.slice(0, 5).map(w => ({ type: w.id }));
-        
+
         if (defaults.length === 0) {
-            // Fallback if manifest not loaded
+            // Fallback if the manifest lacks per-page flags (it currently does)
             const fallback = ['shopping', 'work', 'personal', 'reminders', 'bucket'];
             defaults.push(...fallback.map(type => ({ type })));
         }
