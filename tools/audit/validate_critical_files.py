@@ -55,6 +55,13 @@ CRITICAL_FILES = {
         'services/zoe-ui/dist/components/zoe-orb.html',
         'services/zoe-ui/dist/components/zoe-orb-complete.html',
     ],
+    'manifests': [
+        # Both were caught by the blanket *.json gitignore and existed ONLY on
+        # the live box. widget-manifest.json blanks the widget grid if missing;
+        # manifest.json breaks PWA install (nginx serves index.html in its place).
+        'services/zoe-ui/dist/manifest.json',
+        'services/zoe-ui/dist/js/widgets/widget-manifest.json',
+    ],
     'html_pages': [
         'services/zoe-ui/dist/index.html',
         'services/zoe-ui/dist/auth.html',
