@@ -17,7 +17,8 @@ importScripts('/workbox/workbox-sw.js');
 // bundles ship under a single cache key.
 // (4.65.0 music-card-breathe vs 4.64.10 sleep-playing-flag -> 4.65.1.)
 // (4.66.0 calendar-anchor vs 4.65.2 music-card-polish -> 4.66.1.)
-const SW_VERSION = '4.68.4'; // calendar: stop wiping event metadata on drag/resize + escape all rendered user text
+// (4.69.0 sign-in-fails-closed vs 4.68.4 calendar-metadata-escape -> 4.69.1.)
+const SW_VERSION = '4.69.1'; // sign-in fails closed (no client-side session fabrication, no ?setup= XSS) + calendar metadata/escaping
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
