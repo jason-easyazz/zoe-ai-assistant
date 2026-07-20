@@ -1537,14 +1537,12 @@ async def get_peer_agent_card(name: str):
         raise HTTPException(status_code=404, detail=f"Unknown peer agent: {name}")
 
     from main import _RUNTIME_HEALTH  # type: ignore[import]
-    from skill_discovery import parse_openclaw_skills, parse_hermes_skills  # type: ignore[import]
 
-    if name == "openclaw":
-        skills = parse_openclaw_skills()
-    elif name == "hermes":
-        skills = parse_hermes_skills()
-    else:
-        skills = [{"id": s, "name": s, "description": s} for s in agent_info.get("skills", [])]
+    # Skills come from the registry for every agent. The openclaw/hermes cases
+    # used to call skill_discovery.py, which was deleted: it parsed the two
+    # skill directories into a catalogue whose only consumers were this field
+    # and an unread markdown file, and nothing dispatched on it.
+    skills = [{"id": s, "name": s, "description": s} for s in agent_info.get("skills", [])]
 
     return {
         "a2aVersion": "1.0",
@@ -1559,23 +1557,6 @@ async def get_peer_agent_card(name: str):
     }
 
 
-@_agent_card_router.post("/peers/{name}/skills/reload")
-async def reload_peer_skills(name: str, user: dict = Depends(require_admin)):
-    """Admin-only: force-flush the skill discovery cache for a peer agent."""
-    from skill_discovery import invalidate_openclaw_cache, invalidate_hermes_cache  # type: ignore[import]
-
-    if name == "openclaw":
-        invalidate_openclaw_cache()
-        from skill_discovery import parse_openclaw_skills  # type: ignore[import]
-        skills = parse_openclaw_skills()
-    elif name == "hermes":
-        invalidate_hermes_cache()
-        from skill_discovery import parse_hermes_skills  # type: ignore[import]
-        skills = parse_hermes_skills()
-    else:
-        raise HTTPException(status_code=404, detail=f"Unknown peer agent: {name}")
-
-    return {"ok": True, "agent": name, "skill_count": len(skills)}
 
 
 # ── Cost tracking + LLM stats ────────────────────────────────────────────────

@@ -13,9 +13,18 @@
 
 ## What a skill actually is
 
-A skill is a `SKILL.md` file whose **description** is parsed by
-`services/zoe-data/skill_discovery.py` and advertised to the brain (via the
-`list_openclaw_skills` tool) so it knows a capability exists.
+A skill is a `SKILL.md` file whose **description** may be surfaced to the brain
+via the `list_openclaw_skills` tool, so it knows a capability exists.
+
+> **Corrected 2026-07-20.** This previously credited
+> `services/zoe-data/skill_discovery.py` with that advertising. It never did it:
+> `skill_discovery.py` was a dead-end catalogue whose only outputs were an agent
+> card with zero callers and a markdown file with zero readers, and it has been
+> deleted. The tool path uses `openclaw_manager.list_skills()`, an independent
+> parser of the same directory. Note also that `list_openclaw_skills` reports
+> `builder_skills_installed` for skills the agent **cannot load** (the workspace
+> skills root is misconfigured and symlinked skills are rejected), so its output
+> is not evidence a skill is usable.
 
 Zoe **parses descriptions**. She does not load, sandbox, gate, or execute skills.
 Discovery reads exactly two directories — `~/.openclaw/workspace/skills/` and
@@ -54,8 +63,10 @@ These exist and are the ones to rely on:
   outcome or a deliberate waiver.
 - **Do not egress internal skill content** to an external LLM provider for
   scanning without operator consent; prefer static scans or a local provider.
-- **Cache reload is admin-gated.** `POST /api/agent/peers/{name}/skills/reload`
-  requires admin (`require_admin`).
+- ~~**Cache reload is admin-gated.**~~ **Removed 2026-07-20** —
+  `POST /api/agent/peers/{name}/skills/reload` existed only to flush
+  `skill_discovery.py`'s cache and was deleted with it. There is no skill cache
+  to reload.
 - **Human review.** Installing a skill is a privileged operator action, not an
   automated one.
 
