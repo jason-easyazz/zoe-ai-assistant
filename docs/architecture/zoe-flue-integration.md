@@ -238,6 +238,36 @@ and the Multica pins — not the skills.
 
 ### 8.1 Multica — board-driven engineering orchestration
 
+> ## ⛔ STOP — this section describes retiring a system that WORKS
+>
+> **Corrected 2026-07-20.** Multica **achieved true 100% hands-off
+> idea→merged-PR autonomy** on 2026-06-17 (e2e8 / ZOE-5834 → PR **#682**
+> actually merged, `merge_sha 2d3edaa9`, zero operator action on the pipeline).
+> Twelve harness PRs are merged and verified present in `main`:
+> `#592 #597` dispatch keystone · `#601` PR_URL handoff · `#607` verify mandate ·
+> `#632` deterministic verify · `#637` board/journal reconcile · `#672 #677`
+> deterministic review · `#679 #681` authoritative closeout · `#685` zombie
+> reaper · `#694` no-op converge.
+>
+> **It is PAUSED, not broken.** Kill switch `~/.zoe/multica_dispatch_paused` is
+> present (2026-06-18 20:29). The board reads 132 done / 128 blocked /
+> **0 dispatchable**.
+>
+> **Do not read the board's statistics as a health metric.** The success rate
+> declines over time (100% on 05-31 → 6% on 06-11 → ~45% by 06-18) and not one
+> of the 128 blocked tickets records a `blocker_reason`. That looks like decay
+> and is the opposite: those were **deliberate test tickets run to find failure
+> modes**, and each mode found became one of the twelve PRs above. The curve
+> measures the system being BUILT. A session on 2026-07-20 misread exactly this
+> and spent hours arguing to delete a working harness.
+>
+> **The design worth preserving:** every flaky-agent dependency was taken off
+> the critical path. The agent only *implements*; the **harness** runs the PR's
+> focused tests, approves review from objective CI state, and performs the merge
+> itself. `#681` goes further — closeout ignores an agent's *claimed* success and
+> requires a real `merge_sha`. Reuse this shape for any future autonomy work:
+> **agents propose, the harness verifies.**
+
 > Executable packet: [`multica-retirement-gates.md`](multica-retirement-gates.md)
 > — code-verified inventory, per-capability proof gates, rollback, sequencing,
 > Forbidden list. The table below is the summary; the packet is normative.
@@ -249,6 +279,39 @@ and the Multica pins — not the skills.
 | Greptile PR loop: `greploop_guard.py`, `greptile_client.py` (packet-only fix loops, thread resolution) | A Flue **workflow step/subagent** wrapping the same packet-generation logic — port the module, don't rewrite the mechanics. | A Flue-driven greploop takes ≥3 PRs from open → threads-resolved → merged. |
 
 ### 8.2 Hermes — engineering/browser delegation
+
+> ## ⛔ RETIRING HERMES REMOVES THE AUTONOMOUS HARNESS'S QUEUE AND EXECUTOR
+>
+> **Added 2026-07-20 — this section previously missed it entirely.** The skills
+> inventory below is accurate and low-stakes (none of them was ever invoked; see
+> §8.3). The load-bearing dependency is elsewhere, and it is not a skill:
+>
+> | Piece | Where it lives | Survives Hermes retirement? |
+> |---|---|---|
+> | The **board** | `~/.hermes/kanban.db` — Hermes-owned SQLite, no remote, unbacked | **NO** |
+> | The **workers** | Hermes gateway `kanban_watchers.py`, `dispatch_in_gateway: true` | **NO** |
+> | The harness logic | `kanban_adapter.py`, `pipeline_store.py`, deterministic verify/review/closeout — all in `zoe-data` | yes |
+>
+> An earlier operator note is explicit that `dispatch_in_gateway` must stay
+> `true` — *"NEVER disable it; it's the executor."* Zoe's `kanban_adapter` only
+> **creates** tasks via the kanban CLI; it never spawns a worker.
+>
+> **So retiring Hermes leaves the intelligence with no queue and nothing to run
+> it.** §8.1's harness (which achieved 100% hands-off autonomy — see the stop
+> block there) would be intact but inert.
+>
+> **Sequencing requirement:** build and prove a replacement board + executor
+> **before** retiring Hermes, not after. Zoe's Postgres is the natural home for
+> the board (it is already the system of record and is not being retired); Flue's
+> own docs say its sqlite holds run durability only, never business data. The
+> agent roles are already spiked in `labs/flue-harness-spike/` (`scout`,
+> `verifier`, `sandbox: local()`); the durable state layer is what's missing.
+>
+> **Whatever replaces the board must record WHY on every transition.** Multica's
+> board had a `blocker_reason` field and populated it **zero times across 128
+> blocked tickets**, which is why its failure modes had to be found by hand one
+> at a time. Zoe's application logging was also dead for this entire period
+> (fixed 2026-07-20, PR #1468) — so the June debugging was conducted blind.
 
 | Capability today | Flue recreation | Retire-gate |
 |---|---|---|
@@ -274,11 +337,32 @@ the existing ones, and legacy rows drop out as each system above retires.
 ### 8.5 What deletion looks like (when gates pass)
 
 Per CANONICAL: **retire by removing** — each passed gate produces a deletion PR
-(module + its tests + its AGENTS.md/docs mentions), not an archive copy. The big
-wins land here: `kanban_adapter.py` (~2.3k lines) + `test_kanban_adapter.py`
-(~6k lines, the largest file in the repo), `greploop_guard.py` + its ~3.2k-line
-test, `hermes_http.py`, `routers/openclaw.py`. None of it moves until its row
-above is green.
+(module + its tests + its AGENTS.md/docs mentions), not an archive copy. None of
+it moves until its row above is green.
+
+**Corrected 2026-07-20 — this list previously led with the wrong targets.** It
+named `kanban_adapter.py` (~2.3k lines) + `test_kanban_adapter.py` (~6k, the
+largest file in the repo) as "the big wins". Those are **the working autonomous
+harness** (§8.1), and line count is not a reason to delete something that works.
+Likewise `greploop_guard.py`: it is Hermes-free (verified — `ESCALATE_HERMES` in
+it is a state label with **0 occurrences across 293 state files**; it routes
+through `ZOE_CHEAP_PR_AGENT_CMD`), so it is not part of a Hermes retirement at
+all, and it is actively used.
+
+Deletion candidates that are genuinely safe, in order of confidence:
+
+| Target | Basis |
+|---|---|
+| `skill_discovery.py`, `skills_watcher.py` | **DONE** (PR #1471) — zero consumers, no behaviour change |
+| The 58 stock Hermes skills + 3 stock OpenClaw skills | third-party, re-pullable upstream |
+| `hermes_http.py` | only 4 real callers once `zoe_repo_root` moved out (PR #1473) |
+| `routers/openclaw.py`, `openclaw_manager.py`, ACP path | **NOT dead** — 2,338 `openclaw_run_state` rows through 2026-07-16. Needs a decision, not a deletion PR. |
+| `kanban_adapter.py`, `pipeline_store.py`, harness | **DO NOT DELETE** — the working harness. See §8.1. |
+
+Measure twice here: three separate claims in this document have already been
+found backwards (skills "live" when never invoked; `hermes-agent` "paused" when
+active; Multica "failing" when it had succeeded and been parked). Verify
+execution, not presence, before deleting anything.
 
 ---
 
