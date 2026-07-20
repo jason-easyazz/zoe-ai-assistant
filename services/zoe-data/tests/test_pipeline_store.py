@@ -16,6 +16,24 @@ from pipeline_evidence import EvidenceItem, PipelineState, with_evidence
 def isolated_store(tmp_path, monkeypatch):
     path = tmp_path / "runs.jsonl"
     monkeypatch.setenv("ZOE_PIPELINE_STORE_PATH", str(path))
+    # Hermetic by default: the harness validator seam (_append_harness_validators)
+    # otherwise shells out to the REAL repo validators (validate_structure /
+    # validate_critical_files) against the live checkout — ~50s per run and
+    # pass/fail depends on checkout hygiene, not the code under test (a dirty dev
+    # box turns the spurious-block override test red while CI's clean checkout
+    # stays green). Tests that need failing validators re-patch in their body,
+    # which wins because the fixture runs first.
+    from pipeline_validators import ValidatorRunResult
+
+    monkeypatch.setattr(
+        "pipeline_validators.run_repo_validators",
+        lambda *, repo_root=None: ValidatorRunResult(
+            exit_code=0,
+            summary="validators: pass (stubbed)",
+            content_hash="stub-validators-pass",
+            passed=True,
+        ),
+    )
     return path
 
 
