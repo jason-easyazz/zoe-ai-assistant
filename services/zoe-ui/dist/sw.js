@@ -17,7 +17,7 @@ importScripts('/workbox/workbox-sw.js');
 // bundles ship under a single cache key.
 // (4.65.0 music-card-breathe vs 4.64.10 sleep-playing-flag -> 4.65.1.)
 // (4.66.0 calendar-anchor vs 4.65.2 music-card-polish -> 4.66.1.)
-const SW_VERSION = '4.68.4'; // lists page defaults to real list widgets (lists-dashboard.js); chat.html XSS escaping + cross-origin script/CSS routes left unrouted
+const SW_VERSION = '4.68.5'; // (4.68.4 chat XSS + cross-origin script/CSS unrouted vs 4.68.4 calendar drag/resize metadata + escaping -> 4.68.5, both shipped)
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
