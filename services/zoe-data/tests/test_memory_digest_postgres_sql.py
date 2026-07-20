@@ -119,12 +119,20 @@ async def test_run_digest_for_all_active_users_uses_postgres_timestamp_cast(monk
 
     assert [item["user_id"] for item in results] == ["user-1", "user-2"]
     assert seen == ["user-1", "user-2"]
-    assert "(cm.created_at::timestamptz AT TIME ZONE ?::text)::date" in db.sql[0]
-    assert "(now()::timestamptz AT TIME ZONE ?::text)::date" in db.sql[0]
-    # Placeholder-count guard (see _load_todays_messages test): discovery's
-    # today-only clause binds exactly the two timezone params; a stray `?`
-    # (e.g. in a comment) would shift them and break active-user detection.
-    assert db.sql[0].count("?") == len(db.params[0]) == 2
+    # UPDATED 2026-07-20: the nightly job moved from a calendar-today clause to
+    # a ROLLING lookback window. Asking for "today" at 03:00 selected the
+    # 00:00-03:00 dead window, so the job completed cleanly and processed 0
+    # users for 10 consecutive nights. The cast discipline this test was written
+    # to protect is unchanged in intent — an uncast placeholder still binds as
+    # "unknown" and silently zeroes the query — so it is asserted here against
+    # the new clause rather than dropped.
+    assert "make_interval(hours => ?::int)" in db.sql[0]
+    assert "now()::timestamptz -" in db.sql[0]
+    assert "::date =" not in db.sql[0], "calendar-day clause came back on the nightly path"
+    # Placeholder-count guard (see _load_todays_messages test): the rolling
+    # clause binds exactly one interval param; a stray `?` (e.g. in a comment)
+    # would shift it and break active-user detection.
+    assert db.sql[0].count("?") == len(db.params[0]) == 1
     assert "cm.metadata ~ '^\\s*\\{'" in db.sql[0]
     assert "substring(cm.metadata from" in db.sql[0]
     assert "::jsonb" not in db.sql[0]
