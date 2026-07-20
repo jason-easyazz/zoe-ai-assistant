@@ -243,9 +243,21 @@ update + SW_VERSION bump where precached + touch-consumer grep + panel smoke)
   3. After the Wave-2 nav repoint lands, delete the desktop `cooking.html`/`smart-home.html`
      stubs and their touch targets.
   4. Decide `touch/settings.html` (reachability + whether desktop settings absorbs it).
-  5. **Last:** delete `touch/js/touch-{menu,nav,widgets}.js` once no consumer remains; then
-     prune the dead `auth.js` `TOUCH_PATH_TO_PAGE_ID` entries, the `orb-loader.js` skip-list
-     entries, and the `sw.js:735` cache route.
+  5. **Last:** delete the `touch/js/touch-{menu,nav,widgets}.js` **files** once no page loads
+     them; then prune the dead `auth.js` `TOUCH_PATH_TO_PAGE_ID` entries, the
+     `orb-loader.js` skip-list entries, and the `sw.js:735` cache route.
+
+  **The shared scripts are BOTH referrer and consumer — treat the entries and the file
+  separately.** `touch-menu.js` carries an 18-entry link registry (`:17-39`, incl.
+  `updates` at `:38`) and `touch-nav.js` a 12-path `PAGE_ORDER` swipe array (`:14-25`),
+  each pointing at pages in this deletion set. So **every step above must prune that page's
+  menu + nav entries in the SAME PR that deletes the page** — otherwise any page still
+  loading the shared menu (settings/cooking/smart-home, live until steps 3-4) renders a tile
+  that navigates to a deleted page. The step-5 "delete last" rule applies to the **files**,
+  not their entries. Note the `_nav` allowlist (`touch-menu.js:540-558`) does **not** save
+  you here: a deleted-but-still-listed path is still in `allowed`, so it navigates to a 404
+  rather than falling back to home.
+
   Panel smoke after each step. Closes skybridge-cutover PR 5 for the genuinely dead pages.
 - **NOT retired here** — carve-outs that a blanket sweep would have broken:
   - `touch/voice.html` — **live** `lets_talk` voice navigation (`chat.py:71`); replay-gated;
