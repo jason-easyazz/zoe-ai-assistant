@@ -17,7 +17,9 @@ importScripts('/workbox/workbox-sw.js');
 // bundles ship under a single cache key.
 // (4.65.0 music-card-breathe vs 4.64.10 sleep-playing-flag -> 4.65.1.)
 // (4.66.0 calendar-anchor vs 4.65.2 music-card-polish -> 4.66.1.)
-const SW_VERSION = '4.68.5'; // (4.68.4 chat XSS + cross-origin script/CSS unrouted vs 4.68.4 calendar drag/resize metadata + escaping -> 4.68.5, both shipped)
+// (4.69.0 sign-in-fails-closed vs 4.68.4 calendar-metadata-escape -> 4.69.1.)
+// (4.69.1 sign-in+calendar vs 4.68.5 chat-xss+cross-origin-unrouted -> 4.69.2.)
+const SW_VERSION = '4.69.2'; // sign-in fails closed + calendar metadata/escaping + chat.html XSS escaping + cross-origin script/CSS left unrouted
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
