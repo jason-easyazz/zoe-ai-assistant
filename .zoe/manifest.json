@@ -60,6 +60,10 @@
     "config": [
       "docker-compose.yml",
       "services/zoe-ui/nginx.conf"
+    ],
+    "manifests": [
+      "services/zoe-ui/dist/manifest.json",
+      "services/zoe-ui/dist/js/widgets/widget-manifest.json"
     ]
   },
   "approved_patterns": {
