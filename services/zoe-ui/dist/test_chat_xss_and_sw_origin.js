@@ -194,6 +194,11 @@ const preds = routePredicates(sw);
 const GUARD = /url\.origin\s*===\s*self\.location\.origin/;
 const isWidgetScoped = (p) => /\/widgets\//.test(p);
 
+const widgetScriptRoute = preds.find((p) => /destination\s*===\s*'script'/.test(p) && isWidgetScoped(p));
+check('sw.js: widget script route found', !!widgetScriptRoute);
+check('sw.js: widget script route is same-origin only',
+      !!widgetScriptRoute && GUARD.test(widgetScriptRoute));
+
 const scriptRoute = preds.find((p) => /destination\s*===\s*'script'/.test(p) && !isWidgetScoped(p));
 const widgetCssRoute = preds.find((p) => /destination\s*===\s*'style'/.test(p) && isWidgetScoped(p));
 const otherCssRoute = preds.find((p) => /destination\s*===\s*'style'/.test(p) && !isWidgetScoped(p));
@@ -209,13 +214,18 @@ check('sw.js: other CSS route is same-origin only', !!otherCssRoute && GUARD.tes
 const imageRoute = preds.find((p) => /destination\s*===\s*'image'/.test(p));
 check('sw.js: image route still same-origin only', !!imageRoute && GUARD.test(imageRoute));
 
-// No blanket route may re-capture every script or style regardless of origin.
-const blanketScript = preds.some((p) => /destination\s*===\s*'script'/.test(p)
-                                        && !isWidgetScoped(p) && !GUARD.test(p));
-const blanketStyle = preds.some((p) => /destination\s*===\s*'style'/.test(p)
-                                       && !isWidgetScoped(p) && !GUARD.test(p));
-check('sw.js: no unguarded blanket script route', !blanketScript);
-check('sw.js: no unguarded blanket style route', !blanketStyle);
+// NO script/style route may lack the guard — including the widget routes, whose
+// predicates are substring matches on the URL. A cross-origin CDN path that
+// happens to contain '/widgets/' would be captured by an unguarded widget route
+// BEFORE reaching the guarded generic route, and fail opaque exactly the same
+// way (Greptile P2 on PR #1486).
+const unguarded = preds.filter((p) => /destination\s*===\s*'(script|style)'/.test(p)
+                                      && !GUARD.test(p));
+check('sw.js: EVERY script/style route carries the origin guard',
+      unguarded.length === 0);
+if (unguarded.length) {
+    unguarded.forEach((p) => console.log('    unguarded predicate: ' + p.trim().replace(/\s+/g, ' ')));
+}
 
 // Same-origin caching must be unaffected: the routes still exist and still use
 // NetworkFirst with the cacheable-response plugin.

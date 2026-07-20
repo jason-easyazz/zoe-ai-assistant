@@ -156,9 +156,13 @@ if (workbox) {
 
     // 2. JavaScript - Network First for widgets and widget-system, Cache First for other JS
     workbox.routing.registerRoute(
-        ({ request }) => {
-            // Check if it's a widget file, widget-system.js, or widget-base.js - always network first
-            return request.destination === 'script' && (
+        ({ request, url }) => {
+            // Check if it's a widget file, widget-system.js, or widget-base.js - always network first.
+            // SAME-ORIGIN ONLY: these are substring matches on the URL, so a cross-origin
+            // CDN path containing '/widgets/' (or either filename) would otherwise be
+            // captured here and fail opaque before reaching the guarded generic route below.
+            return request.destination === 'script'
+                && url.origin === self.location.origin && (
                 request.url.includes('/widgets/') ||
                 request.url.includes('widget-system.js') ||
                 request.url.includes('widget-base.js')
