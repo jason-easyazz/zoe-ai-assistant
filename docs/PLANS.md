@@ -67,6 +67,17 @@ a link to the detail + where it's up to. Mark ✅ when done so nothing lingers h
 - **Now:** audit ✅ (#774, `docs/agent-setup-audit.md`); opensrc populated ✅ (#773); **Claude Code** wired ✅ (#787 — `CLAUDE.md`+committed `.mcp.json`), **Codex** ✅ (#788 — `.codex/config.toml`), **Cursor** ✅ (#786 — fixed `.cursor/mcp.json`); **Omnigent container code-intel** ✅ (#792 committed the mounts; **applied + verified live 2026-06-26** — recreated the container, serena+codebase-memory+opensrc all resolve in-container, harnesses launch with `--dangerously-skip-permissions` so the project MCP auto-loads); **shared knowledge bundle populated** ✅ (#855 — runtime-topology/voice-pipeline/merge-and-deploy promoted from private memory into `docs/knowledge/` so the whole fleet reads the same ground-truth). **Remaining (🔨):** tool-use enforcement verification across agents (AGENTS.md start-of-task checklist landed; confirm each harness honours it).
 
 ### Flue convergence — recreate the harness on Flue, then retire Multica/Hermes/OpenClaw
+
+> **⛔ STATUS 2026-07-20 — read before acting on this section.** Multica is **not
+> a failed system awaiting retirement**: it reached true 100% hands-off
+> idea→merged-PR autonomy on 2026-06-17 (e2e8 / ZOE-5834 → PR #682 merged) and
+> was then **deliberately paused** (kill switch present since 2026-06-18). Its
+> **board is `~/.hermes/kanban.db` and its workers are the Hermes gateway**, so
+> "retire Hermes" removes the queue and executor of a working harness. Build and
+> prove a replacement board + executor **first**. Full detail in the stop blocks
+> at [`zoe-flue-integration.md`](architecture/zoe-flue-integration.md) §8.1/§8.2.
+> Separately confirmed: the 101 Hermes/OpenClaw *skills* genuinely never ran, so
+> that part of the retirement is safe.
 - **Goal:** one engine (Pi) hosted by Flue owns the brain lane + the autonomous engineering harness; Multica/Hermes/OpenClaw are retired **by recreation** — each capability is rebuilt on Flue, gate-proven, then deleted (never deleted first).
 - **Detail / executable plan:** [`docs/architecture/zoe-flue-integration.md`](architecture/zoe-flue-integration.md) — seams (§3), zero-regression gates (§4), phases (§6), and the per-capability **retirement inventory** (§8: what Multica/Hermes/OpenClaw each do today → the Flue recreation → the retire-gate).
 - **§8.1 retire-gate spec (Multica):** [`docs/architecture/multica-retirement-gates.md`](architecture/multica-retirement-gates.md) — code-verified capability inventory (poll loop, admission/dispatch, phase chain, PR closeout, worktrees, autopilots) with per-capability proof gates, rollback (Multica installed-but-idle until each gate holds), sequencing (autopilots first), and the Forbidden list.
