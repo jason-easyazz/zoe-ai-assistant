@@ -2218,11 +2218,15 @@
             }
         }
         
+        // List TYPES whose collection fetch failed (distinct from individual
+        // lists whose items failed — see tasksUnavailableLists below).
+        let listsUnavailableTypes = [];
         // Load lists from API
         async function loadLists() {
             try {
                 const listTypes = ['personal_todos', 'work_todos', 'shopping', 'bucket'];
                 const allLists = [];
+                listsUnavailableTypes = [];
                 
                 for (const listType of listTypes) {
                     try {
@@ -2230,7 +2234,11 @@
                         // items, so the task sidebar below (which reads
                         // list.items) was permanently empty even though every
                         // request returned 200. See js/common.js.
-                        const { lists } = await window.zoeFetchListsWithItems(listType);
+                        const { lists, ok } = await window.zoeFetchListsWithItems(listType);
+                        // ok:false = the collection fetch for this whole TYPE
+                        // failed. Not the same as the type having no lists —
+                        // surface it, or the sidebar renders as if complete.
+                        if (!ok) { listsUnavailableTypes.push(listType); }
                         if (Array.isArray(lists)) {
                             lists.forEach(list => {
                                 allLists.push({
@@ -2278,7 +2286,7 @@
         async function loadTasks() {
             try {
                 tasks = [];
-                tasksUnavailableLists = [];
+                tasksUnavailableLists = listsUnavailableTypes.slice();
 
                 for (const list of availableLists) {
                     if (list.items === null) {

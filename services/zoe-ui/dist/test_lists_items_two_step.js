@@ -206,6 +206,31 @@ function makeFetch(opts = {}) {
             'list names are user-authored — they must be escaped');
     });
 
+    // ——— f2) EVERY caller must consume ok:false ————————————————————
+    // Two distinct failure levels exist and both must be surfaced:
+    //   items:null → one list's items failed
+    //   ok:false   → the whole list TYPE's collection fetch failed
+    // Ignoring the second is how a total outage renders as "no tasks" /
+    // "No lists yet" — the latter actively invites duplicate lists.
+    check('all three callers consume the ok:false collection signal', () => {
+        const tasksJs = fs.readFileSync(path.join(__dirname, 'js', 'widgets', 'core', 'tasks.js'), 'utf8');
+        const cal = fs.readFileSync(path.join(__dirname, 'calendar.html'), 'utf8');
+        const lists = fs.readFileSync(path.join(__dirname, 'lists.html'), 'utf8');
+
+        assert.ok(/const \{ lists, ok \}/.test(tasksJs) && /if \(!ok\)/.test(tasksJs),
+            'tasks.js must destructure and act on ok');
+        assert.ok(/const \{ lists, ok \}/.test(cal) && /if \(!ok\) \{ listsUnavailableTypes\.push/.test(cal),
+            'calendar.html must record list types whose collection fetch failed');
+        assert.ok(/\(\{ lists, ok \}, i\)/.test(lists) && /widgetsUnavailableKinds\.push/.test(lists),
+            'lists.html must record list kinds whose collection fetch failed');
+    });
+
+    check('lists.html empty state does not claim "No lists yet" after a failure', () => {
+        const lists = fs.readFileSync(path.join(__dirname, 'lists.html'), 'utf8');
+        assert.ok(/widgetsUnavailableKinds\.length[\s\S]{0,200}Couldn't load your lists/.test(lists),
+            'a failed load must say so rather than inviting the user to recreate existing lists');
+    });
+
     // ——— g) NEGATIVE CONTROL ————————————————————————————————————————
     // Prove these assertions would have caught the pre-fix code: the old
     // single-step read of the collection response yields undefined items.

@@ -2118,11 +2118,16 @@
             const widgets = await fetchExistingWidgets();
             
             if (widgets.length === 0) {
-                grid.innerHTML = '<div style="text-align: center; padding: 40px; color: #999;"><p style="font-size: 18px; margin-bottom: 8px;">No lists yet</p><p style="font-size: 14px;">Create your first list from the "Core Widgets" tab</p></div>';
+                grid.innerHTML = widgetsUnavailableKinds.length
+                    ? `<div style="text-align: center; padding: 40px; color: #999;"><p style="font-size: 18px; margin-bottom: 8px;">Couldn't load your lists</p><p style="font-size: 14px;">${widgetsUnavailableKinds.map(k => window.zoeEscapeHtml(k)).join(', ')} unavailable — check back in a moment</p></div>`
+                    : '<div style="text-align: center; padding: 40px; color: #999;"><p style="font-size: 18px; margin-bottom: 8px;">No lists yet</p><p style="font-size: 14px;">Create your first list from the "Core Widgets" tab</p></div>';
                 return;
             }
             
-            let html = '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px;">';
+            let html = widgetsUnavailableKinds.length
+                ? `<div style="padding:8px 4px;color:#999;font-size:13px;font-style:italic;">Couldn't load: ${widgetsUnavailableKinds.map(k => window.zoeEscapeHtml(k)).join(', ')}</div>`
+                : '';
+            html += '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px;">';
             html += widgets.map(widget => `
                 <div class="widget-item" onclick="addExistingWidget('${widget.type}', ${widget.id})">
                     <div class="widget-icon">${widget.icon}</div>
@@ -2136,8 +2141,13 @@
         }
         
         // Fetch existing widgets (projects, lists, etc.)
+        // List types whose collection fetch failed. Tracked because
+        // "couldn't load" must never render as "No lists yet" — that
+        // invites the user to recreate lists they already have.
+        let widgetsUnavailableKinds = [];
         async function fetchExistingWidgets() {
             const widgets = [];
+            widgetsUnavailableKinds = [];
             
             try {
                 // Fetch existing projects
@@ -2171,8 +2181,12 @@
                     LIST_KINDS.map(kind => window.zoeFetchListsWithItems(kind.type))
                 );
 
-                kindResults.forEach(({ lists }, i) => {
+                kindResults.forEach(({ lists, ok }, i) => {
                     const kind = LIST_KINDS[i];
+                    // ok:false means the COLLECTION fetch failed for this type —
+                    // not that the type has no lists. Skipping it silently would
+                    // hide a whole category behind an empty-looking picker.
+                    if (!ok) { widgetsUnavailableKinds.push(kind.fallback); return; }
                     lists.forEach(list => {
                         widgets.push({
                             type: kind.widget,
