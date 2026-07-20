@@ -490,6 +490,31 @@ function zoeListCountLabel(list) {
 }
 window.zoeListCountLabel = zoeListCountLabel;
 
+/**
+ * Desktop pages no longer load touch-ui-executor.js, which registered the browser
+ * as a physical panel and asked the service worker to poll
+ * /api/ui/actions/pending every 5s (sw.js:552). That SW poll OUTLIVES the page,
+ * so a browser that visited a desktop page before this change keeps polling with
+ * nobody left to stop it. Tell the SW to stop, once, on any non-/touch/ page.
+ */
+(function stopStrayPanelPoll() {
+    try {
+        if (location.pathname.startsWith('/touch/')) return;   // the panel legitimately polls
+        if (!('serviceWorker' in navigator)) return;
+        navigator.serviceWorker.ready
+            .then((reg) => {
+                // During an SW update reg.active can be the NEWLY activated worker
+                // while navigator.serviceWorker.controller is still the old one --
+                // and the old one owns the running poll timer. Message both, so the
+                // stale poll actually stops instead of waiting to be retired.
+                const targets = [navigator.serviceWorker.controller, reg && reg.active]
+                    .filter((sw, i, arr) => sw && arr.indexOf(sw) === i);
+                targets.forEach((sw) => sw.postMessage({ type: 'STOP_PANEL_POLL' }));
+            })
+            .catch(() => {});
+    } catch (_) { /* never let cleanup break page boot */ }
+})();
+
 // Manual test function for debugging (available in console)
 window.testApiConnection = async function() {
     console.log('=== API Connection Test ===');
