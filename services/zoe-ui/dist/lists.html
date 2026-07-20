@@ -2362,122 +2362,13 @@
     <!-- Mini Player for persistent music playback -->
     <script src="js/mini-player.js"></script>
     <!-- Touch panel action executor — allows Zoe to navigate/control this page remotely -->
-    <script src="/js/touch-ui-executor.js?v=20260405">
-
-        // Navigation helper functions
-        function openMoreOverlay() {
-            document.getElementById('moreOverlay').classList.add('active');
-        }
-        
-        function closeMoreOverlay() {
-            document.getElementById('moreOverlay').classList.remove('active');
-        }
-        
-        function navigateToPage(page) {
-            window.location.href = page;
-        }
-        
-        function openNotifications() {
-            document.getElementById('notificationsPanel').classList.add('open');
-            loadNotifications();
-            const notificationBtn = document.querySelector('.notifications-btn');
-            if (notificationBtn) notificationBtn.classList.remove('has-notifications');
-        }
-        
-        function closeNotifications() {
-            document.getElementById('notificationsPanel').classList.remove('open');
-        }
-        
-        async function loadNotifications() {
-            try {
-                const response = await apiRequest('/reminders/notifications/pending');
-                const notifications = response.notifications || [];
-                displayNotifications(notifications);
-            } catch (error) {
-                console.error('Failed to load notifications:', error);
-                displayNotifications([]);
-            }
-        }
-        
-        function displayNotifications(notifications) {
-            const notificationsContent = document.getElementById('notificationsContent');
-            const notificationBtn = document.querySelector('.notifications-btn');
-            
-            if (notifications.length > 0 && notificationBtn) {
-                notificationBtn.classList.add('has-notifications');
-            } else if (notificationBtn) {
-                notificationBtn.classList.remove('has-notifications');
-            }
-            
-            if (notifications.length === 0) {
-                notificationsContent.innerHTML = '<div class="no-notifications">No notifications</div>';
-                return;
-            }
-            
-            notificationsContent.innerHTML = notifications.map(notification => `
-                <div class="notification-item ${notification.is_delivered ? '' : 'unread'}" 
-                     onclick="handleNotificationClick(${notification.id})">
-                    <div class="notification-title">${notification.message}</div>
-                    <div class="notification-meta">
-                        <span class="notification-time">${formatNotificationTime(notification.notification_time)}</span>
-                    </div>
-                </div>
-            `).join('');
-        }
-        
-        function formatNotificationTime(timeStr) {
-            const date = new Date(timeStr);
-            const now = new Date();
-            const diff = now - date;
-            const minutes = Math.floor(diff / 60000);
-            const hours = Math.floor(minutes / 60);
-            const days = Math.floor(hours / 24);
-            
-            if (minutes < 1) return 'Just now';
-            if (minutes < 60) return `${minutes}m ago`;
-            if (hours < 24) return `${hours}h ago`;
-            return `${days}d ago`;
-        }
-        
-        async function handleNotificationClick(notificationId) {
-            try {
-                await apiRequest(`/reminders/notifications/${notificationId}/deliver`, {
-                    method: 'POST'
-                });
-                loadNotifications();
-            } catch (error) {
-                console.error('Failed to acknowledge notification:', error);
-            }
-            closeNotifications();
-        }
-        
-        // Update time/date display
-        function updateTimeDate() {
-            const now = new Date();
-            const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            const dateString = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
-            
-            const timeElement = document.getElementById('currentTime');
-            const dateElement = document.getElementById('currentDate');
-            
-            if (timeElement) timeElement.textContent = timeString;
-            if (dateElement) dateElement.textContent = dateString;
-        }
-        
-        // Initialize time/date updates
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', function() {
-                updateTimeDate();
-                setInterval(updateTimeDate, 60000);
-                loadNotifications();
-            });
-        } else {
-            updateTimeDate();
-            setInterval(updateTimeDate, 60000);
-            loadNotifications();
-        }
-
-    </script>
+    <!-- Removed: this <script src="/js/touch-ui-executor.js"> had NO same-line
+         close, so the 114 lines of inline JS that followed were swallowed and
+         never executed (openMoreOverlay/navigateToPage/loadNotifications/...).
+         The block also carried an unescaped notification-message innerHTML
+         sink, so ACTIVATING it would have shipped a live XSS. The shared
+         notifications-panel.js + common.js already cover this ground, and the
+         executor itself does not belong on a desktop page. -->
 </body>
 </html>
 
