@@ -5535,9 +5535,12 @@
                     r.best ? '<span class="pt-badge best">Best</span>' : '',
                     r.sale ? '<span class="pt-badge sale">Sale</span>' : '',
                 ].join('');
+                // Same defect as renderActionMenu had: JSON.stringify output opens
+                // with a double quote, terminating the double-quoted attribute,
+                // and sendMessage() takes no arguments anyway. Delegated below.
                 const action = r.url
                     ? `<a href="${escapeHtml(r.url)}" target="_blank" class="pt-action" rel="noopener">View</a>`
-                    : (r.action ? `<button class="pt-action" onclick="sendMessage(${JSON.stringify(r.action)})">${escapeHtml(r.action_label||'Select')}</button>` : '');
+                    : (r.action ? `<button class="pt-action" data-pt-action="${escapeHtml(r.action)}">${escapeHtml(r.action_label||'Select')}</button>` : '');
                 return `<tr>
                     <td>${escapeHtml(r.store||r.name||'')}</td>
                     <td>${escapeHtml(r.product||r.desc||'')}</td>
@@ -5556,6 +5559,10 @@
                     <tbody>${rows}</tbody>
                 </table>
             `;
+            container.addEventListener('click', (ev) => {
+                const btn = ev.target.closest('button.pt-action[data-pt-action]');
+                if (btn) tryPrompt(btn.dataset.ptAction);
+            });
         }
 
         function renderMapEmbed(container, props) {
@@ -5623,10 +5630,15 @@
 
         function renderActionMenu(container, props) {
             container.className += ' action-menu-component';
-            const options = (props.options || []).map(o => {
-                const msg = JSON.stringify(o.message || o.label || '');
-                return `<div class="am-option" onclick="sendMessage(${msg})">
-                    <span class="am-icon">${o.icon || '▶️'}</span>
+            // Was: onclick="sendMessage(${JSON.stringify(...)})" — doubly broken.
+            // JSON.stringify output opens with a double quote, which terminated
+            // the double-quoted attribute (SyntaxError on every option), and
+            // sendMessage() takes NO arguments anyway (chat.html:4063) — it
+            // reads #chatInput. Use the delegated data-attribute pattern, so no
+            // user text is ever interpolated into executable attribute context.
+            const options = (props.options || []).map((o, i) => {
+                return `<div class="am-option" data-am-index="${i}">
+                    <span class="am-icon">${escapeHtml(o.icon || '▶️')}</span>
                     <span class="am-label">${escapeHtml(o.label || '')}</span>
                 </div>`;
             }).join('');
@@ -5634,6 +5646,15 @@
                 ${props.prompt ? `<div class="am-prompt">${escapeHtml(props.prompt)}</div>` : ''}
                 <div class="am-options">${options}</div>
             `;
+            // Index back into the original props, so the message text never
+            // round-trips through the DOM.
+            container.addEventListener('click', (ev) => {
+                const opt = ev.target.closest('.am-option[data-am-index]');
+                if (!opt) return;
+                const o = (props.options || [])[Number(opt.dataset.amIndex)];
+                if (!o) return;
+                tryPrompt(o.message || o.label || '');
+            });
         }
 
         function renderDataGrid(container, props) {
@@ -6786,12 +6807,30 @@
                     btn.textContent = '✅ Added!';
                     
                 } else if (actionType === 'add_to_list') {
-                    await apiRequest(`/api/lists/tasks?user_id=${userId}`, {
+                    // Was: POST /api/lists/tasks {text,list_name,priority}.
+                    // That is the CREATE-LIST route (lists.py:92), whose body is
+                    // ListCreate{name,...} — so it 422'd on every click. Items go
+                    // to POST /{list_type}/{list_id}/items (lists.py:285), which
+                    // needs a list id first. Same two-step _fetchTodoItems uses.
+                    const listType = 'tasks';
+                    const listsResp = await apiRequest(`/api/lists/${listType}`);
+                    let listId = listsResp?.lists?.[0]?.id;
+                    if (!listId) {
+                        const created = await apiRequest(`/api/lists/${listType}`, {
+                            method: 'POST',
+                            body: JSON.stringify({
+                                name: data.list_name || 'Tasks',
+                                list_type: listType
+                            })
+                        });
+                        listId = created?.id || created?.list?.id;
+                        if (!listId) throw new Error('could not resolve a tasks list');
+                    }
+                    await apiRequest(`/api/lists/${listType}/${listId}/items`, {
                         method: 'POST',
                         body: JSON.stringify({
                             text: data.text,
-                            list_name: data.list_name || 'Tasks',
-                            priority: data.priority || 'medium'
+                            priority: data.priority || 'normal'
                         })
                     });
                     btn.textContent = '✅ Added!';
@@ -7491,6 +7530,17 @@
                 console.warn('Proactive claim failed:', e);
             }
         }
+
+        // claimPending() dispatches 'proactive_session' and rewrites ?session=,
+        // but NOTHING listened for it and nothing read the param — so tapping a
+        // proactive notification landed you on a blank chat. Listen for it.
+        // A listener (not an init-time URL read) is required: on a cold tap the
+        // claim POST is still in flight when init() runs, and on a warm tab
+        // init() never runs again.
+        window.addEventListener('proactive_session', (ev) => {
+            const sid = ev.detail && ev.detail.session_id;
+            if (sid) loadSessionMessages(sid);
+        });
 
         // Handle cold-start tap.
         const params = new URLSearchParams(window.location.search);
