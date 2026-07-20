@@ -18,6 +18,31 @@ jobs:
       cancel-in-progress: false
 
     steps:
+      # MEMORY-HEADROOM GATE (self-hosted only — same Jetson as the live
+      # llama-server brain; unified memory means cgroup guards don't cover GPU
+      # allocations, and a CI memory burst has crash-looped the brain before —
+      # verified 2026-07-19). This job runs genuinely heavy steps on the box
+      # (docker compose --build for zoe-auth, npm ci + build for the Flue
+      # sidecars), so gate it the same way as self-hosted-tests.yml.
+      # Threshold 1800MB: the brain died when transients pushed availMB below
+      # ~1-1.5GB; 1800MB keeps clear of that kill zone with margin while being
+      # a no-op instant pass in the normal case (box idles with several GB free).
+      - name: Wait for memory headroom (protect the live brain)
+        timeout-minutes: 10
+        run: |
+          THRESHOLD_MB=1800
+          for attempt in $(seq 1 40); do
+            AVAIL_MB="$(free -m | awk '/Mem:/{print $7}')"
+            if [ "${AVAIL_MB}" -ge "${THRESHOLD_MB}" ]; then
+              echo "Memory headroom OK: ${AVAIL_MB}MB available (>= ${THRESHOLD_MB}MB)."
+              exit 0
+            fi
+            echo "Waiting for memory headroom: ${AVAIL_MB}MB available (< ${THRESHOLD_MB}MB); retry in 15s (${attempt}/40)."
+            sleep 15
+          done
+          echo "::error::Jetson is memory-starved: ${AVAIL_MB}MB available after ~10min, need >= ${THRESHOLD_MB}MB. Refusing to deploy next to the live brain under memory pressure (unified memory — a CI burst here has crash-looped llama-server before). Operator: free memory on the box (check the brain's RSS, stray pytest/chromium, VmSwap of the :8000 pid), then re-run the deploy."
+          exit 1
+
       - name: Pull latest main
         env:
           GITHUB_TOKEN: ${{ github.token }}
