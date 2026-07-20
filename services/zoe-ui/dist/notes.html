@@ -630,8 +630,12 @@
         })();
 
         /* ── Notes logic ── */
-        function escHtml(str) {
-            return (str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        /* Notes are family-visible across users, so every note field is untrusted
+           input on this page. Renderers below build DOM nodes (textContent +
+           addEventListener) instead of concatenating HTML strings — no note data
+           ever reaches an on* attribute or innerHTML. */
+        function safeNoteColor(value) {
+            return /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(String(value || '')) ? value : '#7B61FF';
         }
         function hashStr(s) {
             let h = 0; for (let i = 0; i < s.length; i++) h = (Math.imul(31,h)+s.charCodeAt(i))|0; return Math.abs(h);
@@ -685,27 +689,51 @@
             renderSidebar(filteredNotes);
         }
 
+        function makeDiv(className, text) {
+            const d = document.createElement('div');
+            d.className = className;
+            if (text !== undefined) d.textContent = text;
+            return d;
+        }
+
         function renderSidebar(list) {
             const el = document.getElementById('notesList');
+            el.replaceChildren();
             if (!list.length) {
-                el.innerHTML = `<div class="notes-empty-list">${searchQuery ? 'No results for "' + escHtml(searchQuery) + '"' : 'No notes yet. Click + to create one.'}</div>`;
+                el.appendChild(makeDiv('notes-empty-list',
+                    searchQuery ? `No results for "${searchQuery}"` : 'No notes yet. Click + to create one.'));
                 return;
             }
-            el.innerHTML = list.map(note => {
+            list.forEach(note => {
                 const color = note.color || NOTE_COLORS[hashStr(note.id || note.title || '') % NOTE_COLORS.length];
                 const date = note.updated_at || note.created_at
                     ? new Date(note.updated_at || note.created_at).toLocaleDateString(undefined, { month:'short', day:'numeric' }) : '';
-                const tags = (note.tags||[]).slice(0,2).map(t => `<span class="note-item-tag">${escHtml(t)}</span>`).join('');
-                const sel = currentNoteId === (note.id || note._id) ? ' selected' : '';
-                return `<div class="note-item${sel}" style="border-left-color:${color}" onclick='selectNote(${JSON.stringify(note)})'>
-                    <div class="note-item-title">${escHtml(note.title || 'Untitled')}</div>
-                    <div class="note-item-preview">${escHtml(note.content || '')}</div>
-                    <div class="note-item-meta">
-                        ${date ? `<span class="note-item-date">${date}</span>` : ''}
-                        ${tags}
-                    </div>
-                </div>`;
-            }).join('');
+
+                const item = makeDiv('note-item' + (currentNoteId === (note.id || note._id) ? ' selected' : ''));
+                // Assigning a CSS property cannot escape into another declaration,
+                // and the pattern check rejects anything that is not a hex colour.
+                item.style.borderLeftColor = safeNoteColor(color);
+                item.addEventListener('click', () => selectNote(note));
+
+                item.appendChild(makeDiv('note-item-title', note.title || 'Untitled'));
+                item.appendChild(makeDiv('note-item-preview', note.content || ''));
+
+                const meta = makeDiv('note-item-meta');
+                if (date) {
+                    const d = document.createElement('span');
+                    d.className = 'note-item-date';
+                    d.textContent = date;
+                    meta.appendChild(d);
+                }
+                (note.tags || []).slice(0, 2).forEach(t => {
+                    const tag = document.createElement('span');
+                    tag.className = 'note-item-tag';
+                    tag.textContent = t;
+                    meta.appendChild(tag);
+                });
+                item.appendChild(meta);
+                el.appendChild(item);
+            });
         }
 
         function selectNote(note) {
@@ -765,9 +793,20 @@
         }
         function removeTag(tag) { currentTags = currentTags.filter(t => t !== tag); updateTagsChips(); isDirty = true; }
         function updateTagsChips() {
-            document.getElementById('tagsChips').innerHTML = currentTags.map(t =>
-                `<span class="tag-chip">${escHtml(t)}<span class="tag-remove" onclick="removeTag('${escHtml(t)}')">×</span></span>`
-            ).join('');
+            const wrap = document.getElementById('tagsChips');
+            wrap.replaceChildren();
+            currentTags.forEach(t => {
+                const chip = document.createElement('span');
+                chip.className = 'tag-chip';
+                chip.textContent = t;
+                const rm = document.createElement('span');
+                rm.className = 'tag-remove';
+                rm.textContent = '×';
+                // Closure over the tag value — nothing is serialised into markup.
+                rm.addEventListener('click', () => removeTag(t));
+                chip.appendChild(rm);
+                wrap.appendChild(chip);
+            });
         }
 
         /* Color */

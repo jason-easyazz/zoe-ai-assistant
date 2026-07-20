@@ -1406,6 +1406,30 @@
     <script src="/js/notifications-panel.js"></script>
     <script src="js/ai-processor.js"></script>
     <script>
+        /* ── Render-safety helpers ──
+           Memory content, collection names and canvas tiles originate from
+           conversations, ingest and pasted data, so every field below is
+           untrusted. The renderers in this file build DOM nodes (textContent +
+           addEventListener) instead of concatenating HTML strings: untrusted
+           values never reach innerHTML and never reach an on* attribute, which
+           is what made escaping alone insufficient. */
+        function memDiv(className, text) {
+            const d = document.createElement('div');
+            d.className = className;
+            if (text !== undefined) d.textContent = text;
+            return d;
+        }
+        function sanitizeTileUrl(value) {
+            const raw = String(value ?? '').trim();
+            if (!raw) return '';
+            // Browsers ignore control chars and whitespace when parsing the
+            // scheme, so strip them before testing ("java\tscript:" bypasses).
+            const collapsed = raw.replace(/[\u0000-\u0020]/g, '').toLowerCase();
+            if (/^(javascript|vbscript|file):/.test(collapsed)) return '';
+            if (collapsed.startsWith('data:') && !/^data:image\//.test(collapsed)) return '';
+            return raw;
+        }
+
         const canvas = document.getElementById('memoryCanvas');
         const ctx = canvas.getContext('2d');
         let width, height, centerX, centerY;
@@ -1819,59 +1843,63 @@
                 tile.style.width = item.tileWidth + 'px';
             }
             
-            let contentHtml = '';
-            
+            // Header: title input + close button.
+            const header = memDiv(isPhotoTile ? 'tile-header photo-header' : 'tile-header');
+            header.addEventListener('mousedown', e => startTileDrag(e, item.id));
+            const titleInput = document.createElement('input');
+            titleInput.type = 'text';
+            titleInput.className = 'tile-title';
+            titleInput.placeholder = isPhotoTile ? 'Add a title...' : 'Untitled';
+            titleInput.value = item.name || '';
+            titleInput.addEventListener('input', () => updateTileName(item.id, titleInput.value));
+            const closeBtn = document.createElement('button');
+            closeBtn.className = 'tile-close';
+            closeBtn.textContent = '×';
+            closeBtn.addEventListener('click', () => closeTile(item.id));
+            header.append(titleInput, closeBtn);
+
+            // Body.
+            const editor = document.createElement('textarea');
+            editor.className = isPhotoTile ? 'tile-editor photo-notes' : 'tile-editor';
+            editor.placeholder = isPhotoTile ? 'Add notes (optional)...' : 'Type notes or paste a link...';
+            editor.value = item.content || '';
+            editor.addEventListener('input', () => updateTileContent(item.id, editor.value));
+
+            const content = memDiv(isPhotoTile ? 'tile-content photo-content' : 'tile-content');
             if (isPhotoTile) {
-                // Photo-centric layout
-                contentHtml = `
-                    <div class="tile-header photo-header" onmousedown="startTileDrag(event, '${item.id}')">
-                        <input type="text" class="tile-title" placeholder="Add a title..." value="${item.name || ''}" 
-                               oninput="updateTileName('${item.id}', this.value)">
-                        <button class="tile-close" onclick="closeTile('${item.id}')">×</button>
-                    </div>
-                    <div class="tile-content photo-content">
-                        <div class="tile-photo-main">
-                            <img src="${item.preview.image}" alt="Photo">
-                            <div class="tile-resize-handle" onmousedown="startImageResize(event, '${item.id}')">⇲</div>
-                        </div>
-                        <textarea class="tile-editor photo-notes" placeholder="Add notes (optional)..." 
-                                  oninput="updateTileContent('${item.id}', this.value)">${item.content || ''}</textarea>
-                    </div>
-                    <div class="tile-toolbar">
-                        <button class="tile-tool-btn" onclick="editTile('${item.id}')">✏️ Edit</button>
-                        <button class="tile-tool-btn delete" onclick="deleteTile('${item.id}')">🗑️ Delete</button>
-                    </div>
-                `;
+                const photoMain = memDiv('tile-photo-main');
+                const img = document.createElement('img');
+                // Assigning .src still honours javascript:/data: schemes, so screen them.
+                img.src = sanitizeTileUrl(item.preview.image);
+                img.alt = 'Photo';
+                const handle = memDiv('tile-resize-handle', '⇲');
+                handle.addEventListener('mousedown', e => startImageResize(e, item.id));
+                photoMain.append(img, handle);
+                content.append(photoMain, editor);
             } else {
-                // Standard text/link layout
-                const previewHtml = item.preview ? `
-                    <div class="tile-preview">
-                        <div class="tile-preview-image">${item.preview.image}</div>
-                        <div class="tile-preview-title">${item.preview.title}</div>
-                        <div class="tile-preview-description">${item.preview.description}</div>
-                        <div class="tile-preview-url">${item.preview.url}</div>
-                    </div>
-                ` : '';
-                
-                contentHtml = `
-                    <div class="tile-header" onmousedown="startTileDrag(event, '${item.id}')">
-                        <input type="text" class="tile-title" placeholder="Untitled" value="${item.name || ''}" 
-                               oninput="updateTileName('${item.id}', this.value)">
-                        <button class="tile-close" onclick="closeTile('${item.id}')">×</button>
-                    </div>
-                    <div class="tile-content">
-                        <textarea class="tile-editor" placeholder="Type notes or paste a link..." 
-                                  oninput="updateTileContent('${item.id}', this.value)">${item.content || ''}</textarea>
-                        ${previewHtml}
-                    </div>
-                    <div class="tile-toolbar">
-                        <button class="tile-tool-btn" onclick="editTile('${item.id}')">✏️ Edit</button>
-                        <button class="tile-tool-btn delete" onclick="deleteTile('${item.id}')">🗑️ Delete</button>
-                    </div>
-                `;
+                content.appendChild(editor);
+                if (item.preview) {
+                    const preview = memDiv('tile-preview');
+                    preview.appendChild(memDiv('tile-preview-image', item.preview.image || ''));
+                    preview.appendChild(memDiv('tile-preview-title', item.preview.title || ''));
+                    preview.appendChild(memDiv('tile-preview-description', item.preview.description || ''));
+                    preview.appendChild(memDiv('tile-preview-url', item.preview.url || ''));
+                    content.appendChild(preview);
+                }
             }
-            
-            tile.innerHTML = contentHtml;
+
+            // Toolbar.
+            const toolbar = memDiv('tile-toolbar');
+            [['tile-tool-btn', '✏️ Edit', () => editTile(item.id)],
+             ['tile-tool-btn delete', '🗑️ Delete', () => deleteTile(item.id)]].forEach(([cls, label, fn]) => {
+                const b = document.createElement('button');
+                b.className = cls;
+                b.textContent = label;
+                b.addEventListener('click', fn);
+                toolbar.appendChild(b);
+            });
+
+            tile.replaceChildren(header, content, toolbar);
             document.getElementById('tilesContainer').appendChild(tile);
         }
         
@@ -2265,11 +2293,16 @@
             if (currentCollection) {
                 breadcrumb.style.display = 'flex';
                 const col = collections.find(c => c.id === currentCollection);
-                breadcrumb.innerHTML = `
-                    <span class="breadcrumb-link" onclick="navigateBack()">Collections</span>
-                    <span class="breadcrumb-separator">›</span>
-                    <span>${col ? col.name : ''}</span>
-                `;
+                const link = document.createElement('span');
+                link.className = 'breadcrumb-link';
+                link.textContent = 'Collections';
+                link.addEventListener('click', () => navigateBack());
+                const sep = document.createElement('span');
+                sep.className = 'breadcrumb-separator';
+                sep.textContent = '›';
+                const name = document.createElement('span');
+                name.textContent = col ? (col.name || '') : '';
+                breadcrumb.replaceChildren(link, sep, name);
             } else {
                 breadcrumb.style.display = 'none';
             }
@@ -2304,21 +2337,35 @@
         function updateSidebar() {
             const list = document.getElementById('insightsList');
             const filters = document.getElementById('filterChips');
-            
-            filters.innerHTML = `<div class="filter-chip active">Review Queue (${reviewQueue.length})</div>`;
-            list.innerHTML = reviewQueue.map(item => `
-                <div class="person-card">
-                    <div class="person-label">${item.memory_type || 'memory'} • confidence ${(Math.round((item.confidence || 0) * 100))}%</div>
-                    <div class="person-text">${(item.content || '').slice(0, 180)}</div>
-                    <div class="quick-actions" style="margin-top:10px">
-                        <div class="quick-action-btn" onclick="reviewMemory('${item.id}','approve')"><div class="quick-action-label">Approve</div></div>
-                        <div class="quick-action-btn" onclick="reviewMemory('${item.id}','reject')"><div class="quick-action-label">Reject</div></div>
-                    </div>
-                </div>
-            `).join('');
+
+            filters.replaceChildren(memDiv('filter-chip active', `Review Queue (${reviewQueue.length})`));
+            list.replaceChildren();
+
             if (!reviewQueue.length) {
-                list.innerHTML = '<div class="person-card"><div class="person-text">No pending memories. OpenClaw-learned facts will appear here for review.</div></div>';
+                const card = memDiv('person-card');
+                card.appendChild(memDiv('person-text', 'No pending memories. OpenClaw-learned facts will appear here for review.'));
+                list.appendChild(card);
+                return;
             }
+
+            reviewQueue.forEach(item => {
+                const card = memDiv('person-card');
+                card.appendChild(memDiv('person-label',
+                    `${item.memory_type || 'memory'} • confidence ${Math.round((item.confidence || 0) * 100)}%`));
+                card.appendChild(memDiv('person-text', (item.content || '').slice(0, 180)));
+
+                const actions = memDiv('quick-actions');
+                actions.style.marginTop = '10px';
+                [['approve', 'Approve'], ['reject', 'Reject']].forEach(([action, label]) => {
+                    const btn = memDiv('quick-action-btn');
+                    btn.appendChild(memDiv('quick-action-label', label));
+                    // Closure over the id — never serialised into an on* attribute.
+                    btn.addEventListener('click', () => reviewMemory(item.id, action));
+                    actions.appendChild(btn);
+                });
+                card.appendChild(actions);
+                list.appendChild(card);
+            });
         }
         
         
@@ -2357,12 +2404,20 @@
                 const data = await apiRequest(`/api/memories/search?q=${encodeURIComponent(q)}&limit=20`);
                 const results = data.results || [];
                 const list = document.getElementById('insightsList');
-                list.innerHTML = results.map(item => `
-                    <div class="person-card">
-                        <div class="person-label">${item.source || 'local'} • score ${Number(item.score || 0).toFixed(2)}</div>
-                        <div class="person-text">${(item.content || '').slice(0, 180)}</div>
-                    </div>
-                `).join('') || '<div class="person-card"><div class="person-text">No matches.</div></div>';
+                list.replaceChildren();
+                if (!results.length) {
+                    const card = memDiv('person-card');
+                    card.appendChild(memDiv('person-text', 'No matches.'));
+                    list.appendChild(card);
+                    return;
+                }
+                results.forEach(item => {
+                    const card = memDiv('person-card');
+                    card.appendChild(memDiv('person-label',
+                        `${item.source || 'local'} • score ${Number(item.score || 0).toFixed(2)}`));
+                    card.appendChild(memDiv('person-text', (item.content || '').slice(0, 180)));
+                    list.appendChild(card);
+                });
             } catch (error) {
                 console.error('Memory search failed:', error);
             }
@@ -2448,16 +2503,30 @@
                 return;
             }
             
-            notificationsContent.innerHTML = notifications.map(notification => `
-                <div class="notification-item ${notification.is_delivered ? '' : 'unread'}" 
-                     onclick="handleNotificationClick(${notification.id})">
-                    <div class="notification-title">${notification.message}</div>
-                    <div class="notification-meta">
-                        <span class="notification-time">${new Date(notification.created_at).toLocaleTimeString()}</span>
-                        ${notification.priority ? `<span class="notification-priority" style="background: ${getPriorityColor(notification.priority)}; color: white;">${notification.priority}</span>` : ''}
-                    </div>
-                </div>
-            `).join('');
+            notificationsContent.replaceChildren();
+            notifications.forEach(notification => {
+                const row = memDiv('notification-item' + (notification.is_delivered ? '' : ' unread'));
+                row.addEventListener('click', () => handleNotificationClick(notification.id));
+                row.appendChild(memDiv('notification-title', notification.message || ''));
+
+                const meta = memDiv('notification-meta');
+                const time = document.createElement('span');
+                time.className = 'notification-time';
+                time.textContent = new Date(notification.created_at).toLocaleTimeString();
+                meta.appendChild(time);
+                if (notification.priority) {
+                    const pri = document.createElement('span');
+                    pri.className = 'notification-priority';
+                    // getPriorityColor returns a fixed palette value, and setting a
+                    // CSS property cannot escape into another declaration anyway.
+                    pri.style.background = getPriorityColor(notification.priority);
+                    pri.style.color = 'white';
+                    pri.textContent = notification.priority;
+                    meta.appendChild(pri);
+                }
+                row.appendChild(meta);
+                notificationsContent.appendChild(row);
+            });
         }
 
         function getPriorityColor(priority) {
