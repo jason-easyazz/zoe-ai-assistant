@@ -198,82 +198,76 @@ window.ZoeWebSockets = {
         }
     },
 
+    /**
+     * Keep the page's data fresh.
+     *
+     * This USED to open six per-resource WebSockets
+     * (/api/{lists,calendar,people,reminders,notes,journal}/ws/{user_id}).
+     * They never connected -- not once, for any user: the URL is built as
+     * `${endpoint}/${userId}` with no query string, while the server requires
+     * session_id from the query string or an X-Session-ID header
+     * (main.py:2501), and a browser cannot set headers on a WebSocket. Every
+     * socket was closed 1008 Unauthorized immediately.
+     *
+     * The 'fallback' handlers were meant to catch that and poll, but they were
+     * unreachable: maxReconnectAttempts defaults to 0 meaning "unlimited", so
+     * canRetry never became false and fallbackToPolling() was dead code. Net
+     * effect: ~20 failed handshakes every 10 seconds and NO data-change signal
+     * at all -- ask Zoe to add an event by voice and the page stayed stale
+     * until a manual reload.
+     *
+     * So: poll, which is what the estate does (touch/home.html opens zero
+     * WebSockets -- 15s clock, 30s HA, 5s music, 600s weather).
+     *
+     * initPush() below is UNAFFECTED: different socket (/ws/push), it does send
+     * session_id, and it works.
+     */
+    _pollTimer: null,
+    _pollMs: 30000,
+    _visibilityBound: false,
+
+    _refreshAll() {
+        // Only handlers whose page-level function exists actually fire, so this
+        // is safe to call from any page that loads this module.
+        try {
+            if (typeof loadEvents === 'function') loadEvents();
+            if (typeof loadPeople === 'function') loadPeople();
+            if (typeof loadReminders === 'function') loadReminders();
+            if (typeof loadNotes === 'function') loadNotes();
+            if (typeof loadJournalEntries === 'function') loadJournalEntries();
+            else if (typeof loadEntries === 'function') loadEntries();
+            this._refreshWidget('events');
+            this._refreshWidget('reminders');
+            if (typeof WidgetManager !== 'undefined' && WidgetManager.updateAll) {
+                WidgetManager.updateAll();
+            }
+        } catch (err) {
+            console.warn('resource refresh failed:', err);
+        }
+    },
+
     init(userId) {
-        // --- Lists ---
-        this.lists = new ZoeWebSocketSync('/api/lists/ws', userId);
-        ['item_added', 'item_removed', 'item_completed'].forEach(evt => {
-            this.lists.on(evt, (data) => {
-                this._refreshListWidget(data.list_type || data?.data?.list_type || 'shopping');
-            });
-        });
-        ['list_created', 'list_updated'].forEach(evt => {
-            this.lists.on(evt, () => {
-                if (typeof WidgetManager !== 'undefined' && WidgetManager.updateAll) WidgetManager.updateAll();
-            });
-        });
-        this.lists.on('fallback', () => {
-            setInterval(() => {
-                if (typeof WidgetManager !== 'undefined' && WidgetManager.updateAll) WidgetManager.updateAll();
-            }, 5000);
-        });
-        this.lists.connect();
+        this.userId = userId;
+        if (this._pollTimer) return;   // idempotent: some pages call init() twice
 
-        // --- Calendar ---
-        this.calendar = new ZoeWebSocketSync('/api/calendar/ws', userId);
-        ['event_created', 'event_updated', 'event_deleted'].forEach(evt => {
-            this.calendar.on(evt, () => {
-                if (typeof loadEvents === 'function') loadEvents();
-                this._refreshWidget('events');
-            });
-        });
-        this.calendar.on('fallback', () => {
-            setInterval(() => {
-                if (typeof loadEvents === 'function') loadEvents();
-            }, 5000);
-        });
-        this.calendar.connect();
+        // Never poll a hidden tab: wasted requests, and on this box they compete
+        // with the voice path for the same backend.
+        this._pollTimer = setInterval(() => {
+            if (!document.hidden) this._refreshAll();
+        }, this._pollMs);
 
-        // --- People ---
-        this.people = new ZoeWebSocketSync('/api/people/ws', userId);
-        ['people:created', 'people:updated', 'people:deleted'].forEach(evt => {
-            this.people.on(evt, () => {
-                if (typeof loadPeople === 'function') loadPeople();
+        if (!this._visibilityBound) {
+            this._visibilityBound = true;
+            document.addEventListener('visibilitychange', () => {
+                if (!document.hidden) this._refreshAll();
             });
-        });
-        this.people.connect();
-
-        // --- Reminders ---
-        this.reminders = new ZoeWebSocketSync('/api/reminders/ws', userId);
-        ['reminder_created', 'reminder_updated', 'reminder_deleted',
-         'reminder_snoozed', 'reminder_acknowledged'].forEach(evt => {
-            this.reminders.on(evt, () => {
-                if (typeof loadReminders === 'function') loadReminders();
-                this._refreshWidget('reminders');
-            });
-        });
-        this.reminders.connect();
-
-        // --- Notes ---
-        this.notes = new ZoeWebSocketSync('/api/notes/ws', userId);
-        ['note_created', 'note_updated', 'note_deleted'].forEach(evt => {
-            this.notes.on(evt, () => {
-                if (typeof loadNotes === 'function') loadNotes();
-            });
-        });
-        this.notes.connect();
-
-        // --- Journal ---
-        this.journal = new ZoeWebSocketSync('/api/journal/ws', userId);
-        ['entry_created', 'entry_updated', 'entry_deleted'].forEach(evt => {
-            this.journal.on(evt, () => {
-                if (typeof loadJournalEntriesInline === 'function') loadJournalEntriesInline();
-                else if (typeof loadEntries === 'function') loadEntries();
-            });
-        });
-        this.journal.connect();
+        }
     },
 
     disconnect() {
+        if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
+        // init() no longer creates these, but a caller may still hold a handle
+        // from a page load that predates this change.
         ['lists', 'calendar', 'people', 'reminders', 'notes', 'journal'].forEach(name => {
             if (this[name]) this[name].disconnect();
         });
