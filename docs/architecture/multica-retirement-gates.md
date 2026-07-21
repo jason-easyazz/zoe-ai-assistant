@@ -1,5 +1,29 @@
 # Multica retirement gates — the §8.1 executable packet
 
+> ## ⛔ STATUS 2026-07-20 — DO NOT EXECUTE THIS PACKET AS WRITTEN
+>
+> This document was written 2026-07-06 against `main @ 6891c93f`, **before** the
+> outcome was known. Since then:
+>
+> - **Multica achieved true 100% hands-off idea→merged-PR autonomy** on
+>   2026-06-17 (e2e8 / ZOE-5834 → PR #682 merged, `merge_sha 2d3edaa9`, zero
+>   operator action). Twelve harness PRs are merged in `main`.
+> - **It is PAUSED, not failed** — kill switch `~/.zoe/multica_dispatch_paused`
+>   present since 2026-06-18 20:29, board at 0 dispatchable.
+> - **Its board and workers live inside Hermes** (`~/.hermes/kanban.db`; gateway
+>   `kanban_watchers.py`), so retiring Hermes silently removes the queue and
+>   executor this packet assumes will still exist.
+>
+> The capability inventory below is still accurate and useful — it is a good map
+> of what Multica does. What is **not** valid is the framing that these
+> capabilities are awaiting retirement. Nothing here should be switched off until
+> a replacement board + executor exists and is proven, and that replacement is
+> not yet built (`labs/flue-harness-spike/` has the agent roles; the durable
+> state layer is missing).
+>
+> See the stop blocks in [`zoe-flue-integration.md`](zoe-flue-integration.md)
+> §8.1 and §8.2.
+
 > Executable retire-gate spec for
 > [`zoe-flue-integration.md`](zoe-flue-integration.md) **§8.1** (Multica —
 > board-driven engineering orchestration). Rule of the land (§6 Phase 4 / §8):

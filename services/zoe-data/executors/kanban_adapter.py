@@ -29,7 +29,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from hermes_http import hermes_bin, zoe_repo_root
+from hermes_http import hermes_bin
+from repo_paths import zoe_repo_root
 from kanban_phase_budget import (
     dead_worker_reason,
     latest_log_session,

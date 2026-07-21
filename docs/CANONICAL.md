@@ -38,6 +38,20 @@ rocks:
     loader_marker: "warm_moonshine"
   tts:
     name: "Kokoro"
+  router:
+    # A rock that is ALLOWED TO IMPROVE. What is locked is the ARCHITECTURE and
+    # the contract — not the checkpoint. The self-train loop exists to replace
+    # the checkpoint, guarded by its ratchet, so pinning a hash here would fight
+    # the design. Swapping the two-stage SHAPE is what must fail CI.
+    architecture: "two-stage"
+    stage1: "SetFit MLP shortlist"
+    stage2: "FunctionGemma-270M GBNF decode"
+    sidecar_service: "functiongemma-router.service"
+    sidecar_port: "11436"
+    flag: "ZOE_ROUTER_HEAD"
+    stage1_artifact: "services/zoe-data/models/router_head_mlp.joblib"
+    stage2_artifact_dir: "~/models/functiongemma-router"
+    checkpoint_pinned: "no — owned by the ZOE_ROUTER_SELFTRAIN ratchet"
 ```
 
 ## 🟢 Canonical live systems — the spine

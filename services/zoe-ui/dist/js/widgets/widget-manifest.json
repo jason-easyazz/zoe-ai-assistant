@@ -1,0 +1,422 @@
+{
+  "version": "1.0.0",
+  "widgets": [
+    {
+      "id": "time",
+      "name": "Time & Date",
+      "description": "Current time and date display",
+      "category": "core",
+      "path": "/js/widgets/core/time.js",
+      "defaultSize": {
+        "w": 2,
+        "h": 2
+      },
+      "minSize": {
+        "w": 2,
+        "h": 2
+      }
+    },
+    {
+      "id": "weather",
+      "name": "Weather",
+      "description": "Current weather conditions and forecast",
+      "category": "core",
+      "path": "/js/widgets/core/weather.js",
+      "defaultSize": {
+        "w": 4,
+        "h": 3
+      },
+      "minSize": {
+        "w": 3,
+        "h": 2
+      }
+    },
+    {
+      "id": "events",
+      "name": "Calendar Events",
+      "description": "Upcoming calendar events",
+      "category": "core",
+      "path": "/js/widgets/core/events.js",
+      "defaultSize": {
+        "w": 4,
+        "h": 4
+      },
+      "minSize": {
+        "w": 3,
+        "h": 3
+      }
+    },
+    {
+      "id": "tasks",
+      "name": "Tasks",
+      "description": "Task list and management",
+      "category": "core",
+      "path": "/js/widgets/core/tasks.js",
+      "defaultSize": {
+        "w": 4,
+        "h": 4
+      },
+      "minSize": {
+        "w": 3,
+        "h": 3
+      }
+    },
+    {
+      "id": "home",
+      "name": "Home Control",
+      "description": "Smart home device control",
+      "category": "core",
+      "path": "/js/widgets/core/home.js",
+      "defaultSize": {
+        "w": 4,
+        "h": 3
+      },
+      "minSize": {
+        "w": 3,
+        "h": 2
+      }
+    },
+    {
+      "id": "notes",
+      "name": "Quick Notes",
+      "description": "Quick note taking",
+      "category": "core",
+      "path": "/js/widgets/core/notes.js",
+      "defaultSize": {
+        "w": 3,
+        "h": 3
+      },
+      "minSize": {
+        "w": 2,
+        "h": 2
+      }
+    },
+    {
+      "id": "journal",
+      "name": "Journal",
+      "description": "Personal journal entries",
+      "category": "core",
+      "path": "/js/widgets/core/journal.js",
+      "defaultSize": {
+        "w": 4,
+        "h": 4
+      },
+      "minSize": {
+        "w": 3,
+        "h": 3
+      }
+    },
+    {
+      "id": "reminders",
+      "name": "Reminders",
+      "description": "Reminder notifications",
+      "category": "core",
+      "path": "/js/widgets/core/reminders.js",
+      "defaultSize": {
+        "w": 3,
+        "h": 3
+      },
+      "minSize": {
+        "w": 2,
+        "h": 2
+      },
+      "lists": true
+    },
+    {
+      "id": "shopping",
+      "name": "Shopping List",
+      "description": "Shopping list management",
+      "category": "core",
+      "path": "/js/widgets/core/shopping.js",
+      "defaultSize": {
+        "w": 3,
+        "h": 4
+      },
+      "minSize": {
+        "w": 2,
+        "h": 3
+      },
+      "lists": true
+    },
+    {
+      "id": "system",
+      "name": "System Status",
+      "description": "System information and status",
+      "category": "core",
+      "path": "/js/widgets/core/system.js",
+      "defaultSize": {
+        "w": 3,
+        "h": 2
+      },
+      "minSize": {
+        "w": 2,
+        "h": 2
+      }
+    },
+    {
+      "id": "zoe-orb",
+      "name": "Zoe AI",
+      "description": "AI assistant orb",
+      "category": "core",
+      "path": "/js/widgets/core/zoe-orb.js",
+      "defaultSize": {
+        "w": 3,
+        "h": 3
+      },
+      "minSize": {
+        "w": 2,
+        "h": 2
+      }
+    },
+    {
+      "id": "week-planner",
+      "name": "Week Planner",
+      "description": "Weekly planning view",
+      "category": "core",
+      "path": "/js/widgets/core/week-planner.js",
+      "defaultSize": {
+        "w": 6,
+        "h": 4
+      },
+      "minSize": {
+        "w": 4,
+        "h": 3
+      }
+    },
+    {
+      "id": "personal",
+      "name": "Personal",
+      "description": "Personal information widget",
+      "category": "core",
+      "path": "/js/widgets/core/personal.js",
+      "defaultSize": {
+        "w": 3,
+        "h": 3
+      },
+      "minSize": {
+        "w": 2,
+        "h": 2
+      },
+      "lists": true
+    },
+    {
+      "id": "work",
+      "name": "Work",
+      "description": "Work-related tasks and information",
+      "category": "core",
+      "path": "/js/widgets/core/work.js",
+      "defaultSize": {
+        "w": 4,
+        "h": 4
+      },
+      "minSize": {
+        "w": 3,
+        "h": 3
+      },
+      "lists": true
+    },
+    {
+      "id": "bucket",
+      "name": "Bucket List",
+      "description": "Bucket list management",
+      "category": "core",
+      "path": "/js/widgets/core/bucket.js",
+      "defaultSize": {
+        "w": 3,
+        "h": 4
+      },
+      "minSize": {
+        "w": 2,
+        "h": 3
+      },
+      "lists": true
+    },
+    {
+      "id": "dynamic-list",
+      "name": "Dynamic List",
+      "description": "Customizable dynamic list",
+      "category": "core",
+      "path": "/js/widgets/core/dynamic-list.js",
+      "defaultSize": {
+        "w": 3,
+        "h": 4
+      },
+      "minSize": {
+        "w": 2,
+        "h": 3
+      },
+      "lists": true
+    },
+    {
+      "id": "project",
+      "name": "Projects",
+      "description": "Multi-stage project management with automatic stage progression",
+      "category": "core",
+      "path": "/js/widgets/core/project.js",
+      "defaultSize": {
+        "w": 4,
+        "h": 5
+      },
+      "minSize": {
+        "w": 3,
+        "h": 4
+      },
+      "dashboard": true,
+      "lists": true
+    },
+    {
+      "id": "music",
+      "name": "Music Player",
+      "description": "YouTube Music playback with voice control",
+      "category": "core",
+      "path": "/js/widgets/core/music.js",
+      "defaultSize": {
+        "w": 4,
+        "h": 3
+      },
+      "minSize": {
+        "w": 3,
+        "h": 2
+      },
+      "dashboard": true
+    },
+    {
+      "id": "music-player",
+      "name": "Music Player (New)",
+      "description": "Advanced music player with zone control and video support",
+      "category": "music",
+      "path": "/js/widgets/music/player.js",
+      "dependencies": [
+        "/js/widgets/music/music-state.js"
+      ],
+      "defaultSize": {
+        "w": 3,
+        "h": 5
+      },
+      "minSize": {
+        "w": 2,
+        "h": 4
+      },
+      "maxSize": {
+        "w": 4,
+        "h": 6
+      },
+      "dashboard": true
+    },
+    {
+      "id": "music-library",
+      "name": "Music Library",
+      "description": "Search, queue, and recommendations in a tabbed interface",
+      "category": "music",
+      "path": "/js/widgets/music/library.js",
+      "dependencies": [
+        "/js/widgets/music/music-state.js"
+      ],
+      "defaultSize": {
+        "w": 4,
+        "h": 5
+      },
+      "minSize": {
+        "w": 3,
+        "h": 4
+      },
+      "maxSize": {
+        "w": 6,
+        "h": 8
+      },
+      "dashboard": true
+    },
+    {
+      "id": "music-search",
+      "name": "Music Search",
+      "description": "Search songs and playlists",
+      "category": "music",
+      "path": "/js/widgets/music/search.js",
+      "dependencies": [
+        "/js/widgets/music/music-state.js"
+      ],
+      "defaultSize": {
+        "w": 4,
+        "h": 5
+      },
+      "minSize": {
+        "w": 3,
+        "h": 4
+      },
+      "maxSize": {
+        "w": 6,
+        "h": 8
+      },
+      "dashboard": true
+    },
+    {
+      "id": "music-queue",
+      "name": "Queue",
+      "description": "Current playback queue with reorder/remove",
+      "category": "music",
+      "path": "/js/widgets/music/queue.js",
+      "dependencies": [
+        "/js/widgets/music/music-state.js"
+      ],
+      "defaultSize": {
+        "w": 3,
+        "h": 5
+      },
+      "minSize": {
+        "w": 2,
+        "h": 4
+      },
+      "maxSize": {
+        "w": 5,
+        "h": 8
+      },
+      "dashboard": true
+    },
+    {
+      "id": "music-playlists",
+      "name": "Playlists",
+      "description": "User playlists and YouTube playlists",
+      "category": "music",
+      "path": "/js/widgets/music/playlists.js",
+      "dependencies": [
+        "/js/widgets/music/music-state.js"
+      ],
+      "defaultSize": {
+        "w": 3,
+        "h": 5
+      },
+      "minSize": {
+        "w": 3,
+        "h": 4
+      },
+      "maxSize": {
+        "w": 6,
+        "h": 8
+      },
+      "dashboard": true
+    },
+    {
+      "id": "music-suggestions",
+      "name": "Music Suggestions",
+      "description": "Personal radio, discover, and similar tracks",
+      "category": "music",
+      "path": "/js/widgets/music/suggestions.js",
+      "dependencies": [
+        "/js/widgets/music/music-state.js"
+      ],
+      "defaultSize": {
+        "w": 4,
+        "h": 5
+      },
+      "minSize": {
+        "w": 3,
+        "h": 4
+      },
+      "maxSize": {
+        "w": 6,
+        "h": 8
+      },
+      "dashboard": true
+    }
+  ]
+}

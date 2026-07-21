@@ -917,9 +917,152 @@ async def _run_mempalace_migration_gate(get_db_ctx=None, migrate=None, flag_path
     return True
 
 
+
+
+# ── Scheduled job callables — MODULE LEVEL ON PURPOSE ────────────────────────
+#
+# APScheduler's SQLAlchemyJobStore PICKLES the callable, and a function nested
+# inside lifespan() has no importable reference, so add_job() raises:
+#
+#   "This Job cannot be serialized since the reference to its callable
+#    (<function lifespan.<locals>._run_music_discovery_batch ...>) could not be
+#    determined."
+#
+# The surrounding try/except swallowed that as a logger.warning, so
+# music_discovery_weekly NEVER registered while its flag was on (2026-07-19
+# onward) and the Zoe Discovery playlist was never refreshed.
+# router_selftrain_weekly carried the identical latent defect — correctly
+# unregistered while its flag was off, and guaranteed to fail the same silent
+# way the moment self-training was enabled.
+#
+# Keep these at module level. Both are self-contained (they capture nothing from
+# lifespan), and the jobs that always worked — music_history.observe_once,
+# ytmusic_signin.refresh_now — are module-level references for this same reason.
+
+async def _run_music_discovery_batch() -> None:
+    """Weekly digarr batch. Spawns OFF the event loop.
+
+    asyncio.create_subprocess_exec forks ON the loop thread, which in this
+    large multi-threaded process can deadlock pre-exec and freeze the whole
+    API — the 2026-06-29 outage (see services/zoe-data/AGENTS.md). This job
+    was never registered until the closure-serialization fix, so the
+    dangerous spawn had never actually run; it must not start now.
+    run_to_completion does the whole spawn+communicate+timeout+kill inside a
+    worker thread.
+    """
+    import subprocess as _sp
+    import sys as _sys
+
+    from async_subprocess import run_to_completion as _run_off_loop
+
+    _script = os.path.normpath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "..", "..", "scripts", "maintenance", "music_discovery_batch.py"))
+    try:
+        proc = await _run_off_loop([_sys.executable, _script], timeout=2400)
+    except _sp.TimeoutExpired:
+        # run_to_completion already killed the child. Force-remove the
+        # container regardless — a leaked 768MB digarr container on this
+        # memory-tight box is an incident, and the script's `finally` may not
+        # have run.
+        logger.error("music discovery batch timed out (killed); removing digarr container")
+        try:
+            await _run_off_loop(["docker", "rm", "-f", "zoe-digarr-batch"], timeout=120)
+        except Exception as _rm_exc:
+            logger.error("could not remove zoe-digarr-batch after timeout: %s", _rm_exc)
+        return
+    except Exception as _exc:
+        logger.error("music discovery batch failed to run: %s", _exc)
+        return
+
+    tail = (proc.stdout or b"").decode(errors="replace")[-2000:]
+    if proc.returncode == 0:
+        logger.info("music discovery batch ok:\n%s", tail)
+    else:
+        logger.error("music discovery batch rc=%s:\n%s", proc.returncode, tail)
+
+
+async def _run_router_selftrain() -> None:
+    import subprocess as _sp
+    import sys as _sys
+
+    from async_subprocess import run_to_completion as _run_off_loop
+
+    _script = os.path.normpath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "..", "..", "scripts", "maintenance", "router_selftrain.py"))
+    _timeout = int(os.environ.get(
+        "ZOE_ROUTER_SELFTRAIN_TIMEOUT_S", "28800"))  # 8h: CPU train is slow
+    _brain = os.environ.get("ZOE_BRAIN_UNIT", "llama-server.service")
+    _env = dict(os.environ)
+    # no login session in a scheduled job — point systemctl at the user bus
+    _env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+
+    # NOTE: every spawn here goes through async_subprocess.run_to_completion
+    # (fork+exec inside a thread pool). asyncio.create_subprocess_exec forks
+    # ON the loop thread, which in this large multi-threaded process can
+    # deadlock pre-exec and freeze the whole API — that is the 2026-06-29
+    # outage. See services/zoe-data/AGENTS.md.
+    try:
+        proc = await _run_off_loop(
+            [_sys.executable, _script], env=_env, timeout=_timeout)
+    except _sp.TimeoutExpired:
+        # The helper KILLs the child on timeout (SIGKILL — no in-process
+        # handler survives it). So a timeout can land (a) inside a training
+        # window with llama-server stopped, or (b) mid-deploy, after the
+        # served GGUF was swapped but before the new model passed its live
+        # checks — leaving the sidecar on an UNVERIFIED model.
+        # `--recover` is the idempotent cleanup for both: it ensures the
+        # brain is up and, if the on-disk deploy marker says a swap was in
+        # flight, restores the last-known-good GGUF and restarts onto it.
+        # Safe to run when nothing is broken.
+        logger.error("router self-train timed out after %ss (child killed) "
+                     "— running --recover", _timeout)
+        try:
+            _rec = await _run_off_loop(
+                [_sys.executable, _script, "--recover"],
+                env=_env, timeout=900)
+            _rtail = (_rec.stdout or b"").decode(errors="replace")[-1500:]
+            if _rec.returncode == 0:
+                logger.info("router self-train recovery ok:\n%s", _rtail)
+            else:
+                logger.error(
+                    "router self-train RECOVERY FAILED (rc=%s) — OPERATOR "
+                    "ACTION REQUIRED (brain may be down and/or the sidecar "
+                    "may be serving an unverified model):\n%s",
+                    _rec.returncode, _rtail)
+        except Exception as _rexc:
+            logger.error(
+                "router self-train RECOVERY FAILED (%s) — OPERATOR ACTION "
+                "REQUIRED: brain (%s) may be down and the sidecar may be "
+                "serving an unverified model", _rexc, _brain)
+        return
+
+    tail = (proc.stdout or b"").decode(errors="replace")[-3000:]
+    if proc.returncode == 0:
+        logger.info("router self-train ok:\n%s", tail)
+    else:
+        # rc!=0 includes an auto-rollback — loud on purpose.
+        logger.error("router self-train rc=%s:\n%s\n%s", proc.returncode, tail,
+                     (proc.stderr or b"").decode(errors="replace")[-1000:])
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _openclaw_bg_task, _digest_bg_task, _zoe_update_bg_task, _consolidation_bg_task, _runtime_health_task
+
+    # First thing at startup: without this the root logger has no handler, so
+    # every logger.info() in the service is discarded and WARNING+ falls through
+    # to logging.lastResort unformatted (hence undatable). See logging_setup.
+    #
+    # Deliberately here rather than at module import: 10+ test modules import
+    # `main`, and configuring at import time wrote test noise into the
+    # operator's real ~/.zoe-logs. uvicorn runs the lifespan before serving, so
+    # production still gets logging configured before the first request.
+    from logging_setup import configure_logging  # type: ignore[import]
+
+    configure_logging()
+
     try:
         from runtime_env import bootstrap_runtime_env  # type: ignore[import]
         from hermes_http import hermes_api_key  # type: ignore[import]
@@ -1168,41 +1311,6 @@ async def lifespan(app: FastAPI):
         try:
             from proactive.scheduler import get_scheduler as _get_aps
 
-            async def _run_music_discovery_batch() -> None:
-                import asyncio as _aio
-                import sys as _sys
-                _script = os.path.normpath(os.path.join(
-                    os.path.dirname(os.path.abspath(__file__)),
-                    "..", "..", "scripts", "maintenance", "music_discovery_batch.py"))
-                proc = await _aio.create_subprocess_exec(
-                    _sys.executable, _script,
-                    stdout=_aio.subprocess.PIPE, stderr=_aio.subprocess.STDOUT)
-                try:
-                    out, _ = await _aio.wait_for(proc.communicate(), timeout=2400)
-                except _aio.TimeoutError:
-                    # SIGTERM first so the script's `finally` can stop+remove
-                    # the digarr container; SIGKILL only if it hangs. Then
-                    # force-remove the container regardless — a leaked 768MB
-                    # container on this memory-tight box is an incident.
-                    proc.terminate()
-                    try:
-                        await _aio.wait_for(proc.communicate(), timeout=60)
-                        logger.error("music discovery batch timed out (terminated; script cleanup ran)")
-                    except _aio.TimeoutError:
-                        proc.kill()
-                        logger.error("music discovery batch timed out (killed)")
-                    _rm = await _aio.create_subprocess_exec(
-                        "docker", "rm", "-f", "zoe-digarr-batch",
-                        stdout=_aio.subprocess.DEVNULL,
-                        stderr=_aio.subprocess.DEVNULL)
-                    await _rm.wait()
-                    return
-                tail = (out or b"").decode(errors="replace")[-2000:]
-                if proc.returncode == 0:
-                    logger.info("music discovery batch ok:\n%s", tail)
-                else:
-                    logger.error("music discovery batch rc=%s:\n%s", proc.returncode, tail)
-
             _get_aps().add_job(
                 _run_music_discovery_batch,
                 trigger="cron",
@@ -1235,70 +1343,6 @@ async def lifespan(app: FastAPI):
         try:
             from proactive.scheduler import get_scheduler as _get_aps
 
-            async def _run_router_selftrain() -> None:
-                import subprocess as _sp
-                import sys as _sys
-
-                from async_subprocess import run_to_completion as _run_off_loop
-
-                _script = os.path.normpath(os.path.join(
-                    os.path.dirname(os.path.abspath(__file__)),
-                    "..", "..", "scripts", "maintenance", "router_selftrain.py"))
-                _timeout = int(os.environ.get(
-                    "ZOE_ROUTER_SELFTRAIN_TIMEOUT_S", "28800"))  # 8h: CPU train is slow
-                _brain = os.environ.get("ZOE_BRAIN_UNIT", "llama-server.service")
-                _env = dict(os.environ)
-                # no login session in a scheduled job — point systemctl at the user bus
-                _env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
-
-                # NOTE: every spawn here goes through async_subprocess.run_to_completion
-                # (fork+exec inside a thread pool). asyncio.create_subprocess_exec forks
-                # ON the loop thread, which in this large multi-threaded process can
-                # deadlock pre-exec and freeze the whole API — that is the 2026-06-29
-                # outage. See services/zoe-data/AGENTS.md.
-                try:
-                    proc = await _run_off_loop(
-                        [_sys.executable, _script], env=_env, timeout=_timeout)
-                except _sp.TimeoutExpired:
-                    # The helper KILLs the child on timeout (SIGKILL — no in-process
-                    # handler survives it). So a timeout can land (a) inside a training
-                    # window with llama-server stopped, or (b) mid-deploy, after the
-                    # served GGUF was swapped but before the new model passed its live
-                    # checks — leaving the sidecar on an UNVERIFIED model.
-                    # `--recover` is the idempotent cleanup for both: it ensures the
-                    # brain is up and, if the on-disk deploy marker says a swap was in
-                    # flight, restores the last-known-good GGUF and restarts onto it.
-                    # Safe to run when nothing is broken.
-                    logger.error("router self-train timed out after %ss (child killed) "
-                                 "— running --recover", _timeout)
-                    try:
-                        _rec = await _run_off_loop(
-                            [_sys.executable, _script, "--recover"],
-                            env=_env, timeout=900)
-                        _rtail = (_rec.stdout or b"").decode(errors="replace")[-1500:]
-                        if _rec.returncode == 0:
-                            logger.info("router self-train recovery ok:\n%s", _rtail)
-                        else:
-                            logger.error(
-                                "router self-train RECOVERY FAILED (rc=%s) — OPERATOR "
-                                "ACTION REQUIRED (brain may be down and/or the sidecar "
-                                "may be serving an unverified model):\n%s",
-                                _rec.returncode, _rtail)
-                    except Exception as _rexc:
-                        logger.error(
-                            "router self-train RECOVERY FAILED (%s) — OPERATOR ACTION "
-                            "REQUIRED: brain (%s) may be down and the sidecar may be "
-                            "serving an unverified model", _rexc, _brain)
-                    return
-
-                tail = (proc.stdout or b"").decode(errors="replace")[-3000:]
-                if proc.returncode == 0:
-                    logger.info("router self-train ok:\n%s", tail)
-                else:
-                    # rc!=0 includes an auto-rollback — loud on purpose.
-                    logger.error("router self-train rc=%s:\n%s\n%s", proc.returncode, tail,
-                                 (proc.stderr or b"").decode(errors="replace")[-1000:])
-
             _get_aps().add_job(
                 _run_router_selftrain,
                 trigger="cron",
@@ -1314,15 +1358,6 @@ async def lifespan(app: FastAPI):
                         os.environ.get("ZOE_ROUTER_SELFTRAIN_HOUR", "1"))
         except Exception as _rst_exc:
             logger.warning("Router self-train not scheduled (non-fatal): %s", _rst_exc)
-
-    # Skills filesystem watcher (live cache invalidation for peer agent cards)
-    try:
-        from skills_watcher import start_skills_watcher  # type: ignore[import]
-        _skills_observer = start_skills_watcher()
-        logger.info("Skills watcher started")
-    except Exception as _sw_exc:
-        _skills_observer = None
-        logger.warning("Skills watcher not started (non-fatal): %s", _sw_exc)
 
     # Multica board polling loop (30s interval, no-op if ZOE_MULTICA=false)
     async def _multica_poll_loop():
