@@ -50,11 +50,17 @@ async function seedTask(
     workerPid?: number;
     /** status='dispatched' only: backdate dispatched_at by this many ms. */
     dispatchedAgoMs?: number;
+    /** 'heavy' routes to the Omnigent lane. */
+    lane?: string;
+    /** Task brief forwarded to the Omnigent session. */
+    brief?: string;
   },
 ): Promise<{ id: string; workDir: string }> {
   const workDir = mkdtempSync(join(tmpdir(), 'flue-executor-e2e-'));
   const context: Record<string, unknown> = { phase: 'implement', mode: opts.mode };
   if (opts.workerPid !== undefined) context['worker_pid'] = opts.workerPid;
+  if (opts.lane !== undefined) context['lane'] = opts.lane;
+  if (opts.brief !== undefined) context['brief'] = opts.brief;
   const res = await pool.query(
     `INSERT INTO agent_task_queue
        (agent_id, issue_id, status, priority, runtime_id, work_dir, context, max_attempts,
@@ -236,6 +242,40 @@ async function main(): Promise<void> {
     `failure_reason names the death (got: ${reason3.rows[0].failure_reason})`);
   const s4 = await untilStatus(pool, cfg, state, t4.id, ['completed', 'failed'], 120_000);
   assert(s4 === 'completed', `lane freed; queued task then completed (got: ${s4})`);
+  await pool.query('TRUNCATE agent_task_queue, activity_log');
+
+  console.log('== 6. omnigent lane down -> heavy task fails loudly, with a reason ==');
+  const cfgDown = { ...cfg, omnigentBaseUrl: 'http://127.0.0.1:1' };
+  const t5 = await seedTask(pool, cfg, { mode: 'succeed', lane: 'heavy', maxAttempts: 1 });
+  const s5 = await untilStatus(pool, cfgDown, state, t5.id, ['failed', 'completed'], 60_000);
+  assert(s5 === 'failed', `heavy task failed when omnigent is down (got: ${s5})`);
+  const reason5 = (await taskRow(pool, t5.id)).failure_reason as string | null;
+  assert(/unavailable|no online host/.test(reason5 ?? ''),
+    `failure_reason names the down lane (got: ${reason5})`);
+  await pool.query('TRUNCATE agent_task_queue, activity_log');
+
+  console.log('== 7. omnigent lane LIVE: heavy synthetic ticket end-to-end ==');
+  const { omnigentHealthy } = await import('./omnigent.ts');
+  assert(await omnigentHealthy(cfg),
+    'live omnigent reachable with an online host (hard requirement on the dev box)');
+  const t6 = await seedTask(pool, cfg, {
+    mode: 'succeed', lane: 'heavy', maxAttempts: 1,
+    brief: 'Connectivity proof for the flue-executor Omnigent lane. No file or command work is required.',
+  });
+  const s6 = await untilStatus(pool, cfg, state, t6.id, ['completed', 'failed'], 360_000);
+  assert(s6 === 'completed', `heavy ticket completed via omnigent (got: ${s6})`);
+  const row6 = await taskRow(pool, t6.id);
+  assert(typeof row6.session_id === 'string' && (row6.session_id as string).length > 0,
+    'omnigent session id recorded on the queue row');
+  const result6 = row6.result as { ok?: boolean; sessionId?: string } | null;
+  assert(result6?.ok === true && result6?.sessionId === row6.session_id,
+    'result jsonb names the completing session');
+  const acts6 = await activityActions(pool, t6.id);
+  assert(
+    JSON.stringify(acts6) === JSON.stringify(['task_claimed', 'task_started', 'task_completed']),
+    `omnigent lane logged the full reasoned transition chain (got: ${acts6.join(' -> ')})`,
+  );
+  assert(await allReasonsNonEmpty(pool, t6.id), 'omnigent-lane reasons are all non-empty');
 
   await pool.end();
   console.log(failures === 0 ? '\nE2E: ALL PASS' : `\nE2E: ${failures} FAILURE(S)`);
