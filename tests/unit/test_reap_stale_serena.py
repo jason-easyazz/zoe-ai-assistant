@@ -237,3 +237,82 @@ def test_recycle_reports_systemd_failure(monkeypatch):
     monkeypatch.setattr(reaper.subprocess, "run", lambda cmd, **kw: _R())
     outcome = reaper.recycle_shared(execute=True)
     assert "FAILED" in outcome and "Unit not found" in outcome
+
+
+# --- Greptile PR #1499: three ways the recycle could silently not-work ------ #
+def _shared_proc(rss_mb):
+    return proc(cgroup=SHARED_CGROUP, rss_kb=rss_mb * 1024)
+
+
+def _run_main(monkeypatch, procs, *, run_result, argv=("--execute",)):
+    """Drive main() over a fake process list with a fake systemctl."""
+    calls = []
+
+    monkeypatch.setattr(reaper, "scan", lambda *a, **k: list(procs))
+    monkeypatch.setattr(reaper.os, "getuid", lambda: 1000)
+    monkeypatch.setattr(reaper.subprocess, "run",
+                        lambda cmd, **kw: calls.append((cmd, kw)) or run_result)
+    monkeypatch.setattr(sys, "argv", ["reap_stale_serena.py", *argv])
+    rc = reaper.main()
+    return rc, calls
+
+
+class _OK:
+    returncode = 0
+    stderr = ""
+
+
+class _Fail:
+    returncode = 1
+    stderr = "Failed to restart serena-mcp.service: Interactive authentication required."
+
+
+def test_recycle_passes_the_user_bus_env():
+    # systemctl --user needs XDG_RUNTIME_DIR; the timer has it, a hand/CI run
+    # may not, and without it the restart fails while the bloat survives.
+    seen = {}
+
+    class _Rec:
+        returncode = 0
+        stderr = ""
+
+    import types as _t
+    fake = _t.SimpleNamespace(run=lambda cmd, **kw: seen.update(kw) or _Rec())
+    orig = reaper.subprocess
+    reaper.subprocess = fake
+    try:
+        reaper.recycle_shared(execute=True)
+    finally:
+        reaper.subprocess = orig
+    assert "XDG_RUNTIME_DIR" in seen["env"]
+    assert seen["env"]["XDG_RUNTIME_DIR"] == f"/run/user/{os.getuid()}"
+
+
+def test_failed_recycle_makes_the_run_fail(monkeypatch):
+    # A failed restart must not be recorded as a healthy hourly run: the unit
+    # is still bloated and the deploy gate is still starving.
+    rc, calls = _run_main(monkeypatch, [_shared_proc(1100)], run_result=_Fail())
+    assert rc == 1, "a failed recycle must exit non-zero"
+    assert len(calls) == 1
+
+
+def test_successful_recycle_exits_zero(monkeypatch):
+    rc, _ = _run_main(monkeypatch, [_shared_proc(1100)], run_result=_OK())
+    assert rc == 0
+
+
+def test_unit_is_restarted_once_however_many_procs_share_the_cgroup(monkeypatch):
+    # One restart recycles the whole unit; restarting per-process would flap it.
+    rc, calls = _run_main(
+        monkeypatch,
+        [_shared_proc(1100), _shared_proc(1000), _shared_proc(950)],
+        run_result=_OK(),
+    )
+    assert rc == 0
+    assert len(calls) == 1, f"expected exactly one restart, got {len(calls)}"
+
+
+def test_no_recycle_flag_leaves_a_bloated_unit_alone(monkeypatch):
+    rc, calls = _run_main(monkeypatch, [_shared_proc(1100)],
+                          run_result=_OK(), argv=("--execute", "--no-recycle"))
+    assert rc == 0 and calls == []

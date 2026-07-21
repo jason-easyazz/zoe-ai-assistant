@@ -174,9 +174,16 @@ def recycle_shared(execute: bool) -> str:
     """Restart the shared unit via systemd. Never signals the process."""
     if not execute:
         return "would restart (dry run)"
+    # `systemctl --user` needs the user bus. The hourly timer inherits
+    # XDG_RUNTIME_DIR, but a hand/CI run may not — and deploy.yml already
+    # exports it explicitly for its Flue steps for exactly this reason. Without
+    # it the restart fails, the bloat survives, and the deploy gate keeps
+    # starving with the recycle path reporting that it "ran".
+    env = os.environ.copy()
+    env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
     proc = subprocess.run(
         ["systemctl", "--user", "restart", SHARED_UNIT],
-        capture_output=True, text=True,
+        capture_output=True, text=True, env=env,
     )
     if proc.returncode != 0:
         return f"restart FAILED rc={proc.returncode}: {(proc.stderr or '').strip()[:120]}"
@@ -246,6 +253,7 @@ def main() -> int:
     procs = scan()
     reaped = kept = skipped = 0
     recycled = 0
+    recycle_failed = False
     for p in sorted(procs, key=lambda x: -x.swap_kb):
         reason = classify(p, swap_mb=args.swap_mb, grace_min=args.grace_min)
         ident = (f"pid={p.pid} age={p.age_s/3600:.1f}h swap={p.swap_kb//1024}MB "
@@ -258,9 +266,17 @@ def main() -> int:
             if bloat is None:
                 kept += 1
                 print(f"KEEP  {ident} — shared unit")
+            elif recycled:
+                # Restart the UNIT once per run: several processes can share the
+                # unit cgroup, and one restart already recycles all of them.
+                # Restarting per-process would flap the service.
+                kept += 1
+                print(f"KEEP  {ident} — {bloat}, already recycled this run")
             else:
                 outcome = recycle_shared(args.execute)
                 recycled += 1
+                if "FAILED" in outcome:
+                    recycle_failed = True
                 print(f"RECYCLE {ident} — {bloat} -> {outcome}")
             continue
         if reason is None:
@@ -287,6 +303,12 @@ def main() -> int:
     # hits exactly one bucket), so the operator can verify the run at a glance.
     print(f"\n{len(procs)} serena server(s): {mode} {reaped}, kept {kept}, "
           f"skipped {skipped}, recycled {recycled}")
+    if recycle_failed:
+        # Non-zero so the hourly oneshot is recorded as FAILED. Exiting 0 here
+        # would report a healthy run while the shared unit stayed bloated and
+        # the deploy gate kept starving — the silent-success pattern.
+        print("ERROR: the shared unit could not be recycled — see the RECYCLE line above")
+        return 1
     return 0
 
 
