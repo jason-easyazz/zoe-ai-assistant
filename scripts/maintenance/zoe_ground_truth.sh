@@ -35,6 +35,10 @@ dim() { printf '  %s%s%s\n' "$C_DIM" "$1" "$C_0"; }
 PSQL() { timeout 3 docker exec zoe-database psql -U zoe -d "${1:-zoe}" -tAc "$2" 2>/dev/null; }
 DB_UP=0
 timeout 2 docker exec zoe-database psql -U zoe -d zoe -tAc 'SELECT 1' >/dev/null 2>&1 && DB_UP=1
+# Every external-daemon call is timed, so a slow systemd/D-Bus or docker daemon
+# degrades a line, never hangs the probe. timeout → empty, treated as "not
+# active"/degraded by callers. This is the "bounded on failure" contract.
+SCTL() { timeout 2 systemctl --user is-active "$1.service" 2>/dev/null; }
 
 printf '%sZOE GROUND TRUTH%s  %s  (read-only)\n' "$C_HDR" "$C_0" "$(uptime -p 2>/dev/null || true)"
 
@@ -53,7 +57,7 @@ done
 wait
 for unit in zoe-data llama-server kokoro-tts functiongemma-router flue-zoe-brain \
             flue-zoe-telegram hermes-agent openclaw-gateway serena-mcp github-runner; do
-  active=$(systemctl --user is-active "$unit.service" 2>/dev/null)
+  active=$(SCTL "$unit")
   port=${HEALTH[$unit]:-}
   if [ -n "$port" ]; then
     code=$(awk -v u="$unit" '$1==u{print $2}' "$_tmp_health" 2>/dev/null)
@@ -91,7 +95,7 @@ fi
 
 # ── Multica: its OWN product on Zoe, not a Hermes component ──────────────────
 hdr "MULTICA (own containers + own DB — verify before reasoning about it)"
-docker ps --format '{{.Names}} {{.Status}}' 2>/dev/null | grep -i multica | while read -r l; do ok "$l"; done
+timeout 3 docker ps --format '{{.Names}} {{.Status}}' 2>/dev/null | grep -i multica | while read -r l; do ok "$l"; done
 if [ "$DB_UP" != 1 ]; then dim "issue count skipped — zoe-database unreachable"; else
   mcount=$(PSQL multica "SELECT count(*) FROM issue;")
   [ -n "$mcount" ] && ok "multica DB reachable — issue rows: $mcount" || dim "multica DB not reachable"
@@ -102,7 +106,7 @@ else ok "dispatch armed (no kill switch)"; fi
 
 # ── Hermes: was paused; something may have restarted it for a test ───────────
 hdr "HERMES (doc may say paused — check the live process)"
-ha=$(systemctl --user is-active hermes-agent.service 2>/dev/null)
+ha=$(SCTL hermes-agent)
 if [ "$ha" = "active" ]; then
   ls=$(ss -tln 2>/dev/null | grep -c ':8642 ')
   bad "hermes-agent ACTIVE (listening=$ls on :8642) — if a doc says 'paused', the doc is stale"
