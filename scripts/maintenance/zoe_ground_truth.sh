@@ -32,21 +32,31 @@ PSQL() { docker exec zoe-database psql -U zoe -d "${1:-zoe}" -tAc "$2" 2>/dev/nu
 printf '%sZOE GROUND TRUTH%s  %s  (read-only)\n' "$C_HDR" "$C_0" "$(uptime -p 2>/dev/null || true)"
 
 # ── Host-native services + real health (is-active LIES; poll /health) ────────
+# Health curls run in PARALLEL with a short (2s) timeout, so this section stays
+# bounded at ~2s even when every port is down — not 4s × N serial. Localhost
+# /health answers in <100ms when up; the timeout only bites on a dead port.
 hdr "SERVICES (health-checked, not is-active)"
 declare -A HEALTH=( [zoe-data]=8000 [llama-server]=11434 [kokoro-tts]=10201
                     [functiongemma-router]=11436 [flue-zoe-brain]=3578 )
+_tmp_health=$(mktemp 2>/dev/null || echo /tmp/zgt_health.$$)
+for unit in "${!HEALTH[@]}"; do
+  ( code=$(curl -s -o /dev/null -w '%{http_code}' -m 2 "http://127.0.0.1:${HEALTH[$unit]}/health" 2>/dev/null)
+    printf '%s %s\n' "$unit" "$code" >> "$_tmp_health" ) &
+done
+wait
 for unit in zoe-data llama-server kokoro-tts functiongemma-router flue-zoe-brain \
             flue-zoe-telegram hermes-agent openclaw-gateway serena-mcp github-runner; do
   active=$(systemctl --user is-active "$unit.service" 2>/dev/null)
   port=${HEALTH[$unit]:-}
   if [ -n "$port" ]; then
-    code=$(curl -s -o /dev/null -w '%{http_code}' -m 4 "http://127.0.0.1:$port/health" 2>/dev/null)
+    code=$(awk -v u="$unit" '$1==u{print $2}' "$_tmp_health" 2>/dev/null)
     [ "$code" = "200" ] && ok "$unit  active + /health 200 (:$port)" \
-                        || bad "$unit  is-active=$active but /health=$code (:$port)"
+                        || bad "$unit  is-active=$active but /health=${code:-timeout} (:$port)"
   else
     [ "$active" = "active" ] && ok "$unit  active" || dim "$unit  $active"
   fi
 done
+rm -f "$_tmp_health" 2>/dev/null
 
 # ── Which brain actually answers — from the RUNNING process env ──────────────
 hdr "BRAIN LANE (from the running process env, not code defaults)"
