@@ -1762,9 +1762,10 @@
       t.classList.toggle('open');
     });
   }
-  // ---- "Keep playing" (∞), now on the scrub's left flank -------------------
-  // It moved out of #mTransport, so it can no longer ride that element's
-  // delegated click handler and is wired directly.
+  // ---- "Keep playing" (∞), a round button in the transport row (#1450) -----
+  // It lives inside #mTransport (before shuffle) but carries no data-a, so the
+  // transport's delegated handler — which dispatches on data-a — skips it; it is
+  // wired directly here instead.
   // MA auto-continues with similar tracks when the queue runs dry. Optimistic
   // like shuffle/repeat, but reverted on refusal — MA rejects the enable
   // unless a provider offers similar_tracks.
@@ -2339,7 +2340,10 @@
     cfApplyScale();cfClear();wireCF();wireSeek();wireVol();wireVolPop();wireKeep();
     loadMusic();_wxTick=setInterval(function(){if(_cur==='music')loadMusic();},5000);
     if(_homeTick){clearInterval(_homeTick);}_homeTick=setInterval(tickMusic,1000);
-    var t=document.getElementById('mTransport');if(t)t.addEventListener('click',function(e){var btn=e.target.closest('button');if(!btn)return;var a=btn.getAttribute('data-a');
+    var t=document.getElementById('mTransport');if(t)t.addEventListener('click',function(e){var btn=e.target.closest('button');if(!btn)return;var a=btn.getAttribute('data-a');if(!a)return;
+      // ∞ (#mDS) is a button in this row with no data-a — it has its own handler
+      // (wireKeep). Without this guard its click bubbles here and falls through to
+      // musicControl(null), POSTing a null-action /api/music/control on every tap.
       if(a==='shuffle'){musicSet('shuffle_set',!_music.shuffle);return;}
       if(a==='repeat'){var nxt={off:'all',all:'one',one:'off'}[_music.repeat||'off'];musicSet('repeat_set',nxt);return;}
       musicControl(a==='playpause'?(document.getElementById('mPP').dataset.playing==='1'?'pause':'play'):a);});
