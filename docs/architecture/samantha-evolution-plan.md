@@ -432,13 +432,14 @@ sequence W4.1 straight after W1.3. W3.3-3.5 are open, so the gate is not met. To
 argument against waiving it quietly — 124 MB available on 2026-07-22, a brain CUDA-OOM crash, and
 three deploy-gate failures out of that same pressure; W3.1/W3.2 closing did not make this box roomy.
 
-So the step after W1.3 is one of exactly two, and it is **Jason's call, not an agent's**:
-  (a) meet **W3's DoD** — which is the MEASUREMENT, not the three checkboxes: a post-reclaim
+So the step after W1.3 is one of exactly two. **DECIDED 2026-07-22 by Jason: (a).** The W3 gate
+stands; no waiver. An agent may not revisit this:
+  (a) [CHOSEN] meet **W3's DoD** — which is the MEASUREMENT, not the three checkboxes: a post-reclaim
       profile by the same methodology as `docs/knowledge/memory-pressure-profile.md`, in a new
       OKF record, showing >=2 GB actually freed. Closing W3.3-3.5 as rows without that profile
       does not open this gate (rows-closed-but-effect-unmeasured is the same silent-success
       pattern that hid the digest and logging failures); or
-  (b) an explicit, recorded operator waiver of the W3 gate for W4.1 on measured headroom.
+  (b) [NOT CHOSEN] an explicit, recorded operator waiver of the W3 gate for W4.1 on measured headroom.
 An agent must not pick (b) for itself — "confirm headroom at bake-off time" was exactly the kind of
 soft gate that gets talked past, which is how this box lost its brain twice this week.
 
