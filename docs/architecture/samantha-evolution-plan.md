@@ -240,9 +240,13 @@ is already in requirements (unimported) and its source is cached in opensrc for 
   week; measure match/false-accept rates against the fallback chain; (3) tune threshold;
   (4) let identification win over panel-binding for user resolution; PIN challenge stays as
   the escalation for sensitive scopes (recognition greets, badge-check gates).
-- **Gates:** shadow-mode numbers before acting on identity; replay-gate.
+- **Gates:** shadow-mode numbers before acting on identity; replay-gate; **a written
+  biometric retention/deletion policy before ANY enrollment is enabled** — voiceprints and
+  face embeddings are biometrics, so the policy must state a TTL or an explicit "kept until
+  deleted", and give each household member self-service deletion of their own profile.
   **DoD:** Zoe addresses Jason by name from voice alone on the panel; an unenrolled voice
-  cleanly falls back to guest.
+  cleanly falls back to guest; the retention policy is written down and the deletion path
+  works end-to-end for a non-admin member.
 - **Effort:** days (mostly product/operator). **Risk:** low in shadow mode.
 
 ### W6 — Attributed ambient capture: from "assistant with a good log" to "was in the room"
@@ -393,9 +397,13 @@ regression, ever (replay harness is the enforcement).
 - [~] **W5** speaker-ID enrollment + shadow mode + enable — **SCAFFOLDING MERGED, DARK**
   (consent-gated speaker profiles, migration `0023_speaker_consent`; face identity phase 2
   `0024_face_profiles` + `routers/face_id.py`, embeddings-only and consent-mandatory;
-  guided spoken enrollment flow). Remaining is operator work: enroll, then flag on.
-  Before enabling, write the biometric retention/deletion policy (TTL or explicit
-  "until deleted", plus household-member self-service deletion).
+  guided spoken enrollment flow). Remaining is operator work, and it is the §W5 step
+  list in full — NOT enroll-then-flip: (1) enroll, (2) **shadow mode for a week**
+  (identify + log, never act) with false-accept/false-reject measured against the
+  fallback chain, (3) tune the threshold on those numbers, (4) only then let identity
+  win over panel-binding. Skipping (2)-(3) enables biometric identification with its
+  error rates unmeasured. Blocked until the biometric retention/deletion policy in
+  §W5's Gates exists.
 - [ ] **W6** attributed ambient capture — NOT STARTED (gated on W3+W4+W5 + consent design)
 - [ ] **W7** self-evolution loop closed once — NOT STARTED
 - [ ] **W8** Telegram voice notes — NOT STARTED (after W3)
@@ -404,7 +412,11 @@ regression, ever (replay harness is the enforcement).
 
 → **W1.3 close-out: flip `ZOE_LIVEKIT_STREAM_TTS` in the lab, measure first-audio, replay-gate it** —
 the code merged 2026-07-21 (#1469, flag OFF), so what remains is the DoD, not the build —
-**plus M3/M4 measurements (packet P-W1.4, bars in §6).** W2 is **DONE and ear-verified** (2026-07-19, see §6 — including the W2.3 lesson: the kiosk browser was never a speaker; spoken delivery rides the Pi daemon's audio path via the `voice_announcements` queue). The 7:30am scheduled brief now speaks to whoever is present; watch-week running. After W1.3: **W4.1** SER bake-off (RAM allows it — voice stack unswappable per #1409, ~2 GB steady-state).
+**plus M3/M4 measurements (packet P-W1.4, bars in §6).** W2 is **DONE and ear-verified** (2026-07-19, see §6 — including the W2.3 lesson: the kiosk browser was never a speaker; spoken delivery rides the Pi daemon's audio path via the `voice_announcements` queue). The 7:30am scheduled brief now speaks to whoever is present; watch-week running. After W1.3: **W4.1** SER bake-off — but mind its OWN gate, which §W4 states as "W3 first (RAM)".
+W3.1/W3.2 (the RAM reclamation that actually blocked it) are closed, W3.3-3.5 are not, and the box
+still hit 124 MB available on 2026-07-22 (a brain CUDA-OOM crash and three deploy-gate failures came
+out of that same pressure). So: confirm live headroom at bake-off time rather than treating #1409 as
+a standing clearance.
 
 Closed en route: **W0** fully (2026-07-13 — P-F6 #1160, organic chat/Telegram capture,
 spoken-panel positive control after #1282) and **W3.1** (2026-07-19, measured: the
