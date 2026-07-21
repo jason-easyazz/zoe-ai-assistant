@@ -126,8 +126,8 @@ services/zoe-data/
 ├── main.py                      # FastAPI app - CRITICAL
 ├── database.py                  # DB path + schema - CRITICAL
 ├── auth.py                      # Session validation - CRITICAL
-├── openclaw_ws.py               # OpenClaw CLI client - CRITICAL
-├── openclaw_maintenance.py      # Version check / upgrade helpers - CRITICAL
+├── openclaw_ws.py               # OpenClaw CLI client - CRITICAL  **← RETIREMENT TARGET (2026-07-22): no longer never-delete; deletable ONLY via the gated PRs in docs/architecture/multica-executor-migration.md**
+├── openclaw_maintenance.py      # Version check / upgrade helpers - CRITICAL  **← RETIREMENT TARGET (2026-07-22): same gated-deletion contract**
 ├── intent_router.py             # Intent fast path - CRITICAL
 ├── mcp_server.py                # MCP stdio server for tools - CRITICAL
 ├── routers/
