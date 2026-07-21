@@ -87,8 +87,9 @@ current Pi extension and Flue point at.
 Zoe's capabilities (memory recall, calendar, lists, abilities) are exposed to the
 Flue brain as **tools**: start with `defineTool` HTTP wrappers over zoe-data's
 existing `/api/*` (lowest friction; this replaces today's Pi-extension HTTP
-callbacks), and promote to **MCP** (`connectMcpServer`, local **stdio**) as the
-surface matures. **MemPalace stays the system-of-record** — Flue's `db.ts`
+callbacks), and promote to **MCP** (`connectMcpServer`) as the surface matures —
+note Flue `beta.6`'s MCP transport is **streamable-http/SSE only, no stdio**
+(verified 2026-07-21; an earlier revision of this seam assumed local stdio). **MemPalace stays the system-of-record** — Flue's `db.ts`
 (`sqlite('./data/flue.db')`) holds *only* conversation/run durability, never
 business data (per Flue's own docs).
 

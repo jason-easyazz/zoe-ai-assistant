@@ -75,20 +75,38 @@ Replaces the Hermes gateway's `kanban_watchers`. Contract:
 - reap a worker whose process died (the `#685` behaviour — do not lose it)
 
 Substrate: Flue. `labs/flue-harness-spike/` already has `scout` / `verifier`
-`defineAgentProfile`s and `sandbox: local()`. The missing piece is the claim →
-spawn → report loop, not the agent roles.
+`defineAgentProfile`s and `sandbox: local()`. The missing piece was the claim →
+spawn → report loop, not the agent roles — **the core loop is built and proven
+lab-first in `labs/flue-executor/` (2026-07-21): synthetic end-to-end ticket,
+21/21 asserts, including the reason-on-every-transition write-through and the
+#685 reap.** Evidence: `labs/flue-executor/FINDINGS.md`. The lab increment runs
+the **local lane only** — per §5 decision 2 the **Omnigent spawn path must also
+ship before Phase 1 is complete**; a local-only executor does not satisfy the
+contract.
 
-**Unknowns to settle before estimating** (this is why Phase 1 is not costed
-here):
-1. Does Flue's `sandbox: local()` give a worker a writable worktree on a branch,
-   or does the harness still own `worktree_bootstrap`?
-2. Atomic claim — Multica's `agent_task_queue`, or a Zoe-side lease table?
-3. Where the (already-decided) routing RULE lives mechanically. The policy is
-   settled — Omnigent is the primary heavy lane, local 4B the light lane (§5) —
-   so this unknown is only its implementation point: a task-class field on the
-   Multica ticket, a rule in the executor's claim step, or a kanban_adapter
-   handoff attribute. A local-only Phase-1 executor does NOT satisfy the
-   contract; the Omnigent lane ships in Phase 1.
+**The three unknowns — settled 2026-07-21** (full evidence in
+`labs/flue-executor/FINDINGS.md`):
+1. **`sandbox: local()` does not manage git state at all** — it binds an agent
+   to an *existing* host directory (`packages/runtime/src/node/local.ts` is a
+   thin fs+spawn wrapper; the spike's #864 dirty-tree bug proved the same live).
+   **`worktree_bootstrap` stays authoritative**; the executor passes the task's
+   worktree path through the handoff (`work_dir`) as the worker's `cwd`.
+2. **Multica's `agent_task_queue`, no Zoe-side lease table.** The live schema
+   already has a claim-candidates partial index keyed by `runtime_id`, the full
+   status lifecycle, `attempt`/`max_attempts`/`failure_reason`, and a
+   one-pending-task-per-issue guard — and `activity_log` is in the same DB, so
+   the reason commits in the same transaction as the status flip. Claim =
+   per-runtime advisory lock + `FOR UPDATE SKIP LOCKED` (SKIP LOCKED alone
+   double-dispatches under concurrency — proven and closed in the lab). A
+   Zoe-side lease table would hide queue state from `multica-web`.
+3. The routing POLICY was already decided (§5: Omnigent = primary heavy lane,
+   local 4B = light lane); the open question was only its implementation point.
+   **Answer: a rule in the executor at claim/spawn time, keyed off the claimed
+   task's context (task-class rides the handoff)** — local lane = a Flue
+   per-agent model (config), heavy lane = an Omnigent kick (session + staged
+   brief + `omnigent run -r` — not a model swap). Claim-time routing keeps the
+   Phase-2 `kanban_adapter` change to the minimal seam swap and preserves
+   "Omnigent down → local lane still runs".
 
 ### Phase 2 — re-point `kanban_adapter`
 

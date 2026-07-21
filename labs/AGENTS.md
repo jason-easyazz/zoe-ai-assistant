@@ -72,6 +72,18 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
   operator step gated on the voice replay harness — see its README.
 - `flue-harness-spike/` — Flue autonomous-harness substrate spike (scout → implement
   → verify → openPR slice); README + RUNBOOK + FINDINGS are records, not contracts.
+- `flue-executor/` — Phase 1 of the Multica executor migration
+  (`docs/architecture/multica-executor-migration.md`): the Flue-based
+  claim → spawn → report → reap loop that will replace the Hermes gateway's
+  `kanban_watchers`. Proven 2026-07-21 against a synthetic ticket (21/21
+  asserts): per-runtime advisory-lock + SKIP LOCKED single-lane claim, real
+  `flue run phase-worker` child processes, reason-mandatory transitions written
+  through to `activity_log` atomically, dead-worker reap (#685). Runs only
+  against the scratch `multica_executor_lab` DB (config refuses the live
+  `multica` DB); the synthetic worker never opens a model session. Flue gotcha
+  on record: `src/db.ts` is a reserved filename (persistence adapter) — the lab
+  DB module is `labdb.ts`. FINDINGS.md answers the migration doc's three §3
+  unknowns; README/FINDINGS are records, not contracts.
 - `flue-zoe-brain/` — Flue-hosted Pi `Agent` on the local Gemma brain (a third
   implementation behind the `run_zoe_core` seam, per
   `docs/architecture/zoe-flue-integration.md`). Serves 21 tools (20 capability
