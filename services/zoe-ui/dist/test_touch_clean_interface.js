@@ -396,7 +396,10 @@ async function t(name, fn) {
     // right-anchored popover "overlaps" it vacuously — the same box-vs-inked
     // trap the .cfmeta note above flags. Check each card individually.
     coverBoxes.forEach((b, i) => {
-      if (!b.w || !b.h) return;
+      // A cover that collapsed to a zero-size box would skip the overlap check
+      // and pass vacuously, so assert it rendered before measuring clearance.
+      assert.ok(b.w > 0 && b.h > 0,
+        `cover ${i} rendered with an unusable ${Math.round(b.w)}x${Math.round(b.h)} box`);
       assert.ok(!overlaps(pop, b), `the open volume popover overlaps cover ${i}`);
     });
     // The favourite heart (.mfav) is deliberately NOT in the must-clear set.
@@ -406,7 +409,7 @@ async function t(name, fn) {
     // now-playing readout; occluding it during a volume adjust is the
     // operator-approved layout (the popover dismisses and the heart returns).
     for (const [what, sel] of [['#orb', '#orb'], ['#apps', '#apps'],
-      ['the QR panel', '.mqr'], ['the transport buttons', '#mTransport .pp'],
+      ['the QR panel', '.mqr'],
       ['the seek bar', '#mScrub'], ['the track title', '.mfull .mtitle'],
       ['the artist', '.mfull .martist'], ['the "now playing" kicker', '.mfull .mkick']]) {
       if (!(await page.$(sel))) continue;
@@ -415,6 +418,24 @@ async function t(name, fn) {
       if (!b.w || !b.h) continue;
       assert.ok(!overlaps(pop, b), `the open volume popover overlaps ${what}`);
     }
+    // EVERY real transport button must clear the right-edge popover — not just the
+    // centred play/pause. `#mTransport button` sweeps keep/shuffle/prev/play/next/
+    // repeat while naturally excluding the volume TILE (#mVolT is a div — the
+    // popover's own trigger, expected to sit under it) and the inert .tsp spacers,
+    // so a spacing change that slides repeat (the rightmost control) under the
+    // popover fails here instead of passing on an unmeasured button.
+    const tBtns = await page.$$eval('#mTransport button', (els) => els.map((e) => {
+      const r = e.getBoundingClientRect();
+      return { id: e.id || e.getAttribute('data-a') || '?',
+        x: r.x, y: r.y, w: r.width, h: r.height, right: r.right, bottom: r.bottom };
+    }));
+    assert.ok(tBtns.length >= 6,
+      `only ${tBtns.length} transport buttons measured — the clear-check is vacuous`);
+    tBtns.forEach((b) => {
+      assert.ok(b.w > 0 && b.h > 0,
+        `transport button ${b.id} rendered with an unusable ${Math.round(b.w)}x${Math.round(b.h)} box`);
+      assert.ok(!overlaps(pop, b), `the open volume popover overlaps transport button ${b.id}`);
+    });
     await page.close();
   });
 
