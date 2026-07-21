@@ -412,11 +412,17 @@ regression, ever (replay harness is the enforcement).
 
 → **W1.3 close-out: flip `ZOE_LIVEKIT_STREAM_TTS` in the lab, measure first-audio, replay-gate it** —
 the code merged 2026-07-21 (#1469, flag OFF), so what remains is the DoD, not the build —
-**plus M3/M4 measurements (packet P-W1.4, bars in §6).** W2 is **DONE and ear-verified** (2026-07-19, see §6 — including the W2.3 lesson: the kiosk browser was never a speaker; spoken delivery rides the Pi daemon's audio path via the `voice_announcements` queue). The 7:30am scheduled brief now speaks to whoever is present; watch-week running. After W1.3: **W4.1** SER bake-off — but mind its OWN gate, which §W4 states as "W3 first (RAM)".
-W3.1/W3.2 (the RAM reclamation that actually blocked it) are closed, W3.3-3.5 are not, and the box
-still hit 124 MB available on 2026-07-22 (a brain CUDA-OOM crash and three deploy-gate failures came
-out of that same pressure). So: confirm live headroom at bake-off time rather than treating #1409 as
-a standing clearance.
+**plus M3/M4 measurements (packet P-W1.4, bars in §6).** W2 is **DONE and ear-verified** (2026-07-19, see §6 — including the W2.3 lesson: the kiosk browser was never a speaker; spoken delivery rides the Pi daemon's audio path via the `voice_announcements` queue). The 7:30am scheduled brief now speaks to whoever is present; watch-week running. After W1.3, **W4.1 is BLOCKED, not next.** This plan contradicts itself here and the contradiction
+is now resolved in favour of the gate: §W4 states W4.1's gate as "W3 first (RAM)", while §7 used to
+sequence W4.1 straight after W1.3. W3.3-3.5 are open, so the gate is not met. Today's box is the
+argument against waiving it quietly — 124 MB available on 2026-07-22, a brain CUDA-OOM crash, and
+three deploy-gate failures out of that same pressure; W3.1/W3.2 closing did not make this box roomy.
+
+So the step after W1.3 is one of exactly two, and it is **Jason's call, not an agent's**:
+  (a) close **W3.3-3.5** (reap generalization, zram rebalance, harness fence-out), then W4.1; or
+  (b) an explicit, recorded operator waiver of the W3 gate for W4.1 on measured headroom.
+An agent must not pick (b) for itself — "confirm headroom at bake-off time" was exactly the kind of
+soft gate that gets talked past, which is how this box lost its brain twice this week.
 
 Closed en route: **W0** fully (2026-07-13 — P-F6 #1160, organic chat/Telegram capture,
 spoken-panel positive control after #1282) and **W3.1** (2026-07-19, measured: the
