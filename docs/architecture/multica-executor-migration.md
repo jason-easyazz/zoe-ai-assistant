@@ -91,12 +91,16 @@ Swap the dispatch target from the `hermes kanban` CLI to the Phase-1 executor.
 Keep every phase, gate and deterministic override untouched. Prove on ≥3 real
 tickets end-to-end before Phase 3.
 
-### Phase 3 — Omnigent as a second executor
+### Phase 3 — (superseded by §5 decision 2: Omnigent is PRIMARY from day one)
 
-`zoe-omnigent` (`:6767`) already has `/home/zoe/assistant` mounted rw and `gh`
-credentials. Register it alongside the Flue executor and let Multica route by
-task class — heavy/multi-file work to Omnigent, small work local. Additive: if
-Omnigent is down, the local lane still runs.
+Per the operator decision, Omnigent is not a deferred "second executor" — the
+Phase-1 executor's worker-routing contract includes the Omnigent lane from the
+start: heavy/multi-file implement work routes to `zoe-omnigent` (`:6767`, repo
+mounted rw, `gh` creds), light work to the local 4B, and the deterministic
+harness gates keep either worker honest. What remains as "Phase 3" is only
+hardening the routing policy (task-class rules, Omnigent-down fallback to the
+local lane) once Phase 2 has real tickets flowing. If Omnigent is down, the
+local lane still runs — that property is non-negotiable.
 
 ### Phase 4 — retire Hermes
 

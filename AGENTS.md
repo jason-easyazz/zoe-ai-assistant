@@ -116,7 +116,7 @@ Local Zoe Hermes engineering skills live under `~/.hermes/skills`, including `zo
 
 The `agentic-engineering-workflow` and `grep-loop-review-workflow` names are kept as compatibility entrypoints for the Micky-style workflow pack, but they map onto Zoe's Hermes-first codebase-memory/opensrc/Greptile process rather than introducing a second parallel system.
 
-OpenClaw remains installed and available as a future/manual fallback. Do not route ordinary coding, planning, review, board work, browser work, or background work to OpenClaw by default. Zoe's Multica-first engineering driver owns workflow state and phase advancement; Hermes executes the one ready phase unless the user explicitly asks to use OpenClaw.
+OpenClaw is **being fully retired** (operator decision 2026-07-22, recorded in `docs/architecture/multica-executor-migration.md` §5): do not route ANY work to it, do not extend it, and its runtime + builder intents are to be deleted via gated PRs (its 31 workspace skills never executed once — verified; backups live in `docs/knowledge/operator-skills/`). Capabilities are rebuilt on Pi/Flue when actually needed, referencing the public Agent-Skills ecosystem. Zoe's Multica-first engineering driver owns workflow state and phase advancement; execution moves to the Flue executor + Omnigent per the migration plan.
 
 ## Branching policy
 
