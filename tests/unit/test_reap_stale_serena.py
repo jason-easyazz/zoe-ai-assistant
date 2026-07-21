@@ -159,3 +159,81 @@ def test_reap_bails_on_pid_reuse(monkeypatch):
 def test_still_serena_false_for_dead_pid():
     # A pid that cannot exist must classify as not-serena (never signalled).
     assert reaper._still_serena(2**31 - 1) is False
+
+
+# --------------------------------------------------------------------------- #
+# Recycle policy — the SHARED unit only, and never a kill.
+#
+# Why these exist: the shared server is exempt from both kill rules, so nothing
+# bounded its growth. Its caches are never evicted (~1 GB/day, in RSS not swap,
+# so the COLD rule is blind to it) and that creep starved the deploy workflow's
+# memory gate three runs in a row on 2026-07-21.
+# --------------------------------------------------------------------------- #
+RECYCLE_DEFAULTS = dict(shared_rss_mb=900)
+
+
+def test_bloated_shared_server_is_recycled():
+    p = proc(cgroup=SHARED_CGROUP, rss_kb=1_100_000)
+    reason = reaper.classify_shared(p, **RECYCLE_DEFAULTS)
+    assert reason is not None and "bloated" in reason
+
+
+def test_normal_shared_server_is_left_alone():
+    # A freshly restarted server sits ~100 MB; a working cache must not trip it.
+    p = proc(cgroup=SHARED_CGROUP, rss_kb=400_000)
+    assert reaper.classify_shared(p, **RECYCLE_DEFAULTS) is None
+
+
+def test_recycle_threshold_is_exclusive():
+    p = proc(cgroup=SHARED_CGROUP, rss_kb=900 * 1024)
+    assert reaper.classify_shared(p, **RECYCLE_DEFAULTS) is None
+    p = proc(cgroup=SHARED_CGROUP, rss_kb=900 * 1024 + 1)
+    assert reaper.classify_shared(p, **RECYCLE_DEFAULTS) is not None
+
+
+def test_per_session_instance_is_never_recycled():
+    # Strays are the KILL path's business; recycling restarts the shared UNIT,
+    # which would be the wrong action entirely for a session-owned process.
+    p = proc(rss_kb=4_000_000)
+    assert reaper.classify_shared(p, **RECYCLE_DEFAULTS) is None
+
+
+def test_bloated_shared_server_is_still_never_KILLED():
+    # The recycle path must not have weakened the kill exemption: even huge and
+    # fully swapped, the shared unit is never signalled.
+    p = proc(cgroup=SHARED_CGROUP, rss_kb=4_000_000, swap_kb=4_500_000, ppid=1)
+    assert reaper.classify(p, **DEFAULTS) is None
+
+
+def test_recycle_restarts_the_unit_via_systemd_not_signals(monkeypatch):
+    calls = []
+
+    class _R:
+        returncode = 0
+        stderr = ""
+
+    monkeypatch.setattr(reaper.subprocess, "run",
+                        lambda cmd, **kw: calls.append(cmd) or _R())
+    killed = []
+    monkeypatch.setattr(reaper.os, "kill", lambda *a: killed.append(a))
+
+    assert reaper.recycle_shared(execute=True) == "restarted"
+    assert calls == [["systemctl", "--user", "restart", "serena-mcp.service"]]
+    assert killed == [], "recycle must never signal the process directly"
+
+
+def test_recycle_dry_run_touches_nothing(monkeypatch):
+    calls = []
+    monkeypatch.setattr(reaper.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+    assert "would restart" in reaper.recycle_shared(execute=False)
+    assert calls == []
+
+
+def test_recycle_reports_systemd_failure(monkeypatch):
+    class _R:
+        returncode = 1
+        stderr = "Failed to restart serena-mcp.service: Unit not found."
+
+    monkeypatch.setattr(reaper.subprocess, "run", lambda cmd, **kw: _R())
+    outcome = reaper.recycle_shared(execute=True)
+    assert "FAILED" in outcome and "Unit not found" in outcome
