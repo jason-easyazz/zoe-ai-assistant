@@ -124,6 +124,9 @@ existence. What must be true before Hermes is retired:
       piece §8.2 is really about
 - [ ] An executor runs phase workers without the Hermes gateway (Phase 1)
 - [ ] Both proven on ≥3 real tickets end to end (Phase 2)
+- [ ] **The Omnigent lane proven too**: at least one heavy ticket routed to and
+      completed via Omnigent under the Phase-1 routing rule — a local-only
+      executor does NOT satisfy this gate (§5 decision 2)
 - [ ] Operator sign-off naming the `hermes-agent.service` row specifically
 
 Retiring Hermes on the strength of "Multica already exists" would remove the
