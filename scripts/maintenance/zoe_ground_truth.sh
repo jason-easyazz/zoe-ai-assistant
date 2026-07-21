@@ -27,7 +27,9 @@ ok()  { printf '  %s✓%s %s\n' "$C_OK" "$C_0" "$1"; }
 bad() { printf '  %s✗ %s%s\n' "$C_BAD" "$1" "$C_0"; }
 dim() { printf '  %s%s%s\n' "$C_DIM" "$1" "$C_0"; }
 
-PSQL() { docker exec zoe-database psql -U zoe -d "${1:-zoe}" -tAc "$2" 2>/dev/null; }
+# 3s cap: a wedged zoe-database must degrade this check, not hang the probe.
+# timeout → empty stdout, which every caller already treats as "unreadable".
+PSQL() { timeout 3 docker exec zoe-database psql -U zoe -d "${1:-zoe}" -tAc "$2" 2>/dev/null; }
 
 printf '%sZOE GROUND TRUTH%s  %s  (read-only)\n' "$C_HDR" "$C_0" "$(uptime -p 2>/dev/null || true)"
 
