@@ -55,6 +55,8 @@ Rules for the autonomous loops that run from this subtree. `router_selftrain.py`
 
 Log to journal (systemd) or an explicit log path; scripts that fail silently have already cost this repo a stale knowledge graph.
 
+**`maintenance/zoe_ground_truth.sh` is the runtime-truth probe — the "what runs" companion to codebase-memory's "what exists".** Read-only, ~5s, self-discovering (finds the zoe-data pid by port, degrades per-check). Run it before trusting any doc's claim about what is live: it reads the brain lane from the running process env (not code defaults), the jobs that actually registered in `apscheduler_jobs`, Multica's own containers + DB, whether Hermes is live despite a "paused" doc, app-log health, and the deploy gap. Keep it strictly read-only and keep each check independent + non-fatal.
+
 ## Verification
 
 For timer-driven scripts, run once manually with the unit's exact ExecStart line and check `systemctl --user status <unit>` after the next scheduled fire.
