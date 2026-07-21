@@ -168,6 +168,16 @@ async function main(): Promise<void> {
   assert(await allReasonsNonEmpty(pool, t1.id), 'every activity_log row carries a non-empty reason');
   const row1 = await taskRow(pool, t1.id);
   assert((row1.result as { ok?: boolean } | null)?.ok === true, 'result jsonb recorded on the queue row');
+  // CAS guard: a stale reporter (e.g. reaper racing the exit handler) must
+  // LOSE against the already-terminal row, not overwrite the result.
+  const stale: TaskRow = {
+    id: t1.id, agent_id: LAB_AGENT_ID, issue_id: null, status: 'running',
+    attempt: 1, max_attempts: 2, context: null, work_dir: t1.workDir,
+  };
+  const won = await reportTransition(pool, cfg.runtimeId, stale, 'failed',
+    'stale reporter racing a terminal row (must lose)');
+  assert(won === false && (await taskRow(pool, t1.id)).status === 'completed',
+    'stale transition loses the CAS race; completed result is not overwritten');
 
   console.log('== 4. reap: zombie running row with dead pid (the #685 behaviour) ==');
   // A pid that is certainly dead: spawn a no-op and wait for it.

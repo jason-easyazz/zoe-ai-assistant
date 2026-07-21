@@ -35,10 +35,7 @@ export async function tick(
   const task = await claimNextTask(pool, cfg.runtimeId,
     'single lane free; claimed highest-priority oldest queued task for this runtime');
   if (!task) return { reaped, claimed: null };
-  const handle = await spawnWorker(pool, cfg, task);
-  if (handle) {
-    state.trackedPids.add(handle.pid);
-  }
+  await spawnWorker(pool, cfg, task, state.trackedPids);
   return { reaped, claimed: task.id };
 }
 

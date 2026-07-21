@@ -75,7 +75,7 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
 - `flue-executor/` — Phase 1 of the Multica executor migration
   (`docs/architecture/multica-executor-migration.md`): the Flue-based
   claim → spawn → report → reap loop that will replace the Hermes gateway's
-  `kanban_watchers`. Proven 2026-07-21 against a synthetic ticket (18/18
+  `kanban_watchers`. Proven 2026-07-21 against a synthetic ticket (19/19
   asserts): per-runtime advisory-lock + SKIP LOCKED single-lane claim, real
   `flue run phase-worker` child processes, reason-mandatory transitions written
   through to `activity_log` atomically, dead-worker reap (#685). Runs only

@@ -79,16 +79,25 @@ remains available later if the lanes ever need independent claim loops.
 ## The claim → spawn → report → reap loop — proven end-to-end
 
 `npm run e2e` (synthetic ticket, real `flue run phase-worker` child processes,
-scratch DB): **18/18 asserts PASS** —
+scratch DB): **19/19 asserts PASS** —
 
 ```
 == 1. reason enforcement (negative control) ==       2/2 PASS
 == 2. atomic single-lane claim under concurrency ==  1/1 PASS
-== 3. happy path: claim -> spawn -> report ==        5/5 PASS
+== 3. happy path: claim -> spawn -> report + CAS ==  6/6 PASS
 == 4. reap: zombie running row, dead pid (#685) ==   4/4 PASS
 == 5. single lane + kill of a hung worker ==         6/6 PASS
 E2E: ALL PASS
 ```
+
+Review-hardening (Greptile, PR #1498), re-proven by the run above: transitions
+are compare-and-swap (`WHERE id AND status=<expected from>`) so a racing
+reporter (exit handler vs reaper) loses cleanly instead of overwriting a
+terminal result (asserted in scenario 3); a worker's pid leaves the tracked set
+at exit BEFORE the exit report, so a report that dies on a transient DB error
+self-heals via the reaper instead of the tracked pid stalling the lane; the
+scratch-DB guard is an allowlist (`multica_executor_lab` exactly), not a
+`/multica` denylist.
 
 - Every transition (`task_claimed`, `task_started`, `task_completed`,
   `task_failed`, `task_requeued`, reap) lands in `activity_log` with a

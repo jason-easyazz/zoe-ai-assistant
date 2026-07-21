@@ -41,6 +41,14 @@ export async function spawnWorker(
   pool: pg.Pool,
   cfg: ExecutorConfig,
   task: TaskRow,
+  /** Live-worker registry owned by the executor. The pid is ADDED here the
+   * moment the child exists and REMOVED in the exit handler BEFORE the exit
+   * report — so a report that fails on a transient DB error leaves an
+   * untracked dead pid on a `running` row, which the reaper then heals on the
+   * next tick instead of the tracked pid stalling the lane forever. Tracking
+   * both sides inside this function closes the instant-exit race (a child that
+   * dies before the caller could have registered it). */
+  trackedPids: Set<number> = new Set(),
 ): Promise<WorkerHandle | null> {
   const ctx = (task.context ?? {}) as { phase?: string; mode?: string };
   const phase = ctx.phase ?? 'implement';
@@ -84,6 +92,8 @@ export async function spawnWorker(
     return null;
   }
 
+  trackedPids.add(pid);
+
   await reportTransition(pool, cfg.runtimeId, task, 'running',
     `worker pid ${pid} spawned for phase "${phase}" via \`flue run phase-worker\` in ${workDir}`,
     { workerPid: pid });
@@ -96,6 +106,7 @@ export async function spawnWorker(
     clearTimeout(timeout);
     closeSync(outFd);
     closeSync(errFd);
+    trackedPids.delete(pid);
     void reportWorkerExit(pool, cfg, { ...task, status: 'running' }, resultPath, code, signal)
       .catch((err) => console.error(`[executor] failed to report exit of task ${task.id}:`, err));
   });
@@ -139,7 +150,12 @@ export async function failOrRequeue(
   task: TaskRow,
   reason: string,
 ): Promise<void> {
-  await reportTransition(pool, cfg.runtimeId, task, 'failed', reason);
+  const won = await reportTransition(pool, cfg.runtimeId, task, 'failed', reason);
+  if (!won) {
+    // Another reporter (exit handler vs reaper) already moved this row to a
+    // terminal state — do NOT requeue over their result.
+    return;
+  }
   if (task.attempt < task.max_attempts) {
     await reportTransition(pool, cfg.runtimeId, { ...task, status: 'failed' }, 'queued',
       `requeued for attempt ${task.attempt + 1}/${task.max_attempts} after: ${reason}`,

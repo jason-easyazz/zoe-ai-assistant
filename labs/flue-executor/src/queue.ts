@@ -84,7 +84,17 @@ export async function claimNextTask(
   }
 }
 
-/** Transition a task and write the reason through to activity_log, atomically. */
+/**
+ * Transition a task and write the reason through to activity_log, atomically.
+ *
+ * Compare-and-swap semantics: the UPDATE only fires when the row is still in
+ * `task.status` (the expected from-state). Two reporters can race on the same
+ * row — e.g. the in-process exit handler and the reaper both see `running` —
+ * and without the guard the LAST transaction would win, able to erase a valid
+ * `completed` result or resurrect a terminal row back to `queued`. With it,
+ * exactly one reporter wins; the loser returns false and must not proceed
+ * (e.g. failOrRequeue skips the requeue when its `failed` write lost).
+ */
 export async function reportTransition(
   pool: pg.Pool,
   runtimeId: string,
@@ -98,7 +108,7 @@ export async function reportTransition(
     /** to='queued' only: requeue bumps attempt and clears run state. */
     requeue?: boolean;
   } = {},
-): Promise<void> {
+): Promise<boolean> {
   requireReason(reason);
   const action =
     opts.action ??
@@ -108,45 +118,57 @@ export async function reportTransition(
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    let updated: number;
     if (to === 'running') {
-      await client.query(
+      const res = await client.query(
         `UPDATE agent_task_queue
             SET status='running', started_at=now(),
                 context = coalesce(context,'{}'::jsonb) || jsonb_build_object('worker_pid', $2::int)
-          WHERE id=$1`,
-        [task.id, opts.workerPid ?? null],
+          WHERE id=$1 AND status=$3`,
+        [task.id, opts.workerPid ?? null, task.status],
       );
+      updated = res.rowCount ?? 0;
     } else if (to === 'completed') {
-      await client.query(
+      const res = await client.query(
         `UPDATE agent_task_queue
             SET status='completed', completed_at=now(), result=$2::jsonb, failure_reason=NULL
-          WHERE id=$1`,
-        [task.id, JSON.stringify(opts.result ?? null)],
+          WHERE id=$1 AND status=$3`,
+        [task.id, JSON.stringify(opts.result ?? null), task.status],
       );
+      updated = res.rowCount ?? 0;
     } else if (to === 'failed') {
-      await client.query(
+      const res = await client.query(
         `UPDATE agent_task_queue
             SET status='failed', completed_at=now(), failure_reason=$2
-          WHERE id=$1`,
-        [task.id, reason],
+          WHERE id=$1 AND status=$3`,
+        [task.id, reason, task.status],
       );
+      updated = res.rowCount ?? 0;
     } else {
       // requeue: same row back to queued with attempt+1, run state cleared.
-      await client.query(
+      const res = await client.query(
         `UPDATE agent_task_queue
             SET status='queued', attempt=attempt+1,
                 dispatched_at=NULL, started_at=NULL, completed_at=NULL,
                 failure_reason=NULL,
                 context = coalesce(context,'{}'::jsonb) - 'worker_pid'
-          WHERE id=$1`,
-        [task.id],
+          WHERE id=$1 AND status=$2`,
+        [task.id, task.status],
       );
+      updated = res.rowCount ?? 0;
+    }
+    if (updated === 0) {
+      // Lost the race: another reporter already moved the row. Log nothing,
+      // change nothing — the winner's reason is the record.
+      await client.query('ROLLBACK');
+      return false;
     }
     await logActivity(client, runtimeId, task, action, reason, {
       from: task.status,
       to,
     });
     await client.query('COMMIT');
+    return true;
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;

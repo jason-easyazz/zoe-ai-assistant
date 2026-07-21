@@ -59,8 +59,13 @@ function postgresUrlFromEnvFile(): string {
 export function loadConfig(): ExecutorConfig {
   const base = process.env.LAB_DATABASE_URL ?? postgresUrlFromEnvFile();
   const labDatabaseUrl = process.env.LAB_DATABASE_URL ?? swapDbName(base, LAB_DB_NAME);
-  if (new URL(labDatabaseUrl).pathname === '/multica') {
-    throw new Error('Refusing to run the lab against the live `multica` database.');
+  // Hard allowlist, not a denylist: the lab may ONLY ever touch the scratch DB.
+  // A denylist of "/multica" is bypassable by typo (/zoe, /Multica, /multica/).
+  if (new URL(labDatabaseUrl).pathname !== `/${LAB_DB_NAME}`) {
+    throw new Error(
+      `Refusing to run: the lab only operates on the "${LAB_DB_NAME}" scratch database, ` +
+        `got ${new URL(labDatabaseUrl).pathname}`,
+    );
   }
   return {
     labDatabaseUrl,
