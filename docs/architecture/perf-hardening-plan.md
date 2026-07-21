@@ -51,9 +51,13 @@ all /health 200.
       github-runner) via drop-ins, sized from `zoe_ground_truth.sh` +
       `systemctl show MemoryCurrent` observations. **Keep-if:** no unit enters
       throttle-thrash (journal) in 48h and brain headroom floor rises.
-- [ ] **2b. ccd-cli fleet cleanup (W3.1, PLANS.md)** — the largest single
-      reclaim (~3.6G swap historically). **Keep-if:** swap-in-use drops and no
-      agent workflow breaks.
+- [ ] **2b. ccd-cli swap — VERIFY, don't re-clean.** Measured 2026-07-21:
+      swap-in-use is **156Mi** — W3.1's "~3.6G swap" figure in PLANS.md is
+      STALE (the 07-19 cgroup guards + reboots already reclaimed it). Action is
+      measurement-first: update PLANS.md's figure, and only build any further
+      cleanup if `zoe_ground_truth.sh` shows swap churn recurring above ~1G.
+      Re-cleaning a solved problem (or adding a blunt session-killing sweep)
+      is the failure mode to avoid.
 - [ ] **2c. Retirement completion → stop hermes-agent + openclaw-gateway**
       (~500Mi) — ONLY behind the §8/executor-migration gates already written.
       Not a shortcut; the gates are the plan.
