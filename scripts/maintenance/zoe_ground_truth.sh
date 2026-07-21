@@ -29,7 +29,7 @@ dim() { printf '  %s%s%s\n' "$C_DIM" "$1" "$C_0"; }
 
 # DB access is bounded TWICE: a single 2s reachability preflight gates every DB
 # section (so a wedged container costs one 2s check, not one per query — ~8
-# sequential 3s calls would otherwise blow the ~5s contract), and each call
+# sequential 3s calls would otherwise stack), and each call
 # still carries its own 3s cap as a backstop. timeout → empty stdout, which
 # every caller already treats as "unreadable".
 PSQL() { timeout 3 docker exec zoe-database psql -U zoe -d "${1:-zoe}" -tAc "$2" 2>/dev/null; }
@@ -109,17 +109,30 @@ if [ "$ha" = "active" ]; then
 else dim "hermes-agent $ha"; fi
 
 # ── Load-bearing tables: row count + freshness (empty+documented-live=suspect)
+# The 3 tables run in PARALLEL, so a locked table bounds this section at one
+# table's window instead of 3× serial. Count and freshness are SEPARATE queries
+# on purpose: the row count is the load-bearing signal (empty + documented-live
+# = suspect), so a wrong/missing timestamp column must never cost us the count.
 hdr "KEY TABLES (row count / freshness)"
-freshness() { # table  timestamp-col
-  local n mx
-  n=$(PSQL zoe "SELECT count(*) FROM $1;")
-  mx=$(PSQL zoe "SELECT max($2)::timestamp(0) FROM $1;" 2>/dev/null)
-  [ -n "$n" ] && dim "$1: $n rows${mx:+, newest $mx}" || dim "$1: (unreadable)"
-}
 if [ "$DB_UP" != 1 ]; then dim "skipped — zoe-database unreachable (2s preflight)"; else
-  freshness chat_messages created_at
-  freshness people created_at
-  freshness memory_consolidation_state updated_at
+  _tmp_tbl=$(mktemp 2>/dev/null || echo /tmp/zgt_tbl.$$)
+  freshness() { # table  timestamp-col
+    local n mx
+    n=$(PSQL zoe "SELECT count(*) FROM $1;")
+    mx=$(PSQL zoe "SELECT max($2)::timestamp(0) FROM $1;")   # optional; empty if col absent
+    printf '%s\t%s\t%s\n' "$1" "${n:-ERR}" "$mx" >> "$_tmp_tbl"
+  }
+  freshness chat_messages created_at &
+  freshness people created_at &
+  freshness memory_consolidation_state last_consolidated_at &
+  wait
+  for t in chat_messages people memory_consolidation_state; do
+    IFS=$'\t' read -r _ n mx < <(grep -m1 "^$t"$'\t' "$_tmp_tbl" 2>/dev/null)
+    if [ -z "${n:-}" ] || [ "$n" = "ERR" ]; then dim "$t: (unreadable)"
+    elif [ -n "${mx:-}" ]; then dim "$t: $n rows, newest $mx"
+    else dim "$t: $n rows"; fi
+  done
+  rm -f "$_tmp_tbl" 2>/dev/null
 fi
 
 # ── Observability + deploy state (the amplifiers that hid bugs) ──────────────
