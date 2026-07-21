@@ -83,7 +83,12 @@ here):
 1. Does Flue's `sandbox: local()` give a worker a writable worktree on a branch,
    or does the harness still own `worktree_bootstrap`?
 2. Atomic claim — Multica's `agent_task_queue`, or a Zoe-side lease table?
-3. Worker model routing: local 4B vs Omnigent, decided where?
+3. Where the (already-decided) routing RULE lives mechanically. The policy is
+   settled — Omnigent is the primary heavy lane, local 4B the light lane (§5) —
+   so this unknown is only its implementation point: a task-class field on the
+   Multica ticket, a rule in the executor's claim step, or a kanban_adapter
+   handoff attribute. A local-only Phase-1 executor does NOT satisfy the
+   contract; the Omnigent lane ships in Phase 1.
 
 ### Phase 2 — re-point `kanban_adapter`
 

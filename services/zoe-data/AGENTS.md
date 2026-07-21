@@ -2,7 +2,7 @@
 
 ## Purpose
 
-THE production Zoe API: FastAPI app served by host uvicorn on port 8000. Owns chat, intent routing, memory, MCP tools, auth integration, background jobs, and the OpenClaw/Hermes agent bridges.
+THE production Zoe API: FastAPI app served by host uvicorn on port 8000. Owns chat, intent routing, memory, MCP tools, auth integration, and background jobs. (It also still CONTAINS the OpenClaw/Hermes agent bridges, but those are retirement targets — see Local Contracts — not owned capabilities to extend.)
 
 ## Ownership
 
