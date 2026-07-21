@@ -401,7 +401,11 @@ regression, ever (replay harness is the enforcement).
   list in full — NOT enroll-then-flip: (1) enroll, (2) **shadow mode for a week**
   (identify + log, never act) with false-accept/false-reject measured against the
   fallback chain, (3) tune the threshold on those numbers, (4) only then let identity
-  win over panel-binding. Skipping (2)-(3) enables biometric identification with its
+  win over panel-binding. **Face identity needs its own shadow week and its own
+  threshold** — it is a separate modality with separate failure modes (panel lighting,
+  angle, distance), so a voice-only shadow week is not evidence about faces; running the
+  voice gate and then flipping face ID would enable a biometric whose FA/FR nobody has
+  measured. Skipping (2)-(3) enables biometric identification with its
   error rates unmeasured. Blocked until the biometric retention/deletion policy in
   §W5's Gates exists.
 - [ ] **W6** attributed ambient capture — NOT STARTED (gated on W3+W4+W5 + consent design)
@@ -419,7 +423,11 @@ argument against waiving it quietly — 124 MB available on 2026-07-22, a brain 
 three deploy-gate failures out of that same pressure; W3.1/W3.2 closing did not make this box roomy.
 
 So the step after W1.3 is one of exactly two, and it is **Jason's call, not an agent's**:
-  (a) close **W3.3-3.5** (reap generalization, zram rebalance, harness fence-out), then W4.1; or
+  (a) meet **W3's DoD** — which is the MEASUREMENT, not the three checkboxes: a post-reclaim
+      profile by the same methodology as `docs/knowledge/memory-pressure-profile.md`, in a new
+      OKF record, showing >=2 GB actually freed. Closing W3.3-3.5 as rows without that profile
+      does not open this gate (rows-closed-but-effect-unmeasured is the same silent-success
+      pattern that hid the digest and logging failures); or
   (b) an explicit, recorded operator waiver of the W3 gate for W4.1 on measured headroom.
 An agent must not pick (b) for itself — "confirm headroom at bake-off time" was exactly the kind of
 soft gate that gets talked past, which is how this box lost its brain twice this week.
