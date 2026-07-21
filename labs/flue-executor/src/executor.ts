@@ -48,8 +48,14 @@ async function main(): Promise<void> {
   const maxTicks = ticksArg >= 0 ? Number(process.argv[ticksArg + 1]) : Infinity;
   console.log(`[executor] runtime ${cfg.runtimeId} polling every ${cfg.pollMs}ms`);
   for (let i = 0; i < maxTicks; i++) {
-    const { reaped, claimed } = await tick(pool, cfg, state);
-    if (reaped || claimed) console.log(`[executor] tick: reaped=${reaped} claimed=${claimed ?? '-'}`);
+    try {
+      const { reaped, claimed } = await tick(pool, cfg, state);
+      if (reaped || claimed) console.log(`[executor] tick: reaped=${reaped} claimed=${claimed ?? '-'}`);
+    } catch (err) {
+      // A transient DB/spawn error must not kill the loop — the stalled-
+      // dispatch reaper heals any row the failed tick left behind.
+      console.error('[executor] tick failed (will retry):', err);
+    }
     await new Promise((r) => setTimeout(r, cfg.pollMs));
   }
   await pool.end();

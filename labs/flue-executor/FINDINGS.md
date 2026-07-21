@@ -79,13 +79,14 @@ remains available later if the lanes ever need independent claim loops.
 ## The claim → spawn → report → reap loop — proven end-to-end
 
 `npm run e2e` (synthetic ticket, real `flue run phase-worker` child processes,
-scratch DB): **19/19 asserts PASS** —
+scratch DB): **21/21 asserts PASS** —
 
 ```
 == 1. reason enforcement (negative control) ==       2/2 PASS
 == 2. atomic single-lane claim under concurrency ==  1/1 PASS
 == 3. happy path: claim -> spawn -> report + CAS ==  6/6 PASS
 == 4. reap: zombie running row, dead pid (#685) ==   4/4 PASS
+== 4b. reap: stalled dispatched row ==               2/2 PASS
 == 5. single lane + kill of a hung worker ==         6/6 PASS
 E2E: ALL PASS
 ```
@@ -97,7 +98,13 @@ terminal result (asserted in scenario 3); a worker's pid leaves the tracked set
 at exit BEFORE the exit report, so a report that dies on a transient DB error
 self-heals via the reaper instead of the tracked pid stalling the lane; the
 scratch-DB guard is an allowlist (`multica_executor_lab` exactly), not a
-`/multica` denylist.
+`/multica` denylist. Second round: a `dispatched` row whose running transition
+is lost (DB error mid-spawn, executor crash, instant-exit race) can no longer
+wedge the lane — the reaper also fails-and-requeues dispatched rows older than
+worker-timeout + grace (by then any real worker has been SIGKILLed by the spawn
+timeout), the spawn path kills its child if the running CAS loses or throws so
+no orphan outlives its row, and a failed tick no longer kills the loop
+(scenario 4b).
 
 - Every transition (`task_claimed`, `task_started`, `task_completed`,
   `task_failed`, `task_requeued`, reap) lands in `activity_log` with a

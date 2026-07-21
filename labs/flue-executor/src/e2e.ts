@@ -42,7 +42,15 @@ function assert(cond: boolean, label: string): void {
 async function seedTask(
   pool: pg.Pool,
   cfg: ExecutorConfig,
-  opts: { mode: string; status?: string; priority?: number; maxAttempts?: number; workerPid?: number },
+  opts: {
+    mode: string;
+    status?: string;
+    priority?: number;
+    maxAttempts?: number;
+    workerPid?: number;
+    /** status='dispatched' only: backdate dispatched_at by this many ms. */
+    dispatchedAgoMs?: number;
+  },
 ): Promise<{ id: string; workDir: string }> {
   const workDir = mkdtempSync(join(tmpdir(), 'flue-executor-e2e-'));
   const context: Record<string, unknown> = { phase: 'implement', mode: opts.mode };
@@ -50,9 +58,11 @@ async function seedTask(
   const res = await pool.query(
     `INSERT INTO agent_task_queue
        (agent_id, issue_id, status, priority, runtime_id, work_dir, context, max_attempts,
-        started_at, trigger_summary)
+        started_at, dispatched_at, trigger_summary)
      VALUES ($1, gen_random_uuid(), $2, $3, $4, $5, $6::jsonb, $7,
              CASE WHEN $2 = 'running' THEN now() ELSE NULL END,
+             CASE WHEN $2 IN ('dispatched','running')
+                  THEN now() - ($8::int * interval '1 millisecond') ELSE NULL END,
              'synthetic e2e ticket')
      RETURNING id`,
     [
@@ -63,6 +73,7 @@ async function seedTask(
       workDir,
       JSON.stringify(context),
       opts.maxAttempts ?? 2,
+      opts.dispatchedAgoMs ?? 0,
     ],
   );
   return { id: res.rows[0].id as string, workDir };
@@ -192,6 +203,18 @@ async function main(): Promise<void> {
   assert(s2 === 'completed', `reaped task re-ran to completion on attempt 2 (got: ${s2})`);
   assert((await taskRow(pool, t2.id)).attempt === 2, 'attempt was bumped by the requeue');
   assert(await allReasonsNonEmpty(pool, t2.id), 'reap + requeue reasons are non-empty');
+  await pool.query('TRUNCATE agent_task_queue, activity_log');
+
+  console.log('== 4b. reap: stalled dispatched row that never reached running ==');
+  const t2b = await seedTask(pool, cfg, {
+    mode: 'succeed', status: 'dispatched',
+    dispatchedAgoMs: cfg.workerTimeoutMs + 60_000,
+  });
+  const s2b = await untilStatus(pool, cfg, state, t2b.id, ['completed', 'failed'], 120_000);
+  const acts2b = await activityActions(pool, t2b.id);
+  assert(acts2b[0] === 'task_failed' && acts2b[1] === 'task_requeued',
+    `stalled dispatched row was reaped with reason then requeued (got: ${acts2b.slice(0, 2).join(' -> ')})`);
+  assert(s2b === 'completed', `stalled-dispatch task re-ran to completion (got: ${s2b})`);
   await pool.query('TRUNCATE agent_task_queue, activity_log');
 
   console.log('== 5. single lane + kill of a hung worker ==');

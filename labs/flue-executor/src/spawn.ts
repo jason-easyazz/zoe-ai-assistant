@@ -94,9 +94,33 @@ export async function spawnWorker(
 
   trackedPids.add(pid);
 
-  await reportTransition(pool, cfg.runtimeId, task, 'running',
-    `worker pid ${pid} spawned for phase "${phase}" via \`flue run phase-worker\` in ${workDir}`,
-    { workerPid: pid });
+  let startedOk: boolean;
+  try {
+    startedOk = await reportTransition(pool, cfg.runtimeId, task, 'running',
+      `worker pid ${pid} spawned for phase "${phase}" via \`flue run phase-worker\` in ${workDir}`,
+      { workerPid: pid });
+  } catch (err) {
+    // Transient DB failure mid-spawn: kill the child so no orphan outlives its
+    // row (the row stays `dispatched`; the stalled-dispatch reaper requeues it).
+    child.kill('SIGKILL');
+    trackedPids.delete(pid);
+    closeSync(outFd);
+    closeSync(errFd);
+    throw err;
+  }
+  if (!startedOk) {
+    // The row is no longer `dispatched` (e.g. the stalled-dispatch reaper beat
+    // us to it after a long pause) — nobody owns this child anymore. Kill it
+    // rather than leave an untracked worker mutating the work_dir.
+    child.kill('SIGKILL');
+    trackedPids.delete(pid);
+    closeSync(outFd);
+    closeSync(errFd);
+    console.error(
+      `[executor] task ${task.id}: running transition lost (row moved on); killed worker pid ${pid}`,
+    );
+    return null;
+  }
 
   const timeout = setTimeout(() => {
     child.kill('SIGKILL');
