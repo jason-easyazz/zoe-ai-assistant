@@ -24,13 +24,18 @@ jobs:
       # verified 2026-07-19). This job runs genuinely heavy steps on the box
       # (docker compose --build for zoe-auth, npm ci + build for the Flue
       # sidecars), so gate it the same way as self-hosted-tests.yml.
-      # Threshold 1800MB: the brain died when transients pushed availMB below
-      # ~1-1.5GB; 1800MB keeps clear of that kill zone with margin while being
-      # a no-op instant pass in the normal case (box idles with several GB free).
+      # Threshold 800MB (measured 2026-07-21): the box's NORMAL idle sits at
+      # 0.7-1.5GB available with the full resident stack (brain ~6.5G, Kokoro
+      # ~2.5G, Serena's session-cache creep ~1G) — the original 1800MB blocked
+      # EVERY deploy, including two on an idle box. The deploy itself is a
+      # light burst (git reset + service restart, which momentarily FREES
+      # zoe-data's ~0.5G); the brain-killing bursts are the TEST lanes, whose
+      # gate in self-hosted-tests.yml keeps the strict 1800MB. 800MB refuses
+      # only genuine starvation (the brain crash-looped reloading below ~600MB).
       - name: Wait for memory headroom (protect the live brain)
         timeout-minutes: 10
         run: |
-          THRESHOLD_MB=1800
+          THRESHOLD_MB=800
           for attempt in $(seq 1 36); do
             AVAIL_MB="$(free -m | awk '/Mem:/{print $7}')"
             if [ "${AVAIL_MB}" -ge "${THRESHOLD_MB}" ]; then
@@ -147,6 +152,18 @@ jobs:
       - name: Rebuild / restart zoe-auth
         run: |
           cd /home/zoe/assistant
+          # Heavy-build sub-gate (Greptile, PR #1493): the base 800MB gate admits
+          # the light deploy path; an actual (re)build is the transient that can
+          # squeeze the brain, so it alone waits for the stricter bar.
+          for attempt in $(seq 1 20); do
+            AVAIL_MB="$(free -m | awk '/Mem:/{print $7}')"
+            [ "${AVAIL_MB}" -ge 1400 ] && break
+            echo "heavy-build wait: ${AVAIL_MB}MB < 1400MB (${attempt}/20)"; sleep 15
+          done
+          if [ "${AVAIL_MB}" -lt 1400 ]; then
+            echo "::error::refusing heavy build at ${AVAIL_MB}MB (< 1400MB) — free memory and re-run the deploy."
+            exit 1
+          fi
           docker compose up -d --build zoe-auth
           for attempt in {1..12}; do
             curl -sf http://localhost:8002/health > /dev/null && exit 0
@@ -189,6 +206,18 @@ jobs:
             exit 0
           fi
           echo "sidecar changed (or dist missing) — rebuilding and restarting."
+          # Heavy-build sub-gate (Greptile, PR #1493): the base 800MB gate admits
+          # the light deploy path; an actual (re)build is the transient that can
+          # squeeze the brain, so it alone waits for the stricter bar.
+          for attempt in $(seq 1 20); do
+            AVAIL_MB="$(free -m | awk '/Mem:/{print $7}')"
+            [ "${AVAIL_MB}" -ge 1400 ] && break
+            echo "heavy-build wait: ${AVAIL_MB}MB < 1400MB (${attempt}/20)"; sleep 15
+          done
+          if [ "${AVAIL_MB}" -lt 1400 ]; then
+            echo "::error::refusing heavy build at ${AVAIL_MB}MB (< 1400MB) — free memory and re-run the deploy."
+            exit 1
+          fi
           # The self-hosted runner uses a non-login shell that does not source
           # nvm, so `npm` is not on PATH (the systemd unit hard-codes
           # ~/.nvm/current/bin/node for the same reason). Put nvm's active-version
@@ -239,6 +268,15 @@ jobs:
             exit 0
           fi
           echo "bot changed (or dist missing) — rebuilding and restarting."
+          for attempt in $(seq 1 20); do
+            AVAIL_MB="$(free -m | awk '/Mem:/{print $7}')"
+            [ "${AVAIL_MB}" -ge 1400 ] && break
+            echo "heavy-build wait: ${AVAIL_MB}MB < 1400MB (${attempt}/20)"; sleep 15
+          done
+          if [ "${AVAIL_MB}" -lt 1400 ]; then
+            echo "::error::refusing heavy build at ${AVAIL_MB}MB (< 1400MB) — free memory and re-run the deploy."
+            exit 1
+          fi
           # Same non-login-shell PATH fix as the brain step: nvm isn't sourced, so
           # put its active-version bin on PATH for npm.
           export PATH="$HOME/.nvm/current/bin:$PATH"
