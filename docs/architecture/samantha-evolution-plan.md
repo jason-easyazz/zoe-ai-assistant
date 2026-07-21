@@ -235,18 +235,28 @@ false-accept/false-reject rates disappoint, the named upgrade path is **ECAPA-TD
 swap the embedder behind the same enroll/match seam, don't redesign the flow. pyannote
 is already in requirements (unimported) and its source is cached in opensrc for evaluation.
 
-- **Steps:** (1) enrollment session for Jason (+ family who consent) via the existing
-  endpoint/settings page; (2) enable in **shadow mode** — identify + log, don't act — for a
-  week; measure match/false-accept rates against the fallback chain; (3) tune threshold;
-  (4) let identification win over panel-binding for user resolution; PIN challenge stays as
-  the escalation for sensitive scopes (recognition greets, badge-check gates).
-- **Gates:** shadow-mode numbers before acting on identity; replay-gate; **a written
+- **Steps — run PER MODALITY, never once for both.** Voice and face are separate biometrics
+  with separate failure modes, so voice measurements are NOT evidence about faces:
+  (1) enrollment session for Jason (+ family who consent) via the existing endpoint/settings
+  page; (2) enable in **shadow mode** — identify + log, don't act — for a week; measure
+  match/false-accept/false-reject rates against the fallback chain; (3) tune that modality's
+  threshold on its own numbers (`ZOE_SPEAKER_ID_THRESHOLD` for voice; the face threshold and
+  `FACE_MIN_PX` for face); (4) let identification win over panel-binding for user resolution;
+  PIN challenge stays as the escalation for sensitive scopes (recognition greets, badge-check
+  gates). **Face's shadow week must run in REAL panel conditions** — the lighting, angle and
+  distance people are actually at — because that is where its errors live, and the panel's
+  camera shares USB power with the speaker (see the panel-identity notes) so it must be
+  measured in situ, not at a desk.
+- **Gates:** shadow-mode numbers **for the modality being enabled** before acting on identity
+  (voice numbers do not unlock face, or vice versa); replay-gate; **a written
   biometric retention/deletion policy before ANY enrollment is enabled** — voiceprints and
   face embeddings are biometrics, so the policy must state a TTL or an explicit "kept until
   deleted", and give each household member self-service deletion of their own profile.
   **DoD:** Zoe addresses Jason by name from voice alone on the panel; an unenrolled voice
   cleanly falls back to guest; the retention policy is written down and the deletion path
-  works end-to-end for a non-admin member.
+  works end-to-end for a non-admin member. For FACE, additionally: a face shadow week in real
+  panel conditions with FA/FR recorded, and the face threshold tuned on those numbers —
+  face stays OFF until that exists, however good the voice numbers are.
 - **Effort:** days (mostly product/operator). **Risk:** low in shadow mode.
 
 ### W6 — Attributed ambient capture: from "assistant with a good log" to "was in the room"
