@@ -2,13 +2,22 @@
 /**
  * Estate panel — "clean interface" gate (headless 1280x720, the real panel size).
  *
- * Covers the two changes in this PR:
- *   1. Music card: volume is behind a speaker icon + popover; "keep playing" (∞)
- *      holds the scrub's left flank.
+ * Covers two properties of the clean estate:
+ *   1. Music card: volume is behind a speaker icon + a VERTICAL popover anchored
+ *      to the right edge; "keep playing" (∞) is a round transport button, first
+ *      in the row before shuffle. (This is the #1450 layout, which corrected the
+ *      original #1446 design of a left-flank ∞ pill + horizontal volume strip.)
  *   2. No per-card settings cogs anywhere; Settings still reachable.
  *
  * The sleep card's pinned controls are NOT covered here — that shipped as
  * #1444 and is gated by test_touch_dock_pins.js.
+ *
+ * DESIGN OF RECORD: #1450 (operator-reported). Transport order is
+ * [keep, shuffle, prev, play, next, repeat, volume]; the volume popover is
+ * vertical (104x260 at right:24px) with a 44x176 vertical slider, matching the
+ * dock thermostat. Do NOT "restore" the #1446 left-flank/horizontal design — it
+ * was deliberately replaced. The popover shares the right edge with the
+ * favourite heart by design (see the overlap test).
  *
  * Fixtures are asserted against the LIVE API before the browser starts — a
  * mock that invents fields is how a feature here once passed 50 assertions
@@ -322,21 +331,27 @@ async function t(name, fn) {
     await page.close();
   });
 
-  await t('∞ "keep playing" holds the scrub\'s LEFT flank, out of the transport', async () => {
+  await t('∞ "keep playing" is a round transport button, first in the row before shuffle', async () => {
+    // #1450 corrected #1446: "keep playing" is a round .sml icon button back IN
+    // the transport, immediately before shuffle — not the left-flank pill #1446
+    // built. Transport order: [keep, shuffle, prev, play, next, repeat, volume].
     const ctx = newCtx();
     const page = await open(browser, base, ctx);
     await page.nav('music');
     await page.waitForSelector('#mDS', { timeout: 8000 });
-    assert.ok(await page.$eval('#mDS', (e) => e.closest('#mTransport') === null),
-      '∞ is still inside the transport — it did not move left');
+    assert.ok(await page.$eval('#mDS', (e) => e.closest('#mTransport') !== null),
+      '∞ is not inside #mTransport — #1450 put it back into the transport row');
+    assert.ok(await page.$eval('#mDS', (e) => e.classList.contains('sml')),
+      '∞ is not a round .sml transport button');
+    // It renders immediately before shuffle in the transport row's DOM order.
+    assert.ok(await page.evaluate(() => {
+      const ds = document.getElementById('mDS'), sh = document.getElementById('mShuf');
+      return !!ds && !!sh
+        && (ds.compareDocumentPosition(sh) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    }), '∞ does not precede the shuffle button in the transport row');
     const k = await box(page, '#mDS');
-    assert.ok(k.x < 200, `∞ is at x${Math.round(k.x)} — not on the left flank`);
-    assert.ok(k.h >= 48, `∞ is only ${Math.round(k.h)}px tall — under the 48px finger floor`);
-    // The measured rule from #1429/#1436: the left flank is clear only out to
-    // x360, where .mscrub starts.
-    const scrub = await box(page, '#mScrub');
-    assert.ok(k.right <= scrub.x + 1,
-      `∞ ends at x${Math.round(k.right)} but .mscrub starts at x${Math.round(scrub.x)} — they collide`);
+    assert.ok(k.h >= 48 && k.w >= 48,
+      `∞ is ${Math.round(k.w)}x${Math.round(k.h)}px — under the 48px finger floor`);
     await page.close();
   });
 
@@ -349,38 +364,78 @@ async function t(name, fn) {
     assert.ok(await page.$eval('#mVolT', (e) => e.classList.contains('open')), 'the popover did not open');
     assert.strictEqual(await page.$eval('.vpop', (e) => getComputedStyle(e).opacity), '1', 'the popover is still transparent');
     const v = await box(page, '#mVol');
-    assert.ok(v.w > 100 && v.h >= 30, `the slider measures ${Math.round(v.w)}x${Math.round(v.h)} — not usable`);
+    // #1450: the slider is VERTICAL (44x176), anchored to the right, matching the
+    // dock thermostat — not the horizontal strip #1446 built. Usable = tall and
+    // wide enough for a finger, and taller than it is wide.
+    assert.ok(v.h > 100 && v.w >= 30 && v.h > v.w,
+      `the volume slider measures ${Math.round(v.w)}x${Math.round(v.h)} — not a usable vertical slider`);
     // It reads the real volume, not a default.
     assert.strictEqual(await page.$eval('#mVol', (e) => e.value), '34', 'the slider did not adopt the live volume');
     await shoot(page, 'music-popover-open');
     await page.close();
   });
 
-  await t('the open popover clears the covers, orb, apps, QR and transport', async () => {
+  await t('the open popover clears every cover, the now-playing info and the transport', async () => {
     const ctx = newCtx();
     const page = await open(browser, base, ctx);
     await page.nav('music');
     await page.click('#mVolT');
     await page.waitForTimeout(400);
     const pop = await box(page, '.vpop');
-    const keep = await box(page, '#mDS');
     // The fan must actually be there, or "clears the covers" proves nothing.
-    const covers = await page.$$eval('.mfull .cfc', (e) => e.length);
-    assert.ok(covers >= 3, `only ${covers} covers rendered — the collision checks below are vacuous`);
+    const coverBoxes = await page.$$eval('.mfull .cfc', (els) => els.map((e) => {
+      const r = e.getBoundingClientRect();
+      return { x: r.x, y: r.y, right: r.right, bottom: r.bottom, w: r.width, h: r.height };
+    }));
+    assert.ok(coverBoxes.length >= 3,
+      `only ${coverBoxes.length} covers rendered — the collision checks below are vacuous`);
     const dead = await page.$$eval('.mfull .cfc img', (e) => e.filter((x) => !x.naturalWidth).length);
     assert.strictEqual(dead, 0, `${dead} covers rendered a blank <img>`);
-    for (const [what, sel] of [['the cover fan', '.mfull .cf'], ['#orb', '#orb'], ['#apps', '#apps'],
-      ['the QR panel', '.mqr'], ['the transport buttons', '#mTransport .pp'],
-      ['the seek bar', '#mScrub'], ['the track title', '.mfull .mtitle'], ['the artist', '.mfull .martist'],
-      ['the "now playing" kicker', '.mfull .mkick'], ['the favourite heart', '.mfull .mfav']]) {
+    // Overlap is tested against the actual cover CARDS (.cfc), never the .cf
+    // CONTAINER: .cf spans the full card width (left:0;right:0), so a
+    // right-anchored popover "overlaps" it vacuously — the same box-vs-inked
+    // trap the .cfmeta note above flags. Check each card individually.
+    coverBoxes.forEach((b, i) => {
+      // A cover that collapsed to a zero-size box would skip the overlap check
+      // and pass vacuously, so assert it rendered before measuring clearance.
+      assert.ok(b.w > 0 && b.h > 0,
+        `cover ${i} rendered with an unusable ${Math.round(b.w)}x${Math.round(b.h)} box`);
+      assert.ok(!overlaps(pop, b), `the open volume popover overlaps cover ${i}`);
+    });
+    // The favourite heart (.mfav) is deliberately NOT in the must-clear set.
+    // #1450 anchors the volume popover to the right edge (right:24px) — the same
+    // edge the heart sits on — so the popover sits over the heart while open. The
+    // heart is a transient-occluded secondary control, not part of the
+    // now-playing readout; occluding it during a volume adjust is the
+    // operator-approved layout (the popover dismisses and the heart returns).
+    for (const [what, sel] of [['#orb', '#orb'], ['#apps', '#apps'],
+      ['the QR panel', '.mqr'],
+      ['the seek bar', '#mScrub'], ['the track title', '.mfull .mtitle'],
+      ['the artist', '.mfull .martist'], ['the "now playing" kicker', '.mfull .mkick']]) {
       if (!(await page.$(sel))) continue;
       const inked = ['.mfull .mtitle', '.mfull .martist', '.mfull .mkick'].includes(sel);
       const b = await (inked ? textBox : box)(page, sel);
       if (!b.w || !b.h) continue;
       assert.ok(!overlaps(pop, b), `the open volume popover overlaps ${what}`);
-      assert.ok(!overlaps(keep, b), `the ∞ control overlaps ${what}`);
     }
-    assert.ok(!overlaps(pop, keep), 'the popover overlaps the ∞ control');
+    // EVERY real transport button must clear the right-edge popover — not just the
+    // centred play/pause. `#mTransport button` sweeps keep/shuffle/prev/play/next/
+    // repeat while naturally excluding the volume TILE (#mVolT is a div — the
+    // popover's own trigger, expected to sit under it) and the inert .tsp spacers,
+    // so a spacing change that slides repeat (the rightmost control) under the
+    // popover fails here instead of passing on an unmeasured button.
+    const tBtns = await page.$$eval('#mTransport button', (els) => els.map((e) => {
+      const r = e.getBoundingClientRect();
+      return { id: e.id || e.getAttribute('data-a') || '?',
+        x: r.x, y: r.y, w: r.width, h: r.height, right: r.right, bottom: r.bottom };
+    }));
+    assert.ok(tBtns.length >= 6,
+      `only ${tBtns.length} transport buttons measured — the clear-check is vacuous`);
+    tBtns.forEach((b) => {
+      assert.ok(b.w > 0 && b.h > 0,
+        `transport button ${b.id} rendered with an unusable ${Math.round(b.w)}x${Math.round(b.h)} box`);
+      assert.ok(!overlaps(pop, b), `the open volume popover overlaps transport button ${b.id}`);
+    });
     await page.close();
   });
 
@@ -438,10 +493,16 @@ async function t(name, fn) {
     await page.click('#mDS');
     await page.waitForTimeout(500);
     const p = lastPost(ctx, 'music/dont-stop');
-    assert.ok(p, '∞ posted nothing — it lost its handler when it left the transport');
+    assert.ok(p, '∞ posted nothing — its direct handler (wireKeep) is not wired');
     assert.strictEqual(p.body.enabled, true, 'the ∞ tap did not ask to enable');
     assert.ok(!(await page.$eval('#mDS', (e) => e.classList.contains('on'))),
       '∞ stayed lit after MA refused the enable');
+    // ∞ carries no data-a, but it sits INSIDE #mTransport, whose delegated
+    // handler dispatches on data-a. Without a `if(!a)return` guard the tap
+    // bubbles there and fires musicControl(null) — a spurious null-action
+    // /api/music/control on every keep-playing tap. It must post ONLY dont-stop.
+    assert.ok(!ctx.posts.some((x) => x.path === 'music/control'),
+      'the ∞ tap also fired /api/music/control (null action) — it bubbled to the transport handler');
     await page.close();
   });
 

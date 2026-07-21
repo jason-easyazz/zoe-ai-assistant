@@ -479,7 +479,7 @@ test('layout: play/pause stays centred and nothing collides', async (browser, ba
   const box = (s) => page.$eval(s, (e) => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; });
   const pp = await box('#mPP');
   assert.ok(Math.abs((pp.x + pp.w / 2) - 640) <= 2,
-    'play/pause is off-centre at ' + (pp.x + pp.w / 2) + 'px (the 6th transport button unbalanced the row)');
+    'play/pause is off-centre at ' + (pp.x + pp.w / 2) + 'px (a transport button unbalanced the row)');
   // The transport must not run under the launcher or the QR.
   const vt = await box('#mVolT');
   const qr = await box('#mQR');
@@ -492,12 +492,11 @@ test('layout: play/pause stays centred and nothing collides', async (browser, ba
     const b = await box(s);
     assert.ok(b.x >= 0 && b.y >= 0 && b.x + b.w <= 1280 && b.y + b.h <= 720, s + ' is off-screen');
   }
-  // Whatever holds the scrub's left flank must not sit ON the artwork. This
-  // assertion exists because the volume pill's first placement (in .mtop,
-  // beside the speaker chip) did exactly that, and every other test still
-  // passed — only the screenshot showed it. "Keep playing" (∞) inherited that
-  // slot when volume moved behind the transport's speaker icon, so it
-  // inherits the guard.
+  // ∞ ("keep playing", #mDS) is a round transport BUTTON (#1450), not the
+  // left-flank pill #1446 built. It must still stay clear of the cover artwork
+  // above it — the guard that caught the volume pill's first placement sitting
+  // ON the covers — but it is now a member of #mTransport by design, so its box
+  // being inside the transport is expected, not a collision.
   const vol = await box('#mDS');
   const covers = await page.$$eval('.mfull .cfc', (es) => es.map((e) => {
     const r = e.getBoundingClientRect();
@@ -505,16 +504,22 @@ test('layout: play/pause stays centred and nothing collides', async (browser, ba
   }));
   const hits = (a, b2) => !(a.x + a.w <= b2.x || b2.x + b2.w <= a.x || a.y + a.h <= b2.y || b2.y + b2.h <= a.y);
   const clash = covers.find((c) => hits(vol, c));
-  assert.ok(!clash, 'the ∞ pill overlaps cover art at x' + (clash && Math.round(clash.x)));
-  // ...nor the scrub it shares a row with, nor the transport below it. (It also
-  // must not cover the focused cover's ✕ remove affordance — that is what the
-  // cover-overlap check above really protects.)
-  for (const [sel, what] of [['#mScrub', 'the scrub bar'], ['#mTransport', 'the transport'], ['#orb', 'the orb']]) {
+  assert.ok(!clash, 'the ∞ button overlaps cover art at x' + (clash && Math.round(clash.x)));
+  // ...nor the scrub above it, nor the orb. (NOT #mTransport — ∞ lives inside it.)
+  for (const [sel, what] of [['#mScrub', 'the scrub bar'], ['#orb', 'the orb']]) {
     const b = await box(sel);
-    assert.ok(!hits(vol, b), 'the ∞ pill overlaps ' + what);
+    assert.ok(!hits(vol, b), 'the ∞ button overlaps ' + what);
   }
+  // It belongs to the transport row, immediately before shuffle (#1450 order:
+  // [keep, shuffle, prev, play, next, repeat, volume]).
+  assert.ok(await page.$eval('#mDS', (e) => e.closest('#mTransport') !== null),
+    '∞ is not inside #mTransport — #1450 put it back into the transport row');
+  assert.ok(await page.evaluate(() => {
+    const ds = document.getElementById('mDS'), sh = document.getElementById('mShuf');
+    return !!ds && !!sh && (ds.compareDocumentPosition(sh) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+  }), '∞ does not precede the shuffle button in the transport row');
   // Finger-target floor for the kiosk.
-  assert.ok(vol.h >= 48, 'volume pill is only ' + vol.h + 'px tall (kiosk floor is 48)');
+  assert.ok(vol.h >= 48, 'the ∞ button is only ' + vol.h + 'px tall (kiosk floor is 48)');
   // The tight spot the breathe PR flagged: the centre cover must still clear
   // .cfmeta. Our scrub padding must not have eaten that gap.
   const cover = await page.$eval('.mfull .cfc.mid, .mfull .cfc', (e) => { const r = e.getBoundingClientRect(); return r.bottom; });
