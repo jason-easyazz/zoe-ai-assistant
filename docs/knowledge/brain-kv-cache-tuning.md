@@ -27,8 +27,7 @@ after the Gemma `--swa-full` fix (#22288, 2026-04-24) and has `--cache-ram`.
 | Change | Why |
 |---|---|
 | `--ctx-size 16384 --parallel 2` | two 8192 slots; voice+chat keep separate warm prefixes and no longer queue |
-| `--cache-type-v q8_0` (K already q8) | halves the global-layer KV |
-| `--flash-attn on` (was **off**) | REQUIRED for V-quant (llama.cpp refuses otherwise, issue #10378) |
+| V-quant **NOT applied**; K stays q8 | FA on **crashes with the MTP draft on this build** (documented at the #810 template sync), and q8 V requires FA (issue #10378) — so V stays f16 while MTP is in use. Cost: only the ~4 global layers, ~64MB at 16384. Revisit only if MTP is ever dropped or the crash is fixed upstream. |
 | `--cache-ram 2048` | Oct-2025 host prompt cache (PR #16391): similarity hot-swap of whole cached prompts, **SWA-compatible** — the real replacement for prefix eviction. **Capped** because the 8192 MiB default is an OOM hazard on 15.6G unified memory. The running server today has NO cap — latent hazard until this deploys. |
 | `--cache-reuse 256` **removed** | KV shifting cannot reuse past the 512-token SWA window (threshold `pos_next − n_swa`); it was a no-op for gemma3n |
 
@@ -52,10 +51,9 @@ systemctl --user daemon-reload && systemctl --user restart llama-server
 
 ## Risks & rollback
 
-- **`--flash-attn on` is the one real risk** — it was explicitly `off` before
-  (reason unrecorded; possibly historical SM87 issues). If generation is garbled
-  or /health fails: rollback below, then retry with `-fa on` but f16 V
-  (`--cache-type-v f16`) to isolate FA from V-quant.
+- FA stays off — the earlier "reason unrecorded" was wrong: the #810 sync note
+  records that **FA on crashes with MTP** on this build. Do not flip it while
+  `--spec-type draft-mtp` is present.
 - Rollback = restore previous unit (git), daemon-reload, restart. All changes
   are serving-config only; the model rock is untouched.
 

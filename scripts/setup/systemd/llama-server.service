@@ -71,8 +71,10 @@ Environment=LD_LIBRARY_PATH=%h/llama.cpp/build-jetson-new/bin
 #    similarity hot-swap of whole cached prompts; SWA-compatible. Default is
 #    8192 MiB — on this 15.6G UNIFIED-memory box that default is an OOM
 #    hazard, so it is capped. Never remove the cap.
-#  --flash-attn on  = REQUIRED for --cache-type-v; verify /health + replay gate
-#    after first start (it was previously forced off).
+#  --flash-attn stays OFF and V stays f16: FA on CRASHES with the MTP draft on
+#    this build (proven; see #810 sync note), and q8 V-cache requires FA — so
+#    V-quant is off the table while MTP is in use. K stays q8 (works without
+#    FA). V at f16 costs only the ~4 global layers: ~64MB at 16384 — acceptable.
 #  --cache-reuse REMOVED: KV shifting cannot reuse past the 512-token sliding
 #    window on SWA models (reuse threshold = pos_next - n_swa), so it was a
 #    no-op here; the host prompt cache above is the working replacement.
@@ -88,11 +90,10 @@ ExecStart=%h/llama.cpp/build-jetson-new/bin/llama-server \
   --ctx-size 16384 \
   --parallel 2 \
   --cache-type-k q8_0 \
-  --cache-type-v q8_0 \
   --cache-ram 2048 \
   --n-gpu-layers 99 \
   --cont-batching \
-  --flash-attn on \
+  --flash-attn off \
   --temp 0.7 \
   --top-k 64 \
   --top-p 0.95 \
