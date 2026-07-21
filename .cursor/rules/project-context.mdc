@@ -15,4 +15,4 @@ Before file changes, follow `.zoe/AI_ASSISTANT_CHECKLIST.md`: validate structure
 
 Zoe is multi-user and scope-aware. Memory writes must carry scope, credentials are per user/scope, and core code must not bake in home/family/household assumptions.
 
-Hermes is the preferred escalation path for reasoning, repair, and development workflow. Keep OpenClaw as fallback for browser-heavy or specialized workflows.
+Hermes is being retired behind the Flue executor migration (docs/architecture/multica-executor-migration.md). OpenClaw is being FULLY RETIRED (operator decision 2026-07-22) — route nothing to it; its runtime and builder intents are slated for deletion via gated PRs. Rebuild needed capabilities on Pi/Flue.

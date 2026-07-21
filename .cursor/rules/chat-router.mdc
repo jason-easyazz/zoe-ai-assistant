@@ -23,4 +23,4 @@ Every new feature reachable from chat/voice needs:
 
 Preserve AG-UI SSE event patterns already used in `chat.py`. Persist user/assistant turns and run memory extraction through existing hooks so chat, voice, and nightly digest stay consistent.
 
-For complex repair or development tasks, prefer Hermes escalation. Keep OpenClaw available for browser-heavy or fallback execution.
+For complex repair or development tasks, follow the Flue executor migration plan. OpenClaw is being FULLY RETIRED (operator decision 2026-07-22) — do not route work to it or preserve it in deletion PRs.
