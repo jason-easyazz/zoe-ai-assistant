@@ -13,7 +13,7 @@ alwaysApply: false
 
 Keep one production chat router: `services/zoe-data/routers/chat.py`. Do not create `chat_v2.py`, `_new`, `_fixed`, or side routers for production behavior.
 
-Natural-language handling should live in `intent_router.py`, Zoe Agent, Hermes, or OpenClaw. Avoid adding broad hardcoded phrase branches in `chat.py`; use focused intents for stable fast paths and agent routing for fuzzy language.
+Natural-language handling should live in `intent_router.py` or Zoe Agent (Hermes/OpenClaw are retirement targets — never destinations). Avoid adding broad hardcoded phrase branches in `chat.py`; use focused intents for stable fast paths and agent routing for fuzzy language.
 
 Every new feature reachable from chat/voice needs:
 - An intent or agent/tool path.

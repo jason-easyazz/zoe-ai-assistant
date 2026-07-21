@@ -79,7 +79,10 @@ CRITICAL_FILES = {
         'services/zoe-data/main.py',
         'services/zoe-data/database.py',
         'services/zoe-data/auth.py',
-        'services/zoe-data/openclaw_ws.py',
+        # 'services/zoe-data/openclaw_ws.py' — REMOVED from critical list 2026-07-22:
+        # OpenClaw is being retired (multica-executor-migration.md §5); the file is a
+        # gated deletion target and the validator must not block its deletion PR.
+
         'services/zoe-data/routers/chat.py',
         'services/zoe-data/routers/system.py',
         'services/zoe-auth/main.py',
