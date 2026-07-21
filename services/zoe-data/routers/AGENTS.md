@@ -6,7 +6,7 @@ FastAPI routers for every Zoe API domain: chat, calendar, lists, memories, remin
 
 ## Ownership
 
-- `chat.py` — THE ONLY production chat router (intent fast path + OpenClaw/Hermes agent path via `intent_router`, `openclaw_ws`, `ag_ui_stream`). CRITICAL FILE.
+- `chat.py` — THE ONLY production chat router (intent fast path + agent path via `intent_router`, `ag_ui_stream`; it still CONTAINS the OpenClaw/Hermes lanes via `openclaw_ws`, but those are retirement targets per the 2026-07-22 decision — do not extend them). CRITICAL FILE.
 - `system.py` — system/status endpoints. CRITICAL FILE.
 - `panel_config.py` — per-panel config (`GET`/`PUT /api/panels/{device_id}/config`): the panel's room, its default speaker, and its pinned dock controls. Storage is the `panels` row (`location` + `default_player` + `pinned`), keyed by `panel_id` == the panel's `device_id`.
 - `rooms.py` — Zoe-owned rooms (`/api/rooms`): create a room, put devices in it. Storage is `rooms` + `room_devices` (alembic 0026), plus `panels.room_id`.
@@ -15,7 +15,7 @@ FastAPI routers for every Zoe API domain: chat, calendar, lists, memories, remin
 ## Local Contracts
 
 - NEVER create `chat_v2.py`, `chat_new.py`, `chat_optimized.py`, or any parallel chat router. Use git branches, not file duplication.
-- No hardcoded NLU command detection (if "add" in message and "shopping" in message...) in `chat.py` or any router; natural-language understanding goes through `intent_router.py` patterns, Zoe Agent, Hermes, or OpenClaw.
+- No hardcoded NLU command detection (if "add" in message and "shopping" in message...) in `chat.py` or any router; natural-language understanding goes through `intent_router.py` patterns or Zoe Agent. (Hermes/OpenClaw are retirement targets — never new destinations.)
 - Validate user input at the API boundary; parameterized queries only.
 - Routers hold domain policy; reusable mechanics (provider calls, parsing, payload transforms) belong in service-layer helpers, not duplicated across routers.
 - **Panel-scoped settings live in ONE place per concern — do not add a second store.** `panels.location` is THE panel location (it predates `panel_config.py`); `display_preferences` (`system.py`) stays the *display* store (brightness/idle/off). A new panel-scoped fact goes in the `panels` row.

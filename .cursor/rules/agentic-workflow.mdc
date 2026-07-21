@@ -9,7 +9,7 @@ For Zoe architecture or cross-module work, start with the codebase-memory MCP (r
 
 For third-party libraries, prefer `opensrc` or upstream docs before guessing API behavior. Keep external source caches outside the repo, under `~/.opensrc/repos/`. Treat new package adoption cautiously: prefer mature packages, check source/maintenance history, and avoid adding dependencies for code less than about 14 days old unless the user explicitly accepts the risk.
 
-For agent delegation, use Hermes. This includes planning, code repair, architecture, PR review loops, Greptile feedback, Multica board repair, Zoe knowledge refresh, and browser work through Zoe's CloakBrowser tools. OpenClaw remains installed and available as a future/manual fallback; do not route work to it unless the operator explicitly asks for OpenClaw.
+For agent delegation, use Hermes. This includes planning, code repair, architecture, PR review loops, Greptile feedback, Multica board repair, Zoe knowledge refresh, and browser work through Zoe's CloakBrowser tools. OpenClaw is being FULLY RETIRED (operator decision 2026-07-22, docs/architecture/multica-executor-migration.md §5) — never route work to it; its runtime + builder intents are to be deleted via gated PRs, with backups already in docs/knowledge/operator-skills/.
 
 Plan first for broad or risky work. Keep changes surgical. Prefer existing Zoe patterns, avoid backup/old/new file copies, and do not create parallel routers or duplicate feature files.
 
