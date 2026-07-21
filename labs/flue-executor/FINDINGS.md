@@ -127,6 +127,9 @@ app-level module `src/db.ts` in a Flue project.**
 
 ## Deliberate scope limits
 
+- This increment proves the **local lane only**. Per the migration doc §5
+  decision 2, the Omnigent heavy-lane spawn path must also ship before Phase 1
+  is complete — a local-only executor does not satisfy the contract.
 - The synthetic worker never opens a model session (dead-end provider); model
   choice per phase is config, proven separately by the spike's live runs.
 - The lab mirrors `agent_task_queue`/`activity_log` DDL minus FKs; Phase 2
