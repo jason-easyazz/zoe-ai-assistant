@@ -152,6 +152,18 @@ jobs:
       - name: Rebuild / restart zoe-auth
         run: |
           cd /home/zoe/assistant
+          # Heavy-build sub-gate (Greptile, PR #1493): the base 800MB gate admits
+          # the light deploy path; an actual (re)build is the transient that can
+          # squeeze the brain, so it alone waits for the stricter bar.
+          for attempt in $(seq 1 20); do
+            AVAIL_MB="$(free -m | awk '/Mem:/{print $7}')"
+            [ "${AVAIL_MB}" -ge 1400 ] && break
+            echo "heavy-build wait: ${AVAIL_MB}MB < 1400MB (${attempt}/20)"; sleep 15
+          done
+          if [ "${AVAIL_MB}" -lt 1400 ]; then
+            echo "::error::refusing heavy build at ${AVAIL_MB}MB (< 1400MB) — free memory and re-run the deploy."
+            exit 1
+          fi
           docker compose up -d --build zoe-auth
           for attempt in {1..12}; do
             curl -sf http://localhost:8002/health > /dev/null && exit 0
@@ -194,6 +206,18 @@ jobs:
             exit 0
           fi
           echo "sidecar changed (or dist missing) — rebuilding and restarting."
+          # Heavy-build sub-gate (Greptile, PR #1493): the base 800MB gate admits
+          # the light deploy path; an actual (re)build is the transient that can
+          # squeeze the brain, so it alone waits for the stricter bar.
+          for attempt in $(seq 1 20); do
+            AVAIL_MB="$(free -m | awk '/Mem:/{print $7}')"
+            [ "${AVAIL_MB}" -ge 1400 ] && break
+            echo "heavy-build wait: ${AVAIL_MB}MB < 1400MB (${attempt}/20)"; sleep 15
+          done
+          if [ "${AVAIL_MB}" -lt 1400 ]; then
+            echo "::error::refusing heavy build at ${AVAIL_MB}MB (< 1400MB) — free memory and re-run the deploy."
+            exit 1
+          fi
           # The self-hosted runner uses a non-login shell that does not source
           # nvm, so `npm` is not on PATH (the systemd unit hard-codes
           # ~/.nvm/current/bin/node for the same reason). Put nvm's active-version
@@ -244,6 +268,15 @@ jobs:
             exit 0
           fi
           echo "bot changed (or dist missing) — rebuilding and restarting."
+          for attempt in $(seq 1 20); do
+            AVAIL_MB="$(free -m | awk '/Mem:/{print $7}')"
+            [ "${AVAIL_MB}" -ge 1400 ] && break
+            echo "heavy-build wait: ${AVAIL_MB}MB < 1400MB (${attempt}/20)"; sleep 15
+          done
+          if [ "${AVAIL_MB}" -lt 1400 ]; then
+            echo "::error::refusing heavy build at ${AVAIL_MB}MB (< 1400MB) — free memory and re-run the deploy."
+            exit 1
+          fi
           # Same non-login-shell PATH fix as the brain step: nvm isn't sourced, so
           # put its active-version bin on PATH for npm.
           export PATH="$HOME/.nvm/current/bin:$PATH"
