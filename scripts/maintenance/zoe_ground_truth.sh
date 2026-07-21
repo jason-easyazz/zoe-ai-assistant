@@ -27,9 +27,14 @@ ok()  { printf '  %s✓%s %s\n' "$C_OK" "$C_0" "$1"; }
 bad() { printf '  %s✗ %s%s\n' "$C_BAD" "$1" "$C_0"; }
 dim() { printf '  %s%s%s\n' "$C_DIM" "$1" "$C_0"; }
 
-# 3s cap: a wedged zoe-database must degrade this check, not hang the probe.
-# timeout → empty stdout, which every caller already treats as "unreadable".
+# DB access is bounded TWICE: a single 2s reachability preflight gates every DB
+# section (so a wedged container costs one 2s check, not one per query — ~8
+# sequential 3s calls would otherwise blow the ~5s contract), and each call
+# still carries its own 3s cap as a backstop. timeout → empty stdout, which
+# every caller already treats as "unreadable".
 PSQL() { timeout 3 docker exec zoe-database psql -U zoe -d "${1:-zoe}" -tAc "$2" 2>/dev/null; }
+DB_UP=0
+timeout 2 docker exec zoe-database psql -U zoe -d zoe -tAc 'SELECT 1' >/dev/null 2>&1 && DB_UP=1
 
 printf '%sZOE GROUND TRUTH%s  %s  (read-only)\n' "$C_HDR" "$C_0" "$(uptime -p 2>/dev/null || true)"
 
@@ -77,16 +82,20 @@ fi
 
 # ── Scheduled jobs that ACTUALLY registered (the music_discovery class) ──────
 hdr "SCHEDULED JOBS (registered in apscheduler_jobs — not just coded)"
-jobs=$(PSQL zoe "SELECT id || '  next=' || to_timestamp(next_run_time)::timestamp(0) FROM apscheduler_jobs ORDER BY id;")
-if [ -n "$jobs" ]; then printf '%s\n' "$jobs" | while IFS= read -r j; do ok "$j"; done
-else dim "(no rows — jobstore empty or unreadable)"; fi
-dim "reminder: a coded add_job that raised (e.g. unpicklable closure) is ABSENT here, silently"
+if [ "$DB_UP" != 1 ]; then dim "skipped — zoe-database unreachable (2s preflight)"; else
+  jobs=$(PSQL zoe "SELECT id || '  next=' || to_timestamp(next_run_time)::timestamp(0) FROM apscheduler_jobs ORDER BY id;")
+  if [ -n "$jobs" ]; then printf '%s\n' "$jobs" | while IFS= read -r j; do ok "$j"; done
+  else dim "(no rows — jobstore empty)"; fi
+  dim "reminder: a coded add_job that raised (e.g. unpicklable closure) is ABSENT here, silently"
+fi
 
 # ── Multica: its OWN product on Zoe, not a Hermes component ──────────────────
 hdr "MULTICA (own containers + own DB — verify before reasoning about it)"
 docker ps --format '{{.Names}} {{.Status}}' 2>/dev/null | grep -i multica | while read -r l; do ok "$l"; done
-mcount=$(PSQL multica "SELECT count(*) FROM issue;")
-[ -n "$mcount" ] && ok "multica DB reachable — issue rows: $mcount" || dim "multica DB not reachable"
+if [ "$DB_UP" != 1 ]; then dim "issue count skipped — zoe-database unreachable"; else
+  mcount=$(PSQL multica "SELECT count(*) FROM issue;")
+  [ -n "$mcount" ] && ok "multica DB reachable — issue rows: $mcount" || dim "multica DB not reachable"
+fi
 if [ -e "$HOME/.zoe/multica_dispatch_paused" ]; then
   bad "dispatch PAUSED (kill switch present: ~/.zoe/multica_dispatch_paused)"
 else ok "dispatch armed (no kill switch)"; fi
@@ -107,9 +116,11 @@ freshness() { # table  timestamp-col
   mx=$(PSQL zoe "SELECT max($2)::timestamp(0) FROM $1;" 2>/dev/null)
   [ -n "$n" ] && dim "$1: $n rows${mx:+, newest $mx}" || dim "$1: (unreadable)"
 }
-freshness chat_messages created_at
-freshness people created_at
-freshness memory_consolidation_state updated_at
+if [ "$DB_UP" != 1 ]; then dim "skipped — zoe-database unreachable (2s preflight)"; else
+  freshness chat_messages created_at
+  freshness people created_at
+  freshness memory_consolidation_state updated_at
+fi
 
 # ── Observability + deploy state (the amplifiers that hid bugs) ──────────────
 hdr "OBSERVABILITY + DEPLOY"
