@@ -359,8 +359,12 @@ regression, ever (replay harness is the enforcement).
   prod flags ON per #1082)
 - [x] **W1.2** Smart Turn v3 endpointer — **DONE + LIVE** (#1051: `voice_turn.py`, 8.3 MB ONNX,
   complete-utterance 0.90 vs mid-sentence 0.02 on real voice; `ZOE_SMART_TURN_ENABLED` ON in prod)
-- [ ] **W1.3** sentence-streamed TTS in conversation mode — NOT STARTED (LiveKit lane still
-  whole-utterance `synthesize`)
+- [~] **W1.3** sentence-streamed TTS in conversation mode — **MERGED, FLAG OFF** (#1469:
+  `ZOE_LIVEKIT_STREAM_TTS`, default OFF; both `voice_livekit.py` synth sites stream one
+  data message per sentence with `seq`/`final`, clients queue and play in order, barge-in
+  clears the queue, flag-off path byte-identical). NOT yet DONE: the DoD needs the lab
+  flip + first-audio measured at or below the `/ws/voice/` lane on the same utterance,
+  with the replay gate green.
 - [~] **W1.4** live measurement session (ADR M1/M3/M4) — PARTIAL: M1 barge-in quality verified
   on real voice (#1081); M3 end-to-end latency + M4 loaded-RAM numbers still unmeasured.
   Bars (from the retired #1056 plan's A3 gate): barge time-to-stop < ~300 ms over 10
@@ -386,14 +390,21 @@ regression, ever (replay harness is the enforcement).
 - [ ] **W3.5** harness fence-out (with tech-debt Wave 4) — NOT STARTED
 - [ ] **W4.1** SER bake-off (Wav2Small / emotion2vec) — NOT STARTED
 - [ ] **W4.2–4** scoring hook + fusion + lab-proof — NOT STARTED (gated on W3)
-- [ ] **W5** speaker-ID enrollment + shadow mode + enable — NOT STARTED
+- [~] **W5** speaker-ID enrollment + shadow mode + enable — **SCAFFOLDING MERGED, DARK**
+  (consent-gated speaker profiles, migration `0023_speaker_consent`; face identity phase 2
+  `0024_face_profiles` + `routers/face_id.py`, embeddings-only and consent-mandatory;
+  guided spoken enrollment flow). Remaining is operator work: enroll, then flag on.
+  Before enabling, write the biometric retention/deletion policy (TTL or explicit
+  "until deleted", plus household-member self-service deletion).
 - [ ] **W6** attributed ambient capture — NOT STARTED (gated on W3+W4+W5 + consent design)
 - [ ] **W7** self-evolution loop closed once — NOT STARTED
 - [ ] **W8** Telegram voice notes — NOT STARTED (after W3)
 
 ## 7. NEXT ACTION (always exactly one)
 
-→ **W1.3 (streamed TTS in conversation mode, packet P-W1.3) + M3/M4 measurements (packet P-W1.4, bars in §6).** W2 is **DONE and ear-verified** (2026-07-19, see §6 — including the W2.3 lesson: the kiosk browser was never a speaker; spoken delivery rides the Pi daemon's audio path via the `voice_announcements` queue). The 7:30am scheduled brief now speaks to whoever is present; watch-week running. After W1.3: **W4.1** SER bake-off (RAM allows it — voice stack unswappable per #1409, ~2 GB steady-state).
+→ **W1.3 close-out: flip `ZOE_LIVEKIT_STREAM_TTS` in the lab, measure first-audio, replay-gate it** —
+the code merged 2026-07-21 (#1469, flag OFF), so what remains is the DoD, not the build —
+**plus M3/M4 measurements (packet P-W1.4, bars in §6).** W2 is **DONE and ear-verified** (2026-07-19, see §6 — including the W2.3 lesson: the kiosk browser was never a speaker; spoken delivery rides the Pi daemon's audio path via the `voice_announcements` queue). The 7:30am scheduled brief now speaks to whoever is present; watch-week running. After W1.3: **W4.1** SER bake-off (RAM allows it — voice stack unswappable per #1409, ~2 GB steady-state).
 
 Closed en route: **W0** fully (2026-07-13 — P-F6 #1160, organic chat/Telegram capture,
 spoken-panel positive control after #1282) and **W3.1** (2026-07-19, measured: the
