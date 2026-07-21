@@ -61,6 +61,21 @@ Environment=LD_LIBRARY_PATH=%h/llama.cpp/build-jetson-new/bin
 # The endpoint is unauthenticated. Default to loopback; the live Zoe host binds
 # 0.0.0.0 ONLY because it is fronted by Cloudflare Access + host firewalling. Do NOT
 # expose 0.0.0.0 without equivalent auth/firewalling.
+# KV-cache tuning (2026-07-21, evidence in docs/knowledge/brain-kv-cache-tuning.md):
+#  --ctx-size 16384 --parallel 2  = two 8192 slots, so voice + chat each keep a
+#    warm prefix instead of evicting each other (~5s reprocess per eviction,
+#    measured live). Near-free on gemma3n: the SWA-aware cache sizes the 20
+#    sliding-window layers by the 512-token window, NOT by ctx (llama.cpp
+#    PR #13194); only ~4 global layers scale, halved again by q8 V-quant.
+#  --cache-ram 2048  = the Oct-2025 host-memory prompt cache (PR #16391),
+#    similarity hot-swap of whole cached prompts; SWA-compatible. Default is
+#    8192 MiB — on this 15.6G UNIFIED-memory box that default is an OOM
+#    hazard, so it is capped. Never remove the cap.
+#  --flash-attn on  = REQUIRED for --cache-type-v; verify /health + replay gate
+#    after first start (it was previously forced off).
+#  --cache-reuse REMOVED: KV shifting cannot reuse past the 512-token sliding
+#    window on SWA models (reuse threshold = pos_next - n_swa), so it was a
+#    no-op here; the host prompt cache above is the working replacement.
 ExecStart=%h/llama.cpp/build-jetson-new/bin/llama-server \
   --model %h/models/gemma4-e4b-qat/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf \
   --model-draft %h/models/gemma4-e4b-qat/mtp-gemma-4-E4B-it.gguf \
@@ -70,13 +85,14 @@ ExecStart=%h/llama.cpp/build-jetson-new/bin/llama-server \
   --spec-draft-ngl 99 \
   --host 127.0.0.1 \
   --port 11434 \
-  --ctx-size 8192 \
+  --ctx-size 16384 \
+  --parallel 2 \
   --cache-type-k q8_0 \
+  --cache-type-v q8_0 \
+  --cache-ram 2048 \
   --n-gpu-layers 99 \
-  --parallel 1 \
   --cont-batching \
-  --cache-reuse 256 \
-  --flash-attn off \
+  --flash-attn on \
   --temp 0.7 \
   --top-k 64 \
   --top-p 0.95 \
