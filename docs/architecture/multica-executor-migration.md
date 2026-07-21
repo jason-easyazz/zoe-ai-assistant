@@ -162,6 +162,10 @@ was added to prevent.
   the ACP path's 2,338 runs were improvisation, not skill execution). Rebuild
   capabilities on Pi/Flue when actually needed, referencing the public
   Agent-Skills ecosystem ("internet of skills") rather than porting blind.
-- **Hardware: PARKED.** No purchase now. Direction when it happens: a larger,
-  more capable Gemma-family brain plus a dedicated coding model on the side —
-  which keeps the used-3090-class box (not DGX Spark) as the likely fit.
+- **Hardware: PARKED, direction = DGX Spark.** No purchase now; "it will
+  probably be a DGX Spark, i havent seen anything better yet" (Jason,
+  2026-07-22). Coherent with the two-model direction: 128GB unified holds a
+  larger Gemma brain AND a resident coding model simultaneously — a 24GB card
+  cannot — plus local fine-tuning headroom, on the same CUDA stack Zoe already
+  runs. The accepted trade: ~273GB/s bandwidth means big models generate
+  steadily, not fast; capacity and training headroom are what the money buys.
