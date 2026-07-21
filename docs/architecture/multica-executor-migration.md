@@ -139,13 +139,29 @@ was added to prevent.
 
 ---
 
-## 5. Open decisions for the operator
+## 5. Decisions — RESOLVED by operator (Jason, 2026-07-22)
 
-1. **Phase 1 substrate** — Flue workflow, or a plain Python loop in zoe-data?
-   Flue is the strategic answer; a Python loop is faster to prove and reuses
-   `worktree_bootstrap` as-is.
-2. **Worker model** — the local 4B has known agentic-reliability limits; the
-   harness's deterministic verify/review/closeout were built precisely so a weak
-   worker cannot corrupt the outcome. Confirm that still holds under Flue.
-3. **Omnigent scope** — second executor now (Phase 3), or defer until the local
-   lane is proven?
+1. **Phase 1 substrate = FLUE.** "Wouldn't using flue be smarter" — yes:
+   durable run state, one engine (the brain already lives there), and the
+   agent roles are already spiked in `labs/flue-harness-spike/`. No Python
+   interim; build the claim → spawn → report loop on Flue directly.
+2. **Omnigent is a PRIMARY executor lane from day one, not a deferred Phase 3.**
+   "Omnigent is a beast, and should be used to build zoe until we get a box
+   where local agents can do those tasks." Route heavy/multi-file implement
+   work to Omnigent; the local 4B keeps the light lane and the deterministic
+   harness gates keep either worker honest. Revisit the split only when new
+   hardware lands.
+3. **Hermes retires; Multica stays and pairs with Flue.** Confirmed. Keep what
+   was built (skills/adapters already backed up in
+   `docs/knowledge/operator-skills/`) as reference, and work toward this goal
+   through the Phase 1-4 gates above — the gates themselves are unchanged.
+
+**Related decisions of record (same date):**
+- **OpenClaw: full retirement.** "Just bloody get rid of openclaw" — delete the
+  runtime + builder intents with it (the intents name skills that never loaded;
+  the ACP path's 2,338 runs were improvisation, not skill execution). Rebuild
+  capabilities on Pi/Flue when actually needed, referencing the public
+  Agent-Skills ecosystem ("internet of skills") rather than porting blind.
+- **Hardware: PARKED.** No purchase now. Direction when it happens: a larger,
+  more capable Gemma-family brain plus a dedicated coding model on the side —
+  which keeps the used-3090-class box (not DGX Spark) as the likely fit.
