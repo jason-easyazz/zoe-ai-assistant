@@ -75,15 +75,32 @@ Replaces the Hermes gateway's `kanban_watchers`. Contract:
 - reap a worker whose process died (the `#685` behaviour — do not lose it)
 
 Substrate: Flue. `labs/flue-harness-spike/` already has `scout` / `verifier`
-`defineAgentProfile`s and `sandbox: local()`. The missing piece is the claim →
-spawn → report loop, not the agent roles.
+`defineAgentProfile`s and `sandbox: local()`. The missing piece was the claim →
+spawn → report loop, not the agent roles — **built and proven lab-first in
+`labs/flue-executor/` (2026-07-21): synthetic end-to-end ticket, 18/18 asserts,
+including the reason-on-every-transition write-through and the #685 reap.**
+Evidence: `labs/flue-executor/FINDINGS.md`.
 
-**Unknowns to settle before estimating** (this is why Phase 1 is not costed
-here):
-1. Does Flue's `sandbox: local()` give a worker a writable worktree on a branch,
-   or does the harness still own `worktree_bootstrap`?
-2. Atomic claim — Multica's `agent_task_queue`, or a Zoe-side lease table?
-3. Worker model routing: local 4B vs Omnigent, decided where?
+**The three unknowns — settled 2026-07-21** (full evidence in
+`labs/flue-executor/FINDINGS.md`):
+1. **`sandbox: local()` does not manage git state at all** — it binds an agent
+   to an *existing* host directory (`packages/runtime/src/node/local.ts` is a
+   thin fs+spawn wrapper; the spike's #864 dirty-tree bug proved the same live).
+   **`worktree_bootstrap` stays authoritative**; the executor passes the task's
+   worktree path through the handoff (`work_dir`) as the worker's `cwd`.
+2. **Multica's `agent_task_queue`, no Zoe-side lease table.** The live schema
+   already has a claim-candidates partial index keyed by `runtime_id`, the full
+   status lifecycle, `attempt`/`max_attempts`/`failure_reason`, and a
+   one-pending-task-per-issue guard — and `activity_log` is in the same DB, so
+   the reason commits in the same transaction as the status flip. Claim =
+   per-runtime advisory lock + `FOR UPDATE SKIP LOCKED` (SKIP LOCKED alone
+   double-dispatches under concurrency — proven and closed in the lab). A
+   Zoe-side lease table would hide queue state from `multica-web`.
+3. **Routing is decided in the executor at spawn time** from the claimed task's
+   context: local lane = a Flue per-agent model (config), heavy lane = an
+   Omnigent kick (session + brief + `omnigent run -r` — not a model swap).
+   Claim-time routing keeps the Phase-2 `kanban_adapter` change to the minimal
+   seam swap and preserves "Omnigent down → local lane still runs".
 
 ### Phase 2 — re-point `kanban_adapter`
 
@@ -139,13 +156,18 @@ was added to prevent.
 
 ---
 
-## 5. Open decisions for the operator
+## 5. Decisions of record (Jason, 2026-07-20)
 
-1. **Phase 1 substrate** — Flue workflow, or a plain Python loop in zoe-data?
-   Flue is the strategic answer; a Python loop is faster to prove and reuses
-   `worktree_bootstrap` as-is.
-2. **Worker model** — the local 4B has known agentic-reliability limits; the
-   harness's deterministic verify/review/closeout were built precisely so a weak
-   worker cannot corrupt the outcome. Confirm that still holds under Flue.
-3. **Omnigent scope** — second executor now (Phase 3), or defer until the local
-   lane is proven?
+1. **Phase 1 substrate is Flue** — no Python interim loop. (The lab executor
+   reuses `worktree_bootstrap` anyway, per unknown 1: worktree lifecycle stays
+   in Python regardless of the executor substrate.)
+2. **Worker model** — the deterministic verify/review/closeout gates carry over
+   unchanged; the local 4B's agentic-reliability limits are contained by the
+   gates, not by the worker. Confirmed compatible with Flue's per-agent model
+   binding (the spike's live runs + the lab executor's spawn design).
+3. **Omnigent is a PRIMARY heavy executor lane from day one**, not a deferred
+   Phase-3 add-on — the executor routes heavy/multi-file work to it at spawn
+   time (see unknown 3). Additive: if Omnigent is down, the local lane runs.
+4. **OpenClaw fully retires.** It is not a lane in this architecture.
+5. **Hermes retires only via the Phase 4 gates** — no part of that gate is
+   treated as pre-satisfied.
