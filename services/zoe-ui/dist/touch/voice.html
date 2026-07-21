@@ -491,6 +491,8 @@ function handleVoiceEvent(msg) {
     // Barge-in (#1051): server saw the user talking over Zoe — stop playback
     // now and drop any queued streamed sentences.
     streamAwaitingFinal = false;
+    serverBusy = false;  // the barged-in turn may never send 'done'; a stuck
+                         // busy flag makes scheduleAutoListen a silent no-op
     audioQueue = [];
     if (currentAudio) {
       try { currentAudio.pause(); } catch(e) {}
