@@ -480,12 +480,37 @@ function handleVoiceEvent(msg) {
       setTimeout(endCall, 2000);
     }
   } else if (type === 'audio') {
+    // P-W1.3: streamed-sentence messages (seq/final) arrive in order over the
+    // reliable data channel; the existing queue plays them sequentially. But a
+    // fast first sentence can finish BEFORE the next arrives — latch until the
+    // final-flagged sentence so an empty queue mid-stream doesn't reopen the
+    // mic over the rest of Zoe's reply (Greptile, PR #1469).
+    if (typeof msg.seq === 'number') streamAwaitingFinal = (msg.final !== true);
     enqueueAudio(msg.audio_base64, msg.content_type || 'audio/wav');
+  } else if (type === 'stop_playback') {
+    // Barge-in (#1051): server saw the user talking over Zoe — stop playback
+    // now and drop any queued streamed sentences.
+    streamAwaitingFinal = false;
+    serverBusy = false;  // the barged-in turn may never send 'done'; a stuck
+                         // busy flag makes scheduleAutoListen a silent no-op
+    audioQueue = [];
+    if (currentAudio) {
+      try { currentAudio.pause(); } catch(e) {}
+      if (currentAudio._zoeUrl) { try { URL.revokeObjectURL(currentAudio._zoeUrl); } catch(e) {} }
+    }
+    audioPlaying = false;
+    speaking = false;
+    currentAudio = null;
+    setOrbState('listening');
+    // The server already moved to LISTENING; make the client actually capture
+    // again instead of just painting the orb (livekit mode records per turn).
+    if (convMode) scheduleAutoListen();
   } else if (type === 'text') {
     if (!audioPlaying) setOrbState('ambient');
   } else if (type === 'agui' || type === 'ui_component') {
     showAguiCard(msg.data || msg);
   } else if (type === 'done') {
+    streamAwaitingFinal = false;  // safety: server ends the turn even if the final marker was lost
     serverBusy = false;
     resetTouchIdle();
     if (!audioPlaying) {
@@ -496,6 +521,7 @@ function handleVoiceEvent(msg) {
 }
 
 // ── Audio playback queue ──────────────────────────────────────────────────
+let streamAwaitingFinal = false;  // P-W1.3: a seq'd sentence stream is mid-flight
 function enqueueAudio(b64, contentType) {
   if (!b64) return;
   audioQueue.push({ b64, contentType: contentType || 'audio/wav' });
@@ -504,6 +530,13 @@ function enqueueAudio(b64, contentType) {
 
 function drainAudioQueue() {
   if (!audioQueue.length) {
+    if (streamAwaitingFinal) {
+      // Mid-stream gap: more sentences are coming — stay in responding state,
+      // do NOT re-arm the mic. The next enqueueAudio() resumes the drain.
+      audioPlaying = false;
+      currentAudio = null;
+      return;
+    }
     audioPlaying = false;
     speaking = false;
     currentAudio = null;
@@ -524,6 +557,7 @@ function drainAudioQueue() {
     const blob = new Blob([bytes], { type: contentType });
     const url = URL.createObjectURL(blob);
     const audio = new Audio(url);
+    audio._zoeUrl = url;   // so a server-driven stop can revoke it (pause fires no 'ended')
     currentAudio = audio;
     audio.onended = () => { URL.revokeObjectURL(url); drainAudioQueue(); };
     audio.onerror = () => { URL.revokeObjectURL(url); drainAudioQueue(); };
