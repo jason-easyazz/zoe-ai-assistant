@@ -33,11 +33,40 @@ after the Gemma `--swa-full` fix (#22288, 2026-04-24) and has `--cache-ram`.
 
 ## Apply (operator)
 
+**⚠️ A warm-box restart CRASHES (proven live 2026-07-21, twice).** Once Kokoro
+(~2.4G) + the agent stack fill memory, CUDA cannot allocate the brain's ~2.6G
+transient load buffer — the unit core-dumps or fails with
+`failed to allocate CUDA0 buffer`. Even the OLD config cannot reload on a warm
+box. The brain fits because boot order loads it FIRST.
+
+**Blessed path — apply + reboot:**
 ```bash
 cp ~/assistant/scripts/setup/systemd/llama-server.service ~/.config/systemd/user/
-systemctl --user daemon-reload && systemctl --user restart llama-server
-# ExecStartPost blocks until /health ok (120s)
+systemctl --user daemon-reload
+sudo reboot
 ```
+
+**No-reboot path — park Kokoro to recreate boot order (voice is down either way):**
+```bash
+cp ~/assistant/scripts/setup/systemd/llama-server.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user stop kokoro-tts
+systemctl --user restart llama-server     # loads in ~12s with the memory free
+systemctl --user start kokoro-tts
+```
+(The cp + daemon-reload are load-bearing: restarting without them relaunches the
+OLD unit, and every later verification tests the wrong config.)
+
+**Run the replay gate immediately post-boot, and nowhere else.** Right after
+boot there is briefly well over 2G free; run the gate THEN, before the agent
+fleet fills memory. Do NOT run it merely because free memory ticks past 2G on
+a warm box: the probe loads a second Kokoro (~2.3G) and its transient burst can
+crash the ALREADY-LOADED brain even when the probe's own 1500MB floor passes —
+producing another CUDA-OOM `error` artifact instead of a verdict (this is the
+standing cgroup-guards-don't-cover-CUDA rule). Later in uptime the floor makes
+it SKIP anyway, and a skip is NOT a pass. (2026-07-21: the artifact currently
+reads `error` from the crash window — it must be re-run green post-boot before
+this change counts as done.)
 
 ## Verify
 
