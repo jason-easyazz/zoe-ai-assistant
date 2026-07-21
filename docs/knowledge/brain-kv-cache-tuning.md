@@ -33,11 +33,30 @@ after the Gemma `--swa-full` fix (#22288, 2026-04-24) and has `--cache-ram`.
 
 ## Apply (operator)
 
+**⚠️ A warm-box restart CRASHES (proven live 2026-07-21, twice).** Once Kokoro
+(~2.4G) + the agent stack fill memory, CUDA cannot allocate the brain's ~2.6G
+transient load buffer — the unit core-dumps or fails with
+`failed to allocate CUDA0 buffer`. Even the OLD config cannot reload on a warm
+box. The brain fits because boot order loads it FIRST.
+
+**Blessed path — apply + reboot:**
 ```bash
 cp ~/assistant/scripts/setup/systemd/llama-server.service ~/.config/systemd/user/
-systemctl --user daemon-reload && systemctl --user restart llama-server
-# ExecStartPost blocks until /health ok (120s)
+systemctl --user daemon-reload
+sudo reboot
 ```
+
+**No-reboot path — park Kokoro to recreate boot order (voice is down either way):**
+```bash
+systemctl --user stop kokoro-tts
+systemctl --user restart llama-server     # loads in ~12s with the memory free
+systemctl --user start kokoro-tts
+```
+
+**Run the replay gate in the post-boot window** — right after boot there is
+briefly >2G free; later the harness's 1500MB floor makes it SKIP, and a skip
+is NOT a pass. (2026-07-21: the artifact currently reads `error` from the
+crash window — it must be re-run green before this change counts as done.)
 
 ## Verify
 
