@@ -243,3 +243,55 @@ resurrecting an old worktree**; a stale config silently re-creates the fleet.
 **Prevention (the actual rule).** A memory cap on this box is
 `MemoryHigh` + `MemoryMax` + **`MemorySwapMax=0`** — all three, via drop-in.
 Two out of three is not a cap.
+
+## 7. Scheduled job runs on time and does NOTHING — the zero-effect blind spot (2026-07-22)
+
+**Signature.** Everything is green. The loop logs `nightly run complete` at
+03:00 on the dot, `/health` is 200, `stale: false` on the memory-loops status
+endpoint — and no memory has been written for weeks. This has now happened
+**twice** to the same job: a timezone cast that made the lookback window empty
+(#1217) and ten consecutive nights processing zero users (#1480).
+
+**Diagnosis.** The observability added after the first outage (#1226) records
+*that* the loop ran and raises `stale` when a run is MISSED. A run that happens
+punctually and produces nothing is, to that check, indistinguishable from a
+healthy one — the empty successes were faithfully recorded and never alerted
+on. **A heartbeat that carries only liveness is not a heartbeat.**
+
+**Watch it.**
+- Every recorded run now carries `effect_count` — the summed effects the run
+  actually produced (digest: `extracted + new + superseded + skipped_duplicates`;
+  consolidation: `merged + resolved_contradictions + archived`). Zero means the
+  run did no work at all.
+- Consecutive zero-effect runs accumulate into `zero_effect_streak`; reaching
+  `zero_effect_alert_after` (default 5, `ZOE_MEMORY_LOOP_ZERO_EFFECT_RUNS`;
+  `< 1` disables) sets `zero_effect_alert: true` and escalates the run-complete
+  line in `~/.zoe/zoe-data-memory-loops.log` to a `ZERO-EFFECT ALERT` WARNING.
+- Human-queryable: admin `GET /api/system/memory-loops/status` →
+  `{loops, healthy, alerts}`. `alerts` is prose, e.g. `digest: ran 10 times in
+  a row and did nothing each time (threshold 5)`.
+- **PromQL alert rule:**
+  ```promql
+  # A memory-maintenance loop is running on schedule but doing nothing.
+  - alert: MemoryLoopZeroEffect
+    expr: zoe_memory_loop_zero_effect_alert == 1
+    for: 10m
+    labels: { severity: warning }
+    annotations:
+      summary: "{{ $labels.loop }} loop runs but produces no effects"
+      description: "zoe_memory_loop_zero_effect_streak{loop=\"{{ $labels.loop }}\"} consecutive runs with effect_count 0. Staleness will NOT catch this — the runs are on time. Check the loop's query window (timezone/lookback) and its active-user selection."
+  ```
+
+**Fix.** Zero effect is a *symptom*: read the loop's own selection query first
+(both digest outages were in the "which users / which window" step, not in the
+extraction). Confirm with a manual run and inspect `users` alongside
+`effect_count` — `users: 0` means the selection is empty, `users: N` with
+`effect_count: 0` means the window or the extractor is.
+
+**Prevention (the actual rule).** Any scheduled job's heartbeat must record
+**what the run did, not just that it ran**, and N consecutive no-op runs must
+raise a visible unhealthy state. A job that is *legitimately* idle sometimes
+declares it (`memory_metrics._IDLE_TOLERANT_LOOPS`) rather than having its
+alert threshold quietly raised for everyone — the declaration is reviewable,
+a tuned-away threshold is not. Pinned by
+`services/zoe-data/tests/test_memory_loop_observability.py`.
