@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Auto-generated inventory of every ZOE_* environment flag read in the codebase — defaults, readers, typed_env adoption, and .env.example coverage.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-07-19T00:00:00Z
+timestamp: 2026-07-22T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-07-19T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-07-19. The table body is deterministic (sorted, no
+Last generated: 2026-07-22. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Default `dynamic` = not statically extractable; `(required)` = bare
@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-392 flags; 392 not documented in `.env.example`.
+396 flags; 396 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -97,7 +97,6 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_DATA_DB` | `dynamic` | no | NO | `services/zoe-data/database.py` |
 | `ZOE_DATA_URL` | `'http://127.0.0.1:8000'`, `-` | no | NO | `scripts/maintenance/check_emotional_thread.py`<br>`services/zoe-data/zoe_core_client.py` |
 | `ZOE_DB_ACQUIRE_TIMEOUT_S` | `''` | no | NO | `services/zoe-data/db_pool.py` |
-| `ZOE_DEFAULT_LIGHT_ENTITY` | `'light.all'` | no | NO | `services/zoe-data/intent_router.py` |
 | `ZOE_DEFAULT_MEDIA_PLAYER` | `'media_player.all'` | no | NO | `modules/zoe-music/main.py`<br>`services/zoe-data/intent_router.py` |
 | `ZOE_DEVICE_TOKEN` | `-` | no | NO | `scripts/maintenance/zoe_latency_probe.py` |
 | `ZOE_DIGARR_AI_BASE_URL` | `''` | no | NO | `scripts/maintenance/music_discovery_batch.py` |
@@ -196,6 +195,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_LIVEKIT_FAST_TIERS` | `'0'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_LIVEKIT_IDLE_TIMEOUT_S` | `'300'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_LIVEKIT_ONDEMAND` | `'true'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
+| `ZOE_LIVEKIT_STREAM_TTS` | `'0'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_LIVE_REPO_ROOT` | `'/home/zoe/assistant'` | no | NO | `scripts/maintenance/zoe_apply_intent_gap_contract.py` |
 | `ZOE_LIVE_SERVICE_DIR` | `'/home/zoe/assistant/services/zoe-data'` | no | NO | `scripts/maintenance/router_selftrain.py` |
 | `ZOE_LK_COOLDOWN_TIMEOUT_S` | `'4.0'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
@@ -211,6 +211,8 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_LOCATION_COUNTRY` | `dynamic` | no | NO | `services/zoe-data/routers/weather.py` |
 | `ZOE_LOCATION_LAT` | `'-28.7774'`, `dynamic` | no | NO | `services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/weather.py` |
 | `ZOE_LOCATION_LON` | `'114.6158'`, `dynamic` | no | NO | `services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/weather.py` |
+| `ZOE_LOG_DIR` | `-` | no | NO | `services/zoe-data/logging_setup.py` |
+| `ZOE_LOG_LEVEL` | `-` | no | NO | `services/zoe-data/logging_setup.py` |
 | `ZOE_MAX_BROWSER_TABS` | `'5'` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_MCP_ACTOR_ROLE` | `-` | no | NO | `services/zoe-data/mcp_server.py` |
 | `ZOE_MCP_ACTOR_USER_ID` | `-` | no | NO | `services/zoe-data/mcp_server.py` |
@@ -219,11 +221,13 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_MCP_USER_ROLE` | `-` | no | NO | `services/zoe-data/mcp_server.py` |
 | `ZOE_MEMORY_AUDIT_COLLECTION` | `'mempalace_audit'` | no | NO | `services/zoe-data/memory_service.py` |
 | `ZOE_MEMORY_COMPOSE_ENABLED` | `''` | no | NO | `services/zoe-data/zoe_memory_compose.py` |
+| `ZOE_MEMORY_DIGEST_LOOKBACK_HOURS` | `-` | no | NO | `services/zoe-data/memory_digest.py` |
 | `ZOE_MEMORY_LINK_RESOLVER_ENABLED` | `''` | no | NO | `services/zoe-data/memory_digest.py` |
 | `ZOE_MEMORY_LINT_IN_DREAMING` | `''` | no | NO | `services/zoe-data/memory_lint.py` |
 | `ZOE_MEMORY_LINT_NEAR_DUP_RATIO` | `'0.92'` | no | NO | `services/zoe-data/memory_lint.py` |
 | `ZOE_MEMORY_LINT_STALE_DAYS` | `'365'` | no | NO | `services/zoe-data/memory_lint.py` |
 | `ZOE_MEMORY_LOOP_LOG_PATH` | `'~/.zoe/zoe-data-memory-loops.log'` | no | NO | `services/zoe-data/routers/system.py` |
+| `ZOE_MEMORY_LOOP_ZERO_EFFECT_RUNS` | `-` | no | NO | `services/zoe-data/memory_metrics.py` |
 | `ZOE_MEMORY_STARTUP_STRICT` | `'false'` | no | NO | `services/zoe-data/main.py` |
 | `ZOE_MERGE_QUEUE_ENABLED` | `''` | no | NO | `services/zoe-data/greploop_guard.py` |
 | `ZOE_MERGE_QUEUE_LABEL` | `'auto-merge'` | no | NO | `services/zoe-data/greploop_guard.py` |
@@ -318,7 +322,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_RELATIONSHIP_GRAPH_ENABLED` | `''` | no | NO | `services/zoe-data/relationship_graph.py` |
 | `ZOE_REMINDER_MAX_ATTEMPTS` | `'5'` | no | NO | `services/zoe-data/proactive/engine.py` |
 | `ZOE_REMINDER_STUCK_CLAIM_S` | `'600'` | no | NO | `services/zoe-data/proactive/triggers/reminders.py` |
-| `ZOE_REPO_ROOT` | `''` | no | NO | `services/zoe-data/hermes_http.py` |
+| `ZOE_REPO_ROOT` | `''` | no | NO | `services/zoe-data/repo_paths.py` |
 | `ZOE_RIG_BIND` | `-` | no | NO | `services/zoe-data/ytmusic_signin.py` |
 | `ZOE_RIG_DISPLAY` | `':99'` | no | NO | `services/zoe-data/ytmusic_signin.py` |
 | `ZOE_RIG_GEOMETRY` | `'1280x800x24'` | no | NO | `services/zoe-data/ytmusic_signin.py` |

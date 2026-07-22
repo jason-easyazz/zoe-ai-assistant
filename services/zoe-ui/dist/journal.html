@@ -32,9 +32,9 @@
     </script>
     <title>Zoe - Journal</title>
     
-    <!-- FilePond CSS -->
-    <link href="https://unpkg.com/filepond/dist/filepond.min.css" rel="stylesheet">
-    <link href="https://unpkg.com/filepond-plugin-image-preview/dist/filepond-plugin-image-preview.min.css" rel="stylesheet">
+    <!-- FilePond CSS — VENDORED, see services/zoe-ui/AGENTS.md -->
+    <link href="/lib/filepond/filepond.min.css" rel="stylesheet">
+    <link href="/lib/filepond/plugins/filepond-plugin-image-preview.min.css" rel="stylesheet">
     
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -2015,16 +2015,16 @@
         </div>
     </div>
 
-    <!-- FilePond Scripts -->
-    <script src="https://unpkg.com/filepond-plugin-image-preview/dist/filepond-plugin-image-preview.min.js"></script>
-    <script src="https://unpkg.com/filepond-plugin-image-resize/dist/filepond-plugin-image-resize.min.js"></script>
-    <script src="https://unpkg.com/filepond-plugin-image-transform/dist/filepond-plugin-image-transform.min.js"></script>
-    <script src="https://unpkg.com/filepond-plugin-file-validate-size/dist/filepond-plugin-file-validate-size.min.js"></script>
-    <script src="https://unpkg.com/filepond-plugin-file-validate-type/dist/filepond-plugin-file-validate-type.min.js"></script>
-    <script src="https://unpkg.com/filepond/dist/filepond.min.js"></script>
-    
-    <!-- Browser Image Compression -->
-    <script src="https://cdn.jsdelivr.net/npm/browser-image-compression@2.0.2/dist/browser-image-compression.js"></script>
+    <!-- FilePond Scripts — VENDORED -->
+    <script src="/lib/filepond/plugins/filepond-plugin-image-preview.min.js"></script>
+    <script src="/lib/filepond/plugins/filepond-plugin-image-resize.min.js"></script>
+    <script src="/lib/filepond/plugins/filepond-plugin-image-transform.min.js"></script>
+    <script src="/lib/filepond/plugins/filepond-plugin-file-validate-size.min.js"></script>
+    <script src="/lib/filepond/plugins/filepond-plugin-file-validate-type.min.js"></script>
+    <script src="/lib/filepond/filepond.min.js"></script>
+
+    <!-- Browser Image Compression — VENDORED -->
+    <script src="/lib/browser-image-compression/browser-image-compression.js"></script>
     
     <!-- Zoe Auth (must load first) -->
     <script src="js/auth.js"></script>
