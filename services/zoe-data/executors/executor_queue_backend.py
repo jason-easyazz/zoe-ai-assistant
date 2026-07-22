@@ -224,7 +224,9 @@ def _row_to_hermes(record: asyncpg.Record) -> dict[str, Any]:
         # where the executor records WHY, so surface it under both names.
         "block_reason": record["failure_reason"] if status == "blocked" else None,
         "result": result.get("summary") or result.get("result") or "",
-        "workspace_path": record["work_dir"] or ctx.get("workspace_path") or "",
+        # Always the RESOLVED path — recovery paths in the adapter treat this
+        # as a real directory (it greps the worktree for unpushed commits).
+        "workspace_path": record["work_dir"] or "",
         "idempotency_key": ctx.get("idempotency_key") or "",
     }
 
@@ -254,6 +256,32 @@ _CREATE_VALUE_FLAGS = {
     "assignee", "workspace", "idempotency-key", "max-runtime", "max-retries",
     "created-by", "body", "skill", "parent", "goal", "goal-mode",
 }
+
+
+def resolve_workspace(selector: str, task_id: str) -> str:
+    """Turn the adapter's SYMBOLIC ``--workspace`` selector into a real path.
+
+    The adapter passes ``worktree`` (meaning "the task's own worktree") or
+    ``dir:<abs path>`` (retro runs read-only from the main repo). Under Hermes
+    the selector was resolved by the CLI, and `worktree_bootstrap`
+    additionally pinned the absolute path into `~/.hermes/kanban.db` — a store
+    this backend never reads. So the selector MUST be resolved here: the
+    executor treats `work_dir` as a concrete filesystem path for the worker's
+    sandbox, result file and logs, and would otherwise try to use the literal
+    string "worktree" as a directory and fail before the worker ran.
+
+    `worktree_path()` is deterministic (``~/.worktrees/<task_id>``, or
+    ``ZOE_WORKTREE_ROOT``), so the path is correct even though the adapter
+    creates the worktree a moment AFTER this create call returns.
+    """
+    sel = (selector or "").strip()
+    if sel.startswith("dir:"):
+        return sel[4:]
+    if sel in ("", "worktree"):
+        from worktree_bootstrap import worktree_path  # lazy: heavy import
+
+        return str(worktree_path(task_id))
+    return sel
 
 
 async def run_kanban_command(args: list[str], *, expect_json: bool = False) -> Any:
@@ -375,7 +403,9 @@ async def _cmd_create(
         "body": body,
         "idempotency_key": idem,
         "assignee": assignee,
-        "workspace_path": workspace,
+        # Keep the raw selector for provenance; work_dir carries the resolved
+        # concrete path (see resolve_workspace).
+        "workspace_selector": workspace,
         "phase": phase,
         "lane": "heavy" if phase == "implement" else "light",
         "skills": flags.get("skill") or [],
@@ -399,17 +429,24 @@ async def _cmd_create(
             """INSERT INTO agent_task_queue
                  (agent_id, issue_id, status, priority, runtime_id, work_dir, context,
                   max_attempts, parent_task_id, trigger_summary)
-               VALUES ($1::uuid, NULL, 'queued', 0, $2::uuid, $3, $4::jsonb,
-                       $5, $6::uuid, $7)
+               VALUES ($1::uuid, NULL, 'queued', 0, $2::uuid, NULL, $3::jsonb,
+                       $4, $5::uuid, $6)
                RETURNING id::text""",
-            identity["agent_id"], identity["runtime_id"], workspace,
+            identity["agent_id"], identity["runtime_id"],
             json.dumps(context), max(1, max_retries), parent, title[:500],
+        )
+        # work_dir needs the task id (worktree paths are ~/.worktrees/<id>), so
+        # it is resolved and written here — same transaction, so a row can
+        # never be visible to the executor without its concrete work_dir.
+        work_dir = resolve_workspace(workspace, task_id)
+        await conn.execute(
+            "UPDATE agent_task_queue SET work_dir=$2 WHERE id=$1::uuid", task_id, work_dir
         )
         await _log_activity(
             conn, identity, task_id, "task_created",
             f"queued phase '{phase or 'unknown'}' for {idem} on the "
-            f"{context['lane']} lane (assignee={assignee or 'unset'})",
-            {"idempotency_key": idem, "lane": context["lane"]},
+            f"{context['lane']} lane (assignee={assignee or 'unset'}) in {work_dir}",
+            {"idempotency_key": idem, "lane": context["lane"], "work_dir": work_dir},
         )
     return {"id": task_id, "deduplicated": False}
 

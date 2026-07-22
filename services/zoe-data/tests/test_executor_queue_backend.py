@@ -251,7 +251,7 @@ async def test_create_routes_implement_to_the_heavy_lane_and_logs_it():
     )
     assert out["deduplicated"] is False and out["id"] == "new-id"
     insert = next(a for s, a in conn.statements if "INSERT INTO agent_task_queue" in s)
-    context = json.loads(insert[3])
+    context = json.loads(insert[2])
     assert context["lane"] == "heavy" and context["phase"] == "implement"
     assert conn.logged_actions() == ["task_created"]
 
@@ -262,8 +262,62 @@ async def test_create_routes_non_implement_phases_to_the_light_lane():
     await eb._cmd_create(
         conn, IDENTITY, ["review ZOE-9", "--idempotency-key", "multica:ZOE-9:review", "--json"],
     )
-    context = json.loads(next(a for s, a in conn.statements if "INSERT INTO agent_task_queue" in s)[3])
+    context = json.loads(next(a for s, a in conn.statements if "INSERT INTO agent_task_queue" in s)[2])
     assert context["lane"] == "light" and context["phase"] == "review"
+
+
+@pytest.mark.asyncio
+async def test_create_resolves_the_symbolic_worktree_selector_to_a_real_path(monkeypatch):
+    """`--workspace worktree` is a SELECTOR, not a path. Storing it verbatim
+    would hand the executor the literal string 'worktree' as a directory and
+    the worker would die before running."""
+    monkeypatch.setenv("ZOE_WORKTREE_ROOT", "/tmp/wt-root")
+    conn = FakeConn(fetchval_results=[None, "task-abc"])
+    await eb._cmd_create(
+        conn, IDENTITY,
+        ["implement ZOE-9", "--workspace", "worktree",
+         "--idempotency-key", "multica:ZOE-9:implement", "--json"],
+    )
+    insert = next(a for s, a in conn.statements if "INSERT INTO agent_task_queue" in s)
+    assert None in insert, "work_dir must not be written before the id is known"
+    update = next(a for s, a in conn.statements if "SET work_dir" in s)
+    assert update[1] == "/tmp/wt-root/task-abc"
+    # ...and the raw selector is kept for provenance, not mistaken for a path.
+    context = json.loads(insert[2])
+    assert context["workspace_selector"] == "worktree"
+
+
+@pytest.mark.asyncio
+async def test_create_resolves_a_dir_selector_by_stripping_the_prefix(monkeypatch):
+    """Retro runs pass `dir:<abs path>` (read-only from the main repo)."""
+    conn = FakeConn(fetchval_results=[None, "task-retro"])
+    await eb._cmd_create(
+        conn, IDENTITY,
+        ["retro ZOE-9", "--workspace", "dir:/home/zoe/assistant",
+         "--idempotency-key", "multica:ZOE-9:retro", "--json"],
+    )
+    update = next(a for s, a in conn.statements if "SET work_dir" in s)
+    assert update[1] == "/home/zoe/assistant"
+
+
+def test_resolve_workspace_covers_both_selector_forms(monkeypatch):
+    monkeypatch.setenv("ZOE_WORKTREE_ROOT", "/tmp/wt-root")
+    assert eb.resolve_workspace("worktree", "t1") == "/tmp/wt-root/t1"
+    assert eb.resolve_workspace("", "t1") == "/tmp/wt-root/t1"
+    assert eb.resolve_workspace("dir:/some/path", "t1") == "/some/path"
+    # An already-absolute path passes through untouched.
+    assert eb.resolve_workspace("/already/abs", "t1") == "/already/abs"
+
+
+def test_row_workspace_path_is_the_resolved_dir_not_the_selector():
+    row = {
+        "id": "abc", "status": "queued", "failure_reason": None, "result": None,
+        "context": json.dumps({"workspace_selector": "worktree"}),
+        "work_dir": "/home/zoe/.worktrees/abc",
+    }
+    mapped = eb._row_to_hermes(row)
+    assert mapped["workspace_path"] == "/home/zoe/.worktrees/abc"
+    assert mapped["workspace_path"] != "worktree"
 
 
 @pytest.mark.asyncio
