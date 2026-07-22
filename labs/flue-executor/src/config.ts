@@ -32,6 +32,16 @@ export interface ExecutorConfig {
   pollMs: number;
   /** Hard cap on a worker's wall-clock before it is killed and failed, ms. */
   workerTimeoutMs: number;
+  /** Omnigent heavy lane (§5 decision 2): API base URL. */
+  omnigentBaseUrl: string;
+  /** Omnigent agent to run heavy tasks (default: polly, the claude-sdk workhorse). */
+  omnigentAgentId: string;
+  /** Container name for the docker-exec kick (REST cannot start claude-sdk runs). */
+  omnigentContainer: string;
+  /** Hard cap on an Omnigent session before the task is failed, ms. */
+  omnigentTimeoutMs: number;
+  /** Interval between completion-token polls of an Omnigent session, ms. */
+  omnigentPollMs: number;
 }
 
 function swapDbName(url: string, dbName: string): string {
@@ -73,5 +83,11 @@ export function loadConfig(): ExecutorConfig {
     runtimeId: process.env.LAB_RUNTIME_ID ?? LAB_RUNTIME_ID,
     pollMs: Number(process.env.LAB_POLL_MS ?? '1000'),
     workerTimeoutMs: Number(process.env.LAB_WORKER_TIMEOUT_MS ?? '300000'),
+    omnigentBaseUrl: process.env.LAB_OMNIGENT_URL ?? 'http://127.0.0.1:6767',
+    omnigentAgentId:
+      process.env.LAB_OMNIGENT_AGENT_ID ?? 'ag_057995d1517418e6839f51d340785dd6',
+    omnigentContainer: process.env.LAB_OMNIGENT_CONTAINER ?? 'zoe-omnigent',
+    omnigentTimeoutMs: Number(process.env.LAB_OMNIGENT_TIMEOUT_MS ?? '600000'),
+    omnigentPollMs: Number(process.env.LAB_OMNIGENT_POLL_MS ?? '5000'),
   };
 }

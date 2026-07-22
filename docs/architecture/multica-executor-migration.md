@@ -76,13 +76,16 @@ Replaces the Hermes gateway's `kanban_watchers`. Contract:
 
 Substrate: Flue. `labs/flue-harness-spike/` already has `scout` / `verifier`
 `defineAgentProfile`s and `sandbox: local()`. The missing piece was the claim →
-spawn → report loop, not the agent roles — **the core loop is built and proven
-lab-first in `labs/flue-executor/` (2026-07-21): synthetic end-to-end ticket,
-21/21 asserts, including the reason-on-every-transition write-through and the
-#685 reap.** Evidence: `labs/flue-executor/FINDINGS.md`. The lab increment runs
-the **local lane only** — per §5 decision 2 the **Omnigent spawn path must also
-ship before Phase 1 is complete**; a local-only executor does not satisfy the
-contract.
+spawn → report loop, not the agent roles — **built and lab-proven in
+`labs/flue-executor/`, BOTH lanes (Phase 1 contract complete 2026-07-22):
+33/33 e2e asserts (2026-07-22; suite since grown to 35 — see FINDINGS) — the local Flue worker lane (2026-07-21) plus the Omnigent
+heavy lane live against `zoe-omnigent` (session + staged brief + runner +
+docker-exec kick; completion by nonce token — sessions settle to `idle`, never
+`completed`), with the reason-on-every-transition write-through, the #685
+reap, and Omnigent-down failing loudly while the local lane runs.** Evidence:
+`labs/flue-executor/FINDINGS.md`. What remains before Phase 2: registering the
+executor's `agent_runtime` row and pointing it at the REAL Multica tables
+(the lab mirrors the DDL in a scratch DB).
 
 **The three unknowns — settled 2026-07-21** (full evidence in
 `labs/flue-executor/FINDINGS.md`):

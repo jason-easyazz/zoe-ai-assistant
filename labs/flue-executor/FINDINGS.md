@@ -125,13 +125,75 @@ fix was renaming the lab module to `labdb.ts`. So the e2e demonstrably goes red
 on a real defect, and a real Flue API gotcha is now on record: **do not name an
 app-level module `src/db.ts` in a Flue project.**
 
+## The Omnigent heavy lane — LIVE-PROVEN 2026-07-22 (Phase 1 complete)
+
+Per §5 decision 2, the executor routes `context.lane === 'heavy'` to Omnigent
+at spawn time. Full e2e (`npm run e2e`) after adding the lane: **33/33 asserts
+PASS on 2026-07-22**, including a REAL heavy ticket end-to-end on the live
+`zoe-omnigent`
+(`:6767`): session created for `polly` (claude-sdk), brief staged as a comment,
+runner launched, the `docker exec … omnigent run -r <SID>` kick fired (REST
+alone cannot start a claude-sdk run — re-confirmed), and the session's reply
+carried the per-task nonce token; the executor reported `completed` with the
+full `task_claimed → task_started → task_completed` reasoned chain and the
+session id on the queue row.
+
+Load-bearing findings for Phase 2:
+
+- **Sessions never report `completed`** — they settle back to `idle` after
+  replying. Completion detection MUST be by evidence (the nonce token in the
+  session items), not by session status.
+- **Two real harness outages hit during this build — both are the same class
+  and both now fail fast with the cause on the board.** (1) logged-out
+  claude-sdk (`Not logged in · Please run /login`), fixed by operator
+  re-login; (2) **exhausted account credits** (`You're out of usage credits`)
+  a few hours later. The credit case initially MISSED the fail-fast pattern
+  and burned the full 10-minute timeout — a genuine gap the incident exposed,
+  now closed (the pattern covers login, API-key, credit and rate-limit
+  phrasings). Expect this class to recur: the Omnigent lane depends on a
+  consumer account whose credentials expire (2026-08-22) and whose credits
+  deplete. **This is the top operational risk for Phase 2's heavy lane** —
+  the local lane is unaffected by design.
+- **The anti-silence design proved itself on a real failure.** The first live
+  run failed because the container's claude-sdk harness was logged out (its
+  OAuth record had `expiresAt: 0`). The executor surfaced the ROOT CAUSE in
+  `failure_reason` within seconds — `omnigent claude-sdk harness cannot run
+  (fatal kick error): … Not logged in · Please run /login` — via fail-fast
+  pattern-matching on the kick log, instead of a silent 10-minute timeout.
+  Operator re-login (interactive `claude /login` in the container,
+  2026-07-22) fixed it; the credential expires 2026-08-22, so this WILL
+  recur — the executor's reasoned failure is the designed detection path.
+- **Omnigent-down is loud and contained**: a heavy task fails with
+  `omnigent lane unavailable …; local lane is unaffected` (scenario 6).
+- Orphaned omnigent rows (executor restart) are recovered by the reaper on
+  token EVIDENCE — completed work is never thrown away. Review-hardened
+  (PR #1503 rounds 1–2): ownership (session/nonce/lane) is written to the row
+  BEFORE the kick, so even a crash mid-spawn leaves a dispatched row the
+  reaper recovers by evidence, never blind-requeues; the assembled completion
+  token can never appear in the staged brief (self-completion closed); a 404
+  is authoritative session-gone (reap + requeue, ownership cleared); an
+  UNREACHABLE API is never destructive — the row is held with one loud
+  `task_stuck_evidence_unobservable` activity entry until evidence returns
+  (e2e scenario 4c).
+
+### Current suite state — read this before trusting a number
+
+The suite is **35 asserts** (33 + 2 added for the stuck-log atomicity negative
+control). The **last all-green run was 33/33** — the live heavy ticket
+included — on the spawn path that is still current (ownership-before-kick,
+evidence-based reap). The **two later asserts are green**; the **three live
+Omnigent asserts are currently RED because the container's Claude account ran
+out of usage credits**, not because of a code change. Restoring credits (or
+pointing the harness at API-key billing) should return the suite to all-green;
+the executor now names that cause in `failure_reason` within seconds.
+
 ## Deliberate scope limits
 
-- This increment proves the **local lane only**. Per the migration doc §5
-  decision 2, the Omnigent heavy-lane spawn path must also ship before Phase 1
-  is complete — a local-only executor does not satisfy the contract.
-- The synthetic worker never opens a model session (dead-end provider); model
-  choice per phase is config, proven separately by the spike's live runs.
+- The local synthetic worker never opens a model session (dead-end provider);
+  model choice per phase is config, proven separately by the spike's live runs.
+- The live heavy ticket is a connectivity/contract proof (no file work by
+  design); the §4 Hermes-retirement gate item "≥1 heavy ticket routed to and
+  completed via Omnigent" refers to Phase-2 REAL tickets and stays unticked.
 - The lab mirrors `agent_task_queue`/`activity_log` DDL minus FKs; Phase 2
   targets the real tables and must create the executor's `agent_runtime` row.
 - Multica dispatch stays paused (`~/.zoe/multica_dispatch_paused`);

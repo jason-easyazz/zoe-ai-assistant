@@ -12,12 +12,22 @@ Multica DB):
 
 - **claim** a ready task atomically, single lane (`POLL_DISPATCH_LIMIT=1`
   semantics), via a per-runtime advisory lock + `FOR UPDATE SKIP LOCKED`
-- **spawn** a worker for the task's phase as a real Flue workflow process
+- **route** at spawn time from the claimed task's context (§5 decision 2):
+  `context.lane === 'heavy'` → the **Omnigent lane** (session + staged brief +
+  runner + the docker-exec kick REST cannot do; completion detected by a
+  per-task nonce token in the session items); everything else → the local lane
+- **spawn** a local worker as a real Flue workflow process
   (`flue run phase-worker`) bound to the task's work_dir (worktree handoff)
 - **report** terminal state **with a reason on every transition**, written
   through to `activity_log` in the same transaction — an empty reason throws
-- **reap** workers whose process died (the #685 zombie-lane behaviour):
-  fail with a reason, requeue while attempts remain
+- **reap** dead workers (the #685 zombie-lane behaviour): dead-pid `running`
+  rows, age-stalled `dispatched` rows, and orphaned Omnigent rows (recovered by
+  token evidence, failed by timeout) — always with a reason, requeued while
+  attempts remain
+
+The e2e's Omnigent scenarios need the live `zoe-omnigent` container (`:6767`)
+— the lane test is a REAL claude-sdk session (tiny, no file work), and an
+unreachable Omnigent is an honest test failure, not a skip.
 
 The three migration-doc §3 unknowns are answered with evidence in
 [`FINDINGS.md`](./FINDINGS.md).

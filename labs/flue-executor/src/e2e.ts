@@ -29,6 +29,11 @@ import { bootstrapLabDb, makePool } from './labdb.ts';
 import { claimNextTask, reportTransition, type TaskRow } from './queue.ts';
 import { tick, type ExecutorState } from './executor.ts';
 
+/** A config whose omnigent endpoint is a dead port — evidence unobservable. */
+function cfgDownForReap(cfg: ExecutorConfig): ExecutorConfig {
+  return { ...cfg, omnigentBaseUrl: 'http://127.0.0.1:1' };
+}
+
 let failures = 0;
 function assert(cond: boolean, label: string): void {
   if (cond) {
@@ -50,19 +55,33 @@ async function seedTask(
     workerPid?: number;
     /** status='dispatched' only: backdate dispatched_at by this many ms. */
     dispatchedAgoMs?: number;
+    /** 'heavy' routes to the Omnigent lane; 'omnigent' marks an owned row. */
+    lane?: string;
+    /** Task brief forwarded to the Omnigent session. */
+    brief?: string;
+    /** Seed an omnigent-owned row: session id + nonce markers. */
+    sessionId?: string;
+    nonce?: string;
+    /** status='running' only: backdate started_at by this many ms. */
+    startedAgoMs?: number;
   },
 ): Promise<{ id: string; workDir: string }> {
   const workDir = mkdtempSync(join(tmpdir(), 'flue-executor-e2e-'));
   const context: Record<string, unknown> = { phase: 'implement', mode: opts.mode };
   if (opts.workerPid !== undefined) context['worker_pid'] = opts.workerPid;
+  if (opts.lane !== undefined) context['lane'] = opts.lane;
+  if (opts.brief !== undefined) context['brief'] = opts.brief;
+  if (opts.nonce !== undefined) context['nonce'] = opts.nonce;
   const res = await pool.query(
     `INSERT INTO agent_task_queue
        (agent_id, issue_id, status, priority, runtime_id, work_dir, context, max_attempts,
-        started_at, dispatched_at, trigger_summary)
+        started_at, dispatched_at, session_id, trigger_summary)
      VALUES ($1, gen_random_uuid(), $2, $3, $4, $5, $6::jsonb, $7,
-             CASE WHEN $2 = 'running' THEN now() ELSE NULL END,
+             CASE WHEN $2 = 'running'
+                  THEN now() - ($9::int * interval '1 millisecond') ELSE NULL END,
              CASE WHEN $2 IN ('dispatched','running')
                   THEN now() - ($8::int * interval '1 millisecond') ELSE NULL END,
+             $10,
              'synthetic e2e ticket')
      RETURNING id`,
     [
@@ -74,6 +93,8 @@ async function seedTask(
       JSON.stringify(context),
       opts.maxAttempts ?? 2,
       opts.dispatchedAgoMs ?? 0,
+      opts.startedAgoMs ?? 0,
+      opts.sessionId ?? null,
     ],
   );
   return { id: res.rows[0].id as string, workDir };
@@ -217,6 +238,74 @@ async function main(): Promise<void> {
   assert(s2b === 'completed', `stalled-dispatch task re-ran to completion (got: ${s2b})`);
   await pool.query('TRUNCATE agent_task_queue, activity_log');
 
+  console.log('== 4c. omnigent evidence-based reap: 404 = verified-gone; unreachable = never destructive ==');
+  // A 404 from the live API is an AUTHORITATIVE "session gone": reap + requeue,
+  // and the requeue must clear ownership (session_id, nonce) and remap the lane
+  // marker back to routable 'heavy'.
+  const t7 = await seedTask(pool, cfg, {
+    mode: 'succeed', status: 'running', lane: 'omnigent',
+    sessionId: 'conv_e2e_does_not_exist', nonce: 'deadbeef0000',
+    startedAgoMs: cfg.omnigentTimeoutMs + 60_000, maxAttempts: 2,
+  });
+  const { reapDeadWorkers } = await import('./reaper.ts');
+  await reapDeadWorkers(pool, cfg, state.trackedPids);
+  const row7 = await taskRow(pool, t7.id);
+  assert(row7.status === 'queued' && row7.attempt === 2,
+    `gone-session row was reaped and requeued (got: ${row7.status}, attempt ${row7.attempt})`);
+  const ctx7 = row7.context as Record<string, unknown>;
+  assert(row7.session_id === null && ctx7['nonce'] === undefined && ctx7['lane'] === 'heavy',
+    `requeue cleared ownership and remapped lane to 'heavy' (got session=${row7.session_id}, lane=${ctx7['lane']})`);
+  await pool.query('DELETE FROM agent_task_queue WHERE id=$1', [t7.id]);
+  // Unreachable API: the reaper must NOT fail the row — it logs one loud
+  // stuck entry and holds the lane until evidence is observable again.
+  const t8 = await seedTask(pool, cfg, {
+    mode: 'succeed', status: 'running', lane: 'omnigent',
+    sessionId: 'conv_e2e_unobservable', nonce: 'deadbeef1111',
+    startedAgoMs: cfg.omnigentTimeoutMs + 60_000, maxAttempts: 1,
+  });
+  await reapDeadWorkers(pool, cfgDownForReap(cfg), state.trackedPids);
+  await reapDeadWorkers(pool, cfgDownForReap(cfg), state.trackedPids);
+  const row8 = await taskRow(pool, t8.id);
+  const stuck = await pool.query(
+    `SELECT count(*)::int AS n FROM activity_log
+      WHERE action='task_stuck_evidence_unobservable' AND details->>'task_id'=$1`, [t8.id]);
+  assert(row8.status === 'running',
+    `unobservable-evidence row was NOT destroyed (got: ${row8.status})`);
+  assert(stuck.rows[0].n === 1,
+    `exactly one stuck entry logged across two reap passes (got: ${stuck.rows[0].n})`);
+  await pool.query('DELETE FROM agent_task_queue WHERE id=$1', [t8.id]);
+  // Atomicity negative control: if the activity insert fails, the dedupe
+  // marker must NOT survive — otherwise a crash between the two writes would
+  // silence the stuck signal forever. Force the insert to fail with a CHECK
+  // constraint, then assert the marker is absent and a retry still logs.
+  const t9 = await seedTask(pool, cfg, {
+    mode: 'succeed', status: 'running', lane: 'omnigent',
+    sessionId: 'conv_e2e_atomicity', nonce: 'deadbeef2222',
+    startedAgoMs: cfg.omnigentTimeoutMs + 60_000, maxAttempts: 1,
+  });
+  // NOT VALID: gate only NEW writes — earlier scenarios legitimately inserted
+  // stuck entries, and validating against them would fail the ALTER itself.
+  await pool.query(
+    `ALTER TABLE activity_log ADD CONSTRAINT e2e_block_stuck
+       CHECK (action <> 'task_stuck_evidence_unobservable') NOT VALID`);
+  let reapThrew = false;
+  try {
+    await reapDeadWorkers(pool, cfgDownForReap(cfg), state.trackedPids);
+  } catch {
+    reapThrew = true;
+  }
+  const ctx9 = (await taskRow(pool, t9.id)).context as Record<string, unknown>;
+  assert(reapThrew && ctx9['evidence_stuck_logged'] === undefined,
+    `failed activity insert rolls the dedupe marker back (threw=${reapThrew}, marker=${ctx9['evidence_stuck_logged']})`);
+  await pool.query('ALTER TABLE activity_log DROP CONSTRAINT e2e_block_stuck');
+  await reapDeadWorkers(pool, cfgDownForReap(cfg), state.trackedPids);
+  const stuck9 = await pool.query(
+    `SELECT count(*)::int AS n FROM activity_log
+      WHERE action='task_stuck_evidence_unobservable' AND details->>'task_id'=$1`, [t9.id]);
+  assert(stuck9.rows[0].n === 1,
+    `the retry after the failed write still logs the stuck reason (got: ${stuck9.rows[0].n})`);
+  await pool.query('TRUNCATE agent_task_queue, activity_log');
+
   console.log('== 5. single lane + kill of a hung worker ==');
   const t3 = await seedTask(pool, cfg, { mode: 'hang', priority: 10, maxAttempts: 1 });
   const t4 = await seedTask(pool, cfg, { mode: 'succeed' });
@@ -236,6 +325,40 @@ async function main(): Promise<void> {
     `failure_reason names the death (got: ${reason3.rows[0].failure_reason})`);
   const s4 = await untilStatus(pool, cfg, state, t4.id, ['completed', 'failed'], 120_000);
   assert(s4 === 'completed', `lane freed; queued task then completed (got: ${s4})`);
+  await pool.query('TRUNCATE agent_task_queue, activity_log');
+
+  console.log('== 6. omnigent lane down -> heavy task fails loudly, with a reason ==');
+  const cfgDown = { ...cfg, omnigentBaseUrl: 'http://127.0.0.1:1' };
+  const t5 = await seedTask(pool, cfg, { mode: 'succeed', lane: 'heavy', maxAttempts: 1 });
+  const s5 = await untilStatus(pool, cfgDown, state, t5.id, ['failed', 'completed'], 60_000);
+  assert(s5 === 'failed', `heavy task failed when omnigent is down (got: ${s5})`);
+  const reason5 = (await taskRow(pool, t5.id)).failure_reason as string | null;
+  assert(/unavailable|no online host/.test(reason5 ?? ''),
+    `failure_reason names the down lane (got: ${reason5})`);
+  await pool.query('TRUNCATE agent_task_queue, activity_log');
+
+  console.log('== 7. omnigent lane LIVE: heavy synthetic ticket end-to-end ==');
+  const { omnigentHealthy } = await import('./omnigent.ts');
+  assert(await omnigentHealthy(cfg),
+    'live omnigent reachable with an online host (hard requirement on the dev box)');
+  const t6 = await seedTask(pool, cfg, {
+    mode: 'succeed', lane: 'heavy', maxAttempts: 1,
+    brief: 'Connectivity proof for the flue-executor Omnigent lane. No file or command work is required.',
+  });
+  const s6 = await untilStatus(pool, cfg, state, t6.id, ['completed', 'failed'], 360_000);
+  assert(s6 === 'completed', `heavy ticket completed via omnigent (got: ${s6})`);
+  const row6 = await taskRow(pool, t6.id);
+  assert(typeof row6.session_id === 'string' && (row6.session_id as string).length > 0,
+    'omnigent session id recorded on the queue row');
+  const result6 = row6.result as { ok?: boolean; sessionId?: string } | null;
+  assert(result6?.ok === true && result6?.sessionId === row6.session_id,
+    'result jsonb names the completing session');
+  const acts6 = await activityActions(pool, t6.id);
+  assert(
+    JSON.stringify(acts6) === JSON.stringify(['task_claimed', 'task_started', 'task_completed']),
+    `omnigent lane logged the full reasoned transition chain (got: ${acts6.join(' -> ')})`,
+  );
+  assert(await allReasonsNonEmpty(pool, t6.id), 'omnigent-lane reasons are all non-empty');
 
   await pool.end();
   console.log(failures === 0 ? '\nE2E: ALL PASS' : `\nE2E: ${failures} FAILURE(S)`);
