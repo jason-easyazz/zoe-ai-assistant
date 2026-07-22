@@ -38,8 +38,8 @@ The desktop surface splits into a **live core with real value** (chat.html, sett
 calendar.html, notes, lists, jukebox, setup-*), a **broken-but-alive tier** (24 confirmed P1s:
 8 XSS sink areas, calendar data-loss, dead people.html, placebo controls, a PWA manifest that
 isn't in git), and a **verified-dead tier** (~30k+ lines). 61 of 329 client-called endpoints
-are MISSING or MOVED — the honest measure of the rot. Direction: **desktop is Zoe's
-keyboard-first deep-work power surface**; the estate panel stays the ambient face.
+are MISSING or MOVED — the honest measure of the rot. Direction: **desktop is Zoe's library and
+workbench — see everything, load anything** (see Direction); the estate panel stays the ambient face.
 
 ## FUNCTION FIRST — Jason's reframe (2026-07-20)
 
@@ -124,7 +124,39 @@ that must never break.
 
 ## Direction
 
-- **Desktop = the deep-work face** (chat workspace, bulk PIM editing, fleet/admin console).
+> **Jason, 2026-07-20 — what each surface IS:**
+> *"Imagine touch is a panel on a wall or by the bed, it's voice and touch native. And the desktop
+> is something you bring up on your computer, another gateway to Zoe — somewhere you can see all
+> your notes, calendar items, contacts etc, somewhere you can load reminders. And then imagine it
+> eventually being able to do more: interact with your computer, sync things, give you
+> notifications."*
+
+This is the plan's north star. It is **not** the same claim as "desktop = deep-work power surface",
+which was a judge-panel inference; where the two disagree, the thesis wins.
+
+- **Touch = presence.** A wall/bedside panel, voice- and touch-native. Answers *what matters right
+  now*: glanceable, spoken, ambient, physical. Deliberately shallow.
+- **Desktop = the library and the workbench.** *"Another gateway to Zoe"* — a peer, not a lesser
+  surface. Answers *show me everything*: all notes, all calendar items, all contacts, all reminders,
+  in a place you can read, search and edit with a keyboard. Somewhere you can **load** things.
+- **Desktop, later = Zoe present on the machine** — interacting with your computer, syncing,
+  notifying. This is what makes the thin native shell worth building: not a nicer window, but
+  presence (global summon, tray, eventually screen context).
+
+**The test every desktop item is now ranked against: "can you see everything, and load anything?"**
+A capability the backend already has but no screen exposes is not a nice-to-have — it is a hole in
+the stated product.
+
+- **NO desktop→touch links** *(standing rule, Jason 2026-07-20: "desktop is desktop, touch is
+  touch")*. No desktop page may link, redirect, or deep-link into `/touch/*`. **A gateway that
+  bounces you into the kiosk UI is not a gateway.** If desktop needs a capability, desktop gets its
+  own surface — which is why `music.html` is rebuilt rather than redirected. Two consequences
+  already applied below: the shared nav carries no `/touch/` entries (Wave 2), and the
+  `notifications-panel.js` deep-links are severed rather than repointed (Wave 3).
+  **Corollary:** `touch/` is edited only by Jason's own retirement work, never as part of desktop
+  work — but read it freely, it is the working reference architecture. Shared files
+  (`js/common.js`, `js/journal-api.js`, `sw.js`, `js/notifications-panel.js`) stay
+  backward-compatible with their touch consumers.
 - **Design work is deferred** (see FUNCTION FIRST). The `skybridge-ds.css` token layer remains the
   eventual target for both surfaces, but no wave blocks on it.
 - **Honesty-by-removal** is the default for UI with no backend — but only after verifying the
@@ -174,7 +206,7 @@ skip-list, `sw.js` cache routes, `voice_tts.py:526-530` supersede/cancel list.
 | `index.html` | **keep-fix (the ONE auth surface)** | nginx index + SPA fallback; absorbs auth.html's flows |
 | `auth.html` | **fold into index.html → stub** | Reflected DOM XSS via `?setup=`. **`index.html:1036` must be rewritten in the same PR or it loops** |
 | `dashboard.html` | **redo (rebuild as THE landing page)** | Jason's call. Rebuild on tokens; salvage the 8 working widget bindings |
-| `updates.html` | **retire desktop copy; KEEP `touch/updates.html`** | The panel deep-links only to the touch copy — it is the repoint target, so it must survive |
+| `updates.html` | **retire desktop copy; KEEP `touch/updates.html`** | Survives for the panel's own use. **Desktop severs its deep-links to it** (no-cross-links rule) — it is *not* a repoint target |
 | `voice.html` (desktop) | **retire** | True orphan. **`touch/voice.html` is NOT retired — see below** |
 | `touch/voice.html` | **KEEP — not this overhaul** | Live `lets_talk` target (`chat.py:71`, `voice_tts.py:1111`); replay-gated. Retires with the Ask-card cutover (PLANS Phase 1c) |
 | `touch/smart-home.html` | **RETIRE — the estate owns smart-home** | **CORRECTED 2026-07-20 (Jason): all touch interfaces now live in `home.html`.** An earlier verdict kept this page as "the only smart-home UI, no estate replacement" — that was wrong. The estate calls `/api/ha/entities` and `/api/ha/control` directly (3 sites in `touch/home.html`), so it owns smart-home. The "no estate surface" line in `chat.py:58-60` is about NAVIGATION DOMAINS, not HA capability, and I over-read it. This page is legacy: do NOT fix its dead `/api/ha/{states,areas,scene}` calls — retire it with the rest of the legacy touch island. **It is NOT an orphan — prune every referrer in the SAME PR as the deletion, or tap/voice paths 404. The full verified referrer list is Wave 3 step 3** |
@@ -309,10 +341,18 @@ Wave 2's auth/nav/plumbing items move into Wave F; only its token/theme work is 
 **F3 — The lists-items shape fix** (root cause 1): one shared two-step helper, applied to
 calendar's task sidebar, lists.html, and `tasks.js`.
 
-**F4 — Free wins (live backend, zero UI, small effort).**
-- **Reminders are write-only on desktop.** Nine routes exist (`reminders.py:96/130/151/220/252/317`);
-  desktop only POSTs and polls pending. **Nobody can see, edit, snooze or delete a reminder anywhere.**
-  Highest user-visible value on this list.
+**F4 — "See everything, load anything": the desktop feature set.**
+
+**Re-framed by the thesis (2026-07-20). This is no longer a scraps list.** These are capabilities
+Zoe's backend already has and no screen exposes — which is precisely the product Jason described.
+Ranked by the thesis test, not by effort. "Live backend, zero UI, small effort" is now an argument
+these should come *sooner*, not that they are optional.
+
+- **Reminders — a CORE desktop job, not a free win.** *"Somewhere you can load reminders"* is named
+  in the thesis. Nine routes exist (`reminders.py:96/130/151/220/252/317`); desktop only POSTs and
+  polls pending. **Nobody can see, edit, snooze or delete a reminder anywhere** — you can create one
+  and never see it again. This is the single largest gap between the stated product and the built
+  one, and it needs a real read/edit surface, not a widget.
 - `GET/PUT /api/dashboard/layout/` — zero callers; pairs with Wave 4b (schema caveats there).
 - `GET /api/dashboard/widgets/available` (`dashboard.py:183`) — a ready-made widget-picker catalogue.
 - Journal `search` / `mood` / date filters (`journal.py:124-128`) — built, unexposed.
@@ -322,6 +362,15 @@ calendar's task sidebar, lists.html, and `tasks.js`.
 - `GET /api/lists/types`, `GET /api/calendar/events/today`, `GET /api/transactions/summary/week`.
 - **Rooms** — the newest system in the repo (2026-07-19) and desktop has **no room concept at all**,
   though #1442 made "turn off the light" room-scoped. Reference: `touch/home.html:2863-2886`.
+- **Web push is product, not hygiene.** *"Give you notifications"* is named in the thesis. The stack
+  is already wired (VAPID keys + an `sw.js` push handler); a single strict-mode `ReferenceError` at
+  `push-notifications.js:132` kills every subscribe (triage item 20). A one-line fix restores a
+  headline capability — promote it out of the hygiene bucket.
+
+**Search and filter are load-bearing here.** "See everything" fails at scale without them: the
+journal `search`/`mood`/date filters and `people/search` above are not extras, they are what makes
+a library usable once it holds more than a screenful. Wherever a list surface lands, it ships with
+its filter.
 - **Multi-room speaker grouping** (`/api/music/{groups,group,ungroup}`, #1425) — zero callers anywhere.
 - **`portrait.py` and `proactive.py` are entire routers with no UI** — portrait/emotional-moments and
   proactive suggestions accept/dismiss. Evaluate as product, not just wiring.
@@ -410,11 +459,18 @@ collections/tiles canvas, `/api/music/similar`.
   `auth.html` is a **critical file in both manifests**.
 - **One shared nav.** Specify the **complete post-Wave-3 entry list**, not a delta — and **delete the
   hardcoded per-page nav markup in the same PR** (13 pages carry their own More-menu + mobile-nav
-  blocks; adding a shared nav without removing them leaves ~40 links to 404). Keep Cooking pointing
-  at `/touch/cooking.html` (that target survives). **Drop Smart Home entirely** — its target retires
-  (see the verdict table and Wave 3 step 3); the estate owns smart-home, and the panel reaches it
-  from `home.html`, not from desktop nav. Drop Developer/Games. Keep Updates pointing at
-  `touch/updates.html`.
+  blocks; adding a shared nav without removing them leaves ~40 links to 404).
+  **The shared desktop nav contains ZERO `/touch/*` entries** (no-cross-links rule, see Direction).
+  Two independent reasons converge here, and both are worth keeping:
+  - **Smart Home: drop entirely** — its target *retires* (verdict table + Wave 3 step 3). The estate
+    owns smart-home and the panel reaches it from `home.html`, so a desktop nav entry would point at
+    a deleted page. **This one would 404 even without the no-cross-links rule.**
+  - **Cooking: drop too** — `touch/cooking.html` survives, so this is *not* a 404 risk; it is dropped
+    purely because desktop must not link into the kiosk UI. Desktop has no cooking surface of its
+    own, and inventing one is out of scope for this overhaul.
+  - **Updates: sever, do not repoint** — see Wave 3 step 2. Same rule as Cooking: the target
+    survives, the desktop link does not.
+  - Drop Developer/Games (dead targets).
 - Add a `<script src>` to **settings.html** (it loads none) or it gets neither nav nor theme.
 - Standardize `auth.js` + enforceAuth on every authed page — ends the logged-out 401/WS churn.
 - **SW_VERSION bump** (`index.html`, `dark-mode-shared.css`, `js/auth.js`).
@@ -422,9 +478,34 @@ collections/tiles canvas, `/api/music/similar`.
 ### Wave 3 — Retire the dead tier (sequenced; referrers first, targets second)
 1. Delete the 11 orphaned legacy touch pages. **Prune each page's `touch-menu.js`/`touch-nav.js`
    entries and its `TOUCH_PAGES` voice-map entry in the SAME PR.**
-2. **Retire desktop `updates.html` only — `touch/updates.html` SURVIVES** as the deep-link target
-   (`notifications-panel.js:345/:358`, loaded on 20 pages). No repoint needed.
-3. **Smart-home retirement — one PR, target + stub + all six referrer sites.** Delete
+2. **Retire desktop `updates.html` only — `touch/updates.html` SURVIVES** for the panel's own use.
+   **But desktop must STOP deep-linking into it.** `notifications-panel.js:345/:358` is loaded on
+   ~20 desktop pages and sends the user into the kiosk UI; under the no-cross-links rule that is
+   exactly what a gateway must not do. **Sever both links** — the notifications panel already
+   renders the notification list inline, so the "view all" deep-link can simply go, and a desktop
+   updates surface (if wanted) is a later, separate decision.
+
+   **CONCRETE GUARDRAIL — do NOT delete the handlers globally.** `notifications-panel.js` is
+   loaded by BOTH desktop pages and surviving touch pages, and `touch/updates.html` stays alive
+   for the panel. Deleting `:345/:358` outright severs the touch surfaces' own working route to
+   it — breaking the page this very step is preserving. Required instead: make the deep-link
+   **desktop-only at runtime**, e.g.
+
+   ```js
+   // touch surfaces keep their route to touch/updates.html; desktop pages do not get one
+   const IS_TOUCH_SURFACE = location.pathname.startsWith('/touch/');
+   if (IS_TOUCH_SURFACE) { /* existing "view all" deep-link */ }
+   ```
+
+   Any equivalent gate is fine (a data-attribute on the host page, a caller-passed option); what
+   is NOT fine is an unconditional deletion, or a copy of the script for each tier. **Acceptance
+   for this step: load a surviving touch page and confirm "view all" still reaches
+   `touch/updates.html`, AND load a desktop page and confirm no route into `/touch/` exists.**
+   Both halves must be checked — verifying only the desktop half is how the touch regression
+   ships unnoticed. This is the shared-`js/` rule in the guardrails, stated concretely because
+   "gate on the consumer check" is not an instruction anyone can follow.
+3. **Smart-home retirement — one PR: target + stub + ALL SEVEN referrer sites below.** (Count them
+   off the list; two of the seven live in the same file, which is exactly how one gets missed.) Delete
    `touch/smart-home.html` AND the 11-line desktop `smart-home.html` stub (it meta-refreshes to the
    target, so it cannot survive it). `touch/cooking.html` is unaffected — delete the desktop
    `cooking.html` stub only, its touch target **stays**.
