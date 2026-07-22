@@ -13,7 +13,7 @@
  * LAB ONLY.
  */
 import { spawn } from 'node:child_process';
-import { openSync, closeSync, readFileSync } from 'node:fs';
+import { openSync, closeSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type pg from 'pg';
@@ -56,6 +56,28 @@ export async function spawnWorker(
   if (!workDir) {
     await reportTransition(pool, cfg.runtimeId, task, 'failed',
       'task has no work_dir (worktree handoff missing) — cannot spawn a worker');
+    return null;
+  }
+  // The dispatcher commits the queue row BEFORE it creates the worktree, so a
+  // fast poll can legitimately claim a task whose directory does not exist
+  // yet. Opening the worker's log files under an absent directory would ENOENT
+  // and strand the row as dispatched, holding the single lane until the
+  // stalled-dispatch reaper ran. Defer instead — put it back on the queue
+  // WITHOUT burning an attempt, and let the next tick pick it up once the
+  // worktree lands. Bounded: if the directory is still missing after the
+  // worker timeout, the worktree is never coming and the task fails loudly.
+  if (!existsSync(workDir)) {
+    const ageMs = task.created_at ? Date.now() - new Date(task.created_at).getTime() : 0;
+    if (ageMs > cfg.workerTimeoutMs) {
+      await reportTransition(pool, cfg.runtimeId, task, 'failed',
+        `work_dir ${workDir} never appeared (still missing ${Math.round(ageMs / 1000)}s after the ` +
+        'row was queued) — the dispatcher did not create the worktree');
+      return null;
+    }
+    await reportTransition(pool, cfg.runtimeId, task, 'queued',
+      `work_dir ${workDir} does not exist yet (dispatcher still preparing the worktree) — ` +
+      'returned to the queue without burning an attempt',
+      { requeue: true, keepAttempt: true, action: 'task_deferred' });
     return null;
   }
   const resultPath = join(workDir, 'result.json');
