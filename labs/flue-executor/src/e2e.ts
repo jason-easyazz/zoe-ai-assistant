@@ -20,7 +20,7 @@
  *
  * LAB ONLY.
  */
-import { mkdtempSync, existsSync } from 'node:fs';
+import { mkdtempSync, existsSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pg from 'pg';
@@ -304,6 +304,34 @@ async function main(): Promise<void> {
       WHERE action='task_stuck_evidence_unobservable' AND details->>'task_id'=$1`, [t9.id]);
   assert(stuck9.rows[0].n === 1,
     `the retry after the failed write still logs the stuck reason (got: ${stuck9.rows[0].n})`);
+  await pool.query('TRUNCATE agent_task_queue, activity_log');
+
+  console.log('== 4d. work_dir not created yet -> defer, do NOT burn an attempt ==');
+  // The dispatcher commits the queue row before creating the worktree, so a
+  // fast claim can see a directory that does not exist yet.
+  const missingDir = join(tmpdir(), `flue-executor-absent-${Date.now()}`);
+  const t10 = await pool.query(
+    `INSERT INTO agent_task_queue
+       (agent_id, issue_id, status, priority, runtime_id, work_dir, context, max_attempts, trigger_summary)
+     VALUES ($1, gen_random_uuid(), 'queued', 0, $2, $3, '{"phase":"implement","mode":"succeed"}'::jsonb, 2, 'absent workdir')
+     RETURNING id`,
+    [LAB_AGENT_ID, cfg.runtimeId, missingDir],
+  );
+  const t10id = t10.rows[0].id as string;
+  await tick(pool, cfg, state);
+  const row10 = await taskRow(pool, t10id);
+  assert(row10.status === 'queued',
+    `task with an absent work_dir returns to the queue, not dispatched (got ${row10.status})`);
+  assert(row10.attempt === 1,
+    `deferral did NOT burn an attempt (got attempt ${row10.attempt})`);
+  const acts10 = await activityActions(pool, t10id);
+  assert(acts10.includes('task_deferred'),
+    `the deferral is on the board with a reason (got ${acts10.join(' -> ')})`);
+  assert(await allReasonsNonEmpty(pool, t10id), 'deferral reason is non-empty');
+  // Once the directory exists, the very next tick runs it normally.
+  mkdirSync(missingDir, { recursive: true });
+  const s10 = await untilStatus(pool, cfg, state, t10id, ['completed', 'failed'], 120_000);
+  assert(s10 === 'completed', `once the worktree lands the task runs normally (got ${s10})`);
   await pool.query('TRUNCATE agent_task_queue, activity_log');
 
   console.log('== 5. single lane + kill of a hung worker ==');

@@ -30,10 +30,12 @@ export interface TaskRow {
   max_attempts: number;
   context: Record<string, unknown> | null;
   work_dir: string | null;
+  /** Used to bound the not-yet-created-worktree deferral (see spawn.ts). */
+  created_at?: string | Date | null;
 }
 
 const TASK_COLS =
-  'id, agent_id, issue_id, status, attempt, max_attempts, context, work_dir';
+  'id, agent_id, issue_id, status, attempt, max_attempts, context, work_dir, created_at';
 
 /**
  * Claim the next ready task for this runtime, or null when the lane is busy or
@@ -113,6 +115,11 @@ export async function reportTransition(
     sessionId?: string;
     /** to='queued' only: requeue bumps attempt and clears run state. */
     requeue?: boolean;
+    /** to='queued' only: return the task WITHOUT burning an attempt. For
+     * "not ready yet" deferrals (e.g. the worktree the adapter creates just
+     * after the row commits) — a deferral is not a failed attempt, and
+     * counting it would exhaust max_attempts on a task that never ran. */
+    keepAttempt?: boolean;
   } = {},
 ): Promise<boolean> {
   requireReason(reason);
@@ -159,7 +166,7 @@ export async function reportTransition(
       // clean and cannot be mistaken for one that still owns an old session.
       const res = await client.query(
         `UPDATE agent_task_queue
-            SET status='queued', attempt=attempt+1,
+            SET status='queued', attempt=attempt+${opts.keepAttempt ? 0 : 1},
                 dispatched_at=NULL, started_at=NULL, completed_at=NULL,
                 failure_reason=NULL, session_id=NULL,
                 context = (coalesce(context,'{}'::jsonb)

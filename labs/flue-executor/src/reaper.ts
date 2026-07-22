@@ -35,7 +35,7 @@ export async function reapDeadWorkers(
   trackedPids: Set<number>,
 ): Promise<number> {
   const res = await pool.query(
-    `SELECT id, agent_id, issue_id, status, attempt, max_attempts, context, work_dir
+    `SELECT id, agent_id, issue_id, status, attempt, max_attempts, context, work_dir, created_at
        FROM agent_task_queue
       WHERE runtime_id = $1 AND status = 'running'`,
     [cfg.runtimeId],
@@ -171,7 +171,7 @@ const DISPATCH_STALL_GRACE_MS = 30_000;
 
 async function reapStalledDispatched(pool: pg.Pool, cfg: ExecutorConfig): Promise<number> {
   const res = await pool.query(
-    `SELECT id, agent_id, issue_id, status, attempt, max_attempts, context, work_dir
+    `SELECT id, agent_id, issue_id, status, attempt, max_attempts, context, work_dir, created_at
        FROM agent_task_queue
       WHERE runtime_id = $1 AND status = 'dispatched'
         AND dispatched_at < now() - ($2::int * interval '1 millisecond')`,
