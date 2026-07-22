@@ -1,15 +1,9 @@
 {
-  "_comment": "Container-relative MCP config for the zoe-omnigent container (audit fix #4). docker-compose.module.yml bind-mounts THIS file over /workspace/.mcp.json (read-only), so Claude Code with --project /workspace auto-loads it — no manual copy. Code-intel binaries are bind-mounted READ-ONLY at identical host paths, so /home/zoe/.local/bin/... resolves verbatim. serena's --project is /workspace (where the repo is mounted), unlike the committed repo-root .mcp.json which targets host path /home/zoe/assistant. opensrc is a CLI (on PATH via the bin mount + PATH env), not an MCP server, so it is intentionally not listed here.",
+  "_comment": "Container-relative MCP config for the zoe-omnigent container (audit fix #4). docker-compose.module.yml bind-mounts THIS file over /workspace/.mcp.json (read-only), so Claude Code with --project /workspace auto-loads it — no manual copy. serena is the HOST'S SHARED server (serena-mcp.service, one process for the whole agent fleet), reached over the internal zoe-codeintel network at its gateway 172.28.0.1:9121 via scripts/setup/systemd/serena-bridge.{socket,service}; Serena itself still binds 127.0.0.1 only. Do NOT put a stdio serena back here: each container-spawned server costs ~900 MB RSS on a 15.6 GB box shared with llama-server + Kokoro (pinned by tests/unit/modules/test_omnigent_mcp_config.py). The shared server's --project is the host checkout /home/zoe/assistant, which is the SAME tree as /workspace (compose bind-mounts ../../:/workspace), so Serena's relative paths resolve identically inside the container. codebase-memory still runs in-container from the read-only host bin mount, so /home/zoe/.local/bin/... resolves verbatim. opensrc is a CLI (on PATH via the bin mount + PATH env), not an MCP server, so it is intentionally not listed here.",
   "mcpServers": {
     "serena": {
-      "command": "/home/zoe/.local/bin/serena",
-      "args": [
-        "start-mcp-server",
-        "--context", "claude-code",
-        "--project", "/workspace",
-        "--transport", "stdio",
-        "--enable-web-dashboard", "false"
-      ]
+      "type": "http",
+      "url": "http://172.28.0.1:9121/mcp"
     },
     "codebase-memory": {
       "command": "/home/zoe/.local/bin/codebase-memory-mcp"

@@ -26,14 +26,33 @@ fi
 #    ALLOW-LIST, not a deny-list: matching known-bad wildcards (0.0.0.0, [::])
 #    would silently pass a specific non-loopback bind such as
 #    `--host 192.168.1.218`. Anything that is not loopback fails.
-while read -r local_addr; do
+#
+#    ONE sanctioned exception, and it is never Serena itself: the scoped bridge
+#    for the zoe-omnigent container (scripts/setup/systemd/system/
+#    serena-bridge.{socket,service}) puts a systemd-socket-proxyd listener on
+#    ${BRIDGE_ADDR}, the gateway of the one-member internal `zoe-codeintel`
+#    network, restricted by IPAddressAllow. Without this arm the check would
+#    start failing the moment that bridge is installed. It is deliberately
+#    narrow: the exact address, the socket unit actually active, AND the socket
+#    must not belong to serena — a Serena rebound onto that address still fails.
+BRIDGE_ADDR="172.28.0.1:${PORT}"
+while read -r local_addr proc; do
     [ -n "$local_addr" ] || continue
     case "${local_addr%:*}" in           # strip the :port -> 127.0.0.1 | [::1] | 0.0.0.0 | *
-        127.*|"[::1]"|"::1") ;;          # loopback: fine
-        *) fail "port ${PORT} is bound to '${local_addr%:*}', beyond loopback (must be 127.0.0.1 only)" ;;
+        127.*|"[::1]"|"::1") continue ;; # loopback: fine
     esac
+    case "$proc" in
+        *'"serena"'*) fail "Serena itself is bound to '${local_addr%:*}', beyond loopback (must be 127.0.0.1 only)" ;;
+    esac
+    if [ "$local_addr" = "$BRIDGE_ADDR" ] \
+       && systemctl is-active --quiet serena-bridge.socket 2>/dev/null; then
+        echo "NOTE: ${BRIDGE_ADDR} is the scoped serena-bridge proxy (system unit," \
+             "IPAddressAllow-restricted to the omnigent container); Serena itself is loopback-only."
+        continue
+    fi
+    fail "port ${PORT} is bound to '${local_addr%:*}', beyond loopback (must be 127.0.0.1 only)"
 done <<EOF
-$(ss -lnt "sport = :${PORT}" 2>/dev/null | awk 'NR > 1 {print $4}')
+$(ss -lntp "sport = :${PORT}" 2>/dev/null | awk 'NR > 1 {print $4, $6}')
 EOF
 
 # 3. Real MCP initialize handshake. Streamable HTTP requires BOTH content types
