@@ -1,0 +1,62 @@
+# Proxy half of the Serena code-intel bridge. SYSTEM unit, socket-activated.
+#
+# Forwards connections accepted on serena-bridge.socket (172.28.0.1:9121, the
+# gateway of the internal `zoe-codeintel` Docker network, one member:
+# zoe-omnigent) to the shared Serena MCP server on 127.0.0.1:9121. The full
+# rationale — why the bridge exists, why Serena keeps its loopback-only bind,
+# why the IP access list is the real boundary, and why this is a system unit —
+# is in serena-bridge.socket. Read that first.
+#
+# Short version: zoe-omnigent used to spawn a private ~900 MB Serena per agent
+# session; the host already runs one shared server. Serena can read the entire
+# repo, so it must never bind beyond 127.0.0.1.
+#
+# systemd-socket-proxyd, not socat: socat is not installed on this box.
+#
+# This unit has NO [Install] section on purpose — enable the SOCKET
+# (`systemctl enable --now serena-bridge.socket`); it activates this on demand.
+
+[Unit]
+Description=Serena MCP bridge (zoe-codeintel gateway -> shared Serena on 127.0.0.1:9121)
+Documentation=file:///home/zoe/assistant/scripts/AGENTS.md
+Requires=serena-bridge.socket
+After=serena-bridge.socket
+# The proxy is useless without the shared server, but must not take it down or
+# refuse to start while it restarts: Wants=, not Requires=. serena-mcp.service
+# is a USER unit, so there is no system-scope ordering edge to declare here —
+# a connection arriving before it is up simply fails and is retried.
+
+[Service]
+# Type=simple, matching the systemd-socket-proxyd(8) example: the listening
+# socket is already open (the socket unit owns it), so there is nothing for a
+# readiness protocol to gate.
+Type=simple
+ExecStart=/lib/systemd/systemd-socket-proxyd 127.0.0.1:9121
+
+# Least privilege: this is a byte shuffler. It needs no filesystem, no user, and
+# only loopback + the one container address.
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateDevices=yes
+RestrictAddressFamilies=AF_INET AF_UNIX
+# Replicated from the socket unit (systemd.resource-control(5) recommends
+# setting the list on both). `localhost` is required here and NOT on the socket:
+# this half makes the OUTBOUND connection to the shared Serena on 127.0.0.1.
+IPAddressDeny=any
+IPAddressAllow=localhost 172.28.0.2/32
+
+# A few MB of buffers. The cap is a containment bound, not a tuning knob, and it
+# must never swap in front of the voice stack.
+MemoryMax=64M
+MemorySwapMax=0
+# Dev tooling: it must lose any memory fight against llama-server / kokoro /
+# zoe-data, exactly like serena-mcp.service itself.
+Nice=10
+OOMScoreAdjust=500
+Restart=on-failure
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=serena-bridge

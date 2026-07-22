@@ -149,11 +149,33 @@ at their identical host paths**, so the absolute paths in the root `.mcp.json` a
 `codebase-memory-mcp` is a self-contained static aarch64 ELF; `serena` and `opensrc` are
 symlinks whose targets are covered by the mounts above.
 
-**Container `.mcp.json`:** the root `.mcp.json` pins serena to `--project /home/zoe/assistant`,
-but inside the container the repo lives at `/workspace`. Use the tracked container-relative
-`modules/omnigent/.mcp.json` (serena `--project /workspace`) for Claude-in-container — copy it
-to `/workspace/.mcp.json` (or to the agent's cwd) if the host root `.mcp.json` is not the one
-that should be active inside the container.
+**Container `.mcp.json`:** the tracked `modules/omnigent/.mcp.json` is bind-mounted (read-only)
+over `/workspace/.mcp.json`, so Claude Code with `--project /workspace` auto-loads it.
+`codebase-memory` runs in-container from the read-only bin mount above; **serena does not**.
+
+**Serena is the host's SHARED server — never a stdio spawn here.** The old config gave serena
+a `command` + `--transport stdio`, so every agent session started its own server: ~900 MB RSS
+each, on a 15.6 GB box that also runs llama-server + Kokoro. That pressure starved the deploy
+gate and contributed to llama-server CUDA-OOM crashes. The entry is now
+`{"type": "http", "url": "http://172.28.0.1:9121/mcp"}` — the host's `serena-mcp.service`,
+reached over `zoe-codeintel`:
+
+- `zoe-codeintel` is an `internal` Docker network (subnet pinned to `172.28.0.0/24`) declared
+  in `docker-compose.module.yml`, with exactly one member: this container, pinned at
+  `172.28.0.2`. `zoe-network` is unchanged, so cloudflared still reaches `zoe-omnigent:6767`.
+- Serena itself still binds `127.0.0.1` only. The root units
+  `scripts/setup/systemd/system/serena-bridge.{socket,service}` proxy the gateway address to
+  that loopback port, with `IPAddressDeny=any` / `IPAddressAllow=172.28.0.2/32`.
+- **The access list — not the network — is what scopes it.** Measured 2026-07-22: any container
+  on any bridge can reach a HOST address (gateways included), because host-local delivery goes
+  through INPUT while Docker's isolation rules live in FORWARD. Cross-network access to
+  *container* addresses is blocked; host addresses are not.
+- Serena's `--project` is the host checkout `/home/zoe/assistant`, which is the same tree as
+  `/workspace` (`../../:/workspace`), so its relative paths resolve identically in-container.
+
+Install the bridge units before recreating this container — `scripts/setup/systemd/README.md`
+has the commands and the mandatory negative control. `tests/unit/modules/test_omnigent_mcp_config.py`
+fails if a stdio serena comes back or the pinned addresses drift apart.
 
 **Repo rules:** the repo-root `CLAUDE.md` (tracked, `@AGENTS.md`-includes the hub) is visible
 at `/workspace/CLAUDE.md`, so Claude-in-container reads the rules.
