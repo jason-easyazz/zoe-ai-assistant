@@ -473,6 +473,11 @@ def memory_loop_status(now: float | None = None) -> dict:
         # Recomputed here (not read from the recorded run) so an operator
         # retuning the threshold sees the effect without waiting for a run.
         alert = threshold is not None and streak >= threshold
+        # Re-sync the exported gauge to the recomputed verdict, otherwise a
+        # retuned threshold would move this endpoint while the PromQL alert
+        # kept the value written at the last run — two surfaces disagreeing
+        # about health is exactly the confusion this change exists to remove.
+        memory_loop_zero_effect_alert.labels(loop=loop).set(1 if alert else 0)
         info = _LAST_RUN.get(loop)
         common = {
             "idle_tolerant": loop in _IDLE_TOLERANT_LOOPS,
@@ -509,6 +514,21 @@ def memory_loop_status(now: float | None = None) -> dict:
             **common,
         }
     return out
+
+
+def refresh_memory_loop_gauges() -> None:
+    """Re-sync the zero-effect alert gauges before a Prometheus scrape.
+
+    :func:`memory_loop_status` recomputes the alert from the CURRENT threshold
+    and writes it to the gauge as a side effect. Calling it on scrape means a
+    retuned ``ZOE_MEMORY_LOOP_ZERO_EFFECT_RUNS`` reaches PromQL immediately
+    instead of waiting for the next nightly run. Never raises — metrics must
+    never break the scrape.
+    """
+    try:
+        memory_loop_status()
+    except Exception:  # pragma: no cover - metrics must never break the scrape
+        pass
 
 
 def memory_loop_health(now: float | None = None) -> dict:
@@ -607,5 +627,6 @@ __all__ = [
     "record_consolidation_run",
     "memory_loop_status",
     "memory_loop_health",
+    "refresh_memory_loop_gauges",
     "snapshot_collection_sizes",
 ]

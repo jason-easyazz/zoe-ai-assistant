@@ -314,6 +314,37 @@ def test_zero_effect_gauges_are_exported(mm):
     assert samples[("zoe_memory_loop_zero_effect_alert", "digest")] == 1.0
 
 
+def test_retuned_threshold_moves_the_gauge_not_just_the_endpoint(mm, monkeypatch):
+    """The status endpoint and the PromQL alert must never disagree about health.
+
+    Lowering the threshold between runs makes ``memory_loop_status`` report
+    ``zero_effect_alert: true`` immediately; the exported gauge must follow, or
+    the endpoint reads unhealthy while PromQL sits at 0 until the next nightly.
+    """
+    def _alert_gauge():
+        return next(
+            s.value
+            for metric in mm.REGISTRY.collect()
+            if metric.name == "zoe_memory_loop_zero_effect_alert"
+            for s in metric.samples
+            if s.labels.get("loop") == "digest"
+        )
+
+    monkeypatch.setenv("ZOE_MEMORY_LOOP_ZERO_EFFECT_RUNS", "10")
+    for night in range(3):
+        mm.record_digest_run([], now=float(night))
+    assert _alert_gauge() == 0.0
+
+    monkeypatch.setenv("ZOE_MEMORY_LOOP_ZERO_EFFECT_RUNS", "3")
+    assert mm.memory_loop_status(now=3.0)["digest"]["zero_effect_alert"] is True
+    assert _alert_gauge() == 1.0, "gauge must track the recomputed verdict"
+
+    # The /metrics scrape path re-syncs too, without anyone hitting the endpoint.
+    monkeypatch.setenv("ZOE_MEMORY_LOOP_ZERO_EFFECT_RUNS", "10")
+    mm.refresh_memory_loop_gauges()
+    assert _alert_gauge() == 0.0
+
+
 def test_never_run_loop_is_unhealthy_without_a_zero_effect_alert(mm):
     health = mm.memory_loop_health(now=5000.0)
     assert health["healthy"] is False
