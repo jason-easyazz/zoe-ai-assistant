@@ -46,8 +46,17 @@
 # zoe-codeintel bridge (boot order, or any window where the module is down).
 # Without IP_FREEBIND the unit fails at boot with EADDRNOTAVAIL.
 #
-# systemd-native on purpose: socat is NOT installed on this box;
-# /lib/systemd/systemd-socket-proxyd ships with systemd.
+# The proxy half is NOT an L4 proxy, and cannot be: systemd-socket-proxyd (and
+# socat, which is not installed on this box anyway) shuffles bytes and cannot
+# rewrite the Host header. Serena's MCP transport-security middleware answers
+# 421 to any Host that is not a loopback authority, so the bridge would carry
+# TCP perfectly and still fail every request. See serena-bridge.service.
+#
+# The socket unit still owns the BIND, and must keep owning it: for a
+# socket-activated service the passed-in listening socket is covered by the
+# SOCKET unit's access list, so a proxy that bound for itself would silently
+# drop the filtering below. serena_bridge_proxy.py therefore refuses to start
+# without LISTEN_FDS and has no --listen option.
 #
 # Install: see scripts/setup/systemd/README.md. Its negative control is
 # MANDATORY — on a kernel without cgroup-BPF firewalling systemd also fails
@@ -60,7 +69,8 @@ Documentation=file:///home/zoe/assistant/scripts/AGENTS.md
 [Socket]
 ListenStream=172.28.0.1:9121
 FreeBind=true
-# systemd-socket-proxyd multiplexes connections itself.
+# One proxy process multiplexes every connection (asyncio); do NOT switch to
+# Accept=yes — that spawns a service instance per connection.
 Accept=no
 
 # THE access control. The socket unit's list is the load-bearing one: for a
