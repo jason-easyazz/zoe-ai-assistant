@@ -26,9 +26,9 @@
     <meta name="theme-color" content="#fafbfc">
     <title>Zoe — Journal</title>
 
-    <!-- FilePond for photo uploads -->
-    <link href="https://unpkg.com/filepond/dist/filepond.min.css" rel="stylesheet">
-    <link href="https://unpkg.com/filepond-plugin-image-preview/dist/filepond-plugin-image-preview.min.css" rel="stylesheet">
+    <!-- FilePond for photo uploads — VENDORED, see services/zoe-ui/AGENTS.md -->
+    <link href="/lib/filepond/filepond.min.css" rel="stylesheet">
+    <link href="/lib/filepond/plugins/filepond-plugin-image-preview.min.css" rel="stylesheet">
 
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -676,9 +676,9 @@
     <script src="/touch/js/touch-menu.js?v=skybridge-auth-ready-1"></script>
     <script src="/js/journal-api.js"></script>
 
-    <!-- FilePond -->
-    <script src="https://unpkg.com/filepond-plugin-image-preview/dist/filepond-plugin-image-preview.min.js"></script>
-    <script src="https://unpkg.com/filepond/dist/filepond.min.js"></script>
+    <!-- FilePond — VENDORED -->
+    <script src="/lib/filepond/plugins/filepond-plugin-image-preview.min.js"></script>
+    <script src="/lib/filepond/filepond.min.js"></script>
 
     <script>
     // ──────────────────────────────────────────────────────────────
