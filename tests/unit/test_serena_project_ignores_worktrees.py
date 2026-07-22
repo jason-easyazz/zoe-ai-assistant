@@ -12,9 +12,9 @@ should fail a test rather than be rediscovered from a log at midnight.
 from __future__ import annotations
 
 import pathlib
+import re
 
 import pytest
-import yaml
 
 pytestmark = pytest.mark.ci_safe
 
@@ -25,9 +25,29 @@ _PROJECT_YML = pathlib.Path(__file__).resolve().parents[2] / ".serena" / "projec
 _WORKTREE_ROOTS = (".claude/worktrees", ".worktrees")
 
 
+# Parsed WITHOUT PyYAML on purpose: it is absent from validate.yml's slim CI
+# dependency set, and pytest imports every test module before marker-based
+# deselection — so a module-level `import yaml` would abort collection for the
+# WHOLE tests/unit step, not merely skip this file (Greptile, PR #1512).
+_ENTRY_RE = re.compile(r"""^\s*-\s*["']?([^"'#\s]+)["']?\s*$""")
+
+
 def _ignored() -> list[str]:
-    data = yaml.safe_load(_PROJECT_YML.read_text(encoding="utf-8")) or {}
-    return list(data.get("ignored_paths") or [])
+    """Return the `ignored_paths:` list items from .serena/project.yml."""
+    out: list[str] = []
+    in_block = False
+    for raw in _PROJECT_YML.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0] if not raw.lstrip().startswith("#") else ""
+        if re.match(r"^\s*ignored_paths\s*:", line):
+            in_block = True
+            continue
+        if in_block:
+            if line.strip() and not line.lstrip().startswith("-"):
+                break  # next top-level key ends the block
+            m = _ENTRY_RE.match(line)
+            if m:
+                out.append(m.group(1))
+    return out
 
 
 def test_project_yml_is_readable():
