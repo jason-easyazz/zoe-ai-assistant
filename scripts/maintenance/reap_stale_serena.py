@@ -156,7 +156,7 @@ def is_shared(p: SerenaProc) -> bool:
     return SHARED_SERVICE_MARKER in p.cgroup
 
 
-def classify_shared(p: SerenaProc, *, shared_rss_mb: int) -> str | None:
+def classify_shared(p: SerenaProc, *, shared_rss_mb: int, grace_min: int = 30) -> str | None:
     """Return a RECYCLE reason for the shared server, or None to leave it.
 
     Deliberately separate from classify(): that function's job is to decide
@@ -165,6 +165,15 @@ def classify_shared(p: SerenaProc, *, shared_rss_mb: int) -> str | None:
     """
     if not is_shared(p):
         return None  # only the shared unit is recyclable; strays get reaped
+    if p.age_s < grace_min * 60:
+        # WARM-UP GUARD. Measured 2026-07-22: a cold start walks ~120 agent
+        # worktrees and logs "Loading of .gitignore files completed in 15
+        # minutes" — and it is already ~1 GB while still doing it, i.e. ABOVE
+        # the recycle threshold before it has served a single request. Without
+        # this guard the hourly timer restarts it mid-warm-up, forever, and the
+        # fleet never gets a usable server: the recycle would cause the outage
+        # it exists to prevent.
+        return None
     if p.rss_kb > shared_rss_mb * 1024:
         return f"bloated ({p.rss_kb // 1024} MB RSS > {shared_rss_mb} MB limit)"
     return None
@@ -262,7 +271,7 @@ def main() -> int:
         # (systemctl restart) when its never-evicted caches have bloated it.
         if is_shared(p):
             bloat = None if args.no_recycle else classify_shared(
-                p, shared_rss_mb=args.shared_rss_mb)
+                p, shared_rss_mb=args.shared_rss_mb, grace_min=args.grace_min)
             if bloat is None:
                 kept += 1
                 print(f"KEEP  {ident} — shared unit")
