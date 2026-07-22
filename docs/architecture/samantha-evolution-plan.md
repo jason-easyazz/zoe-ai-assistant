@@ -433,7 +433,20 @@ argument against waiving it quietly — 124 MB available on 2026-07-22, a brain 
 three deploy-gate failures out of that same pressure; W3.1/W3.2 closing did not make this box roomy.
 
 So the step after W1.3 is one of exactly two. **DECIDED 2026-07-22 by Jason: (a).** The W3 gate
-stands; no waiver. An agent may not revisit this:
+stands; no waiver. An agent may not revisit this.
+
+**Concretely, once W1.3's close-out is done, the NEXT ACTION becomes this ordered list — work it
+top-down, one at a time, and do not skip to the measurement before the reclaim work:**
+  1. **W3.3** reap generalization (HA / music-assistant)
+  2. **W3.4** zram rebalance (measure-first)
+  3. **W3.5** harness fence-out (with tech-debt Wave 4)
+  4. **the W3 DoD profile** — re-run the `memory-pressure-profile.md` methodology into a NEW OKF
+     record and show >=2 GB freed. This is the gate; 1-3 being ticked is not.
+  5. only then **W4.1**.
+If the profile at (4) shows <2 GB freed, W4.1 stays blocked and the shortfall goes back to Jason —
+an agent does not get to call it close enough.
+
+The two options as recorded:
   (a) [CHOSEN] meet **W3's DoD** — which is the MEASUREMENT, not the three checkboxes: a post-reclaim
       profile by the same methodology as `docs/knowledge/memory-pressure-profile.md`, in a new
       OKF record, showing >=2 GB actually freed. Closing W3.3-3.5 as rows without that profile
