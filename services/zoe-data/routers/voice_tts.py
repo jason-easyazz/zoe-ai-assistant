@@ -5214,8 +5214,16 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
     import uuid as _uuid
     from db_compat import get_compat_db as _get_compat_db
 
+    from biometric_scope import resolve_enroll_target
+
     b64 = str((payload or {}).get("audio_base64", "")).strip()
-    user_id = str((payload or {}).get("user_id", caller.get("user_id", "unknown")))
+    # A session caller may only enrol ITSELF (admins excepted). Taking the
+    # payload's user_id verbatim let any household member enrol their own voice
+    # under someone else's id — identity takeover, not just a bad row. A device
+    # token still enrols on behalf of the person at the panel; when it names
+    # nobody the pre-existing caller fallback stands.
+    _target = resolve_enroll_target((payload or {}).get("user_id"), caller)
+    user_id = str(_target or caller.get("user_id", "unknown"))
     display_name = str((payload or {}).get("display_name", user_id)).strip() or user_id
     panel_id = str((payload or {}).get("panel_id", caller.get("panel_id") or ""))
     # Biometric enrollment is opt-in (W6): the enroll UI sends consent=true after
@@ -5439,18 +5447,33 @@ async def voice_profiles_sync(caller: dict = Depends(_require_voice_auth)):
 
 @router.get("/profiles")
 async def voice_profiles(caller: dict = Depends(_require_voice_auth)):
-    """List enrolled speaker profiles (id, user_id, display_name, sample_count).
+    """List the CALLER'S OWN enrolled speaker profiles (never embeddings).
 
-    Used by the settings page Voice Identity section to show who is enrolled.
+    Used by the settings page Voice Identity section to show the signed-in
+    member what they have enrolled. Household-wide only for an admin: who is
+    enrolled, and whether they consented, is itself biometric metadata, so the
+    scope filter is in the SQL rather than a post-filter.
     """
     from db_compat import get_compat_db as _get_compat_db
+    from biometric_scope import require_person_scope
+
+    caller_id, is_admin = require_person_scope(caller)
+    if is_admin:
+        sql = (
+            "SELECT id, user_id, display_name, sample_count, panel_id, consent_at "
+            "FROM speaker_profiles ORDER BY display_name"
+        )
+        params: tuple = ()
+    else:
+        sql = (
+            "SELECT id, user_id, display_name, sample_count, panel_id, consent_at "
+            "FROM speaker_profiles WHERE user_id=? ORDER BY display_name"
+        )
+        params = (caller_id,)
 
     try:
         async with _get_compat_db() as db:
-            async with db.execute(
-                "SELECT id, user_id, display_name, sample_count, panel_id, consent_at "
-                "FROM speaker_profiles ORDER BY display_name"
-            ) as cur:
+            async with db.execute(sql, params) as cur:
                 rows = await cur.fetchall()
         return {
             "ok": True,
@@ -5468,14 +5491,31 @@ async def voice_profiles(caller: dict = Depends(_require_voice_auth)):
 
 @router.delete("/profiles/{profile_id}")
 async def voice_profile_delete(profile_id: str, caller: dict = Depends(_require_voice_auth)):
-    """Delete an enrolled speaker profile."""
-    from db_compat import get_compat_db as _get_compat_db
+    """Delete an enrolled speaker profile — the caller's own, or any for an admin.
 
+    Ownership is checked against the row BEFORE the delete. `_require_voice_auth`
+    only proves the caller may reach the voice surface, so an unscoped
+    `DELETE ... WHERE id=?` let any signed-in household member wipe anyone
+    else's voiceprint.
+    """
+    from db_compat import get_compat_db as _get_compat_db
+    from biometric_scope import authorize_profile_access, require_person_scope
+
+    caller_id, is_admin = require_person_scope(caller)
     try:
         async with _get_compat_db() as db:
+            async with db.execute(
+                "SELECT user_id FROM speaker_profiles WHERE id=?", (profile_id,)
+            ) as cur:
+                row = await cur.fetchone()
+            authorize_profile_access(
+                row[0] if row else None, caller_id, is_admin, kind="speaker"
+            )
             await db.execute("DELETE FROM speaker_profiles WHERE id=?", (profile_id,))
             await db.commit()
         return {"ok": True, "deleted": profile_id}
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error("voice/profiles delete error: %s", exc)
         raise HTTPException(status_code=500, detail="DB error") from exc

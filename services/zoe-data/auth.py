@@ -233,6 +233,19 @@ async def get_current_user(request: Request) -> dict:
 _ADMIN_ROLES = {"admin", "family-admin"}  # ZOE-22dcd46d: honour family-admin alias
 
 
+def is_admin_role(role: object) -> bool:
+    """True only for a recognised admin role string — fail-closed otherwise.
+
+    The public read of `_ADMIN_ROLES`, for code that has already resolved a
+    caller (e.g. the voice/face routers' `_require_voice_auth` dict) and so
+    cannot depend on `require_admin`. Anything that is not exactly one of the
+    admin role strings — None, "", "user", "guest", a non-string — is NOT an
+    admin. Prefer this over an inline `role == "admin"`, which silently misses
+    the `family-admin` alias.
+    """
+    return isinstance(role, str) and role in _ADMIN_ROLES
+
+
 async def require_admin(user: dict = Depends(get_current_user)) -> dict:
     if user.get("role") not in _ADMIN_ROLES:
         raise HTTPException(status_code=403, detail="Admin access required")
