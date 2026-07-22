@@ -10,9 +10,9 @@
  * LAB ONLY.
  */
 import type pg from 'pg';
-import type { ExecutorConfig } from './config.ts';
+import { LAB_WORKSPACE_ID, type ExecutorConfig } from './config.ts';
 import { failOrRequeue } from './spawn.ts';
-import { doneToken, sessionHasToken } from './omnigent.ts';
+import { doneToken, sessionHasToken, OmnigentApiError } from './omnigent.ts';
 import { reportTransition, type TaskRow } from './queue.ts';
 
 function pidAlive(pid: number): boolean {
@@ -73,16 +73,23 @@ async function reapOmnigentRow(
   cfg: ExecutorConfig,
   row: TaskRow & { session_id?: string | null; started_at?: Date | null },
 ): Promise<number> {
-  const ctx = (row.context ?? {}) as { nonce?: string };
+  const ctx = (row.context ?? {}) as { nonce?: string; evidence_stuck_logged?: boolean };
   const full = await pool.query(
-    `SELECT session_id, started_at FROM agent_task_queue WHERE id=$1`, [row.id]);
+    `SELECT session_id, started_at, dispatched_at FROM agent_task_queue WHERE id=$1`,
+    [row.id]);
   const sessionId = full.rows[0]?.session_id as string | null;
-  const startedAt = full.rows[0]?.started_at as Date | null;
-  // Evidence states: token present -> complete; VERIFIED absent -> eligible
-  // for the normal age fail; unobservable (API unreachable) -> the row may
-  // belong to a session that already finished, so failing on the normal
-  // timeout would throw completed work away. Only a much larger hard cap
-  // (3x timeout) may fail an unobservable row, and its reason says so.
+  const anchor = (full.rows[0]?.started_at ?? full.rows[0]?.dispatched_at) as Date | null;
+  // Evidence states:
+  //   token present            -> complete (recover the work);
+  //   VERIFIED absent          -> eligible for the age fail. A 404 counts as
+  //                               verified: the API answered authoritatively
+  //                               that the session no longer exists;
+  //   unobservable (API down)  -> NEVER destructive. The session may have
+  //                               finished; failing/requeuing would throw
+  //                               completed work away. Log a loud stuck
+  //                               entry once and leave the row recoverable —
+  //                               the evidence path resolves it when the API
+  //                               returns.
   let evidenceObserved = false;
   if (sessionId && ctx.nonce) {
     try {
@@ -94,23 +101,41 @@ async function reapOmnigentRow(
           { result: { ok: true, summary: `omnigent session ${sessionId} completed (recovered by reaper)`, sessionId } });
         return won ? 1 : 0;
       }
-    } catch {
-      // API unreachable — evidence unobservable this tick.
+    } catch (err) {
+      if (err instanceof OmnigentApiError && err.status === 404) {
+        evidenceObserved = true; // authoritative: the session is gone
+      }
+      // otherwise: unobservable this tick
     }
   } else {
     // No session/nonce recorded: there is no evidence to consult — age rules.
     evidenceObserved = true;
   }
-  const ageMs = startedAt ? Date.now() - startedAt.getTime() : Infinity;
-  if (evidenceObserved && ageMs > cfg.omnigentTimeoutMs + 30_000) {
+  const ageMs = anchor ? Date.now() - anchor.getTime() : Infinity;
+  if (ageMs <= cfg.omnigentTimeoutMs + 30_000) return 0;
+  if (evidenceObserved) {
     await failOrRequeue(pool, cfg, row,
       `reaped: omnigent-lane row exceeded session timeout + grace without a completion token (session ${sessionId ?? 'unknown'})`);
     return 1;
   }
-  if (!evidenceObserved && ageMs > 3 * cfg.omnigentTimeoutMs) {
-    await failOrRequeue(pool, cfg, row,
-      `reaped: omnigent-lane row exceeded 3x session timeout and the omnigent API stayed unreachable — completion evidence was unobservable (session ${sessionId})`);
-    return 1;
+  if (!ctx.evidence_stuck_logged) {
+    // Loud, reasoned, on the board — but non-destructive: the lane stays
+    // held by this row until evidence becomes observable again or the
+    // operator intervenes via multica-web.
+    await pool.query(
+      `UPDATE agent_task_queue
+          SET context = coalesce(context,'{}'::jsonb) || '{"evidence_stuck_logged":true}'::jsonb
+        WHERE id=$1`,
+      [row.id]);
+    await pool.query(
+      `INSERT INTO activity_log (workspace_id, issue_id, actor_type, actor_id, action, details)
+       VALUES ($1, $2, 'agent', $3, 'task_stuck_evidence_unobservable', $4::jsonb)`,
+      [LAB_WORKSPACE_ID, row.issue_id, cfg.runtimeId, JSON.stringify({
+        task_id: row.id,
+        reason: `omnigent session ${sessionId} exceeded its timeout but the omnigent API is unreachable — ` +
+          'completion evidence is unobservable, so the executor is holding the row rather than ' +
+          'destroying possibly-completed work; will resolve when the API returns',
+      })]);
   }
   return 0;
 }
@@ -137,6 +162,14 @@ async function reapStalledDispatched(pool: pg.Pool, cfg: ExecutorConfig): Promis
   );
   let reaped = 0;
   for (const row of res.rows as TaskRow[]) {
+    // A dispatched row that already carries omnigent ownership (session
+    // staged/kicked before the running flip committed) must be recovered by
+    // EVIDENCE, not blind-requeued — its remote session may be running or
+    // even already done.
+    if (((row.context ?? {}) as { lane?: string }).lane === 'omnigent') {
+      reaped += await reapOmnigentRow(pool, cfg, row);
+      continue;
+    }
     await failOrRequeue(pool, cfg, row,
       'reaped: dispatched row never reached running within worker-timeout + grace ' +
         '(running transition lost or executor died mid-spawn) — freeing the lane');

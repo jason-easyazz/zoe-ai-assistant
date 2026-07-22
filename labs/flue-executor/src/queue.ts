@@ -154,13 +154,18 @@ export async function reportTransition(
       );
       updated = res.rowCount ?? 0;
     } else {
-      // requeue: same row back to queued with attempt+1, run state cleared.
+      // requeue: same row back to queued with attempt+1, ALL run state cleared
+      // — including omnigent ownership markers, so a requeued task starts
+      // clean and cannot be mistaken for one that still owns an old session.
       const res = await client.query(
         `UPDATE agent_task_queue
             SET status='queued', attempt=attempt+1,
                 dispatched_at=NULL, started_at=NULL, completed_at=NULL,
-                failure_reason=NULL,
-                context = coalesce(context,'{}'::jsonb) - 'worker_pid'
+                failure_reason=NULL, session_id=NULL,
+                context = (coalesce(context,'{}'::jsonb)
+                           - 'worker_pid' - 'nonce' - 'evidence_stuck_logged')
+                          || CASE WHEN coalesce(context,'{}'::jsonb)->>'lane' = 'omnigent'
+                                  THEN '{"lane":"heavy"}'::jsonb ELSE '{}'::jsonb END
           WHERE id=$1 AND status=$2`,
         [task.id, task.status],
       );

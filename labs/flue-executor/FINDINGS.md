@@ -128,7 +128,7 @@ app-level module `src/db.ts` in a Flue project.**
 ## The Omnigent heavy lane — LIVE-PROVEN 2026-07-22 (Phase 1 complete)
 
 Per §5 decision 2, the executor routes `context.lane === 'heavy'` to Omnigent
-at spawn time. Full e2e (`npm run e2e`) after adding the lane: **29/29 asserts
+at spawn time. Full e2e (`npm run e2e`) after adding the lane: **33/33 asserts
 PASS**, including a REAL heavy ticket end-to-end on the live `zoe-omnigent`
 (`:6767`): session created for `polly` (claude-sdk), brief staged as a comment,
 runner launched, the `docker exec … omnigent run -r <SID>` kick fired (REST
@@ -154,8 +154,15 @@ Load-bearing findings for Phase 2:
 - **Omnigent-down is loud and contained**: a heavy task fails with
   `omnigent lane unavailable …; local lane is unaffected` (scenario 6).
 - Orphaned omnigent rows (executor restart) are recovered by the reaper on
-  token EVIDENCE — completed work is never thrown away — and failed by age
-  otherwise.
+  token EVIDENCE — completed work is never thrown away. Review-hardened
+  (PR #1503 rounds 1–2): ownership (session/nonce/lane) is written to the row
+  BEFORE the kick, so even a crash mid-spawn leaves a dispatched row the
+  reaper recovers by evidence, never blind-requeues; the assembled completion
+  token can never appear in the staged brief (self-completion closed); a 404
+  is authoritative session-gone (reap + requeue, ownership cleared); an
+  UNREACHABLE API is never destructive — the row is held with one loud
+  `task_stuck_evidence_unobservable` activity entry until evidence returns
+  (e2e scenario 4c).
 
 ## Deliberate scope limits
 

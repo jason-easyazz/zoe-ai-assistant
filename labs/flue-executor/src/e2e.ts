@@ -29,6 +29,11 @@ import { bootstrapLabDb, makePool } from './labdb.ts';
 import { claimNextTask, reportTransition, type TaskRow } from './queue.ts';
 import { tick, type ExecutorState } from './executor.ts';
 
+/** A config whose omnigent endpoint is a dead port — evidence unobservable. */
+function cfgDownForReap(cfg: ExecutorConfig): ExecutorConfig {
+  return { ...cfg, omnigentBaseUrl: 'http://127.0.0.1:1' };
+}
+
 let failures = 0;
 function assert(cond: boolean, label: string): void {
   if (cond) {
@@ -50,10 +55,15 @@ async function seedTask(
     workerPid?: number;
     /** status='dispatched' only: backdate dispatched_at by this many ms. */
     dispatchedAgoMs?: number;
-    /** 'heavy' routes to the Omnigent lane. */
+    /** 'heavy' routes to the Omnigent lane; 'omnigent' marks an owned row. */
     lane?: string;
     /** Task brief forwarded to the Omnigent session. */
     brief?: string;
+    /** Seed an omnigent-owned row: session id + nonce markers. */
+    sessionId?: string;
+    nonce?: string;
+    /** status='running' only: backdate started_at by this many ms. */
+    startedAgoMs?: number;
   },
 ): Promise<{ id: string; workDir: string }> {
   const workDir = mkdtempSync(join(tmpdir(), 'flue-executor-e2e-'));
@@ -61,14 +71,17 @@ async function seedTask(
   if (opts.workerPid !== undefined) context['worker_pid'] = opts.workerPid;
   if (opts.lane !== undefined) context['lane'] = opts.lane;
   if (opts.brief !== undefined) context['brief'] = opts.brief;
+  if (opts.nonce !== undefined) context['nonce'] = opts.nonce;
   const res = await pool.query(
     `INSERT INTO agent_task_queue
        (agent_id, issue_id, status, priority, runtime_id, work_dir, context, max_attempts,
-        started_at, dispatched_at, trigger_summary)
+        started_at, dispatched_at, session_id, trigger_summary)
      VALUES ($1, gen_random_uuid(), $2, $3, $4, $5, $6::jsonb, $7,
-             CASE WHEN $2 = 'running' THEN now() ELSE NULL END,
+             CASE WHEN $2 = 'running'
+                  THEN now() - ($9::int * interval '1 millisecond') ELSE NULL END,
              CASE WHEN $2 IN ('dispatched','running')
                   THEN now() - ($8::int * interval '1 millisecond') ELSE NULL END,
+             $10,
              'synthetic e2e ticket')
      RETURNING id`,
     [
@@ -80,6 +93,8 @@ async function seedTask(
       JSON.stringify(context),
       opts.maxAttempts ?? 2,
       opts.dispatchedAgoMs ?? 0,
+      opts.startedAgoMs ?? 0,
+      opts.sessionId ?? null,
     ],
   );
   return { id: res.rows[0].id as string, workDir };
@@ -221,6 +236,44 @@ async function main(): Promise<void> {
   assert(acts2b[0] === 'task_failed' && acts2b[1] === 'task_requeued',
     `stalled dispatched row was reaped with reason then requeued (got: ${acts2b.slice(0, 2).join(' -> ')})`);
   assert(s2b === 'completed', `stalled-dispatch task re-ran to completion (got: ${s2b})`);
+  await pool.query('TRUNCATE agent_task_queue, activity_log');
+
+  console.log('== 4c. omnigent evidence-based reap: 404 = verified-gone; unreachable = never destructive ==');
+  // A 404 from the live API is an AUTHORITATIVE "session gone": reap + requeue,
+  // and the requeue must clear ownership (session_id, nonce) and remap the lane
+  // marker back to routable 'heavy'.
+  const t7 = await seedTask(pool, cfg, {
+    mode: 'succeed', status: 'running', lane: 'omnigent',
+    sessionId: 'conv_e2e_does_not_exist', nonce: 'deadbeef0000',
+    startedAgoMs: cfg.omnigentTimeoutMs + 60_000, maxAttempts: 2,
+  });
+  const { reapDeadWorkers } = await import('./reaper.ts');
+  await reapDeadWorkers(pool, cfg, state.trackedPids);
+  const row7 = await taskRow(pool, t7.id);
+  assert(row7.status === 'queued' && row7.attempt === 2,
+    `gone-session row was reaped and requeued (got: ${row7.status}, attempt ${row7.attempt})`);
+  const ctx7 = row7.context as Record<string, unknown>;
+  assert(row7.session_id === null && ctx7['nonce'] === undefined && ctx7['lane'] === 'heavy',
+    `requeue cleared ownership and remapped lane to 'heavy' (got session=${row7.session_id}, lane=${ctx7['lane']})`);
+  await pool.query('DELETE FROM agent_task_queue WHERE id=$1', [t7.id]);
+  // Unreachable API: the reaper must NOT fail the row — it logs one loud
+  // stuck entry and holds the lane until evidence is observable again.
+  const t8 = await seedTask(pool, cfg, {
+    mode: 'succeed', status: 'running', lane: 'omnigent',
+    sessionId: 'conv_e2e_unobservable', nonce: 'deadbeef1111',
+    startedAgoMs: cfg.omnigentTimeoutMs + 60_000, maxAttempts: 1,
+  });
+  await reapDeadWorkers(pool, cfgDownForReap(cfg), state.trackedPids);
+  await reapDeadWorkers(pool, cfgDownForReap(cfg), state.trackedPids);
+  const row8 = await taskRow(pool, t8.id);
+  const stuck = await pool.query(
+    `SELECT count(*)::int AS n FROM activity_log
+      WHERE action='task_stuck_evidence_unobservable' AND details->>'task_id'=$1`, [t8.id]);
+  assert(row8.status === 'running',
+    `unobservable-evidence row was NOT destroyed (got: ${row8.status})`);
+  assert(stuck.rows[0].n === 1,
+    `exactly one stuck entry logged across two reap passes (got: ${stuck.rows[0].n})`);
+  await pool.query('DELETE FROM agent_task_queue WHERE id=$1', [t8.id]);
   await pool.query('TRUNCATE agent_task_queue, activity_log');
 
   console.log('== 5. single lane + kill of a hung worker ==');

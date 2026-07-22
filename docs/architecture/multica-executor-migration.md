@@ -78,7 +78,7 @@ Substrate: Flue. `labs/flue-harness-spike/` already has `scout` / `verifier`
 `defineAgentProfile`s and `sandbox: local()`. The missing piece was the claim →
 spawn → report loop, not the agent roles — **built and lab-proven in
 `labs/flue-executor/`, BOTH lanes (Phase 1 contract complete 2026-07-22):
-29/29 e2e asserts — the local Flue worker lane (2026-07-21) plus the Omnigent
+33/33 e2e asserts — the local Flue worker lane (2026-07-21) plus the Omnigent
 heavy lane live against `zoe-omnigent` (session + staged brief + runner +
 docker-exec kick; completion by nonce token — sessions settle to `idle`, never
 `completed`), with the reason-on-every-transition write-through, the #685

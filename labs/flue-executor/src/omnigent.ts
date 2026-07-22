@@ -31,6 +31,16 @@ interface OmnigentSession {
   status: string;
 }
 
+/** API error carrying the HTTP status — a 404 is an AUTHORITATIVE answer
+ * (the session does not exist), unlike a network failure (no answer at all). */
+export class OmnigentApiError extends Error {
+  readonly status?: number;
+  constructor(message: string, status?: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
 async function api<T>(
   cfg: ExecutorConfig,
   method: string,
@@ -44,7 +54,10 @@ async function api<T>(
     signal: AbortSignal.timeout(15_000),
   });
   if (!res.ok) {
-    throw new Error(`omnigent ${method} ${path} -> HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    throw new OmnigentApiError(
+      `omnigent ${method} ${path} -> HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`,
+      res.status,
+    );
   }
   return (await res.json()) as T;
 }
@@ -96,6 +109,22 @@ export async function spawnOmnigentWorker(
     });
     sessionId = session.id;
 
+    // Durable ownership BEFORE anything can start running: if the executor
+    // dies after the kick but before the running transition commits, the
+    // dispatched row must already carry the session pointer so the reaper
+    // recovers by EVIDENCE instead of blind-requeuing a task whose remote
+    // session is still working. (The only remaining crash window is between
+    // session creation and this write — an unkicked session, which sits idle
+    // and harmless.)
+    await pool.query(
+      `UPDATE agent_task_queue
+          SET session_id=$2,
+              context = coalesce(context,'{}'::jsonb) ||
+                jsonb_build_object('lane','omnigent','nonce',$3::text)
+        WHERE id=$1 AND status='dispatched'`,
+      [task.id, sessionId, nonce],
+    );
+
     // The assembled completion token must NEVER appear in the brief: staged
     // comments can surface in the session's items, and a scan that finds the
     // token in our own instruction text would self-complete the task. The
@@ -143,9 +172,8 @@ export async function spawnOmnigentWorker(
     return;
   }
 
-  // lane/nonce/session_id land in the SAME transaction as the running flip —
-  // a reaper can never observe an omnigent running row that still looks like
-  // a pid-less local row (which it would otherwise fail as "cannot be alive").
+  // Ownership was written before the kick; merging it again here keeps the
+  // running flip self-contained even if that earlier write raced a requeue.
   const startedOk = await reportTransition(pool, cfg.runtimeId, task, 'running',
     `omnigent session ${sessionId} staged, runner launched, claude-sdk run kicked for phase "${phase}"`,
     {
