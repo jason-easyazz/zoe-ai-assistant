@@ -2253,14 +2253,16 @@ async def prometheus_metrics(_: None = Depends(require_internal_token)):
     Exposes counters/gauges from `memory_metrics.REGISTRY` (MemPalace ingest,
     search latency, PII rejects, feedback, training, routing). Refreshes the
     per-user collection-size gauge inline so dashboards always see current
-    values. Uses `prometheus_client.generate_latest` with our dedicated
-    registry to avoid leaking default Python/process metrics.
+    values, and re-syncs the memory-loop zero-effect alert gauges against the
+    current threshold. Uses `prometheus_client.generate_latest` with our
+    dedicated registry to avoid leaking default Python/process metrics.
     """
     from fastapi.responses import Response
     from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
-    from memory_metrics import REGISTRY, snapshot_collection_sizes
+    from memory_metrics import REGISTRY, refresh_memory_loop_gauges, snapshot_collection_sizes
 
     await snapshot_collection_sizes()
+    refresh_memory_loop_gauges()
     return Response(
         content=generate_latest(REGISTRY),
         media_type=CONTENT_TYPE_LATEST,
