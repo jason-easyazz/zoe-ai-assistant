@@ -267,19 +267,27 @@ diff <(ls ~/.openclaw/workspace/skills) <(ls docs/knowledge/operator-skills/open
 mkdir -p ~/.hermes-retired
 mv ~/.hermes/skills/productivity/linear ~/.hermes-retired/linear
 
-# 3. The rm is GUARDED — it cannot run unless linear is provably safe,
-#    either rescued in step 2 or already imported into this bundle.
-if [ -f ~/.hermes-retired/linear/SKILL.md ] \
-   || [ -f docs/knowledge/operator-skills/productivity/linear/SKILL.md ]; then
+# 3. The rm is GUARDED — it cannot run unless linear is provably safe:
+#    either imported into this bundle, or GONE from the tree about to be
+#    deleted AND present at its new home.
+if [ -f docs/knowledge/operator-skills/productivity/linear/SKILL.md ] \
+   || { [ ! -e ~/.hermes/skills/productivity/linear ] \
+        && [ -f ~/.hermes-retired/linear/SKILL.md ]; }
+then
   rm -rf ~/.hermes/skills ~/.openclaw/skills ~/.openclaw/workspace/skills
 else
-  echo "linear is unarchived and unrescued — NOTHING DELETED"
+  echo "linear is still live and unarchived — NOTHING DELETED"
 fi
 ```
 
 The guard is structural, not advisory: `rm -rf ~/.hermes/skills` takes
 `productivity/linear` with it, and nothing in this bundle can bring it back, so
 the destructive step lives inside the `if` rather than after a warning.
+
+The rescue branch tests **absence from the doomed tree**, not just presence of a
+rescue copy. A leftover `~/.hermes-retired/linear` from an earlier attempt is not
+evidence that *this* run's `mv` succeeded — if the live path still exists, the
+`mv` did not happen and the guard must fail closed.
 
 ## Related
 
