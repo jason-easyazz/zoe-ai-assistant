@@ -14,6 +14,7 @@ event.
 
 from __future__ import annotations
 
+import os
 import time
 from collections import deque
 
@@ -260,6 +261,35 @@ memory_consolidation_last_run_effects = Gauge(
     registry=REGISTRY,
 )
 
+# ── Effect-count heartbeat + zero-effect alerting ────────────────────────────
+# The staleness signal above only catches a MISSED run. It does not catch the
+# failure that actually happened twice: a loop that runs exactly on schedule,
+# logs "run complete", and does NOTHING (#1217 timezone cast, #1480 ten
+# consecutive nights of zero users). A heartbeat must carry what the run DID.
+# These gauges carry the scalar effect count per run and the consecutive
+# zero-effect streak, so "ran 10 times, did nothing 10 times" is visible
+# instead of a green tick. Alert on `zoe_memory_loop_zero_effect_alert == 1`.
+memory_loop_last_run_effect_count = Gauge(
+    "zoe_memory_loop_last_run_effect_count",
+    "Total effects (sum of the loop's effect keys) produced by its last run. "
+    "Zero means the run did no work at all.",
+    ["loop"],
+    registry=REGISTRY,
+)
+memory_loop_zero_effect_streak = Gauge(
+    "zoe_memory_loop_zero_effect_streak",
+    "Consecutive completed runs of this loop that produced zero effects.",
+    ["loop"],
+    registry=REGISTRY,
+)
+memory_loop_zero_effect_alert = Gauge(
+    "zoe_memory_loop_zero_effect_alert",
+    "1 when the loop's zero-effect streak has reached its alert threshold "
+    "(the loop is running but doing nothing); 0 otherwise.",
+    ["loop"],
+    registry=REGISTRY,
+)
+
 # Effect keys summed per loop (see memory_digest.run_memory_digest /
 # run_weekly_consolidation). Unknown/missing keys are simply skipped.
 _DIGEST_EFFECT_KEYS = ("extracted", "new", "superseded", "skipped_duplicates")
@@ -271,10 +301,51 @@ _CONSOLIDATION_EFFECT_KEYS = ("merged", "resolved_contradictions", "archived")
 _DIGEST_MAX_AGE_S = 26 * 3600
 _CONSOLIDATION_MAX_AGE_S = 8 * 86400
 
+# How many consecutive zero-effect runs raise the alert, for loops that are NOT
+# idle-tolerant. Default 5: a household that talks to Zoe can plausibly have a
+# quiet night or two, but five nights of literally zero extracted/new/
+# superseded/skipped facts is a broken loop, not a quiet week. Override with
+# ZOE_MEMORY_LOOP_ZERO_EFFECT_RUNS; a value < 1 disables zero-effect alerting.
+_ZERO_EFFECT_RUNS_DEFAULT = 5
+
+# Loops that legitimately have nothing to do on a normal run DECLARE it here,
+# so they cannot cry wolf. Weekly consolidation only fires when there are
+# near-duplicates to merge, contradictions to resolve, or stale rows to
+# archive; on a well-maintained store the honest answer is "nothing to do" for
+# many weeks running. Its missed-run staleness check (8d grace) still covers a
+# consolidation loop that dies. The nightly digest is deliberately NOT
+# idle-tolerant — if Zoe was used at all there are messages to digest.
+_IDLE_TOLERANT_LOOPS = frozenset({"consolidation"})
+
 # In-process last-run state for the human-queryable health endpoint. Gauges
 # cover Prometheus; this covers the "what's the age of the last run" question
-# without external time math.
+# without external time math. Streaks are per-process and reset on restart —
+# a restart therefore forgives the streak but not the staleness clock.
 _LAST_RUN: dict[str, dict] = {}
+_ZERO_EFFECT_STREAK: dict[str, int] = {}
+
+
+def zero_effect_threshold(loop: str) -> int | None:
+    """Consecutive zero-effect runs that raise an alert for ``loop``.
+
+    ``None`` means zero-effect alerting is off for this loop: either the loop
+    declared itself idle-tolerant (see ``_IDLE_TOLERANT_LOOPS``) or the
+    operator disabled alerting with a ``< 1`` env value. Never raises — a
+    malformed env value falls back to the default rather than breaking the
+    status surface.
+    """
+    if loop in _IDLE_TOLERANT_LOOPS:
+        return None
+    # Literal env name (not a constant) so tools/audit/flag_inventory.py can
+    # statically extract this flag.
+    raw = os.environ.get("ZOE_MEMORY_LOOP_ZERO_EFFECT_RUNS")
+    threshold = _ZERO_EFFECT_RUNS_DEFAULT
+    if raw is not None:
+        try:
+            threshold = int(str(raw).strip())
+        except (TypeError, ValueError):
+            threshold = _ZERO_EFFECT_RUNS_DEFAULT
+    return threshold if threshold >= 1 else None
 
 
 def _sum_effects(results, keys) -> dict[str, int]:
@@ -310,19 +381,39 @@ def _record_loop_run(
     """Persist last-run timestamp + aggregate counts for a memory loop.
 
     Sets the Prometheus gauges and updates the in-process ``_LAST_RUN`` state.
-    Returns a summary dict (``timestamp``, ``users``, ``effects``) so callers
-    can log a single enriched run-complete line.
+    Returns a summary dict (``timestamp``, ``users``, ``effects``,
+    ``effect_count``, ``zero_effect_streak``, ``zero_effect_alert``) so callers
+    can log a single enriched run-complete line that says what the run DID, not
+    merely that it ran.
     """
     now_ts = time.time() if now is None else now
     users = len(results) if results is not None else 0
     effects = _sum_effects(results, keys)
+    effect_count = sum(effects.values())
+
+    # A run that produced nothing extends the streak; any real effect clears it.
+    streak = _ZERO_EFFECT_STREAK.get(loop, 0) + 1 if effect_count == 0 else 0
+    _ZERO_EFFECT_STREAK[loop] = streak
+    threshold = zero_effect_threshold(loop)
+    alert = threshold is not None and streak >= threshold
 
     ts_gauge.set(now_ts)
     users_gauge.set(users)
     for effect, value in effects.items():
         effects_gauge.labels(effect=effect).set(value)
+    memory_loop_last_run_effect_count.labels(loop=loop).set(effect_count)
+    memory_loop_zero_effect_streak.labels(loop=loop).set(streak)
+    memory_loop_zero_effect_alert.labels(loop=loop).set(1 if alert else 0)
 
-    summary = {"timestamp": now_ts, "users": users, "effects": effects}
+    summary = {
+        "timestamp": now_ts,
+        "users": users,
+        "effects": effects,
+        "effect_count": effect_count,
+        "zero_effect_streak": streak,
+        "zero_effect_alert_after": threshold,
+        "zero_effect_alert": alert,
+    }
     _LAST_RUN[loop] = summary
     return summary
 
@@ -354,11 +445,22 @@ def record_consolidation_run(results, *, now: float | None = None) -> dict:
 
 
 def memory_loop_status(now: float | None = None) -> dict:
-    """Queryable last-run + staleness for both memory-maintenance loops.
+    """Queryable last-run, staleness AND zero-effect state for both loops.
 
-    A loop that never ran this process (or ran longer ago than its cadence
-    grace) reports ``stale: True`` — that's the signal a nightly/Sunday pass
-    was missed. ``age_seconds`` is the age of the last successful run.
+    Two independent unhealthy signals, because they catch different failures:
+
+    * ``stale: True`` — a loop that never ran this process, or ran longer ago
+      than its cadence grace. This is the MISSED-run signal.
+    * ``zero_effect_alert: True`` — the loop ran on schedule
+      ``zero_effect_streak`` times in a row and produced zero effects each
+      time. This is the DID-NOTHING signal, and it is the one that was missing
+      when the nightly digest processed zero users for ten straight nights
+      while logging "nightly run complete".
+
+    ``healthy`` is the flat "is this loop fine" answer (not stale and not
+    alerting) so a human glancing at the surface does not have to reason about
+    two flags. Idle-tolerant loops report ``zero_effect_alert_after: None`` and
+    never raise the zero-effect alert; their streak is still reported.
     """
     now_ts = time.time() if now is None else now
     out: dict[str, dict] = {}
@@ -366,7 +468,18 @@ def memory_loop_status(now: float | None = None) -> dict:
         ("digest", _DIGEST_MAX_AGE_S),
         ("consolidation", _CONSOLIDATION_MAX_AGE_S),
     ):
+        threshold = zero_effect_threshold(loop)
+        streak = _ZERO_EFFECT_STREAK.get(loop, 0)
+        # Recomputed here (not read from the recorded run) so an operator
+        # retuning the threshold sees the effect without waiting for a run.
+        alert = threshold is not None and streak >= threshold
         info = _LAST_RUN.get(loop)
+        common = {
+            "idle_tolerant": loop in _IDLE_TOLERANT_LOOPS,
+            "zero_effect_streak": streak,
+            "zero_effect_alert_after": threshold,
+            "zero_effect_alert": alert,
+        }
         if not info:
             out[loop] = {
                 "ever_ran": False,
@@ -376,19 +489,58 @@ def memory_loop_status(now: float | None = None) -> dict:
                 "max_age_seconds": max_age,
                 "users": None,
                 "effects": None,
+                "effect_count": None,
+                "healthy": False,
+                **common,
             }
             continue
         age = max(0.0, now_ts - info["timestamp"])
+        stale = age > max_age
         out[loop] = {
             "ever_ran": True,
             "last_run_ts": info["timestamp"],
             "age_seconds": age,
-            "stale": age > max_age,
+            "stale": stale,
             "max_age_seconds": max_age,
             "users": info["users"],
             "effects": info["effects"],
+            "effect_count": info.get("effect_count"),
+            "healthy": not stale and not alert,
+            **common,
         }
     return out
+
+
+def memory_loop_health(now: float | None = None) -> dict:
+    """Roll the per-loop status up into one glanceable healthy/alert verdict.
+
+    Returns ``{"loops": ..., "healthy": bool, "alerts": [str, ...]}``. The
+    alert strings are written to be read by a human at 2am — e.g.
+    ``"digest: ran 10 times in a row and did nothing each time (threshold 5)"``
+    — because the whole point of this surface is that "ran, did nothing" must
+    not look like a green tick.
+    """
+    loops = memory_loop_status(now=now)
+    alerts: list[str] = []
+    for loop, info in loops.items():
+        if info["zero_effect_alert"]:
+            alerts.append(
+                f"{loop}: ran {info['zero_effect_streak']} times in a row and did "
+                f"nothing each time (threshold {info['zero_effect_alert_after']})"
+            )
+        if info["stale"]:
+            if not info["ever_ran"]:
+                alerts.append(f"{loop}: has never run in this process")
+            else:
+                alerts.append(
+                    f"{loop}: last run was {info['age_seconds'] / 3600:.1f}h ago "
+                    f"(grace {info['max_age_seconds'] / 3600:.0f}h)"
+                )
+    return {
+        "loops": loops,
+        "healthy": all(info["healthy"] for info in loops.values()),
+        "alerts": alerts,
+    }
 
 
 async def snapshot_collection_sizes(timeout_s: float = 2.0) -> None:
@@ -447,8 +599,13 @@ __all__ = [
     "memory_consolidation_last_run_timestamp",
     "memory_consolidation_last_run_users",
     "memory_consolidation_last_run_effects",
+    "memory_loop_last_run_effect_count",
+    "memory_loop_zero_effect_streak",
+    "memory_loop_zero_effect_alert",
+    "zero_effect_threshold",
     "record_digest_run",
     "record_consolidation_run",
     "memory_loop_status",
+    "memory_loop_health",
     "snapshot_collection_sizes",
 ]

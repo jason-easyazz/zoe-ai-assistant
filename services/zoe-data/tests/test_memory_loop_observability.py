@@ -23,8 +23,12 @@ def mm():
     import memory_metrics as _mm
 
     _mm._LAST_RUN.clear()
+    _mm._ZERO_EFFECT_STREAK.clear()
     _mm.memory_digest_last_run_effects.clear()
     _mm.memory_consolidation_last_run_effects.clear()
+    _mm.memory_loop_last_run_effect_count.clear()
+    _mm.memory_loop_zero_effect_streak.clear()
+    _mm.memory_loop_zero_effect_alert.clear()
     return _mm
 
 
@@ -181,3 +185,152 @@ def test_attach_memory_loop_log_handler_accepts_bare_filename(mm, tmp_path, monk
             system.logger.removeHandler(h)
             if isinstance(h, logging.Handler):
                 h.close()
+
+
+# ── Effect-count heartbeat + zero-effect alerting ────────────────────────────
+# Staleness only catches a MISSED run. These pin the DID-NOTHING signal: the
+# nightly digest processed zero users for ten consecutive nights while logging
+# "nightly run complete", and the observability above recorded every one of
+# those empty successes without ever raising an alert.
+
+
+def test_run_records_a_scalar_effect_count(mm):
+    """Every recorded run must carry HOW MUCH work it did, not just that it ran."""
+    summary = mm.record_digest_run(
+        [{"extracted": 3, "new": 2, "superseded": 1, "skipped_duplicates": 4}], now=1.0
+    )
+    assert summary["effect_count"] == 10  # 3 + 2 + 1 + 4
+    assert summary["zero_effect_streak"] == 0
+
+    empty = mm.record_digest_run([], now=2.0)
+    assert empty["users"] == 0
+    assert empty["effect_count"] == 0
+    assert empty["zero_effect_streak"] == 1
+
+
+def test_ten_consecutive_zero_effect_digest_runs_raise_the_alert(mm):
+    """THE falsification test: the exact #1480 shape — ten on-time runs, zero users.
+
+    If the alert condition is broken this goes RED. Staleness cannot catch this
+    case: every run is punctual, so ``stale`` stays False throughout.
+    """
+    for night in range(10):
+        summary = mm.record_digest_run([], now=float(night) * 86400)
+
+    assert summary["zero_effect_streak"] == 10
+    assert summary["effect_count"] == 0
+    assert summary["zero_effect_alert"] is True, "10 empty nights must raise the alert"
+
+    status = mm.memory_loop_status(now=9 * 86400)["digest"]
+    assert status["stale"] is False, "the runs were all on time — staleness can't catch this"
+    assert status["zero_effect_alert"] is True
+    assert status["healthy"] is False, "ran 10 times and did nothing 10 times is NOT healthy"
+
+    health = mm.memory_loop_health(now=9 * 86400)
+    assert health["healthy"] is False
+    assert any("did nothing" in a and "digest" in a for a in health["alerts"]), health["alerts"]
+
+
+def test_zero_effect_alert_fires_when_users_run_but_produce_nothing(mm):
+    """Zero EFFECTS, not zero users, is the trigger — the #1217 shape."""
+    for night in range(5):
+        summary = mm.record_digest_run(
+            [{"user_id": "demo-1", "extracted": 0, "new": 0}], now=float(night)
+        )
+    assert summary["users"] == 1  # the loop "processed" a user every night
+    assert summary["effect_count"] == 0
+    assert summary["zero_effect_alert"] is True
+
+
+def test_idle_tolerant_loop_never_cries_wolf(mm):
+    """A loop that DECLARED it is legitimately idle must not alert on zero effect.
+
+    Weekly consolidation genuinely has nothing to merge for weeks at a time on a
+    healthy store; its missed-run staleness check still covers it dying.
+    """
+    for week in range(10):
+        summary = mm.record_consolidation_run([{"merged": 0}], now=float(week) * 86400)
+    # A healthy digest alongside it, so the rollup below isolates consolidation.
+    mm.record_digest_run([{"extracted": 1}], now=9 * 86400)
+
+    assert summary["effect_count"] == 0
+    assert summary["zero_effect_streak"] == 10  # the streak is still REPORTED …
+    assert summary["zero_effect_alert_after"] is None
+    assert summary["zero_effect_alert"] is False  # … but it never alerts
+
+    status = mm.memory_loop_status(now=9 * 86400)["consolidation"]
+    assert status["idle_tolerant"] is True
+    assert status["zero_effect_alert"] is False
+    assert status["healthy"] is True
+    assert mm.memory_loop_health(now=9 * 86400)["healthy"] is True
+
+
+def test_streak_resets_on_a_productive_run(mm):
+    for night in range(4):
+        mm.record_digest_run([], now=float(night))
+    assert mm.memory_loop_status(now=4.0)["digest"]["zero_effect_streak"] == 4
+
+    after = mm.record_digest_run([{"extracted": 1}], now=5.0)
+    assert after["zero_effect_streak"] == 0
+    assert after["zero_effect_alert"] is False
+    assert mm.memory_loop_status(now=5.0)["digest"]["healthy"] is True
+
+
+def test_alert_threshold_is_configurable_and_disablable(mm, monkeypatch):
+    monkeypatch.setenv("ZOE_MEMORY_LOOP_ZERO_EFFECT_RUNS", "2")
+    assert mm.record_digest_run([], now=1.0)["zero_effect_alert"] is False
+    assert mm.record_digest_run([], now=2.0)["zero_effect_alert"] is True
+
+    # Threshold is re-read on status, so retuning takes effect without a run.
+    monkeypatch.setenv("ZOE_MEMORY_LOOP_ZERO_EFFECT_RUNS", "50")
+    assert mm.memory_loop_status(now=2.0)["digest"]["zero_effect_alert"] is False
+
+    # < 1 disables zero-effect alerting entirely; garbage falls back to default.
+    monkeypatch.setenv("ZOE_MEMORY_LOOP_ZERO_EFFECT_RUNS", "0")
+    assert mm.zero_effect_threshold("digest") is None
+    monkeypatch.setenv("ZOE_MEMORY_LOOP_ZERO_EFFECT_RUNS", "not-a-number")
+    assert mm.zero_effect_threshold("digest") == mm._ZERO_EFFECT_RUNS_DEFAULT
+
+
+def test_default_threshold_tolerates_a_couple_of_quiet_nights(mm):
+    """A quiet night or two must not alert — only a sustained run of them."""
+    assert mm._ZERO_EFFECT_RUNS_DEFAULT >= 3
+    for night in range(2):
+        summary = mm.record_digest_run([], now=float(night))
+    assert summary["zero_effect_alert"] is False
+
+
+def test_zero_effect_gauges_are_exported(mm):
+    for night in range(5):
+        mm.record_digest_run([], now=float(night))
+    samples = {
+        (metric.name, sample.labels.get("loop")): sample.value
+        for metric in mm.REGISTRY.collect()
+        for sample in metric.samples
+        if metric.name.startswith("zoe_memory_loop_")
+    }
+    assert samples[("zoe_memory_loop_last_run_effect_count", "digest")] == 0.0
+    assert samples[("zoe_memory_loop_zero_effect_streak", "digest")] == 5.0
+    assert samples[("zoe_memory_loop_zero_effect_alert", "digest")] == 1.0
+
+
+def test_never_run_loop_is_unhealthy_without_a_zero_effect_alert(mm):
+    health = mm.memory_loop_health(now=5000.0)
+    assert health["healthy"] is False
+    assert health["loops"]["digest"]["zero_effect_streak"] == 0
+    assert health["loops"]["digest"]["zero_effect_alert"] is False
+    assert any("never run" in a for a in health["alerts"])
+
+
+def test_digest_loop_recorder_escalates_to_warning_on_alert(mm, caplog):
+    """The durable memory-loop log must carry the same verdict the endpoint shows."""
+    import logging
+
+    import routers.system as system
+
+    with caplog.at_level(logging.WARNING, logger=system.logger.name):
+        for night in range(mm._ZERO_EFFECT_RUNS_DEFAULT):
+            summary = system._record_memory_loop("digest", [])
+
+    assert summary["zero_effect_alert"] is True
+    assert any("ZERO-EFFECT ALERT" in r.message for r in caplog.records), caplog.text

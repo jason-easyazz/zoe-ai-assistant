@@ -793,16 +793,6 @@
         ],
         "typed_env": false
       },
-      "ZOE_DEFAULT_LIGHT_ENTITY": {
-        "defaults": [
-          "'light.all'"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "services/zoe-data/intent_router.py"
-        ],
-        "typed_env": false
-      },
       "ZOE_DEFAULT_MEDIA_PLAYER": {
         "defaults": [
           "'media_player.all'"
@@ -1812,6 +1802,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_LIVEKIT_STREAM_TTS": {
+        "defaults": [
+          "'0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_livekit.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_LIVE_REPO_ROOT": {
         "defaults": [
           "'/home/zoe/assistant'"
@@ -1969,6 +1969,26 @@
         ],
         "typed_env": false
       },
+      "ZOE_LOG_DIR": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/logging_setup.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LOG_LEVEL": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/logging_setup.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_MAX_BROWSER_TABS": {
         "defaults": [
           "'5'"
@@ -2049,6 +2069,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_MEMORY_DIGEST_LOOKBACK_HOURS": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_digest.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_MEMORY_LINK_RESOLVER_ENABLED": {
         "defaults": [
           "''"
@@ -2096,6 +2126,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/routers/system.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MEMORY_LOOP_ZERO_EFFECT_RUNS": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_metrics.py"
         ],
         "typed_env": false
       },
@@ -3056,7 +3096,7 @@
         ],
         "in_env_example": false,
         "readers": [
-          "services/zoe-data/hermes_http.py"
+          "services/zoe-data/repo_paths.py"
         ],
         "typed_env": false
       },
