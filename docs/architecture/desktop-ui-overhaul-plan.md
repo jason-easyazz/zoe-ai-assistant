@@ -483,8 +483,27 @@ collections/tiles canvas, `/api/music/similar`.
    ~20 desktop pages and sends the user into the kiosk UI; under the no-cross-links rule that is
    exactly what a gateway must not do. **Sever both links** — the notifications panel already
    renders the notification list inline, so the "view all" deep-link can simply go, and a desktop
-   updates surface (if wanted) is a later, separate decision. `notifications-panel.js` is shared
-   with touch pages, so gate the change on the consumer check in the guardrails.
+   updates surface (if wanted) is a later, separate decision.
+
+   **CONCRETE GUARDRAIL — do NOT delete the handlers globally.** `notifications-panel.js` is
+   loaded by BOTH desktop pages and surviving touch pages, and `touch/updates.html` stays alive
+   for the panel. Deleting `:345/:358` outright severs the touch surfaces' own working route to
+   it — breaking the page this very step is preserving. Required instead: make the deep-link
+   **desktop-only at runtime**, e.g.
+
+   ```js
+   // touch surfaces keep their route to touch/updates.html; desktop pages do not get one
+   const IS_TOUCH_SURFACE = location.pathname.startsWith('/touch/');
+   if (IS_TOUCH_SURFACE) { /* existing "view all" deep-link */ }
+   ```
+
+   Any equivalent gate is fine (a data-attribute on the host page, a caller-passed option); what
+   is NOT fine is an unconditional deletion, or a copy of the script for each tier. **Acceptance
+   for this step: load a surviving touch page and confirm "view all" still reaches
+   `touch/updates.html`, AND load a desktop page and confirm no route into `/touch/` exists.**
+   Both halves must be checked — verifying only the desktop half is how the touch regression
+   ships unnoticed. This is the shared-`js/` rule in the guardrails, stated concretely because
+   "gate on the consumer check" is not an instruction anyone can follow.
 3. **Smart-home retirement — one PR: target + stub + ALL SEVEN referrer sites below.** (Count them
    off the list; two of the seven live in the same file, which is exactly how one gets missed.) Delete
    `touch/smart-home.html` AND the 11-line desktop `smart-home.html` stub (it meta-refreshes to the
