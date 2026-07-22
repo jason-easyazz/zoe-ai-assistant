@@ -264,17 +264,22 @@ diff <(ls ~/.hermes/skills) <(ls docs/knowledge/operator-skills)
 diff <(ls ~/.openclaw/workspace/skills) <(ls docs/knowledge/operator-skills/openclaw)
 
 # 2. Rescue the one skill archived nowhere, BEFORE any rm -rf.
-#    Skip this step only if productivity/linear has since been imported above.
 mkdir -p ~/.hermes-retired
 mv ~/.hermes/skills/productivity/linear ~/.hermes-retired/linear
-test -f ~/.hermes-retired/linear/SKILL.md || { echo "RESCUE FAILED — STOP"; }
 
-# 3. Then, and only then
-rm -rf ~/.hermes/skills ~/.openclaw/skills ~/.openclaw/workspace/skills
+# 3. The rm is GUARDED — it cannot run unless linear is provably safe,
+#    either rescued in step 2 or already imported into this bundle.
+if [ -f ~/.hermes-retired/linear/SKILL.md ] \
+   || [ -f docs/knowledge/operator-skills/productivity/linear/SKILL.md ]; then
+  rm -rf ~/.hermes/skills ~/.openclaw/skills ~/.openclaw/workspace/skills
+else
+  echo "linear is unarchived and unrescued — NOTHING DELETED"
+fi
 ```
 
-Step 2 is not optional. `rm -rf ~/.hermes/skills` takes
-`productivity/linear` with it, and nothing in this bundle can bring it back.
+The guard is structural, not advisory: `rm -rf ~/.hermes/skills` takes
+`productivity/linear` with it, and nothing in this bundle can bring it back, so
+the destructive step lives inside the `if` rather than after a warning.
 
 ## Related
 
