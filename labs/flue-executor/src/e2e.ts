@@ -274,6 +274,36 @@ async function main(): Promise<void> {
   assert(stuck.rows[0].n === 1,
     `exactly one stuck entry logged across two reap passes (got: ${stuck.rows[0].n})`);
   await pool.query('DELETE FROM agent_task_queue WHERE id=$1', [t8.id]);
+  // Atomicity negative control: if the activity insert fails, the dedupe
+  // marker must NOT survive — otherwise a crash between the two writes would
+  // silence the stuck signal forever. Force the insert to fail with a CHECK
+  // constraint, then assert the marker is absent and a retry still logs.
+  const t9 = await seedTask(pool, cfg, {
+    mode: 'succeed', status: 'running', lane: 'omnigent',
+    sessionId: 'conv_e2e_atomicity', nonce: 'deadbeef2222',
+    startedAgoMs: cfg.omnigentTimeoutMs + 60_000, maxAttempts: 1,
+  });
+  // NOT VALID: gate only NEW writes — earlier scenarios legitimately inserted
+  // stuck entries, and validating against them would fail the ALTER itself.
+  await pool.query(
+    `ALTER TABLE activity_log ADD CONSTRAINT e2e_block_stuck
+       CHECK (action <> 'task_stuck_evidence_unobservable') NOT VALID`);
+  let reapThrew = false;
+  try {
+    await reapDeadWorkers(pool, cfgDownForReap(cfg), state.trackedPids);
+  } catch {
+    reapThrew = true;
+  }
+  const ctx9 = (await taskRow(pool, t9.id)).context as Record<string, unknown>;
+  assert(reapThrew && ctx9['evidence_stuck_logged'] === undefined,
+    `failed activity insert rolls the dedupe marker back (threw=${reapThrew}, marker=${ctx9['evidence_stuck_logged']})`);
+  await pool.query('ALTER TABLE activity_log DROP CONSTRAINT e2e_block_stuck');
+  await reapDeadWorkers(pool, cfgDownForReap(cfg), state.trackedPids);
+  const stuck9 = await pool.query(
+    `SELECT count(*)::int AS n FROM activity_log
+      WHERE action='task_stuck_evidence_unobservable' AND details->>'task_id'=$1`, [t9.id]);
+  assert(stuck9.rows[0].n === 1,
+    `the retry after the failed write still logs the stuck reason (got: ${stuck9.rows[0].n})`);
   await pool.query('TRUNCATE agent_task_queue, activity_log');
 
   console.log('== 5. single lane + kill of a hung worker ==');

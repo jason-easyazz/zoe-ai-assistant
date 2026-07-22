@@ -207,9 +207,12 @@ export async function spawnOmnigentWorker(
         return;
       }
       // Fail FAST on fatal kick errors — do not burn the full timeout when the
-      // harness already told us why it cannot run at all.
+      // harness already told us why it cannot run at all. This list is grown
+      // from real incidents, not guessed: logged-out harness (2026-07-22) and
+      // exhausted account credits ("You're out of usage credits", same day —
+      // which the earlier narrower pattern MISSED, costing a full timeout).
       const kickNow = await kickLogTail(cfg, sessionId);
-      if (/not logged in|please run \/login|invalid api key|credit balance/i.test(kickNow)) {
+      if (/not logged in|please run \/login|invalid api key|credit balance|usage credits|out of credit|rate limit|quota exceeded/i.test(kickNow)) {
         await failOrRequeue(pool, cfg, runningTask,
           `omnigent claude-sdk harness cannot run (fatal kick error): ${kickNow}`);
         return;

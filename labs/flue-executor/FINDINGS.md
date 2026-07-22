@@ -129,7 +129,8 @@ app-level module `src/db.ts` in a Flue project.**
 
 Per §5 decision 2, the executor routes `context.lane === 'heavy'` to Omnigent
 at spawn time. Full e2e (`npm run e2e`) after adding the lane: **33/33 asserts
-PASS**, including a REAL heavy ticket end-to-end on the live `zoe-omnigent`
+PASS on 2026-07-22**, including a REAL heavy ticket end-to-end on the live
+`zoe-omnigent`
 (`:6767`): session created for `polly` (claude-sdk), brief staged as a comment,
 runner launched, the `docker exec … omnigent run -r <SID>` kick fired (REST
 alone cannot start a claude-sdk run — re-confirmed), and the session's reply
@@ -142,6 +143,17 @@ Load-bearing findings for Phase 2:
 - **Sessions never report `completed`** — they settle back to `idle` after
   replying. Completion detection MUST be by evidence (the nonce token in the
   session items), not by session status.
+- **Two real harness outages hit during this build — both are the same class
+  and both now fail fast with the cause on the board.** (1) logged-out
+  claude-sdk (`Not logged in · Please run /login`), fixed by operator
+  re-login; (2) **exhausted account credits** (`You're out of usage credits`)
+  a few hours later. The credit case initially MISSED the fail-fast pattern
+  and burned the full 10-minute timeout — a genuine gap the incident exposed,
+  now closed (the pattern covers login, API-key, credit and rate-limit
+  phrasings). Expect this class to recur: the Omnigent lane depends on a
+  consumer account whose credentials expire (2026-08-22) and whose credits
+  deplete. **This is the top operational risk for Phase 2's heavy lane** —
+  the local lane is unaffected by design.
 - **The anti-silence design proved itself on a real failure.** The first live
   run failed because the container's claude-sdk harness was logged out (its
   OAuth record had `expiresAt: 0`). The executor surfaced the ROOT CAUSE in
@@ -163,6 +175,17 @@ Load-bearing findings for Phase 2:
   UNREACHABLE API is never destructive — the row is held with one loud
   `task_stuck_evidence_unobservable` activity entry until evidence returns
   (e2e scenario 4c).
+
+### Current suite state — read this before trusting a number
+
+The suite is **35 asserts** (33 + 2 added for the stuck-log atomicity negative
+control). The **last all-green run was 33/33** — the live heavy ticket
+included — on the spawn path that is still current (ownership-before-kick,
+evidence-based reap). The **two later asserts are green**; the **three live
+Omnigent asserts are currently RED because the container's Claude account ran
+out of usage credits**, not because of a code change. Restoring credits (or
+pointing the harness at API-key billing) should return the suite to all-green;
+the executor now names that cause in `failure_reason` within seconds.
 
 ## Deliberate scope limits
 
