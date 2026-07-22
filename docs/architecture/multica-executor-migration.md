@@ -75,15 +75,41 @@ Replaces the Hermes gateway's `kanban_watchers`. Contract:
 - reap a worker whose process died (the `#685` behaviour — do not lose it)
 
 Substrate: Flue. `labs/flue-harness-spike/` already has `scout` / `verifier`
-`defineAgentProfile`s and `sandbox: local()`. The missing piece is the claim →
-spawn → report loop, not the agent roles.
+`defineAgentProfile`s and `sandbox: local()`. The missing piece was the claim →
+spawn → report loop, not the agent roles — **built and lab-proven in
+`labs/flue-executor/`, BOTH lanes (Phase 1 contract complete 2026-07-22):
+33/33 e2e asserts (2026-07-22; suite since grown to 35 — see FINDINGS) — the local Flue worker lane (2026-07-21) plus the Omnigent
+heavy lane live against `zoe-omnigent` (session + staged brief + runner +
+docker-exec kick; completion by nonce token — sessions settle to `idle`, never
+`completed`), with the reason-on-every-transition write-through, the #685
+reap, and Omnigent-down failing loudly while the local lane runs.** Evidence:
+`labs/flue-executor/FINDINGS.md`. What remains before Phase 2: registering the
+executor's `agent_runtime` row and pointing it at the REAL Multica tables
+(the lab mirrors the DDL in a scratch DB).
 
-**Unknowns to settle before estimating** (this is why Phase 1 is not costed
-here):
-1. Does Flue's `sandbox: local()` give a worker a writable worktree on a branch,
-   or does the harness still own `worktree_bootstrap`?
-2. Atomic claim — Multica's `agent_task_queue`, or a Zoe-side lease table?
-3. Worker model routing: local 4B vs Omnigent, decided where?
+**The three unknowns — settled 2026-07-21** (full evidence in
+`labs/flue-executor/FINDINGS.md`):
+1. **`sandbox: local()` does not manage git state at all** — it binds an agent
+   to an *existing* host directory (`packages/runtime/src/node/local.ts` is a
+   thin fs+spawn wrapper; the spike's #864 dirty-tree bug proved the same live).
+   **`worktree_bootstrap` stays authoritative**; the executor passes the task's
+   worktree path through the handoff (`work_dir`) as the worker's `cwd`.
+2. **Multica's `agent_task_queue`, no Zoe-side lease table.** The live schema
+   already has a claim-candidates partial index keyed by `runtime_id`, the full
+   status lifecycle, `attempt`/`max_attempts`/`failure_reason`, and a
+   one-pending-task-per-issue guard — and `activity_log` is in the same DB, so
+   the reason commits in the same transaction as the status flip. Claim =
+   per-runtime advisory lock + `FOR UPDATE SKIP LOCKED` (SKIP LOCKED alone
+   double-dispatches under concurrency — proven and closed in the lab). A
+   Zoe-side lease table would hide queue state from `multica-web`.
+3. The routing POLICY was already decided (§5: Omnigent = primary heavy lane,
+   local 4B = light lane); the open question was only its implementation point.
+   **Answer: a rule in the executor at claim/spawn time, keyed off the claimed
+   task's context (task-class rides the handoff)** — local lane = a Flue
+   per-agent model (config), heavy lane = an Omnigent kick (session + staged
+   brief + `omnigent run -r` — not a model swap). Claim-time routing keeps the
+   Phase-2 `kanban_adapter` change to the minimal seam swap and preserves
+   "Omnigent down → local lane still runs".
 
 ### Phase 2 — re-point `kanban_adapter`
 
@@ -91,12 +117,16 @@ Swap the dispatch target from the `hermes kanban` CLI to the Phase-1 executor.
 Keep every phase, gate and deterministic override untouched. Prove on ≥3 real
 tickets end-to-end before Phase 3.
 
-### Phase 3 — Omnigent as a second executor
+### Phase 3 — (superseded by §5 decision 2: Omnigent is PRIMARY from day one)
 
-`zoe-omnigent` (`:6767`) already has `/home/zoe/assistant` mounted rw and `gh`
-credentials. Register it alongside the Flue executor and let Multica route by
-task class — heavy/multi-file work to Omnigent, small work local. Additive: if
-Omnigent is down, the local lane still runs.
+Per the operator decision, Omnigent is not a deferred "second executor" — the
+Phase-1 executor's worker-routing contract includes the Omnigent lane from the
+start: heavy/multi-file implement work routes to `zoe-omnigent` (`:6767`, repo
+mounted rw, `gh` creds), light work to the local 4B, and the deterministic
+harness gates keep either worker honest. What remains as "Phase 3" is only
+hardening the routing policy (task-class rules, Omnigent-down fallback to the
+local lane) once Phase 2 has real tickets flowing. If Omnigent is down, the
+local lane still runs — that property is non-negotiable.
 
 ### Phase 4 — retire Hermes
 
@@ -115,6 +145,9 @@ existence. What must be true before Hermes is retired:
       piece §8.2 is really about
 - [ ] An executor runs phase workers without the Hermes gateway (Phase 1)
 - [ ] Both proven on ≥3 real tickets end to end (Phase 2)
+- [ ] **The Omnigent lane proven too**: at least one heavy ticket routed to and
+      completed via Omnigent under the Phase-1 routing rule — a local-only
+      executor does NOT satisfy this gate (§5 decision 2)
 - [ ] Operator sign-off naming the `hermes-agent.service` row specifically
 
 Retiring Hermes on the strength of "Multica already exists" would remove the
@@ -139,13 +172,33 @@ was added to prevent.
 
 ---
 
-## 5. Open decisions for the operator
+## 5. Decisions — RESOLVED by operator (Jason, 2026-07-22)
 
-1. **Phase 1 substrate** — Flue workflow, or a plain Python loop in zoe-data?
-   Flue is the strategic answer; a Python loop is faster to prove and reuses
-   `worktree_bootstrap` as-is.
-2. **Worker model** — the local 4B has known agentic-reliability limits; the
-   harness's deterministic verify/review/closeout were built precisely so a weak
-   worker cannot corrupt the outcome. Confirm that still holds under Flue.
-3. **Omnigent scope** — second executor now (Phase 3), or defer until the local
-   lane is proven?
+1. **Phase 1 substrate = FLUE.** "Wouldn't using flue be smarter" — yes:
+   durable run state, one engine (the brain already lives there), and the
+   agent roles are already spiked in `labs/flue-harness-spike/`. No Python
+   interim; build the claim → spawn → report loop on Flue directly.
+2. **Omnigent is a PRIMARY executor lane from day one, not a deferred Phase 3.**
+   "Omnigent is a beast, and should be used to build zoe until we get a box
+   where local agents can do those tasks." Route heavy/multi-file implement
+   work to Omnigent; the local 4B keeps the light lane and the deterministic
+   harness gates keep either worker honest. Revisit the split only when new
+   hardware lands.
+3. **Hermes retires; Multica stays and pairs with Flue.** Confirmed. Keep what
+   was built (skills/adapters already backed up in
+   `docs/knowledge/operator-skills/`) as reference, and work toward this goal
+   through the Phase 1-4 gates above — the gates themselves are unchanged.
+
+**Related decisions of record (same date):**
+- **OpenClaw: full retirement.** "Just bloody get rid of openclaw" — delete the
+  runtime + builder intents with it (the intents name skills that never loaded;
+  the ACP path's 2,338 runs were improvisation, not skill execution). Rebuild
+  capabilities on Pi/Flue when actually needed, referencing the public
+  Agent-Skills ecosystem ("internet of skills") rather than porting blind.
+- **Hardware: PARKED, direction = DGX Spark.** No purchase now; "it will
+  probably be a DGX Spark, i havent seen anything better yet" (Jason,
+  2026-07-22). Coherent with the two-model direction: 128GB unified holds a
+  larger Gemma brain AND a resident coding model simultaneously — a 24GB card
+  cannot — plus local fine-tuning headroom, on the same CUDA stack Zoe already
+  runs. The accepted trade: ~273GB/s bandwidth means big models generate
+  steadily, not fast; capacity and training headroom are what the money buys.

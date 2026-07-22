@@ -1,0 +1,93 @@
+/**
+ * Lab executor config — where the lab DB lives and who this runtime is.
+ *
+ * The lab NEVER touches the live `multica` database. It uses its own scratch
+ * database (`multica_executor_lab`) in the same Postgres container, so the
+ * atomic-claim semantics are proven against the real engine (SKIP LOCKED,
+ * partial indexes) without any risk to the board.
+ *
+ * Credentials are never committed: the connection string is taken from
+ * `LAB_DATABASE_URL`, or derived from the live service env file's
+ * `POSTGRES_URL` with the database name swapped to the lab DB.
+ *
+ * LAB ONLY. See ../README.md.
+ */
+import { readFileSync } from 'node:fs';
+
+/** Fixed lab identities (arbitrary but stable UUIDs, used for actor/agent columns). */
+export const LAB_WORKSPACE_ID = '00000000-0000-4000-8000-00000dab0001';
+export const LAB_RUNTIME_ID = '00000000-0000-4000-8000-00000dab0002';
+export const LAB_AGENT_ID = '00000000-0000-4000-8000-00000dab0003';
+
+export const LAB_DB_NAME = 'multica_executor_lab';
+
+export interface ExecutorConfig {
+  /** Postgres URL pointing at the LAB database (never the live `multica` DB). */
+  labDatabaseUrl: string;
+  /** Same credentials pointing at the maintenance `zoe` DB, used only to CREATE DATABASE. */
+  adminDatabaseUrl: string;
+  /** This executor's runtime identity — rows are claimed per-runtime. */
+  runtimeId: string;
+  /** Poll interval between executor ticks, ms. */
+  pollMs: number;
+  /** Hard cap on a worker's wall-clock before it is killed and failed, ms. */
+  workerTimeoutMs: number;
+  /** Omnigent heavy lane (§5 decision 2): API base URL. */
+  omnigentBaseUrl: string;
+  /** Omnigent agent to run heavy tasks (default: polly, the claude-sdk workhorse). */
+  omnigentAgentId: string;
+  /** Container name for the docker-exec kick (REST cannot start claude-sdk runs). */
+  omnigentContainer: string;
+  /** Hard cap on an Omnigent session before the task is failed, ms. */
+  omnigentTimeoutMs: number;
+  /** Interval between completion-token polls of an Omnigent session, ms. */
+  omnigentPollMs: number;
+}
+
+function swapDbName(url: string, dbName: string): string {
+  // postgresql://user:pass@host:port/dbname[?params]
+  const u = new URL(url);
+  u.pathname = `/${dbName}`;
+  return u.toString();
+}
+
+function postgresUrlFromEnvFile(): string {
+  const envFile = process.env.ZOE_ENV_FILE ?? '/home/zoe/assistant/services/zoe-data/.env';
+  let text: string;
+  try {
+    text = readFileSync(envFile, 'utf8');
+  } catch (err) {
+    throw new Error(
+      `Set LAB_DATABASE_URL, or make ${envFile} readable (override path with ZOE_ENV_FILE): ${err}`,
+    );
+  }
+  const line = text.split('\n').find((l) => l.startsWith('POSTGRES_URL='));
+  if (!line) throw new Error(`No POSTGRES_URL in ${envFile}; set LAB_DATABASE_URL instead.`);
+  return line.slice('POSTGRES_URL='.length).trim();
+}
+
+export function loadConfig(): ExecutorConfig {
+  const base = process.env.LAB_DATABASE_URL ?? postgresUrlFromEnvFile();
+  const labDatabaseUrl = process.env.LAB_DATABASE_URL ?? swapDbName(base, LAB_DB_NAME);
+  // Hard allowlist, not a denylist: the lab may ONLY ever touch the scratch DB.
+  // A denylist of "/multica" is bypassable by typo (/zoe, /Multica, /multica/).
+  if (new URL(labDatabaseUrl).pathname !== `/${LAB_DB_NAME}`) {
+    throw new Error(
+      `Refusing to run: the lab only operates on the "${LAB_DB_NAME}" scratch database, ` +
+        `got ${new URL(labDatabaseUrl).pathname}`,
+    );
+  }
+  return {
+    labDatabaseUrl,
+    adminDatabaseUrl: swapDbName(base, 'zoe'),
+    runtimeId: process.env.LAB_RUNTIME_ID ?? LAB_RUNTIME_ID,
+    pollMs: Number(process.env.LAB_POLL_MS ?? '1000'),
+    workerTimeoutMs: Number(process.env.LAB_WORKER_TIMEOUT_MS ?? '300000'),
+    omnigentBaseUrl: process.env.LAB_OMNIGENT_URL ?? 'http://127.0.0.1:6767',
+    omnigentAgentId:
+      process.env.LAB_OMNIGENT_AGENT_ID ?? 'ag_057995d1517418e6839f51d340785dd6',
+    omnigentContainer: process.env.LAB_OMNIGENT_CONTAINER ?? 'zoe-omnigent',
+    omnigentTimeoutMs: Number(process.env.LAB_OMNIGENT_TIMEOUT_MS ?? '600000'),
+    omnigentPollMs: Number(process.env.LAB_OMNIGENT_POLL_MS ?? '5000'),
+  };
+}

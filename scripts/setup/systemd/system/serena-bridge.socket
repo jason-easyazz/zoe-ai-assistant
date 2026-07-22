@@ -1,0 +1,86 @@
+# Listening half of the Serena code-intel bridge. SYSTEM unit — see "WHY ROOT".
+#
+# WHY THIS EXISTS
+# The zoe-omnigent container used to spawn its OWN Serena per agent session
+# (stdio entry in modules/omnigent/.mcp.json), ~900 MB RSS each, on a 15.6 GB
+# box that also runs llama-server + Kokoro. That pressure starved the deploy
+# gate and contributed to llama-server CUDA-OOM crashes. The host already runs
+# ONE shared Serena (serena-mcp.service, a user unit). This socket plus
+# serena-bridge.service let the container use that shared server instead.
+#
+# WHY SERENA ITSELF STAYS ON 127.0.0.1
+# serena-mcp.service can read the ENTIRE repo, so its bind is loopback-only and
+# is NOT changed by this (scripts/maintenance/serena_mcp_health.sh FAILS on a
+# non-loopback bind — keep it that way). This is a narrow proxy in front of it.
+#
+# THE TWO LAYERS, AND WHY BOTH ARE NEEDED (measured 2026-07-22)
+# 172.28.0.1 is the gateway of `zoe-codeintel`, an `internal: true` Docker
+# network declared in modules/omnigent/docker-compose.module.yml whose ONLY
+# member is zoe-omnigent (pinned at 172.28.0.2).
+#
+#   Layer 1 — the dedicated internal network. VERIFIED to block cross-network
+#   access to CONTAINER addresses: a container on zoe-network could not reach a
+#   container IP on a throwaway internal bridge (Docker's isolation rules live
+#   in FORWARD, and `internal` adds its own drops).
+#
+#   Layer 2 — this IP access list. Layer 1 alone is NOT enough, and assuming it
+#   was would have shipped a hole: a packet addressed to a HOST address (any
+#   bridge gateway) is delivered locally via INPUT, which Docker's FORWARD rules
+#   never see. Measured on this box with a throwaway listener on a throwaway
+#   internal bridge, a container on zoe-network reached it fine. So binding a
+#   port on the zoe-codeintel gateway is, by itself, no more private than
+#   binding on the zoe-network gateway — the option that was rejected because
+#   zoe-network carries 9 containers including homeassistant and third-party
+#   ghcr.io/multica-ai/* images. IPAddressDeny=any + IPAddressAllow=<omnigent's
+#   pinned IP> is what actually scopes it, and it closes the LAN case too: a LAN
+#   host that adds a static route for 172.28.0.0/24 via this box would otherwise
+#   reach the port the same way (weak host model).
+#
+# WHY ROOT (a SYSTEM unit, unlike the user units in scripts/setup/systemd/)
+# systemd's IP access lists are cgroup-BPF and require root: as a --user unit
+# the manager logs "unit configures an IP firewall, but not running as root"
+# and then starts the unit with NO filtering — a silent fail-open, measured.
+# Root is needed for the enforcement, not for the proxying.
+#
+# FreeBind=true: the socket must bind before Docker has created the
+# zoe-codeintel bridge (boot order, or any window where the module is down).
+# Without IP_FREEBIND the unit fails at boot with EADDRNOTAVAIL.
+#
+# The proxy half is NOT an L4 proxy, and cannot be: systemd-socket-proxyd (and
+# socat, which is not installed on this box anyway) shuffles bytes and cannot
+# rewrite the Host header. Serena's MCP transport-security middleware answers
+# 421 to any Host that is not a loopback authority, so the bridge would carry
+# TCP perfectly and still fail every request. See serena-bridge.service.
+#
+# The socket unit still owns the BIND, and must keep owning it: for a
+# socket-activated service the passed-in listening socket is covered by the
+# SOCKET unit's access list, so a proxy that bound for itself would silently
+# drop the filtering below. serena_bridge_proxy.py therefore refuses to start
+# without LISTEN_FDS and has no --listen option.
+#
+# Install: see scripts/setup/systemd/README.md. Its negative control is
+# MANDATORY — on a kernel without cgroup-BPF firewalling systemd also fails
+# OPEN, so prove that a non-member container cannot connect.
+
+[Unit]
+Description=Serena MCP bridge socket (zoe-codeintel gateway 172.28.0.1:9121)
+Documentation=file:///home/zoe/assistant/scripts/AGENTS.md
+
+[Socket]
+ListenStream=172.28.0.1:9121
+FreeBind=true
+# One proxy process multiplexes every connection (asyncio); do NOT switch to
+# Accept=yes — that spawns a service instance per connection.
+Accept=no
+
+# THE access control. The socket unit's list is the load-bearing one: for a
+# socket-activated service the passed-in listening socket is covered by the
+# SOCKET unit's list, not the service's (systemd.resource-control(5) — which is
+# also why the service replicates it). 172.28.0.2 is zoe-omnigent's pinned
+# address on zoe-codeintel; the two must stay in sync (pinned by
+# tests/unit/modules/test_omnigent_mcp_config.py).
+IPAddressDeny=any
+IPAddressAllow=172.28.0.2/32
+
+[Install]
+WantedBy=sockets.target

@@ -1,0 +1,87 @@
+# Proxy half of the Serena code-intel bridge. SYSTEM unit, socket-activated.
+#
+# Forwards connections accepted on serena-bridge.socket (172.28.0.1:9121, the
+# gateway of the internal `zoe-codeintel` Docker network, one member:
+# zoe-omnigent) to the shared Serena MCP server on 127.0.0.1:9121. The full
+# rationale — why the bridge exists, why Serena keeps its loopback-only bind,
+# why the IP access list is the real boundary, and why this is a system unit —
+# is in serena-bridge.socket. Read that first.
+#
+# Short version: zoe-omnigent used to spawn a private ~900 MB Serena per agent
+# session; the host already runs one shared server. Serena can read the entire
+# repo, so it must never bind beyond 127.0.0.1.
+#
+# WHY NOT systemd-socket-proxyd (it was, and it did not work)
+# With an L4 proxy the TCP path is fine and EVERY request still comes back
+# `421 Misdirected Request / Invalid Host header`. Serena builds its FastMCP
+# without passing `transport_security=`, so the MCP SDK auto-enables DNS-
+# rebinding protection for its loopback bind with
+# allowed_hosts=["127.0.0.1:*","localhost:*","[::1]:*"], and the container's
+# requests carry `Host: 172.28.0.1:9121`. systemd-socket-proxyd shuffles bytes
+# and cannot rewrite a header. serena_bridge_proxy.py is an HTTP-aware proxy
+# that changes exactly one thing — the Host header — and streams everything
+# else through untouched (MCP replies are long-lived text/event-stream, so it
+# must never buffer). Neither shortcut is acceptable: binding Serena non-
+# loopback breaks the loopback-only rule AND disables the protection outright,
+# and overriding `localhost` in the container's /etc/hosts breaks
+# container-local loopback.
+#
+# THE SCRIPT IS INSTALLED, NOT RUN FROM THE REPO. ProtectHome=yes makes /home
+# inaccessible to this unit, so an ExecStart pointing into /home/zoe/assistant
+# would fail with ENOENT. Copy it alongside these units:
+#   sudo install -D -m 0755 scripts/maintenance/serena_bridge_proxy.py \
+#        /usr/local/lib/zoe/serena_bridge_proxy.py
+# Re-copy it whenever the repo copy changes (same rule as the units themselves).
+#
+# This unit has NO [Install] section on purpose — enable the SOCKET
+# (`systemctl enable --now serena-bridge.socket`); it activates this on demand.
+
+[Unit]
+Description=Serena MCP bridge (zoe-codeintel gateway -> shared Serena on 127.0.0.1:9121)
+Documentation=file:///home/zoe/assistant/scripts/AGENTS.md
+Requires=serena-bridge.socket
+After=serena-bridge.socket
+# The proxy is useless without the shared server, but must not take it down or
+# refuse to start while it restarts: Wants=, not Requires=. serena-mcp.service
+# is a USER unit, so there is no system-scope ordering edge to declare here —
+# a connection arriving before it is up simply fails and is retried.
+
+[Service]
+# Type=simple: the listening socket is already open (the socket unit owns it),
+# so there is nothing for a readiness protocol to gate.
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/lib/zoe/serena_bridge_proxy.py --upstream 127.0.0.1:9121
+# The proxy adopts the inherited socket (LISTEN_FDS, fd 3) and refuses to start
+# otherwise — it must never bind for itself, because the bind is what carries
+# FreeBind and the IPAddressAllow list on the socket unit.
+Environment=PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+
+# Least privilege: this relays bytes. It needs no writable filesystem, no user,
+# and only loopback + the one container address.
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateDevices=yes
+RestrictAddressFamilies=AF_INET AF_UNIX
+# Replicated from the socket unit (systemd.resource-control(5) recommends
+# setting the list on both). `localhost` is required here and NOT on the socket:
+# this half makes the OUTBOUND connection to the shared Serena on 127.0.0.1.
+IPAddressDeny=any
+IPAddressAllow=localhost 172.28.0.2/32
+
+# Buffers plus a CPython interpreter (~25 MB RSS, where socket-proxyd needed
+# ~2 MB) — that is the price of being able to rewrite a header. Still a
+# containment bound, not a tuning knob, and it must never swap in front of the
+# voice stack.
+MemoryMax=128M
+MemorySwapMax=0
+# Dev tooling: it must lose any memory fight against llama-server / kokoro /
+# zoe-data, exactly like serena-mcp.service itself.
+Nice=10
+OOMScoreAdjust=500
+Restart=on-failure
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=serena-bridge

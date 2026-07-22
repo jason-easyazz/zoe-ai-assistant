@@ -19,7 +19,15 @@ importScripts('/workbox/workbox-sw.js');
 // (4.66.0 calendar-anchor vs 4.65.2 music-card-polish -> 4.66.1.)
 // (4.69.0 sign-in-fails-closed vs 4.68.4 calendar-metadata-escape -> 4.69.1.)
 // (4.69.1 sign-in+calendar vs 4.68.5 chat-xss+cross-origin-unrouted -> 4.69.2.)
-const SW_VERSION = '4.69.2'; // sign-in fails closed + calendar metadata/escaping + chat.html XSS escaping + cross-origin script/CSS left unrouted
+// (4.69.2 -> 4.70.0: chat.html is PRECACHED and its <script>/<link> tags now
+//  point at the vendored /lib/... copies of marked, DOMPurify, Prism, QRCode,
+//  Leaflet and Chart.js. Without this bump every existing client keeps serving
+//  the precached CDN-referencing chat.html forever. The vendored files
+//  themselves are deliberately NOT added to precacheAndRoute: they are now
+//  same-origin, so the generic script/style routes below already cache them on
+//  first use, and precaching ~2 MB of libraries would re-download the lot on
+//  every future SW_VERSION bump.)
+const SW_VERSION = '4.70.0'; // sign-in fails closed + calendar metadata/escaping + chat.html XSS escaping + cross-origin script/CSS left unrouted + CDN libraries vendored to /lib/
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded

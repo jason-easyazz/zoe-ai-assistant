@@ -16,7 +16,7 @@ Production runtime services for the Zoe assistant: the web/chat API, static UI, 
 ## Local Contracts
 
 - Exactly ONE production chat router: `zoe-data/routers/chat.py`. Never create `chat_v2.py`, `chat_new.py`, or parallel routers.
-- No hardcoded NLU if/else in the production chat router; natural-language routing belongs in `intent_router.py`, Zoe Agent, Hermes, or OpenClaw.
+- No hardcoded NLU if/else in the production chat router; natural-language routing belongs in `intent_router.py` or Zoe Agent. (Hermes and OpenClaw are being RETIRED — operator decision 2026-07-22, `docs/architecture/multica-executor-migration.md` §5 — do not add new routing to either; their existing paths are deletion targets via the gated retirement PRs.)
 - Code must work on BOTH Jetson Orin NX (GPU) and Raspberry Pi 5 (CPU); gate hardware-specific paths on `HARDWARE_PLATFORM`.
 - Memory writes always carry scope (`personal` / `shared` / `ambient`); credentials are per user and per scope, never in global env vars.
 - No `home` / `family` / `household` concepts in kernel code (router, memory schema, auth, tool signatures) — they belong in skills and scopes.

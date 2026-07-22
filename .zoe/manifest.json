@@ -53,7 +53,6 @@
       "services/zoe-data/main.py",
       "services/zoe-data/database.py",
       "services/zoe-data/auth.py",
-      "services/zoe-data/openclaw_ws.py",
       "services/zoe-data/routers/chat.py",
       "services/zoe-data/routers/system.py"
     ],
