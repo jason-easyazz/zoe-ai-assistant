@@ -155,6 +155,15 @@ def _board() -> str:
     return os.environ.get("ZOE_KANBAN_BOARD", "default")
 
 
+def _kanban_backend() -> str:
+    """Which executor serves the kanban verbs: ``hermes`` (default) or ``executor``.
+
+    Read per call, never cached, so the revert is an env flip + restart with no
+    code change (docs/architecture/perf-hardening-plan.md discipline).
+    """
+    return (os.environ.get("ZOE_KANBAN_BACKEND", "hermes") or "hermes").strip().lower()
+
+
 def _workspace_for_phase(phase: str) -> str:
     """Choose the Hermes workspace for a phase.
 
@@ -832,6 +841,24 @@ class KanbanAdapter:
     name = NAME
 
     async def _run(self, args: list[str], *, expect_json: bool = False) -> Any:
+        # PHASE-2 SEAM (docs/architecture/multica-executor-migration.md §2):
+        # the ONLY Hermes coupling in this adapter is this CLI call site. With
+        # ZOE_KANBAN_BACKEND=executor the identical verb surface is served by
+        # the Zoe-native executor against Multica's own agent_task_queue, so
+        # every phase, gate and deterministic override above stays untouched.
+        # Default is `hermes` — shipping this file changes no behaviour, and
+        # the revert path is one env var.
+        if _kanban_backend() == "executor":
+            from executors import executor_queue_backend
+
+            try:
+                return await executor_queue_backend.run_kanban_command(
+                    args, expect_json=expect_json
+                )
+            except executor_queue_backend.ExecutorBackendError as exc:
+                # Surface as the adapter's own error type so all existing
+                # recovery paths treat it exactly like a CLI failure.
+                raise KanbanCLIError(f"executor backend: {exc}") from exc
         cmd = [hermes_bin(), "kanban", "--board", _board(), *args]
         env = dict(os.environ)
         env.setdefault("HERMES_KANBAN_BOARD", _board())

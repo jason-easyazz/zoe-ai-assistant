@@ -111,11 +111,45 @@ executor's `agent_runtime` row and pointing it at the REAL Multica tables
    Phase-2 `kanban_adapter` change to the minimal seam swap and preserves
    "Omnigent down → local lane still runs".
 
-### Phase 2 — re-point `kanban_adapter`
+### Phase 2 — re-point `kanban_adapter`  ← seam LANDED 2026-07-22, flag-dark
 
 Swap the dispatch target from the `hermes kanban` CLI to the Phase-1 executor.
 Keep every phase, gate and deterministic override untouched. Prove on ≥3 real
 tickets end-to-end before Phase 3.
+
+**Seam shipped (default OFF).** `kanban_adapter._run` — the single CLI call
+site, exactly as §2 predicted — now dispatches on `ZOE_KANBAN_BACKEND`:
+
+| value | behaviour |
+|---|---|
+| `hermes` (**default**) | today's `hermes kanban` CLI. Shipping this changed nothing. |
+| `executor` | `executors/executor_queue_backend.py` serves the same six verbs (`list`/`show`/`create`/`block`/`archive`/`complete`) against Multica's own `agent_task_queue` + `activity_log`. |
+
+The adapter's 2,394 lines of discovered failure modes are **untouched** — 279
+of its existing tests pass unchanged. Revert path: unset the env var and
+restart (no code change, no migration).
+
+**Proven against the REAL Multica tables** (not a scratch DB) by
+`scripts/maintenance/verify_executor_queue_backend.py` — 30/30 checks:
+identity registration is idempotent; `create` dedupes on the idempotency key
+under an advisory lock (no double dispatch); every row/detail field the
+adapter reads is present and `_row_ref_key()` correlates; the status
+vocabularies map (`queued→ready`, `failed→blocked`, `completed→done`); and
+**every transition lands a non-empty reason in `activity_log`** — the §4
+non-negotiable, now visible in `multica-web` where Hermes recorded
+`blocker_reason` 0/128 times. The probe task is deleted afterwards; the
+reason entries are kept as evidence.
+
+**Registered in live Multica** (additive, no schema change): `agent_runtime`
+"Flue Executor (Zoe)" + `agent` "Flue Executor" (`max_concurrent_tasks=1`,
+mirroring the single-lane contract). Schema gotcha on record: `agent.status`
+is `idle|working|blocked|error|offline` — NOT `agent_runtime`'s
+`online|offline` — and `agent.description` is capped at 255 chars.
+
+**Still to do before Phase 3:** flip the flag on a real ticket with the
+executor process running, and land ≥3 real tickets end-to-end (≥1 heavy via
+Omnigent). The dispatch kill switch (`~/.zoe/multica_dispatch_paused`) stays
+until that holds.
 
 ### Phase 3 — (superseded by §5 decision 2: Omnigent is PRIMARY from day one)
 
