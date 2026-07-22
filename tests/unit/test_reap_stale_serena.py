@@ -316,3 +316,36 @@ def test_no_recycle_flag_leaves_a_bloated_unit_alone(monkeypatch):
     rc, calls = _run_main(monkeypatch, [_shared_proc(1100)],
                           run_result=_OK(), argv=("--execute", "--no-recycle"))
     assert rc == 0 and calls == []
+
+
+# --- Warm-up guard (measured 2026-07-22) ------------------------------------ #
+# A cold shared server walks ~120 agent worktrees; its own log says "Loading of
+# .gitignore files completed in 15 minutes" and it is ALREADY ~1 GB while doing
+# it — above the recycle threshold before serving one request. Without a guard
+# the hourly timer restarts it mid-warm-up forever and the fleet never gets a
+# usable server: the recycle would cause the outage it exists to prevent.
+def test_bloated_but_still_warming_up_is_not_recycled():
+    p = proc(cgroup=SHARED_CGROUP, rss_kb=1_100_000, age_s=10 * 60)
+    assert reaper.classify_shared(p, **RECYCLE_DEFAULTS, grace_min=30) is None
+
+
+def test_bloated_after_warmup_is_recycled():
+    p = proc(cgroup=SHARED_CGROUP, rss_kb=1_100_000, age_s=45 * 60)
+    assert reaper.classify_shared(p, **RECYCLE_DEFAULTS, grace_min=30) is not None
+
+
+def test_warmup_guard_boundary_is_exclusive():
+    at = proc(cgroup=SHARED_CGROUP, rss_kb=1_100_000, age_s=30 * 60)
+    assert reaper.classify_shared(at, **RECYCLE_DEFAULTS, grace_min=30) is not None
+    just_under = proc(cgroup=SHARED_CGROUP, rss_kb=1_100_000, age_s=30 * 60 - 1)
+    assert reaper.classify_shared(just_under, **RECYCLE_DEFAULTS, grace_min=30) is None
+
+
+def test_main_does_not_restart_a_warming_up_server(monkeypatch):
+    # End-to-end through main(): a fresh, bloated shared server must survive.
+    rc, calls = _run_main(
+        monkeypatch,
+        [proc(cgroup=SHARED_CGROUP, rss_kb=1_200_000, age_s=5 * 60)],
+        run_result=_OK(),
+    )
+    assert rc == 0 and calls == [], "restarted a server that was still warming up"
