@@ -18,6 +18,17 @@ Secrets are never inlined — they are read from `.env` files.
 | `flue-zoe-brain.service`   | 3578  | Flue Zoe-brain sidecar (optional, operator opt-in) |
 | `serena-mcp.service`       | 9121  | Shared Serena MCP code-intelligence server (dev tooling, one per HOST — see below) |
 
+Everything in this directory is a **user** unit. The `system/` subdirectory holds
+the few that must run as **root** (`/etc/systemd/system/`) because they use
+directives the user manager cannot enforce — today just
+`serena-bridge.{socket,service}`. They are kept out of this directory precisely
+so the install glob below can never drop one into the user manager, where its
+access-control directives would be silently ignored.
+
+| System unit | Port | Purpose |
+|-------------|------|---------|
+| `system/serena-bridge.socket` + `.service` | 9121 on `172.28.0.1` | Scoped proxy letting ONLY the `zoe-omnigent` container use the shared Serena — see below |
+
 ## Install
 
 ```bash
@@ -56,6 +67,51 @@ only — this server can read the whole repo and must never reach the LAN.
 Claude Code does **not** auto-start a URL-based MCP server: if this unit is
 down, every agent silently loses code intelligence. `Restart=always` covers
 crashes; the health check covers the rest.
+
+### Letting the omnigent container use the shared server (`system/serena-bridge.*`)
+
+`zoe-omnigent` used to spawn its **own** Serena per agent session (a stdio entry
+in `modules/omnigent/.mcp.json`), ~900 MB RSS each — pressure that starved the
+deploy gate and contributed to llama-server CUDA-OOM crashes. It now points at
+the shared server. Serena itself does **not** change: it stays on `127.0.0.1`.
+Two root units bridge the gap:
+
+- `system/serena-bridge.socket` — listens on `172.28.0.1:9121`, the gateway of
+  `zoe-codeintel` (an `internal` Docker network declared in
+  `modules/omnigent/docker-compose.module.yml`, one member: `zoe-omnigent`,
+  pinned at `172.28.0.2`), and carries the access list
+  `IPAddressDeny=any` / `IPAddressAllow=172.28.0.2/32`.
+- `system/serena-bridge.service` — socket-activated `systemd-socket-proxyd` to
+  `127.0.0.1:9121` (socat is not installed on this box).
+
+**Root, not user**: a `--user` unit logs `unit configures an IP firewall, but
+not running as root` and then starts with **no filtering**. And the access list
+is not decoration — the dedicated network alone does not protect a
+gateway-bound port, because host-local delivery goes through INPUT while
+Docker's isolation rules live in FORWARD (measured: a `zoe-network` container
+reached a listener on a separate internal bridge's gateway).
+
+```bash
+sudo cp scripts/setup/systemd/system/serena-bridge.socket \
+        scripts/setup/systemd/system/serena-bridge.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now serena-bridge.socket   # the SOCKET, not the service
+
+# Bring the container onto zoe-codeintel (this RECREATES it):
+cd modules/omnigent && docker compose --env-file ../../.env \
+  -f docker-compose.module.yml up -d && cd -
+
+# MANDATORY negative control — systemd fails OPEN if it cannot install the BPF
+# filter, so prove the boundary rather than assuming it:
+docker run --rm --network zoe-network alpine:latest \
+  wget -q -T 5 -O - http://172.28.0.1:9121/mcp     # MUST fail / time out
+docker exec zoe-omnigent python3 -c \
+  "import urllib.request as u;print(u.urlopen('http://172.28.0.1:9121/mcp',timeout=5).status)"
+  # any HTTP status (Serena answers 400/405 to a bare GET) proves reachability
+```
+
+If the first command succeeds, the filter is not in force: `sudo systemctl
+disable --now serena-bridge.socket` and do not leave the bridge running.
 
 `flue-zoe-brain.service` is deliberately NOT in that enable line: it supervises
 the sidecar behind zoe-data's default-OFF `ZOE_BRAIN_BACKEND=flue` seam.
