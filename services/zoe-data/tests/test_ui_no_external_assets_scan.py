@@ -253,3 +253,47 @@ def test_scan_ignores_inline_js_url_assignment():
       img.src = "https://images.example.com/a.png";
     </script>"""
     assert find_external_assets(js) == []
+
+
+# --------------------------------------------------------------------------- #
+# CSP: the ENFORCEMENT half of local-first.
+#
+# #1506 removed every CDN reference from dist/. This pins the other half: if the
+# CSP still permits those origins, "local-first" is a convention rather than a
+# guarantee — one inline <script src="https://cdn…"> would load happily and the
+# scan above would be the only thing standing in its way. Dropping the origins
+# means the browser refuses, whatever a page asks for.
+# --------------------------------------------------------------------------- #
+_NGINX_CONF = Path(__file__).resolve().parents[2] / "zoe-ui" / "nginx.conf"
+
+# Origins that must never reappear in a CSP directive. youtube.com is
+# deliberately absent: video embeds are a real, in-use feature.
+_FORBIDDEN_CSP_ORIGINS = ("cdn.jsdelivr.net", "unpkg.com", "cdnjs.cloudflare.com",
+                          "fonts.googleapis.com", "fonts.gstatic.com")
+
+_CSP_LINE_RE = re.compile(r"add_header\s+Content-Security-Policy\s+(.+?)\s+always;", re.I | re.S)
+
+
+def _csp_headers() -> list[str]:
+    return _CSP_LINE_RE.findall(_NGINX_CONF.read_text(encoding="utf-8"))
+
+
+def test_nginx_conf_has_csp_headers_to_check():
+    # Guard against the scan silently passing because the regex stopped matching.
+    assert len(_csp_headers()) >= 5, "expected the known CSP headers in nginx.conf"
+
+
+@pytest.mark.parametrize("origin", _FORBIDDEN_CSP_ORIGINS)
+def test_csp_does_not_permit_cdn_origins(origin):
+    offending = [h[:120] for h in _csp_headers() if origin in h]
+    assert not offending, (
+        f"CSP still allows {origin} — every asset was vendored in #1506, so "
+        f"permitting it re-opens the hole silently. Offending header(s): {offending}"
+    )
+
+
+def test_csp_still_allows_youtube_embeds():
+    # Negative control: the tightening must not have been a blanket strip.
+    assert all("www.youtube.com" in h for h in _csp_headers()), (
+        "youtube.com was removed from a CSP header — video embeds are in use"
+    )
