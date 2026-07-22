@@ -159,3 +159,160 @@ def test_reap_bails_on_pid_reuse(monkeypatch):
 def test_still_serena_false_for_dead_pid():
     # A pid that cannot exist must classify as not-serena (never signalled).
     assert reaper._still_serena(2**31 - 1) is False
+
+
+# --------------------------------------------------------------------------- #
+# Recycle policy — the SHARED unit only, and never a kill.
+#
+# Why these exist: the shared server is exempt from both kill rules, so nothing
+# bounded its growth. Its caches are never evicted (~1 GB/day, in RSS not swap,
+# so the COLD rule is blind to it) and that creep starved the deploy workflow's
+# memory gate three runs in a row on 2026-07-21.
+# --------------------------------------------------------------------------- #
+RECYCLE_DEFAULTS = dict(shared_rss_mb=900)
+
+
+def test_bloated_shared_server_is_recycled():
+    p = proc(cgroup=SHARED_CGROUP, rss_kb=1_100_000)
+    reason = reaper.classify_shared(p, **RECYCLE_DEFAULTS)
+    assert reason is not None and "bloated" in reason
+
+
+def test_normal_shared_server_is_left_alone():
+    # A freshly restarted server sits ~100 MB; a working cache must not trip it.
+    p = proc(cgroup=SHARED_CGROUP, rss_kb=400_000)
+    assert reaper.classify_shared(p, **RECYCLE_DEFAULTS) is None
+
+
+def test_recycle_threshold_is_exclusive():
+    p = proc(cgroup=SHARED_CGROUP, rss_kb=900 * 1024)
+    assert reaper.classify_shared(p, **RECYCLE_DEFAULTS) is None
+    p = proc(cgroup=SHARED_CGROUP, rss_kb=900 * 1024 + 1)
+    assert reaper.classify_shared(p, **RECYCLE_DEFAULTS) is not None
+
+
+def test_per_session_instance_is_never_recycled():
+    # Strays are the KILL path's business; recycling restarts the shared UNIT,
+    # which would be the wrong action entirely for a session-owned process.
+    p = proc(rss_kb=4_000_000)
+    assert reaper.classify_shared(p, **RECYCLE_DEFAULTS) is None
+
+
+def test_bloated_shared_server_is_still_never_KILLED():
+    # The recycle path must not have weakened the kill exemption: even huge and
+    # fully swapped, the shared unit is never signalled.
+    p = proc(cgroup=SHARED_CGROUP, rss_kb=4_000_000, swap_kb=4_500_000, ppid=1)
+    assert reaper.classify(p, **DEFAULTS) is None
+
+
+def test_recycle_restarts_the_unit_via_systemd_not_signals(monkeypatch):
+    calls = []
+
+    class _R:
+        returncode = 0
+        stderr = ""
+
+    monkeypatch.setattr(reaper.subprocess, "run",
+                        lambda cmd, **kw: calls.append(cmd) or _R())
+    killed = []
+    monkeypatch.setattr(reaper.os, "kill", lambda *a: killed.append(a))
+
+    assert reaper.recycle_shared(execute=True) == "restarted"
+    assert calls == [["systemctl", "--user", "restart", "serena-mcp.service"]]
+    assert killed == [], "recycle must never signal the process directly"
+
+
+def test_recycle_dry_run_touches_nothing(monkeypatch):
+    calls = []
+    monkeypatch.setattr(reaper.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+    assert "would restart" in reaper.recycle_shared(execute=False)
+    assert calls == []
+
+
+def test_recycle_reports_systemd_failure(monkeypatch):
+    class _R:
+        returncode = 1
+        stderr = "Failed to restart serena-mcp.service: Unit not found."
+
+    monkeypatch.setattr(reaper.subprocess, "run", lambda cmd, **kw: _R())
+    outcome = reaper.recycle_shared(execute=True)
+    assert "FAILED" in outcome and "Unit not found" in outcome
+
+
+# --- Greptile PR #1499: three ways the recycle could silently not-work ------ #
+def _shared_proc(rss_mb):
+    return proc(cgroup=SHARED_CGROUP, rss_kb=rss_mb * 1024)
+
+
+def _run_main(monkeypatch, procs, *, run_result, argv=("--execute",)):
+    """Drive main() over a fake process list with a fake systemctl."""
+    calls = []
+
+    monkeypatch.setattr(reaper, "scan", lambda *a, **k: list(procs))
+    monkeypatch.setattr(reaper.os, "getuid", lambda: 1000)
+    monkeypatch.setattr(reaper.subprocess, "run",
+                        lambda cmd, **kw: calls.append((cmd, kw)) or run_result)
+    monkeypatch.setattr(sys, "argv", ["reap_stale_serena.py", *argv])
+    rc = reaper.main()
+    return rc, calls
+
+
+class _OK:
+    returncode = 0
+    stderr = ""
+
+
+class _Fail:
+    returncode = 1
+    stderr = "Failed to restart serena-mcp.service: Interactive authentication required."
+
+
+def test_recycle_passes_the_user_bus_env():
+    # systemctl --user needs XDG_RUNTIME_DIR; the timer has it, a hand/CI run
+    # may not, and without it the restart fails while the bloat survives.
+    seen = {}
+
+    class _Rec:
+        returncode = 0
+        stderr = ""
+
+    import types as _t
+    fake = _t.SimpleNamespace(run=lambda cmd, **kw: seen.update(kw) or _Rec())
+    orig = reaper.subprocess
+    reaper.subprocess = fake
+    try:
+        reaper.recycle_shared(execute=True)
+    finally:
+        reaper.subprocess = orig
+    assert "XDG_RUNTIME_DIR" in seen["env"]
+    assert seen["env"]["XDG_RUNTIME_DIR"] == f"/run/user/{os.getuid()}"
+
+
+def test_failed_recycle_makes_the_run_fail(monkeypatch):
+    # A failed restart must not be recorded as a healthy hourly run: the unit
+    # is still bloated and the deploy gate is still starving.
+    rc, calls = _run_main(monkeypatch, [_shared_proc(1100)], run_result=_Fail())
+    assert rc == 1, "a failed recycle must exit non-zero"
+    assert len(calls) == 1
+
+
+def test_successful_recycle_exits_zero(monkeypatch):
+    rc, _ = _run_main(monkeypatch, [_shared_proc(1100)], run_result=_OK())
+    assert rc == 0
+
+
+def test_unit_is_restarted_once_however_many_procs_share_the_cgroup(monkeypatch):
+    # One restart recycles the whole unit; restarting per-process would flap it.
+    rc, calls = _run_main(
+        monkeypatch,
+        [_shared_proc(1100), _shared_proc(1000), _shared_proc(950)],
+        run_result=_OK(),
+    )
+    assert rc == 0
+    assert len(calls) == 1, f"expected exactly one restart, got {len(calls)}"
+
+
+def test_no_recycle_flag_leaves_a_bloated_unit_alone(monkeypatch):
+    rc, calls = _run_main(monkeypatch, [_shared_proc(1100)],
+                          run_result=_OK(), argv=("--execute", "--no-recycle"))
+    assert rc == 0 and calls == []
