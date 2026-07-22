@@ -131,9 +131,13 @@ def test_bridge_socket_access_list_is_the_real_boundary():
     assert re.search(r"^IPAddressDeny=any$", text, re.MULTILINE), (
         "serena-bridge.socket lost its default-deny IP access list"
     )
-    allow = re.search(r"^IPAddressAllow=(.+)$", text, re.MULTILINE)
-    assert allow, "serena-bridge.socket has no IPAddressAllow="
-    assert allow.group(1).split() == [f"{_pinned_container_ip()}/32"], (
+    # systemd MERGES repeated IPAddressAllow= lines, so check every one of them:
+    # matching only the first would let a second line quietly add another
+    # container to the allowlist while this test stayed green.
+    allow_lines = re.findall(r"^IPAddressAllow=(.+)$", text, re.MULTILINE)
+    assert allow_lines, "serena-bridge.socket has no IPAddressAllow="
+    allowed = [entry for line in allow_lines for entry in line.split()]
+    assert allowed == [f"{_pinned_container_ip()}/32"], (
         "the socket's allowlist must be exactly omnigent's pinned address"
     )
 
