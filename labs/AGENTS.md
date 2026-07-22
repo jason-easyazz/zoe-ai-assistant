@@ -74,16 +74,22 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
   → verify → openPR slice); README + RUNBOOK + FINDINGS are records, not contracts.
 - `flue-executor/` — Phase 1 of the Multica executor migration
   (`docs/architecture/multica-executor-migration.md`): the Flue-based
-  claim → spawn → report → reap loop that will replace the Hermes gateway's
-  `kanban_watchers`. Proven 2026-07-21 against a synthetic ticket (21/21
-  asserts): per-runtime advisory-lock + SKIP LOCKED single-lane claim, real
-  `flue run phase-worker` child processes, reason-mandatory transitions written
-  through to `activity_log` atomically, dead-worker reap (#685). Runs only
-  against the scratch `multica_executor_lab` DB (config refuses the live
-  `multica` DB); the synthetic worker never opens a model session. Flue gotcha
-  on record: `src/db.ts` is a reserved filename (persistence adapter) — the lab
-  DB module is `labdb.ts`. FINDINGS.md answers the migration doc's three §3
-  unknowns; README/FINDINGS are records, not contracts.
+  claim → spawn → report → reap executor that will replace the Hermes gateway's
+  `kanban_watchers`. Phase-1 contract lab-proven on BOTH lanes 2026-07-22
+  (28/28 e2e asserts): per-runtime advisory-lock + SKIP LOCKED single-lane
+  claim; local lane = real `flue run phase-worker` child processes; heavy lane
+  = live Omnigent (`context.lane='heavy'` → session + staged brief + runner +
+  docker-exec kick, completion by nonce token — sessions settle to `idle`,
+  never `completed`); reason-mandatory transitions written through to
+  `activity_log` atomically; reap (#685) covers dead-pid running rows,
+  age-stalled dispatched rows, and orphaned omnigent rows (recovered by token
+  evidence). Runs only against the scratch `multica_executor_lab` DB (config
+  allowlists that name); the local synthetic worker never opens a model
+  session; the live omnigent e2e scenario runs one tiny real claude-sdk
+  session. Flue gotcha on record: `src/db.ts` is a reserved filename
+  (persistence adapter) — the lab DB module is `labdb.ts`. FINDINGS.md answers
+  the migration doc's three §3 unknowns; README/FINDINGS are records, not
+  contracts.
 - `flue-zoe-brain/` — Flue-hosted Pi `Agent` on the local Gemma brain (a third
   implementation behind the `run_zoe_core` seam, per
   `docs/architecture/zoe-flue-integration.md`). Serves 21 tools (20 capability
