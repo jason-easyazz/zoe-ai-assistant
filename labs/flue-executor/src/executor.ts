@@ -18,6 +18,7 @@ import { loadConfig, type ExecutorConfig } from './config.ts';
 import { bootstrapLabDb, makePool } from './labdb.ts';
 import { claimNextTask } from './queue.ts';
 import { spawnWorker } from './spawn.ts';
+import { spawnOmnigentWorker } from './omnigent.ts';
 import { reapDeadWorkers } from './reaper.ts';
 
 export interface ExecutorState {
@@ -25,7 +26,15 @@ export interface ExecutorState {
   trackedPids: Set<number>;
 }
 
-/** One executor tick: reap zombies, then claim + spawn if the lane is free. */
+/**
+ * One executor tick: reap zombies, then claim + spawn if the lane is free.
+ *
+ * WORKER ROUTING happens here, at spawn time, from the claimed task's context
+ * (migration doc §3 unknown 3): `context.lane === 'heavy'` routes to the
+ * Omnigent lane (§5 decision 2 — Omnigent is primary for heavy work), anything
+ * else runs the local Flue worker. Omnigent down → heavy tasks fail loudly
+ * with a reason; the local lane is untouched.
+ */
 export async function tick(
   pool: pg.Pool,
   cfg: ExecutorConfig,
@@ -35,7 +44,12 @@ export async function tick(
   const task = await claimNextTask(pool, cfg.runtimeId,
     'single lane free; claimed highest-priority oldest queued task for this runtime');
   if (!task) return { reaped, claimed: null };
-  await spawnWorker(pool, cfg, task, state.trackedPids);
+  const lane = ((task.context ?? {}) as { lane?: string }).lane;
+  if (lane === 'heavy') {
+    await spawnOmnigentWorker(pool, cfg, task);
+  } else {
+    await spawnWorker(pool, cfg, task, state.trackedPids);
+  }
   return { reaped, claimed: task.id };
 }
 

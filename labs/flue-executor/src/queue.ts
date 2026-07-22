@@ -105,6 +105,12 @@ export async function reportTransition(
     action?: string;
     result?: unknown;
     workerPid?: number;
+    /** to='running' only: recorded on the row in the SAME transaction as the
+     * status flip, so a reaper can never observe a running row without its
+     * ownership metadata (lane/nonce/session). */
+    contextMerge?: Record<string, unknown>;
+    /** to='running' only: session id stored atomically with the transition. */
+    sessionId?: string;
     /** to='queued' only: requeue bumps attempt and clears run state. */
     requeue?: boolean;
   } = {},
@@ -120,12 +126,15 @@ export async function reportTransition(
     await client.query('BEGIN');
     let updated: number;
     if (to === 'running') {
+      const merge: Record<string, unknown> = { ...(opts.contextMerge ?? {}) };
+      if (opts.workerPid !== undefined) merge['worker_pid'] = opts.workerPid;
       const res = await client.query(
         `UPDATE agent_task_queue
             SET status='running', started_at=now(),
-                context = coalesce(context,'{}'::jsonb) || jsonb_build_object('worker_pid', $2::int)
+                session_id = coalesce($4, session_id),
+                context = coalesce(context,'{}'::jsonb) || $2::jsonb
           WHERE id=$1 AND status=$3`,
-        [task.id, opts.workerPid ?? null, task.status],
+        [task.id, JSON.stringify(merge), task.status, opts.sessionId ?? null],
       );
       updated = res.rowCount ?? 0;
     } else if (to === 'completed') {
@@ -145,13 +154,18 @@ export async function reportTransition(
       );
       updated = res.rowCount ?? 0;
     } else {
-      // requeue: same row back to queued with attempt+1, run state cleared.
+      // requeue: same row back to queued with attempt+1, ALL run state cleared
+      // — including omnigent ownership markers, so a requeued task starts
+      // clean and cannot be mistaken for one that still owns an old session.
       const res = await client.query(
         `UPDATE agent_task_queue
             SET status='queued', attempt=attempt+1,
                 dispatched_at=NULL, started_at=NULL, completed_at=NULL,
-                failure_reason=NULL,
-                context = coalesce(context,'{}'::jsonb) - 'worker_pid'
+                failure_reason=NULL, session_id=NULL,
+                context = (coalesce(context,'{}'::jsonb)
+                           - 'worker_pid' - 'nonce' - 'evidence_stuck_logged')
+                          || CASE WHEN coalesce(context,'{}'::jsonb)->>'lane' = 'omnigent'
+                                  THEN '{"lane":"heavy"}'::jsonb ELSE '{}'::jsonb END
           WHERE id=$1 AND status=$2`,
         [task.id, task.status],
       );
