@@ -81,8 +81,35 @@ Two root units bridge the gap:
   `modules/omnigent/docker-compose.module.yml`, one member: `zoe-omnigent`,
   pinned at `172.28.0.2`), and carries the access list
   `IPAddressDeny=any` / `IPAddressAllow=172.28.0.2/32`.
-- `system/serena-bridge.service` — socket-activated `systemd-socket-proxyd` to
-  `127.0.0.1:9121` (socat is not installed on this box).
+- `system/serena-bridge.service` — socket-activated
+  `scripts/maintenance/serena_bridge_proxy.py`, forwarding to `127.0.0.1:9121`.
+
+**It is not an L4 proxy, and cannot be.** The bridge originally ran
+`systemd-socket-proxyd`. The TCP path was fine and every request still came back
+`421 Misdirected Request` / `Invalid Host header`: Serena builds its `FastMCP`
+without passing `transport_security=`, so the MCP SDK auto-enables DNS-rebinding
+protection for its loopback bind (`allowed_hosts = 127.0.0.1:*`, `localhost:*`,
+`[::1]:*`) and the container's requests carry `Host: 172.28.0.1:9121`. A byte
+shuffler cannot rewrite a header. `serena_bridge_proxy.py` (stdlib asyncio, no
+new dependency — socat is not installed here either) changes exactly that one
+header and relays everything else untouched. Two properties are load-bearing and
+pinned by `tests/unit/test_serena_bridge_proxy.py`: it must **stream** both
+directions (MCP replies are open-ended `text/event-stream`, so a
+read-to-EOF-then-forward proxy hangs forever), and it must rewrite **every**
+request on a kept-alive connection, not just the first. Both shortcuts are
+wrong: binding Serena non-loopback breaks the loopback-only rule **and** turns
+the SDK's protection off entirely, and overriding `localhost` in the container's
+`/etc/hosts` breaks container-local loopback.
+
+The proxy is **socket-activated and never binds for itself** — it refuses to
+start without `LISTEN_FDS` and has no `--listen` option. The socket unit must
+keep owning the bind: `FreeBind` and the `IPAddressAllow` list live there, and
+for a socket-activated service it is the SOCKET unit's access list that covers
+the passed-in listening socket.
+
+Because the service runs with `ProtectHome=yes`, `/home` is invisible to it, so
+the script is **installed** outside the checkout rather than run from it.
+Re-install it whenever the repo copy changes — same rule as the units.
 
 **Root, not user**: a `--user` unit logs `unit configures an IP firewall, but
 not running as root` and then starts with **no filtering**. And the access list
@@ -92,10 +119,16 @@ Docker's isolation rules live in FORWARD (measured: a `zoe-network` container
 reached a listener on a separate internal bridge's gateway).
 
 ```bash
+# The proxy script FIRST — ProtectHome=yes hides /home from the unit, so
+# ExecStart cannot point into the checkout.
+sudo install -D -m 0755 scripts/maintenance/serena_bridge_proxy.py \
+        /usr/local/lib/zoe/serena_bridge_proxy.py
 sudo cp scripts/setup/systemd/system/serena-bridge.socket \
         scripts/setup/systemd/system/serena-bridge.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now serena-bridge.socket   # the SOCKET, not the service
+# On an upgrade the SERVICE also has to be picked up (the socket stays bound):
+sudo systemctl restart serena-bridge.service 2>/dev/null || true
 
 # Bring the container onto zoe-codeintel (this RECREATES it):
 cd modules/omnigent && docker compose --env-file ../../.env \
@@ -105,13 +138,25 @@ cd modules/omnigent && docker compose --env-file ../../.env \
 # filter, so prove the boundary rather than assuming it:
 docker run --rm --network zoe-network alpine:latest \
   wget -q -T 5 -O - http://172.28.0.1:9121/mcp     # MUST fail / time out
-docker exec zoe-omnigent python3 -c \
-  "import urllib.request as u;print(u.urlopen('http://172.28.0.1:9121/mcp',timeout=5).status)"
-  # any HTTP status (Serena answers 400/405 to a bare GET) proves reachability
+curl -sS --max-time 5 http://172.28.0.1:9121/mcp   # the HOST too: MUST fail
+
+# Positive control — a real MCP handshake, not just a TCP connect. It must NOT
+# come back "Invalid Host header":
+docker exec zoe-omnigent curl -sS -i --max-time 30 \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"1"}}}' \
+  http://172.28.0.1:9121/mcp | head -20      # expect 200 + "serverInfo"
 ```
 
-If the first command succeeds, the filter is not in force: `sudo systemctl
+If either negative control succeeds, the filter is not in force: `sudo systemctl
 disable --now serena-bridge.socket` and do not leave the bridge running.
+
+A freshly (re)started `serena-mcp.service` can take **many minutes** to answer
+its first request — it walks every `.gitignore` under the checkout, and the
+~120 agent worktrees under `.claude/worktrees/` made that 15 minutes on
+2026-07-22. A hanging handshake right after a restart is warm-up, not the
+bridge; check `systemctl --user status serena-mcp` before debugging.
 
 `flue-zoe-brain.service` is deliberately NOT in that enable line: it supervises
 the sidecar behind zoe-data's default-OFF `ZOE_BRAIN_BACKEND=flue` seam.

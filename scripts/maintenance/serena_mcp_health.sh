@@ -29,12 +29,16 @@ fi
 #
 #    ONE sanctioned exception, and it is never Serena itself: the scoped bridge
 #    for the zoe-omnigent container (scripts/setup/systemd/system/
-#    serena-bridge.{socket,service}) puts a systemd-socket-proxyd listener on
-#    ${BRIDGE_ADDR}, the gateway of the one-member internal `zoe-codeintel`
-#    network, restricted by IPAddressAllow. Without this arm the check would
-#    start failing the moment that bridge is installed. It is deliberately
-#    narrow: the exact address, the socket unit actually active, AND the socket
-#    must not belong to serena — a Serena rebound onto that address still fails.
+#    serena-bridge.{socket,service}) listens on ${BRIDGE_ADDR}, the gateway of
+#    the one-member internal `zoe-codeintel` network, restricted by
+#    IPAddressAllow. The listener is systemd itself while the socket unit is
+#    idle, and `scripts/maintenance/serena_bridge_proxy.py` once activated — an
+#    HTTP-aware hop that rewrites the Host header to loopback (Serena's MCP
+#    transport-security middleware 421s anything else) and forwards to
+#    127.0.0.1:${PORT}. Without this arm the check would start failing the
+#    moment that bridge is installed. It is deliberately narrow: the exact
+#    address, the socket unit actually active, AND the socket must not belong to
+#    serena — a Serena rebound onto that address still fails.
 BRIDGE_ADDR="172.28.0.1:${PORT}"
 while read -r local_addr proc; do
     [ -n "$local_addr" ] || continue

@@ -32,6 +32,11 @@ SYSTEMD_SYSTEM = REPO_ROOT / "scripts" / "setup" / "systemd" / "system"
 BRIDGE_SOCKET = SYSTEMD_SYSTEM / "serena-bridge.socket"
 BRIDGE_SERVICE = SYSTEMD_SYSTEM / "serena-bridge.service"
 
+# The bridge's HTTP-aware proxy. It lives in the repo but RUNS from an installed
+# copy: the unit sets ProtectHome=yes, which makes /home unreadable to it.
+PROXY_SOURCE = REPO_ROOT / "scripts" / "maintenance" / "serena_bridge_proxy.py"
+PROXY_INSTALL_PATH = "/usr/local/lib/zoe/serena_bridge_proxy.py"
+
 CODEINTEL_NETWORK = "zoe-codeintel"
 SHARED_SERENA_PORT = 9121
 
@@ -108,13 +113,49 @@ def test_bridge_socket_listens_on_the_url_the_container_uses():
 
 
 def test_bridge_service_proxies_to_loopback_serena():
-    """Serena itself must stay loopback-bound; the bridge is the only hop."""
+    """Serena itself must stay loopback-bound; the bridge is the only hop.
+
+    And that hop must be the HTTP-aware proxy, not an L4 one: Serena's MCP
+    transport-security middleware answers 421 "Invalid Host header" to any Host
+    that is not a loopback authority, so systemd-socket-proxyd carried the TCP
+    perfectly and failed every single request.
+    """
     text = BRIDGE_SERVICE.read_text()
     exec_start = re.search(r"^ExecStart=(.+)$", text, re.MULTILINE)
     assert exec_start, "serena-bridge.service has no ExecStart="
-    assert exec_start.group(1).strip() == (
-        f"/lib/systemd/systemd-socket-proxyd 127.0.0.1:{SHARED_SERENA_PORT}"
+    command = exec_start.group(1).strip()
+
+    assert "systemd-socket-proxyd" not in command, (
+        "the bridge is back to an L4 proxy; it cannot rewrite the Host header, "
+        "so Serena answers 421 Invalid Host header to every request"
     )
+    assert command.endswith(f"--upstream 127.0.0.1:{SHARED_SERENA_PORT}"), command
+    assert PROXY_INSTALL_PATH in command, (
+        f"ExecStart must run the INSTALLED copy at {PROXY_INSTALL_PATH}: the "
+        "unit sets ProtectHome=yes, so a path inside /home is not readable"
+    )
+    assert PROXY_SOURCE.is_file(), f"missing the repo copy at {PROXY_SOURCE}"
+    assert Path(PROXY_INSTALL_PATH).name == PROXY_SOURCE.name
+
+
+def test_bridge_service_does_not_reach_into_the_checkout():
+    """ProtectHome=yes makes /home invisible to the unit, so an ExecStart
+    pointing at the repo fails with ENOENT at activation — silently, on a path
+    nothing else exercises."""
+    text = BRIDGE_SERVICE.read_text()
+    assert re.search(r"^ProtectHome=yes$", text, re.MULTILINE)
+    exec_start = re.search(r"^ExecStart=(.+)$", text, re.MULTILINE).group(1)
+    assert "/home/" not in exec_start, exec_start
+
+
+def test_bridge_proxy_never_binds_for_itself():
+    """The socket unit owns the bind, and with it FreeBind + the IPAddressAllow
+    list that is the bridge's ACTUAL access control. For a socket-activated
+    service the listening socket is covered by the SOCKET unit's list, so a
+    proxy that bound for itself would silently shed the filtering."""
+    source = PROXY_SOURCE.read_text()
+    assert ".bind(" not in source
+    assert "LISTEN_FDS" in source
 
 
 def test_bridge_socket_access_list_is_the_real_boundary():
