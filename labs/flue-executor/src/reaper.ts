@@ -78,22 +78,38 @@ async function reapOmnigentRow(
     `SELECT session_id, started_at FROM agent_task_queue WHERE id=$1`, [row.id]);
   const sessionId = full.rows[0]?.session_id as string | null;
   const startedAt = full.rows[0]?.started_at as Date | null;
+  // Evidence states: token present -> complete; VERIFIED absent -> eligible
+  // for the normal age fail; unobservable (API unreachable) -> the row may
+  // belong to a session that already finished, so failing on the normal
+  // timeout would throw completed work away. Only a much larger hard cap
+  // (3x timeout) may fail an unobservable row, and its reason says so.
+  let evidenceObserved = false;
   if (sessionId && ctx.nonce) {
     try {
-      if (await sessionHasToken(cfg, sessionId, doneToken(ctx.nonce))) {
+      const hasToken = await sessionHasToken(cfg, sessionId, doneToken(ctx.nonce));
+      evidenceObserved = true;
+      if (hasToken) {
         const won = await reportTransition(pool, cfg.runtimeId, row, 'completed',
           `reaper found the completion token in omnigent session ${sessionId} (executor poller was lost)`,
           { result: { ok: true, summary: `omnigent session ${sessionId} completed (recovered by reaper)`, sessionId } });
         return won ? 1 : 0;
       }
     } catch {
-      // API unreachable — fall through to the age check.
+      // API unreachable — evidence unobservable this tick.
     }
+  } else {
+    // No session/nonce recorded: there is no evidence to consult — age rules.
+    evidenceObserved = true;
   }
   const ageMs = startedAt ? Date.now() - startedAt.getTime() : Infinity;
-  if (ageMs > cfg.omnigentTimeoutMs + 30_000) {
+  if (evidenceObserved && ageMs > cfg.omnigentTimeoutMs + 30_000) {
     await failOrRequeue(pool, cfg, row,
       `reaped: omnigent-lane row exceeded session timeout + grace without a completion token (session ${sessionId ?? 'unknown'})`);
+    return 1;
+  }
+  if (!evidenceObserved && ageMs > 3 * cfg.omnigentTimeoutMs) {
+    await failOrRequeue(pool, cfg, row,
+      `reaped: omnigent-lane row exceeded 3x session timeout and the omnigent API stayed unreachable — completion evidence was unobservable (session ${sessionId})`);
     return 1;
   }
   return 0;

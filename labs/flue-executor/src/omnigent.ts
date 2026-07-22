@@ -96,13 +96,22 @@ export async function spawnOmnigentWorker(
     });
     sessionId = session.id;
 
+    // The assembled completion token must NEVER appear in the brief: staged
+    // comments can surface in the session's items, and a scan that finds the
+    // token in our own instruction text would self-complete the task. The
+    // brief carries the prefix and the id as separate pieces the agent must
+    // join — only a real agent reply can contain the assembled token.
     const brief = [
       `SYNTHETIC EXECUTOR TASK (flue-executor lab). Task id: ${task.id}, phase: ${phase}.`,
       ctx.brief ?? 'No task brief was provided; treat this as a connectivity proof.',
       '',
       'Do NOT modify, create, or delete any files. Do not run commands.',
-      `When done, reply with exactly this token on its own line: ${token}`,
+      'When done, reply with a single line consisting of the prefix',
+      `"FLUE-EXEC-DONE-" immediately followed (no space) by this completion id: ${nonce}`,
     ].join('\n');
+    if (brief.includes(token)) {
+      throw new Error('internal: assembled completion token leaked into the brief');
+    }
     await api(cfg, 'POST', `/v1/sessions/${sessionId}/comments`, {
       path: 'README.md',
       body: brief,
@@ -134,19 +143,20 @@ export async function spawnOmnigentWorker(
     return;
   }
 
+  // lane/nonce/session_id land in the SAME transaction as the running flip —
+  // a reaper can never observe an omnigent running row that still looks like
+  // a pid-less local row (which it would otherwise fail as "cannot be alive").
   const startedOk = await reportTransition(pool, cfg.runtimeId, task, 'running',
     `omnigent session ${sessionId} staged, runner launched, claude-sdk run kicked for phase "${phase}"`,
-    { action: 'task_started' });
+    {
+      action: 'task_started',
+      sessionId,
+      contextMerge: { lane: 'omnigent', nonce },
+    });
   if (!startedOk) {
     console.error(`[executor] task ${task.id}: running transition lost after omnigent kick (row moved on)`);
     return;
   }
-  await pool.query(
-    `UPDATE agent_task_queue SET session_id=$2,
-        context = coalesce(context,'{}'::jsonb) || jsonb_build_object('lane','omnigent','nonce',$3::text)
-      WHERE id=$1`,
-    [task.id, sessionId, nonce],
-  );
 
   const runningTask: TaskRow = { ...task, status: 'running' };
   const deadline = Date.now() + cfg.omnigentTimeoutMs;
