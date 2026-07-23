@@ -230,20 +230,40 @@ def execute_issue_dict(issue: dict, *, no_merge: bool = False) -> OmnigentResult
     ft = run_focused_pr_tests(pr_url, repo_root=repo_root)
     if ft.ran and not ft.passed:
         return OmnigentResult(False, "tests", f"focused tests failed: {ft.summary}", pr_url=pr_url, session_id=sid)
-    rr = assess_pr_review_ready(pr_url, repo_root=repo_root)
-    if not rr.ready:
-        return OmnigentResult(False, "review", f"review not ready: {rr.reason}", pr_url=pr_url, session_id=sid)
-    if no_merge:
-        return OmnigentResult(True, "review", "PR open + gates green (merge skipped)", pr_url=pr_url, session_id=sid)
 
-    co = run_closeout_merge(pr_url, repo_root=repo_root)
-    if not co.merged:
-        return OmnigentResult(False, "merge", f"merge not completed: {co.reason}", pr_url=pr_url, session_id=sid)
-    try:
-        remove_task_worktree(task_id)
-    except Exception:  # noqa: BLE001
-        pass
-    return OmnigentResult(True, "done", "merged", pr_url=pr_url, session_id=sid, merged=True, merge_sha=co.merge_sha)
+    if no_merge:
+        rr = assess_pr_review_ready(pr_url, repo_root=repo_root)
+        return OmnigentResult(
+            bool(rr.ready), "review",
+            "PR open + gates green (merge skipped)" if rr.ready else f"PR open; not merge-ready: {rr.reason}",
+            pr_url=pr_url, session_id=sid,
+        )
+
+    # Closeout LOOP — the hardened greploop guard owns readiness (CI, Greptile,
+    # threads, update-branch) and merges when clear. Do NOT hard-fail on a
+    # one-shot "not ready": right after a PR opens, CI/Greptile are still
+    # running, and a single check would wrongly mark the issue blocked. Poll the
+    # guard until it merges or a real timeout — transient states (CI pending,
+    # branch behind, review running) resolve themselves; a genuine block (an
+    # actionable finding, a stuck review) simply never merges and times out to
+    # a reasoned "needs feedback".
+    close_timeout = float(os.environ.get("ZOE_OMNIGENT_CLOSE_TIMEOUT_S", "2400"))
+    close_poll = float(os.environ.get("ZOE_OMNIGENT_CLOSE_POLL_S", "60"))
+    deadline = time.time() + close_timeout
+    last_reason = "not started"
+    while time.time() < deadline:
+        co = run_closeout_merge(pr_url, repo_root=repo_root)
+        if co.merged:
+            try:
+                remove_task_worktree(task_id)
+            except Exception:  # noqa: BLE001
+                pass
+            return OmnigentResult(True, "done", "merged", pr_url=pr_url, session_id=sid,
+                                  merged=True, merge_sha=co.merge_sha)
+        last_reason = co.reason
+        time.sleep(close_poll)
+    return OmnigentResult(False, "merge", f"not merged within {close_timeout:.0f}s; last: {last_reason}",
+                          pr_url=pr_url, session_id=sid)
 
 
 def _amain() -> int:
