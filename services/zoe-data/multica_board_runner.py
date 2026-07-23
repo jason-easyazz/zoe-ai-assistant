@@ -43,6 +43,22 @@ def kill_switch_present() -> bool:
     return KILL_SWITCH.exists()
 
 
+def _ensure_postgres_url() -> None:
+    """Hand-run robustness: as a systemd unit POSTGRES_URL is in the environment,
+    but a manual invocation may not have it exported — derive it from the live
+    service env file so the Multica pool can connect. No secret is committed."""
+    if os.environ.get("POSTGRES_URL") or os.environ.get("MULTICA_DATABASE_URL"):
+        return
+    env_file = Path(os.environ.get("ZOE_ENV_FILE", "/home/zoe/assistant/services/zoe-data/.env"))
+    try:
+        for line in env_file.read_text().splitlines():
+            if line.startswith("POSTGRES_URL="):
+                os.environ["POSTGRES_URL"] = line.split("=", 1)[1].strip()
+                return
+    except OSError:
+        pass
+
+
 def build_issue_body(row: asyncpg.Record | dict) -> str:
     """Compose the task body the agent sees: description + acceptance criteria."""
     desc = str((row["description"] if row["description"] is not None else "") or "").strip()
@@ -183,6 +199,7 @@ def main() -> int:
     ap.add_argument("--issue", type=int, default=None, help="target a specific board item number")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    _ensure_postgres_url()
     return asyncio.run(_amain(args.loop, args.issue))
 
 
