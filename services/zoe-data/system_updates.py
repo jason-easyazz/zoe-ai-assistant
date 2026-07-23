@@ -19,13 +19,6 @@ from typing import Any
 
 import httpx
 
-from openclaw_maintenance import (
-    fetch_npm_latest_version,
-    read_installed_version_sync,
-    run_npm_upgrade_openclaw,
-    version_newer,
-    fetch_gateway_status,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +169,7 @@ _GIT_BACKED_IDS: frozenset[str] = frozenset({"zoe-ui", "zoe-auth", "homeassistan
 def installable_components() -> list[str]:
     """Synchronous — called twice by system.py for validation and error messages."""
     docker_ids = [s[0] for s in _DOCKER_SERVICES]
-    return docker_ids + ["openclaw", "hermes", "zoe-data"]
+    return docker_ids + ["zoe-data"]
 
 
 # ---------------------------------------------------------------------------
@@ -464,88 +457,6 @@ async def _check_docker_service(
     }
 
 
-async def _check_openclaw() -> dict:
-    """OpenClaw npm package — delegates to openclaw_maintenance."""
-    installed = read_installed_version_sync()
-    latest = await fetch_npm_latest_version()
-    gateway_status, _ = await fetch_gateway_status()
-
-    update_available = False
-    if latest and installed:
-        update_available = version_newer(latest, installed)
-    elif latest and not installed:
-        update_available = True
-
-    health = "healthy" if gateway_status == "connected" else (
-        "warning" if gateway_status == "error" else "offline"
-    )
-
-    return {
-        "id": "openclaw",
-        "name": "OpenClaw Agent",
-        "detail": "AI agent runtime and gateway",
-        "version": installed or "not installed",
-        "latest": latest or "—",
-        "health": health,
-        "update_available": update_available,
-        "installable": True,
-    }
-
-
-async def _check_hermes() -> dict:
-    """Hermes Agent — installed at ~/.local/bin/hermes, updates via `hermes update`."""
-    hermes_bin = os.path.expanduser("~/.local/bin/hermes")
-    version_str = "not installed"
-    update_available = False
-    commits_behind: int | None = None
-    health = "unknown"
-
-    rc, out = await _run_cmd(hermes_bin, "--version", timeout=12.0)
-    if rc != 0:
-        return {
-            "id": "hermes",
-            "name": "Hermes Agent",
-            "detail": "AI agent runtime (gateway)",
-            "version": "not installed",
-            "latest": "—",
-            "health": "offline",
-            "update_available": False,
-            "installable": False,
-        }
-
-    # Parse: "Hermes Agent v0.12.0 (2026.4.30)" and optional "Update available: N commits behind"
-    for line in out.splitlines():
-        line = line.strip()
-        if line.lower().startswith("hermes agent"):
-            parts = line.split()
-            if len(parts) >= 3:
-                version_str = parts[2]  # e.g. v0.12.0
-        if "commits behind" in line.lower():
-            try:
-                commits_behind = int(line.split()[2])
-                update_available = True
-            except (IndexError, ValueError):
-                update_available = True
-
-    # Verify process is running
-    rc_ps, out_ps = await _run_cmd("pgrep", "-f", "hermes gateway run", timeout=5.0)
-    health = "healthy" if rc_ps == 0 else "warning"
-
-    latest_label = f"{commits_behind} commits behind" if commits_behind else ("up-to-date" if not update_available else "update available")
-
-    return {
-        "id": "hermes",
-        "name": "Hermes Agent",
-        "detail": "AI agent runtime (gateway)",
-        "version": version_str,
-        "latest": latest_label,
-        "health": health,
-        "update_available": update_available,
-        "installable": True,
-    }
-
-
-
 async def _check_zoe_data(github_latest_tag: str | None = None) -> dict:
     """zoe-data host Python service — VERSION file + GitHub release tracking."""
     local_ver = _read_local_version()
@@ -614,8 +525,6 @@ async def build_updates_snapshot(db: Any, force: bool = False) -> dict:
         _check_docker_service(svc_id, name, detail, container, image, local_build, github_latest)
         for svc_id, name, detail, container, image, local_build in _DOCKER_SERVICES
     ]
-    tasks.append(_check_openclaw())
-    tasks.append(_check_hermes())
     tasks.append(_check_zoe_data(github_latest))
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -626,11 +535,7 @@ async def build_updates_snapshot(db: Any, force: bool = False) -> dict:
         if isinstance(r, Exception):
             if i < n_docker:
                 label = _DOCKER_SERVICES[i][0]
-            elif i == n_docker:
-                label = "openclaw"
-            elif i == n_docker + 1:
-                label = "hermes"
-            elif i == n_docker + 2:
+            else:
                 label = "zoe-data"
             logger.warning("build_updates_snapshot: check for %s raised: %s", label, r)
             components.append({
@@ -661,12 +566,6 @@ async def install_component(db: Any, user: dict, component: str) -> dict:
     Install/upgrade a component. Returns {"ok": bool, "log": str}.
     Writes a row to update_history regardless of outcome.
     """
-    if component == "openclaw":
-        return await _install_openclaw(db, user)
-
-    if component == "hermes":
-        return await _install_hermes(db, user)
-
     # All git-backed components (and zoe-data) use the platform installer
     if component in _GIT_BACKED_IDS or component == "zoe-data":
         return await _install_zoe_platform(db, user)
@@ -697,43 +596,6 @@ async def install_component(db: Any, user: dict, component: str) -> dict:
         version_after = tag if tag not in ("latest", "stable", "") else f"{tag} ({created})"
 
     await _write_update_history(db, component, version_before, version_after, ok, log, user)
-    invalidate_cache()
-    return {"ok": ok, "log": log}
-
-
-async def _install_openclaw(db: Any, user: dict) -> dict:
-    installed_before = read_installed_version_sync()
-    ok, log = await run_npm_upgrade_openclaw()
-    installed_after = read_installed_version_sync()
-    await _write_update_history(db, "openclaw", installed_before, installed_after, ok, log, user)
-    invalidate_cache()
-    return {"ok": ok, "log": log}
-
-
-async def _install_hermes(db: Any, user: dict) -> dict:
-    """Run `hermes update` and record the result."""
-    hermes_bin = os.path.expanduser("~/.local/bin/hermes")
-
-    rc_before, out_before = await _run_cmd(hermes_bin, "--version", timeout=12.0)
-    version_before: str | None = None
-    for line in out_before.splitlines():
-        if line.strip().lower().startswith("hermes agent"):
-            parts = line.strip().split()
-            if len(parts) >= 3:
-                version_before = parts[2]
-
-    rc, log = await _run_cmd(hermes_bin, "update", "--yes", timeout=300.0)
-    ok = rc == 0
-
-    rc_after, out_after = await _run_cmd(hermes_bin, "--version", timeout=12.0)
-    version_after: str | None = None
-    for line in out_after.splitlines():
-        if line.strip().lower().startswith("hermes agent"):
-            parts = line.strip().split()
-            if len(parts) >= 3:
-                version_after = parts[2]
-
-    await _write_update_history(db, "hermes", version_before, version_after, ok, log, user)
     invalidate_cache()
     return {"ok": ok, "log": log}
 
