@@ -179,6 +179,11 @@ def resolve_player_kind(player: dict) -> dict[str, str]:
         kind = "computer"
     elif _has(_SPEAKER_MODEL_HINTS):
         kind = "speaker"                     # Home Mini and friends
+    elif "shairport" in low:
+        # A shairport-sync AirPlay RECEIVER — e.g. the touch panel made into a
+        # speaker (model reports "ShairportSync"). It's a dedicated audio sink,
+        # not a TV, so it must escape the AirPlay-is-a-TV catch-all below.
+        kind = "speaker"
     elif _has(_TV_MODEL_HINTS):
         kind = "tv"                          # OLED/QLED/Smart TV/Chromecast/Media Renderer
     elif provider in ("chromecast", "airplay", "universal_player"):
@@ -200,6 +205,8 @@ def resolve_player_kind(player: dict) -> dict[str, str]:
         label = m or "Computer"
     elif kind == "display":
         label = _strip_google(m) or "Smart display"
+    elif kind == "speaker" and "shairport" in low:
+        label = "AirPlay speaker"            # not the raw "ShairportSync" model string
     elif kind == "speaker":
         label = _strip_google(m) or "Speaker"
     elif kind == "tv":

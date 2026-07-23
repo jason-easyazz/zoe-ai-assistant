@@ -1,13 +1,19 @@
 /*
  * Browser test for the typed speaker picker (touch/home.html).
  *
- * The operator reported three things about "Play on…": it should be BIGGER
- * without scrolling, he "still can't select the bedroom Sonos", and it should
- * show WHAT each device is (TV / speaker / …). #2 and #4 are the same bug — the
- * house has TWO players named "Bedroom" (a live Sonos Beam and a dead AirPlay
- * Apple TV), so he was tapping the wrong, unavailable one. This test proves the
- * redesigned picker fits 14 tiles at 1280x720 WITHOUT scrolling, tells the two
- * Bedrooms apart, marks the unavailable one, and still posts the right call.
+ * The operator reported issues about "Play on…": it should be BIGGER, he "still
+ * can't select the bedroom Sonos", it should show WHAT each device is (TV /
+ * speaker / …), and — after the panel-as-a-speaker work grew the roster to 17 —
+ * "the cancel button doesnt fit ... optimise the page to fit on the touch panels
+ * display", plus label the panel's own output ("Zoe Panel", its room, and that
+ * it's THIS device). The Bedroom bug is the two-same-name hazard (a live Sonos
+ * Beam and a dead AirPlay Apple TV); the panel's own output repeats it (an
+ * available "Zoe Panel (AirPlay)" and a dead one of the SAME name). This test
+ * proves the picker: renders all 17 typed tiles, tells same-named players apart,
+ * marks the unavailable ones, CAPS the modal to the 720px stage so the grid
+ * scrolls internally while the Cancel button stays on-screen, badges ONLY the
+ * available self as "This device" (with its room) and hoists it first, and still
+ * posts the right call.
  *
  * WHY A REAL BROWSER
  * ------------------
@@ -71,6 +77,8 @@ const API = process.env.ZOE_API || 'http://127.0.0.1:8000';
 const CURRENT = 'RINCON_38420B45B65001400';
 const BEAM = 'RINCON_347E5C9BEC8F01400';   // the real Bedroom Sonos (available)
 const APPLETV = 'ap40cbc0db9fb8';           // the dead Bedroom AirPlay (unavailable)
+const SELF = 'up88a29e0a953f';              // the panel's OWN AirPlay output (available)
+const SELF_DEAD = 'upc134dd3b3b2a';         // its dead AirPlay-1 predecessor, SAME name
 
 function P(player_id, name, provider, ptype, model, manufacturer, available, kind, kind_label) {
   return {
@@ -95,6 +103,13 @@ const PLAYERS = [
   P(BEAM, 'Bedroom', 'sonos', 'player', 'Beam', 'SONOS', true, 'speaker', 'Sonos Beam'),
   P(APPLETV, 'Bedroom', 'airplay', 'player', 'Apple TV 4K', 'Apple', false, 'tv', 'Apple TV'),
   P('ap9c207b93ae6d', 'Parents Lounge Apple TV', 'airplay', 'player', 'Apple TV Gen3', 'Apple', true, 'tv', 'Apple TV'),
+  // Three shairport-sync AirPlay receivers ADDED this session (the panel-as-a-
+  // speaker work): a stale "Zoe-touch" ghost, the panel's OWN output, and its
+  // dead AirPlay-1 predecessor. The last two share the name "Zoe Panel (AirPlay)"
+  // — the exact self-identification hazard the "This device" logic must handle.
+  P(SELF, 'Zoe Panel (AirPlay)', 'universal_player', 'player', 'ShairportSync', 'AirPlay', true, 'speaker', 'AirPlay speaker'),
+  P(SELF_DEAD, 'Zoe Panel (AirPlay)', 'universal_player', 'player', 'ShairportSync', 'AirPlay', false, 'speaker', 'AirPlay speaker'),
+  P('up7cdc65abf98f', 'Zoe-touch (AirPlay)', 'universal_player', 'player', 'ShairportSync', 'AirPlay', true, 'speaker', 'AirPlay speaker'),
 ];
 
 const NOW_PLAYING = {
@@ -112,8 +127,8 @@ const QUEUE = [{
   media_item: {}, streamdetails: {}, extra_attributes: {},
 }];
 const PANEL_CFG = {
-  device_id: 'zoe-touch-pi', location: 'bedroom', room_id: null, room_name: null,
-  room_slug: null, default_player: CURRENT, default_player_source: 'global',
+  device_id: 'zoe-touch-pi', location: 'bedroom', room_id: 'r-bed', room_name: 'Bedroom',
+  room_slug: 'bedroom', default_player: CURRENT, default_player_source: 'global',
   pins_configured: false, pinned: [], unresolved: [], ha_available: true, max_pins: 4,
 };
 
@@ -144,9 +159,9 @@ async function assertLiveContract() {
     assert.strictEqual((l.device_info || {}).model, f.device_info.model, `${f.player_id}: model drifted (live=${(l.device_info||{}).model})`);
     checked++;
   }
-  assert.strictEqual(checked, 14, `expected 14 fixture players, checked ${checked}`);
-  assert.strictEqual(d.players.length, 14, `live API now returns ${d.players.length} players, not 14 — re-measure the no-scroll fit`);
-  console.log('  ✓ all 14 fixture players match the LIVE API base fields (' + API + ')');
+  assert.strictEqual(checked, 17, `expected 17 fixture players, checked ${checked}`);
+  assert.strictEqual(d.players.length, 17, `live API now returns ${d.players.length} players, not 17 — re-measure the picker fit`);
+  console.log('  ✓ all 17 fixture players match the LIVE API base fields (' + API + ')');
 }
 
 // ── plumbing ─────────────────────────────────────────────────────────────────
@@ -241,31 +256,64 @@ async function t(name, fn) {
     w: Math.round(e.getBoundingClientRect().width),
   })));
 
-  await t('all 14 players render as tiles', async () => {
+  await t('all 17 players render as tiles', async () => {
     const ts = await tiles();
-    assert.strictEqual(ts.length, 14, `rendered ${ts.length} tiles, expected 14`);
+    assert.strictEqual(ts.length, 17, `rendered ${ts.length} tiles, expected 17`);
   });
 
-  await t('the picker does NOT scroll (grid + overlay both fit their box)', async () => {
+  // 17 players (the AirPlay receivers pushed the roster past 14) no longer fit
+  // without scrolling. The operator's requirement changed accordingly: "the
+  // cancel button doesnt fit ... optimise the page to fit on the touch panels
+  // display." So the modal is CAPPED to the 720px stage, ONLY the grid scrolls
+  // internally, and the title + Cancel row stay pinned and on-screen.
+  await t('the picker fits the 720px stage — modal + Cancel never escape it', async () => {
     const m = await page.evaluate(() => {
       const grid = document.querySelector('.spkgrid');
       const mc = document.querySelector('.estmc');
-      const gr = grid.getBoundingClientRect();
-      const mr = mc.getBoundingClientRect();
+      const cancel = document.querySelector('.estmc [data-x="cancel"]');
+      const r = (el) => { const b = el.getBoundingClientRect(); return { top: Math.round(b.top), bottom: Math.round(b.bottom) }; };
       return {
-        gridScroll: grid.scrollHeight, gridClient: grid.clientHeight,
+        mc: r(mc), cancel: r(cancel),
         mcScroll: mc.scrollHeight, mcClient: mc.clientHeight,
-        mcTop: Math.round(mr.top), mcBottom: Math.round(mr.bottom),
+        gridScroll: grid.scrollHeight, gridClient: grid.clientHeight,
         bodyScrollW: document.documentElement.scrollWidth, bodyClientW: document.documentElement.clientWidth,
         bodyScrollH: document.documentElement.scrollHeight, bodyClientH: document.documentElement.clientHeight,
       };
     });
-    assert.ok(m.gridScroll <= m.gridClient + 1, `grid scrolls: scrollHeight ${m.gridScroll} > clientHeight ${m.gridClient}`);
-    assert.ok(m.mcScroll <= m.mcClient + 1, `overlay scrolls: scrollHeight ${m.mcScroll} > clientHeight ${m.mcClient}`);
-    assert.ok(m.mcTop >= 0 && m.mcBottom <= 720, `overlay escapes the 720px viewport (top=${m.mcTop} bottom=${m.mcBottom})`);
+    // The modal is a flex column capped to the stage: it must NOT itself scroll…
+    assert.ok(m.mcScroll <= m.mcClient + 1, `the modal itself scrolls (${m.mcScroll} > ${m.mcClient}) — only the grid should`);
+    // …it must sit entirely inside the 720px stage…
+    assert.ok(m.mc.top >= 0 && m.mc.bottom <= 720, `modal escapes the stage (top=${m.mc.top} bottom=${m.mc.bottom})`);
+    // …the Cancel button — the reported casualty — must be fully visible…
+    assert.ok(m.cancel.top >= 0 && m.cancel.bottom <= 720, `Cancel button off-screen (top=${m.cancel.top} bottom=${m.cancel.bottom})`);
+    // …the overflow is absorbed by the grid scrolling internally…
+    assert.ok(m.gridScroll > m.gridClient, `grid did not overflow with 17 players — fixture/layout drift (scrollH ${m.gridScroll} clientH ${m.gridClient})`);
+    // …and the page body never scrolls in either axis.
     assert.ok(m.bodyScrollW <= m.bodyClientW + 1, `page scrolls horizontally (${m.bodyScrollW} > ${m.bodyClientW})`);
     assert.ok(m.bodyScrollH <= m.bodyClientH + 1, `page scrolls vertically (${m.bodyScrollH} > ${m.bodyClientH})`);
-    console.log(`      grid ${m.gridScroll}<=${m.gridClient}px, overlay ${m.mcBottom - m.mcTop}px tall (top ${m.mcTop}, bottom ${m.mcBottom})`);
+    console.log(`      modal ${m.mc.bottom - m.mc.top}px (top ${m.mc.top}, bottom ${m.mc.bottom}); Cancel bottom ${m.cancel.bottom}<=720; grid scrolls ${m.gridScroll}>${m.gridClient}`);
+  });
+
+  await t('the panel\'s OWN output is badged "This device", shows its room, and sits first', async () => {
+    const ts = await tiles();
+    // The badge lands on exactly one tile — the AVAILABLE self, never the dead
+    // same-named ghost.
+    const badged = await page.$$eval('.spkopt', (els) => els
+      .filter((e) => e.querySelector('.sbadge'))
+      .map((e) => ({ pid: e.getAttribute('data-pid'), badge: e.querySelector('.sbadge').textContent, off: e.classList.contains('off') })));
+    assert.strictEqual(badged.length, 1, `expected exactly one "This device" badge, got ${badged.length}: ${JSON.stringify(badged)}`);
+    assert.strictEqual(badged[0].pid, SELF, `badge is on ${badged[0].pid}, expected the live self ${SELF}`);
+    assert.strictEqual(badged[0].badge, 'This device', `badge text was "${badged[0].badge}"`);
+    assert.ok(!badged[0].off, 'the badged tile is the dimmed/unavailable one');
+    // Its subtitle is the panel's room (from panel config), not the generic type.
+    const self = ts.find((x) => x.pid === SELF);
+    assert.strictEqual(self.sub, 'Bedroom', `self subtitle was "${self.sub}", expected the room "Bedroom"`);
+    // The dead same-named ghost is NOT badged and stays marked unavailable.
+    const dead = ts.find((x) => x.pid === SELF_DEAD);
+    assert.ok(dead && dead.off && /Unavailable/i.test(dead.sub), `the dead "Zoe Panel" ghost is mishandled: ${JSON.stringify(dead)}`);
+    // Self is hoisted to the front so it isn't hidden below the scroll.
+    assert.strictEqual(ts[0].pid, SELF, `self is at index ${ts.findIndex((x) => x.pid === SELF)}, expected first`);
+    console.log(`      "This device" on ${badged[0].pid} — "${self.name}" · ${self.sub}, at index 0`);
   });
 
   await t('every tile is a >=48px finger target', async () => {
