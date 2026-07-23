@@ -47,6 +47,38 @@ def test_poll_returns_none_on_fatal_harness_error(monkeypatch):
     assert oie.poll_for_pr_url("sid", timeout_s=5, poll_s=0.1) is None
 
 
+def test_closeout_poll_survives_a_transient_error_then_merges(monkeypatch):
+    """A one-off raise in the poll must NOT abort the window; the next poll merges."""
+    monkeypatch.setenv("ZOE_OMNIGENT_CLOSE_TIMEOUT_S", "5")
+    monkeypatch.setenv("ZOE_OMNIGENT_CLOSE_POLL_S", "0")
+    monkeypatch.setattr(oie, "remove_task_worktree", lambda tid: None)
+
+    class _Merged:
+        merged, merge_sha, reason = True, "deadbeef", "merged"
+
+    calls = {"n": 0}
+
+    def flaky(pr_url, *, repo_root):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("network blip")
+        return _Merged()
+
+    monkeypatch.setattr(oie, "run_closeout_merge", flaky)
+    out = oie._poll_closeout_until_merged("https://github.com/o/r/pull/1", repo_root="/x", task_id="t", sid="s")
+    assert out.merged is True and out.stage == "done"
+    assert calls["n"] == 2  # it retried past the transient raise rather than aborting
+
+
+def test_closeout_poll_times_out_to_review_not_blocked(monkeypatch):
+    """A PR that never merges within the window times out to a reasoned merge-miss, not an exception."""
+    monkeypatch.setenv("ZOE_OMNIGENT_CLOSE_TIMEOUT_S", "0")  # deadline already passed → no poll
+    monkeypatch.setenv("ZOE_OMNIGENT_CLOSE_POLL_S", "0")
+    monkeypatch.setattr(oie, "run_closeout_merge", lambda *a, **k: pytest.fail("should not poll past deadline"))
+    out = oie._poll_closeout_until_merged("https://github.com/o/r/pull/2", repo_root="/x", task_id="t", sid="s")
+    assert out.merged is False and out.stage == "merge" and "not merged within" in out.detail
+
+
 def test_execute_reports_no_pr_when_omnigent_yields_nothing(monkeypatch):
     monkeypatch.setenv("ZOE_USE_OMNIGENT_EXECUTOR", "1")
     monkeypatch.setattr(oie, "_fetch_issue", lambda n: {"number": n, "title": "t", "body": "b"})

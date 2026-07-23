@@ -247,12 +247,30 @@ def execute_issue_dict(issue: dict, *, no_merge: bool = False) -> OmnigentResult
     # branch behind, review running) resolve themselves; a genuine block (an
     # actionable finding, a stuck review) simply never merges and times out to
     # a reasoned "needs feedback".
+    return _poll_closeout_until_merged(pr_url, repo_root=repo_root, task_id=task_id, sid=sid)
+
+
+def _poll_closeout_until_merged(pr_url: str, *, repo_root: str, task_id: str, sid: str) -> "OmnigentResult":
+    """Poll the hardened greploop guard until it merges the PR or a real timeout.
+
+    Transient states (CI pending, branch behind, review running) resolve
+    themselves, so a one-shot "not ready" must NOT hard-fail — only a PR that
+    genuinely never merges times out to a reasoned "in_review". A transient blip
+    in a SINGLE poll (subprocess error, network hiccup, OOM) is likewise swallowed
+    and retried: it must not abort the whole window and mark a mergeable PR blocked.
+    """
     close_timeout = float(os.environ.get("ZOE_OMNIGENT_CLOSE_TIMEOUT_S", "2400"))
     close_poll = float(os.environ.get("ZOE_OMNIGENT_CLOSE_POLL_S", "60"))
     deadline = time.time() + close_timeout
     last_reason = "not started"
     while time.time() < deadline:
-        co = run_closeout_merge(pr_url, repo_root=repo_root)
+        try:
+            co = run_closeout_merge(pr_url, repo_root=repo_root)
+        except Exception as exc:  # noqa: BLE001
+            last_reason = f"transient closeout error: {exc}"
+            logger.warning("closeout poll for %s raised (will retry): %s", pr_url, exc)
+            time.sleep(close_poll)
+            continue
         if co.merged:
             try:
                 remove_task_worktree(task_id)
