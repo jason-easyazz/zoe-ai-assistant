@@ -79,13 +79,16 @@ async def _noop():
 
 
 def test_ensure_postgres_url_strips_surrounding_quotes(monkeypatch, tmp_path):
-    monkeypatch.delenv("POSTGRES_URL", raising=False)
-    monkeypatch.delenv("MULTICA_DATABASE_URL", raising=False)
+    # _ensure_postgres_url writes os.environ["POSTGRES_URL"] directly, which
+    # monkeypatch cannot undo. Point the module at a throwaway env dict (sans the
+    # two DSN keys) so the synthetic value can't leak into later tests.
+    env = {k: v for k, v in r.os.environ.items() if k not in ("POSTGRES_URL", "MULTICA_DATABASE_URL")}
     envf = tmp_path / ".env"
     envf.write_text('FOO=bar\nPOSTGRES_URL="postgresql://u:p@h:5432/zoe"\n')
-    monkeypatch.setenv("ZOE_ENV_FILE", str(envf))
+    env["ZOE_ENV_FILE"] = str(envf)  # the module reads env via r.os.environ, so set it here
+    monkeypatch.setattr(r.os, "environ", env)
     r._ensure_postgres_url()
-    assert r.os.environ["POSTGRES_URL"] == "postgresql://u:p@h:5432/zoe"
+    assert env["POSTGRES_URL"] == "postgresql://u:p@h:5432/zoe"
 
 
 def test_run_one_turns_execute_exception_into_blocked(monkeypatch):
