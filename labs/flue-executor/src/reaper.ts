@@ -10,10 +10,10 @@
  * LAB ONLY.
  */
 import type pg from 'pg';
-import { LAB_WORKSPACE_ID, type ExecutorConfig } from './config.ts';
+import type { ExecutorConfig } from './config.ts';
 import { failOrRequeue } from './spawn.ts';
 import { doneToken, sessionHasToken, OmnigentApiError } from './omnigent.ts';
-import { reportTransition, type TaskRow } from './queue.ts';
+import { activityWorkspaceId, reportTransition, type TaskRow } from './queue.ts';
 
 function pidAlive(pid: number): boolean {
   try {
@@ -140,7 +140,7 @@ async function reapOmnigentRow(
       await client.query(
         `INSERT INTO activity_log (workspace_id, issue_id, actor_type, actor_id, action, details)
          VALUES ($1, $2, 'agent', $3, 'task_stuck_evidence_unobservable', $4::jsonb)`,
-        [LAB_WORKSPACE_ID, row.issue_id, cfg.runtimeId, JSON.stringify({
+        [activityWorkspaceId(), row.issue_id, cfg.runtimeId, JSON.stringify({
           task_id: row.id,
           reason: `omnigent session ${sessionId} exceeded its timeout but the omnigent API is unreachable — ` +
             'completion evidence is unobservable, so the executor is holding the row rather than ' +

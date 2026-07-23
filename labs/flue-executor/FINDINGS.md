@@ -4,6 +4,30 @@ Run on the live Jetson Orin NX, 2026-07-21, in an isolated worktree. Node
 v22.22.0, `@flue/runtime@1.0.0-beta.6` + `@flue/cli@1.0.0-beta.6`, Postgres =
 the live `zoe-database` container (scratch DB `multica_executor_lab` only).
 
+## Phase 2 — live runner findings (2026-07-22/23)
+
+The live runner (`src/live-runner.ts`, `ZOE_EXECUTOR_MODE=live`) consumes the
+REAL `agent_task_queue`. Three lab-vs-live gaps the scratch DB masked, all found
+by review and fixed:
+
+- **`activity_log.workspace_id` has a live FK.** The lab schema omits FKs, so
+  the hardcoded `LAB_WORKSPACE_ID` constant worked there; against real Multica
+  it FK-violates and rolls back **every claim transaction** (task never leaves
+  `queued`). Fixed: the runner resolves the executor runtime's OWN workspace at
+  startup (`resolveWorkspaceId`) and `setActivityWorkspaceId()`s it before any
+  claim. Proven in `full` mode against the real DB: a synthetic claim wrote
+  `task_claimed`/`task_deferred` with the real workspace `681a418b…`, no
+  rollback (probe cleaned up).
+- **Runtime identity is resolved BY NAME** (`Flue Executor (Zoe)`), agreeing
+  with `executor_queue_backend.py`; >1 same-named runtime fails loudly rather
+  than split-braining the runner onto a queue nobody enqueues into.
+- **Graceful shutdown**: SIGTERM/SIGINT finish the in-flight tick then drain the
+  pool, so `systemctl stop` never abandons a task mid-transition.
+
+This `full`-dispatch run also incidentally validated the claim → defer path
+against the live schema (a missing `work_dir` deferred without burning an
+attempt — the Phase-2 seam's work_dir-race fix, live).
+
 ## The three migration-doc §3 unknowns — answered with evidence
 
 ### 1. Does `sandbox: local()` give a worker a writable worktree on a branch?

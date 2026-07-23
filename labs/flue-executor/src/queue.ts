@@ -21,6 +21,20 @@
 import type pg from 'pg';
 import { LAB_WORKSPACE_ID } from './config.ts';
 
+// The workspace_id stamped on every activity_log row. In lab mode this is the
+// scratch-DB constant (no FK). In LIVE mode `activity_log.workspace_id` has a
+// FOREIGN KEY to workspace(id), so a fake id makes every claim transaction roll
+// back — the live runner MUST call setActivityWorkspaceId() with the executor
+// runtime's real workspace at startup before it claims anything.
+let _activityWorkspaceId = LAB_WORKSPACE_ID;
+export function setActivityWorkspaceId(id: string): void {
+  if (!id) throw new Error('setActivityWorkspaceId: empty workspace id');
+  _activityWorkspaceId = id;
+}
+export function activityWorkspaceId(): string {
+  return _activityWorkspaceId;
+}
+
 export interface TaskRow {
   id: string;
   agent_id: string;
@@ -219,7 +233,7 @@ async function logActivity(
     `INSERT INTO activity_log (workspace_id, issue_id, actor_type, actor_id, action, details)
      VALUES ($1, $2, 'agent', $3, $4, $5::jsonb)`,
     [
-      LAB_WORKSPACE_ID,
+      _activityWorkspaceId,
       task.issue_id,
       runtimeId,
       action,

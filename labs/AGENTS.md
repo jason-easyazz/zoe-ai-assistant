@@ -28,7 +28,13 @@ with its own README/RUNBOOK and is self-contained.
   its supervisor `scripts/setup/systemd/flue-zoe-telegram-watchdog.{service,timer}`
   (polls the bot's `GET /health` once a minute and restarts it when the poll loop
   has died but the process is still alive — the recovery the app's 503 health
-  signal was designed for; also operator opt-in, never auto-enabled).
+  signal was designed for; also operator opt-in, never auto-enabled);
+  `flue-executor/` → `scripts/setup/systemd/flue-executor.service` (the
+  supervised single-lane consumer of Multica's real `agent_task_queue`, Phase 2
+  of the executor migration). Operator opt-in, never auto-enabled, and gated
+  THREE ways until deliberately lifted: it idles while the dispatch kill switch
+  `~/.zoe/multica_dispatch_paused` exists, `ZOE_EXECUTOR_DISPATCH` defaults to
+  `dry` (poll + log, mutate nothing), and it claims at most one task at a time.
   No other lab may ship a unit without amending this contract.)
 - Do **not** let lab **harness/agent** work point at the local voice brain on
   `:11434` (Gemma-4-E4B) for *its own* engineering work — harnesses must use a
@@ -89,7 +95,14 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
   session. Flue gotcha on record: `src/db.ts` is a reserved filename
   (persistence adapter) — the lab DB module is `labdb.ts`. FINDINGS.md answers
   the migration doc's three §3 unknowns; README/FINDINGS are records, not
-  contracts.
+  contracts. **Phase 2 (live runner):** `src/live-runner.ts` (`npm run live`,
+  `ZOE_EXECUTOR_MODE=live`) is the supervised consumer of Multica's REAL
+  `agent_task_queue` — resolves the shared `Flue Executor (Zoe)` runtime by
+  NAME (agreeing with `services/zoe-data/executors/executor_queue_backend.py`),
+  idles on the `~/.zoe/multica_dispatch_paused` kill switch, defaults to `dry`
+  dispatch, single-lane. Shipped as the opt-in `flue-executor.service` template
+  (see Forbidden). `config.ts` gained a `lab|live` mode split; lab mode is
+  unchanged and still the `npm run e2e` default.
 - `flue-zoe-brain/` — Flue-hosted Pi `Agent` on the local Gemma brain (a third
   implementation behind the `run_zoe_core` seam, per
   `docs/architecture/zoe-flue-integration.md`). Serves 21 tools (20 capability
