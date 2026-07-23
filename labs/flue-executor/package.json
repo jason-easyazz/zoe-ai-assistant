@@ -12,7 +12,8 @@
     "build": "flue build --target node",
     "typecheck": "tsc --noEmit",
     "executor": "node --experimental-strip-types src/executor.ts",
-    "e2e": "node --experimental-strip-types src/e2e.ts"
+    "e2e": "node --experimental-strip-types src/e2e.ts",
+    "live": "node --experimental-strip-types src/live-runner.ts"
   },
   "dependencies": {
     "@flue/runtime": "1.0.0-beta.6",

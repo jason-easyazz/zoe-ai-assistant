@@ -72,7 +72,7 @@ export async function bootstrapLabDb(cfg: ExecutorConfig): Promise<void> {
   } finally {
     await admin.end();
   }
-  const lab = new pg.Client({ connectionString: cfg.labDatabaseUrl });
+  const lab = new pg.Client({ connectionString: cfg.databaseUrl });
   await lab.connect();
   try {
     await lab.query(DDL);
@@ -82,5 +82,5 @@ export async function bootstrapLabDb(cfg: ExecutorConfig): Promise<void> {
 }
 
 export function makePool(cfg: ExecutorConfig): pg.Pool {
-  return new pg.Pool({ connectionString: cfg.labDatabaseUrl, max: 4 });
+  return new pg.Pool({ connectionString: cfg.databaseUrl, max: 4 });
 }
