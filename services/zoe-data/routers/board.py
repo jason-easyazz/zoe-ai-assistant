@@ -73,43 +73,45 @@ async def board_summary(limit_done: int = 10, user: dict = Depends(get_current_u
     recently done) with PR links + block reasons from the runner's activity_log."""
     from executors.executor_queue_backend import get_pool
 
+    # ONE error boundary over the whole DB path — pool creation, acquire, and
+    # every query. Multica going unreachable at any point degrades the panel to
+    # a graceful "unavailable", never a 500.
     try:
         pool = await get_pool()
+        async with pool.acquire() as conn:
+            ws = await _resolve_workspace_id(conn)
+            if not ws:
+                return {"ok": False, "detail": "no workspace", "counts": {}}
+
+            counts = {
+                r["status"]: r["n"]
+                for r in await conn.fetch(
+                    "SELECT status, count(*)::int AS n FROM issue WHERE workspace_id=$1::uuid GROUP BY status",
+                    ws,
+                )
+            }
+
+            # Only the statuses the card lists, with the done set bounded in SQL
+            # — never load every done/backlog/cancelled issue ever recorded.
+            async def _rows(statuses, limit):
+                return await conn.fetch(
+                    """SELECT i.number, i.title, i.status, a.details
+                         FROM issue i
+                         LEFT JOIN LATERAL (
+                             SELECT details FROM activity_log
+                              WHERE issue_id = i.id ORDER BY created_at DESC LIMIT 1
+                         ) a ON true
+                        WHERE i.workspace_id=$1::uuid AND i.status = ANY($2::text[])
+                        ORDER BY i.updated_at DESC
+                        LIMIT $3""",
+                    ws, statuses, limit,
+                )
+
+            active_rows = await _rows(["in_progress", "in_review", "blocked"], 100)
+            done_rows = await _rows(["done"], max(0, min(limit_done, 50)))
     except Exception as exc:  # noqa: BLE001 - Multica unreachable is not fatal to the panel
-        logger.warning("board_summary: Multica unreachable: %s", exc)
+        logger.warning("board_summary: board backend error: %s", exc)
         return {"ok": False, "detail": "board backend unreachable", "counts": {}}
-
-    async with pool.acquire() as conn:
-        ws = await _resolve_workspace_id(conn)
-        if not ws:
-            return {"ok": False, "detail": "no workspace", "counts": {}}
-
-        counts = {
-            r["status"]: r["n"]
-            for r in await conn.fetch(
-                "SELECT status, count(*)::int AS n FROM issue WHERE workspace_id=$1::uuid GROUP BY status",
-                ws,
-            )
-        }
-
-        # Only the statuses the card actually lists, with the done set bounded in
-        # SQL — never load every done/backlog/cancelled issue ever recorded.
-        async def _rows(statuses, limit):
-            return await conn.fetch(
-                """SELECT i.number, i.title, i.status, a.details
-                     FROM issue i
-                     LEFT JOIN LATERAL (
-                         SELECT details FROM activity_log
-                          WHERE issue_id = i.id ORDER BY created_at DESC LIMIT 1
-                     ) a ON true
-                    WHERE i.workspace_id=$1::uuid AND i.status = ANY($2::text[])
-                    ORDER BY i.updated_at DESC
-                    LIMIT $3""",
-                ws, statuses, limit,
-            )
-
-        active_rows = await _rows(["in_progress", "in_review", "blocked"], 100)
-        done_rows = await _rows(["done"], max(0, min(limit_done, 50)))
 
     in_progress = [_entry(r) for r in active_rows if r["status"] == "in_progress"]
     in_review = [_entry(r) for r in active_rows if r["status"] == "in_review"]
