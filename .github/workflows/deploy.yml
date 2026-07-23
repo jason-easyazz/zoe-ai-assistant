@@ -149,22 +149,43 @@ jobs:
           cd /home/zoe/assistant
           bash scripts/deploy/migrate.sh
 
-      - name: Rebuild / restart zoe-auth
+      - name: Rebuild / restart zoe-auth (if changed)
         run: |
           cd /home/zoe/assistant
-          # Heavy-build sub-gate (Greptile, PR #1493): the base 800MB gate admits
-          # the light deploy path; an actual (re)build is the transient that can
-          # squeeze the brain, so it alone waits for the stricter bar.
-          for attempt in $(seq 1 20); do
-            AVAIL_MB="$(free -m | awk '/Mem:/{print $7}')"
-            [ "${AVAIL_MB}" -ge 1400 ] && break
-            echo "heavy-build wait: ${AVAIL_MB}MB < 1400MB (${attempt}/20)"; sleep 15
-          done
-          if [ "${AVAIL_MB}" -lt 1400 ]; then
-            echo "::error::refusing heavy build at ${AVAIL_MB}MB (< 1400MB) — free memory and re-run the deploy."
-            exit 1
+          # Change-detection (mirrors the Flue sidecar steps below): the full
+          # `--build` is the heavy transient that needs the 1400MB sub-gate, and
+          # demanding it on EVERY deploy wedged the lane 6x straight while the
+          # box idled at 500-900MB free — skipping zoe-data restart + health and
+          # silently shipping stale code under a green-looking merge flow.
+          # Only pay the gated rebuild when services/zoe-auth/ actually changed
+          # since the previously-deployed SHA; an unchanged, healthy container
+          # keeps serving untouched.
+          if [ -n "${OLD_SHA:-}" ] \
+             && git diff --quiet "${OLD_SHA}" HEAD -- services/zoe-auth/; then
+            if curl -sf http://localhost:8002/health > /dev/null 2>&1; then
+              echo "zoe-auth unchanged since ${OLD_SHA} and healthy — no rebuild needed."
+              exit 0
+            fi
+            # Unchanged code but container down/unhealthy: a light up (no
+            # --build) restores it without the heavy-build memory bar.
+            echo "zoe-auth unchanged since ${OLD_SHA} but unhealthy — light restart (no --build)."
+            docker compose up -d zoe-auth
+          else
+            echo "zoe-auth changed since ${OLD_SHA:-<unknown>} (or first deploy) — rebuilding."
+            # Heavy-build sub-gate (Greptile, PR #1493): the base 800MB gate admits
+            # the light deploy path; an actual (re)build is the transient that can
+            # squeeze the brain, so it alone waits for the stricter bar.
+            for attempt in $(seq 1 20); do
+              AVAIL_MB="$(free -m | awk '/Mem:/{print $7}')"
+              [ "${AVAIL_MB}" -ge 1400 ] && break
+              echo "heavy-build wait: ${AVAIL_MB}MB < 1400MB (${attempt}/20)"; sleep 15
+            done
+            if [ "${AVAIL_MB}" -lt 1400 ]; then
+              echo "::error::refusing heavy build at ${AVAIL_MB}MB (< 1400MB) — free memory and re-run the deploy."
+              exit 1
+            fi
+            docker compose up -d --build zoe-auth
           fi
-          docker compose up -d --build zoe-auth
           for attempt in {1..12}; do
             curl -sf http://localhost:8002/health > /dev/null && exit 0
             sleep 5
