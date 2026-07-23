@@ -26,6 +26,8 @@ import asyncio
 import json
 import logging
 import os
+import re
+import subprocess
 import time
 from pathlib import Path
 
@@ -141,23 +143,69 @@ async def claim_next_issue(
         return row
 
 
-async def report_result(conn: asyncpg.Connection, identity: dict, issue: asyncpg.Record, result) -> None:
-    """Map the executor result onto Multica issue status + an activity entry."""
+def _first_paragraph(text: str | None, *, cap: int = 280) -> str:
+    """First *prose* paragraph of a PR body — skip scaffolding blocks (markdown
+    headings, HTML comments, and bullet/ordered list blocks) so the detail reads
+    as a sentence, not '- Fix A - Fix B'. Collapse whitespace, cap length."""
+    if not text:
+        return ""
+    for block in re.split(r"\n\s*\n", text.replace("\r\n", "\n").strip()):
+        b = block.strip()
+        if (not b or b.startswith("#") or b.startswith("<!--")
+                or b.startswith(("- ", "* ", "+ ")) or re.match(r"\d+[.)]\s", b)):
+            continue
+        return re.sub(r"\s+", " ", b)[:cap].rstrip()
+    return ""
+
+
+def build_completion_summary(result) -> tuple[str | None, str | None]:
+    """Plain-English (what-was-fixed, longer-detail) for a merged PR, read from
+    the PR Omnigent authored — its title is already a conventional one-liner and
+    its body opens with prose. Best-effort: returns (None, None) if the PR/gh is
+    unavailable, so a summary never blocks or fails the terminal-status write."""
+    if not (getattr(result, "merged", False) and result.pr_url):
+        return None, None
+    try:
+        out = subprocess.run(
+            ["gh", "pr", "view", result.pr_url, "--json", "title,body"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if out.returncode != 0:
+            return None, None
+        data = json.loads(out.stdout or "{}")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("board runner: could not read PR for summary (%s): %s", result.pr_url, exc)
+        return None, None
+    return (data.get("title") or None), (_first_paragraph(data.get("body")) or None)
+
+
+async def report_result(
+    conn: asyncpg.Connection, identity: dict, issue: asyncpg.Record, result,
+    *, summary: str | None = None, summary_detail: str | None = None,
+) -> None:
+    """Map the executor result onto Multica issue status + an activity entry.
+
+    For merged work, `summary`/`summary_detail` carry a plain-English record of
+    what was fixed onto the completion activity, so the review card (and later an
+    Ask-Zoe answer) can explain each done item without re-reading the diff."""
     if result.merged:
         status, action = "done", "issue_completed"
     elif result.ok and result.stage == "review":
         status, action = "in_review", "issue_in_review"
     else:
         status, action = "blocked", "issue_blocked"
+    extra = {"pr_url": result.pr_url, "merged": result.merged,
+             "session_id": result.session_id, "merge_sha": result.merge_sha}
+    if summary:
+        extra["summary"] = summary
+    if summary_detail:
+        extra["summary_detail"] = summary_detail
     async with conn.transaction():
         await conn.execute(
             "UPDATE issue SET status=$2, updated_at=now() WHERE id=$1::uuid", issue["id"], status,
         )
         await _log_issue_activity(
-            conn, identity, issue["id"], action,
-            f"{result.stage}: {result.detail}",
-            {"pr_url": result.pr_url, "merged": result.merged, "session_id": result.session_id,
-             "merge_sha": result.merge_sha},
+            conn, identity, issue["id"], action, f"{result.stage}: {result.detail}", extra,
         )
 
 
@@ -188,10 +236,22 @@ async def run_one(*, issue_number: int | None = None) -> dict:
         logger.exception("board runner: #%s raised", issue["number"])
         result = OmnigentResult(False, "error", f"runner exception: {exc}")
 
+    # Best-effort plain-English record of what shipped (merged PRs only), built
+    # off the event loop since it shells out to gh. A failure here must never
+    # block the terminal-status write, so it degrades to no summary.
+    summary = summary_detail = None
+    if getattr(result, "merged", False) and result.pr_url:
+        try:
+            summary, summary_detail = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: build_completion_summary(result))
+        except Exception:  # noqa: BLE001
+            logger.warning("board runner: summary build failed for #%s", issue["number"])
+
     try:
         async with pool.acquire() as conn:
             identity = await ensure_executor_identity(conn)
-            await report_result(conn, identity, issue, result)
+            await report_result(conn, identity, issue, result,
+                                summary=summary, summary_detail=summary_detail)
     except Exception:  # noqa: BLE001 - last resort: don't leave it in_progress
         logger.exception("board runner: could not write final status for #%s", issue["number"])
         try:

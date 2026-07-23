@@ -904,6 +904,8 @@
   .wkpr{color:#8ab4ff;text-decoration:none}
   .wkpr:active{opacity:.7}
   .wkreason{color:#ff9db0;font-size:15px;margin-top:8px}
+  .wksum{color:rgba(255,255,255,.74);font-size:15px;margin-top:8px;line-height:1.45}
+  .wksum .wksd{color:rgba(255,255,255,.5)}
   .wkdot{width:9px;height:9px;border-radius:50%;flex:none}
   .wkdot.prog{background:#7b96ff}.wkdot.review{background:#ffbf5e}
   .wkdot.block{background:#ff7a90}.wkdot.done{background:#66d6a3}
@@ -1570,8 +1572,12 @@
     function prLink(u){var s=safeUrl(u);return s?' · <a class="wkpr" href="'+esc(s)+'" target="_blank" rel="noopener">review PR ↗</a>':'';}
     function itemHtml(it,cls,withReason){
       var reason=(withReason&&it.reason)?'<div class="wkreason">⚠ '+esc(it.reason)+'</div>':'';
+      // Plain-English "what was fixed", written at merge — the headline is the
+      // fix, the muted tail is the longer detail (both already escaped).
+      var sum=it.summary?'<div class="wksum">'+esc(it.summary)
+        +(it.summary_detail?'<span class="wksd"> — '+esc(it.summary_detail)+'</span>':'')+'</div>':'';
       return '<div class="wkitem"><div class="wkt"><span class="wkdot '+cls+'"></span> '+esc(it.title)+'</div>'
-        +'<div class="wkm">#'+esc(it.number)+prLink(it.pr_url)+'</div>'+reason+'</div>';
+        +'<div class="wkm">#'+esc(it.number)+prLink(it.pr_url)+'</div>'+sum+reason+'</div>';
     }
     function section(title,arr,cls,withReason){
       if(!arr||!arr.length)return '';

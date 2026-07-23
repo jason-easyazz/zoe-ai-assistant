@@ -26,26 +26,32 @@ router = APIRouter(prefix="/api/board", tags=["board"])
 _EXECUTOR_RUNTIME_NAME = "Flue Executor (Zoe)"
 
 
-def _pr_from_details(details) -> str | None:
-    """PR url out of an activity_log.details value (dict or json string)."""
+def _load_details(details) -> dict:
+    """An activity_log.details value (jsonb dict or json string) as a dict."""
     if isinstance(details, str):
         try:
             details = json.loads(details)
         except json.JSONDecodeError:
-            return None
-    url = (details or {}).get("pr_url")
+            return {}
+    return details if isinstance(details, dict) else {}
+
+
+def _pr_from_details(details) -> str | None:
+    """PR url out of an activity_log.details value."""
+    url = _load_details(details).get("pr_url")
     # Only surface a real https URL — never a javascript:/data: value that could
     # reach an href (defence-in-depth; the card also checks the scheme).
     return url if isinstance(url, str) and url.startswith("https://") else None
 
 
 def _reason_from_details(details) -> str | None:
-    if isinstance(details, str):
-        try:
-            details = json.loads(details)
-        except json.JSONDecodeError:
-            return None
-    return (details or {}).get("reason")
+    return _load_details(details).get("reason")
+
+
+def _str_from_details(details, key: str) -> str | None:
+    """A plain string field (e.g. the plain-English 'what was fixed' summary)."""
+    v = _load_details(details).get(key)
+    return v if isinstance(v, str) and v.strip() else None
 
 
 async def _resolve_workspace_id(conn) -> str | None:
@@ -60,10 +66,14 @@ async def _resolve_workspace_id(conn) -> str | None:
     return await conn.fetchval("SELECT id::text FROM workspace ORDER BY created_at LIMIT 1")
 
 
-def _entry(row, *, with_reason=False):
+def _entry(row, *, with_reason=False, with_summary=False):
     e = {"number": row["number"], "title": row["title"], "pr_url": _pr_from_details(row["details"])}
     if with_reason:
         e["reason"] = _reason_from_details(row["details"])
+    if with_summary:
+        # Plain-English record of what shipped, written at merge by the runner.
+        e["summary"] = _str_from_details(row["details"], "summary")
+        e["summary_detail"] = _str_from_details(row["details"], "summary_detail")
     return e
 
 
@@ -116,7 +126,7 @@ async def board_summary(limit_done: int = 10, user: dict = Depends(get_current_u
     in_progress = [_entry(r) for r in active_rows if r["status"] == "in_progress"]
     in_review = [_entry(r) for r in active_rows if r["status"] == "in_review"]
     blocked = [_entry(r, with_reason=True) for r in active_rows if r["status"] == "blocked"]
-    done = [_entry(r) for r in done_rows]
+    done = [_entry(r, with_summary=True) for r in done_rows]
 
     bits = []
     if blocked:
