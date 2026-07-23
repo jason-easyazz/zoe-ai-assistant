@@ -258,14 +258,28 @@
   /* Speaker picker: a wider overlay + a 4-column tile grid so all players fit
      at 1280x720 WITHOUT scrolling (the operator explicitly does not want to
      scroll). Widen ONLY this modal — scope it to the picker via :has(.spkgrid)
-     so every other estmc dialog keeps its 520px width. */
-  .estmc:has(.spkgrid){width:1120px;max-width:calc(100vw - 40px)}
-  .estmc .spkgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:16px}
+     so every other estmc dialog keeps its 520px width.
+     The modal is a flex COLUMN capped to the stage (100% of .estmodal, which is
+     inset:0 of the 1280x720 #stage — NOT 100vh, since the stage is transform-
+     scaled to the physical panel): the title + Cancel row are pinned (flex:none)
+     and ONLY the grid scrolls. Without the cap a long player list (ghost players
+     inflate it) pushed the modal taller than the stage and the Cancel button
+     fell off the bottom edge. The common case (a handful of players) still fits
+     with no scroll. */
+  .estmc:has(.spkgrid){width:1120px;max-width:calc(100vw - 40px);max-height:calc(100% - 24px);display:flex;flex-direction:column}
+  .estmc:has(.spkgrid) h3{flex:none;margin-bottom:12px}
+  .estmc:has(.spkgrid) .btns{flex:none;margin-top:16px}
+  .estmc .spkgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:16px;overflow-y:auto;min-height:0;flex:1 1 auto;-webkit-overflow-scrolling:touch}
   .estmc .spkopt{display:flex;flex-direction:column;align-items:flex-start;gap:8px;width:100%;min-height:104px;text-align:left;padding:15px 17px;border-radius:16px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:#fff;font:inherit;cursor:pointer;position:relative;overflow:hidden}
   .estmc .spkopt .si{width:32px;height:32px;color:rgba(255,255,255,.82);flex:none}
   .estmc .spkopt .si svg{width:32px;height:32px;display:block}
   .estmc .spkopt .snm{font-size:20px;font-weight:600;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
   .estmc .spkopt .ssub{font-size:14px;color:var(--ink-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;letter-spacing:.02em}
+  /* "This device" pill on the panel's own AirPlay output, top-right so it clears
+     the type glyph (top-left) and the name row (below). */
+  .estmc .spkopt .sbadge{position:absolute;top:12px;right:12px;font-size:12px;font-weight:600;letter-spacing:.03em;padding:3px 10px;border-radius:999px;background:var(--accent);color:#fff}
+  .estmc .spkopt.self{border-color:var(--accent)}
+  .estmc .spkopt.self .snm{max-width:calc(100% - 96px)}
   .estmc .spkopt.cur{border-color:var(--accent)}
   .estmc .spkopt.off{opacity:.45}
   .estmc .spkopt.off .ssub{color:#ff9db0}
@@ -2461,16 +2475,36 @@
         // dimmed + marked (a flapping speaker may return; a silent disappearance
         // is worse). The display name goes on data-name, because the tile's
         // textContent now includes the subtitle and can't be the sticky label.
+        // The panel's OWN AirPlay output is just another player in MA's list; its
+        // name ("Zoe Panel") doesn't say where it is or that it's the screen you're
+        // touching. Mark it: subtitle → the panel's location ("Bedroom"), plus a
+        // "This device" badge. Identity is name-matched against the panel's self
+        // name — configurable via _pcfg.self_player, defaulting to the AirPlay
+        // receiver name we deploy ("Zoe Panel"). Location comes from panel config.
+        var selfName=String((_pcfg&&_pcfg.self_player)||'Zoe Panel').toLowerCase();
+        var selfLoc=(_pcfg&&(_pcfg.room_name||_pcfg.location))||'';
+        var selfMarked=false;   // badge only ONE tile even if the name repeats
+        // Hoist THIS device to the front — it's the most likely pick and should
+        // not hide at the bottom of a scrolled list. First available match only.
+        for(var _i=0;_i<ps.length;_i++){var _n=String(ps[_i].display_name||ps[_i].name||'').toLowerCase();
+          if(ps[_i].available!==false&&selfName&&_n.indexOf(selfName)>=0){if(_i>0){ps=ps.slice();ps.unshift(ps.splice(_i,1)[0]);}break;}}
         estOpen('<h3>Play on…</h3><div class="spkgrid">'+ps.map(function(pl){
             var pid=pl.player_id||pl.id||'';
             var nm=pl.display_name||pl.name||pid;
             var kind=pl.kind||'speaker';
             var sub=pl.kind_label||'';
             var off=(pl.available===false);
+            // Identity by SUBSTRING, not equality: MA suffixes the receiver name
+            // ("Zoe Panel" → "Zoe Panel (AirPlay)") and a dead ghost can carry the
+            // SAME name, so also require the tile be available and mark only the
+            // first match — otherwise the ghost gets a false "This device" badge.
+            var isSelf=(!selfMarked&&!off&&!!selfName&&String(nm).toLowerCase().indexOf(selfName)>=0);
+            if(isSelf){selfMarked=true;if(selfLoc)sub=selfLoc;}  // location; the badge says it's this device
             if(off)sub=(sub?sub+' · ':'')+'Unavailable';
-            var cls='spkopt'+((_music.player_id&&pid===_music.player_id)?' cur':'')+(off?' off':'');
+            var cls='spkopt'+((_music.player_id&&pid===_music.player_id)?' cur':'')+(off?' off':'')+(isSelf?' self':'');
             return '<button class="'+cls+'" data-pid="'+esc(String(pid))+'" data-name="'+esc(String(nm))+'">'
               +'<span class="si">'+spkKindIcon(kind)+'</span>'
+              +(isSelf?'<span class="sbadge">This device</span>':'')
               +'<span class="snm">'+esc(String(nm))+'</span>'
               +'<span class="ssub">'+esc(String(sub))+'</span></button>';}).join('')
           +'</div><div class="btns"><button data-x="cancel">Cancel</button></div>');

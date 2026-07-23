@@ -149,3 +149,16 @@ def test_missing_device_info_degrades_safely():
     out2 = resolve_player_kind(empty)
     assert out2["kind"] == "speaker"   # unknown default
     assert out2["kind_label"]
+
+
+def test_shairport_receiver_is_a_speaker_not_a_tv():
+    """A shairport-sync AirPlay receiver (the touch panel made into a speaker)
+    reports model 'ShairportSync' / manufacturer 'AirPlay'. Without a rule it
+    hits the AirPlay-is-a-TV catch-all and shows as 'AirPlay TV' — wrong for a
+    dedicated audio sink. Payload copied from the live 'Zoe Panel' player.
+    """
+    panel = resolve_player_kind(
+        _p("upc134dd3b3b2a", "Zoe Panel (AirPlay)", "universal_player",
+           "player", "ShairportSync", "AirPlay"))
+    assert panel["kind"] == "speaker", f"got {panel['kind']!r}"
+    assert panel["kind_label"] == "AirPlay speaker", f"got {panel['kind_label']!r}"
