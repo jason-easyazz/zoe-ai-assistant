@@ -29,6 +29,8 @@ This is **knowledge / records** (descriptive facts), not a DOX contract. See the
 - [ZOE_* flag inventory](flag-inventory.md) — **GENERATED** (via `tools/audit/flag_inventory.py`, do not hand-edit): every `ZOE_*` env flag read in the codebase with defaults, reader modules, typed_env adoption, and `.env.example` coverage. Machine-readable twin: [flag-inventory.json](flag-inventory.json).
 - [Flue cutover tool cut list](flue-cutover-tool-cut-list.md) — decision of record (signed off 2026-07-03) for the Flue brain cutover: the 18-item cut list closing the "~56 tools" parity question, the revised 12 → 20 target via Waves 1–3, and the dispositions for each legacy tool. Re-pointed from `docs/PLANS.md` and `zoe-flue-integration.md` §10.
 
+- [Panel-as-a-MA-speaker feasibility](panel-as-ma-speaker-feasibility.md) — read-only investigation (2026-07-23) into making the touch panel a selectable Music Assistant player. Ground truth: the Pi has a Jabra Speak 750 on PulseAudio (which MIXES, so music + TTS coexist — the key enabler), MA is a host-network Docker container on the Orin (NOT the Pi, so no MA-local player helps), and the AirPlay provider is already auto-discovering. Ranked paths (snapcast client best; shairport-sync fewest changes), a lab-provable first step that touches neither the Pi nor live MA config, and the operator-authorized changes each path needs. **Draft findings, not a decision.**
+
 ## Bundles
 
 - [Multica autopilot loop contracts](autopilots/index.md) — Loop-Engineering contracts (Job / Inputs / Allowed / Forbidden / Output / Evaluation) for the three live Multica autopilots.
