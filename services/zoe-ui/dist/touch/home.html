@@ -255,8 +255,20 @@
   .estmc input,.estmc select{width:100%;height:50px;border-radius:13px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.06);color:var(--ink);font:inherit;font-size:19px;padding:0 14px;outline:none}
   .estmc .erow{display:flex;gap:12px}
   .estmc .btns{display:flex;gap:12px;margin-top:24px}
-  .estmc .spkgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;max-height:380px;overflow-y:auto}
-  .estmc .spkopt{display:block;width:100%;text-align:left;padding:15px 18px;border-radius:14px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:#fff;font:inherit;font-size:20px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* Speaker picker: a wider overlay + a 4-column tile grid so all players fit
+     at 1280x720 WITHOUT scrolling (the operator explicitly does not want to
+     scroll). Widen ONLY this modal — scope it to the picker via :has(.spkgrid)
+     so every other estmc dialog keeps its 520px width. */
+  .estmc:has(.spkgrid){width:1120px;max-width:calc(100vw - 40px)}
+  .estmc .spkgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:16px}
+  .estmc .spkopt{display:flex;flex-direction:column;align-items:flex-start;gap:8px;width:100%;min-height:104px;text-align:left;padding:15px 17px;border-radius:16px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:#fff;font:inherit;cursor:pointer;position:relative;overflow:hidden}
+  .estmc .spkopt .si{width:32px;height:32px;color:rgba(255,255,255,.82);flex:none}
+  .estmc .spkopt .si svg{width:32px;height:32px;display:block}
+  .estmc .spkopt .snm{font-size:20px;font-weight:600;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+  .estmc .spkopt .ssub{font-size:14px;color:var(--ink-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;letter-spacing:.02em}
+  .estmc .spkopt.cur{border-color:var(--accent)}
+  .estmc .spkopt.off{opacity:.45}
+  .estmc .spkopt.off .ssub{color:#ff9db0}
   .estmc .btns button{flex:1;height:54px;border-radius:14px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:var(--ink);font:inherit;font-size:19px;cursor:pointer}
   .estmc .btns .save{background:var(--accent);border-color:transparent;color:#fff;font-weight:600}
   .estmc .btns button:disabled{opacity:.4;cursor:default}
@@ -913,6 +925,17 @@
   function hrs(list){return list.map(function(h){return '<div class="hh"><div class="lab">'+h[0]+'</div><div class="ic" style="color:'+(h[1]==='sun'?'#ffce7a':(h[1]==='moon'?'#c7d4ff':'#e2ebf4'))+'">'+IC[h[1]]+'</div><div class="d">'+h[2]+'</div></div>';}).join('');}
 
   var SPKR='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2.5" width="14" height="19" rx="3"/><circle cx="12" cy="14" r="3.4"/><circle cx="12" cy="6.5" r="1"/></svg>';
+  // Device-type glyphs for the speaker picker, one per resolved `kind` from
+  // /api/music/players (see routers/music.py::resolve_player_kind). The panel
+  // only RENDERS these — it never derives a device type from a model string.
+  var SPK_KIND_ICONS={
+    speaker:SPKR,
+    tv:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8.5 21h7M12 17v4"/></svg>',
+    display:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="12" rx="3"/><path d="M7 15h10l1.6 5.5H5.4z"/></svg>',
+    group:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="7.5" width="12" height="13.5" rx="2.5"/><path d="M8 4.5h9.5a2 2 0 0 1 2 2V17"/></svg>',
+    computer:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4.5" width="16" height="11" rx="1.8"/><path d="M2.5 19.5h19"/></svg>'
+  };
+  function spkKindIcon(k){return SPK_KIND_ICONS[k]||SPKR;}
   // The Ask surface is re-rendered from FULL.ask.html on every ask, so build it
   // from ONE shell — otherwise the talk control vanishes the moment Zoe answers.
   // (Hoisted: FULL's literal calls this.)
@@ -2377,28 +2400,45 @@
       apiGet('/api/music/players').then(function(d){
         var ps=(d&&d.players)||[];
         if(!ps.length){toast('No speakers found');return;}
-        estOpen('<h3>Play on…</h3><div class="spkgrid">'+ps.map(function(pl){var pid=pl.player_id||pl.id||'';var nm=pl.display_name||pl.name||pid;
-          var cur=(_music.player_id&&pid===_music.player_id)?' style="border-color:var(--accent)"':'';
-          return '<button class="spkopt" data-pid="'+esc(String(pid))+'"'+cur+'>'+esc(String(nm))+'</button>';}).join('')
+        // Each tile carries a type icon + the device's own name + a subtitle
+        // (`kind_label`, resolved server-side) so two players with the SAME name
+        // — this house has two "Bedroom"s, a Sonos Beam and a dead AirPlay Apple
+        // TV — are finally tellable apart. Unavailable players stay LISTED but
+        // dimmed + marked (a flapping speaker may return; a silent disappearance
+        // is worse). The display name goes on data-name, because the tile's
+        // textContent now includes the subtitle and can't be the sticky label.
+        estOpen('<h3>Play on…</h3><div class="spkgrid">'+ps.map(function(pl){
+            var pid=pl.player_id||pl.id||'';
+            var nm=pl.display_name||pl.name||pid;
+            var kind=pl.kind||'speaker';
+            var sub=pl.kind_label||'';
+            var off=(pl.available===false);
+            if(off)sub=(sub?sub+' · ':'')+'Unavailable';
+            var cls='spkopt'+((_music.player_id&&pid===_music.player_id)?' cur':'')+(off?' off':'');
+            return '<button class="'+cls+'" data-pid="'+esc(String(pid))+'" data-name="'+esc(String(nm))+'">'
+              +'<span class="si">'+spkKindIcon(kind)+'</span>'
+              +'<span class="snm">'+esc(String(nm))+'</span>'
+              +'<span class="ssub">'+esc(String(sub))+'</span></button>';}).join('')
           +'</div><div class="btns"><button data-x="cancel">Cancel</button></div>');
         var m=document.getElementById('estModal');
         m.querySelector('[data-x="cancel"]').onclick=estClose;
         m.querySelectorAll('.spkopt').forEach(function(b){b.onclick=function(){
           var pid=b.getAttribute('data-pid');
+          var nm=b.getAttribute('data-name')||b.textContent;
           var active=_music.np&&_music.np.active;   // paused still owns a queue — transfer it
           if(!active){
             // Nothing to move — remember this speaker as the default for the
             // NEXT play (server-side, so voice plays land there too).
-            _music.player_id=pid;_music.chosenName=b.textContent;estClose();
+            _music.player_id=pid;_music.chosenName=nm;estClose();
             // Fresh lookup: the `spk` captured in wireMusic can be detached by a
             // card rebuild, and writing to a detached node silently does nothing.
-            var sn=document.querySelector('#mSpk .spkname');if(sn)sn.textContent=b.textContent;
+            var sn=document.querySelector('#mSpk .spkname');if(sn)sn.textContent=nm;
             apiJson('POST','/api/music/preferred-player',{player_id:pid}).catch(function(){});
-            toast('Music will play on '+b.textContent);
+            toast('Music will play on '+nm);
             return;
           }
           apiJson('POST','/api/music/transfer',{target_player_id:pid,source_player_id:_music.player_id||undefined})
-            .then(function(){estClose();var sn=document.querySelector('#mSpk .spkname');if(sn)sn.textContent=b.textContent;loadMusic();})
+            .then(function(){estClose();var sn=document.querySelector('#mSpk .spkname');if(sn)sn.textContent=nm;loadMusic();})
             .catch(function(){toast('Couldn’t switch speaker');});};});
       }).catch(function(){toast('Couldn’t load speakers');});
     };

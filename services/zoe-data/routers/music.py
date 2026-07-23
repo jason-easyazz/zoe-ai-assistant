@@ -8,6 +8,7 @@ status that the music page and settings page both need without an extra auth hop
 """
 import logging
 import os
+import re
 from typing import Any
 
 import httpx
@@ -76,6 +77,141 @@ async def _get_players() -> list | None:
     except Exception as exc:
         logger.debug("MA players/all unreachable: %s", exc)
     return None
+
+
+# ---------------------------------------------------------------------------
+# Device-type resolution (server-side; the panel gets flat resolved fields)
+# ---------------------------------------------------------------------------
+#
+# MA's own `icon` field is useless for the panel — it is `mdi-speaker` for
+# almost every player. The real signal for "what is this thing" lives across
+# `type` (player | group), `provider` (sonos | chromecast | airplay |
+# universal_player) and `device_info.model`. Resolving it HERE keeps the doctrine
+# the panel already follows for dock pins and rooms: the browser never parses a
+# vendor model string, it just renders a flat `kind` + `kind_label`.
+#
+# `kind` is a small closed set the panel draws an icon for:
+#   group     -> an MA sync/cast group (e.g. the "House" Chromecast group)
+#   display   -> a smart display WITH a screen (Google Nest Hub)
+#   speaker   -> a dedicated audio speaker (Sonos Beam/Arc, Google Home Mini)
+#   computer  -> a laptop/desktop (Jason's MacBook Pro)
+#   tv        -> anything whose job is a TV screen: a smart TV, a Chromecast
+#                dongle plugged into a TV, or an Apple TV streaming box
+#
+# There is deliberately NO `airplay` kind: AirPlay is a TRANSPORT, not a form
+# factor, and the operator asked "is it a TV, a speaker, etc" — a form-factor
+# question. Every AirPlay device in this house is either an Apple TV (-> tv) or
+# the MacBook (-> computer), so a transport-named bucket would only muddy the
+# very disambiguation this change exists to provide.
+#
+# The two identically-named "Bedroom" players are exactly why this exists:
+#   RINCON_347E5C9BEC8F01400  Sonos "Beam"     -> kind=speaker, "Sonos Beam"
+#   ap40cbc0db9fb8            AirPlay "Apple TV 4K" -> kind=tv,  "Apple TV" (unavailable)
+# so the picker can finally tell the real (Sonos) one from the dead AirPlay one.
+
+# Model/name substrings that identify a form factor. Ordered checks below decide
+# precedence; these are just the vocabularies. Matched case-insensitively.
+_SPEAKER_MODEL_HINTS = (
+    "sonos", "beam", "arc", "home mini", "nest mini", "nest audio",
+    "homepod", "echo", "speaker", "soundbar", "one sl", "play:",
+)
+# Only SPECIFIC smart-display models — never a bare "display". The display check
+# runs before the TV check, so a generic "display" substring would misclassify a
+# TV whose model happens to carry the word (e.g. "Samsung Smart Monitor M7
+# Display" or "Chromecast with Google TV Display") as a Nest-Hub-style display.
+_DISPLAY_MODEL_HINTS = ("nest hub", "home hub", "hub max", "smart display")
+_COMPUTER_MODEL_HINTS = ("macbook", "imac", "mac mini", "mac studio", "mac pro",
+                         "laptop", "desktop", "surface", " pc")
+_TV_MODEL_HINTS = ("apple tv", "chromecast", "smart tv", "media renderer",
+                   "oled", "qled", "webos", "bravia", "roku", "fire tv", " tv")
+
+
+def _strip_parenthetical(text: str) -> str:
+    """"MacBook Pro (MacBookPro18,2)" -> "MacBook Pro"."""
+    return re.sub(r"\s*\(.*?\)\s*", " ", text or "").strip()
+
+
+def _clean_brand(manufacturer: str) -> str:
+    """"LG Electronics" -> "LG"; "Unknown manufacturer" -> "" (unknown)."""
+    m = (manufacturer or "").strip()
+    if m.lower() in ("", "unknown", "unknown manufacturer"):
+        return ""
+    m = re.sub(r"\s+(electronics|inc\.?|corp\.?|corporation|co\.?|ltd\.?|llc)$",
+               "", m, flags=re.I).strip()
+    # Vendor casing the panel expects.
+    return {"sonos": "Sonos", "google": "Google", "lg": "LG"}.get(m.lower(), m)
+
+
+def _strip_google(model: str) -> str:
+    """"Google Nest Hub" -> "Nest Hub"; "Google Home Mini" -> "Home Mini"."""
+    return re.sub(r"^google\s+", "", model or "", flags=re.I).strip()
+
+
+def resolve_player_kind(player: dict) -> dict[str, str]:
+    """Resolve a MA player into a flat ``{"kind", "kind_label"}`` for the panel.
+
+    Pure — takes one player dict (the shape returned by MA's ``players/all``)
+    and returns only the two derived fields. Derivation uses ``type`` +
+    ``provider`` + ``device_info.model`` ONLY, never the user-editable ``name``
+    (a Sonos a user renamed "TV Room" must stay a speaker). See the module
+    comment above for the mapping and its rationale.
+    """
+    ptype = str(player.get("type") or "").lower()
+    provider = str(player.get("provider") or "").lower()
+    dev = player.get("device_info") or {}
+    model = str(dev.get("model") or "")
+    manufacturer = str(dev.get("manufacturer") or "")
+    low = model.lower()
+
+    def _has(hints: tuple) -> bool:
+        return any(h in low for h in hints)
+
+    # --- kind (order is precedence; first match wins) ---
+    if ptype == "group":
+        kind = "group"
+    elif provider == "sonos":
+        kind = "speaker"                     # Sonos players are always speakers
+    elif "apple tv" in low:
+        kind = "tv"                          # Apple TV is a streaming box on a TV
+    elif _has(_DISPLAY_MODEL_HINTS):
+        kind = "display"                     # Nest Hub etc. — a screen you also cast to
+    elif _has(_COMPUTER_MODEL_HINTS):
+        kind = "computer"
+    elif _has(_SPEAKER_MODEL_HINTS):
+        kind = "speaker"                     # Home Mini and friends
+    elif _has(_TV_MODEL_HINTS):
+        kind = "tv"                          # OLED/QLED/Smart TV/Chromecast/Media Renderer
+    elif provider in ("chromecast", "airplay", "universal_player"):
+        # An AV endpoint (cast dongle / AirPlay-2 receiver / DLNA renderer) that
+        # is not a known speaker/computer is, in practice, a TV.
+        kind = "tv"
+    else:
+        kind = "speaker"
+
+    # --- kind_label (short, human; prefers a cleaned model) ---
+    m = _strip_parenthetical(model)
+    if provider == "sonos":
+        label = m if m.lower().startswith("sonos") else (f"Sonos {m}" if m else "Sonos")
+    elif "apple tv" in low:
+        label = "Apple TV"
+    elif kind == "group":
+        label = "Speaker group"
+    elif kind == "computer":
+        label = m or "Computer"
+    elif kind == "display":
+        label = _strip_google(m) or "Smart display"
+    elif kind == "speaker":
+        label = _strip_google(m) or "Speaker"
+    elif kind == "tv":
+        if "chromecast" in low:
+            label = "Chromecast"             # clearer than "Google TV"
+        else:
+            brand = _clean_brand(manufacturer)
+            label = f"{brand} TV" if brand else (m or "TV")
+    else:
+        label = m or "Speaker"
+
+    return {"kind": kind, "kind_label": label}
 
 
 def _queue_item_art(item: dict) -> str:
@@ -246,6 +382,11 @@ async def music_players() -> dict[str, Any]:
     players = await _get_players()
     if players is None:
         return {"available": False, "players": []}
+    # Enrich each player with flat, panel-ready device-type fields so the browser
+    # never parses a vendor model string. Existing fields are preserved.
+    for p in players:
+        if isinstance(p, dict):
+            p.update(resolve_player_kind(p))
     return {"available": True, "players": players}
 
 
