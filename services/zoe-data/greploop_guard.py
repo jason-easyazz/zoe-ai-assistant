@@ -1609,7 +1609,13 @@ async def merge_pr_when_ready(
             ):
                 upd = _gh_update_branch(pr_number, repo=repo)
                 state["last_update_branch_at"] = now
-                state["terminal_state"] = "UPDATING_BRANCH" if upd["ok"] else "BLOCKED_NOT_READY"
+                # terminal_state MUST mirror the returned state so a caller
+                # reading status.json and a caller reading the dict agree.
+                returned_state = "UPDATING_BRANCH" if upd["ok"] else "BLOCKED_MERGE_FAILED"
+                state["terminal_state"] = returned_state
+                if not upd["ok"]:
+                    state["merge_blockers"] = assessment["blockers"]
+                    state["merge_error"] = (upd.get("detail") or "")[:2000]
                 _write_json(pr_number, "status.json", state)
                 _record_guardrail(
                     pr_number,
@@ -1617,7 +1623,7 @@ async def merge_pr_when_ready(
                 )
                 return {
                     "ok": False,
-                    "state": "UPDATING_BRANCH" if upd["ok"] else "BLOCKED_MERGE_FAILED",
+                    "state": returned_state,
                     "blockers": assessment["blockers"],
                     "update_branch": upd,
                     "retry_after_seconds": UPDATE_BRANCH_COOLDOWN_SECONDS,
