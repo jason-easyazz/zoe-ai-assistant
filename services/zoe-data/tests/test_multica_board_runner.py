@@ -96,6 +96,14 @@ def test_first_paragraph_skips_headings_and_comments():
     assert r._first_paragraph("") == "" and r._first_paragraph(None) == ""
 
 
+def test_first_paragraph_skips_list_blocks_for_prose():
+    # a heading + a bullet list before the prose must not surface as "- Fix A - Fix B"
+    body = "## Changes\n\n- Fix A\n- Fix B\n\nThis reworks the retry so a blip no longer aborts the run."
+    assert r._first_paragraph(body) == "This reworks the retry so a blip no longer aborts the run."
+    # ordered lists are skipped too
+    assert r._first_paragraph("1. step one\n2. step two\n\nThe real explanation.") == "The real explanation."
+
+
 def test_first_paragraph_caps_length():
     assert len(r._first_paragraph("x " * 500, cap=100)) <= 100
 

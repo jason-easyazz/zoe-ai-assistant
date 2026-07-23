@@ -144,13 +144,15 @@ async def claim_next_issue(
 
 
 def _first_paragraph(text: str | None, *, cap: int = 280) -> str:
-    """First prose paragraph of a PR body — skip markdown headings and HTML
-    comment blocks (PR-template scaffolding), collapse whitespace, cap length."""
+    """First *prose* paragraph of a PR body — skip scaffolding blocks (markdown
+    headings, HTML comments, and bullet/ordered list blocks) so the detail reads
+    as a sentence, not '- Fix A - Fix B'. Collapse whitespace, cap length."""
     if not text:
         return ""
     for block in re.split(r"\n\s*\n", text.replace("\r\n", "\n").strip()):
         b = block.strip()
-        if not b or b.startswith("#") or b.startswith("<!--"):
+        if (not b or b.startswith("#") or b.startswith("<!--")
+                or b.startswith(("- ", "* ", "+ ")) or re.match(r"\d+[.)]\s", b)):
             continue
         return re.sub(r"\s+", " ", b)[:cap].rstrip()
     return ""
