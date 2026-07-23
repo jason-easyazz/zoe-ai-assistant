@@ -23,6 +23,24 @@ def test_entry_shapes_number_title_pr_and_reason():
     assert e == {"number": 5, "title": "t", "pr_url": "https://github.com/o/r/pull/5", "reason": "why"}
 
 
+def test_entry_surfaces_plain_english_summary_for_done():
+    row = {"number": 9, "title": "t", "details": json.dumps({
+        "pr_url": "https://github.com/o/r/pull/9",
+        "summary": "fix(x): guard null", "summary_detail": "Guards the null case."})}
+    e = board._entry(row, with_summary=True)
+    assert e["summary"] == "fix(x): guard null" and e["summary_detail"] == "Guards the null case."
+    # without the flag (in-flight/blocked lists), no summary keys are added
+    assert "summary" not in board._entry(row)
+
+
+def test_str_from_details_rejects_nonstring_and_blank():
+    assert board._str_from_details({"summary": 123}, "summary") is None
+    assert board._str_from_details({"summary": "   "}, "summary") is None
+    assert board._str_from_details({}, "summary") is None
+    assert board._str_from_details("not json", "summary") is None
+    assert board._str_from_details({"summary": "real"}, "summary") == "real"
+
+
 def test_summary_route_requires_auth():
     # every route on this router carries the get_current_user dependency
     route = next(r for r in board.router.routes if r.path == "/api/board/summary")
