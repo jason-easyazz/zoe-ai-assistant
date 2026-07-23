@@ -49,6 +49,7 @@ npm install
 npm run typecheck
 npm run e2e        # the synthetic end-to-end proof (5 scenarios, hard asserts)
 npm run executor   # the loop itself, standalone (Ctrl-C to stop)
+npm run live       # the supervised live runner (Ctrl-C to stop)
 ```
 
 Credentials are read at runtime from `LAB_DATABASE_URL`, or derived from

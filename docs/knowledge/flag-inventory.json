@@ -261,6 +261,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_BACKUP_DIR": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/reset_engineering_boards.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_BARGE_MIN_MS": {
         "defaults": [
           "'192'"
@@ -312,6 +322,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-core/bench/pi_brain_latency.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_BOARD_POLL_S": {
+        "defaults": [
+          "'60'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/multica_board_runner.py"
         ],
         "typed_env": false
       },
@@ -793,6 +813,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_DB_CONTAINER": {
+        "defaults": [
+          "'zoe-database'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/reset_engineering_boards.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_DEFAULT_MEDIA_PLAYER": {
         "defaults": [
           "'media_player.all'"
@@ -1001,6 +1031,18 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/executors/kanban_adapter.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ENV_FILE": {
+        "defaults": [
+          "''",
+          "'/home/zoe/assistant/services/zoe-data/.env'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/verify_executor_queue_backend.py",
+          "services/zoe-data/multica_board_runner.py"
         ],
         "typed_env": false
       },
@@ -1331,6 +1373,16 @@
           "services/zoe-data/zoe_core_client.py"
         ],
         "typed_env": true
+      },
+      "ZOE_KANBAN_BACKEND": {
+        "defaults": [
+          "'hermes'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/executors/kanban_adapter.py"
+        ],
+        "typed_env": false
       },
       "ZOE_KANBAN_BOARD": {
         "defaults": [
@@ -2300,6 +2352,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_MULTICA_KILL_SWITCH": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/multica_board_runner.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_MULTICA_NATIVE_COMMENT_GUARD": {
         "defaults": [
           "-"
@@ -2340,6 +2402,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_MULTICA_POOL_MAX": {
+        "defaults": [
+          "'4'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/executors/executor_queue_backend.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_MULTICA_STALE_IN_PROGRESS_HOURS": {
         "defaults": [
           "6.0"
@@ -2349,6 +2421,16 @@
           "services/zoe-data/main.py"
         ],
         "typed_env": true
+      },
+      "ZOE_MULTICA_WORKSPACE_ID": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/executors/executor_queue_backend.py"
+        ],
+        "typed_env": false
       },
       "ZOE_MUSIC_BIND_HOST": {
         "defaults": [
@@ -2498,6 +2580,66 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/pi_intent_classifier.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_OMNIGENT_AGENT_ID": {
+        "defaults": [
+          "'ag_057995d1517418e6839f51d340785dd6'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omnigent_issue_executor.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_OMNIGENT_CLOSE_POLL_S": {
+        "defaults": [
+          "'60'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omnigent_issue_executor.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_OMNIGENT_CLOSE_TIMEOUT_S": {
+        "defaults": [
+          "'2400'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omnigent_issue_executor.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_OMNIGENT_CONTAINER": {
+        "defaults": [
+          "'zoe-omnigent'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omnigent_issue_executor.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_OMNIGENT_IMPLEMENT_TIMEOUT_S": {
+        "defaults": [
+          "'1800'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omnigent_issue_executor.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_OMNIGENT_URL": {
+        "defaults": [
+          "'http://127.0.0.1:6767'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omnigent_issue_executor.py"
         ],
         "typed_env": false
       },
@@ -2909,6 +3051,26 @@
         ],
         "typed_env": false
       },
+      "ZOE_PR_GUARD_AUTO_RESOLVE_THREADS": {
+        "defaults": [
+          "'0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/greploop_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PR_GUARD_AUTO_UPDATE_BRANCH": {
+        "defaults": [
+          "'0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/greploop_guard.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_PR_GUARD_GREPTILE_WAIT_POLL_SECONDS": {
         "defaults": [
           "'120'"
@@ -3022,6 +3184,16 @@
       "ZOE_PR_GUARD_TRIGGER_COOLDOWN_SECONDS": {
         "defaults": [
           "'900'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/greploop_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PR_GUARD_UPDATE_BRANCH_COOLDOWN_SECONDS": {
+        "defaults": [
+          "'300'"
         ],
         "in_env_example": false,
         "readers": [
@@ -3685,6 +3857,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/brain_dispatch.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_USE_OMNIGENT_EXECUTOR": {
+        "defaults": [
+          "'0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omnigent_issue_executor.py"
         ],
         "typed_env": false
       },
