@@ -325,6 +325,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_BOARD_POLL_S": {
+        "defaults": [
+          "'60'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/multica_board_runner.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_BOARD_REVIEW_AUTOPILOT_ENABLED": {
         "defaults": [
           "'false'"
@@ -1026,11 +1036,13 @@
       },
       "ZOE_ENV_FILE": {
         "defaults": [
-          "''"
+          "''",
+          "'/home/zoe/assistant/services/zoe-data/.env'"
         ],
         "in_env_example": false,
         "readers": [
-          "scripts/maintenance/verify_executor_queue_backend.py"
+          "scripts/maintenance/verify_executor_queue_backend.py",
+          "services/zoe-data/multica_board_runner.py"
         ],
         "typed_env": false
       },
@@ -2340,6 +2352,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_MULTICA_KILL_SWITCH": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/multica_board_runner.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_MULTICA_NATIVE_COMMENT_GUARD": {
         "defaults": [
           "-"
@@ -2564,6 +2586,26 @@
       "ZOE_OMNIGENT_AGENT_ID": {
         "defaults": [
           "'ag_057995d1517418e6839f51d340785dd6'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omnigent_issue_executor.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_OMNIGENT_CLOSE_POLL_S": {
+        "defaults": [
+          "'60'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omnigent_issue_executor.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_OMNIGENT_CLOSE_TIMEOUT_S": {
+        "defaults": [
+          "'2400'"
         ],
         "in_env_example": false,
         "readers": [
