@@ -53,7 +53,12 @@ def _ensure_postgres_url() -> None:
     try:
         for line in env_file.read_text().splitlines():
             if line.startswith("POSTGRES_URL="):
-                os.environ["POSTGRES_URL"] = line.split("=", 1)[1].strip()
+                val = line.split("=", 1)[1].strip()
+                # A .env value may be wrapped in quotes — strip a matching pair
+                # so the DSN isn't passed with literal surrounding quotes.
+                if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+                    val = val[1:-1]
+                os.environ["POSTGRES_URL"] = val
                 return
     except OSError:
         pass
@@ -96,12 +101,17 @@ async def claim_next_issue(
     claimed row, or None if the lane is busy / nothing ready."""
     async with conn.transaction():
         await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", "multica-board-runner")
-        # Refuse to start new work while an issue is already in flight.
+        # Refuse to start new work while an issue is already in flight — this is
+        # the SINGLE-LANE guard, and it holds for `--issue N` too (targeting a
+        # specific item must not open a second concurrent lane). The one
+        # exception is re-targeting the item that is itself already in_progress.
         busy = await conn.fetchval(
-            "SELECT count(*) FROM issue WHERE workspace_id=$1::uuid AND status='in_progress'",
-            identity["workspace_id"],
+            """SELECT count(*) FROM issue
+                WHERE workspace_id=$1::uuid AND status='in_progress'
+                  AND ($2::int IS NULL OR number <> $2)""",
+            identity["workspace_id"], issue_number,
         )
-        if busy and issue_number is None:
+        if busy:
             return None
         if issue_number is not None:
             row = await conn.fetchrow(
@@ -165,13 +175,31 @@ async def run_one(*, issue_number: int | None = None) -> dict:
 
     issue_dict = {"number": issue["number"], "title": issue["title"], "body": build_issue_body(issue)}
     logger.info("board runner: implementing #%s %r", issue["number"], issue["title"][:60])
-    # Blocking Omnigent run off the event loop so nothing else stalls.
-    result = await asyncio.get_running_loop().run_in_executor(
-        None, lambda: execute_issue_dict(issue_dict))
+    # The issue is now committed `in_progress`. Anything that raises before the
+    # final status write would strand it there forever (the single-lane guard
+    # would then wedge the whole board). Catch every failure and turn it into a
+    # blocked result so report_result always writes a terminal status.
+    try:
+        # Blocking Omnigent run off the event loop so nothing else stalls.
+        result = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: execute_issue_dict(issue_dict))
+    except Exception as exc:  # noqa: BLE001
+        from omnigent_issue_executor import OmnigentResult
+        logger.exception("board runner: #%s raised", issue["number"])
+        result = OmnigentResult(False, "error", f"runner exception: {exc}")
 
-    async with pool.acquire() as conn:
-        identity = await ensure_executor_identity(conn)
-        await report_result(conn, identity, issue, result)
+    try:
+        async with pool.acquire() as conn:
+            identity = await ensure_executor_identity(conn)
+            await report_result(conn, identity, issue, result)
+    except Exception:  # noqa: BLE001 - last resort: don't leave it in_progress
+        logger.exception("board runner: could not write final status for #%s", issue["number"])
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE issue SET status='blocked', updated_at=now() WHERE id=$1::uuid", issue["id"])
+        except Exception:  # noqa: BLE001
+            logger.error("board runner: #%s left in_progress — Multica unreachable", issue["number"])
     return {
         "status": "done" if result.merged else ("in_review" if result.ok else "blocked"),
         "issue": issue["number"], "stage": result.stage, "pr": result.pr_url,

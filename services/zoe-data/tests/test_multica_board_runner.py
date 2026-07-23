@@ -76,3 +76,49 @@ def test_report_result_maps_block_to_blocked(monkeypatch):
 
 async def _noop():
     return None
+
+
+def test_ensure_postgres_url_strips_surrounding_quotes(monkeypatch, tmp_path):
+    monkeypatch.delenv("POSTGRES_URL", raising=False)
+    monkeypatch.delenv("MULTICA_DATABASE_URL", raising=False)
+    envf = tmp_path / ".env"
+    envf.write_text('FOO=bar\nPOSTGRES_URL="postgresql://u:p@h:5432/zoe"\n')
+    monkeypatch.setenv("ZOE_ENV_FILE", str(envf))
+    r._ensure_postgres_url()
+    assert r.os.environ["POSTGRES_URL"] == "postgresql://u:p@h:5432/zoe"
+
+
+def test_run_one_turns_execute_exception_into_blocked(monkeypatch):
+    monkeypatch.setattr(r, "kill_switch_present", lambda: False)
+    monkeypatch.setattr(r, "omnigent_executor_enabled", lambda: True)
+
+    issue = _Rec(id="i1", number=7, title="t", description="d", acceptance_criteria=[])
+
+    class FakeConn:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+
+    class FakePool:
+        def acquire(self): return FakeConn()
+
+    async def fake_pool(): return FakePool()
+    monkeypatch.setattr(r, "get_pool", fake_pool)
+    async def fake_ident(conn): return {"workspace_id": "w", "agent_id": "a"}
+    monkeypatch.setattr(r, "ensure_executor_identity", fake_ident)
+    async def fake_claim(conn, identity, *, issue_number=None): return issue
+    monkeypatch.setattr(r, "claim_next_issue", fake_claim)
+
+    def boom(_d): raise RuntimeError("gate blew up")
+    monkeypatch.setattr(r, "execute_issue_dict", boom)
+
+    reported = {}
+    async def fake_report(conn, identity, iss, result):
+        reported["status"] = "done" if result.merged else ("in_review" if result.ok else "blocked")
+        reported["stage"] = result.stage
+    monkeypatch.setattr(r, "report_result", fake_report)
+
+    import asyncio
+    out = asyncio.run(r.run_one())
+    # the issue must end blocked, never stranded in_progress
+    assert reported["status"] == "blocked" and reported["stage"] == "error"
+    assert out["status"] == "blocked"
