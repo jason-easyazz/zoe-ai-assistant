@@ -27,7 +27,7 @@ importScripts('/workbox/workbox-sw.js');
 //  same-origin, so the generic script/style routes below already cache them on
 //  first use, and precaching ~2 MB of libraries would re-download the lot on
 //  every future SW_VERSION bump.)
-const SW_VERSION = '4.72.1'; // speaker picker: modal capped to the 720px stage so the grid scrolls internally + Cancel stays visible (roster grew to 17 with the AirPlay receivers) + panel's own output badged "This device" with its room + hoisted first (4.72.1: self tile name no longer over-truncated by the badge — badge is on a different row); typed speaker picker: server-resolved device kind/label + sign-in fails closed + calendar metadata/escaping + chat.html XSS escaping + cross-origin script/CSS left unrouted + CDN libraries vendored to /lib/
+const SW_VERSION = '4.73.0'; // presence-aware idle sleep: a toggle ON in the panel's own room blocks the screensaver (GET /api/panels/{id}/sleep-gate), raced in parallel with the music check; speaker picker capped to the 720px stage (grid scrolls, Cancel pinned) + panel's own output badged "This device" with its room + hoisted first; server-resolved device kind/label; sign-in fails closed; calendar metadata/escaping; chat.html XSS escaping; cross-origin script/CSS left unrouted; CDN libraries vendored to /lib/
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
