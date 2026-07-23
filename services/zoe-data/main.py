@@ -38,6 +38,7 @@ from routers import (
     pi_intent_lab_router,
 )
 from routers.dashboard import router as dashboard_router
+from routers.board import router as board_router
 from routers.stubs import router as stubs_router
 from routers.push import router as push_router
 from routers.proactive import router as proactive_router
@@ -2115,6 +2116,7 @@ app.include_router(voice_settings_router)
 app.include_router(face_id_router)
 app.include_router(user_profile_router)
 app.include_router(dashboard_router)
+app.include_router(board_router)
 app.include_router(stubs_router)
 app.include_router(push_router)
 app.include_router(proactive_router)
