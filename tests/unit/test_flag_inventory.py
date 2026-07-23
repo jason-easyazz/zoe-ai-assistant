@@ -9,6 +9,8 @@ determinism of the rendered markdown.
 from __future__ import annotations
 
 import importlib.util
+import json
+import re
 import sys
 from pathlib import Path
 
@@ -16,7 +18,8 @@ import pytest
 
 pytestmark = pytest.mark.ci_safe
 
-_TOOL = Path(__file__).resolve().parents[2] / "tools" / "audit" / "flag_inventory.py"
+_REPO = Path(__file__).resolve().parents[2]
+_TOOL = _REPO / "tools" / "audit" / "flag_inventory.py"
 _spec = importlib.util.spec_from_file_location("flag_inventory", _TOOL)
 flag_inventory = importlib.util.module_from_spec(_spec)
 sys.modules["flag_inventory"] = flag_inventory
@@ -106,3 +109,26 @@ def test_markdown_deterministic_and_dateless_body(fixture_repo: Path) -> None:
     # date only differs in header, table body identical
     other = flag_inventory.render_markdown(data, "2027-12-31")
     assert other.split("## Production flags", 1)[1] == body
+
+
+def test_committed_inventory_matches_generator_output() -> None:
+    """Drift guard: the committed generated files match a fresh generator run.
+
+    The generator is deterministic by construction (sorted output; the only
+    date lives in the markdown header), so a byte-exact comparison is cheap
+    and honest: render with the date already committed in the markdown, then
+    require both files to match exactly. On failure, regenerate and commit:
+    ``python3 tools/audit/flag_inventory.py``.
+    """
+    md_path = _REPO / "docs" / "knowledge" / "flag-inventory.md"
+    json_path = _REPO / "docs" / "knowledge" / "flag-inventory.json"
+    committed_md = md_path.read_text(encoding="utf-8")
+    committed_json = json_path.read_text(encoding="utf-8")
+
+    m = re.search(r"^Last generated: (\d{4}-\d{2}-\d{2})\.", committed_md, re.MULTILINE)
+    assert m, "committed markdown is missing its 'Last generated: YYYY-MM-DD.' line"
+
+    data = flag_inventory.scan_repo(_REPO)
+    regen_hint = "stale inventory — rerun: python3 tools/audit/flag_inventory.py"
+    assert flag_inventory.render_markdown(data, m.group(1)) == committed_md, regen_hint
+    assert json.dumps(data, indent=2, sort_keys=True) + "\n" == committed_json, regen_hint
