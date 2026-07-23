@@ -3524,3 +3524,37 @@ def _async_return(value):
     async def _coro(*_a, **_k):
         return value
     return _coro()
+
+
+def _mixed_thread(tid):
+    # human OPENED it; Greptile replied later — must count as a HUMAN thread.
+    return {"id": tid, "isResolved": False, "comments": {"nodes": [
+        {"author": {"login": "jason-easyazz"}},
+        {"author": {"login": "greptile-apps[bot]"}},
+    ]}}
+
+
+def test_thread_classified_by_opener_not_any_commenter():
+    assert greploop_guard._thread_is_greptile(_mixed_thread("m")) is False
+    assert greploop_guard._thread_is_greptile(_greptile_thread("g")) is True
+
+
+def test_resolve_refuses_when_human_opened_thread_has_greptile_reply(monkeypatch):
+    monkeypatch.setattr(greploop_guard, "_gh_pr_review_threads",
+                        lambda *a, **k: [_greptile_thread("g"), _mixed_thread("m")])
+    calls = []
+    monkeypatch.setattr(greploop_guard, "_gh_resolve_thread", lambda tid: calls.append(tid) or True)
+    out = greploop_guard._resolve_greptile_threads(66)
+    assert out["ok"] is False and out["reason"] == "HUMAN_THREADS_OPEN"
+    assert calls == [], "must resolve nothing when a human-opened thread is unresolved"
+
+
+def test_resolve_handles_thread_without_id(monkeypatch):
+    no_id = {"isResolved": False, "comments": {"nodes": [{"author": {"login": "greptile"}}]}}
+    monkeypatch.setattr(greploop_guard, "_gh_pr_review_threads",
+                        lambda *a, **k: [_greptile_thread("g"), no_id])
+    monkeypatch.setattr(greploop_guard, "_gh_resolve_thread", lambda tid: True)
+    out = greploop_guard._resolve_greptile_threads(66)
+    assert out["resolved"] == ["g"]
+    assert out["missing_id"] == 1 and out["ok"] is False
+    assert "None" not in out["failed"], "a missing id must not poison failed with 'None'"

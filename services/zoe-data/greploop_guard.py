@@ -1541,10 +1541,15 @@ def _update_branch_cooldown_ok(state: dict[str, Any], *, now: float) -> bool:
 def _thread_is_greptile(thread: dict[str, Any]) -> bool:
     """A thread authored by Greptile (any of its comments) — mirrors the
     detection in _gh_thread_counts so the two never disagree."""
-    for comment in ((thread.get("comments") or {}).get("nodes") or []):
-        if "greptile" in str(((comment.get("author") or {}).get("login") or "")).lower():
-            return True
-    return False
+    comments = ((thread.get("comments") or {}).get("nodes") or [])
+    if not comments:
+        return False
+    # Classify by the OPENER (first/oldest comment), NOT "any comment". A human
+    # can open a thread that Greptile later replies to — that is a HUMAN thread
+    # and must never be auto-resolved. Safety-critical: used only by the resolve
+    # path, so a mixed thread counts as human (fail-safe).
+    opener_login = str(((comments[0].get("author") or {}).get("login") or "")).lower()
+    return "greptile" in opener_login
 
 
 def _only_thread_resolution_pending(assessment: dict[str, Any]) -> bool:
@@ -1594,13 +1599,25 @@ def _resolve_greptile_threads(pr_number: int, *, repo: str = DEFAULT_REPO) -> di
         return {"ok": False, "reason": "HUMAN_THREADS_OPEN", "human_unresolved": len(human_unresolved)}
     resolved: list[str] = []
     failed: list[str] = []
+    missing_id = 0
     for thread in unresolved:
         tid = thread.get("id")
-        if tid and _gh_resolve_thread(str(tid)):
+        if not tid:
+            # A thread with no node id can't be resolved — count it distinctly
+            # (not as a "None" failure that poisons the result), and it keeps
+            # ok False so the merge stays blocked (safe: unresolved == blocked).
+            missing_id += 1
+            continue
+        if _gh_resolve_thread(str(tid)):
             resolved.append(str(tid))
         else:
             failed.append(str(tid))
-    return {"ok": not failed, "resolved": resolved, "failed": failed}
+    return {
+        "ok": not failed and missing_id == 0,
+        "resolved": resolved,
+        "failed": failed,
+        "missing_id": missing_id,
+    }
 
 
 async def merge_pr_when_ready(
@@ -1697,13 +1714,23 @@ async def merge_pr_when_ready(
                         "retry_after_seconds": 15,
                         "assessment": assessment,
                     }
-                if res.get("reason") == "HUMAN_THREADS_OPEN":
+                elif res.get("reason") == "HUMAN_THREADS_OPEN":
                     _record_guardrail(
                         pr_number,
                         f"NOT auto-resolving: {res['human_unresolved']} human review "
                         "thread(s) open — a person must address them",
                     )
-                # otherwise fall through to the normal block/update-branch path
+                else:
+                    # THREAD_READ_FAILED / partial resolve / missing ids — leave
+                    # a diagnostic trace instead of silently falling through, so
+                    # a stuck PR is explainable from the guardrail log.
+                    _record_guardrail(
+                        pr_number,
+                        "thread auto-resolve did not fully succeed: "
+                        f"reason={res.get('reason')} resolved={len(res.get('resolved') or [])} "
+                        f"failed={len(res.get('failed') or [])} missing_id={res.get('missing_id', 0)}",
+                    )
+                # fall through to the normal block/update-branch path
             # Autonomous close (step 1): if the PR is otherwise done and only
             # BEHIND base, bring it current instead of stranding it for a human.
             # Gated, cooldown-guarded, and only when BEHIND is the sole blocker.
