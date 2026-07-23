@@ -1,6 +1,4 @@
 """Tests for the Omnigent issue executor (S2). No network — REST/kick mocked."""
-import asyncio
-
 import pytest
 
 import omnigent_issue_executor as oie
@@ -11,13 +9,26 @@ pytestmark = pytest.mark.ci_safe
 def test_disabled_by_default(monkeypatch):
     monkeypatch.delenv("ZOE_USE_OMNIGENT_EXECUTOR", raising=False)
     assert oie.omnigent_executor_enabled() is False
-    out = asyncio.run(oie.execute_issue(1))
+    out = oie.execute_issue(1)
     assert out.ok is False and out.stage == "disabled"
 
 
-def test_pr_url_regex_matches_github_pr():
+def test_pr_url_regex_requires_prefix_and_rejects_bare_url():
     m = oie._PR_URL_RE.search("blah PR_URL=https://github.com/o/r/pull/42 done")
-    assert m and m.group(0) == "https://github.com/o/r/pull/42" and m.group(1) == "42"
+    assert m and m.group(1) == "https://github.com/o/r/pull/42" and m.group(2) == "42"
+    # a bare github PR url (e.g. a stray link in the issue body) must NOT match
+    assert oie._PR_URL_RE.search("see https://github.com/o/r/pull/99 for context") is None
+
+
+def test_session_id_validation_rejects_shell_metachars():
+    assert oie._SESSION_ID_RE.match("conv_abc123") is not None
+    for bad in ("conv_a;rm -rf", "conv_$(x)", "conv_`x`", "evil", "conv_a b"):
+        assert oie._SESSION_ID_RE.match(bad) is None
+
+
+def test_lazy_env_accessors_honour_runtime_setenv(monkeypatch):
+    monkeypatch.setenv("ZOE_OMNIGENT_URL", "http://example:9999")
+    assert oie._omnigent_url() == "http://example:9999"
 
 
 def test_implement_brief_marks_issue_as_untrusted_data():
@@ -41,5 +52,5 @@ def test_execute_reports_no_pr_when_omnigent_yields_nothing(monkeypatch):
     monkeypatch.setattr(oie, "_fetch_issue", lambda n: {"number": n, "title": "t", "body": "b"})
     monkeypatch.setattr(oie, "kick_omnigent", lambda issue: "sid123")
     monkeypatch.setattr(oie, "poll_for_pr_url", lambda sid, **k: None)
-    out = asyncio.run(oie.execute_issue(9))
+    out = oie.execute_issue(9)
     assert out.ok is False and out.stage == "no_pr" and out.session_id == "sid123"

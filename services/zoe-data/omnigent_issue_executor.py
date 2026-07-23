@@ -23,7 +23,6 @@ prints, not a nonce.
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
 import logging
 import os
@@ -42,10 +41,28 @@ from worktree_bootstrap import prepare_existing_pr_revision_worktree, remove_tas
 
 logger = logging.getLogger(__name__)
 
-OMNIGENT_URL = os.environ.get("ZOE_OMNIGENT_URL", "http://127.0.0.1:6767")
-OMNIGENT_AGENT_ID = os.environ.get("ZOE_OMNIGENT_AGENT_ID", "ag_057995d1517418e6839f51d340785dd6")
-OMNIGENT_CONTAINER = os.environ.get("ZOE_OMNIGENT_CONTAINER", "zoe-omnigent")
-_PR_URL_RE = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/pull/(\d+)")
+# Read env LAZILY (accessors, like pi_executor's _pi_*), so tests can
+# monkeypatch.setenv after import and runtime changes are honoured.
+def _omnigent_url() -> str:
+    return os.environ.get("ZOE_OMNIGENT_URL", "http://127.0.0.1:6767")
+
+
+def _omnigent_agent_id() -> str:
+    return os.environ.get("ZOE_OMNIGENT_AGENT_ID", "ag_057995d1517418e6839f51d340785dd6")
+
+
+def _omnigent_container() -> str:
+    return os.environ.get("ZOE_OMNIGENT_CONTAINER", "zoe-omnigent")
+
+
+# REQUIRE the explicit `PR_URL=` prefix the brief instructs the agent to print
+# (NOT a bare github PR url anywhere in the log): a stray PR link in the issue
+# body or tool output could otherwise be mistaken for the agent's PR — the same
+# reasoning pi_executor's _PR_URL_RE documents.
+_PR_URL_RE = re.compile(r"PR_URL=\s*(https://github\.com/[^/\s]+/[^/\s]+/pull/(\d+))")
+# A session id is used inside a `sh -c` string for the docker-exec kick, so it
+# must be a strict, shell-safe token (Omnigent ids are `conv_<hex>`).
+_SESSION_ID_RE = re.compile(r"^conv_[A-Za-z0-9]+$")
 
 
 def omnigent_executor_enabled() -> bool:
@@ -66,7 +83,7 @@ class OmnigentResult:
 def _api(method: str, path: str, body: dict | None = None, *, timeout: float = 15.0) -> dict:
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(
-        f"{OMNIGENT_URL}{path}", data=data, method=method,
+        f"{_omnigent_url()}{path}", data=data, method=method,
         headers={"content-type": "application/json"},
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -111,10 +128,14 @@ def _implement_brief(issue: dict) -> str:
 def kick_omnigent(issue: dict) -> str:
     """Stage + kick an Omnigent implement session; return the session id."""
     session = _api("POST", "/v1/sessions", {
-        "agent_id": OMNIGENT_AGENT_ID,
+        "agent_id": _omnigent_agent_id(),
         "title": f"implement issue #{issue.get('number')}",
     })
     sid = str(session["id"])
+    # The sid is interpolated into a `sh -c` string below — refuse anything that
+    # is not a strict conv_<alnum> token so a hostile/malformed id can't inject.
+    if not _SESSION_ID_RE.match(sid):
+        raise RuntimeError(f"refusing unsafe Omnigent session id: {sid!r}")
     _api("POST", f"/v1/sessions/{sid}/comments", {
         "path": "AGENTS.md", "body": _implement_brief(issue),
         "start_index": 0, "end_index": 0,
@@ -125,9 +146,12 @@ def kick_omnigent(issue: dict) -> str:
         "Read your session comments for the implement task and do it yourself, "
         "end to end. Open ONE PR and print PR_URL=<url>, then STOP."
     )
+    # sid is validated (^conv_[A-Za-z0-9]+$); the url comes from our own env and
+    # the kick text is JSON-quoted, so the sh -c string has no injection surface.
+    server = _omnigent_url()
     subprocess.run(
-        ["docker", "exec", "-d", OMNIGENT_CONTAINER, "sh", "-c",
-         f"cd /workspace && omnigent run --server {OMNIGENT_URL} --harness claude-sdk "
+        ["docker", "exec", "-d", _omnigent_container(), "sh", "-c",
+         f"cd /workspace && omnigent run --server {server} --harness claude-sdk "
          f"-r {sid} -p {json.dumps(kick)} --no-log > /tmp/omni-impl-{sid}.log 2>&1"],
         check=False, timeout=30,
     )
@@ -140,26 +164,32 @@ def _session_text(sid: str) -> str:
 
 
 def poll_for_pr_url(sid: str, *, timeout_s: float, poll_s: float = 15.0) -> str | None:
-    """Poll the Omnigent session until a GitHub PR URL appears (or timeout)."""
+    """Poll the Omnigent session until the agent's `PR_URL=<url>` appears (or
+    timeout). Transient REST/docker errors during the (up to 30-minute) poll are
+    logged and retried — a blip must not abort a long, expensive implement run.
+    Returns the LAST PR_URL seen (the agent's final declaration)."""
     deadline = time.time() + timeout_s
     while time.time() < deadline:
-        blob = _session_text(sid)
-        m = _PR_URL_RE.search(blob)
-        if m:
-            return m.group(0)
-        # fatal harness errors surface in the kick log — fail fast
-        tail = subprocess.run(
-            ["docker", "exec", OMNIGENT_CONTAINER, "sh", "-c", f"tail -c 300 /tmp/omni-impl-{sid}.log 2>/dev/null"],
-            capture_output=True, text=True, timeout=15,
-        ).stdout
-        if re.search(r"not logged in|usage credits|out of credit|invalid api key", tail, re.I):
-            logger.error("omnigent harness fatal: %s", tail.strip())
-            return None
+        try:
+            blob = _session_text(sid)
+            matches = _PR_URL_RE.findall(blob)
+            if matches:
+                return matches[-1][0]  # group(1): the full url of the last PR_URL=
+            tail = subprocess.run(
+                ["docker", "exec", _omnigent_container(), "sh", "-c",
+                 f"tail -c 300 /tmp/omni-impl-{sid}.log 2>/dev/null"],
+                capture_output=True, text=True, timeout=15,
+            ).stdout
+            if re.search(r"not logged in|usage credits|out of credit|invalid api key", tail, re.I):
+                logger.error("omnigent harness fatal: %s", tail.strip())
+                return None
+        except Exception as exc:  # noqa: BLE001 - transient poll error, keep going
+            logger.warning("omnigent poll transient error (retrying): %s", exc)
         time.sleep(poll_s)
     return None
 
 
-async def execute_issue(issue_number: int, *, no_merge: bool = False) -> OmnigentResult:
+def execute_issue(issue_number: int, *, no_merge: bool = False) -> OmnigentResult:
     if not omnigent_executor_enabled():
         return OmnigentResult(False, "disabled", "ZOE_USE_OMNIGENT_EXECUTOR is off")
     try:
@@ -213,7 +243,7 @@ def _amain() -> int:
     parser.add_argument("--no-merge", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    result = asyncio.run(execute_issue(args.issue_number, no_merge=args.no_merge))
+    result = execute_issue(args.issue_number, no_merge=args.no_merge)
     print(json.dumps(result.__dict__, indent=2))
     return 0 if result.ok else 1
 
