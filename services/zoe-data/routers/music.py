@@ -115,7 +115,11 @@ _SPEAKER_MODEL_HINTS = (
     "sonos", "beam", "arc", "home mini", "nest mini", "nest audio",
     "homepod", "echo", "speaker", "soundbar", "one sl", "play:",
 )
-_DISPLAY_MODEL_HINTS = ("nest hub", "home hub", "hub max", "smart display", "display")
+# Only SPECIFIC smart-display models — never a bare "display". The display check
+# runs before the TV check, so a generic "display" substring would misclassify a
+# TV whose model happens to carry the word (e.g. "Samsung Smart Monitor M7
+# Display" or "Chromecast with Google TV Display") as a Nest-Hub-style display.
+_DISPLAY_MODEL_HINTS = ("nest hub", "home hub", "hub max", "smart display")
 _COMPUTER_MODEL_HINTS = ("macbook", "imac", "mac mini", "mac studio", "mac pro",
                          "laptop", "desktop", "surface", " pc")
 _TV_MODEL_HINTS = ("apple tv", "chromecast", "smart tv", "media renderer",

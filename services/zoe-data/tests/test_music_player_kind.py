@@ -116,6 +116,28 @@ def test_name_never_drives_classification():
     assert resolve_player_kind(misleading_tv)["kind"] == "tv"
 
 
+def test_display_word_in_a_tv_model_stays_tv():
+    """A TV whose model merely CONTAINS the word "display" must not be mistaken
+    for a Nest-Hub-style smart display (Greptile finding on PR #1516).
+
+    The display check runs before the TV check, so a bare "display" hint would
+    have swallowed these. Only specific smart-display models (nest hub, smart
+    display, …) may resolve to `display`.
+    """
+    monitor = _p("up_mon", "Lounge Screen", "universal_player", "player",
+                 "Samsung Smart Monitor M7 Display", "Samsung")
+    assert resolve_player_kind(monitor)["kind"] == "tv"
+
+    cc_tv = _p("cc_gtv", "Lounge", "chromecast", "player",
+               "Chromecast with Google TV Display", "Google Inc.")
+    assert resolve_player_kind(cc_tv)["kind"] == "tv"
+
+    # …and a genuine smart display still resolves to display.
+    nest = _p("cc_hub", "Kitchen Display", "chromecast", "player",
+              "Google Nest Hub", "Google Inc.")
+    assert resolve_player_kind(nest)["kind"] == "display"
+
+
 def test_missing_device_info_degrades_safely():
     """A player with no device_info must still return a valid kind + label."""
     bare = {"player_id": "x", "name": "Mystery", "provider": "sonos", "type": "player"}
