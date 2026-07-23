@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-410 flags; 410 not documented in `.env.example`.
+414 flags; 414 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -51,6 +51,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_BASE_URL` | `'http://localhost:8000'`, `'http://zoe.local'`, `'https://192.168.1.218'` | no | NO | `services/zoe-auth/oidc/startup.py`<br>`services/zoe-data/routers/panel_provision.py`<br>`services/zoe-data/routers/system.py` |
 | `ZOE_BENCHMARK_OUTPUT` | `dynamic` | no | NO | `scripts/utilities/gemma4_trial_benchmark.py` |
 | `ZOE_BENCH_REPEATS` | `'3'` | no | NO | `services/zoe-core/bench/pi_brain_latency.py` |
+| `ZOE_BOARD_POLL_S` | `'60'` | no | NO | `services/zoe-data/multica_board_runner.py` |
 | `ZOE_BOARD_REVIEW_AUTOPILOT_ENABLED` | `'false'` | no | NO | `services/zoe-data/multica_autopilot_sync.py` |
 | `ZOE_BRAIN_BACKEND` | `'core'` | no | NO | `services/zoe-data/brain_dispatch.py` |
 | `ZOE_BRAIN_PREWARM_ON_WAKE` | `'1'`, `True` | yes | NO | `services/zoe-data/routers/voice_livekit.py`<br>`services/zoe-data/routers/voice_tts.py` |
@@ -120,7 +121,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_ENABLE_OPENCLAW_BROWSER_FALLBACK` | `'false'` | no | NO | `services/zoe-data/browser_broker.py` |
 | `ZOE_ENABLE_OPENCLAW_EXECUTION` | `'false'` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_ENGINEERING_MODE` | `-` | no | NO | `services/zoe-data/executors/kanban_adapter.py` |
-| `ZOE_ENV_FILE` | `''` | no | NO | `scripts/maintenance/verify_executor_queue_backend.py` |
+| `ZOE_ENV_FILE` | `''`, `'/home/zoe/assistant/services/zoe-data/.env'` | no | NO | `scripts/maintenance/verify_executor_queue_backend.py`<br>`services/zoe-data/multica_board_runner.py` |
 | `ZOE_ESPEAK_PITCH` | `dynamic` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_ESPEAK_SPEED` | `dynamic` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_ESPEAK_VOLUME` | `dynamic` | no | NO | `services/zoe-data/routers/voice_tts.py` |
@@ -248,6 +249,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_MULTICA_AUTO_ADMIT` | `'false'` | no | NO | `services/zoe-data/main.py` |
 | `ZOE_MULTICA_BLOCKED_RESUME_BUDGET` | `4` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_MULTICA_DISPATCH_PAUSE_FILE` | `''` | no | NO | `services/zoe-data/multica_dispatch_control.py` |
+| `ZOE_MULTICA_KILL_SWITCH` | `dynamic` | no | NO | `services/zoe-data/multica_board_runner.py` |
 | `ZOE_MULTICA_NATIVE_COMMENT_GUARD` | `-` | no | NO | `scripts/maintenance/multica_health_report.py` |
 | `ZOE_MULTICA_PAUSED_POLL_S` | `300.0` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_MULTICA_POLL_DISPATCH_LIMIT` | `1` | yes | NO | `services/zoe-data/main.py` |
@@ -271,6 +273,8 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_MUSIC_SETUP_TTL_S` | `'900'` | no | NO | `services/zoe-data/music_setup.py` |
 | `ZOE_NVM_NODE_BIN` | `-` | no | NO | `services/zoe-data/pi_intent_classifier.py` |
 | `ZOE_OMNIGENT_AGENT_ID` | `'ag_057995d1517418e6839f51d340785dd6'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
+| `ZOE_OMNIGENT_CLOSE_POLL_S` | `'60'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
+| `ZOE_OMNIGENT_CLOSE_TIMEOUT_S` | `'2400'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
 | `ZOE_OMNIGENT_CONTAINER` | `'zoe-omnigent'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
 | `ZOE_OMNIGENT_IMPLEMENT_TIMEOUT_S` | `'1800'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
 | `ZOE_OMNIGENT_URL` | `'http://127.0.0.1:6767'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
