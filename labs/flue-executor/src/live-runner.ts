@@ -33,17 +33,28 @@ import { tick, type ExecutorState } from './executor.ts';
  * the row is created by the enqueue side / the verify script, never guessed. */
 export async function resolveRuntimeId(pool: pg.Pool, runtimeName: string): Promise<string> {
   const res = await pool.query(
-    'SELECT id::text AS id FROM agent_runtime WHERE name = $1 ORDER BY created_at LIMIT 1',
+    'SELECT id::text AS id FROM agent_runtime WHERE name = $1 ORDER BY created_at',
     [runtimeName],
   );
-  const id = res.rows[0]?.id as string | undefined;
-  if (!id) {
+  if (res.rows.length === 0) {
     throw new Error(
       `no agent_runtime named "${runtimeName}" in the live database. Register it first ` +
         '(scripts/maintenance/verify_executor_queue_backend.py registers it), then restart.',
     );
   }
-  return id;
+  if (res.rows.length > 1) {
+    // Ambiguous: the enqueue side (executor_queue_backend.py) and this runner
+    // could bind to DIFFERENT rows and split-brain. A duplicate is a
+    // misconfiguration (re-registration / schema reset) — fail loudly rather
+    // than silently pick the oldest and claim a queue nobody enqueues into.
+    const ids = res.rows.map((r) => r.id as string).join(', ');
+    throw new Error(
+      `${res.rows.length} agent_runtime rows named "${runtimeName}" (${ids}). ` +
+        'Deduplicate to exactly one before running the executor — the enqueue side ' +
+        'and this runner must bind to the same runtime.',
+    );
+  }
+  return res.rows[0].id as string;
 }
 
 /** What the runner WOULD claim next, without mutating anything (dry mode). */
@@ -84,8 +95,19 @@ async function main(): Promise<void> {
     console.log('[live] DRY dispatch — will report what it WOULD claim, mutating nothing.');
   }
 
+  // Graceful shutdown: `systemctl stop` sends SIGTERM. Let the in-flight tick
+  // finish (ticks are awaited sequentially), then break and drain the pool so
+  // no task is abandoned mid-transition and no server-side connection leaks.
+  let stopping = false;
+  const onSignal = (sig: string) => {
+    if (!stopping) console.log(`[live] ${sig} received — finishing the current tick, then draining.`);
+    stopping = true;
+  };
+  process.on('SIGTERM', () => onSignal('SIGTERM'));
+  process.on('SIGINT', () => onSignal('SIGINT'));
+
   let pausedLogged = false;
-  for (let i = 0; i < maxTicks; i++) {
+  for (let i = 0; i < maxTicks && !stopping; i++) {
     try {
       if (killSwitchPresent(cfg)) {
         if (!pausedLogged) {
