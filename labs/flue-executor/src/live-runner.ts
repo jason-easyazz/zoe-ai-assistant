@@ -26,6 +26,7 @@ import { pathToFileURL } from 'node:url';
 import type pg from 'pg';
 import { loadConfig, type ExecutorConfig } from './config.ts';
 import { makePool } from './labdb.ts';
+import { setActivityWorkspaceId } from './queue.ts';
 import { tick, type ExecutorState } from './executor.ts';
 
 /** Resolve the shared runtime identity by NAME, agreeing with the enqueue side
@@ -57,6 +58,20 @@ export async function resolveRuntimeId(pool: pg.Pool, runtimeName: string): Prom
   return res.rows[0].id as string;
 }
 
+/** The runtime's OWN workspace — used to stamp activity_log rows. Live
+ * Multica enforces `activity_log.workspace_id -> workspace(id)` with a FK, so
+ * this must be a real workspace, not the lab constant. Resolved from the same
+ * runtime row we claim under, so the two can never disagree. */
+export async function resolveWorkspaceId(pool: pg.Pool, runtimeId: string): Promise<string> {
+  const res = await pool.query(
+    'SELECT workspace_id::text AS id FROM agent_runtime WHERE id = $1',
+    [runtimeId],
+  );
+  const id = res.rows[0]?.id as string | undefined;
+  if (!id) throw new Error(`agent_runtime ${runtimeId} has no workspace_id`);
+  return id;
+}
+
 /** What the runner WOULD claim next, without mutating anything (dry mode). */
 async function previewNextClaim(pool: pg.Pool, runtimeId: string): Promise<string | null> {
   const res = await pool.query(
@@ -82,6 +97,9 @@ async function main(): Promise<void> {
   }
   const pool = makePool(cfg);
   cfg.runtimeId = await resolveRuntimeId(pool, cfg.runtimeName);
+  // MUST happen before any claim: live activity_log has a workspace FK, so the
+  // lab-constant default would roll back every claim transaction.
+  setActivityWorkspaceId(await resolveWorkspaceId(pool, cfg.runtimeId));
   const state: ExecutorState = { trackedPids: new Set() };
 
   const ticksArg = process.argv.indexOf('--ticks');
