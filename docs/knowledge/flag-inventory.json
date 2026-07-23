@@ -1041,6 +1041,7 @@
         ],
         "in_env_example": false,
         "readers": [
+          "scripts/maintenance/retire_hermes_openclaw_board.py",
           "scripts/maintenance/verify_executor_queue_backend.py",
           "services/zoe-data/multica_board_runner.py"
         ],
@@ -1376,7 +1377,7 @@
       },
       "ZOE_KANBAN_BACKEND": {
         "defaults": [
-          "'hermes'"
+          "'executor'"
         ],
         "in_env_example": false,
         "readers": [
@@ -1390,8 +1391,7 @@
         ],
         "in_env_example": false,
         "readers": [
-          "services/zoe-data/executors/kanban_adapter.py",
-          "services/zoe-data/worktree_bootstrap.py"
+          "services/zoe-data/executors/kanban_adapter.py"
         ],
         "typed_env": false
       },
@@ -1412,16 +1412,6 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/executors/kanban_adapter.py"
-        ],
-        "typed_env": false
-      },
-      "ZOE_KANBAN_DB_PATH": {
-        "defaults": [
-          "''"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "services/zoe-data/worktree_bootstrap.py"
         ],
         "typed_env": false
       },
@@ -3999,17 +3989,6 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/voice_greeting.py"
-        ],
-        "typed_env": false
-      },
-      "ZOE_VOICE_HERMES_TIMEOUT_S": {
-        "defaults": [
-          "'45'",
-          "dynamic"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "services/zoe-data/routers/voice_tts.py"
         ],
         "typed_env": false
       },
