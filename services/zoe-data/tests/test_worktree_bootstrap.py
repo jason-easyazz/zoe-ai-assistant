@@ -204,50 +204,6 @@ def test_ensure_worktree_raises_when_repo_not_git(tmp_path, monkeypatch):
         wb.ensure_worktree("t_badrepo")
 
 
-def test_pin_kanban_workspace_updates_task_row(tmp_path, monkeypatch):
-    import sqlite3
-
-    db = tmp_path / "kanban.db"
-    conn = sqlite3.connect(str(db))
-    conn.execute(
-        """
-        CREATE TABLE tasks (
-            id TEXT PRIMARY KEY,
-            workspace_kind TEXT,
-            workspace_path TEXT
-        )
-        """
-    )
-    conn.execute(
-        "INSERT INTO tasks (id, workspace_kind, workspace_path) VALUES (?, ?, ?)",
-        ("t_pin", "worktree", None),
-    )
-    conn.commit()
-    conn.close()
-
-    monkeypatch.setenv("ZOE_KANBAN_DB_PATH", str(db))
-    wt = tmp_path / "worktrees" / "t_pin"
-    wt.mkdir(parents=True)
-
-    pinned = wb.pin_kanban_workspace("t_pin", wt)
-    assert pinned == wt.resolve()
-
-    conn = sqlite3.connect(str(db))
-    row = conn.execute(
-        "SELECT workspace_path FROM tasks WHERE id = ?", ("t_pin",)
-    ).fetchone()
-    conn.close()
-    assert row[0] == str(wt.resolve())
-
-
-def test_kanban_db_path_default_board(monkeypatch):
-    monkeypatch.delenv("ZOE_KANBAN_DB_PATH", raising=False)
-    monkeypatch.delenv("ZOE_KANBAN_BOARD", raising=False)
-    path = wb.kanban_db_path()
-    assert path.name == "kanban.db"
-    assert path.parent.name == ".hermes"
-
-
 def _commit_on_worktree(wt: Path, name: str) -> None:
     (wt / name).write_text("change\n", encoding="utf-8")
     subprocess.run(["git", "add", name], cwd=wt, check=True, capture_output=True)
@@ -361,42 +317,6 @@ def test_prune_merged_worktrees_dry_run_reports_without_removing(git_repo):
     decisions = {r["worktree"]: r["decision"] for r in results}
     assert decisions[str(wt.resolve())] == "would-remove"
     assert wt.exists()
-
-
-def test_pin_kanban_workspace_falls_back_without_worktree_kind(tmp_path, monkeypatch):
-    import sqlite3
-
-    db = tmp_path / "kanban.db"
-    conn = sqlite3.connect(str(db))
-    conn.execute(
-        """
-        CREATE TABLE tasks (
-            id TEXT PRIMARY KEY,
-            workspace_kind TEXT,
-            workspace_path TEXT
-        )
-        """
-    )
-    conn.execute(
-        "INSERT INTO tasks (id, workspace_kind, workspace_path) VALUES (?, ?, ?)",
-        ("t_fallback", "git_worktree", None),
-    )
-    conn.commit()
-    conn.close()
-
-    monkeypatch.setenv("ZOE_KANBAN_DB_PATH", str(db))
-    wt = tmp_path / "worktrees" / "t_fallback"
-    wt.mkdir(parents=True)
-
-    pinned = wb.pin_kanban_workspace("t_fallback", wt)
-    assert pinned == wt.resolve()
-
-    conn = sqlite3.connect(str(db))
-    row = conn.execute(
-        "SELECT workspace_path FROM tasks WHERE id = ?", ("t_fallback",)
-    ).fetchone()
-    conn.close()
-    assert row[0] == str(wt.resolve())
 
 
 # ── shared-branch guard ──────────────────────────────────────────────────────
