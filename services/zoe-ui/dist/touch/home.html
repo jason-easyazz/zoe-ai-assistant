@@ -881,6 +881,20 @@
   #pick button.sel{background:#fff;color:#0a0d14;font-weight:600}
   #pick .sep{width:1px;background:rgba(255,255,255,.14);margin:4px 4px}
   .tag{position:fixed;top:12px;left:14px;font-size:12px;color:rgba(255,255,255,.4);z-index:99}
+  /* Zoe's Work — autonomous board review view */
+  .wkf{position:absolute;top:104px;left:64px;right:64px;bottom:96px;overflow-y:auto;-webkit-overflow-scrolling:touch}
+  .wkbody{display:flex;flex-direction:column;gap:22px;padding-bottom:20px}
+  .wksec h4{font-size:14px;text-transform:uppercase;letter-spacing:.06em;color:rgba(255,255,255,.55);margin:0 0 10px}
+  .wkitem{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);border-radius:16px;padding:14px 18px;margin-bottom:10px}
+  .wkitem .wkt{font-size:19px;font-weight:500;display:flex;align-items:center;gap:10px}
+  .wkitem .wkm{color:rgba(255,255,255,.5);font-size:15px;margin-top:5px}
+  .wkpr{color:#8ab4ff;text-decoration:none}
+  .wkpr:active{opacity:.7}
+  .wkreason{color:#ff9db0;font-size:15px;margin-top:8px}
+  .wkdot{width:9px;height:9px;border-radius:50%;flex:none}
+  .wkdot.prog{background:#7b96ff}.wkdot.review{background:#ffbf5e}
+  .wkdot.block{background:#ff7a90}.wkdot.done{background:#66d6a3}
+  .wkempty{color:rgba(255,255,255,.5);font-size:16px;padding:20px 4px}
 </style>
 </head>
 <body>
@@ -966,6 +980,9 @@
   // full-screen answers
   var BULB='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.2 20h5.6"/><path d="M10 22.5h4"/><path d="M12 2.5a6.5 6.5 0 0 0-4.2 11.4c.8.7 1.2 1.4 1.2 2.6h6c0-1.2.4-1.9 1.2-2.6A6.5 6.5 0 0 0 12 2.5z"/></svg>';
   var FULL={
+    work:{home:true, bg:GROUND, canvas:false,
+      html:'<div class="chttl">Zoe’s Work</div><div class="chmeta" id="wkMeta"></div>'
+        +'<div class="wkf"><div id="wkBody" class="wkbody"><div class="wkempty">Loading…</div></div></div>'},
     home:{home:false, bg:DUSK, canvas:true,
       html:'<div class="hfull">'
         +'<div class="htemp" id="hTemp"><div class="n">—°</div><div class="c"></div></div>'
@@ -1170,6 +1187,7 @@
       if(id==='calendar')wireCalendar();
       if(id==='person')wireContacts();
       if(id==='settings')wireSettings();
+      if(id==='work')wireWork();
       if(id==='reminder')wireReminder();
       full.querySelectorAll('.sc[data-t], .rlt[data-l], .hdock .hpc.light').forEach(function(el){el.onclick=function(){el.classList.toggle('on');var rs=el.querySelector('.rs');if(rs)rs.textContent=el.classList.contains('on')?'On':'Off';};});
       full.querySelectorAll('.rchip').forEach(function(c){c.onclick=function(){full.querySelectorAll('.rchip').forEach(function(x){x.classList.remove('on')});c.classList.add('on');};});
@@ -1529,6 +1547,36 @@
   lgrid.addEventListener('click',function(e){var t=e.target.closest('.ltile');if(!t)return;lclose();var u=t.getAttribute('data-u');if(u){location.href=u;return;}
     show(t.dataset.id);});
   addEventListener('keydown',function(e){if(e.key==='Escape')lclose();});
+
+  // Zoe's Work — review surface for the autonomous board runner. Reads the
+  // read-only /api/board/summary and renders needs-feedback first.
+  function wireWork(){
+    var body=document.getElementById('wkBody'), meta=document.getElementById('wkMeta');
+    if(!body)return;
+    function safeUrl(u){return (typeof u==='string'&&/^https:\/\/github\.com\//.test(u))?u:null;}
+    function prLink(u){var s=safeUrl(u);return s?' · <a class="wkpr" href="'+esc(s)+'" target="_blank" rel="noopener">review PR ↗</a>':'';}
+    function itemHtml(it,cls,withReason){
+      var reason=(withReason&&it.reason)?'<div class="wkreason">⚠ '+esc(it.reason)+'</div>':'';
+      return '<div class="wkitem"><div class="wkt"><span class="wkdot '+cls+'"></span> '+esc(it.title)+'</div>'
+        +'<div class="wkm">#'+esc(it.number)+prLink(it.pr_url)+'</div>'+reason+'</div>';
+    }
+    function section(title,arr,cls,withReason){
+      if(!arr||!arr.length)return '';
+      return '<div class="wksec"><h4>'+esc(title)+' ('+arr.length+')</h4>'+arr.map(function(it){return itemHtml(it,cls,withReason);}).join('')+'</div>';
+    }
+    apiGet('/api/board/summary').then(function(d){
+      if(_cur!=='work')return;
+      if(!d||!d.ok){body.innerHTML='<div class="wkempty">Board unavailable — the runner or Multica may be down.</div>';if(meta)meta.textContent='';return;}
+      var c=d.counts||{};
+      if(meta)meta.textContent=(d.needs_attention?d.needs_attention+' need feedback · ':'')+(c.done||0)+' done · '+(c.todo||0)+' queued';
+      var h='';
+      h+=section('Needs your feedback',d.blocked,'block',true);
+      h+=section('In progress',d.in_progress,'prog',false);
+      h+=section('In review',d.in_review,'review',false);
+      h+=section('Recently shipped',d.recently_done,'done',false);
+      body.innerHTML=h||'<div class="wkempty">Nothing on the board yet.</div>';
+    }).catch(function(){if(_cur==='work')body.innerHTML='<div class="wkempty">Board unavailable.</div>';});
+  }
 
   // ---- live home data: real clock + weather + today's agenda (no placeholder data) ----
   var CAT={social:'var(--cat-personal)',health:'var(--cat-health)',work:'var(--cat-work)',family:'var(--cat-family)',personal:'var(--cat-personal)',
