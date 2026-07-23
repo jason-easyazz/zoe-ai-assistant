@@ -49,6 +49,20 @@ HEAD_STABILITY_WINDOW_SECONDS = int(os.environ.get("ZOE_PR_GUARD_HEAD_STABILITY_
 # for the same head before escalating to Hermes instead of looping forever.
 NO_FINDINGS_RETRIGGER_LIMIT = int(os.environ.get("ZOE_PR_GUARD_NO_FINDINGS_RETRIGGER_LIMIT", "3"))
 
+# Autonomous close (Phase 2 executor migration): when the ONLY thing keeping an
+# otherwise-clear PR from merging is a strict-mode BEHIND branch, self-heal with
+# `gh pr update-branch` instead of stranding the PR for a human. Safe — updating
+# a branch merges base into it and the merge STILL requires every gate afterward
+# (Greptile 5/5, threads resolved, CI green) — but it re-triggers CI + Greptile,
+# so it is cooldown-guarded and only fires when BEHIND is the sole blocker.
+# Default OFF: this file is load-bearing for every PR; the operator flips it on.
+AUTO_UPDATE_BRANCH = os.environ.get("ZOE_PR_GUARD_AUTO_UPDATE_BRANCH", "0").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+UPDATE_BRANCH_COOLDOWN_SECONDS = int(
+    os.environ.get("ZOE_PR_GUARD_UPDATE_BRANCH_COOLDOWN_SECONDS", "300")
+)
+
 
 def _env_flag(name: str, default: bool) -> bool:
     raw = os.environ.get(name)
@@ -1479,6 +1493,40 @@ async def assess_merge_readiness(
     }
 
 
+def _only_behind_blocks(assessment: dict[str, Any]) -> bool:
+    """True iff the SOLE reason the PR is not ready is a strict-mode BEHIND branch.
+
+    Requires the Greptile side to be fully clear (no confidence / unresolved-
+    thread / actionable-finding blockers) so update-branch never thrashes a
+    re-review that still has open work — only a genuinely done PR that just
+    needs to catch up to base.
+    """
+    blockers = set(assessment.get("blockers") or [])
+    gh = assessment.get("gh") or {}
+    return (
+        blockers == {"GH_NOT_MERGEABLE"}
+        and str(gh.get("mergeStateStatus") or "").upper() == "BEHIND"
+    )
+
+
+def _gh_update_branch(pr_number: int, *, repo: str = DEFAULT_REPO) -> dict[str, Any]:
+    """Bring a BEHIND PR branch up to date with base via `gh pr update-branch`.
+
+    Safe by construction: it merges base into the PR branch (never force, never
+    rebase-onto-main here); the merge still passes through every gate afterward.
+    Never runs on DIRTY (real conflicts) — `_only_behind_blocks` gates that out,
+    and a conflict makes update-branch fail loudly rather than guess.
+    """
+    proc = _run_gh(["pr", "update-branch", str(int(pr_number))], repo=repo)
+    ok = proc.returncode == 0
+    return {"ok": ok, "detail": (proc.stderr or proc.stdout or "").strip()}
+
+
+def _update_branch_cooldown_ok(state: dict[str, Any], *, now: float) -> bool:
+    last = float(state.get("last_update_branch_at") or 0)
+    return (now - last) >= UPDATE_BRANCH_COOLDOWN_SECONDS
+
+
 async def merge_pr_when_ready(
     pr_number: int,
     *,
@@ -1550,6 +1598,37 @@ async def merge_pr_when_ready(
             default_branch=default_branch,
         )
         if not assessment["ready"]:
+            # Autonomous close: if the PR is otherwise done and only BEHIND base,
+            # bring it current instead of stranding it for a human. Gated,
+            # cooldown-guarded, and only when BEHIND is the sole blocker.
+            now = time.time()
+            if (
+                AUTO_UPDATE_BRANCH
+                and _only_behind_blocks(assessment)
+                and _update_branch_cooldown_ok(state, now=now)
+            ):
+                upd = _gh_update_branch(pr_number, repo=repo)
+                state["last_update_branch_at"] = now
+                # terminal_state MUST mirror the returned state so a caller
+                # reading status.json and a caller reading the dict agree.
+                returned_state = "UPDATING_BRANCH" if upd["ok"] else "BLOCKED_MERGE_FAILED"
+                state["terminal_state"] = returned_state
+                if not upd["ok"]:
+                    state["merge_blockers"] = assessment["blockers"]
+                    state["merge_error"] = (upd.get("detail") or "")[:2000]
+                _write_json(pr_number, "status.json", state)
+                _record_guardrail(
+                    pr_number,
+                    f"branch BEHIND base — ran gh pr update-branch (ok={upd['ok']}): {upd['detail'][:200]}",
+                )
+                return {
+                    "ok": False,
+                    "state": returned_state,
+                    "blockers": assessment["blockers"],
+                    "update_branch": upd,
+                    "retry_after_seconds": UPDATE_BRANCH_COOLDOWN_SECONDS,
+                    "assessment": assessment,
+                }
             state["terminal_state"] = "BLOCKED_NOT_READY"
             state["merge_blockers"] = assessment["blockers"]
             _write_json(pr_number, "status.json", state)

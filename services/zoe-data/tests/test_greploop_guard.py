@@ -3259,3 +3259,150 @@ async def test_queue_reports_list_failure(monkeypatch, _mq_enabled):
     monkeypatch.setattr(greploop_guard, "_merge_queue_candidates", lambda **k: None)
     out = await greploop_guard.run_merge_queue()
     assert out["ok"] is False and out["action"] == "list_failed"
+
+
+# --- Autonomous close: update-branch on strict-mode BEHIND -------------------
+
+def test_only_behind_blocks_true_when_behind_is_sole_blocker():
+    assessment = {
+        "ready": False,
+        "blockers": ["GH_NOT_MERGEABLE"],
+        "gh": {"ok": False, "reason": "GH_NOT_MERGEABLE", "mergeStateStatus": "BEHIND"},
+    }
+    assert greploop_guard._only_behind_blocks(assessment) is True
+
+
+def test_only_behind_blocks_false_when_greptile_work_open():
+    # SAFETY: never update-branch (which thrashes a re-review) while a Greptile
+    # blocker is still open.
+    assessment = {
+        "ready": False,
+        "blockers": ["GREPTILE_UNRESOLVED_THREADS:2", "GH_NOT_MERGEABLE"],
+        "gh": {"mergeStateStatus": "BEHIND"},
+    }
+    assert greploop_guard._only_behind_blocks(assessment) is False
+
+
+def test_only_behind_blocks_false_when_dirty_not_behind():
+    # DIRTY is a real conflict — never auto-update.
+    assessment = {
+        "ready": False,
+        "blockers": ["GH_NOT_MERGEABLE"],
+        "gh": {"mergeStateStatus": "DIRTY"},
+    }
+    assert greploop_guard._only_behind_blocks(assessment) is False
+
+
+def _behind_assessment():
+    return {
+        "ready": False,
+        "blockers": ["GH_NOT_MERGEABLE"],
+        "greptile": {},
+        "gh": {"ok": False, "reason": "GH_NOT_MERGEABLE", "mergeStateStatus": "BEHIND"},
+    }
+
+
+async def _behind_status(**_kwargs):
+    return {"confidenceScore": 5, "reviewIsRunning": False, "headSha": "abc"}
+
+
+@pytest.mark.asyncio
+async def test_merge_auto_updates_branch_when_only_behind(tmp_path, monkeypatch):
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(greploop_guard, "AUTO_UPDATE_BRANCH", True)
+    monkeypatch.setattr("greptile_client.get_pr_status", _behind_status)
+
+    async def fake_assess(_pr, **_k):
+        return _behind_assessment()
+
+    monkeypatch.setattr(greploop_guard, "assess_merge_readiness", fake_assess)
+
+    calls: list[list[str]] = []
+
+    def fake_run_gh(args, *, repo=greploop_guard.DEFAULT_REPO, check=False):
+        calls.append(list(args))
+        return type("P", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(greploop_guard, "_run_gh", fake_run_gh)
+
+    out = await greploop_guard.merge_pr_when_ready(66)
+    assert out["state"] == "UPDATING_BRANCH"
+    assert ["pr", "update-branch", "66"] in calls
+    # It must NOT have attempted a merge.
+    assert not any(c[:2] == ["pr", "merge"] for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_merge_does_not_update_branch_when_flag_disabled(tmp_path, monkeypatch):
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(greploop_guard, "AUTO_UPDATE_BRANCH", False)
+    monkeypatch.setattr("greptile_client.get_pr_status", _behind_status)
+
+    async def fake_assess(_pr, **_k):
+        return _behind_assessment()
+
+    monkeypatch.setattr(greploop_guard, "assess_merge_readiness", fake_assess)
+    calls: list[list[str]] = []
+
+    def fake_run_gh(args, *, repo=greploop_guard.DEFAULT_REPO, check=False):
+        calls.append(list(args))
+        return type("P", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(greploop_guard, "_run_gh", fake_run_gh)
+    out = await greploop_guard.merge_pr_when_ready(66)
+    assert out["state"] == "BLOCKED_NOT_READY"
+    assert not any(c[:2] == ["pr", "update-branch"] for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_merge_never_updates_branch_while_greptile_open(tmp_path, monkeypatch):
+    # The safety property, exercised through the real merge path.
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(greploop_guard, "AUTO_UPDATE_BRANCH", True)
+    monkeypatch.setattr("greptile_client.get_pr_status", _behind_status)
+
+    async def fake_assess(_pr, **_k):
+        return {
+            "ready": False,
+            "blockers": ["GREPTILE_UNRESOLVED_THREADS:1", "GH_NOT_MERGEABLE"],
+            "greptile": {},
+            "gh": {"mergeStateStatus": "BEHIND"},
+        }
+
+    monkeypatch.setattr(greploop_guard, "assess_merge_readiness", fake_assess)
+    calls: list[list[str]] = []
+
+    def fake_run_gh(args, *, repo=greploop_guard.DEFAULT_REPO, check=False):
+        calls.append(list(args))
+        return type("P", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(greploop_guard, "_run_gh", fake_run_gh)
+    out = await greploop_guard.merge_pr_when_ready(66)
+    assert out["state"] == "BLOCKED_NOT_READY"
+    assert not any(c[:2] == ["pr", "update-branch"] for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_update_branch_failure_state_is_consistent(tmp_path, monkeypatch):
+    # When update-branch fails, the returned state and the persisted
+    # terminal_state must agree, and merge_blockers must be populated.
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(greploop_guard, "AUTO_UPDATE_BRANCH", True)
+    monkeypatch.setattr("greptile_client.get_pr_status", _behind_status)
+
+    async def fake_assess(_pr, **_k):
+        return _behind_assessment()
+
+    monkeypatch.setattr(greploop_guard, "assess_merge_readiness", fake_assess)
+
+    def fake_run_gh(args, *, repo=greploop_guard.DEFAULT_REPO, check=False):
+        if args[:2] == ["pr", "update-branch"]:
+            return type("P", (), {"returncode": 1, "stdout": "", "stderr": "merge conflict"})()
+        return type("P", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(greploop_guard, "_run_gh", fake_run_gh)
+    out = await greploop_guard.merge_pr_when_ready(66)
+    assert out["state"] == "BLOCKED_MERGE_FAILED"
+    persisted = greploop_guard._load_status(66)
+    assert persisted.get("terminal_state") == "BLOCKED_MERGE_FAILED"
+    assert persisted.get("merge_blockers") == ["GH_NOT_MERGEABLE"]
