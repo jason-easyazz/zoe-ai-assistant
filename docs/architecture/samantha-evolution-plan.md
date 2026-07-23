@@ -378,7 +378,14 @@ regression, ever (replay harness is the enforcement).
   data message per sentence with `seq`/`final`, clients queue and play in order, barge-in
   clears the queue, flag-off path byte-identical). NOT yet DONE: the DoD needs the lab
   flip + first-audio measured at or below the `/ws/voice/` lane on the same utterance,
-  with the replay gate green.
+  with the replay gate green. **Close-out attempt 2026-07-23 (board #6089) — BLOCKED at
+  the RAM gate, flag stays OFF:** focused unit gate green
+  (`services/zoe-data/tests/test_livekit_stream_tts.py`, 7 passed), but the mandatory
+  replay gate under `flock /tmp/zoe-voice-harness.lock` wrote
+  `voice_regression_last.json` `status=skip` (MemAvailable 133 MB < the 1500 MB OOM
+  guard) — and a skip is NOT a pass, so prod-enabling `ZOE_LIVEKIT_STREAM_TTS` would
+  have violated this task's own gate. Re-run the flip in an idle window with ≥1.5 GB
+  MemAvailable (unblocked by / coordinate with W3.3 RAM reclaim).
 - [~] **W1.4** live measurement session (ADR M1/M3/M4) — PARTIAL: M1 barge-in quality verified
   on real voice (#1081); M3 end-to-end latency + M4 loaded-RAM numbers still unmeasured.
   Bars (from the retired #1056 plan's A3 gate): barge time-to-stop < ~300 ms over 10
