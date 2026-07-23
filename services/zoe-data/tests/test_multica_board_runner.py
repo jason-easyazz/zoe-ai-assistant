@@ -78,6 +78,87 @@ async def _noop():
     return None
 
 
+# ---- plain-English completion summaries ----
+
+class _Proc:
+    def __init__(self, rc, out):
+        self.returncode, self.stdout = rc, out
+
+
+def _merged(pr="https://github.com/o/r/pull/1"):
+    from omnigent_issue_executor import OmnigentResult
+    return OmnigentResult(True, "done", "merged", pr_url=pr, merged=True, merge_sha="sha")
+
+
+def test_first_paragraph_skips_headings_and_comments():
+    body = "<!-- template -->\n\n# Title\n\nGuards the null case so it no longer crashes.\n\ntrailing"
+    assert r._first_paragraph(body) == "Guards the null case so it no longer crashes."
+    assert r._first_paragraph("") == "" and r._first_paragraph(None) == ""
+
+
+def test_first_paragraph_caps_length():
+    assert len(r._first_paragraph("x " * 500, cap=100)) <= 100
+
+
+def test_build_completion_summary_none_when_not_merged():
+    from omnigent_issue_executor import OmnigentResult
+    res = OmnigentResult(True, "review", "open", pr_url="https://github.com/o/r/pull/1", merged=False)
+    assert r.build_completion_summary(res) == (None, None)
+
+
+def test_build_completion_summary_reads_pr_title_and_body(monkeypatch):
+    payload = '{"title": "fix(x): guard null", "body": "# H\\n\\nGuards the null case so it no longer crashes."}'
+    monkeypatch.setattr(r.subprocess, "run", lambda *a, **k: _Proc(0, payload))
+    title, detail = r.build_completion_summary(_merged())
+    assert title == "fix(x): guard null"
+    assert detail == "Guards the null case so it no longer crashes."
+
+
+def test_build_completion_summary_none_on_gh_nonzero(monkeypatch):
+    monkeypatch.setattr(r.subprocess, "run", lambda *a, **k: _Proc(1, ""))
+    assert r.build_completion_summary(_merged()) == (None, None)
+
+
+def test_build_completion_summary_swallows_subprocess_exception(monkeypatch):
+    def boom(*a, **k):
+        raise OSError("gh missing")
+    monkeypatch.setattr(r.subprocess, "run", boom)
+    assert r.build_completion_summary(_merged()) == (None, None)
+
+
+def _capture_report(monkeypatch):
+    captured = {}
+    class FakeConn:
+        def transaction(self):
+            class T:
+                async def __aenter__(s): return s
+                async def __aexit__(s, *a): return False
+            return T()
+        async def execute(self, sql, *a):
+            pass
+    async def fake_log(conn, identity, issue_id, action, reason, extra=None):
+        captured["extra"] = extra or {}
+    monkeypatch.setattr(r, "_log_issue_activity", fake_log)
+    return FakeConn(), captured
+
+
+def test_report_result_records_summary_when_present(monkeypatch):
+    conn, cap = _capture_report(monkeypatch)
+    asyncio.run(r.report_result(
+        conn, {"workspace_id": "w", "agent_id": "a"}, _Rec(id="i1", number=5), _merged(),
+        summary="fix(x): guard null", summary_detail="Guards the null case."))
+    assert cap["extra"]["summary"] == "fix(x): guard null"
+    assert cap["extra"]["summary_detail"] == "Guards the null case."
+
+
+def test_report_result_omits_summary_when_absent(monkeypatch):
+    from omnigent_issue_executor import OmnigentResult
+    conn, cap = _capture_report(monkeypatch)
+    res = OmnigentResult(False, "review", "not ready", pr_url="u")
+    asyncio.run(r.report_result(conn, {"workspace_id": "w", "agent_id": "a"}, _Rec(id="i1", number=5), res))
+    assert "summary" not in cap["extra"] and "summary_detail" not in cap["extra"]
+
+
 def test_ensure_postgres_url_strips_surrounding_quotes(monkeypatch, tmp_path):
     # _ensure_postgres_url writes os.environ["POSTGRES_URL"] directly, which
     # monkeypatch cannot undo. Point the module at a throwaway env dict (sans the
@@ -115,7 +196,7 @@ def test_run_one_turns_execute_exception_into_blocked(monkeypatch):
     monkeypatch.setattr(r, "execute_issue_dict", boom)
 
     reported = {}
-    async def fake_report(conn, identity, iss, result):
+    async def fake_report(conn, identity, iss, result, **kw):
         reported["status"] = "done" if result.merged else ("in_review" if result.ok else "blocked")
         reported["stage"] = result.stage
     monkeypatch.setattr(r, "report_result", fake_report)
