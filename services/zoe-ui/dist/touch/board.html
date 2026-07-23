@@ -54,7 +54,10 @@
 <script>
   var API = '/api/board/summary';
   function esc(s){ var d=document.createElement('div'); d.textContent=s==null?'':String(s); return d.innerHTML; }
-  function pr(url){ return url ? ' · <a class="pr" href="'+esc(url)+'" target="_blank" rel="noopener">review PR ↗</a>' : ''; }
+  // Only ever render an https GitHub PR url as a link — never a javascript:/data:
+  // value that esc() would pass through unchanged into an href.
+  function safeUrl(u){ return (typeof u==='string' && /^https:\/\/github\.com\//.test(u)) ? u : null; }
+  function pr(url){ var u=safeUrl(url); return u ? ' · <a class="pr" href="'+esc(u)+'" target="_blank" rel="noopener">review PR ↗</a>' : ''; }
   function item(cls, it, opts){
     opts = opts || {};
     var reason = opts.reason && it.reason ? '<div class="reason">⚠ '+esc(it.reason)+'</div>' : '';
