@@ -3406,3 +3406,121 @@ async def test_update_branch_failure_state_is_consistent(tmp_path, monkeypatch):
     persisted = greploop_guard._load_status(66)
     assert persisted.get("terminal_state") == "BLOCKED_MERGE_FAILED"
     assert persisted.get("merge_blockers") == ["GH_NOT_MERGEABLE"]
+
+
+# --- Autonomous close (2/2): resolve Greptile threads -----------------------
+
+def _greptile_thread(tid, resolved=False):
+    return {"id": tid, "isResolved": resolved,
+            "comments": {"nodes": [{"author": {"login": "greptile-apps[bot]"}}]}}
+
+
+def _human_thread(tid, resolved=False):
+    return {"id": tid, "isResolved": resolved,
+            "comments": {"nodes": [{"author": {"login": "jason-easyazz"}}]}}
+
+
+def test_thread_is_greptile_detects_author():
+    assert greploop_guard._thread_is_greptile(_greptile_thread("t1")) is True
+    assert greploop_guard._thread_is_greptile(_human_thread("t2")) is False
+
+
+def test_only_thread_resolution_pending():
+    assert greploop_guard._only_thread_resolution_pending(
+        {"blockers": ["GREPTILE_UNRESOLVED_THREADS:2", "GH_NOT_MERGEABLE"]}) is True
+    # substantive greptile blocker present -> not just bookkeeping
+    assert greploop_guard._only_thread_resolution_pending(
+        {"blockers": ["GREPTILE_UNRESOLVED_THREADS:2", "GREPTILE_CONFIDENCE:3<5"]}) is False
+    assert greploop_guard._only_thread_resolution_pending(
+        {"blockers": ["GREPTILE_ACTIONABLE_FINDINGS:1"]}) is False
+    assert greploop_guard._only_thread_resolution_pending(
+        {"blockers": ["GH_NOT_MERGEABLE"]}) is False  # no thread blocker
+
+
+def test_resolve_greptile_threads_resolves_all_greptile(monkeypatch):
+    threads = [_greptile_thread("a"), _greptile_thread("b", resolved=True), _greptile_thread("c")]
+    monkeypatch.setattr(greploop_guard, "_gh_pr_review_threads", lambda *a, **k: threads)
+    resolved = []
+    monkeypatch.setattr(greploop_guard, "_gh_resolve_thread", lambda tid: resolved.append(tid) or True)
+    out = greploop_guard._resolve_greptile_threads(66)
+    assert out["ok"] is True
+    assert set(resolved) == {"a", "c"}  # only the unresolved ones
+
+
+def test_resolve_greptile_threads_refuses_when_human_thread_open(monkeypatch):
+    # THE safety property: never auto-resolve anything while a human review
+    # thread is unresolved.
+    threads = [_greptile_thread("a"), _human_thread("h")]
+    monkeypatch.setattr(greploop_guard, "_gh_pr_review_threads", lambda *a, **k: threads)
+    resolve_calls = []
+    monkeypatch.setattr(greploop_guard, "_gh_resolve_thread", lambda tid: resolve_calls.append(tid) or True)
+    out = greploop_guard._resolve_greptile_threads(66)
+    assert out["ok"] is False and out["reason"] == "HUMAN_THREADS_OPEN"
+    assert resolve_calls == [], "must resolve NOTHING when a human thread is open"
+
+
+def _threads_pending_assessment():
+    return {
+        "ready": False,
+        "blockers": ["GREPTILE_UNRESOLVED_THREADS:1", "GH_NOT_MERGEABLE"],
+        "greptile": {},
+        "gh": {"ok": False, "mergeStateStatus": "BLOCKED"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_merge_auto_resolves_then_retries(tmp_path, monkeypatch):
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(greploop_guard, "AUTO_RESOLVE_GREPTILE_THREADS", True)
+    monkeypatch.setattr("greptile_client.get_pr_status", _behind_status)
+    monkeypatch.setattr(greploop_guard, "assess_merge_readiness",
+                        lambda _p, **_k: _async_return(_threads_pending_assessment()))
+    monkeypatch.setattr(greploop_guard, "_gh_pr_review_threads",
+                        lambda *a, **k: [_greptile_thread("a")])
+    resolved = []
+    monkeypatch.setattr(greploop_guard, "_gh_resolve_thread", lambda tid: resolved.append(tid) or True)
+    merged = []
+    monkeypatch.setattr(greploop_guard, "_run_gh",
+                        lambda args, **k: merged.append(args) or type("P", (), {"returncode": 0, "stdout": "", "stderr": ""})())
+    out = await greploop_guard.merge_pr_when_ready(66)
+    assert out["state"] == "RESOLVING_THREADS"
+    assert resolved == ["a"]
+    assert not any(a[:2] == ["pr", "merge"] for a in merged), "must not merge in the resolve cycle"
+
+
+@pytest.mark.asyncio
+async def test_merge_never_resolves_while_human_thread_open(tmp_path, monkeypatch):
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(greploop_guard, "AUTO_RESOLVE_GREPTILE_THREADS", True)
+    monkeypatch.setattr("greptile_client.get_pr_status", _behind_status)
+    monkeypatch.setattr(greploop_guard, "assess_merge_readiness",
+                        lambda _p, **_k: _async_return(_threads_pending_assessment()))
+    monkeypatch.setattr(greploop_guard, "_gh_pr_review_threads",
+                        lambda *a, **k: [_greptile_thread("a"), _human_thread("h")])
+    resolve_calls = []
+    monkeypatch.setattr(greploop_guard, "_gh_resolve_thread", lambda tid: resolve_calls.append(tid) or True)
+    monkeypatch.setattr(greploop_guard, "_run_gh",
+                        lambda args, **k: type("P", (), {"returncode": 0, "stdout": "", "stderr": ""})())
+    out = await greploop_guard.merge_pr_when_ready(66)
+    assert resolve_calls == [], "human thread open -> resolve nothing"
+    assert out["state"] == "BLOCKED_NOT_READY"
+
+
+@pytest.mark.asyncio
+async def test_merge_does_not_resolve_when_flag_off(tmp_path, monkeypatch):
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(greploop_guard, "AUTO_RESOLVE_GREPTILE_THREADS", False)
+    monkeypatch.setattr("greptile_client.get_pr_status", _behind_status)
+    monkeypatch.setattr(greploop_guard, "assess_merge_readiness",
+                        lambda _p, **_k: _async_return(_threads_pending_assessment()))
+    calls = []
+    monkeypatch.setattr(greploop_guard, "_gh_pr_review_threads", lambda *a, **k: calls.append("read") or [])
+    out = await greploop_guard.merge_pr_when_ready(66)
+    assert out["state"] == "BLOCKED_NOT_READY"
+    assert calls == [], "flag off -> never even reads threads to resolve"
+
+
+def _async_return(value):
+    async def _coro(*_a, **_k):
+        return value
+    return _coro()
