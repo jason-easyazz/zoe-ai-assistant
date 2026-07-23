@@ -1151,18 +1151,32 @@
       // claimed "a failed request falls through to sleeping"; a HUNG one isn't a
       // failed one, and that gap made the claim untrue.) Race a timer so exactly
       // one decision is taken, whichever arrives first.
-      var _decided=false,_decideT=null;
-      function _decide(playing){
+      var _decided=false,_decideT=null,_votes=0,_stay=false;
+      function _decide(stayAwake){
         if(_decided)return;_decided=true;
         if(_decideT){clearTimeout(_decideT);_decideT=null;}
-        if(playing){armIdleSleep(IDLE_SLEEP_RETRY_MS);return;}
+        if(stayAwake){armIdleSleep(IDLE_SLEEP_RETRY_MS);return;}
         _sleepNow();
       }
-      _decideT=setTimeout(function(){_decide(false);},4000);
+      // TWO independent reasons to stay awake, asked in parallel — EITHER wins.
+      // The timeout decides with whatever votes have LANDED, not a hard false:
+      // otherwise a "music is playing" vote already received would be thrown
+      // away by the second, slower request hanging, and the panel would sleep
+      // mid-song again. With no votes at all _stay is false, so an unreachable
+      // server still falls through to sleeping exactly as before.
+      function _tally(stay){if(stay)_stay=true;if(++_votes>=2)_decide(_stay);}
+      _decideT=setTimeout(function(){_decide(_stay);},4000);
       apiGet('/api/music/now-playing').then(function(d){
         var np=d&&d.now_playing;
-        _decide(!!(np&&np.state==='playing'));
-      }).catch(function(){_decide(false);});
+        _tally(!!(np&&np.state==='playing'));
+      }).catch(function(){_tally(false);});
+      // A light/fan/TV on in THIS panel's room means a human is up. The idle
+      // timer alone never knew that, so it drifted to the night clock while the
+      // operator sat in a lit room. Resolved server-side from the panel's room
+      // (rooms -> room_devices), so no entity id is hardcoded here.
+      apiGet('/api/panels/'+encodeURIComponent(_panelDevId())+'/sleep-gate').then(function(d){
+        _tally(!!(d&&d.block));
+      }).catch(function(){_tally(false);});
     },ms||IDLE_SLEEP_MS);}
   // Any touch on the panel means the user took over — the screen is theirs.
   document.addEventListener('pointerdown',function(){_userTookOver=true;_voiceScreen=false;cancelAutoHome();armIdleSleep();},true);
