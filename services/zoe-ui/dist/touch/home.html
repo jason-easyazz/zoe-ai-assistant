@@ -2386,7 +2386,18 @@
       var dx=e.clientX-d.x0,dy=e.clientY-d.y0,dt=Date.now()-d.t0;
       if(d.lifted){
         d.el.classList.remove('lift');d.el.style.zIndex='';
-        cfCommitMove(d.i,(d.to==null?d.i:d.to));return;
+        var to=(d.to==null?d.i:d.to);
+        // A lift that never MOVED is not a reorder — it is just a slow tap.
+        // Committing a move-to-itself here made every stationary press longer
+        // than CF_HOLD_MS (320ms) a dead zone that neither played nor
+        // reordered: "I cant seem to click on an upcoming track to get it to
+        // play now". A deliberate tap easily runs past 320ms, especially when
+        // aiming at a smaller off-centre cover, so the bug hid from quick
+        // flicks and bit exactly the careful taps. Compare the SLOT, not the
+        // `moved` flag: finger wobble sets `moved` while still rounding to the
+        // same slot, and that is still a tap.
+        if(to===d.i){cfPlay(d.i);return;}
+        cfCommitMove(d.i,to);return;
       }
       if(d.onX){cfRemove(d.i);return;}                            // the visible affordance
       if(d.browsing){cfRelease(d,e);return;}                      // BROWSE only — never plays

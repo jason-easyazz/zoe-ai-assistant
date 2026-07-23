@@ -27,7 +27,7 @@ importScripts('/workbox/workbox-sw.js');
 //  same-origin, so the generic script/style routes below already cache them on
 //  first use, and precaching ~2 MB of libraries would re-download the lot on
 //  every future SW_VERSION bump.)
-const SW_VERSION = '4.73.0'; // presence-aware idle sleep: a toggle ON in the panel's own room blocks the screensaver (GET /api/panels/{id}/sleep-gate), raced in parallel with the music check; speaker picker capped to the 720px stage (grid scrolls, Cancel pinned) + panel's own output badged "This device" with its room + hoisted first; server-resolved device kind/label; sign-in fails closed; calendar metadata/escaping; chat.html XSS escaping; cross-origin script/CSS left unrouted; CDN libraries vendored to /lib/
+const SW_VERSION = '4.74.0'; // cover flow: a stationary press past CF_HOLD_MS is a TAP (plays) not a move-to-itself — stationary presses of 320ms+ previously did nothing at all; presence-aware idle sleep (room toggle blocks the screensaver); speaker picker capped to the 720px stage with Cancel pinned + "This device" badge
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
