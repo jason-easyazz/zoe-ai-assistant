@@ -27,7 +27,7 @@ importScripts('/workbox/workbox-sw.js');
 //  same-origin, so the generic script/style routes below already cache them on
 //  first use, and precaching ~2 MB of libraries would re-download the lot on
 //  every future SW_VERSION bump.)
-const SW_VERSION = '4.70.0'; // sign-in fails closed + calendar metadata/escaping + chat.html XSS escaping + cross-origin script/CSS left unrouted + CDN libraries vendored to /lib/
+const SW_VERSION = '4.71.0'; // typed speaker picker: server-resolved device kind/label + no-scroll tile grid + sign-in fails closed + calendar metadata/escaping + chat.html XSS escaping + cross-origin script/CSS left unrouted + CDN libraries vendored to /lib/
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
