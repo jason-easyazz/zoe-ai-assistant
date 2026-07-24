@@ -176,3 +176,52 @@ def test_disk_restore_keeps_fetched_at_zero(daemon, monkeypatch, tmp_path):
     with daemon._profile_cache_lock:
         assert len(daemon._profile_cache["profiles"]) == 1
         assert daemon._profile_cache["fetched_at"] == 0.0  # first sync still refreshes
+
+
+# ── 4. startup warmup ──────────────────────────────────────────────────────
+
+class _FakeEncoder:
+    def __init__(self):
+        self.embedded = []
+
+    def embed_utterance(self, wav):
+        self.embedded.append(wav)
+        return np.zeros(256, dtype=np.float32)
+
+
+def _stub_resemblyzer(monkeypatch):
+    """Slim CI has no resemblyzer; the warmup imports preprocess_wav lazily."""
+    mod = types.ModuleType("resemblyzer")
+    mod.preprocess_wav = lambda p: np.zeros(16000, dtype=np.float32)
+    monkeypatch.setitem(sys.modules, "resemblyzer", mod)
+
+
+def test_warmup_runs_full_pipeline_and_cleans_temp(daemon, monkeypatch, tmp_path, caplog):
+    import logging
+    enc = _FakeEncoder()
+    monkeypatch.setattr(daemon, "_get_voice_encoder", lambda: enc)
+    monkeypatch.setattr(daemon.tempfile, "tempdir", str(tmp_path))
+    _stub_resemblyzer(monkeypatch)
+    with caplog.at_level(logging.INFO, logger=daemon.log.name):
+        daemon._speaker_id_warmup()
+    # the wav was written, preprocessed, and embedded
+    assert len(enc.embedded) == 1
+    assert "warmed" in caplog.text
+    assert list(tmp_path.iterdir()) == []  # temp wav removed
+
+
+def test_warmup_never_raises_and_cleans_temp_on_failure(daemon, monkeypatch, tmp_path):
+    class _BoomEncoder:
+        def embed_utterance(self, wav):
+            raise RuntimeError("embed exploded")
+
+    monkeypatch.setattr(daemon, "_get_voice_encoder", lambda: _BoomEncoder())
+    monkeypatch.setattr(daemon.tempfile, "tempdir", str(tmp_path))
+    _stub_resemblyzer(monkeypatch)
+    daemon._speaker_id_warmup()  # must not raise
+    assert list(tmp_path.iterdir()) == []  # temp wav removed on the failure path
+
+
+def test_warmup_noop_without_encoder(daemon, monkeypatch):
+    monkeypatch.setattr(daemon, "_get_voice_encoder", lambda: None)
+    daemon._speaker_id_warmup()  # no encoder → clean no-op
