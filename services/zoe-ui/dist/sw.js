@@ -27,7 +27,7 @@ importScripts('/workbox/workbox-sw.js');
 //  same-origin, so the generic script/style routes below already cache them on
 //  first use, and precaching ~2 MB of libraries would re-download the lot on
 //  every future SW_VERSION bump.)
-const SW_VERSION = '4.74.0'; // cover flow: a stationary press past CF_HOLD_MS is a TAP (plays) not a move-to-itself — stationary presses of 320ms+ previously did nothing at all; presence-aware idle sleep (room toggle blocks the screensaver); speaker picker capped to the 720px stage with Cancel pinned + "This device" badge
+const SW_VERSION = '4.75.0'; // orb hands the mic to the panel daemon (wake beep + mic) instead of opening a keyboard-only text box; dock no longer rebuilt on every 30s refresh when nothing changed (the flash); cover flow slow-tap plays; presence-aware idle sleep
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded

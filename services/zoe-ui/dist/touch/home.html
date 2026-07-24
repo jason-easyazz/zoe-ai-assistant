@@ -1499,8 +1499,7 @@
     // is never empty. pins_configured:true with an empty list is a real choice
     // ("show nothing") and must NOT fall back.
     if(_pcfg&&_pcfg.pins_configured){
-      dbody.innerHTML=(_pcfg.pinned||[]).map(dockPinHtml).join('');
-      paintDockTimer();paintDockMusic();wireDock();return;
+      _dockPaint((_pcfg.pinned||[]).map(dockPinHtml).join(''));return;
     }
     var cl=_ha.climate,lights=_ha.lights.slice(0,cl?2:3),html='';
     // Dock pills carry a ONE-WORD name: the dock is a glance surface and
@@ -1529,10 +1528,35 @@
       html+='<div class="pc temp" data-eid="'+esc(cl.entity_id)+'" data-act="set_temperature" data-tgt="'+esc(String(ctgt))+'"'
         +' data-mn="'+cb.mn+'" data-mx="'+cb.mx+'" data-st="'+cb.st+'"><div class="tv">'+(cur!=null?Math.round(cur):'—')+'°</div><div class="tl">Temp</div>'
         +'<div class="tpop"><div class="tpv">'+_tfmt(ctgt,cb.st)+'°</div><div class="tsl"><div class="tff"></div><div class="tkn"></div></div><div class="tpl">Thermostat</div></div></div>';}
-    dbody.innerHTML=html;
+    _dockPaint(html);
+  }
+  // Write the dock ONLY when its markup actually changed.
+  //
+  // refreshHA() runs every 30s and used to call renderDock() unconditionally,
+  // which replaced dbody.innerHTML wholesale — tearing down and rebuilding every
+  // tile, icon and SVG even when not one value had moved. That is the reported
+  // "the dock flashes, or changes quickly, just while your on one card, not
+  // touching anything": a full DOM swap twice a minute, forever.
+  //
+  // Comparing against dbody.innerHTML directly does NOT work: the browser
+  // normalises serialised markup, and paintDockMusic()/paintDockTimer() append
+  // their chips afterwards, so the live innerHTML never equals a freshly
+  // generated pin string. Compare against the exact string we last wrote.
+  //
+  // Still rebuild when our tiles are absent (a "heard" chip took the dock, or
+  // this is the first paint) — otherwise an unchanged signature would leave the
+  // dock empty forever.
+  var _dockHtml=null;
+  function _dockPaint(html){
+    if(html!==_dockHtml||!dbody.querySelector('.pc')){
+      _dockHtml=html;
+      dbody.innerHTML=html;
+      wireDock();
+    }
+    // These own their own chips and are cheap + idempotent, so they run every
+    // time: they are what keeps the timer countdown and now-playing fresh.
     paintDockTimer();
     paintDockMusic();
-    wireDock();
   }
 
   // ---- launcher overlay (opened from the dock grid button) ----
@@ -4011,9 +4035,33 @@
       if(_cur!=='home'&&_cur!=='sleep'){_voiceScreen=true;armAutoHome();}}
   };
 
+  // Tapping the orb hands the mic to Zoe exactly as "Hey Zoe" does — the panel
+  // daemon plays the wake beep and opens the mic. It used to just toggle a TEXT
+  // box, which is useless on a panel with no keyboard. The typed bar survives
+  // only as the FALLBACK for where that daemon isn't reachable (a desktop
+  // browser, dev), so the same build still works off-panel.
+  var _orbListenT=null;
+  function orbListening(on){
+    if(_orbListenT){clearTimeout(_orbListenT);_orbListenT=null;}
+    orb.classList.toggle('listening',!!on);
+    if(!on)return;
+    // The daemon owns the turn from here, so this is only the visual
+    // affordance — it must expire on its own rather than latch on forever if
+    // nothing comes back.
+    _orbListenT=setTimeout(function(){orb.classList.remove('listening');},12000);
+  }
   orb.addEventListener('click',function(){
-    var on=cmdbar.classList.toggle('on');
-    if(on){setTimeout(function(){cmdin.focus();},50);}
+    if(_convLive)return;                 // a live conversation already owns the mic
+    cmdbar.classList.remove('on');
+    orbListening(true);
+    toast('Listening — ask Zoe anything');
+    fetch('http://localhost:7777/activate',{method:'POST',signal:AbortSignal.timeout(800)})
+      .then(function(r){if(!r||!r.ok)throw new Error('activate '+(r&&r.status));})
+      .catch(function(){
+        orbListening(false);toastHide();
+        cmdbar.classList.add('on');
+        setTimeout(function(){cmdin.focus();},50);
+      });
   });
   cmdin.addEventListener('keydown',function(e){if(e.key==='Enter')sendCmd(cmdin.value);if(e.key==='Escape')cmdbar.classList.remove('on');});
   document.getElementById('cmdgo').addEventListener('click',function(){sendCmd(cmdin.value);});
