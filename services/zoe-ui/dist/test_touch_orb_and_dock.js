@@ -152,6 +152,40 @@ async function t(name, fn) {
     await page.close();
   });
 
+  await t('rapid double-tap sends ONE activate, not two beeps', async () => {
+    // `_convLive` only guards a LiveKit session; a daemon-activated turn never
+    // sets it, so without its own in-flight guard two taps inside the 800ms
+    // window both reach the daemon and the wake beep fires twice.
+    const ctx = { activates: [] }; const page = await open(browser, ctx, base, true);
+    await page.evaluate(() => {
+      const o = document.getElementById('orb');
+      o.click(); o.click(); o.click();
+    });
+    await page.waitForTimeout(900);
+    assert.deepStrictEqual(ctx.activates, ['POST'],
+      `three rapid taps produced ${ctx.activates.length} activate POSTs — the daemon would beep that many times`);
+    await page.close();
+  });
+
+  await t('the guard clears after a FAILED activate (orb never wedges)', async () => {
+    // If the in-flight flag only cleared on success, one unreachable daemon
+    // would leave the orb permanently dead.
+    const ctx = { activates: [] }; const page = await open(browser, ctx, base, false);
+    await page.evaluate(() => document.getElementById('orb').click());
+    await page.waitForTimeout(1200);
+    await page.evaluate(() => document.getElementById('orb').click());
+    await page.waitForTimeout(1200);
+    assert.strictEqual(ctx.activates.length, 2,
+      `second tap after a failure produced ${ctx.activates.length} total attempts — the orb wedged`);
+    await page.close();
+  });
+
+  // NOT TESTED HERE, deliberately: cancelling `_orbListenT` when convEvent takes
+  // over the orb needs a live LiveKit `state` message, and convEvent is closure
+  // -scoped with no seam to drive it. A test that faked it would assert nothing
+  // (the first draft of this called a probe that did not exist and "passed").
+  // The change is a one-line defensive clear; it is reviewed, not proven.
+
   await t('an unchanged refresh does NOT rebuild the dock (no flash)', async () => {
     const ctx = { activates: [] }; const page = await open(browser, ctx, base, true);
     // Tag the live nodes, force the same refresh the 30s timer performs, and see

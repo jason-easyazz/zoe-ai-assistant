@@ -3902,6 +3902,10 @@
   function convEvent(msg){
     var t=msg.type||msg.event,s=msg.state;
     if(t==='state'){
+      // The voice pipeline now OWNS the orb, so drop the orb-tap fallback timer.
+      // Left running it would strip a genuine `listening` class mid-session when
+      // its 12s expiry landed inside an active turn.
+      if(_orbListenT){clearTimeout(_orbListenT);_orbListenT=null;}
       if(s==='listening'||s==='wake'){orb.classList.remove('busy');orb.classList.add('listening');convPaint('Listening…');}
       else if(s==='thinking'||s==='processing'){orb.classList.remove('listening');orb.classList.add('busy');convPaint('Thinking…');}
       else if(s==='responding'||s==='speaking'){orb.classList.remove('listening');orb.classList.add('busy');convPaint('');}
@@ -4040,7 +4044,10 @@
   // box, which is useless on a panel with no keyboard. The typed bar survives
   // only as the FALLBACK for where that daemon isn't reachable (a desktop
   // browser, dev), so the same build still works off-panel.
-  var _orbListenT=null;
+  // `_orbBusy` is a SEPARATE guard from `_convLive`: a daemon-activated turn
+  // never sets _convLive, so that check alone let two taps inside the 800ms
+  // window send two POSTs and beep twice.
+  var _orbListenT=null,_orbBusy=false;
   function orbListening(on){
     if(_orbListenT){clearTimeout(_orbListenT);_orbListenT=null;}
     orb.classList.toggle('listening',!!on);
@@ -4051,7 +4058,8 @@
     _orbListenT=setTimeout(function(){orb.classList.remove('listening');},12000);
   }
   orb.addEventListener('click',function(){
-    if(_convLive)return;                 // a live conversation already owns the mic
+    if(_convLive||_orbBusy)return;       // a live conversation, or an activate already in flight
+    _orbBusy=true;
     cmdbar.classList.remove('on');
     orbListening(true);
     toast('Listening — ask Zoe anything');
@@ -4061,7 +4069,10 @@
         orbListening(false);toastHide();
         cmdbar.classList.add('on');
         setTimeout(function(){cmdin.focus();},50);
-      });
+      })
+      // Trailing .then runs after EITHER branch — the guard must clear on the
+      // fallback path too, or one unreachable daemon would wedge the orb.
+      .then(function(){_orbBusy=false;});
   });
   cmdin.addEventListener('keydown',function(e){if(e.key==='Enter')sendCmd(cmdin.value);if(e.key==='Escape')cmdbar.classList.remove('on');});
   document.getElementById('cmdgo').addEventListener('click',function(){sendCmd(cmdin.value);});
