@@ -11,6 +11,13 @@
 
 1. **Worktree:** `git worktree add --detach /home/zoe/.worktrees/<packet-id> origin/main`,
    branch `fix/<packet-id>` or `feature/<packet-id>`. Never work in `/home/zoe/assistant`.
+   **Immediately symlink the live env in:**
+   `ln -sf /home/zoe/assistant/services/zoe-data/.env /home/zoe/.worktrees/<packet-id>/services/zoe-data/.env`.
+   Without it the voice replay gate (rule 3) **silently skips** — `measure_voice.py`
+   requires the live-service `.env` and exits 0 with no JSON, which reads as a pass but
+   validated nothing. (Learned 2026-07-08: the Agent-tool auto-worktrees omit this, so
+   every builder-agent voice gate skipped until the `.env` was symlinked by hand. If you
+   run in an auto-created worktree, symlink `.env` before the gate.)
 2. **Flag default OFF.** The flag named in the packet gates ALL new behaviour. Flag-off
    must be byte-identical to today (write a test that proves it where the packet says so).
 3. **Voice replay gate (any packet touching `voice_*`, `tts_*`, brain, or Kokoro config):**
