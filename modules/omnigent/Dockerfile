@@ -70,10 +70,31 @@ ENV UV_FIND_LINKS=/opt/wheels
 # (the 0.3.0 jump arrived as a side effect of a pi rebuild). 0.4.0 verified on this stack
 # 2026-07-05: providers-mapping format, RUNNER_ENV_PASSTHROUGH, header auth, and the
 # entrypoint workspace-patch marker all unchanged.
+# The chown runs in THIS SAME RUN, not a later one. A separate `RUN chown -R /root`
+# layer would re-record every changed file — /root is ~1.3 GB image-side, so that is
+# ~1.3 GB of pure duplication in the image. Chowning before the layer is committed
+# costs nothing.
+#
+# WHY 1000: the container runs as host uid 1000 (zoe) — see `user:` in
+# docker-compose.module.yml. HOME stays /root (every mount, the uv tool install, and
+# the entrypoint's ~/.omnigent config seed all target it), so /root must be owned by
+# the runtime user or omnigent cannot write its own state.
 RUN pip install --no-cache-dir uv pyyaml \
     && uv tool install --force -q --python 3.12 omnigent==0.4.0
+# A numeric `user:` has no /etc/passwd entry, and several tools (git, uv, shells)
+# fall back to "?" or fail outright when getpwuid() misses. Give uid 1000 a real
+# entry whose home is /root so ~ expands correctly inside the container.
+RUN groupadd --gid 1000 zoe \
+    && useradd --uid 1000 --gid 1000 --no-create-home --home-dir /root --shell /bin/bash zoe
 ENV PATH="/root/.local/bin:${PATH}"
-RUN timeout 30s omnigent --version || echo "WARN: confirm 'omnigent --version' at runtime"
+# Smoke test BEFORE the chown, and chown in the SAME layer. The smoke test runs as
+# root and writes caches/metadata under /root (uv, python), so chowning earlier would
+# leave exactly those files root-owned and unwritable by the runtime uid — the failure
+# would surface later as omnigent unable to update its own tool state. Everything root
+# writes under /root must happen before this line.
+RUN (timeout 30s omnigent --version || echo "WARN: confirm 'omnigent --version' at runtime") \
+    && chown -R 1000:1000 /root \
+    && chmod 750 /root
 
 COPY entrypoint.sh /usr/local/bin/omnigent-entrypoint.sh
 RUN chmod +x /usr/local/bin/omnigent-entrypoint.sh
