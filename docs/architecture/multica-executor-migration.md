@@ -243,21 +243,41 @@ A `background_runner.py` "engineering lane" (route `Implement evolution proposal
 tasks to the Omnigent `execute_issue_dict` lane) was specced (PR #1538) and built
 flag-dark (PR #1547), then **both closed** — the premise was wrong.
 
-**Finding:** nothing enqueues a proposal as a *background* task. The only builder
-of the `Implement evolution proposal <id>` string is the proposal-approve
-endpoint (`services/zoe-data/routers/system.py:2095`), which calls `dispatch_issue`
-→ the **Multica board**, not `enqueue_background_task`. So approved proposals
-ALREADY reach the Omnigent lane via the board runner (dispatch → Multica issue →
-`execute_issue_dict`) — the correct, authorized path (dispatched by the approve
-endpoint, not by arbitrary caller task text). A second lane in `background_runner`
-would only duplicate it and add a confused-deputy surface.
+**Finding 1 (why the background lane was wrong):** nothing enqueues a proposal
+as a *background* task. The only builder of the `Implement evolution proposal
+<id>` string is the proposal-approve endpoint (`routers/system.py`), which
+dispatched via `dispatch_issue`, never `enqueue_background_task`. So a
+`background_runner` engineering lane targets a task that never arrives there.
+Corroborating: its pre-existing auto-deploy regex is dead code and matched
+**dashed** UUIDs while real `evolution_proposals.id` is **32-hex non-dashed**.
+`background_runner` stays general-only.
 
-Corroborating: `background_runner`'s pre-existing evolution-proposal auto-deploy
-regex is itself dead code, and it (and the built lane) matched **dashed** UUIDs
-while real `evolution_proposals.id` values are **32-hex non-dashed** — so the
-classifier could never have fired on a real proposal anyway.
+**Finding 2 (the real break — proposals reached NO live executor):** an early
+draft of this note claimed proposals "already reach Omnigent via the board." That
+was WRONG, and was disproved on real approved proposal `631f4b5e` (operator:
+"prove it on a real proposal before flipping"). In truth:
+- `dispatch_issue` routes to the **Kanban PHASE pipeline** (`kanban_adapter` →
+  `pipeline_store`), whose consumer (Hermes / the Flue live-runner) is
+  **retired / not running** — `agent_task_queue` is empty, the unit inactive.
+- The proposal's `multica_issue_id` was a **phantom** — never persisted to the
+  `issue` table (`update_multica_issue_on_proposal_status_change` only *updates*,
+  never creates).
+- The board **runner** (running, proven) claims `todo` issues from the `issue`
+  table — a **different mechanism/table** than `dispatch_issue`. Proposals never
+  reached it.
 
-**Consequence:** `background_runner` stays general-only. The remaining Hermes CLI
-user is the **general/research** background path (voice/chat escalation, live web
-lookups) — that is the web-search/browse tier, tracked separately. The Hermes CLI
-cannot be deleted (nor `HERMES_API_KEY` revoked) until that tier exists.
+So approved proposals stranded, reaching no executor. *Lesson: verify the task
+actually FLOWS to a running consumer — reading the dispatch code is not proof.*
+
+**Fix (PR #1557):** `proposal_board_bridge` lands an approved proposal as a `todo`
+issue directly in the board runner's workspace (body from the proposal's own DB
+fields only), and the approve endpoint calls it instead of `dispatch_issue`. So
+proposals now flow through the proven board lane (runner → `execute_issue_dict` →
+gated PR → merge). **Proven end-to-end before wiring:** `631f4b5e` → issue #6112
+→ PR #1555 (*fix(agent): stop clock fast-path hijacking business-hours
+questions*) → merged.
+
+**Remaining Hermes CLI user:** the **general/research** background path
+(voice/chat escalation, live web lookups) = the web-search/browse tier (task
+#18). The Hermes CLI can't be deleted (nor `HERMES_API_KEY` revoked) until it
+exists.
