@@ -27,12 +27,23 @@ durable, machine-readable result to --results (default
 ~/.cache/zoe/voice_regression_last.json):
 
     {status: pass|fail|skip|error, timestamp, said_vs_did_regressions,
-     per_stage_speed_deltas, baseline_ref, reason, summary}
+     per_stage_speed_deltas, baseline_ref, reason, summary,
+     non_pass_streak, non_pass_alert_after, non_pass_alert}
 
 A skip/timeout/error MUST leave an artifact with status != "pass" — never an
 ABSENT file that a downstream checker could misread as "nothing wrong". The
 deploy-path checker scripts/maintenance/voice_gate_check.py reads exactly this
 contract to decide whether a voice-path deploy is allowed to proceed.
+
+SKIP-STREAK ALARM ("a gate that can skip forever under green timers is not a
+gate"): every run records `non_pass_streak` — the count of consecutive runs
+whose status != "pass" (a real pass resets it to 0). Once the streak reaches
+`--alert-after-non-pass` (default 3, env ZOE_VOICE_ALERT_NON_PASS_RUNS), the
+artifact carries `non_pass_alert: true` AND the memory-skip path stops exiting
+0: it exits 4 so the systemd unit/timer goes visibly red instead of recording
+SUCCESS forever (same shape as the memory-loops zero-effect streak alert in
+services/zoe-data/routers/system.py). fail/error runs already exit non-zero;
+they count toward the streak too.
 
 Examples:
     # establish/refresh the baseline (run when the path is known-good):
@@ -242,6 +253,12 @@ def emit_result(args, *, status: str, summary: dict[str, Any],
     reads exactly this contract; keep the keys stable. `summary` and `created_at`
     are also retained for the existing router_selftrain replay_gate reader."""
     ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    # Consecutive non-pass streak — read the PREVIOUS artifact before this run
+    # overwrites it. A genuine pass resets the streak; anything else increments
+    # it. The threshold turns a silent skip-forever loop into a visible alarm.
+    prev_streak = _previous_non_pass_streak(args.results)
+    streak = 0 if status == "pass" else prev_streak + 1
+    alert_after = max(1, int(getattr(args, "alert_after_non_pass", 3) or 3))
     base_summary = baseline.get("summary") if isinstance(baseline, dict) else None
     baseline_ref = {
         "path": str(args.baseline),
@@ -257,6 +274,9 @@ def emit_result(args, *, status: str, summary: dict[str, Any],
         "per_stage_speed_deltas": speed_deltas,
         "baseline_ref": baseline_ref,
         "summary": summary,                     # back-compat: n_samples / ok_rate / medians_ms
+        "non_pass_streak": streak,              # consecutive runs with status != "pass"
+        "non_pass_alert_after": alert_after,
+        "non_pass_alert": streak >= alert_after,
     }
     write_json(args.results, payload)
     try:
@@ -266,6 +286,20 @@ def emit_result(args, *, status: str, summary: dict[str, Any],
     except OSError:
         pass
     return payload
+
+
+def _previous_non_pass_streak(results_path: Path) -> int:
+    """Read the prior run's non_pass_streak from the last-result artifact.
+
+    Missing/corrupt artifact or a pre-streak artifact (no field) => 0: the
+    streak then starts counting from THIS run — never a crash, never an
+    invented alarm."""
+    try:
+        prev = json.loads(Path(results_path).read_text(encoding="utf-8"))
+        streak = prev.get("non_pass_streak")
+        return max(0, int(streak)) if isinstance(streak, (int, float)) else 0
+    except Exception:
+        return 0
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -453,7 +487,12 @@ def main() -> int:
     ap.add_argument("--warn-ratio", type=float, default=float(os.environ.get("ZOE_VOICE_WARN_RATIO", "1.5")))
     ap.add_argument("--warn-ms", type=float, default=float(os.environ.get("ZOE_VOICE_WARN_MS", "1500")))
     ap.add_argument("--min-mem-mb", type=int, default=int(os.environ.get("ZOE_VOICE_PROBE_MIN_MEM_MB", "1500")),
-                    help="skip (exit 0) if available memory is below this — never OOM the live box")
+                    help="skip if available memory is below this — never OOM the live box "
+                         "(exit 0 until the non-pass streak trips the alert, then exit 4)")
+    ap.add_argument("--alert-after-non-pass", type=int,
+                    default=int(os.environ.get("ZOE_VOICE_ALERT_NON_PASS_RUNS", "3")),
+                    help="consecutive non-pass runs before the skip path exits non-zero "
+                         "(4) so the systemd timer goes visibly red instead of green-skipping forever")
     ap.add_argument("--no-cleanup", action="store_true",
                     help="skip the post-run replay-artifact cleanup (soft-delete of rows created during the replay window)")
     args = ap.parse_args()
@@ -476,9 +515,18 @@ def main() -> int:
         reason = (f"available memory {avail}MB < {args.min_mem_mb}MB threshold — "
                   "deferring to avoid OOM on the live box")
         print(f"SKIP: {reason}.")
-        emit_result(args, status="skip", summary=dict(EMPTY_SUMMARY),
-                    said_vs_did=[], speed_deltas={}, baseline=baseline, reason=reason)
+        payload = emit_result(args, status="skip", summary=dict(EMPTY_SUMMARY),
+                              said_vs_did=[], speed_deltas={}, baseline=baseline, reason=reason)
         print(f"Results: {args.results}  (status=skip — a skip is NOT a pass)")
+        if payload.get("non_pass_alert"):
+            # Skip-streak alarm: N consecutive runs without a real pass. Exit
+            # non-zero so the oneshot unit (and its timer) goes visibly RED —
+            # a gate that green-skips forever is not a gate.
+            print(f"ALERT: {payload['non_pass_streak']} consecutive non-pass runs "
+                  f"(threshold {payload['non_pass_alert_after']}) — the replay gate has "
+                  "not produced a real PASS; failing loudly so the unit goes red. "
+                  "Free memory (or fix the underlying error) and re-run.", file=sys.stderr)
+            return 4
         return 0
 
     run_started_utc = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
