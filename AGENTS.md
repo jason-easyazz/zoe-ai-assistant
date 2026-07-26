@@ -90,10 +90,11 @@ flaw → **Greptile** caught that → **Bugbot** caught a silently-failing symli
 saw. Three reviewers, three distinct real defects, no overlap. So the order is not
 ceremony — it is what makes the last review cheap and clean.
 
-**Open every PR as a DRAFT.** Greptile is configured `triggerOnDrafts: false` and (since
-2026-07-26) `triggerOnUpdates: false`, so it reviews **exactly once, when the PR is marked
-ready for review**. That makes it the final gate by construction. Marking ready is the
-act of spending it — don't do it until the PR is genuinely finished.
+**Open every PR as a DRAFT.** Greptile is configured `triggerOnDrafts: false`, so a draft
+is invisible to it and all iteration is free. Marking ready is the act of spending the
+first review — don't do it until the PR is genuinely finished. `triggerOnUpdates` is
+**true**, so any later push or branch update is reviewed too: that is deliberate (see THE
+GUARANTEE below), and it is why batching fixes into one push matters.
 
 Sequence:
 
@@ -112,32 +113,40 @@ Sequence:
    exactly what happened on #1560.
 5. **Mark ready** → Greptile reviews once, as the final gate → resolve threads → merge.
 
-**PRECONDITION — this workflow is only coherent once two operator settings change**, and
-Greptile itself caught the contradiction (2/5 confidence on the PR that introduced this):
+**THE GUARANTEE — every merge is up-to-date AND reviewed at that exact commit.** This is
+the load-bearing property and it is worth credits:
 
-- **`Greptile Review` must stop being a REQUIRED check.** While it is required, the
-  "routine" tier below is impossible: a PR cannot merge without a Greptile review, so
-  "local + Copilot → merge" would just block forever.
-- **Branch protection `strict` must be `false`.** `strict: true` plus
-  `triggerOnUpdates: false` is a deadlock: `strict` forces a branch update, the new head
-  gets no automatic Greptile review, and the required check is then permanently absent on
-  that commit.
+| setting | value | guarantees |
+|---|---|---|
+| branch protection `strict` | **true** | the PR is up to date with `main` |
+| `triggerOnUpdates` | **true** | that up-to-date head actually gets reviewed |
+| `triggerOnDrafts` | **false** | iteration in draft stays free |
+| `Greptile Review` required | **yes** | the gate is real |
 
-**Until both land**, the interim rule is: after ANY branch update on a PR that needs the
-Greptile check, comment `@greptileai` once to review the new head — and expect every
-routine PR to need that too. Each of those is a paid credit, which is precisely the churn
-this section exists to end.
+`triggerOnUpdates: false` was tried on 2026-07-26 and **reverted the same day**. It looks
+like a saving and it silently breaks the guarantee: `strict` forces a branch update, and
+Greptile then skips the new head because the PR diff is unchanged — correct dedup on its
+part, but it leaves the merged commit with no review and the required check permanently
+absent. Measured, same PR: `update-branch -> COMPLETED` with it true; three consecutive
+`SKIPPED` with it false. Do not turn it off again.
+
+**Cost comes from CONCURRENCY, not from update reviews.** July's 3.6 reviews/PR was
+`strict` cascading across ~8 simultaneously open PRs — every merge updated the other
+seven, each billing a review. Serialise instead: keep one or two PRs in flight and it
+settles at ~2 reviews per PR (one at ready, one after the final branch update). Draft-first
+keeps all iteration before that free, so you only ever pay once the work is finished.
 
 Tier by risk; four reviewers on a one-file docs change is friction, not safety:
-- **Routine** (docs, config, generated files, tests, UI) → local `/review` + Copilot → merge.
-  Valid ONLY once Greptile is no longer a required check (see PRECONDITION above); until
-  then a routine PR still needs one `@greptileai` review to clear the gate.
+- **Routine** (docs, config, generated files, tests, UI) → local `/review` + Copilot, then
+  mark ready for the single Greptile pass. Greptile is a REQUIRED check, so every PR gets
+  it; the tiering decides how much cheap review happens BEFORE that, not whether it runs.
 - **Load-bearing** (voice path, auth, migrations, anything flag-gated) → the full chain.
 
 Cost note, measured 2026-07: this repo ran **400+ reviews across 112 PRs (3.6× per PR)**
 in one month. At that volume Greptile is ~$380/mo and Bugbot ~$400–600/mo, against
-Copilot's $10 flat. The multiplier — not the PR count — was the cost, and
-`triggerOnUpdates: false` plus draft-first is what removes it. **Copilot's inline comments
+Copilot's $10 flat. The multiplier — not the PR count — was the cost, and the fix is
+draft-first plus SERIALISING PRs (see THE GUARANTEE); disabling update reviews was tried
+and reverted, because it breaks the gate. **Copilot's inline comments
 create review threads that count toward `required_conversation_resolution`**, so they must
 be resolved like any other.
 
