@@ -2508,6 +2508,9 @@
     var mf=document.querySelector('.mfull');if(!mf)return;
     if(open===undefined)open=!mf.classList.contains('tools');
     mf.classList.toggle('tools',open);
+    // The row is aria-hidden while collapsed; reveal it to the screen reader when
+    // it opens, or keep/shuffle/repeat are visible but unreachable by assistive nav.
+    var row=document.getElementById('mTools');if(row)row.setAttribute('aria-hidden',open?'false':'true');
     var btn=document.getElementById('mToolsBtn');if(btn)btn.setAttribute('aria-pressed',open?'true':'false');if(btn)btn.classList.toggle('on',open);
     if(open)_toolsArm();else _toolsClear();
   }

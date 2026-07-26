@@ -168,9 +168,13 @@ async function t(name, fn) {
       scrub: getComputedStyle(document.querySelector('.mfull .mscrub')).display !== 'none',
       tools: getComputedStyle(document.getElementById('mTools')).display !== 'none',
       controls: ['mDS', 'mShuf', 'mRep'].filter((id) => document.getElementById(id)).length,
+      ariaHidden: document.getElementById('mTools').getAttribute('aria-hidden'),
     }));
     assert.ok(!after.scrub && after.tools, 'tools did not replace the scrub');
     assert.strictEqual(after.controls, 3, 'tools row missing keep/shuffle/repeat');
+    // Visible AND reachable: aria-hidden must clear when the row opens, or a
+    // screen reader can't get to keep/shuffle/repeat.
+    assert.strictEqual(after.ariaHidden, 'false', 'tools row stays aria-hidden when open (unreachable to a screen reader)');
     await page.close();
   });
 
