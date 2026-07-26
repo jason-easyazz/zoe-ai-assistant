@@ -274,8 +274,10 @@ async def test_queue_saturation_is_not_reported_as_a_child_timeout(monkeypatch):
 
     queue_wait = float(os.environ.get("HERMES_BACKGROUND_QUEUE_WAIT_S", "600"))
 
+    from async_subprocess import QueueTimeout
+
     async def _queue_gave_up(cmd, **kw):
-        raise subprocess.TimeoutExpired(cmd, kw["queue_timeout"])
+        raise QueueTimeout(cmd, kw["queue_timeout"])
 
     monkeypatch.setattr(br, "run_to_completion", _queue_gave_up)
     with pytest.raises(TimeoutError) as ei:
@@ -323,3 +325,29 @@ async def test_background_lane_waits_rather_than_failing_fast(monkeypatch):
     monkeypatch.setattr(br, "run_to_completion", _capture)
     await br._run_hermes_background_task("t", user_id="jason", task_id=1)
     assert seen["queue_timeout"] > async_subprocess._QUEUE_WAIT_S
+
+
+def test_queue_and_runtime_budgets_are_told_apart_by_type_not_value():
+    """The discriminator must survive queue_timeout == timeout.
+
+    Comparing exc.timeout against the queue budget is silently wrong the moment
+    a caller's two budgets coincide — a "never started" failure would then be
+    reported as a child overrun (or vice versa). QueueTimeout subclasses
+    TimeoutExpired, so existing handlers still catch it.
+    """
+    from async_subprocess import QueueTimeout
+
+    assert issubclass(QueueTimeout, subprocess.TimeoutExpired)
+    same = 900.0
+    queued = QueueTimeout(["x"], same)
+    overran = subprocess.TimeoutExpired(["x"], same)
+    # Identical .timeout values, still distinguishable.
+    assert queued.timeout == overran.timeout
+    assert isinstance(queued, QueueTimeout)
+    assert not isinstance(overran, QueueTimeout)
+    # ...and the legacy handler shape still catches the new type.
+    for exc in (queued, overran):
+        try:
+            raise exc
+        except subprocess.TimeoutExpired:
+            pass

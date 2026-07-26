@@ -69,6 +69,20 @@ _QUEUE_GRACE_S = 5.0
 _RUN_SLOTS: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
 
 
+class QueueTimeout(subprocess.TimeoutExpired):
+    """Gave up waiting for a worker — the child NEVER STARTED.
+
+    A distinct type rather than a flag or a magic timeout value, because callers
+    must be able to tell "never ran" from "ran too long": they warrant different
+    log messages and different recovery (retry later vs. investigate a hang).
+    Discriminating on the `.timeout` value instead is silently wrong whenever a
+    caller's queue and runtime budgets happen to coincide.
+
+    Subclasses `subprocess.TimeoutExpired` so every existing
+    `except subprocess.TimeoutExpired` handler keeps working unchanged.
+    """
+
+
 def _run_slots() -> "asyncio.Semaphore":
     loop = asyncio.get_running_loop()
     sem = _RUN_SLOTS.get(loop)
@@ -199,7 +213,10 @@ async def run_to_completion(
       latency-sensitive caller blocks for minutes behind long background work.
 
     Worst case is therefore `queue_timeout + timeout`, both explicit. Giving up
-    while queued raises before anything forks, so no child is orphaned.
+    while queued raises `QueueTimeout` before anything forks, so no child is
+    orphaned and callers can distinguish "never started" from "ran too long" by
+    TYPE — it subclasses `subprocess.TimeoutExpired`, so existing handlers are
+    unaffected.
     """
     loop = asyncio.get_running_loop()
     if queue_timeout is None:
@@ -227,7 +244,7 @@ async def run_to_completion(
             "run_to_completion gave up queueing after %.1fs (pool saturated, %d workers): %s",
             queue_timeout, _RUN_POOL_WIDTH, cmd[0] if cmd else "?",
         )
-        raise subprocess.TimeoutExpired(list(cmd), queue_timeout) from None
+        raise QueueTimeout(list(cmd), queue_timeout) from None
 
     # _RUN_POOL, NOT _SPAWN_POOL: this worker is held for the child's whole
     # lifetime, so parking it in the small spawn pool would starve new fork+execs.

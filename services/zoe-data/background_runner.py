@@ -19,7 +19,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 
-from async_subprocess import run_to_completion
+from async_subprocess import QueueTimeout, run_to_completion
 from hermes_http import hermes_auth_headers, hermes_bin
 from repo_paths import zoe_repo_root
 
@@ -272,15 +272,16 @@ async def _run_hermes_background_task(task: str, *, user_id: str, task_id: int) 
         proc = await run_to_completion(
             cmd, cwd=repo_root, env=env, timeout=timeout_s, queue_timeout=queue_wait_s
         )
+    except QueueTimeout as exc:
+        # Never started — say so. Reporting the child's 900s budget here sends
+        # whoever reads the log hunting a slow hermes that never ran. Caught by
+        # TYPE: comparing exc.timeout to queue_wait_s is silently wrong whenever
+        # the queue and runtime budgets happen to coincide.
+        raise TimeoutError(
+            f"Background Hermes task never started: no free subprocess worker "
+            f"after {queue_wait_s:.0f}s (pool saturated)"
+        ) from exc
     except subprocess.TimeoutExpired as exc:
-        # Distinguish "never started" from "ran too long": reporting the child's
-        # 900s budget when we actually gave up queueing after `queue_wait_s`
-        # sends whoever reads this log hunting a slow hermes that never ran.
-        if exc.timeout is not None and float(exc.timeout) == queue_wait_s:
-            raise TimeoutError(
-                f"Background Hermes task never started: no free subprocess worker "
-                f"after {queue_wait_s:.0f}s (pool saturated)"
-            ) from exc
         raise TimeoutError(
             f"Background Hermes task timed out after {timeout_s:.0f}s"
         ) from exc

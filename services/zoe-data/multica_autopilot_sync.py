@@ -232,7 +232,7 @@ async def _run_platform_health_check() -> None:
     import subprocess
     from pathlib import Path
 
-    from async_subprocess import run_to_completion
+    from async_subprocess import QueueTimeout, run_to_completion
 
     script = Path(
         os.environ.get(
@@ -251,6 +251,14 @@ async def _run_platform_health_check() -> None:
             timeout=_HEALTH_CHECK_TIMEOUT_S,
             merge_stderr=True,
         )
+    except QueueTimeout as exc:
+        # The script never ran — a saturated worker pool, not an unhealthy
+        # platform. Reporting this as a health-check timeout would send the
+        # operator investigating the platform instead of the queue.
+        raise RuntimeError(
+            "Platform health check never started: no free subprocess worker "
+            f"(waited {exc.timeout:.0f}s, pool saturated)"
+        ) from exc
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(
             f"Platform health check timed out after {_HEALTH_CHECK_TIMEOUT_S:.0f}s"
