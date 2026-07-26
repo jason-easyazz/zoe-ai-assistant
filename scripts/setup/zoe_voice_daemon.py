@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import io
+import itertools
 import json
 import logging
 import os
@@ -1046,6 +1047,7 @@ def _identify_speaker_from_wav(wav_bytes: bytes) -> tuple[str, float] | None:
 
 
 _shadow_log_lock = threading.Lock()
+_shadow_seq = itertools.count(1)
 
 
 def _record_speaker_shadow(claim: tuple[str, float] | None) -> None:
@@ -1055,12 +1057,24 @@ def _record_speaker_shadow(claim: tuple[str, float] | None) -> None:
     cosine score ONLY — never audio bytes or embeddings, per
     docs/knowledge/biometric-retention-policy.md. A write failure must never
     cost the turn.
+
+    The daemon cannot know who ACTUALLY spoke, so a row is a prediction, not a
+    labelled outcome: `truth` is an empty slot the operator fills during the
+    shadow-week review (see docs/architecture/panel-identity-plan.md). Without
+    it FA/FR cannot be computed — `seq` gives each row a stable handle to label,
+    and `n_profiles` pins how many enrolled voices the score was chosen from, so
+    a mid-week enrollment doesn't silently change what the score means.
     """
+    with _profile_cache_lock:
+        n_profiles = len(_profile_cache["profiles"])
     row = {
+        "seq": next(_shadow_seq),
         "ts": time.time(),
         "panel_id": PANEL_ID,
         "user_id": claim[0] if claim else None,
         "score": round(claim[1], 4) if claim else None,
+        "n_profiles": n_profiles,
+        "truth": None,  # operator-filled ground truth; null until reviewed
     }
     try:
         parent = os.path.dirname(SPEAKER_ID_SHADOW_LOG)

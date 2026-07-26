@@ -5,8 +5,10 @@ Shadow-before-acting is the W5 gate (`docs/architecture/samantha-evolution-plan.
 and logs it — journal line + one JSONL metrics row — but ``_speaker_claim_for_turn``
 returns None, so the claim is never attached to the turn payload and the server
 cannot act on identity during the shadow week. Metrics rows carry
-ts/panel_id/user_id/score ONLY — never audio bytes or embeddings
-(`docs/knowledge/biometric-retention-policy.md`).
+seq/ts/panel_id/user_id/score/n_profiles/truth ONLY — never audio bytes or
+embeddings (`docs/knowledge/biometric-retention-policy.md`). `truth` is the
+operator-filled ground-truth slot: rows are predictions, and FA/FR is not
+computable from them until they are labelled.
 
 The daemon imports hardware deps (pyaudio) at module level, so this test loads
 it via importlib with those modules stubbed — no mic, no network, no models.
@@ -77,10 +79,14 @@ def test_shadow_suppresses_claim_and_records_metrics_row(daemon, monkeypatch, sh
     assert len(rows) == 1
     row = rows[0]
     # Retention policy: metadata only — exactly these keys, no audio/embeddings.
-    assert set(row) == {"ts", "panel_id", "user_id", "score"}
+    assert set(row) == {"seq", "ts", "panel_id", "user_id", "score", "n_profiles", "truth"}
     assert row["user_id"] == "jason"
     assert row["score"] == pytest.approx(0.9124, abs=1e-4)
     assert row["panel_id"] == daemon.PANEL_ID
+    # A row is a PREDICTION: ground truth ships empty for the operator to fill,
+    # otherwise the shadow-week FA/FR review has nothing to compare against.
+    assert row["truth"] is None
+    assert row["seq"] == 1
 
 
 def test_shadow_records_no_match_as_null_row(daemon, monkeypatch, shadow_log):
