@@ -94,3 +94,51 @@ async def test_setup_save_first_connect_has_no_instance_id(monkeypatch):
 
     assert res["ok"] is True and res.get("reconnected") is False
     assert captured["instance_id"] is None, "a first-time connect must not reuse an instance id"
+
+
+# ── OAuth reconnect must ALSO refresh in place (Greptile #1559) ───────────────
+# The generic "Reconnect" works for OAuth providers (Spotify/Tidal/Deezer) too;
+# their save runs through music_oauth._run_flow, which must pass the existing
+# instance_id or MA duplicates the provider and leaves the broken one.
+
+@pytest.mark.asyncio
+async def test_oauth_run_flow_reconnects_in_place(monkeypatch):
+    import asyncio, json, secrets, sys, types, music_oauth
+
+    monkeypatch.delenv("MUSIC_ASSISTANT_TOKEN", raising=False)  # skip the WS auth ack
+    monkeypatch.setattr(secrets, "token_hex", lambda n: "FIXED")  # deterministic msg_id
+    msg_id = "zoe-auth-FIXED"
+
+    class FakeWS:
+        def __init__(self):
+            self._q = ["{}", json.dumps({"message_id": msg_id, "result": [
+                {"key": "session_id", "value": "s"}]})]
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def send(self, _s): pass
+        async def recv(self):
+            return self._q.pop(0) if self._q else "{}"
+    # _run_flow does a LOCAL `import websockets`, so patch sys.modules, not a
+    # module attribute — the local import re-binds from sys.modules and would
+    # otherwise pull the real package.
+    fake_ws_mod = types.ModuleType("websockets")
+    fake_ws_mod.connect = lambda *a, **k: FakeWS()
+    monkeypatch.setitem(sys.modules, "websockets", fake_ws_mod)
+    monkeypatch.setattr(music_oauth, "_values_from_entries", lambda r: {"token": "abc"})
+
+    async def fake_instance(provider): return "spotify--EXISTING"
+    captured = {}
+    async def fake_save(provider, values, instance_id=None):
+        captured["instance_id"] = instance_id
+        return {"name": "Spotify"}
+    monkeypatch.setattr(music_service, "provider_instance_id", fake_instance)
+    monkeypatch.setattr(music_service, "save_provider", fake_save)
+
+    oid = "o1"
+    music_oauth._flows[oid] = {"state": "pending", "auth_url": None, "provider": "spotify",
+                               "error": None, "created": 0, "event": asyncio.Event()}
+    await music_oauth._run_flow(oid, "spotify")
+
+    assert music_oauth._flows[oid]["state"] == "connected"
+    assert captured["instance_id"] == "spotify--EXISTING", "OAuth reconnect did not reuse the instance"
+    music_oauth._flows.pop(oid, None)
