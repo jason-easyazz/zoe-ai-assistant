@@ -34,6 +34,19 @@ _EXECUTOR_AGENT_NAME = "Flue Executor"
 _ADMIN_ROLES = {"admin", "family-admin", "owner"}
 
 
+def _as_list(v) -> tuple:
+    """Coerce an approval field to a tuple. It may be a JSON-array TEXT column
+    (Postgres/SQLite), an already-parsed list, or None."""
+    if v is None:
+        return ()
+    if isinstance(v, str):
+        try:
+            v = json.loads(v)
+        except (ValueError, TypeError):
+            return (v,) if v.strip() else ()
+    return tuple(v) if isinstance(v, (list, tuple)) else (v,)
+
+
 def may_auto_execute(user: dict | None, proposal: asyncpg.Record | dict) -> tuple[bool, str]:
     """Fail-closed gate for auto-executing a proposal (Zoe writing + merging her
     own code). BOTH must hold: (1) the approver holds an admin role, and (2) the
@@ -48,14 +61,15 @@ def may_auto_execute(user: dict | None, proposal: asyncpg.Record | dict) -> tupl
     # execution`). Any OTHER required approval classes must be evidenced by refs
     # the proposal's own contract carries — passed through here, not fabricated.
     user_id = str((user or {}).get("user_id") or "").strip() or "unknown"
-    proposal_refs = tuple(str(r) for r in (get("approval_refs") or ()))
+    proposal_refs = tuple(str(r) for r in _as_list(get("approval_refs")))
     approval_refs = (f"approval:admin:{user_id}", *proposal_refs)
     try:
         from zoe_evolution_execution_gate import evaluate_execution_gate
         gate = evaluate_execution_gate({
             "proposal_id": str(get("id") or ""),
             "autonomy_class": get("autonomy_class") or "",
-            "approval_required": get("approval_required") or (),
+            # approval_required is a JSON-array TEXT column (dialect-agnostic) — parse it.
+            "approval_required": _as_list(get("approval_required")),
         }, approval_refs=approval_refs)
     except Exception as exc:  # noqa: BLE001 - fail closed
         return False, f"execution gate error: {exc}"

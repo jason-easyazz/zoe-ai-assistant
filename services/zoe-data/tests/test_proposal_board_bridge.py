@@ -106,6 +106,16 @@ def test_may_auto_execute_allows_admin_with_executable_contract():
     assert allowed is True, reason
 
 
+def test_may_auto_execute_parses_json_string_approval_required():
+    """approval_required arrives as a JSON-array TEXT column from the DB — the
+    real end-to-end shape after the autonomy contract is persisted."""
+    admin = {"role": "family-admin", "user_id": "jason"}
+    prop = {"id": "p", "autonomy_class": "execute",
+            "approval_required": '["user_or_admin_for_privileged_execution"]'}  # JSON string
+    allowed, reason = pbb.may_auto_execute(admin, prop)
+    assert allowed is True, reason
+
+
 def test_admin_approval_does_not_satisfy_other_approval_classes():
     """The admin ref satisfies only privileged-execution — a proposal that also
     requires e.g. security_review still blocks until THAT evidence exists."""

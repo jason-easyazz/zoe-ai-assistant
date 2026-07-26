@@ -239,10 +239,13 @@ async def run_evolution_notice() -> dict:
                 title=title,
                 signal=signal,
             )
+            from evolution_autonomy import contract_for_type
+            _c = contract_for_type(row["type"])
             await db.execute(
                 """INSERT INTO evolution_proposals
-                   (id, type, title, description, evidence, target_patterns, status, proposed_at)
-                   VALUES ($1,$2,$3,$4,$5,$6,'pending',$7)""",
+                   (id, type, title, description, evidence, target_patterns, status, proposed_at,
+                    autonomy_class, approval_required, risk)
+                   VALUES ($1,$2,$3,$4,$5,$6,'pending',$7,$8,$9,$10)""",
                 row["id"],
                 row["type"],
                 row["title"],
@@ -250,6 +253,7 @@ async def run_evolution_notice() -> dict:
                 row["evidence"],
                 row["target_patterns"],
                 time.time(),
+                _c["autonomy_class"], json.dumps(_c["approval_required"]), _c["risk"],
             )
             created += 1
             logger.info("evolution_notice: proposed intent gap '%s' (%d hits)", rep[:60], len(members))
@@ -476,16 +480,20 @@ async def record_frustration_signal(
             title=title,
             signal=signal,
         )
+        from evolution_autonomy import contract_for_type
+        _c = contract_for_type("user_frustration")
         await db.execute(
             """INSERT INTO evolution_proposals
-               (id, type, title, description, evidence, target_patterns, status, proposed_at)
-               VALUES ($1,'user_frustration',$2,$3,$4,$5,'pending',$6)""",
+               (id, type, title, description, evidence, target_patterns, status, proposed_at,
+                autonomy_class, approval_required, risk)
+               VALUES ($1,'user_frustration',$2,$3,$4,$5,'pending',$6,$7,$8,$9)""",
             row["id"],
             row["title"],
             row["description"],
             row["evidence"],
             row["target_patterns"],
             time.time(),
+            _c["autonomy_class"], json.dumps(_c["approval_required"]), _c["risk"],
         )
         logger.info(
             "evolution_notice: frustration signal for user=%s message='%s' repeats=%d",
