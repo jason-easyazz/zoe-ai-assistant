@@ -1,0 +1,101 @@
+# PR hygiene — size guard + overlap notice.
+#
+# Both exist to make "combine related work, submit when finished" cheap to follow.
+# Thresholds are calibrated from 40 real merged PRs (2026-07): median 4 files / 246
+# lines, p90 9 files / 653 lines, max 10 files / 975 lines. NOTHING exceeded 40 files
+# or 1500 lines, so a guard set there would never fire. These are set well above normal
+# work but well below Greptile's ~50-file silent-skip — an oversized PR must not sail
+# past review entirely while still costing a credit.
+name: pr-hygiene
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-hygiene-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  size-and-overlap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            if (pr.draft) { core.info('draft — hygiene checks deferred until ready'); return; }
+
+            // Files that legitimately move in bulk and say nothing about review burden.
+            const GENERATED = [
+              /^docs\/knowledge\/flag-inventory\.(md|json)$/,
+              /^services\/zoe-ui\/dist\/lib\//,
+              /package-lock\.json$/,
+              /^modules\/omnigent\/wheels\//,
+            ];
+            const OVERRIDE = 'oversized-ok';
+            const WARN  = { files: 15, lines: 1000 };
+            const FAIL  = { files: 30, lines: 2000 };
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner, repo: context.repo.repo,
+              pull_number: pr.number, per_page: 100,
+            });
+            const counted = files.filter(f => !GENERATED.some(re => re.test(f.filename)));
+            const nFiles = counted.length;
+            const nLines = counted.reduce((a, f) => a + f.additions + f.deletions, 0);
+            const skipped = files.length - nFiles;
+            core.info(`counted ${nFiles} files / ${nLines} lines (${skipped} generated excluded)`);
+
+            // ── Overlap notice: is another OPEN PR already touching these files? ──
+            // This is the automatable half of "combine related work before review".
+            // Reviews are billed per PR and per push, so two PRs over the same files
+            // pay twice and then conflict. Advisory only — it reports, never blocks.
+            const others = await github.paginate(github.rest.pulls.list, {
+              owner: context.repo.owner, repo: context.repo.repo, state: 'open', per_page: 100,
+            });
+            const mine = new Set(counted.map(f => f.filename));
+            const overlaps = [];
+            for (const o of others) {
+              if (o.number === pr.number || o.draft) continue;
+              const of = await github.paginate(github.rest.pulls.listFiles, {
+                owner: context.repo.owner, repo: context.repo.repo,
+                pull_number: o.number, per_page: 100,
+              });
+              const shared = of.map(f => f.filename).filter(f => mine.has(f));
+              if (shared.length) overlaps.push({ number: o.number, title: o.title, shared });
+            }
+
+            const lines = [];
+            if (overlaps.length) {
+              lines.push('**Overlapping open PRs** — consider combining before review:');
+              for (const o of overlaps) {
+                lines.push(`- #${o.number} (${o.title}) shares: ${o.shared.slice(0, 5).join(', ')}${o.shared.length > 5 ? ` +${o.shared.length - 5} more` : ''}`);
+              }
+              lines.push('');
+              lines.push('Two PRs over the same files are billed twice by every reviewer, and the second inherits the first\'s conflicts. Landing them as one branch is cheaper and reviews better.');
+            }
+
+            const over = (t) => nFiles > t.files || nLines > t.lines;
+            const hasOverride = pr.labels.some(l => l.name === OVERRIDE);
+
+            if (over(FAIL) && !hasOverride) {
+              lines.push('', `**Too large:** ${nFiles} files / ${nLines} lines (limit ${FAIL.files} / ${FAIL.lines}).`,
+                '', `Split it, or add the \`${OVERRIDE}\` label if it genuinely cannot be split. Note Greptile silently SKIPS PRs over ~50 files — past that you get no review at all while still paying for it.`);
+            } else if (over(WARN)) {
+              lines.push('', `**Getting large:** ${nFiles} files / ${nLines} lines (typical here is 4 files / 246 lines). Not blocking.`);
+            }
+
+            if (lines.length) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: pr.number, body: lines.join('\n'),
+              });
+            }
+            if (over(FAIL) && !hasOverride) {
+              core.setFailed(`PR too large: ${nFiles} files / ${nLines} lines`);
+            }

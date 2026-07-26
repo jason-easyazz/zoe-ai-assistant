@@ -150,6 +150,33 @@ and reverted, because it breaks the gate. **Copilot's inline comments
 create review threads that count toward `required_conversation_resolution`**, so they must
 be resolved like any other.
 
+## One workstream, one PR — combine before review, not after
+
+Reviews are billed **per PR and per push**, and every reviewer re-runs on every update. So
+splitting one piece of work across several PRs multiplies the cost, and two PRs over the same
+files pay twice and then conflict with each other. Combine first.
+
+- **One branch per WORKSTREAM, not per change.** Several commits on `feature/<slug>`, one PR,
+  one review — rather than three PRs that each touch the same module.
+- **A draft PR is a parked PR, and parking is free.** Greptile is `triggerOnDrafts: false`, so
+  a draft can stay open for days at zero cost. Open early as a draft, iterate, and mark ready
+  only when the work is genuinely finished — marking ready is the act of spending the review.
+- **Before opening a PR, check for an open one over the same files.** If it exists, add to that
+  branch or wait for it to land. `pr-hygiene.yml` posts an overlap notice automatically, but
+  the cheaper move is not creating the second PR at all.
+- **Serialise.** Keep one or two PRs in flight. With `strict: true` every merge pushes the
+  others behind, and each branch update triggers a fresh review — the measured 3.6 reviews/PR
+  in July was this, not oversized changes.
+
+**Size** (`pr-hygiene.yml`, thresholds from 40 real merged PRs: median 4 files / 246 lines,
+p90 9 / 653, max 10 / 975):
+- warn above **15 files or 1000 lines**, fail above **30 files or 2000 lines**
+- generated files (flag inventory, vendored `dist/lib/`, lockfiles, wheels) are excluded — they
+  move in bulk and say nothing about review burden
+- `oversized-ok` label overrides a genuine exception
+- the hard limit exists because **Greptile silently skips PRs over ~50 files** — past that you
+  get no review at all while still paying for it, which is worse than a blocked PR
+
 ## Greptile PR loop
 
 For reviewable development work:
