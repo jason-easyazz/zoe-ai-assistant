@@ -1332,9 +1332,28 @@ _HIDDEN_ENTRY_TYPES = {"label", "divider"}
 
 
 async def provider_catalogue() -> list[dict[str, Any]]:
-    """The 'Add music' catalogue merged with configured status."""
-    configured = {c.get("domain") for c in (await _ma("config/providers") or []) if isinstance(c, dict)}
-    return [{**p, "connected": p["domain"] in configured} for p in _SETUP_CATALOGUE]
+    """The 'Add music' catalogue merged with configured + health status.
+
+    `connected` = an instance exists in MA. `needs_attention` = that instance is
+    enabled but NOT loaded (e.g. YouTube Music failing its Premium check), with
+    MA's own `reason` — so the UI can offer "Reconnect" instead of "Connect".
+    """
+    cfgs = [c for c in (await _ma("config/providers") or []) if isinstance(c, dict)]
+    provs = _as_list(await _ma("providers"))
+    configured = {c.get("domain") for c in cfgs}
+    available = {p.get("domain") for p in provs if isinstance(p, dict) and p.get("available")}
+    err_by_domain = {
+        c.get("domain"): str(c.get("last_error") or "")
+        for c in cfgs if c.get("enabled") and c.get("last_error")
+    }
+    out: list[dict[str, Any]] = []
+    for p in _SETUP_CATALOGUE:
+        dom = p["domain"]
+        connected = dom in configured
+        needs = connected and dom not in available and dom in err_by_domain
+        out.append({**p, "connected": connected, "needs_attention": needs,
+                    "reason": err_by_domain.get(dom, "") if needs else ""})
+    return out
 
 
 def _clean_entries(entries: Any) -> list[dict[str, Any]]:
