@@ -59,7 +59,11 @@ services:
   # ── Multica — A2A board visibility (opt-in: ZOE_MULTICA=true) ───────────────
   # Uses the base zoe-database container's separate 'multica' database.
   multica-backend:
-    image: ghcr.io/multica-ai/multica-backend:latest
+    # Pinned by digest (was :latest) — supply-chain hardening, see
+    # docs/architecture/multica-executor-migration.md §1 / perf-hardening-plan 3d.
+    # Digest of ghcr.io :latest as of 2026-07-26. To bump: docker pull the new
+    # tag, then update this digest deliberately.
+    image: ghcr.io/multica-ai/multica-backend@sha256:1f77644ee888e62ddcf2558153a036afdd5ec4dbed3ff90d768b54211ab5afd0
     container_name: zoe-multica-backend
     ports:
     - "8080:8080"
@@ -108,7 +112,8 @@ services:
       start_period: 60s
 
   multica-web:
-    image: ghcr.io/multica-ai/multica-web:latest
+    # Pinned by digest (was :latest) — digest of ghcr.io :latest as of 2026-07-26.
+    image: ghcr.io/multica-ai/multica-web@sha256:6999178663e22729cb49a2c9e579d1b8b9b35e2866a272dab72a857cf93797de
     container_name: zoe-multica-web
     ports:
     - "3000:3000"
