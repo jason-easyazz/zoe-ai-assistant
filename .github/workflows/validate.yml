@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Required checks must report on the merge_group event or a merge queue stalls
+  # forever waiting for them (GitHub: "checks that only run on pull_request will not
+  # execute during merge queue operations"). Harmless until a queue is enabled — no
+  # merge_group events are produced without one. See docs/knowledge/merge-queue-switch.md.
+  merge_group:
 
 concurrency:
   group: validate-${{ github.event.pull_request.number || github.ref }}
