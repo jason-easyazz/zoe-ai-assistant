@@ -34,6 +34,14 @@ input here rather than a rewrite.
 
 NON-GOALS (from the plan): synthetic laughter and singing. The model cannot do
 them; faking them badly is worse than not doing them.
+
+ENABLING THIS IS GATED. Landing it dark did NOT satisfy the repo's mandatory
+replay-gate rule for voice-path changes — it deferred it. Before setting
+``ZOE_EXPRESSIVE_TTS=1``, run ``scripts/maintenance/voice_regression_probe.py``
+under ``flock /tmp/zoe-voice-harness.lock`` and require a green result: said-vs-did
+must not regress and per-stage speed must not regress. The flag-OFF path is
+byte-identical (no ``speed`` key at all), which is why merging dark is safe; the
+flag-ON path is a real delivery change and is not exempt.
 """
 from __future__ import annotations
 
