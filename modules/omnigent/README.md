@@ -92,8 +92,18 @@ for d in .omnigent .claude .codex .cursor; do \
 find /home/zoe/assistant/.git -not -user zoe      # expect no new entries over time
 ```
 
-If omnigent cannot write `/root/.omnigent`, the volume chown was missed — revert by
-removing `user:` and restarting while it is investigated.
+```bash
+# The actual point of the change: new files in the bind-mounted repo must land
+# zoe-owned. Nothing else proves the fix worked — a green container does not.
+find /home/zoe/assistant/.git -not -user zoe -not -name '.gh_credentials' | wc -l
+```
+
+Expect that count to stay at 0 as omnigent works. Before the switch it reached 47 in
+about an hour. If it climbs again, the container is still writing as root and `user:`
+did not take — check `docker exec zoe-omnigent id` before anything else.
+
+If omnigent cannot write any of the four state dirs, that volume's chown was missed —
+revert by removing `user:` and restarting while it is investigated.
 
 ## Auth — OAuth subscriptions (not API keys)
 The harnesses authenticate with the **subscription logins** (Claude Pro/Max, ChatGPT/Codex,
