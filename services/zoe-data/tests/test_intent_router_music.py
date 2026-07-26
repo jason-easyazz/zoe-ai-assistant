@@ -121,3 +121,92 @@ def test_music_async_path_has_no_sync_psycopg2_connect():
 
     assert "psycopg2" not in sources
     assert ".connect(" not in sources
+
+
+# ── "Hey Zoe, I like this song" -> favourite the current track ───────────────
+
+@pytest.mark.parametrize("phrase", [
+    "I like this song",
+    "i love this track",
+    "favourite this",
+    "favorite this song",
+    "hey zoe, I like this",
+    "thumbs up this song",
+    "like it",
+])
+def test_favorite_phrases_detect_music_favorite(phrase):
+    det = intent_router.detect_intent(phrase, log_miss=False)
+    assert det is not None and det.name == "music_favorite", f"{phrase!r} -> {det}"
+
+
+@pytest.mark.parametrize("phrase", [
+    "I like jazz",                 # a taste statement, not "this" — must NOT fire
+    "play something I like",       # a play request
+    "I like the weather today",
+])
+def test_taste_statements_do_not_favourite(phrase):
+    det = intent_router.detect_intent(phrase, log_miss=False)
+    assert det is None or det.name != "music_favorite", f"{phrase!r} wrongly -> music_favorite"
+
+
+@pytest.mark.asyncio
+async def test_favorite_execution_speaks_the_track(monkeypatch):
+    import music_service
+    async def fake_fav(player_id=""):
+        return {"ok": True, "title": "Meet Joe Black", "artist": "Thomas Newman"}
+    monkeypatch.setattr(music_service, "favorite_now_playing", fake_fav)
+    result = await intent_router._execute_music_intent(Intent("music_favorite", {}), "jason")
+    assert result == "Done — added Meet Joe Black by Thomas Newman to your favourites."
+
+
+@pytest.mark.asyncio
+async def test_favorite_nothing_playing_says_so(monkeypatch):
+    import music_service
+    async def fake_fav(player_id=""):
+        return {"ok": False, "reason": "nothing playing"}
+    monkeypatch.setattr(music_service, "favorite_now_playing", fake_fav)
+    result = await intent_router._execute_music_intent(Intent("music_favorite", {}), "jason")
+    assert result == "There's nothing playing to favourite right now."
+
+
+@pytest.mark.asyncio
+async def test_favorite_write_failure_does_not_claim_success(monkeypatch):
+    import music_service
+    async def fake_fav(player_id=""):
+        return {"ok": False, "reason": "unavailable", "title": "X", "artist": "Y"}
+    monkeypatch.setattr(music_service, "favorite_now_playing", fake_fav)
+    result = await intent_router._execute_music_intent(Intent("music_favorite", {}), "jason")
+    assert result == "I couldn't favourite that just now."
+
+
+# ── the voice channel must actually reach this intent ───────────────────────
+
+def test_music_favorite_is_reachable_from_the_voice_fast_path():
+    """The whole feature is voice-triggered, so the voice gate must admit it.
+
+    voice_tts.py's public-intent short-circuit only executes intents that are in
+    guest_policy.PUBLIC_HOUSEHOLD_INTENTS. An intent missing from that set falls
+    through to the brain, which has no favourite capability — so "Hey Zoe, I
+    like this song" would detect correctly and then silently do nothing.
+
+    Favouriting writes to the SHARED Music Assistant library
+    (favorite_now_playing takes no user_id), so household scope is correct here
+    rather than USER_SCOPED_INTENTS.
+    """
+    from guest_policy import PUBLIC_HOUSEHOLD_INTENTS, USER_SCOPED_INTENTS
+
+    assert "music_favorite" in PUBLIC_HOUSEHOLD_INTENTS
+    assert "music_favorite" not in USER_SCOPED_INTENTS
+
+
+def test_the_favorite_phrase_detects_and_is_voice_admitted():
+    """End-to-end on the two gates the phrase must clear: detect, then admit."""
+    from guest_policy import PUBLIC_HOUSEHOLD_INTENTS
+
+    for phrase in ("hey zoe i like this song", "I like this song", "I love this song"):
+        intent = intent_router.detect_intent(phrase, log_miss=False)
+        assert intent is not None, f"{phrase!r} did not detect"
+        assert intent.name == "music_favorite", f"{phrase!r} -> {intent.name}"
+        assert intent.name in PUBLIC_HOUSEHOLD_INTENTS, (
+            f"{phrase!r} detects but the voice fast path would skip it"
+        )
