@@ -490,18 +490,37 @@
   /* Grows under the finger so a drag is visibly grabbed, not just repainted. */
   .mfull .mscrub.drag .mknob{transform:translate(-50%,-50%) scale(1.5)}
   .mfull .mtimes{display:flex;justify-content:space-between;margin-top:12px;font-size:18px;color:rgba(255,255,255,.6);font-variant-numeric:tabular-nums}
-  .mfull .mtransport{position:absolute;left:0;right:0;bottom:44px;display:flex;justify-content:center;align-items:center;gap:44px}
-  .mfull .mtransport .sml{opacity:.55;background:none;border:0;color:#fff;cursor:pointer;width:68px;height:68px;border-radius:50%;display:grid;place-items:center}
-  .mfull .mtransport .sml svg{width:26px;height:26px}
+  /* Transport is now JUST back / play / next, centred. Keep-playing, shuffle and
+     repeat moved into the tools row (#mTools); volume and the tools button sit
+     absolutely at the two bottom corners, so the centred trio stays centred. */
+  .mfull .mtransport{position:absolute;left:0;right:0;bottom:44px;display:flex;justify-content:center;align-items:center;gap:44px;pointer-events:none}
+  /* The row spans the full width to centre prev/play/next, but its EMPTY areas
+     overlay the bottom-corner tools button + volume tile — a transparent box
+     still eats pointer events, so a real finger tap on those corners was being
+     swallowed. Only the buttons themselves take events. */
+  .mfull .mtransport button{pointer-events:auto}
   .mfull .mtransport button svg{width:28px;height:28px}
   .mfull .mtransport .pp svg{width:32px;height:32px;color:#0a0d18}
-  .mfull .mtransport .sml.on{opacity:1;background:rgba(123,150,255,.25);box-shadow:0 0 16px rgba(123,150,255,.35)}
-  /* Don't-stop is a 6th button, and 6 buttons in a centred row would push
-     play/pause 56px off-centre — undoing the centring the card was just
-     rebuilt around. An inert 68px spacer on the left restores the 3-a-side
-     balance (spacer,shuffle,prev | pp | next,repeat,dont-stop) without
-     restructuring the stack. */
-  .mfull .mtransport .tsp{width:68px;height:68px;flex:none;pointer-events:none}
+  /* Tools row occupies the progress-bar slot; shown only while .mfull.tools, and
+     the scrub is hidden then (they never coexist — "replace, don't overlay"). */
+  .mfull .mtools{position:absolute;left:50%;width:560px;margin-left:-280px;bottom:120px;display:none;justify-content:center;align-items:center;gap:52px}
+  .mfull.tools .mtools{display:flex}
+  .mfull.tools .mscrub{display:none}
+  .mfull .mtools .sml{opacity:.6;background:none;border:0;color:#fff;cursor:pointer;width:68px;height:68px;border-radius:50%;display:grid;place-items:center}
+  .mfull .mtools .sml svg{width:28px;height:28px}
+  .mfull .mtools .sml.on{opacity:1;background:rgba(123,150,255,.25);box-shadow:0 0 16px rgba(123,150,255,.35)}
+  /* Tools button: bottom-left, under the scrub's left edge; the volume tile
+     mirrors it under the right edge. Both 68px, so prev/play/next stay centred. */
+  .mfull .mtoolsbtn{position:absolute;bottom:44px;left:calc(50% - 280px);width:68px;height:68px;border-radius:50%;border:0;background:rgba(255,255,255,.10);color:#fff;display:grid;place-items:center;cursor:pointer;opacity:.7}
+  .mfull .mtoolsbtn svg{width:26px;height:26px}
+  .mfull .mtoolsbtn.on{opacity:1;background:rgba(123,150,255,.25);box-shadow:0 0 16px rgba(123,150,255,.35)}
+  /* Buttons flanking the cover flow, in its glassy card styling: search (left),
+     playlists/radio/sources (right). Vertically centred on the cover band. */
+  .mfull .cfside{position:absolute;top:calc(74px + var(--cfcard,300px) / 2);transform:translateY(-50%);width:60px;height:60px;border-radius:18px;border:1px solid rgba(255,255,255,.16);background:linear-gradient(180deg,rgba(255,255,255,.14),rgba(255,255,255,.05));backdrop-filter:blur(8px);color:#fff;display:grid;place-items:center;cursor:pointer;z-index:40;box-shadow:0 14px 32px rgba(0,0,0,.4)}
+  .mfull .cfside svg{width:26px;height:26px}
+  .mfull .cfside:active{transform:translateY(-50%) scale(.93)}
+  .mfull .cfleft{left:40px}
+  .mfull .cfright{right:40px}
   .mqbtn{width:48px;height:48px;flex:none;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.2);color:#fff;cursor:pointer}
   .mqbtn svg{width:22px;height:22px}
   /* Browse (Recent + Playlists) is a real SURFACE, not an overlay on the music
@@ -736,19 +755,21 @@
      #mTransport's delegated handler matches `closest('button')`, so a div is
      invisible to it and cannot fall through to musicControl(); and a native
      range input inside a <button> is invalid interactive content. */
-  .mfull .mtransport .mvolt{position:relative;flex:none;width:68px;height:68px;border-radius:50%;
-        display:grid;place-items:center;color:#fff;opacity:.55;cursor:pointer;transition:.25s}
-  .mfull .mtransport .mvolt svg{width:26px;height:26px}
-  .mfull .mtransport .mvolt.open{opacity:1;background:rgba(255,255,255,.16)}
+  /* Volume left the transport row: it now sits absolutely at bottom-right,
+     mirroring the tools button at bottom-left, so prev/play/next stay centred. */
+  .mfull .mvolt{position:absolute;bottom:44px;right:calc(50% - 280px);width:68px;height:68px;border-radius:50%;
+        display:grid;place-items:center;color:#fff;opacity:.7;cursor:pointer;transition:.25s}
+  .mfull .mvolt svg{width:26px;height:26px}
+  .mfull .mvolt.open{opacity:1;background:rgba(255,255,255,.16)}
   /* Cleared over .mscrub, not merely "above the button". At bottom:80px the
      popover sat across the seek bar and hid the duration — it passed every
      assertion, and only the screenshot showed it. This lands its bottom edge
      above the scrub's top, in the band between the covers (they end y412 at
      CF_K=1) and the progress row. Re-measure if either of those moves. */
-  .mfull .mtransport .mvolt .vpop{position:fixed;right:24px;top:50%;transform:translateY(-50%) translateX(16px);width:104px;height:260px;padding:18px 0 16px;border-radius:22px;background:rgba(18,16,30,.78);border:1px solid rgba(255,255,255,.14);backdrop-filter:blur(18px);box-shadow:0 20px 50px rgba(0,0,0,.5);opacity:0;pointer-events:none;transition:opacity .26s ease,transform .28s cubic-bezier(.2,.8,.3,1);display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:14px;z-index:70}
-  .mfull .mtransport .mvolt.open .vpop{opacity:1;transform:translateY(-50%) translateX(0);pointer-events:auto}
-  .mfull .mtransport .mvolt .vpop input[type=range]{-webkit-appearance:slider-vertical;appearance:slider-vertical;writing-mode:vertical-lr;direction:rtl;width:44px;height:176px;accent-color:#fff;flex:none;margin:0;background:transparent;cursor:pointer;touch-action:none}
-  .mfull .mtransport .mvolt .vpop .vv{min-width:46px;text-align:right;font-size:17px;
+  .mfull .mvolt .vpop{position:fixed;right:24px;top:50%;transform:translateY(-50%) translateX(16px);width:104px;height:260px;padding:18px 0 16px;border-radius:22px;background:rgba(18,16,30,.78);border:1px solid rgba(255,255,255,.14);backdrop-filter:blur(18px);box-shadow:0 20px 50px rgba(0,0,0,.5);opacity:0;pointer-events:none;transition:opacity .26s ease,transform .28s cubic-bezier(.2,.8,.3,1);display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:14px;z-index:70}
+  .mfull .mvolt.open .vpop{opacity:1;transform:translateY(-50%) translateX(0);pointer-events:auto}
+  .mfull .mvolt .vpop input[type=range]{-webkit-appearance:slider-vertical;appearance:slider-vertical;writing-mode:vertical-lr;direction:rtl;width:44px;height:176px;accent-color:#fff;flex:none;margin:0;background:transparent;cursor:pointer;touch-action:none}
+  .mfull .mvolt .vpop .vv{min-width:46px;text-align:right;font-size:17px;
         font-variant-numeric:tabular-nums;color:#fff}
   .spk{display:flex;align-items:center;gap:11px;padding:13px 20px;border-radius:999px;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.22);color:#fff;font:inherit;font-size:19px;font-weight:500;cursor:pointer;max-width:340px}
   .spk .spkname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -989,6 +1010,8 @@
   var PLAY_I='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
   var PAUSE_I='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h3.4v14H7zM13.6 5H17v14h-3.4z"/></svg>';
   var REP1_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/><path d="M11 10h1v4"/></svg>';
+  var SEARCH_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>';
+  var TOOLS_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10M18 6h2M4 12h2M10 12h10M4 18h7M15 18h5"/><circle cx="16" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="13" cy="18" r="2"/></svg>';
   var GROUND='radial-gradient(120% 90% at 50% -10%,#131a2b,#080b12 62%)';
   var DUSK='linear-gradient(180deg,#20264d,#3a3a6b 34%,#8a5a86 60%,#d98a63 82%,#efb27a)';
 
@@ -1009,7 +1032,7 @@
     weather:{home:true, bg:DUSK, canvas:true,
       html:'<div class="wloc" id="wxLoc"></div><div class="wbig"><div class="t" id="wxTemp">—°</div><div class="c" id="wxCond"></div></div><div class="whours" id="wxHours"></div>'},
     music:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,
-      html:'<div class="mtop"><button class="spk" id="mSpk">'+SPKR+' <span class="spkname">Speaker</span> <span class="cx">▾</span></button><button class="mqbtn" id="mQBtn" title="Browse music">'+QICON+'</button></div><div class="mfull"><div class="cf" id="mCF"><div class="cf-track" id="mCFT"></div></div><div class="cfmeta"><div class="mkick" id="mKick">Now Playing</div><div class="mtitle" id="mTitle">—</div><div class="martist" id="mArtist"></div><button class="mfav" id="mFav" title="Favourite">'+HEART_I+'</button></div><div class="mscrub" id="mScrub"><div class="mtrack"><div class="mfill" id="mFill" style="width:0%"></div><div class="mknob" id="mKnob" style="left:0%"></div></div><div class="mtimes"><span id="mElapsed">0:00</span><span id="mDur">0:00</span></div></div><div class="mtransport" id="mTransport"><span class="tsp"></span><button class="sml" id="mDS" type="button" title="Keep the music playing" aria-pressed="false">'+DS_I+'</button><button class="sml" id="mShuf" data-a="shuffle" title="Shuffle">'+SHUF_I+'</button><button data-a="previous">'+PREV_I+'</button><button class="pp" id="mPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button><button class="sml" id="mRep" data-a="repeat" title="Repeat">'+REP_I+'</button><div class="mvolt" id="mVolT" role="button" tabindex="0" aria-label="Volume" title="Volume">'+VOL_I+'<div class="vpop"><input type="range" min="0" max="100" step="2" id="mVol" aria-label="Volume"><span class="vv" id="mVolV"></span></div></div><div class="tsp"></div></div></div><div class="mqr" id="mQR"><div class="qrbox" id="mQRCode"></div><div class="qrlab">Scan to queue</div></div>'},
+      html:'<div class="mtop"><button class="spk" id="mSpk">'+SPKR+' <span class="spkname">Speaker</span> <span class="cx">▾</span></button></div><div class="mfull"><button class="cfside cfleft" id="mSearch" title="Search by voice" aria-label="Search music by voice">'+SEARCH_I+'</button><button class="cfside cfright" id="mBrowse" title="Playlists, radio &amp; sources" aria-label="Playlists, radio and sources">'+QICON+'</button><div class="cf" id="mCF"><div class="cf-track" id="mCFT"></div></div><div class="cfmeta"><div class="mkick" id="mKick">Now Playing</div><div class="mtitle" id="mTitle">—</div><div class="martist" id="mArtist"></div><button class="mfav" id="mFav" title="Favourite">'+HEART_I+'</button></div><div class="mscrub" id="mScrub"><div class="mtrack"><div class="mfill" id="mFill" style="width:0%"></div><div class="mknob" id="mKnob" style="left:0%"></div></div><div class="mtimes"><span id="mElapsed">0:00</span><span id="mDur">0:00</span></div></div><div class="mtools" id="mTools" aria-hidden="true"><button class="sml" id="mDS" type="button" title="Keep the music playing" aria-pressed="false">'+DS_I+'</button><button class="sml" id="mShuf" data-a="shuffle" title="Shuffle">'+SHUF_I+'</button><button class="sml" id="mRep" data-a="repeat" title="Repeat">'+REP_I+'</button></div><button class="mtoolsbtn" id="mToolsBtn" type="button" title="More controls" aria-label="More controls" aria-pressed="false">'+TOOLS_I+'</button><div class="mtransport" id="mTransport"><button data-a="previous">'+PREV_I+'</button><button class="pp" id="mPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button></div><div class="mvolt" id="mVolT" role="button" tabindex="0" aria-label="Volume" title="Volume">'+VOL_I+'<div class="vpop"><input type="range" min="0" max="100" step="2" id="mVol" aria-label="Volume"><span class="vv" id="mVolV"></span></div></div></div><div class="mqr" id="mQR"><div class="qrbox" id="mQRCode"></div><div class="qrlab">Scan to queue</div></div>'},
     // Browse — Recent + Playlists. Same background as music (it is the music
     // card's other face), standard card header: title by #home.
     browse:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,
@@ -1731,6 +1754,7 @@
       var spk=document.getElementById('mSpk'),ti=document.getElementById('mTitle'),ar=document.getElementById('mArtist'),fill=document.getElementById('mFill'),te=document.getElementById('mElapsed'),td=document.getElementById('mDur'),pp=document.getElementById('mPP');
       var idle=!d||!d.available||!np||!(np.title||np.state==='playing'||np.state==='paused');
       var scrub=document.querySelector('.mfull .mscrub'),tp=document.getElementById('mTransport');
+      var tbtn=document.getElementById('mToolsBtn'),vtile=document.getElementById('mVolT');
       noteNP(np);   // before the idle return, so stopping the music lets sleep arm again
       if(idle){
         // Idle is a real state, not a broken card: say so, keep the speaker
@@ -1742,6 +1766,9 @@
         var pp0=document.getElementById('mPP');if(pp0){pp0.dataset.playing='0';pp0.innerHTML=PLAY_I;}
         if(ar)ar.innerHTML='Say <b style="color:var(--ink)">“Hey Zoe, play some music”</b> — or pick a speaker first.';
         if(scrub)scrub.style.display='none';if(tp)tp.style.display='none';
+        // Nothing to act on: hide the tools + volume tiles too, and force the
+        // tools row shut so it can't linger over an idle card.
+        if(tbtn)tbtn.style.display='none';if(vtile)vtile.style.display='none';musicTools(false);
         // Don't stomp the speaker the operator just chose. With nothing
         // playing, now-playing still names whatever MA last had active, so
         // refreshing from it made the label snap back a few seconds after
@@ -1753,6 +1780,7 @@
         return;
       }
       if(scrub)scrub.style.display='';if(tp)tp.style.display='';
+      if(tbtn)tbtn.style.display='';if(vtile)vtile.style.display='';
       _music.player_id=np.player_id;
       if(spk){var nm=spk.querySelector('.spkname');
         // A REAL track playing somewhere is the truth — that player wins and any
@@ -2470,6 +2498,22 @@
     toast('No speaker playing yet');
     return false;
   }
+  // Tools overlay: keep-playing / shuffle / repeat replace the progress bar, then
+  // auto-hide — "these are all tools you only touch once and leave". Defined at
+  // this scope (not inside wireMusic) so loadMusic's idle path can force it shut.
+  var _toolsT=null;
+  function _toolsClear(){if(_toolsT){clearTimeout(_toolsT);_toolsT=null;}}
+  function _toolsArm(){_toolsClear();_toolsT=setTimeout(function(){musicTools(false);},4500);}
+  function musicTools(open){
+    var mf=document.querySelector('.mfull');if(!mf)return;
+    if(open===undefined)open=!mf.classList.contains('tools');
+    mf.classList.toggle('tools',open);
+    // The row is aria-hidden while collapsed; reveal it to the screen reader when
+    // it opens, or keep/shuffle/repeat are visible but unreachable by assistive nav.
+    var row=document.getElementById('mTools');if(row)row.setAttribute('aria-hidden',open?'false':'true');
+    var btn=document.getElementById('mToolsBtn');if(btn)btn.setAttribute('aria-pressed',open?'true':'false');if(btn)btn.classList.toggle('on',open);
+    if(open)_toolsArm();else _toolsClear();
+  }
   function wireMusic(){
     // Revisits: seed the play/pause button from the cached snapshot so the
     // pre-poll icon (and a fast tap) match the last-known real state.
@@ -2477,18 +2521,29 @@
       if(pp0){pp0.dataset.playing=_music.np.playing?'1':'0';pp0.innerHTML=_music.np.playing?PAUSE_I:PLAY_I;}}
     // The flow is rebuilt with the card, so its state can't survive a show().
     cfApplyScale();cfClear();wireCF();wireSeek();wireVol();wireVolPop();wireKeep();
+    _toolsClear();var _mf0=document.querySelector('.mfull');if(_mf0)_mf0.classList.remove('tools');
     loadMusic();_wxTick=setInterval(function(){if(_cur==='music')loadMusic();},5000);
     if(_homeTick){clearInterval(_homeTick);}_homeTick=setInterval(tickMusic,1000);
     var t=document.getElementById('mTransport');if(t)t.addEventListener('click',function(e){var btn=e.target.closest('button');if(!btn)return;var a=btn.getAttribute('data-a');if(!a)return;
-      // ∞ (#mDS) is a button in this row with no data-a — it has its own handler
-      // (wireKeep). Without this guard its click bubbles here and falls through to
-      // musicControl(null), POSTing a null-action /api/music/control on every tap.
+      musicControl(a==='playpause'?(document.getElementById('mPP').dataset.playing==='1'?'pause':'play'):a);});
+    // Tools button opens/closes the row; the row's own clicks (shuffle/repeat —
+    // keep-playing is wired directly by wireKeep) keep the auto-hide alive so it
+    // doesn't vanish while you're still adjusting.
+    var tb=document.getElementById('mToolsBtn');
+    if(tb)tb.onclick=function(e){e.stopPropagation();musicTools();};
+    var tr=document.getElementById('mTools');
+    if(tr)tr.addEventListener('click',function(e){var btn=e.target.closest('button');if(!btn)return;
+      _toolsArm();   // still fiddling — keep it open
+      var a=btn.getAttribute('data-a');
       if(a==='shuffle'){musicSet('shuffle_set',!_music.shuffle);return;}
       if(a==='repeat'){var nxt={off:'all',all:'one',one:'off'}[_music.repeat||'off'];musicSet('repeat_set',nxt);return;}
-      musicControl(a==='playpause'?(document.getElementById('mPP').dataset.playing==='1'?'pause':'play'):a);});
-    // Browse is a surface now, so this is plain navigation — no toggle, no
-    // overlay state, and #home keeps its corner because nothing covers it.
-    var qb=document.getElementById('mQBtn');
+      // #mDS has no data-a; wireKeep owns its action, this just kept the timer alive.
+    });
+    // Search hands the mic to Zoe (voice), the same path the orb + wake word use;
+    // Browse is the playlists/radio/sources surface.
+    var sb=document.getElementById('mSearch');
+    if(sb)sb.onclick=function(e){e.stopPropagation();panelVoice('Listening — what would you like to hear?');};
+    var qb=document.getElementById('mBrowse');
     if(qb)qb.onclick=function(e){e.stopPropagation();show('browse');};
     var fav=document.getElementById('mFav');
     if(fav)fav.onclick=function(){
@@ -4057,12 +4112,15 @@
     // nothing comes back.
     _orbListenT=setTimeout(function(){orb.classList.remove('listening');},12000);
   }
-  orb.addEventListener('click',function(){
+  // Hand the mic to Zoe via the panel daemon (beep + open mic). Shared by the
+  // orb and the music card's search button — both want "listen, don't type".
+  // `promptMsg` is the on-screen cue while listening.
+  function panelVoice(promptMsg){
     if(_convLive||_orbBusy)return;       // a live conversation, or an activate already in flight
     _orbBusy=true;
     cmdbar.classList.remove('on');
     orbListening(true);
-    toast('Listening — ask Zoe anything');
+    toast(promptMsg||'Listening — ask Zoe anything');
     fetch('http://localhost:7777/activate',{method:'POST',signal:AbortSignal.timeout(800)})
       .then(function(r){if(!r||!r.ok)throw new Error('activate '+(r&&r.status));})
       .catch(function(){
@@ -4073,7 +4131,8 @@
       // Trailing .then runs after EITHER branch — the guard must clear on the
       // fallback path too, or one unreachable daemon would wedge the orb.
       .then(function(){_orbBusy=false;});
-  });
+  }
+  orb.addEventListener('click',function(){panelVoice('Listening — ask Zoe anything');});
   cmdin.addEventListener('keydown',function(e){if(e.key==='Enter')sendCmd(cmdin.value);if(e.key==='Escape')cmdbar.classList.remove('on');});
   document.getElementById('cmdgo').addEventListener('click',function(){sendCmd(cmdin.value);});
 
