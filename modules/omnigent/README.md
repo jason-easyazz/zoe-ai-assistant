@@ -58,16 +58,20 @@ state. Miss any of them and that worker cannot refresh, so it silently loses
 authentication rather than failing loudly. Do all three steps together:
 
 ```bash
-docker compose -f modules/omnigent/docker-compose.module.yml build omnigent
-docker compose -f modules/omnigent/docker-compose.module.yml stop omnigent
+docker compose -p omnigent -f modules/omnigent/docker-compose.module.yml build omnigent
+docker compose -p omnigent -f modules/omnigent/docker-compose.module.yml stop omnigent
 # Chown through Compose, not host paths: it resolves the project's real volumes itself.
+# `-p omnigent` on EVERY command is load-bearing: without it the project name derives
+# from the working directory, so running these from the repo root would address a
+# DIFFERENT volume set than the live container (created from modules/omnigent/) — it
+# would silently create and chown empty replacements and leave the real ones root-owned.
 # Hard-coding /var/lib/docker/volumes/omnigent_* assumes a rootful daemon, the default
 # data-root, and a project prefix derived from the working directory — any of which can
 # be wrong, and the failure mode is chowning nothing (or the wrong volumes) silently.
-docker compose -f modules/omnigent/docker-compose.module.yml run --rm --no-deps \
+docker compose -p omnigent -f modules/omnigent/docker-compose.module.yml run --rm --no-deps \
   --user 0:0 --entrypoint sh omnigent \
   -c 'chown -R 1000:1000 /root/.omnigent /root/.claude /root/.codex /root/.cursor'
-docker compose -f modules/omnigent/docker-compose.module.yml up -d omnigent
+docker compose -p omnigent -f modules/omnigent/docker-compose.module.yml up -d omnigent
 ```
 
 Stop before chowning: a still-running root container writes new root-owned files into the
