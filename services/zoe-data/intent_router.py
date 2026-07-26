@@ -2121,13 +2121,23 @@ async def _run_mcporter(cmd: str) -> Optional[str]:
     env = os.environ.copy()
     env["PATH"] = f"{NODE_BIN}:{env.get('PATH', '')}"
     try:
-        from async_subprocess import run_to_completion
+        from async_subprocess import QueueTimeout, run_to_completion
 
         proc = await run_to_completion(shlex.split(cmd), env=env, timeout=10)
         if proc.returncode != 0:
             logger.warning(f"mcporter-safe failed: {proc.stderr.decode()}")
             return None
         return proc.stdout.decode().strip()
+    except QueueTimeout as exc:
+        # Distinct from a slow mcporter: nothing ran. Logging this as "timed out"
+        # points debugging at mcporter when the real problem is a saturated
+        # subprocess pool. This is a live intent path, so it keeps the short
+        # interactive queue budget rather than waiting minutes for a worker.
+        logger.warning(
+            "mcporter-safe never started: no free subprocess worker after %ss "
+            "(pool saturated)", exc.timeout,
+        )
+        return None
     except subprocess.TimeoutExpired:
         logger.warning("mcporter-safe timed out")
         return None

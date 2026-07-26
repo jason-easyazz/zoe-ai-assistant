@@ -9,9 +9,10 @@ import pytest
 
 pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m ci_safe` lane
 
+import contextlib
 import subprocess
 import sys
-import weakref
+import threading
 
 import pytest
 
@@ -48,7 +49,7 @@ def narrow_pool(monkeypatch):
     )
     monkeypatch.setattr(mod, "_RUN_POOL", narrow)
     monkeypatch.setattr(mod, "_RUN_POOL_WIDTH", 2)
-    monkeypatch.setattr(mod, "_RUN_SLOTS", weakref.WeakKeyDictionary())
+    monkeypatch.setattr(mod, "_RUN_SLOTS", threading.BoundedSemaphore(2))
     try:
         yield 2
     finally:
@@ -279,3 +280,42 @@ async def test_queue_time_does_not_shrink_the_child_budget(narrow_pool):
         assert proc.stdout.strip() == b"survived"
     finally:
         await asyncio.gather(*hogs, return_exceptions=True)
+
+
+def test_run_slots_are_global_not_per_loop(monkeypatch):
+    """Permits must count across loops, because the pool they guard is global.
+
+    A per-loop semaphore hands every loop a full set of permits over the SAME
+    workers, so two loops can admit 2x the pool width. The second loop's
+    timeout+grace backstop then starts ticking while its child is still stuck
+    behind the first loop's work — it reports a wedged worker for a job that
+    never got one.
+    """
+    import asyncio
+
+    import async_subprocess as mod
+
+    # Own semaphore, so the assertion doesn't depend on what the rest of the
+    # suite happens to be holding.
+    monkeypatch.setattr(mod, "_RUN_SLOTS", threading.BoundedSemaphore(2))
+    monkeypatch.setattr(mod, "_RUN_POOL_WIDTH", 2)
+
+    # Loop-agnostic: acquired from OUTSIDE any running loop.
+    assert mod._RUN_SLOTS.acquire(blocking=False)
+    assert mod._RUN_SLOTS.acquire(blocking=False)
+    try:
+        async def _probe():
+            return await mod._acquire_slot(0.2)
+
+        # A brand-new loop must still see the pool as full.
+        assert asyncio.run(_probe()) is False, "a fresh loop got permits over a full pool"
+
+        # And once a permit comes back, that same fresh-loop path succeeds —
+        # proving the False above was exhaustion, not a broken acquire.
+        mod._RUN_SLOTS.release()
+        assert asyncio.run(_probe()) is True
+    finally:
+        with contextlib.suppress(ValueError):
+            mod._RUN_SLOTS.release()
+        with contextlib.suppress(ValueError):
+            mod._RUN_SLOTS.release()

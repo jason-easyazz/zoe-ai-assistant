@@ -246,10 +246,15 @@ async def _run_platform_health_check() -> None:
     # AGENTS.md fork rule: never fork on the event-loop thread — the whole
     # spawn+communicate+timeout+kill runs in a worker thread (2026-06-29 outage).
     try:
+        # queue_timeout, not the interactive 30s default: this pool is shared
+        # with background Hermes tasks that hold a worker for up to 900s, so the
+        # default would make the health check routinely never start — where the
+        # prior on-loop spawn always ran. The autopilot has no latency budget.
         proc = await run_to_completion(
             ["bash", str(script)],
             timeout=_HEALTH_CHECK_TIMEOUT_S,
             merge_stderr=True,
+            queue_timeout=float(os.environ.get("ZOE_AUTOPILOT_QUEUE_WAIT_S", "600")),
         )
     except QueueTimeout as exc:
         # The script never ran — a saturated worker pool, not an unhealthy

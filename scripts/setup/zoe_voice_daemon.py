@@ -1061,6 +1061,10 @@ def _identify_speaker_from_wav(wav_bytes: bytes) -> tuple[str, float] | None:
         return None
     encoder = _get_voice_encoder()
     if encoder is None:
+        # NOT a no-match: nothing was scored. Recorded distinctly so a shadow
+        # week run on a panel missing resemblyzer produces rows that say so,
+        # instead of a file full of null user_ids that reads as "never matched".
+        _claim_ctx.source = "encoder_unavailable"
         return None
     try:
         from resemblyzer import preprocess_wav  # type: ignore

@@ -72,12 +72,26 @@ python3 -m venv "$INSTALL_DIR/venv"
 source "$INSTALL_DIR/venv/bin/activate"
 
 pip install --quiet --upgrade pip
+# resemblyzer is REQUIRED here, not optional: the env written below ships
+# SPEAKER_ID_ENABLED=true, and without the encoder _get_voice_encoder() returns
+# None, so the W5 shadow week records every turn as a null no-match — a metrics
+# file that reads like real data and is not.
 pip install --quiet \
     openwakeword \
     pyaudio \
     numpy \
     requests \
-    websocket-client
+    websocket-client \
+    "resemblyzer>=0.1.3"
+
+# Fail loudly NOW rather than silently collecting a week of empty shadow rows.
+if ! python3 -c "import resemblyzer" 2>/dev/null; then
+    echo "!!  resemblyzer failed to install — speaker ID cannot score anything."
+    echo "!!  Either fix the install or set SPEAKER_ID_ENABLED=false in the env"
+    echo "!!  file below; leaving it enabled produces a shadow log full of"
+    echo "!!  no-match rows that look like results."
+    exit 1
+fi
 
 ### ---- openwakeword model download -------------------------------------
 echo "==> Downloading wake word model..."

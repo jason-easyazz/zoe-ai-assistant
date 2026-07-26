@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import StreamingResponse
-from async_subprocess import run_to_completion
+from async_subprocess import QueueTimeout, run_to_completion
 from intent_router import detect_intent, detect_and_extract_intent, execute_intent, openclaw_user_message, Intent
 from browser_broker import create_default_browser_broker
 from conversation_context import ConversationContext as _CC
@@ -803,6 +803,13 @@ async def _restart_hermes() -> None:
             timeout=10,
         )
         logger.info("hermes-agent.service restarted after token write")
+    except QueueTimeout as exc:
+        # Never started. Logged distinctly so a saturated subprocess pool isn't
+        # investigated as a slow/hanging systemd restart.
+        logger.warning(
+            "Hermes restart after token write never started: no free subprocess "
+            "worker after %ss (pool saturated)", exc.timeout,
+        )
     except Exception as exc:
         logger.warning("Hermes restart after token write failed: %s", exc)
 

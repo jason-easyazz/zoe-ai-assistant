@@ -343,3 +343,28 @@ def test_n_profiles_is_null_for_a_server_resolved_claim(daemon, monkeypatch, sha
     row = _rows(shadow_log)[-1]
     assert row["source"] == "local"
     assert row["n_profiles"] == 1
+
+
+def test_missing_encoder_is_not_recorded_as_a_no_match(daemon, monkeypatch, shadow_log):
+    """A panel without resemblyzer must not produce a week of fake no-matches.
+
+    `_get_voice_encoder()` returns None when the dependency is missing, and the
+    installer ships SPEAKER_ID_ENABLED=true. If that landed in the artifact as
+    an ordinary null-user row, the shadow week would look like "the model never
+    matched anyone" when in truth nothing was ever scored — and the operator
+    would tune a threshold against data that does not exist.
+    """
+    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", True)
+    monkeypatch.setattr(daemon, "_get_voice_encoder", lambda: None)
+
+    assert daemon._identify_speaker_from_wav(b"wav") is None
+    daemon._record_speaker_shadow(None)
+
+    row = _rows(shadow_log)[-1]
+    assert row["source"] == "encoder_unavailable"
+    assert row["user_id"] is None
+    # ...and a genuine scored no-match still reads differently.
+    daemon._claim_ctx.source = "local"
+    daemon._record_speaker_shadow(None)
+    assert _rows(shadow_log)[-1]["source"] == "local"
