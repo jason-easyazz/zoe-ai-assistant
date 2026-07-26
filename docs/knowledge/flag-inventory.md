@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-413 flags; 413 not documented in `.env.example`.
+417 flags; 417 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -129,6 +129,10 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_EXPERT_ALLOW_WRITES` | `'0'` | no | NO | `services/zoe-data/expert_dispatch.py` |
 | `ZOE_EXPERT_ENABLED` | `'1'` | no | NO | `services/zoe-data/expert_dispatch.py` |
 | `ZOE_EXPERT_MODE` | `'shadow'` | no | NO | `services/zoe-data/expert_dispatch.py` |
+| `ZOE_EXPRESSIVE_GENTLE_FROM_H` | `22` | yes | NO | `services/zoe-data/voice_delivery.py` |
+| `ZOE_EXPRESSIVE_GENTLE_TO_H` | `7` | yes | NO | `services/zoe-data/voice_delivery.py` |
+| `ZOE_EXPRESSIVE_MIN_CHARS` | `60` | yes | NO | `services/zoe-data/voice_delivery.py` |
+| `ZOE_EXPRESSIVE_TTS` | `False` | yes | NO | `services/zoe-data/voice_delivery.py` |
 | `ZOE_FACE_ID_ENABLED` | `'false'` | no | NO | `services/zoe-data/routers/face_id.py` |
 | `ZOE_FACE_ID_THRESHOLD` | `'0.45'` | no | NO | `services/zoe-data/routers/face_id.py` |
 | `ZOE_FLUE_BRAIN_TIMEOUT_S` | `dynamic` | no | NO | `services/zoe-data/zoe_flue_client.py` |
@@ -394,7 +398,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_TTS_TRIM_SILENCE` | `'true'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_UNAUTHENTICATED_ROLE` | `'guest'` | no | NO | `services/zoe-data/auth.py` |
 | `ZOE_UPDATE_CHECK_ENABLED` | `'true'` | no | NO | `services/zoe-data/system_updates.py` |
-| `ZOE_URL` | `'http://127.0.0.1:8000'`, `'https://zoe.local'` | no | NO | `scripts/maintenance/zoe_latency_probe.py`<br>`scripts/setup/zoe_face_id.py`<br>`scripts/setup/zoe_voice_daemon.py` |
+| `ZOE_URL` | `'http://127.0.0.1:8000'`, `'https://zoe.local'`, `dynamic` | no | NO | `scripts/maintenance/zoe_latency_probe.py`<br>`scripts/setup/zoe_enroll_flow.py`<br>`scripts/setup/zoe_face_id.py`<br>`scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_USE_CORE_BRAIN` | `'true'` | no | NO | `services/zoe-data/brain_dispatch.py` |
 | `ZOE_USE_OMNIGENT_EXECUTOR` | `'0'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
 | `ZOE_USE_PI_EXECUTOR` | `'false'` | no | NO | `services/zoe-data/pi_executor.py` |

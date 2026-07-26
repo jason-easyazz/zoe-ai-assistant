@@ -1117,6 +1117,46 @@
         ],
         "typed_env": false
       },
+      "ZOE_EXPRESSIVE_GENTLE_FROM_H": {
+        "defaults": [
+          "22"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_delivery.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_EXPRESSIVE_GENTLE_TO_H": {
+        "defaults": [
+          "7"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_delivery.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_EXPRESSIVE_MIN_CHARS": {
+        "defaults": [
+          "60"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_delivery.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_EXPRESSIVE_TTS": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_delivery.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_FACE_ID_ENABLED": {
         "defaults": [
           "'false'"
@@ -3830,11 +3870,13 @@
       "ZOE_URL": {
         "defaults": [
           "'http://127.0.0.1:8000'",
-          "'https://zoe.local'"
+          "'https://zoe.local'",
+          "dynamic"
         ],
         "in_env_example": false,
         "readers": [
           "scripts/maintenance/zoe_latency_probe.py",
+          "scripts/setup/zoe_enroll_flow.py",
           "scripts/setup/zoe_face_id.py",
           "scripts/setup/zoe_voice_daemon.py"
         ],
