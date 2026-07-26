@@ -29,6 +29,12 @@ from typed_env import env_str  # reads env at CALL time — importing it reads n
 if __name__ == "__main__":
     bootstrap_runtime_env()
 
+# True only in the spawned `python mcp_server.py` stdio worker (mcporter).
+# In-process importers (zoe_agent, intent_router, tests) see False. Used to
+# decide whether a service-layer broadcaster.broadcast could actually reach
+# UI clients (they live in the zoe-data server process, not this worker).
+_STDIO_WORKER = __name__ == "__main__"
+
 OPENWEATHERMAP_API_KEY = os.environ.get("OPENWEATHERMAP_API_KEY", "")
 _BROADCAST_URL = "http://127.0.0.1:8000/api/internal/broadcast"
 _OPENCLAW_GW = os.environ.get("ZOE_OPENCLAW_GW", "http://127.0.0.1:18789")
@@ -1584,15 +1590,30 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         return {"item_id": item_id, "text": text, "status": "completed"}
 
     elif name == "reminder_create":
-        rid = str(uuid.uuid4())
-        await db.execute(
-            "INSERT INTO reminders (id, user_id, title, due_date, due_time, priority, category, visibility) VALUES (?,?,?,?,?,?,?,?)",
-            (rid, user_id, args["title"], args.get("due_date"), args.get("due_time"),
-             args.get("priority", "normal"), args.get("category", "general"), "personal"),
+        from models import ReminderCreate
+        from reminder_service import create_reminder_record
+
+        payload = ReminderCreate(
+            title=args["title"],
+            due_date=args.get("due_date"),
+            due_time=args.get("due_time"),
+            priority=args.get("priority", "normal"),
+            category=args.get("category", "general"),
+            visibility="personal",  # the visibility the old raw MCP INSERT always used
         )
-        result = {"id": rid, "title": args["title"], "due_date": args.get("due_date"),
-                  "due_time": args.get("due_time"), "priority": args.get("priority", "normal")}
-        await _notify_ui("reminders", "reminder_created", result)
+        # Canonical write path (same as routers/reminders.py and intent_router):
+        # policy gate + INSERT + notification row + commit + broadcaster.broadcast.
+        reminder = await create_reminder_record(payload, user=actor, db=db)
+        result = {"id": reminder.get("id"), "title": reminder.get("title", args["title"]),
+                  "due_date": reminder.get("due_date"), "due_time": reminder.get("due_time"),
+                  "priority": reminder.get("priority", payload.priority)}
+        if _STDIO_WORKER:
+            # The service already broadcast via the in-process broadcaster, but
+            # in the stdio worker that broadcaster has no UI clients (they hang
+            # off the zoe-data server process) — relay once over HTTP so panels
+            # still get exactly one update. In-process callers (zoe_agent) skip
+            # this: the service broadcast already reached the panels.
+            await _notify_ui("reminders", "reminder_created", result)
         # Proactive scheduling is handled by ReminderScanTrigger (runs every 5 min),
         # which correctly converts due_time from AWST local time to UTC.
         return {**result, "status": "created"}
