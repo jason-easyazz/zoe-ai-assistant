@@ -16,6 +16,7 @@ from __future__ import annotations
 import base64
 import io
 import itertools
+import uuid
 import json
 import logging
 import os
@@ -1085,7 +1086,19 @@ def _identify_speaker_from_wav(wav_bytes: bytes) -> tuple[str, float] | None:
 _CLAIM_UNSET = object()
 
 _shadow_log_lock = threading.Lock()
-_shadow_seq: "itertools.count | None" = None
+
+# The row handle is (boot, seq), NOT a global sequence recovered from the log.
+#
+# Deriving the handle by re-reading the file was the wrong shape: every failure
+# mode of that read — a torn tail hiding its own seq, invalid UTF-8, a transient
+# OSError — silently restarted the counter and reused handles that are already
+# on disk, which is precisely the ambiguity the operator review cannot tolerate.
+# A per-process token makes uniqueness structural instead of recovered: `boot`
+# is fresh for each daemon start, `seq` counts within that start, so no read of
+# the existing file is required and no read failure can cause a collision.
+# Labelling is unaffected — the operator labels the (boot, seq) pair.
+_SHADOW_BOOT_ID = uuid.uuid4().hex[:8]
+_shadow_seq = itertools.count(1)
 
 
 def _needs_leading_newline(path: str) -> bool:
@@ -1104,40 +1117,6 @@ def _needs_leading_newline(path: str) -> bool:
         return False
 
 
-def _resume_shadow_seq() -> "itertools.count":
-    """Continue `seq` from the existing log instead of restarting at 1.
-
-    The log is opened in append mode and the shadow week spans daemon restarts,
-    so a process-local counter starting at 1 every boot would hand the SAME seq
-    to distinct persisted rows — destroying the stable labelling handle the
-    operator review depends on. Seed from the highest seq already on disk.
-
-    Called under `_shadow_log_lock`. Any unreadable/garbled tail falls back to
-    the max seq parsed so far (0 if none), which keeps the counter monotonic
-    rather than colliding.
-    """
-    highest = 0
-    try:
-        with open(SPEAKER_ID_SHADOW_LOG, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    seq = int(json.loads(line).get("seq") or 0)
-                except Exception:
-                    continue  # a torn/legacy row must not stall the resume
-                if seq > highest:
-                    highest = seq
-    except FileNotFoundError:
-        pass
-    except Exception as exc:
-        # Never let metrics bookkeeping cost a turn; a duplicate seq is far less
-        # bad than a crashed voice daemon, but say so loudly enough to notice.
-        log.warning("shadow seq resume failed (restarting at 1): %s", exc)
-    return itertools.count(highest + 1)
-
-
 def _record_speaker_shadow(claim: tuple[str, float] | None) -> None:
     """Append one W5 shadow-week metrics row (JSONL) for FA/FR analysis.
 
@@ -1149,11 +1128,10 @@ def _record_speaker_shadow(claim: tuple[str, float] | None) -> None:
     The daemon cannot know who ACTUALLY spoke, so a row is a prediction, not a
     labelled outcome: `truth` is an empty slot the operator fills during the
     shadow-week review (see docs/architecture/panel-identity-plan.md). Without
-    it FA/FR cannot be computed — `seq` gives each row a stable handle to label,
-    and `n_profiles` pins how many enrolled voices the score was chosen from, so
-    a mid-week enrollment doesn't silently change what the score means.
+    it FA/FR cannot be computed — `(boot, seq)` gives each row a stable handle to
+    label, and `n_profiles` pins how many enrolled voices the score was chosen
+    from, so a mid-week enrollment doesn't silently change what the score means.
     """
-    global _shadow_seq
     with _profile_cache_lock:
         n_profiles = len(_profile_cache["profiles"])
     try:
@@ -1163,9 +1141,8 @@ def _record_speaker_shadow(claim: tuple[str, float] | None) -> None:
         # seq is allocated AND written inside one critical section: allocating
         # outside it would let two turns interleave and land out of order.
         with _shadow_log_lock:
-            if _shadow_seq is None:
-                _shadow_seq = _resume_shadow_seq()
             row = {
+                "boot": _SHADOW_BOOT_ID,
                 "seq": next(_shadow_seq),
                 "ts": time.time(),
                 "panel_id": PANEL_ID,
@@ -1177,10 +1154,11 @@ def _record_speaker_shadow(claim: tuple[str, float] | None) -> None:
             # Heal a torn tail before appending. If a previous write was cut
             # short (power loss, SIGKILL) the file can end without a newline;
             # appending straight onto it would fuse the partial record and the
-            # new one into a single malformed line, hiding BOTH from the resume
-            # scan and letting a seq be silently reused. A leading newline keeps
-            # every row independently parseable — the torn one stays skippable
-            # on its own line, the new one lands clean.
+            # new one into a single malformed line, costing the analysis BOTH
+            # rows. A leading newline keeps every row independently parseable —
+            # the torn one stays skippable on its own line, the new one lands
+            # clean. (Handle uniqueness no longer depends on this: see
+            # _SHADOW_BOOT_ID.)
             if _needs_leading_newline(SPEAKER_ID_SHADOW_LOG):
                 with open(SPEAKER_ID_SHADOW_LOG, "a", encoding="utf-8") as f:
                     f.write("\n")
@@ -1336,7 +1314,10 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     import time as _time
 
     audio_b64_wav = base64.b64encode(wav).decode()
-    voice_claim: tuple[str, float] | None = None
+    # Sentinel, not None: if scoring RAISES, the fallback must re-score rather
+    # than inherit a None that looks like a completed no-match. Only a scoring
+    # call that actually returned replaces it.
+    voice_claim: object = _CLAIM_UNSET
     try:
         voice_claim = _speaker_claim_for_turn(wav)
         if voice_claim:
@@ -1349,9 +1330,13 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
         # Tell the server we're inside an open conversation so ender phrases
         # ("that's all", "goodbye") are honoured; outside one they never fire.
         payload["conversation"] = True
-    if voice_claim:
+    # The sentinel is a plain object() and therefore TRUTHY — it must never
+    # reach the unpack below, so collapse "never scored" to "no claim" here.
+    # The sentinel keeps its meaning for the fallback hand-off only.
+    _scored_claim = None if voice_claim is _CLAIM_UNSET else voice_claim
+    if _scored_claim:
         # A claim + raw score; the server applies its own threshold.
-        payload["voice_user_id"], payload["voice_score"] = voice_claim
+        payload["voice_user_id"], payload["voice_score"] = _scored_claim
 
     url = f"{ZOE_URL}/api/voice/turn_stream"
     _barge_in_requested.clear()

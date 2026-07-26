@@ -5,10 +5,12 @@ Shadow-before-acting is the W5 gate (`docs/architecture/samantha-evolution-plan.
 and logs it — journal line + one JSONL metrics row — but ``_speaker_claim_for_turn``
 returns None, so the claim is never attached to the turn payload and the server
 cannot act on identity during the shadow week. Metrics rows carry
-seq/ts/panel_id/user_id/score/n_profiles/truth ONLY — never audio bytes or
+boot/seq/ts/panel_id/user_id/score/n_profiles/truth ONLY — never audio bytes or
 embeddings (`docs/knowledge/biometric-retention-policy.md`). `truth` is the
 operator-filled ground-truth slot: rows are predictions, and FA/FR is not
-computable from them until they are labelled.
+computable from them until they are labelled. The labelling handle is the
+(boot, seq) PAIR — `boot` is fresh per daemon start, so uniqueness never
+depends on successfully re-reading the existing log.
 
 The daemon imports hardware deps (pyaudio) at module level, so this test loads
 it via importlib with those modules stubbed — no mic, no network, no models.
@@ -56,9 +58,10 @@ def daemon():
 def shadow_log(daemon, monkeypatch, tmp_path):
     path = tmp_path / "metrics" / "speaker_shadow_metrics.jsonl"
     monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW_LOG", str(path))
-    # The daemon module is module-scoped, so the lazily-seeded seq counter would
-    # otherwise leak across tests. None = "not yet seeded", i.e. a fresh boot.
-    monkeypatch.setattr(daemon, "_shadow_seq", None)
+    # The daemon module is module-scoped, so the process counter would otherwise
+    # leak across tests. A fresh count == a fresh daemon start.
+    import itertools
+    monkeypatch.setattr(daemon, "_shadow_seq", itertools.count(1))
     return path
 
 
@@ -83,7 +86,7 @@ def test_shadow_suppresses_claim_and_records_metrics_row(daemon, monkeypatch, sh
     assert len(rows) == 1
     row = rows[0]
     # Retention policy: metadata only — exactly these keys, no audio/embeddings.
-    assert set(row) == {"seq", "ts", "panel_id", "user_id", "score", "n_profiles", "truth"}
+    assert set(row) == {"boot", "seq", "ts", "panel_id", "user_id", "score", "n_profiles", "truth"}
     assert row["user_id"] == "jason"
     assert row["score"] == pytest.approx(0.9124, abs=1e-4)
     assert row["panel_id"] == daemon.PANEL_ID
@@ -139,52 +142,37 @@ def test_metrics_write_failure_never_costs_the_turn(daemon, monkeypatch, tmp_pat
     assert daemon._speaker_claim_for_turn(b"wav-bytes") is None
 
 
-# ── seq must survive a daemon restart ───────────────────────────────────────
+# ── the labelling handle must never repeat ──────────────────────────────────
 
-def test_seq_resumes_across_restart_instead_of_colliding(daemon, monkeypatch, shadow_log):
-    """seq is the labelling handle, so it must never repeat in one log file.
+def test_handle_is_unique_across_restarts_without_reading_the_log(daemon, monkeypatch, shadow_log):
+    """(boot, seq) must not collide even when the existing log is unreadable.
 
-    The log is append-mode and the shadow week spans daemon restarts. A
-    process-local counter starting at 1 each boot would hand the SAME seq to
-    distinct persisted rows, making the operator's ground-truth labels
-    ambiguous and the FA/FR review unreliable.
+    Deriving the handle by re-scanning the file made every read failure — torn
+    tail, invalid UTF-8, transient OSError — silently restart the counter and
+    reuse handles already on disk. `boot` is per-process, so uniqueness is
+    structural: no read happens, so no read can fail into a collision.
     """
     monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
     monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", True)
-    monkeypatch.setattr(daemon, "_identify_speaker_from_wav", lambda wav: ("jason", 0.9))
 
     daemon._record_speaker_shadow(("jason", 0.9))
     daemon._record_speaker_shadow(("jason", 0.9))
+    first_boot = daemon._SHADOW_BOOT_ID
 
-    # Simulate a restart: fresh process, same on-disk log.
-    monkeypatch.setattr(daemon, "_shadow_seq", None)
+    # Restart with the log deliberately unreadable as text (invalid UTF-8) —
+    # the old resume path seeded from 1 here and reused handles.
+    with open(shadow_log, "ab") as f:
+        f.write(b"\xff\xfe not utf-8 at all\n")
+    import itertools
+    monkeypatch.setattr(daemon, "_shadow_seq", itertools.count(1))
+    monkeypatch.setattr(daemon, "_SHADOW_BOOT_ID", "restart2")
     daemon._record_speaker_shadow(("jason", 0.9))
 
-    seqs = [r["seq"] for r in _rows(shadow_log)]
-    assert seqs == [1, 2, 3], f"seq collided across restart: {seqs}"
-    assert len(seqs) == len(set(seqs)), "duplicate seq destroys the labelling handle"
-
-
-def test_seq_resume_survives_a_torn_row(daemon, monkeypatch, shadow_log):
-    """A half-written or legacy line must not stall the resume or collide."""
-    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
-    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", True)
-
-    shadow_log.parent.mkdir(parents=True, exist_ok=True)
-    shadow_log.write_text(
-        '{"seq": 1, "ts": 1.0}\n'
-        '{"seq": 2, "ts": 2.0\n'          # torn: no closing brace
-        '{"ts": 3.0}\n'                     # legacy: no seq at all
-        '{"seq": 7, "ts": 4.0}\n',
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(daemon, "_shadow_seq", None)
-    daemon._record_speaker_shadow(("jason", 0.9))
-
-    # Read the appended row directly — _rows() would choke on the torn line the
-    # fixture deliberately planted, which is the whole point of this test.
-    last = json.loads(shadow_log.read_text(encoding="utf-8").splitlines()[-1])
-    assert last["seq"] == 8  # continues past the highest good seq, no collision
+    rows = [json.loads(l) for l in shadow_log.read_text(encoding="utf-8", errors="replace").splitlines()
+            if l.strip().startswith("{")]
+    handles = [(r["boot"], r["seq"]) for r in rows]
+    assert len(handles) == len(set(handles)), f"handle collision: {handles}"
+    assert (first_boot, 1) in handles and ("restart2", 1) in handles
 
 
 # ── one spoken turn must produce exactly one row ────────────────────────────
@@ -232,8 +220,13 @@ def test_stream_fallback_does_not_double_log_the_turn(daemon, monkeypatch, shado
     assert len(scored) == 2
 
 
-def test_torn_tail_does_not_fuse_rows_or_hide_a_seq(daemon, monkeypatch, shadow_log):
-    """An interrupted write must not swallow the next row into its line."""
+def test_torn_tail_does_not_fuse_rows(daemon, monkeypatch, shadow_log):
+    """An interrupted write must not swallow the next row into its line.
+
+    Handle uniqueness no longer depends on this (see `boot`), but a fused line
+    still costs the analysis BOTH records — the torn one and the good one that
+    landed on top of it. Each row must stay independently parseable.
+    """
     monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
     monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", True)
 
@@ -241,11 +234,11 @@ def test_torn_tail_does_not_fuse_rows_or_hide_a_seq(daemon, monkeypatch, shadow_
     # A write cut short mid-record: no trailing newline.
     shadow_log.write_text('{"seq": 1, "ts": 1.0}\n{"seq": 2, "ts": 2.', encoding="utf-8")
 
-    monkeypatch.setattr(daemon, "_shadow_seq", None)
     daemon._record_speaker_shadow(("jason", 0.9))
 
     lines = shadow_log.read_text(encoding="utf-8").splitlines()
     # The torn record keeps its own line; the new row is separately parseable.
+    assert lines[-2] == '{"seq": 2, "ts": 2.', "torn record was mutated"
     last = json.loads(lines[-1])
     assert last["user_id"] == "jason"
-    assert last["seq"] > 1, "new row fused onto the torn line or reused a seq"
+    assert last["boot"] == daemon._SHADOW_BOOT_ID
