@@ -161,7 +161,7 @@ def _kanban_backend() -> str:
     Read per call, never cached, so the revert is an env flip + restart with no
     code change (docs/architecture/perf-hardening-plan.md discipline).
     """
-    return (os.environ.get("ZOE_KANBAN_BACKEND", "hermes") or "hermes").strip().lower()
+    return (os.environ.get("ZOE_KANBAN_BACKEND", "executor") or "executor").strip().lower()
 
 
 def _workspace_for_phase(phase: str) -> str:

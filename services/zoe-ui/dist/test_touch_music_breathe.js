@@ -397,7 +397,7 @@ async function t(name, fn) {
   console.log('    shot: ' + await shoot(page, 'music-card'));
 
   // ── 3. Browse is a card ──────────────────────────────────────────────────
-  await page.click('#mQBtn');
+  await page.click('#mBrowse');
   await page.waitForSelector('.brf', { timeout: 4000 });
   await page.waitForTimeout(600);
 
@@ -466,7 +466,7 @@ async function t(name, fn) {
   await t('browse: Save/Clear refuse to post a null queue_id (nothing ever played)', async () => {
     // Greptile #1429: Save and Clear lacked the `||undefined` guard the play
     // paths have. Its stated premise was wrong (Browse is NOT a launcher tile —
-    // #mQBtn on the music card is the only route, so loadMusic always runs
+    // #mBrowse on the music card is the only route, so loadMusic always runs
     // first), but "nothing has ever played" genuinely leaves player_id null and
     // a POST with queue_id:null fails opaquely.
     // Driven with a SECOND page whose now-playing is idle — the real null state,
@@ -478,7 +478,7 @@ async function t(name, fn) {
     await idlePage.waitForSelector('#stage.lopen');
     await idlePage.click('.ltile[data-id="music"]');
     await idlePage.waitForTimeout(900);
-    await idlePage.click('#mQBtn');
+    await idlePage.click('#mBrowse');
     await idlePage.waitForSelector('.brf', { timeout: 4000 });
     await idlePage.waitForTimeout(400);
     assert.strictEqual(await idlePage.evaluate(() => document.querySelector('#dock .pc.dnp')), null,

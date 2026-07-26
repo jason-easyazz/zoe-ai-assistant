@@ -263,3 +263,100 @@ async def test_execute_reminder_create_policy_denial_does_not_fall_back_to_mcpor
         await execute_intent(Intent("reminder_create", {"title": "check the oven"}), "jason")
 
     assert exc_info.value.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# MCP tool path: reminder_create must route through reminder_service (#6098)
+# ---------------------------------------------------------------------------
+
+def _mcp_reminder_service_harness(monkeypatch):
+    """Wire fakes around mcp_server's reminder_create and return the probes."""
+    import mcp_server
+
+    db = _FakeDB()
+    service_calls = []
+    notify_calls = []
+
+    async def fake_create_reminder_record(payload, *, user, db):
+        service_calls.append((payload, user, db))
+        return {
+            "id": "rem-1",
+            "title": payload.title,
+            "due_date": payload.due_date,
+            "due_time": payload.due_time,
+            "priority": payload.priority,
+        }
+
+    async def fake_notify_ui(channel, event_type, data):
+        notify_calls.append((channel, event_type, data))
+
+    # The handler imports create_reminder_record at call time, so patching the
+    # reminder_service attribute intercepts it.
+    monkeypatch.setattr("reminder_service.create_reminder_record", fake_create_reminder_record)
+    monkeypatch.setattr(mcp_server, "_notify_ui", fake_notify_ui)
+    return mcp_server, db, service_calls, notify_calls
+
+
+_MCP_CREATE_ARGS = {
+    "_user_id": "family-admin",
+    "title": "check the oven",
+    "due_date": "2026-06-15",
+    "due_time": "23:00",
+}
+
+
+@pytest.mark.asyncio
+async def test_mcp_reminder_create_routes_through_reminder_service(monkeypatch):
+    mcp_server, db, service_calls, notify_calls = _mcp_reminder_service_harness(monkeypatch)
+
+    result = await mcp_server._execute_tool(db, "reminder_create", dict(_MCP_CREATE_ARGS))
+
+    # Exactly one service call, carrying the faithfully-mapped MCP args plus
+    # the defaults the raw INSERT used to hard-code.
+    assert len(service_calls) == 1
+    payload, user, service_db = service_calls[0]
+    assert service_db is db
+    assert payload.title == "check the oven"
+    assert payload.due_date == "2026-06-15"
+    assert payload.due_time == "23:00"
+    assert payload.priority == "normal"
+    assert payload.category == "general"
+    assert payload.visibility == "personal"
+    assert user["user_id"] == "family-admin"
+    assert "role" in user  # actor mapping satisfies require_feature_access
+
+    # No raw INSERT bypass left behind.
+    assert not any("INSERT INTO reminders" in sql for sql, _ in db.calls)
+
+    # External result shape is unchanged.
+    assert result == {
+        "id": "rem-1",
+        "title": "check the oven",
+        "due_date": "2026-06-15",
+        "due_time": "23:00",
+        "priority": "normal",
+        "status": "created",
+    }
+
+    # In-process callers (zoe_agent): the service's broadcaster.broadcast is
+    # the one and only fan-out — no HTTP relay, no double notification.
+    assert notify_calls == []
+
+
+@pytest.mark.asyncio
+async def test_mcp_reminder_create_stdio_worker_relays_exactly_one_ui_update(monkeypatch):
+    mcp_server, db, service_calls, notify_calls = _mcp_reminder_service_harness(monkeypatch)
+    # In the spawned stdio worker the in-process broadcaster has no UI clients,
+    # so the HTTP relay must fire — exactly once.
+    monkeypatch.setattr(mcp_server, "_STDIO_WORKER", True)
+
+    result = await mcp_server._execute_tool(db, "reminder_create", dict(_MCP_CREATE_ARGS))
+
+    assert len(service_calls) == 1
+    assert result["status"] == "created"
+    assert notify_calls == [(
+        "reminders",
+        "reminder_created",
+        {"id": "rem-1", "title": "check the oven", "due_date": "2026-06-15",
+         "due_time": "23:00", "priority": "normal"},
+    )]

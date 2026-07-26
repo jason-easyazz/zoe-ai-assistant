@@ -374,6 +374,48 @@ def resolve_pins(
     return resolved, unresolved
 
 
+# Domains whose "on" state is evidence a human is up in the room. A switch here
+# may be a light, a fan or a TV — all three are equally good evidence, so the
+# rule is deliberately domain-based rather than a single nominated "light".
+# Sensors/numbers/scenes are excluded: they are readings, not occupancy.
+_AWAKE_DOMAINS = ("light", "switch", "input_boolean")
+
+
+def resolve_sleep_gate(
+    room_entity_ids: set[str] | None,
+    entity_index: dict[str, dict] | None,
+) -> dict[str, Any]:
+    """Should the panel STAY AWAKE because its room is evidently occupied?
+
+    The idle screensaver is a plain inactivity timer: it never knew whether
+    anyone was there, so it drifted to the night clock while the operator was
+    sitting in a lit room. This house has ZERO motion/presence/occupancy
+    entities (44 entities, no ``binary_sensor``), so the room's own toggles are
+    the only honest presence signal available.
+
+    Fails toward ``block: False`` — i.e. toward SLEEPING — for every unknown
+    (HA unreachable, panel in no room, room empty). The panel must never latch
+    awake because a lookup failed; that is the same direction the client's
+    timeout race already falls, so the two agree.
+    """
+    if entity_index is None:
+        return {"block": False, "reason": "ha-unavailable", "entities": []}
+    on: list[str] = []
+    for eid in sorted(room_entity_ids or ()):
+        if str(eid).partition(".")[0] not in _AWAKE_DOMAINS:
+            continue
+        entity = entity_index.get(str(eid))
+        if entity is None:
+            continue
+        if entity.get("state") == "on":
+            on.append(str(eid))
+    return {
+        "block": bool(on),
+        "reason": "room-occupied" if on else "room-dark",
+        "entities": on,
+    }
+
+
 def build_config_payload(
     device_id: str,
     location: str | None,
@@ -556,6 +598,24 @@ async def get_panel_config(device_id: str, db=Depends(get_db)) -> dict[str, Any]
         entity_index=entity_index,
         room=await _load_room(db, _row_value(row, "room_id")),
     )
+
+
+@router.get("/{device_id}/sleep-gate")
+async def get_sleep_gate(device_id: str, db=Depends(get_db)) -> dict[str, Any]:
+    """Whether this panel should stay awake because its room looks occupied.
+
+    Polled by the kiosk at the moment it is about to drift to the sleep clock,
+    so it must be LIVE — a value cached at boot would be stale by the time the
+    decision is taken (the same trap the music guard already documents).
+
+    Unauthenticated for the same reason as ``GET /{device_id}/config``: the
+    kiosk runs as a guest, and this exposes nothing beyond HA entity state that
+    ``/api/ha/entities`` already serves unauthed.
+    """
+    from routers.rooms import room_entity_ids_for_panel
+
+    room_entity_ids = await room_entity_ids_for_panel(db, device_id)
+    return resolve_sleep_gate(room_entity_ids, await _entity_index())
 
 
 @router.put("/{device_id}/config")

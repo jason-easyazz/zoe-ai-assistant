@@ -2,11 +2,11 @@
 FastAPI router for lists and list items.
 Mounted at prefix="/api/lists" with tag "lists".
 """
-import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from auth import get_current_user
 from database import get_db
 from guest_policy import require_feature_access, role_from_user
+from list_service import create_item_record, create_list_record
 from models import ListCreate, ListUpdate, ListItemCreate, ListItemUpdate
 from push import broadcaster
 
@@ -102,23 +102,17 @@ async def create_list(
         raise HTTPException(status_code=404, detail=f"Unknown list type: {list_type}")
     list_type = _normalize_list_type(list_type)
 
-    list_id = str(uuid.uuid4())
     user_id = user["user_id"]
 
-    await db.execute(
-        """
-        INSERT INTO lists (id, user_id, name, list_type, description, visibility)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (
-            list_id,
-            user_id,
-            body.name,
-            list_type,
-            body.description or "",
-            body.visibility,
-        ),
+    record = await create_list_record(
+        db,
+        user_id=user_id,
+        name=body.name,
+        list_type=list_type,
+        description=body.description or "",
+        visibility=body.visibility,
     )
+    list_id = record["id"]
     await db.commit()
 
     cursor = await db.execute(
@@ -299,23 +293,17 @@ async def add_item(
     user_id = user["user_id"]
     await _require_list_item_mutation_access(db, list_id, list_type, user, "add")
 
-    item_id = str(uuid.uuid4())
-    await db.execute(
-        """
-        INSERT INTO list_items (id, list_id, text, priority, category, quantity, parent_id, assigned_to)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            item_id,
-            list_id,
-            body.text,
-            body.priority,
-            body.category or "",
-            body.quantity or "",
-            body.parent_id,
-            body.assigned_to,
-        ),
+    record = await create_item_record(
+        db,
+        list_id=list_id,
+        text=body.text,
+        priority=body.priority,
+        category=body.category or "",
+        quantity=body.quantity or "",
+        parent_id=body.parent_id,
+        assigned_to=body.assigned_to,
     )
+    item_id = record["id"]
     await db.commit()
 
     cursor = await db.execute(

@@ -144,15 +144,23 @@ async def test_now_playing_dont_stop_defaults_false_when_absent(monkeypatch, ma)
 
 
 @pytest.mark.asyncio
-async def test_now_playing_still_has_no_uri(monkeypatch, ma):
-    """Pins the bug: the panel must never again read `now_playing.uri`.
+async def test_now_playing_carries_the_current_uri(monkeypatch, ma):
+    """The heart's uri must be REAL, not absent and not empty.
 
-    The heart used `_music.np.uri`, which was permanently '' because this
-    payload has never carried a uri — so every tap short-circuited to
-    "Nothing playing" and no favourite request was ever sent.
+    History (#1436): the panel's heart read `_music.np.uri`, which was
+    permanently '' because this payload carried no uri at all — so every tap
+    short-circuited to "Nothing playing" and no favourite request was ever
+    sent. That was pinned then as "never read np.uri".
+
+    The uri is now resolved from the queue's current item and returned here, so
+    the field is load-bearing rather than a trap: `favorite_now_playing` reads
+    it, and the panel heart can too. What must never regress is a uri that is
+    MISSING or EMPTY while something is genuinely playing — that reintroduces
+    the silent no-op.
     """
     np = await _now_playing(monkeypatch, ma, QUEUE)
-    assert "uri" not in np and "media_uri" not in np
+    assert np["uri"] == "ytmusic--HemJN6vc://track/pu7mh0FWO7E"
+    assert np["uri"], "an empty uri is the #1436 silent-no-op bug all over again"
 
 
 # ── un-favourite ────────────────────────────────────────────────────────────
