@@ -277,7 +277,21 @@ gated PR → merge). **Proven end-to-end before wiring:** `631f4b5e` → issue #
 → PR #1555 (*fix(agent): stop clock fast-path hijacking business-hours
 questions*) → merged.
 
-**Remaining Hermes CLI user:** the **general/research** background path
-(voice/chat escalation, live web lookups) = the web-search/browse tier (task
-#18). The Hermes CLI can't be deleted (nor `HERMES_API_KEY` revoked) until it
-exists.
+**Remaining Hermes CLI users — the FULL scope (all `background_runner` callers).**
+`background_runner._run_hermes_background_task` shells `hermes -p <profile> -z`,
+and it is the general-task engine for **every** `enqueue_background_task` entry
+point, not just escalation. To retire the Hermes CLI, ALL of these must move (else
+they fail once the CLI is gone):
+
+- `routers/chat.py` — Zoe-Agent background escalation **and** the
+  `/api/chat/tasks/*` generic task API.
+- `routers/voice_tts.py` — voice escalation (post-#1531 → background).
+- `mcp_server.py` — the `hermes` agent MCP tool (A2A/agent-to-agent entry).
+- the A2A **delegation-depth** path (`request_depth`/`_MAX_REQUEST_DEPTH`).
+- `routers/system.py` — the background-task admin endpoints.
+
+Most are **general/research** work that should route to the web-search/browse
+tier (task #18); the A2A/MCP generic-task callers may instead want the Omnigent
+general lane. The Hermes CLI can't be deleted (nor `HERMES_API_KEY` revoked)
+until **every** caller above has a non-Hermes home — task #18 is necessary but
+not by itself sufficient.
