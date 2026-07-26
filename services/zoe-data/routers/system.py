@@ -2178,12 +2178,16 @@ async def evolution_proposal_action(
                     _dispatch = {"ok": False, "auto_executed": False,
                                  "reason": f"approved, but auto-execution failed: {exc}"}
                     logger.warning("evolution_approve: board bridge failed for %s: %s", proposal_id, exc)
-            # top-level auto_executed reflects whether a run was actually enqueued,
-            # so 'ok: true' (the APPROVE succeeded) is never misread as "executing".
+            # top-level auto_executed = a NEW run was enqueued this call (false for
+            # an idempotent re-approve that returned an already-live/done issue).
+            # 'execution_failed' is keyed on the dispatch's OK, not on auto_executed:
+            # an idempotent re-approve is a SUCCESS (issue already running), only a
+            # bridge error (dispatch ok=false) is a failure.
             _auto_executed = bool(_dispatch and _dispatch.get("auto_executed"))
+            _exec_failed = bool(_allowed and _dispatch and not _dispatch.get("ok", True))
             return {
                 "ok": True,
-                "action": "approved" if (not _allowed or _auto_executed) else "approved_execution_failed",
+                "action": "approved_execution_failed" if _exec_failed else "approved",
                 "auto_executed": _auto_executed,
                 "multica_issue_id": multica_issue_id,
                 "dispatch": _dispatch,
