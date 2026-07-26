@@ -10,6 +10,7 @@ FastAPI routers for every Zoe API domain: chat, calendar, lists, memories, remin
 - `system.py` — system/status endpoints. CRITICAL FILE.
 - `panel_config.py` — per-panel config (`GET`/`PUT /api/panels/{device_id}/config`): the panel's room, its default speaker, and its pinned dock controls. Storage is the `panels` row (`location` + `default_player` + `pinned`), keyed by `panel_id` == the panel's `device_id`. Also serves `GET /api/panels/{device_id}/sleep-gate` — whether the kiosk should stay awake because its room looks occupied.
 - `rooms.py` — Zoe-owned rooms (`/api/rooms`): create a room, put devices in it. Storage is `rooms` + `room_devices` (alembic 0026), plus `panels.room_id`.
+- `music_setup.py` — the QR→phone "connect a music source" flow (`/api/music/setup/*`). Panel `/start` is auth-gated (owner action) + mints a one-time token/QR; phone endpoints are gated ONLY by that token. **Re-auth reconnects IN PLACE**: `setup/save` passes the existing `provider_instance_id` to `save_provider`, or a cookie/Premium refresh mints a duplicate provider instance. `provider_catalogue()` flags a configured-but-unloaded provider `needs_attention` (with MA's `last_error`) so the panel's Browse→Sources tab offers "Reconnect" not "Connected".
 - One router module per domain (`calendar.py`, `lists.py`, `memories.py`, `journal.py`, `music.py`, `push.py`, `skybridge.py`, ...).
 
 ## Local Contracts
