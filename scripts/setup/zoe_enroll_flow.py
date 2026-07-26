@@ -229,11 +229,17 @@ def _record_wav(seconds: float, path: str) -> bool:
 def enroll_voice(user: str, name: str, daemon_service: str = "zoe-voice") -> int:
     say(f"Hi {name}. Let's teach me your voice. I'll ask you to say three short "
         "phrases. I store a voice signature — numbers, not recordings.")
-    # The Jabra can't hold two input streams — pause the daemon for the window.
-    subprocess.run(["systemctl", "--user", "stop", daemon_service], check=False)
-    time.sleep(2)
     uploaded = 0
+    # The stop lives INSIDE the try: everything from here on must be covered by
+    # the finally that restarts the daemon. A Ctrl+C during the settle sleep —
+    # or a failure in the stop itself — would otherwise exit with the daemon
+    # down, leaving the panel deaf to wake-words until someone restarts it by
+    # hand. `start` on an already-running unit is a no-op, so covering the stop
+    # too is free.
     try:
+        # The Jabra can't hold two input streams — pause the daemon for the window.
+        subprocess.run(["systemctl", "--user", "stop", daemon_service], check=False)
+        time.sleep(2)
         for i, phrase in enumerate(VOICE_PHRASES, 1):
             say(f"Phrase {i}. After the beep, please say: {phrase}")
             time.sleep(0.4)

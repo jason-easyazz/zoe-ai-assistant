@@ -94,3 +94,49 @@ def test_voice_enroll_skips_failed_phrase_keeps_rest(quiet, monkeypatch):
     assert flow.enroll_voice("jason", "Jason") == 0
     assert len(quiet["api"]) == 2  # phrase 1 skipped, 2 + 3 uploaded
     assert quiet["systemctl"] == ["stop", "start"]
+
+
+# ── the daemon must come back even if the operator bails early ──────────────
+
+def test_ctrl_c_during_settle_sleep_still_restarts_daemon(quiet, monkeypatch):
+    """Ctrl+C in the stop→record gap must not leave the panel deaf.
+
+    The daemon is stopped so the Jabra can hand its input stream over, then the
+    flow sleeps ~2s to let that settle. If the stop and that sleep sit OUTSIDE
+    the try, a KeyboardInterrupt during the sleep exits before the finally ever
+    arms — the daemon stays down and the panel cannot hear wake-words until
+    someone restarts it by hand.
+    """
+    def interrupt(_seconds):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(flow.time, "sleep", interrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        flow.enroll_voice("jason", "Jason")
+
+    assert quiet["systemctl"] == ["stop", "start"], (
+        f"daemon left in {quiet['systemctl']!r} — panel is deaf after Ctrl+C"
+    )
+
+
+def test_daemon_restarts_even_if_the_stop_itself_raises(quiet, monkeypatch):
+    """A failure in the stop call must still leave the daemon started."""
+    seen = []
+
+    def flaky_run(cmd, **kw):
+        if cmd[:3] == ["systemctl", "--user", "stop"]:
+            seen.append("stop")
+            raise OSError("systemctl vanished")
+        if cmd[:2] == ["systemctl", "--user"]:
+            seen.append(cmd[2])
+
+        class _P:
+            returncode = 0
+        return _P()
+
+    monkeypatch.setattr(flow.subprocess, "run", flaky_run)
+
+    with pytest.raises(OSError):
+        flow.enroll_voice("jason", "Jason")
+    assert seen == ["stop", "start"]
