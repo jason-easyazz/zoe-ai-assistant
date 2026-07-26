@@ -172,6 +172,48 @@ can't attribute per-commit, but the landed work that drove it:
 July-2 bar the gate compared against an easy, ~1.75× slower target, so a silent brain slowdown could
 regress most of the July wins and still "pass". The new bar holds the gains.
 
+## Stopping the brain does NOT guarantee it restarts (2026-07-26)
+
+Freeing RAM by stopping `llama-server` — the documented move for a build or training window —
+has a trap that cost ~20 minutes of total voice outage on 2026-07-26.
+
+**What happened.** Brain stopped for a Docker build. Build succeeded. Brain then refused to
+start, crash-looping with:
+
+```
+ggml_backend_cuda_buffer_type_alloc_buffer: allocating 2493.32 MiB on device 0:
+cudaMalloc failed: out of memory
+```
+
+...while `MemAvailable` showed **6.5 GB free**. Dropping page cache changed nothing.
+
+**Why.** This is Tegra unified memory: the brain needs a ~2.5 GB *contiguous CUDA* buffer, and
+that is a different resource from free system RAM. While the brain was down, the **Kokoro
+sidecar expanded into the freed GPU memory and did not give it back** (`kokoro-tts.service`,
+PyTorch/CUDA backend, ~2.45 GB RSS holding `/dev/nvmap`). System RAM was plentiful; GPU memory
+was not.
+
+**The ordering that works** — stop Kokoro too, and start the brain FIRST so it claims its
+buffer before anything else can:
+
+```bash
+systemctl --user stop llama-server.service
+systemctl --user stop kokoro-tts.service     # ← the step that is easy to forget
+# ... do the RAM-hungry work ...
+systemctl --user start llama-server.service  # ← brain first: it needs the CONTIGUOUS buffer
+curl -sf http://127.0.0.1:11434/health       # wait for {"status":"ok"} before continuing
+systemctl --user start kokoro-tts.service    # Kokoro fits in what remains
+```
+
+**Diagnosing it:** `sudo fuser -v /dev/nvmap` lists the GPU holders — that is the question to
+ask, not `free -m`. A CUDA OOM with gigabytes of free system RAM always means a *GPU* holder,
+so find it rather than dropping caches.
+
+**Two process notes from the same incident:** run the long build in the BACKGROUND (a
+foreground timeout killed it with the brain already stopped — silent Zoe, no build running),
+and if a `trap` restarts the brain on exit, do not also call `start` explicitly — the race
+produces a "Job failed" that looks like a hard failure while the service is actually mid-load.
+
 ## Failure modes that are easy to misdiagnose (2026-07-14 / -15)
 
 All were reported as "the wake word gets the first use wrong" or "the voice is choppy / broken into
