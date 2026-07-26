@@ -73,11 +73,20 @@ async def test_creates_todo_issue_with_agent_creator_and_proposal_ref():
 
 
 @pytest.mark.asyncio
-async def test_idempotent_when_a_live_issue_already_refs_the_proposal():
-    conn = _FakeConn(existing={"number": 999, "id": "already"})
+async def test_idempotent_when_an_issue_already_refs_the_proposal():
+    conn = _FakeConn(existing={"number": 999, "id": "already", "status": "in_progress"})
     out = await pbb.create_board_issue_for_proposal(conn, {"id": "p1", "title": "T", "description": "d"})
-    assert out == {"number": 999, "issue_id": "already", "created": False}
+    assert out["number"] == 999 and out["issue_id"] == "already" and out["created"] is False
     assert conn.inserted is None                         # no duplicate insert (concurrency-safe)
+
+
+@pytest.mark.asyncio
+async def test_idempotent_even_when_prior_issue_is_terminal():
+    """Re-approving an already-DONE proposal must NOT enqueue a second run."""
+    conn = _FakeConn(existing={"number": 6112, "id": "done-issue", "status": "done"})
+    out = await pbb.create_board_issue_for_proposal(conn, {"id": "p1", "title": "T", "description": "d"})
+    assert out["created"] is False and out["status"] == "done"
+    assert conn.inserted is None                         # no re-execution
 
 
 def test_may_auto_execute_is_fail_closed():

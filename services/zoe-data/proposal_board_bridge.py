@@ -61,8 +61,13 @@ def may_auto_execute(user: dict | None, proposal: asyncpg.Record | dict) -> tupl
     # execution`). Any OTHER required approval classes must be evidenced by refs
     # the proposal's own contract carries — passed through here, not fabricated.
     user_id = str((user or {}).get("user_id") or "").strip() or "unknown"
-    proposal_refs = tuple(str(r) for r in _as_list(get("approval_refs")))
-    approval_refs = (f"approval:admin:{user_id}", *proposal_refs)
+    # The ONLY approval evidence available today is the admin's own approval
+    # (`approval:admin:<id>` → satisfies `user_or_admin_for_privileged_execution`).
+    # There is no store yet for OTHER approval-class evidence (e.g. a completed
+    # `security_review`), so proposals requiring those classes correctly CANNOT be
+    # satisfied and fail closed. Persisting per-proposal approval refs is future
+    # work — deliberately NOT read from a non-existent column here.
+    approval_refs = (f"approval:admin:{user_id}",)
     try:
         from zoe_evolution_execution_gate import evaluate_execution_gate
         gate = evaluate_execution_gate({
@@ -127,15 +132,19 @@ async def create_board_issue_for_proposal(
 
         # Idempotency by a STABLE proposal reference stored on the issue
         # (context_refs) — NOT the caller-passed multica_issue_id, which may be a
-        # phantom or stale under concurrency.
+        # phantom or stale under concurrency. Match ANY status, including terminal
+        # (done/cancelled): a proposal maps to at most ONE board issue for its
+        # lifetime, so re-approving an already-implemented proposal returns that
+        # issue instead of enqueuing a second autonomous run.
         existing = await conn.fetchrow(
-            """SELECT number, id::text AS id FROM issue
+            """SELECT number, id::text AS id, status FROM issue
                 WHERE workspace_id = $1::uuid AND context_refs @> $2::jsonb
-                  AND status <> ALL(ARRAY['done','cancelled']) LIMIT 1""",
+                ORDER BY created_at LIMIT 1""",
             ws, proposal_ref,
         )
         if existing:
-            return {"number": existing["number"], "issue_id": existing["id"], "created": False}
+            return {"number": existing["number"], "issue_id": existing["id"],
+                    "created": False, "status": existing["status"]}
 
         number = (await conn.fetchval("SELECT coalesce(max(number), 0) + 1 FROM issue")) or 1
         # claim_next: sit just ahead of the current todo backlog (the runner
