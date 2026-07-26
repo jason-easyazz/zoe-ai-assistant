@@ -3,7 +3,7 @@
   "commentTypes": ["logic", "syntax"],
   "excludeBranches": ["draft", "wip"],
   "triggerOnDrafts": false,
-  "triggerOnUpdates": false,
+  "triggerOnUpdates": true,
   "statusCheck": true,
   "statusCommentsEnabled": true,
   "updateExistingSummaryComment": true,
