@@ -32,6 +32,50 @@ upstreaming as an aarch64 CI target.
 The `Dockerfile` here is otherwise correct and builds fine up to the omnigent install step; it
 would succeed on an x86_64 host (or once the aarch64 wheel lands).
 
+## Container user — runs as uid 1000 (zoe), not root
+
+The repo is bind-mounted at `/workspace`, so whatever uid the container runs as is the
+uid that owns files it writes into the host's **live checkout**. It ran as root until
+2026-07-26; the result was 38 root-owned entries under `/home/zoe/assistant/.git` —
+loose objects, `refs/heads/omni/*`, reflogs, and `.git/config` itself — after which every
+zoe-side `git fetch` failed to take a lock on ~60 refs. Omnigent had also written a
+**local** `credential.helper = store --file=/workspace/.git/.gh_credentials` into the
+shared `.git/config`; `/workspace` does not exist outside the container, so every zoe git
+push failed with `unable to get credential storage lock ... No such file or directory`.
+
+Matching uids stops that at the source. `user: "1000:1000"` in the compose file, and the
+image chowns `/root` to 1000 (inside the install RUN, so it costs no extra layer) and
+gives uid 1000 a passwd entry with `--home-dir /root`. `HOME=/root` is set explicitly
+because a numeric `user:` otherwise makes Docker default `HOME` to `/`.
+
+### One-time migration (required — a plain restart is NOT enough)
+
+The two named volumes were written by root and stay root-owned across a rebuild, so the
+new uid cannot write its own state until they are chowned. Do all three together:
+
+```bash
+docker compose -f modules/omnigent/docker-compose.module.yml build omnigent
+sudo chown -R 1000:1000 \
+  /var/lib/docker/volumes/omnigent_omnigent-data/_data \
+  /var/lib/docker/volumes/omnigent_omnigent-cursor/_data
+docker compose -f modules/omnigent/docker-compose.module.yml up -d omnigent
+```
+
+`omnigent-data` is ~12 GB, so the chown is slow but metadata-only. **Check RAM before
+building** — the box gates on it, and an image build alongside the 6 GB `llama-server`
+can OOM the live brain (`docs/knowledge/memory-pressure-profile.md`).
+
+Verify afterwards, in this order — a green container is not proof:
+
+```bash
+docker exec zoe-omnigent id                       # expect uid=1000(zoe)
+docker exec zoe-omnigent touch /root/.omnigent/.wtest && echo "state dir writable"
+find /home/zoe/assistant/.git -not -user zoe      # expect no new entries over time
+```
+
+If omnigent cannot write `/root/.omnigent`, the volume chown was missed — revert by
+removing `user:` and restarting while it is investigated.
+
 ## Auth — OAuth subscriptions (not API keys)
 The harnesses authenticate with the **subscription logins** (Claude Pro/Max, ChatGPT/Codex,
 Cursor), not metered API keys.
