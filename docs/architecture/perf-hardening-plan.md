@@ -67,9 +67,14 @@ all /health 200.
 
 ## Phase 3 — correctness loose ends (order by user impact)
 
-- [ ] **3a. `zoe-voice-regression.service` boot race** — add
-      `After=docker.service` + a Postgres wait to the unit; a permanently-red
-      unit masks real failures. **Test:** reboot → unit green.
+- [x] **3a. `zoe-voice-regression.service` boot race** — done via a bounded
+      `ExecStartPre` TCP wait on Postgres :5432
+      (`scripts/maintenance/wait_for_port.py`), NOT `After=docker.service`: it
+      is a USER unit, so ordering against a system unit silently does nothing.
+      Companion fix: the probe now records a consecutive `non_pass_streak` and
+      the memory-skip path exits 4 once the streak trips (default 3), so the
+      gate can no longer green-skip forever. Operator: re-install the user unit
+      + `systemctl --user daemon-reload`. **Test:** reboot → unit green.
 - [ ] **3b. Hermes Codex auth** — fix or explicitly accept `openrouter/free`
       fallback; today it degrades silently on every turn.
 - [ ] **3c. `expert_dispatch` split-brain** — first teach `zoe_flue_client` to
