@@ -27,7 +27,7 @@ importScripts('/workbox/workbox-sw.js');
 //  same-origin, so the generic script/style routes below already cache them on
 //  first use, and precaching ~2 MB of libraries would re-download the lot on
 //  every future SW_VERSION bump.)
-const SW_VERSION = '4.76.0'; // music card cleanup: transport = back/play/next (centred); tools button swaps the progress bar for keep-playing/shuffle/repeat then auto-hides; volume bottom-right; speaker hard top-right; playlist button gone; search + browse flank the cover flow; transport no longer eats corner-button taps
+const SW_VERSION = '4.79.0'; // multi-zone speaker picker (2-col rows, tap zones to group live) + per-zone volume sliders + picker redesign; jukebox honest "song search unavailable" notice (merge of 4.78.0 + 4.77.0 -> 4.79.0)
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
