@@ -261,9 +261,26 @@ async def _run_hermes_background_task(task: str, *, user_id: str, task_id: int) 
     env["HERMES_SESSION_ID"] = f"background-task-{task_id}"
     # AGENTS.md fork rule: never fork on the event-loop thread — the whole
     # spawn+communicate+timeout+kill runs in a worker thread (2026-06-29 outage).
+    #
+    # queue_timeout is deliberately generous here. Background work has no latency
+    # budget — nobody is waiting on this turn — so it should queue behind other
+    # tasks rather than fail fast. The helper's 30s default suits interactive
+    # callers; taking it here would make a saturated pool abort background tasks
+    # that the pre-helper create_subprocess_exec path would simply have started.
+    queue_wait_s = float(os.environ.get("HERMES_BACKGROUND_QUEUE_WAIT_S", "600"))
     try:
-        proc = await run_to_completion(cmd, cwd=repo_root, env=env, timeout=timeout_s)
+        proc = await run_to_completion(
+            cmd, cwd=repo_root, env=env, timeout=timeout_s, queue_timeout=queue_wait_s
+        )
     except subprocess.TimeoutExpired as exc:
+        # Distinguish "never started" from "ran too long": reporting the child's
+        # 900s budget when we actually gave up queueing after `queue_wait_s`
+        # sends whoever reads this log hunting a slow hermes that never ran.
+        if exc.timeout is not None and float(exc.timeout) == queue_wait_s:
+            raise TimeoutError(
+                f"Background Hermes task never started: no free subprocess worker "
+                f"after {queue_wait_s:.0f}s (pool saturated)"
+            ) from exc
         raise TimeoutError(
             f"Background Hermes task timed out after {timeout_s:.0f}s"
         ) from exc
