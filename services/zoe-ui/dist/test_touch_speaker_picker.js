@@ -3,13 +3,14 @@
  *
  * The operator reported issues about "Play on…": it should be BIGGER, he "still
  * can't select the bedroom Sonos", it should show WHAT each device is (TV /
- * speaker / …), and — after the panel-as-a-speaker work grew the roster to 17 —
- * "the cancel button doesnt fit ... optimise the page to fit on the touch panels
- * display", plus label the panel's own output ("Zoe Panel", its room, and that
- * it's THIS device). The Bedroom bug is the two-same-name hazard (a live Sonos
- * Beam and a dead AirPlay Apple TV); the panel's own output repeats it (an
- * available "Zoe Panel (AirPlay)" and a dead one of the SAME name). This test
- * proves the picker: renders all 17 typed tiles, tells same-named players apart,
+ * speaker / …), and — after the panel-as-a-speaker work grew the roster past
+ * what fits — "the cancel button doesnt fit ... optimise the page to fit on the
+ * touch panels display", plus label the panel's own output ("Zoe Panel", its
+ * room, and that it's THIS device). The Bedroom bug is the two-same-name hazard
+ * (a live Sonos Beam and a dead AirPlay Apple TV); the panel's own output
+ * repeats it (an available "Zoe Panel (AirPlay)" and a dead one of the SAME
+ * name). This test proves the picker: renders every typed tile, tells
+ * same-named players apart,
  * marks the unavailable ones, CAPS the modal to the 720px stage so the grid
  * scrolls internally while the Cancel button stays on-screen, badges ONLY the
  * available self as "This device" (with its room) and hoists it first, and still
@@ -17,16 +18,18 @@
  *
  * WHY A REAL BROWSER
  * ------------------
- * Every claim is a LAYOUT/RENDER claim — "14 tiles fit without scrolling", "the
- * two Bedroom tiles look different", "the dead one is dimmed". A fake DOM sees
+ * Every claim is a LAYOUT/RENDER claim — "the modal fits the stage", "the two
+ * Bedroom tiles look different", "the dead one is dimmed". A fake DOM sees
  * none of that. This drives real headless Chromium at the panel's resolution and
  * reads real bounding boxes, and it SCREENSHOTS the open picker to be eyeballed.
  *
  * FIXTURE PROVENANCE — read before changing any fixture below
  * ----------------------------------------------------------
  * PLAYERS is a field-for-field capture of the live `GET /api/music/players`
- * (MA behind zoe-data, 2026-07-23) — all 14 players, ids/names/providers/types/
- * device_info/available copied verbatim. `kind`/`kind_label` are the fields the
+ * (MA behind zoe-data, 2026-07-23/24) — ids/names/providers/types/device_info/
+ * available copied verbatim. The roster CHURNS (a TV sleeps, a receiver is
+ * removed), so entries carry `expectLive`; the contract check counts only the
+ * live-expected ones rather than freezing a total. `kind`/`kind_label` are the fields the
  * server now adds (routers/music.py::resolve_player_kind); their values here are
  * the DESIGNED mapping, hand-written, and separately proven + mutation-tested by
  * services/zoe-data/tests/test_music_player_kind.py. assertLiveContract()
@@ -80,11 +83,16 @@ const APPLETV = 'ap40cbc0db9fb8';           // the dead Bedroom AirPlay (unavail
 const SELF = 'up88a29e0a953f';              // the panel's OWN AirPlay output (available)
 const SELF_DEAD = 'upc134dd3b3b2a';         // its dead AirPlay-1 predecessor, SAME name
 
-function P(player_id, name, provider, ptype, model, manufacturer, available, kind, kind_label) {
+// `expectLive:false` marks a fixture DELIBERATELY retained after it left the
+// live roster, because it encodes a hazard worth keeping under test. The
+// live-contract check skips those and counts only the rest, so ordinary MA
+// churn (a TV going offline) cannot silently invalidate the whole fixture.
+function P(player_id, name, provider, ptype, model, manufacturer, available, kind, kind_label, expectLive) {
   return {
     player_id, name, display_name: name, provider, type: ptype, available,
     device_info: { model, manufacturer },
     kind, kind_label,
+    expectLive: expectLive !== false,
   };
 }
 // ── live-captured 14-player inventory (see provenance header) ────────────────
@@ -102,13 +110,16 @@ const PLAYERS = [
   P(CURRENT, 'Living Room', 'sonos', 'player', 'Arc', 'SONOS', true, 'speaker', 'Sonos Arc'),
   P(BEAM, 'Bedroom', 'sonos', 'player', 'Beam', 'SONOS', true, 'speaker', 'Sonos Beam'),
   P(APPLETV, 'Bedroom', 'airplay', 'player', 'Apple TV 4K', 'Apple', false, 'tv', 'Apple TV'),
-  P('ap9c207b93ae6d', 'Parents Lounge Apple TV', 'airplay', 'player', 'Apple TV Gen3', 'Apple', true, 'tv', 'Apple TV'),
   // Three shairport-sync AirPlay receivers ADDED this session (the panel-as-a-
   // speaker work): a stale "Zoe-touch" ghost, the panel's OWN output, and its
   // dead AirPlay-1 predecessor. The last two share the name "Zoe Panel (AirPlay)"
   // — the exact self-identification hazard the "This device" logic must handle.
   P(SELF, 'Zoe Panel (AirPlay)', 'universal_player', 'player', 'ShairportSync', 'AirPlay', true, 'speaker', 'AirPlay speaker'),
-  P(SELF_DEAD, 'Zoe Panel (AirPlay)', 'universal_player', 'player', 'ShairportSync', 'AirPlay', false, 'speaker', 'AirPlay speaker'),
+  // RETAINED after the operator cleared it from MA (2026-07-24): an available
+  // player sharing its name with a dead one is the exact hazard the "This
+  // device" badge must survive, and it WILL recur (every shairport restart
+  // can strand a config). Not expected in the live API.
+  P(SELF_DEAD, 'Zoe Panel (AirPlay)', 'universal_player', 'player', 'ShairportSync', 'AirPlay', false, 'speaker', 'AirPlay speaker', false),
   P('up7cdc65abf98f', 'Zoe-touch (AirPlay)', 'universal_player', 'player', 'ShairportSync', 'AirPlay', true, 'speaker', 'AirPlay speaker'),
 ];
 
@@ -149,7 +160,7 @@ async function assertLiveContract() {
   const live = {};
   for (const p of d.players) live[p.player_id] = p;
   let checked = 0;
-  for (const f of PLAYERS) {
+  for (const f of PLAYERS.filter((x) => x.expectLive)) {
     const l = live[f.player_id];
     if (!l) { assert.fail(`fixture player ${f.player_id} (${f.name}) is not in the LIVE API — fixture is stale`); }
     assert.strictEqual(l.name, f.name, `${f.player_id}: name drifted (live=${l.name})`);
@@ -159,9 +170,10 @@ async function assertLiveContract() {
     assert.strictEqual((l.device_info || {}).model, f.device_info.model, `${f.player_id}: model drifted (live=${(l.device_info||{}).model})`);
     checked++;
   }
-  assert.strictEqual(checked, 17, `expected 17 fixture players, checked ${checked}`);
-  assert.strictEqual(d.players.length, 17, `live API now returns ${d.players.length} players, not 17 — re-measure the picker fit`);
-  console.log('  ✓ all 17 fixture players match the LIVE API base fields (' + API + ')');
+  const expected = PLAYERS.filter((x) => x.expectLive).length;
+  assert.strictEqual(checked, expected, `expected ${expected} live fixture players, checked ${checked}`);
+  assert.strictEqual(d.players.length, expected, `live API now returns ${d.players.length} players, not ${expected} — fixture drifted`);
+  console.log(`  ✓ all ${expected} live fixture players match the LIVE API base fields (${API})`);
 }
 
 // ── plumbing ─────────────────────────────────────────────────────────────────
@@ -193,7 +205,16 @@ async function open(browser, ctx, base) {
     if (url.includes('/api/panels/')) return json(PANEL_CFG);
     if (url.includes('/api/music/now-playing')) return json({ available: true, now_playing: NOW_PLAYING });
     if (url.includes('/api/music/queue/')) return json({ available: true, items: QUEUE });
-    if (url.includes('/api/music/players')) return json({ available: true, players: PLAYERS });
+    if (url.includes('/api/music/players')) {
+      let list = PLAYERS;
+      if (ctx.padRoster) {
+        list = PLAYERS.slice();
+        for (let i = list.length; i < ctx.padRoster; i++) {
+          list.push(P('pad' + i, 'Spare Speaker ' + i, 'chromecast', 'player', 'Google Home Mini', 'Google Inc.', true, 'speaker', 'Home Mini', false));
+        }
+      }
+      return json({ available: true, players: list });
+    }
     if (url.includes('/api/music/recently-played')) return json({ available: true, items: [] });
     if (url.includes('/api/music/playlists')) return json({ playlists: [] });
     if (url.includes('/api/system/display/preferences')) return json({ preferences: {} });
@@ -256,9 +277,9 @@ async function t(name, fn) {
     w: Math.round(e.getBoundingClientRect().width),
   })));
 
-  await t('all 17 players render as tiles', async () => {
+  await t('every player renders as a tile', async () => {
     const ts = await tiles();
-    assert.strictEqual(ts.length, 17, `rendered ${ts.length} tiles, expected 17`);
+    assert.strictEqual(ts.length, PLAYERS.length, `rendered ${ts.length} tiles, expected ${PLAYERS.length}`);
   });
 
   // 17 players (the AirPlay receivers pushed the roster past 14) no longer fit
@@ -286,8 +307,11 @@ async function t(name, fn) {
     assert.ok(m.mc.top >= 0 && m.mc.bottom <= 720, `modal escapes the stage (top=${m.mc.top} bottom=${m.mc.bottom})`);
     // …the Cancel button — the reported casualty — must be fully visible…
     assert.ok(m.cancel.top >= 0 && m.cancel.bottom <= 720, `Cancel button off-screen (top=${m.cancel.top} bottom=${m.cancel.bottom})`);
-    // …the overflow is absorbed by the grid scrolling internally…
-    assert.ok(m.gridScroll > m.gridClient, `grid did not overflow with 17 players — fixture/layout drift (scrollH ${m.gridScroll} clientH ${m.gridClient})`);
+    // …any overflow is absorbed by the GRID, never by the modal or the page…
+    // (deliberately not asserting the grid DOES overflow: that depends on how
+    // many speakers happen to be powered on, and a test that only passes on a
+    // busy night is a flaky test. The forced-overflow case below proves the
+    // scroll path directly.)
     // …and the page body never scrolls in either axis.
     assert.ok(m.bodyScrollW <= m.bodyClientW + 1, `page scrolls horizontally (${m.bodyScrollW} > ${m.bodyClientW})`);
     assert.ok(m.bodyScrollH <= m.bodyClientH + 1, `page scrolls vertically (${m.bodyScrollH} > ${m.bodyClientH})`);
@@ -314,6 +338,44 @@ async function t(name, fn) {
     // Self is hoisted to the front so it isn't hidden below the scroll.
     assert.strictEqual(ts[0].pid, SELF, `self is at index ${ts.findIndex((x) => x.pid === SELF)}, expected first`);
     console.log(`      "This device" on ${badged[0].pid} — "${self.name}" · ${self.sub}, at index 0`);
+  });
+
+  // The scroll path must be proven even on a quiet night when few speakers are
+  // powered on. Force a roster far past what fits and re-open the picker.
+  await t('with a roster too big to fit, the GRID scrolls and Cancel stays visible', async () => {
+    await page.evaluate(() => {
+      const el = document.querySelector('.estmc [data-x="cancel"]');
+      if (el) el.click();
+    });
+    await page.waitForTimeout(200);
+    ctx.padRoster = 30;                         // route below pads to 30 players
+    await page.click('#mSpk');
+    await page.waitForSelector('.spkgrid .spkopt', { timeout: 4000 });
+    await page.waitForTimeout(250);
+    const m = await page.evaluate(() => {
+      const grid = document.querySelector('.spkgrid');
+      const mc = document.querySelector('.estmc');
+      const cancel = document.querySelector('.estmc [data-x="cancel"]');
+      const r = (el) => { const b = el.getBoundingClientRect(); return { top: Math.round(b.top), bottom: Math.round(b.bottom) }; };
+      return {
+        tiles: document.querySelectorAll('.spkopt').length,
+        gridScroll: grid.scrollHeight, gridClient: grid.clientHeight,
+        mcScroll: mc.scrollHeight, mcClient: mc.clientHeight,
+        mc: r(mc), cancel: r(cancel),
+      };
+    });
+    assert.ok(m.tiles >= 30, `expected a padded roster, rendered ${m.tiles}`);
+    assert.ok(m.gridScroll > m.gridClient, `grid did not overflow with ${m.tiles} tiles`);
+    assert.ok(m.mcScroll <= m.mcClient + 1, 'the modal itself scrolled — only the grid should');
+    assert.ok(m.mc.top >= 0 && m.mc.bottom <= 720, `modal escaped the stage (${m.mc.top}..${m.mc.bottom})`);
+    assert.ok(m.cancel.top >= 0 && m.cancel.bottom <= 720, `Cancel off-screen (${m.cancel.top}..${m.cancel.bottom})`);
+    console.log(`      ${m.tiles} tiles: grid ${m.gridScroll}>${m.gridClient}, Cancel bottom ${m.cancel.bottom}<=720`);
+    ctx.padRoster = 0;
+    await page.evaluate(() => { const el = document.querySelector('.estmc [data-x="cancel"]'); if (el) el.click(); });
+    await page.waitForTimeout(200);
+    await page.click('#mSpk');
+    await page.waitForSelector('.spkgrid .spkopt', { timeout: 4000 });
+    await page.waitForTimeout(200);
   });
 
   await t('every tile is a >=48px finger target', async () => {
