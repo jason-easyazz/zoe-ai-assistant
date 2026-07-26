@@ -34,6 +34,7 @@
   #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(80px);background:rgba(20,24,40,.95);border:1px solid var(--line);border-radius:12px;padding:10px 18px;font-size:14px;transition:transform .25s;max-width:90vw}
   #toast.on{transform:translateX(-50%) translateY(0)}
   .empty{color:var(--faint);font-size:14px;text-align:center;padding:24px 0}
+  .notice{background:rgba(245,177,60,.12);border:1px solid rgba(245,177,60,.4);color:#f5d08a;border-radius:12px;padding:12px 14px;font-size:13px;line-height:1.35;margin-bottom:12px}
 </style>
 </head>
 <body>
@@ -79,7 +80,19 @@
         if(!items.length)return;
         html+='<div class="grp">'+g[1]+'</div>'+items.map(function(it){return row(it,g[1].replace(/s$/,''));}).join('');
       });
-      out.innerHTML=html||'<div class="empty">No results for “'+esc(term)+'”.</div>';
+      // Songs/albums come from a streaming provider (YouTube Music); when it's
+      // down the server flags `degraded` and only radio can match. Say so plainly
+      // — a bare "No results" made a provider outage look like the search was
+      // broken. Shown ABOVE any radio hits too, since "beatles" returning only
+      // stations is exactly the confusing case.
+      var notice='';
+      if(d&&d.degraded){
+        notice='<div class="notice">Song &amp; album search is unavailable right now'
+          +(d.degraded_reason?' — '+esc(d.degraded_reason):'')
+          +'. Only radio stations can be found until it’s fixed.</div>';
+      }
+      out.innerHTML=notice+(html||(d&&d.degraded?'':'<div class="empty">No results for “'+esc(term)+'”.</div>'))
+        ||'<div class="empty">No results for “'+esc(term)+'”.</div>';
     }).catch(function(){out.innerHTML='<div class="empty">Search failed — is Zoe reachable?</div>';});
   }
   document.getElementById('go').onclick=search;
