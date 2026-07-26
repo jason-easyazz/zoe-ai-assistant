@@ -152,8 +152,28 @@ def trim_to_speech_end(audio: np.ndarray, chunk: int, is_speech) -> np.ndarray:
     return audio[:last_voiced] if last_voiced > 0 else audio
 
 
+def reset_vad_state(mod: types.ModuleType) -> None:
+    """Clear Silero's hidden state between streams.
+
+    Silero VAD is STATEFUL (an RNN), and `_get_silero_vad()` hands out ONE cached
+    module that every `_Endpointer` shares. Without an explicit reset, whatever
+    audio ran through it last — the trimming pass, or the previous sample —
+    carries hidden state into the next measurement, so results would depend on
+    fixture selection and ORDER rather than on the stream under test. A probe
+    whose numbers move when you reorder the corpus is not measuring the
+    endpointer.
+    """
+    try:
+        model, _ = mod._get_silero_vad()
+        if model is not None and hasattr(model, "reset_states"):
+            model.reset_states()
+    except Exception:
+        pass
+
+
 def run_stream(mod: types.ModuleType, audio: np.ndarray, chunk: int) -> int | None:
     """Feed audio through a fresh _Endpointer; return the closing sample index."""
+    reset_vad_state(mod)
     ep = mod._Endpointer()
     n_frames = 0
     for start in range(0, len(audio) - chunk + 1, chunk):
@@ -264,6 +284,7 @@ def main() -> int:
         audio = read_wav_mono16(path, rate)
         if audio is not None:
             audio = trim_to_speech_end(audio, chunk, _is_speech)
+            reset_vad_state(mod)
             if len(audio) >= 4 * chunk:
                 loaded.append(audio)
         if len(loaded) >= args.samples:
