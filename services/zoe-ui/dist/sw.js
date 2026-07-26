@@ -27,7 +27,7 @@ importScripts('/workbox/workbox-sw.js');
 //  same-origin, so the generic script/style routes below already cache them on
 //  first use, and precaching ~2 MB of libraries would re-download the lot on
 //  every future SW_VERSION bump.)
-const SW_VERSION = '4.75.0'; // orb hands the mic to the panel daemon (wake beep + mic) instead of opening a keyboard-only text box; dock no longer rebuilt on every 30s refresh when nothing changed (the flash); cover flow slow-tap plays; presence-aware idle sleep
+const SW_VERSION = '4.79.0'; // multi-zone speaker picker (2-col rows, tap zones to group live) + per-zone volume sliders + picker redesign; jukebox honest "song search unavailable" notice (merge of 4.78.0 + 4.77.0 -> 4.79.0)
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded

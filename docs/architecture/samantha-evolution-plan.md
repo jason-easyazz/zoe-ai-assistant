@@ -429,6 +429,84 @@ regression, ever (replay harness is the enforcement).
 - [ ] **W7** self-evolution loop closed once — NOT STARTED
 - [ ] **W8** Telegram voice notes — NOT STARTED (after W3)
 
+### 6a. Lane audit (2026-07-26) — W1 ships on a lane the panel never enters
+
+Measured, not inferred. **W1.1/W1.2 are live and correct; they are simply not on the
+path the wall panel uses**, so their felt benefit at the panel is zero and the plan
+must stop reading "W1 DONE" as "conversation-grade voice at the panel".
+
+- **Two independent lanes exist and never meet.** `voice_livekit.py` (LiveKit room
+  `zoe-voice`) holds W1's barge-in + Smart Turn v3. `scripts/setup/zoe_voice_daemon.py`
+  (wake word → whole-WAV POST → `/voice/command`) is what the panel actually runs.
+  The daemon contains **zero** references to LiveKit. `"hey zoe, let's talk"` does NOT
+  open a LiveKit room — the server returns `{"conversation_mode": true}` on the done
+  frame and the DAEMON holds open listen windows itself.
+- **Flags are genuinely ON** (read from the live process env, not defaults):
+  `ZOE_VOICE_BARGE_IN=1`, `ZOE_SMART_TURN_ENABLED=1`. They only ever execute in
+  `voice_livekit.py`.
+- **Smart Turn cannot reach the panel lane by construction**, not by bug: the Jetson
+  never sees live audio there, only a finished WAV. Endpointing happens on the Pi.
+- **LiveKit container state:** last started 2026-07-20, ran 5m42s, stopped on a clean
+  SIGTERM (`oom=false`) — that is `ZOE_LIVEKIT_ONDEMAND=true` idle-reaping by design,
+  NOT a fault. Low recent traffic reflects operator usage (standard commands, not
+  conversation mode) and is **not** an argument to retire the lane —
+  **operator decision 2026-07-26: LiveKit stays.**
+- **Live panel-lane latency budget** (measured this session): endpoint wait **800 ms**
+  (`VAD_ENDPOINT_SILENCE_S=0.8`, live in `/home/pi/.zoe-voice/.env.voice`) → STT
+  **550 ms** → brain **TTFT 66.5 ms** @ 20.1 tok/s. Note the gate's `brain_ms=1583`
+  is generation-to-COMPLETION; sentence-streamed TTS means first audio does not wait
+  for it. **The 800 ms endpoint wait is therefore the largest controllable block
+  before Zoe speaks on the panel lane.**
+- **The replay gate cannot see any of this.** `measure_voice.py` computes
+  `e2e = stt + resolve + brain` by replaying SAVED WAVs, so endpointing, VAD, barge-in
+  and TTS are all outside its boundary. Any endpointing change would leave the gate
+  green regardless of live quality. **A continuous-audio harness is a prerequisite for
+  touching panel-lane endpointing** — building it is most of that work.
+- **Consequence for W1.3:** the flag flip remains correct for the LiveKit lane and
+  stays queued. It is not a panel-lane improvement and must not be scored as one.
+- **Cheap capacity nobody is using:** the Pi 5 runs at roughly one third of ONE core
+  of four with **5.65 GB of 8 GB free**, while the Jetson is the RAM-starved side that
+  gates W3/W4. Panel-lane work implemented on the Pi consumes no Jetson RAM and so does
+  **not** sit behind the W3 gate. Smart Turn v3 is already vendored in-repo
+  (`voice_turn.py`, 8.3 MB ONNX, CPU) — porting it into the daemon's `_Endpointer` is
+  reuse of proven in-house code, not new research. Gated on the harness above.
+- **Panel turn-state feedback is DONE — do not rebuild it.** An earlier draft of this
+  audit claimed the screen was dark during a turn; that was wrong, and the error is
+  worth recording because it is an easy one to repeat. The full chain is live:
+  `/voice/wake` → `voice:listening_started`, `/voice/transcribe` → `voice:thinking`,
+  `/voice/command` → `voice:responding` / `voice:done` / `voice:transcript`, all via
+  `push.broadcaster`; `connect_panel()` subscribes every panel to **both** `all` and
+  `panel_<id>`, so `broadcast("all", …)` does reach it; `js/touch-ui-executor.js`
+  (lines ~1031-1066) owns its own `/ws/push` socket, filters on `panelMatches()`,
+  drives `setOrbMode()` — which applies `orb-listening` / `orb-thinking` /
+  `orb-responding` to `#ztm-orb-dot` — plus a `VoiceOverlay` with transcript display.
+  The live kiosk URL is `/touch/home.html?panel_id=zoe-touch-pi&kiosk=1`, and
+  `home.html` loads `touch-ui-executor.js`, so the machine is loaded where it matters.
+  **The trap:** the orb *classes* are declared in `touch/js/touch-menu.js` while the
+  code that *applies* them lives in `dist/js/touch-ui-executor.js` — a grep scoped to
+  `touch/js/` finds the styles, finds no consumer, and concludes the feature is
+  missing. Search `dist/js/` too before declaring any panel behaviour absent.
+- **Already built, do not rebuild:** async delegation / holding speech is DONE —
+  `ZOE_VOICE_TOOL_FILLER` (default ON, `voice_tts.py`) speaks a per-tool lead-in on the
+  brain's first `__TOOL__: phase=start`, plus the cached `_DEFAULT_PROCESSING_ACK_PHRASES`
+  in `voice_presence.py`. The filler map already carries `web`/`search` entries waiting
+  on a web-search tool that does not exist yet — the gap is the TOOL, not the filler.
+- **W4 shortlist has an option the 2026-07-06 audit could not have had:** Gemma 4 E4B
+  ships its own USM-style conformer audio encoder (log-Mel in, acoustics preserved), so
+  prosody could ride the resident brain instead of a fifth model. NOT free — input-only
+  (no speech out), needs a BF16 mmproj (absent on the box; quantised drifts through the
+  12 conformer layers), and `llama-server`'s `input_audio` routing was closed as
+  not-planned upstream (ggml-org/llama.cpp#21868), leaving `llama-mtmd-cli` subprocess
+  cold-start as the only path. Recorded as **information for the W3 gate decision, not
+  a waiver** — the gate stands per the 2026-07-22 ruling.
+- **Voice gate false alarm (fixed).** `voice_regression_last.json` read `status=fail`
+  on 2026-07-26 with **fail=0 in both runs** — one corpus sample moved OK→EMPTY
+  (18 OK + 2 EMPTY vs a 19 OK + 1 EMPTY baseline) and EMPTY sat in the `ok_rate`
+  denominator, so a silent recording could veto every voice-path deploy. Fixed: score
+  over SCOREABLE samples (EMPTY reported, never gating), plus the CANT_DO/ERROR **count**
+  check the module docstring promised but `compare()` never implemented. Negative
+  controls in `tests/unit/test_voice_regression_probe_scoring.py`.
+
 ## 7. NEXT ACTION (always exactly one)
 
 → **W1.3 close-out: flip `ZOE_LIVEKIT_STREAM_TTS` in the lab, measure first-audio, replay-gate it** —

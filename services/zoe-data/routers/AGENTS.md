@@ -6,7 +6,7 @@ FastAPI routers for every Zoe API domain: chat, calendar, lists, memories, remin
 
 ## Ownership
 
-- `chat.py` — THE ONLY production chat router (intent fast path + agent path via `intent_router`, `ag_ui_stream`; it still CONTAINS the OpenClaw/Hermes lanes via `openclaw_ws`, but those are retirement targets per the 2026-07-22 decision — do not extend them). CRITICAL FILE.
+- `chat.py` — THE ONLY production chat router (intent fast path + agent path via `intent_router`, `ag_ui_stream`; it still CONTAINS the OpenClaw/Hermes lanes via `openclaw_ws`, but those are retirement targets per the 2026-07-22 decision — do not extend them; Hermes provider mechanics moved to `../chat_hermes_stream.py` (W4-C3), re-exported here). CRITICAL FILE.
 - `system.py` — system/status endpoints. CRITICAL FILE.
 - `panel_config.py` — per-panel config (`GET`/`PUT /api/panels/{device_id}/config`): the panel's room, its default speaker, and its pinned dock controls. Storage is the `panels` row (`location` + `default_player` + `pinned`), keyed by `panel_id` == the panel's `device_id`. Also serves `GET /api/panels/{device_id}/sleep-gate` — whether the kiosk should stay awake because its room looks occupied.
 - `rooms.py` — Zoe-owned rooms (`/api/rooms`): create a room, put devices in it. Storage is `rooms` + `room_devices` (alembic 0026), plus `panels.room_id`.

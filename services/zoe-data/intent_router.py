@@ -2263,63 +2263,27 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
     ln = str(slots.get("list_name") or "").strip() or lt.capitalize()
     try:
         from database import get_db_ctx
+        from list_service import add_item_to_list, default_visibility
 
         async with get_db_ctx() as db:
-            cursor = await db.execute(
-                "SELECT id FROM lists WHERE list_type=? AND name=? AND deleted=0"
-                " AND (user_id=? OR visibility='family')"
-                " ORDER BY CASE WHEN visibility='family' THEN 0 ELSE 1 END LIMIT 1",
-                (lt, ln, user_id),
-            )
-            row = await cursor.fetchone()
-            item_id = str(uuid.uuid4())
-            if row:
-                # Existing list: a single INSERT is already atomic.
-                list_id = row["id"]
+            outcome = await add_item_to_list(
+                db,
+                user_id=user_id,
+                list_type=lt,
+                list_name=ln,
+                text=item,
+                quantity=slots.get("quantity"),
+                category=slots.get("category"),
+                new_list_visibility=default_visibility(lt),
                 # Retry idempotency (same guard as the skybridge add): a voice
                 # re-POST replays the identical add seconds later — treat it as
                 # already done instead of inserting a duplicate.
-                # created_at is a TEXT column, so it must be cast before the
-                # timestamp comparison — a bare `created_at > now() - interval`
-                # throws `operator does not exist: text > timestamp` on Postgres,
-                # which silently drops the whole direct add to the mcporter
-                # fallback (live 2026-07-08: 69 such errors under eval traffic).
-                dup_cursor = await db.execute(
-                    "SELECT id FROM list_items WHERE list_id=? AND lower(text)=lower(?)"
-                    " AND deleted=0 AND created_at::timestamptz > now() - interval '10 seconds' LIMIT 1",
-                    (list_id, item),
-                )
-                dup_row = await dup_cursor.fetchone()
-                if dup_row:
-                    logger.info("list add: duplicate %r within 10s on list %s — replay skipped", item, list_id)
-                else:
-                    await db.execute(
-                        "INSERT INTO list_items (id, list_id, text, quantity, category) VALUES (?,?,?,?,?)",
-                        (item_id, list_id, item, slots.get("quantity"), slots.get("category")),
-                    )
-            else:
-                # Fresh list: the list row and its first item must land together,
-                # or a failed item insert leaves an orphaned empty list. asyncpg
-                # auto-commits each statement, so wrap both in one transaction.
-                list_id = str(uuid.uuid4())
-
-                async def _write_new_list_and_item() -> None:
-                    await db.execute(
-                        "INSERT INTO lists (id, user_id, name, list_type, visibility) VALUES (?,?,?,?,?)",
-                        (list_id, user_id, ln, lt,
-                         "personal" if lt in {"personal", "tasks", "shopping"} else "family"),
-                    )
-                    await db.execute(
-                        "INSERT INTO list_items (id, list_id, text, quantity, category) VALUES (?,?,?,?,?)",
-                        (item_id, list_id, item, slots.get("quantity"), slots.get("category")),
-                    )
-
-                txn = getattr(db, "transaction", None)
-                if callable(txn):
-                    async with txn():
-                        await _write_new_list_and_item()
-                else:  # fallback (e.g. a DB shim without transaction support)
-                    await _write_new_list_and_item()
+                dedup_window_s=10,
+            )
+        list_id = outcome["list_id"]
+        item_id = outcome["item_id"]
+        if outcome["deduped"]:
+            logger.info("list add: duplicate %r within 10s on list %s — replay skipped", item, list_id)
         await _notify_lists_ui(
             "list_updated",
             {"action": "item_added", "list_id": list_id, "item": {"id": item_id, "text": item}},

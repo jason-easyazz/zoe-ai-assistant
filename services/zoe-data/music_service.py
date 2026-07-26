@@ -502,6 +502,8 @@ def build_group_view(players: list[dict[str, Any]]) -> dict[str, Any]:
             "provider": str(player.get("provider") or ""),
             "available": bool(player.get("available")),
             "powered": bool(player.get("powered")),
+            # Per-zone volume for the grouped volume popover (one slider each).
+            "volume": player.get("volume_level"),
             "state": str(player.get("playback_state") or player.get("state") or ""),
             "is_group_player": player.get("type") == "group",
             "is_static_group": _is_static_group(player),
@@ -867,6 +869,51 @@ def _normalize_hit(item: Any, media_type: str) -> Optional[dict[str, Any]]:
     }
 
 
+# Streaming catalogues that answer a general "search for <song>" — as opposed to
+# builtin (library-only) and radiobrowser (stations only), which are always
+# available and are NOT evidence that song search works. If one of these is
+# enabled but not loaded, catalogue search is degraded and callers should say so
+# rather than render a misleading "no results".
+_STREAMING_MUSIC_DOMAINS = {
+    "ytmusic", "spotify", "apple_music", "applemusic", "tidal", "deezer",
+    "qobuz", "soundcloud", "plex", "subsonic", "opensubsonic", "jellyfin",
+}
+
+
+async def catalog_health() -> dict[str, Any]:
+    """Whether general catalogue search is DEGRADED — a streaming music provider
+    is enabled but not loaded (e.g. YouTube Music failing its Premium check), so
+    searches return only radio/library. Best-effort; never raises.
+
+    Returns {degraded, reason, providers}. `reason` carries MA's own last_error
+    (e.g. "User does not have Youtube Music Premium") so the surface can be
+    specific instead of a generic shrug."""
+    try:
+        cfgs = _as_list(await _ma("config/providers"))
+        provs = _as_list(await _ma("providers"))
+    except Exception:
+        return {"degraded": False, "reason": "", "providers": []}
+    available = {p.get("domain") for p in provs if isinstance(p, dict) and p.get("available")}
+    # If ANY streaming catalogue is loaded, search works — a second provider being
+    # down is not a user-visible outage. Only flag degraded when NONE is available.
+    if any(d in _STREAMING_MUSIC_DOMAINS for d in available):
+        return {"degraded": False, "reason": "", "providers": []}
+    broken = [
+        {"domain": str(c.get("domain") or ""), "last_error": str(c.get("last_error") or "")}
+        for c in cfgs
+        if isinstance(c, dict) and c.get("enabled")
+        and str(c.get("domain") or "") in _STREAMING_MUSIC_DOMAINS
+        and str(c.get("domain") or "") not in available
+    ]
+    if not broken:
+        return {"degraded": False, "reason": "", "providers": []}
+    return {
+        "degraded": True,
+        "reason": broken[0]["last_error"] or "a music service needs attention",
+        "providers": [b["domain"] for b in broken],
+    }
+
+
 async def search(query: str, media_types: Optional[list[str]] = None,
                  limit: int = 8) -> dict[str, Any]:
     """Search the connected providers and return hits grouped by media type.
@@ -905,7 +952,24 @@ async def search(query: str, media_types: Optional[list[str]] = None,
         results[_SEARCH_RESULT_KEY[mt]] = hits
         if hits:
             any_hit = True
-    return {"available": any_hit, "query": query, "results": results}
+    out = {"available": any_hit, "query": query, "results": results}
+    # When the catalogue buckets (songs/albums/artists/playlists — everything
+    # except radio) came back empty, the cause may be a down streaming provider
+    # rather than a genuine no-match. Check once, only then, so healthy searches
+    # pay nothing. The flag lets the jukebox/panel say "YouTube Music needs
+    # attention" instead of a misleading "no results". ONLY when the caller
+    # actually REQUESTED a catalogue type — a radio-only search (types=radio)
+    # leaves those buckets empty by scope, not by outage, and must not be flagged.
+    catalogue_requested = [m for m in requested if m in ("track", "album", "artist", "playlist")]
+    catalogue_empty = bool(catalogue_requested) and not any(
+        results.get(_SEARCH_RESULT_KEY[m]) for m in catalogue_requested
+    )
+    if catalogue_empty:
+        health = await catalog_health()
+        if health.get("degraded"):
+            out["degraded"] = True
+            out["degraded_reason"] = health.get("reason", "")
+    return out
 
 
 async def play_media(uri: str, player_id: str = "", option: str = "replace",
