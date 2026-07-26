@@ -121,3 +121,59 @@ def test_music_async_path_has_no_sync_psycopg2_connect():
 
     assert "psycopg2" not in sources
     assert ".connect(" not in sources
+
+
+# ── "Hey Zoe, I like this song" -> favourite the current track ───────────────
+
+@pytest.mark.parametrize("phrase", [
+    "I like this song",
+    "i love this track",
+    "favourite this",
+    "favorite this song",
+    "hey zoe, I like this",
+    "thumbs up this song",
+    "like it",
+])
+def test_favorite_phrases_detect_music_favorite(phrase):
+    det = intent_router.detect_intent(phrase, log_miss=False)
+    assert det is not None and det.name == "music_favorite", f"{phrase!r} -> {det}"
+
+
+@pytest.mark.parametrize("phrase", [
+    "I like jazz",                 # a taste statement, not "this" — must NOT fire
+    "play something I like",       # a play request
+    "I like the weather today",
+])
+def test_taste_statements_do_not_favourite(phrase):
+    det = intent_router.detect_intent(phrase, log_miss=False)
+    assert det is None or det.name != "music_favorite", f"{phrase!r} wrongly -> music_favorite"
+
+
+@pytest.mark.asyncio
+async def test_favorite_execution_speaks_the_track(monkeypatch):
+    import music_service
+    async def fake_fav(player_id=""):
+        return {"ok": True, "title": "Meet Joe Black", "artist": "Thomas Newman"}
+    monkeypatch.setattr(music_service, "favorite_now_playing", fake_fav)
+    result = await intent_router._execute_music_intent(Intent("music_favorite", {}), "jason")
+    assert result == "Done — added Meet Joe Black by Thomas Newman to your favourites."
+
+
+@pytest.mark.asyncio
+async def test_favorite_nothing_playing_says_so(monkeypatch):
+    import music_service
+    async def fake_fav(player_id=""):
+        return {"ok": False, "reason": "nothing playing"}
+    monkeypatch.setattr(music_service, "favorite_now_playing", fake_fav)
+    result = await intent_router._execute_music_intent(Intent("music_favorite", {}), "jason")
+    assert result == "There's nothing playing to favourite right now."
+
+
+@pytest.mark.asyncio
+async def test_favorite_write_failure_does_not_claim_success(monkeypatch):
+    import music_service
+    async def fake_fav(player_id=""):
+        return {"ok": False, "reason": "unavailable", "title": "X", "artist": "Y"}
+    monkeypatch.setattr(music_service, "favorite_now_playing", fake_fav)
+    result = await intent_router._execute_music_intent(Intent("music_favorite", {}), "jason")
+    assert result == "I couldn't favourite that just now."

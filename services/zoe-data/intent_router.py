@@ -1249,6 +1249,17 @@ def detect_intent(
         re.IGNORECASE,
     )
     _VOLUME_SET_RE = re.compile(r"^(?:set volume|volume) (?:to |at )?(\d{1,3})(?:\s*%)?\.?$", re.IGNORECASE)
+    # Favourite the current track. Verbs: like / love / favourite(+US spelling) /
+    # thumbs up / heart; object: this / this song|track|tune|one / it. "I like
+    # this", "favourite this song", "thumbs up this". Deliberately NOT "add …":
+    # "add this to my favourites" collides with the shopping-list `list_add`
+    # intent (which matches earlier), and "favourite this" already covers it.
+    _MUSIC_FAVORITE_RE = re.compile(
+        r"^(?:hey zoe,?\s*)?(?:i\s+)?(?:really\s+)?"
+        r"(?:like|love|favou?rite|thumbs?\s*up|heart)\s+"
+        r"(?:this(?:\s+(?:song|track|tune|one))?|it)\.?$",
+        re.IGNORECASE,
+    )
 
     m = _MUSIC_PLAY_RE.match(t)
     if m:
@@ -1269,6 +1280,14 @@ def detect_intent(
         if cmd in {"quieter"}: cmd = "volume_down"
         if "playing" in cmd or "song_is_this" in cmd: cmd = "now_playing"
         return Intent("music_control", {"command": cmd})
+
+    # "Hey Zoe, I like this song" -> favourite the current track. Kept OUT of the
+    # command regex because it takes no HA service call — it favourites the
+    # playing item's uri via MA. Matches the natural ways someone says it; the
+    # object ("this"/"this song"/"it") is required so a bare "I like jazz" (a
+    # taste statement, not a command) does not trip it.
+    if _MUSIC_FAVORITE_RE.match(t):
+        return Intent("music_favorite", {})
 
 
     # --- SET VOLUME / TTS voice volume (ZOE-13) ---
@@ -2819,7 +2838,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
     if intent.name == "music_setup":
         return await _execute_music_setup(user_id)
 
-    if intent.name in {"music_play", "music_control", "music_volume"}:
+    if intent.name in {"music_play", "music_control", "music_volume", "music_favorite"}:
         return await _execute_music_intent(intent, user_id)
 
     if intent.name == "good_morning":
@@ -4116,6 +4135,20 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
         import os as _os, httpx as _httpx
         ha_url = _os.environ.get("ZOE_HA_BRIDGE_URL", "http://127.0.0.1:8007")
         slots = intent.slots or {}
+
+        if intent.name == "music_favorite":
+            # Favourite whatever is playing. Goes through MA (not the HA bridge)
+            # because favouriting acts on the media item's uri, which only MA
+            # knows. Spoken confirmation names the track so it's clearly the one.
+            import music_service as _ms
+            res = await _ms.favorite_now_playing()
+            if res.get("ok"):
+                title = res.get("title") or "this one"
+                artist = res.get("artist")
+                return f"Done — added {title}{' by ' + artist if artist else ''} to your favourites."
+            if res.get("reason") == "nothing playing":
+                return "There's nothing playing to favourite right now."
+            return "I couldn't favourite that just now."
 
         if intent.name == "music_play":
             query = slots.get("query", "music")

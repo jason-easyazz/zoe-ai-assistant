@@ -265,6 +265,11 @@ async def now_playing(player_id: str = "") -> Optional[dict[str, Any]]:
         "title": media.get("name") or "",
         "artist": artist,
         "album": (media.get("album") or {}).get("name", "") if isinstance(media.get("album"), dict) else (media.get("album") or ""),
+        # The playing item's media uri — what favourite/queue actions act on. The
+        # panel's heart otherwise has to dig it out of the queue item at the
+        # current index; exposing it here lets "Hey Zoe, I like this song" (and a
+        # future panel simplification) act on the current track directly.
+        "uri": (media.get("uri") or (cur.get("uri") if isinstance(cur, dict) else "") or ""),
         "image": _hi_res_art(safe_image),
         "volume": player.get("volume_level"),
         "queue_id": pid,
@@ -795,6 +800,27 @@ async def favorite_add(uri: str) -> bool:
     if not uri:
         return False
     return await _ma_ok("music/favorites/add_item", item=uri)
+
+
+async def favorite_now_playing(player_id: str = "") -> dict[str, Any]:
+    """Favourite whatever is playing right now — powers "Hey Zoe, I like this
+    song". Returns a flat result the caller turns into speech:
+      {ok, title, artist}                on success
+      {ok:False, reason:"nothing playing"} when there is no current track
+      {ok:False, reason:"unavailable"}     when MA/the favourite write failed
+
+    The now-playing snapshot already resolves the current item's uri + title +
+    artist (added alongside), so this stays a thin capability block: read the
+    snapshot, favourite its uri. `favorite_add` no-ops falsy uris, so radio /
+    provider-less streams (no uri) fall out as "nothing playing" rather than a
+    silent success."""
+    np = await now_playing(player_id)
+    if not np or np.get("state") not in ("playing", "paused") or not np.get("uri"):
+        return {"ok": False, "reason": "nothing playing"}
+    ok = await favorite_add(str(np.get("uri")))
+    if not ok:
+        return {"ok": False, "reason": "unavailable", "title": np.get("title", ""), "artist": np.get("artist", "")}
+    return {"ok": True, "title": np.get("title", ""), "artist": np.get("artist", ""), "uri": np.get("uri")}
 
 
 async def favorite_remove(uri: str) -> bool:
