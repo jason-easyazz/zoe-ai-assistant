@@ -397,6 +397,28 @@ async def test_omnigent_engineering_merged_returns_text(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_engineering_identity_is_namespaced_no_board_collision(monkeypatch):
+    """The issue 'number' passed to the board lane must be namespaced so a
+    background task_id can't derive the same omni/issue-<n> branch/worktree as a
+    Multica issue with the same integer number."""
+    seen = {}
+    from omnigent_issue_executor import OmnigentResult
+
+    def capture(issue):
+        seen["number"] = issue["number"]
+        return OmnigentResult(True, "done", "merged", pr_url="https://github.com/o/r/pull/1",
+                              merged=True, merge_sha="s")
+
+    monkeypatch.setattr("omnigent_issue_executor.execute_issue_dict", capture)
+    await br._run_omnigent_engineering_task(_PROPOSAL, user_id="u", task_id=6093)
+    assert seen["number"] == "bg6093"          # namespaced
+    assert str(seen["number"]) != "6093"       # cannot collide with board issue #6093
+    # and the worktree validator accepts the derived id
+    from worktree_bootstrap import _validate_task_id
+    assert _validate_task_id(f"omni-issue-{seen['number']}") == f"omni-issue-{seen['number']}"
+
+
+@pytest.mark.asyncio
 async def test_omnigent_engineering_non_merge_raises_no_false_deploy(monkeypatch):
     """A blocked/no-PR result must RAISE — so _run_task records 'error', never
     'done', and the auto-deploy step can't mark the proposal deployed."""

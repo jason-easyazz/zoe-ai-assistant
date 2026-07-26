@@ -157,7 +157,14 @@ async def _run_omnigent_engineering_task(task: str, *, user_id: str, task_id: in
             "engineering lane busy — another proposal is being implemented; try again shortly")
     _engineering_busy = True
     try:
-        issue = {"number": task_id, "title": f"Background engineering task {task_id}", "body": task}
+        # NAMESPACE the identity. execute_issue_dict derives the PR branch
+        # (omni/issue-<number>) and worktree (omni-issue-<number>) from `number`,
+        # which is only ever string-interpolated. A raw background task_id could
+        # equal a Multica issue number and collide with a board run's branch/
+        # worktree during push/setup/cleanup. A "bg" prefix can't collide with an
+        # integer issue number.
+        issue = {"number": f"bg{task_id}",
+                 "title": f"Background engineering task {task_id}", "body": task}
         result: OmnigentResult = await asyncio.get_running_loop().run_in_executor(
             None, lambda: execute_issue_dict(issue))
     finally:
