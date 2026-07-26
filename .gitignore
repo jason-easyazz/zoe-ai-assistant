@@ -355,3 +355,8 @@ homeassistant/custom_components/localtuya/
 # router-90-campaign: the *.json negation above force-tracks committed
 # measurement artifacts; gen1-lineage.json is a runtime lineage journal, not one.
 labs/router-90-campaign/results/gen1-lineage.json
+# Agent task worktrees + polly orchestrator state on the live checkout —
+# ~2.1 GB of untracked runtime data that drowned validate_structure.py in
+# 48k phantom orphans (issue #6104). Never tracked, never vendored.
+/.worktrees/
+/.polly/
