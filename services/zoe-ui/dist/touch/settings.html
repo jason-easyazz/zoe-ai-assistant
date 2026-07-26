@@ -4681,7 +4681,15 @@
             
             try {
                 // Smart location search via the zoe-data geocode proxy (CSP: connect-src 'self')
-                const response = await fetch(`/api/geo/search?q=${encodeURIComponent(query)}&limit=5`);
+                const response = await fetch(`/api/geo/search?q=${encodeURIComponent(query)}&limit=5`, {
+                    headers: { 'X-Session-ID': window.zoeAuth?.getCurrentSession?.()?.session_id || '' }
+                });
+                if (!response.ok) {
+                    showNotification(response.status === 429
+                        ? 'Location search is busy — try again in a moment'
+                        : 'Location search unavailable', 'error');
+                    return;
+                }
                 const results = await response.json();
                 
                 if (results.length === 0) {
@@ -4719,7 +4727,15 @@
         async function handleCurrentLocation(lat, lon) {
             try {
                 // Get location details from coordinates via the zoe-data geocode proxy
-                const response = await fetch(`/api/geo/reverse?lat=${lat}&lon=${lon}`);
+                const response = await fetch(`/api/geo/reverse?lat=${lat}&lon=${lon}`, {
+                    headers: { 'X-Session-ID': window.zoeAuth?.getCurrentSession?.()?.session_id || '' }
+                });
+                if (!response.ok) {
+                    showNotification(response.status === 429
+                        ? 'Location lookup is busy — try again in a moment'
+                        : 'Location lookup unavailable', 'error');
+                    return;
+                }
                 const result = await response.json();
                 
                 if (result && result.address) {

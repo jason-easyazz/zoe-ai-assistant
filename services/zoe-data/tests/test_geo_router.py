@@ -25,9 +25,10 @@ import routers.geo as geo  # noqa: E402
 pytestmark = pytest.mark.ci_safe
 
 
-def _client() -> TestClient:
+def _client(user_id: str = "test-user") -> TestClient:
     app = FastAPI()
     app.include_router(geo.router)
+    app.dependency_overrides[geo.get_current_user] = lambda: {"user_id": user_id, "role": "user"}
     return TestClient(app)
 
 
@@ -119,6 +120,28 @@ def test_window_rate_limit_answers_429(fake_upstream, monkeypatch):
     # the window is per-endpoint: reverse is not consumed by search traffic
     fake_upstream["state"]["payload"] = b"{}"
     assert client.get("/api/geo/reverse", params={"lat": 0.0, "lon": 0.0}).status_code == 200
+
+
+def test_window_is_per_caller_not_global(fake_upstream, monkeypatch):
+    monkeypatch.setattr(geo, "_RATE_LIMIT_MAX", 1)
+    assert _client("panel-a").get("/api/geo/search", params={"q": "perth"}).status_code == 200
+    # panel-a's window is now full…
+    assert _client("panel-a").get("/api/geo/search", params={"q": "perth"}).status_code == 429
+    # …but panel-b (a different resolved caller) is unaffected
+    assert _client("panel-b").get("/api/geo/search", params={"q": "perth"}).status_code == 200
+
+
+def test_anonymous_caller_resolves_to_guest_bucket(fake_upstream, monkeypatch):
+    """Without a session, the house get_current_user policy resolves to the
+    shared guest identity — the endpoint still works (read-only feature) and
+    guests share one rate bucket."""
+    monkeypatch.setattr(geo, "_RATE_LIMIT_MAX", 1)
+    app = FastAPI()
+    app.include_router(geo.router)  # no dependency override: real auth path
+    client = TestClient(app)
+    assert client.get("/api/geo/search", params={"q": "perth"}).status_code == 200
+    assert "search:guest" in geo._rate_limit
+    assert client.get("/api/geo/search", params={"q": "perth"}).status_code == 429
 
 
 def test_outbound_gap_enforces_one_request_per_second(fake_upstream, monkeypatch):
