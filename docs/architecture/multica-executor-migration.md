@@ -236,3 +236,28 @@ was added to prevent.
   cannot — plus local fine-tuning headroom, on the same CUDA stack Zoe already
   runs. The accepted trade: ~273GB/s bandwidth means big models generate
   steadily, not fast; capacity and training headroom are what the money buys.
+
+## 6. Background-task engineering lane — NOT built (investigated + closed 2026-07-24)
+
+A `background_runner.py` "engineering lane" (route `Implement evolution proposal`
+tasks to the Omnigent `execute_issue_dict` lane) was specced (PR #1538) and built
+flag-dark (PR #1547), then **both closed** — the premise was wrong.
+
+**Finding:** nothing enqueues a proposal as a *background* task. The only builder
+of the `Implement evolution proposal <id>` string is the proposal-approve
+endpoint (`services/zoe-data/routers/system.py:2095`), which calls `dispatch_issue`
+→ the **Multica board**, not `enqueue_background_task`. So approved proposals
+ALREADY reach the Omnigent lane via the board runner (dispatch → Multica issue →
+`execute_issue_dict`) — the correct, authorized path (dispatched by the approve
+endpoint, not by arbitrary caller task text). A second lane in `background_runner`
+would only duplicate it and add a confused-deputy surface.
+
+Corroborating: `background_runner`'s pre-existing evolution-proposal auto-deploy
+regex is itself dead code, and it (and the built lane) matched **dashed** UUIDs
+while real `evolution_proposals.id` values are **32-hex non-dashed** — so the
+classifier could never have fired on a real proposal anyway.
+
+**Consequence:** `background_runner` stays general-only. The remaining Hermes CLI
+user is the **general/research** background path (voice/chat escalation, live web
+lookups) — that is the web-search/browse tier, tracked separately. The Hermes CLI
+cannot be deleted (nor `HERMES_API_KEY` revoked) until that tier exists.
