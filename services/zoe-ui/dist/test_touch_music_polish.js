@@ -423,6 +423,8 @@ test('dont-stop toggles, reads back, and reverts on refusal', async (browser, ba
   // toggle off -> posts enabled:false
   ctx = newCtx();
   page = await openMusic(browser, ctx, { base, np: nowPlaying({ dont_stop: true }) });
+  // Keep-playing moved into the tools row (it "clutters" the transport) — open it.
+  await page.click('#mToolsBtn'); await page.waitForTimeout(200);
   await page.click('#mDS');
   await page.waitForTimeout(300);
   const post = lastPost(ctx, 'music/dont-stop');
@@ -433,6 +435,7 @@ test('dont-stop toggles, reads back, and reverts on refusal', async (browser, ba
   // MA refuses (no similar_tracks provider) -> the button must not lie
   ctx = newCtx();
   page = await openMusic(browser, ctx, { base, fail: (p) => p === 'music/dont-stop' });
+  await page.click('#mToolsBtn'); await page.waitForTimeout(200);
   await page.click('#mDS');
   await page.waitForTimeout(400);
   assert.strictEqual(await page.$eval('#mDS', (e) => e.classList.contains('on')), false,
@@ -444,7 +447,7 @@ test('play next sends option:next; add still sends add', async (browser, base) =
   const recent = [{ uri: 'ytmusic--X://track/R1', name: 'Recent One', artist: 'A', image: '' }];
   const ctx = newCtx();
   const page = await openMusic(browser, ctx, { base, recent });
-  await page.click('#mQBtn');
+  await page.click('#mBrowse');
   await page.waitForSelector('.rtile', { timeout: 6000 });
   console.log('    shot: ' + await shoot(page, 'browse-card'));
   await page.click('.rtile .qnext');
@@ -480,46 +483,40 @@ test('layout: play/pause stays centred and nothing collides', async (browser, ba
   const pp = await box('#mPP');
   assert.ok(Math.abs((pp.x + pp.w / 2) - 640) <= 2,
     'play/pause is off-centre at ' + (pp.x + pp.w / 2) + 'px (a transport button unbalanced the row)');
-  // The transport must not run under the launcher or the QR.
+  // Volume + tools are the two bottom CORNERS now (keep-playing/shuffle/repeat
+  // moved into the tools row, off the transport). Neither may overlap the QR or
+  // the launcher; play stays centred BETWEEN them.
   const vt = await box('#mVolT');
   const qr = await box('#mQR');
   assert.ok(vt.x + vt.w <= qr.x, 'the volume button overlaps the jukebox QR');
   const apps = await box('#apps');
-  const shuf = await box('#mShuf');
-  assert.ok(shuf.x >= apps.x + apps.w, 'the transport runs into the launcher button');
-  // Everything on screen.
-  for (const s of ['#mVolT', '#mDS', '#mScrub', '#mFav']) {
+  const tb = await box('#mToolsBtn');
+  assert.ok(tb.x >= apps.x + apps.w, 'the tools button runs into the launcher button');
+  assert.ok(tb.x + tb.w < pp.x && vt.x > pp.x + pp.w, 'play is not between the tools and volume corners');
+  // Everything on screen (the tools row is opened so its members have real boxes).
+  await page.click('#mToolsBtn'); await page.waitForTimeout(200);
+  for (const s of ['#mVolT', '#mToolsBtn', '#mDS', '#mShuf', '#mRep', '#mTools', '#mFav']) {
     const b = await box(s);
     assert.ok(b.x >= 0 && b.y >= 0 && b.x + b.w <= 1280 && b.y + b.h <= 720, s + ' is off-screen');
   }
-  // ∞ ("keep playing", #mDS) is a round transport BUTTON (#1450), not the
-  // left-flank pill #1446 built. It must still stay clear of the cover artwork
-  // above it — the guard that caught the volume pill's first placement sitting
-  // ON the covers — but it is now a member of #mTransport by design, so its box
-  // being inside the transport is expected, not a collision.
-  const vol = await box('#mDS');
+  // The tools row occupies the scrub's slot and must clear the cover art above it
+  // (the guard that caught the volume pill's first placement sitting ON a cover).
+  const tools = await box('#mTools');
   const covers = await page.$$eval('.mfull .cfc', (es) => es.map((e) => {
     const r = e.getBoundingClientRect();
     return { x: r.x, y: r.y, w: r.width, h: r.height };
   }));
   const hits = (a, b2) => !(a.x + a.w <= b2.x || b2.x + b2.w <= a.x || a.y + a.h <= b2.y || b2.y + b2.h <= a.y);
-  const clash = covers.find((c) => hits(vol, c));
-  assert.ok(!clash, 'the ∞ button overlaps cover art at x' + (clash && Math.round(clash.x)));
-  // ...nor the scrub above it, nor the orb. (NOT #mTransport — ∞ lives inside it.)
-  for (const [sel, what] of [['#mScrub', 'the scrub bar'], ['#orb', 'the orb']]) {
-    const b = await box(sel);
-    assert.ok(!hits(vol, b), 'the ∞ button overlaps ' + what);
-  }
-  // It belongs to the transport row, immediately before shuffle (#1450 order:
-  // [keep, shuffle, prev, play, next, repeat, volume]).
-  assert.ok(await page.$eval('#mDS', (e) => e.closest('#mTransport') !== null),
-    '∞ is not inside #mTransport — #1450 put it back into the transport row');
-  assert.ok(await page.evaluate(() => {
-    const ds = document.getElementById('mDS'), sh = document.getElementById('mShuf');
-    return !!ds && !!sh && (ds.compareDocumentPosition(sh) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
-  }), '∞ does not precede the shuffle button in the transport row');
+  const clash = covers.find((c) => hits(tools, c));
+  assert.ok(!clash, 'the tools row overlaps cover art at x' + (clash && Math.round(clash.x)));
+  // keep-playing / shuffle / repeat all live in the tools row, not the transport.
+  assert.ok(await page.evaluate(() =>
+    ['mDS', 'mShuf', 'mRep'].every((id) => { const e = document.getElementById(id); return e && e.closest('#mTools'); })),
+    'keep/shuffle/repeat are not in the tools row');
   // Finger-target floor for the kiosk.
-  assert.ok(vol.h >= 48, 'the ∞ button is only ' + vol.h + 'px tall (kiosk floor is 48)');
+  assert.ok((await box('#mDS')).h >= 48, 'the keep-playing button is under the 48px kiosk floor');
+  // Close tools again so the scrub-clearance check below sees the normal card.
+  await page.click('#mToolsBtn'); await page.waitForTimeout(200);
   // The tight spot the breathe PR flagged: the centre cover must still clear
   // .cfmeta. Our scrub padding must not have eaten that gap.
   const cover = await page.$eval('.mfull .cfc.mid, .mfull .cfc', (e) => { const r = e.getBoundingClientRect(); return r.bottom; });
