@@ -127,12 +127,24 @@ def summarize(report: dict[str, Any]) -> dict[str, Any]:
     verdicts = report.get("verdicts", {}) or {}
     total = sum(verdicts.values()) or 1
     ok = verdicts.get("OK", 0)
+    # EMPTY = "STT heard nothing" (silence / clipped capture, see replay_samples.py
+    # ``_classify``). That is a property of the RECORDING, not of Zoe's ability, which
+    # is why it is already excluded from ``fail``. Leaving it in the ok_rate DENOMINATOR
+    # made one extra silent clip read as a said-vs-did regression and hard-fail the gate:
+    # observed 2026-07-26, 18 OK + 2 EMPTY scored 0.900 against a 19 OK + 1 EMPTY
+    # baseline of 0.950 with fail=0 on BOTH runs — no capability lost, deploys blocked.
+    # Score over SCOREABLE samples only. EMPTY stays in the artifact (and the printed
+    # line) so a rising count is still visible, but it never gates a deploy on its own —
+    # a silent recording must not be able to veto a voice-path release.
+    empty = verdicts.get("EMPTY", 0)
+    scoreable = max(1, total - empty)
     fail = verdicts.get("CANT_DO", 0) + verdicts.get("ERROR", 0)
     medians = {k: (agg.get(k) or {}).get("median") for k in ("stt_ms", "brain_ms", "e2e_ms")}
     return {
         "n_samples": report.get("n_samples", 0),
-        "ok_rate": round(ok / total, 3),
+        "ok_rate": round(ok / scoreable, 3),
         "ok": ok, "fail": fail, "total": total,
+        "empty": empty, "scoreable": scoreable,
         "verdicts": verdicts,
         "medians_ms": medians,
     }
@@ -148,6 +160,15 @@ def compare(cur: dict[str, Any], baseline: dict[str, Any], warn_ratio: float, wa
     if isinstance(base_ok, (int, float)) and cur["ok_rate"] < base_ok - 0.001:
         warnings.append(f"FUNCTION: OK rate {cur['ok_rate']:.3f} vs baseline {base_ok:.3f} "
                         f"(fail {cur['fail']} vs {base.get('fail')})")
+    # ...and the CANT_DO/ERROR COUNT must not rise. The module contract promises both
+    # checks; only the rate one was implemented, and a rate alone can hide a new
+    # CANT_DO when the scoreable denominator grows in the same run (19/20 = 0.950
+    # clears a 0.950 bar while carrying a regression the corpus did not have before).
+    # "Can't do it" is a bug (memory: project_voice_recording_test_loop) — count it.
+    base_fail = base.get("fail")
+    if isinstance(base_fail, int) and isinstance(cur.get("fail"), int) and cur["fail"] > base_fail:
+        warnings.append(f"FUNCTION: CANT_DO/ERROR count rose to {cur['fail']} "
+                        f"from baseline {base_fail}")
     # Speed regression — per stage, ratio AND absolute gate.
     base_med = base.get("medians_ms", {}) if isinstance(base.get("medians_ms"), dict) else {}
     for stage, cur_ms in cur["medians_ms"].items():
@@ -452,7 +473,8 @@ def main() -> int:
 
     m = summary["medians_ms"]
     print(f"Zoe voice regression probe — {summary['n_samples']} samples, "
-          f"OK {summary['ok']}/{summary['total']} ({summary['ok_rate']:.0%}), fail={summary['fail']}")
+          f"OK {summary['ok']}/{summary['scoreable']} ({summary['ok_rate']:.0%}), "
+          f"fail={summary['fail']}, empty={summary['empty']}/{summary['total']}")
     print(f"  medians: STT={m.get('stt_ms')}  brain={m.get('brain_ms')}  e2e={m.get('e2e_ms')}  (ms; warm-harness, relative only)")
     for w in warnings:
         print(f"WARN {w}")
