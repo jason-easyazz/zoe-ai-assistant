@@ -502,6 +502,8 @@ def build_group_view(players: list[dict[str, Any]]) -> dict[str, Any]:
             "provider": str(player.get("provider") or ""),
             "available": bool(player.get("available")),
             "powered": bool(player.get("powered")),
+            # Per-zone volume for the grouped volume popover (one slider each).
+            "volume": player.get("volume_level"),
             "state": str(player.get("playback_state") or player.get("state") or ""),
             "is_group_player": player.get("type") == "group",
             "is_static_group": _is_static_group(player),
