@@ -81,67 +81,92 @@ identifies engineering tasks; everything else defaults to the research tier.
 This keeps latency and cost sane (a coding-orchestrator boot for "tickets to
 Bali" is absurd) and means the two migrations proceed independently.
 
+**Classification is deliberately conservative (as built).** `_classify_task`
+returns `engineering` *only* for `Implement evolution proposal <UUID>` — the one
+pattern `_run_task` already keys its auto-deploy post-step off. Free-form
+engineering asks submitted via chat / MCP / A2A are **not** reclassified; they
+stay `general` (Hermes) rather than risk misrouting a general task onto the heavy
+board lane. Broadening the classifier (e.g. an explicit `kind` field on the
+enqueue call, or an intent classifier) is future work — the safe default is to
+under-route, never over-route.
+
 ## Target design (engineering lane)
 
 Swap only the engine, behind a flag, reusing the board runner's proven mechanics.
 
 ### Reuse, don't reinvent
 
-`omnigent_issue_executor.py` already has the pieces:
-- `kick_omnigent(issue) -> sid` — POST `/v1/sessions` + staged brief + runner +
-  `docker exec -d … omnigent run -r <sid>` (the handoff recipe).
-- `_session_text(sid) -> str` — pulls the session transcript text. This is the
-  **text-result extractor** a background task needs (the board runner instead
-  greps that text for a `PR_URL=`).
-- `_omnigent_url/_omnigent_agent_id/_omnigent_container` — lazy env accessors.
+The engineering lane reuses the whole board-runner entrypoint —
+`execute_issue_dict(issue)` in `omnigent_issue_executor.py` — which already
+wraps the kick recipe (`kick_omnigent` → `poll_for_pr_url`), the three gates, and
+the greploop merge. **No new helper and no change to `omnigent_issue_executor`.**
+(An earlier draft proposed factoring a `poll_session_until_settled` /
+text-result helper out of the PR path; that is unnecessary once the lane reuses
+`execute_issue_dict`, and is dropped.)
 
-Factor the shared kick+poll out of the PR-specific path so both consumers use it:
+### New engine — AS BUILT (PR #1547)
 
-```
-kick_omnigent(brief) -> sid
-poll_session_until_settled(sid, timeout_s) -> final_text   # NEW, generalises poll_for_pr_url
-```
-
-The board runner keeps `poll_for_pr_url` (grep the text for a PR); the background
-runner adds `poll_session_until_settled` (return the text itself).
-
-### New engine
+An engineering background task (`Implement evolution proposal …`) is *exactly*
+what the board runner already does end-to-end: implement → open ONE PR → gated
+merge. So the engineering lane **reuses `execute_issue_dict` wholesale** rather
+than inventing a prose "answer" path. This is strictly better: engineering work
+becomes a **gated, merged PR**, not a loose text blob, and it means **zero
+change to the proven `omnigent_issue_executor`**.
 
 ```python
-def _run_omnigent_background_task(task, *, user_id, task_id) -> str:
-    brief = _background_brief(task, user_id=user_id, task_id=task_id)  # untrusted-data framed
-    sid = kick_omnigent({"number": task_id, "title": f"bg-{task_id}", "body": brief})
-    text = poll_session_until_settled(sid, timeout_s=BACKGROUND_TIMEOUT_S)
-    if not text:
-        raise RuntimeError("omnigent background task returned no text")
-    return text
+async def _run_omnigent_engineering_task(task, *, user_id, task_id) -> str:
+    issue = {"number": task_id, "title": f"Background engineering task {task_id}", "body": task}
+    async with _ENGINEERING_LANE:                    # single-lane usage guard
+        result = await get_running_loop().run_in_executor(  # off the event loop
+            None, lambda: execute_issue_dict(issue))
+    # map the OmnigentResult to a plain-English text answer for the existing
+    # store/broadcast/auto-deploy machinery
+    if result.merged:      return f"Done — implemented and merged {result.pr_url} ({result.merge_sha})."
+    if result.stage=="review": return f"Implemented; PR open and gated, awaiting merge: {result.pr_url}"
+    return f"Couldn't complete this engineering task — {result.stage}: {result.detail}"
 ```
 
-### Completion signal (the real engineering risk)
+This resolves two risks the earlier draft carried:
+- **No PR-vs-prose conflict.** The superseded draft passed a brief to
+  `kick_omnigent` (which wraps with `_implement_brief` to open a PR + emit
+  `PR_URL=`) while also asking for prose via a `RESULT:` marker — contradictory.
+  Reusing `execute_issue_dict` means completion is the board lane's **proven
+  `PR_URL=`/merge detection**, not a new sentinel. No `poll_session_until_settled`
+  or `RESULT:` marker is needed.
+- **No blocking call on the event loop.** `execute_issue_dict` is synchronous
+  (subprocess + REST), so it runs under `run_in_executor`, exactly as the board
+  runner does — it never stalls the API loop.
 
-Omnigent sessions **settle to `idle`, never `completed`** (measured; the board
-runner works around this with a nonce-token/PR-URL grep). A background task needs
-the *answer text*, so it needs a definite "done, here it is" signal — two options:
+### Completion signal
 
-- **(A) Quiescent-idle + last assistant message.** Poll until the session is
-  `idle` and the transcript has stopped growing for N polls, then take the last
-  assistant turn. Simple, but risks truncating a still-thinking agent.
-- **(B) Sentinel marker.** Brief the agent to end with `RESULT: <answer>` and
-  extract after the marker (mirrors the board runner's `PR_URL=` contract, which
-  is proven). More robust; **recommended.**
+Not a new problem for the engineering lane: `execute_issue_dict` already detects
+completion via the agent's `PR_URL=` line + the greploop merge, and surfaces a
+clean `blocked`/`review` terminal otherwise. (A `RESULT:`-marker text path only
+becomes relevant if the *general/research* lane is ever built on Omnigent instead
+of the task-#18 web tier — which is not the plan.)
 
-Use (B): reuse the prefixed-marker discipline (`_PR_URL_RE` is the template) so
-completion is explicit, not inferred from quiescence.
+### Watchdog must be kind-aware — AS BUILT
+
+The board lane runs up to ~70 min (implement 1800 s + closeout 2400 s), but the
+`_watchdog_loop` marks tasks stuck in `running` past `ZOE_TASK_TIMEOUT_S`
+(**900 s**) as `blocked`. Left unchanged, it would falsely kill a legitimately
+running PR build. `_task_watchdog_timeout_s(task)` now returns
+`ZOE_TASK_ENGINEERING_TIMEOUT_S` (default **5400 s**, > implement+closeout) for
+engineering tasks and 900 s for general. The watchdog prefilters by the
+**shortest** timeout so no general task is missed, then applies the per-kind
+budget per row.
 
 ### Cutover, flag-gated (mirror the kanban_adapter pattern)
 
 - `ZOE_BACKGROUND_BACKEND = hermes | omnigent`, read per call, **default
   `hermes`** so landing the code changes nothing (the seam ships dark, exactly as
   the kanban seam did — see `_kanban_backend()`).
-- `_run_task` dispatches on the flag to `_run_hermes_background_task` (unchanged)
-  or `_run_omnigent_background_task` (new).
-- Prove on the lab/dev box with ≥3 real background tasks, compare said-vs-did,
-  then flip the default to `omnigent`. Only after the flip is Hermes deletable.
+- `_run_task` routes: engineering + `omnigent` + `ZOE_USE_OMNIGENT_EXECUTOR` →
+  `_run_omnigent_engineering_task`; everything else → `_run_hermes_background_task`
+  (unchanged).
+- Prove on the lab/dev box with ≥3 real engineering tasks, compare said-vs-did,
+  then flip the default to `omnigent`. Only after the general lane also moves off
+  Hermes is the Hermes CLI deletable.
 
 ### Cost accounting
 
