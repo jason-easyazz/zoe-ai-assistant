@@ -112,8 +112,26 @@ Sequence:
    exactly what happened on #1560.
 5. **Mark ready** → Greptile reviews once, as the final gate → resolve threads → merge.
 
+**PRECONDITION — this workflow is only coherent once two operator settings change**, and
+Greptile itself caught the contradiction (2/5 confidence on the PR that introduced this):
+
+- **`Greptile Review` must stop being a REQUIRED check.** While it is required, the
+  "routine" tier below is impossible: a PR cannot merge without a Greptile review, so
+  "local + Copilot → merge" would just block forever.
+- **Branch protection `strict` must be `false`.** `strict: true` plus
+  `triggerOnUpdates: false` is a deadlock: `strict` forces a branch update, the new head
+  gets no automatic Greptile review, and the required check is then permanently absent on
+  that commit.
+
+**Until both land**, the interim rule is: after ANY branch update on a PR that needs the
+Greptile check, comment `@greptileai` once to review the new head — and expect every
+routine PR to need that too. Each of those is a paid credit, which is precisely the churn
+this section exists to end.
+
 Tier by risk; four reviewers on a one-file docs change is friction, not safety:
 - **Routine** (docs, config, generated files, tests, UI) → local `/review` + Copilot → merge.
+  Valid ONLY once Greptile is no longer a required check (see PRECONDITION above); until
+  then a routine PR still needs one `@greptileai` review to clear the gate.
 - **Load-bearing** (voice path, auth, migrations, anything flag-gated) → the full chain.
 
 Cost note, measured 2026-07: this repo ran **400+ reviews across 112 PRs (3.6× per PR)**
