@@ -116,3 +116,32 @@ def test_rising_fail_count_caught_when_the_rate_ties():
 def test_steady_state_passes():
     """No change at all must stay green — the gate is not allowed to drift red."""
     assert _function_warnings({"OK": 19, "EMPTY": 1}, {"OK": 19, "EMPTY": 1}) == []
+
+
+# ── No scoreable samples: no evidence, and say so honestly ─────────────────
+
+def test_all_empty_run_reports_no_evidence_not_a_regression():
+    """Every sample silent = the harness saw nothing, NOT "Zoe lost everything".
+
+    Clamping the denominator to 1 would score this 0/1 = 0.000 and emit a total
+    said-vs-did collapse. It must still be non-pass (a blind gate is not green),
+    but it must name the real reason.
+    """
+    summary = vrp.summarize(_report(EMPTY=20))
+    assert summary["ok_rate"] is None, "must not fabricate a 0.0 rate"
+    assert summary["scoreable"] == 0
+
+    baseline = {"summary": vrp.summarize(_report(OK=19, EMPTY=1))}
+    warnings = vrp.compare(summary, baseline, 1.25, 400)
+    assert warnings, "a gate with no evidence must not read as green"
+    assert all(w.startswith("NO-EVIDENCE") for w in warnings), warnings
+    assert not [w for w in warnings if w.startswith("FUNCTION")], (
+        "an all-EMPTY run is not a said-vs-did regression"
+    )
+
+
+def test_no_verdicts_at_all_is_also_no_evidence():
+    """An empty verdict map means nothing was measured — never a 0% pass rate."""
+    summary = vrp.summarize(_report())
+    assert summary["ok_rate"] is None
+    assert summary["scoreable"] == 0

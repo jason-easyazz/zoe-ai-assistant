@@ -125,7 +125,10 @@ def run_measure(samples: int, service_dir: str, user: str, timeout: int) -> dict
 def summarize(report: dict[str, Any]) -> dict[str, Any]:
     agg = report.get("aggregate_ms", {}) or {}
     verdicts = report.get("verdicts", {}) or {}
-    total = sum(verdicts.values()) or 1
+    # NOT `or 1`: a fabricated denominator is exactly what this function must avoid.
+    # An empty verdict map means "nothing was measured", which flows to ok_rate=None
+    # below and is reported as NO-EVIDENCE rather than as a 0% pass rate.
+    total = sum(verdicts.values())
     ok = verdicts.get("OK", 0)
     # EMPTY = "STT heard nothing" (silence / clipped capture, see replay_samples.py
     # ``_classify``). That is a property of the RECORDING, not of Zoe's ability, which
@@ -136,15 +139,23 @@ def summarize(report: dict[str, Any]) -> dict[str, Any]:
     # Score over SCOREABLE samples only. EMPTY stays in the artifact (and the printed
     # line) so a rising count is still visible, but it never gates a deploy on its own —
     # a silent recording must not be able to veto a voice-path release.
+    #
+    # When scoreable hits ZERO (every sample EMPTY, or no verdicts at all) there is no
+    # evidence in either direction, so ``ok_rate`` is None rather than a fabricated 0.0.
+    # Dividing by a clamped ``max(1, ...)`` denominator instead would manufacture an OK
+    # rate of 0.000, which ``compare()`` reads as a total said-vs-did collapse — turning
+    # "the harness recorded nothing" into "Zoe lost every ability she had". A gate with
+    # no evidence must not pass, but it must not lie about WHY it did not pass either;
+    # ``compare()`` emits a distinct NO-EVIDENCE warning for this.
     empty = verdicts.get("EMPTY", 0)
-    scoreable = max(1, total - empty)
+    scoreable = total - empty
     fail = verdicts.get("CANT_DO", 0) + verdicts.get("ERROR", 0)
     medians = {k: (agg.get(k) or {}).get("median") for k in ("stt_ms", "brain_ms", "e2e_ms")}
     return {
         "n_samples": report.get("n_samples", 0),
-        "ok_rate": round(ok / scoreable, 3),
+        "ok_rate": round(ok / scoreable, 3) if scoreable > 0 else None,
         "ok": ok, "fail": fail, "total": total,
-        "empty": empty, "scoreable": scoreable,
+        "empty": empty, "scoreable": max(0, scoreable),
         "verdicts": verdicts,
         "medians_ms": medians,
     }
@@ -154,6 +165,16 @@ def compare(cur: dict[str, Any], baseline: dict[str, Any], warn_ratio: float, wa
     warnings: list[str] = []
     base = baseline.get("summary") if isinstance(baseline, dict) else None
     if not isinstance(base, dict):
+        return warnings
+    # No scoreable samples at all (every sample EMPTY / nothing recorded): the gate has
+    # no evidence, which is NOT a function regression and must not be reported as one.
+    # It still produces a warning, so status != pass — a gate that cannot see anything
+    # must never read as green (artifact contract: "a skip is NOT a pass").
+    if cur.get("ok_rate") is None:
+        warnings.append(
+            f"NO-EVIDENCE: 0 scoreable samples ({cur.get('empty', 0)} EMPTY of "
+            f"{cur.get('total', 0)}) — the gate could not verify function either way"
+        )
         return warnings
     # Function regression — Zoe must not lose the ability to handle the corpus.
     base_ok = base.get("ok_rate")
@@ -201,8 +222,13 @@ def stage_speed_deltas(summary: dict[str, Any], baseline: dict[str, Any]) -> dic
     return out
 
 
+# Skip/error paths never reach summarize(); this keeps the artifact SHAPE identical so
+# a reader never has to branch on which path wrote it. ok_rate stays 0.0 rather than
+# None purely for back-compat with existing consumers of the skip/error artifact —
+# those paths already carry status != "pass", so the value is never read as a verdict.
 EMPTY_SUMMARY = {"n_samples": 0, "ok_rate": 0.0, "ok": 0, "fail": 0,
-                 "total": 0, "verdicts": {}, "medians_ms": {}}
+                 "total": 0, "empty": 0, "scoreable": 0,
+                 "verdicts": {}, "medians_ms": {}}
 
 
 def emit_result(args, *, status: str, summary: dict[str, Any],
@@ -472,8 +498,9 @@ def main() -> int:
     speed_deltas = stage_speed_deltas(summary, baseline)
 
     m = summary["medians_ms"]
+    _rate = "n/a" if summary["ok_rate"] is None else f"{summary['ok_rate']:.0%}"
     print(f"Zoe voice regression probe — {summary['n_samples']} samples, "
-          f"OK {summary['ok']}/{summary['scoreable']} ({summary['ok_rate']:.0%}), "
+          f"OK {summary['ok']}/{summary['scoreable']} ({_rate}), "
           f"fail={summary['fail']}, empty={summary['empty']}/{summary['total']}")
     print(f"  medians: STT={m.get('stt_ms')}  brain={m.get('brain_ms')}  e2e={m.get('e2e_ms')}  (ms; warm-harness, relative only)")
     for w in warnings:
