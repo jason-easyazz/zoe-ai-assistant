@@ -337,8 +337,13 @@ def match_embedding(emb: np.ndarray) -> tuple[str, float] | None:
 _camera_lock = threading.Lock()
 
 
-def _pick_best_face(dets: np.ndarray, kps: np.ndarray):
-    """Largest area × detector score, rejecting faces below MIN_FACE_PX."""
+def pick_best_face(dets: np.ndarray, kps: np.ndarray):
+    """Best face by area × detector score, rejecting faces below MIN_FACE_PX.
+
+    Returns (det, kps, value) — value is the ranking score so callers that
+    compare candidates ACROSS frames (e.g. the enrollment flow) reuse the
+    same formula instead of duplicating it. None when no face qualifies.
+    """
     best_i, best_v = -1, 0.0
     for i in range(dets.shape[0]):
         x1, y1, x2, y2, score = dets[i]
@@ -350,7 +355,15 @@ def _pick_best_face(dets: np.ndarray, kps: np.ndarray):
             best_i, best_v = i, v
     if best_i < 0:
         return None
-    return dets[best_i], kps[best_i]
+    return dets[best_i], kps[best_i], best_v
+
+
+def _pick_best_face(dets: np.ndarray, kps: np.ndarray):
+    """Back-compat wrapper: (det, kps) without the ranking value."""
+    picked = pick_best_face(dets, kps)
+    if picked is None:
+        return None
+    return picked[0], picked[1]
 
 
 def capture_frames(n: int = None, span_s: float = None) -> list:
