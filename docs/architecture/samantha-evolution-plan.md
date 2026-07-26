@@ -932,7 +932,17 @@ because Theodore reacts; Zoe currently discards the reactions.
 - [ ] **W9.3** draft-with-human-send — NOT STARTED (auto-send forbidden)
 - [ ] **W10.1** `zoe_self` first-person memory lane + `[self]` recall block — NOT STARTED
 - [ ] **W10.2** weekly Zoe-reflection → persona-diff PRs via the proposal contract — NOT STARTED (after W7)
-- [ ] **W11.1** delivery-profile mapper (speed/pauses/voice per sentence) — NOT STARTED (best after W4)
+- [x] **W11.1** delivery-profile mapper — **CODE MERGED, FLAG OFF, NOT YET ENABLED**
+  (`services/zoe-data/voice_delivery.py`, flag `ZOE_EXPRESSIVE_TTS` default OFF; wired in
+  `tts_waterfall._synthesize_kokoro_sidecar`, which adds `speed` to the payload ONLY for a
+  non-neutral profile so the flag-off request is byte-identical). Deliberately built
+  WITHOUT W4: it uses reply text + household-timezone hour, and W4's valence/arousal joins
+  as one more input when it lands rather than requiring a rewrite. Utterances at or under
+  `ZOE_EXPRESSIVE_MIN_CHARS` (60) are never touched, because the Kokoro phrase cache only
+  serves at speed 1.0. Pinned by `tests/test_voice_delivery.py` (`ci_safe`), whose
+  load-bearing cases are the negatives. **ENABLING IS GATED**: `ZOE_EXPRESSIVE_TTS=1` is a
+  voice-path behaviour change and MUST have a green replay gate first — merging dark did
+  not satisfy that requirement, it deferred it to the enable step.
 - [ ] **W11.2** backchannels — NOT STARTED (needs W1.3 + proven echo handling)
 - [ ] **W12.1** remote live voice over the tunnel (measure WAN latency) — NOT STARTED
 - [ ] **W12.2** proactive outbound voice note when nobody's home — NOT STARTED (W2×W8)
