@@ -171,96 +171,79 @@ def test_run_to_completion_uses_its_own_pool():
     )
 
 
-@pytest.mark.asyncio
-async def test_timeout_bounds_queue_wait_not_just_child_runtime():
-    """A saturated pool must not blow past the caller's timeout budget.
 
-    subprocess.run(timeout=) only counts the CHILD's runtime, so a call queued
-    behind long-running work could block far past what the caller asked for.
-    Saturate _RUN_POOL with sleepers, then assert a short-timeout call gives up
-    close to its own budget instead of waiting for a worker to free up.
-    """
+
+# ── waiting and running are separate budgets ───────────────────────────────
+
+@pytest.mark.asyncio
+async def test_queue_wait_is_bounded_separately_from_runtime():
+    """A saturated pool must fail fast on the WAIT, without a child forking."""
     import asyncio
-    import time
 
     import async_subprocess
 
-    sleeper = [sys.executable, "-c", "import time; time.sleep(60)"]
+    # Short-lived: cancelling a caller does NOT free its worker, so a long
+    # sleeper would leak occupied permits into the next test.
+    sleeper = [sys.executable, "-c", "import time; time.sleep(3)"]
     hogs = [
-        asyncio.create_task(run_to_completion(sleeper, timeout=60))
-        for _ in range(async_subprocess._RUN_POOL._max_workers + 2)
+        asyncio.create_task(run_to_completion(sleeper, timeout=10))
+        for _ in range(async_subprocess._RUN_POOL_WIDTH)
     ]
     try:
-        await asyncio.sleep(0.5)  # let them occupy every worker
-        started = time.monotonic()
-        with pytest.raises(subprocess.TimeoutExpired):
-            await run_to_completion([sys.executable, "-c", "print('hi')"], timeout=1)
-        elapsed = time.monotonic() - started
-        # Budget is 1s + the queue grace; anything near 60s means the outer
-        # bound is missing and we waited for a worker instead.
-        assert elapsed < 1 + async_subprocess._QUEUE_GRACE_S + 5, (
-            f"waited {elapsed:.1f}s for a 1s-timeout call — queue time is unbounded"
-        )
+        await asyncio.sleep(0.5)  # every worker occupied
+        spawned = []
+        real_run = async_subprocess.subprocess.run
+
+        def _spy(*a, **k):
+            spawned.append(a[0])
+            return real_run(*a, **k)
+
+        async_subprocess.subprocess.run = _spy
+        try:
+            started = asyncio.get_running_loop().time()
+            with pytest.raises(subprocess.TimeoutExpired):
+                await run_to_completion(
+                    [sys.executable, "-c", "print('x')"], timeout=900, queue_timeout=1
+                )
+            waited = asyncio.get_running_loop().time() - started
+        finally:
+            async_subprocess.subprocess.run = real_run
+        # Gave up on the WAIT (~1s), not after the 900s runtime budget...
+        assert waited < 5, f"queue wait not bounded: {waited:.1f}s"
+        # ...and nothing forked, so no child was orphaned by giving up.
+        assert spawned == []
     finally:
-        for t in hogs:
-            t.cancel()
+        # Let the children exit so their permits come back before the next test.
         await asyncio.gather(*hogs, return_exceptions=True)
 
 
 @pytest.mark.asyncio
-async def test_queued_job_does_not_outlive_its_callers_budget():
-    """Time spent queued must eat the child's budget, not extend it.
+async def test_queue_time_does_not_shrink_the_child_budget():
+    """Queue time must NOT be charged against the child's runtime.
 
-    If the runtime timeout restarted when a worker picked the job up, a late
-    starter would keep running (holding a _RUN_POOL worker and a live child)
-    after its caller had already been handed TimeoutExpired. Deadline is fixed
-    at call time, so a job that starts past it never forks, and one that starts
-    late gets only the remainder.
+    The background Hermes lane asks for 900s of `hermes`, not '900s from
+    whenever I asked'. Charging the wait against it would kill real work early
+    under contention. Prove the child still gets its full budget after waiting.
     """
     import asyncio
-    import time as _time
 
     import async_subprocess
 
-    # Occupy every worker so the job under test is forced to queue.
-    blocker = [sys.executable, "-c", "import time; time.sleep(3)"]
+    # Occupy every worker briefly, so the job under test genuinely queues.
+    blocker = [sys.executable, "-c", "import time; time.sleep(2)"]
     hogs = [
         asyncio.create_task(run_to_completion(blocker, timeout=10))
-        for _ in range(async_subprocess._RUN_POOL._max_workers)
+        for _ in range(async_subprocess._RUN_POOL_WIDTH)
     ]
     try:
         await asyncio.sleep(0.3)
-        started = _time.monotonic()
-        # 1s budget, but it cannot start for ~3s — it must never fork.
-        with pytest.raises(subprocess.TimeoutExpired):
-            await run_to_completion([sys.executable, "-c", "print('x')"], timeout=1)
-        # Caller released near its own budget, not after the queue drained.
-        assert _time.monotonic() - started < 1 + async_subprocess._QUEUE_GRACE_S + 3
+        # 1.5s of runtime, queued behind ~2s of blockers. If the wait were
+        # charged against it the child would be killed; it must succeed.
+        proc = await run_to_completion(
+            [sys.executable, "-c", "import time; time.sleep(1); print('survived')"],
+            timeout=1.5,
+            queue_timeout=20,
+        )
+        assert proc.stdout.strip() == b"survived"
     finally:
-        for t in hogs:
-            t.cancel()
         await asyncio.gather(*hogs, return_exceptions=True)
-
-
-@pytest.mark.asyncio
-async def test_expired_deadline_never_forks(monkeypatch):
-    """A job whose budget expired while queued must not spawn a child at all."""
-    import async_subprocess
-
-    spawned = []
-
-    def _spy(*a, **kw):  # must never be reached
-        spawned.append(a[0])
-        raise AssertionError("forked a child whose budget had already expired")
-
-    monkeypatch.setattr(async_subprocess.subprocess, "run", _spy)
-    # First reading is the call-time deadline stamp; the worker then sees a
-    # clock far past it, i.e. the job sat in the queue past its whole budget.
-    clock = [0.0]
-    monkeypatch.setattr(
-        async_subprocess.time, "monotonic", lambda: clock.pop(0) if clock else 1e9
-    )
-
-    with pytest.raises(subprocess.TimeoutExpired):
-        await run_to_completion([sys.executable, "-c", "print('x')"], timeout=1)
-    assert spawned == []
