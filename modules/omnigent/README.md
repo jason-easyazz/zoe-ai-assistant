@@ -50,16 +50,27 @@ because a numeric `user:` otherwise makes Docker default `HOME` to `/`.
 
 ### One-time migration (required — a plain restart is NOT enough)
 
-The two named volumes were written by root and stay root-owned across a rebuild, so the
-new uid cannot write its own state until they are chowned. Do all three together:
+**All FOUR** writable named volumes were written by root and stay root-owned across a
+rebuild, so the new uid cannot write its own state until they are chowned. Two of them
+(`omnigent-claude`, `omnigent-codex`) hold the **OAuth subscription tokens** — miss those
+and the Claude/Codex workers cannot refresh, so they silently lose authentication rather
+than failing loudly. Do all three steps together:
 
 ```bash
 docker compose -f modules/omnigent/docker-compose.module.yml build omnigent
+docker compose -f modules/omnigent/docker-compose.module.yml stop omnigent
 sudo chown -R 1000:1000 \
   /var/lib/docker/volumes/omnigent_omnigent-data/_data \
-  /var/lib/docker/volumes/omnigent_omnigent-cursor/_data
+  /var/lib/docker/volumes/omnigent_omnigent-cursor/_data \
+  /var/lib/docker/volumes/omnigent_omnigent-claude/_data \
+  /var/lib/docker/volumes/omnigent_omnigent-codex/_data
 docker compose -f modules/omnigent/docker-compose.module.yml up -d omnigent
 ```
+
+Stop before chowning: a still-running root container writes new root-owned files into the
+volumes underneath you. The read-only binds (`/root/.config/gh`,
+`/root/.local/share/cursor-agent`, the `/home/zoe/...` tool paths) need nothing — they
+come from zoe-owned host paths and uid 1000 can already read them.
 
 `omnigent-data` is ~12 GB, so the chown is slow but metadata-only. **Check RAM before
 building** — the box gates on it, and an image build alongside the 6 GB `llama-server`
@@ -69,7 +80,8 @@ Verify afterwards, in this order — a green container is not proof:
 
 ```bash
 docker exec zoe-omnigent id                       # expect uid=1000(zoe)
-docker exec zoe-omnigent touch /root/.omnigent/.wtest && echo "state dir writable"
+for d in .omnigent .claude .codex .cursor; do \
+  docker exec zoe-omnigent touch /root/$d/.wtest && echo "$d writable"; done
 find /home/zoe/assistant/.git -not -user zoe      # expect no new entries over time
 ```
 
