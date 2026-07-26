@@ -23,6 +23,7 @@ from auth import get_current_user
 from database import get_db
 from stt_wake_strip import _strip_wake_word
 from typed_env import env_bool, env_float, env_int, env_str
+from voice_speaker_id import _compute_resemblyzer_embedding, _cosine_similarity
 # Waterfall engine mechanics live in tts_waterfall; they are re-exported here so
 # existing importers (main.py health detail, tests that monkeypatch this module,
 # tests/replay_samples.py, scripts/perf/measure_tts.py) keep working unchanged.
@@ -5029,25 +5030,6 @@ async def voice_ambient(payload: dict, caller: dict = Depends(_require_voice_aut
 
 # ── Speaker identification ─────────────────────────────────────────────────
 
-def _compute_resemblyzer_embedding(wav_path: str) -> Optional[bytes]:
-    """Compute a 256-dim resemblyzer voice embedding from a WAV file.
-
-    Returns raw float32 bytes or None if resemblyzer is not installed.
-    """
-    try:
-        from resemblyzer import VoiceEncoder, preprocess_wav  # type: ignore
-        import numpy as np
-        encoder = VoiceEncoder()
-        wav = preprocess_wav(wav_path)
-        embedding = encoder.embed_utterance(wav)  # shape: (256,)
-        return embedding.astype(np.float32).tobytes()
-    except ImportError:
-        logger.debug("resemblyzer not installed; speaker ID unavailable")
-        return None
-    except Exception as exc:
-        logger.warning("resemblyzer embedding failed: %s", exc)
-        return None
-
 
 def _speaker_id_threshold() -> float:
     """Resemblyzer cosine acceptance threshold, read per call so .env flips apply."""
@@ -5108,21 +5090,6 @@ async def _voice_claim_consented(user_id: str) -> bool:
     except Exception as exc:
         logger.warning("voice claim consent check failed for %s (dropping claim): %s", user_id, exc)
         return False
-
-
-def _cosine_similarity(a: bytes, b: bytes) -> float:
-    """Cosine similarity between two float32 byte blobs."""
-    try:
-        import numpy as np
-        va = np.frombuffer(a, dtype=np.float32)
-        vb = np.frombuffer(b, dtype=np.float32)
-        na = np.linalg.norm(va)
-        nb = np.linalg.norm(vb)
-        if na == 0 or nb == 0:
-            return 0.0
-        return float(np.dot(va, vb) / (na * nb))
-    except Exception:
-        return 0.0
 
 
 @router.post("/enroll")

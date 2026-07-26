@@ -289,7 +289,7 @@ them): `main.py` (health detail, `warm_moonshine`, `_transcribe_audio`,
 
 ## 4. Status checklist (tick on merge, note the PR #)
 
-- [ ] PR 1 — `voice_speaker_id.py`
+- [x] PR 1 — `voice_speaker_id.py`
 - [ ] PR 2 — `voice_text_units.py`
 - [ ] PR 3 — `stt_moonshine.py`
 - [ ] PR 4 — `voice_ui_broadcast.py`
