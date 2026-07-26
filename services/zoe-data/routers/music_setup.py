@@ -123,10 +123,16 @@ async def setup_save(payload: dict) -> dict[str, Any]:
             music_service._ytmusic_potoken_url()):
         return {"ok": False, "reason": "The YouTube Music helper isn't running yet — "
                 "ask your Zoe admin to start it, then try again."}
-    saved = await music_service.save_provider(provider, values)
+    # RE-AUTH refreshes the EXISTING instance in place. Without the instance_id,
+    # save mints a fresh instance every time — so reconnecting (a cookie/Premium
+    # refresh) would leave a duplicate YouTube Music provider behind. Pass the
+    # current instance when one exists; first-time connects still create anew.
+    existing = await music_service.provider_instance_id(provider)
+    saved = await music_service.save_provider(provider, values, instance_id=existing)
     if not saved:
         return {"ok": False, "reason": "couldn't connect — check your details"}
-    return {"ok": True, "provider": provider, "name": saved.get("name") or provider}
+    return {"ok": True, "provider": provider, "name": saved.get("name") or provider,
+            "reconnected": bool(existing)}
 
 
 # ── OAuth providers (Spotify etc.) — phone-driven, one-time-token gated ──────
