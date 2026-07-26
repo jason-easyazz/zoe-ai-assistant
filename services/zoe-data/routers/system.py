@@ -2080,40 +2080,46 @@ async def evolution_proposal_action(
                     proposal_id, exc,
                 )
 
-            # Dispatch the approved proposal to the Kanban executor (via Multica issue).
+            # Land the approved proposal on the board runner's PROVEN lane.
+            # The old executor_registry.dispatch_issue path went to the Kanban
+            # PHASE pipeline whose consumer (Hermes / the Flue live-runner) is
+            # retired — so proposals stranded, reaching no live executor
+            # (docs/architecture/multica-executor-migration.md §6). The board
+            # runner instead claims 'todo' issues from its workspace and drives
+            # them through Omnigent end-to-end; proven on proposal 631f4b5e
+            # (bridge -> issue #6112 -> PR #1555 merged). The issue body is built
+            # from the proposal's OWN fields only (never caller text).
             _dispatch = None
             try:
-                from executor_registry import dispatch_issue  # type: ignore[import]
-                from multica_client import get_engineering_multica_agent_id  # type: ignore[import]
+                from proposal_board_bridge import create_board_issue_for_proposal  # type: ignore[import]
+                from executors.executor_queue_backend import get_pool  # type: ignore[import]
 
-                if multica_issue_id:
-                    _issue = {
-                        "id": multica_issue_id,
-                        "identifier": proposal_id,
-                        "title": proposal["title"],
-                        "description": (
-                            f"Implement evolution proposal {proposal_id}: "
-                            f"{proposal['title']}.\n\n{proposal['description']}"
-                        ),
-                        "assignee_id": get_engineering_multica_agent_id(),
-                    }
-                    _dispatch = await dispatch_issue(_issue)
-                    logger.info(
-                        "evolution_approve: dispatched proposal %s -> %s",
-                        proposal_id, _dispatch.get("chain") if _dispatch.get("ok") else _dispatch,
+                prop_row = {
+                    "id": proposal_id,
+                    "title": proposal["title"],
+                    "description": proposal["description"],
+                    "evidence": proposal.get("evidence"),
+                    "multica_issue_id": multica_issue_id,
+                }
+                pool = await get_pool()
+                async with pool.acquire() as _mconn:
+                    bridged = await create_board_issue_for_proposal(_mconn, prop_row)
+                if bridged.get("issue_id"):
+                    # Point the proposal at the REAL board issue (replacing any
+                    # phantom id from the earlier Multica REST create).
+                    multica_issue_id = bridged["issue_id"]
+                    await db.execute(
+                        "UPDATE evolution_proposals SET multica_issue_id=$1 WHERE id=$2",
+                        multica_issue_id, proposal_id,
                     )
-                else:
-                    # No Multica issue to anchor the journaled engineering run (Multica
-                    # unconfigured or the issue sync failed). Surface it so the
-                    # approved proposal does not sit undispatched silently.
-                    _dispatch = {"ok": False, "reason": "no multica_issue_id; proposal approved but not dispatched"}
-                    logger.warning(
-                        "evolution_approve: proposal %s approved but NOT dispatched — %s",
-                        proposal_id, _dispatch["reason"],
-                    )
+                _dispatch = {"ok": True, "board_issue": bridged["number"], "created": bridged["created"]}
+                logger.info(
+                    "evolution_approve: proposal %s -> board issue #%s (created=%s)",
+                    proposal_id, bridged["number"], bridged["created"],
+                )
             except Exception as exc:
                 _dispatch = {"ok": False, "reason": str(exc)}
-                logger.warning("evolution_approve: could not dispatch proposal to Kanban: %s", exc)
+                logger.warning("evolution_approve: board bridge failed for %s: %s", proposal_id, exc)
             return {
                 "ok": True,
                 "action": "approved",
