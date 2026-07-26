@@ -32,6 +32,95 @@ upstreaming as an aarch64 CI target.
 The `Dockerfile` here is otherwise correct and builds fine up to the omnigent install step; it
 would succeed on an x86_64 host (or once the aarch64 wheel lands).
 
+## Container user — runs as uid 1000 (zoe), not root
+
+The repo is bind-mounted at `/workspace`, so whatever uid the container runs as is the
+uid that owns files it writes into the host's **live checkout**. It ran as root until
+2026-07-26; the result was 38 root-owned entries under `/home/zoe/assistant/.git` —
+loose objects, `refs/heads/omni/*`, reflogs, and `.git/config` itself — after which every
+zoe-side `git fetch` failed to take a lock on ~60 refs. Omnigent had also written a
+**local** `credential.helper = store --file=/workspace/.git/.gh_credentials` into the
+shared `.git/config`; `/workspace` does not exist outside the container, so every zoe git
+push failed with `unable to get credential storage lock ... No such file or directory`.
+
+Matching uids stops that at the source. `user: "1000:1000"` in the compose file, and the
+image chowns `/root` to 1000 (inside the install RUN, so it costs no extra layer) and
+gives uid 1000 a passwd entry with `--home-dir /root`. `HOME=/root` is set explicitly
+because a numeric `user:` otherwise makes Docker default `HOME` to `/`.
+
+### One-time migration (required — a plain restart is NOT enough)
+
+**All FOUR** writable named volumes were written by root and stay root-owned across a
+rebuild, so the new uid cannot write its own state until they are chowned. Every one of
+them is a persisted login/token store or live state — `omnigent-claude`, `omnigent-codex`
+AND `omnigent-cursor` all hold agent credentials, and `omnigent-data` holds host/runner
+state. Miss any of them and that worker cannot refresh, so it silently loses
+authentication rather than failing loudly. Do all three steps together:
+
+```bash
+# Resolve everything FIRST — every command below depends on it, and every variable here
+# exists because assuming it silently targeted the WRONG thing at least once.
+#
+#  * PROJECT: compose derives it from the working directory, so the same commands run
+#    from a different directory address a DIFFERENT volume set — they create and chown
+#    empty replacements while the real root-owned volumes are untouched. The container's
+#    own label is the only authoritative answer. `:?` aborts rather than letting an empty
+#    -p select the default project.
+#  * REPO: absolute paths so the block is safe from any cwd.
+#  * --env-file: the normal bring-up uses it (see above). Without it OPENROUTER_API_KEY
+#    and OMNIGENT_WS_ALLOWED_ORIGINS come back unset, breaking pi gateway auth and tunnel
+#    CSRF checks with no obvious link to the uid change.
+REPO=$(git -C /home/zoe/assistant rev-parse --show-toplevel)
+PROJECT=$(docker inspect zoe-omnigent --format '{{index .Config.Labels "com.docker.compose.project"}}')
+: "${PROJECT:?could not read the compose project label — is zoe-omnigent running?}"
+echo "compose project = $PROJECT   repo = $REPO"
+
+COMPOSE="docker compose -p $PROJECT --env-file $REPO/.env -f $REPO/modules/omnigent/docker-compose.module.yml"
+
+# STOP FIRST, before the build. The build takes minutes, and a still-running root
+# container keeps writing root-owned files into the bind-mounted checkout for all of it —
+# recreating the exact problem this migration exists to fix.
+$COMPOSE stop omnigent
+$COMPOSE build omnigent
+# Chown through Compose, not host paths: hard-coding /var/lib/docker/volumes/<project>_*
+# assumes a rootful daemon, the default data-root, and a known prefix — any of which can
+# be wrong, and the failure mode is chowning nothing (or the wrong volumes) silently.
+$COMPOSE run --rm --no-deps --user 0:0 --entrypoint sh omnigent \
+  -c 'chown -R 1000:1000 /root/.omnigent /root/.claude /root/.codex /root/.cursor'
+$COMPOSE up -d omnigent
+```
+
+Stop before chowning: a still-running root container writes new root-owned files into the
+volumes underneath you. The read-only binds (`/root/.config/gh`,
+`/root/.local/share/cursor-agent`, the `/home/zoe/...` tool paths) need nothing — they
+come from zoe-owned host paths and uid 1000 can already read them.
+
+`omnigent-data` is ~12 GB, so the chown is slow but metadata-only. **Check RAM before
+building** — the box gates on it, and an image build alongside the 6 GB `llama-server`
+can OOM the live brain (`docs/knowledge/memory-pressure-profile.md`).
+
+Verify afterwards, in this order — a green container is not proof:
+
+```bash
+docker exec zoe-omnigent id                       # expect uid=1000(zoe)
+for d in .omnigent .claude .codex .cursor; do \
+  docker exec zoe-omnigent touch /root/$d/.wtest && echo "$d writable"; done
+find /home/zoe/assistant/.git -not -user zoe      # expect no new entries over time
+```
+
+```bash
+# The actual point of the change: new files in the bind-mounted repo must land
+# zoe-owned. Nothing else proves the fix worked — a green container does not.
+find /home/zoe/assistant/.git -not -user zoe -not -name '.gh_credentials' | wc -l
+```
+
+Expect that count to stay at 0 as omnigent works. Before the switch it reached 47 in
+about an hour. If it climbs again, the container is still writing as root and `user:`
+did not take — check `docker exec zoe-omnigent id` before anything else.
+
+If omnigent cannot write any of the four state dirs, that volume's chown was missed —
+revert by removing `user:` and restarting while it is investigated.
+
 ## Auth — OAuth subscriptions (not API keys)
 The harnesses authenticate with the **subscription logins** (Claude Pro/Max, ChatGPT/Codex,
 Cursor), not metered API keys.
