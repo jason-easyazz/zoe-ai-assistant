@@ -51,19 +51,22 @@ because a numeric `user:` otherwise makes Docker default `HOME` to `/`.
 ### One-time migration (required — a plain restart is NOT enough)
 
 **All FOUR** writable named volumes were written by root and stay root-owned across a
-rebuild, so the new uid cannot write its own state until they are chowned. Two of them
-(`omnigent-claude`, `omnigent-codex`) hold the **OAuth subscription tokens** — miss those
-and the Claude/Codex workers cannot refresh, so they silently lose authentication rather
-than failing loudly. Do all three steps together:
+rebuild, so the new uid cannot write its own state until they are chowned. Every one of
+them is a persisted login/token store or live state — `omnigent-claude`, `omnigent-codex`
+AND `omnigent-cursor` all hold agent credentials, and `omnigent-data` holds host/runner
+state. Miss any of them and that worker cannot refresh, so it silently loses
+authentication rather than failing loudly. Do all three steps together:
 
 ```bash
 docker compose -f modules/omnigent/docker-compose.module.yml build omnigent
 docker compose -f modules/omnigent/docker-compose.module.yml stop omnigent
-sudo chown -R 1000:1000 \
-  /var/lib/docker/volumes/omnigent_omnigent-data/_data \
-  /var/lib/docker/volumes/omnigent_omnigent-cursor/_data \
-  /var/lib/docker/volumes/omnigent_omnigent-claude/_data \
-  /var/lib/docker/volumes/omnigent_omnigent-codex/_data
+# Chown through Compose, not host paths: it resolves the project's real volumes itself.
+# Hard-coding /var/lib/docker/volumes/omnigent_* assumes a rootful daemon, the default
+# data-root, and a project prefix derived from the working directory — any of which can
+# be wrong, and the failure mode is chowning nothing (or the wrong volumes) silently.
+docker compose -f modules/omnigent/docker-compose.module.yml run --rm --no-deps \
+  --user 0:0 --entrypoint sh omnigent \
+  -c 'chown -R 1000:1000 /root/.omnigent /root/.claude /root/.codex /root/.cursor'
 docker compose -f modules/omnigent/docker-compose.module.yml up -d omnigent
 ```
 
