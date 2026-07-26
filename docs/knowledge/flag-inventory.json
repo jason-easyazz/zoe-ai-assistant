@@ -3802,6 +3802,7 @@
           "services/zoe-data/proactive/triggers/reminder_scan.py",
           "services/zoe-data/routers/weather.py",
           "services/zoe-data/time_utils.py",
+          "services/zoe-data/voice_delivery.py",
           "services/zoe-data/voice_greeting.py"
         ],
         "typed_env": false

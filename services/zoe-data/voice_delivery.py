@@ -37,7 +37,9 @@ them; faking them badly is worse than not doing them.
 """
 from __future__ import annotations
 
+import os
 import re
+import zoneinfo
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
@@ -48,6 +50,13 @@ from typing import Optional
 # local `_env_flag` wrapper would work at runtime and be INVISIBLE to the
 # generated inventory — a flag nobody can find is a flag nobody can turn off.
 from typed_env import env_bool, env_int
+
+# Household timezone, resolved the same way proactive/engine.py does for ITS quiet
+# hours. `datetime.now()` alone reads the HOST clock, and this box runs UTC while
+# the household is Australia/Perth — so a naive now() would soften delivery in the
+# middle of the afternoon and leave real 2am replies neutral. Quiet hours are a
+# fact about the house, not about the server.
+_ZOE_TZ = zoneinfo.ZoneInfo(os.environ.get("ZOE_TIMEZONE", "Australia/Perth"))
 
 # Profiles are speed multipliers for the Kokoro sidecar. Kept few and boring on
 # purpose: every one of them costs a phrase-cache miss, so each has to earn it.
@@ -112,7 +121,7 @@ def resolve(text: str, *, hour: Optional[int] = None) -> Delivery:
         return NEUTRAL
 
     if hour is None:
-        hour = datetime.now().hour
+        hour = datetime.now(_ZOE_TZ).hour
 
     candidates: list[Delivery] = []
     if _WARM_RE.search(body):

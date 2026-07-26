@@ -135,3 +135,31 @@ def test_empty_and_none_text_are_safe(monkeypatch):
     _on(monkeypatch)
     assert voice_delivery.resolve("", hour=2).speed is None
     assert voice_delivery.resolve(None, hour=2).speed is None  # type: ignore[arg-type]
+
+
+# ── Quiet hours belong to the HOUSE, not the server ────────────────────────
+
+def test_quiet_hours_use_household_timezone_not_host_clock(monkeypatch):
+    """The box runs UTC; the household is Australia/Perth (UTC+8).
+
+    With a naive ``datetime.now()`` this fires in the middle of the afternoon and
+    leaves real 2am replies neutral — the window is inverted, not merely offset.
+    """
+    _on(monkeypatch)
+    import datetime as _dt
+
+    # 18:00 UTC == 02:00 next day in Perth: quiet by household time, not by host.
+    monkeypatch.setenv("TZ", "UTC")
+    monkeypatch.setenv("ZOE_TIMEZONE", "Australia/Perth")
+    importlib.reload(voice_delivery)
+
+    class _FixedDateTime(_dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            base = _dt.datetime(2026, 7, 26, 18, 0, tzinfo=_dt.timezone.utc)
+            return base.astimezone(tz) if tz else base.replace(tzinfo=None)
+
+    monkeypatch.setattr(voice_delivery, "datetime", _FixedDateTime)
+    assert voice_delivery.resolve(LONG_NEUTRAL).profile == "gentle", (
+        "18:00 UTC is 02:00 in Perth — must be treated as quiet hours"
+    )
