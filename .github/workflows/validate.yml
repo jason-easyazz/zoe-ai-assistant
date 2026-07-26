@@ -151,3 +151,40 @@ jobs:
             --override-ini="asyncio_mode=auto"
         env:
           POSTGRES_URL: postgresql://zoe:${{ env.CI_DB_PASSWORD }}@localhost:5432/zoe
+
+  # Secret scanning as a MERGE-QUEUE-COMPATIBLE gate.
+  #
+  # The GitGuardian GitHub App cannot report on `merge_group`, so it can never be a
+  # required check once a merge queue is enabled (GitHub: checks that only run on
+  # pull_request will not execute during merge queue operations). This job is the
+  # Action equivalent and inherits this workflow's merge_group trigger, so it CAN.
+  # The App stays installed for its dashboard alerts and PR comments — only the
+  # blocking gate moves here. See docs/knowledge/merge-queue-switch.md.
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # ggshield scans BRANCH HISTORY, not just the head tree: a credential in an
+          # intermediate commit fails even when the final diff is clean. Full history
+          # is required or the scan silently checks far less than it appears to.
+          fetch-depth: 0
+
+      - name: Fail loudly if the scan gate is not actually configured
+        # A missing or expired token must NOT look like a pass. This is the same rule
+        # as the voice gate: an absent result is never a green one.
+        run: |
+          if [ -z "${{ secrets.GITGUARDIAN_API_KEY }}" ]; then
+            echo "::error::GITGUARDIAN_API_KEY is not set — the secret-scan gate is NOT running."
+            echo "Set it at Settings → Secrets and variables → Actions. Until then this check is meaningless."
+            exit 1
+          fi
+
+      - name: GitGuardian scan
+        uses: GitGuardian/ggshield-action@v1
+        env:
+          GITHUB_PUSH_BEFORE_SHA: ${{ github.event.before }}
+          GITHUB_PUSH_BASE_SHA: ${{ github.event.base }}
+          GITHUB_PULL_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
