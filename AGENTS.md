@@ -82,6 +82,44 @@ Service helpers should be small capability blocks with explicit parameters, stru
 
 Do not refactor the whole app as cleanup. Do not create `_new`, `_fixed`, `_v2`, `_old`, backup, or duplicate router files.
 
+## Review pipeline — cheap reviewers first, Greptile last
+
+Three reviewers are live and they catch **different** things. On #1560 the chain ran:
+a brittle host-path chown → **Copilot** fixed it *and introduced* a Compose project-name
+flaw → **Greptile** caught that → **Bugbot** caught a silently-failing symlink neither
+saw. Three reviewers, three distinct real defects, no overlap. So the order is not
+ceremony — it is what makes the last review cheap and clean.
+
+**Open every PR as a DRAFT.** Greptile is configured `triggerOnDrafts: false` and (since
+2026-07-26) `triggerOnUpdates: false`, so it reviews **exactly once, when the PR is marked
+ready for review**. That makes it the final gate by construction. Marking ready is the
+act of spending it — don't do it until the PR is genuinely finished.
+
+Sequence:
+
+1. **Draft PR.** Invisible to Greptile.
+2. **Local `/review` (Cursor) — free.** Bugbot recognises the same diff later and skips
+   the cloud review, so this tier costs nothing. `.cursor/BUGBOT.md` carries the repo's
+   review guide.
+3. **Copilot** — `gh pr edit <n> --add-reviewer @copilot` (that syntax; the bot login does
+   NOT resolve). ~$10/mo flat for 1500 requests, and its reviews are always `COMMENTED`,
+   so it can never block a merge.
+4. **Batch the fixes.** Collect every finding, fix once, push once. Fix-push-fix-push
+   multiplies reviews AND multiplies the chance a fix introduces a new bug — which is
+   exactly what happened on #1560.
+5. **Mark ready** → Greptile reviews once, as the final gate → resolve threads → merge.
+
+Tier by risk; four reviewers on a one-file docs change is friction, not safety:
+- **Routine** (docs, config, generated files, tests, UI) → local `/review` + Copilot → merge.
+- **Load-bearing** (voice path, auth, migrations, anything flag-gated) → the full chain.
+
+Cost note, measured 2026-07: this repo ran **400+ reviews across 112 PRs (3.6× per PR)**
+in one month. At that volume Greptile is ~$380/mo and Bugbot ~$400–600/mo, against
+Copilot's $10 flat. The multiplier — not the PR count — was the cost, and
+`triggerOnUpdates: false` plus draft-first is what removes it. **Copilot's inline comments
+create review threads that count toward `required_conversation_resolution`**, so they must
+be resolved like any other.
+
 ## Greptile PR loop
 
 For reviewable development work:
