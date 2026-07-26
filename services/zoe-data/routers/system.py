@@ -2058,40 +2058,48 @@ async def evolution_proposal_action(
                    WHERE id=$3""",
                 _time.time(), multica_issue_id, proposal_id,
             )
-            # Hermes code-review gate before queuing implementation.
+            # Hermes PROPOSAL pre-review gate — REVIEW-ONLY proposals only.
+            # An auto-executing proposal is skipped here: it is already authorized
+            # (admin + execution gate) and the CODE it produces is reviewed
+            # downstream by the board lane (focused tests + review gate + greploop
+            # before merge). Running this gate for auto-exec proposals is both
+            # redundant AND unsafe — on a re-approve it could revert the proposal
+            # to 'pending' and return early while an already-live board issue keeps
+            # running (proposal says human-review-needed, board says implementing).
             # Fails open — if Hermes is unavailable we proceed normally.
-            try:
-                _h_approved, _h_feedback = await _hermes_review_proposal(proposal)
-                if not _h_approved and re.search(r"CONCERNS:|REJECT", _h_feedback, re.IGNORECASE):
-                    logger.info(
-                        "evolution_approve: Hermes flagged concerns for proposal %s", proposal_id
+            if not _allowed:
+                try:
+                    _h_approved, _h_feedback = await _hermes_review_proposal(proposal)
+                    if not _h_approved and re.search(r"CONCERNS:|REJECT", _h_feedback, re.IGNORECASE):
+                        logger.info(
+                            "evolution_approve: Hermes flagged concerns for proposal %s", proposal_id
+                        )
+                        if multica_issue_id:
+                            try:
+                                from multica_client import get_multica_client  # type: ignore[import]
+                                _mc = get_multica_client()
+                                if _mc.is_configured():
+                                    async with httpx.AsyncClient(timeout=30) as _hc:
+                                        _cur_desc = proposal.get("description", "")
+                                        await _hc.put(
+                                            f"{_mc._base}/api/issues/{multica_issue_id}",
+                                            json={"description": f"{_cur_desc}\n\nHermes review:\n{_h_feedback}"},
+                                            headers=_mc._headers(),
+                                        )
+                            except Exception as _exc:
+                                logger.warning(
+                                    "evolution_approve: could not append Hermes feedback to Multica issue: %s", _exc
+                                )
+                        await db.execute(
+                            "UPDATE evolution_proposals SET status='pending' WHERE id=$1", proposal_id
+                        )
+                        return {"ok": True, "action": "hermes_review_required", "feedback": _h_feedback}
+                    logger.info("evolution_approve: Hermes cleared proposal %s", proposal_id)
+                except Exception as exc:
+                    logger.warning(
+                        "evolution_approve: Hermes review failed — proceeding without review for proposal %s: %s",
+                        proposal_id, exc,
                     )
-                    if multica_issue_id:
-                        try:
-                            from multica_client import get_multica_client  # type: ignore[import]
-                            _mc = get_multica_client()
-                            if _mc.is_configured():
-                                async with httpx.AsyncClient(timeout=30) as _hc:
-                                    _cur_desc = proposal.get("description", "")
-                                    await _hc.put(
-                                        f"{_mc._base}/api/issues/{multica_issue_id}",
-                                        json={"description": f"{_cur_desc}\n\nHermes review:\n{_h_feedback}"},
-                                        headers=_mc._headers(),
-                                    )
-                        except Exception as _exc:
-                            logger.warning(
-                                "evolution_approve: could not append Hermes feedback to Multica issue: %s", _exc
-                            )
-                    await db.execute(
-                        "UPDATE evolution_proposals SET status='pending' WHERE id=$1", proposal_id
-                    )
-                    return {"ok": True, "action": "hermes_review_required", "feedback": _h_feedback}
-                logger.info("evolution_approve: Hermes cleared proposal %s", proposal_id)
-            except Exception as exc:
-                logger.warning(
-                    "evolution_approve: Hermes review failed — proceeding without review for proposal %s: %s",
-                    proposal_id, exc,
-                )
 
             # Land the approved proposal on the board runner's PROVEN lane.
             # The old executor_registry.dispatch_issue path went to the Kanban
