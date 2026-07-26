@@ -75,6 +75,7 @@ jobs:
       # actually run; the skip-streak guard at the end of the job makes any
       # renewed flatline loud instead of silent.
       - name: Wait for memory headroom (protect the live brain)
+        id: mem_gate
         timeout-minutes: 10
         run: |
           THRESHOLD_MB=800
@@ -198,11 +199,19 @@ jobs:
           STREAK_DIR="${HOME}/.zoe-ci"
           STREAK_FILE="${STREAK_DIR}/self-hosted-tests-skip-streak"
           mkdir -p "${STREAK_DIR}"
-          # host_suites is the first pytest step; it is only 'skipped' when an
-          # earlier step (the memory-headroom gate) failed before it.
-          if [ "${{ steps.host_suites.outcome }}" != "skipped" ]; then
+          # Key the streak on the memory gate ITSELF, not on host_suites being
+          # 'skipped'. host_suites is also skipped when any earlier step fails —
+          # a Checkout failure (network blip, token expiry, disk full) would
+          # otherwise increment the streak and, after three, fire the flatline
+          # alarm and fail the workflow even though the gate passed and pytest
+          # was never blocked by memory at all.
+          if [ "${{ steps.mem_gate.outcome }}" != "failure" ]; then
             echo 0 > "${STREAK_FILE}"
-            echo "Pytest executed this run; gate-skip streak reset to 0." >> "$GITHUB_STEP_SUMMARY"
+            if [ "${{ steps.host_suites.outcome }}" == "skipped" ]; then
+              echo "Memory gate passed but pytest did not run (an earlier step failed — check Checkout); streak NOT incremented, reset to 0." >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "Pytest executed this run; gate-skip streak reset to 0." >> "$GITHUB_STEP_SUMMARY"
+            fi
             exit 0
           fi
           PREV="$(cat "${STREAK_FILE}" 2>/dev/null || echo 0)"
