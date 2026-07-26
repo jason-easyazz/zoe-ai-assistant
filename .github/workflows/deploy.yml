@@ -160,11 +160,35 @@ jobs:
           # Only pay the gated rebuild when services/zoe-auth/ actually changed
           # since the previously-deployed SHA; an unchanged, healthy container
           # keeps serving untouched.
+          #
+          # docker-compose.yml counts as a change even though it isn't under
+          # services/zoe-auth/: env vars, port bindings and resource limits live
+          # there, and a healthy container will happily keep serving the OLD
+          # config forever if compose edits don't trip this check. It needs no
+          # --build though — a light `up -d` reconciles container config against
+          # the compose file — so it takes the cheap branch, not the heavy gate.
           if [ -n "${OLD_SHA:-}" ] \
              && git diff --quiet "${OLD_SHA}" HEAD -- services/zoe-auth/; then
-            if curl -sf http://localhost:8002/health > /dev/null 2>&1; then
+            if git diff --quiet "${OLD_SHA}" HEAD -- docker-compose.yml; then
+              COMPOSE_CHANGED=0
+            else
+              COMPOSE_CHANGED=1
+            fi
+            if [ "${COMPOSE_CHANGED}" -eq 0 ] \
+               && curl -sf http://localhost:8002/health > /dev/null 2>&1; then
               echo "zoe-auth unchanged since ${OLD_SHA} and healthy — no rebuild needed."
               exit 0
+            fi
+            if [ "${COMPOSE_CHANGED}" -eq 1 ]; then
+              # Compose-level config drift: reconcile without the heavy build bar.
+              echo "zoe-auth source unchanged but docker-compose.yml changed since ${OLD_SHA} — light up -d to apply new container config."
+              docker compose up -d zoe-auth
+              for attempt in {1..12}; do
+                curl -sf http://localhost:8002/health > /dev/null && exit 0
+                sleep 5
+              done
+              echo "::error::zoe-auth unhealthy after compose-config reconcile."
+              exit 1
             fi
             # Unchanged code but container down/unhealthy: a light up (no
             # --build) restores it without the heavy-build memory bar.
