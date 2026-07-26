@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import subprocess
 import sys
 import types
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -43,21 +44,14 @@ def test_zoe_repo_root_is_portable(monkeypatch):
 async def test_run_hermes_background_task_uses_worker_cli(monkeypatch):
     captured = {}
 
-    async def fake_communicate():
-        return b"done", b""
-
-    proc = MagicMock()
-    proc.communicate = fake_communicate
-    proc.returncode = 0
-    proc.kill = MagicMock()
-    proc.wait = AsyncMock()
-
-    async def fake_exec(*cmd, **kwargs):
-        captured["cmd"] = cmd
+    async def fake_run_to_completion(cmd, **kwargs):
+        captured["cmd"] = tuple(cmd)
         captured["kwargs"] = kwargs
-        return proc
+        return subprocess.CompletedProcess(list(cmd), 0, stdout=b"done", stderr=b"")
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    # The spawn goes through async_subprocess.run_to_completion (off-loop fork
+    # rule), imported into background_runner's namespace.
+    monkeypatch.setattr(br, "run_to_completion", fake_run_to_completion)
     monkeypatch.setenv("HERMES_BACKGROUND_PROFILE", "zoe-coder")
 
     result = await br._run_hermes_background_task("audit validators only", user_id="u1", task_id=99)
@@ -263,3 +257,97 @@ async def test_run_task_marks_error_on_failure(monkeypatch):
 
 async def _noop_async(*_a, **_kw):
     pass
+
+
+# ── queue saturation must be reported honestly ─────────────────────────────
+
+@pytest.mark.asyncio
+async def test_queue_saturation_is_not_reported_as_a_child_timeout(monkeypatch):
+    """"Never started" and "ran too long" must not read the same in the log.
+
+    run_to_completion raises TimeoutExpired for BOTH giving up on the queue and
+    the child overrunning. Reporting the child's 900s budget when we actually
+    abandoned the queue after `queue_wait_s` sends whoever reads this hunting a
+    slow hermes that never ran.
+    """
+    import background_runner as br
+
+    queue_wait = float(os.environ.get("HERMES_BACKGROUND_QUEUE_WAIT_S", "600"))
+
+    from async_subprocess import QueueTimeout
+
+    async def _queue_gave_up(cmd, **kw):
+        raise QueueTimeout(cmd, kw["queue_timeout"])
+
+    monkeypatch.setattr(br, "run_to_completion", _queue_gave_up)
+    with pytest.raises(TimeoutError) as ei:
+        await br._run_hermes_background_task("t", user_id="jason", task_id=1)
+    assert "never started" in str(ei.value)
+    assert f"{queue_wait:.0f}s" in str(ei.value)
+
+
+@pytest.mark.asyncio
+async def test_child_overrun_still_reports_the_child_budget(monkeypatch):
+    """The other branch must keep reporting the runtime budget."""
+    import background_runner as br
+
+    async def _child_overran(cmd, **kw):
+        raise subprocess.TimeoutExpired(cmd, kw["timeout"])
+
+    monkeypatch.setattr(br, "run_to_completion", _child_overran)
+    with pytest.raises(TimeoutError) as ei:
+        await br._run_hermes_background_task("t", user_id="jason", task_id=1)
+    assert "never started" not in str(ei.value)
+    assert "timed out after" in str(ei.value)
+
+
+@pytest.mark.asyncio
+async def test_background_lane_waits_rather_than_failing_fast(monkeypatch):
+    """Background work has no latency budget — it must not take the 30s default.
+
+    The pre-helper create_subprocess_exec path simply started; adopting the
+    helper's interactive default would abort background tasks under contention.
+    """
+    import async_subprocess
+    import background_runner as br
+
+    seen = {}
+
+    async def _capture(cmd, **kw):
+        seen.update(kw)
+
+        class _P:
+            returncode = 0
+            stdout = b"ok"
+            stderr = b""
+        return _P()
+
+    monkeypatch.setattr(br, "run_to_completion", _capture)
+    await br._run_hermes_background_task("t", user_id="jason", task_id=1)
+    assert seen["queue_timeout"] > async_subprocess._QUEUE_WAIT_S
+
+
+def test_queue_and_runtime_budgets_are_told_apart_by_type_not_value():
+    """The discriminator must survive queue_timeout == timeout.
+
+    Comparing exc.timeout against the queue budget is silently wrong the moment
+    a caller's two budgets coincide — a "never started" failure would then be
+    reported as a child overrun (or vice versa). QueueTimeout subclasses
+    TimeoutExpired, so existing handlers still catch it.
+    """
+    from async_subprocess import QueueTimeout
+
+    assert issubclass(QueueTimeout, subprocess.TimeoutExpired)
+    same = 900.0
+    queued = QueueTimeout(["x"], same)
+    overran = subprocess.TimeoutExpired(["x"], same)
+    # Identical .timeout values, still distinguishable.
+    assert queued.timeout == overran.timeout
+    assert isinstance(queued, QueueTimeout)
+    assert not isinstance(overran, QueueTimeout)
+    # ...and the legacy handler shape still catches the new type.
+    for exc in (queued, overran):
+        try:
+            raise exc
+        except subprocess.TimeoutExpired:
+            pass

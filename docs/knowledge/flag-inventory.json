@@ -3742,6 +3742,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_SUBPROCESS_QUEUE_WAIT_S": {
+        "defaults": [
+          "'30'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/async_subprocess.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_TASK_TIMEOUT_S": {
         "defaults": [
           "'900'"

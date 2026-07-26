@@ -24,16 +24,72 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import contextlib
+import logging
+import os
 import subprocess
+import weakref
 from typing import Mapping, Sequence
 
-# Shared, small pool used ONLY for the quick blocking fork+exec (subprocess.Popen)
-# and the run_to_completion() run. Long blocking waits do NOT go here — see
-# AsyncPipeProcess.wait() — so a stuck process can't hold a spawn slot for its
-# whole lifetime and starve new fork+execs.
+_log = logging.getLogger(__name__)
+
+# Shared, small pool used ONLY for the quick blocking fork+exec (subprocess.Popen).
+# Long blocking waits do NOT go here — see AsyncPipeProcess.wait() and _RUN_POOL —
+# so a stuck process can't hold a spawn slot for its whole lifetime and starve new
+# fork+execs.
 _SPAWN_POOL = concurrent.futures.ThreadPoolExecutor(
     max_workers=4, thread_name_prefix="zoe-async-spawn"
 )
+
+# Separate, wider pool for run_to_completion(): that call holds its worker for the
+# child's WHOLE lifetime, which for the background Hermes lane is up to
+# HERMES_BACKGROUND_TIMEOUT_S (900s default). Sharing _SPAWN_POOL would let four
+# concurrent background tasks occupy every spawn slot and stall unrelated chat/voice
+# fork+execs behind them for 15 minutes.
+_RUN_POOL_WIDTH = 16
+_RUN_POOL = concurrent.futures.ThreadPoolExecutor(
+    max_workers=_RUN_POOL_WIDTH, thread_name_prefix="zoe-async-run"
+)
+
+# Default cap on how long a caller waits for a free _RUN_POOL worker. Bounds the
+# queue explicitly instead of letting the executor absorb it invisibly; callers
+# with their own latency budget pass queue_timeout=.
+_QUEUE_WAIT_S = float(os.environ.get("ZOE_SUBPROCESS_QUEUE_WAIT_S", "30"))
+
+# Slack past a child's own timeout before we conclude the WORKER (not the child)
+# is wedged. subprocess.run kills the child at `timeout`, so exceeding this means
+# the thread itself is stuck — see the backstop in run_to_completion.
+_QUEUE_GRACE_S = 5.0
+
+# Permits mirroring _RUN_POOL's width, so "acquired" means "a worker is free".
+# Created lazily (the module imports before any loop exists) and keyed PER LOOP:
+# asyncio.Semaphore binds to the loop that first awaits it, so a single cached
+# instance raises "bound to a different event loop" the moment a second loop
+# appears — a fresh loop after a restart, or any test that makes its own. Weak
+# keys so a finished loop's permits are collected with it.
+_RUN_SLOTS: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+
+
+class QueueTimeout(subprocess.TimeoutExpired):
+    """Gave up waiting for a worker — the child NEVER STARTED.
+
+    A distinct type rather than a flag or a magic timeout value, because callers
+    must be able to tell "never ran" from "ran too long": they warrant different
+    log messages and different recovery (retry later vs. investigate a hang).
+    Discriminating on the `.timeout` value instead is silently wrong whenever a
+    caller's queue and runtime budgets happen to coincide.
+
+    Subclasses `subprocess.TimeoutExpired` so every existing
+    `except subprocess.TimeoutExpired` handler keeps working unchanged.
+    """
+
+
+def _run_slots() -> "asyncio.Semaphore":
+    loop = asyncio.get_running_loop()
+    sem = _RUN_SLOTS.get(loop)
+    if sem is None:
+        sem = asyncio.Semaphore(_RUN_POOL_WIDTH)
+        _RUN_SLOTS[loop] = sem
+    return sem
 
 
 class AsyncPipeProcess:
@@ -131,6 +187,8 @@ async def run_to_completion(
     cwd: "str | None" = None,
     env: "Mapping[str, str] | None" = None,
     timeout: "float | None" = None,
+    merge_stderr: bool = False,
+    queue_timeout: "float | None" = None,
 ) -> "subprocess.CompletedProcess[bytes]":
     """Run a subprocess to completion OFF the event-loop thread.
 
@@ -138,8 +196,31 @@ async def run_to_completion(
     worker thread via `subprocess.run`, so nothing forks on the loop. Raises
     `subprocess.TimeoutExpired` (the child is killed) on timeout; returns a
     `CompletedProcess` with `.returncode`, `.stdout`, `.stderr` (bytes).
+
+    `merge_stderr=True` interleaves stderr into stdout (`stderr=STDOUT`), for
+    callers that previously spawned with `stderr=asyncio.subprocess.STDOUT`;
+    `.stderr` is then `None`.
+
+    Waiting and running are SEPARATE budgets, because conflating them breaks one
+    caller or the other:
+
+    * `timeout` is how long the CHILD may run, measured from its actual start.
+      Charging queue time against it would silently shorten real work — the
+      background Hermes lane asks for 900s of `hermes`, not "900s from whenever
+      I asked", and under contention it would have been killed early.
+    * `queue_timeout` is how long to wait for a free worker before giving up
+      (default `_QUEUE_WAIT_S`). Without it, queue time is unbounded and a
+      latency-sensitive caller blocks for minutes behind long background work.
+
+    Worst case is therefore `queue_timeout + timeout`, both explicit. Giving up
+    while queued raises `QueueTimeout` before anything forks, so no child is
+    orphaned and callers can distinguish "never started" from "ran too long" by
+    TYPE — it subclasses `subprocess.TimeoutExpired`, so existing handlers are
+    unaffected.
     """
     loop = asyncio.get_running_loop()
+    if queue_timeout is None:
+        queue_timeout = _QUEUE_WAIT_S
 
     def _blocking_run() -> "subprocess.CompletedProcess[bytes]":
         return subprocess.run(
@@ -147,8 +228,61 @@ async def run_to_completion(
             cwd=cwd,
             env=dict(env) if env is not None else None,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
             timeout=timeout,
         )
 
-    return await loop.run_in_executor(_SPAWN_POOL, _blocking_run)
+    # Bound the WAIT explicitly rather than letting the executor queue absorb it
+    # invisibly. The semaphore mirrors the pool width, so holding a permit means
+    # a worker is available — the job starts immediately once acquired and gets
+    # its full `timeout`.
+    slots = _run_slots()
+    try:
+        await asyncio.wait_for(slots.acquire(), timeout=queue_timeout)
+    except asyncio.TimeoutError:
+        _log.warning(
+            "run_to_completion gave up queueing after %.1fs (pool saturated, %d workers): %s",
+            queue_timeout, _RUN_POOL_WIDTH, cmd[0] if cmd else "?",
+        )
+        raise QueueTimeout(list(cmd), queue_timeout) from None
+
+    # _RUN_POOL, NOT _SPAWN_POOL: this worker is held for the child's whole
+    # lifetime, so parking it in the small spawn pool would starve new fork+execs.
+    fut = loop.run_in_executor(_RUN_POOL, _blocking_run)
+    released = False
+    try:
+        if timeout is None:
+            result = await fut
+        else:
+            # shield: on the backstop below we must NOT cancel the thread — it
+            # owns a real child. Let it run on and release its own permit.
+            result = await asyncio.wait_for(
+                asyncio.shield(fut), timeout=timeout + _QUEUE_GRACE_S
+            )
+        released = True
+        slots.release()
+        return result
+    except asyncio.TimeoutError:
+        # subprocess.run's own timeout should already have killed the child, so
+        # reaching here means the WORKER is wedged — e.g. a child stuck in
+        # uninterruptible sleep, which no in-process mechanism can reclaim. Hand
+        # the caller its TimeoutExpired but keep the permit held until the thread
+        # actually finishes, so the semaphore keeps reflecting real capacity
+        # rather than over-admitting into a pool that has no free worker.
+        fut.add_done_callback(lambda _f: slots.release())
+        released = True
+        _log.error(
+            "run_to_completion worker wedged past %.1fs+%.1fs grace; permit held "
+            "until it exits (pool capacity reduced): %s",
+            timeout, _QUEUE_GRACE_S, cmd[0] if cmd else "?",
+        )
+        raise subprocess.TimeoutExpired(list(cmd), timeout) from None
+    except BaseException:
+        # Includes CancelledError. Cancelling the CALLER does not stop the
+        # worker thread — it still owns a live child — so releasing the permit
+        # here would over-admit into a pool with no free worker, the same
+        # accounting error as the wedged case. Hand the permit back only when
+        # the thread actually finishes.
+        if not released:
+            fut.add_done_callback(lambda _f: slots.release())
+        raise

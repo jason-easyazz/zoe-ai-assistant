@@ -229,8 +229,10 @@ async def _run_reminder_scan() -> None:
 
 async def _run_platform_health_check() -> None:
     """Run the host health script and open a Hermes-assigned issue on failure."""
-    import asyncio
+    import subprocess
     from pathlib import Path
+
+    from async_subprocess import QueueTimeout, run_to_completion
 
     script = Path(
         os.environ.get(
@@ -241,24 +243,27 @@ async def _run_platform_health_check() -> None:
     if not script.exists():
         raise FileNotFoundError(f"Health check script missing: {script}")
 
-    proc = await asyncio.create_subprocess_exec(
-        "bash",
-        str(script),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-    )
+    # AGENTS.md fork rule: never fork on the event-loop thread — the whole
+    # spawn+communicate+timeout+kill runs in a worker thread (2026-06-29 outage).
     try:
-        stdout, _ = await asyncio.wait_for(
-            proc.communicate(),
+        proc = await run_to_completion(
+            ["bash", str(script)],
             timeout=_HEALTH_CHECK_TIMEOUT_S,
+            merge_stderr=True,
         )
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.communicate()
+    except QueueTimeout as exc:
+        # The script never ran — a saturated worker pool, not an unhealthy
+        # platform. Reporting this as a health-check timeout would send the
+        # operator investigating the platform instead of the queue.
+        raise RuntimeError(
+            "Platform health check never started: no free subprocess worker "
+            f"(waited {exc.timeout:.0f}s, pool saturated)"
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
         raise RuntimeError(
             f"Platform health check timed out after {_HEALTH_CHECK_TIMEOUT_S:.0f}s"
-        )
-    output = (stdout or b"").decode("utf-8", errors="replace").strip()
+        ) from exc
+    output = (proc.stdout or b"").decode("utf-8", errors="replace").strip()
     tail = "\n".join(output.splitlines()[-25:])
 
     if proc.returncode == 0:
