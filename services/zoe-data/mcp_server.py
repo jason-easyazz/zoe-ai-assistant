@@ -1532,28 +1532,22 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         return {"lists": list(lists_map.values())}
 
     elif name == "list_add_item":
+        from list_service import add_item_to_list, default_visibility
+
         lt = args["list_type"]
         ln = args.get("list_name", lt.capitalize())
-        cursor = await db.execute(
-            "SELECT id FROM lists WHERE list_type=? AND name=? AND deleted=0"
-            " AND (user_id=? OR visibility='family')"
-            " ORDER BY CASE WHEN visibility='family' THEN 0 ELSE 1 END LIMIT 1",
-            (lt, ln, user_id),
+        outcome = await add_item_to_list(
+            db,
+            user_id=user_id,
+            list_type=lt,
+            list_name=ln,
+            text=args["text"],
+            quantity=args.get("quantity"),
+            category=args.get("category"),
+            new_list_visibility=default_visibility(lt),
         )
-        row = await cursor.fetchone()
-        if row:
-            list_id = row["id"]
-        else:
-            list_id = str(uuid.uuid4())
-            await db.execute(
-                "INSERT INTO lists (id, user_id, name, list_type, visibility) VALUES (?,?,?,?,?)",
-                (list_id, user_id, ln, lt, "personal" if lt in {"personal", "tasks", "shopping"} else "family"),
-            )
-        item_id = str(uuid.uuid4())
-        await db.execute(
-            "INSERT INTO list_items (id, list_id, text, quantity, category) VALUES (?,?,?,?,?)",
-            (item_id, list_id, args["text"], args.get("quantity"), args.get("category")),
-        )
+        list_id = outcome["list_id"]
+        item_id = outcome["item_id"]
         result = {"item_id": item_id, "list": ln, "list_id": list_id, "text": args["text"], "status": "added"}
         await _notify_ui("lists", "list_updated", {"action": "item_added", "list_id": list_id, "item": {"id": item_id, "text": args["text"]}})
         return result
