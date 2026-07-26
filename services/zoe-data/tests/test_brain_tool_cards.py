@@ -5,6 +5,8 @@ import pytest
 
 from routers.chat import brain_tool_card_events
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _tool(phase, name="", tid="t1", **extra):
     return "__TOOL__:" + json.dumps({"phase": phase, "id": tid, "name": name, **extra})

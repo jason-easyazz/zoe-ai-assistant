@@ -1,9 +1,12 @@
+import pytest
 from multica_dispatch_control import (
     dispatch_is_paused,
     pause_dispatch,
     pause_reason,
     resume_dispatch,
 )
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_runtime_dispatch_pause_round_trip(tmp_path, monkeypatch):

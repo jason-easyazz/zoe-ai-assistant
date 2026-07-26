@@ -9,7 +9,7 @@ import os
 import threading
 from functools import partial
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Iterable
 
 from pipeline_evidence import (
     EvidenceItem,
@@ -120,7 +120,16 @@ def _ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
 
-def _latest_state_from_lines(lines: list[str], task_ref: str) -> PipelineState | None:
+def _latest_state_from_lines(lines: Iterable[str], task_ref: str) -> PipelineState | None:
+    """Last-match-wins scan for ``task_ref``'s newest state.
+
+    Takes any ITERABLE of lines — including an open file handle — so callers can
+    stream the store instead of materialising it. This is an event-sourced store:
+    every save_state re-appends a full state snapshot, so the file grows without
+    bound (it reached 1.59 GB before the compactor existed). Reading it whole would
+    pull all of that into RAM on a memory-tight Jetson. Only the latest matching
+    payload is retained here, so memory stays O(one state) regardless of file size.
+    """
     latest: PipelineState | None = None
     for line in lines:
         if not line.strip():
@@ -143,10 +152,18 @@ def load_latest_state(task_ref: str) -> PipelineState | None:
         with path.open("r", encoding="utf-8") as handle:
             fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
             try:
-                lines = handle.read().splitlines()
+                # Stream the handle: iterating it never materialises the file.
+                # The scan now runs INSIDE the shared lock (it has to — you cannot
+                # stream a handle after releasing it). That is the same lock TYPE
+                # and ordering as before, held across the parse rather than only
+                # the read. The trade is deliberate: the previous read() pulled the
+                # entire store into RAM under this very lock — 1.59 GB before the
+                # compactor existed — which is the hazard this fixes. LOCK_SH is
+                # shared, so concurrent readers are unaffected; only a LOCK_EX
+                # writer waits, and it already waited for the whole-file read.
+                return _latest_state_from_lines(handle, task_ref)
             finally:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-    return _latest_state_from_lines(lines, task_ref)
 
 
 async def _run_io(func, *args):
@@ -168,10 +185,11 @@ def save_state(
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
             try:
                 handle.seek(0)
-                latest = _latest_state_from_lines(
-                    handle.read().splitlines(),
-                    state.task_ref,
-                )
+                # Stream rather than read() the whole store; already inside
+                # LOCK_EX, so the hold is unchanged. The scan leaves the position
+                # at EOF, and the append below re-seeks to SEEK_END explicitly, so
+                # the write is unaffected.
+                latest = _latest_state_from_lines(handle, state.task_ref)
                 incoming_is_stale = bool(
                     latest and state.journal_revision < latest.journal_revision
                 )

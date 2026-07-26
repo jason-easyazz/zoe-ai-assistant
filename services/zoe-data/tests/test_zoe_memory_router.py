@@ -1,4 +1,7 @@
+import pytest
 from zoe_memory_router import MemoryBackend, route_memory_query
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_default_chat_uses_mempalace_fast_path():

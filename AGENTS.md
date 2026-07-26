@@ -12,6 +12,7 @@
 
 Before any code task, you MUST — do not fall back to raw grep/guessing:
 
+- **On the live Zoe host, read LIVE reality before trusting any doc's claim about what is live — run `scripts/maintenance/zoe_ground_truth.sh` (read-only; ~1s healthy, bounded on failure).** Not a gate on *every* code task, and not for CI / off-host / clean-container environments where there is nothing live to read (it needs the box's systemd, Docker, service ports, `/proc`, and `~/assistant` — off-host it simply reports those as absent, which is noise, not a blocker). Reach for it whenever you are about to *reason about or assert what is running* — brain lane, flags, scheduled jobs, whether a service a doc calls "paused" is actually up. codebase-memory/Serena/grep answer *what EXISTS*; they cannot tell you *what RUNS*, and a static doc physically cannot track a flag flip or a test restart. Every wrong conclusion in the 2026-07-20 session lived in that gap (a paused-doc Hermes that was live; a board assumed "inside Hermes" that is its own product; a flag read from its default; a job that never registered). **What exists ≠ what runs — verify execution, not presence** (`[[feedback_verify_your_instruments]]`).
 - **Navigate + edit code via the MCP bus, not raw grep/Read/Edit.** Use **codebase-memory** for who-calls-what / architecture / seams and **Serena** for symbol read + symbolic edits. Reach for `grep`/`Read` only when the bus genuinely can't answer. If codebase-memory `list_projects` comes back empty, run `index_repository(repo_path=/home/zoe/assistant, mode="moderate")` before proceeding — an empty graph silently unmeets this mandate and agents fall back to grep.
 - **Use `opensrc` for any third-party API before guessing** — `opensrc path pypi:<pkg>@<version>` (pin the installed version). Never invent library behaviour from memory.
 - **Drive every PR to merge with the Greptile loop** — reply to + RESOLVE each Greptile thread, follow up until it actually merges; squash only, never `--admin`/`--force`.
@@ -29,6 +30,31 @@ graphify is **retired**: there is no committed `graphify-out/` graph and no `gra
 - **Serena** (MCP) — symbol read + symbolic edits.
 
 Reach for raw `grep`/`Read` only when the MCP bus genuinely can't answer.
+
+### Serena is ONE shared server — read via Serena, EDIT in your own worktree
+
+`.mcp.json` points every agent at a **single long-lived** Serena server
+(`http://127.0.0.1:9121/mcp`, unit `scripts/setup/systemd/serena-mcp.service`).
+It is not spawned per agent. Two consequences are load-bearing:
+
+- **It is pinned to `--project /home/zoe/assistant` — the LIVE checkout.** So
+  **navigation/read is correct** (agents branch off fresh `origin/main`, so the
+  live checkout on `main` *is* their baseline), but **symbolic EDITS would
+  target the live checkout, not your worktree.** Do your Read/Edit **in your own
+  worktree** with the normal file tools. Two agents hit this on 2026-07-16 via
+  absolute paths. This pinning is not new — the old stdio config had the same
+  `--project` — but one shared server makes it fleet-wide instead of incidental.
+- **Serena serialises the fleet.** All tool calls run through one
+  `SerenaAgent` TaskExecutor queue (one worker, strict FIFO), so concurrent
+  calls queue rather than interleave, and every agent waits for the whole queue
+  to drain. Measured: 6 concurrent cold calls = 6.15s wall for 4.53s of work.
+  That tax is deliberate — 6 separate servers (up to 2G each) do not fit in
+  15.6G and OOMed the live voice brain on 2026-07-16. Keep Serena calls
+  purposeful; it is a shared single-lane resource, not free parallelism.
+
+If code-intel tools vanish, the server is down — Claude Code does **not**
+auto-start a URL-based MCP server. Check
+`scripts/maintenance/serena_mcp_health.sh`.
 
 ## opensrc
 
@@ -90,7 +116,7 @@ Local Zoe Hermes engineering skills live under `~/.hermes/skills`, including `zo
 
 The `agentic-engineering-workflow` and `grep-loop-review-workflow` names are kept as compatibility entrypoints for the Micky-style workflow pack, but they map onto Zoe's Hermes-first codebase-memory/opensrc/Greptile process rather than introducing a second parallel system.
 
-OpenClaw remains installed and available as a future/manual fallback. Do not route ordinary coding, planning, review, board work, browser work, or background work to OpenClaw by default. Zoe's Multica-first engineering driver owns workflow state and phase advancement; Hermes executes the one ready phase unless the user explicitly asks to use OpenClaw.
+OpenClaw is **being fully retired** (operator decision 2026-07-22, recorded in `docs/architecture/multica-executor-migration.md` §5): do not route ANY work to it, do not extend it, and its runtime + builder intents are to be deleted via gated PRs (its 31 workspace skills never executed once — verified; backups live in `docs/knowledge/operator-skills/`). Capabilities are rebuilt on Pi/Flue when actually needed, referencing the public Agent-Skills ecosystem. Zoe's Multica-first engineering driver owns workflow state and phase advancement; execution moves to the Flue executor + Omnigent per the migration plan.
 
 ## Branching policy
 
@@ -209,7 +235,7 @@ When the user requests a durable behavior change, record it here or in the relev
 ## Child DOX Index
 
 - [services/AGENTS.md](services/AGENTS.md) — runtime services: zoe-data production web/chat API, zoe-ui static UI + nginx, zoe-auth, MCP bridges, LiveKit
-- [skills/AGENTS.md](skills/AGENTS.md) — user-facing Zoe runtime skills (SKILL.md dirs discovered by the router)
+- [skills/AGENTS.md](skills/AGENTS.md) — Zoe skill definitions (SKILL.md dirs); documentation only — NOT wired to runtime discovery, which reads `~/.openclaw/workspace/skills` + `~/.hermes/skills`
 - [tools/AGENTS.md](tools/AGENTS.md) — audit, cleanup, validation, and generator utilities (structure/critical-file validators live here)
 - [scripts/AGENTS.md](scripts/AGENTS.md) — setup, maintenance, deployment, and utility scripts, including systemd unit templates
 - [tests/AGENTS.md](tests/AGENTS.md) — unit, integration, performance, e2e, and voice test suites

@@ -19,6 +19,8 @@ Safety guards (all must pass):
   - not the live checkout
   - worktree not locked
   - worktree has no uncommitted changes
+  - branch NOT checked out by another worktree (removing one would pull the
+    shared branch out from under the other — possibly a live agent session)
   - branch merged into origin/main, or detached HEAD is ancestor of origin/main
   - no activity for MIN_AGE_DAYS (default 7) by latest commit timestamp
 
@@ -47,6 +49,31 @@ LIVE_ROOT="$(git rev-parse --show-toplevel)"
 candidates=()
 skipped=()
 worktree_count=0
+
+# Branches checked out by MORE THAN ONE worktree.
+#
+# Removing one of those worktrees deletes the shared branch out from under the
+# other — which may be a LIVE agent session. Seen for real: an agent worktree and
+# the session driving it both sat on `claude/memory-hardening-w0-7ff9c7`, and the
+# branch was merged, so every other guard passed and the tool offered to remove
+# it. Git itself refuses a double-checkout for this reason; the merged-ness of a
+# branch says nothing about whether someone is still standing on it.
+#
+# Built once up front rather than per-worktree so the scan stays O(worktrees).
+shared_branches=""
+while IFS= read -r br; do
+  [[ -n "$br" ]] && shared_branches+="${br}"$'\n'
+done < <(
+  git worktree list --porcelain 2>/dev/null \
+    | sed -n 's|^branch refs/heads/||p' \
+    | sort | uniq -d
+)
+
+branch_is_shared() {
+  local branch="$1"
+  [[ -n "$branch" ]] || return 1
+  grep -qxF -- "$branch" <<<"$shared_branches"
+}
 
 is_merged_ref() {
   local ref="$1"
@@ -96,6 +123,11 @@ while IFS= read -r line; do
       age="$(worktree_age_seconds "$wt_path")"
       if [[ "$age" -lt "$MIN_AGE_SECONDS" ]]; then
         reason="too recent (${age}s < ${MIN_AGE_SECONDS}s)"
+      elif branch_is_shared "$wt_branch"; then
+        # Another worktree (possibly a live agent session) is standing on this
+        # same branch. Merged-ness is irrelevant here — removing this worktree
+        # would pull the branch out from under the other one.
+        reason="branch $wt_branch checked out by another worktree"
       elif [[ -n "$wt_branch" ]]; then
         if git show-ref --verify --quiet "refs/heads/$wt_branch"; then
           branch_tip="$(git rev-parse "$wt_branch")"
@@ -135,6 +167,16 @@ if [[ "$worktree_count" -eq 0 ]]; then
 fi
 
 log "candidates: ${#candidates[@]}; skipped: ${#skipped[@]} (min age ${MIN_AGE_DAYS}d)"
+
+# Print WHY each worktree was skipped. Previously these were collected and
+# thrown away, so an operator saw "skipped: 79" with no way to tell a boring
+# age-guard skip from a load-bearing safety skip (dirty tree, shared branch)
+# without re-deriving it by hand. Set ZOE_WORKTREE_QUIET=1 to suppress.
+if [[ "${ZOE_WORKTREE_QUIET:-0}" != 1 && "${#skipped[@]}" -gt 0 ]]; then
+  for entry in "${skipped[@]}"; do
+    log "  skip: $entry"
+  done
+fi
 
 if [[ "${#candidates[@]}" -eq 0 ]]; then
   log "nothing to prune"

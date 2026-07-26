@@ -11,6 +11,8 @@ import pytest
 
 import zoe_agent_registry
 
+pytestmark = pytest.mark.ci_safe
+
 
 # ── load_agent_registry ──────────────────────────────────────────────────────
 

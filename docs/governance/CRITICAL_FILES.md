@@ -119,25 +119,38 @@ services/zoe-ui/dist/
 ## 🔧 BACKEND CRITICAL FILES
 
 ### Production API — zoe-data (NEVER DELETE)
-Host-native FastAPI on port **8000** (see `docker-compose.yml`). OpenClaw bridge, AG-UI SSE, intents, system/OpenClaw settings.
+Host-native FastAPI on port **8000** (see `docker-compose.yml`). AG-UI SSE, intents, system settings.
 
 ```
 services/zoe-data/
 ├── main.py                      # FastAPI app - CRITICAL
 ├── database.py                  # DB path + schema - CRITICAL
 ├── auth.py                      # Session validation - CRITICAL
-├── openclaw_ws.py               # OpenClaw CLI client - CRITICAL
-├── openclaw_maintenance.py      # Version check / upgrade helpers - CRITICAL
 ├── intent_router.py             # Intent fast path - CRITICAL
 ├── mcp_server.py                # MCP stdio server for tools - CRITICAL
 ├── routers/
 │   ├── chat.py                  # Production chat router - CRITICAL
-│   └── system.py                # System + /api/system/openclaw* - CRITICAL
+│   └── system.py                # System router - CRITICAL
 ├── requirements.txt
 └── Dockerfile
 ```
 
-**Impact if deleted:** Chat, calendar/lists APIs, OpenClaw integration, and settings brain UI break.
+**Impact if deleted:** Chat, calendar/lists APIs, and settings brain UI break.
+
+#### Retirement targets in zoe-data (NOT never-delete — gated deletion)
+OpenClaw is being **fully retired** (operator decision 2026-07-22). These files
+are deliberately EXCLUDED from the never-delete list above:
+
+```
+├── openclaw_ws.py               # OpenClaw CLI client — deletion target
+├── openclaw_maintenance.py      # OpenClaw version/upgrade helpers — deletion target
+```
+
+They are removable **only** via the gated retirement PRs in
+`docs/architecture/multica-executor-migration.md` (the ACP path still executes
+today; each deletion PR must rewire the live import sites in the same change and
+keep zoe-data importable). Do not cite this document to halt that gated work —
+and do not delete them casually outside it.
 
 ---
 

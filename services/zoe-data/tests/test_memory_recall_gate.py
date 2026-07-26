@@ -11,6 +11,8 @@ import pytest
 
 from memory_gate import message_needs_memory
 
+pytestmark = pytest.mark.ci_safe
+
 
 # Recall questions that MUST now trigger memory (previously missed by the list).
 @pytest.mark.parametrize("msg", [

@@ -1,3 +1,4 @@
+import pytest
 from pathlib import Path
 
 from zoe_capability_profile import DEFAULT_CAPABILITY_PROFILES
@@ -7,6 +8,8 @@ from zoe_capability_profile_promotion_handoff import (
 )
 from zoe_capability_trust_review import review_capability_trust_update_plan
 from zoe_capability_trust_update import CapabilityTrustUpdateCandidate, CapabilityTrustUpdatePlan
+
+pytestmark = pytest.mark.ci_safe
 
 
 def _source_text():

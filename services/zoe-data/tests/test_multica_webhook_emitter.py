@@ -3,6 +3,8 @@ import pytest
 
 import multica_webhook_emitter as mwe
 
+pytestmark = pytest.mark.ci_safe
+
 
 @pytest.mark.asyncio
 async def test_emit_skips_without_secret(monkeypatch):

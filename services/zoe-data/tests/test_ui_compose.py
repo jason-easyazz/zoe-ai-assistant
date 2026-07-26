@@ -7,6 +7,8 @@ import pytest
 import ui_compose
 from ui_compose import compose_card, compose_enabled
 
+pytestmark = pytest.mark.ci_safe
+
 
 class _FakeResponse:
     def __init__(self, payload, status=200):

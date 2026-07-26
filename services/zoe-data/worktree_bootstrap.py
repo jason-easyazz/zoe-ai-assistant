@@ -5,11 +5,10 @@ from __future__ import annotations
 import logging
 import os
 import re
-import sqlite3  # operator-local Hermes Kanban DB (~/.hermes), not Zoe PostgreSQL
 import subprocess
 from pathlib import Path
 
-from hermes_http import zoe_repo_root
+from repo_paths import zoe_repo_root
 
 logger = logging.getLogger(__name__)
 
@@ -48,64 +47,6 @@ def worktree_branch(task_id: str) -> str:
     return f"wt/{task_id}"
 
 
-def kanban_db_path() -> Path:
-    """Path to the Hermes Kanban SQLite DB for the active board."""
-    override = os.environ.get("ZOE_KANBAN_DB_PATH", "").strip()
-    if override:
-        return Path(override).expanduser()
-    board = os.environ.get("ZOE_KANBAN_BOARD", "default").strip() or "default"
-    home = Path.home() / ".hermes"
-    if board == "default":
-        return home / "kanban.db"
-    return home / "kanban" / "boards" / board / "kanban.db"
-
-
-def pin_kanban_workspace(task_id: str, wt_path: Path | None = None) -> Path:
-    """Persist the absolute worktree path on a Kanban task before claim.
-
-    Hermes defaults unset worktree paths to ``<dispatcher-cwd>/.worktrees/<id>``.
-    Zoe bootstrap uses ``~/.worktrees/<id>`` (or ``ZOE_WORKTREE_ROOT``). Pin
-    the bootstrap path on the task row so workers and ``ensure_worktree`` agree.
-
-    Writes operator-local ``~/.hermes/kanban.db`` (Hermes Kanban), not Zoe's
-    PostgreSQL store.
-    """
-    task_id = _validate_task_id(task_id)
-    path = (wt_path or worktree_path(task_id)).resolve()
-    abs_path = str(path)
-    db = kanban_db_path()
-    if not db.exists():
-        raise RuntimeError(f"kanban db not found: {db}")
-
-    # Hermes ``hermes kanban create --workspace worktree`` sets workspace_kind to
-    # ``worktree``; fall back to id-only update if the row uses another value.
-    with sqlite3.connect(str(db)) as conn:
-        cur = conn.execute(
-            "UPDATE tasks SET workspace_path = ? WHERE id = ? AND workspace_kind = 'worktree'",
-            (abs_path, task_id),
-        )
-        conn.commit()
-        if cur.rowcount == 0:
-            logger.warning(
-                "worktree_bootstrap: no row for %s with workspace_kind='worktree' in %s; "
-                "retrying id-only workspace_path update",
-                task_id,
-                db,
-            )
-            cur = conn.execute(
-                "UPDATE tasks SET workspace_path = ? WHERE id = ?",
-                (abs_path, task_id),
-            )
-            conn.commit()
-            if cur.rowcount == 0:
-                raise RuntimeError(
-                    f"kanban task {task_id!r} not found in {db}"
-                )
-
-    logger.info("worktree_bootstrap: pinned kanban workspace %s -> %s", task_id, abs_path)
-    return path
-
-
 def _validate_task_id(task_id: str) -> str:
     cleaned = task_id.strip()
     if not cleaned:
@@ -132,6 +73,40 @@ def _worktree_registered(repo: Path, wt_path: Path) -> bool:
         if block_path == target and line.startswith("branch "):
             return True
     return False
+
+
+def _branch_is_shared(repo: Path, branch: str) -> bool:
+    """True when MORE THAN ONE worktree has ``branch`` checked out.
+
+    Removing such a worktree deletes the shared branch out from under the other
+    one — which may be a live agent session. Merged-ness says nothing about
+    whether someone is still standing on a branch, so callers must check this
+    independently of :func:`_branch_merged`.
+
+    Git refuses a double-checkout without ``--force``, but the forced state does
+    occur in practice (2026-07-18: an agent worktree and the session driving it
+    shared one merged branch; every other guard passed and the pruner offered to
+    remove it).
+
+    Fails CLOSED: if ``git worktree list`` cannot be read we report True, because
+    an unverifiable state must not authorise a destructive ``--force`` removal.
+    """
+    if not branch:
+        return False
+    listed = _run_git(
+        ["git", "worktree", "list", "--porcelain"],
+        cwd=str(repo),
+        timeout=30,
+    )
+    if listed.returncode != 0:
+        logger.warning(
+            "worktree_bootstrap: cannot list worktrees to check whether %s is shared; "
+            "treating as shared (fail-closed)",
+            branch,
+        )
+        return True
+    target = f"branch refs/heads/{branch}"
+    return sum(1 for line in listed.stdout.splitlines() if line.strip() == target) > 1
 
 
 def _current_branch(path: Path) -> str:
@@ -235,18 +210,15 @@ def ensure_worktree(task_id: str, *, base_branch: str = "main") -> Path:
 
 
 def prepare_kanban_worktree(task_id: str, *, base_branch: str = "main") -> Path:
-    """Create the git worktree and pin its path on the Kanban task row."""
-    wt_path = ensure_worktree(task_id, base_branch=base_branch)
-    try:
-        pin_kanban_workspace(task_id, wt_path)
-    except RuntimeError as exc:
-        # Pin is best-effort: dispatch must not orphan an already-created chain.
-        logger.warning(
-            "worktree_bootstrap: could not pin kanban workspace for %s: %s",
-            task_id,
-            exc,
-        )
-    return wt_path
+    """Create the git worktree for a board task.
+
+    Previously this also pinned the absolute path into Hermes' operator-local
+    ``~/.hermes/kanban.db``, so Hermes workers and ``ensure_worktree`` agreed on
+    a location. With Hermes retired, nothing reads that store — the pin only ever
+    logged "task not found" warnings on every dispatch — so it is removed. Zoe
+    resolves worktrees from ``worktree_path()`` alone.
+    """
+    return ensure_worktree(task_id, base_branch=base_branch)
 
 
 def _is_ancestor(repo: Path, ref: str, base_ref: str) -> bool:
@@ -349,6 +321,17 @@ def remove_task_worktree(
         logger.info("worktree_bootstrap: keeping %s — uncommitted changes", wt_path)
         return False
 
+    if _branch_is_shared(repo, branch):
+        # Another worktree holds this same branch; removing this one would delete
+        # the branch out from under it (possibly a live agent session). Merged-ness
+        # is irrelevant here, so this is checked before the merge test below.
+        logger.info(
+            "worktree_bootstrap: keeping %s — branch %s checked out by another worktree",
+            wt_path,
+            branch,
+        )
+        return False
+
     if require_merged:
         base_ref = base_ref or _base_ref(repo, base_branch)
         if not _branch_merged(repo, branch, base_ref, consult_pr=consult_pr):
@@ -419,6 +402,23 @@ def prune_merged_worktrees(
             f"git worktree list failed: {(listed.stderr or '').strip() or 'unknown error'}"
         )
 
+    # Branches held by MORE THAN ONE worktree. Removing one of them deletes the
+    # shared branch out from under the other — which may be a LIVE agent session.
+    # Merged-ness says nothing about whether someone is still standing on a
+    # branch, so this is checked independently of _branch_merged. Git refuses a
+    # double-checkout without --force, but the forced state does occur in
+    # practice (seen 2026-07-18: an agent worktree and the session driving it
+    # shared one merged branch, and every other guard passed).
+    #
+    # Derived from the SAME --porcelain output already fetched above, so this
+    # costs no extra git call.
+    _branch_counts: dict[str, int] = {}
+    for _line in listed.stdout.splitlines():
+        if _line.startswith("branch refs/heads/"):
+            _br = _line.removeprefix("branch refs/heads/").strip()
+            _branch_counts[_br] = _branch_counts.get(_br, 0) + 1
+    shared_branches = {b for b, n in _branch_counts.items() if n > 1}
+
     results: list[dict[str, str]] = []
     path = ""
     branch = ""
@@ -438,6 +438,10 @@ def prune_merged_worktrees(
             # Classify detached HEADs before touching the tree — a missing/half-
             # removed path would otherwise read as "dirty" and hide the real state.
             reason = "detached HEAD"
+        elif branch in shared_branches:
+            # Checked BEFORE the merge test: a shared branch is unsafe to remove
+            # regardless of whether it merged.
+            reason = "branch checked out by another worktree"
         elif _worktree_is_dirty(Path(path)):
             reason = "dirty"
         else:

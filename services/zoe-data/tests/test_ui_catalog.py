@@ -14,6 +14,8 @@ from ui_catalog import (
     validate_component_tree,
 )
 
+pytestmark = pytest.mark.ci_safe
+
 
 # ── schema generation ─────────────────────────────────────────────────────────
 

@@ -104,9 +104,13 @@ async def _ma_response(command: str, timeout_s: float = _TIMEOUT_S, **args: Any)
 
 def _first_image(item: dict[str, Any]) -> str:
     """Best square art for a media item — its own image else the album's; only
-    trusts absolute http(s) urls (never a relative/opaque path). MA library
-    items (playlists, tracks, search hits) carry their real art under
-    metadata.images[].path — NOT a top-level image/images field — so scan both
+    trusts absolute http(s) urls (never a relative/opaque path). MA is
+    inconsistent about where art lives, so scan every shape it emits:
+      • str                       — radio, some now-playing shapes
+      • list[{path}]              — full library items
+      • {"type","path"}           — MA's *brief* shape (recently-played, search
+                                    hits): one image dict, `metadata` empty
+      • metadata.images[{path}]   — full library items (playlists, albums)
     (the builtin `logo.png` placeholder is relative → dropped by the http guard)."""
     for src in (item, item.get("album") if isinstance(item.get("album"), dict) else None):
         if not isinstance(src, dict):
@@ -115,7 +119,12 @@ def _first_image(item: dict[str, Any]) -> str:
         imgs = src.get("image") or src.get("images")
         if isinstance(imgs, str) and imgs.startswith(("http://", "https://")):
             return imgs
-        candidates = list(imgs) if isinstance(imgs, list) else []
+        if isinstance(imgs, list):
+            candidates = list(imgs)
+        elif isinstance(imgs, dict):
+            candidates = [imgs]
+        else:
+            candidates = []
         # metadata.images[] — where MA nests library-item art
         md_imgs = (src.get("metadata") or {}).get("images")
         if isinstance(md_imgs, list):
@@ -259,8 +268,25 @@ async def now_playing(player_id: str = "") -> Optional[dict[str, Any]]:
         "image": _hi_res_art(safe_image),
         "volume": player.get("volume_level"),
         "queue_id": pid,
+        # Where the playing track sits in the queue. The panel's Cover Flow needs
+        # this to find "Now" among the covers AND to notice a track change at all
+        # (its reload key is the item id) — without it the flow can't centre or
+        # advance. queue_item_id is the reliable key; queue_index is the fallback
+        # for shapes that lack one.
+        #
+        # NOTE: this is the QUEUE's current_index, deliberately NOT the current
+        # item's own `index` field — they are different things. Live MA had
+        # current_index=2 while current_item.index=0 on the same track, so
+        # matching on the item's index silently points at the wrong cover.
+        "queue_item_id": cur.get("queue_item_id") or "" if isinstance(cur, dict) else "",
+        "queue_index": (queue or {}).get("current_index"),
         "shuffle": bool((queue or {}).get("shuffle_enabled")),
         "repeat": str((queue or {}).get("repeat_mode") or "off"),
+        # "Don't stop the music" read-back. It rides the now-playing poll for the
+        # same reason shuffle/repeat do: the panel already refreshes this every
+        # 5s, and the flag lives on the same queue object that is already in
+        # scope — so the toggle renders TRUE state on load instead of guessing.
+        "dont_stop": bool((queue or {}).get("dont_stop_the_music_enabled")),
         "elapsed": elapsed,
         "duration": duration,
     }
@@ -360,6 +386,266 @@ async def transfer(target_player_id: str, source_player_id: str = "") -> bool:
     await _ma("player_queues/transfer", source_queue_id=source_id, target_queue_id=target_player_id)
     set_preferred_player_id(target_player_id)   # moving music = choosing a speaker
     return True
+
+
+# ── Multi-room: speaker grouping ─────────────────────────────────────────────
+# Grouping is ADDITIVE to `transfer`: transfer MOVES playback to one speaker,
+# grouping SPREADS it across several. Both stay available.
+#
+# MA's grouping state is spread over five fields with non-obvious semantics
+# (verified live against MA 2.8.7 schema 29 + the pinned source at
+# music_assistant/models/player.py):
+#   - `group_members`  — for a normal sync LEADER this includes the leader's OWN
+#     id as the FIRST entry (`__final_group_members`, player.py:1837), and is []
+#     when the player leads nobody. For a `type == "group"` player it is the
+#     child list and does NOT contain the group player itself.
+#   - `synced_to`      — set on a FOLLOWER: the id of its sync leader.
+#   - `active_group`   — set on a member of a permanent/virtual group player.
+#   - `group_childs`   — the children of a group player (mirrors group_members
+#     there). Not authoritative for sync groups; we read `group_members`.
+#   - `static_group_members` — non-empty => a provider-defined FIXED group (the
+#     Chromecast "House" group here). Its membership is not editable via MA, so
+#     the panel must not offer a member picker for it.
+#
+# The panel gets flat, already-resolved fields — it must never re-derive any of
+# the above from MA's payload shape.
+
+_GROUP_FEATURE = "set_members"
+
+
+def _player_name(player: dict[str, Any]) -> str:
+    """A human display name, never empty (falls back to the opaque id)."""
+    for key in ("display_name", "name"):
+        value = player.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return str(player.get("player_id") or "")
+
+
+def _supports_grouping(player: dict[str, Any]) -> bool:
+    features = player.get("supported_features") or []
+    return isinstance(features, list) and _GROUP_FEATURE in features
+
+
+def _is_static_group(player: dict[str, Any]) -> bool:
+    """A provider-defined fixed group (e.g. a Chromecast speaker group)."""
+    return bool(player.get("static_group_members"))
+
+
+def resolve_can_group_with(player: dict[str, Any],
+                           players: list[dict[str, Any]]) -> list[str]:
+    """The real player ids `player` can group with.
+
+    MA documents TWO shapes for `can_group_with` (player.py:307-315): a set of
+    player_ids, OR "just the provider's instance_id if all players can group
+    with each other". This house returns the player-id form (verified live: no
+    unresolvable ids across all 14 players), but the provider form is a
+    supported payload, so an id matching a PROVIDER expands to that provider's
+    players. Unknown ids are dropped rather than passed to the panel as ghost
+    entries; the player's own id is never included.
+    """
+    raw = player.get("can_group_with") or []
+    if not isinstance(raw, (list, set, tuple)):
+        return []
+    self_id = player.get("player_id")
+    by_id = {p.get("player_id") for p in players}
+    resolved: list[str] = []
+    for entry in raw:
+        if not isinstance(entry, str) or not entry:
+            continue
+        if entry in by_id:
+            candidates = [entry]
+        else:
+            # provider-instance form: every player of that provider
+            candidates = [str(p.get("player_id")) for p in players
+                          if p.get("provider") == entry and p.get("player_id")]
+        for candidate in candidates:
+            if candidate != self_id and candidate not in resolved:
+                resolved.append(candidate)
+    return resolved
+
+
+def resolve_group_role(player: dict[str, Any]) -> tuple[str, str]:
+    """(role, leader_id) for one player. role ∈ solo | leader | follower.
+
+    Follower wins over leader: MA sets `synced_to`/`active_group` on a member,
+    and a member never carries members of its own (`__final_group_members`
+    returns [] when synced, player.py:1808-1810). `active_group` is checked
+    first because a permanent group player owns the queue for its members.
+    """
+    for key in ("active_group", "synced_to"):
+        value = player.get(key)
+        if isinstance(value, str) and value:
+            return "follower", value
+    if player.get("group_members"):
+        return "leader", str(player.get("player_id") or "")
+    return "solo", ""
+
+
+def build_group_view(players: list[dict[str, Any]]) -> dict[str, Any]:
+    """Flatten MA's player list into the panel's grouping view.
+
+    Pure + directly callable so the tests exercise THIS function rather than a
+    re-implementation of it. Returns the `players` + `groups` payload described
+    in `routers/music.py::music_groups`.
+    """
+    valid = [p for p in players if isinstance(p, dict) and p.get("player_id")]
+    rows: list[dict[str, Any]] = []
+    for player in valid:
+        role, leader_id = resolve_group_role(player)
+        rows.append({
+            "player_id": str(player.get("player_id")),
+            "name": _player_name(player),
+            # Two speakers here are both named "Bedroom" (a Sonos zone and an
+            # AirPlay endpoint) — the panel needs `provider` to disambiguate
+            # them in the picker, so it is resolved rather than left to MA.
+            "provider": str(player.get("provider") or ""),
+            "available": bool(player.get("available")),
+            "powered": bool(player.get("powered")),
+            # Per-zone volume for the grouped volume popover (one slider each).
+            "volume": player.get("volume_level"),
+            "state": str(player.get("playback_state") or player.get("state") or ""),
+            "is_group_player": player.get("type") == "group",
+            "is_static_group": _is_static_group(player),
+            "can_lead": _supports_grouping(player),
+            "can_group_with": resolve_can_group_with(player, valid),
+            "role": role,
+            "grouped": role != "solo",
+            "leader_id": leader_id,
+        })
+
+    by_id = {r["player_id"]: r for r in rows}
+
+    # Members per leader. A sync leader already lists itself first; a group
+    # player does not, so the leader is prepended only when it is a real
+    # speaker in its own right.
+    members: dict[str, list[str]] = {}
+    for player in valid:
+        pid = str(player.get("player_id"))
+        role, _ = resolve_group_role(player)
+        if role != "leader":
+            continue
+        listed = [str(m) for m in (player.get("group_members") or [])
+                  if isinstance(m, str) and m]
+        ordered = [m for m in listed if m != pid]
+        members[pid] = ordered if player.get("type") == "group" else [pid, *ordered]
+
+    # Followers whose leader did not advertise them (provider lag) still belong
+    # to the group — otherwise a speaker vanishes from the UI mid-regroup.
+    for row in rows:
+        if row["role"] == "follower" and row["leader_id"]:
+            members.setdefault(row["leader_id"], [])
+            if row["player_id"] not in members[row["leader_id"]]:
+                members[row["leader_id"]].append(row["player_id"])
+
+    for row in rows:
+        source = row["player_id"] if row["role"] == "leader" else row["leader_id"]
+        row["group_member_ids"] = list(members.get(source, []))
+
+    groups = []
+    for leader_id, member_ids in members.items():
+        leader = by_id.get(leader_id)
+        groups.append({
+            "leader_id": leader_id,
+            "leader_name": leader["name"] if leader else leader_id,
+            "is_virtual_leader": bool(leader and leader["is_group_player"]),
+            "is_static": bool(leader and leader["is_static_group"]),
+            "member_ids": list(member_ids),
+            "member_names": [by_id[m]["name"] if m in by_id else m for m in member_ids],
+        })
+    groups.sort(key=lambda g: g["leader_name"].lower())
+    return {"players": rows, "groups": groups}
+
+
+async def get_speaker_groups() -> Optional[dict[str, Any]]:
+    """The grouping view, or None when MA is unreachable.
+
+    None (not {}) distinguishes "MA is down" from "MA has no players", so the
+    router can say `available: false` instead of implying an empty house.
+    """
+    raw = await _ma("players/all")
+    if raw is None:
+        return None
+    return build_group_view(_as_list(raw))
+
+
+async def group_players(target_player_id: str,
+                        add: Optional[list[str]] = None,
+                        remove: Optional[list[str]] = None) -> dict[str, Any]:
+    """Join and/or unjoin players to/from `target_player_id` in ONE call.
+
+    Maps to MA's `players/cmd/set_members`, which takes both lists together so a
+    multi-select picker applies its whole selection atomically instead of
+    emitting a burst of per-speaker calls that race each other.
+
+    Best-effort, never raises. Unknown ids are only rejected when we could
+    actually SEE the player list: `_ma` returns None on transport failure, and
+    treating that as "no such player" would lock the operator out of their own
+    speakers during an MA outage (the same class of bug already documented in
+    `routers/AGENTS.md`). When the list is unavailable we forward the command
+    and let MA arbitrate.
+    """
+    target = str(target_player_id or "")
+    if not target:
+        return {"ok": False, "reason": "missing target_player_id"}
+    to_add = [str(p) for p in (add or []) if p]
+    to_remove = [str(p) for p in (remove or []) if p]
+    if not to_add and not to_remove:
+        return {"ok": False, "reason": "nothing to add or remove"}
+    if target in to_add:
+        return {"ok": False, "reason": "target cannot join itself"}
+
+    raw = await _ma("players/all")
+    if raw is not None:
+        players = _as_list(raw)
+        by_id = {p.get("player_id"): p for p in players if isinstance(p, dict)}
+        if players and target not in by_id:
+            return {"ok": False, "reason": "unknown target_player_id"}
+        leader = by_id.get(target)
+        # Static first: a fixed provider group also lacks `set_members`, and
+        # "membership is fixed" is the reason the panel can actually act on.
+        if leader is not None and _is_static_group(leader):
+            return {"ok": False, "reason": "target is a fixed provider group"}
+        if leader is not None and not _supports_grouping(leader):
+            return {"ok": False, "reason": "target player does not support grouping"}
+        unknown = [p for p in (*to_add, *to_remove) if players and p not in by_id]
+        if unknown:
+            return {"ok": False, "reason": f"unknown player_id: {unknown[0]}"}
+
+    ok = await _ma_ok(
+        "players/cmd/set_members",
+        target_player=target,
+        player_ids_to_add=to_add or None,
+        player_ids_to_remove=to_remove or None,
+    )
+    result = {"ok": ok, "target_player_id": target, "added": to_add, "removed": to_remove}
+    if not ok:
+        # EVERY failure carries `reason` — a caller that reads it on ok:false
+        # must never hit a KeyError just because the failure came from MA
+        # rejecting the command rather than from local validation.
+        result["reason"] = "music assistant rejected the group command"
+    return result
+
+
+async def ungroup_player(player_id: str) -> dict[str, Any]:
+    """Remove one player from whatever group it is in.
+
+    Deliberately NOT expressed as `group_players(remove=[id])`: the caller does
+    not know which target to remove FROM, and the answer differs by topology —
+    a permanent-group member unjoins from `active_group`, a sync member from
+    `synced_to`, and a LEADER dissolves its whole group. MA's
+    `players/cmd/ungroup` already owns that disambiguation
+    (controller.py:1211-1240); re-deriving it here would be a second, drifting
+    copy of provider logic Zoe does not own.
+    """
+    pid = str(player_id or "")
+    if not pid:
+        return {"ok": False, "reason": "missing player_id"}
+    ok = await _ma_ok("players/cmd/ungroup", player_id=pid)
+    if not ok:
+        return {"ok": False, "player_id": pid,
+                "reason": "music assistant rejected the ungroup command"}
+    return {"ok": True, "player_id": pid}
 
 
 async def search_and_play(query: str, player_id: str = "",
@@ -513,6 +799,40 @@ async def favorite_add(uri: str) -> bool:
     return await _ma_ok("music/favorites/add_item", item=uri)
 
 
+async def favorite_remove(uri: str) -> bool:
+    """Un-favorite a media item by uri — the other half of `favorite_add`.
+
+    The two MA commands are NOT symmetric, which is the whole reason this needs
+    a resolve step: `favorites/add_item` takes a **uri**, but
+    `favorites/remove_item` takes **(media_type, library_item_id)**. Adding a
+    favourite forces the item into the library (MA's `add_item_to_favorites`
+    calls `add_item_to_library` first), so a favourited provider uri resolves
+    through `music/item_by_uri` to the LIBRARY row that carries that id.
+
+    Verified live against MA 2.8.7 with a ytmusic track (state restored after):
+        before favourite -> provider=ytmusic--…  item_id=lahBKZIkLDM  favorite=False
+        after  favourite -> provider=library     item_id=2            favorite=True
+
+    An item that was never favourited has no library row, so there is nothing
+    to remove — that is success, not failure (the heart is already off).
+    """
+    if not uri:
+        return False
+    item = await _ma("music/item_by_uri", uri=uri)
+    if not isinstance(item, dict):
+        return False
+    # Only a library row has an id `remove_item` accepts. A provider-owned item
+    # is by definition not in the library, hence not a favourite.
+    if str(item.get("provider") or "") != "library":
+        return True
+    library_item_id = item.get("item_id")
+    media_type = str(item.get("media_type") or "")
+    if library_item_id is None or not media_type:
+        return False
+    return await _ma_ok("music/favorites/remove_item",
+                        media_type=media_type, library_item_id=library_item_id)
+
+
 # ── Browse: structured search + play-by-URI (the "use your music" surface) ────
 # The now-playing card + voice path give you *what's playing* and one-shot
 # "play <thing>". These two power the touch music page: see connected sources,
@@ -546,6 +866,51 @@ def _normalize_hit(item: Any, media_type: str) -> Optional[dict[str, Any]]:
         "artist": artist,
         "album": album_name,
         "image": _hi_res_art(_first_image(item)),
+    }
+
+
+# Streaming catalogues that answer a general "search for <song>" — as opposed to
+# builtin (library-only) and radiobrowser (stations only), which are always
+# available and are NOT evidence that song search works. If one of these is
+# enabled but not loaded, catalogue search is degraded and callers should say so
+# rather than render a misleading "no results".
+_STREAMING_MUSIC_DOMAINS = {
+    "ytmusic", "spotify", "apple_music", "applemusic", "tidal", "deezer",
+    "qobuz", "soundcloud", "plex", "subsonic", "opensubsonic", "jellyfin",
+}
+
+
+async def catalog_health() -> dict[str, Any]:
+    """Whether general catalogue search is DEGRADED — a streaming music provider
+    is enabled but not loaded (e.g. YouTube Music failing its Premium check), so
+    searches return only radio/library. Best-effort; never raises.
+
+    Returns {degraded, reason, providers}. `reason` carries MA's own last_error
+    (e.g. "User does not have Youtube Music Premium") so the surface can be
+    specific instead of a generic shrug."""
+    try:
+        cfgs = _as_list(await _ma("config/providers"))
+        provs = _as_list(await _ma("providers"))
+    except Exception:
+        return {"degraded": False, "reason": "", "providers": []}
+    available = {p.get("domain") for p in provs if isinstance(p, dict) and p.get("available")}
+    # If ANY streaming catalogue is loaded, search works — a second provider being
+    # down is not a user-visible outage. Only flag degraded when NONE is available.
+    if any(d in _STREAMING_MUSIC_DOMAINS for d in available):
+        return {"degraded": False, "reason": "", "providers": []}
+    broken = [
+        {"domain": str(c.get("domain") or ""), "last_error": str(c.get("last_error") or "")}
+        for c in cfgs
+        if isinstance(c, dict) and c.get("enabled")
+        and str(c.get("domain") or "") in _STREAMING_MUSIC_DOMAINS
+        and str(c.get("domain") or "") not in available
+    ]
+    if not broken:
+        return {"degraded": False, "reason": "", "providers": []}
+    return {
+        "degraded": True,
+        "reason": broken[0]["last_error"] or "a music service needs attention",
+        "providers": [b["domain"] for b in broken],
     }
 
 
@@ -587,7 +952,24 @@ async def search(query: str, media_types: Optional[list[str]] = None,
         results[_SEARCH_RESULT_KEY[mt]] = hits
         if hits:
             any_hit = True
-    return {"available": any_hit, "query": query, "results": results}
+    out = {"available": any_hit, "query": query, "results": results}
+    # When the catalogue buckets (songs/albums/artists/playlists — everything
+    # except radio) came back empty, the cause may be a down streaming provider
+    # rather than a genuine no-match. Check once, only then, so healthy searches
+    # pay nothing. The flag lets the jukebox/panel say "YouTube Music needs
+    # attention" instead of a misleading "no results". ONLY when the caller
+    # actually REQUESTED a catalogue type — a radio-only search (types=radio)
+    # leaves those buckets empty by scope, not by outage, and must not be flagged.
+    catalogue_requested = [m for m in requested if m in ("track", "album", "artist", "playlist")]
+    catalogue_empty = bool(catalogue_requested) and not any(
+        results.get(_SEARCH_RESULT_KEY[m]) for m in catalogue_requested
+    )
+    if catalogue_empty:
+        health = await catalog_health()
+        if health.get("degraded"):
+            out["degraded"] = True
+            out["degraded_reason"] = health.get("reason", "")
+    return out
 
 
 async def play_media(uri: str, player_id: str = "", option: str = "replace",
@@ -608,9 +990,19 @@ async def play_media(uri: str, player_id: str = "", option: str = "replace",
         return {"ok": False, "reason": "empty uri"}
     players = await get_players()
     if player_id:
+        # Same rule as set_preferred_player / group_players: [] means we could
+        # not see the roster, not that the id is bogus. Rejecting on an empty
+        # list turns an MA blip into "unknown player" for a speaker that exists.
+        # When we cannot validate, forward and let MA arbitrate.
         player = next((p for p in players if p.get("player_id") == player_id), None)
-        if player is None:
+        if players and player is None:
             return {"ok": False, "reason": "unknown player"}
+        if player is None:
+            # Roster invisible. Skipping the rejection is not enough on its own —
+            # `player` would stay None and fall through to "no player available",
+            # which is the same lockout wearing a different label. Trust the
+            # caller's explicit id and let MA arbitrate.
+            player = {"player_id": player_id}
     else:
         player = _pick_player(players)
     if player is None:

@@ -52,7 +52,6 @@ av==16.1.0
 # A2A federation + skill discovery + web search
 ddgs>=6.0
 cloakbrowser>=0.3.28
-watchdog>=4.0
 PyYAML>=6.0
 # CloakBrowser — stealth Chromium for bot-blocked web search fallback (optional).
 # Install with: pip install cloakbrowser

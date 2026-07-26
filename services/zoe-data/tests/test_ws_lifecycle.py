@@ -16,6 +16,8 @@ sys.path.insert(0, str(ROOT))
 import main  # noqa: E402
 from push import PushBroadcaster  # noqa: E402
 
+pytestmark = pytest.mark.ci_safe
+
 
 class FakeWebSocket:
     def __init__(self, messages):

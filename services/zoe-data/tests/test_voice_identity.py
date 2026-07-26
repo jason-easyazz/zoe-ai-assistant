@@ -4,9 +4,12 @@
 zero stored memories — so the voice brain turn injects the users-table name into
 the [About you] block. Guests/daemon/admin get nothing.
 """
+import pytest
 import asyncio
 
 import routers.voice_tts as v
+
+pytestmark = pytest.mark.ci_safe
 
 
 def _run(c):

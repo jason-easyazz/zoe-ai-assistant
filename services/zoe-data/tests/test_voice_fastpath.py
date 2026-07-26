@@ -17,6 +17,8 @@ import main
 import brain_dispatch
 import routers.voice_tts as voice_tts
 
+pytestmark = pytest.mark.ci_safe
+
 
 class _FakeWS:
     def __init__(self, inbound):

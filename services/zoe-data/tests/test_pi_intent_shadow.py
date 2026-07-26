@@ -17,6 +17,8 @@ from pi_intent_shadow import (
 )
 from zoe_pi_promotion import PiPromotionPolicy
 
+pytestmark = pytest.mark.ci_safe
+
 
 @pytest.mark.asyncio
 async def test_shadow_disabled_does_not_write(tmp_path):

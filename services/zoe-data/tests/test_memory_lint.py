@@ -15,6 +15,8 @@ from memory_lint import (
     lint_memories,
 )
 
+pytestmark = pytest.mark.ci_safe
+
 NOW = datetime.datetime(2026, 6, 18, 12, 0, 0)
 
 

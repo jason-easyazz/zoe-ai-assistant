@@ -1,7 +1,10 @@
 """Regression tests for live self-evolution proposal writer closure."""
 
+import pytest
 import ast
 from pathlib import Path
+
+pytestmark = pytest.mark.ci_safe
 
 
 DATA_ROOT = Path(__file__).resolve().parents[1]

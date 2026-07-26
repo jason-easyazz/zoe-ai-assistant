@@ -21,10 +21,13 @@ Mirrors the mocking style of `tests/test_memory_idle_consolidation.py`.
 
     python -m pytest services/zoe-data/tests/test_samantha_acceptance_loop.py -v
 """
+import pytest
 import asyncio
 
 import memory_idle_consolidation as mic
 import memory_quality
+
+pytestmark = pytest.mark.ci_safe
 
 
 def _run(c):

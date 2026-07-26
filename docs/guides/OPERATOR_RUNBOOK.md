@@ -72,6 +72,7 @@ Full env matrix lives in `services/zoe-data/.env.example` and `assistant/.env`.
 | Update llama-server model | `systemctl --user restart llama-server` |
 | Issue/revoke device token | Service auto-loads at startup; restart `zoe-data` to pick up changes |
 | Edit Pi voice daemon `.env.voice` | `systemctl --user restart zoe-voice` (on Pi) |
+| Edit `scripts/setup/zoe_voice_daemon.py` or `zoe_voice_announce.py` | `scp` **both** files to `zoe-pi:~/.zoe-voice/` then `ssh zoe-pi systemctl --user restart zoe-voice` (they deploy as a pair — the daemon disables announce polling with a WARNING if the companion module is missing) |
 
 ---
 

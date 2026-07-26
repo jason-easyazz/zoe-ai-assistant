@@ -1,7 +1,10 @@
 """Tests for the harness-side focused-test runner (deterministic verify)."""
 
+import pytest
 import pipeline_focused_tests as pft
 from pipeline_focused_tests import FocusedTestResult, focused_test_evidence_item
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_run_focused_pr_tests_no_pr_url_does_not_run():

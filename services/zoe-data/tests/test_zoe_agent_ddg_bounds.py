@@ -1,8 +1,11 @@
+import pytest
 import sys
 import types
 
 import research_evidence
 import zoe_agent
+
+pytestmark = pytest.mark.ci_safe
 
 
 class _FailingDDGS:

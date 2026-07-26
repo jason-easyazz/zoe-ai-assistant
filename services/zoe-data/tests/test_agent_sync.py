@@ -1,3 +1,4 @@
+import pytest
 from pathlib import Path
 
 import agent_sync
@@ -7,6 +8,8 @@ from agent_sync import (
     _build_zoe_why,
     _patch_hermes_soul,
 )
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_capabilities_snapshot_is_stable():

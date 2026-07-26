@@ -16,6 +16,8 @@ import routers.memories as memories_mod
 from memory_service import MemoryRef
 from routers.memories import _build_memory_prompt_packet, router as memories_router
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _ref(mem_id: str, text: str, **meta) -> MemoryRef:
     score = meta.pop("score", 0.0)

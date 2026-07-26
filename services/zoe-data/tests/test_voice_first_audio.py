@@ -4,7 +4,10 @@ Time-to-first-audio is what makes a voice reply feel fast. This snaps the first
 chunk out on a clause boundary (or a soft word-boundary cap) instead of waiting for
 a full sentence — without splitting decimals ('twelve point four') mid-number.
 """
+import pytest
 import routers.voice_tts as v
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_flag_default_on_and_togglable(monkeypatch):

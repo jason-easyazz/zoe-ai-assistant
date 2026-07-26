@@ -1,3 +1,4 @@
+import pytest
 from multica_ticket_contract import describe_ticket
 from zoe_memory_admission import MemoryAdmissionStatus
 from zoe_memory_contract import (
@@ -14,6 +15,8 @@ from zoe_multica_memory_admission import (
     build_multica_memory_admission_request,
     evaluate_multica_memory_admission,
 )
+
+pytestmark = pytest.mark.ci_safe
 
 
 def _event(**overrides):

@@ -21,6 +21,38 @@ After=network.target
 [Service]
 Type=simple
 LimitMEMLOCK=infinity
+
+# ── Keep the brain rock resident ─────────────────────────────────────────────
+# `--mlock` below asks llama.cpp to lock the weights; LimitMEMLOCK=infinity lets
+# it. That is necessary but NOT sufficient — measured 2026-07-18 on the live
+# Orin, VmLck held only 1.95 GB of a 5.6 GB RSS and 1,457 MB had still been
+# swapped out (mlock covers the mapped model, not every CUDA/unified-memory
+# allocation around it on Tegra).
+#
+# MemoryLow is soft (reclaim-resistant, not swap-proof), which is why it alone
+# did not stop the eviction. MemorySwapMax=0 is the hard line for the pages
+# mlock does not reach.
+#
+# MemoryLow was previously a LOCAL drop-in only (~/.config/systemd/user/
+# llama-server.service.d/memory.conf) — real protection that existed on one box
+# and in no template, so a rebuild or a second host silently lost it. Tracked
+# here now. Same story for CPUWeight/IOWeight from priority.conf.
+#
+# NOTE: this is a ~5.6 GB RSS process. MemorySwapMax=0 removes its release
+# valve, so pressure surfaces as an OOM kill instead of silent slow paging —
+# which is the intended trade for the brain rock (a swapped brain is a broken
+# brain), but it is why no MemoryMax is set here: a hard ceiling plus no swap
+# would turn a transient spike into a kill. See docs/knowledge/voice-pipeline.md.
+#
+# No Nice=-N / OOMScoreAdjust=-N: a --user unit cannot raise priority on this
+# box (`ulimit -e` is 0) and systemd SILENTLY DROPS the value while reporting
+# success — verified 2026-07-18 (Nice=-5 applied as 0). Dev tooling
+# de-prioritises itself instead (serena-mcp.service: Nice=10), which works
+# because positive values need no privilege.
+MemorySwapMax=0
+MemoryLow=6G
+CPUWeight=400
+IOWeight=400
 # The ExecStartPost health probe waits up to 120s for model+draft load; raise the
 # start timeout above it so systemd doesn't kill the unit at the 90s default first.
 TimeoutStartSec=180
@@ -29,6 +61,23 @@ Environment=LD_LIBRARY_PATH=%h/llama.cpp/build-jetson-new/bin
 # The endpoint is unauthenticated. Default to loopback; the live Zoe host binds
 # 0.0.0.0 ONLY because it is fronted by Cloudflare Access + host firewalling. Do NOT
 # expose 0.0.0.0 without equivalent auth/firewalling.
+# KV-cache tuning (2026-07-21, evidence in docs/knowledge/brain-kv-cache-tuning.md):
+#  --ctx-size 16384 --parallel 2  = two 8192 slots, so voice + chat each keep a
+#    warm prefix instead of evicting each other (~5s reprocess per eviction,
+#    measured live). Near-free on gemma3n: the SWA-aware cache sizes the 20
+#    sliding-window layers by the 512-token window, NOT by ctx (llama.cpp
+#    PR #13194); only ~4 global layers scale, halved again by q8 V-quant.
+#  --cache-ram 2048  = the Oct-2025 host-memory prompt cache (PR #16391),
+#    similarity hot-swap of whole cached prompts; SWA-compatible. Default is
+#    8192 MiB — on this 15.6G UNIFIED-memory box that default is an OOM
+#    hazard, so it is capped. Never remove the cap.
+#  --flash-attn stays OFF and V stays f16: FA on CRASHES with the MTP draft on
+#    this build (proven; see #810 sync note), and q8 V-cache requires FA — so
+#    V-quant is off the table while MTP is in use. K stays q8 (works without
+#    FA). V at f16 costs only the ~4 global layers: ~64MB at 16384 — acceptable.
+#  --cache-reuse REMOVED: KV shifting cannot reuse past the 512-token sliding
+#    window on SWA models (reuse threshold = pos_next - n_swa), so it was a
+#    no-op here; the host prompt cache above is the working replacement.
 ExecStart=%h/llama.cpp/build-jetson-new/bin/llama-server \
   --model %h/models/gemma4-e4b-qat/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf \
   --model-draft %h/models/gemma4-e4b-qat/mtp-gemma-4-E4B-it.gguf \
@@ -38,12 +87,12 @@ ExecStart=%h/llama.cpp/build-jetson-new/bin/llama-server \
   --spec-draft-ngl 99 \
   --host 127.0.0.1 \
   --port 11434 \
-  --ctx-size 8192 \
+  --ctx-size 16384 \
+  --parallel 2 \
   --cache-type-k q8_0 \
+  --cache-ram 2048 \
   --n-gpu-layers 99 \
-  --parallel 1 \
   --cont-batching \
-  --cache-reuse 256 \
   --flash-attn off \
   --temp 0.7 \
   --top-k 64 \

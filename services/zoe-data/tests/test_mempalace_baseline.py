@@ -14,6 +14,8 @@ from mempalace_baseline import (
     score_recall_text,
 )
 
+pytestmark = pytest.mark.ci_safe
+
 
 @dataclass
 class FakeRef:

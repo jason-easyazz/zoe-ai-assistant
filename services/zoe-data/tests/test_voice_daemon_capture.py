@@ -6,9 +6,12 @@ or exercised in CI. We still want a net so a future tweak can't silently revert 
 onset-clipping fix, so we pin the tuned constants via source inspection (no import)
 and verify the lookback-ring seeding semantics with a pure-stdlib model.
 """
+import pytest
 import os
 import re
 from collections import deque
+
+pytestmark = pytest.mark.ci_safe
 
 _DAEMON = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "..", "scripts", "setup", "zoe_voice_daemon.py")

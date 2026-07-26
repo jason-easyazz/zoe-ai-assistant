@@ -35,8 +35,10 @@ Usage (run on the Jetson host):
     ZOE_PERF=1 python3 scripts/perf/measure_voice.py                 # newest 10 samples
     ZOE_PERF=1 python3 scripts/perf/measure_voice.py --last 30       # newest 30
     ZOE_PERF=1 python3 scripts/perf/measure_voice.py --json voice.json
-    # point at a specific service checkout (defaults to repo's services/zoe-data):
-    ZOE_PERF=1 python3 scripts/perf/measure_voice.py --service-dir /home/zoe/assistant/services/zoe-data
+    # ...including from a git WORKTREE, with no flag: --service-dir auto-resolves
+    # to the live env (this repo's services/zoe-data if it has a .env, else the
+    # MAIN worktree's). Pass it explicitly only to override that:
+    ZOE_PERF=1 python3 scripts/perf/measure_voice.py --service-dir /path/to/services/zoe-data
 """
 from __future__ import annotations
 
@@ -47,11 +49,13 @@ import statistics
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
-
-def _repo_root() -> str:
-    # scripts/perf/measure_voice.py → repo root is two levels up.
-    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+from service_dir import (  # noqa: E402 — sibling-import convention, scripts/ is not a package
+    resolve_service_dir,
+    SERVICE_DIR_HELP,
+)
 
 
 def _median(values: list[float]) -> dict:
@@ -81,8 +85,7 @@ def main() -> int:
     ap.add_argument("--last", type=int, default=10, help="newest N samples to replay")
     ap.add_argument("--since", help="only samples whose filename sorts >= this")
     ap.add_argument("--user", default="jason", help="user_id for memory recall (reads only)")
-    ap.add_argument("--service-dir", default=None,
-                    help="path to services/zoe-data (defaults to repo's)")
+    ap.add_argument("--service-dir", default=None, help=SERVICE_DIR_HELP)
     ap.add_argument("--json", help="write aggregated machine-readable results here")
     ap.add_argument("--timeout", type=int, default=600, help="replay subprocess timeout (s)")
     args = ap.parse_args()
@@ -91,15 +94,21 @@ def main() -> int:
         print("ZOE_PERF != 1 — skipping live voice e2e probe (set ZOE_PERF=1 to run).")
         return 0
 
-    service_dir = args.service_dir or os.path.join(_repo_root(), "services", "zoe-data")
+    # Same ladder the probe walks (scripts/lib/service_dir.py): explicit flag
+    # always wins, else this repo's services/zoe-data if it has a .env, else the
+    # MAIN worktree's — so a DIRECT run from a git worktree needs no flag. When
+    # nothing resolves it returns the in-tree default, and the loud skips below
+    # still fire: the ladder fixes the DEFAULT, never the failure mode.
+    service_dir = str(resolve_service_dir(args.service_dir))
     replay = os.path.join(service_dir, "tests", "replay_samples.py")
     if not os.path.exists(replay):
         print(f"replay harness not found at {replay} — skipping.", file=sys.stderr)
         return 0
 
     # The replay harness loads <service_dir>/.env for POSTGRES_URL etc. If that
-    # env is missing (e.g. a fresh git worktree where .env is gitignored), it
-    # can't reach the DB. Skip cleanly rather than fail CI.
+    # env is missing (no live env anywhere, or an explicit --service-dir that has
+    # none), it can't reach the DB. Skip cleanly rather than fail CI — the caller
+    # (voice_regression_probe) turns this result-less skip into status=error.
     if not os.path.exists(os.path.join(service_dir, ".env")):
         print(f"no .env in {service_dir} (live service env required) — skipping.", file=sys.stderr)
         return 0

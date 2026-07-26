@@ -8,6 +8,8 @@ import pytest
 import memory_service
 import zoe_agent
 
+pytestmark = pytest.mark.ci_safe
+
 
 def test_fast_response_answers_known_interesting_fact_topic() -> None:
     response = zoe_agent._check_fast_response("tell me something interesting about oceans")

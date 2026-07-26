@@ -3,6 +3,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.ci_safe
+
 
 HELPER_PATH = Path(__file__).resolve().parents[3] / "tools" / "audit" / "ensure_nginx_security_headers.py"
 spec = importlib.util.spec_from_file_location("ensure_nginx_security_headers", HELPER_PATH)

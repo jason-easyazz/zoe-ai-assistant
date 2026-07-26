@@ -8,7 +8,9 @@ This file defines the active project layout so the repo stays easy to navigate.
 - `services/zoe-ui` - web/touch UI assets and nginx-served frontend
 - `services/zoe-auth` - authentication service
 - `services/homeassistant-mcp-bridge` - Home Assistant bridge service
-- `modules/orbit` - active module service
+- `services/zoe-core` - TypeScript brain service (abilities/, bench/, extensions/)
+- `services/livekit` - LiveKit voice transport
+- `modules/omnigent`, `modules/zoe-music` - active module services served under `/modules/`
 
 ## Device/Deployment Setup
 

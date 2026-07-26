@@ -29,12 +29,25 @@ services:
   # the live zoe-music-assistant/zoe-data services. The image ships no wget/curl,
   # so the healthcheck uses the bundled node runtime to hit /ping (http.get form
   # works on Node 10+, unlike global fetch which needs Node 18+).
+  #
+  # BOUND TO LOOPBACK ONLY. A bare "4416:4416" publishes on 0.0.0.0 (+ [::]), which
+  # exposed this unauthenticated token generator to every host on the LAN — anyone
+  # on the network could mint YouTube PO tokens against Zoe's session. Every real
+  # consumer is host-local, so there is nothing to lose by restricting it:
+  #   - music-assistant is network_mode:host and pings po_token_server_url, which
+  #     zoe-data fills in server-side as http://localhost:4416
+  #     (ZOE_YTMUSIC_POTOKEN_URL, see services/zoe-data/music_service.py).
+  #   - the healthcheck below runs INSIDE the container against its own 127.0.0.1,
+  #     so it does not depend on the published port at all.
+  # 127.0.0.1 (not ::1) is the correct family here: `localhost` on the Jetson
+  # resolves only to 127.0.0.1 (/etc/hosts maps ::1 to ip6-localhost, NOT to
+  # localhost), so an IPv4 loopback publish is what `http://localhost:4416` hits.
   ytmusic-potoken:
     image: brainicism/bgutil-ytdlp-pot-provider:1.3.1
     container_name: zoe-ytmusic-potoken
     init: true
     ports:
-    - "4416:4416"
+    - "127.0.0.1:4416:4416"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:4416/ping',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]

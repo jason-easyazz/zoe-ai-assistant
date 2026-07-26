@@ -15,6 +15,8 @@ import pytest
 
 import gemma_endpoint
 
+pytestmark = pytest.mark.ci_safe
+
 
 # ---------------------------------------------------------------------------
 # helper unit tests — both conventions, slashes, empty

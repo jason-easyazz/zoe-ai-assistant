@@ -34,15 +34,15 @@ replay and OOM the box.
 
 CI gate: requires ``ZOE_PERF=1`` and a reachable sidecar; otherwise exits 0 with a skip.
 
-Usage (run on the Jetson host, under the harness lock):
+Usage (run on the Jetson host, under the harness lock). ``--service-dir`` auto-
+resolves to the live env — including from a git WORKTREE — so it needs no flag:
     # measure TTS on an existing replay dump:
-    ZOE_PERF=1 python3 scripts/perf/measure_tts.py --replay-json voice.json \
-        --service-dir services/zoe-data
+    ZOE_PERF=1 python3 scripts/perf/measure_tts.py --replay-json voice.json
 
     # or run the replay first, then measure TTS on its replies:
     flock /tmp/zoe-voice-harness.lock -c \
       'ZOE_PERF=1 python3 scripts/perf/measure_tts.py --run-replay --last 10 \
-         --service-dir services/zoe-data --json tts.json'
+         --json tts.json'
 """
 from __future__ import annotations
 
@@ -55,10 +55,13 @@ import subprocess
 import sys
 import tempfile
 import time
+from pathlib import Path
 
-
-def _repo_root() -> str:
-    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+from service_dir import (  # noqa: E402 — sibling-import convention, scripts/ is not a package
+    resolve_service_dir,
+    SERVICE_DIR_HELP,
+)
 
 
 def _stats(values: list[float]) -> dict:
@@ -292,7 +295,7 @@ def main() -> int:
     ap.add_argument("--last", type=int, default=10, help="newest N samples (with --run-replay)")
     ap.add_argument("--since", help="only samples whose filename sorts >= this")
     ap.add_argument("--user", default="jason", help="user_id for the replay brain turn")
-    ap.add_argument("--service-dir", default=None, help="path to services/zoe-data")
+    ap.add_argument("--service-dir", default=None, help=SERVICE_DIR_HELP)
     ap.add_argument("--json", help="write machine-readable results here")
     ap.add_argument("--timeout", type=int, default=600, help="replay subprocess timeout (s)")
     args = ap.parse_args()
@@ -301,7 +304,10 @@ def main() -> int:
         print("ZOE_PERF != 1 — skipping TTS first-chunk probe (set ZOE_PERF=1 to run).")
         return 0
 
-    service_dir = args.service_dir or os.path.join(_repo_root(), "services", "zoe-data")
+    # Same ladder as measure_voice.py / the probe (scripts/lib/service_dir.py) —
+    # a direct run from a git worktree resolves the live env with no flag. The
+    # loud skip below is unchanged: the ladder fixes the DEFAULT, not the failure.
+    service_dir = str(resolve_service_dir(args.service_dir))
     if not os.path.exists(os.path.join(service_dir, ".env")):
         print(f"no .env in {service_dir} (live service env required) — skipping.", file=sys.stderr)
         return 0

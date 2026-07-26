@@ -1,7 +1,10 @@
+import pytest
 import importlib.util
 import json
 import sys
 from pathlib import Path
+
+pytestmark = pytest.mark.ci_safe
 
 
 def _load_module():

@@ -8,6 +8,8 @@ import pytest
 
 from conftest import load_compose_generator
 
+pytestmark = pytest.mark.ci_safe
+
 
 @pytest.fixture()
 def gen(tmp_path):

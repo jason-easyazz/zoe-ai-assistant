@@ -18,6 +18,8 @@ from zoe_memory_admission import MemoryAdmissionStatus
 from zoe_memory_router import MemoryBackend
 from zoe_observation_trace import ObservationOutcome, ObservationTrace, ObservationTraceType
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _source_text():
     return (Path(__file__).parent.parent / "zoe_capability_profile.py").read_text(encoding="utf-8")

@@ -8,10 +8,13 @@ status that the music page and settings page both need without an extra auth hop
 """
 import logging
 import os
+import re
 from typing import Any
 
 import httpx
 from fastapi import APIRouter
+
+from music_service import _first_image, _hi_res_art
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +79,224 @@ async def _get_players() -> list | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Device-type resolution (server-side; the panel gets flat resolved fields)
+# ---------------------------------------------------------------------------
+#
+# MA's own `icon` field is useless for the panel — it is `mdi-speaker` for
+# almost every player. The real signal for "what is this thing" lives across
+# `type` (player | group), `provider` (sonos | chromecast | airplay |
+# universal_player) and `device_info.model`. Resolving it HERE keeps the doctrine
+# the panel already follows for dock pins and rooms: the browser never parses a
+# vendor model string, it just renders a flat `kind` + `kind_label`.
+#
+# `kind` is a small closed set the panel draws an icon for:
+#   group     -> an MA sync/cast group (e.g. the "House" Chromecast group)
+#   display   -> a smart display WITH a screen (Google Nest Hub)
+#   speaker   -> a dedicated audio speaker (Sonos Beam/Arc, Google Home Mini)
+#   computer  -> a laptop/desktop (Jason's MacBook Pro)
+#   tv        -> anything whose job is a TV screen: a smart TV, a Chromecast
+#                dongle plugged into a TV, or an Apple TV streaming box
+#
+# There is deliberately NO `airplay` kind: AirPlay is a TRANSPORT, not a form
+# factor, and the operator asked "is it a TV, a speaker, etc" — a form-factor
+# question. Every AirPlay device in this house is either an Apple TV (-> tv) or
+# the MacBook (-> computer), so a transport-named bucket would only muddy the
+# very disambiguation this change exists to provide.
+#
+# The two identically-named "Bedroom" players are exactly why this exists:
+#   RINCON_347E5C9BEC8F01400  Sonos "Beam"     -> kind=speaker, "Sonos Beam"
+#   ap40cbc0db9fb8            AirPlay "Apple TV 4K" -> kind=tv,  "Apple TV" (unavailable)
+# so the picker can finally tell the real (Sonos) one from the dead AirPlay one.
+
+# Model/name substrings that identify a form factor. Ordered checks below decide
+# precedence; these are just the vocabularies. Matched case-insensitively.
+_SPEAKER_MODEL_HINTS = (
+    "sonos", "beam", "arc", "home mini", "nest mini", "nest audio",
+    "homepod", "echo", "speaker", "soundbar", "one sl", "play:",
+)
+# Only SPECIFIC smart-display models — never a bare "display". The display check
+# runs before the TV check, so a generic "display" substring would misclassify a
+# TV whose model happens to carry the word (e.g. "Samsung Smart Monitor M7
+# Display" or "Chromecast with Google TV Display") as a Nest-Hub-style display.
+_DISPLAY_MODEL_HINTS = ("nest hub", "home hub", "hub max", "smart display")
+_COMPUTER_MODEL_HINTS = ("macbook", "imac", "mac mini", "mac studio", "mac pro",
+                         "laptop", "desktop", "surface", " pc")
+_TV_MODEL_HINTS = ("apple tv", "chromecast", "smart tv", "media renderer",
+                   "oled", "qled", "webos", "bravia", "roku", "fire tv", " tv")
+
+
+def _strip_parenthetical(text: str) -> str:
+    """"MacBook Pro (MacBookPro18,2)" -> "MacBook Pro"."""
+    return re.sub(r"\s*\(.*?\)\s*", " ", text or "").strip()
+
+
+def _clean_brand(manufacturer: str) -> str:
+    """"LG Electronics" -> "LG"; "Unknown manufacturer" -> "" (unknown)."""
+    m = (manufacturer or "").strip()
+    if m.lower() in ("", "unknown", "unknown manufacturer"):
+        return ""
+    m = re.sub(r"\s+(electronics|inc\.?|corp\.?|corporation|co\.?|ltd\.?|llc)$",
+               "", m, flags=re.I).strip()
+    # Vendor casing the panel expects.
+    return {"sonos": "Sonos", "google": "Google", "lg": "LG"}.get(m.lower(), m)
+
+
+def _strip_google(model: str) -> str:
+    """"Google Nest Hub" -> "Nest Hub"; "Google Home Mini" -> "Home Mini"."""
+    return re.sub(r"^google\s+", "", model or "", flags=re.I).strip()
+
+
+def resolve_player_kind(player: dict) -> dict[str, str]:
+    """Resolve a MA player into a flat ``{"kind", "kind_label"}`` for the panel.
+
+    Pure — takes one player dict (the shape returned by MA's ``players/all``)
+    and returns only the two derived fields. Derivation uses ``type`` +
+    ``provider`` + ``device_info.model`` ONLY, never the user-editable ``name``
+    (a Sonos a user renamed "TV Room" must stay a speaker). See the module
+    comment above for the mapping and its rationale.
+    """
+    ptype = str(player.get("type") or "").lower()
+    provider = str(player.get("provider") or "").lower()
+    dev = player.get("device_info") or {}
+    model = str(dev.get("model") or "")
+    manufacturer = str(dev.get("manufacturer") or "")
+    low = model.lower()
+
+    def _has(hints: tuple) -> bool:
+        return any(h in low for h in hints)
+
+    # --- kind (order is precedence; first match wins) ---
+    if ptype == "group":
+        kind = "group"
+    elif provider == "sonos":
+        kind = "speaker"                     # Sonos players are always speakers
+    elif "apple tv" in low:
+        kind = "tv"                          # Apple TV is a streaming box on a TV
+    elif _has(_DISPLAY_MODEL_HINTS):
+        kind = "display"                     # Nest Hub etc. — a screen you also cast to
+    elif _has(_COMPUTER_MODEL_HINTS):
+        kind = "computer"
+    elif _has(_SPEAKER_MODEL_HINTS):
+        kind = "speaker"                     # Home Mini and friends
+    elif "shairport" in low:
+        # A shairport-sync AirPlay RECEIVER — e.g. the touch panel made into a
+        # speaker (model reports "ShairportSync"). It's a dedicated audio sink,
+        # not a TV, so it must escape the AirPlay-is-a-TV catch-all below.
+        kind = "speaker"
+    elif _has(_TV_MODEL_HINTS):
+        kind = "tv"                          # OLED/QLED/Smart TV/Chromecast/Media Renderer
+    elif provider in ("chromecast", "airplay", "universal_player"):
+        # An AV endpoint (cast dongle / AirPlay-2 receiver / DLNA renderer) that
+        # is not a known speaker/computer is, in practice, a TV.
+        kind = "tv"
+    else:
+        kind = "speaker"
+
+    # --- kind_label (short, human; prefers a cleaned model) ---
+    m = _strip_parenthetical(model)
+    if provider == "sonos":
+        label = m if m.lower().startswith("sonos") else (f"Sonos {m}" if m else "Sonos")
+    elif "apple tv" in low:
+        label = "Apple TV"
+    elif kind == "group":
+        label = "Speaker group"
+    elif kind == "computer":
+        label = m or "Computer"
+    elif kind == "display":
+        label = _strip_google(m) or "Smart display"
+    elif kind == "speaker" and "shairport" in low:
+        label = "AirPlay speaker"            # not the raw "ShairportSync" model string
+    elif kind == "speaker":
+        label = _strip_google(m) or "Speaker"
+    elif kind == "tv":
+        if "chromecast" in low:
+            label = "Chromecast"             # clearer than "Google TV"
+        else:
+            brand = _clean_brand(manufacturer)
+            label = f"{brand} TV" if brand else (m or "TV")
+    else:
+        label = m or "Speaker"
+
+    return {"kind": kind, "kind_label": label}
+
+
+def _queue_item_art(item: dict) -> str:
+    """Resolve one queue item's cover to a real http(s) url.
+
+    MA hands a queue item its art as a single dict — {"type","path"} — and hangs
+    a richer `media_item` off it. Prefer the media_item's art: it's the same
+    i.ytimg maxres source `now-playing` reports, so the centre cover of the flow
+    matches the now-playing art instead of a lower-res yt3 thumb. Fall back to
+    the item's own thumb. `_first_image` understands both shapes and drops
+    anything non-http, so a missing cover degrades to the placeholder.
+    """
+    media_item = item.get("media_item")
+    art = _first_image(media_item) if isinstance(media_item, dict) else ""
+    return _hi_res_art(art or _first_image(item))
+
+
+def _queue_item_title(item: dict) -> str:
+    """The track title, WITHOUT the artist glued on.
+
+    A queue item's own `name` is a concatenation — live MA returns
+    "Livingston - Shadow" — while `media_item.name` carries the clean title
+    ("Shadow") and `media_item.artists[]` the artist. Splitting the composite on
+    " - " would be guesswork that breaks on any title containing a dash, so take
+    the clean field MA already gives us and fall back to `name` only when there
+    is no media_item (radio, some providers).
+    """
+    media_item = item.get("media_item")
+    if isinstance(media_item, dict):
+        name = media_item.get("name")
+        if isinstance(name, str) and name.strip():
+            return name
+    return item.get("name") or ""
+
+
+def _queue_item_artist(item: dict) -> str:
+    """The performing artist(s), flat.
+
+    Queue items have NO `artist` key at all — the panel read `it.artist` and got
+    undefined, so the artist line under every browsed cover was silently blank.
+    The real value is nested at media_item.artists[].name; resolve it here so the
+    panel keeps receiving a flat, already-resolved field instead of reaching into
+    MA's payload shape (the same reason `image` is resolved at this seam).
+    """
+    media_item = item.get("media_item")
+    if not isinstance(media_item, dict):
+        return ""
+    artists = media_item.get("artists") or []
+    names = [a.get("name", "").strip() for a in artists
+             if isinstance(a, dict) and isinstance(a.get("name"), str) and a.get("name").strip()]
+    if names:
+        return ", ".join(names)
+    artist = media_item.get("artist")
+    return artist.strip() if isinstance(artist, str) else ""
+
+
+def normalize_queue_items(items: list) -> list[dict]:
+    """MA queue items -> the flat shape the panel renders and can act on.
+
+    Everything the client needs is resolved HERE so it never has to know MA's
+    payload shape. In particular `index`: MA carries TWO index-ish fields and the
+    obvious one is a trap — live MA returns ``index: 0`` for EVERY item while
+    ``sort_index`` holds the real queue position. The panel sent ``index`` to
+    play-index, so tapping any cover in the Cover Flow restarted track 1.
+    """
+    out: list[dict] = []
+    for pos, item in enumerate(i for i in items if isinstance(i, dict)):
+        sort_index = item.get("sort_index")
+        out.append({
+            **item,
+            "index": sort_index if isinstance(sort_index, int) else pos,
+            "image": _queue_item_art(item),
+            "title": _queue_item_title(item),
+            "artist": _queue_item_artist(item),
+        })
+    return out
+
+
 async def _get_queue_items(queue_id: str, limit: int = 50) -> list | None:
     try:
         async with httpx.AsyncClient(timeout=5.0) as c:
@@ -86,7 +307,18 @@ async def _get_queue_items(queue_id: str, limit: int = 50) -> list | None:
             )
             if r.status_code == 200:
                 data = r.json()
-                return data if isinstance(data, list) else (data.get("items") or [])
+                items = data if isinstance(data, list) else (data.get("items") or [])
+                # Normalize art HERE or it reaches the panel as MA's raw dict and
+                # renders as "[object Object]" — this endpoint used to pass MA's
+                # payload through verbatim, which is how it dodged the shared
+                # extractor that already fixed the same bug on the other paths.
+                # `index` is NOT the queue position — live MA returns 0 for EVERY
+                # item while `sort_index` carries the real position. The panel
+                # sent `index` to play-index, so tapping any cover in the Cover
+                # Flow restarted track 1. Resolve the true position here (falling
+                # back to enumeration order) so the client never has to know which
+                # of MA's two index-ish fields to trust.
+                return normalize_queue_items(items)
     except Exception as exc:
         logger.debug("MA player_queues/items unreachable: %s", exc)
     return None
@@ -157,6 +389,11 @@ async def music_players() -> dict[str, Any]:
     players = await _get_players()
     if players is None:
         return {"available": False, "players": []}
+    # Enrich each player with flat, panel-ready device-type fields so the browser
+    # never parses a vendor model string. Existing fields are preserved.
+    for p in players:
+        if isinstance(p, dict):
+            p.update(resolve_player_kind(p))
     return {"available": True, "players": players}
 
 
@@ -244,8 +481,13 @@ async def set_preferred_player(payload: dict) -> dict[str, Any]:
     import music_service
     pid = str((payload or {}).get("player_id") or "")
     if pid:
+        # An empty player list means "cannot validate", NOT "no players".
+        # music_service._ma never raises — a transport failure returns None and
+        # get_players() turns that into []. Treating [] as an empty set rejected
+        # every id, so a brief MA outage locked the operator out of setting their
+        # own default speaker. Validate only when the list was actually visible.
         players = await music_service.get_players()
-        if not any(p.get("player_id") == pid for p in players):
+        if players and not any(p.get("player_id") == pid for p in players):
             return {"ok": False, "reason": "unknown player_id"}
     music_service.set_preferred_player_id(pid)
     return {"ok": True, "player_id": pid}
@@ -262,6 +504,84 @@ async def music_transfer(payload: dict) -> dict[str, Any]:
         return {"ok": False, "reason": "missing target_player_id"}
     ok = await music_service.transfer(target, source_player_id=source)
     return {"ok": ok, "target_player_id": target}
+
+
+@router.get("/groups")
+async def music_groups() -> dict[str, Any]:
+    """Multi-room grouping state: who is grouped with whom, and who CAN group.
+
+    Companion to `/transfer` (which moves playback to one speaker) — this is the
+    read side of spreading it across several. Every field is flat and already
+    resolved: the panel renders the picker straight from this and must never
+    reach into MA's payload shape.
+
+    {
+      "available": bool,          # false == MA unreachable, NOT "no speakers"
+      "players": [{
+        "player_id", "name",      # `name` is always non-empty
+        "provider",               # disambiguates two speakers of the same name
+        "available", "powered", "state",
+        "is_group_player":  bool, # a virtual group player, not a real speaker
+        "is_static_group":  bool, # provider-fixed membership — not editable
+        "can_lead":         bool, # supports set_members => may be a target
+        "can_group_with":   [player_id, ...],   # resolved real ids only
+        "role":  "solo" | "leader" | "follower",
+        "grouped":          bool,
+        "leader_id":        str,  # "" when solo; the player that OWNS THE QUEUE
+        "group_member_ids": [player_id, ...]    # whole set, leader first
+      }],
+      "groups": [{"leader_id", "leader_name", "is_virtual_leader", "is_static",
+                  "member_ids": [...], "member_names": [...]}]
+    }
+
+    Unavailable players are still listed (with `available: false`) so an offline
+    or flapping speaker never silently disappears from the picker.
+    """
+    import music_service
+    view = await music_service.get_speaker_groups()
+    if view is None:
+        return {"available": False, "players": [], "groups": []}
+    return {"available": True, **view}
+
+
+@router.post("/group")
+async def music_group(payload: dict) -> dict[str, Any]:
+    """Join and/or unjoin speakers to a target in one atomic call.
+
+    body: {target_player_id, add: [player_id, ...], remove: [player_id, ...]}
+    -> {ok, target_player_id, added, removed} | {ok: false, reason}
+
+    `target_player_id` becomes (or stays) the group LEADER — the player that
+    owns the queue. Both lists are optional but at least one must be non-empty.
+    Taking them together mirrors MA's own `set_members` and lets a multi-select
+    picker apply its whole selection at once, instead of firing one call per
+    speaker and racing them against each other.
+    """
+    import music_service
+    b = payload or {}
+    add = b.get("add") or []
+    remove = b.get("remove") or []
+    if not isinstance(add, list) or not isinstance(remove, list):
+        return {"ok": False, "reason": "add and remove must be lists"}
+    return await music_service.group_players(
+        str(b.get("target_player_id") or ""), add=add, remove=remove,
+    )
+
+
+@router.post("/ungroup")
+async def music_ungroup(payload: dict) -> dict[str, Any]:
+    """Remove one speaker from whatever group it is in.
+
+    body: {player_id} -> {ok, player_id} | {ok: false, reason}
+
+    Separate from `/group` because the caller does not know which target to
+    remove FROM: a sync member leaves its leader, a permanent-group member
+    leaves its group player, and a LEADER dissolves its group entirely. MA owns
+    that disambiguation, so this stays a one-argument call rather than making
+    the panel work out the topology first.
+    """
+    import music_service
+    return await music_service.ungroup_player(str((payload or {}).get("player_id") or ""))
 
 
 @router.post("/play")
@@ -384,6 +704,14 @@ async def music_favorite(payload: dict) -> dict[str, Any]:
     """Favorite / add-to-library a media item. body: {uri}."""
     import music_service
     return {"ok": await music_service.favorite_add(str((payload or {}).get("uri") or ""))}
+
+
+@router.post("/unfavorite")
+async def music_unfavorite(payload: dict) -> dict[str, Any]:
+    """Un-favorite a media item. body: {uri}. The other half of /favorite —
+    without it the panel's heart could only ever be turned ON."""
+    import music_service
+    return {"ok": await music_service.favorite_remove(str((payload or {}).get("uri") or ""))}
 
 
 @router.get("/recommendations")

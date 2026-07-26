@@ -19,6 +19,8 @@ from intent_router import (
     execute_intent,
 )
 
+pytestmark = pytest.mark.ci_safe
+
 USER = "demo_offer_reply_user"  # a DEMO user — never a real person
 
 _OFFER = {

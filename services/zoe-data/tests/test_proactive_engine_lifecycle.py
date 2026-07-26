@@ -4,6 +4,8 @@ import pytest
 
 import proactive.engine as engine
 
+pytestmark = pytest.mark.ci_safe
+
 
 @pytest.fixture
 def engine_task_globals():

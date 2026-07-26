@@ -9,6 +9,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from routers import weather
 
+pytestmark = pytest.mark.ci_safe
+
 
 @pytest.mark.asyncio
 async def test_openmeteo_forecast_filters_hourly_and_today_in_provider_timezone(monkeypatch):

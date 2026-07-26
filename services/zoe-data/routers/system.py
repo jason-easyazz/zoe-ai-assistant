@@ -14,6 +14,7 @@ from agent_safety import SSRFBlocked, assert_panel_host, is_allowed_panel_host
 from auth import (
     get_current_user,
     require_admin,
+    require_signed_in,
     get_a2a_caller,
     require_intent_dispatch_auth,
     require_internal_token,
@@ -741,10 +742,27 @@ def _record_memory_loop(loop: str, results) -> dict:
         from memory_metrics import record_consolidation_run, record_digest_run
 
         recorder = record_digest_run if loop == "digest" else record_consolidation_run
-        return recorder(results)
+        summary = recorder(results)
+        # A loop that runs on schedule and does nothing must not read as
+        # healthy. Escalate to WARNING once the zero-effect streak trips its
+        # threshold, so the durable memory-loop log carries the same verdict
+        # the status endpoint shows.
+        if summary.get("zero_effect_alert"):
+            logger.warning(
+                "memory_%s: ZERO-EFFECT ALERT — %d consecutive runs produced no "
+                "effects (threshold %s). The loop is running but doing nothing.",
+                loop, summary.get("zero_effect_streak"), summary.get("zero_effect_alert_after"),
+            )
+        return summary
     except Exception as _rec_exc:  # pragma: no cover - metrics must never break the loop
         logger.warning("memory_%s: metrics record failed (non-fatal): %s", loop, _rec_exc)
-        return {"users": len(results) if results is not None else 0, "effects": {}}
+        return {
+            "users": len(results) if results is not None else 0,
+            "effects": {},
+            "effect_count": None,
+            "zero_effect_streak": None,
+            "zero_effect_alert": False,
+        }
 
 
 async def _memory_digest_loop():
@@ -765,8 +783,10 @@ async def _memory_digest_loop():
             results = await run_digest_for_all_active_users()
             summary = _record_memory_loop("digest", results)
             logger.info(
-                "memory_digest: nightly run complete — %d users processed, effects=%s",
-                summary["users"], summary["effects"],
+                "memory_digest: nightly run complete — %d users processed, "
+                "effect_count=%s, effects=%s, zero_effect_streak=%s",
+                summary["users"], summary.get("effect_count"), summary["effects"],
+                summary.get("zero_effect_streak"),
             )
         except Exception as exc:
             logger.error("memory_digest: nightly loop error: %s", exc, exc_info=True)
@@ -825,8 +845,10 @@ async def _memory_consolidation_loop():
             results = await run_weekly_consolidation_for_all()
             summary = _record_memory_loop("consolidation", results)
             logger.info(
-                "memory_consolidation: weekly run complete — %d users processed, effects=%s",
-                summary["users"], summary["effects"],
+                "memory_consolidation: weekly run complete — %d users processed, "
+                "effect_count=%s, effects=%s, zero_effect_streak=%s",
+                summary["users"], summary.get("effect_count"), summary["effects"],
+                summary.get("zero_effect_streak"),
             )
         except Exception as exc:
             logger.error("memory_consolidation: loop error: %s", exc, exc_info=True)
@@ -843,15 +865,24 @@ def start_memory_consolidation_background():
 
 @router.get("/memory-loops/status")
 async def get_memory_loops_status(user: dict = Depends(require_admin)):
-    """Last-run + staleness for the nightly digest and weekly consolidation loops.
+    """Last-run, staleness AND zero-effect health for the two memory loops.
 
-    ``stale: true`` (including a loop that never ran this process) is the signal
-    a nightly/Sunday pass was missed — the gap that let the digest break
-    silently for weeks. ``age_seconds`` is the age of the last successful run.
+    Two independent unhealthy signals:
+
+    * ``stale: true`` (including a loop that never ran this process) — a
+      nightly/Sunday pass was MISSED.
+    * ``zero_effect_alert: true`` — the loop ran on schedule and did NOTHING,
+      ``zero_effect_streak`` times in a row. This is the signal that was
+      missing when the digest processed zero users for ten consecutive nights
+      while logging "nightly run complete"; staleness could never catch it
+      because the runs were all on time.
+
+    Top-level ``healthy`` + ``alerts`` roll both up so a human glancing at this
+    endpoint sees "ran 10 times, did nothing 10 times" instead of a green tick.
     """
-    from memory_metrics import memory_loop_status
+    from memory_metrics import memory_loop_health
 
-    return {"loops": memory_loop_status()}
+    return memory_loop_health()
 
 
 @router.get("/memory-reconcile/failopen-status")
@@ -1536,14 +1567,29 @@ async def get_peer_agent_card(name: str):
         raise HTTPException(status_code=404, detail=f"Unknown peer agent: {name}")
 
     from main import _RUNTIME_HEALTH  # type: ignore[import]
-    from skill_discovery import parse_openclaw_skills, parse_hermes_skills  # type: ignore[import]
 
-    if name == "openclaw":
-        skills = parse_openclaw_skills()
-    elif name == "hermes":
-        skills = parse_hermes_skills()
-    else:
-        skills = [{"id": s, "name": s, "description": s} for s in agent_info.get("skills", [])]
+    # Skills come from the registry for every agent. The openclaw/hermes cases
+    # used to call skill_discovery.py, which was deleted: it parsed the two
+    # skill directories into a catalogue whose only consumers were this field
+    # and an unread markdown file, and nothing dispatched on it.
+    #
+    # Entries keep the full A2A v1.0 AgentSkill shape so card consumers can
+    # still negotiate modes and distinguish capabilities. Prose comes from the
+    # registry's `skill_descriptions` map (a parallel map rather than inlined
+    # objects, because four readers treat `skills:` as bare strings — e.g.
+    # zoe_agent_registry.py does ", ".join(...) on it). Falls back to the id
+    # only when a description is genuinely missing.
+    descriptions = agent_info.get("skill_descriptions") or {}
+    skills = [
+        {
+            "id": s,
+            "name": s,
+            "description": descriptions.get(s, s),
+            "inputModes": ["text"],
+            "outputModes": ["text"],
+        }
+        for s in agent_info.get("skills", [])
+    ]
 
     return {
         "a2aVersion": "1.0",
@@ -1558,23 +1604,6 @@ async def get_peer_agent_card(name: str):
     }
 
 
-@_agent_card_router.post("/peers/{name}/skills/reload")
-async def reload_peer_skills(name: str, user: dict = Depends(require_admin)):
-    """Admin-only: force-flush the skill discovery cache for a peer agent."""
-    from skill_discovery import invalidate_openclaw_cache, invalidate_hermes_cache  # type: ignore[import]
-
-    if name == "openclaw":
-        invalidate_openclaw_cache()
-        from skill_discovery import parse_openclaw_skills  # type: ignore[import]
-        skills = parse_openclaw_skills()
-    elif name == "hermes":
-        invalidate_hermes_cache()
-        from skill_discovery import parse_hermes_skills  # type: ignore[import]
-        skills = parse_hermes_skills()
-    else:
-        raise HTTPException(status_code=404, detail=f"Unknown peer agent: {name}")
-
-    return {"ok": True, "agent": name, "skill_count": len(skills)}
 
 
 # ── Cost tracking + LLM stats ────────────────────────────────────────────────
@@ -2203,8 +2232,16 @@ _DEFAULT_DISPLAY_PREFS = {
     "idle_enabled": True,
     "idle_seconds": 120,
     "idle_brightness": 30,
-    "off_enabled": True,
+    # The panel must never power the screen fully OFF — it drifts to a DIMMED
+    # sleep screen instead (idle_brightness + the estate's 'sleep' surface).
+    # off_enabled stays a togglable pref, but defaults OFF so the screen stays a
+    # dim, visible clock rather than going black.
+    "off_enabled": False,
     "off_seconds": 900,
+    # Estate idle→dimmed-sleep drift (the touch UI reads these): after
+    # sleep_seconds of no touch/voice the panel shows the dim 'sleep' clock.
+    "sleep_enabled": True,
+    "sleep_seconds": 180,
 }
 
 _DEFAULT_PI_HOST = os.environ.get("ZOE_PI_HOST", "192.168.1.61")
@@ -2247,6 +2284,34 @@ async def get_display_preferences(
         "pi_host": pi_host,
         "preferences": prefs,
     }
+
+
+@router.get("/panel/idle-logout")
+async def get_panel_idle_logout():
+    """The panel idle-logout window in seconds (no interaction → session lapses).
+
+    Deliberately unauthenticated so the panel settings screen can display it
+    without a token — it's not sensitive.
+    """
+    from routers.voice_tts import _panel_idle_logout_s
+    return {"seconds": await _panel_idle_logout_s()}
+
+
+@router.put("/panel/idle-logout")
+async def put_panel_idle_logout(
+    request: Request,
+    user: dict = Depends(require_signed_in),
+):
+    """Set the panel idle-logout window (seconds, clamped 0..24h). Requires a
+    signed-in, non-guest user — it governs how long a login stays trusted."""
+    body = await request.json()
+    try:
+        seconds = int((body or {}).get("seconds"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="seconds must be an integer")
+    from routers.voice_tts import _set_panel_idle_logout_s
+    saved = await _set_panel_idle_logout_s(seconds)
+    return {"seconds": saved}
 
 
 async def _proxy_reload_to_pi(pi_host: str) -> None:
@@ -2310,8 +2375,9 @@ async def put_display_preferences(
                 device_id, enabled, day_brightness,
                 night_enabled, night_start, night_end, night_brightness,
                 idle_enabled, idle_seconds, idle_brightness,
-                off_enabled, off_seconds, pi_host, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                off_enabled, off_seconds,
+                sleep_enabled, sleep_seconds, pi_host, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
            ON CONFLICT(device_id) DO UPDATE SET
                 enabled=excluded.enabled,
                 day_brightness=excluded.day_brightness,
@@ -2324,6 +2390,8 @@ async def put_display_preferences(
                 idle_brightness=excluded.idle_brightness,
                 off_enabled=excluded.off_enabled,
                 off_seconds=excluded.off_seconds,
+                sleep_enabled=excluded.sleep_enabled,
+                sleep_seconds=excluded.sleep_seconds,
                 pi_host=excluded.pi_host,
                 updated_at=NOW()""",
         (
@@ -2339,6 +2407,8 @@ async def put_display_preferences(
             int(merged["idle_brightness"]),
             1 if merged["off_enabled"] else 0,
             int(merged["off_seconds"]),
+            1 if merged["sleep_enabled"] else 0,
+            int(merged["sleep_seconds"]),
             pi_host,
         ),
     )

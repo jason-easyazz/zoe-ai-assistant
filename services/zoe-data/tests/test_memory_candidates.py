@@ -1,4 +1,7 @@
+import pytest
 from routers.chat import _extract_memory_candidates
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_extracts_preference_signal():

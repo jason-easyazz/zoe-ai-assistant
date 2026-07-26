@@ -598,6 +598,10 @@
     </div>
 
     <script>
+        // Shown whenever zoe-auth cannot be reached. Sign-in must fail closed:
+        // no session is ever created on the client.
+        const AUTH_UNAVAILABLE_MESSAGE = "Zoe's sign-in service is unavailable — try again in a moment";
+
         class ZoeAuth {
             constructor() {
                 // Use empty base - endpoints already include /api/auth prefix
@@ -887,30 +891,12 @@
                         this.showError(data.error_message || 'Login failed');
                     }
                 } catch (error) {
-                    console.warn('Auth service unavailable, trying demo login');
-                    // Demo/offline login for development
-                    if ((username === 'admin' && password === 'admin') || 
-                        (username === 'user' && password === 'user') ||
-                        (username === 'Admin' && password === 'demo') ||
-                        (username === 'User' && password === 'demo')) {
-                        
-                        const demoSession = {
-                            success: true,
-                            user_id: username.toLowerCase(),
-                            username: username,
-                            role: username.toLowerCase() === 'admin' ? 'admin' : 'user',
-                            session_id: 'demo_' + Date.now(),
-                            session_type: 'password',
-                            created_at: new Date().toISOString(),
-                            expires_at: new Date(Date.now() + 24*60*60*1000).toISOString(),
-                            demo_mode: true
-                        };
-                        
-                        this.handleSuccessfulLogin(demoSession);
-                        this.showInfo('Demo mode - auth service offline');
-                    } else {
-                        this.showError('Auth service unavailable. Try admin/admin or user/user for demo.');
-                    }
+                    // Fail closed: never fabricate a session client-side when
+                    // zoe-auth is unreachable. isAuthenticated() in js/auth.js
+                    // trusts localStorage, so a fabricated session would be a
+                    // full authentication bypass.
+                    console.error('Auth service unreachable:', error);
+                    this.showError(AUTH_UNAVAILABLE_MESSAGE);
                 } finally {
                     this.setLoading(btn, false);
                 }
@@ -1061,8 +1047,10 @@
                 localStorage.setItem('zoe_session', JSON.stringify(data));
 
                 // Eagerly register the authenticated panel session in zoe-data so the
-                // voice scope-gate can trust this identity before the dashboard page
-                // loads and touch-ui-executor.js calls bindPanel().  Without this,
+                // voice scope-gate can trust this identity.  (This used to add
+                // "before the dashboard page loads and touch-ui-executor.js calls
+                // bindPanel()" -- the executor no longer loads on any desktop page,
+                // so this is the only binder on this path.)  Without this,
                 // the first voice command after login hits a stale/missing
                 // ui_panel_sessions row and triggers a redundant PIN challenge.
                 this.bindPanelSession(data.session_id);
@@ -1190,44 +1178,64 @@
             }
 
             showPasswordSetup(username) {
+                // `username` comes from the ?setup= URL parameter, i.e. it is
+                // attacker-controlled. It is built into the DOM with
+                // createElement/.value and never via innerHTML, so it cannot
+                // break out into markup (the CSP here allows unsafe-inline,
+                // so an innerHTML sink would be directly exploitable).
+                const el = (tag, props, children) => {
+                    const node = document.createElement(tag);
+                    Object.assign(node, props || {});
+                    (children || []).forEach(c => node.appendChild(c));
+                    return node;
+                };
+                const field = (labelText, input, hint) => {
+                    const kids = [el('label', { className: 'form-label', textContent: labelText }), input];
+                    if (hint) kids.push(hint);
+                    return el('div', { className: 'form-group' }, kids);
+                };
+
+                const usernameInput = el('input', {
+                    type: 'text', className: 'form-input', disabled: true
+                });
+                // Assigned through the DOM API - not interpolated into markup.
+                usernameInput.value = username;
+
+                const newPassword = el('input', {
+                    type: 'password', id: 'newPassword', className: 'form-input',
+                    placeholder: 'Enter new password', required: true, minLength: 8
+                });
+                const confirmPassword = el('input', {
+                    type: 'password', id: 'confirmPassword', className: 'form-input',
+                    placeholder: 'Confirm your password', required: true, minLength: 8
+                });
+                const hint = el('small', { textContent: 'Minimum 8 characters' });
+                hint.setAttribute('style', 'color: #666; font-size: 12px;');
+
+                const form = el('form', { id: 'passwordSetupForm', className: 'auth-form active' }, [
+                    field('Username', usernameInput),
+                    field('New Password', newPassword, hint),
+                    field('Confirm Password', confirmPassword),
+                    el('button', { type: 'submit', className: 'auth-btn', id: 'setupPasswordBtn' }, [
+                        el('span', { className: 'btn-text', textContent: 'Set Password' })
+                    ])
+                ]);
+
+                const logo = el('div', { className: 'zoe-logo' }, [
+                    el('div', { className: 'orb', textContent: 'Z' }),
+                    el('div', { className: 'title', textContent: 'Set Your Password' }),
+                    el('div', { className: 'subtitle', textContent: 'Welcome! Please create your password to continue.' })
+                ]);
+
+                const setupMessage = el('div', { id: 'setupMessage', className: 'message-box' });
+                setupMessage.style.display = 'none';
+
                 // Hide login form, show password setup
                 const container = document.querySelector('.auth-container');
-                container.innerHTML = `
-                    <div class="zoe-logo">
-                        <div class="orb">Z</div>
-                        <div class="title">Set Your Password</div>
-                        <div class="subtitle">Welcome! Please create your password to continue.</div>
-                    </div>
-
-                    <div id="setupMessage" class="message-box" style="display: none;"></div>
-
-                    <form id="passwordSetupForm" class="auth-form active">
-                        <div class="form-group">
-                            <label class="form-label">Username</label>
-                            <input type="text" class="form-input" value="${username}" disabled>
-                        </div>
-
-                        <div class="form-group">
-                            <label class="form-label">New Password</label>
-                            <input type="password" id="newPassword" class="form-input" 
-                                   placeholder="Enter new password" required minlength="8">
-                            <small style="color: #666; font-size: 12px;">Minimum 8 characters</small>
-                        </div>
-
-                        <div class="form-group">
-                            <label class="form-label">Confirm Password</label>
-                            <input type="password" id="confirmPassword" class="form-input" 
-                                   placeholder="Confirm your password" required minlength="8">
-                        </div>
-
-                        <button type="submit" class="auth-btn" id="setupPasswordBtn">
-                            <span class="btn-text">Set Password</span>
-                        </button>
-                    </form>
-                `;
+                container.replaceChildren(logo, setupMessage, form);
 
                 // Add form submission handler
-                document.getElementById('passwordSetupForm').addEventListener('submit', async (e) => {
+                form.addEventListener('submit', async (e) => {
                     e.preventDefault();
                     await this.handlePasswordSetup(username);
                 });

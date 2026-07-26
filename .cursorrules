@@ -36,7 +36,8 @@
 - services/zoe-ui/dist/js/widgets/core/**/*.js (ALL widget files)
 - services/zoe-ui/dist/components/**/*.html (ALL components)
 - services/zoe-ui/dist/*.html (ALL HTML pages)
-- services/zoe-data/main.py, database.py, auth.py, openclaw_ws.py, openclaw_maintenance.py, intent_router.py, mcp_server.py, routers/chat.py, routers/system.py
+- services/zoe-data/main.py, database.py, auth.py, intent_router.py, mcp_server.py, routers/chat.py, routers/system.py
+- (openclaw_ws.py + openclaw_maintenance.py are NOT critical anymore — OpenClaw is being fully retired, operator decision 2026-07-22; they are gated deletion targets per docs/architecture/multica-executor-migration.md)
 - services/zoe-auth/main.py
 - docker-compose.yml, .env, services/zoe-ui/nginx.conf
 
@@ -66,7 +67,7 @@
 ## 🏛️ ARCHITECTURE RULES
 
 ### Single Source of Truth:
-- Production web + chat API: **services/zoe-data/** (host uvicorn :8000; OpenClaw CLI bridge, AG-UI SSE, intent fast path). See `docker-compose.yml` header comments.
+- Production web + chat API: **services/zoe-data/** (host uvicorn :8000; AG-UI SSE, intent fast path; still contains the retiring OpenClaw bridge — do not extend it). See `docker-compose.yml` header comments.
 - **ONLY ONE production chat router:** services/zoe-data/routers/chat.py
 - **services/zoe-core/** is the wired default `core` brain fallback (Pi on local Gemma, `pi --mode rpc`) — extend it, do NOT retire it. The truly-retired thing is the OLD Docker/RouteLLM-MemAgent monolith (git history only).
 - NEVER create chat_v2.py, chat_new.py, chat_optimized.py
@@ -74,17 +75,17 @@
 - Backup files must use git, not file copying
 
 ### Intelligent Systems (production zoe-data):
-- Intent fast path + OpenClaw agent path: **services/zoe-data/routers/chat.py** (with intent_router, openclaw_ws, ag_ui_stream)
+- Intent fast path + agent path: **services/zoe-data/routers/chat.py** (with intent_router, ag_ui_stream; the openclaw_ws lane is a retirement target)
 - Family / MCP tools: **services/zoe-data/mcp_server.py**
 - **services/zoe-core** is the wired default `core` brain (Pi on Gemma 4) — the fallback lane below the live `flue` sidecar; extend, don't retire. Only the OLD Docker/RouteLLM/MemAgent monolith is retired (git history only)
-- NEVER hardcode brittle command detection in **production** chat.py for NLU; use intent_router patterns + OpenClaw where appropriate
+- NEVER hardcode brittle command detection in **production** chat.py for NLU; use intent_router patterns or Zoe Agent (OpenClaw/Hermes are retirement targets — never destinations)
 - Let specialized systems do their jobs
 
 ### No Hardcoding:
 - NO "if/else" command detection in **production chat router** for general NLU
 - Use LLM + Agent system for natural language understanding
 - Example WRONG: if "add" in message and "shopping" in message: return "Added"
-- Example RIGHT: route through intent_router / OpenClaw agent per architecture docs
+- Example RIGHT: route through intent_router / Zoe Agent per architecture docs
 
 ## Security Rules
 - Never hardcode API keys, passwords, or secrets

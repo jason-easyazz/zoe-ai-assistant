@@ -1,6 +1,9 @@
 """Regression tests for Multica ticket widget copy."""
 
+import pytest
 from pathlib import Path
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_multica_widget_uses_ticket_language():

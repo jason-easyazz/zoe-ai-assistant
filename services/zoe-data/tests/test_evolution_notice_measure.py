@@ -8,6 +8,8 @@ import pytest
 import evolution_notice
 from zoe_evolution_proposal_adapter import dump_legacy_evolution_proposal_contract, dump_mcp_evolution_proposal_contract
 
+pytestmark = pytest.mark.ci_safe
+
 
 class _Db:
     def __init__(self, rows):

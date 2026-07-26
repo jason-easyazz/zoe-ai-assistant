@@ -1,9 +1,12 @@
 """Tests for the harness-side closeout merge runner (deterministic closeout)."""
 
+import pytest
 import json
 
 import pipeline_closeout as pc
 from pipeline_closeout import CloseoutResult, _pr_number
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_pr_number_parses():

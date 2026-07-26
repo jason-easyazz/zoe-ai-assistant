@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 import json
 import sys
 from pathlib import Path
@@ -15,6 +16,8 @@ if str(ROOT) not in sys.path:
 from routers import calendar as calendar_router
 from routers import reminders as reminders_router
 from routers import transactions as transactions_router
+
+pytestmark = pytest.mark.ci_safe
 
 
 class FakeCursor:

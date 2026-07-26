@@ -13,6 +13,8 @@ from fastapi import Response
 import smart_home_setup
 from routers.smart_home_setup import setup_info
 
+pytestmark = pytest.mark.ci_safe
+
 
 def test_token_round_trip_and_single_use():
     tok = smart_home_setup.mint("user-1")["token"]

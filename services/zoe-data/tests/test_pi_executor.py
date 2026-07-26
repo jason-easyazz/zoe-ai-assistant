@@ -10,6 +10,8 @@ import pytest
 
 import pi_executor as pe
 
+pytestmark = pytest.mark.ci_safe
+
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 

@@ -149,6 +149,11 @@ async def fire_notification(
         context=ctx,
     )
 
+    # P-W2.2 spoken delivery — ADDITIVE, never a replacement: the push below is
+    # always sent regardless of what happens in here, and the adapter never
+    # raises (any spoken-path failure must not block the push).
+    await _maybe_speak_notification(user_id=user_id, message=message, trigger_type=trigger_type)
+
     deep_link = f"/chat.html?p={pid}"
     subscribers_reached = await _send_push(user_id=user_id, message=message, extra={"url": deep_link})
     in_app_fallback_ok = False
@@ -195,6 +200,94 @@ async def fire_notification(
                 pending_id,
                 user_id,
             )
+
+
+def _spoken_enabled() -> bool:
+    """P-W2.2 flag: ZOE_PROACTIVE_SPOKEN, default OFF. Read at call time so an
+    .env flip + restart (or a test) needs no module reload."""
+    return os.environ.get("ZOE_PROACTIVE_SPOKEN", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _spoken_triggers() -> set[str]:
+    """Comma-separated trigger allowlist (ZOE_PROACTIVE_SPOKEN_TRIGGERS),
+    default morning_checkin only."""
+    raw = os.environ.get("ZOE_PROACTIVE_SPOKEN_TRIGGERS", "morning_checkin")
+    return {t.strip() for t in raw.split(",") if t.strip()}
+
+
+async def _maybe_speak_notification(user_id: str, message: str, trigger_type: str) -> None:
+    """P-W2.2/P-W2.3 spoken-delivery adapter: if the flag is ON, the trigger is
+    allowlisted, and the user has a fresh foreground panel session
+    (proactive.presence.panel_presence), deliver the composed message to BOTH
+    spoken lanes:
+
+      1. a ``panel_announce`` UI action — the kiosk toast (+ best-effort
+         browser TTS, honestly reported in its ack since P-W2.3);
+      2. a row in the daemon announcement queue (``voice_announce``) — the
+         lane that actually reaches the SPEAKER: the Pi voice daemon polls
+         ``GET /api/voice/announcements`` with its device token and plays the
+         text through its proven TTS/playback path (P-W2.3; the browser lane
+         alone 401'd silently — kiosk guests can't call /api/voice/speak).
+
+    Contract (binding, see services/zoe-data/AGENTS.md):
+      * ADDITIVE — the push in fire_notification is always still sent; this
+        never replaces it.
+      * NEVER raises — any failure in EITHER lane is logged (the
+        PROACTIVE_SPOKEN line, with per-lane outcome) and swallowed so the
+        mandatory push path — and the other lane — is untouched.
+      * Flag OFF is byte-identical behaviour: immediate return, no DB access,
+        no imports.
+    """
+    try:
+        if not _spoken_enabled():
+            return
+        if trigger_type not in _spoken_triggers():
+            return
+        # Deferred imports: keep flag-OFF free of them and avoid import cycles
+        # (ui_orchestrator pulls in push.broadcaster, same reason _send_push
+        # defers routers.push).
+        import proactive.presence as _presence
+        panel_id = await _presence.panel_presence(user_id)
+        if not panel_id:
+            log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=none outcome=absent",
+                     trigger_type, user_id)
+            return
+        # Lane 1: kiosk toast (panel_announce). Guarded separately so a
+        # failure here never blocks the daemon queue below (or vice versa).
+        panel_outcome = "enqueued"
+        try:
+            import ui_orchestrator as _ui_orchestrator
+            async with _get_compat_db() as db:
+                await _ui_orchestrator.enqueue_ui_action(
+                    db,
+                    user_id=user_id,
+                    action_type="panel_announce",
+                    payload={"message": message},
+                    requested_by="proactive",
+                    panel_id=panel_id,
+                )
+        except Exception as exc:
+            panel_outcome = f"error:{exc}"
+        # Lane 2: the daemon speaker queue (P-W2.3) — on its own pooled
+        # connection so a failed lane-1 transaction can't poison this insert.
+        daemon_outcome = "queued"
+        try:
+            import voice_announce as _voice_announce
+            async with _get_compat_db() as db:
+                await _voice_announce.enqueue_announcement(
+                    db,
+                    user_id=user_id,
+                    panel_id=panel_id,
+                    message=message,
+                    trigger_type=trigger_type,
+                )
+        except Exception as exc:
+            daemon_outcome = f"error:{exc}"
+        log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=%s outcome=%s daemon_queue=%s",
+                 trigger_type, user_id, panel_id, panel_outcome, daemon_outcome)
+    except Exception as exc:
+        log.warning("PROACTIVE_SPOKEN trigger=%s user=%s outcome=error err=%s",
+                    trigger_type, user_id, exc)
 
 
 async def _send_push(user_id: str, message: str, extra: dict | None = None) -> int:

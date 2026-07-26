@@ -27,6 +27,8 @@ import zoe_memory_compose as compose_mod
 from memory_service import MemoryRef
 from routers.memories import router as memories_router
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _ref(mem_id: str, text: str, **meta) -> MemoryRef:
     score = meta.pop("score", 0.0)

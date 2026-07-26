@@ -23,6 +23,42 @@ Environment=KOKORO_SIDECAR_PORT=10201
 # back to CPU on its own if CUDA cannot load.
 Environment=ZOE_KOKORO_BACKEND=pytorch
 Environment=LD_LIBRARY_PATH=%h/.local/lib:/usr/local/cuda-12.6/lib64:/usr/lib/aarch64-linux-gnu
+
+# ── Keep the TTS engine OUT OF SWAP ──────────────────────────────────────────
+# Measured 2026-07-18 on the live Orin: this unit carried NO memory directives,
+# so its cgroup `memory.low` was 0 — zero reclaim protection — and 1,489 MB of
+# the engine had been paged to disk. That is a mechanism for "voice in pieces":
+# the first synth after idle faults ~1.5 GB back from disk while the
+# sentence-streamed pipe starves, which presents exactly like the CPU-backend
+# starvation the ZOE_KOKORO_BACKEND note above already guards against.
+#
+# MemorySwapMax=0 is the load-bearing line: the voice path must never be paged
+# out. It is safe here because this sidecar is BOUNDED (it does not grow with
+# load) and MemoryMax gives a hard ceiling, so refusing swap cannot turn into
+# unbounded pressure. MemoryLow keeps the kernel reclaiming elsewhere first —
+# the brain uses the same mechanism at 6G.
+#
+# MemoryLow=3G is sized from MEASUREMENT, not from the "~2.3 GB" figure in the
+# note above. On the live box after 20 real voice turns: memory.current 2,309 MB,
+# VmHWM 2,465 MB. A 2G floor would have left ~260-420 MB of the working set
+# OUTSIDE the protected zone — MemorySwapMax=0 stops that remainder being
+# swapped, but the kernel may still RECLAIM it, and on unified-memory Tegra those
+# are GPU-accessible pages. 3G covers the measured peak with headroom for cache
+# warmth while staying under MemoryMax. (Greptile review, PR #1409.)
+MemorySwapMax=0
+MemoryLow=3G
+MemoryMax=4G
+
+# NOTE — do NOT add Nice=-N / OOMScoreAdjust=-N here. Verified on this box
+# 2026-07-18: a --user unit CANNOT raise priority (`ulimit -e` is 0). systemd
+# accepts the directive, the service starts, status is success — and the value
+# is SILENTLY DROPPED (measured: Nice=-5 applied as 0, OOMScoreAdjust=-500
+# applied as 0; Nice=10 applied correctly as 10). Writing them would document a
+# guarantee that does not exist. Priority ordering is achieved the other way
+# round: dev tooling DE-prioritises itself (serena-mcp.service runs Nice=10 /
+# OOMScoreAdjust=500), which does work because positive values need no
+# privilege.
+
 Restart=always
 RestartSec=10
 StandardOutput=journal

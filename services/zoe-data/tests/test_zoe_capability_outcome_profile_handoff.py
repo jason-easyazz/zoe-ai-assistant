@@ -21,6 +21,8 @@ from zoe_evolution_proposal import (
 )
 from zoe_observation_trace import ObservationOutcome, ObservationTrace, ObservationTraceType
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _source_text():
     return (Path(__file__).parent.parent / "zoe_capability_profile.py").read_text(encoding="utf-8")

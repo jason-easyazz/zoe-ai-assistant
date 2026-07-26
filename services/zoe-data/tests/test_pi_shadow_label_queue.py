@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _load_module(monkeypatch):
     path = Path(__file__).resolve().parents[3] / "scripts" / "maintenance" / "pi_shadow_label_queue.py"

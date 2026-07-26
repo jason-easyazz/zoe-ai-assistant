@@ -1,0 +1,2 @@
+# Screenshots are build artifacts — `node shoot.js` regenerates them (~350KB each).
+shot_*.png

@@ -4,7 +4,10 @@ The Pi brain is a separate subprocess that never sees `voice_mode`, and SOUL has
 voice rule — so the directive has to be injected into the composed message. Without
 it the panel path got no brevity signal and over-answered.
 """
+import pytest
 import zoe_core_client as zc
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_voice_mode_injects_brevity_directive():

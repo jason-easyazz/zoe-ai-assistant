@@ -9,6 +9,8 @@ import pytest
 
 import worktree_bootstrap as wb
 
+pytestmark = pytest.mark.ci_safe
+
 
 @pytest.fixture
 def git_repo(tmp_path, monkeypatch):
@@ -202,50 +204,6 @@ def test_ensure_worktree_raises_when_repo_not_git(tmp_path, monkeypatch):
         wb.ensure_worktree("t_badrepo")
 
 
-def test_pin_kanban_workspace_updates_task_row(tmp_path, monkeypatch):
-    import sqlite3
-
-    db = tmp_path / "kanban.db"
-    conn = sqlite3.connect(str(db))
-    conn.execute(
-        """
-        CREATE TABLE tasks (
-            id TEXT PRIMARY KEY,
-            workspace_kind TEXT,
-            workspace_path TEXT
-        )
-        """
-    )
-    conn.execute(
-        "INSERT INTO tasks (id, workspace_kind, workspace_path) VALUES (?, ?, ?)",
-        ("t_pin", "worktree", None),
-    )
-    conn.commit()
-    conn.close()
-
-    monkeypatch.setenv("ZOE_KANBAN_DB_PATH", str(db))
-    wt = tmp_path / "worktrees" / "t_pin"
-    wt.mkdir(parents=True)
-
-    pinned = wb.pin_kanban_workspace("t_pin", wt)
-    assert pinned == wt.resolve()
-
-    conn = sqlite3.connect(str(db))
-    row = conn.execute(
-        "SELECT workspace_path FROM tasks WHERE id = ?", ("t_pin",)
-    ).fetchone()
-    conn.close()
-    assert row[0] == str(wt.resolve())
-
-
-def test_kanban_db_path_default_board(monkeypatch):
-    monkeypatch.delenv("ZOE_KANBAN_DB_PATH", raising=False)
-    monkeypatch.delenv("ZOE_KANBAN_BOARD", raising=False)
-    path = wb.kanban_db_path()
-    assert path.name == "kanban.db"
-    assert path.parent.name == ".hermes"
-
-
 def _commit_on_worktree(wt: Path, name: str) -> None:
     (wt / name).write_text("change\n", encoding="utf-8")
     subprocess.run(["git", "add", name], cwd=wt, check=True, capture_output=True)
@@ -361,37 +319,73 @@ def test_prune_merged_worktrees_dry_run_reports_without_removing(git_repo):
     assert wt.exists()
 
 
-def test_pin_kanban_workspace_falls_back_without_worktree_kind(tmp_path, monkeypatch):
-    import sqlite3
+# ── shared-branch guard ──────────────────────────────────────────────────────
+# Removing a worktree whose branch ANOTHER worktree also holds deletes that
+# branch out from under the other one — which may be a live agent session.
+# Merged-ness says nothing about whether someone is still standing on a branch.
+#
+# Seen 2026-07-18: an agent worktree and the session driving it shared one merged
+# branch; every other guard (live/locked/dirty/merged/age) passed, and the pruner
+# offered to remove it. The manual shell tool and this in-process pruner mirror
+# each other, so both need the guard (Greptile review, PR #1406).
 
-    db = tmp_path / "kanban.db"
-    conn = sqlite3.connect(str(db))
-    conn.execute(
-        """
-        CREATE TABLE tasks (
-            id TEXT PRIMARY KEY,
-            workspace_kind TEXT,
-            workspace_path TEXT
-        )
-        """
+
+def _force_second_checkout(repo, wt_path, branch):
+    """Put `branch` in a SECOND worktree. git needs --force for a double-checkout;
+    the real incident got there exactly this way."""
+    subprocess.run(
+        ["git", "worktree", "add", "--force", str(wt_path), branch],
+        cwd=repo, check=True, capture_output=True,
     )
-    conn.execute(
-        "INSERT INTO tasks (id, workspace_kind, workspace_path) VALUES (?, ?, ?)",
-        ("t_fallback", "git_worktree", None),
+
+
+def test_remove_task_worktree_keeps_a_shared_branch(git_repo, tmp_path):
+    """THE REGRESSION: a branch held by two worktrees is never removed."""
+    wt = wb.ensure_worktree("t_shared01")
+    branch = wb.worktree_branch("t_shared01")
+    _force_second_checkout(git_repo, tmp_path / "second", branch)
+
+    removed = wb.remove_task_worktree("t_shared01", require_merged=False, consult_pr=False)
+
+    assert removed is False, "removed a worktree whose branch another worktree holds"
+    assert wt.exists(), "worktree was deleted despite the shared branch"
+
+
+def test_remove_task_worktree_still_removes_an_unshared_branch(git_repo):
+    """The guard must not over-block — otherwise 'never remove' would pass the
+    test above and silently turn the pruner into a no-op."""
+    wt = wb.ensure_worktree("t_solo001")
+
+    removed = wb.remove_task_worktree("t_solo001", require_merged=False, consult_pr=False)
+
+    assert removed is True, "a lone worktree should still be removable"
+    assert not wt.exists()
+
+
+def test_branch_is_shared_fails_closed_when_git_fails(git_repo, monkeypatch):
+    """An unverifiable state must not authorise a --force removal."""
+    def _boom(*_a, **_k):
+        class R:
+            returncode = 1
+            stdout = ""
+            stderr = "boom"
+        return R()
+
+    monkeypatch.setattr(wb, "_run_git", _boom)
+    assert wb._branch_is_shared(git_repo, "wt/t_whatever") is True
+
+
+def test_prune_merged_worktrees_skips_a_shared_branch(git_repo, tmp_path):
+    """The scheduled sweep honours the same guard as the per-task path."""
+    wb.ensure_worktree("t_shared02")
+    branch = wb.worktree_branch("t_shared02")
+    _force_second_checkout(git_repo, tmp_path / "second2", branch)
+
+    results = wb.prune_merged_worktrees(min_age_days=0, execute=False, consult_pr=False)
+
+    decisions = {r["worktree"]: r.get("decision", "") for r in results}
+    shared = [d for d in decisions.values() if "another worktree" in d]
+    assert shared, f"expected a shared-branch skip, got: {decisions}"
+    assert not [d for d in decisions.values() if d in ("removed", "would-remove")], (
+        f"offered to remove a worktree on a shared branch: {decisions}"
     )
-    conn.commit()
-    conn.close()
-
-    monkeypatch.setenv("ZOE_KANBAN_DB_PATH", str(db))
-    wt = tmp_path / "worktrees" / "t_fallback"
-    wt.mkdir(parents=True)
-
-    pinned = wb.pin_kanban_workspace("t_fallback", wt)
-    assert pinned == wt.resolve()
-
-    conn = sqlite3.connect(str(db))
-    row = conn.execute(
-        "SELECT workspace_path FROM tasks WHERE id = ?", ("t_fallback",)
-    ).fetchone()
-    conn.close()
-    assert row[0] == str(wt.resolve())

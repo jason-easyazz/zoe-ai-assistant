@@ -146,7 +146,15 @@
         }
 
         _render() {
-            if (!this._container) {
+            // `!this._container` is not enough. chat.html's loadSessions() does
+            // sessionsList.innerHTML = ... at three sites (chat.html:3758/:3765/
+            // :3788) on every sessions load — including one fired milliseconds
+            // after boot. That DETACHES our node without nulling this reference,
+            // so the old guard passed and we rendered into an orphan forever:
+            // the whole feature was invisible despite working perfectly.
+            // isConnected is the check that actually catches it.
+            if (!this._container || !this._container.isConnected) {
+                this._container = null;
                 this._ensureContainer();
                 if (!this._container) return;
             }

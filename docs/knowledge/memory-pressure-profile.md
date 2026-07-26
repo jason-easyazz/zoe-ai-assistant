@@ -8,6 +8,29 @@ timestamp: 2026-07-06T21:15:00Z
 
 # Memory Pressure Profile (2026-07-06)
 
+> **STATUS 2026-07-19 — the two biggest swap owners below are FIXED.** The voice
+> stack now carries cgroup guards (`MemorySwapMax=0` + `MemoryLow`), so
+> llama-server and kokoro-tts hold **0 swap** instead of the 4.14 GB / 630 MB
+> recorded here (total swap 6.6 GB → 3.4 GB, measured 2026-07-19). Two findings
+> from that work change how you should read this profile:
+>
+> - **`--mlock` was never sufficient on Tegra.** llama-server has always run
+>   `--mlock` with `LimitMEMLOCK=infinity`, yet `VmLck` held only **1.95 GB of a
+>   5.6 GB RSS** — mlock covers the mapped model, not the CUDA/unified
+>   allocations around it. "The brain is mlocked" was never a reason its swap
+>   figure below was safe.
+> - **The `ccd-cli` fleet row (3.59 GB) was largely per-session Serena.** Each MCP
+>   client spawned its own server **at connect time**, so the per-instance 1G/2G
+>   cap bounded each member and never the fleet. One shared `serena-mcp.service`
+>   replaced it.
+>
+> Current values, the drop-in-not-template-copy procedure, and the
+> `Nice=-N`-is-silently-dropped trap live in
+> [`scripts/setup/systemd/README.md`](../../scripts/setup/systemd/README.md)
+> ("Memory protection"). Triage signature: [`incident-runbook.md`](incident-runbook.md).
+> The snapshot below is retained as the evidence that motivated the fix — do not
+> read its numbers as current.
+
 Read-only profile of the live host taken 2026-07-06 ~21:10 (host uptime 3d 6h). Numbers are a
 point-in-time snapshot — calmer than the reviewed spike (1.1–2.6 GB free, swap 23 GB deep) but the
 ownership shape is the durable fact. Context: the 2026-07-04 architecture review flagged memory as

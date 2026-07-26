@@ -1,4 +1,7 @@
+import pytest
 from pathlib import Path
+
+pytestmark = pytest.mark.ci_safe
 
 
 ROOT = Path(__file__).resolve().parents[3]

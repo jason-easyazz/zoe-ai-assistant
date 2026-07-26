@@ -1,3 +1,4 @@
+import pytest
 import os
 import sys
 from datetime import datetime, timezone
@@ -5,6 +6,8 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from time_utils import today_for_zoe_tz
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_today_for_zoe_tz_uses_configured_timezone_not_server_timezone(monkeypatch):

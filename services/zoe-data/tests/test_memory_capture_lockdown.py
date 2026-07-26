@@ -1,8 +1,11 @@
 """Lockdown tests for conversational memory capture resilience."""
 
+import pytest
 import sys
 import types
 from pathlib import Path
+
+pytestmark = pytest.mark.ci_safe
 
 
 ROOT = Path(__file__).resolve().parents[1]

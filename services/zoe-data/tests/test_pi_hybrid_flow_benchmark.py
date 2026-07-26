@@ -1,8 +1,11 @@
+import pytest
 import importlib.util
 import json
 import sys
 import types
 from pathlib import Path
+
+pytestmark = pytest.mark.ci_safe
 
 
 def _install_fake_lab(monkeypatch, *, result_by_text):

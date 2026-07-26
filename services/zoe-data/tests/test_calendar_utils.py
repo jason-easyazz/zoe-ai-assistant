@@ -5,7 +5,10 @@ and Skybridge service. These tests cover the parsing branches (metadata JSON,
 boolean coercion) without touching DB, network, or time.
 """
 
+import pytest
 from calendar_utils import row_to_event
+
+pytestmark = pytest.mark.ci_safe
 
 
 # ---------------------------------------------------------------------------

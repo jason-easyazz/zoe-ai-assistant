@@ -14,6 +14,8 @@ if str(ROOT) not in sys.path:
 
 from routers import ha_control, portrait, weather
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _ha_client() -> TestClient:
     app = FastAPI()

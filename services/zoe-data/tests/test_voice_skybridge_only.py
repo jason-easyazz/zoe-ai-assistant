@@ -16,6 +16,8 @@ if str(ROOT) not in sys.path:
 
 import routers.voice_tts as vt
 
+pytestmark = pytest.mark.ci_safe
+
 
 @pytest.mark.parametrize(
     "value,expected",

@@ -30,6 +30,20 @@ Outputs (git-ignored — they contain raw family text):
 - `data/router_selftrain/candidate_<UTCSTAMP>.meta.json` — counts per reason, the
   shadow window mined, the hash-join yield, and the held-out-guard result.
 
+## The shadow log is rotated (read every segment)
+
+The router caps the shadow log and rolls it into `<log>.1`, `<log>.2`, … rather
+than truncating it, precisely so mining input is never destroyed in place. The
+miner therefore reads **every segment** via
+`semantic_router.shadow_log_segments()` (oldest→newest); reading only `<log>`
+would silently mine just the newest slice and quietly shrink the training window.
+
+Retention defaults to `ZOE_ROUTER_SHADOW_MAX_BYTES` (16 MB) ×
+`ZOE_ROUTER_SHADOW_KEEP` + 1 = ~80 MB, which at the observed ~133 KB/day is
+~1.7 years of history — far more than any mining run has needed. Records older
+than the window do age out, so a round that must reach further back should be
+mined before the window closes (or the cap raised first).
+
 ## Getting the raw text (the join)
 
 The shadow log stores only a 12-hex **hash** of the utterance (`utt`) — the

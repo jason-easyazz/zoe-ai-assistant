@@ -5,9 +5,12 @@ httpx.AsyncClient per call paid a TCP/connection setup at every inter-sentence
 boundary. _kokoro_http_client() must hand back the SAME live client and only
 re-open one once it's been closed.
 """
+import pytest
 import asyncio
 
 import tts_waterfall as v
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_client_is_reused_across_calls(monkeypatch):

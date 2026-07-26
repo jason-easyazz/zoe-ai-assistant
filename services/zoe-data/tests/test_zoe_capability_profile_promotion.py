@@ -13,6 +13,8 @@ from zoe_capability_profile_promotion import (
 from zoe_capability_trust_review import review_capability_trust_update_plan
 from zoe_capability_trust_update import CapabilityTrustUpdateCandidate, CapabilityTrustUpdatePlan
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _candidate(**overrides):
     values = {

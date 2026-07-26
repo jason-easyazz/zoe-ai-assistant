@@ -12,6 +12,8 @@ from hindsight_memory import (
 )
 from zoe_memory_contract import MemoryEvent, MemoryEventType, MemoryScope, MemorySource
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _event():
     return MemoryEvent(

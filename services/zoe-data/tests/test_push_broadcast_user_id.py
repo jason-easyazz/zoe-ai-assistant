@@ -14,6 +14,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from push import PushBroadcaster
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _make_ws():
     """Return a mock WebSocket; user_id mapping is tracked in broadcaster state."""

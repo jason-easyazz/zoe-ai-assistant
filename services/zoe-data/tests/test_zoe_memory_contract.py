@@ -11,6 +11,8 @@ from zoe_memory_contract import (
     memory_event_from_mapping,
 )
 
+pytestmark = pytest.mark.ci_safe
+
 
 def test_relational_memory_requires_evidence():
     event = MemoryEvent(

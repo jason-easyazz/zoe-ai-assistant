@@ -16,6 +16,8 @@ from zoe_capability_profile_promotion import build_capability_profile_promotion_
 from zoe_capability_trust_review import review_capability_trust_update_plan
 from zoe_capability_trust_update import CapabilityTrustUpdateCandidate, CapabilityTrustUpdatePlan
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _source_text():
     return (Path(__file__).parent.parent / "zoe_capability_profile.py").read_text(encoding="utf-8")

@@ -12,6 +12,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import routers.ui_actions as ui_actions  # noqa: E402
 from routers.ui_actions import ack_ui_action  # noqa: E402
 
+pytestmark = pytest.mark.ci_safe
+
 
 class _Cursor:
     def __init__(self, row=None):

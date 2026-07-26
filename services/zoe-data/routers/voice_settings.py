@@ -19,7 +19,7 @@ import base64
 from fastapi import APIRouter, Depends, HTTPException
 
 import voice_settings
-from auth import get_current_user
+from auth import get_current_user, require_signed_in
 from tts_waterfall import _synthesize_kokoro, _synthesize_kokoro_sidecar
 
 router = APIRouter(prefix="/api/voice", tags=["voice-settings"])
@@ -52,8 +52,14 @@ async def list_voices(user: dict = Depends(get_current_user)):
 
 
 @router.put("/voice")
-async def set_voice(payload: dict, user: dict = Depends(get_current_user)):
-    """Persist the household voice preference (validated against the catalogue)."""
+async def set_voice(payload: dict, user: dict = Depends(require_signed_in)):
+    """Persist the household voice preference (validated against the catalogue).
+
+    require_signed_in, NOT get_current_user: this changes the voice Zoe speaks with
+    for the whole household, and get_current_user resolves an unauthenticated caller
+    to guest rather than rejecting — so depending on it alone let any LAN client PUT
+    a new voice with no session at all. Reads (/voices) stay open.
+    """
     requested = str((payload or {}).get("voice") or "").strip()
     if not requested:
         raise HTTPException(status_code=400, detail="voice is required")

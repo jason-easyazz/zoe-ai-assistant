@@ -13,6 +13,8 @@ from hindsight_retain_executor import execute_admitted_hindsight_retain_plan
 from zoe_memory_contract import MemoryEvent, MemoryEventType, MemoryScope, MemorySource
 from zoe_observation_trace import ObservationOutcome, ObservationTrace, ObservationTraceType
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _event():
     return MemoryEvent(

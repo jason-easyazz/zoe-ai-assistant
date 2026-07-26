@@ -20,6 +20,8 @@ from zoe_memory_contract import MemoryEventType
 from zoe_memory_router import MemoryBackend
 from zoe_observation_trace import ObservationOutcome, ObservationTrace, ObservationTraceType
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _candidate():
     return CandidateEvaluation(

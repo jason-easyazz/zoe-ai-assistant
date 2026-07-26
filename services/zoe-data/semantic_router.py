@@ -133,6 +133,86 @@ _HEAD_LOG_PATH = os.environ.get(
                  "data", "router_head_shadow.jsonl"),
 )
 
+# ── Shadow-log rotation ─────────────────────────────────────────────────────
+# The shadow log is append-only on EVERY routed turn, so left alone it grows
+# without bound on a box with a small disk.
+#
+# It is ROTATED, never truncated, because the self-training MINER
+# (labs/router-selftrain/mine_candidates.py) reads the whole history by default
+# (`--since` defaults to 0.0) to turn real measured mistakes into training
+# candidates. Dropping records in place would silently starve the mine→label→
+# ratchet loop of exactly the traffic it exists to learn from. Rotated segments
+# stay on disk as `<log>.1`, `<log>.2`, … and the readers glob them back in, so
+# rotation is lossless until a segment ages out of the retention window.
+#
+# Budget: MAX_BYTES per segment × (KEEP + 1) segments. The defaults keep ~80 MB
+# of history — at the observed record size that is a large multiple of what the
+# miner has ever needed in one run, while bounding the worst case.
+_SHADOW_MAX_BYTES = int(os.environ.get("ZOE_ROUTER_SHADOW_MAX_BYTES", 16 * 1024 * 1024))
+_SHADOW_KEEP = int(os.environ.get("ZOE_ROUTER_SHADOW_KEEP", 4))
+
+# Serialises rotate+append. Both the per-turn head shadow and the shadow2
+# two-stage logger (which runs in a BACKGROUND thread) append to this file, so
+# without this two threads could rotate concurrently and lose a segment.
+_shadow_write_lock = threading.Lock()
+
+
+def _rotate_shadow_log(path: str) -> None:
+    """Roll `path` to `path.1` (and shift older segments) once it exceeds the cap.
+
+    Caller must hold `_shadow_write_lock`. Best-effort: rotation must never break
+    a turn, so any OSError is swallowed by the callers' existing handlers.
+    """
+    if _SHADOW_MAX_BYTES <= 0:  # 0/negative disables rotation entirely
+        return
+    try:
+        if os.path.getsize(path) < _SHADOW_MAX_BYTES:
+            return
+    except OSError:
+        return  # missing file -> nothing to rotate
+
+    # Drop the oldest, then shift each segment down: .3 -> .4, .2 -> .3, .1 -> .2
+    oldest = f"{path}.{_SHADOW_KEEP}"
+    if os.path.exists(oldest):
+        os.remove(oldest)
+    for seg in range(_SHADOW_KEEP - 1, 0, -1):
+        src = f"{path}.{seg}"
+        if os.path.exists(src):
+            os.replace(src, f"{path}.{seg + 1}")
+    os.replace(path, f"{path}.1")
+
+
+def _append_shadow_line(path: str, line: str) -> None:
+    """Rotate-if-needed then append one JSON line, under the shadow write lock."""
+    with _shadow_write_lock:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        _rotate_shadow_log(path)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+
+
+def shadow_log_segments(path: str | None = None) -> list[str]:
+    """Every existing shadow-log segment, OLDEST first.
+
+    THE contract for readers. Rotation moves history into `<log>.1`, `<log>.2`,
+    …, so anything that reads only `<log>` silently sees just the newest slice.
+    The miner and the shadow reports go through this so rotation stays lossless
+    for them.
+
+    Ordering is oldest→newest (`.N` … `.1`, then the live file) so that
+    concatenating segments yields records in append order, which is what the
+    readers' chronological assumptions (and `--since`) expect.
+    """
+    path = path or _HEAD_LOG_PATH
+    segments = [
+        f"{path}.{seg}"
+        for seg in range(_SHADOW_KEEP, 0, -1)
+        if os.path.exists(f"{path}.{seg}")
+    ]
+    if os.path.exists(path):
+        segments.append(path)
+    return segments
+
 
 def head_mode() -> str:
     """ZOE_ROUTER_HEAD: 'off' (default) | 'shadow' | 'shadow2' | 'active'.
@@ -309,9 +389,10 @@ def _head_shadow(text: str, v: np.ndarray, routed: str) -> None:
         }
         shadow_logger.info("router_head_shadow %s", json.dumps(rec, sort_keys=True))
         try:
-            os.makedirs(os.path.dirname(_HEAD_LOG_PATH), exist_ok=True)
-            with open(_HEAD_LOG_PATH, "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(_with_text(rec, text), sort_keys=True) + "\n")
+            _append_shadow_line(
+                _HEAD_LOG_PATH,
+                json.dumps(_with_text(rec, text), sort_keys=True),
+            )
         except OSError as exc:
             shadow_logger.debug("shadow log append failed: %s", exc)
     except Exception as exc:  # shadow must never break a turn
@@ -328,9 +409,7 @@ def _log_two_stage(rec: dict) -> None:
     try:
         line_rec = {k: v for k, v in rec.items() if k != "utt_text"}
         shadow_logger.info("router_two_stage %s", json.dumps(line_rec, sort_keys=True))
-        os.makedirs(os.path.dirname(_HEAD_LOG_PATH), exist_ok=True)
-        with open(_HEAD_LOG_PATH, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(rec, sort_keys=True) + "\n")
+        _append_shadow_line(_HEAD_LOG_PATH, json.dumps(rec, sort_keys=True))
     except Exception as exc:
         shadow_logger.debug("two_stage log append failed: %s", exc)
 

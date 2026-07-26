@@ -6,6 +6,7 @@ candidate evidence only; labels still require review before promotion scoring.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -596,13 +597,36 @@ def _append_jsonl(path: str, record: Mapping[str, Any], *, max_records: int | No
     _reject_secret_keys(record)
     target = Path(path).expanduser()
     target.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
+    # Append + prune must be ONE critical section. `_prune_jsonl` is a
+    # read-modify-write (read every row, seek(0), rewrite, truncate), so an
+    # unlocked concurrent writer loses records: writer B appends, B's prune
+    # reads the rows, writer A appends, then B's truncate rewrites only the
+    # rows B read — A's record is gone. Real callers hit this (an awaited
+    # accepted-decision write racing a fire-and-forget Pi audit write, both via
+    # `asyncio.to_thread`, in `pi_hybrid_production`). An flock on the target
+    # serializes writers across threads AND processes (multiple zoe-data
+    # workers share the evidence path); `_prune_jsonl` deliberately uses a
+    # separate unlocked handle, so it cannot self-deadlock against this hold.
     with target.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
-    if max_records is not None and max_records > 0:
-        _prune_jsonl(target, max_records=max_records)
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            handle.write(line)
+            handle.flush()
+            if max_records is not None and max_records > 0:
+                _prune_jsonl(target, max_records=max_records)
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _prune_jsonl(target: Path, *, max_records: int) -> None:
+    """Trim `target` to its last `max_records` lines.
+
+    Callers MUST already hold the `_append_jsonl` flock on `target`: this is a
+    read-modify-write and is not safe to run concurrently with any other writer.
+    It intentionally does not take the lock itself — the caller holds it on a
+    different open file description, and flock would block against that hold.
+    """
     try:
         with target.open("r+", encoding="utf-8", errors="replace") as handle:
             rows = deque(handle, maxlen=max_records)

@@ -9,6 +9,8 @@ import pi_hybrid_production
 from pi_hybrid_production import PiHybridProductionConfig, pi_hybrid_production_eligible, try_pi_hybrid_production
 from zoe_pi_promotion import intent_group_for_intent
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _install_prefilter(monkeypatch, *, allowed=True):
     module = types.ModuleType("pi_intent_classifier")

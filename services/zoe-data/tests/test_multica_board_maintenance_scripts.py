@@ -1,4 +1,7 @@
+import pytest
 from pathlib import Path
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_legacy_board_maintenance_is_dry_run_and_preserves_descriptions():

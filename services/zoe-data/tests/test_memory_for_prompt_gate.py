@@ -9,6 +9,8 @@ import pytest
 
 from memory_gate import message_needs_memory as _message_needs_memory
 
+pytestmark = pytest.mark.ci_safe
+
 
 def test_single_source_of_truth():
     """Both the /for-prompt endpoint and the legacy agent must use the ONE gate in

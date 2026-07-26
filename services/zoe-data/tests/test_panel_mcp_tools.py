@@ -13,6 +13,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import mcp_server
 from mcp_server import TOOLS
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _tool(name: str) -> dict | None:
     return next((t for t in TOOLS if t["name"] == name), None)

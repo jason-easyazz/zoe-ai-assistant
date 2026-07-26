@@ -1,0 +1,51 @@
+# Flue Executor (lab) — the supervised process that consumes Multica's REAL
+# agent_task_queue and runs phase workers one at a time (Phase 2 of the Multica
+# executor migration, docs/architecture/multica-executor-migration.md).
+#
+# OPTIONAL and NOT enabled by default. Installing/enabling this unit is an
+# explicit operator action. Nothing here is auto-installed.
+#
+# THREE SAFETY GATES, all on until deliberately lifted:
+#   * KILL SWITCH — while ~/.zoe/multica_dispatch_paused exists the runner
+#     idles and claims nothing. It is safe to enable this unit long before the
+#     board is unpaused; removing that file is the single go-live action.
+#   * DRY DISPATCH — ZOE_EXECUTOR_DISPATCH defaults to `dry` (poll + log what it
+#     WOULD claim, mutate nothing). Set it to `full` in the env file only when
+#     the loop is being taken live.
+#   * SINGLE LANE — the claim logic dispatches at most one task at a time per
+#     runtime, so a board of issues never fans out into concurrent Omnigent
+#     sessions (the "don't eat usage" guard).
+#
+# Prereqs (the unit runs, it does not build):
+#   cd ~/assistant/labs/flue-executor && npm install
+#   # register the executor identity in Multica (idempotent):
+#   python3 ~/assistant/scripts/maintenance/verify_executor_queue_backend.py
+#   # create the env file from the template and adjust if needed:
+#   cp ~/assistant/labs/flue-executor/.env.example ~/assistant/labs/flue-executor/.env
+[Unit]
+Description=Flue Executor (lab) — single-lane Multica queue consumer
+# Reads Multica's DB (via the shared zoe-database container). Restart=always
+# recovers start-order races on boot (same pattern as flue-zoe-brain.service).
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/assistant/labs/flue-executor
+# Adjust the node path if you are not using nvm (same convention as flue-zoe-brain).
+ExecStart=%h/.nvm/current/bin/node --experimental-strip-types src/live-runner.ts
+Restart=always
+RestartSec=5
+# ZOE_EXECUTOR_MODE=live is REQUIRED (the runner refuses to start otherwise).
+# ZOE_EXECUTOR_DISPATCH (dry|full), MULTICA_DATABASE_URL/POSTGRES_URL, and any
+# Omnigent overrides live in the lab-local .env — copy .env.example and fill it
+# in. NEVER inline secrets here. The file is required (no '-' prefix): the unit
+# fails loudly if the operator has not configured it.
+Environment=ZOE_EXECUTOR_MODE=live
+EnvironmentFile=%h/assistant/labs/flue-executor/.env
+
+# Light hardening (user-service compatible).
+NoNewPrivileges=true
+RestrictRealtime=true
+
+[Install]
+WantedBy=default.target

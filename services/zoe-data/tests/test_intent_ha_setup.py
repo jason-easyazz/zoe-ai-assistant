@@ -10,6 +10,8 @@ from intent_router import (
     openclaw_user_message,
 )
 
+pytestmark = pytest.mark.ci_safe
+
 
 @pytest.mark.parametrize(
     "text",

@@ -20,6 +20,8 @@ from pi_intent_classifier import (
     pi_intent_status,
 )
 
+pytestmark = pytest.mark.ci_safe
+
 
 @pytest.fixture(autouse=True)
 def _reset_pi_runtime_probe_cache(monkeypatch):

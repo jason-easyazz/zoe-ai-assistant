@@ -13,6 +13,8 @@ from routers.pi_intent_lab import require_lab_operator
 from pi_intent_lab import _await_speculative_safe_fulfillment, compare_pi_intent_lab
 from routers.pi_intent_lab import router as pi_intent_lab_router
 
+pytestmark = pytest.mark.ci_safe
+
 
 @pytest.fixture(autouse=True)
 def _neutralize_pi_lab_resource_guard(monkeypatch):
@@ -88,13 +90,20 @@ def _install_fake_intent_router(
     monkeypatch.setitem(sys.modules, "intent_router", module)
 
 
-def _install_fake_pi_classifier(monkeypatch, *, result=None, seen_env=None, delay_seconds=0.0):
+def _install_fake_pi_classifier(monkeypatch, *, result=None, seen_env=None, delay_seconds=0.0, wait_event=None):
     module = types.ModuleType("pi_intent_classifier")
     module.PI_INTENT_EXECUTE_THRESHOLD = 0.78
 
     async def classify_with_pi_intent_governor(text, *, context_turns="", env=None, config=None):
         if seen_env is not None:
             seen_env.append({"text": text, "context_turns": context_turns, "env": dict(env or os.environ)})
+        if wait_event is not None:
+            # Condition-based ordering (mirrors execute_started_event): hold the
+            # verdict until the given event fires. Lets a test guarantee "the
+            # speculative execute HAS started before pi returns" without racing a
+            # wall-clock delay — a 50ms sleep loses that race on a starved loop,
+            # where cancellation can land before the coroutine's first slice.
+            await wait_event.wait()
         if delay_seconds:
             await asyncio.sleep(delay_seconds)
         return result
@@ -417,13 +426,20 @@ async def test_lab_blocks_non_allowlisted_side_effect_pi_fulfillment(monkeypatch
 @pytest.mark.asyncio
 async def test_lab_safe_fulfillment_timeout_is_reported(monkeypatch):
     calls = []
+    # Timing margins are deliberately WIDE on both sides of the inequality
+    # (10s delay vs 0.25s timeout, was 0.05 vs 0.01). The old 10ms budget could
+    # expire before the execute coroutine's FIRST scheduling slice on a starved
+    # loop — `calls` stayed empty and `len(calls) == 1` failed with 0 == 1
+    # (seen on a slow reviewer VM). 0.25s is enough for any loop to start the
+    # task; the 10s delay never actually elapses (wait_for cancels it), so the
+    # test still finishes in ~0.25s and the timeout is still genuinely proven.
     _install_fake_intent_router(
         monkeypatch,
         raw=None,
         extracted=None,
         execute_response="too late",
         execute_calls=calls,
-        execute_delay_seconds=0.05,
+        execute_delay_seconds=10.0,
     )
     _install_fake_pi_classifier(
         monkeypatch,
@@ -442,7 +458,7 @@ async def test_lab_safe_fulfillment_timeout_is_reported(monkeypatch):
         "rain later",
         include_hybrid_status=False,
         include_safe_fulfillment=True,
-        safe_fulfillment_timeout_seconds=0.01,
+        safe_fulfillment_timeout_seconds=0.25,
     )
 
     assert len(calls) == 1
@@ -738,6 +754,17 @@ async def test_lab_does_not_speculate_ambiguous_weather_words(monkeypatch, text)
 @pytest.mark.asyncio
 async def test_lab_discards_speculative_safe_fulfillment_when_pi_slots_differ(monkeypatch):
     calls = []
+    # Event-ordered, not scheduler-luck (the #1413 fix, extended to this test).
+    # The discard path calls `task.cancel()` on the speculative task; if that
+    # lands before the task's FIRST scheduling slice, execute_intent's body
+    # never runs, nothing is appended to `calls`, and the two-call assertion
+    # below fails with [{'forecast': True}] != [{'forecast': False}, ...].
+    # Holding the pi verdict until execute_started fires makes the speculative
+    # call a fact before the discard can race it. Safe against deadlock: the
+    # speculative task is created (pi_intent_lab.py:106) BEFORE pi is awaited
+    # (:114), so the event is always reachable. Passed on this box and in CI
+    # while failing on a slower reviewer VM — the classic starved-loop tell.
+    execute_started = asyncio.Event()
 
     def response_for(intent):
         return f"forecast={intent.slots.get('forecast')}"
@@ -748,6 +775,7 @@ async def test_lab_discards_speculative_safe_fulfillment_when_pi_slots_differ(mo
         extracted=_Intent("weather", {"forecast": False}),
         execute_response=response_for,
         execute_calls=calls,
+        execute_started_event=execute_started,
     )
     _install_fake_pi_classifier(
         monkeypatch,
@@ -760,6 +788,7 @@ async def test_lab_discards_speculative_safe_fulfillment_when_pi_slots_differ(mo
             latency_ms=123.0,
             reason="weather signal",
         ),
+        wait_event=execute_started,
     )
 
     result = await compare_pi_intent_lab(
@@ -768,7 +797,16 @@ async def test_lab_discards_speculative_safe_fulfillment_when_pi_slots_differ(mo
         include_safe_fulfillment=True,
     )
 
-    assert [call["intent"].slots for call in calls] == [{"forecast": False}, {"forecast": True}]
+    # Self-describing on failure: this test has been reported failing on a
+    # slower VM while green here and in CI, and a bare list-compare hides WHICH
+    # half went missing (speculative never ran vs pi-validated never ran).
+    assert [call["intent"].slots for call in calls] == [
+        {"forecast": False},
+        {"forecast": True},
+    ], (
+        "expected the speculative execute (forecast=False) THEN the pi-validated "
+        f"one (forecast=True); actually recorded {[c['intent'].slots for c in calls]!r}"
+    )
     assert result["safe_fulfillment"]["started_before_pi"] is False
     assert result["safe_fulfillment"]["validated_by_pi"] is True
     assert result["safe_fulfillment"]["speculative_safe_fulfillment"] == "discarded"
@@ -780,13 +818,22 @@ async def test_lab_discards_speculative_safe_fulfillment_when_pi_slots_differ(mo
 @pytest.mark.asyncio
 async def test_lab_discards_speculative_safe_fulfillment_below_pi_threshold(monkeypatch):
     calls = []
+    # Event-ordered, not wall-clock: the pi verdict is HELD until the speculative
+    # execute has actually started (wait_event=execute_started), so the discard
+    # can never cancel the task before its first scheduling slice. The old 50ms
+    # delay raced exactly that on a starved loop — cancellation landed before the
+    # coroutine body ran, `calls` stayed empty, and `len(calls) == 1` failed with
+    # 0 == 1 (seen on a slow reviewer VM). The 10s delay never elapses: the
+    # below-threshold discard cancels the task, which is the behaviour under test.
+    execute_started = asyncio.Event()
     _install_fake_intent_router(
         monkeypatch,
         raw=_Intent("weather"),
         extracted=_Intent("weather", {"forecast": False}),
         execute_response="should not be exposed",
         execute_calls=calls,
-        execute_delay_seconds=0.05,
+        execute_delay_seconds=10.0,
+        execute_started_event=execute_started,
     )
     _install_fake_pi_classifier(
         monkeypatch,
@@ -799,6 +846,7 @@ async def test_lab_discards_speculative_safe_fulfillment_below_pi_threshold(monk
             latency_ms=123.0,
             reason="weak weather signal",
         ),
+        wait_event=execute_started,
     )
 
     result = await compare_pi_intent_lab(

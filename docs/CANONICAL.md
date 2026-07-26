@@ -38,6 +38,20 @@ rocks:
     loader_marker: "warm_moonshine"
   tts:
     name: "Kokoro"
+  router:
+    # A rock that is ALLOWED TO IMPROVE. What is locked is the ARCHITECTURE and
+    # the contract — not the checkpoint. The self-train loop exists to replace
+    # the checkpoint, guarded by its ratchet, so pinning a hash here would fight
+    # the design. Swapping the two-stage SHAPE is what must fail CI.
+    architecture: "two-stage"
+    stage1: "SetFit MLP shortlist"
+    stage2: "FunctionGemma-270M GBNF decode"
+    sidecar_service: "functiongemma-router.service"
+    sidecar_port: "11436"
+    flag: "ZOE_ROUTER_HEAD"
+    stage1_artifact: "services/zoe-data/models/router_head_mlp.joblib"
+    stage2_artifact_dir: "~/models/functiongemma-router"
+    checkpoint_pinned: "no — owned by the ZOE_ROUTER_SELFTRAIN ratchet"
 ```
 
 ## 🟢 Canonical live systems — the spine
@@ -60,6 +74,10 @@ The Pi-as-brain path and the services it depends on. These are real and load-bea
   - **`legacy`** — `services/zoe-data/zoe_agent.py`, the last fallback (only when
     `ZOE_BRAIN_BACKEND` is not `flue` AND `ZOE_USE_CORE_BRAIN` is off).
 - **`services/zoe-data`** — FastAPI app (`:8000`): voice/chat path, memory router, Skybridge.
+- **Two-stage router** (LIVE, `ZOE_ROUTER_HEAD=active`) — a fast tool-router *front* on the voice
+  path: SetFit MLP shortlist → `functiongemma-router.service` GBNF decoder (host-native, `:11436`).
+  The Gemma 4 E4B rock stays the brain and the fallback for every abstain/miss. Self-training loop
+  (`ZOE_ROUTER_SELFTRAIN`, default OFF) can mine → retrain → ratchet-promote. See [`PLANS.md`](PLANS.md).
 - **`zoe-database`** — PostgreSQL (asyncpg, `$1` placeholders). Relational + temporal memory.
 - **Chroma / MemPalace** — vector store for memory (raw-first).
 - **`llama-server`** (host-native, `:11434`) — serves the brain rock above.

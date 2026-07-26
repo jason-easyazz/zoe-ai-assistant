@@ -781,7 +781,10 @@ async def submit_pin(payload: dict, request: Request = None, db=Depends(get_db))
                     )
                     await db.commit()
                 except Exception as _db_exc:
-                    logger.debug("panel_auth: ui_panel_sessions update failed (non-fatal): %s", _db_exc)
+                    logger.warning(
+                        "panel_auth: ui_panel_sessions update failed for panel=%s "
+                        "user=%s — panel session identity NOT persisted: %s",
+                        p_id, resolved_user_id, _db_exc)
                 if pending_transcript:
                     # Replay the held voice command under the verified identity.
                     async def _run_replay():

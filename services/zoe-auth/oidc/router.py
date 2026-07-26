@@ -101,9 +101,14 @@ async def discovery(request: Request):
         ],
         "id_token_signing_alg_values_supported": ["RS256"],
         "code_challenge_methods_supported": ["S256"],
+        # `groups` is listed here but deliberately NOT in scopes_supported: like
+        # `role`/`zoe_user_id`, it is emitted unconditionally rather than gated on a
+        # requested scope. Advertising a scope this provider does not enforce would
+        # promise a contract that does not exist.
         "claims_supported": [
             "sub", "iss", "aud", "exp", "iat", "auth_time", "nonce",
-            "email", "email_verified", "name", "preferred_username", "role", "zoe_user_id",
+            "email", "email_verified", "name", "preferred_username", "role", "groups",
+            "zoe_user_id",
         ],
     })
 
@@ -499,13 +504,15 @@ async def userinfo(
     if user_info is None:
         raise HTTPException(404, "User not found")
 
+    role = user_info.get("role", "user")
     return JSONResponse({
         "sub": user_id,
         "name": user_info.get("username", ""),
         "email": user_info.get("email", ""),
         "email_verified": True,
         "preferred_username": user_info.get("username", ""),
-        "role": user_info.get("role", "user"),
+        "role": role,
+        "groups": [role],
         "zoe_user_id": user_id,
     })
 

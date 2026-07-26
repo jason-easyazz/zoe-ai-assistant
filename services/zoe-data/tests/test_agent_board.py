@@ -4,6 +4,8 @@ import pytest
 
 from routers import system
 
+pytestmark = pytest.mark.ci_safe
+
 
 @pytest.mark.asyncio
 async def test_agent_board_keeps_active_and_chain_enrichment_bounded(monkeypatch):

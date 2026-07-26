@@ -3,6 +3,8 @@ import pytest
 import db_pool
 import user_portrait
 
+pytestmark = pytest.mark.ci_safe
+
 
 class _Cursor:
     def __init__(self, rows):

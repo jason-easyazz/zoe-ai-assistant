@@ -20,7 +20,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 
-from hermes_http import zoe_repo_root
+from repo_paths import zoe_repo_root
 from pipeline_evidence import EvidenceItem, content_hash
 
 _TEST_TIMEOUT_S = 600

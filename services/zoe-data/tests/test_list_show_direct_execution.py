@@ -4,6 +4,8 @@ import pytest
 
 from intent_router import Intent, _execute_list_show_direct, detect_intent, execute_intent
 
+pytestmark = pytest.mark.ci_safe
+
 
 class _Cursor:
     def __init__(self, rows=None):

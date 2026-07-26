@@ -121,31 +121,6 @@ def test_directories():
     
     return all_exist
 
-def test_model_manager():
-    """Test model manager CLI"""
-    print("\n🤖 Testing Model Manager...")
-    
-    import subprocess
-    
-    try:
-        result = subprocess.run(
-            [str(PROJECT_ROOT / "tools/model-manager.py"), "info"],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        
-        if result.returncode == 0:
-            print("  ✅ Model manager functional")
-            print("     " + result.stdout.split('\n')[0])
-            return True
-        else:
-            print(f"  ❌ Model manager error: {result.stderr}")
-            return False
-    except Exception as e:
-        print(f"  ❌ Model manager test failed: {e}")
-        return False
-
 def test_unsloth():
     """Test if Unsloth is installed"""
     print("\n🔥 Testing Unsloth (Optional)...")
@@ -219,7 +194,6 @@ def main():
         "Imports": test_imports(),
         "Database": test_database(),
         "Directories": test_directories(),
-        "Model Manager": test_model_manager(),
         "Unsloth": test_unsloth(),
         "API Endpoints": test_api_endpoints()
     }

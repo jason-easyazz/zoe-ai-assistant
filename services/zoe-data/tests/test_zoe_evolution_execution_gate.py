@@ -1,5 +1,8 @@
+import pytest
 from zoe_evolution_execution_gate import evaluate_execution_gate
 from zoe_evolution_proposal import ProposalRisk, TrustAutonomyClass
+
+pytestmark = pytest.mark.ci_safe
 
 
 def _proposal(**overrides):

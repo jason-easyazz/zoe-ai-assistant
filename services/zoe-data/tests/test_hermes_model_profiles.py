@@ -7,6 +7,8 @@ import yaml
 
 import hermes_model_profiles as hmp
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _write_config(path: Path, provider: str = "openrouter", model: str = "openrouter/free") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)

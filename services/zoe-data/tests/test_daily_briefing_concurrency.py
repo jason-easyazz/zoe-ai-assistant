@@ -3,6 +3,8 @@ import pytest
 
 from intent_router import _execute_daily_briefing
 
+pytestmark = pytest.mark.ci_safe
+
 
 @pytest.fixture(autouse=True)
 def clear_daily_briefing_cache():

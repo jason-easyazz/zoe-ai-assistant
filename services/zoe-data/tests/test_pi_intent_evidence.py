@@ -1,9 +1,11 @@
 import hashlib
 import json
+import threading
 from pathlib import Path
 
 import pytest
 
+import pi_intent_evidence
 from intent_router import detect_intent
 from pi_intent_evidence import (
     append_pi_hybrid_production_label,
@@ -15,6 +17,8 @@ from pi_intent_evidence import (
     record_pi_hybrid_production_evidence,
     sanitize_evidence_text,
 )
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_record_intent_miss_evidence_disabled_does_not_write(tmp_path):
@@ -485,6 +489,66 @@ def test_sanitize_evidence_text_redacts_common_pii():
     assert sanitize_evidence_text("Jason Smith asked about the weather") == "[NAME] asked about the weather"
     assert sanitize_evidence_text("Will Smith called about the meeting") == "[NAME] called about the meeting"
     assert sanitize_evidence_text("Can Chen asked about the plan") == "[NAME] asked about the plan"
+
+
+def test_append_jsonl_does_not_lose_records_under_concurrent_writers(tmp_path):
+    """Concurrent evidence writers must not clobber each other's records.
+
+    `_append_jsonl` prunes via a read-modify-write, so without a lock a writer
+    that reads the file before a second writer appends will truncate that
+    second record away. Production hits this for real: a router fast-accept
+    writes its accepted decision while the fire-and-forget Pi audit task writes
+    a disagreement, both through `asyncio.to_thread` onto the same path.
+
+    Unlocked, this loses ~40% of records on every run; locked it is exact.
+    """
+    evidence_path = tmp_path / "concurrent-evidence.jsonl"
+    writers = 8
+    per_writer = 25
+    start = threading.Barrier(writers)
+    errors: list[BaseException] = []
+
+    def write_records(writer_id: int) -> None:
+        try:
+            start.wait(timeout=30)
+            for index in range(per_writer):
+                pi_intent_evidence._append_jsonl(
+                    str(evidence_path),
+                    {"writer": writer_id, "index": index},
+                    max_records=10000,
+                )
+        except BaseException as exc:  # pragma: no cover - surfaced via `errors`
+            errors.append(exc)
+
+    threads = [threading.Thread(target=write_records, args=(writer_id,)) for writer_id in range(writers)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+
+    assert errors == []
+    assert not [thread for thread in threads if thread.is_alive()]
+
+    lines = evidence_path.read_text(encoding="utf-8").splitlines()
+    # Lost update: a concurrent prune truncates away records that landed after
+    # it read the file, so the file comes up short.
+    assert len(lines) == writers * per_writer
+    # Torn line: an interleaved rewrite can also leave a half-written record.
+    records = [json.loads(line) for line in lines]
+    # Every writer's every record survived, exactly once.
+    assert sorted((record["writer"], record["index"]) for record in records) == sorted(
+        (writer_id, index) for writer_id in range(writers) for index in range(per_writer)
+    )
+
+
+def test_append_jsonl_prune_keeps_newest_records_under_max(tmp_path):
+    """The lock must not cost the prune its job: the cap still holds."""
+    evidence_path = tmp_path / "pruned-evidence.jsonl"
+    for index in range(10):
+        pi_intent_evidence._append_jsonl(str(evidence_path), {"index": index}, max_records=4)
+
+    records = [json.loads(line) for line in evidence_path.read_text(encoding="utf-8").splitlines()]
+    assert [record["index"] for record in records] == [6, 7, 8, 9]
 
 
 def test_detect_intent_miss_produces_pi_evidence_when_enabled(tmp_path, monkeypatch):

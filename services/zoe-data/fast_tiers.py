@@ -14,7 +14,6 @@ Design notes (see docs/architecture/stage-a-channel-agnostic-core.md):
     own them.
   - The ambiguity *margin check* defers to the brain when the top two routed
     domains are within a small margin — a standard semantic-router safeguard.
-  - `fast_path.resolve` is a back-compat shim re-exporting `resolve`.
 """
 from __future__ import annotations
 

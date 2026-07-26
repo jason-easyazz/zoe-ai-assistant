@@ -233,9 +233,39 @@ async def get_current_user(request: Request) -> dict:
 _ADMIN_ROLES = {"admin", "family-admin"}  # ZOE-22dcd46d: honour family-admin alias
 
 
+def is_admin_role(role: object) -> bool:
+    """True only for a recognised admin role string — fail-closed otherwise.
+
+    The public read of `_ADMIN_ROLES`, for code that has already resolved a
+    caller (e.g. the voice/face routers' `_require_voice_auth` dict) and so
+    cannot depend on `require_admin`. Anything that is not exactly one of the
+    admin role strings — None, "", "user", "guest", a non-string — is NOT an
+    admin. Prefer this over an inline `role == "admin"`, which silently misses
+    the `family-admin` alias.
+    """
+    return isinstance(role, str) and role in _ADMIN_ROLES
+
+
 async def require_admin(user: dict = Depends(get_current_user)) -> dict:
     if user.get("role") not in _ADMIN_ROLES:
         raise HTTPException(status_code=403, detail="Admin access required")
+    return user
+
+
+async def require_signed_in(user: dict = Depends(get_current_user)) -> dict:
+    """A real, signed-in user — not a guest.
+
+    ``get_current_user`` RESOLVES an identity but never enforces one: an
+    unauthenticated caller comes back as GUEST (least privilege) rather than a
+    401/403. So `Depends(get_current_user)` alone lets any LAN client through —
+    fine for reads, wrong for household-wide writes (e.g. changing the voice Zoe
+    speaks with for everyone). Depend on THIS instead for those.
+
+    Not the same as require_admin: any signed-in household member qualifies —
+    this only excludes guest/unauthenticated.
+    """
+    if user.get("role") in (None, "guest") or user.get("user_id") in (None, GUEST_USER_ID):
+        raise HTTPException(status_code=403, detail="Sign in to change this setting")
     return user
 
 

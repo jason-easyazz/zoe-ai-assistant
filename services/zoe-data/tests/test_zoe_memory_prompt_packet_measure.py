@@ -20,6 +20,8 @@ from zoe_memory_prompt_packet_measure import (
     synthetic_measure_user_id_allowed,
 )
 
+pytestmark = pytest.mark.ci_safe
+
 
 @dataclass
 class FakePromptPacketMemoryService:

@@ -5,6 +5,8 @@ import pytest
 
 from pi_runtime_probe import PI_INSTALL_COMMAND, PiRuntimeConfig, PiRuntimeConfigError, probe_pi_runtime
 
+pytestmark = pytest.mark.ci_safe
+
 
 def test_pi_runtime_defaults_are_disabled_and_offline_only():
     config = PiRuntimeConfig.from_env({})

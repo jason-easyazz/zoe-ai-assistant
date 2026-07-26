@@ -29,6 +29,8 @@ import pytest
 import person_health
 from person_health import _HALF_LIFE, _HALF_LIFE_LEGACY, _next_occurrence, calc_health_score
 
+pytestmark = pytest.mark.ci_safe
+
 
 # ── Test helpers ────────────────────────────────────────────────────────────
 

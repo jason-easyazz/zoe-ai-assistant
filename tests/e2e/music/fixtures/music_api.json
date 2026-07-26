@@ -1,0 +1,196 @@
+{
+  "captured_from": "live localhost:8000 on 2026-07-17",
+  "_real_now_playing_keys": [
+    "album",
+    "artist",
+    "duration",
+    "elapsed",
+    "image",
+    "player_id",
+    "player_name",
+    "queue_id",
+    "repeat",
+    "shuffle",
+    "state",
+    "title",
+    "volume"
+  ],
+  "_real_queue_item_keys": [
+    "available",
+    "duration",
+    "extra_attributes",
+    "image",
+    "index",
+    "media_item",
+    "name",
+    "queue_id",
+    "queue_item_id",
+    "sort_index",
+    "streamdetails"
+  ],
+  "now_playing_response": {
+    "available": true,
+    "now_playing": {
+      "player_id": "RINCON_347E5C9BEC8F01400",
+      "player_name": "Bedroom",
+      "state": "playing",
+      "title": "Livingston - Shadow",
+      "artist": "Mother Mother",
+      "album": "Inside (Deluxe)",
+      "image": "http://127.0.0.1/art/0.png",
+      "volume": 12,
+      "queue_id": "RINCON_347E5C9BEC8F01400",
+      "shuffle": false,
+      "repeat": "off",
+      "elapsed": 12.0,
+      "duration": 158.0,
+      "queue_item_id": "6c70e504e0c942bd8c14a1f8b09ddfb8",
+      "queue_index": 0
+    }
+  },
+  "queue_response": {
+    "available": true,
+    "items": [
+      {
+        "queue_id": "RINCON_347E5C9BEC8F01400",
+        "queue_item_id": "6c70e504e0c942bd8c14a1f8b09ddfb8",
+        "name": "Livingston - Shadow",
+        "duration": 158,
+        "sort_index": 0,
+        "index": 0,
+        "available": true,
+        "image": "http://127.0.0.1/art/0.png"
+      },
+      {
+        "queue_id": "RINCON_347E5C9BEC8F01400",
+        "queue_item_id": "e541a23dd0cd43ada1d27454714b6ba9",
+        "name": "CHINCHILLA - Little Girl Gone",
+        "duration": 189,
+        "sort_index": 1,
+        "index": 0,
+        "available": true,
+        "image": "http://127.0.0.1/art/1.png"
+      },
+      {
+        "queue_id": "RINCON_347E5C9BEC8F01400",
+        "queue_item_id": "1e99ca9087054a50b1c52e47433241ac",
+        "name": "K.Flay - High Enough",
+        "duration": 232,
+        "sort_index": 2,
+        "index": 0,
+        "available": true,
+        "image": "http://127.0.0.1/art/2.png"
+      },
+      {
+        "queue_id": "RINCON_347E5C9BEC8F01400",
+        "queue_item_id": "3df4377cdf98433aa7409a59fced049d",
+        "name": "Jack Harris - Careful What You Wish For (the doctor said to)",
+        "duration": 194,
+        "sort_index": 3,
+        "index": 0,
+        "available": true,
+        "image": "http://127.0.0.1/art/3.png"
+      },
+      {
+        "queue_id": "RINCON_347E5C9BEC8F01400",
+        "queue_item_id": "0915d4262b694647afccdac4542d4117",
+        "name": "Chris Grey - LET THE WORLD BURN",
+        "duration": 164,
+        "sort_index": 4,
+        "index": 0,
+        "available": true,
+        "image": "http://127.0.0.1/art/4.png"
+      },
+      {
+        "queue_id": "RINCON_347E5C9BEC8F01400",
+        "queue_item_id": "422117686a3b48fe92854601a4968b25",
+        "name": "PEGGY - ALICE",
+        "duration": 154,
+        "sort_index": 5,
+        "index": 0,
+        "available": true,
+        "image": "http://127.0.0.1/art/5.png"
+      },
+      {
+        "queue_id": "RINCON_347E5C9BEC8F01400",
+        "queue_item_id": "b1b34ba924df41c1bcb490f143db2feb",
+        "name": "SkyDxddy - Pretty Distraction",
+        "duration": 176,
+        "sort_index": 6,
+        "index": 0,
+        "available": true,
+        "image": "http://127.0.0.1/art/6.png"
+      },
+      {
+        "queue_id": "RINCON_347E5C9BEC8F01400",
+        "queue_item_id": "d564370044204f56b4509fc719dcbe0f",
+        "name": "EMELINE - cinderella's dead",
+        "duration": 121,
+        "sort_index": 7,
+        "index": 0,
+        "available": true,
+        "image": "http://127.0.0.1/art/7.png"
+      },
+      {
+        "queue_id": "RINCON_347E5C9BEC8F01400",
+        "queue_item_id": "d6084ce66a8847d7a6b303f9d1170890",
+        "name": "Mother Mother - Hayloft II",
+        "duration": 216,
+        "sort_index": 8,
+        "index": 0,
+        "available": true,
+        "image": "http://127.0.0.1/art/8.png"
+      },
+      {
+        "queue_id": "RINCON_347E5C9BEC8F01400",
+        "queue_item_id": "7017945c37e84a3485c623b5a4d0feac",
+        "name": "Angie\u6069\u7199 - Juby Phonic- Miss wanna die (Lyrics)",
+        "duration": 202,
+        "sort_index": 9,
+        "index": 0,
+        "available": true,
+        "image": "http://127.0.0.1/art/9.png"
+      },
+      {
+        "queue_id": "RINCON_347E5C9BEC8F01400",
+        "queue_item_id": "814a1dec7e5a43908565b294e8eccf59",
+        "name": "Set It Off - Wolf in Sheep's Clothing",
+        "duration": 188,
+        "sort_index": 10,
+        "index": 0,
+        "available": true,
+        "image": "http://127.0.0.1/art/10.png"
+      },
+      {
+        "queue_id": "RINCON_347E5C9BEC8F01400",
+        "queue_item_id": "612d4236badf47b594992877d43f5b3d",
+        "name": "Em Beihold - Numb Little Bug",
+        "duration": 170,
+        "sort_index": 11,
+        "index": 0,
+        "available": true,
+        "image": "http://127.0.0.1/art/11.png"
+      },
+      {
+        "queue_id": "RINCON_347E5C9BEC8F01400",
+        "queue_item_id": "dc0f20347d4542fbb99baf1a2e03eb41",
+        "name": "Charlotte Lawrence - Joke's On You",
+        "duration": 185,
+        "sort_index": 12,
+        "index": 0,
+        "available": true,
+        "image": "http://127.0.0.1/art/12.png"
+      },
+      {
+        "queue_id": "RINCON_347E5C9BEC8F01400",
+        "queue_item_id": "1d318f293df34497803a8d4becb49b61",
+        "name": "Soap&Skin - Me and the Devil",
+        "duration": 185,
+        "sort_index": 13,
+        "index": 0,
+        "available": true,
+        "image": "http://127.0.0.1/art/13.png"
+      }
+    ]
+  }
+}

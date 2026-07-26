@@ -8,6 +8,8 @@ import types
 
 import pytest
 
+pytestmark = pytest.mark.ci_safe
+
 fast_tiers = pytest.importorskip("fast_tiers")
 fast_path = pytest.importorskip("fast_path")
 expert_dispatch = pytest.importorskip("expert_dispatch")

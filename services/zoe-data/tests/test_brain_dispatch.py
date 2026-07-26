@@ -5,6 +5,8 @@ import pytest
 
 import brain_dispatch as bd
 
+pytestmark = pytest.mark.ci_safe
+
 
 def test_use_core_brain_flag(monkeypatch):
     monkeypatch.delenv("ZOE_USE_CORE_BRAIN", raising=False)

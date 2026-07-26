@@ -6,6 +6,8 @@ import types
 import pytest
 from fastapi.testclient import TestClient
 
+pytestmark = pytest.mark.ci_safe
+
 
 @pytest.fixture(autouse=True)
 def _restore_swapped_modules():

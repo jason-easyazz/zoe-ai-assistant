@@ -5,7 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Zoe Developer Dashboard</title>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+        /* Zoe is local-first: no webfont is fetched. This page's font-family
+           already falls back to the system UI stack. The Google Fonts @import
+           that used to sit here never loaded anyway — nginx's CSP allows
+           neither fonts.googleapis.com in style-src nor a non-'self' font-src. */
 
         :root {
             --bg-primary: #0a0a0a;

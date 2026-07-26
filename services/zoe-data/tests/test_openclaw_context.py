@@ -1,6 +1,9 @@
 """OpenClaw message context prefix (zoe-auth role → agent)."""
 
+import pytest
 from openclaw_ws import _zoe_context_prefix
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_context_prefix_includes_user_role_and_name():

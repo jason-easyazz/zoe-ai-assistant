@@ -2,13 +2,20 @@
 # ============================================================
 # deploy-pi-voice.sh — Deploy Zoe voice daemon to Raspberry Pi
 # Run from the Jetson: bash scripts/setup/deploy-pi-voice.sh
+#
+# LIVE PANEL DEFAULTS: the zoe-touch panel runs the daemon as user `pi`
+# with files in /home/pi/.zoe-voice/ under the USER service zoe-voice
+# (ssh alias `zoe-pi`; restart with `systemctl --user restart zoe-voice`).
+# These defaults target that live layout. For a fresh Pi provisioned by
+# pi_voice_daemon_install.sh under a different user, override PI_USER /
+# PI_DAEMON_DIR / PI_VENV explicitly.
 # ============================================================
 set -euo pipefail
 
 PI_HOST="${PI_HOST:-192.168.1.61}"
-PI_USER="${PI_USER:-zoe}"
-PI_DAEMON_DIR="${PI_DAEMON_DIR:-/home/zoe/assistant/scripts/setup}"
-PI_VENV="${PI_VENV:-/home/zoe/venv}"
+PI_USER="${PI_USER:-pi}"
+PI_DAEMON_DIR="${PI_DAEMON_DIR:-/home/pi/.zoe-voice}"
+PI_VENV="${PI_VENV:-/home/pi/.zoe-voice/venv}"
 
 echo "==> Deploying Zoe voice daemon to ${PI_USER}@${PI_HOST}"
 

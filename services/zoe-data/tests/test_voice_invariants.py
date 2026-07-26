@@ -18,6 +18,8 @@ import os
 
 import pytest
 
+pytestmark = pytest.mark.ci_safe
+
 DATA = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # services/zoe-data
 
 

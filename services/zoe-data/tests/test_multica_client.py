@@ -11,6 +11,8 @@ import pytest
 from multica_ticket_contract import parse_ticket_block
 from zoe_evolution_proposal_adapter import dump_mcp_evolution_proposal_contract
 
+pytestmark = pytest.mark.ci_safe
+
 
 def test_get_engineering_multica_agent_id_prefers_env(monkeypatch):
     monkeypatch.setenv("HERMES_MULTICA_AGENT_ID", "env-hermes-id")

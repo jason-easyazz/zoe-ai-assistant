@@ -18,7 +18,8 @@ import time
 import uuid
 from datetime import datetime, timezone
 
-from hermes_http import hermes_auth_headers, hermes_bin, zoe_repo_root
+from hermes_http import hermes_auth_headers, hermes_bin
+from repo_paths import zoe_repo_root
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,9 @@ async def _record_cost_event(
                 user_id, input_tokens, output_tokens, estimated_cost_usd, time.time(),
             )
     except Exception as exc:
-        logger.debug("Failed to record cost event: %s", exc)
+        logger.warning(
+            "background_runner: failed to record cost event for agent=%s model=%s "
+            "— spend under-reported: %s", agent_name, model, exc)
 
 
 async def enqueue_background_task(
@@ -169,7 +172,9 @@ async def _run_task(
                     except Exception as _me:
                         logger.debug("background_runner: Multica sync failed: %s", _me)
             except Exception as _pe:
-                logger.debug("background_runner: could not mark proposal deployed: %s", _pe)
+                logger.warning(
+                    "background_runner: could not mark proposal deployed — "
+                    "proposal status stays stale: %s", _pe)
 
         # Estimate output tokens from output length (rough: ~4 chars/token)
         _est_tokens = len(result) // 4

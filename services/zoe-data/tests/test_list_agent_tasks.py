@@ -10,6 +10,8 @@ sys.path.insert(0, __file__.rsplit("/tests/", 1)[0])
 
 from routers import system
 
+pytestmark = pytest.mark.ci_safe
+
 
 class _FakeDB:
     def __init__(self):

@@ -6,7 +6,10 @@ http://127.0.0.1:11434/v1/v1/chat/completions (404) and silently killed idle
 consolidation's Gemma extraction in prod. Normalization strips a trailing /v1 so
 the append is always a single /v1.
 """
+import pytest
 from memory_digest import _normalize_gemma_base
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_strips_trailing_v1():

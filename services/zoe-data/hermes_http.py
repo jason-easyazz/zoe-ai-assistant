@@ -1,10 +1,13 @@
-"""Shared Hermes helpers (gateway auth, CLI paths, repo root)."""
+"""Shared Hermes helpers (gateway auth, CLI path).
+
+``zoe_repo_root`` moved to ``repo_paths.py`` — it never had Hermes semantics,
+and living here made six path-only modules look Hermes-coupled.
+"""
 
 from __future__ import annotations
 
 import os
 import shutil
-from pathlib import Path
 
 from runtime_env import bootstrap_runtime_env
 
@@ -18,15 +21,6 @@ def hermes_bin() -> str:
     if found:
         return found
     return os.path.expanduser("~/.local/bin/hermes")
-
-
-def zoe_repo_root() -> str:
-    """Repo root for subprocess cwd; honour ZOE_REPO_ROOT or derive from this file."""
-    env = os.environ.get("ZOE_REPO_ROOT", "").strip()
-    if env:
-        return env
-    # services/zoe-data/hermes_http.py -> repo root is two levels up from zoe-data.
-    return str(Path(__file__).resolve().parents[2])
 
 
 def hermes_api_key() -> str:

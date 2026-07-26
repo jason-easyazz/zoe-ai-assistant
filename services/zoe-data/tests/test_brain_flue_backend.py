@@ -12,6 +12,8 @@ import json
 
 import pytest
 
+pytestmark = pytest.mark.ci_safe
+
 
 # ── (a) default → existing core path, flue untouched ──────────────────────────
 

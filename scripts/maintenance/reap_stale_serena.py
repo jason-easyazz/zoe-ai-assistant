@@ -19,6 +19,17 @@ session's code-intel; a missed kill can take down the live brain):
   A process younger than --grace-min (default 30) minutes is never touched,
   whatever its state — fresh sessions swap-storm briefly while indexing.
 
+Recycle policy (the SHARED server only, and never a kill): the shared unit is
+exempt from both kill rules above, so nothing used to bound its growth. Its
+per-session project/symbol caches are never evicted, so it creeps ~1 GB/day
+(measured 2026-07-20/21/22) and it does so in RSS, not swap, which the COLD
+rule cannot see. That creep is not cosmetic: it drags the box's idle headroom
+under the deploy workflow's memory gate, and three consecutive deploys failed
+at 640-658 MB available on 2026-07-21 purely because of it. So when the shared
+server exceeds --shared-rss-mb, this tool asks systemd to RESTART the unit
+(graceful; Restart=always brings it back in ~4 s with an empty cache). It is
+never signalled directly — the reap exemption stays absolute.
+
 Dry-run by default; pass --execute to actually kill (SIGTERM, then SIGKILL
 after --term-wait seconds for anything that ignored it).
 
@@ -32,11 +43,31 @@ from __future__ import annotations
 import argparse
 import os
 import signal
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
 
 SERENA_MARKER = "serena start-mcp-server"
+
+# The SHARED server (scripts/setup/systemd/serena-mcp.service) is a long-lived
+# systemd user unit, not a per-session leftover: systemd owns its lifecycle and
+# its unit carries the MemoryHigh/MemoryMax caps. It must be exempt from both
+# reap rules. The ORPHAN rule would not fire on it today (a service main process
+# is parented to `systemd --user`, not PID 1), but the COLD rule absolutely
+# would — a legitimately idle shared server on this swap-heavy box drifts past
+# the swap threshold, and reaping it would kill code-intel for the whole fleet
+# and throw away the warm index that this server exists to share. Match on the
+# cgroup rather than the cmdline: the cgroup is set by systemd and cannot be
+# spoofed by a stray hand-launched process copying the same flags.
+SHARED_SERVICE_MARKER = "serena-mcp.service"
+
+# RSS at which the shared server is recycled. Its unit allows MemoryMax=2G, but
+# the box only has ~1-1.5 GB of idle headroom to give, and the deploy gate needs
+# 800 MB of it; 900 MB fires well before the cap while leaving a normal working
+# cache alone (a freshly restarted server sits at ~100 MB).
+SHARED_RECYCLE_RSS_MB = 900
+SHARED_UNIT = "serena-mcp.service"
 
 
 @dataclass
@@ -48,6 +79,7 @@ class SerenaProc:
     swap_kb: int
     rss_kb: int
     cmdline: str
+    cgroup: str = ""
 
 
 def _clock_ticks() -> float:
@@ -85,6 +117,11 @@ def scan(now: float | None = None) -> list[SerenaProc]:
             ppid = int(after[1])
             start_ticks = float(after[19])
             age_s = now - (boot + start_ticks / ticks)
+            try:
+                with open(f"/proc/{pid}/cgroup") as fh:
+                    cgroup = fh.read().strip()
+            except (FileNotFoundError, PermissionError):
+                cgroup = ""  # unreadable -> treated as unmanaged, i.e. reapable
             swap_kb = rss_kb = 0
             uid = -1
             with open(f"/proc/{pid}/status") as fh:
@@ -97,12 +134,14 @@ def scan(now: float | None = None) -> list[SerenaProc]:
                         uid = int(line.split()[1])
         except (FileNotFoundError, ProcessLookupError, PermissionError, IndexError, ValueError):
             continue  # raced a process exit or unreadable entry — skip
-        found.append(SerenaProc(pid, ppid, uid, age_s, swap_kb, rss_kb, cmdline))
+        found.append(SerenaProc(pid, ppid, uid, age_s, swap_kb, rss_kb, cmdline, cgroup))
     return found
 
 
 def classify(p: SerenaProc, *, swap_mb: int, grace_min: int) -> str | None:
     """Return a reap reason, or None to keep the process."""
+    if SHARED_SERVICE_MARKER in p.cgroup:
+        return None  # the shared server — systemd owns it; see SHARED_SERVICE_MARKER
     if p.age_s < grace_min * 60:
         return None  # fresh session still indexing — never touch
     if p.ppid == 1:
@@ -110,6 +149,54 @@ def classify(p: SerenaProc, *, swap_mb: int, grace_min: int) -> str | None:
     if p.swap_kb > swap_mb * 1024:
         return f"cold ({p.swap_kb // 1024} MB swapped > {swap_mb} MB limit)"
     return None
+
+
+def is_shared(p: SerenaProc) -> bool:
+    """True for the systemd-owned shared server (cgroup match, unspoofable)."""
+    return SHARED_SERVICE_MARKER in p.cgroup
+
+
+def classify_shared(p: SerenaProc, *, shared_rss_mb: int, grace_min: int = 30) -> str | None:
+    """Return a RECYCLE reason for the shared server, or None to leave it.
+
+    Deliberately separate from classify(): that function's job is to decide
+    what to KILL, and its shared-server exemption must stay absolute. This one
+    only ever leads to a systemctl restart.
+    """
+    if not is_shared(p):
+        return None  # only the shared unit is recyclable; strays get reaped
+    if p.age_s < grace_min * 60:
+        # WARM-UP GUARD. Measured 2026-07-22: a cold start walks ~120 agent
+        # worktrees and logs "Loading of .gitignore files completed in 15
+        # minutes" — and it is already ~1 GB while still doing it, i.e. ABOVE
+        # the recycle threshold before it has served a single request. Without
+        # this guard the hourly timer restarts it mid-warm-up, forever, and the
+        # fleet never gets a usable server: the recycle would cause the outage
+        # it exists to prevent.
+        return None
+    if p.rss_kb > shared_rss_mb * 1024:
+        return f"bloated ({p.rss_kb // 1024} MB RSS > {shared_rss_mb} MB limit)"
+    return None
+
+
+def recycle_shared(execute: bool) -> str:
+    """Restart the shared unit via systemd. Never signals the process."""
+    if not execute:
+        return "would restart (dry run)"
+    # `systemctl --user` needs the user bus. The hourly timer inherits
+    # XDG_RUNTIME_DIR, but a hand/CI run may not — and deploy.yml already
+    # exports it explicitly for its Flue steps for exactly this reason. Without
+    # it the restart fails, the bloat survives, and the deploy gate keeps
+    # starving with the recycle path reporting that it "ran".
+    env = os.environ.copy()
+    env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    proc = subprocess.run(
+        ["systemctl", "--user", "restart", SHARED_UNIT],
+        capture_output=True, text=True, env=env,
+    )
+    if proc.returncode != 0:
+        return f"restart FAILED rc={proc.returncode}: {(proc.stderr or '').strip()[:120]}"
+    return "restarted"
 
 
 def _still_serena(pid: int) -> bool:
@@ -162,17 +249,45 @@ def main() -> int:
                     help="never touch processes younger than this (default 30 min)")
     ap.add_argument("--term-wait", type=float, default=10.0,
                     help="seconds to wait after SIGTERM before SIGKILL")
+    ap.add_argument("--shared-rss-mb", type=int, default=SHARED_RECYCLE_RSS_MB,
+                    help=f"restart the shared unit above this RSS "
+                         f"(default {SHARED_RECYCLE_RSS_MB} MB)")
+    ap.add_argument("--no-recycle", action="store_true",
+                    help="never restart the shared unit (kill rules unchanged)")
     ap.add_argument("--execute", action="store_true",
-                    help="actually kill; without this flag it is a dry run")
+                    help="actually kill/restart; without this flag it is a dry run")
     args = ap.parse_args()
 
     my_uid = os.getuid()
     procs = scan()
     reaped = kept = skipped = 0
+    recycled = 0
+    recycle_failed = False
     for p in sorted(procs, key=lambda x: -x.swap_kb):
         reason = classify(p, swap_mb=args.swap_mb, grace_min=args.grace_min)
         ident = (f"pid={p.pid} age={p.age_s/3600:.1f}h swap={p.swap_kb//1024}MB "
                  f"rss={p.rss_kb//1024}MB ppid={p.ppid}")
+        # The shared unit is exempt from every kill rule, but may be RECYCLED
+        # (systemctl restart) when its never-evicted caches have bloated it.
+        if is_shared(p):
+            bloat = None if args.no_recycle else classify_shared(
+                p, shared_rss_mb=args.shared_rss_mb, grace_min=args.grace_min)
+            if bloat is None:
+                kept += 1
+                print(f"KEEP  {ident} — shared unit")
+            elif recycled:
+                # Restart the UNIT once per run: several processes can share the
+                # unit cgroup, and one restart already recycles all of them.
+                # Restarting per-process would flap the service.
+                kept += 1
+                print(f"KEEP  {ident} — {bloat}, already recycled this run")
+            else:
+                outcome = recycle_shared(args.execute)
+                recycled += 1
+                if "FAILED" in outcome:
+                    recycle_failed = True
+                print(f"RECYCLE {ident} — {bloat} -> {outcome}")
+            continue
         if reason is None:
             kept += 1
             print(f"KEEP  {ident}")
@@ -193,9 +308,16 @@ def main() -> int:
             reaped += 1
 
     mode = "reaped" if args.execute else "would reap"
-    # reaped + kept + skipped == len(procs) always (every process hits exactly
-    # one bucket), so the operator can verify the run at a glance.
-    print(f"\n{len(procs)} serena server(s): {mode} {reaped}, kept {kept}, skipped {skipped}")
+    # reaped + kept + skipped + recycled == len(procs) always (every process
+    # hits exactly one bucket), so the operator can verify the run at a glance.
+    print(f"\n{len(procs)} serena server(s): {mode} {reaped}, kept {kept}, "
+          f"skipped {skipped}, recycled {recycled}")
+    if recycle_failed:
+        # Non-zero so the hourly oneshot is recorded as FAILED. Exiting 0 here
+        # would report a healthy run while the shared unit stayed bloated and
+        # the deploy gate kept starving — the silent-success pattern.
+        print("ERROR: the shared unit could not be recycled — see the RECYCLE line above")
+        return 1
     return 0
 
 

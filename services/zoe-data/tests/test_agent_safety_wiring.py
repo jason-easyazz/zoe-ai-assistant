@@ -16,6 +16,8 @@ import uuid
 
 import pytest
 
+pytestmark = pytest.mark.ci_safe
+
 
 def _run(coro):
     return asyncio.new_event_loop().run_until_complete(coro)

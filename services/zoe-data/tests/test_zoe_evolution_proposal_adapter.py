@@ -1,3 +1,4 @@
+import pytest
 import json
 
 from zoe_evolution_proposal_adapter import (
@@ -8,6 +9,8 @@ from zoe_evolution_proposal_adapter import (
     load_proposal_contract_snapshot,
     normalize_mcp_evolution_proposal_type,
 )
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_mcp_contract_snapshot_is_valid_and_review_only():

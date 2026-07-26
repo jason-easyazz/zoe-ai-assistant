@@ -11,6 +11,7 @@ import asyncio
 import fcntl
 import hashlib
 import json
+import logging
 import os
 import re
 import shlex
@@ -47,6 +48,31 @@ HEAD_STABILITY_WINDOW_SECONDS = int(os.environ.get("ZOE_PR_GUARD_HEAD_STABILITY_
 # P2c: bound how many times the guard re-triggers a clean-but-sub-confidence review
 # for the same head before escalating to Hermes instead of looping forever.
 NO_FINDINGS_RETRIGGER_LIMIT = int(os.environ.get("ZOE_PR_GUARD_NO_FINDINGS_RETRIGGER_LIMIT", "3"))
+
+# Autonomous close (Phase 2 executor migration): when the ONLY thing keeping an
+# otherwise-clear PR from merging is a strict-mode BEHIND branch, self-heal with
+# `gh pr update-branch` instead of stranding the PR for a human. Safe — updating
+# a branch merges base into it and the merge STILL requires every gate afterward
+# (Greptile 5/5, threads resolved, CI green) — but it re-triggers CI + Greptile,
+# so it is cooldown-guarded and only fires when BEHIND is the sole blocker.
+# Default OFF: this file is load-bearing for every PR; the operator flips it on.
+AUTO_UPDATE_BRANCH = os.environ.get("ZOE_PR_GUARD_AUTO_UPDATE_BRANCH", "0").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+UPDATE_BRANCH_COOLDOWN_SECONDS = int(
+    os.environ.get("ZOE_PR_GUARD_UPDATE_BRANCH_COOLDOWN_SECONDS", "300")
+)
+
+# Autonomous close step 2: `required_conversation_resolution` blocks the merge
+# until every review thread is marked resolved — but nothing in code marks
+# Greptile's threads resolved (it is done by hand). This automates that, and
+# ONLY that, with two safety layers: it fires only when Greptile is otherwise
+# satisfied (no open confidence/finding blockers), and it resolves ONLY
+# Greptile-authored threads — if ANY human review thread is unresolved it
+# refuses entirely (a person must address it). Default OFF: load-bearing file.
+AUTO_RESOLVE_GREPTILE_THREADS = os.environ.get(
+    "ZOE_PR_GUARD_AUTO_RESOLVE_THREADS", "0"
+).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -576,7 +602,10 @@ async def _record_cost_event(task_id: str | None, estimated_cost_usd: float) -> 
                 estimated_cost_usd,
                 time.time(),
             )
-    except Exception:
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "greploop_guard: failed to record cost event for task=%s ($%.4f) — "
+            "spend under-reported: %s", task_id, estimated_cost_usd, exc)
         return
 
 
@@ -884,14 +913,14 @@ def _gh_pr_review_threads(pr_number: int, *, repo: str = DEFAULT_REPO) -> list[d
         "repository(owner:$owner,name:$repo){pullRequest(number:$pr){"
         "reviewThreads(first:100){"
         "pageInfo{hasNextPage endCursor}"
-        "nodes{isResolved comments(first:20){nodes{id author{login} path line body url}}}}}}}"
+        "nodes{id isResolved comments(first:20){nodes{id author{login} path line body url}}}}}}}"
     )
     query_next = (
         "query($owner:String!,$repo:String!,$pr:Int!,$after:String!){"
         "repository(owner:$owner,name:$repo){pullRequest(number:$pr){"
         "reviewThreads(first:100,after:$after){"
         "pageInfo{hasNextPage endCursor}"
-        "nodes{isResolved comments(first:20){nodes{id author{login} path line body url}}}}}}}"
+        "nodes{id isResolved comments(first:20){nodes{id author{login} path line body url}}}}}}}"
     )
     threads: list[dict[str, Any]] = []
     after: str | None = None
@@ -1475,6 +1504,122 @@ async def assess_merge_readiness(
     }
 
 
+def _only_behind_blocks(assessment: dict[str, Any]) -> bool:
+    """True iff the SOLE reason the PR is not ready is a strict-mode BEHIND branch.
+
+    Requires the Greptile side to be fully clear (no confidence / unresolved-
+    thread / actionable-finding blockers) so update-branch never thrashes a
+    re-review that still has open work — only a genuinely done PR that just
+    needs to catch up to base.
+    """
+    blockers = set(assessment.get("blockers") or [])
+    gh = assessment.get("gh") or {}
+    return (
+        blockers == {"GH_NOT_MERGEABLE"}
+        and str(gh.get("mergeStateStatus") or "").upper() == "BEHIND"
+    )
+
+
+def _gh_update_branch(pr_number: int, *, repo: str = DEFAULT_REPO) -> dict[str, Any]:
+    """Bring a BEHIND PR branch up to date with base via `gh pr update-branch`.
+
+    Safe by construction: it merges base into the PR branch (never force, never
+    rebase-onto-main here); the merge still passes through every gate afterward.
+    Never runs on DIRTY (real conflicts) — `_only_behind_blocks` gates that out,
+    and a conflict makes update-branch fail loudly rather than guess.
+    """
+    proc = _run_gh(["pr", "update-branch", str(int(pr_number))], repo=repo)
+    ok = proc.returncode == 0
+    return {"ok": ok, "detail": (proc.stderr or proc.stdout or "").strip()}
+
+
+def _update_branch_cooldown_ok(state: dict[str, Any], *, now: float) -> bool:
+    last = float(state.get("last_update_branch_at") or 0)
+    return (now - last) >= UPDATE_BRANCH_COOLDOWN_SECONDS
+
+
+def _thread_is_greptile(thread: dict[str, Any]) -> bool:
+    """A thread authored by Greptile (any of its comments) — mirrors the
+    detection in _gh_thread_counts so the two never disagree."""
+    comments = ((thread.get("comments") or {}).get("nodes") or [])
+    if not comments:
+        return False
+    # Classify by the OPENER (first/oldest comment), NOT "any comment". A human
+    # can open a thread that Greptile later replies to — that is a HUMAN thread
+    # and must never be auto-resolved. Safety-critical: used only by the resolve
+    # path, so a mixed thread counts as human (fail-safe).
+    opener_login = str(((comments[0].get("author") or {}).get("login") or "")).lower()
+    return "greptile" in opener_login
+
+
+def _only_thread_resolution_pending(assessment: dict[str, Any]) -> bool:
+    """True iff Greptile is satisfied and the sole remaining Greptile gap is
+    that its threads aren't marked resolved on GitHub. A BEHIND branch may also
+    be present (handled separately) — what this forbids is any SUBSTANTIVE
+    Greptile blocker (open confidence, actionable findings, running/failed
+    check), so threads are only auto-resolved once the review itself is clean."""
+    blockers = list(assessment.get("blockers") or [])
+    has_thread_blocker = any(b.startswith("GREPTILE_UNRESOLVED_THREADS") for b in blockers)
+    substantive = any(
+        b.startswith("GREPTILE_CONFIDENCE")
+        or b.startswith("GREPTILE_ACTIONABLE_FINDINGS")
+        or b in ("GREPTILE_REVIEW_RUNNING", "GREPTILE_THREAD_CHECK_FAILED")
+        for b in blockers
+    )
+    return has_thread_blocker and not substantive
+
+
+def _gh_resolve_thread(thread_id: str) -> bool:
+    """Mark ONE review thread resolved via the GraphQL resolveReviewThread
+    mutation. Same raw-gh pattern as _gh_pr_review_threads (gh api graphql
+    takes no --repo; the thread id already scopes it)."""
+    mutation = (
+        "mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}"
+    )
+    proc = subprocess.run(
+        ["gh", "api", "graphql", "-f", f"query={mutation}", "-f", f"id={thread_id}"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+    )
+    return proc.returncode == 0
+
+
+def _resolve_greptile_threads(pr_number: int, *, repo: str = DEFAULT_REPO) -> dict[str, Any]:
+    """Mark every UNRESOLVED Greptile-authored thread resolved. SAFETY: refuses
+    entirely if ANY unresolved thread is NOT Greptile's — a human review is
+    pending and must be addressed by a person, never auto-resolved. Call only
+    when Greptile has given the all-clear (see _only_thread_resolution_pending)."""
+    threads = _gh_pr_review_threads(pr_number, repo=repo)
+    if threads is None:
+        return {"ok": False, "reason": "THREAD_READ_FAILED"}
+    unresolved = [t for t in threads if not t.get("isResolved")]
+    human_unresolved = [t for t in unresolved if not _thread_is_greptile(t)]
+    if human_unresolved:
+        return {"ok": False, "reason": "HUMAN_THREADS_OPEN", "human_unresolved": len(human_unresolved)}
+    resolved: list[str] = []
+    failed: list[str] = []
+    missing_id = 0
+    for thread in unresolved:
+        tid = thread.get("id")
+        if not tid:
+            # A thread with no node id can't be resolved — count it distinctly
+            # (not as a "None" failure that poisons the result), and it keeps
+            # ok False so the merge stays blocked (safe: unresolved == blocked).
+            missing_id += 1
+            continue
+        if _gh_resolve_thread(str(tid)):
+            resolved.append(str(tid))
+        else:
+            failed.append(str(tid))
+    return {
+        "ok": not failed and missing_id == 0,
+        "resolved": resolved,
+        "failed": failed,
+        "missing_id": missing_id,
+    }
+
+
 async def merge_pr_when_ready(
     pr_number: int,
     *,
@@ -1546,6 +1691,76 @@ async def merge_pr_when_ready(
             default_branch=default_branch,
         )
         if not assessment["ready"]:
+            now = time.time()
+            # Autonomous close (step 2): Greptile is satisfied but its threads
+            # aren't marked resolved on GitHub, so required_conversation_resolution
+            # blocks. Resolve Greptile's own threads (never human threads — the
+            # resolver refuses if any are open) and retry next cycle.
+            if AUTO_RESOLVE_GREPTILE_THREADS and _only_thread_resolution_pending(assessment):
+                res = _resolve_greptile_threads(pr_number, repo=repo)
+                if res.get("ok") and res.get("resolved"):
+                    state["terminal_state"] = "RESOLVING_THREADS"
+                    _write_json(pr_number, "status.json", state)
+                    _record_guardrail(
+                        pr_number,
+                        f"marked {len(res['resolved'])} Greptile thread(s) resolved; "
+                        "re-checking merge readiness next cycle",
+                    )
+                    return {
+                        "ok": False,
+                        "state": "RESOLVING_THREADS",
+                        "blockers": assessment["blockers"],
+                        "resolved_threads": res["resolved"],
+                        "retry_after_seconds": 15,
+                        "assessment": assessment,
+                    }
+                elif res.get("reason") == "HUMAN_THREADS_OPEN":
+                    _record_guardrail(
+                        pr_number,
+                        f"NOT auto-resolving: {res['human_unresolved']} human review "
+                        "thread(s) open — a person must address them",
+                    )
+                else:
+                    # THREAD_READ_FAILED / partial resolve / missing ids — leave
+                    # a diagnostic trace instead of silently falling through, so
+                    # a stuck PR is explainable from the guardrail log.
+                    _record_guardrail(
+                        pr_number,
+                        "thread auto-resolve did not fully succeed: "
+                        f"reason={res.get('reason')} resolved={len(res.get('resolved') or [])} "
+                        f"failed={len(res.get('failed') or [])} missing_id={res.get('missing_id', 0)}",
+                    )
+                # fall through to the normal block/update-branch path
+            # Autonomous close (step 1): if the PR is otherwise done and only
+            # BEHIND base, bring it current instead of stranding it for a human.
+            # Gated, cooldown-guarded, and only when BEHIND is the sole blocker.
+            if (
+                AUTO_UPDATE_BRANCH
+                and _only_behind_blocks(assessment)
+                and _update_branch_cooldown_ok(state, now=now)
+            ):
+                upd = _gh_update_branch(pr_number, repo=repo)
+                state["last_update_branch_at"] = now
+                # terminal_state MUST mirror the returned state so a caller
+                # reading status.json and a caller reading the dict agree.
+                returned_state = "UPDATING_BRANCH" if upd["ok"] else "BLOCKED_MERGE_FAILED"
+                state["terminal_state"] = returned_state
+                if not upd["ok"]:
+                    state["merge_blockers"] = assessment["blockers"]
+                    state["merge_error"] = (upd.get("detail") or "")[:2000]
+                _write_json(pr_number, "status.json", state)
+                _record_guardrail(
+                    pr_number,
+                    f"branch BEHIND base — ran gh pr update-branch (ok={upd['ok']}): {upd['detail'][:200]}",
+                )
+                return {
+                    "ok": False,
+                    "state": returned_state,
+                    "blockers": assessment["blockers"],
+                    "update_branch": upd,
+                    "retry_after_seconds": UPDATE_BRANCH_COOLDOWN_SECONDS,
+                    "assessment": assessment,
+                }
             state["terminal_state"] = "BLOCKED_NOT_READY"
             state["merge_blockers"] = assessment["blockers"]
             _write_json(pr_number, "status.json", state)

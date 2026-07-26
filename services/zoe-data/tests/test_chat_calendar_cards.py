@@ -1,7 +1,10 @@
 """Tests for calendar intent canonical card emission."""
 
+import pytest
 from intent_router import Intent
 from routers.chat import _intent_card_data
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_calendar_show_payload_keeps_compat_shape_and_adds_contract():

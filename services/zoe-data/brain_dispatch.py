@@ -3,9 +3,10 @@
 zoe-core (Pi on local Gemma) by default; the legacy ``zoe_agent`` brain only when
 ``ZOE_USE_CORE_BRAIN`` is explicitly off (the validation-window fallback). Every
 entry point — text chat AND all the voice paths — routes through here so the
-cutover flag controls them consistently. (chat.py keeps its own equivalent
-helpers, which are exercised by the routing tests; this module is what the voice
-paths use to avoid circular imports with chat.py.)
+cutover flag controls them consistently. ``routers/chat.py`` imports these under
+its historical private names (``_use_flue_brain`` / ``_brain_streaming`` /
+``_brain_oneshot``), so its call sites and the routing tests that patch those
+names on the chat module keep working unchanged.
 
 Cutover seam: ``ZOE_BRAIN_BACKEND='flue'`` (default ``'core'``) opts the brain
 lane into the Flue brain sidecar (``zoe_flue_client``) instead of zoe-core. This

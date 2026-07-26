@@ -1,5 +1,8 @@
+import pytest
 import importlib.util
 from pathlib import Path
+
+pytestmark = pytest.mark.ci_safe
 
 
 def test_engineering_prompt_contract_eval_passes():

@@ -1,0 +1,79 @@
+# Shared Serena MCP code-intelligence server, port 9121 (user unit).
+#
+# Why this exists: `.mcp.json` used to give Serena a `command` + `--transport
+# stdio`, which means EVERY MCP client spawns its OWN server. N agents = N
+# processes, each indexing the same ~20k-node repo. The per-instance scope cap
+# from serena_mcp_capped.sh (1G/2G) bounds each MEMBER but not the FLEET:
+# 6 agents x 2G = 12G on a 15.6G box. On 2026-07-16 that OOMed the host
+# (65 MB free, 11 GB swap, live voice 2.2x slower, two Serenas burning 92%/58%
+# CPU re-indexing). One long-lived server = one process, one index, and the
+# same 1G/2G cap now bounds the WHOLE fleet.
+#
+# PORT: 9121, NOT Serena's default. Serena's `--port` defaults to 8000, which is
+# zoe-data's PRODUCTION port — starting Serena with the default would collide
+# with the live API. 9121 is free, sits outside Zoe's dense 8000-8123 service
+# block, and is below the ephemeral range (32768-60999) so the kernel can never
+# transiently steal it for an outbound connection.
+#
+# BIND: 127.0.0.1 only. This server can read the entire repo; it must never be
+# reachable from the LAN.
+#
+# TRANSPORT: streamable-http (not sse). SSE is deprecated in both the MCP spec
+# and Claude Code's docs; `type: "http"` + streamable-http is the forward path.
+#
+# TRADE-OFF (measured, see PR): Serena executes ALL tool calls through a single
+# SerenaAgent TaskExecutor queue, so one shared server SERIALISES the fleet's
+# calls. Measured on this box: 6 concurrent cold calls -> 6.15s wall for 4.53s
+# of work, strictly sequential. This is accepted deliberately: 6 separate
+# servers do not fit in RAM, and a serialised call is better than an OOMed
+# voice brain. See docs + AGENTS.md.
+
+[Unit]
+Description=Shared Serena MCP code-intelligence server (fleet-wide, port 9121)
+Documentation=https://github.com/oraios/serena
+After=network.target
+
+[Service]
+Type=simple
+# The launcher resolves the serena binary AND self-provisions
+# jedi-language-server (the project's configured python_jedi backend). Both are
+# load-bearing — do not inline a bare `serena` call here.
+#
+# SERENA_NO_SCOPE=1: the launcher normally wraps Serena in its own
+# `systemd-run --user --scope` because a stdio-spawned server has no unit of its
+# own to carry limits. Under a service that wrapper is actively harmful — the
+# scope reparents the process to PID 1 and moves it into app.slice, escaping
+# THIS unit's cgroup, which breaks Restart= tracking and makes the process look
+# like an orphan to reap_stale_serena.py. So: skip the scope, and let systemd
+# apply the identical caps natively via MemoryHigh/MemoryMax below.
+Environment=SERENA_NO_SCOPE=1
+ExecStart=%h/assistant/scripts/maintenance/serena_mcp_capped.sh \
+    start-mcp-server \
+    --context claude-code \
+    --project %h/assistant \
+    --transport streamable-http \
+    --host 127.0.0.1 \
+    --port 9121 \
+    --enable-web-dashboard false
+
+# The fleet-wide memory bound (previously per-instance, via the launcher's
+# scope). MemoryHigh throttles + reclaims; MemoryMax is the hard OOM-kill line.
+# MemorySwapMax stops a bloated language server from pushing GBs into swap —
+# the exact failure that exhausted this box's swap on 2026-07-03.
+MemoryHigh=1G
+MemoryMax=2G
+MemorySwapMax=2G
+
+# Code intelligence is dev tooling: it must never win a memory fight against the
+# live voice stack (llama-server / kokoro / zoe-data).
+Nice=10
+OOMScoreAdjust=500
+
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=serena-mcp
+
+[Install]
+WantedBy=default.target
