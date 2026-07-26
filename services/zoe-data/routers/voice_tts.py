@@ -21,7 +21,6 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, R
 from fastapi.responses import StreamingResponse
 from auth import get_current_user
 from database import get_db
-from hermes_http import hermes_auth_headers
 from stt_wake_strip import _strip_wake_word
 from typed_env import env_bool, env_float, env_int, env_str
 # Waterfall engine mechanics live in tts_waterfall; they are re-exported here so
@@ -2531,46 +2530,6 @@ async def _run_voice_memory_passes(
         logger.warning("voice memory passes failed (non-fatal): %s", exc)
 
 
-async def _run_hermes_voice_escalation(prompt: str, session_id: str, user_id: str) -> str:
-    """Use Hermes for foreground voice escalation; OpenClaw is manual-only."""
-    hermes_url = os.environ.get(
-        "HERMES_API_URL",
-        "http://127.0.0.1:8642/v1/chat/completions",
-    )
-    payload = {
-        "model": os.environ.get("HERMES_MODEL", "hermes"),
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are Hermes acting as Zoe's escalation agent for voice. "
-                    "Be concise, complete the requested task, and avoid asking the user "
-                    "to switch surfaces unless absolutely necessary."
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"User id: {user_id}\n"
-                    f"Session id: {session_id}\n\n"
-                    f"{prompt}"
-                ),
-            },
-        ],
-        "temperature": 0.3,
-        "max_tokens": 900,
-        "stream": False,
-    }
-    timeout_s = float(os.environ.get("ZOE_VOICE_HERMES_TIMEOUT_S", "45"))
-    async with httpx.AsyncClient(timeout=timeout_s) as client:
-        resp = await client.post(
-            hermes_url,
-            json=payload,
-            headers=hermes_auth_headers(session_id=session_id),
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    return (data.get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
 
 
 @router.post("/command")
@@ -3802,11 +3761,6 @@ async def voice_command(
         from brain_dispatch import brain_streaming  # zoe-core by default
 
         voice_timeout = float(os.environ.get("ZOE_VOICE_CHAT_TIMEOUT_S", "20"))
-        try:
-            _hermes_cap = float(os.environ.get("ZOE_VOICE_HERMES_TIMEOUT_S", str(voice_timeout)))
-        except Exception:
-            _hermes_cap = voice_timeout
-        hermes_voice_timeout = max(5.0, min(voice_timeout, _hermes_cap))
         _t_first_token: Optional[float] = None
 
         if stream:
@@ -3974,32 +3928,15 @@ async def voice_command(
                             continue
                         if delta.startswith(_VOICE_ESCALATION_MARKERS):
                             try:
-                                is_bg, reason, hermes_prompt = _parse_voice_escalation_delta(delta, text)
-                                logger.info("voice/command stream escalation -> Hermes background=%s reason=%s", is_bg, reason or "unspecified")
-                                if is_bg:
-                                    from background_runner import enqueue_background_task
-                                    _spawn_bg(enqueue_background_task(hermes_prompt, effective_user, session_id))
-                                    delta = "I'll work on that in the background and let you know when it's done."
-                                else:
-                                    # Voice foreground turns should answer aloud when possible;
-                                    # long-running work still uses the explicit background marker.
-                                    try:
-                                        await _bc_stream.broadcast("all", "voice:responding", {
-                                            "panel_id": panel_id,
-                                            "text": "Give me a second - this one may take a little longer. I will come back with the result.",
-                                        })
-                                    except Exception:
-                                        pass
-                                    delta = (
-                                        await asyncio.wait_for(
-                                            _run_hermes_voice_escalation(hermes_prompt, session_id, effective_user),
-                                            timeout=hermes_voice_timeout,
-                                        )
-                                    ).strip()
-                                    if not delta:
-                                        continue
+                                is_bg, reason, esc_prompt = _parse_voice_escalation_delta(delta, text)
+                                # See the non-stream path: Hermes is retired, so
+                                # every escalation goes to the background runner.
+                                logger.info("voice/command stream escalation -> background (was_bg=%s) reason=%s", is_bg, reason or "unspecified")
+                                from background_runner import enqueue_background_task
+                                _spawn_bg(enqueue_background_task(esc_prompt, effective_user, session_id))
+                                delta = "I'll work on that in the background and let you know when it's done."
                             except Exception as esc_exc:
-                                logger.warning("voice/command Hermes escalation failed: %s", esc_exc)
+                                logger.warning("voice/command stream escalation failed: %s", esc_exc)
                                 delta = "I couldn't complete that advanced request right now. Please try again."
                         if _t_first_token is None:
                             _t_first_token = time.monotonic() - t_chat_start
@@ -4110,33 +4047,18 @@ async def voice_command(
                     continue
                 if delta.startswith(_VOICE_ESCALATION_MARKERS):
                     try:
-                        from push import broadcaster as _bc_escalate
-                        is_bg, reason, hermes_prompt = _parse_voice_escalation_delta(delta, text)
-                        logger.info("voice/command escalation -> Hermes background=%s reason=%s", is_bg, reason or "unspecified")
-                        if is_bg:
-                            from background_runner import enqueue_background_task
-                            _spawn_bg(enqueue_background_task(hermes_prompt, effective_user, session_id))
-                            delta = "I'll work on that in the background and let you know when it's done."
-                        else:
-                            # Voice foreground turns should answer aloud when possible;
-                            # long-running work still uses the explicit background marker.
-                            try:
-                                await _bc_escalate.broadcast("all", "voice:responding", {
-                                    "panel_id": panel_id,
-                                    "text": "Give me a second - this one may take a little longer. I will come back with the result.",
-                                })
-                            except Exception:
-                                pass
-                            delta = (
-                                await asyncio.wait_for(
-                                    _run_hermes_voice_escalation(hermes_prompt, session_id, effective_user),
-                                    timeout=hermes_voice_timeout,
-                                )
-                            ).strip()
-                            if not delta:
-                                continue
+                        is_bg, reason, esc_prompt = _parse_voice_escalation_delta(delta, text)
+                        # Hermes is retired, so there is no foreground escalation
+                        # engine — every escalation now goes to the background
+                        # runner, which is the path that still has one. Verified
+                        # never-fired before removal (operator-confirmed; zero
+                        # 'escalation ->' hits in the logs).
+                        logger.info("voice/command escalation -> background (was_bg=%s) reason=%s", is_bg, reason or "unspecified")
+                        from background_runner import enqueue_background_task
+                        _spawn_bg(enqueue_background_task(esc_prompt, effective_user, session_id))
+                        delta = "I'll work on that in the background and let you know when it's done."
                     except Exception as esc_exc:
-                        logger.warning("voice/command Hermes escalation failed: %s", esc_exc)
+                        logger.warning("voice/command escalation failed: %s", esc_exc)
                         delta = "I couldn't complete that advanced request right now. Please try again."
                 if _t_first_token is None:
                     _t_first_token = time.monotonic() - t_chat_start

@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Auto-generated inventory of every ZOE_* environment flag read in the codebase — defaults, readers, typed_env adoption, and .env.example coverage.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-07-23T00:00:00Z
+timestamp: 2026-07-24T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-07-23T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-07-23. The table body is deterministic (sorted, no
+Last generated: 2026-07-24. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Default `dynamic` = not statically extractable; `(required)` = bare
@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-414 flags; 414 not documented in `.env.example`.
+412 flags; 412 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -121,7 +121,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_ENABLE_OPENCLAW_BROWSER_FALLBACK` | `'false'` | no | NO | `services/zoe-data/browser_broker.py` |
 | `ZOE_ENABLE_OPENCLAW_EXECUTION` | `'false'` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_ENGINEERING_MODE` | `-` | no | NO | `services/zoe-data/executors/kanban_adapter.py` |
-| `ZOE_ENV_FILE` | `''`, `'/home/zoe/assistant/services/zoe-data/.env'` | no | NO | `scripts/maintenance/verify_executor_queue_backend.py`<br>`services/zoe-data/multica_board_runner.py` |
+| `ZOE_ENV_FILE` | `''`, `'/home/zoe/assistant/services/zoe-data/.env'` | no | NO | `scripts/maintenance/retire_hermes_openclaw_board.py`<br>`scripts/maintenance/verify_executor_queue_backend.py`<br>`services/zoe-data/multica_board_runner.py` |
 | `ZOE_ESPEAK_PITCH` | `dynamic` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_ESPEAK_SPEED` | `dynamic` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_ESPEAK_VOLUME` | `dynamic` | no | NO | `services/zoe-data/routers/voice_tts.py` |
@@ -153,11 +153,10 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_IDLE_CONSOLIDATION_ENABLED` | `'0'` | no | NO | `services/zoe-data/memory_idle_consolidation.py` |
 | `ZOE_INTENT_DISPATCH_REQUIRE_TOKEN` | `''` | no | NO | `services/zoe-data/auth.py` |
 | `ZOE_INTERNAL_TOKEN` | `''`, `-` | yes | NO | `scripts/maintenance/check_emotional_thread.py`<br>`services/zoe-data/auth.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/music_setup.py`<br>`services/zoe-data/smart_home_setup.py`<br>`services/zoe-data/zoe_core_client.py` |
-| `ZOE_KANBAN_BACKEND` | `'hermes'` | no | NO | `services/zoe-data/executors/kanban_adapter.py` |
-| `ZOE_KANBAN_BOARD` | `'default'` | no | NO | `services/zoe-data/executors/kanban_adapter.py`<br>`services/zoe-data/worktree_bootstrap.py` |
+| `ZOE_KANBAN_BACKEND` | `'executor'` | no | NO | `services/zoe-data/executors/kanban_adapter.py` |
+| `ZOE_KANBAN_BOARD` | `'default'` | no | NO | `services/zoe-data/executors/kanban_adapter.py` |
 | `ZOE_KANBAN_CODE_AUDIT_POST_PATCH_EXPLORE_BUDGET` | `'2'` | no | NO | `services/zoe-data/kanban_phase_budget.py` |
 | `ZOE_KANBAN_CONVERGE_NOOP_IMPLEMENT` | `'true'` | no | NO | `services/zoe-data/executors/kanban_adapter.py` |
-| `ZOE_KANBAN_DB_PATH` | `''` | no | NO | `services/zoe-data/worktree_bootstrap.py` |
 | `ZOE_KANBAN_DEAD_WORKER_GRACE_S` | `'180'` | no | NO | `services/zoe-data/kanban_phase_budget.py` |
 | `ZOE_KANBAN_ESCALATION_MAX_RUNTIME` | `'90m'` | no | NO | `services/zoe-data/executors/kanban_adapter.py` |
 | `ZOE_KANBAN_IMPLEMENT_POST_FOCUS_FOCUSED_TEST_READ_BUDGET` | `dynamic` | no | NO | `services/zoe-data/kanban_phase_budget.py` |
@@ -411,7 +410,6 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_VOICE_GATE_PATHS` | `''` | no | NO | `scripts/maintenance/voice_gate_check.py` |
 | `ZOE_VOICE_GREETING_ENABLED` | `'0'` | no | NO | `services/zoe-data/voice_greeting.py` |
 | `ZOE_VOICE_GREETING_STATE_PATH` | `dynamic` | no | NO | `services/zoe-data/voice_greeting.py` |
-| `ZOE_VOICE_HERMES_TIMEOUT_S` | `'45'`, `dynamic` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_IDENT` | `''` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_LOG` | `''` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_VOICE_PROBE_MIN_MEM_MB` | `'1500'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |

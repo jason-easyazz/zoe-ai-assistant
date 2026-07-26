@@ -77,9 +77,17 @@ IDENTITY = {
 
 # --- the seam itself -------------------------------------------------------
 
-def test_default_backend_is_hermes_so_shipping_changes_nothing(monkeypatch):
+def test_default_backend_is_executor_now_that_hermes_is_retired(monkeypatch):
+    """The seam shipped dark (default 'hermes') so landing it changed nothing.
+
+    Hermes is retired: its gateway is stopped/disabled and its board rows are
+    gone, so defaulting to it would shell a CLI for a runtime that no longer
+    runs. The executor backend is verified against live Multica by
+    scripts/maintenance/verify_executor_queue_backend.py (ALL PASS, including the
+    durable block_reason Hermes never recorded).
+    """
     monkeypatch.delenv("ZOE_KANBAN_BACKEND", raising=False)
-    assert ka._kanban_backend() == "hermes"
+    assert ka._kanban_backend() == "executor"
 
 
 def test_backend_flag_is_read_per_call_so_revert_needs_no_code_change(monkeypatch):
