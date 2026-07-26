@@ -12,8 +12,9 @@ Flag any change that reaches for a different model instead of working within the
 
 ## Voice path — the highest-consequence area
 
-Files: `services/zoe-data/routers/voice_tts.py`, `zoe_core_client.py`, `fast_tiers.py`,
-`tts_waterfall.py`, `scripts/setup/zoe_voice_daemon.py`, Kokoro/Moonshine config.
+Files: `services/zoe-data/routers/voice_tts.py`, `services/zoe-data/zoe_core_client.py`,
+`services/zoe-data/fast_tiers.py`, `services/zoe-data/tts_waterfall.py`,
+`scripts/setup/zoe_voice_daemon.py`, `scripts/setup/kokoro_sidecar.py`, Moonshine config.
 
 - **Said-vs-did is the bar.** A command that used to work and now doesn't is a bug, not
   a regression to argue about. "Can't do it" = bug.

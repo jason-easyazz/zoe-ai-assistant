@@ -100,7 +100,10 @@ Sequence:
 1. **Draft PR.** Invisible to Greptile.
 2. **Local `/review` (Cursor) — free.** Bugbot recognises the same diff later and skips
    the cloud review, so this tier costs nothing. `.cursor/BUGBOT.md` carries the repo's
-   review guide.
+   review guide. This is an IDE-side command — agents cannot run it; it is the operator's
+   step. **Bugbot does not reliably auto-review DRAFT PRs** (verified on #1563: a
+   `bugbot run` comment on a draft produced nothing), so on the draft tier treat local
+   `/review` as the Bugbot pass and use `bugbot run` only after marking ready, if wanted.
 3. **Copilot** — `gh pr edit <n> --add-reviewer @copilot` (that syntax; the bot login does
    NOT resolve). ~$10/mo flat for 1500 requests, and its reviews are always `COMMENTED`,
    so it can never block a merge.
