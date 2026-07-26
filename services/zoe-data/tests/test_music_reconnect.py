@@ -142,3 +142,54 @@ async def test_oauth_run_flow_reconnects_in_place(monkeypatch):
     assert music_oauth._flows[oid]["state"] == "connected"
     assert captured["instance_id"] == "spotify--EXISTING", "OAuth reconnect did not reuse the instance"
     music_oauth._flows.pop(oid, None)
+
+
+@pytest.mark.asyncio
+async def test_reconnect_preserves_existing_provider_settings(monkeypatch):
+    """A reconnect must merge the new auth over the instance's CURRENT values,
+    not fresh defaults — or it silently resets unrelated settings (Greptile)."""
+    saved_args = {}
+    async def fake_ma(command, **args):
+        if command == "config/providers/get_entries":
+            return [
+                {"key": "username", "type": "string", "default_value": ""},
+                {"key": "cookie", "type": "secure_string", "default_value": ""},
+                {"key": "library_sync", "type": "boolean", "default_value": False},
+            ]
+        if command == "config/providers":
+            return [{"domain": "spotify", "instance_id": "sp-EX",
+                     "values": {"username": "old@me", "library_sync": True}}]
+        if command == "config/providers/save":
+            saved_args.update(args)
+            return {"name": "Spotify"}
+        return None
+    monkeypatch.setattr(music_service, "_ma", fake_ma)
+
+    await music_service.save_provider("spotify", {"cookie": "fresh"}, instance_id="sp-EX")
+
+    v = saved_args.get("values") or {}
+    assert v.get("library_sync") is True, "reconnect reset a non-default setting to its default"
+    assert v.get("username") == "old@me", "reconnect dropped the existing username"
+    assert v.get("cookie") == "fresh", "the new auth value was not applied"
+    assert saved_args.get("instance_id") == "sp-EX"
+
+
+@pytest.mark.asyncio
+async def test_first_connect_uses_defaults_not_a_prior_instance(monkeypatch):
+    """A FIRST connect (no instance_id) starts from defaults — it must NOT pull
+    another instance's values."""
+    saved_args = {}
+    async def fake_ma(command, **args):
+        if command == "config/providers/get_entries":
+            return [{"key": "library_sync", "type": "boolean", "default_value": False}]
+        if command == "config/providers":
+            return [{"domain": "spotify", "instance_id": "other", "values": {"library_sync": True}}]
+        if command == "config/providers/save":
+            saved_args.update(args); return {"name": "Spotify"}
+        return None
+    monkeypatch.setattr(music_service, "_ma", fake_ma)
+
+    await music_service.save_provider("spotify", {}, instance_id=None)
+
+    assert (saved_args.get("values") or {}).get("library_sync") is False
+    assert "instance_id" not in saved_args

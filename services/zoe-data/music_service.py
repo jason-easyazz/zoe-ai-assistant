@@ -1440,10 +1440,21 @@ async def save_provider(provider: str, values: dict[str, Any],
     Pass ``instance_id`` to UPDATE that existing instance in place (MA otherwise
     mints a new instance on every save — which duplicates the provider on a
     re-connect or a cookie refresh)."""
-    # Merge the caller's values over MA's defaults so unspecified fields are valid.
+    # Base to merge the caller's values over. On a FIRST connect that's MA's
+    # defaults. On a RECONNECT (instance_id) it's the EXISTING instance's current
+    # values — so a cookie/OAuth refresh preserves the user's other settings
+    # (library-sync toggles etc.) instead of resetting them to defaults, which it
+    # would if we always started from defaults.
     entries = await _ma("config/providers/get_entries", provider_domain=provider) or []
     merged = {e["key"]: e.get("default_value") for e in entries
               if isinstance(e, dict) and e.get("key") and e.get("type") not in _HIDDEN_ENTRY_TYPES}
+    if instance_id:
+        for c in (await _ma("config/providers") or []):
+            if isinstance(c, dict) and (c.get("instance_id") == instance_id or c.get("id") == instance_id):
+                cur = c.get("values")
+                if isinstance(cur, dict):
+                    merged.update({k: v for k, v in cur.items() if v is not None})
+                break
     merged.update({k: v for k, v in (values or {}).items() if v is not None})
     if provider == _YTMUSIC_DOMAIN:
         # Always point YouTube Music at Zoe's local PO-token generator, whatever
