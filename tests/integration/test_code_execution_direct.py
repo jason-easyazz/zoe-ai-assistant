@@ -14,19 +14,29 @@ ZOE_DATA = PROJECT_ROOT / "services" / "zoe-data"
 
 
 def test_chat_router_wires_core_brain_tool_event_mapping():
+    # W4-C2 moved the mapper verbatim to chat_stream_protocol.py; chat.py keeps a
+    # permanent re-export shim. Pin the mapper's new home and chat's shim import.
     chat_source = (ZOE_DATA / "routers" / "chat.py").read_text()
+    protocol_source = (ZOE_DATA / "chat_stream_protocol.py").read_text()
 
-    assert "from zoe_core_client import run_zoe_core, run_zoe_core_streaming" in chat_source
-    assert "def brain_tool_sentinel_events" in chat_source
-    assert "ToolCallStartEvent" in chat_source
-    assert "ToolCallArgsEvent" in chat_source
-    assert "ToolCallEndEvent" in chat_source
-    assert "ToolCallResultEvent" in chat_source
+    # W4-C1 moved the zoe_core_client import behind brain_dispatch (chat.py no
+    # longer imports run_zoe_core directly) — pin that seam, not the old import.
+    assert "from brain_dispatch import" in chat_source
+    dispatch_source = (ZOE_DATA / "brain_dispatch.py").read_text()
+    assert "from zoe_core_client import run_zoe_core" in dispatch_source
+    assert "from chat_stream_protocol import" in chat_source
+    assert "def brain_tool_sentinel_events" in protocol_source
+    assert "ToolCallStartEvent" in protocol_source
+    assert "ToolCallArgsEvent" in protocol_source
+    assert "ToolCallEndEvent" in protocol_source
+    assert "ToolCallResultEvent" in protocol_source
 
 
 def test_chat_router_uses_brain_tool_sentinel_events_in_streaming_path():
     chat_source = (ZOE_DATA / "routers" / "chat.py").read_text()
 
-    mapper_pos = chat_source.index("def brain_tool_sentinel_events")
+    # The shim import must precede the streaming-path use (the name resolves in
+    # chat's module globals so tests can still monkeypatch it on routers.chat).
+    import_pos = chat_source.index("from chat_stream_protocol import")
     streaming_use_pos = chat_source.index("for _tool_ev in brain_tool_sentinel_events(")
-    assert mapper_pos < streaming_use_pos
+    assert import_pos < streaming_use_pos

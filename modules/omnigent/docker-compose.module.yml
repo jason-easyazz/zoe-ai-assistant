@@ -158,12 +158,64 @@ services:
       # Persist omnigent's own state (mount path to confirm at first run).
       - omnigent-data:/root/.omnigent
     networks:
-      - zoe-network
+      # Public/in-cluster lane: cloudflared reaches the UI at http://zoe-omnigent:6767.
+      zoe-network: {}
+      # Code-intel lane: an INTERNAL network whose only member is this container,
+      # used solely to reach the host's shared Serena via the serena-bridge units.
+      # The address is PINNED because it is the allowlist entry in
+      # scripts/setup/systemd/system/serena-bridge.socket (IPAddressAllow=) — the
+      # thing that actually keeps other containers off the shared Serena.
+      zoe-codeintel:
+        ipv4_address: 172.28.0.2
 
 networks:
   zoe-network:
     name: zoe-network
     external: true
+  # Private code-intel lane for the shared Serena MCP server.
+  #
+  # WHY it exists: this container used to spawn its OWN Serena per agent session
+  # (stdio in modules/omnigent/.mcp.json), ~900 MB RSS each, on a 15.6 GB box
+  # that also runs llama-server + Kokoro. That pressure starved the deploy gate
+  # and contributed to llama-server CUDA-OOM crashes. The host already runs ONE
+  # shared Serena (scripts/setup/systemd/serena-mcp.service) — but it binds
+  # 127.0.0.1 ONLY and must stay that way: it can read the entire repo.
+  # scripts/setup/systemd/system/serena-bridge.{socket,service} proxy this
+  # network's gateway address to that loopback port; Serena's bind never changes.
+  #
+  # WHY NOT reach it over zoe-network: zoe-network carries 9 containers,
+  # including homeassistant and third-party ghcr.io/multica-ai/* images.
+  # Publishing whole-repo code intelligence on that gateway would hand repo read
+  # access to every one of them. This network has exactly ONE member.
+  #
+  # internal: true — Docker adds no NAT/egress for it. The gateway (172.28.0.1)
+  # stays reachable from members because host-local delivery is INPUT, while
+  # Docker's isolation rules are in FORWARD.
+  #
+  # THIS NETWORK IS NOT, BY ITSELF, THE ACCESS CONTROL (measured 2026-07-22).
+  # It does block cross-network access to CONTAINER addresses. But that same
+  # INPUT-vs-FORWARD asymmetry means ANY container on ANY bridge here can reach
+  # a HOST address, gateways included — verified with a throwaway listener on a
+  # throwaway internal bridge, which a zoe-network container reached fine. What
+  # actually scopes the bridge port to this container is the IPAddressAllow= on
+  # scripts/setup/systemd/system/serena-bridge.socket, which is why the
+  # container's address is pinned above.
+  #
+  # The subnet is PINNED so the gateway IP is deterministic: modules/omnigent/
+  # .mcp.json and serena-bridge.socket both name 172.28.0.1, so an auto-allocated
+  # subnet would silently break the link. 172.28.0.0/24 was verified free on this
+  # host (in use: 172.17/16 docker0, 172.18/16 zoe-network, 172.19/16
+  # assistant_default). If it ever collides, change it in ALL FOUR places: here,
+  # the ipv4_address above, .mcp.json, and both serena-bridge units.
+  zoe-codeintel:
+    name: zoe-codeintel
+    driver: bridge
+    internal: true
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.0.0/24
+          gateway: 172.28.0.1
 
 volumes:
   omnigent-claude:

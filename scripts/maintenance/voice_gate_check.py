@@ -57,6 +57,10 @@ VOICE_PATH_PATTERNS = (
     "services/zoe-data/fast_tiers.py",
     "*kokoro*",
     "*moonshine*",
+    # The brain's serving config IS the voice path: flash-attn, KV format and
+    # slot layout all change generation behaviour. Greptile P1 on #1494 — a
+    # deploy touching this unit previously bypassed the gate entirely.
+    "scripts/setup/systemd/llama-server.service",
 )
 DEFAULT_MAX_AGE_H = float(os.environ.get("ZOE_VOICE_GATE_MAX_AGE_H", "24"))
 

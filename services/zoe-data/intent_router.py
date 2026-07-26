@@ -2263,63 +2263,27 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
     ln = str(slots.get("list_name") or "").strip() or lt.capitalize()
     try:
         from database import get_db_ctx
+        from list_service import add_item_to_list, default_visibility
 
         async with get_db_ctx() as db:
-            cursor = await db.execute(
-                "SELECT id FROM lists WHERE list_type=? AND name=? AND deleted=0"
-                " AND (user_id=? OR visibility='family')"
-                " ORDER BY CASE WHEN visibility='family' THEN 0 ELSE 1 END LIMIT 1",
-                (lt, ln, user_id),
-            )
-            row = await cursor.fetchone()
-            item_id = str(uuid.uuid4())
-            if row:
-                # Existing list: a single INSERT is already atomic.
-                list_id = row["id"]
+            outcome = await add_item_to_list(
+                db,
+                user_id=user_id,
+                list_type=lt,
+                list_name=ln,
+                text=item,
+                quantity=slots.get("quantity"),
+                category=slots.get("category"),
+                new_list_visibility=default_visibility(lt),
                 # Retry idempotency (same guard as the skybridge add): a voice
                 # re-POST replays the identical add seconds later — treat it as
                 # already done instead of inserting a duplicate.
-                # created_at is a TEXT column, so it must be cast before the
-                # timestamp comparison — a bare `created_at > now() - interval`
-                # throws `operator does not exist: text > timestamp` on Postgres,
-                # which silently drops the whole direct add to the mcporter
-                # fallback (live 2026-07-08: 69 such errors under eval traffic).
-                dup_cursor = await db.execute(
-                    "SELECT id FROM list_items WHERE list_id=? AND lower(text)=lower(?)"
-                    " AND deleted=0 AND created_at::timestamptz > now() - interval '10 seconds' LIMIT 1",
-                    (list_id, item),
-                )
-                dup_row = await dup_cursor.fetchone()
-                if dup_row:
-                    logger.info("list add: duplicate %r within 10s on list %s — replay skipped", item, list_id)
-                else:
-                    await db.execute(
-                        "INSERT INTO list_items (id, list_id, text, quantity, category) VALUES (?,?,?,?,?)",
-                        (item_id, list_id, item, slots.get("quantity"), slots.get("category")),
-                    )
-            else:
-                # Fresh list: the list row and its first item must land together,
-                # or a failed item insert leaves an orphaned empty list. asyncpg
-                # auto-commits each statement, so wrap both in one transaction.
-                list_id = str(uuid.uuid4())
-
-                async def _write_new_list_and_item() -> None:
-                    await db.execute(
-                        "INSERT INTO lists (id, user_id, name, list_type, visibility) VALUES (?,?,?,?,?)",
-                        (list_id, user_id, ln, lt,
-                         "personal" if lt in {"personal", "tasks", "shopping"} else "family"),
-                    )
-                    await db.execute(
-                        "INSERT INTO list_items (id, list_id, text, quantity, category) VALUES (?,?,?,?,?)",
-                        (item_id, list_id, item, slots.get("quantity"), slots.get("category")),
-                    )
-
-                txn = getattr(db, "transaction", None)
-                if callable(txn):
-                    async with txn():
-                        await _write_new_list_and_item()
-                else:  # fallback (e.g. a DB shim without transaction support)
-                    await _write_new_list_and_item()
+                dedup_window_s=10,
+            )
+        list_id = outcome["list_id"]
+        item_id = outcome["item_id"]
+        if outcome["deduped"]:
+            logger.info("list add: duplicate %r within 10s on list %s — replay skipped", item, list_id)
         await _notify_lists_ui(
             "list_updated",
             {"action": "item_added", "list_id": list_id, "item": {"id": item_id, "text": item}},
@@ -4709,50 +4673,46 @@ async def _execute_greeting(intent: Intent, user_id: str) -> str:
 
 
 async def _execute_smart_home_intent(intent: Intent, user_id: str) -> Optional[str]:
-    """Route light-control intents to the HA bridge (ZOE-9)."""
+    """Route light-control intents through the REAL device resolver (ZOE-9).
+
+    This used to FABRICATE an entity id from a string template —
+    ``light.{room}``, or ``light.all`` when no room word was recognised — and
+    POST it straight at the bridge. Neither id has to exist: this house has zero
+    ``light.*`` entities (its real light is ``switch.bedroom_1_switch_1``), and
+    the bridge answers HTTP 200 with "Successfully executed …" for ANY entity,
+    known or not. So the call did nothing and Zoe said "Lights off." — a silent
+    no-op that reported success, which is worse than an error.
+
+    It also duplicated matching that ``smart_home_service`` already does
+    properly (real entity lists, class resolution, room context, ambiguity).
+    Delegate instead: one resolver, one behaviour, no invented ids.
+    """
     try:
-        import httpx as _httpx
-        ha_url = os.environ.get("ZOE_HA_BRIDGE_URL", "http://127.0.0.1:8007")
+        from smart_home_service import resolve_smart_home
+
         slots = intent.slots or {}
         action = slots.get("action", "turn_off")
         room = slots.get("room")
 
-        # Build the HA entity_id from room name, falling back to the group alias
-        if room:
-            entity_id = f"light.{room.lower()}"
-        else:
-            entity_id = os.environ.get("ZOE_DEFAULT_LIGHT_ENTITY", "light.all")
+        # The resolver matches on words, not ids: hand it the room the pattern
+        # found (if any) plus the device class, and let it find what exists.
+        query = f"{room.replace('_', ' ')} light" if room else "light"
 
-        service_map = {
-            "turn_on":  "turn_on",
-            "turn_off": "turn_off",
-            "dim":      "turn_on",
-            "brighten": "turn_on",
-        }
-        service = service_map.get(action, "turn_on" if action == "turn_on" else "turn_off")
-        data: dict = {"entity_id": entity_id}
-        if action == "dim":
-            data["brightness_pct"] = 25
-        elif action == "brighten":
-            data["brightness_pct"] = 100
+        class _I:
+            domain = "smart_home"
+            entity_id = ""
 
-        data.pop("entity_id", None)
-        payload = {"entity_id": entity_id, "action": service, "data": data}
-        async with _httpx.AsyncClient(timeout=8.0) as c:
-            resp = await c.post(f"{ha_url}/devices/control", json=payload)
-            resp.raise_for_status()
+        i = _I()
+        i.action = "set_brightness" if action in ("dim", "brighten") else action
+        i.query = query
+        i.duration_seconds = 25 if action == "dim" else (100 if action == "brighten" else 0)
 
-        action_labels = {
-            "turn_on":  "on",
-            "turn_off": "off",
-            "dim":      "dimmed",
-            "brighten": "brightened",
-        }
-        label = action_labels.get(action, action)
-        if room:
-            room_friendly = room.replace("_", " ").title()
-            return f"{room_friendly} lights {label}."
-        return f"Lights {label}."
+        result = await resolve_smart_home(i)
+        # The resolver already phrases the outcome — including "which one?" when
+        # a bare command is genuinely ambiguous. Speaking its summary is what
+        # stops this path from inventing a success it did not verify.
+        spoken = (result or {}).get("spoken_summary") or ""
+        return spoken or None
     except Exception as exc:
         logger.warning("smart_home intent failed: %s", exc)
         # An HTTPStatusError means the bridge WAS reachable but rejected the

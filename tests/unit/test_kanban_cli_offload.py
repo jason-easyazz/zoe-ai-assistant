@@ -41,7 +41,14 @@ async def test_worktree_command_runs_off_the_event_loop(monkeypatch, tmp_path):
 
 
 async def test_run_kanban_cli_plumbing(monkeypatch):
-    """_run still returns stdout and passes board args through the new runner."""
+    """_run still returns stdout and passes board args through the new runner.
+
+    Pins the CLI backend explicitly: this test exercises the `hermes kanban`
+    CLI plumbing, and it used to get there via the default. The default is now
+    `executor`, which dispatches to Multica's Postgres instead — so without the
+    pin this reaches for a `multica` database that does not exist in CI.
+    """
+    monkeypatch.setenv("ZOE_KANBAN_BACKEND", "hermes")
     monkeypatch.setattr(ka, "hermes_bin", lambda: "echo")
     monkeypatch.setattr(ka, "_board", lambda: "board-x")
     adapter = ka.KanbanAdapter()

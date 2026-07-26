@@ -102,7 +102,14 @@ _UNUSABLE_STATES = (None, "unavailable", "unknown")
 
 # The panel-config columns on the `panels` row. A fixed whitelist: PUT builds its
 # ON CONFLICT SET list from this, never from request-body keys.
-_WRITABLE = ("location", "default_player", "pinned")
+#
+# `room_id` (alembic 0026) is the STRUCTURED answer to "where is this panel" and
+# is what resolves "the light in HERE". `location` is the older free-text label
+# and is deliberately left alone rather than mirrored: nothing reads it for
+# behaviour (it is displayed in the settings surface and the panel admin
+# listings only), so keeping them in sync would be a dual-write with no
+# consumer. Where both exist, `room_id` is authoritative.
+_WRITABLE = ("location", "default_player", "pinned", "room_id")
 
 
 # ── validation / normalisation (pure — unit-tested without a DB) ──────────────
@@ -367,6 +374,48 @@ def resolve_pins(
     return resolved, unresolved
 
 
+# Domains whose "on" state is evidence a human is up in the room. A switch here
+# may be a light, a fan or a TV — all three are equally good evidence, so the
+# rule is deliberately domain-based rather than a single nominated "light".
+# Sensors/numbers/scenes are excluded: they are readings, not occupancy.
+_AWAKE_DOMAINS = ("light", "switch", "input_boolean")
+
+
+def resolve_sleep_gate(
+    room_entity_ids: set[str] | None,
+    entity_index: dict[str, dict] | None,
+) -> dict[str, Any]:
+    """Should the panel STAY AWAKE because its room is evidently occupied?
+
+    The idle screensaver is a plain inactivity timer: it never knew whether
+    anyone was there, so it drifted to the night clock while the operator was
+    sitting in a lit room. This house has ZERO motion/presence/occupancy
+    entities (44 entities, no ``binary_sensor``), so the room's own toggles are
+    the only honest presence signal available.
+
+    Fails toward ``block: False`` — i.e. toward SLEEPING — for every unknown
+    (HA unreachable, panel in no room, room empty). The panel must never latch
+    awake because a lookup failed; that is the same direction the client's
+    timeout race already falls, so the two agree.
+    """
+    if entity_index is None:
+        return {"block": False, "reason": "ha-unavailable", "entities": []}
+    on: list[str] = []
+    for eid in sorted(room_entity_ids or ()):
+        if str(eid).partition(".")[0] not in _AWAKE_DOMAINS:
+            continue
+        entity = entity_index.get(str(eid))
+        if entity is None:
+            continue
+        if entity.get("state") == "on":
+            on.append(str(eid))
+    return {
+        "block": bool(on),
+        "reason": "room-occupied" if on else "room-dark",
+        "entities": on,
+    }
+
+
 def build_config_payload(
     device_id: str,
     location: str | None,
@@ -374,6 +423,7 @@ def build_config_payload(
     global_default_player: str | None,
     stored_pins: list[dict[str, str]] | None,
     entity_index: dict[str, dict] | None,
+    room: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compose the flat, resolved panel-config payload.
 
@@ -394,6 +444,13 @@ def build_config_payload(
     return {
         "device_id": device_id,
         "location": location,
+        # The panel's Zoe room, resolved server-side and FLAT (matching
+        # default_player/default_player_source rather than nesting an object):
+        # the client gets the id to write back and the name to display without
+        # a second round-trip. All three are null when the panel is in no room.
+        "room_id": (room or {}).get("id"),
+        "room_name": (room or {}).get("name"),
+        "room_slug": (room or {}).get("slug"),
         "default_player": default_player,
         "default_player_source": source,
         "pins_configured": stored_pins is not None,
@@ -478,9 +535,29 @@ async def _known_player_ids() -> set[str] | None:
     return player_ids_or_unknown(players)
 
 
+async def _load_room(db, room_id: Any) -> dict[str, Any] | None:
+    """Resolve the panel's room to {id, name, slug}, or None.
+
+    A room_id pointing at a room that no longer exists degrades to None rather
+    than erroring: the room was deleted out from under this panel, and a panel
+    that cannot boot its own config because of that is worse than one that
+    simply reports having no room.
+    """
+    if not room_id:
+        return None
+    cursor = await db.execute(
+        "SELECT id, name, slug FROM rooms WHERE id = ?", (str(room_id),)
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        logger.warning("panel config: room %s no longer exists", room_id)
+        return None
+    return {"id": row["id"], "name": row["name"], "slug": row["slug"]}
+
+
 async def _load_panel_row(db, device_id: str):
     cursor = await db.execute(
-        "SELECT location, default_player, pinned FROM panels WHERE panel_id = ?",
+        "SELECT location, default_player, pinned, room_id FROM panels WHERE panel_id = ?",
         (device_id,),
     )
     return await cursor.fetchone()
@@ -519,7 +596,26 @@ async def get_panel_config(device_id: str, db=Depends(get_db)) -> dict[str, Any]
         global_default_player=_global_default_player(),
         stored_pins=_stored_pins(_row_value(row, "pinned")),
         entity_index=entity_index,
+        room=await _load_room(db, _row_value(row, "room_id")),
     )
+
+
+@router.get("/{device_id}/sleep-gate")
+async def get_sleep_gate(device_id: str, db=Depends(get_db)) -> dict[str, Any]:
+    """Whether this panel should stay awake because its room looks occupied.
+
+    Polled by the kiosk at the moment it is about to drift to the sleep clock,
+    so it must be LIVE — a value cached at boot would be stale by the time the
+    decision is taken (the same trap the music guard already documents).
+
+    Unauthenticated for the same reason as ``GET /{device_id}/config``: the
+    kiosk runs as a guest, and this exposes nothing beyond HA entity state that
+    ``/api/ha/entities`` already serves unauthed.
+    """
+    from routers.rooms import room_entity_ids_for_panel
+
+    room_entity_ids = await room_entity_ids_for_panel(db, device_id)
+    return resolve_sleep_gate(room_entity_ids, await _entity_index())
 
 
 @router.put("/{device_id}/config")
@@ -586,6 +682,22 @@ async def put_panel_config(
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc))
 
+    if "room_id" in body:
+        raw_room = body["room_id"]
+        if raw_room is None or (isinstance(raw_room, str) and not raw_room.strip()):
+            updates["room_id"] = None          # explicit "this panel is in no room"
+        elif not isinstance(raw_room, str):
+            raise HTTPException(status_code=400, detail="room_id must be a string")
+        else:
+            candidate = raw_room.strip()
+            # Unlike the MA player list, the rooms table is LOCAL — an empty
+            # result genuinely means "no such room", not "cannot validate", so
+            # rejecting an unknown id here cannot lock the operator out during
+            # somebody else's outage.
+            if await _load_room(db, candidate) is None:
+                raise HTTPException(status_code=400, detail="unknown room_id")
+            updates["room_id"] = candidate
+
     # Column names come from this fixed whitelist, never from the request body.
     set_clause = ", ".join(f"{col}=excluded.{col}" for col in _WRITABLE if col in updates)
     if set_clause:
@@ -597,17 +709,18 @@ async def put_panel_config(
     # RETURNING gives the post-write row, so the response reflects what is
     # actually stored without a second read.
     cursor = await db.execute(
-        f"""INSERT INTO panels (panel_id, name, location, default_player, pinned, updated_at)
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        f"""INSERT INTO panels (panel_id, name, location, default_player, pinned, room_id, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(panel_id) DO UPDATE SET
                  {set_clause}updated_at=CURRENT_TIMESTAMP
-            RETURNING location, default_player, pinned""",
+            RETURNING location, default_player, pinned, room_id""",
         (
             device_id,
             device_id,
             updates.get("location"),
             updates.get("default_player"),
             updates.get("pinned"),
+            updates.get("room_id"),
         ),
     )
     row = await cursor.fetchone()
@@ -621,4 +734,5 @@ async def put_panel_config(
         global_default_player=_global_default_player(),
         stored_pins=_stored_pins(_row_value(row, "pinned")),
         entity_index=entity_index,
+        room=await _load_room(db, _row_value(row, "room_id")),
     )

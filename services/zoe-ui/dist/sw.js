@@ -12,9 +12,22 @@
 importScripts('/workbox/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-// Both sides of this merge landed on 4.64.8 — bumped rather than picking one,
-// or two different bundles would ship under a single cache key.
-const SW_VERSION = '4.64.9'; // dock: user-pinned controls + remote album art
+// On a merge conflict here, take the HIGHEST of the two and bump it — never
+// just pick a side, and bump even when both sides are equal, or two different
+// bundles ship under a single cache key.
+// (4.65.0 music-card-breathe vs 4.64.10 sleep-playing-flag -> 4.65.1.)
+// (4.66.0 calendar-anchor vs 4.65.2 music-card-polish -> 4.66.1.)
+// (4.69.0 sign-in-fails-closed vs 4.68.4 calendar-metadata-escape -> 4.69.1.)
+// (4.69.1 sign-in+calendar vs 4.68.5 chat-xss+cross-origin-unrouted -> 4.69.2.)
+// (4.69.2 -> 4.70.0: chat.html is PRECACHED and its <script>/<link> tags now
+//  point at the vendored /lib/... copies of marked, DOMPurify, Prism, QRCode,
+//  Leaflet and Chart.js. Without this bump every existing client keeps serving
+//  the precached CDN-referencing chat.html forever. The vendored files
+//  themselves are deliberately NOT added to precacheAndRoute: they are now
+//  same-origin, so the generic script/style routes below already cache them on
+//  first use, and precaching ~2 MB of libraries would re-download the lot on
+//  every future SW_VERSION bump.)
+const SW_VERSION = '4.79.0'; // multi-zone speaker picker (2-col rows, tap zones to group live) + per-zone volume sliders + picker redesign; jukebox honest "song search unavailable" notice (merge of 4.78.0 + 4.77.0 -> 4.79.0)
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
@@ -153,9 +166,13 @@ if (workbox) {
 
     // 2. JavaScript - Network First for widgets and widget-system, Cache First for other JS
     workbox.routing.registerRoute(
-        ({ request }) => {
-            // Check if it's a widget file, widget-system.js, or widget-base.js - always network first
-            return request.destination === 'script' && (
+        ({ request, url }) => {
+            // Check if it's a widget file, widget-system.js, or widget-base.js - always network first.
+            // SAME-ORIGIN ONLY: these are substring matches on the URL, so a cross-origin
+            // CDN path containing '/widgets/' (or either filename) would otherwise be
+            // captured here and fail opaque before reaching the guarded generic route below.
+            return request.destination === 'script'
+                && url.origin === self.location.origin && (
                 request.url.includes('/widgets/') ||
                 request.url.includes('widget-system.js') ||
                 request.url.includes('widget-base.js')
@@ -176,9 +193,20 @@ if (workbox) {
         })
     );
 
-    // Other JavaScript - Network First (ensures auth/executor fixes deploy instantly)
+    // Other JavaScript - Network First (ensures auth/executor fixes deploy instantly).
+    // SAME-ORIGIN ONLY — see the image-route note below for the mechanism. A
+    // <script src> to a CDN is a no-cors request, so NetworkFirst gets an opaque
+    // response it cannot read; on every SW-controlled reload chat.html lost all 9
+    // of its cross-origin assets with net::ERR_FAILED (marked, DOMPurify, Prism +
+    // autoloader, Chart.js, QRCode, Leaflet), killing markdown rendering, HTML
+    // sanitization, code highlighting, charts and maps. Unlike the image route,
+    // CacheableResponsePlugin({statuses:[0,200]}) here means opaque responses ARE
+    // cacheable — so the failure is on the read side, not the cache-write side —
+    // but the remedy is the same: leave cross-origin UNROUTED so the browser
+    // fetches it normally. Same-origin caching is unchanged.
     workbox.routing.registerRoute(
-        ({ request }) => request.destination === 'script',
+        ({ request, url }) => request.destination === 'script'
+                              && url.origin === self.location.origin,
         new workbox.strategies.NetworkFirst({
             cacheName: 'zoe-js',
             networkTimeoutSeconds: 3,
@@ -194,10 +222,13 @@ if (workbox) {
         })
     );
 
-    // 3. CSS - Network First for widget CSS, Cache First for others
+    // 3. CSS - Network First for widget CSS, Cache First for others. SAME-ORIGIN ONLY
+    // (same opaque-response mechanism as the script route above).
     workbox.routing.registerRoute(
-        ({ request }) => {
-            return request.destination === 'style' && request.url.includes('/widgets/');
+        ({ request, url }) => {
+            return request.destination === 'style'
+                   && url.origin === self.location.origin
+                   && request.url.includes('/widgets/');
         },
         new workbox.strategies.NetworkFirst({
             cacheName: 'zoe-widgets-css',
@@ -214,9 +245,12 @@ if (workbox) {
         })
     );
 
-    // Other CSS - Network First (ensures style fixes deploy instantly)
+    // Other CSS - Network First (ensures style fixes deploy instantly). SAME-ORIGIN
+    // ONLY — this route was stripping chat.html's Prism theme and Leaflet CSS on
+    // every reload (same opaque-response mechanism as the script route above).
     workbox.routing.registerRoute(
-        ({ request }) => request.destination === 'style',
+        ({ request, url }) => request.destination === 'style'
+                              && url.origin === self.location.origin,
         new workbox.strategies.NetworkFirst({
             cacheName: 'zoe-css',
             networkTimeoutSeconds: 3,

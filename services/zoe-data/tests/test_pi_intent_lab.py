@@ -754,6 +754,17 @@ async def test_lab_does_not_speculate_ambiguous_weather_words(monkeypatch, text)
 @pytest.mark.asyncio
 async def test_lab_discards_speculative_safe_fulfillment_when_pi_slots_differ(monkeypatch):
     calls = []
+    # Event-ordered, not scheduler-luck (the #1413 fix, extended to this test).
+    # The discard path calls `task.cancel()` on the speculative task; if that
+    # lands before the task's FIRST scheduling slice, execute_intent's body
+    # never runs, nothing is appended to `calls`, and the two-call assertion
+    # below fails with [{'forecast': True}] != [{'forecast': False}, ...].
+    # Holding the pi verdict until execute_started fires makes the speculative
+    # call a fact before the discard can race it. Safe against deadlock: the
+    # speculative task is created (pi_intent_lab.py:106) BEFORE pi is awaited
+    # (:114), so the event is always reachable. Passed on this box and in CI
+    # while failing on a slower reviewer VM — the classic starved-loop tell.
+    execute_started = asyncio.Event()
 
     def response_for(intent):
         return f"forecast={intent.slots.get('forecast')}"
@@ -764,6 +775,7 @@ async def test_lab_discards_speculative_safe_fulfillment_when_pi_slots_differ(mo
         extracted=_Intent("weather", {"forecast": False}),
         execute_response=response_for,
         execute_calls=calls,
+        execute_started_event=execute_started,
     )
     _install_fake_pi_classifier(
         monkeypatch,
@@ -776,6 +788,7 @@ async def test_lab_discards_speculative_safe_fulfillment_when_pi_slots_differ(mo
             latency_ms=123.0,
             reason="weather signal",
         ),
+        wait_event=execute_started,
     )
 
     result = await compare_pi_intent_lab(
@@ -784,7 +797,16 @@ async def test_lab_discards_speculative_safe_fulfillment_when_pi_slots_differ(mo
         include_safe_fulfillment=True,
     )
 
-    assert [call["intent"].slots for call in calls] == [{"forecast": False}, {"forecast": True}]
+    # Self-describing on failure: this test has been reported failing on a
+    # slower VM while green here and in CI, and a bare list-compare hides WHICH
+    # half went missing (speculative never ran vs pi-validated never ran).
+    assert [call["intent"].slots for call in calls] == [
+        {"forecast": False},
+        {"forecast": True},
+    ], (
+        "expected the speculative execute (forecast=False) THEN the pi-validated "
+        f"one (forecast=True); actually recorded {[c['intent'].slots for c in calls]!r}"
+    )
     assert result["safe_fulfillment"]["started_before_pi"] is False
     assert result["safe_fulfillment"]["validated_by_pi"] is True
     assert result["safe_fulfillment"]["speculative_safe_fulfillment"] == "discarded"

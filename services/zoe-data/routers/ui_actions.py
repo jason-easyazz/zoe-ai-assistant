@@ -365,6 +365,12 @@ async def ack_ui_action(
            WHERE id = ? AND user_id = ?""",
         (status, error_code, error_message, retries, should_set_acked_at, real_id, action_user_id),
     )
+    # Handler-reported real outcome (additive, P-W2.3): e.g. panel_announce's
+    # honest TTS result ({"tts": "played"|"http_401"|...}). Bounded so a rogue
+    # panel can't bloat the ledger; non-dict / oversized payloads are dropped.
+    handler_event = payload.get("event_data")
+    if not isinstance(handler_event, dict) or len(json.dumps(handler_event, default=str)) > 2000:
+        handler_event = None
     await append_ledger(
         db,
         action_id=real_id,
@@ -375,6 +381,7 @@ async def ack_ui_action(
             "ui_context": payload.get("ui_context", {}),
             "error_code": error_code,
             "error_message": error_message,
+            **({"result": handler_event} if handler_event else {}),
         },
     )
     await db.commit()

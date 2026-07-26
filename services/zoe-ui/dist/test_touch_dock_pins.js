@@ -124,6 +124,12 @@ const PIN_TEMP = {
 function cfg(over) {
   return Object.assign({
     device_id: 'zoe-touch-pi', location: 'bedroom',
+    // The panel's Zoe room, added by the rooms work. Present-but-null is the
+    // real shape for a panel in no room — the client must never branch on key
+    // existence, so these are always sent. assertLiveContract() compares this
+    // key set against the live endpoint and caught their absence the moment
+    // the API shipped them.
+    room_id: null, room_name: null, room_slug: null,
     default_player: 'living', default_player_source: 'global',
     pins_configured: true, pinned: [], unresolved: [],
     ha_available: true, max_pins: 4,
@@ -151,8 +157,12 @@ function serve() {
   const types = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.json': 'application/json' };
   const srv = http.createServer((req, res) => {
     const rel = decodeURIComponent(req.url.split('?')[0]);
-    const file = path.join(DIST, rel);
-    if (!file.startsWith(DIST) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
+    // Resolve, then anchor the containment check at a separator: a bare
+    // startsWith(DIST) also accepts a SIBLING whose name merely begins with it
+    // (dist2, dist-legacy), because the prefix matches with no path boundary.
+    const file = path.resolve(DIST, '.' + path.sep + rel);
+    if ((file !== DIST && !file.startsWith(DIST + path.sep))
+        || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
       res.writeHead(404); res.end('nope'); return;
     }
     res.writeHead(200, { 'Content-Type': types[path.extname(file)] || 'text/plain' });
@@ -535,17 +545,38 @@ async function t(name, fn) {
   });
 
   // 13. settings: the panel section renders its three rows from the live shape
-  await t('Settings › This panel renders location / speaker / dock controls', async () => {
+  await t('Settings › This panel renders room / rooms / location / speaker / dock controls', async () => {
     const ctx = newCtx();
     const page = await open(browser, ctx, { base, cfg: cfg({ pinned: [PIN_BED, PIN_TEMP] }) });
     await openPanelSettings(page);
     const rows = await page.$$eval('#setPanel .srow2', (els) => els.map((e) => e.textContent));
-    assert.strictEqual(rows.length, 3, 'expected 3 rows, got ' + JSON.stringify(rows));
-    assert.ok(/Location/.test(rows[0]) && /bedroom/.test(rows[0]), rows[0]);
-    assert.ok(/speaker/i.test(rows[1]) && /household default/.test(rows[1]),
-      'speaker row must surface default_player_source: ' + rows[1]);
-    assert.ok(/2 of 4/.test(rows[2]), 'pin count row: ' + rows[2]);
+    assert.strictEqual(rows.length, 5, 'expected 5 rows, got ' + JSON.stringify(rows));
+    // ROOM leads: it is the structured "where is this panel", and what makes
+    // "turn off the light" mean the light in here. Null room reads "Not set".
+    assert.ok(/Room/.test(rows[0]) && /Not set/.test(rows[0]), 'room row: ' + rows[0]);
+    assert.ok(/Manage rooms/.test(rows[1]), 'rooms management row: ' + rows[1]);
+    // The legacy free-text label keeps its own row, relabelled so it cannot be
+    // mistaken for the room — nothing reads it for behaviour.
+    assert.ok(/Location label/.test(rows[2]) && /bedroom/.test(rows[2]), rows[2]);
+    assert.ok(/speaker/i.test(rows[3]) && /household default/.test(rows[3]),
+      'speaker row must surface default_player_source: ' + rows[3]);
+    assert.ok(/2 of 4/.test(rows[4]), 'pin count row: ' + rows[4]);
     await shoot(page, '13_settings_panel');
+    await page.close();
+  });
+
+  // The room row must show the NAME, never the opaque id — the panel resolves
+  // it server-side precisely so the operator never sees a uuid.
+  await t('Settings › the room row shows the room NAME when the panel is in one', async () => {
+    const ctx = newCtx();
+    const page = await open(browser, ctx, {
+      base,
+      cfg: cfg({ room_id: 'r-bed', room_name: 'Bedroom', room_slug: 'bedroom' }),
+    });
+    await openPanelSettings(page);
+    const row = await page.$eval('#setPanel .srow2[data-p="room"]', (e) => e.textContent);
+    assert.ok(/Bedroom/.test(row), 'room row should name the room: ' + row);
+    assert.ok(!/r-bed/.test(row), 'room row must never show the raw id: ' + row);
     await page.close();
   });
 
@@ -752,6 +783,121 @@ async function t(name, fn) {
       'Save must not PUT a list that would delete the newly-unresolved pin');
     assert.ok(await page.$eval('#estModal [data-x="save"]', (e) => e.disabled),
       'the repaint should disable Save and explain');
+    await page.close();
+  });
+
+  // ── the night screen renders the SAME pins ──────────────────────────────────
+  // It used to render `_ha.lights.slice(0,4)` with a hardcoded BULB: it ignored
+  // the operator's pins entirely and drew a light bulb on the fan — the exact
+  // domain-derived-icon bug the dock resolves server-side. These cases pin the
+  // SOURCE and SEMANTICS, not the sizing: sleep tiles stay large deliberately,
+  // because that surface is hit in the dark.
+
+  const sleepTiles = (page) => page.$$eval('#slDock .sc', (els) => els.map((e) => ({
+    name: (e.querySelector('.nm') || {}).textContent || '',
+    on: e.classList.contains('on'),
+    kind: e.getAttribute('data-k'),
+    eid: e.getAttribute('data-eid'),
+    unavail: e.classList.contains('unavail'),
+    icon: (e.querySelector('svg') || {}).innerHTML || '',
+  })));
+
+  // The real route in: no touch for IDLE_SLEEP_MS (180s). `show()` is scoped
+  // inside the estate's IIFE, so a test cannot call it — and a window hook
+  // added for the harness would prove less than driving the actual timer.
+  async function toSleep(page) {
+    // Reaching the night clock is NOT just "advance past IDLE_SLEEP_MS". When
+    // the idle timer fires the estate asks the server whether music is playing
+    // (deliberately, rather than trusting a cached flag) and only then calls
+    // show('sleep'). That decision races the request against a 4s fallback
+    // timer, so two different clocks are involved:
+    //   * the request resolves in REAL time — a mocked-clock tick does not
+    //     advance it, so we have to yield actual time for the promise;
+    //   * the 4s fallback is a setTimeout, so it needs mocked time if the
+    //     request lost the race.
+    // Driving only one of them leaves `.slp` present-but-hidden, which is
+    // exactly how this helper failed its first run.
+    await page.clock.runFor(181000);   // the idle window elapses
+    await page.waitForTimeout(400);    // let the now-playing request settle
+    await page.clock.runFor(5000);     // …or let the 4s fallback decide
+    // Wait on the CLOCK, not `.slp`: the surface wrapper has no CSS rule of its
+    // own and every child is position:absolute, so `.slp` collapses to a
+    // zero-size box that Playwright will always call hidden. Waiting on it was
+    // an unsatisfiable condition — the night screen was rendering correctly the
+    // whole time.
+    await page.waitForSelector('#slClock', { state: 'visible', timeout: 8000 });
+    await page.waitForTimeout(400);
+  }
+
+  await t('sleep renders the operator pins, in order, with the server icon', async () => {
+    const ctx = newCtx();
+    const page = await open(browser, ctx, {
+      base, clock: true, cfg: cfg({ pinned: [PIN_BED, PIN_FAN] }),
+    });
+    await toSleep(page);
+    const st = await sleepTiles(page);
+    assert.deepStrictEqual(st.map((s) => s.name), ['Bed', 'Fan'],
+      'sleep must show the pins in the operator order, not HA friendly names');
+    assert.deepStrictEqual(st.map((s) => s.eid),
+      ['input_boolean.bedroom_light', 'input_boolean.fan'],
+      'sleep tiles must act on the pinned WRITE entities');
+    // The bug this whole change exists to kill: every tile drew the same bulb.
+    assert.notStrictEqual(st[0].icon, st[1].icon,
+      'the fan must not draw the light icon — sleep hardcoded BULB for every tile');
+    await page.close();
+  });
+
+  await t('sleep keeps the legacy fallback when nobody has pinned anything', async () => {
+    const ctx = newCtx();
+    const page = await open(browser, ctx, {
+      base, clock: true, cfg: cfg({ pins_configured: false, pinned: [] }),
+    });
+    await toSleep(page);
+    assert.ok((await sleepTiles(page)).length > 0,
+      'pins_configured:false must not leave a fresh panel with an empty night screen');
+    await page.close();
+  });
+
+  await t('sleep shows nothing when the operator pinned nothing', async () => {
+    const ctx = newCtx();
+    const page = await open(browser, ctx, {
+      base, clock: true, cfg: cfg({ pins_configured: true, pinned: [] }),
+    });
+    await toSleep(page);
+    assert.strictEqual((await sleepTiles(page)).length, 0,
+      'pins_configured:true with an empty list is a real choice and must NOT fall back');
+    await page.close();
+  });
+
+  await t('sleep temp tile is adjustable and survives the 30s refresh', async () => {
+    const ctx = newCtx();
+    const page = await open(browser, ctx, {
+      base, clock: true, cfg: cfg({ pinned: [PIN_TEMP] }),
+    });
+    await toSleep(page);
+    await page.click('#slDock .sc.temp');
+    await page.waitForTimeout(250);
+    assert.ok(await page.$('#slDock .sc.temp.open'),
+      'tapping the night temp tile must open its popover');
+    // Same trap as the dock: the poll would wipe the popover out from under a
+    // drag. Driving the timer is the only way to prove the guard holds.
+    await page.clock.runFor(31000);
+    await page.waitForTimeout(500);
+    assert.ok(await page.$('#slDock .sc.temp.open'),
+      'the 30s refresh must not destroy an open popover mid-drag');
+    await page.close();
+  });
+
+  await t('an unreachable pin renders muted on sleep, never blank', async () => {
+    const ctx = newCtx();
+    const page = await open(browser, ctx, {
+      base, clock: true,
+      cfg: cfg({ pinned: [Object.assign({}, PIN_BED, { available: false })] }),
+    });
+    await toSleep(page);
+    const st = await sleepTiles(page);
+    assert.strictEqual(st.length, 1, 'an unavailable pin must still render — the operator chose it');
+    assert.ok(st[0].unavail, 'it must be visibly muted so a dead control cannot pass as live');
     await page.close();
   });
 

@@ -216,16 +216,25 @@ def _spoken_triggers() -> set[str]:
 
 
 async def _maybe_speak_notification(user_id: str, message: str, trigger_type: str) -> None:
-    """P-W2.2 spoken-delivery adapter: if the flag is ON, the trigger is
+    """P-W2.2/P-W2.3 spoken-delivery adapter: if the flag is ON, the trigger is
     allowlisted, and the user has a fresh foreground panel session
-    (proactive.presence.panel_presence), enqueue a ``panel_announce`` UI action
-    so the kiosk speaks the composed message.
+    (proactive.presence.panel_presence), deliver the composed message to BOTH
+    spoken lanes:
+
+      1. a ``panel_announce`` UI action — the kiosk toast (+ best-effort
+         browser TTS, honestly reported in its ack since P-W2.3);
+      2. a row in the daemon announcement queue (``voice_announce``) — the
+         lane that actually reaches the SPEAKER: the Pi voice daemon polls
+         ``GET /api/voice/announcements`` with its device token and plays the
+         text through its proven TTS/playback path (P-W2.3; the browser lane
+         alone 401'd silently — kiosk guests can't call /api/voice/speak).
 
     Contract (binding, see services/zoe-data/AGENTS.md):
       * ADDITIVE — the push in fire_notification is always still sent; this
         never replaces it.
-      * NEVER raises — any failure here is logged (the PROACTIVE_SPOKEN line)
-        and swallowed so the mandatory push path is untouched.
+      * NEVER raises — any failure in EITHER lane is logged (the
+        PROACTIVE_SPOKEN line, with per-lane outcome) and swallowed so the
+        mandatory push path — and the other lane — is untouched.
       * Flag OFF is byte-identical behaviour: immediate return, no DB access,
         no imports.
     """
@@ -243,18 +252,39 @@ async def _maybe_speak_notification(user_id: str, message: str, trigger_type: st
             log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=none outcome=absent",
                      trigger_type, user_id)
             return
-        import ui_orchestrator as _ui_orchestrator
-        async with _get_compat_db() as db:
-            await _ui_orchestrator.enqueue_ui_action(
-                db,
-                user_id=user_id,
-                action_type="panel_announce",
-                payload={"message": message},
-                requested_by="proactive",
-                panel_id=panel_id,
-            )
-        log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=%s outcome=enqueued",
-                 trigger_type, user_id, panel_id)
+        # Lane 1: kiosk toast (panel_announce). Guarded separately so a
+        # failure here never blocks the daemon queue below (or vice versa).
+        panel_outcome = "enqueued"
+        try:
+            import ui_orchestrator as _ui_orchestrator
+            async with _get_compat_db() as db:
+                await _ui_orchestrator.enqueue_ui_action(
+                    db,
+                    user_id=user_id,
+                    action_type="panel_announce",
+                    payload={"message": message},
+                    requested_by="proactive",
+                    panel_id=panel_id,
+                )
+        except Exception as exc:
+            panel_outcome = f"error:{exc}"
+        # Lane 2: the daemon speaker queue (P-W2.3) — on its own pooled
+        # connection so a failed lane-1 transaction can't poison this insert.
+        daemon_outcome = "queued"
+        try:
+            import voice_announce as _voice_announce
+            async with _get_compat_db() as db:
+                await _voice_announce.enqueue_announcement(
+                    db,
+                    user_id=user_id,
+                    panel_id=panel_id,
+                    message=message,
+                    trigger_type=trigger_type,
+                )
+        except Exception as exc:
+            daemon_outcome = f"error:{exc}"
+        log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=%s outcome=%s daemon_queue=%s",
+                 trigger_type, user_id, panel_id, panel_outcome, daemon_outcome)
     except Exception as exc:
         log.warning("PROACTIVE_SPOKEN trigger=%s user=%s outcome=error err=%s",
                     trigger_type, user_id, exc)

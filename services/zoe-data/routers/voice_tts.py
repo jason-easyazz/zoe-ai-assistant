@@ -21,9 +21,9 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, R
 from fastapi.responses import StreamingResponse
 from auth import get_current_user
 from database import get_db
-from hermes_http import hermes_auth_headers
 from stt_wake_strip import _strip_wake_word
 from typed_env import env_bool, env_float, env_int, env_str
+from voice_speaker_id import _compute_resemblyzer_embedding, _cosine_similarity
 # Waterfall engine mechanics live in tts_waterfall; they are re-exported here so
 # existing importers (main.py health detail, tests that monkeypatch this module,
 # tests/replay_samples.py, scripts/perf/measure_tts.py) keep working unchanged.
@@ -872,7 +872,10 @@ async def _broadcast_weather_ui(
                 logger.debug("voice weather ui broadcast failed (non-fatal): %s", exc)
             break
     except Exception as exc:
-        logger.debug("voice weather ui enqueue failed (non-fatal): %s", exc)
+        logger.warning(
+            "voice weather ui_actions enqueue failed for panel=%s — weather card/navigate dropped (non-fatal): %s",
+            panel_id, exc,
+        )
 
 
 async def _broadcast_calendar_ui(
@@ -1053,7 +1056,10 @@ async def _broadcast_skybridge_ui(
                         (_superseded_at, _row["id"]),
                     )
             except Exception as _sup_exc:
-                logger.debug("voice skybridge stale-action cleanup failed (non-fatal): %s", _sup_exc)
+                logger.warning(
+                    "voice skybridge stale ui_actions supersede UPDATE failed for panel=%s user=%s — old queued actions may replay (non-fatal): %s",
+                    panel_id, _panel_user_id, _sup_exc,
+                )
             await _db.commit()
             nav_delivered = await broadcaster.broadcast_to_panel(
                 panel_id,
@@ -1077,7 +1083,10 @@ async def _broadcast_skybridge_ui(
                 await _db.commit()
             break
     except Exception as exc:
-        logger.debug("voice skybridge ui enqueue failed (non-fatal): %s", exc)
+        logger.warning(
+            "voice skybridge ui_actions enqueue failed for panel=%s — skybridge card/navigate dropped (non-fatal): %s",
+            panel_id, exc,
+        )
 
 
 async def _broadcast_lets_talk_ui(panel_id: str, turn_key: Optional[str] = None) -> None:
@@ -1560,7 +1569,10 @@ async def _touch_panel_session(panel_id: str, user_id: str) -> None:
             )
             await _conn.commit()
     except Exception as exc:
-        logger.debug("voice: panel session heartbeat failed for panel=%s (non-fatal): %s", panel_id, exc)
+        logger.warning(
+            "voice: ui_panel_sessions heartbeat UPSERT failed for panel=%s user=%s — session may lapse to guest (non-fatal): %s",
+            panel_id, user_id, exc,
+        )
 
 
 _PANEL_IDLE_LOGOUT_KEY = "panel_idle_logout_s"
@@ -1802,6 +1814,27 @@ async def speak(payload: dict, caller: dict = Depends(_require_voice_auth)):
         "content_type": response.media_type,
         "audio_base64": b64,
     }
+
+
+@router.get("/announcements")
+async def voice_announcements(caller: dict = Depends(_require_voice_auth), db=Depends(get_db)):
+    """P-W2.3: claim-and-return pending spoken announcements for the voice daemon.
+
+    Device-token ONLY: `_require_voice_auth` already rejects guests, but a
+    non-guest browser session must not be able to drain the speaker queue
+    either — the daemon (the proven audio path) is the sole consumer, and it
+    authenticates with the panel device token. Claims are atomic server-side
+    (voice_announce.claim_announcements), so overlapping polls never
+    double-speak; TTL-expired rows are marked expired and never returned.
+    """
+    if caller.get("source") != "device":
+        raise HTTPException(status_code=403, detail="Announcement claim requires a device token")
+    import voice_announce
+
+    items = await voice_announce.claim_announcements(
+        db, panel_id=str(caller.get("panel_id") or "")
+    )
+    return {"ok": True, "announcements": items}
 
 
 _STREAM_TEXT_MAX = 2000  # character cap for streaming TTS to prevent runaway requests
@@ -2498,46 +2531,6 @@ async def _run_voice_memory_passes(
         logger.warning("voice memory passes failed (non-fatal): %s", exc)
 
 
-async def _run_hermes_voice_escalation(prompt: str, session_id: str, user_id: str) -> str:
-    """Use Hermes for foreground voice escalation; OpenClaw is manual-only."""
-    hermes_url = os.environ.get(
-        "HERMES_API_URL",
-        "http://127.0.0.1:8642/v1/chat/completions",
-    )
-    payload = {
-        "model": os.environ.get("HERMES_MODEL", "hermes"),
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are Hermes acting as Zoe's escalation agent for voice. "
-                    "Be concise, complete the requested task, and avoid asking the user "
-                    "to switch surfaces unless absolutely necessary."
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"User id: {user_id}\n"
-                    f"Session id: {session_id}\n\n"
-                    f"{prompt}"
-                ),
-            },
-        ],
-        "temperature": 0.3,
-        "max_tokens": 900,
-        "stream": False,
-    }
-    timeout_s = float(os.environ.get("ZOE_VOICE_HERMES_TIMEOUT_S", "45"))
-    async with httpx.AsyncClient(timeout=timeout_s) as client:
-        resp = await client.post(
-            hermes_url,
-            json=payload,
-            headers=hermes_auth_headers(session_id=session_id),
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    return (data.get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
 
 
 @router.post("/command")
@@ -3769,11 +3762,6 @@ async def voice_command(
         from brain_dispatch import brain_streaming  # zoe-core by default
 
         voice_timeout = float(os.environ.get("ZOE_VOICE_CHAT_TIMEOUT_S", "20"))
-        try:
-            _hermes_cap = float(os.environ.get("ZOE_VOICE_HERMES_TIMEOUT_S", str(voice_timeout)))
-        except Exception:
-            _hermes_cap = voice_timeout
-        hermes_voice_timeout = max(5.0, min(voice_timeout, _hermes_cap))
         _t_first_token: Optional[float] = None
 
         if stream:
@@ -3941,32 +3929,15 @@ async def voice_command(
                             continue
                         if delta.startswith(_VOICE_ESCALATION_MARKERS):
                             try:
-                                is_bg, reason, hermes_prompt = _parse_voice_escalation_delta(delta, text)
-                                logger.info("voice/command stream escalation -> Hermes background=%s reason=%s", is_bg, reason or "unspecified")
-                                if is_bg:
-                                    from background_runner import enqueue_background_task
-                                    _spawn_bg(enqueue_background_task(hermes_prompt, effective_user, session_id))
-                                    delta = "I'll work on that in the background and let you know when it's done."
-                                else:
-                                    # Voice foreground turns should answer aloud when possible;
-                                    # long-running work still uses the explicit background marker.
-                                    try:
-                                        await _bc_stream.broadcast("all", "voice:responding", {
-                                            "panel_id": panel_id,
-                                            "text": "Give me a second - this one may take a little longer. I will come back with the result.",
-                                        })
-                                    except Exception:
-                                        pass
-                                    delta = (
-                                        await asyncio.wait_for(
-                                            _run_hermes_voice_escalation(hermes_prompt, session_id, effective_user),
-                                            timeout=hermes_voice_timeout,
-                                        )
-                                    ).strip()
-                                    if not delta:
-                                        continue
+                                is_bg, reason, esc_prompt = _parse_voice_escalation_delta(delta, text)
+                                # See the non-stream path: Hermes is retired, so
+                                # every escalation goes to the background runner.
+                                logger.info("voice/command stream escalation -> background (was_bg=%s) reason=%s", is_bg, reason or "unspecified")
+                                from background_runner import enqueue_background_task
+                                _spawn_bg(enqueue_background_task(esc_prompt, effective_user, session_id))
+                                delta = "I'll work on that in the background and let you know when it's done."
                             except Exception as esc_exc:
-                                logger.warning("voice/command Hermes escalation failed: %s", esc_exc)
+                                logger.warning("voice/command stream escalation failed: %s", esc_exc)
                                 delta = "I couldn't complete that advanced request right now. Please try again."
                         if _t_first_token is None:
                             _t_first_token = time.monotonic() - t_chat_start
@@ -4077,33 +4048,18 @@ async def voice_command(
                     continue
                 if delta.startswith(_VOICE_ESCALATION_MARKERS):
                     try:
-                        from push import broadcaster as _bc_escalate
-                        is_bg, reason, hermes_prompt = _parse_voice_escalation_delta(delta, text)
-                        logger.info("voice/command escalation -> Hermes background=%s reason=%s", is_bg, reason or "unspecified")
-                        if is_bg:
-                            from background_runner import enqueue_background_task
-                            _spawn_bg(enqueue_background_task(hermes_prompt, effective_user, session_id))
-                            delta = "I'll work on that in the background and let you know when it's done."
-                        else:
-                            # Voice foreground turns should answer aloud when possible;
-                            # long-running work still uses the explicit background marker.
-                            try:
-                                await _bc_escalate.broadcast("all", "voice:responding", {
-                                    "panel_id": panel_id,
-                                    "text": "Give me a second - this one may take a little longer. I will come back with the result.",
-                                })
-                            except Exception:
-                                pass
-                            delta = (
-                                await asyncio.wait_for(
-                                    _run_hermes_voice_escalation(hermes_prompt, session_id, effective_user),
-                                    timeout=hermes_voice_timeout,
-                                )
-                            ).strip()
-                            if not delta:
-                                continue
+                        is_bg, reason, esc_prompt = _parse_voice_escalation_delta(delta, text)
+                        # Hermes is retired, so there is no foreground escalation
+                        # engine — every escalation now goes to the background
+                        # runner, which is the path that still has one. Verified
+                        # never-fired before removal (operator-confirmed; zero
+                        # 'escalation ->' hits in the logs).
+                        logger.info("voice/command escalation -> background (was_bg=%s) reason=%s", is_bg, reason or "unspecified")
+                        from background_runner import enqueue_background_task
+                        _spawn_bg(enqueue_background_task(esc_prompt, effective_user, session_id))
+                        delta = "I'll work on that in the background and let you know when it's done."
                     except Exception as esc_exc:
-                        logger.warning("voice/command Hermes escalation failed: %s", esc_exc)
+                        logger.warning("voice/command escalation failed: %s", esc_exc)
                         delta = "I couldn't complete that advanced request right now. Please try again."
                 if _t_first_token is None:
                     _t_first_token = time.monotonic() - t_chat_start
@@ -5074,25 +5030,6 @@ async def voice_ambient(payload: dict, caller: dict = Depends(_require_voice_aut
 
 # ── Speaker identification ─────────────────────────────────────────────────
 
-def _compute_resemblyzer_embedding(wav_path: str) -> Optional[bytes]:
-    """Compute a 256-dim resemblyzer voice embedding from a WAV file.
-
-    Returns raw float32 bytes or None if resemblyzer is not installed.
-    """
-    try:
-        from resemblyzer import VoiceEncoder, preprocess_wav  # type: ignore
-        import numpy as np
-        encoder = VoiceEncoder()
-        wav = preprocess_wav(wav_path)
-        embedding = encoder.embed_utterance(wav)  # shape: (256,)
-        return embedding.astype(np.float32).tobytes()
-    except ImportError:
-        logger.debug("resemblyzer not installed; speaker ID unavailable")
-        return None
-    except Exception as exc:
-        logger.warning("resemblyzer embedding failed: %s", exc)
-        return None
-
 
 def _speaker_id_threshold() -> float:
     """Resemblyzer cosine acceptance threshold, read per call so .env flips apply."""
@@ -5155,21 +5092,6 @@ async def _voice_claim_consented(user_id: str) -> bool:
         return False
 
 
-def _cosine_similarity(a: bytes, b: bytes) -> float:
-    """Cosine similarity between two float32 byte blobs."""
-    try:
-        import numpy as np
-        va = np.frombuffer(a, dtype=np.float32)
-        vb = np.frombuffer(b, dtype=np.float32)
-        na = np.linalg.norm(va)
-        nb = np.linalg.norm(vb)
-        if na == 0 or nb == 0:
-            return 0.0
-        return float(np.dot(va, vb) / (na * nb))
-    except Exception:
-        return 0.0
-
-
 @router.post("/enroll")
 async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth)):
     """Enroll a speaker voice profile using a WAV audio sample.
@@ -5181,8 +5103,16 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
     import uuid as _uuid
     from db_compat import get_compat_db as _get_compat_db
 
+    from biometric_scope import resolve_enroll_target
+
     b64 = str((payload or {}).get("audio_base64", "")).strip()
-    user_id = str((payload or {}).get("user_id", caller.get("user_id", "unknown")))
+    # A session caller may only enrol ITSELF (admins excepted). Taking the
+    # payload's user_id verbatim let any household member enrol their own voice
+    # under someone else's id — identity takeover, not just a bad row. A device
+    # token still enrols on behalf of the person at the panel; when it names
+    # nobody the pre-existing caller fallback stands.
+    _target = resolve_enroll_target((payload or {}).get("user_id"), caller)
+    user_id = str(_target or caller.get("user_id", "unknown"))
     display_name = str((payload or {}).get("display_name", user_id)).strip() or user_id
     panel_id = str((payload or {}).get("panel_id", caller.get("panel_id") or ""))
     # Biometric enrollment is opt-in (W6): the enroll UI sends consent=true after
@@ -5406,18 +5336,33 @@ async def voice_profiles_sync(caller: dict = Depends(_require_voice_auth)):
 
 @router.get("/profiles")
 async def voice_profiles(caller: dict = Depends(_require_voice_auth)):
-    """List enrolled speaker profiles (id, user_id, display_name, sample_count).
+    """List the CALLER'S OWN enrolled speaker profiles (never embeddings).
 
-    Used by the settings page Voice Identity section to show who is enrolled.
+    Used by the settings page Voice Identity section to show the signed-in
+    member what they have enrolled. Household-wide only for an admin: who is
+    enrolled, and whether they consented, is itself biometric metadata, so the
+    scope filter is in the SQL rather than a post-filter.
     """
     from db_compat import get_compat_db as _get_compat_db
+    from biometric_scope import require_person_scope
+
+    caller_id, is_admin = require_person_scope(caller)
+    if is_admin:
+        sql = (
+            "SELECT id, user_id, display_name, sample_count, panel_id, consent_at "
+            "FROM speaker_profiles ORDER BY display_name"
+        )
+        params: tuple = ()
+    else:
+        sql = (
+            "SELECT id, user_id, display_name, sample_count, panel_id, consent_at "
+            "FROM speaker_profiles WHERE user_id=? ORDER BY display_name"
+        )
+        params = (caller_id,)
 
     try:
         async with _get_compat_db() as db:
-            async with db.execute(
-                "SELECT id, user_id, display_name, sample_count, panel_id, consent_at "
-                "FROM speaker_profiles ORDER BY display_name"
-            ) as cur:
+            async with db.execute(sql, params) as cur:
                 rows = await cur.fetchall()
         return {
             "ok": True,
@@ -5435,14 +5380,31 @@ async def voice_profiles(caller: dict = Depends(_require_voice_auth)):
 
 @router.delete("/profiles/{profile_id}")
 async def voice_profile_delete(profile_id: str, caller: dict = Depends(_require_voice_auth)):
-    """Delete an enrolled speaker profile."""
-    from db_compat import get_compat_db as _get_compat_db
+    """Delete an enrolled speaker profile — the caller's own, or any for an admin.
 
+    Ownership is checked against the row BEFORE the delete. `_require_voice_auth`
+    only proves the caller may reach the voice surface, so an unscoped
+    `DELETE ... WHERE id=?` let any signed-in household member wipe anyone
+    else's voiceprint.
+    """
+    from db_compat import get_compat_db as _get_compat_db
+    from biometric_scope import authorize_profile_access, require_person_scope
+
+    caller_id, is_admin = require_person_scope(caller)
     try:
         async with _get_compat_db() as db:
+            async with db.execute(
+                "SELECT user_id FROM speaker_profiles WHERE id=?", (profile_id,)
+            ) as cur:
+                row = await cur.fetchone()
+            authorize_profile_access(
+                row[0] if row else None, caller_id, is_admin, kind="speaker"
+            )
             await db.execute("DELETE FROM speaker_profiles WHERE id=?", (profile_id,))
             await db.commit()
         return {"ok": True, "deleted": profile_id}
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error("voice/profiles delete error: %s", exc)
         raise HTTPException(status_code=500, detail="DB error") from exc
