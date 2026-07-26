@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import base64
 import io
+import itertools
+import uuid
 import json
 import logging
 import os
@@ -108,6 +110,26 @@ WAKEWORD_DEBUG = os.environ.get("WAKEWORD_DEBUG", "").lower() in ("1", "true", "
 BARGE_IN_ENABLED = os.environ.get("BARGE_IN_ENABLED", "true").lower() in ("1", "true", "yes")
 # Speaker identification via resemblyzer (disable until profiles are enrolled).
 SPEAKER_ID_ENABLED = os.environ.get("SPEAKER_ID_ENABLED", "false").lower() in ("1", "true", "yes")
+# W5 shadow mode (default ON): identify + LOG each turn's speaker claim, but
+# never attach it to the turn payload — the server must not act on identity
+# until the shadow week's false-accept/false-reject numbers are reviewed with
+# the operator (docs/architecture/samantha-evolution-plan.md §W5,
+# docs/architecture/panel-identity-plan.md ops-enable). Metrics rows hold
+# timestamp + panel + user_id + raw score ONLY — no audio, no embeddings
+# (docs/knowledge/biometric-retention-policy.md).
+# Parsed as a default-ON SAFETY gate, not an ordinary feature flag: only an
+# EXPLICIT false-y value lifts it. The usual `in ("1","true","yes")` shape would
+# read an EMPTY `SPEAKER_ID_SHADOW=` in .env.voice as off — so a typo or a
+# half-edited line would silently start attaching voice_user_id/voice_score to
+# live turns with no shadow metrics, which is precisely the ungated state the W5
+# gate exists to prevent. Unset, empty and unparseable all stay ON.
+SPEAKER_ID_SHADOW = os.environ.get("SPEAKER_ID_SHADOW", "").strip().lower() not in (
+    "0", "false", "no", "off",
+)
+SPEAKER_ID_SHADOW_LOG = os.environ.get(
+    "SPEAKER_ID_SHADOW_LOG",
+    os.path.expanduser("~/.zoe-voice/speaker_shadow_metrics.jsonl"),
+)
 # VAD probability threshold for barge-in detection (0.0-1.0).
 BARGE_IN_THRESHOLD = float(os.environ.get("BARGE_IN_THRESHOLD", "0.5"))
 # Rolling-window trigger for the playback barge monitor: >= BARGE_MIN_CHUNKS
@@ -946,6 +968,14 @@ def _sync_speaker_profiles(force: bool = False) -> None:
             _profile_cache["syncing"] = False
 
 
+# Where the last claim on THIS thread came from: "local" (cosine match against
+# the synced profile cache) or "server" (the /api/voice/identify fallback).
+# n_profiles describes the LOCAL cache, so it is meaningless — and actively
+# misleading — for a server-derived claim, which is scored against a profile set
+# this process never saw. Thread-local because turns can overlap.
+_claim_ctx = threading.local()
+
+
 def _match_speaker_local(embedding) -> tuple[str, float] | None:
     """Cosine-match an embedding against the cached profiles.
 
@@ -1026,6 +1056,7 @@ def _identify_speaker_from_wav(wav_bytes: bytes) -> tuple[str, float] | None:
     the remote fallback reports the server's confidence. None when speaker ID
     is disabled, resemblyzer is unavailable, or nothing matched.
     """
+    _claim_ctx.source = None
     if not SPEAKER_ID_ENABLED:
         return None
     encoder = _get_voice_encoder()
@@ -1050,6 +1081,7 @@ def _identify_speaker_from_wav(wav_bytes: bytes) -> tuple[str, float] | None:
         _sync_speaker_profiles()
         local = _match_speaker_local(embedding)
         if local is not None:
+            _claim_ctx.source = "local"
             return local
 
         emb_bytes = embedding.astype(_np.float32).tobytes()
@@ -1059,13 +1091,144 @@ def _identify_speaker_from_wav(wav_bytes: bytes) -> tuple[str, float] | None:
             uid = resp.get("user_id")
             if not uid:
                 return None  # legacy server echoed identified without a user
+            _claim_ctx.source = "server"
             return uid, float(resp.get("confidence") or 1.0)
+        _claim_ctx.source = None
         return None
     except ImportError:
+        _claim_ctx.source = None
         return None
     except Exception as exc:
+        _claim_ctx.source = None
         log.debug("Speaker ID failed: %s", exc)
         return None
+
+
+# Distinguishes "caller did not score this turn" from a scored no-match (None).
+_CLAIM_UNSET = object()
+
+_shadow_log_lock = threading.Lock()
+
+# The row handle is (boot, seq), NOT a global sequence recovered from the log.
+#
+# Deriving the handle by re-reading the file was the wrong shape: every failure
+# mode of that read — a torn tail hiding its own seq, invalid UTF-8, a transient
+# OSError — silently restarted the counter and reused handles that are already
+# on disk, which is precisely the ambiguity the operator review cannot tolerate.
+# A per-process token makes uniqueness structural instead of recovered: `boot`
+# is fresh for each daemon start, `seq` counts within that start, so no read of
+# the existing file is required and no read failure can cause a collision.
+# Labelling is unaffected — the operator labels the (boot, seq) pair.
+_SHADOW_BOOT_ID = uuid.uuid4().hex[:8]
+_shadow_seq = itertools.count(1)
+
+
+
+def _needs_leading_newline(path: str) -> bool:
+    """True when `path` is non-empty and its last byte is not a newline.
+
+    Signals a torn tail: the previous append never finished. Any error here
+    answers False — a missing separator is recoverable, a crashed turn is not.
+    """
+    try:
+        if os.path.getsize(path) == 0:
+            return False
+        with open(path, "rb") as f:
+            f.seek(-1, os.SEEK_END)
+            return f.read(1) != b"\n"
+    except (OSError, ValueError):
+        return False
+
+
+def _record_speaker_shadow(claim: tuple[str, float] | None) -> bool:
+    """Append one W5 shadow-week metrics row (JSONL) for FA/FR analysis.
+
+    Rows carry timestamp, panel, matched user_id (null on no-match) and the raw
+    cosine score ONLY — never audio bytes or embeddings, per
+    docs/knowledge/biometric-retention-policy.md. A write failure must never
+    cost the turn.
+
+    The daemon cannot know who ACTUALLY spoke, so a row is a prediction, not a
+    labelled outcome: `truth` is an empty slot the operator fills during the
+    shadow-week review (see docs/architecture/panel-identity-plan.md). Without
+    it FA/FR cannot be computed — `(boot, seq)` gives each row a stable handle to
+    label, and `n_profiles` pins how many enrolled voices the score was chosen
+    from, so a mid-week enrollment doesn't silently change what the score means.
+    """
+    # n_profiles describes the LOCAL cache. A claim resolved by the server
+    # fallback was scored against a profile set this process never saw, so
+    # reporting the local count there would state something untrue about how the
+    # score was reached. Record the source and leave the count null instead.
+    source = getattr(_claim_ctx, "source", None)
+    if source == "local":
+        with _profile_cache_lock:
+            n_profiles = len(_profile_cache["profiles"])
+    else:
+        n_profiles = None
+    try:
+        parent = os.path.dirname(SPEAKER_ID_SHADOW_LOG)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        # seq is allocated AND written inside one critical section: allocating
+        # outside it would let two turns interleave and land out of order.
+        with _shadow_log_lock:
+            row = {
+                "boot": _SHADOW_BOOT_ID,
+                "seq": next(_shadow_seq),
+                "ts": time.time(),
+                "panel_id": PANEL_ID,
+                "user_id": claim[0] if claim else None,
+                "score": round(claim[1], 4) if claim else None,
+                "n_profiles": n_profiles,   # local cache size; null for server claims
+                "source": source,           # "local" | "server" | null (no match)
+                "truth": None,  # operator-filled ground truth; null until reviewed
+            }
+            # Heal a torn tail before appending. If a previous write was cut
+            # short (power loss, SIGKILL) the file can end without a newline;
+            # appending straight onto it would fuse the partial record and the
+            # new one into a single malformed line, costing the analysis BOTH
+            # rows. A leading newline keeps every row independently parseable —
+            # the torn one stays skippable on its own line, the new one lands
+            # clean. (Handle uniqueness no longer depends on this: see
+            # _SHADOW_BOOT_ID.)
+            if _needs_leading_newline(SPEAKER_ID_SHADOW_LOG):
+                with open(SPEAKER_ID_SHADOW_LOG, "a", encoding="utf-8") as f:
+                    f.write("\n")
+            with open(SPEAKER_ID_SHADOW_LOG, "a", encoding="utf-8") as f:
+                f.write(json.dumps(row) + "\n")
+        return True
+    except Exception as exc:
+        # Still never costs the turn — but the caller must not then claim the
+        # turn was logged. A journal line saying "logged" for a row that was
+        # never written over-counts scored turns in the W5 review.
+        log.warning("speaker shadow metrics write failed: %s", exc)
+        return False
+
+
+def _speaker_claim_for_turn(wav_bytes: bytes) -> tuple[str, float] | None:
+    """Identify the speaker for one turn, honouring W5 shadow mode.
+
+    Returns the claim to ATTACH to the turn payload. While SPEAKER_ID_SHADOW is
+    on (the default), identity is scored + logged — journal line + JSONL
+    metrics row — but None is returned, so the server never receives (and can
+    never act on) the claim: shadow-before-acting, the W5 gate.
+    """
+    if not SPEAKER_ID_ENABLED:
+        return None
+    claim = _identify_speaker_from_wav(wav_bytes)
+    if SPEAKER_ID_SHADOW:
+        logged = _record_speaker_shadow(claim)
+        # "logged" is a claim about the artifact, so only say it when the row
+        # actually landed — otherwise the journal and the metrics file disagree
+        # and the FA/FR review silently over-counts.
+        state = "logged" if logged else "NOT logged (metrics write failed)"
+        if claim:
+            log.info("Speaker ID (shadow): %s (%.3f) — %s, not acted on",
+                     claim[0], claim[1], state)
+        else:
+            log.info("Speaker ID (shadow): no match — %s, not acted on", state)
+        return None
+    return claim
 
 
 _BUFFER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "buffers")
@@ -1193,9 +1356,12 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     import time as _time
 
     audio_b64_wav = base64.b64encode(wav).decode()
-    voice_claim: tuple[str, float] | None = None
+    # Sentinel, not None: if scoring RAISES, the fallback must re-score rather
+    # than inherit a None that looks like a completed no-match. Only a scoring
+    # call that actually returned replaces it.
+    voice_claim: object = _CLAIM_UNSET
     try:
-        voice_claim = _identify_speaker_from_wav(wav)
+        voice_claim = _speaker_claim_for_turn(wav)
         if voice_claim:
             log.info("Speaker claim: %s (%.3f)", voice_claim[0], voice_claim[1])
     except Exception:
@@ -1206,9 +1372,13 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
         # Tell the server we're inside an open conversation so ender phrases
         # ("that's all", "goodbye") are honoured; outside one they never fire.
         payload["conversation"] = True
-    if voice_claim:
+    # The sentinel is a plain object() and therefore TRUTHY — it must never
+    # reach the unpack below, so collapse "never scored" to "no claim" here.
+    # The sentinel keeps its meaning for the fallback hand-off only.
+    _scored_claim = None if voice_claim is _CLAIM_UNSET else voice_claim
+    if _scored_claim:
         # A claim + raw score; the server applies its own threshold.
-        payload["voice_user_id"], payload["voice_score"] = voice_claim
+        payload["voice_user_id"], payload["voice_score"] = _scored_claim
 
     url = f"{ZOE_URL}/api/voice/turn_stream"
     _barge_in_requested.clear()
@@ -1313,7 +1483,10 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
             log.warning("turn_stream failed after server processed it (%s) — NOT re-POSTing (avoid duplicate write)", exc)
             return False
         log.warning("turn_stream failed with no server response (%s) — falling back to blocking turn", exc)
-        return _do_single_turn(pa, wav, prompt_on_empty=prompt_on_empty)
+        # Pass the claim we already scored: re-scoring here would append a
+        # second shadow row + journal line for this one spoken turn.
+        return _do_single_turn(pa, wav, prompt_on_empty=prompt_on_empty,
+                               voice_claim=voice_claim)
 
     # Drain playback (respecting barge-in) once the stream ends.
     if aplay is not None:
@@ -1363,11 +1536,18 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     return False
 
 
-def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = True, conversation: bool = False) -> bool:
+def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = True,
+                    conversation: bool = False, voice_claim: object = _CLAIM_UNSET) -> bool:
     """Process one recorded WAV: combined STT+LLM+TTS via /api/voice/turn.
 
     Returns True if audio was played (eligible for follow-up listening).
     Uses a single HTTP round-trip instead of separate transcribe + command calls.
+
+    `voice_claim` lets a caller hand over a claim it already scored. The stream
+    path falls back here on error, and re-scoring would append a SECOND shadow
+    metrics row (and journal line) for one spoken turn — inflating the counts
+    and giving one utterance two seqs, which breaks the per-seq FA/FR labelling.
+    The sentinel distinguishes "not scored yet" from a scored no-match (None).
     """
     import time as _time
     _t_pi_start = _time.monotonic()
@@ -1375,14 +1555,15 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
     audio_b64_wav = base64.b64encode(wav).decode()
     _t_encode = _time.monotonic() - _t_pi_start
 
-    voice_claim: tuple[str, float] | None = None
     _t_vid_start = _time.monotonic()
-    try:
-        voice_claim = _identify_speaker_from_wav(wav)
-        if voice_claim:
-            log.info("Speaker claim: %s (%.3f)", voice_claim[0], voice_claim[1])
-    except Exception:
-        pass
+    if voice_claim is _CLAIM_UNSET:
+        voice_claim = None
+        try:
+            voice_claim = _speaker_claim_for_turn(wav)
+            if voice_claim:
+                log.info("Speaker claim: %s (%.3f)", voice_claim[0], voice_claim[1])
+        except Exception:
+            pass
     _t_vid = _time.monotonic() - _t_vid_start
 
     turn_payload: dict = {"audio_base64": audio_b64_wav, "panel_id": PANEL_ID}
