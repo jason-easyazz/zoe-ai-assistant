@@ -2089,37 +2089,56 @@ async def evolution_proposal_action(
             # them through Omnigent end-to-end; proven on proposal 631f4b5e
             # (bridge -> issue #6112 -> PR #1555 merged). The issue body is built
             # from the proposal's OWN fields only (never caller text).
+            # Auto-executing a proposal means Zoe autonomously writes and (via the
+            # greploop gate) MERGES her own code. That is gated on TWO fail-closed
+            # controls, both required, before the bridge is allowed to run:
+            #   1. AUTHORIZATION — the approver must hold the admin role. A plain
+            #      authenticated (or the unauthenticated-default) user must not be
+            #      able to trigger autonomous code execution.
+            #   2. EXECUTION GATE — evaluate_execution_gate must allow it (executable
+            #      autonomy_class + satisfied approval_required). Proposals without a
+            #      populated autonomy contract fail closed and are NOT auto-executed.
             _dispatch = None
-            try:
-                from proposal_board_bridge import create_board_issue_for_proposal  # type: ignore[import]
-                from executors.executor_queue_backend import get_pool  # type: ignore[import]
-
-                prop_row = {
-                    "id": proposal_id,
-                    "title": proposal["title"],
-                    "description": proposal["description"],
-                    "evidence": proposal.get("evidence"),
-                    "multica_issue_id": multica_issue_id,
-                }
-                pool = await get_pool()
-                async with pool.acquire() as _mconn:
-                    bridged = await create_board_issue_for_proposal(_mconn, prop_row)
-                if bridged.get("issue_id"):
-                    # Point the proposal at the REAL board issue (replacing any
-                    # phantom id from the earlier Multica REST create).
-                    multica_issue_id = bridged["issue_id"]
-                    await db.execute(
-                        "UPDATE evolution_proposals SET multica_issue_id=$1 WHERE id=$2",
-                        multica_issue_id, proposal_id,
-                    )
-                _dispatch = {"ok": True, "board_issue": bridged["number"], "created": bridged["created"]}
+            from proposal_board_bridge import may_auto_execute  # type: ignore[import]
+            _allowed, _reason = may_auto_execute(user, proposal)
+            if not _allowed:
+                _dispatch = {"ok": False, "auto_executed": False, "reason": _reason}
                 logger.info(
-                    "evolution_approve: proposal %s -> board issue #%s (created=%s)",
-                    proposal_id, bridged["number"], bridged["created"],
+                    "evolution_approve: proposal %s approved but NOT auto-executed (%s)",
+                    proposal_id, _reason,
                 )
-            except Exception as exc:
-                _dispatch = {"ok": False, "reason": str(exc)}
-                logger.warning("evolution_approve: board bridge failed for %s: %s", proposal_id, exc)
+            else:
+                try:
+                    from proposal_board_bridge import create_board_issue_for_proposal  # type: ignore[import]
+                    from executors.executor_queue_backend import get_pool  # type: ignore[import]
+
+                    prop_row = {
+                        "id": proposal_id,
+                        "title": proposal["title"],
+                        "description": proposal["description"],
+                        "evidence": proposal.get("evidence"),
+                        "multica_issue_id": multica_issue_id,
+                    }
+                    pool = await get_pool()
+                    async with pool.acquire() as _mconn:
+                        bridged = await create_board_issue_for_proposal(_mconn, prop_row)
+                    if bridged.get("issue_id"):
+                        # Point the proposal at the REAL board issue (replacing any
+                        # phantom id from the earlier Multica REST create).
+                        multica_issue_id = bridged["issue_id"]
+                        await db.execute(
+                            "UPDATE evolution_proposals SET multica_issue_id=$1 WHERE id=$2",
+                            multica_issue_id, proposal_id,
+                        )
+                    _dispatch = {"ok": True, "auto_executed": True,
+                                 "board_issue": bridged["number"], "created": bridged["created"]}
+                    logger.info(
+                        "evolution_approve: proposal %s -> board issue #%s (created=%s)",
+                        proposal_id, bridged["number"], bridged["created"],
+                    )
+                except Exception as exc:
+                    _dispatch = {"ok": False, "reason": str(exc)}
+                    logger.warning("evolution_approve: board bridge failed for %s: %s", proposal_id, exc)
             return {
                 "ok": True,
                 "action": "approved",

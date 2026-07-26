@@ -31,6 +31,32 @@ _EXECUTOR_RUNTIME_NAME = "Flue Executor (Zoe)"
 _EXECUTOR_AGENT_NAME = "Flue Executor"
 
 
+_ADMIN_ROLES = {"admin", "family-admin", "owner"}
+
+
+def may_auto_execute(user: dict | None, proposal: asyncpg.Record | dict) -> tuple[bool, str]:
+    """Fail-closed gate for auto-executing a proposal (Zoe writing + merging her
+    own code). BOTH must hold: (1) the approver holds an admin role, and (2) the
+    evolution execution gate allows it (executable autonomy_class + satisfied
+    approvals). Returns (allowed, reason). Any error or missing signal → denied."""
+    role = str((user or {}).get("role", "")).strip().lower()
+    if role not in _ADMIN_ROLES:
+        return False, "not admin"
+    try:
+        from zoe_evolution_execution_gate import evaluate_execution_gate
+        get = proposal.get if isinstance(proposal, dict) else (lambda k, d=None: proposal[k] if k in proposal else d)
+        gate = evaluate_execution_gate({
+            "proposal_id": str(get("id") or ""),
+            "autonomy_class": get("autonomy_class") or "",
+            "approval_required": get("approval_required") or (),
+        })
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return False, f"execution gate error: {exc}"
+    if not gate.allowed_to_execute:
+        return False, "execution gate blocked: " + "; ".join(gate.blockers)
+    return True, "ok"
+
+
 def build_proposal_issue_body(proposal: asyncpg.Record | dict) -> str:
     """Compose the implement brief from the proposal's OWN trusted fields."""
     title = str((proposal["title"] or "")).strip()
@@ -61,37 +87,34 @@ async def create_board_issue_for_proposal(
     Returns {number, issue_id, created}; the caller updates
     evolution_proposals.multica_issue_id in the zoe DB.
     """
-    ws = await conn.fetchval(
-        "SELECT workspace_id::text FROM agent_runtime WHERE name=$1 ORDER BY created_at LIMIT 1",
-        _EXECUTOR_RUNTIME_NAME,
-    )
-    if not ws:
-        raise RuntimeError(f"no workspace for runtime {_EXECUTOR_RUNTIME_NAME!r}")
-    agent_id = await conn.fetchval(
-        "SELECT id::text FROM agent WHERE name=$1 ORDER BY created_at LIMIT 1", _EXECUTOR_AGENT_NAME,
-    )
-    if not agent_id:
-        raise RuntimeError(f"no agent {_EXECUTOR_AGENT_NAME!r} to attribute the issue to")
+    # Resolve the workspace/agent the SAME way the board runner does
+    # (ensure_executor_identity honours ZOE_MULTICA_WORKSPACE_ID), so the bridge
+    # can never insert into a workspace the runner does not poll.
+    from executors.executor_queue_backend import ensure_executor_identity
+    identity = await ensure_executor_identity(conn)
+    ws, agent_id = identity["workspace_id"], identity["agent_id"]
+    pid = str(proposal["id"])
+    proposal_ref = json.dumps([{"proposal_id": pid}])
 
     async with conn.transaction():
-        # Serialize number assignment against concurrent board writers (Multica
-        # assigns issue.number in the app layer, default 0 — no DB sequence).
+        # ONE global lock serializes ALL board-issue creation here: it assigns
+        # issue.number (Multica has no DB sequence — default 0) AND makes the
+        # idempotency check-and-insert atomic. Two concurrent approvals of the
+        # same proposal therefore can't both insert — the second waits, then sees
+        # the first's issue below and returns it.
         await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", "multica-issue-number")
 
-        # Idempotency: if the proposal already points at a LIVE issue in this
-        # workspace, return it (no duplicate). Single-DB check on the issue table
-        # — the proposal's multica_issue_id is passed in via the proposal row.
-        linked = str((proposal.get("multica_issue_id") if isinstance(proposal, dict)
-                      else (proposal["multica_issue_id"] if "multica_issue_id" in proposal else None)) or "").strip()
-        if linked:
-            existing = await conn.fetchrow(
-                """SELECT number, id::text AS id FROM issue
-                    WHERE id = $1::uuid AND workspace_id = $2::uuid
-                      AND status <> ALL(ARRAY['done','cancelled'])""",
-                linked, ws,
-            )
-            if existing:
-                return {"number": existing["number"], "issue_id": existing["id"], "created": False}
+        # Idempotency by a STABLE proposal reference stored on the issue
+        # (context_refs) — NOT the caller-passed multica_issue_id, which may be a
+        # phantom or stale under concurrency.
+        existing = await conn.fetchrow(
+            """SELECT number, id::text AS id FROM issue
+                WHERE workspace_id = $1::uuid AND context_refs @> $2::jsonb
+                  AND status <> ALL(ARRAY['done','cancelled']) LIMIT 1""",
+            ws, proposal_ref,
+        )
+        if existing:
+            return {"number": existing["number"], "issue_id": existing["id"], "created": False}
 
         number = (await conn.fetchval("SELECT coalesce(max(number), 0) + 1 FROM issue")) or 1
         # claim_next: sit just ahead of the current todo backlog (the runner
@@ -105,11 +128,12 @@ async def create_board_issue_for_proposal(
         row = await conn.fetchrow(
             """INSERT INTO issue
                  (workspace_id, title, description, status, priority,
-                  creator_type, creator_id, number, position, acceptance_criteria)
+                  creator_type, creator_id, number, position,
+                  acceptance_criteria, context_refs)
                VALUES ($1::uuid, $2, $3, 'todo', 'medium',
-                       'agent', $4::uuid, $5, $6, '[]'::jsonb)
+                       'agent', $4::uuid, $5, $6, '[]'::jsonb, $7::jsonb)
                RETURNING number, id::text AS id""",
             ws, str(proposal["title"])[:250], build_proposal_issue_body(proposal),
-            agent_id, number, position,
+            agent_id, number, position, proposal_ref,
         )
         return {"number": row["number"], "issue_id": row["id"], "created": True}
