@@ -541,6 +541,21 @@
   .mqtabs button.on{background:rgba(123,150,255,.22);border-color:rgba(123,150,255,.4);color:#fff}
   .mqlist{flex:1;overflow-y:auto;min-height:0}
   .brf .qthumb.ph{display:block}
+  /* Browse → Sources tab: music services with Connect/Reconnect. A provider that
+     needs attention (e.g. YouTube Music failing its Premium check) is amber. */
+  .mqlist .srclist{display:flex;flex-direction:column;gap:12px}
+  .srcrow{display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:16px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.05)}
+  .srcrow.warn{border-color:rgba(245,177,60,.5);background:rgba(245,177,60,.10)}
+  .srcrow .srctx{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+  .srcrow .srcnm{font-size:19px;font-weight:600}
+  .srcrow .srcsub{font-size:13.5px;color:var(--ink-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .srcrow.warn .srcsub{color:#f5c877}
+  .srcbtn{flex:none;height:44px;padding:0 20px;border-radius:12px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.08);color:#fff;font:inherit;font-size:16px;font-weight:600;cursor:pointer}
+  .srcbtn.warn{background:var(--accent);border-color:transparent}
+  .srcok{flex:none;font-size:14px;color:#66d6a3;font-weight:600}
+  .srcnote{color:var(--ink-faint);padding:12px 4px;font-size:16px;display:flex;flex-direction:column;gap:12px;align-items:flex-start}
+  .estmc .srcqr{display:flex;justify-content:center;padding:8px 0 4px}
+  .estmc .srcqr img{width:220px;height:220px;background:#fff;border-radius:14px;padding:8px}
   /* ---- Recent tab: a grid of rectangle tiles (fits more) ---- */
   .mqlist.recent{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;align-content:start}
   .rtile{display:flex;align-items:center;gap:14px;padding:10px 12px;border-radius:16px;background:rgba(255,255,255,.05);cursor:pointer}
@@ -1058,7 +1073,7 @@
       html:'<div class="chttl" id="mQTitle">Recently played</div>'
         +'<div class="chmeta"><button class="chbtn" id="mQSave" title="Save queue as playlist">'+SAVE_I+'</button>'
         +'<button class="chbtn" id="mQClear" title="Clear queue">'+TRASH_I+'</button></div>'
-        +'<div class="brf"><div class="mqtabs"><button class="on" data-qt="recent">Recent</button><button data-qt="playlists">Playlists</button></div>'
+        +'<div class="brf"><div class="mqtabs"><button class="on" data-qt="recent">Recent</button><button data-qt="playlists">Playlists</button><button data-qt="sources">Sources</button></div>'
         +'<div id="mQList" class="mqlist"></div></div>'},
     timer:{home:true, bg:'radial-gradient(120% 100% at 50% 44%,#122447,#080b12 62%)', canvas:false, glow:'radial-gradient(closest-side at 50% 44%,rgba(123,150,255,.35),transparent 70%)',
       html:'<div class="chttl">Timers</div><div class="tfull"><div class="trings" id="tmRings"></div><div class="tmore" id="tmMore"></div></div>'},
@@ -2071,6 +2086,53 @@
         host.innerHTML=pls.map(_pltile).join('')||_qempty('No playlists yet — build one with Save.');
         host.onclick=function(e){var r=e.target.closest('.qi.pl');if(!r)return;_qpost('play_media',{uri:r.getAttribute('data-uri'),player_id:_music.player_id||undefined,option:'replace'}).then(function(){toast('Playing playlist');setTimeout(loadMusic,600);}).catch(function(){toast('Couldn’t play');});};
       }).catch(function(){if(_cur!=='browse'||gen!==_qGen)return;host.innerHTML=_qempty('Couldn’t load playlists.');});return;}
+    if(_qtab==='sources'){host.classList.remove('recent','grid');if(ttl)ttl.textContent='Music sources';
+      host.innerHTML=_qmsg('Loading…');
+      // Owner-only (the catalogue endpoint requires auth). A provider that is
+      // configured but not loaded — YouTube Music failing its Premium check —
+      // comes back needs_attention:true, so we offer "Reconnect" (which refreshes
+      // the sign-in on the phone) rather than a misleading "Connected".
+      apiGet('/api/music/setup/catalogue').then(function(d){if(_cur!=='browse'||gen!==_qGen)return;
+        var provs=(d&&d.providers)||[];
+        host.innerHTML='<div class="srclist">'+provs.map(_srcRow).join('')+'</div>'||_qempty('No music services.');
+        _wireSources(host);
+      }).catch(function(){if(_cur!=='browse'||gen!==_qGen)return;
+        // The catalogue is owner-gated — a guest kiosk gets 401. Offer sign-in.
+        host.innerHTML='<div class="srcnote">Sign in to manage music services.'
+          +'<button class="srcbtn" id="srcSignin">Sign in</button></div>';
+        var b=document.getElementById('srcSignin');if(b)b.onclick=function(){if(window.__showAuthCard)window.__showAuthCard();};
+      });return;}
+  }
+  function _srcRow(p){
+    var nm=esc(p.name||p.domain);
+    var right = p.needs_attention
+        ? '<button class="srcbtn warn" data-src="'+esc(p.domain)+'" data-name="'+nm+'">Reconnect</button>'
+        : (p.connected ? '<span class="srcok">Connected</span>'
+                       : '<button class="srcbtn" data-src="'+esc(p.domain)+'" data-name="'+nm+'">Connect</button>');
+    var sub = p.needs_attention ? (p.reason||'Needs attention')
+            : (p.connected ? 'Connected' : (p.auth==='free' ? 'Free — no account' : 'Sign in on your phone'));
+    return '<div class="srcrow'+(p.needs_attention?' warn':'')+'">'
+      +'<span class="srctx"><span class="srcnm">'+esc(p.name)+'</span><span class="srcsub">'+esc(sub)+'</span></span>'
+      +right+'</div>';
+  }
+  function _wireSources(host){
+    host.onclick=function(e){var b=e.target.closest('button[data-src]');if(!b)return;
+      startProviderConnect(b.getAttribute('data-src'),b.textContent.trim(),b.getAttribute('data-name')||b.getAttribute('data-src'));};
+  }
+  // Launch the existing QR setup flow: the panel mints a one-time link + QR, the
+  // owner scans it on their phone and signs in (their password only touches the
+  // provider). Free providers connect immediately with no phone step.
+  function startProviderConnect(domain,label,name){
+    apiJson('POST','/api/music/setup/start',{provider:domain}).then(function(r){
+      if(r&&r.immediate){toast('Connected');loadQueue();return;}
+      if(!(r&&r.ok&&r.qr_path)){toast('Sign in first to manage music');if(window.__showAuthCard)window.__showAuthCard();return;}
+      estOpen('<h3>'+esc((label||'Connect')+' '+(name||domain))+'</h3>'
+        +'<div class="srcqr"><img alt="Scan to sign in" src="'+esc(r.qr_path)+'"></div>'
+        +'<div class="spkhint">Scan with your phone to sign in — the link is private to your network and expires shortly.</div>'
+        +'<div class="btns"><button data-x="cancel">Done</button></div>');
+      var m=document.getElementById('estModal');
+      m.querySelector('[data-x="cancel"]').onclick=function(){estClose();loadQueue();};
+    }).catch(function(){toast('Sign in first to manage music');if(window.__showAuthCard)window.__showAuthCard();});
   }
   function _qmsg(t){return '<div class="mqmsg" style="color:var(--ink-faint);padding:8px 4px">'+esc(t)+'</div>';}
   function _qempty(t){return '<div style="color:var(--ink-faint);padding:8px 4px">'+esc(t)+'</div>';}
