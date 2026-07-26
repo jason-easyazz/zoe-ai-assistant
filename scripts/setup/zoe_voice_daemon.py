@@ -968,6 +968,14 @@ def _sync_speaker_profiles(force: bool = False) -> None:
             _profile_cache["syncing"] = False
 
 
+# Where the last claim on THIS thread came from: "local" (cosine match against
+# the synced profile cache) or "server" (the /api/voice/identify fallback).
+# n_profiles describes the LOCAL cache, so it is meaningless — and actively
+# misleading — for a server-derived claim, which is scored against a profile set
+# this process never saw. Thread-local because turns can overlap.
+_claim_ctx = threading.local()
+
+
 def _match_speaker_local(embedding) -> tuple[str, float] | None:
     """Cosine-match an embedding against the cached profiles.
 
@@ -1048,6 +1056,7 @@ def _identify_speaker_from_wav(wav_bytes: bytes) -> tuple[str, float] | None:
     the remote fallback reports the server's confidence. None when speaker ID
     is disabled, resemblyzer is unavailable, or nothing matched.
     """
+    _claim_ctx.source = None
     if not SPEAKER_ID_ENABLED:
         return None
     encoder = _get_voice_encoder()
@@ -1072,6 +1081,7 @@ def _identify_speaker_from_wav(wav_bytes: bytes) -> tuple[str, float] | None:
         _sync_speaker_profiles()
         local = _match_speaker_local(embedding)
         if local is not None:
+            _claim_ctx.source = "local"
             return local
 
         emb_bytes = embedding.astype(_np.float32).tobytes()
@@ -1081,11 +1091,15 @@ def _identify_speaker_from_wav(wav_bytes: bytes) -> tuple[str, float] | None:
             uid = resp.get("user_id")
             if not uid:
                 return None  # legacy server echoed identified without a user
+            _claim_ctx.source = "server"
             return uid, float(resp.get("confidence") or 1.0)
+        _claim_ctx.source = None
         return None
     except ImportError:
+        _claim_ctx.source = None
         return None
     except Exception as exc:
+        _claim_ctx.source = None
         log.debug("Speaker ID failed: %s", exc)
         return None
 
@@ -1109,6 +1123,7 @@ _SHADOW_BOOT_ID = uuid.uuid4().hex[:8]
 _shadow_seq = itertools.count(1)
 
 
+
 def _needs_leading_newline(path: str) -> bool:
     """True when `path` is non-empty and its last byte is not a newline.
 
@@ -1125,7 +1140,7 @@ def _needs_leading_newline(path: str) -> bool:
         return False
 
 
-def _record_speaker_shadow(claim: tuple[str, float] | None) -> None:
+def _record_speaker_shadow(claim: tuple[str, float] | None) -> bool:
     """Append one W5 shadow-week metrics row (JSONL) for FA/FR analysis.
 
     Rows carry timestamp, panel, matched user_id (null on no-match) and the raw
@@ -1140,8 +1155,16 @@ def _record_speaker_shadow(claim: tuple[str, float] | None) -> None:
     label, and `n_profiles` pins how many enrolled voices the score was chosen
     from, so a mid-week enrollment doesn't silently change what the score means.
     """
-    with _profile_cache_lock:
-        n_profiles = len(_profile_cache["profiles"])
+    # n_profiles describes the LOCAL cache. A claim resolved by the server
+    # fallback was scored against a profile set this process never saw, so
+    # reporting the local count there would state something untrue about how the
+    # score was reached. Record the source and leave the count null instead.
+    source = getattr(_claim_ctx, "source", None)
+    if source == "local":
+        with _profile_cache_lock:
+            n_profiles = len(_profile_cache["profiles"])
+    else:
+        n_profiles = None
     try:
         parent = os.path.dirname(SPEAKER_ID_SHADOW_LOG)
         if parent:
@@ -1156,7 +1179,8 @@ def _record_speaker_shadow(claim: tuple[str, float] | None) -> None:
                 "panel_id": PANEL_ID,
                 "user_id": claim[0] if claim else None,
                 "score": round(claim[1], 4) if claim else None,
-                "n_profiles": n_profiles,
+                "n_profiles": n_profiles,   # local cache size; null for server claims
+                "source": source,           # "local" | "server" | null (no match)
                 "truth": None,  # operator-filled ground truth; null until reviewed
             }
             # Heal a torn tail before appending. If a previous write was cut
@@ -1172,8 +1196,13 @@ def _record_speaker_shadow(claim: tuple[str, float] | None) -> None:
                     f.write("\n")
             with open(SPEAKER_ID_SHADOW_LOG, "a", encoding="utf-8") as f:
                 f.write(json.dumps(row) + "\n")
+        return True
     except Exception as exc:
-        log.debug("speaker shadow metrics write failed: %s", exc)
+        # Still never costs the turn — but the caller must not then claim the
+        # turn was logged. A journal line saying "logged" for a row that was
+        # never written over-counts scored turns in the W5 review.
+        log.warning("speaker shadow metrics write failed: %s", exc)
+        return False
 
 
 def _speaker_claim_for_turn(wav_bytes: bytes) -> tuple[str, float] | None:
@@ -1188,11 +1217,16 @@ def _speaker_claim_for_turn(wav_bytes: bytes) -> tuple[str, float] | None:
         return None
     claim = _identify_speaker_from_wav(wav_bytes)
     if SPEAKER_ID_SHADOW:
-        _record_speaker_shadow(claim)
+        logged = _record_speaker_shadow(claim)
+        # "logged" is a claim about the artifact, so only say it when the row
+        # actually landed — otherwise the journal and the metrics file disagree
+        # and the FA/FR review silently over-counts.
+        state = "logged" if logged else "NOT logged (metrics write failed)"
         if claim:
-            log.info("Speaker ID (shadow): %s (%.3f) — logged, not acted on", claim[0], claim[1])
+            log.info("Speaker ID (shadow): %s (%.3f) — %s, not acted on",
+                     claim[0], claim[1], state)
         else:
-            log.info("Speaker ID (shadow): no match — logged, not acted on")
+            log.info("Speaker ID (shadow): no match — %s, not acted on", state)
         return None
     return claim
 

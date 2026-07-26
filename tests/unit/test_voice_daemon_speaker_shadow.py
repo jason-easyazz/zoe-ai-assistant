@@ -86,7 +86,7 @@ def test_shadow_suppresses_claim_and_records_metrics_row(daemon, monkeypatch, sh
     assert len(rows) == 1
     row = rows[0]
     # Retention policy: metadata only — exactly these keys, no audio/embeddings.
-    assert set(row) == {"boot", "seq", "ts", "panel_id", "user_id", "score", "n_profiles", "truth"}
+    assert set(row) == {"boot", "seq", "ts", "panel_id", "user_id", "score", "n_profiles", "source", "truth"}
     assert row["user_id"] == "jason"
     assert row["score"] == pytest.approx(0.9124, abs=1e-4)
     assert row["panel_id"] == daemon.PANEL_ID
@@ -288,3 +288,58 @@ def test_shadow_gate_fails_safe_on_bad_env(monkeypatch, raw, expected_shadow):
                 sys.modules.pop(n, None)
             else:
                 sys.modules[n] = prev
+
+
+# ── the row and the journal must not overstate what happened ────────────────
+
+def test_journal_does_not_claim_logged_when_the_write_failed(daemon, monkeypatch, tmp_path, caplog):
+    """A failed metrics write must not produce a journal line saying "logged".
+
+    The write is best-effort by design (it must never cost the turn), but the
+    journal claiming the turn was logged while no row landed makes the two
+    disagree and silently over-counts scored turns in the W5 review.
+    """
+    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", True)
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW_LOG", str(tmp_path))  # a dir: unwritable
+    monkeypatch.setattr(daemon, "_identify_speaker_from_wav", lambda wav: ("jason", 0.9))
+
+    with caplog.at_level("INFO"):
+        assert daemon._speaker_claim_for_turn(b"wav") is None  # turn survives
+    msgs = " ".join(r.getMessage() for r in caplog.records)
+    assert "NOT logged" in msgs
+    assert "0.900 — logged" not in msgs
+
+
+def test_record_reports_whether_the_row_landed(daemon, monkeypatch, tmp_path, shadow_log):
+    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", True)
+    assert daemon._record_speaker_shadow(("jason", 0.9)) is True
+
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW_LOG", str(tmp_path))  # unwritable
+    assert daemon._record_speaker_shadow(("jason", 0.9)) is False
+
+
+def test_n_profiles_is_null_for_a_server_resolved_claim(daemon, monkeypatch, shadow_log):
+    """n_profiles describes the LOCAL cache — it must not be stated for a
+    server-fallback claim, which was scored against a profile set this process
+    never saw. A row showing n_profiles=0 beside a real user_id/score would
+    contradict the field's documented meaning during FA/FR review."""
+    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", True)
+
+    daemon._claim_ctx.source = "server"
+    daemon._record_speaker_shadow(("jason", 0.88))
+    row = _rows(shadow_log)[-1]
+    assert row["source"] == "server"
+    assert row["n_profiles"] is None
+    assert row["user_id"] == "jason"
+
+    # ...and a local claim still reports the cache size it was scored against.
+    daemon._claim_ctx.source = "local"
+    with daemon._profile_cache_lock:
+        daemon._profile_cache["profiles"] = [{"user_id": "jason"}]
+    daemon._record_speaker_shadow(("jason", 0.91))
+    row = _rows(shadow_log)[-1]
+    assert row["source"] == "local"
+    assert row["n_profiles"] == 1
