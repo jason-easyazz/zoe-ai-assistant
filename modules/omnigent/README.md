@@ -58,20 +58,30 @@ state. Miss any of them and that worker cannot refresh, so it silently loses
 authentication rather than failing loudly. Do all three steps together:
 
 ```bash
-# Resolve the project FIRST — every command below depends on it. Compose derives the
-# project from the working directory, so the same commands run from a different directory
-# address a DIFFERENT volume set: they silently create and chown empty replacements while
-# the real, root-owned volumes are left untouched. The container's own label is the only
-# authoritative answer, whatever directory the stack was originally brought up from, and
-# `:?` aborts here rather than letting an empty -p silently select the wrong project.
+# Resolve everything FIRST — every command below depends on it, and every variable here
+# exists because assuming it silently targeted the WRONG thing at least once.
+#
+#  * PROJECT: compose derives it from the working directory, so the same commands run
+#    from a different directory address a DIFFERENT volume set — they create and chown
+#    empty replacements while the real root-owned volumes are untouched. The container's
+#    own label is the only authoritative answer. `:?` aborts rather than letting an empty
+#    -p select the default project.
+#  * REPO: absolute paths so the block is safe from any cwd.
+#  * --env-file: the normal bring-up uses it (see above). Without it OPENROUTER_API_KEY
+#    and OMNIGENT_WS_ALLOWED_ORIGINS come back unset, breaking pi gateway auth and tunnel
+#    CSRF checks with no obvious link to the uid change.
+REPO=$(git -C /home/zoe/assistant rev-parse --show-toplevel)
 PROJECT=$(docker inspect zoe-omnigent --format '{{index .Config.Labels "com.docker.compose.project"}}')
 : "${PROJECT:?could not read the compose project label — is zoe-omnigent running?}"
-echo "compose project = $PROJECT"
+echo "compose project = $PROJECT   repo = $REPO"
 
-COMPOSE="docker compose -p $PROJECT -f modules/omnigent/docker-compose.module.yml"
+COMPOSE="docker compose -p $PROJECT --env-file $REPO/.env -f $REPO/modules/omnigent/docker-compose.module.yml"
+
+# STOP FIRST, before the build. The build takes minutes, and a still-running root
+# container keeps writing root-owned files into the bind-mounted checkout for all of it —
+# recreating the exact problem this migration exists to fix.
+$COMPOSE stop omnigent
 $COMPOSE build omnigent
-$COMPOSE stop omnigent      # stop BEFORE chowning: a running root container writes new
-                            # root-owned files into the volumes underneath you
 # Chown through Compose, not host paths: hard-coding /var/lib/docker/volumes/<project>_*
 # assumes a rootful daemon, the default data-root, and a known prefix — any of which can
 # be wrong, and the failure mode is chowning nothing (or the wrong volumes) silently.
