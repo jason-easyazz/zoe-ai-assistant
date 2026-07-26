@@ -18,23 +18,35 @@ import pytest
 pytestmark = pytest.mark.ci_safe
 
 import intent_router
+import list_service
 import skybridge_service
 
 
 def test_both_dedup_queries_cast_created_at():
     # A bare `created_at > now()` comparison on the TEXT column is the bug.
+    # intent_router's copy of the guard moved into list_service (the canonical
+    # list writer), which builds the interval from its dedup_window_s param.
     import inspect
-    for mod, src in (("intent_router", intent_router), ("skybridge_service", skybridge_service)):
+    for mod, src, pattern in (
+        ("list_service", list_service, r"created_at[^\n]*interval '"),
+        ("skybridge_service", skybridge_service, r"created_at[^\n]*interval '10 seconds'"),
+    ):
         text = inspect.getsource(src)
-        matches = re.findall(r"created_at[^\n]*interval '10 seconds'", text)
+        matches = re.findall(pattern, text)
         # guard against a vacuous pass: the dedup window must still exist here,
         # so a refactor that drops it (and its cast) fails loudly.
-        assert matches, f"{mod}: 10-second dedup guard not found — did it move or get removed?"
+        assert matches, f"{mod}: dedup guard not found — did it move or get removed?"
         for frag in matches:
             assert "created_at::timestamptz" in frag, (
                 f"{mod}: dedup guard must cast the TEXT created_at column "
                 f"(`created_at::timestamptz`), got: {frag!r}"
             )
+    # The voice direct add must keep its 10-second replay window when calling
+    # the canonical writer.
+    assert re.search(r"dedup_window_s=10\b", inspect.getsource(intent_router)), (
+        "intent_router: the 10-second list-add replay window is gone — "
+        "did the add_item_to_list call lose dedup_window_s=10?"
+    )
 
 
 def test_dedup_predicate_executes_against_text_created_at():
