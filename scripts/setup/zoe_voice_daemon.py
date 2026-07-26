@@ -1047,7 +1047,41 @@ def _identify_speaker_from_wav(wav_bytes: bytes) -> tuple[str, float] | None:
 
 
 _shadow_log_lock = threading.Lock()
-_shadow_seq = itertools.count(1)
+_shadow_seq: "itertools.count | None" = None
+
+
+def _resume_shadow_seq() -> "itertools.count":
+    """Continue `seq` from the existing log instead of restarting at 1.
+
+    The log is opened in append mode and the shadow week spans daemon restarts,
+    so a process-local counter starting at 1 every boot would hand the SAME seq
+    to distinct persisted rows — destroying the stable labelling handle the
+    operator review depends on. Seed from the highest seq already on disk.
+
+    Called under `_shadow_log_lock`. Any unreadable/garbled tail falls back to
+    the max seq parsed so far (0 if none), which keeps the counter monotonic
+    rather than colliding.
+    """
+    highest = 0
+    try:
+        with open(SPEAKER_ID_SHADOW_LOG, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    seq = int(json.loads(line).get("seq") or 0)
+                except Exception:
+                    continue  # a torn/legacy row must not stall the resume
+                if seq > highest:
+                    highest = seq
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        # Never let metrics bookkeeping cost a turn; a duplicate seq is far less
+        # bad than a crashed voice daemon, but say so loudly enough to notice.
+        log.warning("shadow seq resume failed (restarting at 1): %s", exc)
+    return itertools.count(highest + 1)
 
 
 def _record_speaker_shadow(claim: tuple[str, float] | None) -> None:
@@ -1065,23 +1099,29 @@ def _record_speaker_shadow(claim: tuple[str, float] | None) -> None:
     and `n_profiles` pins how many enrolled voices the score was chosen from, so
     a mid-week enrollment doesn't silently change what the score means.
     """
+    global _shadow_seq
     with _profile_cache_lock:
         n_profiles = len(_profile_cache["profiles"])
-    row = {
-        "seq": next(_shadow_seq),
-        "ts": time.time(),
-        "panel_id": PANEL_ID,
-        "user_id": claim[0] if claim else None,
-        "score": round(claim[1], 4) if claim else None,
-        "n_profiles": n_profiles,
-        "truth": None,  # operator-filled ground truth; null until reviewed
-    }
     try:
         parent = os.path.dirname(SPEAKER_ID_SHADOW_LOG)
         if parent:
             os.makedirs(parent, exist_ok=True)
-        with _shadow_log_lock, open(SPEAKER_ID_SHADOW_LOG, "a", encoding="utf-8") as f:
-            f.write(json.dumps(row) + "\n")
+        # seq is allocated AND written inside one critical section: allocating
+        # outside it would let two turns interleave and land out of order.
+        with _shadow_log_lock:
+            if _shadow_seq is None:
+                _shadow_seq = _resume_shadow_seq()
+            row = {
+                "seq": next(_shadow_seq),
+                "ts": time.time(),
+                "panel_id": PANEL_ID,
+                "user_id": claim[0] if claim else None,
+                "score": round(claim[1], 4) if claim else None,
+                "n_profiles": n_profiles,
+                "truth": None,  # operator-filled ground truth; null until reviewed
+            }
+            with open(SPEAKER_ID_SHADOW_LOG, "a", encoding="utf-8") as f:
+                f.write(json.dumps(row) + "\n")
     except Exception as exc:
         log.debug("speaker shadow metrics write failed: %s", exc)
 

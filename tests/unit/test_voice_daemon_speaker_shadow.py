@@ -55,6 +55,9 @@ def daemon():
 def shadow_log(daemon, monkeypatch, tmp_path):
     path = tmp_path / "metrics" / "speaker_shadow_metrics.jsonl"
     monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW_LOG", str(path))
+    # The daemon module is module-scoped, so the lazily-seeded seq counter would
+    # otherwise leak across tests. None = "not yet seeded", i.e. a fresh boot.
+    monkeypatch.setattr(daemon, "_shadow_seq", None)
     return path
 
 
@@ -133,3 +136,51 @@ def test_metrics_write_failure_never_costs_the_turn(daemon, monkeypatch, tmp_pat
     monkeypatch.setattr(daemon, "_identify_speaker_from_wav", lambda wav: ("jason", 0.9))
 
     assert daemon._speaker_claim_for_turn(b"wav-bytes") is None
+
+
+# ── seq must survive a daemon restart ───────────────────────────────────────
+
+def test_seq_resumes_across_restart_instead_of_colliding(daemon, monkeypatch, shadow_log):
+    """seq is the labelling handle, so it must never repeat in one log file.
+
+    The log is append-mode and the shadow week spans daemon restarts. A
+    process-local counter starting at 1 each boot would hand the SAME seq to
+    distinct persisted rows, making the operator's ground-truth labels
+    ambiguous and the FA/FR review unreliable.
+    """
+    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", True)
+    monkeypatch.setattr(daemon, "_identify_speaker_from_wav", lambda wav: ("jason", 0.9))
+
+    daemon._record_speaker_shadow(("jason", 0.9))
+    daemon._record_speaker_shadow(("jason", 0.9))
+
+    # Simulate a restart: fresh process, same on-disk log.
+    monkeypatch.setattr(daemon, "_shadow_seq", None)
+    daemon._record_speaker_shadow(("jason", 0.9))
+
+    seqs = [r["seq"] for r in _rows(shadow_log)]
+    assert seqs == [1, 2, 3], f"seq collided across restart: {seqs}"
+    assert len(seqs) == len(set(seqs)), "duplicate seq destroys the labelling handle"
+
+
+def test_seq_resume_survives_a_torn_row(daemon, monkeypatch, shadow_log):
+    """A half-written or legacy line must not stall the resume or collide."""
+    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", True)
+
+    shadow_log.parent.mkdir(parents=True, exist_ok=True)
+    shadow_log.write_text(
+        '{"seq": 1, "ts": 1.0}\n'
+        '{"seq": 2, "ts": 2.0\n'          # torn: no closing brace
+        '{"ts": 3.0}\n'                     # legacy: no seq at all
+        '{"seq": 7, "ts": 4.0}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(daemon, "_shadow_seq", None)
+    daemon._record_speaker_shadow(("jason", 0.9))
+
+    # Read the appended row directly — _rows() would choke on the torn line the
+    # fixture deliberately planted, which is the whole point of this test.
+    last = json.loads(shadow_log.read_text(encoding="utf-8").splitlines()[-1])
+    assert last["seq"] == 8  # continues past the highest good seq, no collision
