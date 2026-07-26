@@ -114,7 +114,11 @@ async def _run_flow(oauth_id: str, provider: str) -> None:
                 flow["event"].set()
                 return
         # Persist the connected provider (outside the WS ctx — save uses HTTP).
-        saved = await music_service.save_provider(provider, values)
+        # Reconnect IN PLACE when an instance already exists (e.g. re-authing a
+        # degraded Spotify/Tidal/Deezer), or MA mints a duplicate provider and
+        # leaves the broken original — the same instance_id fix setup_save uses.
+        existing = await music_service.provider_instance_id(provider)
+        saved = await music_service.save_provider(provider, values, instance_id=existing)
         flow["state"] = "connected" if saved else "failed"
         if not saved:
             flow["error"] = "couldn't save the connection"
