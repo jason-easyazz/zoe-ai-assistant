@@ -58,6 +58,48 @@ def test_fast_response_leaves_open_howto_to_model() -> None:
     assert zoe_agent._check_fast_response("how do i boil an egg") is None
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        # #6112: this exact query was answered with the wall clock three times in a row.
+        "what time does the pharmacy close",
+        "What time does the pharmacy close?",
+        "what time does coles open tomorrow",
+        "tell me what time the bus arrives",
+        "what's the best time to visit now",
+    ],
+)
+def test_fast_response_content_time_questions_fall_through(text: str) -> None:
+    assert zoe_agent._check_fast_response(text) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "what time is it",
+        "What time is it right now?",
+        "what's the time",
+        "whats the time",
+        "tell me the time",
+        "could you tell me what time it is",
+        "Can you tell me what time it is?",
+        "do you have the time",
+        "do you know what time it is",
+        "current time",
+        "time now",
+        "what hour is it",
+        "time",
+        "the time",
+        "clock",
+    ],
+)
+def test_fast_response_still_answers_clock_queries(text: str) -> None:
+    response = zoe_agent._check_fast_response(text)
+
+    assert response is not None
+    assert response.startswith("It's ")
+
+
 @pytest.mark.asyncio
 async def test_mempalace_emotional_offset_metadata_gets_age_label(monkeypatch) -> None:
     added_at = datetime.now(timezone.utc).isoformat()

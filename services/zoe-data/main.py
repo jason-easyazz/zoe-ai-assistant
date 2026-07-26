@@ -2142,6 +2142,9 @@ app.include_router(pi_intent_lab_router)
 from routers.portrait import router as portrait_router
 app.include_router(portrait_router)
 
+from routers.geo import router as geo_router
+app.include_router(geo_router)
+
 from routers.ha_control import router as ha_control_router
 app.include_router(ha_control_router)
 
