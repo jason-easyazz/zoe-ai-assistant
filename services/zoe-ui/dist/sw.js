@@ -27,7 +27,7 @@ importScripts('/workbox/workbox-sw.js');
 //  same-origin, so the generic script/style routes below already cache them on
 //  first use, and precaching ~2 MB of libraries would re-download the lot on
 //  every future SW_VERSION bump.)
-const SW_VERSION = '4.73.0'; // presence-aware idle sleep: a toggle ON in the panel's own room blocks the screensaver (GET /api/panels/{id}/sleep-gate), raced in parallel with the music check; speaker picker capped to the 720px stage (grid scrolls, Cancel pinned) + panel's own output badged "This device" with its room + hoisted first; server-resolved device kind/label; sign-in fails closed; calendar metadata/escaping; chat.html XSS escaping; cross-origin script/CSS left unrouted; CDN libraries vendored to /lib/
+const SW_VERSION = '4.79.0'; // multi-zone speaker picker (2-col rows, tap zones to group live) + per-zone volume sliders + picker redesign; jukebox honest "song search unavailable" notice (merge of 4.78.0 + 4.77.0 -> 4.79.0)
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded

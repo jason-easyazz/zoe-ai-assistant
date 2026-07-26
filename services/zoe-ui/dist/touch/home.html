@@ -255,32 +255,36 @@
   .estmc input,.estmc select{width:100%;height:50px;border-radius:13px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.06);color:var(--ink);font:inherit;font-size:19px;padding:0 14px;outline:none}
   .estmc .erow{display:flex;gap:12px}
   .estmc .btns{display:flex;gap:12px;margin-top:24px}
-  /* Speaker picker: a wider overlay + a 4-column tile grid so all players fit
-     at 1280x720 WITHOUT scrolling (the operator explicitly does not want to
-     scroll). Widen ONLY this modal — scope it to the picker via :has(.spkgrid)
-     so every other estmc dialog keeps its 520px width.
-     The modal is a flex COLUMN capped to the stage (100% of .estmodal, which is
-     inset:0 of the 1280x720 #stage — NOT 100vh, since the stage is transform-
-     scaled to the physical panel): the title + Cancel row are pinned (flex:none)
-     and ONLY the grid scrolls. Without the cap a long player list (ghost players
-     inflate it) pushed the modal taller than the stage and the Cancel button
-     fell off the bottom edge. The common case (a handful of players) still fits
-     with no scroll. */
+  /* Speaker picker: a wider overlay + a 2-column list of ROW tiles (icon · name
+     · status/select), scoped via :has(.spkgrid) so other estmc dialogs keep
+     520px. Rows (not square tiles) give long names room instead of the old
+     4-up grid's heavy truncation, and put the multi-select check on the right.
+     The modal is a flex COLUMN capped to the stage (100% of .estmodal — inset:0
+     of the transform-scaled 1280x720 #stage, NOT 100vh): title + hint + Cancel
+     are pinned and only the grid scrolls, so Cancel never falls off. */
   .estmc:has(.spkgrid){width:1120px;max-width:calc(100vw - 40px);max-height:calc(100% - 24px);display:flex;flex-direction:column}
-  .estmc:has(.spkgrid) h3{flex:none;margin-bottom:12px}
+  .estmc:has(.spkgrid) h3{flex:none;margin-bottom:2px}
+  .estmc .spkhint{flex:none;font-size:14px;color:var(--ink-faint);margin-bottom:14px}
   .estmc:has(.spkgrid) .btns{flex:none;margin-top:16px}
-  .estmc .spkgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:16px;overflow-y:auto;min-height:0;flex:1 1 auto;-webkit-overflow-scrolling:touch}
-  .estmc .spkopt{display:flex;flex-direction:column;align-items:flex-start;gap:8px;width:100%;min-height:104px;text-align:left;padding:15px 17px;border-radius:16px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:#fff;font:inherit;cursor:pointer;position:relative;overflow:hidden}
-  .estmc .spkopt .si{width:32px;height:32px;color:rgba(255,255,255,.82);flex:none}
-  .estmc .spkopt .si svg{width:32px;height:32px;display:block}
-  .estmc .spkopt .snm{font-size:20px;font-weight:600;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
-  .estmc .spkopt .ssub{font-size:14px;color:var(--ink-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;letter-spacing:.02em}
-  /* "This device" pill on the panel's own AirPlay output, top-right so it clears
-     the type glyph (top-left) and the name row (below). */
-  .estmc .spkopt .sbadge{position:absolute;top:12px;right:12px;font-size:12px;font-weight:600;letter-spacing:.03em;padding:3px 10px;border-radius:999px;background:var(--accent);color:#fff}
-  .estmc .spkopt.self{border-color:var(--accent)}
-  .estmc .spkopt.cur{border-color:var(--accent)}
-  .estmc .spkopt.off{opacity:.45}
+  .estmc .spkgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;overflow-y:auto;min-height:0;flex:1 1 auto;-webkit-overflow-scrolling:touch;padding-right:4px}
+  .estmc .spkopt{display:flex;align-items:center;gap:14px;width:100%;min-height:74px;text-align:left;padding:12px 16px;border-radius:16px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.05);color:#fff;font:inherit;cursor:pointer;position:relative}
+  .estmc .spkopt .si{width:46px;height:46px;flex:none;border-radius:12px;background:rgba(255,255,255,.08);display:grid;place-items:center;color:rgba(255,255,255,.85)}
+  .estmc .spkopt .si svg{width:24px;height:24px;display:block}
+  .estmc .spkopt .stx{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+  .estmc .spkopt .snm{font-size:19px;font-weight:600;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .estmc .spkopt .ssub{font-size:13.5px;color:var(--ink-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.02em}
+  .estmc .spkopt .sright{flex:none;display:flex;align-items:center;gap:10px}
+  .estmc .spkopt .schip{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:3px 9px;border-radius:999px;background:rgba(255,255,255,.14);color:rgba(255,255,255,.82);white-space:nowrap}
+  .estmc .spkopt .schip.play{background:var(--accent);color:#fff}
+  /* Multi-select check: an empty ring that fills accent when the zone is on. */
+  .estmc .spkopt .schk{width:28px;height:28px;flex:none;border-radius:50%;border:2px solid rgba(255,255,255,.3);display:grid;place-items:center;color:transparent}
+  .estmc .spkopt .schk svg{width:16px;height:16px}
+  .estmc .spkopt.on{border-color:var(--accent);background:rgba(123,150,255,.16)}
+  .estmc .spkopt.on .schk{background:var(--accent);border-color:var(--accent);color:#fff}
+  /* A zone MA can't group (e.g. a lone TV) shows no check — tapping it just
+     switches to it, the single-speaker behaviour. */
+  .estmc .spkopt.nogroup .schk{display:none}
+  .estmc .spkopt.off{opacity:.42;cursor:default}
   .estmc .spkopt.off .ssub{color:#ff9db0}
   .estmc .btns button{flex:1;height:54px;border-radius:14px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:var(--ink);font:inherit;font-size:19px;cursor:pointer}
   .estmc .btns .save{background:var(--accent);border-color:transparent;color:#fff;font-weight:600}
@@ -490,18 +494,37 @@
   /* Grows under the finger so a drag is visibly grabbed, not just repainted. */
   .mfull .mscrub.drag .mknob{transform:translate(-50%,-50%) scale(1.5)}
   .mfull .mtimes{display:flex;justify-content:space-between;margin-top:12px;font-size:18px;color:rgba(255,255,255,.6);font-variant-numeric:tabular-nums}
-  .mfull .mtransport{position:absolute;left:0;right:0;bottom:44px;display:flex;justify-content:center;align-items:center;gap:44px}
-  .mfull .mtransport .sml{opacity:.55;background:none;border:0;color:#fff;cursor:pointer;width:68px;height:68px;border-radius:50%;display:grid;place-items:center}
-  .mfull .mtransport .sml svg{width:26px;height:26px}
+  /* Transport is now JUST back / play / next, centred. Keep-playing, shuffle and
+     repeat moved into the tools row (#mTools); volume and the tools button sit
+     absolutely at the two bottom corners, so the centred trio stays centred. */
+  .mfull .mtransport{position:absolute;left:0;right:0;bottom:44px;display:flex;justify-content:center;align-items:center;gap:44px;pointer-events:none}
+  /* The row spans the full width to centre prev/play/next, but its EMPTY areas
+     overlay the bottom-corner tools button + volume tile — a transparent box
+     still eats pointer events, so a real finger tap on those corners was being
+     swallowed. Only the buttons themselves take events. */
+  .mfull .mtransport button{pointer-events:auto}
   .mfull .mtransport button svg{width:28px;height:28px}
   .mfull .mtransport .pp svg{width:32px;height:32px;color:#0a0d18}
-  .mfull .mtransport .sml.on{opacity:1;background:rgba(123,150,255,.25);box-shadow:0 0 16px rgba(123,150,255,.35)}
-  /* Don't-stop is a 6th button, and 6 buttons in a centred row would push
-     play/pause 56px off-centre — undoing the centring the card was just
-     rebuilt around. An inert 68px spacer on the left restores the 3-a-side
-     balance (spacer,shuffle,prev | pp | next,repeat,dont-stop) without
-     restructuring the stack. */
-  .mfull .mtransport .tsp{width:68px;height:68px;flex:none;pointer-events:none}
+  /* Tools row occupies the progress-bar slot; shown only while .mfull.tools, and
+     the scrub is hidden then (they never coexist — "replace, don't overlay"). */
+  .mfull .mtools{position:absolute;left:50%;width:560px;margin-left:-280px;bottom:120px;display:none;justify-content:center;align-items:center;gap:52px}
+  .mfull.tools .mtools{display:flex}
+  .mfull.tools .mscrub{display:none}
+  .mfull .mtools .sml{opacity:.6;background:none;border:0;color:#fff;cursor:pointer;width:68px;height:68px;border-radius:50%;display:grid;place-items:center}
+  .mfull .mtools .sml svg{width:28px;height:28px}
+  .mfull .mtools .sml.on{opacity:1;background:rgba(123,150,255,.25);box-shadow:0 0 16px rgba(123,150,255,.35)}
+  /* Tools button: bottom-left, under the scrub's left edge; the volume tile
+     mirrors it under the right edge. Both 68px, so prev/play/next stay centred. */
+  .mfull .mtoolsbtn{position:absolute;bottom:44px;left:calc(50% - 280px);width:68px;height:68px;border-radius:50%;border:0;background:rgba(255,255,255,.10);color:#fff;display:grid;place-items:center;cursor:pointer;opacity:.7}
+  .mfull .mtoolsbtn svg{width:26px;height:26px}
+  .mfull .mtoolsbtn.on{opacity:1;background:rgba(123,150,255,.25);box-shadow:0 0 16px rgba(123,150,255,.35)}
+  /* Buttons flanking the cover flow, in its glassy card styling: search (left),
+     playlists/radio/sources (right). Vertically centred on the cover band. */
+  .mfull .cfside{position:absolute;top:calc(74px + var(--cfcard,300px) / 2);transform:translateY(-50%);width:60px;height:60px;border-radius:18px;border:1px solid rgba(255,255,255,.16);background:linear-gradient(180deg,rgba(255,255,255,.14),rgba(255,255,255,.05));backdrop-filter:blur(8px);color:#fff;display:grid;place-items:center;cursor:pointer;z-index:40;box-shadow:0 14px 32px rgba(0,0,0,.4)}
+  .mfull .cfside svg{width:26px;height:26px}
+  .mfull .cfside:active{transform:translateY(-50%) scale(.93)}
+  .mfull .cfleft{left:40px}
+  .mfull .cfright{right:40px}
   .mqbtn{width:48px;height:48px;flex:none;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.2);color:#fff;cursor:pointer}
   .mqbtn svg{width:22px;height:22px}
   /* Browse (Recent + Playlists) is a real SURFACE, not an overlay on the music
@@ -736,20 +759,36 @@
      #mTransport's delegated handler matches `closest('button')`, so a div is
      invisible to it and cannot fall through to musicControl(); and a native
      range input inside a <button> is invalid interactive content. */
-  .mfull .mtransport .mvolt{position:relative;flex:none;width:68px;height:68px;border-radius:50%;
-        display:grid;place-items:center;color:#fff;opacity:.55;cursor:pointer;transition:.25s}
-  .mfull .mtransport .mvolt svg{width:26px;height:26px}
-  .mfull .mtransport .mvolt.open{opacity:1;background:rgba(255,255,255,.16)}
+  /* Volume left the transport row: it now sits absolutely at bottom-right,
+     mirroring the tools button at bottom-left, so prev/play/next stay centred. */
+  .mfull .mvolt{position:absolute;bottom:44px;right:calc(50% - 280px);width:68px;height:68px;border-radius:50%;
+        display:grid;place-items:center;color:#fff;opacity:.7;cursor:pointer;transition:.25s}
+  .mfull .mvolt svg{width:26px;height:26px}
+  .mfull .mvolt.open{opacity:1;background:rgba(255,255,255,.16)}
   /* Cleared over .mscrub, not merely "above the button". At bottom:80px the
      popover sat across the seek bar and hid the duration — it passed every
      assertion, and only the screenshot showed it. This lands its bottom edge
      above the scrub's top, in the band between the covers (they end y412 at
      CF_K=1) and the progress row. Re-measure if either of those moves. */
-  .mfull .mtransport .mvolt .vpop{position:fixed;right:24px;top:50%;transform:translateY(-50%) translateX(16px);width:104px;height:260px;padding:18px 0 16px;border-radius:22px;background:rgba(18,16,30,.78);border:1px solid rgba(255,255,255,.14);backdrop-filter:blur(18px);box-shadow:0 20px 50px rgba(0,0,0,.5);opacity:0;pointer-events:none;transition:opacity .26s ease,transform .28s cubic-bezier(.2,.8,.3,1);display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:14px;z-index:70}
-  .mfull .mtransport .mvolt.open .vpop{opacity:1;transform:translateY(-50%) translateX(0);pointer-events:auto}
-  .mfull .mtransport .mvolt .vpop input[type=range]{-webkit-appearance:slider-vertical;appearance:slider-vertical;writing-mode:vertical-lr;direction:rtl;width:44px;height:176px;accent-color:#fff;flex:none;margin:0;background:transparent;cursor:pointer;touch-action:none}
-  .mfull .mtransport .mvolt .vpop .vv{min-width:46px;text-align:right;font-size:17px;
+  .mfull .mvolt .vpop{position:fixed;right:24px;top:50%;transform:translateY(-50%) translateX(16px);width:104px;height:260px;padding:18px 0 16px;border-radius:22px;background:rgba(18,16,30,.78);border:1px solid rgba(255,255,255,.14);backdrop-filter:blur(18px);box-shadow:0 20px 50px rgba(0,0,0,.5);opacity:0;pointer-events:none;transition:opacity .26s ease,transform .28s cubic-bezier(.2,.8,.3,1);display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:14px;z-index:70}
+  .mfull .mvolt.open .vpop{opacity:1;transform:translateY(-50%) translateX(0);pointer-events:auto}
+  .mfull .mvolt .vpop .vsolo{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:14px;height:100%}
+  .mfull .mvolt .vpop .vsolo input[type=range]{-webkit-appearance:slider-vertical;appearance:slider-vertical;writing-mode:vertical-lr;direction:rtl;width:44px;height:176px;accent-color:#fff;flex:none;margin:0;background:transparent;cursor:pointer;touch-action:none}
+  .mfull .mvolt .vpop .vv{min-width:46px;text-align:right;font-size:17px;
         font-variant-numeric:tabular-nums;color:#fff}
+  /* GROUPED playback: the popover widens into one horizontal slider per zone
+     ("hit volume with multiple zones selected → multiple sliders"). The single
+     vertical slider (.vsolo) hides; .vzones shows. Anchored bottom (it grows
+     downward with zone count) instead of vertically centred. */
+  .mfull .mvolt .vpop .vzones{display:none}
+  .mfull .mvolt.multi .vpop{width:340px;height:auto;max-height:calc(100% - 40px);padding:16px 18px;top:auto;bottom:120px;transform:translateX(16px);justify-content:flex-start;gap:2px;overflow-y:auto}
+  .mfull .mvolt.multi.open .vpop{transform:translateX(0)}
+  .mfull .mvolt.multi .vsolo{display:none}
+  .mfull .mvolt.multi .vpop .vzones{display:flex;flex-direction:column;gap:16px;width:100%}
+  .mfull .vzrow{display:flex;align-items:center;gap:12px;width:100%}
+  .mfull .vzrow .vzn{flex:none;width:104px;font-size:14px;font-weight:500;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mfull .vzrow input[type=range]{flex:1;height:28px;accent-color:#fff;background:transparent;cursor:pointer;touch-action:none;min-width:0}
+  .mfull .vzrow .vzv{flex:none;width:44px;text-align:right;font-size:14px;color:rgba(255,255,255,.85);font-variant-numeric:tabular-nums}
   .spk{display:flex;align-items:center;gap:11px;padding:13px 20px;border-radius:999px;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.22);color:#fff;font:inherit;font-size:19px;font-weight:500;cursor:pointer;max-width:340px}
   .spk .spkname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .spk svg{width:22px;height:22px}
@@ -989,6 +1028,9 @@
   var PLAY_I='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
   var PAUSE_I='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h3.4v14H7zM13.6 5H17v14h-3.4z"/></svg>';
   var REP1_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/><path d="M11 10h1v4"/></svg>';
+  var SEARCH_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>';
+  var TOOLS_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10M18 6h2M4 12h2M10 12h10M4 18h7M15 18h5"/><circle cx="16" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="13" cy="18" r="2"/></svg>';
+  var CHK_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
   var GROUND='radial-gradient(120% 90% at 50% -10%,#131a2b,#080b12 62%)';
   var DUSK='linear-gradient(180deg,#20264d,#3a3a6b 34%,#8a5a86 60%,#d98a63 82%,#efb27a)';
 
@@ -1009,7 +1051,7 @@
     weather:{home:true, bg:DUSK, canvas:true,
       html:'<div class="wloc" id="wxLoc"></div><div class="wbig"><div class="t" id="wxTemp">—°</div><div class="c" id="wxCond"></div></div><div class="whours" id="wxHours"></div>'},
     music:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,
-      html:'<div class="mtop"><button class="spk" id="mSpk">'+SPKR+' <span class="spkname">Speaker</span> <span class="cx">▾</span></button><button class="mqbtn" id="mQBtn" title="Browse music">'+QICON+'</button></div><div class="mfull"><div class="cf" id="mCF"><div class="cf-track" id="mCFT"></div></div><div class="cfmeta"><div class="mkick" id="mKick">Now Playing</div><div class="mtitle" id="mTitle">—</div><div class="martist" id="mArtist"></div><button class="mfav" id="mFav" title="Favourite">'+HEART_I+'</button></div><div class="mscrub" id="mScrub"><div class="mtrack"><div class="mfill" id="mFill" style="width:0%"></div><div class="mknob" id="mKnob" style="left:0%"></div></div><div class="mtimes"><span id="mElapsed">0:00</span><span id="mDur">0:00</span></div></div><div class="mtransport" id="mTransport"><span class="tsp"></span><button class="sml" id="mDS" type="button" title="Keep the music playing" aria-pressed="false">'+DS_I+'</button><button class="sml" id="mShuf" data-a="shuffle" title="Shuffle">'+SHUF_I+'</button><button data-a="previous">'+PREV_I+'</button><button class="pp" id="mPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button><button class="sml" id="mRep" data-a="repeat" title="Repeat">'+REP_I+'</button><div class="mvolt" id="mVolT" role="button" tabindex="0" aria-label="Volume" title="Volume">'+VOL_I+'<div class="vpop"><input type="range" min="0" max="100" step="2" id="mVol" aria-label="Volume"><span class="vv" id="mVolV"></span></div></div><div class="tsp"></div></div></div><div class="mqr" id="mQR"><div class="qrbox" id="mQRCode"></div><div class="qrlab">Scan to queue</div></div>'},
+      html:'<div class="mtop"><button class="spk" id="mSpk">'+SPKR+' <span class="spkname">Speaker</span> <span class="cx">▾</span></button></div><div class="mfull"><button class="cfside cfleft" id="mSearch" title="Search by voice" aria-label="Search music by voice">'+SEARCH_I+'</button><button class="cfside cfright" id="mBrowse" title="Playlists, radio &amp; sources" aria-label="Playlists, radio and sources">'+QICON+'</button><div class="cf" id="mCF"><div class="cf-track" id="mCFT"></div></div><div class="cfmeta"><div class="mkick" id="mKick">Now Playing</div><div class="mtitle" id="mTitle">—</div><div class="martist" id="mArtist"></div><button class="mfav" id="mFav" title="Favourite">'+HEART_I+'</button></div><div class="mscrub" id="mScrub"><div class="mtrack"><div class="mfill" id="mFill" style="width:0%"></div><div class="mknob" id="mKnob" style="left:0%"></div></div><div class="mtimes"><span id="mElapsed">0:00</span><span id="mDur">0:00</span></div></div><div class="mtools" id="mTools" aria-hidden="true"><button class="sml" id="mDS" type="button" title="Keep the music playing" aria-pressed="false">'+DS_I+'</button><button class="sml" id="mShuf" data-a="shuffle" title="Shuffle">'+SHUF_I+'</button><button class="sml" id="mRep" data-a="repeat" title="Repeat">'+REP_I+'</button></div><button class="mtoolsbtn" id="mToolsBtn" type="button" title="More controls" aria-label="More controls" aria-pressed="false">'+TOOLS_I+'</button><div class="mtransport" id="mTransport"><button data-a="previous">'+PREV_I+'</button><button class="pp" id="mPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button></div><div class="mvolt" id="mVolT" role="button" tabindex="0" aria-label="Volume" title="Volume">'+VOL_I+'<div class="vpop"><div class="vsolo"><input type="range" min="0" max="100" step="2" id="mVol" aria-label="Volume"><span class="vv" id="mVolV"></span></div><div class="vzones" id="mVZones"></div></div></div></div><div class="mqr" id="mQR"><div class="qrbox" id="mQRCode"></div><div class="qrlab">Scan to queue</div></div>'},
     // Browse — Recent + Playlists. Same background as music (it is the music
     // card's other face), standard card header: title by #home.
     browse:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,
@@ -1499,8 +1541,7 @@
     // is never empty. pins_configured:true with an empty list is a real choice
     // ("show nothing") and must NOT fall back.
     if(_pcfg&&_pcfg.pins_configured){
-      dbody.innerHTML=(_pcfg.pinned||[]).map(dockPinHtml).join('');
-      paintDockTimer();paintDockMusic();wireDock();return;
+      _dockPaint((_pcfg.pinned||[]).map(dockPinHtml).join(''));return;
     }
     var cl=_ha.climate,lights=_ha.lights.slice(0,cl?2:3),html='';
     // Dock pills carry a ONE-WORD name: the dock is a glance surface and
@@ -1529,10 +1570,35 @@
       html+='<div class="pc temp" data-eid="'+esc(cl.entity_id)+'" data-act="set_temperature" data-tgt="'+esc(String(ctgt))+'"'
         +' data-mn="'+cb.mn+'" data-mx="'+cb.mx+'" data-st="'+cb.st+'"><div class="tv">'+(cur!=null?Math.round(cur):'—')+'°</div><div class="tl">Temp</div>'
         +'<div class="tpop"><div class="tpv">'+_tfmt(ctgt,cb.st)+'°</div><div class="tsl"><div class="tff"></div><div class="tkn"></div></div><div class="tpl">Thermostat</div></div></div>';}
-    dbody.innerHTML=html;
+    _dockPaint(html);
+  }
+  // Write the dock ONLY when its markup actually changed.
+  //
+  // refreshHA() runs every 30s and used to call renderDock() unconditionally,
+  // which replaced dbody.innerHTML wholesale — tearing down and rebuilding every
+  // tile, icon and SVG even when not one value had moved. That is the reported
+  // "the dock flashes, or changes quickly, just while your on one card, not
+  // touching anything": a full DOM swap twice a minute, forever.
+  //
+  // Comparing against dbody.innerHTML directly does NOT work: the browser
+  // normalises serialised markup, and paintDockMusic()/paintDockTimer() append
+  // their chips afterwards, so the live innerHTML never equals a freshly
+  // generated pin string. Compare against the exact string we last wrote.
+  //
+  // Still rebuild when our tiles are absent (a "heard" chip took the dock, or
+  // this is the first paint) — otherwise an unchanged signature would leave the
+  // dock empty forever.
+  var _dockHtml=null;
+  function _dockPaint(html){
+    if(html!==_dockHtml||!dbody.querySelector('.pc')){
+      _dockHtml=html;
+      dbody.innerHTML=html;
+      wireDock();
+    }
+    // These own their own chips and are cheap + idempotent, so they run every
+    // time: they are what keeps the timer countdown and now-playing fresh.
     paintDockTimer();
     paintDockMusic();
-    wireDock();
   }
 
   // ---- launcher overlay (opened from the dock grid button) ----
@@ -1707,6 +1773,7 @@
       var spk=document.getElementById('mSpk'),ti=document.getElementById('mTitle'),ar=document.getElementById('mArtist'),fill=document.getElementById('mFill'),te=document.getElementById('mElapsed'),td=document.getElementById('mDur'),pp=document.getElementById('mPP');
       var idle=!d||!d.available||!np||!(np.title||np.state==='playing'||np.state==='paused');
       var scrub=document.querySelector('.mfull .mscrub'),tp=document.getElementById('mTransport');
+      var tbtn=document.getElementById('mToolsBtn'),vtile=document.getElementById('mVolT');
       noteNP(np);   // before the idle return, so stopping the music lets sleep arm again
       if(idle){
         // Idle is a real state, not a broken card: say so, keep the speaker
@@ -1718,6 +1785,9 @@
         var pp0=document.getElementById('mPP');if(pp0){pp0.dataset.playing='0';pp0.innerHTML=PLAY_I;}
         if(ar)ar.innerHTML='Say <b style="color:var(--ink)">“Hey Zoe, play some music”</b> — or pick a speaker first.';
         if(scrub)scrub.style.display='none';if(tp)tp.style.display='none';
+        // Nothing to act on: hide the tools + volume tiles too, and force the
+        // tools row shut so it can't linger over an idle card.
+        if(tbtn)tbtn.style.display='none';if(vtile)vtile.style.display='none';musicTools(false);
         // Don't stomp the speaker the operator just chose. With nothing
         // playing, now-playing still names whatever MA last had active, so
         // refreshing from it made the label snap back a few seconds after
@@ -1729,6 +1799,7 @@
         return;
       }
       if(scrub)scrub.style.display='';if(tp)tp.style.display='';
+      if(tbtn)tbtn.style.display='';if(vtile)vtile.style.display='';
       _music.player_id=np.player_id;
       if(spk){var nm=spk.querySelector('.spkname');
         // A REAL track playing somewhere is the truth — that player wins and any
@@ -1863,7 +1934,48 @@
     t.dataset.wired='1';
     t.addEventListener('click',function(e){
       if(e.target.closest('.vpop'))return;   // the slider lives in there
+      var opening=!t.classList.contains('open');
       t.classList.toggle('open');
+      if(opening)populateVolPop(t);   // solo slider, or one per zone if grouped
+    });
+  }
+  // When playback spans multiple zones the popover becomes one horizontal slider
+  // per zone ("hit volume with multiple zones → multiple sliders"); solo keeps
+  // the single vertical slider. Reads live group state each open, so the sliders
+  // reflect and control each real member. The solo #mVol is never destroyed —
+  // .vzones is a separate box — so its wiring survives.
+  function populateVolPop(t){
+    var zones=document.getElementById('mVZones');if(!zones)return;
+    apiGet('/api/music/groups').then(function(gd){
+      var players=((gd&&gd.players))||[];
+      var byId={};players.forEach(function(p){if(p&&p.player_id)byId[p.player_id]=p;});
+      var leaderRow=byId[_music.player_id]||{};
+      var mem=(leaderRow.group_member_ids&&leaderRow.group_member_ids.length>1)?leaderRow.group_member_ids:null;
+      if(!mem){t.classList.remove('multi');zones.innerHTML='';return;}
+      zones.innerHTML=mem.map(function(id){
+        var p=byId[id]||{};var nm=p.display_name||p.name||'Zone';
+        var vol=(p.volume!=null?p.volume:(p.volume_level!=null?p.volume_level:50));
+        return '<div class="vzrow"><span class="vzn">'+esc(String(nm))+'</span>'
+          +'<input type="range" min="0" max="100" step="2" class="vz" data-pid="'+esc(String(id))+'" value="'+Math.round(+vol)+'" aria-label="'+esc(String(nm))+' volume">'
+          +'<span class="vzv">'+Math.round(+vol)+'%</span></div>';
+      }).join('');
+      wireZoneVols(zones);
+      t.classList.add('multi');
+    }).catch(function(){});
+  }
+  function wireZoneVols(zones){
+    zones.querySelectorAll('input.vz').forEach(function(v){
+      if(v.dataset.wired)return;v.dataset.wired='1';
+      var vt=null,vv=v.parentNode.querySelector('.vzv');
+      v.addEventListener('pointerdown',function(){v.dataset.drag='1';});
+      ['pointerup','pointercancel'].forEach(function(ev){v.addEventListener(ev,function(){delete v.dataset.drag;});});
+      v.oninput=function(){
+        if(vv)vv.textContent=v.value+'%';
+        if(vt)clearTimeout(vt);
+        vt=setTimeout(function(){
+          fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',
+            body:JSON.stringify({action:'volume_set',player_id:v.getAttribute('data-pid'),value:+v.value})}).catch(function(){});
+        },250);};
     });
   }
   // ---- "Keep playing" (∞), a round button in the transport row (#1450) -----
@@ -2386,7 +2498,18 @@
       var dx=e.clientX-d.x0,dy=e.clientY-d.y0,dt=Date.now()-d.t0;
       if(d.lifted){
         d.el.classList.remove('lift');d.el.style.zIndex='';
-        cfCommitMove(d.i,(d.to==null?d.i:d.to));return;
+        var to=(d.to==null?d.i:d.to);
+        // A lift that never MOVED is not a reorder — it is just a slow tap.
+        // Committing a move-to-itself here made every stationary press longer
+        // than CF_HOLD_MS (320ms) a dead zone that neither played nor
+        // reordered: "I cant seem to click on an upcoming track to get it to
+        // play now". A deliberate tap easily runs past 320ms, especially when
+        // aiming at a smaller off-centre cover, so the bug hid from quick
+        // flicks and bit exactly the careful taps. Compare the SLOT, not the
+        // `moved` flag: finger wobble sets `moved` while still rounding to the
+        // same slot, and that is still a tap.
+        if(to===d.i){cfPlay(d.i);return;}
+        cfCommitMove(d.i,to);return;
       }
       if(d.onX){cfRemove(d.i);return;}                            // the visible affordance
       if(d.browsing){cfRelease(d,e);return;}                      // BROWSE only — never plays
@@ -2435,6 +2558,22 @@
     toast('No speaker playing yet');
     return false;
   }
+  // Tools overlay: keep-playing / shuffle / repeat replace the progress bar, then
+  // auto-hide — "these are all tools you only touch once and leave". Defined at
+  // this scope (not inside wireMusic) so loadMusic's idle path can force it shut.
+  var _toolsT=null;
+  function _toolsClear(){if(_toolsT){clearTimeout(_toolsT);_toolsT=null;}}
+  function _toolsArm(){_toolsClear();_toolsT=setTimeout(function(){musicTools(false);},4500);}
+  function musicTools(open){
+    var mf=document.querySelector('.mfull');if(!mf)return;
+    if(open===undefined)open=!mf.classList.contains('tools');
+    mf.classList.toggle('tools',open);
+    // The row is aria-hidden while collapsed; reveal it to the screen reader when
+    // it opens, or keep/shuffle/repeat are visible but unreachable by assistive nav.
+    var row=document.getElementById('mTools');if(row)row.setAttribute('aria-hidden',open?'false':'true');
+    var btn=document.getElementById('mToolsBtn');if(btn)btn.setAttribute('aria-pressed',open?'true':'false');if(btn)btn.classList.toggle('on',open);
+    if(open)_toolsArm();else _toolsClear();
+  }
   function wireMusic(){
     // Revisits: seed the play/pause button from the cached snapshot so the
     // pre-poll icon (and a fast tap) match the last-known real state.
@@ -2442,18 +2581,29 @@
       if(pp0){pp0.dataset.playing=_music.np.playing?'1':'0';pp0.innerHTML=_music.np.playing?PAUSE_I:PLAY_I;}}
     // The flow is rebuilt with the card, so its state can't survive a show().
     cfApplyScale();cfClear();wireCF();wireSeek();wireVol();wireVolPop();wireKeep();
+    _toolsClear();var _mf0=document.querySelector('.mfull');if(_mf0)_mf0.classList.remove('tools');
     loadMusic();_wxTick=setInterval(function(){if(_cur==='music')loadMusic();},5000);
     if(_homeTick){clearInterval(_homeTick);}_homeTick=setInterval(tickMusic,1000);
     var t=document.getElementById('mTransport');if(t)t.addEventListener('click',function(e){var btn=e.target.closest('button');if(!btn)return;var a=btn.getAttribute('data-a');if(!a)return;
-      // ∞ (#mDS) is a button in this row with no data-a — it has its own handler
-      // (wireKeep). Without this guard its click bubbles here and falls through to
-      // musicControl(null), POSTing a null-action /api/music/control on every tap.
+      musicControl(a==='playpause'?(document.getElementById('mPP').dataset.playing==='1'?'pause':'play'):a);});
+    // Tools button opens/closes the row; the row's own clicks (shuffle/repeat —
+    // keep-playing is wired directly by wireKeep) keep the auto-hide alive so it
+    // doesn't vanish while you're still adjusting.
+    var tb=document.getElementById('mToolsBtn');
+    if(tb)tb.onclick=function(e){e.stopPropagation();musicTools();};
+    var tr=document.getElementById('mTools');
+    if(tr)tr.addEventListener('click',function(e){var btn=e.target.closest('button');if(!btn)return;
+      _toolsArm();   // still fiddling — keep it open
+      var a=btn.getAttribute('data-a');
       if(a==='shuffle'){musicSet('shuffle_set',!_music.shuffle);return;}
       if(a==='repeat'){var nxt={off:'all',all:'one',one:'off'}[_music.repeat||'off'];musicSet('repeat_set',nxt);return;}
-      musicControl(a==='playpause'?(document.getElementById('mPP').dataset.playing==='1'?'pause':'play'):a);});
-    // Browse is a surface now, so this is plain navigation — no toggle, no
-    // overlay state, and #home keeps its corner because nothing covers it.
-    var qb=document.getElementById('mQBtn');
+      // #mDS has no data-a; wireKeep owns its action, this just kept the timer alive.
+    });
+    // Search hands the mic to Zoe (voice), the same path the orb + wake word use;
+    // Browse is the playlists/radio/sources surface.
+    var sb=document.getElementById('mSearch');
+    if(sb)sb.onclick=function(e){e.stopPropagation();panelVoice('Listening — what would you like to hear?');};
+    var qb=document.getElementById('mBrowse');
     if(qb)qb.onclick=function(e){e.stopPropagation();show('browse');};
     var fav=document.getElementById('mFav');
     if(fav)fav.onclick=function(){
@@ -2478,69 +2628,108 @@
     // Speaker picker: list Music Assistant players, tap to move playback there.
     var spk=document.getElementById('mSpk');
     if(spk)spk.onclick=function(){
-      apiGet('/api/music/players').then(function(d){
-        var ps=(d&&d.players)||[];
+      // Two sources, merged by player_id: /players gives the type icon + label,
+      // /groups gives can_group_with + the current group_member_ids. Grouping is
+      // what makes the picker MULTI-select: tap zones to add/remove them live.
+      Promise.all([
+        apiGet('/api/music/players').catch(function(){return null;}),
+        apiGet('/api/music/groups').catch(function(){return null;})
+      ]).then(function(res){
+        var ps=((res[0]&&res[0].players))||[];
         if(!ps.length){toast('No speakers found');return;}
-        // Each tile carries a type icon + the device's own name + a subtitle
-        // (`kind_label`, resolved server-side) so two players with the SAME name
-        // — this house has two "Bedroom"s, a Sonos Beam and a dead AirPlay Apple
-        // TV — are finally tellable apart. Unavailable players stay LISTED but
-        // dimmed + marked (a flapping speaker may return; a silent disappearance
-        // is worse). The display name goes on data-name, because the tile's
-        // textContent now includes the subtitle and can't be the sticky label.
-        // The panel's OWN AirPlay output is just another player in MA's list; its
-        // name ("Zoe Panel") doesn't say where it is or that it's the screen you're
-        // touching. Mark it: subtitle → the panel's location ("Bedroom"), plus a
-        // "This device" badge. Identity is name-matched against the panel's self
-        // name — configurable via _pcfg.self_player, defaulting to the AirPlay
-        // receiver name we deploy ("Zoe Panel"). Location comes from panel config.
+        var gById={};(((res[1]&&res[1].players))||[]).forEach(function(g){if(g&&g.player_id)gById[g.player_id]=g;});
+        ps=ps.map(function(p){var g=gById[p.player_id]||{};return Object.assign({},p,{
+          can_group_with:g.can_group_with||[],group_member_ids:g.group_member_ids||[]});});
+
+        // Self-identity (name-matched; MA suffixes "Zoe Panel"→"Zoe Panel (AirPlay)"
+        // and a dead ghost can share the name, so require available + first-match)
+        // and hoist THIS device to the front.
         var selfName=String((_pcfg&&_pcfg.self_player)||'Zoe Panel').toLowerCase();
         var selfLoc=(_pcfg&&(_pcfg.room_name||_pcfg.location))||'';
-        var selfMarked=false;   // badge only ONE tile even if the name repeats
-        // Hoist THIS device to the front — it's the most likely pick and should
-        // not hide at the bottom of a scrolled list. First available match only.
+        var selfMarked=false;
         for(var _i=0;_i<ps.length;_i++){var _n=String(ps[_i].display_name||ps[_i].name||'').toLowerCase();
           if(ps[_i].available!==false&&selfName&&_n.indexOf(selfName)>=0){if(_i>0){ps=ps.slice();ps.unshift(ps.splice(_i,1)[0]);}break;}}
-        estOpen('<h3>Play on…</h3><div class="spkgrid">'+ps.map(function(pl){
-            var pid=pl.player_id||pl.id||'';
-            var nm=pl.display_name||pl.name||pid;
-            var kind=pl.kind||'speaker';
-            var sub=pl.kind_label||'';
-            var off=(pl.available===false);
-            // Identity by SUBSTRING, not equality: MA suffixes the receiver name
-            // ("Zoe Panel" → "Zoe Panel (AirPlay)") and a dead ghost can carry the
-            // SAME name, so also require the tile be available and mark only the
-            // first match — otherwise the ghost gets a false "This device" badge.
-            var isSelf=(!selfMarked&&!off&&!!selfName&&String(nm).toLowerCase().indexOf(selfName)>=0);
-            if(isSelf){selfMarked=true;if(selfLoc)sub=selfLoc;}  // location; the badge says it's this device
-            if(off)sub=(sub?sub+' · ':'')+'Unavailable';
-            var cls='spkopt'+((_music.player_id&&pid===_music.player_id)?' cur':'')+(off?' off':'')+(isSelf?' self':'');
-            return '<button class="'+cls+'" data-pid="'+esc(String(pid))+'" data-name="'+esc(String(nm))+'">'
-              +'<span class="si">'+spkKindIcon(kind)+'</span>'
-              +(isSelf?'<span class="sbadge">This device</span>':'')
-              +'<span class="snm">'+esc(String(nm))+'</span>'
-              +'<span class="ssub">'+esc(String(sub))+'</span></button>';}).join('')
-          +'</div><div class="btns"><button data-x="cancel">Cancel</button></div>');
+
+        // The anchor zone = whatever is playing now; the selected set = its group
+        // members (or just itself). Multi-select only makes sense while playing —
+        // idle taps set the single default speaker, as before.
+        var playing=!!(_music.np&&_music.np.active)&&!!_music.player_id;
+        var leader=_music.player_id||'';
+        var leaderRow=ps.filter(function(p){return p.player_id===leader;})[0]||{};
+        var leaderName=leaderRow.display_name||leaderRow.name||_music.chosenName||'Speaker';
+        var selected={};
+        if(playing){(leaderRow.group_member_ids&&leaderRow.group_member_ids.length?leaderRow.group_member_ids:[leader]).forEach(function(id){selected[id]=true;});}
+
+        function tile(pl){
+          var pid=pl.player_id||pl.id||'';
+          var nm=pl.display_name||pl.name||pid;
+          var kind=pl.kind||'speaker';
+          var sub=pl.kind_label||'';
+          var off=(pl.available===false);
+          var isSelf=(!selfMarked&&!off&&!!selfName&&String(nm).toLowerCase().indexOf(selfName)>=0);
+          if(isSelf){selfMarked=true;if(selfLoc)sub=selfLoc;}
+          if(off)sub=(sub?sub+' · ':'')+'Unavailable';
+          var isLeader=(pid===leader&&playing);
+          var canGroup=!off&&playing&&(pl.can_group_with&&pl.can_group_with.length>0);
+          var on=!!selected[pid];
+          var cls='spkopt'+(on?' on':'')+(off?' off':'')+((!canGroup&&!isLeader)?' nogroup':'');
+          var chip=isLeader?'<span class="schip play">Playing</span>'
+                  :(isSelf?'<span class="schip">This device</span>':'');
+          var chk=(canGroup||isLeader)?'<span class="schk">'+CHK_I+'</span>':'';
+          return '<button class="'+cls+'" data-pid="'+esc(String(pid))+'" data-name="'+esc(String(nm))+'"'
+            +' data-group="'+(canGroup?'1':'0')+'" data-leader="'+(isLeader?'1':'0')+'"'+(off?' disabled':'')+'>'
+            +'<span class="si">'+spkKindIcon(kind)+'</span>'
+            +'<span class="stx"><span class="snm">'+esc(String(nm))+'</span><span class="ssub">'+esc(String(sub))+'</span></span>'
+            +'<span class="sright">'+chip+chk+'</span></button>';
+        }
+        var hint=playing?'Tap zones to play in more than one room — volume sets each zone.'
+                        :'Tap a speaker to play music there.';
+        estOpen('<h3>Play on…</h3><div class="spkhint">'+esc(hint)+'</div><div class="spkgrid">'
+          +ps.map(tile).join('')+'</div><div class="btns"><button data-x="cancel">Done</button></div>');
         var m=document.getElementById('estModal');
         m.querySelector('[data-x="cancel"]').onclick=estClose;
+
+        function setSpkLabel(){
+          var sn=document.querySelector('#mSpk .spkname');if(!sn)return;
+          var cnt=Object.keys(selected).filter(function(k){return selected[k];}).length;
+          sn.textContent=cnt>1?(leaderName+' +'+(cnt-1)):leaderName;
+        }
+
         m.querySelectorAll('.spkopt').forEach(function(b){b.onclick=function(){
+          if(b.classList.contains('off'))return;
           var pid=b.getAttribute('data-pid');
-          var nm=b.getAttribute('data-name')||b.textContent;
-          var active=_music.np&&_music.np.active;   // paused still owns a queue — transfer it
-          if(!active){
-            // Nothing to move — remember this speaker as the default for the
-            // NEXT play (server-side, so voice plays land there too).
-            _music.player_id=pid;_music.chosenName=nm;estClose();
-            // Fresh lookup: the `spk` captured in wireMusic can be detached by a
-            // card rebuild, and writing to a detached node silently does nothing.
-            var sn=document.querySelector('#mSpk .spkname');if(sn)sn.textContent=nm;
-            apiJson('POST','/api/music/preferred-player',{player_id:pid}).catch(function(){});
-            toast('Music will play on '+nm);
+          var nm=b.getAttribute('data-name')||'';
+          var groupable=b.getAttribute('data-group')==='1';
+          var isLeader=b.getAttribute('data-leader')==='1';
+
+          // IDLE, or a zone MA can't group → single behaviour (set default / switch).
+          if(!playing||(!groupable&&!isLeader)){
+            if(!playing){
+              _music.player_id=pid;_music.chosenName=nm;estClose();
+              var sn0=document.querySelector('#mSpk .spkname');if(sn0)sn0.textContent=nm;
+              apiJson('POST','/api/music/preferred-player',{player_id:pid}).catch(function(){});
+              toast('Music will play on '+nm);
+            }else{
+              apiJson('POST','/api/music/transfer',{target_player_id:pid,source_player_id:leader||undefined})
+                .then(function(){estClose();var sn1=document.querySelector('#mSpk .spkname');if(sn1)sn1.textContent=nm;loadMusic();})
+                .catch(function(){toast('Couldn’t switch speaker');});
+            }
             return;
           }
-          apiJson('POST','/api/music/transfer',{target_player_id:pid,source_player_id:_music.player_id||undefined})
-            .then(function(){estClose();var sn=document.querySelector('#mSpk .spkname');if(sn)sn.textContent=nm;loadMusic();})
-            .catch(function(){toast('Couldn’t switch speaker');});};});
+
+          // MULTI-SELECT: toggle this zone in/out of the playing group. The leader
+          // is the anchor — it stays; you add/remove companion zones around it.
+          if(isLeader){toast('That’s where the music is playing');return;}
+          var nowOn=b.classList.contains('on');
+          b.classList.toggle('on',!nowOn);   // optimistic
+          var body=nowOn?{target_player_id:leader,remove:[pid]}:{target_player_id:leader,add:[pid]};
+          apiJson('POST','/api/music/group',body).then(function(r){
+            if(!(r&&r.ok)){b.classList.toggle('on',nowOn);toast('Couldn’t change zones');return;}
+            selected[pid]=!nowOn;setSpkLabel();
+            toast(nowOn?('Removed '+nm):('Added '+nm));
+            setTimeout(loadMusic,400);
+          }).catch(function(){b.classList.toggle('on',nowOn);toast('Couldn’t change zones');});
+        };});
       }).catch(function(){toast('Couldn’t load speakers');});
     };
   }
@@ -3867,6 +4056,10 @@
   function convEvent(msg){
     var t=msg.type||msg.event,s=msg.state;
     if(t==='state'){
+      // The voice pipeline now OWNS the orb, so drop the orb-tap fallback timer.
+      // Left running it would strip a genuine `listening` class mid-session when
+      // its 12s expiry landed inside an active turn.
+      if(_orbListenT){clearTimeout(_orbListenT);_orbListenT=null;}
       if(s==='listening'||s==='wake'){orb.classList.remove('busy');orb.classList.add('listening');convPaint('Listening…');}
       else if(s==='thinking'||s==='processing'){orb.classList.remove('listening');orb.classList.add('busy');convPaint('Thinking…');}
       else if(s==='responding'||s==='speaking'){orb.classList.remove('listening');orb.classList.add('busy');convPaint('');}
@@ -4000,10 +4193,45 @@
       if(_cur!=='home'&&_cur!=='sleep'){_voiceScreen=true;armAutoHome();}}
   };
 
-  orb.addEventListener('click',function(){
-    var on=cmdbar.classList.toggle('on');
-    if(on){setTimeout(function(){cmdin.focus();},50);}
-  });
+  // Tapping the orb hands the mic to Zoe exactly as "Hey Zoe" does — the panel
+  // daemon plays the wake beep and opens the mic. It used to just toggle a TEXT
+  // box, which is useless on a panel with no keyboard. The typed bar survives
+  // only as the FALLBACK for where that daemon isn't reachable (a desktop
+  // browser, dev), so the same build still works off-panel.
+  // `_orbBusy` is a SEPARATE guard from `_convLive`: a daemon-activated turn
+  // never sets _convLive, so that check alone let two taps inside the 800ms
+  // window send two POSTs and beep twice.
+  var _orbListenT=null,_orbBusy=false;
+  function orbListening(on){
+    if(_orbListenT){clearTimeout(_orbListenT);_orbListenT=null;}
+    orb.classList.toggle('listening',!!on);
+    if(!on)return;
+    // The daemon owns the turn from here, so this is only the visual
+    // affordance — it must expire on its own rather than latch on forever if
+    // nothing comes back.
+    _orbListenT=setTimeout(function(){orb.classList.remove('listening');},12000);
+  }
+  // Hand the mic to Zoe via the panel daemon (beep + open mic). Shared by the
+  // orb and the music card's search button — both want "listen, don't type".
+  // `promptMsg` is the on-screen cue while listening.
+  function panelVoice(promptMsg){
+    if(_convLive||_orbBusy)return;       // a live conversation, or an activate already in flight
+    _orbBusy=true;
+    cmdbar.classList.remove('on');
+    orbListening(true);
+    toast(promptMsg||'Listening — ask Zoe anything');
+    fetch('http://localhost:7777/activate',{method:'POST',signal:AbortSignal.timeout(800)})
+      .then(function(r){if(!r||!r.ok)throw new Error('activate '+(r&&r.status));})
+      .catch(function(){
+        orbListening(false);toastHide();
+        cmdbar.classList.add('on');
+        setTimeout(function(){cmdin.focus();},50);
+      })
+      // Trailing .then runs after EITHER branch — the guard must clear on the
+      // fallback path too, or one unreachable daemon would wedge the orb.
+      .then(function(){_orbBusy=false;});
+  }
+  orb.addEventListener('click',function(){panelVoice('Listening — ask Zoe anything');});
   cmdin.addEventListener('keydown',function(e){if(e.key==='Enter')sendCmd(cmdin.value);if(e.key==='Escape')cmdbar.classList.remove('on');});
   document.getElementById('cmdgo').addEventListener('click',function(){sendCmd(cmdin.value);});
 

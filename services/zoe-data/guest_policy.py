@@ -40,6 +40,13 @@ PUBLIC_HOUSEHOLD_INTENTS: frozenset[str] = frozenset({
     "music_play",
     "music_control",
     "music_volume",
+    # "I like this song" favourites the CURRENT track in the shared Music
+    # Assistant library (favorite_now_playing takes no user_id — there is no
+    # per-user favourites store), so it is household-scoped like the rest.
+    # It must be listed here or the voice public-intent short-circuit in
+    # voice_tts.py never runs it and the turn falls through to a brain with no
+    # favourite capability — i.e. the phrase silently does nothing on voice.
+    "music_favorite",
     # Voice navigation / conversation mode (no personal data involved).
     "lets_talk",
     # Anyone in the household can report a problem to Zoe.

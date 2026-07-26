@@ -1249,6 +1249,17 @@ def detect_intent(
         re.IGNORECASE,
     )
     _VOLUME_SET_RE = re.compile(r"^(?:set volume|volume) (?:to |at )?(\d{1,3})(?:\s*%)?\.?$", re.IGNORECASE)
+    # Favourite the current track. Verbs: like / love / favourite(+US spelling) /
+    # thumbs up / heart; object: this / this song|track|tune|one / it. "I like
+    # this", "favourite this song", "thumbs up this". Deliberately NOT "add …":
+    # "add this to my favourites" collides with the shopping-list `list_add`
+    # intent (which matches earlier), and "favourite this" already covers it.
+    _MUSIC_FAVORITE_RE = re.compile(
+        r"^(?:hey zoe,?\s*)?(?:i\s+)?(?:really\s+)?"
+        r"(?:like|love|favou?rite|thumbs?\s*up|heart)\s+"
+        r"(?:this(?:\s+(?:song|track|tune|one))?|it)\.?$",
+        re.IGNORECASE,
+    )
 
     m = _MUSIC_PLAY_RE.match(t)
     if m:
@@ -1269,6 +1280,14 @@ def detect_intent(
         if cmd in {"quieter"}: cmd = "volume_down"
         if "playing" in cmd or "song_is_this" in cmd: cmd = "now_playing"
         return Intent("music_control", {"command": cmd})
+
+    # "Hey Zoe, I like this song" -> favourite the current track. Kept OUT of the
+    # command regex because it takes no HA service call — it favourites the
+    # playing item's uri via MA. Matches the natural ways someone says it; the
+    # object ("this"/"this song"/"it") is required so a bare "I like jazz" (a
+    # taste statement, not a command) does not trip it.
+    if _MUSIC_FAVORITE_RE.match(t):
+        return Intent("music_favorite", {})
 
 
     # --- SET VOLUME / TTS voice volume (ZOE-13) ---
@@ -2263,63 +2282,27 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
     ln = str(slots.get("list_name") or "").strip() or lt.capitalize()
     try:
         from database import get_db_ctx
+        from list_service import add_item_to_list, default_visibility
 
         async with get_db_ctx() as db:
-            cursor = await db.execute(
-                "SELECT id FROM lists WHERE list_type=? AND name=? AND deleted=0"
-                " AND (user_id=? OR visibility='family')"
-                " ORDER BY CASE WHEN visibility='family' THEN 0 ELSE 1 END LIMIT 1",
-                (lt, ln, user_id),
-            )
-            row = await cursor.fetchone()
-            item_id = str(uuid.uuid4())
-            if row:
-                # Existing list: a single INSERT is already atomic.
-                list_id = row["id"]
+            outcome = await add_item_to_list(
+                db,
+                user_id=user_id,
+                list_type=lt,
+                list_name=ln,
+                text=item,
+                quantity=slots.get("quantity"),
+                category=slots.get("category"),
+                new_list_visibility=default_visibility(lt),
                 # Retry idempotency (same guard as the skybridge add): a voice
                 # re-POST replays the identical add seconds later — treat it as
                 # already done instead of inserting a duplicate.
-                # created_at is a TEXT column, so it must be cast before the
-                # timestamp comparison — a bare `created_at > now() - interval`
-                # throws `operator does not exist: text > timestamp` on Postgres,
-                # which silently drops the whole direct add to the mcporter
-                # fallback (live 2026-07-08: 69 such errors under eval traffic).
-                dup_cursor = await db.execute(
-                    "SELECT id FROM list_items WHERE list_id=? AND lower(text)=lower(?)"
-                    " AND deleted=0 AND created_at::timestamptz > now() - interval '10 seconds' LIMIT 1",
-                    (list_id, item),
-                )
-                dup_row = await dup_cursor.fetchone()
-                if dup_row:
-                    logger.info("list add: duplicate %r within 10s on list %s — replay skipped", item, list_id)
-                else:
-                    await db.execute(
-                        "INSERT INTO list_items (id, list_id, text, quantity, category) VALUES (?,?,?,?,?)",
-                        (item_id, list_id, item, slots.get("quantity"), slots.get("category")),
-                    )
-            else:
-                # Fresh list: the list row and its first item must land together,
-                # or a failed item insert leaves an orphaned empty list. asyncpg
-                # auto-commits each statement, so wrap both in one transaction.
-                list_id = str(uuid.uuid4())
-
-                async def _write_new_list_and_item() -> None:
-                    await db.execute(
-                        "INSERT INTO lists (id, user_id, name, list_type, visibility) VALUES (?,?,?,?,?)",
-                        (list_id, user_id, ln, lt,
-                         "personal" if lt in {"personal", "tasks", "shopping"} else "family"),
-                    )
-                    await db.execute(
-                        "INSERT INTO list_items (id, list_id, text, quantity, category) VALUES (?,?,?,?,?)",
-                        (item_id, list_id, item, slots.get("quantity"), slots.get("category")),
-                    )
-
-                txn = getattr(db, "transaction", None)
-                if callable(txn):
-                    async with txn():
-                        await _write_new_list_and_item()
-                else:  # fallback (e.g. a DB shim without transaction support)
-                    await _write_new_list_and_item()
+                dedup_window_s=10,
+            )
+        list_id = outcome["list_id"]
+        item_id = outcome["item_id"]
+        if outcome["deduped"]:
+            logger.info("list add: duplicate %r within 10s on list %s — replay skipped", item, list_id)
         await _notify_lists_ui(
             "list_updated",
             {"action": "item_added", "list_id": list_id, "item": {"id": item_id, "text": item}},
@@ -2819,7 +2802,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
     if intent.name == "music_setup":
         return await _execute_music_setup(user_id)
 
-    if intent.name in {"music_play", "music_control", "music_volume"}:
+    if intent.name in {"music_play", "music_control", "music_volume", "music_favorite"}:
         return await _execute_music_intent(intent, user_id)
 
     if intent.name == "good_morning":
@@ -4116,6 +4099,20 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
         import os as _os, httpx as _httpx
         ha_url = _os.environ.get("ZOE_HA_BRIDGE_URL", "http://127.0.0.1:8007")
         slots = intent.slots or {}
+
+        if intent.name == "music_favorite":
+            # Favourite whatever is playing. Goes through MA (not the HA bridge)
+            # because favouriting acts on the media item's uri, which only MA
+            # knows. Spoken confirmation names the track so it's clearly the one.
+            import music_service as _ms
+            res = await _ms.favorite_now_playing()
+            if res.get("ok"):
+                title = res.get("title") or "this one"
+                artist = res.get("artist")
+                return f"Done — added {title}{' by ' + artist if artist else ''} to your favourites."
+            if res.get("reason") == "nothing playing":
+                return "There's nothing playing to favourite right now."
+            return "I couldn't favourite that just now."
 
         if intent.name == "music_play":
             query = slots.get("query", "music")

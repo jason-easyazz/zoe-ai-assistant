@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-import sqlite3  # operator-local Hermes Kanban DB (~/.hermes), not Zoe PostgreSQL
 import subprocess
 from pathlib import Path
 
@@ -46,64 +45,6 @@ def worktree_path(task_id: str) -> Path:
 
 def worktree_branch(task_id: str) -> str:
     return f"wt/{task_id}"
-
-
-def kanban_db_path() -> Path:
-    """Path to the Hermes Kanban SQLite DB for the active board."""
-    override = os.environ.get("ZOE_KANBAN_DB_PATH", "").strip()
-    if override:
-        return Path(override).expanduser()
-    board = os.environ.get("ZOE_KANBAN_BOARD", "default").strip() or "default"
-    home = Path.home() / ".hermes"
-    if board == "default":
-        return home / "kanban.db"
-    return home / "kanban" / "boards" / board / "kanban.db"
-
-
-def pin_kanban_workspace(task_id: str, wt_path: Path | None = None) -> Path:
-    """Persist the absolute worktree path on a Kanban task before claim.
-
-    Hermes defaults unset worktree paths to ``<dispatcher-cwd>/.worktrees/<id>``.
-    Zoe bootstrap uses ``~/.worktrees/<id>`` (or ``ZOE_WORKTREE_ROOT``). Pin
-    the bootstrap path on the task row so workers and ``ensure_worktree`` agree.
-
-    Writes operator-local ``~/.hermes/kanban.db`` (Hermes Kanban), not Zoe's
-    PostgreSQL store.
-    """
-    task_id = _validate_task_id(task_id)
-    path = (wt_path or worktree_path(task_id)).resolve()
-    abs_path = str(path)
-    db = kanban_db_path()
-    if not db.exists():
-        raise RuntimeError(f"kanban db not found: {db}")
-
-    # Hermes ``hermes kanban create --workspace worktree`` sets workspace_kind to
-    # ``worktree``; fall back to id-only update if the row uses another value.
-    with sqlite3.connect(str(db)) as conn:
-        cur = conn.execute(
-            "UPDATE tasks SET workspace_path = ? WHERE id = ? AND workspace_kind = 'worktree'",
-            (abs_path, task_id),
-        )
-        conn.commit()
-        if cur.rowcount == 0:
-            logger.warning(
-                "worktree_bootstrap: no row for %s with workspace_kind='worktree' in %s; "
-                "retrying id-only workspace_path update",
-                task_id,
-                db,
-            )
-            cur = conn.execute(
-                "UPDATE tasks SET workspace_path = ? WHERE id = ?",
-                (abs_path, task_id),
-            )
-            conn.commit()
-            if cur.rowcount == 0:
-                raise RuntimeError(
-                    f"kanban task {task_id!r} not found in {db}"
-                )
-
-    logger.info("worktree_bootstrap: pinned kanban workspace %s -> %s", task_id, abs_path)
-    return path
 
 
 def _validate_task_id(task_id: str) -> str:
@@ -269,18 +210,15 @@ def ensure_worktree(task_id: str, *, base_branch: str = "main") -> Path:
 
 
 def prepare_kanban_worktree(task_id: str, *, base_branch: str = "main") -> Path:
-    """Create the git worktree and pin its path on the Kanban task row."""
-    wt_path = ensure_worktree(task_id, base_branch=base_branch)
-    try:
-        pin_kanban_workspace(task_id, wt_path)
-    except RuntimeError as exc:
-        # Pin is best-effort: dispatch must not orphan an already-created chain.
-        logger.warning(
-            "worktree_bootstrap: could not pin kanban workspace for %s: %s",
-            task_id,
-            exc,
-        )
-    return wt_path
+    """Create the git worktree for a board task.
+
+    Previously this also pinned the absolute path into Hermes' operator-local
+    ``~/.hermes/kanban.db``, so Hermes workers and ``ensure_worktree`` agreed on
+    a location. With Hermes retired, nothing reads that store — the pin only ever
+    logged "task not found" warnings on every dispatch — so it is removed. Zoe
+    resolves worktrees from ``worktree_path()`` alone.
+    """
+    return ensure_worktree(task_id, base_branch=base_branch)
 
 
 def _is_ancestor(repo: Path, ref: str, base_ref: str) -> bool:
