@@ -31,9 +31,6 @@ _EXECUTOR_RUNTIME_NAME = "Flue Executor (Zoe)"
 _EXECUTOR_AGENT_NAME = "Flue Executor"
 
 
-_ADMIN_ROLES = {"admin", "family-admin", "owner"}
-
-
 def _as_list(v) -> tuple:
     """Coerce an approval field to a tuple. It may be a JSON-array TEXT column
     (Postgres/SQLite), an already-parsed list, or None."""
@@ -52,8 +49,10 @@ def may_auto_execute(user: dict | None, proposal: asyncpg.Record | dict) -> tupl
     own code). BOTH must hold: (1) the approver holds an admin role, and (2) the
     evolution execution gate allows it (executable autonomy_class + satisfied
     approvals). Returns (allowed, reason). Any error or missing signal → denied."""
-    role = str((user or {}).get("role", "")).strip().lower()
-    if role not in _ADMIN_ROLES:
+    # Use the SAME admin check as auth.require_admin (fail-closed, exact match on
+    # {admin, family-admin}) so this can't diverge from the rest of the app.
+    from auth import is_admin_role
+    if not is_admin_role((user or {}).get("role")):
         return False, "not admin"
     get = proposal.get if isinstance(proposal, dict) else (lambda k, d=None: proposal[k] if k in proposal else d)
     # The admin's approval IS approval evidence for the privileged-execution
@@ -136,10 +135,15 @@ async def create_board_issue_for_proposal(
         # (done/cancelled): a proposal maps to at most ONE board issue for its
         # lifetime, so re-approving an already-implemented proposal returns that
         # issue instead of enqueuing a second autonomous run.
+        # Match a NON-FAILED existing issue: todo/in_progress/in_review/done all
+        # block a duplicate run (done = work already shipped, don't redo it). But
+        # a prior run that ended blocked/cancelled is a FAILURE — exclude it so a
+        # re-approve enqueues a fresh retry rather than returning the dead issue.
         existing = await conn.fetchrow(
             """SELECT number, id::text AS id, status FROM issue
                 WHERE workspace_id = $1::uuid AND context_refs @> $2::jsonb
-                ORDER BY created_at LIMIT 1""",
+                  AND status <> ALL(ARRAY['blocked','cancelled'])
+                ORDER BY created_at DESC LIMIT 1""",
             ws, proposal_ref,
         )
         if existing:

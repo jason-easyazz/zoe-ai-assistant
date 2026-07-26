@@ -2011,33 +2011,46 @@ async def evolution_proposal_action(
         proposal = dict(rows[0])
 
         if action == "approve":
+            # Decide auto-execution ONCE, up front (admin + execution gate,
+            # fail-closed), so the REST display-sync below can be skipped for
+            # auto-executing proposals.
+            from proposal_board_bridge import may_auto_execute  # type: ignore[import]
+            _allowed, _exec_reason = may_auto_execute(user, proposal)
+
             existing_multica_id = proposal.get("multica_issue_id")
             multica_issue_id = existing_multica_id
-            try:
-                from multica_client import (  # type: ignore[import]
-                    sync_evolution_proposal_to_multica,
-                    update_multica_issue_on_proposal_status_change,
-                )
-                if existing_multica_id:
-                    # Issue already created by run_evolution_notice — update status
-                    await update_multica_issue_on_proposal_status_change(
-                        existing_multica_id, "approved"
+            # Sync a Multica DISPLAY issue ONLY for review-only proposals. An
+            # auto-executing proposal's issue is owned by the board runner (its
+            # status flows todo→in_progress→done); calling
+            # update_multica_issue_on_proposal_status_change('approved'→in_progress)
+            # here — especially on a RE-approve, when multica_issue_id is already
+            # the board issue — would clobber that real board status.
+            if not _allowed:
+                try:
+                    from multica_client import (  # type: ignore[import]
+                        sync_evolution_proposal_to_multica,
+                        update_multica_issue_on_proposal_status_change,
                     )
-                else:
-                    # Create issue now (proposal pre-dates the sync or created outside NOTICE)
-                    new_id = await sync_evolution_proposal_to_multica(
-                        proposal_id=proposal_id,
-                        title=proposal["title"],
-                        description=proposal["description"],
-                        evidence=proposal.get("evidence", ""),
-                        proposal_type=proposal.get("type", "intent_pattern"),
-                        contract_snapshot=proposal.get("target_patterns"),
-                    )
-                    if new_id:
-                        multica_issue_id = new_id
-                        await update_multica_issue_on_proposal_status_change(new_id, "approved")
-            except Exception as exc:
-                logger.warning("Could not sync Multica for proposal %s: %s", proposal_id, exc)
+                    if existing_multica_id:
+                        # Issue already created by run_evolution_notice — update status
+                        await update_multica_issue_on_proposal_status_change(
+                            existing_multica_id, "approved"
+                        )
+                    else:
+                        # Create issue now (proposal pre-dates the sync or created outside NOTICE)
+                        new_id = await sync_evolution_proposal_to_multica(
+                            proposal_id=proposal_id,
+                            title=proposal["title"],
+                            description=proposal["description"],
+                            evidence=proposal.get("evidence", ""),
+                            proposal_type=proposal.get("type", "intent_pattern"),
+                            contract_snapshot=proposal.get("target_patterns"),
+                        )
+                        if new_id:
+                            multica_issue_id = new_id
+                            await update_multica_issue_on_proposal_status_change(new_id, "approved")
+                except Exception as exc:
+                    logger.warning("Could not sync Multica for proposal %s: %s", proposal_id, exc)
 
             await db.execute(
                 """UPDATE evolution_proposals
@@ -2098,14 +2111,14 @@ async def evolution_proposal_action(
             #   2. EXECUTION GATE — evaluate_execution_gate must allow it (executable
             #      autonomy_class + satisfied approval_required). Proposals without a
             #      populated autonomy contract fail closed and are NOT auto-executed.
+            # Reuse the decision computed up front (_allowed/_exec_reason) — the
+            # REST display-sync above already depended on it.
             _dispatch = None
-            from proposal_board_bridge import may_auto_execute  # type: ignore[import]
-            _allowed, _reason = may_auto_execute(user, proposal)
             if not _allowed:
-                _dispatch = {"ok": False, "auto_executed": False, "reason": _reason}
+                _dispatch = {"ok": False, "auto_executed": False, "reason": _exec_reason}
                 logger.info(
                     "evolution_approve: proposal %s approved but NOT auto-executed (%s)",
-                    proposal_id, _reason,
+                    proposal_id, _exec_reason,
                 )
             else:
                 try:
