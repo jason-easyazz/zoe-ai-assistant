@@ -90,10 +90,11 @@ flaw → **Greptile** caught that → **Bugbot** caught a silently-failing symli
 saw. Three reviewers, three distinct real defects, no overlap. So the order is not
 ceremony — it is what makes the last review cheap and clean.
 
-**Open every PR as a DRAFT.** Greptile is configured `triggerOnDrafts: false` and (since
-2026-07-26) `triggerOnUpdates: false`, so it reviews **exactly once, when the PR is marked
-ready for review**. That makes it the final gate by construction. Marking ready is the
-act of spending it — don't do it until the PR is genuinely finished.
+**Open every PR as a DRAFT.** Greptile is configured `triggerOnDrafts: false`, so a draft
+is invisible to it and all iteration is free. Marking ready is the act of spending the
+first review — don't do it until the PR is genuinely finished. `triggerOnUpdates` is
+**true**, so any later push or branch update is reviewed too: that is deliberate (see THE
+GUARANTEE below), and it is why batching fixes into one push matters.
 
 Sequence:
 
@@ -143,8 +144,9 @@ Tier by risk; four reviewers on a one-file docs change is friction, not safety:
 
 Cost note, measured 2026-07: this repo ran **400+ reviews across 112 PRs (3.6× per PR)**
 in one month. At that volume Greptile is ~$380/mo and Bugbot ~$400–600/mo, against
-Copilot's $10 flat. The multiplier — not the PR count — was the cost, and
-`triggerOnUpdates: false` plus draft-first is what removes it. **Copilot's inline comments
+Copilot's $10 flat. The multiplier — not the PR count — was the cost, and the fix is
+draft-first plus SERIALISING PRs (see THE GUARANTEE); disabling update reviews was tried
+and reverted, because it breaks the gate. **Copilot's inline comments
 create review threads that count toward `required_conversation_resolution`**, so they must
 be resolved like any other.
 
