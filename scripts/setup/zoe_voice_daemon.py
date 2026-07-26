@@ -1081,8 +1081,27 @@ def _identify_speaker_from_wav(wav_bytes: bytes) -> tuple[str, float] | None:
         return None
 
 
+# Distinguishes "caller did not score this turn" from a scored no-match (None).
+_CLAIM_UNSET = object()
+
 _shadow_log_lock = threading.Lock()
 _shadow_seq: "itertools.count | None" = None
+
+
+def _needs_leading_newline(path: str) -> bool:
+    """True when `path` is non-empty and its last byte is not a newline.
+
+    Signals a torn tail: the previous append never finished. Any error here
+    answers False — a missing separator is recoverable, a crashed turn is not.
+    """
+    try:
+        if os.path.getsize(path) == 0:
+            return False
+        with open(path, "rb") as f:
+            f.seek(-1, os.SEEK_END)
+            return f.read(1) != b"\n"
+    except (OSError, ValueError):
+        return False
 
 
 def _resume_shadow_seq() -> "itertools.count":
@@ -1155,6 +1174,16 @@ def _record_speaker_shadow(claim: tuple[str, float] | None) -> None:
                 "n_profiles": n_profiles,
                 "truth": None,  # operator-filled ground truth; null until reviewed
             }
+            # Heal a torn tail before appending. If a previous write was cut
+            # short (power loss, SIGKILL) the file can end without a newline;
+            # appending straight onto it would fuse the partial record and the
+            # new one into a single malformed line, hiding BOTH from the resume
+            # scan and letting a seq be silently reused. A leading newline keeps
+            # every row independently parseable — the torn one stays skippable
+            # on its own line, the new one lands clean.
+            if _needs_leading_newline(SPEAKER_ID_SHADOW_LOG):
+                with open(SPEAKER_ID_SHADOW_LOG, "a", encoding="utf-8") as f:
+                    f.write("\n")
             with open(SPEAKER_ID_SHADOW_LOG, "a", encoding="utf-8") as f:
                 f.write(json.dumps(row) + "\n")
     except Exception as exc:
@@ -1427,7 +1456,10 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
             log.warning("turn_stream failed after server processed it (%s) — NOT re-POSTing (avoid duplicate write)", exc)
             return False
         log.warning("turn_stream failed with no server response (%s) — falling back to blocking turn", exc)
-        return _do_single_turn(pa, wav, prompt_on_empty=prompt_on_empty)
+        # Pass the claim we already scored: re-scoring here would append a
+        # second shadow row + journal line for this one spoken turn.
+        return _do_single_turn(pa, wav, prompt_on_empty=prompt_on_empty,
+                               voice_claim=voice_claim)
 
     # Drain playback (respecting barge-in) once the stream ends.
     if aplay is not None:
@@ -1477,11 +1509,18 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     return False
 
 
-def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = True, conversation: bool = False) -> bool:
+def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = True,
+                    conversation: bool = False, voice_claim: object = _CLAIM_UNSET) -> bool:
     """Process one recorded WAV: combined STT+LLM+TTS via /api/voice/turn.
 
     Returns True if audio was played (eligible for follow-up listening).
     Uses a single HTTP round-trip instead of separate transcribe + command calls.
+
+    `voice_claim` lets a caller hand over a claim it already scored. The stream
+    path falls back here on error, and re-scoring would append a SECOND shadow
+    metrics row (and journal line) for one spoken turn — inflating the counts
+    and giving one utterance two seqs, which breaks the per-seq FA/FR labelling.
+    The sentinel distinguishes "not scored yet" from a scored no-match (None).
     """
     import time as _time
     _t_pi_start = _time.monotonic()
@@ -1489,14 +1528,15 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
     audio_b64_wav = base64.b64encode(wav).decode()
     _t_encode = _time.monotonic() - _t_pi_start
 
-    voice_claim: tuple[str, float] | None = None
     _t_vid_start = _time.monotonic()
-    try:
-        voice_claim = _speaker_claim_for_turn(wav)
-        if voice_claim:
-            log.info("Speaker claim: %s (%.3f)", voice_claim[0], voice_claim[1])
-    except Exception:
-        pass
+    if voice_claim is _CLAIM_UNSET:
+        voice_claim = None
+        try:
+            voice_claim = _speaker_claim_for_turn(wav)
+            if voice_claim:
+                log.info("Speaker claim: %s (%.3f)", voice_claim[0], voice_claim[1])
+        except Exception:
+            pass
     _t_vid = _time.monotonic() - _t_vid_start
 
     turn_payload: dict = {"audio_base64": audio_b64_wav, "panel_id": PANEL_ID}

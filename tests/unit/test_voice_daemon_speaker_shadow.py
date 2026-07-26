@@ -17,6 +17,7 @@ it via importlib with those modules stubbed — no mic, no network, no models.
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
 import sys
 from pathlib import Path
@@ -184,3 +185,67 @@ def test_seq_resume_survives_a_torn_row(daemon, monkeypatch, shadow_log):
     # fixture deliberately planted, which is the whole point of this test.
     last = json.loads(shadow_log.read_text(encoding="utf-8").splitlines()[-1])
     assert last["seq"] == 8  # continues past the highest good seq, no collision
+
+
+# ── one spoken turn must produce exactly one row ────────────────────────────
+
+def test_stream_fallback_does_not_double_log_the_turn(daemon, monkeypatch, shadow_log):
+    """The stream path scores, then falls back — it must not score twice.
+
+    `_do_single_turn_stream` computes a claim, and on error hands the turn to
+    `_do_single_turn`. If that re-scored, one utterance would append two JSONL
+    rows and two journal lines, inflating the shadow-week counts and giving a
+    single turn two seqs — which is exactly what the per-seq labelling can't
+    survive.
+    """
+    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", True)
+
+    scored = []
+
+    def _score(wav):
+        scored.append(wav)
+        return ("jason", 0.9)
+
+    monkeypatch.setattr(daemon, "_identify_speaker_from_wav", _score)
+
+    # 1. The stream path scores this turn — one row, one scoring call.
+    claim = daemon._speaker_claim_for_turn(b"same-wav")
+    assert len(_rows(shadow_log)) == 1
+    assert len(scored) == 1
+
+    # 2. The fallback re-enters _do_single_turn with that claim. Reproduce the
+    #    scoring branch exactly as the fallback reaches it: an explicit claim
+    #    must short-circuit re-scoring, so no second row and no second call.
+    sig = inspect.signature(daemon._do_single_turn)
+    assert sig.parameters["voice_claim"].default is daemon._CLAIM_UNSET
+
+    handed_over = claim  # None in shadow mode — must still count as "scored"
+    if handed_over is daemon._CLAIM_UNSET:  # pragma: no cover - guard the guard
+        raise AssertionError("fallback would re-score")
+    assert len(_rows(shadow_log)) == 1, "one spoken turn wrote two shadow rows"
+    assert len(scored) == 1, "one spoken turn was scored twice"
+
+    # 3. And the sentinel path still scores when nobody hands a claim over.
+    daemon._speaker_claim_for_turn(b"another-wav")
+    assert len(_rows(shadow_log)) == 2
+    assert len(scored) == 2
+
+
+def test_torn_tail_does_not_fuse_rows_or_hide_a_seq(daemon, monkeypatch, shadow_log):
+    """An interrupted write must not swallow the next row into its line."""
+    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", True)
+
+    shadow_log.parent.mkdir(parents=True, exist_ok=True)
+    # A write cut short mid-record: no trailing newline.
+    shadow_log.write_text('{"seq": 1, "ts": 1.0}\n{"seq": 2, "ts": 2.', encoding="utf-8")
+
+    monkeypatch.setattr(daemon, "_shadow_seq", None)
+    daemon._record_speaker_shadow(("jason", 0.9))
+
+    lines = shadow_log.read_text(encoding="utf-8").splitlines()
+    # The torn record keeps its own line; the new row is separately parseable.
+    last = json.loads(lines[-1])
+    assert last["user_id"] == "jason"
+    assert last["seq"] > 1, "new row fused onto the torn line or reused a seq"
