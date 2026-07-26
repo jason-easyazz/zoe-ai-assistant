@@ -236,3 +236,62 @@ was added to prevent.
   cannot — plus local fine-tuning headroom, on the same CUDA stack Zoe already
   runs. The accepted trade: ~273GB/s bandwidth means big models generate
   steadily, not fast; capacity and training headroom are what the money buys.
+
+## 6. Background-task engineering lane — NOT built (investigated + closed 2026-07-24)
+
+A `background_runner.py` "engineering lane" (route `Implement evolution proposal`
+tasks to the Omnigent `execute_issue_dict` lane) was specced (PR #1538) and built
+flag-dark (PR #1547), then **both closed** — the premise was wrong.
+
+**Finding 1 (why the background lane was wrong):** nothing enqueues a proposal
+as a *background* task. The only builder of the `Implement evolution proposal
+<id>` string is the proposal-approve endpoint (`routers/system.py`), which
+dispatched via `dispatch_issue`, never `enqueue_background_task`. So a
+`background_runner` engineering lane targets a task that never arrives there.
+Corroborating: its pre-existing auto-deploy regex is dead code and matched
+**dashed** UUIDs while real `evolution_proposals.id` is **32-hex non-dashed**.
+`background_runner` stays general-only.
+
+**Finding 2 (the real break — proposals reached NO live executor):** an early
+draft of this note claimed proposals "already reach Omnigent via the board." That
+was WRONG, and was disproved on real approved proposal `631f4b5e` (operator:
+"prove it on a real proposal before flipping"). In truth:
+- `dispatch_issue` routes to the **Kanban PHASE pipeline** (`kanban_adapter` →
+  `pipeline_store`), whose consumer (Hermes / the Flue live-runner) is
+  **retired / not running** — `agent_task_queue` is empty, the unit inactive.
+- The proposal's `multica_issue_id` was a **phantom** — never persisted to the
+  `issue` table (`update_multica_issue_on_proposal_status_change` only *updates*,
+  never creates).
+- The board **runner** (running, proven) claims `todo` issues from the `issue`
+  table — a **different mechanism/table** than `dispatch_issue`. Proposals never
+  reached it.
+
+So approved proposals stranded, reaching no executor. *Lesson: verify the task
+actually FLOWS to a running consumer — reading the dispatch code is not proof.*
+
+**Fix (PR #1557):** `proposal_board_bridge` lands an approved proposal as a `todo`
+issue directly in the board runner's workspace (body from the proposal's own DB
+fields only), and the approve endpoint calls it instead of `dispatch_issue`. So
+proposals now flow through the proven board lane (runner → `execute_issue_dict` →
+gated PR → merge). **Proven end-to-end before wiring:** `631f4b5e` → issue #6112
+→ PR #1555 (*fix(agent): stop clock fast-path hijacking business-hours
+questions*) → merged.
+
+**Remaining Hermes CLI users — the FULL scope (all `background_runner` callers).**
+`background_runner._run_hermes_background_task` shells `hermes -p <profile> -z`,
+and it is the general-task engine for **every** `enqueue_background_task` entry
+point, not just escalation. To retire the Hermes CLI, ALL of these must move (else
+they fail once the CLI is gone):
+
+- `routers/chat.py` — Zoe-Agent background escalation **and** the
+  `/api/chat/tasks/*` generic task API.
+- `routers/voice_tts.py` — voice escalation (post-#1531 → background).
+- `mcp_server.py` — the `hermes` agent MCP tool (A2A/agent-to-agent entry).
+- the A2A **delegation-depth** path (`request_depth`/`_MAX_REQUEST_DEPTH`).
+- `routers/system.py` — the background-task admin endpoints.
+
+Most are **general/research** work that should route to the web-search/browse
+tier (task #18); the A2A/MCP generic-task callers may instead want the Omnigent
+general lane. The Hermes CLI can't be deleted (nor `HERMES_API_KEY` revoked)
+until **every** caller above has a non-Hermes home — task #18 is necessary but
+not by itself sufficient.
