@@ -299,10 +299,15 @@ def test_background_backend_defaults_to_hermes_ships_dark(monkeypatch):
     assert br._background_backend() == "hermes"
 
 
+async def _authorized(*_a, **_kw):
+    return True
+
+
 @pytest.mark.asyncio
 async def test_run_task_routes_engineering_to_omnigent(monkeypatch):
     monkeypatch.setenv("ZOE_BACKGROUND_BACKEND", "omnigent")
     monkeypatch.setenv("ZOE_USE_OMNIGENT_EXECUTOR", "1")
+    monkeypatch.setattr(br, "_proposal_is_authorized", _authorized)  # real+approved proposal
     db = _FakeDB()
     monkeypatch.setitem(sys.modules, "db_pool",
                         types.SimpleNamespace(get_db_ctx=lambda: _FakeCtx(db)))
@@ -324,6 +329,34 @@ async def test_run_task_routes_engineering_to_omnigent(monkeypatch):
     await br._run_task(1, _PROPOSAL, "u", None)
     assert called == {"omnigent": 1, "hermes": 0}
     assert any("done" in str(c).lower() for c in db.executions)
+
+
+@pytest.mark.asyncio
+async def test_fabricated_proposal_prefix_cannot_reach_omnigent(monkeypatch):
+    """SECURITY: a caller who fabricates the prefix but has no real approved
+    proposal must NOT reach the code-merging lane — it falls back to Hermes."""
+    monkeypatch.setenv("ZOE_BACKGROUND_BACKEND", "omnigent")
+    monkeypatch.setenv("ZOE_USE_OMNIGENT_EXECUTOR", "1")
+    db = _FakeDB()  # fetchrow returns {"id": 42} — no matching approved proposal
+    monkeypatch.setitem(sys.modules, "db_pool",
+                        types.SimpleNamespace(get_db_ctx=lambda: _FakeCtx(db)))
+    monkeypatch.setitem(sys.modules, "push",
+                        types.SimpleNamespace(broadcaster=types.SimpleNamespace(broadcast=_noop_async)))
+    hit = {"omnigent": 0, "hermes": 0}
+
+    async def fake_omni(task, *, user_id, task_id):
+        hit["omnigent"] += 1
+        return "x"
+
+    async def fake_hermes(task, *, user_id, task_id):
+        hit["hermes"] += 1
+        return "safe"
+
+    monkeypatch.setattr(br, "_run_omnigent_engineering_task", fake_omni)
+    monkeypatch.setattr(br, "_run_hermes_background_task", fake_hermes)
+
+    await br._run_task(1, _PROPOSAL, "attacker", None)
+    assert hit == {"omnigent": 0, "hermes": 1}  # never reached Omnigent
 
 
 @pytest.mark.asyncio
@@ -354,19 +387,60 @@ async def test_run_task_general_stays_hermes_even_with_omnigent_flag(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_omnigent_engineering_maps_result_to_text(monkeypatch):
+async def test_omnigent_engineering_merged_returns_text(monkeypatch):
     from omnigent_issue_executor import OmnigentResult
-
     merged = OmnigentResult(True, "done", "merged", pr_url="https://github.com/o/r/pull/5",
                             merged=True, merge_sha="deadbee")
     monkeypatch.setattr("omnigent_issue_executor.execute_issue_dict", lambda issue: merged)
     text = await br._run_omnigent_engineering_task(_PROPOSAL, user_id="u", task_id=5)
     assert "merged" in text and "pull/5" in text
 
-    blocked = OmnigentResult(False, "review", "not merge-ready: CI red", pr_url="https://github.com/o/r/pull/6")
-    monkeypatch.setattr("omnigent_issue_executor.execute_issue_dict", lambda issue: blocked)
-    text2 = await br._run_omnigent_engineering_task(_PROPOSAL, user_id="u", task_id=6)
-    assert "Couldn't complete" in text2 and "pull/6" in text2
+
+@pytest.mark.asyncio
+async def test_omnigent_engineering_non_merge_raises_no_false_deploy(monkeypatch):
+    """A blocked/no-PR result must RAISE — so _run_task records 'error', never
+    'done', and the auto-deploy step can't mark the proposal deployed."""
+    from omnigent_issue_executor import OmnigentResult
+    for res in (
+        OmnigentResult(False, "review", "not merge-ready: CI red", pr_url="https://github.com/o/r/pull/6"),
+        OmnigentResult(False, "no_pr", "omnigent produced no PR"),
+        OmnigentResult(False, "merge", "not merged within 2400s"),
+    ):
+        monkeypatch.setattr("omnigent_issue_executor.execute_issue_dict", lambda issue, r=res: r)
+        with pytest.raises(RuntimeError, match="did not merge"):
+            await br._run_omnigent_engineering_task(_PROPOSAL, user_id="u", task_id=6)
+    assert br._engineering_busy is False  # lane released even on the raise
+
+
+@pytest.mark.asyncio
+async def test_engineering_rejects_when_busy(monkeypatch):
+    """No queue: a second engineering task while one runs is rejected, not queued
+    (a queued task's watchdog age would include wait time)."""
+    monkeypatch.setattr(br, "_engineering_busy", True)
+    with pytest.raises(RuntimeError, match="busy"):
+        await br._run_omnigent_engineering_task(_PROPOSAL, user_id="u", task_id=7)
+
+
+@pytest.mark.asyncio
+async def test_proposal_authorization_fails_closed(monkeypatch):
+    class _DB:
+        def __init__(self, row): self._row = row
+        async def fetchrow(self, sql, *a): return self._row
+    def _ctx(row):
+        db = _DB(row)
+        return types.SimpleNamespace(get_db_ctx=lambda: _FakeCtx(db))
+
+    # approved → authorized
+    monkeypatch.setitem(sys.modules, "db_pool", _ctx({"status": "approved"}))
+    assert await br._proposal_is_authorized(_PROPOSAL) is True
+    # wrong status → not authorized
+    monkeypatch.setitem(sys.modules, "db_pool", _ctx({"status": "rejected"}))
+    assert await br._proposal_is_authorized(_PROPOSAL) is False
+    # missing proposal → not authorized
+    monkeypatch.setitem(sys.modules, "db_pool", _ctx(None))
+    assert await br._proposal_is_authorized(_PROPOSAL) is False
+    # not even an engineering task → False
+    assert await br._proposal_is_authorized("find hotels") is False
 
 
 def test_watchdog_timeout_engineering_gets_board_lane_budget(monkeypatch):

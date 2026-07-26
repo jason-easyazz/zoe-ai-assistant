@@ -65,23 +65,50 @@ def _background_profile() -> str:
 # on the existing engine, so the split can't silently misroute a general task.
 
 # Approved evolution proposals are enqueued as "Implement evolution proposal <UUID>: …"
-# — the same pattern _run_task already keys the auto-deploy post-step off.
+# — the same pattern _run_task already keys the auto-deploy post-step off. The UUID
+# is captured so the route can be authorized against the real proposal row.
 _ENGINEERING_RE = re.compile(
     r"^\s*Implement evolution proposal "
-    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+    r"(?P<uuid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
     re.IGNORECASE,
 )
 
-# Engineering runs the heavy board lane (a full PR + gated merge). Serialize it to
-# ONE at a time — the same single-lane usage guard the board runner uses — so a
-# burst of proposals can't fan out into concurrent Omnigent sessions. General
-# tasks are unaffected and stay concurrent (they are interactive).
-_ENGINEERING_LANE = asyncio.Semaphore(1)
+# Engineering runs the heavy board lane (a full PR + gated merge). Run at most ONE
+# at a time (the usage guard) — but do NOT QUEUE. A queued task would accrue
+# watchdog age while waiting, could be marked 'blocked', then later acquire the
+# lane and merge anyway (resurrecting a terminal state). So reject fast when busy
+# instead; a rare second proposal can be re-submitted. The check-and-set has no
+# await between test and set, so it is atomic on the event loop.
+_engineering_busy = False
 
 
 def _classify_task(task: str) -> str:
-    """'engineering' for an evolution-proposal implementation, else 'general'."""
+    """'engineering' for an evolution-proposal implementation, else 'general'.
+
+    NOTE: this is a KIND label only — it is NOT authorization. Routing to the
+    code-merging Omnigent lane additionally requires _proposal_is_authorized."""
     return "engineering" if _ENGINEERING_RE.match(task or "") else "general"
+
+
+async def _proposal_is_authorized(task: str) -> bool:
+    """The engineering lane can create AND merge code, so the
+    'Implement evolution proposal <UUID>' prefix must NOT be trusted as
+    authorization on its own — an authenticated caller could fabricate it.
+    Require the referenced proposal to actually EXIST and be operator-'approved'.
+    Fail CLOSED: a missing proposal, a non-approved status, or any DB error must
+    never route to the merge lane (it falls back to the Hermes general engine)."""
+    m = _ENGINEERING_RE.match(task or "")
+    if not m:
+        return False
+    try:
+        from db_pool import get_db_ctx
+        async with get_db_ctx() as db:
+            row = await db.fetchrow(
+                "SELECT status FROM evolution_proposals WHERE id=$1", m.group("uuid"))
+        return bool(row and row["status"] == "approved")
+    except Exception:  # noqa: BLE001 - fail closed
+        logger.warning("background_runner: proposal authorization check failed — not routing to Omnigent")
+        return False
 
 
 def _task_watchdog_timeout_s(task: str) -> float:
@@ -115,26 +142,33 @@ def _use_omnigent_engineering(task: str) -> bool:
 
 async def _run_omnigent_engineering_task(task: str, *, user_id: str, task_id: int) -> str:
     """Run an engineering background task through the proven board lane
-    (implement → PR → gated merge) and return a plain-English text result for the
-    existing store/broadcast machinery. Single-lane; the blocking executor runs
-    off the event loop so it never stalls the API."""
+    (implement → PR → gated merge). One-at-a-time (reject-when-busy, no queue);
+    the blocking executor runs off the event loop so it never stalls the API.
+
+    Returns the success text ONLY on a merged result. A non-merge (blocked / no
+    PR / failed tests / merge timeout) RAISES — so _run_task records the task
+    'error' and the evolution-proposal auto-deploy post-step never marks the
+    proposal 'deployed' without a merged implementation."""
     from omnigent_issue_executor import OmnigentResult, execute_issue_dict
 
-    issue = {"number": task_id, "title": f"Background engineering task {task_id}", "body": task}
-    async with _ENGINEERING_LANE:
+    global _engineering_busy
+    if _engineering_busy:
+        raise RuntimeError(
+            "engineering lane busy — another proposal is being implemented; try again shortly")
+    _engineering_busy = True
+    try:
+        issue = {"number": task_id, "title": f"Background engineering task {task_id}", "body": task}
         result: OmnigentResult = await asyncio.get_running_loop().run_in_executor(
             None, lambda: execute_issue_dict(issue))
+    finally:
+        _engineering_busy = False
 
     if result.merged:
         return f"Done — implemented and merged {result.pr_url} ({result.merge_sha})."
-    if result.ok and result.stage == "review":
-        return f"Implemented; PR open and gated, awaiting merge: {result.pr_url}"
-    # A clean terminal 'couldn't' (blocked / no PR / disabled) is the RESULT the
-    # user should see — surface it as the task's answer, not a crash.
     detail = f"{result.stage}: {result.detail}"
     if result.pr_url:
         detail += f" ({result.pr_url})"
-    return f"Couldn't complete this engineering task — {detail}"
+    raise RuntimeError(f"engineering task did not merge — {detail}")
 
 
 async def _record_cost_event(
@@ -221,9 +255,12 @@ async def _run_task(
 
     await _set_status("running")
     try:
-        # Route by task KIND: engineering → Omnigent board lane (flag-gated),
-        # everything else → the current engine. See _classify_task.
-        if _use_omnigent_engineering(task):
+        # Route by task KIND: engineering → Omnigent board lane (flag-gated AND
+        # authorized), everything else → the current engine. The authorization
+        # check is load-bearing security: the Omnigent lane merges code, so the
+        # 'Implement evolution proposal' prefix alone is NOT trusted — the
+        # proposal must exist and be operator-approved (else falls back to hermes).
+        if _use_omnigent_engineering(task) and await _proposal_is_authorized(task):
             engine = "omnigent"
             result = await _run_omnigent_engineering_task(task, user_id=user_id, task_id=task_id)
         else:
