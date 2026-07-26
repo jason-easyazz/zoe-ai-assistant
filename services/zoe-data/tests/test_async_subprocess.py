@@ -11,6 +11,7 @@ pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m
 
 import subprocess
 import sys
+import weakref
 
 import pytest
 
@@ -27,6 +28,31 @@ _ECHO_UPPER = (
     "    sys.stdout.write(line.upper())\n"
     "    sys.stdout.flush()\n"
 )
+
+
+@pytest.fixture
+def narrow_pool(monkeypatch):
+    """Shrink _RUN_POOL to 2 workers for saturation tests.
+
+    The invariants under test are about the pool being FULL, not about it being
+    16 wide — and this suite runs on the box hosting the live brain, where a
+    burst of concurrent children is a genuine hazard rather than a cost. Two
+    workers reproduce saturation with a fraction of the processes.
+    """
+    import concurrent.futures
+
+    import async_subprocess as mod
+
+    narrow = concurrent.futures.ThreadPoolExecutor(
+        max_workers=2, thread_name_prefix="zoe-test-run"
+    )
+    monkeypatch.setattr(mod, "_RUN_POOL", narrow)
+    monkeypatch.setattr(mod, "_RUN_POOL_WIDTH", 2)
+    monkeypatch.setattr(mod, "_RUN_SLOTS", weakref.WeakKeyDictionary())
+    try:
+        yield 2
+    finally:
+        narrow.shutdown(wait=False)
 
 
 @pytest.mark.asyncio
@@ -129,11 +155,16 @@ async def test_long_run_to_completion_does_not_starve_spawn_pool():
 
     import async_subprocess
 
-    sleeper = [sys.executable, "-c", "import time; time.sleep(30)"]
+    # The sleepers must outlive the probe's deadline, or "didn't block" and
+    # "blocked, but the blockers finished first" look identical and the test
+    # passes even when run_to_completion IS parked in the spawn pool.
+    _HOLD_S, _PROBE_DEADLINE_S = 6, 2.5
+    sleeper = [sys.executable, "-c", f"import time; time.sleep({_HOLD_S})"]
     # More concurrent long runs than _SPAWN_POOL has workers.
-    n = async_subprocess._SPAWN_POOL._max_workers + 2
+    n = async_subprocess._SPAWN_POOL._max_workers + 1
     long_runs = [
-        asyncio.create_task(run_to_completion(sleeper, timeout=30)) for _ in range(n)
+        asyncio.create_task(run_to_completion(sleeper, timeout=_HOLD_S + 10))
+        for _ in range(n)
     ]
     try:
         # Let them all get scheduled into their pool.
@@ -141,17 +172,18 @@ async def test_long_run_to_completion_does_not_starve_spawn_pool():
         # A fresh fork+exec must still complete promptly, not queue behind them.
         proc = await asyncio.wait_for(
             run_to_completion([sys.executable, "-c", "print('ok')"], timeout=10),
-            timeout=10,
+            timeout=_PROBE_DEADLINE_S,
         )
         assert proc.returncode == 0
         assert proc.stdout.strip() == b"ok"
         # And the dedicated pipe-spawn path must be unblocked too.
         piped = await asyncio.wait_for(
-            spawn_pipe_process([sys.executable, "-c", _ECHO_UPPER]), timeout=10
+            spawn_pipe_process([sys.executable, "-c", _ECHO_UPPER]),
+            timeout=_PROBE_DEADLINE_S,
         )
         piped.stdin.write(b"hi\n")
         await piped.stdin.drain()
-        assert (await asyncio.wait_for(piped.stdout.readline(), timeout=10)) == b"HI\n"
+        assert (await asyncio.wait_for(piped.stdout.readline(), timeout=_PROBE_DEADLINE_S)) == b"HI\n"
         piped.kill()
         await piped.wait()
     finally:
@@ -176,7 +208,7 @@ def test_run_to_completion_uses_its_own_pool():
 # ── waiting and running are separate budgets ───────────────────────────────
 
 @pytest.mark.asyncio
-async def test_queue_wait_is_bounded_separately_from_runtime():
+async def test_queue_wait_is_bounded_separately_from_runtime(narrow_pool):
     """A saturated pool must fail fast on the WAIT, without a child forking."""
     import asyncio
 
@@ -187,7 +219,7 @@ async def test_queue_wait_is_bounded_separately_from_runtime():
     sleeper = [sys.executable, "-c", "import time; time.sleep(3)"]
     hogs = [
         asyncio.create_task(run_to_completion(sleeper, timeout=10))
-        for _ in range(async_subprocess._RUN_POOL_WIDTH)
+        for _ in range(narrow_pool)
     ]
     try:
         await asyncio.sleep(0.5)  # every worker occupied
@@ -218,7 +250,7 @@ async def test_queue_wait_is_bounded_separately_from_runtime():
 
 
 @pytest.mark.asyncio
-async def test_queue_time_does_not_shrink_the_child_budget():
+async def test_queue_time_does_not_shrink_the_child_budget(narrow_pool):
     """Queue time must NOT be charged against the child's runtime.
 
     The background Hermes lane asks for 900s of `hermes`, not '900s from
@@ -233,7 +265,7 @@ async def test_queue_time_does_not_shrink_the_child_budget():
     blocker = [sys.executable, "-c", "import time; time.sleep(2)"]
     hogs = [
         asyncio.create_task(run_to_completion(blocker, timeout=10))
-        for _ in range(async_subprocess._RUN_POOL_WIDTH)
+        for _ in range(narrow_pool)
     ]
     try:
         await asyncio.sleep(0.3)
