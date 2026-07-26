@@ -117,7 +117,15 @@ SPEAKER_ID_ENABLED = os.environ.get("SPEAKER_ID_ENABLED", "false").lower() in ("
 # docs/architecture/panel-identity-plan.md ops-enable). Metrics rows hold
 # timestamp + panel + user_id + raw score ONLY — no audio, no embeddings
 # (docs/knowledge/biometric-retention-policy.md).
-SPEAKER_ID_SHADOW = os.environ.get("SPEAKER_ID_SHADOW", "true").lower() in ("1", "true", "yes")
+# Parsed as a default-ON SAFETY gate, not an ordinary feature flag: only an
+# EXPLICIT false-y value lifts it. The usual `in ("1","true","yes")` shape would
+# read an EMPTY `SPEAKER_ID_SHADOW=` in .env.voice as off — so a typo or a
+# half-edited line would silently start attaching voice_user_id/voice_score to
+# live turns with no shadow metrics, which is precisely the ungated state the W5
+# gate exists to prevent. Unset, empty and unparseable all stay ON.
+SPEAKER_ID_SHADOW = os.environ.get("SPEAKER_ID_SHADOW", "").strip().lower() not in (
+    "0", "false", "no", "off",
+)
 SPEAKER_ID_SHADOW_LOG = os.environ.get(
     "SPEAKER_ID_SHADOW_LOG",
     os.path.expanduser("~/.zoe-voice/speaker_shadow_metrics.jsonl"),

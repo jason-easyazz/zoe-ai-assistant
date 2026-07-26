@@ -242,3 +242,49 @@ def test_torn_tail_does_not_fuse_rows(daemon, monkeypatch, shadow_log):
     last = json.loads(lines[-1])
     assert last["user_id"] == "jason"
     assert last["boot"] == daemon._SHADOW_BOOT_ID
+
+
+# ── the gate must fail SAFE, not open ───────────────────────────────────────
+
+@pytest.mark.parametrize(
+    "raw,expected_shadow",
+    [
+        (None, True),        # unset — the documented default
+        ("", True),          # empty `SPEAKER_ID_SHADOW=` in .env.voice
+        ("   ", True),       # whitespace-only
+        ("maybe", True),     # typo / unparseable
+        ("TRUE", True),
+        ("false", False),    # only an EXPLICIT false-y value lifts the gate
+        ("0", False),
+        ("no", False),
+        ("OFF", False),
+    ],
+)
+def test_shadow_gate_fails_safe_on_bad_env(monkeypatch, raw, expected_shadow):
+    """An empty or unparseable value must NOT lift the W5 gate.
+
+    This is a safety gate, not a feature flag: reading a half-edited
+    `SPEAKER_ID_SHADOW=` as "off" would start attaching voice_user_id/voice_score
+    to live turns with no shadow metrics — the exact ungated state W5 forbids.
+    """
+    import importlib.util as _ilu
+
+    if raw is None:
+        monkeypatch.delenv("SPEAKER_ID_SHADOW", raising=False)
+    else:
+        monkeypatch.setenv("SPEAKER_ID_SHADOW", raw)
+
+    stubs = {n: MagicMock() for n in ("pyaudio",) if n not in sys.modules}
+    saved = {n: sys.modules.get(n) for n in stubs}
+    sys.modules.update(stubs)
+    try:
+        spec = _ilu.spec_from_file_location("zoe_voice_daemon_env_probe", _DAEMON_PATH)
+        mod = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        assert mod.SPEAKER_ID_SHADOW is expected_shadow
+    finally:
+        for n, prev in saved.items():
+            if prev is None:
+                sys.modules.pop(n, None)
+            else:
+                sys.modules[n] = prev
