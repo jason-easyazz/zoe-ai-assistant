@@ -25,6 +25,7 @@ import asyncio
 import concurrent.futures
 import contextlib
 import subprocess
+import time
 from typing import Mapping, Sequence
 
 # Shared, small pool used ONLY for the quick blocking fork+exec (subprocess.Popen).
@@ -44,10 +45,10 @@ _RUN_POOL = concurrent.futures.ThreadPoolExecutor(
     max_workers=16, thread_name_prefix="zoe-async-run"
 )
 
-# Slack added to a caller's timeout before the OUTER (queue-inclusive) bound in
-# run_to_completion fires. Keeps the inner subprocess.run timeout the one that
-# normally trips — it produces the more informative TimeoutExpired, with partial
-# output — while still capping total wall-clock when the pool is saturated.
+# Slack on run_to_completion's outer backstop. The call-time deadline already
+# bounds the work, so this exists only for a thread that wedges outright (e.g. an
+# unkillable child in uninterruptible sleep) — it should never be the normal
+# timeout path, which is why it sits ABOVE the caller's own budget.
 _QUEUE_GRACE_S = 5.0
 
 
@@ -161,22 +162,36 @@ async def run_to_completion(
 
     `timeout` bounds TOTAL wall-clock, not just the child's runtime. A pool of
     any fixed width is exhaustible, so a call can sit queued before
-    `subprocess.run` even starts — and `subprocess.run(timeout=...)` does not
-    count that queue time. Without an outer bound a caller asking for 30s could
-    block for minutes behind long-running background tasks. The outer bound
-    carries a small grace so the inner timeout normally fires first and still
-    produces the informative `TimeoutExpired` (with partial output).
+    `subprocess.run` even starts, and `subprocess.run(timeout=...)` does not
+    count that queue time. The deadline is therefore stamped at CALL time and
+    the child gets only what remains of it: a caller asking for 30s is released
+    at ~30s even behind a saturated pool, a late-starting job cannot outlive
+    the budget its caller already gave up on, and a job whose budget expired
+    while queued never forks at all.
     """
     loop = asyncio.get_running_loop()
+    # Deadline is fixed HERE, at call time, not when a worker picks the job up.
+    # Time spent queued therefore eats into the child's own budget instead of
+    # being added on top of it — a job that starts late gets a correspondingly
+    # shorter run, and one that starts past the deadline never spawns at all.
+    # That is what stops an abandoned late starter from holding a worker (and a
+    # live child) after its caller has already been handed TimeoutExpired.
+    deadline = None if timeout is None else time.monotonic() + timeout
 
     def _blocking_run() -> "subprocess.CompletedProcess[bytes]":
+        remaining = None
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                # Budget already spent while queued — don't fork at all.
+                raise subprocess.TimeoutExpired(list(cmd), timeout or 0)
         return subprocess.run(
             list(cmd),
             cwd=cwd,
             env=dict(env) if env is not None else None,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
-            timeout=timeout,
+            timeout=remaining,
         )
 
     # _RUN_POOL, NOT _SPAWN_POOL: this worker is held for the child's whole
@@ -185,10 +200,10 @@ async def run_to_completion(
     if timeout is None:
         return await fut
     try:
+        # Backstop only. The deadline above already bounds the work, so this
+        # fires solely if the thread itself wedges (e.g. an unkillable child in
+        # uninterruptible sleep) — never as the normal timeout path.
         return await asyncio.wait_for(fut, timeout=timeout + _QUEUE_GRACE_S)
     except asyncio.TimeoutError:
-        # Queued (or wedged) past the caller's budget. If the job never started,
-        # the future is cancelled and no child was ever spawned; if it did start,
-        # its own subprocess.run timeout kills the child, we just stop waiting.
         # Re-raised as TimeoutExpired so callers keep one exception contract.
         raise subprocess.TimeoutExpired(list(cmd), timeout) from None
