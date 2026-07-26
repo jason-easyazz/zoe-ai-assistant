@@ -261,6 +261,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_BACKGROUND_BACKEND": {
+        "defaults": [
+          "'hermes'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/background_runner.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_BACKUP_DIR": {
         "defaults": [
           "dynamic"
@@ -3701,6 +3711,16 @@
           "services/zoe-data/routers/voice_tts.py"
         ],
         "typed_env": true
+      },
+      "ZOE_TASK_ENGINEERING_TIMEOUT_S": {
+        "defaults": [
+          "'5400'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/background_runner.py"
+        ],
+        "typed_env": false
       },
       "ZOE_TASK_TIMEOUT_S": {
         "defaults": [

@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -48,6 +49,92 @@ def _background_profile() -> str:
     if legacy and legacy not in {"hermes-agent", "hermes"}:
         return legacy
     return _DEFAULT_BACKGROUND_PROFILE
+
+
+# ── engine routing: split by task KIND (docs/architecture/background-task-omnigent-migration.md) ──
+#
+# background_runner serves two different task kinds down one pipe. They route to
+# different engines:
+#   * ENGINEERING (implement an evolution proposal) — code work that should become
+#     a gated, merged PR. Routes to the Omnigent executor lane (execute_issue_dict),
+#     the same proven path the Multica board runner uses.
+#   * GENERAL / research (everything else — "work on that", web lookups) — stays on
+#     the current engine (Hermes CLI) until the web-search/browse tier exists.
+#
+# Only the well-defined engineering task is reclassified; anything ambiguous stays
+# on the existing engine, so the split can't silently misroute a general task.
+
+# Approved evolution proposals are enqueued as "Implement evolution proposal <UUID>: …"
+# — the same pattern _run_task already keys the auto-deploy post-step off.
+_ENGINEERING_RE = re.compile(
+    r"^\s*Implement evolution proposal "
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+    re.IGNORECASE,
+)
+
+# Engineering runs the heavy board lane (a full PR + gated merge). Serialize it to
+# ONE at a time — the same single-lane usage guard the board runner uses — so a
+# burst of proposals can't fan out into concurrent Omnigent sessions. General
+# tasks are unaffected and stay concurrent (they are interactive).
+_ENGINEERING_LANE = asyncio.Semaphore(1)
+
+
+def _classify_task(task: str) -> str:
+    """'engineering' for an evolution-proposal implementation, else 'general'."""
+    return "engineering" if _ENGINEERING_RE.match(task or "") else "general"
+
+
+def _task_watchdog_timeout_s(task: str) -> float:
+    """Stuck-timeout for a task. Engineering runs the board lane (implement +
+    closeout, up to ~70 min), so it needs a far longer budget than a general
+    task — else the watchdog would mark a legitimately-running PR build 'blocked'."""
+    general = float(os.environ.get("ZOE_TASK_TIMEOUT_S", "900"))
+    if _classify_task(task) != "engineering":
+        return general
+    # default 5400s (90 min) > implement(1800) + closeout(2400) + overhead
+    return max(general, float(os.environ.get("ZOE_TASK_ENGINEERING_TIMEOUT_S", "5400")))
+
+
+def _background_backend() -> str:
+    """Engine for ENGINEERING tasks: 'hermes' (default) | 'omnigent'. Read per call,
+    so the seam ships dark and reverts with an env flip — mirrors _kanban_backend()."""
+    return (os.environ.get("ZOE_BACKGROUND_BACKEND", "hermes") or "hermes").strip().lower()
+
+
+def _use_omnigent_engineering(task: str) -> bool:
+    """Route to the Omnigent engineering lane only when the task IS engineering,
+    the backend flag selects it, AND the executor itself is enabled."""
+    if _classify_task(task) != "engineering" or _background_backend() != "omnigent":
+        return False
+    try:
+        from omnigent_issue_executor import omnigent_executor_enabled
+        return omnigent_executor_enabled()
+    except Exception:  # noqa: BLE001 - never let routing raise; fall back to hermes
+        return False
+
+
+async def _run_omnigent_engineering_task(task: str, *, user_id: str, task_id: int) -> str:
+    """Run an engineering background task through the proven board lane
+    (implement → PR → gated merge) and return a plain-English text result for the
+    existing store/broadcast machinery. Single-lane; the blocking executor runs
+    off the event loop so it never stalls the API."""
+    from omnigent_issue_executor import OmnigentResult, execute_issue_dict
+
+    issue = {"number": task_id, "title": f"Background engineering task {task_id}", "body": task}
+    async with _ENGINEERING_LANE:
+        result: OmnigentResult = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: execute_issue_dict(issue))
+
+    if result.merged:
+        return f"Done — implemented and merged {result.pr_url} ({result.merge_sha})."
+    if result.ok and result.stage == "review":
+        return f"Implemented; PR open and gated, awaiting merge: {result.pr_url}"
+    # A clean terminal 'couldn't' (blocked / no PR / disabled) is the RESULT the
+    # user should see — surface it as the task's answer, not a crash.
+    detail = f"{result.stage}: {result.detail}"
+    if result.pr_url:
+        detail += f" ({result.pr_url})"
+    return f"Couldn't complete this engineering task — {detail}"
 
 
 async def _record_cost_event(
@@ -134,7 +221,14 @@ async def _run_task(
 
     await _set_status("running")
     try:
-        result = await _run_hermes_background_task(task, user_id=user_id, task_id=task_id)
+        # Route by task KIND: engineering → Omnigent board lane (flag-gated),
+        # everything else → the current engine. See _classify_task.
+        if _use_omnigent_engineering(task):
+            engine = "omnigent"
+            result = await _run_omnigent_engineering_task(task, user_id=user_id, task_id=task_id)
+        else:
+            engine = "hermes"
+            result = await _run_hermes_background_task(task, user_id=user_id, task_id=task_id)
         if not result:
             result = "(No result returned)"
         await _set_status("done", result)
@@ -179,8 +273,8 @@ async def _run_task(
         # Estimate output tokens from output length (rough: ~4 chars/token)
         _est_tokens = len(result) // 4
         await _record_cost_event(
-            agent_name="hermes",
-            model=_background_profile(),
+            agent_name=engine,
+            model=(engine if engine == "omnigent" else _background_profile()),
             task_id=task_id,
             user_id=user_id,
             output_tokens=_est_tokens,
@@ -322,23 +416,32 @@ async def _watchdog_loop() -> None:
     from db_pool import get_db_ctx
     from datetime import timezone, timedelta
 
-    timeout_s = float(os.environ.get("ZOE_TASK_TIMEOUT_S", "900"))
     _CLEANUP_INTERVAL_S = 7 * 86400  # weekly
     _RETENTION_DAYS = 30
     _last_cleanup = 0.0
+    # Prefilter by the SHORTEST timeout (general) so NO potentially-stuck task is
+    # missed; the per-row check then holds engineering to its longer budget.
+    _min_timeout = float(os.environ.get("ZOE_TASK_TIMEOUT_S", "900"))
 
     while True:
         await asyncio.sleep(60)
         try:
-            cutoff = (
-                datetime.now(timezone.utc) - timedelta(seconds=timeout_s)
-            ).isoformat()
+            now = datetime.now(timezone.utc)
+            prefilter = (now - timedelta(seconds=_min_timeout)).isoformat()
             async with get_db_ctx() as db:
-                stuck = await db.fetch(
-                    """SELECT id, user_id, task, session_id FROM background_tasks
+                candidates = await db.fetch(
+                    """SELECT id, user_id, task, session_id, created_at FROM background_tasks
                        WHERE status='running' AND created_at < $1""",
-                    cutoff,
+                    prefilter,
                 )
+                stuck = []
+                for row in candidates:
+                    started = row["created_at"]
+                    if isinstance(started, str):
+                        started = datetime.fromisoformat(started)
+                    age = (now - started).total_seconds()
+                    if age > _task_watchdog_timeout_s(row["task"] or ""):
+                        stuck.append(row)
                 if stuck:
                     ids = [r["id"] for r in stuck]
                     await db.execute(
@@ -346,12 +449,12 @@ async def _watchdog_loop() -> None:
                            SET status='blocked', blocker_reason='watchdog_timeout',
                                completed_at=$1
                            WHERE id = ANY($2::int[])""",
-                        datetime.now(timezone.utc).isoformat(), ids,
+                        now.isoformat(), ids,
                     )
                     for row in stuck:
                         logger.warning(
                             "Watchdog: task #%d (user=%s) timed out after %.0fs — blocked",
-                            row["id"], row["user_id"], timeout_s,
+                            row["id"], row["user_id"], _task_watchdog_timeout_s(row["task"] or ""),
                         )
                         try:
                             from push import broadcaster
