@@ -97,13 +97,23 @@ def test_may_auto_execute_is_fail_closed():
 
 
 def test_may_auto_execute_allows_admin_with_executable_contract():
-    admin = {"role": "family-admin"}
-    # a proposal carrying an executable autonomy contract + satisfied approval
-    prop = {"id": "p9", "autonomy_class": "execute", "approval_required": ["operator"]}
+    admin = {"role": "family-admin", "user_id": "jason"}
+    # executable autonomy + the privileged-execution approval, which the admin's
+    # own approval satisfies (approval:admin:<id>) — the real happy path.
+    prop = {"id": "p9", "autonomy_class": "execute",
+            "approval_required": ["user_or_admin_for_privileged_execution"]}
     allowed, reason = pbb.may_auto_execute(admin, prop)
-    # gate needs matching approval evidence too; without it, still blocked — the
-    # point here is the admin+contract path is REACHED (not short-circuited on role)
-    assert "not admin" not in reason
+    assert allowed is True, reason
+
+
+def test_admin_approval_does_not_satisfy_other_approval_classes():
+    """The admin ref satisfies only privileged-execution — a proposal that also
+    requires e.g. security_review still blocks until THAT evidence exists."""
+    admin = {"role": "family-admin", "user_id": "jason"}
+    prop = {"id": "p9", "autonomy_class": "execute",
+            "approval_required": ["user_or_admin_for_privileged_execution", "security_review"]}
+    allowed, reason = pbb.may_auto_execute(admin, prop)
+    assert allowed is False and "security_review" in reason
 
 
 @pytest.mark.asyncio

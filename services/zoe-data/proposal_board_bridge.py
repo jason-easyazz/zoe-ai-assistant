@@ -42,14 +42,21 @@ def may_auto_execute(user: dict | None, proposal: asyncpg.Record | dict) -> tupl
     role = str((user or {}).get("role", "")).strip().lower()
     if role not in _ADMIN_ROLES:
         return False, "not admin"
+    get = proposal.get if isinstance(proposal, dict) else (lambda k, d=None: proposal[k] if k in proposal else d)
+    # The admin's approval IS approval evidence for the privileged-execution
+    # class (`approval:admin:<id>` satisfies `user_or_admin_for_privileged_
+    # execution`). Any OTHER required approval classes must be evidenced by refs
+    # the proposal's own contract carries — passed through here, not fabricated.
+    user_id = str((user or {}).get("user_id") or "").strip() or "unknown"
+    proposal_refs = tuple(str(r) for r in (get("approval_refs") or ()))
+    approval_refs = (f"approval:admin:{user_id}", *proposal_refs)
     try:
         from zoe_evolution_execution_gate import evaluate_execution_gate
-        get = proposal.get if isinstance(proposal, dict) else (lambda k, d=None: proposal[k] if k in proposal else d)
         gate = evaluate_execution_gate({
             "proposal_id": str(get("id") or ""),
             "autonomy_class": get("autonomy_class") or "",
             "approval_required": get("approval_required") or (),
-        })
+        }, approval_refs=approval_refs)
     except Exception as exc:  # noqa: BLE001 - fail closed
         return False, f"execution gate error: {exc}"
     if not gate.allowed_to_execute:
