@@ -1110,6 +1110,21 @@ def _token_budget(message: str) -> int:
 
 # ── Fast path ─────────────────────────────────────────────────────────────────
 
+# Anchored clock-question matcher for the fast path. A loose substring check
+# here ("time" + "what/tell/now" anywhere) hijacked content questions such as
+# "what time does the pharmacy close" and answered them with the wall clock,
+# so they never reached the agent (#6112).
+_CLOCK_QUERY_RE = re.compile(
+    r"^(?:what(?:'?s| is)?(?: the)? time(?: now| right now)?"
+    r"|what time is it(?: now| right now)?"
+    r"|(?:can you |could you |please )?tell me the time"
+    r"|(?:can you |could you )?give me the time"
+    r"|do you have the time"
+    r"|current time|time now|time please"
+    r"|what hour is it)$"
+)
+
+
 def _check_fast_response(message: str) -> str | None:
     """Return an instant response for simple queries that don't need an LLM."""
     import datetime
@@ -1130,11 +1145,10 @@ def _check_fast_response(message: str) -> str | None:
     if msg in _ack_set:
         return "Glad to help! Anything else?"
 
-    # Time queries — only if "time" is an actual word (not inside "times", "sometimes" etc.)
-    if "time" in words or "clock" in words:
-        if any(w in msg for w in ("what", "tell", "current", "now")):
-            return f"It's {now.strftime('%-I:%M %p')}."
-    if msg in ("time", "the time", "current time", "what time", "clock"):
+    # Time queries — anchored to genuine clock questions only. Content questions
+    # that merely contain "time" (business hours, timetables, "best time to…")
+    # must fall through to the agent so it can actually answer them.
+    if _CLOCK_QUERY_RE.match(msg) or msg in ("time", "the time", "clock"):
         return f"It's {now.strftime('%-I:%M %p')}."
 
     # Date queries — match several natural phrasings
