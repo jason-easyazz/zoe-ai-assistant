@@ -9,8 +9,9 @@ timestamp: 2026-07-05T00:00:00Z
 # Relationship-Memory Flag-Enable Runbook
 
 The relationship-memory roadmap (temporal edges, recursive-CTE graph traversal, person-merge
-/ entity resolution) is **merged but dark**: all three features default **OFF** and ship behind
-env flags. This is the operator procedure to turn them on in prod without regressing the live
+/ entity resolution) ships **OFF by default** behind env flags. As of **2026-07-26 all three
+flags are live** in prod (see the Enable log below); this remains the procedure for re-enabling
+after a rollback or on a fresh deploy. This is the operator procedure to turn them on in prod without regressing the live
 voice write-path or losing relationship history. It also covers the independent **recall
 dossier** flags (`ZOE_MEMORY_COMPOSE_ENABLED` + `ZOE_PERSON_DOSSIER_ENABLED`, last section) that
 control how a person is rendered into the brain's recall packet.
@@ -110,6 +111,19 @@ Expect `200` + nodes (it returns `403` while the flag is off).
   surface a superseded edge.
 - **Merge:** merge two demo stubs → satellite rows re-pointed, edges deduped under the partial
   index, source `deleted=1`.
+
+## Enable log
+
+- **2026-07-08** — `ZOE_MEMORY_COMPOSE_ENABLED=1` live (recall-dossier section below).
+- **2026-07-22** (verified in live `.env`) — `ZOE_TEMPORAL_RELATIONSHIPS_ENABLED=1`,
+  `ZOE_RELATIONSHIP_GRAPH_ENABLED=1` (+ `ZOE_GRAPH_RECALL_BOOST=1`) live; 0015 applied in
+  practice (both flags error at runtime without it).
+- **2026-07-26** — `ZOE_PERSON_MERGE_ENABLED=1` set in `services/zoe-data/.env` (task #6100)
+  — **the trio is fully live**. §2c smoke via the lab-proof
+  (`tests/test_person_merge.py` + `tests/test_relationship_features_integration.py`, flag on,
+  isolated SQLite): stub merge on demo data, satellites re-pointed, supersession row written —
+  15 passed. Admin path, no replay gate (per §2c). Rollback stays flag-off only; never
+  downgrade 0015.
 
 ## Rollback
 
