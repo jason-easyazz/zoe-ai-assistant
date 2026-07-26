@@ -1117,9 +1117,9 @@ def _token_budget(message: str) -> int:
 _CLOCK_QUERY_RE = re.compile(
     r"^(?:what(?:'?s| is)?(?: the)? time(?: now| right now)?"
     r"|what time is it(?: now| right now)?"
-    r"|(?:can you |could you |please )?tell me the time"
+    r"|(?:can you |could you |please )?tell me (?:the time|what time it is)"
     r"|(?:can you |could you )?give me the time"
-    r"|do you have the time"
+    r"|do you (?:have the time|know what time it is)"
     r"|current time|time now|time please"
     r"|what hour is it)$"
 )
