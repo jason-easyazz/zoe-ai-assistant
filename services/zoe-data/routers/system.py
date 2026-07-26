@@ -2122,6 +2122,7 @@ async def evolution_proposal_action(
                     pool = await get_pool()
                     async with pool.acquire() as _mconn:
                         bridged = await create_board_issue_for_proposal(_mconn, prop_row)
+                    _prior = multica_issue_id
                     if bridged.get("issue_id"):
                         # Point the proposal at the REAL board issue (replacing any
                         # phantom id from the earlier Multica REST create).
@@ -2130,8 +2131,19 @@ async def evolution_proposal_action(
                             "UPDATE evolution_proposals SET multica_issue_id=$1 WHERE id=$2",
                             multica_issue_id, proposal_id,
                         )
-                    _dispatch = {"ok": True, "auto_executed": True,
-                                 "board_issue": bridged["number"], "created": bridged["created"]}
+                        # If a NEW board issue superseded a prior REST-synced issue,
+                        # cancel that orphan so it doesn't linger on multica-web.
+                        if bridged.get("created") and _prior and _prior != multica_issue_id:
+                            try:
+                                from multica_client import update_multica_issue_on_proposal_status_change  # type: ignore[import]
+                                await update_multica_issue_on_proposal_status_change(_prior, "failed")
+                            except Exception as _oe:  # noqa: BLE001 - cleanup is best-effort
+                                logger.debug("evolution_approve: orphan REST issue cleanup skipped: %s", _oe)
+                    # auto_executed is true only when a NEW run was enqueued — a
+                    # re-approve that returns an existing (e.g. done) issue did not.
+                    _dispatch = {"ok": True, "auto_executed": bool(bridged.get("created")),
+                                 "board_issue": bridged["number"], "created": bridged["created"],
+                                 "issue_status": bridged.get("status")}
                     logger.info(
                         "evolution_approve: proposal %s -> board issue #%s (created=%s)",
                         proposal_id, bridged["number"], bridged["created"],

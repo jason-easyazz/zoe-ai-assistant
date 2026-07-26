@@ -66,8 +66,44 @@ def upgrade() -> None:
         f"approval_required='{_SECURITY_APPROVAL}' WHERE type IN ({_sec_in})"
     )
 
+    # Stamp the contract by type in the DB, so EVERY creator (evolution_notice,
+    # mcp_server, any future path) gets the right autonomy_class without touching
+    # each INSERT — and so an INSERT never has to list the new columns (which
+    # would fail in a deploy window before this migration runs). Mirrors
+    # evolution_autonomy.contract_for_type; keep in sync. Postgres-only (the
+    # migration chain is Postgres-targeted; tests exercise the policy via the
+    # Python module directly).
+    if bind.dialect.name == "postgresql":
+        op.execute(
+            "CREATE OR REPLACE FUNCTION evolution_stamp_autonomy() RETURNS trigger AS $$\n"
+            "BEGIN\n"
+            f"  IF NEW.type IN ({_exec_in}) THEN\n"
+            "    NEW.autonomy_class := 'execute'; NEW.risk := 'low';\n"
+            f"    NEW.approval_required := '{_DEFAULT_APPROVAL}';\n"
+            f"  ELSIF NEW.type IN ({_sec_in}) THEN\n"
+            "    NEW.autonomy_class := 'prepare'; NEW.risk := 'high';\n"
+            f"    NEW.approval_required := '{_SECURITY_APPROVAL}';\n"
+            "  ELSE\n"
+            "    IF NEW.autonomy_class IS NULL THEN NEW.autonomy_class := 'prepare'; END IF;\n"
+            f"    IF NEW.approval_required IS NULL THEN NEW.approval_required := '{_DEFAULT_APPROVAL}'; END IF;\n"
+            "    IF NEW.risk IS NULL THEN NEW.risk := 'medium'; END IF;\n"
+            "  END IF;\n"
+            "  RETURN NEW;\n"
+            "END;\n"
+            "$$ LANGUAGE plpgsql;"
+        )
+        op.execute("DROP TRIGGER IF EXISTS trg_evolution_stamp_autonomy ON evolution_proposals")
+        op.execute(
+            "CREATE TRIGGER trg_evolution_stamp_autonomy BEFORE INSERT ON evolution_proposals "
+            "FOR EACH ROW EXECUTE FUNCTION evolution_stamp_autonomy()"
+        )
+
 
 def downgrade() -> None:
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        op.execute("DROP TRIGGER IF EXISTS trg_evolution_stamp_autonomy ON evolution_proposals")
+        op.execute("DROP FUNCTION IF EXISTS evolution_stamp_autonomy()")
     for col in ("risk", "approval_required", "autonomy_class"):
-        if _has_column(op.get_bind(), "evolution_proposals", col):
+        if _has_column(bind, "evolution_proposals", col):
             op.drop_column("evolution_proposals", col)
