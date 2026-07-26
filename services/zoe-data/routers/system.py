@@ -2170,11 +2170,21 @@ async def evolution_proposal_action(
                         proposal_id, bridged["number"], bridged["created"],
                     )
                 except Exception as exc:
-                    _dispatch = {"ok": False, "reason": str(exc)}
+                    # The proposal is approved (persisted), but execution did NOT
+                    # start. Say so explicitly — always include auto_executed=false
+                    # so a client can't read this as a running implementation. It
+                    # is retryable: the bridge's idempotency creates a fresh run on
+                    # a later re-approve when no live issue exists.
+                    _dispatch = {"ok": False, "auto_executed": False,
+                                 "reason": f"approved, but auto-execution failed: {exc}"}
                     logger.warning("evolution_approve: board bridge failed for %s: %s", proposal_id, exc)
+            # top-level auto_executed reflects whether a run was actually enqueued,
+            # so 'ok: true' (the APPROVE succeeded) is never misread as "executing".
+            _auto_executed = bool(_dispatch and _dispatch.get("auto_executed"))
             return {
                 "ok": True,
-                "action": "approved",
+                "action": "approved" if (not _allowed or _auto_executed) else "approved_execution_failed",
+                "auto_executed": _auto_executed,
                 "multica_issue_id": multica_issue_id,
                 "dispatch": _dispatch,
             }
