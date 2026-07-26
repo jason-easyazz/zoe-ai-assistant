@@ -460,7 +460,7 @@ async def test_setup_classify_and_resolver(monkeypatch):
 async def test_setup_save_gated_by_token(monkeypatch):
     from routers import music_setup as ms_router
     saved = {"n": 0}
-    async def fake_save(prov, vals): saved["n"] += 1; return {"name": prov}
+    async def fake_save(prov, vals, instance_id=None): saved["n"] += 1; return {"name": prov}
     monkeypatch.setattr(music_service, "save_provider", fake_save)
     async def _up(url): return True
     monkeypatch.setattr(music_service, "_potoken_reachable", _up)  # ytmusic helper "up"
@@ -549,7 +549,7 @@ async def test_ytmusic_setup_save_refuses_with_accurate_msg_when_generator_down(
     async def down(url): return False
     monkeypatch.setattr(music_service, "_potoken_reachable", down)
     saved = {"n": 0}
-    async def fake_save(prov, vals): saved["n"] += 1; return {"name": prov}
+    async def fake_save(prov, vals, instance_id=None): saved["n"] += 1; return {"name": prov}
     monkeypatch.setattr(music_service, "save_provider", fake_save)
     tok = music_setup.mint("ytmusic")["token"]
     r = await ms_router.setup_save({"token": tok, "provider": "ytmusic",
@@ -563,7 +563,7 @@ async def test_ytmusic_setup_save_ok_when_generator_up(monkeypatch):
     from routers import music_setup as ms_router
     async def up(url): return True
     monkeypatch.setattr(music_service, "_potoken_reachable", up)
-    async def fake_save(prov, vals): return {"name": prov}
+    async def fake_save(prov, vals, instance_id=None): return {"name": prov}
     monkeypatch.setattr(music_service, "save_provider", fake_save)
     tok = music_setup.mint("ytmusic")["token"]
     r = await ms_router.setup_save({"token": tok, "provider": "ytmusic",

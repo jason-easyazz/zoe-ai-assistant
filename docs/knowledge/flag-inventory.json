@@ -3871,11 +3871,13 @@
       "ZOE_URL": {
         "defaults": [
           "'http://127.0.0.1:8000'",
-          "'https://zoe.local'"
+          "'https://zoe.local'",
+          "dynamic"
         ],
         "in_env_example": false,
         "readers": [
           "scripts/maintenance/zoe_latency_probe.py",
+          "scripts/setup/zoe_enroll_flow.py",
           "scripts/setup/zoe_face_id.py",
           "scripts/setup/zoe_voice_daemon.py"
         ],

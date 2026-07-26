@@ -398,7 +398,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_TTS_TRIM_SILENCE` | `'true'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_UNAUTHENTICATED_ROLE` | `'guest'` | no | NO | `services/zoe-data/auth.py` |
 | `ZOE_UPDATE_CHECK_ENABLED` | `'true'` | no | NO | `services/zoe-data/system_updates.py` |
-| `ZOE_URL` | `'http://127.0.0.1:8000'`, `'https://zoe.local'` | no | NO | `scripts/maintenance/zoe_latency_probe.py`<br>`scripts/setup/zoe_face_id.py`<br>`scripts/setup/zoe_voice_daemon.py` |
+| `ZOE_URL` | `'http://127.0.0.1:8000'`, `'https://zoe.local'`, `dynamic` | no | NO | `scripts/maintenance/zoe_latency_probe.py`<br>`scripts/setup/zoe_enroll_flow.py`<br>`scripts/setup/zoe_face_id.py`<br>`scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_USE_CORE_BRAIN` | `'true'` | no | NO | `services/zoe-data/brain_dispatch.py` |
 | `ZOE_USE_OMNIGENT_EXECUTOR` | `'0'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
 | `ZOE_USE_PI_EXECUTOR` | `'false'` | no | NO | `services/zoe-data/pi_executor.py` |
