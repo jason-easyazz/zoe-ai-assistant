@@ -13,6 +13,13 @@ After=network-online.target zoe-data.service
 
 [Service]
 Type=oneshot
+# For Type=oneshot this covers ALL ExecStartPre= plus ExecStart=. The box's
+# DefaultTimeoutStartUSec is 90s, which is SHORTER than the 300s Postgres wait
+# below — leaving it at the default would have systemd kill the unit mid-wait
+# during exactly the recoverable boot delay that wait is there to absorb, and
+# without the helper's intended timeout diagnostic. 300s wait + the flock queue
+# + a 20-sample replay through the full STT→brain path fits well inside 30min.
+TimeoutStartSec=1800
 WorkingDirectory=%h/assistant
 # DB + service env so the replay harness (full STT→brain pipeline) can reach Postgres etc.
 EnvironmentFile=-%h/assistant/services/zoe-data/.env
