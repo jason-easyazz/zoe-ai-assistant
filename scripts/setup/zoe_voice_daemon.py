@@ -108,6 +108,18 @@ WAKEWORD_DEBUG = os.environ.get("WAKEWORD_DEBUG", "").lower() in ("1", "true", "
 BARGE_IN_ENABLED = os.environ.get("BARGE_IN_ENABLED", "true").lower() in ("1", "true", "yes")
 # Speaker identification via resemblyzer (disable until profiles are enrolled).
 SPEAKER_ID_ENABLED = os.environ.get("SPEAKER_ID_ENABLED", "false").lower() in ("1", "true", "yes")
+# W5 shadow mode (default ON): identify + LOG each turn's speaker claim, but
+# never attach it to the turn payload — the server must not act on identity
+# until the shadow week's false-accept/false-reject numbers are reviewed with
+# the operator (docs/architecture/samantha-evolution-plan.md §W5,
+# docs/architecture/panel-identity-plan.md ops-enable). Metrics rows hold
+# timestamp + panel + user_id + raw score ONLY — no audio, no embeddings
+# (docs/knowledge/biometric-retention-policy.md).
+SPEAKER_ID_SHADOW = os.environ.get("SPEAKER_ID_SHADOW", "true").lower() in ("1", "true", "yes")
+SPEAKER_ID_SHADOW_LOG = os.environ.get(
+    "SPEAKER_ID_SHADOW_LOG",
+    os.path.expanduser("~/.zoe-voice/speaker_shadow_metrics.jsonl"),
+)
 # VAD probability threshold for barge-in detection (0.0-1.0).
 BARGE_IN_THRESHOLD = float(os.environ.get("BARGE_IN_THRESHOLD", "0.5"))
 # Rolling-window trigger for the playback barge monitor: >= BARGE_MIN_CHUNKS
@@ -1033,6 +1045,54 @@ def _identify_speaker_from_wav(wav_bytes: bytes) -> tuple[str, float] | None:
         return None
 
 
+_shadow_log_lock = threading.Lock()
+
+
+def _record_speaker_shadow(claim: tuple[str, float] | None) -> None:
+    """Append one W5 shadow-week metrics row (JSONL) for FA/FR analysis.
+
+    Rows carry timestamp, panel, matched user_id (null on no-match) and the raw
+    cosine score ONLY — never audio bytes or embeddings, per
+    docs/knowledge/biometric-retention-policy.md. A write failure must never
+    cost the turn.
+    """
+    row = {
+        "ts": time.time(),
+        "panel_id": PANEL_ID,
+        "user_id": claim[0] if claim else None,
+        "score": round(claim[1], 4) if claim else None,
+    }
+    try:
+        parent = os.path.dirname(SPEAKER_ID_SHADOW_LOG)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with _shadow_log_lock, open(SPEAKER_ID_SHADOW_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+    except Exception as exc:
+        log.debug("speaker shadow metrics write failed: %s", exc)
+
+
+def _speaker_claim_for_turn(wav_bytes: bytes) -> tuple[str, float] | None:
+    """Identify the speaker for one turn, honouring W5 shadow mode.
+
+    Returns the claim to ATTACH to the turn payload. While SPEAKER_ID_SHADOW is
+    on (the default), identity is scored + logged — journal line + JSONL
+    metrics row — but None is returned, so the server never receives (and can
+    never act on) the claim: shadow-before-acting, the W5 gate.
+    """
+    if not SPEAKER_ID_ENABLED:
+        return None
+    claim = _identify_speaker_from_wav(wav_bytes)
+    if SPEAKER_ID_SHADOW:
+        _record_speaker_shadow(claim)
+        if claim:
+            log.info("Speaker ID (shadow): %s (%.3f) — logged, not acted on", claim[0], claim[1])
+        else:
+            log.info("Speaker ID (shadow): no match — logged, not acted on")
+        return None
+    return claim
+
+
 _BUFFER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "buffers")
 _BUFFER_ENABLED = os.environ.get("ZOE_BUFFER_PHRASES", "1").strip().lower() not in {"0", "false", "no", "off"}
 # Only speak a buffer phrase if the answer hasn't come back within this many
@@ -1160,7 +1220,7 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     audio_b64_wav = base64.b64encode(wav).decode()
     voice_claim: tuple[str, float] | None = None
     try:
-        voice_claim = _identify_speaker_from_wav(wav)
+        voice_claim = _speaker_claim_for_turn(wav)
         if voice_claim:
             log.info("Speaker claim: %s (%.3f)", voice_claim[0], voice_claim[1])
     except Exception:
@@ -1343,7 +1403,7 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
     voice_claim: tuple[str, float] | None = None
     _t_vid_start = _time.monotonic()
     try:
-        voice_claim = _identify_speaker_from_wav(wav)
+        voice_claim = _speaker_claim_for_turn(wav)
         if voice_claim:
             log.info("Speaker claim: %s (%.3f)", voice_claim[0], voice_claim[1])
     except Exception:

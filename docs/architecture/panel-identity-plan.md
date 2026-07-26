@@ -51,8 +51,9 @@ Face model: InsightFace **buffalo_sc** pack (SCRFD-500M detector + `w600k_mbf.on
 
 **Ops enable + verification**
 - Enroll Jason (3+ utterances) via the existing Voice Identity section in `services/zoe-ui/dist/touch/settings.html`; set `SPEAKER_ID_ENABLED=true` on the Pi; restart.
+- **Shadow week (mandatory before acting — W5 gate):** the daemon ships `SPEAKER_ID_SHADOW=true` (default). With it on, every turn is scored and LOGGED — journal `Speaker ID (shadow)` lines plus JSONL rows `{ts, panel_id, user_id, score}` (user_id null on no-match; never audio or embeddings, per `docs/knowledge/biometric-retention-policy.md`) appended to `~/.zoe-voice/speaker_shadow_metrics.jsonl` (override `SPEAKER_ID_SHADOW_LOG`) — but the claim is NEVER attached to the turn payload, so the server cannot act on identity. Collect ≥1 week of false-accept/false-reject numbers from that artifact, review with the operator, tune `ZOE_SPEAKER_ID_THRESHOLD`, and only then set `SPEAKER_ID_SHADOW=false` + restart. Rollback: `SPEAKER_ID_ENABLED=false` + restart; delete enrollment via the retention policy's self-service deletion path.
 - Replay gate (MANDATORY, daemon touched): `scripts/maintenance/voice_regression_probe.py` under `flock /tmp/zoe-voice-harness.lock` vs `~/.zoe-voice-samples` — no said-vs-did or per-stage speed regression.
-- Live smoke: enrolled speaker → merge log shows identified user; unenrolled → falls to bound/panel user.
+- Live smoke (after shadow is lifted): enrolled speaker → merge log shows identified user; unenrolled → falls to bound/panel user. During shadow, verify via the journal lines + metrics artifact instead.
 
 ## Phase 2 — Camera + on-Pi face ID
 
