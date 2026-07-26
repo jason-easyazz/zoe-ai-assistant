@@ -115,18 +115,38 @@ change to the proven `omnigent_issue_executor`**.
 
 ```python
 async def _run_omnigent_engineering_task(task, *, user_id, task_id) -> str:
-    issue = {"number": task_id, "title": f"Background engineering task {task_id}", "body": task}
-    async with _ENGINEERING_LANE:                    # single-lane usage guard
+    if _engineering_busy:                             # reject-when-busy, no queue
+        raise RuntimeError("engineering lane busy — try again shortly")
+    _engineering_busy = True
+    try:
+        # NAMESPACE the identity — execute_issue_dict derives the PR branch
+        # (omni/issue-<number>) and worktree from `number`; a raw task_id could
+        # equal a Multica issue number and collide with a board run. "bg" can't.
+        issue = {"number": f"bg{task_id}", "title": f"Background engineering task {task_id}", "body": task}
         result = await get_running_loop().run_in_executor(  # off the event loop
             None, lambda: execute_issue_dict(issue))
-    # map the OmnigentResult to a plain-English text answer for the existing
-    # store/broadcast/auto-deploy machinery
-    if result.merged:      return f"Done — implemented and merged {result.pr_url} ({result.merge_sha})."
-    if result.stage=="review": return f"Implemented; PR open and gated, awaiting merge: {result.pr_url}"
-    return f"Couldn't complete this engineering task — {result.stage}: {result.detail}"
+    finally:
+        _engineering_busy = False
+    if result.merged:
+        return f"Done — implemented and merged {result.pr_url} ({result.merge_sha})."
+    # A non-merge (review/no-PR/failed-tests/merge-timeout) is a FAILURE for a
+    # proposal — RAISE so _run_task records 'error' and the auto-deploy post-step
+    # never marks the proposal 'deployed' without a merged implementation.
+    raise RuntimeError(f"engineering task did not merge — {result.stage}: {result.detail}")
 ```
 
-This resolves two risks the earlier draft carried:
+This resolves several risks the earlier draft carried:
+- **Failed runs cannot deploy.** A non-merge raises → `_run_task` error path → the
+  auto-deploy step (in the success branch) never runs.
+- **Authorization is checked, not assumed.** `_run_task` routes to this lane only
+  when `_proposal_is_authorized(task)` confirms the referenced proposal exists and
+  is operator-`approved` (fail-closed) — the `Implement evolution proposal <UUID>`
+  prefix is a KIND label, not authorization, so a fabricated prefix can't reach a
+  code-merging lane.
+- **No cross-lane identity collision.** The `bg`-prefixed `number` keeps the
+  background branch/worktree distinct from any integer Multica issue number.
+- **No watchdog resurrection.** The reject-when-busy guard (not a queue) means no
+  task accrues watchdog age while waiting, then runs after being marked blocked.
 - **No PR-vs-prose conflict.** The superseded draft passed a brief to
   `kick_omnigent` (which wraps with `_implement_brief` to open a PR + emit
   `PR_URL=`) while also asking for prose via a `RESULT:` marker — contradictory.
