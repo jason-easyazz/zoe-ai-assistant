@@ -892,6 +892,10 @@ async def catalog_health() -> dict[str, Any]:
     except Exception:
         return {"degraded": False, "reason": "", "providers": []}
     available = {p.get("domain") for p in provs if isinstance(p, dict) and p.get("available")}
+    # If ANY streaming catalogue is loaded, search works — a second provider being
+    # down is not a user-visible outage. Only flag degraded when NONE is available.
+    if any(d in _STREAMING_MUSIC_DOMAINS for d in available):
+        return {"degraded": False, "reason": "", "providers": []}
     broken = [
         {"domain": str(c.get("domain") or ""), "last_error": str(c.get("last_error") or "")}
         for c in cfgs
@@ -951,10 +955,12 @@ async def search(query: str, media_types: Optional[list[str]] = None,
     # except radio) came back empty, the cause may be a down streaming provider
     # rather than a genuine no-match. Check once, only then, so healthy searches
     # pay nothing. The flag lets the jukebox/panel say "YouTube Music needs
-    # attention" instead of a misleading "no results".
-    catalogue_empty = not any(
-        results.get(_SEARCH_RESULT_KEY[m]) for m in ("track", "album", "artist", "playlist")
-        if m in _SEARCH_RESULT_KEY
+    # attention" instead of a misleading "no results". ONLY when the caller
+    # actually REQUESTED a catalogue type — a radio-only search (types=radio)
+    # leaves those buckets empty by scope, not by outage, and must not be flagged.
+    catalogue_requested = [m for m in requested if m in ("track", "album", "artist", "playlist")]
+    catalogue_empty = bool(catalogue_requested) and not any(
+        results.get(_SEARCH_RESULT_KEY[m]) for m in catalogue_requested
     )
     if catalogue_empty:
         health = await catalog_health()

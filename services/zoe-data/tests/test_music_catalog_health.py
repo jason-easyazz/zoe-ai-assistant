@@ -86,3 +86,26 @@ async def test_search_not_degraded_when_tracks_return(monkeypatch):
     assert "degraded" not in r
     assert len(r["results"]["tracks"]) == 1
 
+
+
+# ── Greptile #1545: don't over-report degradation ────────────────────────────
+
+@pytest.mark.asyncio
+async def test_catalog_health_ok_when_ANOTHER_streaming_provider_is_up(monkeypatch):
+    # ytmusic down but Spotify healthy → catalogue search still works → NOT degraded.
+    _ma_stub(monkeypatch,
+        configs=[{"domain": "ytmusic", "enabled": True, "last_error": "User does not have Youtube Music Premium"},
+                 {"domain": "spotify", "enabled": True, "last_error": None}],
+        providers=[{"domain": "spotify", "available": True}, {"domain": "radiobrowser", "available": True}])
+    assert (await music_service.catalog_health())["degraded"] is False
+
+
+@pytest.mark.asyncio
+async def test_search_radio_only_scope_is_not_degraded(monkeypatch):
+    # A radio-only search leaves the catalogue buckets empty BY SCOPE, not outage.
+    _ma_stub(monkeypatch,
+        configs=[{"domain": "ytmusic", "enabled": True, "last_error": "User does not have Youtube Music Premium"}],
+        providers=[{"domain": "radiobrowser", "available": True}],
+        search_by_type={"radio": {"radio": [{"name": "Beatles Radio", "uri": "radiobrowser://x", "media_type": "radio"}]}})
+    r = await music_service.search("beatles", media_types=["radio"], limit=4)
+    assert "degraded" not in r, "a radio-only search must not carry catalogue-degradation metadata"
