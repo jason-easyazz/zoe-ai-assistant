@@ -44,6 +44,12 @@ _RUN_POOL = concurrent.futures.ThreadPoolExecutor(
     max_workers=16, thread_name_prefix="zoe-async-run"
 )
 
+# Slack added to a caller's timeout before the OUTER (queue-inclusive) bound in
+# run_to_completion fires. Keeps the inner subprocess.run timeout the one that
+# normally trips — it produces the more informative TimeoutExpired, with partial
+# output — while still capping total wall-clock when the pool is saturated.
+_QUEUE_GRACE_S = 5.0
+
 
 class AsyncPipeProcess:
     """Async-stream wrapper around a `subprocess.Popen` spawned off the loop.
@@ -152,6 +158,14 @@ async def run_to_completion(
     `merge_stderr=True` interleaves stderr into stdout (`stderr=STDOUT`), for
     callers that previously spawned with `stderr=asyncio.subprocess.STDOUT`;
     `.stderr` is then `None`.
+
+    `timeout` bounds TOTAL wall-clock, not just the child's runtime. A pool of
+    any fixed width is exhaustible, so a call can sit queued before
+    `subprocess.run` even starts — and `subprocess.run(timeout=...)` does not
+    count that queue time. Without an outer bound a caller asking for 30s could
+    block for minutes behind long-running background tasks. The outer bound
+    carries a small grace so the inner timeout normally fires first and still
+    produces the informative `TimeoutExpired` (with partial output).
     """
     loop = asyncio.get_running_loop()
 
@@ -167,4 +181,14 @@ async def run_to_completion(
 
     # _RUN_POOL, NOT _SPAWN_POOL: this worker is held for the child's whole
     # lifetime, so parking it in the small spawn pool would starve new fork+execs.
-    return await loop.run_in_executor(_RUN_POOL, _blocking_run)
+    fut = loop.run_in_executor(_RUN_POOL, _blocking_run)
+    if timeout is None:
+        return await fut
+    try:
+        return await asyncio.wait_for(fut, timeout=timeout + _QUEUE_GRACE_S)
+    except asyncio.TimeoutError:
+        # Queued (or wedged) past the caller's budget. If the job never started,
+        # the future is cancelled and no child was ever spawned; if it did start,
+        # its own subprocess.run timeout kills the child, we just stop waiting.
+        # Re-raised as TimeoutExpired so callers keep one exception contract.
+        raise subprocess.TimeoutExpired(list(cmd), timeout) from None

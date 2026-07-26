@@ -169,3 +169,39 @@ def test_run_to_completion_uses_its_own_pool():
         async_subprocess._RUN_POOL._max_workers
         > async_subprocess._SPAWN_POOL._max_workers
     )
+
+
+@pytest.mark.asyncio
+async def test_timeout_bounds_queue_wait_not_just_child_runtime():
+    """A saturated pool must not blow past the caller's timeout budget.
+
+    subprocess.run(timeout=) only counts the CHILD's runtime, so a call queued
+    behind long-running work could block far past what the caller asked for.
+    Saturate _RUN_POOL with sleepers, then assert a short-timeout call gives up
+    close to its own budget instead of waiting for a worker to free up.
+    """
+    import asyncio
+    import time
+
+    import async_subprocess
+
+    sleeper = [sys.executable, "-c", "import time; time.sleep(60)"]
+    hogs = [
+        asyncio.create_task(run_to_completion(sleeper, timeout=60))
+        for _ in range(async_subprocess._RUN_POOL._max_workers + 2)
+    ]
+    try:
+        await asyncio.sleep(0.5)  # let them occupy every worker
+        started = time.monotonic()
+        with pytest.raises(subprocess.TimeoutExpired):
+            await run_to_completion([sys.executable, "-c", "print('hi')"], timeout=1)
+        elapsed = time.monotonic() - started
+        # Budget is 1s + the queue grace; anything near 60s means the outer
+        # bound is missing and we waited for a worker instead.
+        assert elapsed < 1 + async_subprocess._QUEUE_GRACE_S + 5, (
+            f"waited {elapsed:.1f}s for a 1s-timeout call — queue time is unbounded"
+        )
+    finally:
+        for t in hogs:
+            t.cancel()
+        await asyncio.gather(*hogs, return_exceptions=True)
