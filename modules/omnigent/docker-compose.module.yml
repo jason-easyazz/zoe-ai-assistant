@@ -11,6 +11,14 @@ services:
     image: zoe-omnigent:latest
     container_name: zoe-omnigent
     restart: unless-stopped
+    # Run as host uid/gid 1000 (zoe), NOT root. The repo is bind-mounted at /workspace,
+    # so a root container writes root-owned files straight into the host's live checkout:
+    # on 2026-07-26 that meant 38 root-owned entries under /home/zoe/assistant/.git —
+    # loose objects, refs, reflogs and .git/config itself — and every zoe-side `git fetch`
+    # failed to take a lock on ~60 refs. Matching uids is what stops it at the source;
+    # chowning afterwards is a repair, not a fix. The image chowns /root to 1000 and
+    # gives uid 1000 a passwd entry (see Dockerfile) so HOME=/root still works.
+    user: "1000:1000"
     # CMD is the image entrypoint (entrypoint.sh): runs the foreground OIDC server AND
     # attaches the host/runner, so a single container serves the UI and runs agents.
     ports:
@@ -27,14 +35,22 @@ services:
     environment:
       - NODE_NO_WARNINGS=1
       # Omnigent launches agents with --dangerously-skip-permissions (autonomous, no prompts).
-      # Claude Code blocks that flag under root; IS_SANDBOX=1 is the documented container
-      # escape hatch — the container IS the isolation boundary. (User-approved 2026-06-17.)
+      # The container IS the isolation boundary. (User-approved 2026-06-17.) Claude Code
+      # blocks that flag under ROOT specifically, and IS_SANDBOX=1 was the documented escape
+      # hatch; since 2026-07-26 the container runs as uid 1000 (see `user:` above), where the
+      # flag is allowed natively. Kept anyway — harmless when the restriction doesn't apply,
+      # and it keeps the flag working if anyone ever reverts `user:`.
       - IS_SANDBOX=1
+      # A numeric `user:` makes Docker default HOME to "/", which would send omnigent's
+      # state, the uv tool install and the entrypoint's ~/.omnigent config seed to the
+      # wrong place. Every mount below targets /root, so pin HOME to it explicitly.
+      - HOME=/root
       # Runner working directory = the mounted Zoe repo, so agents build Zoe. The host
       # creates git worktrees under it (the repo at ../../ is bind-mounted to /workspace).
       - OMNIGENT_RUNNER_WORKSPACE=/workspace
-      # The repo is owned by host uid 1000 but the container runs as root; tell git to
-      # trust it (otherwise "dubious ownership" breaks worktree/agent git ops).
+      # Since the container runs as uid 1000 the bind-mounted repo is no longer "dubious
+      # ownership" — uid matches. Kept as a belt-and-braces guard for the worktrees the
+      # host creates under /workspace and for anyone running the image without `user:`.
       - GIT_CONFIG_COUNT=1
       - GIT_CONFIG_KEY_0=safe.directory
       - GIT_CONFIG_VALUE_0=*
